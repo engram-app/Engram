@@ -150,15 +150,40 @@ describe("problems", () => {
 		expect(tr.problems(" conflicts", "个冲突", "zh")).toEqual([]);
 	});
 
-	it("rejects an English phrase echoed back, a lone word only over a real translation", () => {
+	it("rejects English echoed back, at any length, unless every word is a loanword", () => {
 		expect(tr.problems("Open the vault folder", "Open the vault folder", "de")).toEqual([
 			"untranslated",
 		]);
+		// The bugs that shipped: one- and two-word echoes the old rule waived.
+		expect(tr.problems("Sync", "Sync", "ms")).toEqual(["untranslated"]);
+		expect(tr.problems("Undo", "Undo", "ms")).toEqual(["untranslated"]);
+		expect(tr.problems("Bug", "Bug", "fr")).toEqual(["untranslated"]);
+		expect(tr.problems("Wikilink", "Wikilink", "zh")).toEqual(["untranslated"]);
+		// Words the language's own software keeps (Obsidian, VS Code).
 		expect(tr.problems("Status", "Status", "de")).toEqual([]);
+		expect(tr.problems("💬 Feedback", "💬 Feedback", "de")).toEqual([]);
+		expect(tr.problems("Engram: offline", "Engram: offline", "de")).toEqual([]);
+		expect(tr.problems("Vaults ({used} / {cap})", "Vaults ({used} / {cap})", "de")).toEqual([]);
+		// A product name is matched whole, so its word alone is still a miss.
+		expect(tr.problems("Obsidian Sync", "Obsidian Sync", "fr")).toEqual([]);
+		expect(tr.problems("Sync", "Sync", "fr")).toEqual(["untranslated"]);
+		// A loanword list is per language: German keeps Feedback, French does not.
+		expect(tr.problems("💬 Feedback", "💬 Feedback", "fr")).toEqual(["untranslated"]);
+		// A loanword may not replace a real translation.
+		expect(tr.problems("Status", "Status", "de", "Zustand")).toEqual(["untranslated"]);
 		expect(tr.problems("Unnamed", "Unnamed", "de", "Ohne Namen")).toEqual(["untranslated"]);
+		// Brands alone may stay; the word between them is still German ("für").
+		expect(
+			tr.problems("Engram Vault Sync · Obsidian", "Engram Vault Sync · Obsidian", "de"),
+		).toEqual([]);
 		expect(
 			tr.problems("Engram Vault Sync for Obsidian", "Engram Vault Sync for Obsidian", "de"),
-		).toEqual([]);
+		).toEqual(["untranslated"]);
+	});
+
+	it("rejects an answer that copies the prompt's arrow format", () => {
+		expect(tr.problems("Quote", 'Quote" -> "Cita', "es")).toContain("stray");
+		expect(tr.problems("Settings -> Sync", "Einstellungen -> Sync", "de")).toEqual([]);
 	});
 
 	it("keeps every number but a lone 1, which a language may spell out", () => {
@@ -261,6 +286,12 @@ describe("entryProblems / invalidKeys / catalogProblems", () => {
 			failed: { "Upgrade to Pro": "2026-10-01", "Hard one": "2026-10-01" },
 		};
 		expect(tr.catalogProblems(entries, catalog, "es", state)).toEqual(['es: orphan "Old"']);
+		// A pin is never retranslated, so a tracked failure would only sit there.
+		const pinned = translator({ ...profile, pinned: { es: ["Upgrade to Pro"] } });
+		expect(pinned.catalogProblems(entries, catalog, "es", state)).toEqual([
+			'es: brand in "Upgrade to Pro"',
+			'es: orphan "Old"',
+		]);
 	});
 });
 

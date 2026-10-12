@@ -37,13 +37,18 @@
 			"Attachments": "Anhänge",
 			"Folder": "Ordner",
 			"Tags": "Tags",
-			"Backlinks": "Backlinks",
+			"Backlinks": "Rückverweise",
 			"Properties": "Eigenschaften",
-			"Wikilink": "Wikilink",
+			"Wikilink": "Wiki-Link",
 			"Connections": "Verbindungen",
 			"Settings": "Einstellungen",
 			"Search": "Suchen",
 			"Manage your profile, password, and account.": "Verwalte dein Profil, dein Passwort und dein Konto."
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"es": {
@@ -84,13 +89,18 @@
 			"Attachments": "Adjuntos",
 			"Folder": "Carpeta",
 			"Tags": "Etiquetas",
-			"Backlinks": "Retroenlaces",
+			"Backlinks": "Enlaces entrantes",
 			"Properties": "Propiedades",
-			"Wikilink": "Wikienlace",
+			"Wikilink": "Enlace wiki",
 			"Connections": "Conexiones",
 			"Settings": "Ajustes",
 			"Search": "Buscar",
 			"Manage your profile, password, and account.": "Gestiona tu perfil, tu contraseña y tu cuenta."
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"fr": {
@@ -130,14 +140,19 @@
 			"Sync": "Synchroniser",
 			"Attachments": "Pièces jointes",
 			"Folder": "Dossier",
-			"Tags": "Tags",
+			"Tags": "Mots-clés",
 			"Backlinks": "Rétroliens",
 			"Properties": "Propriétés",
-			"Wikilink": "Wikilink",
+			"Wikilink": "Lien wiki",
 			"Connections": "Connexions",
 			"Settings": "Paramètres",
 			"Search": "Rechercher",
 			"Manage your profile, password, and account.": "Gère ton profil, ton mot de passe et ton compte."
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"it": {
@@ -172,19 +187,24 @@
 		},
 		"glossary": {
 			"Note": "Nota",
-			"Vault": "Archivio",
-			"Vaults": "Archivi",
+			"Vault": "Vault",
+			"Vaults": "Vault",
 			"Sync": "Sincronizza",
 			"Attachments": "Allegati",
 			"Folder": "Cartella",
-			"Tags": "Tag",
-			"Backlinks": "Backlink",
+			"Tags": "Etichette",
+			"Backlinks": "Riferimenti",
 			"Properties": "Proprietà",
-			"Wikilink": "Wikilink",
+			"Wikilink": "Collegamento wiki",
 			"Connections": "Connessioni",
 			"Settings": "Impostazioni",
 			"Search": "Cerca",
 			"Manage your profile, password, and account.": "Gestisci il tuo profilo, la password e l'account."
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"ja": {
@@ -232,6 +252,11 @@
 			"Settings": "設定",
 			"Search": "検索",
 			"Manage your profile, password, and account.": "プロフィール、パスワード、アカウントを管理します。"
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"ko": {
@@ -274,11 +299,16 @@
 			"Tags": "태그",
 			"Backlinks": "백링크",
 			"Properties": "속성",
-			"Wikilink": "위키링크",
+			"Wikilink": "위키 링크",
 			"Connections": "연결",
 			"Settings": "설정",
 			"Search": "검색",
 			"Manage your profile, password, and account.": "프로필, 비밀번호, 계정을 관리하세요."
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"ms": {
@@ -315,7 +345,7 @@
 			"Note": "Nota",
 			"Vault": "Peti Nota",
 			"Vaults": "Peti Nota",
-			"Sync": "Sync",
+			"Sync": "Segerakkan",
 			"Attachments": "Lampiran",
 			"Folder": "Folder",
 			"Tags": "Tag",
@@ -326,6 +356,11 @@
 			"Settings": "Tetapan",
 			"Search": "Carian",
 			"Manage your profile, password, and account.": "Urus profil, kata laluan dan akaun anda."
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"pt-BR": {
@@ -365,14 +400,19 @@
 			"Sync": "Sincronizar",
 			"Attachments": "Anexos",
 			"Folder": "Pasta",
-			"Tags": "Tags",
-			"Backlinks": "Backlinks",
+			"Tags": "Etiquetas",
+			"Backlinks": "Links inversos",
 			"Properties": "Propriedades",
-			"Wikilink": "Wikilink",
+			"Wikilink": "Link wiki",
 			"Connections": "Conexões",
 			"Settings": "Configurações",
 			"Search": "Buscar",
 			"Manage your profile, password, and account.": "Gerencie seu perfil, sua senha e sua conta."
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"ru": {
@@ -415,11 +455,16 @@
 			"Tags": "Теги",
 			"Backlinks": "Обратные ссылки",
 			"Properties": "Свойства",
-			"Wikilink": "Вики-ссылка",
+			"Wikilink": "Wiki-ссылка",
 			"Connections": "Подключения",
 			"Settings": "Настройки",
 			"Search": "Поиск",
 			"Manage your profile, password, and account.": "Управляйте профилем, паролем и учётной записью."
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"vi": {
@@ -467,6 +512,11 @@
 			"Settings": "Cài đặt",
 			"Search": "Tìm kiếm",
 			"Manage your profile, password, and account.": "Quản lý hồ sơ mật khẩu và tài khoản của bạn."
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"zh-CN": {
@@ -501,19 +551,24 @@
 		},
 		"glossary": {
 			"Note": "笔记",
-			"Vault": "知识库",
-			"Vaults": "知识库",
+			"Vault": "仓库",
+			"Vaults": "仓库",
 			"Sync": "同步",
 			"Attachments": "附件",
 			"Folder": "文件夹",
 			"Tags": "标签",
 			"Backlinks": "反向链接",
 			"Properties": "属性",
-			"Wikilink": "Wikilink",
+			"Wikilink": "Wiki 链接",
 			"Connections": "连接",
 			"Settings": "设置",
 			"Search": "搜索",
 			"Manage your profile, password, and account.": "管理你的资料、密码和账号。"
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"zh-TW": {
@@ -548,19 +603,24 @@
 		},
 		"glossary": {
 			"Note": "筆記",
-			"Vault": "知識庫",
-			"Vaults": "知識庫",
+			"Vault": "儲存庫",
+			"Vaults": "儲存庫",
 			"Sync": "同步",
 			"Attachments": "附件",
 			"Folder": "資料夾",
 			"Tags": "標籤",
 			"Backlinks": "反向連結",
 			"Properties": "屬性",
-			"Wikilink": "Wikilink",
+			"Wikilink": "Wiki 式連結",
 			"Connections": "連線",
 			"Settings": "設定",
 			"Search": "搜尋",
 			"Manage your profile, password, and account.": "管理你的個人資料、密碼與帳號。"
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	}
 }

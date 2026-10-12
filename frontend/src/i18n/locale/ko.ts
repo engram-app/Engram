@@ -91,12 +91,72 @@ export default {
 	Status: "상태",
 	Invoice: "송장",
 	Download: "다운로드",
+	"Could not fetch that invoice. Please try again.":
+		"해당 송장을 가져오지 못했습니다. 다시 시도해주세요.",
+	"Payment received. We're finishing your activation in the background.":
+		"결제가 완료되었습니다. 백그라운드에서 활성화를 완료하고 있습니다.",
+	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
+		"일반적으로 몇 초가 소요됩니다. 잠시 후 다시 시도하거나 문제가 지속되면 지원팀에 문의하세요.",
+	Refresh: "새로 고침",
+	"Contact support": "지원팀에 문의",
+	"Loading billing": "결제 정보 불러오는 중",
+	"Could not open the billing portal. Please try again.":
+		"결제 페이지를 열 수 없습니다. 다시 시도해주세요.",
+	"Could not start the payment update. Please try again.":
+		"결제 정보 업데이트를 시작할 수 없습니다. 다시 시도해주세요.",
+	Billing: "결제",
+	"Manage your plan and payment method.": "요금제 및 결제 방법을 관리하세요.",
+	"Change plan": "요금제 변경",
+	"Cancel subscription": "구독 취소",
+	"Setting up your account…": "계정 설정 중…",
+	"← Choose a different plan": "← 다른 요금제를 선택하세요",
+	"Test checkout (dev only)": "테스트 결제 (개발자 전용)",
+	"Paddle's checkout can't embed on localhost, so this stand-in lets you walk the flow. Not shown in production.":
+		"Paddle 결제는 로컬 환경에서 작동하지 않으므로, 이 임시 기능으로 결제 과정을 체험할 수 있습니다. 실제 서비스에서는 표시되지 않습니다.",
+	"Simulate successful payment": "결제 성공 시뮬레이션",
+	"Payment did not go through. Please try again.": "결제가 실패했습니다. 다시 시도해주세요.",
+	"Simulate failure": "결제 실패 시뮬레이션",
+	"Choose a Plan": "요금제 선택",
+	"Both plans include a 7-day free trial.": "모든 요금제에 7일 무료 체험이 포함되어 있습니다.",
+	"Unlimited vaults · 50 GB · cross-vault search + API":
+		"무제한 보관함 · 50GB · 보관함 간 검색 + API",
+	"Choose Pro": "Pro 요금제 선택",
+	"7-day free trial · cancel anytime": "7일 무료 체험 · 언제든지 해지 가능",
+	"10 vaults · 10 GB · unlimited AI": "10개의 보관함 · 10GB · 무제한 AI",
+	"Choose Starter": "Starter 요금제 선택",
+	"Choose Free": "무료 버전 선택",
+	"Opening Paddle…": "Paddle 연결 중…",
+	"Open Paddle billing portal": "Paddle 결제 페이지 열기",
+	"Paddle is our payment processor. Use this if the controls above don't cover what you need.":
+		"Paddle은 저희의 결제 처리 서비스입니다. 위의 옵션이 필요하신 기능을 제공하지 않는 경우 사용하세요.",
+	"Something went wrong with checkout. Please try again.":
+		"결제 과정에서 오류가 발생했습니다. 다시 시도해주세요.",
+	"Could not simulate checkout. Please try again.":
+		"결제 시뮬레이션에 실패했습니다. 다시 시도해주세요.",
+	paid: "결제 완료",
+	"Subscription scheduled to cancel.": "구독 해지 예정",
+	"Could not cancel subscription. Please try again.":
+		"구독 해지에 실패했습니다. 다시 시도해주세요.",
+	"You'll keep paid access through the end of your current billing period.":
+		"현재 결제 기간이 종료될 때까지 유료 기능을 계속 사용하실 수 있습니다.",
+	"Your notes stay. Sync still works for vaults within Free limits.":
+		"노트는 그대로 유지됩니다. 무료 제한 내의 보관함은 동기화가 계속됩니다.",
+	"Vaults or notes that exceed Free limits become read-only.":
+		"무료 제한을 초과하는 보관함 또는 노트는 읽기 전용으로 변경됩니다.",
+	"You can reverse this any time before the effective date.":
+		"언제든지 유효일자 이전까지 이 설정을 변경할 수 있습니다.",
+	"Why are you canceling?": "해지하시려는 이유가 무엇인가요?",
+	"Keep my subscription": "구독을 유지합니다",
+	"Canceling…": "해지 중입니다…",
+	"Cancel at period end": "다음 결제 주기 종료 시 해지",
+	Starter: "Starter",
+	Pro: "Pro",
+	"You'll keep your {tier} plan until {date}, then drop to Free.":
+		"{tier} 요금제를 {date}까지 유지하고, 이후 무료 요금제로 변경됩니다.",
 	"Access ends on": "사용 권한은 다음 날짜에 종료됩니다",
 	"Renews on": "자동 갱신",
 	"Current Plan": "현재 요금제",
 	Free: "무료",
-	Starter: "Starter",
-	Pro: "Pro",
 	"{count} days remaining in your free trial.": { other: "무료 체험은 {count}일 남았습니다." },
 	"Loading current connection…": "현재 연결 로딩 중…",
 	"Disconnected. Retry the new connection now.": "연결 해제됨. 지금 새로운 연결을 시도하세요.",
@@ -114,7 +174,6 @@ export default {
 	canceled: "취소됨",
 	completed: "완료됨",
 	billed: "결제 완료",
-	paid: "결제 완료",
 	ready: "준비 완료",
 	draft: "초안",
 	Unknown: "알 수 없음",
@@ -159,7 +218,6 @@ export default {
 	"Could not reverse the cancellation. Please try again.":
 		"취소 해제에 실패했습니다. 다시 시도해주세요.",
 	"Reversing…": "취소 중...",
-	"Keep my subscription": "구독을 유지합니다",
 	"Your plan changes on {date}": "구독 플랜이 {date}에 변경됩니다",
 	"Your plan cancels on {date}": "구독 플랜이 {date}에 해지됩니다",
 	"Your plan pauses on {date}": "구독 플랜이 {date}에 일시 중지됩니다",
@@ -197,7 +255,6 @@ export default {
 			other:
 				"귀하의 노트 중 {count}개는 검색할 수 없습니다. 가장 오래된 {indexed} 노트만 인덱싱되므로, 최근 작성한 노트는 검색 결과에 나타나지 않습니다.",
 		},
-	"Change plan": "요금제 변경",
 	"Loading plan options…": "요금제 옵션을 불러오는 중…",
 	"Plan change confirmed.": "계획 변경이 확인되었습니다.",
 	"Could not change plan. Please try again.": "계획 변경에 실패했습니다. 다시 시도해주세요.",
@@ -235,63 +292,6 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"무료 체험 기간입니다. 결제 처리 업체인 Paddle은 구독이 체험 기간 중인 경우 요금제 변경을 허용하지 않습니다. 체험 기간은 {date}에 종료됩니다.",
 	Upgrade: "업그레이드",
-	"Could not fetch that invoice. Please try again.":
-		"해당 송장을 가져오지 못했습니다. 다시 시도해주세요.",
-	"Payment received. We're finishing your activation in the background.":
-		"결제가 완료되었습니다. 백그라운드에서 활성화를 완료하고 있습니다.",
-	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
-		"일반적으로 몇 초가 소요됩니다. 잠시 후 다시 시도하거나 문제가 지속되면 지원팀에 문의하세요.",
-	Refresh: "새로 고침",
-	"Contact support": "지원팀에 문의",
-	"Loading billing": "결제 정보 불러오는 중",
-	"Could not open the billing portal. Please try again.":
-		"결제 페이지를 열 수 없습니다. 다시 시도해주세요.",
-	"Could not start the payment update. Please try again.":
-		"결제 정보 업데이트를 시작할 수 없습니다. 다시 시도해주세요.",
-	Billing: "결제",
-	"Manage your plan and payment method.": "요금제 및 결제 방법을 관리하세요.",
-	"Cancel subscription": "구독 취소",
-	"Setting up your account…": "계정 설정 중…",
-	"← Choose a different plan": "← 다른 요금제를 선택하세요",
-	"Test checkout (dev only)": "테스트 결제 (개발자 전용)",
-	"Paddle's checkout can't embed on localhost, so this stand-in lets you walk the flow. Not shown in production.":
-		"Paddle 결제는 로컬 환경에서 작동하지 않으므로, 이 임시 기능으로 결제 과정을 체험할 수 있습니다. 실제 서비스에서는 표시되지 않습니다.",
-	"Simulate successful payment": "결제 성공 시뮬레이션",
-	"Payment did not go through. Please try again.": "결제가 실패했습니다. 다시 시도해주세요.",
-	"Simulate failure": "결제 실패 시뮬레이션",
-	"Choose a Plan": "요금제 선택",
-	"Both plans include a 7-day free trial.": "모든 요금제에 7일 무료 체험이 포함되어 있습니다.",
-	"Unlimited vaults · 50 GB · cross-vault search + API":
-		"무제한 보관함 · 50GB · 보관함 간 검색 + API",
-	"Choose Pro": "Pro 요금제 선택",
-	"7-day free trial · cancel anytime": "7일 무료 체험 · 언제든지 해지 가능",
-	"10 vaults · 10 GB · unlimited AI": "10개의 보관함 · 10GB · 무제한 AI",
-	"Choose Starter": "Starter 요금제 선택",
-	"Choose Free": "무료 버전 선택",
-	"Opening Paddle…": "Paddle 연결 중…",
-	"Open Paddle billing portal": "Paddle 결제 페이지 열기",
-	"Paddle is our payment processor. Use this if the controls above don't cover what you need.":
-		"Paddle은 저희의 결제 처리 서비스입니다. 위의 옵션이 필요하신 기능을 제공하지 않는 경우 사용하세요.",
-	"Something went wrong with checkout. Please try again.":
-		"결제 과정에서 오류가 발생했습니다. 다시 시도해주세요.",
-	"Could not simulate checkout. Please try again.":
-		"결제 시뮬레이션에 실패했습니다. 다시 시도해주세요.",
-	"Subscription scheduled to cancel.": "구독 해지 예정",
-	"Could not cancel subscription. Please try again.":
-		"구독 해지에 실패했습니다. 다시 시도해주세요.",
-	"You'll keep paid access through the end of your current billing period.":
-		"현재 결제 기간이 종료될 때까지 유료 기능을 계속 사용하실 수 있습니다.",
-	"Your notes stay. Sync still works for vaults within Free limits.":
-		"노트는 그대로 유지됩니다. 무료 제한 내의 보관함은 동기화가 계속됩니다.",
-	"Vaults or notes that exceed Free limits become read-only.":
-		"무료 제한을 초과하는 보관함 또는 노트는 읽기 전용으로 변경됩니다.",
-	"You can reverse this any time before the effective date.":
-		"언제든지 유효일자 이전까지 이 설정을 변경할 수 있습니다.",
-	"Why are you canceling?": "해지하시려는 이유가 무엇인가요?",
-	"Canceling…": "해지 중입니다…",
-	"Cancel at period end": "다음 결제 주기 종료 시 해지",
-	"You'll keep your {tier} plan until {date}, then drop to Free.":
-		"{tier} 요금제를 {date}까지 유지하고, 이후 무료 요금제로 변경됩니다.",
 	"An invoice will be created for this amount": "해당 금액으로 청구서가 생성됩니다",
 	"This amount will be charged immediately": "해당 금액은 즉시 청구됩니다",
 	"Charged on {date}": "{date}에 청구됨",
@@ -462,7 +462,9 @@ export default {
 	"{count} days ago": { other: "{count}일 전" },
 	"{count} months ago": { other: "{count}개월 전" },
 	"{count} years ago": { other: "{count}년 전" },
-	"Tell us more": "자세히 알려주세요",
+	"Android device": "Android 기기",
+	"Windows PC": "Windows PC",
+	"Linux PC": "리눅스 PC",
 	"Thanks, we read every message.": "알려주셔서 감사합니다. 모든 메시지를 확인합니다.",
 	"Send feedback": "피드백 보내기",
 	"What's working, what's frustrating, what do you wish Engram did?":
@@ -501,6 +503,7 @@ export default {
 	Idea: "아이디어",
 	Confusing: "혼란스럽습니다",
 	"Love it": "매우 만족합니다",
+	"Tell us more": "자세히 알려주세요",
 	Language: "언어",
 	"My Vault": "내 보관함",
 	"{count} days left in your trial.": { other: "무료 체험은 {count}일 남았습니다." },
@@ -588,6 +591,13 @@ export default {
 		"{okf}에서 요구하는 필수 필드이며, Engram이 따르는 개방형 표준이므로, 이 필드를 채우면 노트를 다른 OKF 호환 프로그램에서도 사용할 수 있습니다.",
 	"{count} results": { other: "{count}개의 결과" },
 	"Sidebar views": "사이드바 보기",
+	"User menu": "사용자 메뉴",
+	Settings: "설정",
+	Theme: "테마",
+	"Sign out": "로그아웃",
+	Light: "밝은 테마",
+	Dark: "어두운 테마",
+	System: "시스템",
 	"Loading vaults…": "보관함 로딩 중…",
 	"No vaults yet": "아직 보관함이 없습니다",
 	Vault: "보관함",
@@ -599,13 +609,6 @@ export default {
 	"A vault holds its own notes and folders, separate from your other vaults.":
 		"보관함은 자체 노트와 폴더를 포함하며, 다른 보관함과는 분리되어 있습니다.",
 	"Create vault": "보관함 만들기",
-	"User menu": "사용자 메뉴",
-	Settings: "설정",
-	Theme: "테마",
-	"Sign out": "로그아웃",
-	Light: "밝은 테마",
-	Dark: "어두운 테마",
-	System: "시스템",
 	day: "일",
 	week: "주",
 	month: "월",
@@ -632,6 +635,11 @@ export default {
 	"Wire transfer": "은행 송금",
 	"Korean payment methods": "한국 결제 방법",
 	"{prorated} of {total} days": "{prorated}일 중 {total}일",
+	"Can't remove the last admin.": "마지막 관리자를 삭제할 수 없습니다.",
+	"Check the invite's label, uses and expiry, then try again.":
+		"초대 링크의 정보(라벨, 사용 횟수, 만료일)를 확인한 후 다시 시도해 주세요.",
+	"Incorrect password.": "비밀번호가 올바르지 않습니다.",
+	"You don't have permission to do that.": "해당 작업을 수행할 권한이 없습니다.",
 	"Payment failed. Please update your payment method to avoid losing access.":
 		"결제 실패. 액세스 권한을 유지하려면 결제 방법을 업데이트해주세요.",
 	"Payment failed. Please contact support to resolve your billing issue.":
@@ -647,11 +655,6 @@ export default {
 		"이 구독은 일시 중단되었습니다. {date}에 다시 시작됩니다.",
 	"This subscription is paused.": "이 구독은 일시 중단되었습니다.",
 	"Your trial ends on {date}.": "체험 기간은 {date}에 종료됩니다.",
-	"Can't remove the last admin.": "마지막 관리자를 삭제할 수 없습니다.",
-	"Check the invite's label, uses and expiry, then try again.":
-		"초대 링크의 정보(라벨, 사용 횟수, 만료일)를 확인한 후 다시 시도해 주세요.",
-	"Incorrect password.": "비밀번호가 올바르지 않습니다.",
-	"You don't have permission to do that.": "해당 작업을 수행할 권한이 없습니다.",
 	"Invalid authorization request": "잘못된 인증 요청",
 	"Missing required OAuth parameters:": "필수 OAuth 매개변수가 누락되었습니다:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -925,7 +928,7 @@ export default {
 	"Failed to load note: {message}": "노트 로드 실패: {message}",
 	"Still loading this note — try again in a moment":
 		"해당 노드를 아직 불러오는 중입니다. 잠시 후 다시 시도해 주세요",
-	"Copied wikilink": "위키링크 복사됨",
+	"Copied wikilink": "위키 링크 복사",
 	"Not syncing - reconnecting...": "동기화 중 - 다시 연결 중...",
 	"Still opening “{target}” — showing “{name}” until it does.":
 		'"{target}"을 아직 열고 있습니다. 완료될 때까지 "{name}"을 표시합니다.',
@@ -1066,6 +1069,27 @@ export default {
 	Connected: "연결됨",
 	"Disconnect {name}": "{name} 연결 해제",
 	"Connect {name}": "{name} 연결",
+	"Account deleted": "계정 삭제됨",
+	"Delete failed": "삭제 실패",
+	"You're the only admin on this instance. Promote another user to admin first, then try again.":
+		"이 인스턴스의 유일한 관리자입니다. 다른 사용자를 먼저 관리자로 지정한 후 다시 시도하세요.",
+	"Danger zone": "위험 구역",
+	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
+		"영구적인 작업입니다. 계정을 삭제하면 로그아웃되며, 해당 사용자 계정으로 다시 로그인할 수 없습니다.",
+	"Delete account": "계정 삭제",
+	"Delete your account?": "계정을 삭제하시겠습니까?",
+	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
+		"사용자 계정을 삭제합니다. 다시 로그인할 수 없습니다. 관리자가 나중에 보관함 데이터를 삭제할 수 있습니다.",
+	"I understand this is irreversible": "이 작업이 되돌릴 수 없다는 것을 이해합니다",
+	Delete: "삭제",
+	"Could not delete account": "계소 삭제에 실패했습니다",
+	"Permanently delete your account and all associated data. This cannot be undone.":
+		"계정과 관련된 모든 데이터를 영구적으로 삭제합니다. 이 작업은 되돌릴 수 없습니다.",
+	"Why are you deleting your account?": "계정을 삭제하시려는 이유가 무엇인가요?",
+	"Your answer is kept after your account is deleted, without your name or email.":
+		"계정 삭제 후에도 답변은 이름이나 이메일 없이 보관됩니다.",
+	'Type "{phrase}" to confirm': '확인을 위해 "{phrase}"을 입력하세요',
+	"Delete my account": "내 계정 삭제",
 	"Email copied": "이메일 복사됨",
 	"To change your email, contact your admin.": "이메일 주소를 변경하려면 관리자에게 문의하세요.",
 	"Copy email": "이메일 복사",
@@ -1119,27 +1143,6 @@ export default {
 	Device: "기기",
 	Browser: "브라우저",
 	"Revoke {name}": "{name} 세션 해제",
-	"Account deleted": "계정 삭제됨",
-	"Delete failed": "삭제 실패",
-	"You're the only admin on this instance. Promote another user to admin first, then try again.":
-		"이 인스턴스의 유일한 관리자입니다. 다른 사용자를 먼저 관리자로 지정한 후 다시 시도하세요.",
-	"Danger zone": "위험 구역",
-	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
-		"영구적인 작업입니다. 계정을 삭제하면 로그아웃되며, 해당 사용자 계정으로 다시 로그인할 수 없습니다.",
-	"Delete account": "계정 삭제",
-	"Delete your account?": "계정을 삭제하시겠습니까?",
-	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"사용자 계정을 삭제합니다. 다시 로그인할 수 없습니다. 관리자가 나중에 보관함 데이터를 삭제할 수 있습니다.",
-	"I understand this is irreversible": "이 작업이 되돌릴 수 없다는 것을 이해합니다",
-	Delete: "삭제",
-	"Could not delete account": "계소 삭제에 실패했습니다",
-	"Permanently delete your account and all associated data. This cannot be undone.":
-		"계정과 관련된 모든 데이터를 영구적으로 삭제합니다. 이 작업은 되돌릴 수 없습니다.",
-	"Why are you deleting your account?": "계정을 삭제하시려는 이유가 무엇인가요?",
-	"Your answer is kept after your account is deleted, without your name or email.":
-		"계정 삭제 후에도 답변은 이름이나 이메일 없이 보관됩니다.",
-	'Type "{phrase}" to confirm': '확인을 위해 "{phrase}"을 입력하세요',
-	"Delete my account": "내 계정 삭제",
 	"Rename failed": "이름 변경 실패",
 	Default: "기본 설정",
 	"Set {name} as default": "{name}을 기본으로 설정",
@@ -1214,8 +1217,8 @@ export default {
 	"Heading level": "제목 레벨",
 	"Heading {level}": "제목 {level}",
 	"Editor commands": "편집 명령어",
-	Undo: "되돌리기",
-	Redo: "다시 실행",
+	"Undo edit": "편집 취소",
+	"Redo edit": "편집 재실행",
 	Bold: "굵게",
 	Italic: "기울임",
 	Strikethrough: "취소선",
@@ -1338,8 +1341,8 @@ export default {
 	"Numbered automatically, with a link back. Reading view only — the editor leaves [^1] as text.":
 		"자동으로 번호가 매겨지며, 링크가 연결됩니다. 읽기 모드에서만 표시되며, 편집기에서는 [^1]이 텍스트로 유지됩니다.",
 	Links: "링크",
-	Wikilink: "위키링크",
-	"Wikilink with alias": "별칭이 있는 위키링크",
+	Wikilink: "위키 링크",
+	"Wikilink with alias": "별칭이 있는 위키 링크",
 	"The pipe sets the display text.": "파이프(|)는 표시 텍스트를 설정합니다.",
 	"External link": "외부 링크",
 	"Image by URL": "URL로 이미지 삽입",
@@ -1369,12 +1372,12 @@ export default {
 	Rename: "이름 바꾸기",
 	"Move to…": "이동",
 	Duplicate: "복사",
-	"Copy wikilink": "위키링크 복사",
+	"Copy wikilink": "위키 링크 복사",
 	"New note here": "여기 새 노트 생성",
 	"New subfolder": "새 하위 폴더 생성",
 	Edit: "편집",
 	Raw: "원본",
-	Reading: "읽기",
+	Reading: "보기 모드",
 	"Move {count} items to…": { other: "{count}개의 항목을 이동합니다…" },
 	"Copy {count} wikilinks": { other: "위키링크 {count}개 복사" },
 	"Delete {count} items": { other: "{count}개 항목 삭제" },

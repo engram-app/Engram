@@ -1,4 +1,4 @@
-// i18n-core 877f2298
+// i18n-core 5cfb0b93
 // The translategemma pipeline shared by the web app, the Obsidian plugin and the
 // marketing site: prompts, the checks an answer must pass, and catalog state.
 // Canonical copy: engram-app/Engram frontend/src/i18n/core/. The other repos
@@ -33,6 +33,15 @@ interface Profile<T extends string> {
 	brands: readonly string[];
 	// Terms pinned across every batch. Must be real keys.
 	glossary: readonly string[];
+	// Per locale, keys kept exactly as committed: a hand override copied from
+	// Obsidian's own translation. Never sent to the model, and not part of the
+	// fingerprint, so adding one redoes nothing.
+	pinned?: Partial<Record<T, readonly string[]>>;
+	// A note for the translator on what a string means where it shows, keyed by
+	// the English: FormatJS's message `description`, gettext's translator comment.
+	// For short labels whose sense the words alone do not fix ("Reading" as a view
+	// mode, not loading). Sent with that string alone; a changed one redoes it.
+	descriptions?: Readonly<Record<string, string>>;
 }
 
 // Per locale, in `locale/state.json`.
@@ -48,6 +57,8 @@ interface LocaleState {
 	one?: Record<string, string>;
 	// The glossary the catalog was built with: a changed term redoes its sentences.
 	glossary?: Record<string, string>;
+	// The descriptions it was built with: a changed one redoes its string.
+	descriptions?: Record<string, string>;
 }
 
 const NEWLINE = "⏎";
@@ -110,6 +121,140 @@ function numbers(s: string, source = false): string[] {
 	return [...new Set(digits.match(/\d+/gu) ?? [])].filter((n) => n !== "1");
 }
 
+// Terms a language's own software leaves in English, by base language, so an
+// echo of one is a translation and not a miss. Each comes from Obsidian's or VS
+// Code's translations for that language; add one only with such a source.
+// Lowercase, letters only, brands already removed ("💬 Feedback" is "feedback").
+const LOANWORDS: Record<string, readonly string[]> = {
+	// Names every language keeps, for profiles that do not list them as brands.
+	"*": [
+		...["chatgpt web", "docker compose", "docker compose up", "mcp", "obsidian sync"],
+		...["reddit", "relay", "sponsors", "youtube"],
+	],
+	de: [
+		"alternative",
+		"backend",
+		"browser",
+		"clients",
+		"cloud",
+		"code",
+		"community",
+		"downloads",
+		"faq",
+		"feedback",
+		"frontmatter",
+		"link",
+		"links",
+		"markdown",
+		"name",
+		"offline",
+		"optional",
+		"self host",
+		"status",
+		"support",
+		"system",
+		"tag",
+		"tags",
+		"text",
+		"token",
+		"upgrade",
+		"uploads",
+		"vault",
+		"vaults",
+		"version",
+		"web",
+	],
+	es: ["error", "idea", "legal", "markdown", "popular", "subtotal", "token", "total", "web"],
+	fr: [
+		"actions",
+		"administration",
+		"alternative",
+		"clients",
+		"code",
+		"concepts",
+		"date",
+		"diagnostics",
+		"documentation",
+		"exact",
+		"faq",
+		"markdown",
+		"mobile",
+		"note",
+		"notes",
+		"source",
+		"structure",
+		"support",
+		"total",
+		"type",
+		"types",
+		"web",
+	],
+	it: [
+		"account",
+		"backend",
+		"browser",
+		"bug",
+		"cloud",
+		"community",
+		"email",
+		"feedback",
+		"file",
+		"frontmatter",
+		"idea",
+		"markdown",
+		"mobile",
+		"offline",
+		"password",
+		"privacy",
+		"self host",
+		"self hosted",
+		"tag",
+		"token",
+		"uploads",
+		"user agent",
+		"vault",
+		"web",
+	],
+	ja: ["linux pc", "markdown", "web", "windows pc"],
+	ko: ["linux pc", "url", "windows pc"],
+	ms: ["edit", "folder", "frontmatter", "idea", "label", "markdown", "popular", "status", "token"],
+	pt: [
+		"backend",
+		"bug",
+		"cloud",
+		"docs",
+		"downloads",
+		"feedback",
+		"frontmatter",
+		"legal",
+		"link",
+		"links",
+		"markdown",
+		"offline",
+		"popular",
+		"status",
+		"subtotal",
+		"tag",
+		"tags",
+		"token",
+		"total",
+		"uploads",
+		"web",
+	],
+	ru: ["markdown"],
+	vi: ["backend", "cloud", "email", "frontmatter", "markdown", "token"],
+	zh: ["bug", "markdown"],
+};
+
+// True when any of `texts` (a source, and the source without its tokens and
+// brands) reads as one listed phrase: "Obsidian Sync" whole, "Feedback" alone.
+function isLoanword(code: string, ...texts: string[]): boolean {
+	const kept = [...(LOANWORDS["*"] ?? []), ...(LOANWORDS[code.split("-")[0] ?? code] ?? [])];
+	return texts.some((text) =>
+		kept.includes((text.toLowerCase().match(/\p{L}+/gu) ?? []).join(" ")),
+	);
+}
+
 function words(s: string): number {
 	return s.split(/\s+/u).filter((w) => /\p{L}/u.test(w)).length;
 }
@@ -164,6 +309,8 @@ function exactOne(code: string): boolean {
 
 function translator<T extends string>(profile: Profile<T>) {
 	const { specs, brands, glossary } = profile;
+	const pinned: Partial<Record<T, readonly string[]>> = profile.pinned ?? {};
+	const descriptions = profile.descriptions ?? {};
 	// Longest first, so "Engram Vault Sync" wins over "Engram" in the alternation.
 	// The `pre` group stands in for a lookbehind: the character before the brand.
 	const BRAND_WORD = `(?<pre>^|[^A-Za-z0-9])(?<brand>${[...brands]
@@ -201,12 +348,13 @@ function translator<T extends string>(profile: Profile<T>) {
 		terms: Record<string, string>,
 		text: string,
 		multi: boolean,
+		description?: string,
 	): string {
 		const { name, tone } = specs[code];
 		// Without the emoji: "🔄 Sync Center = 🔄 ..." made the model paste 🔄 into every
 		// sentence that mentions the Sync Center.
 		const bare = (term: string): string => term.replace(SYMBOL, "").trim();
-		const pinned = Object.entries(terms)
+		const terminology = Object.entries(terms)
 			.map(([en, tr]) => `${bare(en)} = ${bare(tr)}`)
 			.join("\n");
 		// Token rules only when the text has such a token, and never spelled out: the
@@ -229,7 +377,8 @@ function translator<T extends string>(profile: Profile<T>) {
 				? "Each numbered line is a separate string. Translate every line independently and return exactly the same numbered lines, one per line, in the same order."
 				: "",
 			`Rules: keep each string as short as its source. ${tokenRules}Do not add punctuation a source lacks. Keep brand names (${brands.join(", ")}) unchanged. ${tone}`,
-			pinned ? `Use this established terminology and tone:\n${pinned}` : "",
+			terminology ? `Use this established terminology and tone:\n${terminology}` : "",
+			description ? `Context for this string (do not translate it): ${description}` : "",
 			`Produce only the ${name} translation, without any additional explanations or commentary. Please translate the following English text into ${name}:\n\n\n${text}`,
 		]
 			.filter(Boolean)
@@ -286,7 +435,10 @@ function translator<T extends string>(profile: Profile<T>) {
 			placeholders: placeholders(out).join() !== placeholders(src).join(),
 			tags: tags(out) !== tags(src),
 			// A numbered token left after unmasking was invented by the model.
-			stray: NUMBERED.test(out) && !NUMBERED.test(src),
+			stray:
+				(NUMBERED.test(out) && !NUMBERED.test(src)) ||
+				// Or it copied a prompt's `English -> answer` format.
+				(/->|=>/u.test(out) && !/->|=>/u.test(src)),
 			// A plural sample ("2 of {indexed} notes") came back as "{indexed} of {indexed}".
 			numbers: !numbers(src, true).every((n) => numbers(out).includes(n)),
 			newlines: out.split("\n").length !== src.split("\n").length,
@@ -299,12 +451,12 @@ function translator<T extends string>(profile: Profile<T>) {
 			register: Boolean(formal?.test(out)),
 			// Only sentences: "ID:", "A → Z" or a bare "{status}: {message}" may stay Latin.
 			script: Boolean(script && words(prose(src)) > 3 && !script.test(out)),
-			// English echoed back. A phrase is never the same in another language; a
-			// single word may be ("Status"), unless it replaces a real translation.
+			// English echoed back. Only a language's loanwords may stay ("Status" in
+			// German), and never over a real translation.
 			untranslated:
 				out === src &&
 				!isBrandOnly(src) &&
-				(words(prose(src)) > 2 || (old !== undefined && old !== src)),
+				(!isLoanword(code, src, prose(src)) || (old !== undefined && old !== src)),
 		};
 		return Object.keys(failed).filter((name) => failed[name]);
 	}
@@ -363,8 +515,10 @@ function translator<T extends string>(profile: Profile<T>) {
 		const failed = state?.failed ?? {};
 		const used = new Set(entries.map((e) => e.key));
 		const out: string[] = [];
+		const pins = pinned[code] ?? [];
 		for (const e of entries) {
-			if (e.key in failed) {
+			// A pinned key is never retranslated, so its failure is never excused.
+			if (e.key in failed && !pins.includes(e.key)) {
 				continue;
 			}
 			const value = catalog[e.key];
@@ -448,6 +602,8 @@ function translator<T extends string>(profile: Profile<T>) {
 
 	return {
 		buildPrompt,
+		descriptions,
+		pinned,
 		catalogProblems,
 		cleanOutput,
 		entryProblems,
@@ -554,6 +710,7 @@ interface StoredState {
 	failed?: string[] | Record<string, string>;
 	one?: Record<string, string>;
 	glossary?: Record<string, string>;
+	descriptions?: Record<string, string>;
 }
 
 function upgradeState(
@@ -573,7 +730,13 @@ function upgradeState(
 	const stamp =
 		s.translator ??
 		(legacyVersion !== undefined && s.version === legacyVersion ? fingerprint : "legacy");
-	return { translator: stamp, failed, one: s.one, glossary: s.glossary };
+	return {
+		translator: stamp,
+		failed,
+		one: s.one,
+		glossary: s.glossary,
+		descriptions: s.descriptions,
+	};
 }
 
 // Plurals whose English `one` form changed since the catalog was built.
@@ -595,6 +758,17 @@ function todoKeys(
 	const keys = [...new Set(entries.map((e) => e.key))];
 	const oneChanged = new Set(oneChangedKeys(entries, state));
 	return keys.filter((k) => stale || !(k in catalog) || k in failed || oneChanged.has(k));
+}
+
+// Strings whose description was added, edited or removed since the catalog was built.
+function descriptionChangedKeys(
+	entries: readonly Entry[],
+	state: LocaleState | undefined,
+	descriptions: Readonly<Record<string, string>>,
+): string[] {
+	return entries
+		.filter((e) => state?.descriptions?.[e.key] !== descriptions[e.key])
+		.map((e) => e.key);
 }
 
 // Sentences that use a glossary term whose translation changed since the catalog
@@ -628,6 +802,7 @@ function nextLocaleState(
 	fingerprint: string,
 	glossary: Record<string, string>,
 	today: string,
+	descriptions: Readonly<Record<string, string>> = {},
 ): LocaleState {
 	const since: Record<string, string> = {};
 	for (const k of [...failed].sort()) {
@@ -639,7 +814,16 @@ function nextLocaleState(
 			one[key] = plural.one;
 		}
 	}
-	return { translator: fingerprint, failed: since, one, glossary };
+	const described: Record<string, string> = {};
+	for (const { key } of entries) {
+		const note = descriptions[key];
+		if (note !== undefined && !(key in since)) {
+			described[key] = note;
+		}
+	}
+	const state: LocaleState = { translator: fingerprint, failed: since, one, glossary };
+	// Omitted when empty, so a repo without descriptions keeps its state file as is.
+	return Object.keys(described).length > 0 ? { ...state, descriptions: described } : state;
 }
 
 // Failed keys older than `days`: the model cannot translate them, so a person must
@@ -701,6 +885,7 @@ export type { Catalog, Entry, LocaleState, PluralForms, Profile, Spec, StoredSta
 export {
 	batchText,
 	coreHeaderOk,
+	descriptionChangedKeys,
 	exactOne,
 	formSource,
 	fromSample,
