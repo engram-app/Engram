@@ -10,6 +10,8 @@ defmodule EngramWeb.FeedbackController do
 
   def create(conn, %{"kind" => kind} = params) when is_binary(kind) do
     user = conn.assigns.current_user
+    # Server-stamped, so a client cannot send a misleading one.
+    params = Map.put(params, "user_agent", conn |> get_req_header("user-agent") |> List.first())
 
     with {:allow, _} <-
            EngramWeb.RateLimiter.hit(

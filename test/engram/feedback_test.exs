@@ -195,6 +195,161 @@ defmodule Engram.FeedbackTest do
       assert {:error, :empty_message} = Feedback.submit(user, "general", %{"message" => "   "})
       assert {:error, :empty_message} = Feedback.submit(user, "general", %{})
     end
+
+    test "carries category, mood, contact consent and client context", %{user: user} do
+      assert :ok =
+               Feedback.submit(user, "general", %{
+                 "message" => "sync stalls",
+                 "category" => "bug",
+                 "mood" => 2,
+                 "contact_ok" => true,
+                 "source" => "plugin",
+                 "app_version" => "1.33.4",
+                 "area" => "settings/sync",
+                 "user_agent" => "Mozilla/5.0 obsidian/1.9.10"
+               })
+
+      assert_receive {:posthog, %{"event" => "user_feedback", "properties" => props}}, 1_000
+
+      assert %{
+               "category" => "bug",
+               "mood" => 2,
+               "contact_ok" => true,
+               "source" => "plugin",
+               "app_version" => "1.33.4",
+               "area" => "settings/sync",
+               "user_agent" => "Mozilla/5.0 obsidian/1.9.10",
+               "plan" => "free"
+             } = props
+
+      assert is_binary(props["server_version"])
+    end
+
+    test "defaults source to web and contact_ok to false", %{user: user} do
+      assert :ok = Feedback.submit(user, "general", %{"message" => "hi"})
+      assert_receive {:posthog, %{"properties" => props}}, 1_000
+      assert props["source"] == "web"
+      assert props["contact_ok"] == false
+      refute Map.has_key?(props, "category")
+      refute Map.has_key?(props, "mood")
+    end
+
+    test "rejects an unknown category, mood or source", %{user: user} do
+      base = %{"message" => "hi"}
+
+      assert {:error, :invalid_category} =
+               Feedback.submit(user, "general", Map.put(base, "category", "rant"))
+
+      for mood <- [0, 6, "3", 2.5] do
+        assert {:error, :invalid_mood} =
+                 Feedback.submit(user, "general", Map.put(base, "mood", mood))
+      end
+
+      assert {:error, :invalid_source} =
+               Feedback.submit(user, "general", Map.put(base, "source", "ios"))
+    end
+
+    test "caps client context strings", %{user: user} do
+      assert :ok =
+               Feedback.submit(user, "general", %{
+                 "message" => "hi",
+                 "app_version" => String.duplicate("9", 500),
+                 "area" => String.duplicate("a", 500),
+                 "user_agent" => String.duplicate("u", 500)
+               })
+
+      assert_receive {:posthog, %{"properties" => props}}, 1_000
+      assert String.length(props["app_version"]) == 40
+      assert String.length(props["area"]) == 80
+      assert String.length(props["user_agent"]) == 300
+    end
+  end
+
+  describe "general -> Discord" do
+    setup do
+      prior = Application.get_env(:engram, :feedback_discord_webhook_url)
+      on_exit(fn -> Application.put_env(:engram, :feedback_discord_webhook_url, prior) end)
+
+      discord = Bypass.open()
+      parent = self()
+
+      Bypass.stub(discord, "POST", "/hook", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+
+        send(
+          parent,
+          {:discord, Jason.decode!(body), Plug.Conn.get_req_header(conn, "user-agent")}
+        )
+
+        Plug.Conn.resp(conn, 204, "")
+      end)
+
+      Application.put_env(
+        :engram,
+        :feedback_discord_webhook_url,
+        "http://localhost:#{discord.port}/hook"
+      )
+
+      :ok
+    end
+
+    test "pings with category, mood, source and message, and blocks mentions", %{user: user} do
+      assert :ok =
+               Feedback.submit(user, "general", %{
+                 "message" => "@everyone sync stalls",
+                 "category" => "bug",
+                 "mood" => 1,
+                 "source" => "plugin",
+                 "app_version" => "1.33.4"
+               })
+
+      assert_receive {:discord, payload, [ua]}, 1_000
+      assert payload["allowed_mentions"] == %{"parse" => []}
+      # SUPPRESS_EMBEDS, and a descriptive UA: Cloudflare 403s library defaults.
+      assert payload["flags"] == 4
+      assert ua =~ "Engram"
+
+      content = payload["content"]
+      assert content =~ "Bug"
+      assert content =~ "1/5"
+      assert content =~ "plugin 1.33.4"
+      assert content =~ "@everyone sync stalls"
+      assert content =~ user.id
+    end
+
+    test "shows the email only when the user said we can reply", %{user: user} do
+      assert :ok = Feedback.submit(user, "general", %{"message" => "hi"})
+      assert_receive {:discord, %{"content" => content}, _}, 1_000
+      refute content =~ user.email
+
+      assert :ok = Feedback.submit(user, "general", %{"message" => "hi", "contact_ok" => true})
+      assert_receive {:discord, %{"content" => content}, _}, 1_000
+      assert content =~ user.email
+    end
+
+    test "scrubs emails out of the message unless the user said we can reply", %{user: user} do
+      assert :ok = Feedback.submit(user, "general", %{"message" => "mail me at x@y.com"})
+      assert_receive {:discord, %{"content" => content}, _}, 1_000
+      refute content =~ "x@y.com"
+      assert content =~ "[email]"
+    end
+
+    test "fits Discord's 2000-char limit", %{user: user} do
+      assert :ok =
+               Feedback.submit(user, "general", %{
+                 "message" => String.duplicate("a", 2_000),
+                 "user_agent" => String.duplicate("u", 300),
+                 "area" => String.duplicate("r", 80)
+               })
+
+      assert_receive {:discord, %{"content" => content}, _}, 1_000
+      assert String.length(content) <= 2_000
+    end
+
+    test "does not ping on a rejected submission", %{user: user} do
+      assert {:error, :empty_message} = Feedback.submit(user, "general", %{"message" => " "})
+      refute_receive {:discord, _, _}, 200
+    end
   end
 
   test "caps free text at 2000 chars", %{user: user} do
