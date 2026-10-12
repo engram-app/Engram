@@ -151,6 +151,17 @@ defmodule EngramWeb.Plugs.RequireSessionTest do
       assert %{"error" => "device_token_not_allowed"} = json_response(conn, 403)
     end
 
+    # A web session JWT carries `device_token: false`, not nil: it must still
+    # reach every feedback kind (the survey and cancel reason post from here).
+    test "POST /api/feedback lets a web session send any kind", %{conn: conn, user: user} do
+      conn =
+        conn
+        |> session_authed(user)
+        |> post("/api/feedback", %{"kind" => "onboarding", "heard_from" => "reddit"})
+
+      assert json_response(conn, 200) == %{"status" => "ok"}
+    end
+
     test "POST /api/feedback still rejects a third-party OAuth grant", %{conn: conn, user: user} do
       conn =
         conn

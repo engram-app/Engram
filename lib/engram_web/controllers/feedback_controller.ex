@@ -7,8 +7,9 @@ defmodule EngramWeb.FeedbackController do
   # cap (`Feedback.allow?/1`), shared with the MCP send_feedback tool.
   # The plugin's device token is admitted for the feedback box only, not the
   # survey, cancel or delete answers (see :require_session_allow_plugin).
-  def create(%{assigns: %{device_token: token}} = conn, %{"kind" => kind})
-      when not is_nil(token) and kind != "general" do
+  # `device_token` is `false` (not nil) on a web session JWT, so match `true`.
+  def create(%{assigns: %{device_token: true}} = conn, %{"kind" => kind})
+      when kind != "general" do
     conn |> put_status(403) |> json(%{error: "device_token_not_allowed"})
   end
 
