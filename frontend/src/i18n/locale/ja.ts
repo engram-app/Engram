@@ -1342,10 +1342,9 @@ export default {
 	"Creating a new vault": "新しい保管庫を作成中",
 	"New vault name": "新しい保管庫の名前",
 	"Where should these notes sync?": "これらのノートをどこに同期しますか?",
-	Suggested: "おすすめ",
-	"matches your Obsidian vault": "Obsidian の保管庫と一致",
 	"Or sync with a different vault": "または別の保管庫と同期",
 	"Sync with an existing vault": "既存の保管庫と同期",
+	"Sync with your matching vault": "一致する保管庫と同期",
 	"(choose from {count} vaults)": "({count} 件の保管庫から選択)",
 	"Or create a new vault": "または新しい保管庫を作成",
 	"Changes can't be saved: your account can't sync right now.":

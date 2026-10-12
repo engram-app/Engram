@@ -1321,10 +1321,9 @@ export default {
 	"Creating a new vault": "새 보관함 만드는 중",
 	"New vault name": "새 보관함 이름",
 	"Where should these notes sync?": "이 노트를 어디에 동기화할까요?",
-	Suggested: "추천",
-	"matches your Obsidian vault": "Obsidian 보관함과 일치",
 	"Or sync with a different vault": "또는 다른 보관함과 동기화",
 	"Sync with an existing vault": "기존 보관함과 동기화",
+	"Sync with your matching vault": "일치하는 보관함과 동기화",
 	"(choose from {count} vaults)": "(보관함 {count}개 중 선택)",
 	"Or create a new vault": "또는 새 보관함 만들기",
 	"Changes can't be saved: your account can't sync right now.":

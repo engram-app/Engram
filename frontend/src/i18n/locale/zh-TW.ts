@@ -1284,10 +1284,9 @@ export default {
 	"Creating a new vault": "正在建立新知識庫",
 	"New vault name": "新知識庫名稱",
 	"Where should these notes sync?": "這些筆記要同步到哪裡？",
-	Suggested: "建議",
-	"matches your Obsidian vault": "與你的 Obsidian 知識庫相符",
 	"Or sync with a different vault": "或與其他知識庫同步",
 	"Sync with an existing vault": "與現有知識庫同步",
+	"Sync with your matching vault": "與相符的知識庫同步",
 	"(choose from {count} vaults)": "（從 {count} 個知識庫中選擇）",
 	"Or create a new vault": "或建立新知識庫",
 	"Changes can't be saved: your account can't sync right now.":

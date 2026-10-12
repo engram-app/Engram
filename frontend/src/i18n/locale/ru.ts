@@ -1453,10 +1453,9 @@ export default {
 	"Creating a new vault": "Создание нового хранилища",
 	"New vault name": "Название нового хранилища",
 	"Where should these notes sync?": "Куда синхронизировать эти заметки?",
-	Suggested: "Рекомендуется",
-	"matches your Obsidian vault": "совпадает с вашим хранилищем Obsidian",
 	"Or sync with a different vault": "Или синхронизировать с другим хранилищем",
 	"Sync with an existing vault": "Синхронизировать с существующим хранилищем",
+	"Sync with your matching vault": "Синхронизировать с подходящим хранилищем",
 	"(choose from {count} vaults)": "(выберите из {count} хранилищ)",
 	"Or create a new vault": "Или создайте новое хранилище",
 	"Changes can't be saved: your account can't sync right now.":

@@ -1404,10 +1404,9 @@ export default {
 	"Creating a new vault": "Criando um novo cofre",
 	"New vault name": "Nome do novo cofre",
 	"Where should these notes sync?": "Onde estas notas devem ser sincronizadas?",
-	Suggested: "Sugerido",
-	"matches your Obsidian vault": "corresponde ao seu cofre do Obsidian",
 	"Or sync with a different vault": "Ou sincronize com outro cofre",
 	"Sync with an existing vault": "Sincronizar com um cofre existente",
+	"Sync with your matching vault": "Sincronizar com seu cofre correspondente",
 	"(choose from {count} vaults)": "(escolha entre {count} cofres)",
 	"Or create a new vault": "Ou crie um novo cofre",
 	"Changes can't be saved: your account can't sync right now.":

@@ -1408,10 +1408,9 @@ export default {
 	"Creating a new vault": "Creando una bóveda nueva",
 	"New vault name": "Nombre de la bóveda nueva",
 	"Where should these notes sync?": "¿Dónde deben sincronizarse estas notas?",
-	Suggested: "Sugerida",
-	"matches your Obsidian vault": "coincide con tu bóveda de Obsidian",
 	"Or sync with a different vault": "O sincroniza con otra bóveda",
 	"Sync with an existing vault": "Sincronizar con una bóveda existente",
+	"Sync with your matching vault": "Sincronizar con tu bóveda coincidente",
 	"(choose from {count} vaults)": "(elige entre {count} bóvedas)",
 	"Or create a new vault": "O crea una bóveda nueva",
 	"Changes can't be saved: your account can't sync right now.":

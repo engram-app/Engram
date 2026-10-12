@@ -9,6 +9,7 @@ import { useT } from "@/i18n/locale-provider";
 import type { Locale } from "@/i18n/locales";
 import type { Tn } from "@/i18n/translate";
 import { intlLocale } from "@/lib/intl-locale";
+import { selectableRow } from "@/lib/ui-classes";
 
 // Above this many vaults the list gets a search box. Below it, the box is
 // pure clutter - every vault is already on screen.
@@ -42,7 +43,7 @@ function SearchInput({ search, status }: { search: VaultSearch; status?: string 
 	);
 }
 
-export function countLabel(tn: Tn, locale: Locale, notes?: number, files?: number): string {
+function countLabel(tn: Tn, locale: Locale, notes?: number, files?: number): string {
 	const tag = intlLocale(locale);
 	const noteCount = notes ?? 0;
 	const parts = [
@@ -56,11 +57,48 @@ export function countLabel(tn: Tn, locale: Locale, notes?: number, files?: numbe
 	return parts.join(" · ");
 }
 
+interface VaultOptionProps {
+	vault: { name: string; is_default?: boolean; note_count?: number; attachment_count?: number };
+	type: "radio" | "checkbox";
+	checked: boolean;
+	onChange: () => void;
+	name?: string;
+}
+
+// One vault card for every picker (/link is single-select, OAuth consent is
+// multi-select). The counts sit under the name, never beside it: side by side,
+// a long name on a narrow phone collides with them.
+export function VaultOption({ vault, type, checked, onChange, name }: VaultOptionProps) {
+	const { t, tn, renderedLocale } = useT();
+	return (
+		<label className={selectableRow(checked)}>
+			<input
+				type={type}
+				name={name}
+				checked={checked}
+				onChange={onChange}
+				className="accent-primary"
+			/>
+			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+				<span className="wrap-anywhere font-medium text-foreground text-sm">
+					{vault.name}
+					{vault.is_default ? (
+						<span className="ms-2 font-normal text-muted-foreground text-xs">{t("default")}</span>
+					) : null}
+				</span>
+				<span className="text-muted-foreground text-xs">
+					{countLabel(tn, renderedLocale, vault.note_count, vault.attachment_count)}
+				</span>
+			</span>
+		</label>
+	);
+}
+
 // The scrollbar lives in a gutter that `-me-3` pulls out of the column and
 // `pe-3` hands back to the rows, so a scrolling list is exactly as wide as the
 // controls around it. `always` keeps the bar visible: a hover-only bar on a
-// list that fits whole rows gives no hint there is more below. 18rem shows four
-// and a half rows for the same reason, so the fifth is visibly cut off.
+// list that fits whole rows gives no hint there is more below. 18rem shows three
+// and a half rows for the same reason, so the fourth is visibly cut off.
 export function VaultRows({ scroll, children }: { scroll: boolean; children: React.ReactNode }) {
 	// Unscrolled, the rows are direct children of the caller's flex column, so
 	// they need no wrapper of their own. Phones get no fixed height: a scroll

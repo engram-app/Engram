@@ -1420,10 +1420,9 @@ export default {
 	"Creating a new vault": "Creazione di un nuovo archivio",
 	"New vault name": "Nome del nuovo archivio",
 	"Where should these notes sync?": "Dove devono essere sincronizzate queste note?",
-	Suggested: "Suggerito",
-	"matches your Obsidian vault": "corrisponde al tuo archivio Obsidian",
 	"Or sync with a different vault": "Oppure sincronizza con un altro archivio",
 	"Sync with an existing vault": "Sincronizza con un archivio esistente",
+	"Sync with your matching vault": "Sincronizza con il tuo archivio corrispondente",
 	"(choose from {count} vaults)": "(scegli tra {count} archivi)",
 	"Or create a new vault": "Oppure crea un nuovo archivio",
 	"Changes can't be saved: your account can't sync right now.":
