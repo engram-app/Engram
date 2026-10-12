@@ -286,6 +286,12 @@ describe("entryProblems / invalidKeys / catalogProblems", () => {
 			failed: { "Upgrade to Pro": "2026-10-01", "Hard one": "2026-10-01" },
 		};
 		expect(tr.catalogProblems(entries, catalog, "es", state)).toEqual(['es: orphan "Old"']);
+		// A pin is never retranslated, so a tracked failure would only sit there.
+		const pinned = translator({ ...profile, pinned: { es: ["Upgrade to Pro"] } });
+		expect(pinned.catalogProblems(entries, catalog, "es", state)).toEqual([
+			'es: brand in "Upgrade to Pro"',
+			'es: orphan "Old"',
+		]);
 	});
 });
 

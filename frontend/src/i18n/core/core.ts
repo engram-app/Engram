@@ -1,4 +1,4 @@
-// i18n-core 12ccb44a
+// i18n-core bd2681eb
 // The translategemma pipeline shared by the web app, the Obsidian plugin and the
 // marketing site: prompts, the checks an answer must pass, and catalog state.
 // Canonical copy: engram-app/Engram frontend/src/i18n/core/. The other repos
@@ -515,8 +515,10 @@ function translator<T extends string>(profile: Profile<T>) {
 		const failed = state?.failed ?? {};
 		const used = new Set(entries.map((e) => e.key));
 		const out: string[] = [];
+		const pins = pinned[code] ?? [];
 		for (const e of entries) {
-			if (e.key in failed) {
+			// A pinned key is never retranslated, so its failure is never excused.
+			if (e.key in failed && !pins.includes(e.key)) {
 				continue;
 			}
 			const value = catalog[e.key];
