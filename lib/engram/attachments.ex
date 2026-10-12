@@ -394,7 +394,8 @@ defmodule Engram.Attachments do
   If the blob delete fails, the row stays deleted and we log a warning — a zombie blob
   wastes storage but doesn't cause data loss, unlike the reverse (ghost row pointing to nothing).
   """
-  @spec delete_attachment(map(), map(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec delete_attachment(Engram.Accounts.User.t(), map(), String.t(), keyword()) ::
+          :ok | {:error, term()}
   def delete_attachment(user, vault, path, opts \\ []) do
     case delete_attachment_reporting(user, vault, path, opts) do
       {:error, _} = err -> err
@@ -406,7 +407,7 @@ defmodule Engram.Attachments do
   `delete_attachment/4`, reporting whether a live attachment was there:
   `:deleted` or `:absent`.
   """
-  @spec delete_attachment_reporting(map(), map(), String.t(), keyword()) ::
+  @spec delete_attachment_reporting(Engram.Accounts.User.t(), map(), String.t(), keyword()) ::
           :deleted | :absent | {:error, term()}
   def delete_attachment_reporting(user, vault, path, opts \\ []) do
     do_delete_attachment(fresh_user(user), vault, path, opts)
@@ -429,17 +430,24 @@ defmodule Engram.Attachments do
 
         result =
           Repo.with_tenant(user.id, fn ->
-            seq = Engram.Vaults.next_seq!(vault.id)
+            live = from(a in scoped_live(user, vault), where: a.path_hmac == ^path_hmac)
 
-            {count, rows} =
-              from(a in scoped_live(user, vault),
-                where: a.path_hmac == ^path_hmac,
-                select: {a.id, a.storage_key, a.basename_hmac}
-              )
-              |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
+            # Unlocked pre-check so an absent path neither bumps the vault seq
+            # nor waits on the vault row lock. The lock order (vault, then
+            # attachment) stays the same as upsert's; a delete that races in
+            # between just makes update_all below match 0 rows.
+            if Repo.exists?(live) do
+              seq = Engram.Vaults.next_seq!(vault.id)
 
-            if count > 0, do: :ok = evict_counts(user.id)
-            {count, List.first(rows)}
+              {count, rows} =
+                from(a in live, select: {a.id, a.storage_key, a.basename_hmac})
+                |> Repo.update_all(set: [deleted_at: now, updated_at: now, seq: seq])
+
+              if count > 0, do: :ok = evict_counts(user.id)
+              {count, List.first(rows)}
+            else
+              {0, nil}
+            end
           end)
           |> unwrap_tenant()
 
