@@ -266,111 +266,28 @@ defmodule Engram.FeedbackTest do
     end
   end
 
-  describe "general -> Discord" do
-    setup do
-      prior = Application.get_env(:engram, :feedback_discord_webhook_url)
-      on_exit(fn -> Application.put_env(:engram, :feedback_discord_webhook_url, prior) end)
-
-      discord = Bypass.open()
-      parent = self()
-
-      Bypass.stub(discord, "POST", "/hook", fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-
-        send(
-          parent,
-          {:discord, Jason.decode!(body), Plug.Conn.get_req_header(conn, "user-agent")}
-        )
-
-        Plug.Conn.resp(conn, 204, "")
-      end)
-
-      Application.put_env(
-        :engram,
-        :feedback_discord_webhook_url,
-        "http://localhost:#{discord.port}/hook"
-      )
-
-      :ok
-    end
-
-    test "pings with category, mood, source and message, and blocks mentions", %{user: user} do
-      assert :ok =
-               Feedback.submit(user, "general", %{
-                 "message" => "@everyone sync stalls",
-                 "category" => "bug",
-                 "mood" => 1,
-                 "source" => "plugin",
-                 "app_version" => "1.33.4"
-               })
-
-      assert_receive {:discord, payload, [ua]}, 1_000
-      assert payload["allowed_mentions"] == %{"parse" => []}
-      # SUPPRESS_EMBEDS, and a descriptive UA: Cloudflare 403s library defaults.
-      assert payload["flags"] == 4
-      assert ua =~ "Engram"
-
-      content = payload["content"]
-      assert content =~ "Bug"
-      assert content =~ "1/5"
-      assert content =~ "plugin 1.33.4"
-      assert content =~ "@everyone sync stalls"
-      assert content =~ user.id
-    end
-
-    test "shows the email only when the user said we can reply", %{user: user} do
+  describe "general reply consent" do
+    test "carries the email only when the user said we can reply", %{user: user} do
       assert :ok = Feedback.submit(user, "general", %{"message" => "hi"})
-      assert_receive {:discord, %{"content" => content}, _}, 1_000
-      refute content =~ user.email
+      assert_receive {:posthog, %{"properties" => props}}, 1_000
+      refute Map.has_key?(props, "contact_email")
 
       assert :ok = Feedback.submit(user, "general", %{"message" => "hi", "contact_ok" => true})
-      assert_receive {:discord, %{"content" => content}, _}, 1_000
-      assert content =~ user.email
-    end
-
-    test "scrubs emails out of the message unless the user said we can reply", %{user: user} do
-      assert :ok = Feedback.submit(user, "general", %{"message" => "mail me at x@y.com"})
-      assert_receive {:discord, %{"content" => content}, _}, 1_000
-      refute content =~ "x@y.com"
-      assert content =~ "[email]"
-    end
-
-    test "fits Discord's 2000-char limit", %{user: user} do
-      assert :ok =
-               Feedback.submit(user, "general", %{
-                 "message" => String.duplicate("a", 2_000),
-                 "user_agent" => String.duplicate("u", 300),
-                 "area" => String.duplicate("r", 80)
-               })
-
-      assert_receive {:discord, %{"content" => content}, _}, 1_000
-      assert String.length(content) <= 2_000
+      assert_receive {:posthog, %{"properties" => props}}, 1_000
+      assert props["contact_email"] == user.email
     end
 
     test "drops a client area or version that is not a plain token", %{user: user} do
       assert :ok =
                Feedback.submit(user, "general", %{
                  "message" => "hi",
-                 "area" => "x`\nuser `forged` · reply OK: a@b.com",
+                 "area" => "x`\nuser forged a@b.com",
                  "app_version" => "1.0 a@b.com"
                })
 
-      assert_receive {:discord, %{"content" => content}, _}, 1_000
-      refute content =~ "forged"
-      refute content =~ "a@b.com"
-    end
-
-    test "strips backticks from the user agent", %{user: user} do
-      assert :ok =
-               Feedback.submit(user, "general", %{"message" => "hi", "user_agent" => "UA`x"})
-
-      assert_receive {:discord, %{"content" => content}, _}, 1_000
-      assert content =~ "ua `UAx`"
-    end
-
-    test "does not ping on a rejected submission", %{user: user} do
-      assert {:error, :empty_message} = Feedback.submit(user, "general", %{"message" => " "})
-      refute_receive {:discord, _, _}, 200
+      assert_receive {:posthog, %{"properties" => props}}, 1_000
+      refute Map.has_key?(props, "area")
+      refute Map.has_key?(props, "app_version")
     end
   end
 

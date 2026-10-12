@@ -215,7 +215,6 @@ Each block is opt-in: unset → no-op (dev/test/self-host emit nothing).
 | `RELEASE_SHA` | unset | Sentry release tag, must match `getsentry/action-release`. |
 | `POSTHOG_API_KEY` | unset | Server-side PostHog capture. |
 | `POSTHOG_HOST` | `https://us.i.posthog.com` | PostHog ingest host. |
-| `FEEDBACK_DISCORD_WEBHOOK_URL` | unset | Discord webhook pinged for each free-form feedback submission (`Engram.Feedback`). No email unless the user ticked reply consent. Unset = no ping (self-host, dev). |
 | `POSTHOG_ERASURE_API_KEY` | unset | Separate, write-scoped PostHog key for `Engram.Observability.PostHog.delete_person/1`, called from account hard-delete (GDPR Art. 17). Deliberately not `POSTHOG_API_KEY`, that one stays capture-only/read-only. |
 | `POSTHOG_PROJECT_ID` | unset | PostHog project id for the erasure API (`/api/projects/:id/persons/`). Erasure no-ops when either this or `POSTHOG_ERASURE_API_KEY` is unset, self-host/dev. |
 | `GRAFANA_PYROSCOPE_URL` | unset | Enables continuous CPU profiling. |

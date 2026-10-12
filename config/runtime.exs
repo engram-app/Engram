@@ -1011,12 +1011,6 @@ if key = System.get_env("POSTHOG_API_KEY") do
     posthog_host: System.get_env("POSTHOG_HOST", "https://us.i.posthog.com")
 end
 
-# Discord ping for free-form user feedback (Engram.Feedback). No-op when
-# unset, so dev, test and self-host post nothing.
-if url = System.get_env("FEEDBACK_DISCORD_WEBHOOK_URL") do
-  config :engram, :feedback_discord_webhook_url, url
-end
-
 # PostHog erasure (Engram.Observability.PostHog.delete_person/1), called from
 # account hard-delete (GDPR Art. 17). Deliberately a SEPARATE key from
 # POSTHOG_API_KEY above: that one is capture-only and must stay read-only;

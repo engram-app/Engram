@@ -4,10 +4,6 @@ defmodule Engram.Feedback do
   (asked on `/onboard/about`), why a subscriber cancels or deletes their account,
   and free-form feedback.
 
-  Free-form (`general`) feedback also pings Discord when
-  `:feedback_discord_webhook_url` is set, so a message is seen the day it is
-  sent rather than whenever someone opens the dashboard.
-
   Every answer goes to PostHog server-side (ad blockers cannot drop it), with
   the slugs also set as person properties so dashboards can break funnels down
   by them. The onboarding answers are also merged into
@@ -21,7 +17,6 @@ defmodule Engram.Feedback do
 
   alias Engram.Accounts.User
   alias Engram.Billing
-  alias Engram.Notifications.Discord
   alias Engram.Observability.PostHog
   alias Engram.Repo
 
@@ -32,17 +27,8 @@ defmodule Engram.Feedback do
   @sources ~w(web plugin)
   @max_text 2_000
 
-  @category_labels %{
-    "bug" => "🐛 Bug",
-    "idea" => "💡 Idea",
-    "confusing" => "😕 Confusing",
-    "love" => "❤️ Love it"
-  }
-  @mood_faces %{1 => "😡", 2 => "🙁", 3 => "😐", 4 => "🙂", 5 => "😍"}
-  @discord_limit 2_000
-  # Client context lands in Discord outside the quoted message, so anything
-  # that is not a plain token is dropped: no newline, backtick or email can
-  # forge a line or leak an address there.
+  # Client context must be a plain token: anything else (a newline, an email,
+  # free text) is dropped rather than stored as an analytics property.
   @version_format ~r/\A[\w.+-]{1,40}\z/u
   @area_format ~r/\A[\w.\/-]{1,80}\z/u
 
@@ -138,9 +124,7 @@ defmodule Engram.Feedback do
   def submit(user, "general", params) do
     with {:ok, message} <- required_message(params["message"]),
          {:ok, props} <- general_props(user, params) do
-      props = Map.put(props, "message", message)
-      notify_discord(user, props)
-      capture(user, "user_feedback", props)
+      capture(user, "user_feedback", Map.put(props, "message", message))
     end
   end
 
@@ -229,10 +213,12 @@ defmodule Engram.Feedback do
             "category" => category,
             "mood" => mood,
             "contact_ok" => params["contact_ok"] == true,
+            # Only with consent: the one place a reply address is stored.
+            "contact_email" => if(params["contact_ok"] == true, do: user.email),
             "source" => source,
             "app_version" => token(params["app_version"], @version_format),
             "area" => token(params["area"], @area_format),
-            "user_agent" => params["user_agent"] |> text(300) |> strip_backticks(),
+            "user_agent" => text(params["user_agent"], 300),
             "plan" => user |> Billing.tier() |> Atom.to_string(),
             "server_version" => server_version()
           }
@@ -251,57 +237,12 @@ defmodule Engram.Feedback do
     end
   end
 
-  defp notify_discord(user, props) do
-    case Application.get_env(:engram, :feedback_discord_webhook_url) do
-      url when is_binary(url) and url != "" -> Discord.post(url, discord_content(user, props))
-      _ -> :ok
-    end
-  end
-
-  # Context first, message last: the 2,000-char cap then only ever trims the
-  # message, never who sent it. Discord keeps the message after an account is
-  # erased, so without reply consent it carries no email: the user id only,
-  # and any address typed into the message is scrubbed.
-  defp discord_content(user, p) do
-    head =
-      [
-        @category_labels[p["category"]] || "💬 Feedback",
-        p["mood"] && "#{@mood_faces[p["mood"]]} #{p["mood"]}/5",
-        Enum.join([p["source"], p["app_version"]] |> Enum.reject(&is_nil/1), " "),
-        p["plan"]
-      ]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.join(" · ")
-
-    {who, message} =
-      if p["contact_ok"],
-        do: {"reply OK: #{user.email || "no email on file"}", p["message"]},
-        else: {"no reply wanted", scrub_emails(p["message"])}
-
-    meta =
-      [
-        "user `#{user.id}` · #{who}",
-        p["area"] && "area `#{p["area"]}`",
-        "server #{p["server_version"]}",
-        p["user_agent"] && "ua `#{p["user_agent"]}`"
-      ]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.join("\n")
-
-    quoted = message |> String.split("\n") |> Enum.map_join("\n", &("> " <> &1))
-
-    String.slice("**#{head}**\n#{meta}\n#{quoted}", 0, @discord_limit)
-  end
-
   defp token(value, format) when is_binary(value) do
     trimmed = String.trim(value)
     if Regex.match?(format, trimmed), do: trimmed
   end
 
   defp token(_, _), do: nil
-
-  defp strip_backticks(nil), do: nil
-  defp strip_backticks(value), do: String.replace(value, "`", "")
 
   # Free text is trimmed and capped; blank means absent.
   defp text(value, max \\ @max_text)

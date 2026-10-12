@@ -45,9 +45,6 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # Carries user-written free text (survey detail, cancel note, feedback
     # message), which can hold anything a note can.
     "lib/engram/feedback.ex",
-    # Posts that same free text to Discord. Logs only the HTTP status or
-    # transport reason today; in scope so a future payload log is caught.
-    "lib/engram/notifications/discord.ex",
     # Egress sinks for exceptions raised over content (request params, job
     # args, decrypted notes). Their own log call renders an exception, so the
     # scan must see it go through SafeException.
