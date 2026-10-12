@@ -42,8 +42,13 @@ async def test_drifted_map_self_heals_on_inbound_edit(vault_a, vault_b, cdp_a, c
     # Drift: B loses the id->path mapping for this note (the diverged state).
     note_id = await cdp_b.evaluate(f"{PLUGIN}.noteIdMap.get({json.dumps(path)})")
     assert note_id, "B should have mapped the note before drift"
-    await cdp_b.evaluate(f"{PLUGIN}.noteIdMap.delete({json.dumps(path)})")
-    after = await cdp_b.evaluate(f"{PLUGIN}.noteIdMap.pathForId({json.dumps(note_id)})")
+    # Delete and read back in ONE synchronous evaluate. As two round-trips, a
+    # late index/pull `set()` from the base sync could re-learn the mapping in
+    # between, i.e. the self-heal fired before the drift was ever observed.
+    after = await cdp_b.evaluate(
+        f"(() => {{ const m = {PLUGIN}.noteIdMap; m.delete({json.dumps(path)}); "
+        f"return m.pathForId({json.dumps(note_id)}); }})()"
+    )
     assert after is None, "drift injection should have removed the reverse mapping"
 
     # A edits over CRDT. B must re-resolve id->path and materialize the edit,
