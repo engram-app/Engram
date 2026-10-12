@@ -66,6 +66,25 @@ defmodule EngramWeb.UsersControllerTest do
       assert %{"errors" => %{"display_name" => [_ | _]}} = json_response(conn, 422)
     end
 
+    test "stores locale and returns it from GET /api/me", %{user: user} do
+      conn =
+        auth_conn(user)
+        |> put_req_header("content-type", "application/json")
+        |> patch("/api/me", Jason.encode!(%{locale: "ja"}))
+
+      assert json_response(conn, 200)["user"]["locale"] == "ja"
+      assert json_response(auth_conn(user) |> get("/api/me"), 200)["user"]["locale"] == "ja"
+    end
+
+    test "422 on a malformed locale", %{user: user} do
+      conn =
+        auth_conn(user)
+        |> put_req_header("content-type", "application/json")
+        |> patch("/api/me", Jason.encode!(%{locale: "not a tag"}))
+
+      assert %{"errors" => %{"locale" => [_ | _]}} = json_response(conn, 422)
+    end
+
     test "401 without bearer" do
       conn = build_conn() |> patch("/api/me", %{display_name: "x"})
       assert response(conn, 401)

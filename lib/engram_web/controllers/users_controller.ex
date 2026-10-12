@@ -10,30 +10,21 @@ defmodule EngramWeb.UsersController do
   operation(:me,
     operation_id: "account-me",
     summary: "Get the current user",
-    description: "Returns the authenticated user's id, email, role, and display name.",
+    description:
+      "Returns the authenticated user's id, email, role, display name, and UI language.",
     tags: ["Account"],
     responses: [ok: {"Current user", "application/json", Schemas.UserResponse}]
   )
 
   def me(conn, _params) do
-    user = conn.assigns.current_user
-
-    json(conn, %{
-      user: %{
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        display_name: user.display_name,
-        analytics_id: Engram.Observability.PostHog.analytics_id(user.email)
-      }
-    })
+    json(conn, %{user: user_json(conn.assigns.current_user)})
   end
 
   operation(:update,
     operation_id: "account-update",
     summary: "Update the current user's profile",
     description:
-      "Updates the authenticated user's mutable profile fields (currently `display_name`) " <>
+      "Updates the authenticated user's mutable profile fields (`display_name`, `locale`) " <>
         "and returns the updated user.",
     tags: ["Account"],
     request_body:
@@ -46,19 +37,11 @@ defmodule EngramWeb.UsersController do
 
   def update(conn, params) do
     user = conn.assigns.current_user
-    attrs = Map.take(params, ["display_name"])
+    attrs = Map.take(params, ["display_name", "locale"])
 
     case Accounts.update_profile(user, attrs) do
       {:ok, updated} ->
-        json(conn, %{
-          user: %{
-            id: updated.id,
-            email: updated.email,
-            role: updated.role,
-            display_name: updated.display_name,
-            analytics_id: Engram.Observability.PostHog.analytics_id(updated.email)
-          }
-        })
+        json(conn, %{user: user_json(updated)})
 
       {:error, %Ecto.Changeset{}} = error ->
         error
@@ -102,5 +85,16 @@ defmodule EngramWeb.UsersController do
 
   def delete(conn, _params) do
     conn |> put_status(400) |> json(%{error: "password_required"})
+  end
+
+  defp user_json(user) do
+    %{
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      display_name: user.display_name,
+      locale: user.locale,
+      analytics_id: Engram.Observability.PostHog.analytics_id(user.email)
+    }
   end
 end

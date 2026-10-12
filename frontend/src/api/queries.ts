@@ -452,6 +452,8 @@ export interface User {
 	email: string;
 	role: "admin" | "member";
 	display_name: string | null;
+	// UI language (BCP 47) as last reported by a client; null until one does.
+	locale: string | null;
 	// Keyed HMAC of the email, 64-char lowercase hex. Analytics identifies with
 	// this, never with `email` above — see src/auth/use-identify-user-on-auth-change.ts.
 	// Required: GET /me always populates it (schemas/account.ex:21 agrees) —
@@ -1109,7 +1111,8 @@ export function useMe(options?: { enabled?: boolean; client?: QueryClient }) {
 export function useUpdateProfile() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: (body: { display_name: string | null }) => api.patch<{ user: User }>("/me", body),
+		mutationFn: (body: { display_name?: string | null; locale?: string }) =>
+			api.patch<{ user: User }>("/me", body),
 		onSuccess: (data) => {
 			qc.setQueryData(["me"], data);
 		},

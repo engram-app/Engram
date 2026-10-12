@@ -28,6 +28,14 @@
             "x-struct": null,
             "x-validate": null
           },
+          "locale": {
+            "description": "UI language as a BCP 47 tag, as last reported by a client.",
+            "example": "pt-BR",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "role": {
             "example": "user",
             "type": "string",
@@ -113,11 +121,19 @@
       },
       "UpdateProfileRequest": {
         "example": {
-          "display_name": "Ada Lovelace"
+          "display_name": "Ada Lovelace",
+          "locale": "en"
         },
         "properties": {
           "display_name": {
             "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "locale": {
+            "description": "BCP 47 language tag",
+            "example": "pt-BR",
             "type": "string",
             "x-struct": null,
             "x-validate": null
@@ -3965,7 +3981,7 @@
       },
       "get": {
         "callbacks": {},
-        "description": "Returns the authenticated user's id, email, role, and display name.",
+        "description": "Returns the authenticated user's id, email, role, display name, and UI language.",
         "operationId": "account-me",
         "parameters": [],
         "responses": {
@@ -3987,7 +4003,7 @@
       },
       "patch": {
         "callbacks": {},
-        "description": "Updates the authenticated user's mutable profile fields (currently `display_name`) and returns the updated user.",
+        "description": "Updates the authenticated user's mutable profile fields (`display_name`, `locale`) and returns the updated user.",
         "operationId": "account-update",
         "parameters": [],
         "requestBody": {

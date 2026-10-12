@@ -255,9 +255,15 @@ defmodule Engram.Accounts do
 
   @max_display_name_chars 80
 
+  # A BCP 47 language tag: a 2-3 letter language, then optional subtags
+  # ("zh-Hant-TW", "es-419"). 35 is the longest tag the RFC recommends handling.
+  @locale_format ~r/\A[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*\z/
+  @max_locale_chars 35
+
   @doc """
-  Updates the editable profile fields on a user. Currently just `display_name`.
-  Empty/whitespace string clears the field (stored as nil).
+  Updates the editable profile fields on a user: `display_name` and `locale`
+  (the UI language, a BCP 47 tag). An empty/whitespace `display_name` clears
+  it (stored as nil).
   """
   def update_profile(%User{} = user, attrs) do
     user
@@ -267,7 +273,7 @@ defmodule Engram.Accounts do
 
   defp profile_changeset(user, attrs) do
     user
-    |> Ecto.Changeset.cast(attrs, [:display_name])
+    |> Ecto.Changeset.cast(attrs, [:display_name, :locale], empty_values: [])
     |> Ecto.Changeset.update_change(:display_name, fn
       nil ->
         nil
@@ -282,6 +288,8 @@ defmodule Engram.Accounts do
       max: @max_display_name_chars,
       count: :codepoints
     )
+    |> Ecto.Changeset.validate_length(:locale, max: @max_locale_chars)
+    |> Ecto.Changeset.validate_format(:locale, @locale_format)
   end
 
   @doc "Sets a new bcrypt password hash for a user (local auth)."
