@@ -1,10 +1,11 @@
 import { msg } from "@/i18n/msg";
 import type { Translate } from "@/i18n/translate";
+import type { MsgKey } from "@/i18n/ui-text";
 
 // Subscription and transaction statuses arrive as snake_case enum values. Known
 // ones get a translated lowercase label (CSS capitalizes it on screen); an
 // unknown status falls back to its raw value with the underscore opened up.
-const STATUS_LABELS: Record<string, string> = {
+const STATUS_LABELS: Record<string, MsgKey> = {
 	active: msg("active"),
 	trialing: msg("trialing"),
 	past_due: msg("past due"),

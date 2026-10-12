@@ -10,6 +10,7 @@ import { Trans } from "@/i18n/trans";
 import type { UIText } from "@/i18n/ui-text";
 import { DEFAULT_VAULT_NAME } from "@/i18n/vault-name";
 import AuthPanel from "@/layout/auth-panel";
+import { serverErrorMessage } from "@/lib/server-error";
 import { heading } from "@/lib/ui-classes";
 import { track } from "../analytics/track";
 import { setActiveVaultId } from "../api/active-vault";
@@ -394,7 +395,7 @@ function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
 		try {
 			await onCommit(typed ?? DEFAULT_VAULT_NAME);
 		} catch (err) {
-			setError(err instanceof Error ? err.message : t("Could not create vault"));
+			setError(serverErrorMessage(err, t("Could not create vault"), t));
 		}
 	}
 

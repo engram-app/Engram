@@ -38,8 +38,8 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"このアカウントは停止されています。アクセスを回復するには、管理者にお問い合わせください。",
 	"Incorrect email or password.": "メールアドレスまたはパスワードが正しくありません。",
-	"Login failed": "ログインに失敗しました",
 	"Login not available for this auth provider": "この認証プロバイダでのログインは利用できません",
+	"Login failed": "ログインに失敗しました",
 	"Sign-ups require an invite link. Contact your admin to request one.":
 		"新規登録には招待リンクが必要です。管理者にお問い合わせください。",
 	"Sign-ups are closed on this instance.": "このインスタンスでの新規登録は終了しています。",
@@ -50,8 +50,12 @@ export default {
 	"Signing in…": "ログイン中…",
 	"Sign in": "ログイン",
 	"Don't have an account? {signup}": "アカウントをお持ちでない方はこちら {signup}",
-	"Registration failed": "登録に失敗しました",
+	"That password is too short.": "そのパスワードは短すぎます。",
+	"That password is too long.": "そのパスワードは長すぎます。",
+	"This invite link is invalid or has already been used.":
+		"この招待リンクが無効か、すでに使用されています。",
 	"Registration not available for this auth provider": "この認証プロバイダでの登録は利用できません",
+	"Registration failed": "登録に失敗しました",
 	"Passwords do not match": "パスワードが一致しません",
 	Loading: "読み込み中",
 	"Sign-ups are closed": "新規登録は終了しています",
@@ -191,10 +195,10 @@ export default {
 	"50 GB attachments": "50 GBの添付ファイル",
 	"Cross-vault search": "保管庫間検索",
 	"API access": "APIアクセス",
-	"{hidden} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
+	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			other:
-				"あなたのノートのうち、{hidden} は検索できません。最も古い {indexed} しかインデックス化されないため、最新のノートは検索結果に表示されません。",
+				"あなたのノートのうち、{count} は検索できません。最も古い {indexed} しかインデックス化されないため、最新のノートは検索結果に表示されません。",
 		},
 	"Change plan": "プランを変更",
 	"Loading plan options…": "プランのオプションを読み込み中…",
@@ -374,8 +378,8 @@ export default {
 	Create: "作成",
 	"Search vaults": "保管庫を検索",
 	default: "デフォルト",
-	"{n} notes": { other: "{n} ノート" },
-	"{n} files": { other: "{n} 個のファイル" },
+	"{count} notes": { other: "{count} ノート" },
+	"{count} files": { other: "{count}ファイル" },
 	text: "テキスト",
 	"What kind of note this is. Search can filter on it.":
 		"このノートの種類。検索で絞り込みに使用できます。",
@@ -565,6 +569,7 @@ export default {
 	"Clear filters": "フィルタをクリア",
 	"Searching…": "検索中…",
 	"Search failed: {message}": "検索エラー: {message}",
+	"unknown error": "不明なエラー",
 	'No results for "{term}"': '"{term}" に一致する結果はありません',
 	"Upgrade to search everything": "すべてを検索するにはアップグレードしてください",
 	Recent: "最近",
@@ -641,6 +646,13 @@ export default {
 		"このサブスクリプションは一時停止中です。{date}に再開されます。",
 	"This subscription is paused.": "このサブスクリプションは一時停止中です。",
 	"Your trial ends on {date}.": "トライアル期間は{date}に終了します。",
+	"Can't remove the last admin.": "最後の管理者ユーザーは削除できません。",
+	"Check the invite's label, uses and expiry, then try again.":
+		"招待のラベル、利用状況、有効期限を確認し、再度お試しください。",
+	"Incorrect password.": "パスワードが正しくありません。",
+	"You don't have permission to do that.": "その操作を行う権限がありません。",
+	"Too many requests. Try again in a moment.":
+		"リクエストが多すぎます。しばらくしてから再度お試しください。",
 	"Invalid authorization request": "無効な認証リクエスト",
 	"Missing required OAuth parameters:": "必須のOAuthパラメータがありません:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -845,13 +857,11 @@ export default {
 	"Copy failed, click the field and press Cmd/Ctrl+C to copy manually.":
 		"コピーに失敗しました。フィールドをクリックして、Cmd/Ctrl+Cで手動でコピーしてください。",
 	Done: "完了",
-	"{status}: {message}": "{status}: {message}",
 	"Revoke failed": "取り消しに失敗しました",
 	'Revoke "{name}"?': '"{name}" を取り消しますか？',
 	"Revoking…": "取り消し中…",
 	"Close dialog": "ダイアログを閉じます",
 	"Failed to load: {message}": "読み込みに失敗しました: {message}",
-	"unknown error": "不明なエラー",
 	Connections: "接続",
 	"Search connections": "接続を検索",
 	"Manage what's connected to your Engram account.":
@@ -998,7 +1008,6 @@ export default {
 	Uses: "使用状況",
 	Expires: "期限",
 	never: "永続",
-	"Can't remove the last admin.": "最後の管理者ユーザーは削除できません。",
 	"{label}: {error}": "{label}: {error}",
 	"Update role": "ロールを更新",
 	"Update status": "ステータスを更新",
@@ -1121,7 +1130,6 @@ export default {
 	"Delete failed": "削除に失敗しました",
 	"You're the only admin on this instance. Promote another user to admin first, then try again.":
 		"このインスタンスの管理者はいません。まず別のユーザーを管理者として昇格させてから、再度お試しください。",
-	"Incorrect password.": "パスワードが正しくありません。",
 	"Danger zone": "危険区域",
 	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
 		"永続的な操作です。アカウントを削除すると、サインアウトされ、このユーザーによる今後のサインインがブロックされます。",
@@ -1166,7 +1174,6 @@ export default {
 		"ゴミ箱に移動し、{recoverable}され、その後完全に削除されます。",
 	"This only deletes the copy stored on Engram. Files already {synced} stay where they are.":
 		"これはEngramに保存されているコピーのみを削除します。すでに{synced}されているファイルはそのままです。",
-	"{count} notes": { other: "{count} ノート" },
 	"{count} attachments": { other: "{count}つの添付ファイル" },
 	"Restoring would exceed your vault limit. Upgrade or delete another vault first.":
 		"リストアすると、保管庫の制限を超えます。アップグレードするか、別の保管庫を削除してください。",

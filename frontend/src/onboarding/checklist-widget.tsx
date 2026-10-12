@@ -5,6 +5,7 @@ import { Link } from "react-router";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import type { MsgKey } from "@/i18n/ui-text";
 import { track } from "../analytics/track";
 import { type OnboardingStatus, useConnections, useOnboardingStatus } from "../api/queries";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
@@ -59,7 +60,7 @@ const DOC_URLS: Record<string, string> = {
 };
 const DOC_FALLBACK = "https://engram.page/docs/integrations/";
 
-const TOOL_LABELS: Record<string, string> = {
+const TOOL_LABELS: Record<string, MsgKey> = {
 	claude: msg("Connect Claude Desktop"),
 	cursor: msg("Connect Cursor"),
 	devin: msg("Connect Devin"),

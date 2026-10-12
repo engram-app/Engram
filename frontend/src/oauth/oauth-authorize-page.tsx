@@ -20,6 +20,7 @@ import {
 } from "@/components/vault-list";
 import { useT } from "@/i18n/locale-provider";
 import { Trans } from "@/i18n/trans";
+import { serverErrorMessage } from "@/lib/server-error";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { MCP_CLIENTS } from "../analytics/events";
@@ -437,8 +438,7 @@ export default function OAuthAuthorizePage() {
 				setSubmitting(false);
 				return;
 			}
-			const message = e instanceof Error ? e.message : t("Authorization failed");
-			setSubmitError(message);
+			setSubmitError(serverErrorMessage(e, t("Authorization failed"), t));
 			if (isMcp) {
 				track("mcp_connect_failed", { client: mcpClient, reason: "unknown" });
 			}

@@ -15,6 +15,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
 import { notify } from "@/lib/notify";
+import { serverErrorMessage } from "@/lib/server-error";
 import { useDeleteSelf } from "../../api/queries";
 import { useAuthAdapter } from "../../auth/use-auth-adapter";
 import { ROUTES } from "../../routes";
@@ -54,7 +55,7 @@ export function DangerZoneSectionLocal() {
 			} else if (msg.includes("invalid_password")) {
 				setError(t("Incorrect password."));
 			} else {
-				setError(msg);
+				setError(serverErrorMessage(err, t("Delete failed"), t));
 			}
 		}
 	}

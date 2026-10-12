@@ -1,6 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { type Channel, Socket } from "phoenix";
-import { englishT, type Translate } from "@/i18n/translate";
+import type { Translate } from "@/i18n/translate";
 import { notify } from "@/lib/notify";
 import { buildGenesisFrame } from "../crdt/genesis";
 import { CrdtOpQueueController } from "../crdt/op-queue-controller";
@@ -122,8 +122,8 @@ interface ConnectOptions {
 	vaultId: string;
 	getToken: () => Promise<string | null>;
 	queryClient: QueryClient;
-	// The caller's `t` (useT) for the plan-limit toast; English when omitted.
-	t?: Translate;
+	// The caller's `t` (useT) for the plan-limit toast.
+	t: Translate;
 }
 
 type NoteChangedListener = (payload: NoteChangedPayload) => void;
@@ -441,7 +441,7 @@ export async function connectChannel({
 	vaultId,
 	getToken,
 	queryClient,
-	t = englishT,
+	t,
 }: ConnectOptions) {
 	disconnectChannel();
 	const gen = connectGeneration;

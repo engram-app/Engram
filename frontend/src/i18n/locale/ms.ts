@@ -37,9 +37,9 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"Akaun ini telah ditangguhkan. Hubungi pentadbir untuk memulihkan akses.",
 	"Incorrect email or password.": "Emel atau kata laluan tidak betul.",
-	"Login failed": "Log masuk gagal",
 	"Login not available for this auth provider":
 		"Log masuk tidak tersedia untuk penyedia pengesahan ini",
+	"Login failed": "Log masuk gagal",
 	"Sign-ups require an invite link. Contact your admin to request one.":
 		"Pendaftaran memerlukan pautan jemputan. Hubungi pentadbir anda untuk meminta satu.",
 	"Sign-ups are closed on this instance.": "Pendaftaran ditutup pada instance ini.",
@@ -50,9 +50,13 @@ export default {
 	"Signing in…": "Sedang log masuk…",
 	"Sign in": "Log masuk",
 	"Don't have an account? {signup}": "Tiada akaun? {signup}",
-	"Registration failed": "Pendaftaran gagal",
+	"That password is too short.": "Kata laluan itu terlalu pendek.",
+	"That password is too long.": "Kata laluan itu terlalu panjang.",
+	"This invite link is invalid or has already been used.":
+		"Pautan jemputan ini tidak sah atau sudah digunakan.",
 	"Registration not available for this auth provider":
 		"Pendaftaran tidak tersedia untuk penyedia pengesahan ini",
+	"Registration failed": "Pendaftaran gagal",
 	"Passwords do not match": "Kata laluan tidak sepadan",
 	Loading: "Sedang memuat",
 	"Sign-ups are closed": "Pendaftaran ditutup",
@@ -193,10 +197,10 @@ export default {
 	"50 GB attachments": "50 GB lampiran",
 	"Cross-vault search": "Carian merentasi peti nota",
 	"API access": "Akses API",
-	"{hidden} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
+	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			other:
-				"{hidden} daripada nota anda tidak dapat dicari. Hanya {indexed} nota tertua anda yang diindeks, jadi nota terbaru anda tidak akan muncul dalam carian.",
+				"{count} daripada nota anda tidak dapat dicari. Hanya {indexed} nota tertua anda yang diindeks, jadi nota terbaru anda tidak akan muncul dalam carian.",
 		},
 	"Change plan": "Tukar langganan",
 	"Loading plan options…": "Memuatkan pilihan pelan…",
@@ -378,8 +382,8 @@ export default {
 	Create: "Cipta",
 	"Search vaults": "Cari peti nota",
 	default: "lalai",
-	"{n} notes": { other: "{n} nota" },
-	"{n} files": { other: "{n} fail" },
+	"{count} notes": { other: "{count} nota" },
+	"{count} files": { other: "{count} fail" },
 	text: "teks",
 	"What kind of note this is. Search can filter on it.":
 		"Jenis nota ini. Carian boleh menyenaraiakannya.",
@@ -549,7 +553,7 @@ export default {
 	Filters: "Penapis",
 	Type: "Jenis",
 	"What is type?": "Apakah jenisnya?",
-	"Open Knowledge Format": "Format Pengetahuan Terbuka",
+	"Open Knowledge Format": "Open Knowledge Format",
 	"Any type": "Sebarang jenis",
 	"No matching type": "Tiada jenis yang sepadan",
 	Folder: "Folder",
@@ -569,6 +573,7 @@ export default {
 	"Clear filters": "Kosongkan penapis",
 	"Searching…": "Mencari…",
 	"Search failed: {message}": "Pencarian gagal: {message}",
+	"unknown error": "kesilapan tidak diketahui",
 	'No results for "{term}"': 'Tiada hasil untuk "{term}"',
 	"Upgrade to search everything": "Tingkatkan untuk mencari semua",
 	Recent: "Terkini",
@@ -644,6 +649,12 @@ export default {
 		"Langganan ini ditangguhkan. Ia akan disambung semula pada {date}.",
 	"This subscription is paused.": "Langganan ini ditangguhkan.",
 	"Your trial ends on {date}.": "Tempoh percubaan anda berakhir pada {date}.",
+	"Can't remove the last admin.": "Tidak boleh menghapuskan pentadbir terakhir.",
+	"Check the invite's label, uses and expiry, then try again.":
+		"Semak label, kegunaan dan tempoh tamat pautan jemputan, kemudian cuba lagi.",
+	"Incorrect password.": "Kata laluan tidak betul.",
+	"You don't have permission to do that.": "Anda tidak mempunyai kebenaran untuk melakukan itu.",
+	"Too many requests. Try again in a moment.": "Terlalu banyak permintaan. Cuba lagi sebentar.",
 	"Invalid authorization request": "Permintaan pengesahan tidak sah",
 	"Missing required OAuth parameters:": "Parameter OAuth yang diperlukan hilang:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -848,13 +859,11 @@ export default {
 	"Copy failed, click the field and press Cmd/Ctrl+C to copy manually.":
 		"Salinan gagal, klik medan dan tekan Cmd/Ctrl+C untuk menyalin secara manual.",
 	Done: "Selesai",
-	"{status}: {message}": "{status}: {message}",
 	"Revoke failed": "Penyahaktifan gagal",
 	'Revoke "{name}"?': 'Nyahaktifkan "{name}"?',
 	"Revoking…": "Menyahaktifkan…",
 	"Close dialog": "Tutup dialog",
 	"Failed to load: {message}": "Gagal memuat: {message}",
-	"unknown error": "kesilapan tidak diketahui",
 	Connections: "Sambungan",
 	"Search connections": "Cari sambungan",
 	"Manage what's connected to your Engram account.":
@@ -1002,7 +1011,6 @@ export default {
 	Uses: "Penggunaan",
 	Expires: "Tamat tempoh",
 	never: "tidak pernah",
-	"Can't remove the last admin.": "Tidak boleh menghapuskan pentadbir terakhir.",
 	"{label}: {error}": "{label}: {error}",
 	"Update role": "Kemas kini peranan",
 	"Update status": "Kemas kini status",
@@ -1125,7 +1133,6 @@ export default {
 	"Delete failed": "Pemadaman gagal",
 	"You're the only admin on this instance. Promote another user to admin first, then try again.":
 		"Anda adalah pentadbir tunggal dalam sistem ini. Promosikan pengguna lain sebagai pentadbir terlebih dahulu, kemudian cuba lagi.",
-	"Incorrect password.": "Kata laluan tidak betul.",
 	"Danger zone": "Kawasan berbahaya",
 	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
 		"Tindakan kekal. Memadam akaun anda akan mengeluarkan anda dan menghalang log masuk di masa depan untuk pengguna ini.",
@@ -1170,7 +1177,6 @@ export default {
 		"Ia dipindahkan ke tong sampah dan akan {recoverable}, kemudian dipadam secara kekal.",
 	"This only deletes the copy stored on Engram. Files already {synced} stay where they are.":
 		"Ini hanya memadam salinan yang disimpan di Engram. Fail yang sudah {synced} kekal di tempatnya.",
-	"{count} notes": { other: "{count} nota" },
 	"{count} attachments": { other: "{count} lampiran" },
 	"Restoring would exceed your vault limit. Upgrade or delete another vault first.":
 		"Memulihkan akan melebihi had peti nota anda. Tingkatkan atau padam peti nota lain terlebih dahulu.",

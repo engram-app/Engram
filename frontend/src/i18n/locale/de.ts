@@ -39,9 +39,9 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"Dieses Konto ist gesperrt. Kontaktiere einen Administrator, um den Zugriff wiederherzustellen.",
 	"Incorrect email or password.": "Falsche E-Mail-Adresse oder Passwort.",
-	"Login failed": "Anmeldung fehlgeschlagen",
 	"Login not available for this auth provider":
 		"Anmeldung nicht verfügbar für diesen Anmeldeanbieter",
+	"Login failed": "Anmeldung fehlgeschlagen",
 	"Sign-ups require an invite link. Contact your admin to request one.":
 		"Für die Anmeldung ist ein Einladungslink erforderlich. Kontaktiere deinen Administrator, um einen zu beantragen.",
 	"Sign-ups are closed on this instance.": "Die Anmeldung ist in dieser Instanz deaktiviert.",
@@ -52,9 +52,13 @@ export default {
 	"Signing in…": "Anmelden…",
 	"Sign in": "Anmelden",
 	"Don't have an account? {signup}": "Kein Konto? {signup}",
-	"Registration failed": "Registrierung fehlgeschlagen",
+	"That password is too short.": "Dieses Passwort ist zu kurz.",
+	"That password is too long.": "Dieses Passwort ist zu lang.",
+	"This invite link is invalid or has already been used.":
+		"Dieser Einladungslink ist ungültig oder wurde bereits verwendet.",
 	"Registration not available for this auth provider":
 		"Registrierung nicht für diesen Anmeldedienst verfügbar",
+	"Registration failed": "Registrierung fehlgeschlagen",
 	"Passwords do not match": "Passwörter stimmen nicht überein",
 	Loading: "Laden",
 	"Sign-ups are closed": "Anmeldungen sind geschlossen",
@@ -197,11 +201,11 @@ export default {
 	"50 GB attachments": "50 GB Anhänge",
 	"Cross-vault search": "Suche über mehrere Vaults",
 	"API access": "API-Zugriff",
-	"{hidden} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
+	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
-			one: "{hidden} deiner Notizen ist nicht durchsuchbar. Nur deine ältesten {indexed} sind indexiert, deine neuesten Notizen erscheinen also nicht in der Suche.",
+			one: "Eine deiner Notizen ist nicht durchsuchbar. Nur deine ältesten {indexed} werden indiziert, sodass deine neuesten Notizen nicht in der Suche erscheinen.",
 			other:
-				"{hidden} deiner Notizen sind nicht durchsuchbar. Nur deine ältesten {indexed} sind indexiert, deine neuesten Notizen erscheinen also nicht in der Suche.",
+				"{count} deiner Notizen sind nicht durchsuchbar. Nur deine ältesten {indexed} werden indiziert, sodass deine neuesten Notizen nicht in der Suche erscheinen.",
 		},
 	"Change plan": "Plan ändern",
 	"Loading plan options…": "Lade Optionen…",
@@ -386,8 +390,8 @@ export default {
 	Create: "Erstellen",
 	"Search vaults": "Vaults suchen",
 	default: "Standard",
-	"{n} notes": { one: "{n} Notiz", other: "{n} Notizen" },
-	"{n} files": { one: "{n} Datei", other: "{n} Dateien" },
+	"{count} notes": { one: "{count} Notiz", other: "{count} Notizen" },
+	"{count} files": { one: "{count} Datei", other: "{count} Dateien" },
 	text: "Text",
 	"What kind of note this is. Search can filter on it.":
 		"Was für eine Notiz dies ist. Die Suche kann danach filtern.",
@@ -581,6 +585,7 @@ export default {
 	"Clear filters": "Filter löschen",
 	"Searching…": "Suchen…",
 	"Search failed: {message}": "Suche fehlgeschlagen: {message}",
+	"unknown error": "unbekannter Fehler",
 	'No results for "{term}"': 'Keine Ergebnisse für "{term}"',
 	"Upgrade to search everything": "Upgrade, um alles durchsuchen zu können",
 	Recent: "Letzte Änderungen",
@@ -656,6 +661,12 @@ export default {
 		"Dieses Abonnement ist unterbrochen. Es wird am {date} wieder aufgenommen.",
 	"This subscription is paused.": "Dieses Abonnement ist unterbrochen.",
 	"Your trial ends on {date}.": "Dein Testzeitraum endet am {date}.",
+	"Can't remove the last admin.": "Letzten Administrator nicht entfernen.",
+	"Check the invite's label, uses and expiry, then try again.":
+		"Überprüfe die Bezeichnung, die Nutzung und das Ablaufdatum der Einladung und versuche es erneut.",
+	"Incorrect password.": "Falsches Passwort.",
+	"You don't have permission to do that.": "Du hast keine Berechtigung dafür.",
+	"Too many requests. Try again in a moment.": "Zu viele Anfragen. Versuche es später noch einmal.",
 	"Invalid authorization request": "Ungültige Autorisierungsanfrage",
 	"Missing required OAuth parameters:": "Fehlende erforderliche OAuth-Parameter:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -863,13 +874,11 @@ export default {
 	"Copy failed, click the field and press Cmd/Ctrl+C to copy manually.":
 		"Kopiervorgang fehlgeschlagen. Klicke auf das Feld und drücke Cmd/Ctrl+C, um es manuell zu kopieren.",
 	Done: "Fertig",
-	"{status}: {message}": "{status}: {message}",
 	"Revoke failed": "Fehler beim Abbrechen",
 	'Revoke "{name}"?': 'Abbrechen von "{name}"?',
 	"Revoking…": "Wird abgebrochen…",
 	"Close dialog": "Dialog schließen",
 	"Failed to load: {message}": "Fehler beim Laden: {message}",
-	"unknown error": "unbekannter Fehler",
 	Connections: "Verbindungen",
 	"Search connections": "Verbindungen suchen",
 	"Manage what's connected to your Engram account.":
@@ -1019,7 +1028,6 @@ export default {
 	Uses: "Verwendungen",
 	Expires: "Gültig bis",
 	never: "nie",
-	"Can't remove the last admin.": "Letzten Administrator nicht entfernen.",
 	"{label}: {error}": "{label}: {error}",
 	"Update role": "Rolle aktualisieren",
 	"Update status": "Status aktualisieren",
@@ -1146,7 +1154,6 @@ export default {
 	"Delete failed": "Löschen fehlgeschlagen",
 	"You're the only admin on this instance. Promote another user to admin first, then try again.":
 		"Du bist der einzige Administrator für diese Instanz. Befördere zuerst einen anderen Benutzer zum Administrator und versuche es dann erneut.",
-	"Incorrect password.": "Falsches Passwort.",
 	"Danger zone": "Gefahrenzone",
 	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
 		"Permanente Aktionen. Das Löschen deines Kontos meldet dich ab und verhindert zukünftige Anmeldungen für diesen Benutzer.",
@@ -1191,7 +1198,6 @@ export default {
 		"Es wird in den Papierkorb verschoben und ist {recoverable}, dann dauerhaft gelöscht.",
 	"This only deletes the copy stored on Engram. Files already {synced} stay where they are.":
 		"Dies löscht nur die Kopie, die in Engram gespeichert ist. Dateien, die bereits {synced} sind, bleiben dort, wo sie sind.",
-	"{count} notes": { one: "{count} Notiz", other: "{count} Notizen" },
 	"{count} attachments": { one: "{count} Anhang", other: "{count} Anhänge" },
 	"Restoring would exceed your vault limit. Upgrade or delete another vault first.":
 		"Das Wiederherstellen würde dein Vault-Limit überschreiten. Upgrade oder lösche zuerst ein anderes Vault.",

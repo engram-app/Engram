@@ -20,7 +20,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
-import type { UIText } from "@/i18n/ui-text";
+import type { MsgKey, UIText } from "@/i18n/ui-text";
 import { intlLocale } from "@/lib/intl-locale";
 import { formatBillingCycle, formatDate, formatMoney } from "@/lib/paddle-format";
 import type { SubscriptionStatusData } from "@/lib/paddle-types";
@@ -32,7 +32,7 @@ type SubscriptionStatus = "active" | "canceled" | "past_due" | "paused" | "trial
 
 const STATUS_CONFIG: Record<
 	SubscriptionStatus,
-	{ label: string; icon: React.ElementType; className: string }
+	{ label: MsgKey; icon: React.ElementType; className: string }
 > = {
 	active: {
 		label: msg("Active"),
@@ -108,7 +108,7 @@ function getValidScheduledChange(
 function getNextBillingLabel(
 	status: SubscriptionStatus,
 	scheduledChange?: SubscriptionStatusData["scheduledChange"],
-): string | undefined {
+): MsgKey | undefined {
 	if (scheduledChange?.action === "cancel" || scheduledChange?.action === "pause") {
 		return;
 	}

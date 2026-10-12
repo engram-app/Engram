@@ -813,7 +813,7 @@ export default function FolderTree() {
 						dialog.selection
 							? selectionActions(
 									dialog.selection.map(kindOf).filter((k) => k !== "root"),
-									{ t, tn },
+									{ tn },
 								)
 							: actionsFor({ kind: kindOf(dialog.itemId) })
 					}

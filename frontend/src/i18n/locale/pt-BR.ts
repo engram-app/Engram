@@ -37,9 +37,9 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"Esta conta está suspensa. Entre em contato com um administrador para restaurar o acesso.",
 	"Incorrect email or password.": "E-mail ou senha incorretos.",
-	"Login failed": "Falha ao fazer login",
 	"Login not available for this auth provider":
 		"Login não disponível para este provedor de autenticação",
+	"Login failed": "Falha ao fazer login",
 	"Sign-ups require an invite link. Contact your admin to request one.":
 		"O cadastro requer um link de convite. Entre em contato com seu administrador para solicitar um.",
 	"Sign-ups are closed on this instance.": "O cadastro está fechado nesta instância.",
@@ -50,9 +50,13 @@ export default {
 	"Signing in…": "Fazendo login…",
 	"Sign in": "Entrar",
 	"Don't have an account? {signup}": "Não tem uma conta? {signup}",
-	"Registration failed": "Registro falhou",
+	"That password is too short.": "Essa senha é muito curta.",
+	"That password is too long.": "Essa senha é muito longa.",
+	"This invite link is invalid or has already been used.":
+		"Este link de convite é inválido ou já foi usado.",
 	"Registration not available for this auth provider":
 		"Registro não disponível para este provedor de autenticação",
+	"Registration failed": "Registro falhou",
 	"Passwords do not match": "As senhas não coincidem",
 	Loading: "Carregando",
 	"Sign-ups are closed": "As inscrições estão fechadas",
@@ -196,12 +200,12 @@ export default {
 	"50 GB attachments": "50 GB de anexos",
 	"Cross-vault search": "Busca entre cofres",
 	"API access": "Acesso à API",
-	"{hidden} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
+	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
-			one: "{hidden} das suas notas não está pesquisável. Apenas as {indexed} notas mais antigas são indexadas, então suas notas mais recentes não aparecerão na busca.",
-			many: "{hidden} das suas notas não são pesquisáveis. Apenas as {indexed} notas mais antigas são indexadas, então suas notas mais recentes não aparecerão na busca.",
+			one: "{count} de suas notas não está pesquisável. Apenas suas notas mais antigas {indexed} são indexadas, então suas notas mais recentes não aparecerão na busca.",
+			many: "{count} de suas notas não são pesquisáveis. Apenas as {indexed} mais antigas são indexadas, então suas notas mais recentes não aparecerão na busca.",
 			other:
-				"{hidden} das suas notas não são pesquisáveis. Apenas as {indexed} notas mais antigas são indexadas, então suas notas mais recentes não aparecerão na busca.",
+				"{count} de suas notas não estão pesquisáveis. Apenas as {indexed} mais antigas são indexadas, então suas notas mais recentes não aparecerão na busca.",
 		},
 	"Change plan": "Alterar plano",
 	"Loading plan options…": "Carregando opções de plano…",
@@ -385,8 +389,8 @@ export default {
 	Create: "Criar",
 	"Search vaults": "Buscar cofres",
 	default: "padrão",
-	"{n} notes": { one: "{n} nota", many: "{n} notas", other: "{n} notas" },
-	"{n} files": { one: "{n} arquivo", many: "{n} arquivos", other: "{n} arquivos" },
+	"{count} notes": { one: "{count} nota", many: "{count} notas", other: "{count} notas" },
+	"{count} files": { one: "{count} arquivo", many: "{count} arquivos", other: "{count} arquivos" },
 	text: "texto",
 	"What kind of note this is. Search can filter on it.":
 		"Que tipo de nota é esta. A busca pode filtrar por ela.",
@@ -579,7 +583,7 @@ export default {
 	Filters: "Filtros",
 	Type: "Tipo",
 	"What is type?": "Qual é o tipo?",
-	"Open Knowledge Format": "Formato de conhecimento aberto",
+	"Open Knowledge Format": "Open Knowledge Format",
 	"Any type": "Qualquer tipo",
 	"No matching type": "Nenhum tipo correspondente",
 	Folder: "Pasta",
@@ -599,6 +603,7 @@ export default {
 	"Clear filters": "Limpar filtros",
 	"Searching…": "Buscando…",
 	"Search failed: {message}": "Busca falhou: {message}",
+	"unknown error": "erro desconhecido",
 	'No results for "{term}"': 'Nenhum resultado para "{term}"',
 	"Upgrade to search everything": "Atualize para buscar tudo",
 	Recent: "Recentes",
@@ -678,6 +683,13 @@ export default {
 		"Esta assinatura está pausada. Ela será retomada em {date}.",
 	"This subscription is paused.": "Esta assinatura está pausada.",
 	"Your trial ends on {date}.": "Seu período de teste termina em {date}.",
+	"Can't remove the last admin.": "Não é possível remover o último administrador.",
+	"Check the invite's label, uses and expiry, then try again.":
+		"Verifique o rótulo, os usos e a validade do convite, e tente novamente.",
+	"Incorrect password.": "Senha incorreta.",
+	"You don't have permission to do that.": "Você não tem permissão para fazer isso.",
+	"Too many requests. Try again in a moment.":
+		"Muitas solicitações. Tente novamente em um momento.",
 	"Invalid authorization request": "Solicitação de autorização inválida",
 	"Missing required OAuth parameters:": "Parâmetros OAuth obrigatórios ausentes:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -885,13 +897,11 @@ export default {
 	"Copy failed, click the field and press Cmd/Ctrl+C to copy manually.":
 		"Falha ao copiar, clique no campo e pressione Cmd/Ctrl+C para copiar manualmente.",
 	Done: "Concluído",
-	"{status}: {message}": "{status}: {message}",
 	"Revoke failed": "Revogação falhou",
 	'Revoke "{name}"?': 'Revogar "{name}"?',
 	"Revoking…": "Revogando…",
 	"Close dialog": "Fechar diálogo",
 	"Failed to load: {message}": "Falha ao carregar: {message}",
-	"unknown error": "erro desconhecido",
 	Connections: "Conexões",
 	"Search connections": "Buscar conexões",
 	"Manage what's connected to your Engram account.":
@@ -950,7 +960,7 @@ export default {
 	"Failed to load folders.": "Falha ao carregar as pastas.",
 	"No notes yet.": "Ainda não há notas.",
 	"Copied {count} wikilinks": {
-		one: "Wikilink copiado",
+		one: "Copiados {count} wikilink",
 		many: "Copiados {count} wikilinks",
 		other: "Copiados {count} wikilinks",
 	},
@@ -1042,7 +1052,6 @@ export default {
 	Uses: "Usos",
 	Expires: "Expira",
 	never: "nunca",
-	"Can't remove the last admin.": "Não é possível remover o último administrador.",
 	"{label}: {error}": "{label}: {error}",
 	"Update role": "Atualizar função",
 	"Update status": "Atualizar status",
@@ -1165,7 +1174,6 @@ export default {
 	"Delete failed": "Exclusão falhou",
 	"You're the only admin on this instance. Promote another user to admin first, then try again.":
 		"Você é o único administrador nesta instância. Promova outro usuário para administrador primeiro, e tente novamente.",
-	"Incorrect password.": "Senha incorreta.",
 	"Danger zone": "Área de risco",
 	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
 		"Ações permanentes. Excluir sua conta desconecta você e impede futuros logins para este usuário.",
@@ -1210,7 +1218,6 @@ export default {
 		"Ele é movido para a lixeira e fica {recoverable}, sendo então excluído permanentemente.",
 	"This only deletes the copy stored on Engram. Files already {synced} stay where they are.":
 		"Isso exclui apenas a cópia armazenada no Engram. Arquivos já {synced} permanecem onde estão.",
-	"{count} notes": { one: "{count} nota", many: "{count} notas", other: "{count} notas" },
 	"{count} attachments": { one: "{count} anexo", many: "{count} anexos", other: "{count} anexos" },
 	"Restoring would exceed your vault limit. Upgrade or delete another vault first.":
 		"Restaurar excederia o limite do seu cofre. Faça um upgrade ou exclua outro cofre primeiro.",
@@ -1436,7 +1443,7 @@ export default {
 		other: "Mover {count} itens para…",
 	},
 	"Copy {count} wikilinks": {
-		one: "Copiar wikilink",
+		one: "Copiar {count} wikilink",
 		many: "Copiar {count} wikilinks",
 		other: "Copiar {count} wikilinks",
 	},

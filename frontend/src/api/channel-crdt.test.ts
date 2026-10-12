@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { englishT } from "@/i18n/translate";
 import { connectChannel, disconnectChannel } from "./channel";
 
 // Mock the phoenix Socket/Channel so we can assert the crdt: topic join +
@@ -75,6 +76,7 @@ describe("crdt channel wiring", () => {
 			vaultId: "v1",
 			getToken: async () => "tok",
 			queryClient: {} as any,
+			t: englishT,
 		});
 		expect(channels.has("crdt:u1:v1")).toBe(true);
 		expect(sessionMock.startCrdtSession).toHaveBeenCalledWith(
@@ -92,6 +94,7 @@ describe("crdt channel wiring", () => {
 			vaultId: "v1",
 			getToken: async () => "tok",
 			queryClient: {} as any,
+			t: englishT,
 		});
 		const ch = channels.get("crdt:u1:v1");
 		ch.__emit("crdt_msg", { doc_id: "note-uuid-1", b64: "Zm9v" });
@@ -107,6 +110,7 @@ describe("crdt channel wiring", () => {
 			vaultId: "v1",
 			getToken: async () => "tok",
 			queryClient: {} as any,
+			t: englishT,
 		});
 		expect(channelParams.get("crdt:u1:v1")).toEqual({ crdt_proto: 2, client_type: "web" });
 	});
@@ -124,6 +128,7 @@ describe("crdt channel wiring", () => {
 				vaultId: "v1",
 				getToken: async () => "tok",
 				queryClient: {} as any,
+				t: englishT,
 			});
 			const ch = channels.get("crdt:u1:v1");
 			// Invoke the push closure the session was given so it registers its

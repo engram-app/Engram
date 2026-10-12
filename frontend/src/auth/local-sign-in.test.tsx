@@ -42,6 +42,16 @@ describe("LocalSignIn", () => {
 		fireEvent.click(screen.getByRole("button", { name: /sign in/iu }));
 		await waitFor(() => expect(login).toHaveBeenCalledWith("a@b.com", "secret123"));
 	});
+
+	// The server's text is English whatever the UI language: never render it.
+	it("shows a translated generic message for an unknown error code", async () => {
+		login.mockRejectedValueOnce(new Error("rate_limited: slow down"));
+		renderPage();
+		fireEvent.change(screen.getByLabelText("Email"), { target: { value: "a@b.com" } });
+		fireEvent.change(screen.getByLabelText("Password"), { target: { value: "secret123" } });
+		fireEvent.click(screen.getByRole("button", { name: /sign in/iu }));
+		expect(await screen.findByRole("alert")).toHaveTextContent(/^Login failed$/u);
+	});
 });
 
 // The sign-up cross-link is a plain href. A bare one drops the destination

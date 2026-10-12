@@ -2,8 +2,8 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
-import { untranslated } from "@/i18n/ui-text";
 import { notify } from "@/lib/notify";
+import { serverErrorMessage } from "@/lib/server-error";
 import { useMe, useUpdateProfile } from "../../api/queries";
 import { SettingsSectionCard } from "./section-card";
 
@@ -30,9 +30,7 @@ export function ProfileSectionLocal() {
 			await update.mutateAsync({ display_name: value.trim() === "" ? null : value.trim() });
 			notify.success(t("Profile updated"));
 		} catch (err) {
-			notify.error(
-				err instanceof Error ? untranslated(err.message) : t("Could not update profile"),
-			);
+			notify.error(serverErrorMessage(err, t("Could not update profile"), t));
 		}
 	}
 

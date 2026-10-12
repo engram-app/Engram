@@ -1,13 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
-import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
-import { untranslated } from "@/i18n/ui-text";
 import { copyToClipboard } from "@/lib/clipboard";
 import { intlLocale } from "@/lib/intl-locale";
 import { notify } from "@/lib/notify";
+import { serverErrorMessage } from "@/lib/server-error";
 import { adminApi, type Invite } from "./api";
 
 const INVITES_KEY = ["admin", "invites"] as const;
@@ -51,8 +50,7 @@ export default function InvitesTab() {
 			notify.success(t("Invite created — copy the link before leaving this page."));
 			await refresh();
 		} catch (err) {
-			const msg = err instanceof ApiError ? untranslated(err.message) : t("Create failed");
-			notify.error(msg);
+			notify.error(serverErrorMessage(err, t("Create failed"), t));
 		} finally {
 			setCreating(false);
 		}
@@ -64,8 +62,7 @@ export default function InvitesTab() {
 			notify.success(t("Invite revoked"));
 			await refresh();
 		} catch (err) {
-			const msg = err instanceof ApiError ? untranslated(err.message) : t("Revoke failed");
-			notify.error(msg);
+			notify.error(serverErrorMessage(err, t("Revoke failed"), t));
 		}
 	}
 
@@ -149,9 +146,7 @@ export default function InvitesTab() {
 				<p className="text-muted-foreground text-sm">{t("Loading invites…")}</p>
 			) : invitesQuery.error ? (
 				<p role="alert" className="text-destructive text-sm">
-					{invitesQuery.error instanceof ApiError
-						? invitesQuery.error.message
-						: t("Failed to load invites")}
+					{serverErrorMessage(invitesQuery.error, t("Failed to load invites"), t)}
 				</p>
 			) : invites.length === 0 ? (
 				<p className="text-muted-foreground text-sm">{t("No active invites.")}</p>

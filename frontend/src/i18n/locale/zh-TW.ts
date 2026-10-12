@@ -34,8 +34,8 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"該帳戶已停用。請聯繫管理員以恢復存取權。",
 	"Incorrect email or password.": "電子郵件或密碼錯誤。",
-	"Login failed": "登入失敗",
 	"Login not available for this auth provider": "此認證提供者無法登入",
+	"Login failed": "登入失敗",
 	"Sign-ups require an invite link. Contact your admin to request one.":
 		"註冊需要邀請連結。請聯繫您的管理員以取得。",
 	"Sign-ups are closed on this instance.": "此服務已關閉註冊。",
@@ -46,8 +46,11 @@ export default {
 	"Signing in…": "正在登入…",
 	"Sign in": "登入",
 	"Don't have an account? {signup}": "沒有帳號？{signup}",
-	"Registration failed": "註冊失敗",
+	"That password is too short.": "該密碼太短。",
+	"That password is too long.": "該密碼太長。",
+	"This invite link is invalid or has already been used.": "該邀請連結無效或已使用過。",
 	"Registration not available for this auth provider": "此驗證方式不支援註冊",
+	"Registration failed": "註冊失敗",
 	"Passwords do not match": "密碼不一致",
 	Loading: "載入中",
 	"Sign-ups are closed": "暫停註冊",
@@ -180,10 +183,10 @@ export default {
 	"50 GB attachments": "50 GB 附件",
 	"Cross-vault search": "跨知識庫搜尋",
 	"API access": "API 存取",
-	"{hidden} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
+	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			other:
-				"您的 {hidden} 筆記無法搜尋。僅索引最舊的 {indexed} 筆記，因此最新的筆記不會顯示在搜尋結果中。",
+				"您的 {count} 筆記無法搜尋。僅索引最舊的 {indexed} 筆記，因此最新的筆記不會顯示在搜尋結果中。",
 		},
 	"Change plan": "變更方案",
 	"Loading plan options…": "載入方案選項…",
@@ -356,8 +359,8 @@ export default {
 	Create: "建立",
 	"Search vaults": "搜尋知識庫",
 	default: "預設",
-	"{n} notes": { other: "{n} 筆記" },
-	"{n} files": { other: "{n} 個檔案" },
+	"{count} notes": { other: "{count} 筆記" },
+	"{count} files": { other: "{count} 個檔案" },
 	text: "文字",
 	"What kind of note this is. Search can filter on it.": "筆記的類型。搜尋可以根據此篩選。",
 	"a list, or one name": "一個列表，或一個名稱",
@@ -520,7 +523,7 @@ export default {
 	Filters: "過濾器",
 	Type: "類型",
 	"What is type?": "什麼是類型？",
-	"Open Knowledge Format": "開放知識格式",
+	"Open Knowledge Format": "Open Knowledge Format",
 	"Any type": "任何類型",
 	"No matching type": "沒有符合的類型",
 	Folder: "資料夾",
@@ -540,6 +543,7 @@ export default {
 	"Clear filters": "清除篩選",
 	"Searching…": "搜尋中…",
 	"Search failed: {message}": "搜尋失敗：{message}",
+	"unknown error": "未知錯誤",
 	'No results for "{term}"': '"{term}" 無任何結果',
 	"Upgrade to search everything": "升級以搜尋全部內容",
 	Recent: "最近",
@@ -613,6 +617,12 @@ export default {
 	"This subscription is paused. It will resume on {date}.": "訂閱已暫停。將於 {date} 恢復。",
 	"This subscription is paused.": "訂閱已暫停。",
 	"Your trial ends on {date}.": "您的試用期於 {date} 結束。",
+	"Can't remove the last admin.": "無法移除最後一位管理員。",
+	"Check the invite's label, uses and expiry, then try again.":
+		"檢查邀請的標籤、用途和有效期限，然後再試。",
+	"Incorrect password.": "密碼錯誤。",
+	"You don't have permission to do that.": "您沒有權限執行此操作。",
+	"Too many requests. Try again in a moment.": "請求次數過多。請稍後再試。",
 	"Invalid authorization request": "無效的授權請求",
 	"Missing required OAuth parameters:": "缺少必要的 OAuth 參數：",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -810,13 +820,11 @@ export default {
 	"Copy failed, click the field and press Cmd/Ctrl+C to copy manually.":
 		"複製失敗，點擊該欄位並按下 Cmd/Ctrl+C 手動複製。",
 	Done: "完成",
-	"{status}: {message}": "{status}: {message}",
 	"Revoke failed": "撤銷失敗",
 	'Revoke "{name}"?': '撤銷 "{name}"？',
 	"Revoking…": "正在撤銷…",
 	"Close dialog": "關閉對話框",
 	"Failed to load: {message}": "載入失敗：{message}",
-	"unknown error": "未知錯誤",
 	Connections: "連線",
 	"Search connections": "搜尋連線",
 	"Manage what's connected to your Engram account.": "管理與你的 Engram 帳號相關的連線。",
@@ -955,7 +963,6 @@ export default {
 	Uses: "使用次數",
 	Expires: "期限",
 	never: "永久",
-	"Can't remove the last admin.": "無法移除最後一位管理員。",
 	"{label}: {error}": "{label}: {error}",
 	"Update role": "更新角色",
 	"Update status": "更新狀態",
@@ -1073,7 +1080,6 @@ export default {
 	"Delete failed": "刪除失敗",
 	"You're the only admin on this instance. Promote another user to admin first, then try again.":
 		"您是此實例的唯一管理員。先將另一位使用者升級為管理員，然後再試一次。",
-	"Incorrect password.": "密碼錯誤。",
 	"Danger zone": "警告區域",
 	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
 		"永久性操作。刪除您的帳號會登出您，並阻止您未來再次登入此帳戶。",
@@ -1115,7 +1121,6 @@ export default {
 		"它會移到垃圾桶，然後 {recoverable}，之後才會永久刪除。",
 	"This only deletes the copy stored on Engram. Files already {synced} stay where they are.":
 		"這僅刪除儲存在 Engram 上的副本。已經 {synced} 的檔案會保持原位。",
-	"{count} notes": { other: "{count} 筆記" },
 	"{count} attachments": { other: "{count} 個附件" },
 	"Restoring would exceed your vault limit. Upgrade or delete another vault first.":
 		"還原會超過你的知識庫限制。請先升級或刪除另一個知識庫。",

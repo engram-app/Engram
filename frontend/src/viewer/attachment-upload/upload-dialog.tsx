@@ -63,7 +63,7 @@ function messageFor(err: unknown, t: Translate): string {
 		if (err.status === 415) {
 			return t("This file type is not allowed");
 		}
-		return err.message || t("Upload failed");
+		return t("Upload failed");
 	}
 	return t("Upload failed");
 }

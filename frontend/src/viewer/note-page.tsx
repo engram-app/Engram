@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
 import { notify } from "@/lib/notify";
+import { serverErrorMessage } from "@/lib/server-error";
 import { isInvalidId, isNotFound } from "../api/client";
 import type { Note } from "../api/queries";
 import {
@@ -503,7 +504,9 @@ export default function NotePage() {
 		// paper over that with the held pair.
 		return (
 			<p className="p-6 text-destructive">
-				{t("Failed to load note: {message}", { message: error.message })}
+				{t("Failed to load note: {message}", {
+					message: serverErrorMessage(error, t("unknown error"), t),
+				})}
 			</p>
 		);
 	}

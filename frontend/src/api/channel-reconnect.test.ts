@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { englishT } from "@/i18n/translate";
 import { connectChannel, disconnectChannel, reconnectWithFreshToken } from "./channel";
 
 // The socket is built with a params FUNCTION (phoenix re-evaluates it on every
@@ -54,6 +55,7 @@ describe("token refresh on reconnect", () => {
 			vaultId: "v1",
 			getToken: async () => "tok-A",
 			queryClient,
+			t: englishT,
 		});
 
 		expect(typeof sockets[0]!.opts.params).toBe("function");
@@ -66,6 +68,7 @@ describe("token refresh on reconnect", () => {
 			vaultId: "v1",
 			getToken: async () => "tok-A",
 			queryClient,
+			t: englishT,
 		});
 		const socket = sockets[0]!;
 
@@ -81,6 +84,7 @@ describe("token refresh on reconnect", () => {
 			vaultId: "v1",
 			getToken: async () => "tok-A",
 			queryClient,
+			t: englishT,
 		});
 		const socket = sockets[0]!;
 
@@ -101,6 +105,7 @@ describe("token refresh on reconnect", () => {
 			vaultId: "v1",
 			getToken: async () => "tok-A",
 			queryClient,
+			t: englishT,
 		});
 		const socket = sockets[0]!;
 
@@ -126,6 +131,7 @@ describe("token refresh on reconnect", () => {
 			vaultId: "v1",
 			getToken: async () => "tok-A",
 			queryClient,
+			t: englishT,
 		});
 		const socket = sockets[0]!;
 

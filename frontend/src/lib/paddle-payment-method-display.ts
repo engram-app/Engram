@@ -1,5 +1,6 @@
 import { msg } from "@/i18n/msg";
 import type { Translate } from "@/i18n/translate";
+import type { MsgKey } from "@/i18n/ui-text";
 
 // Payment-method names that are brands stay as-is; the generic ones are marked
 // for translation and live in GENERIC_METHOD_LABELS.
@@ -21,7 +22,7 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
 	wechat_pay: "WeChat Pay",
 };
 
-const GENERIC_METHOD_LABELS: Record<string, string> = {
+const GENERIC_METHOD_LABELS: Record<string, MsgKey> = {
 	card: msg("Card"),
 	south_korea_local_card: msg("Korea local card"),
 	offline: msg("Offline"),

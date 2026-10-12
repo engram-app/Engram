@@ -1,3 +1,4 @@
+import type { Key } from "./translate";
 import { asMsgKey, type MsgKey } from "./ui-text";
 
 // The translate function from useT() is a hook result, so it only exists inside
@@ -5,7 +6,8 @@ import { asMsgKey, type MsgKey } from "./ui-text";
 // say) has no hook to call, and a bare string there is invisible to the key
 // scanner. Wrap it in msg() to keep the English text and mark it as a catalog
 // key, then pass it through the translate function when rendering.
-function msg(en: string): MsgKey {
+// Like the translate function, it takes only a literal the key scanner can read.
+function msg<K extends string>(en: Key<K>): MsgKey {
 	return asMsgKey(en);
 }
 

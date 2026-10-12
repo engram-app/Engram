@@ -8,11 +8,13 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { Trans } from "@/i18n/trans";
+import type { MsgKey } from "@/i18n/ui-text";
 import { useActiveEditor } from "../editor/active-editor-context";
 import { insertSnippet } from "../editor/format-commands";
 import NoteView from "../note-view";
 import {
 	CATEGORY_INTROS,
+	entryLabel,
 	entrySyntax,
 	filterSyntax,
 	groupByCategory,
@@ -85,7 +87,7 @@ const REF_LINK = "text-xs underline underline-offset-2 hover:text-foreground";
  * the point. Its own line rather than trailing the prose, so it reads as "go
  * here for more" instead of disappearing into the sentence.
  */
-function RefLink({ link }: { link?: { href: string; label: string } }) {
+function RefLink({ link }: { link?: { href: string; label: MsgKey } }) {
 	const { t } = useT();
 	if (!link) {
 		return null;
@@ -110,7 +112,7 @@ const GRUBER_QUOTE = msg(
 	"A Markdown-formatted document should be publishable as-is, as plain text, without looking like it's been marked up with tags or formatting instructions.",
 );
 
-const OVERVIEW_LINKS: readonly { href: string; label: string }[] = [
+const OVERVIEW_LINKS: readonly { href: string; label: MsgKey }[] = [
 	// The original. Still the most complete statement of the base syntax.
 	{
 		href: "https://daringfireball.net/projects/markdown/syntax",
@@ -231,10 +233,10 @@ function InsertButton({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boo
 					insertSnippet(view, entrySyntax(entry, t), { block: entry.block });
 				}
 			}}
-			aria-label={t("Insert {label}", { label: t(entry.label) })}
+			aria-label={t("Insert {label}", { label: entryLabel(entry, t) })}
 			title={
 				canInsert
-					? t("Insert {label} at the cursor", { label: t(entry.label) })
+					? t("Insert {label} at the cursor", { label: entryLabel(entry, t) })
 					: t("Open a note to insert")
 			}
 			// self-stretch + h-auto: the hit area spans the row's full height rather
@@ -430,7 +432,7 @@ function BlockRow({ entry, canInsert }: { entry: SyntaxEntry; canInsert: boolean
 	return (
 		<Row entry={entry} canInsert={canInsert}>
 			<span className="block min-w-0 flex-1 px-3 py-2">
-				<p className={`mb-1 ${ROW_HEADING}`}>{t(entry.label)}</p>
+				<p className={`mb-1 ${ROW_HEADING}`}>{entryLabel(entry, t)}</p>
 
 				{/* Blurb sits directly under the heading, as a subtitle. Trailing it
 			    after the source made it read as a footer nobody looks at, and it is

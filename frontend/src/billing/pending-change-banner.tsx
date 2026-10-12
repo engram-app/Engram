@@ -2,11 +2,12 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import type { MsgKey } from "@/i18n/ui-text";
 import { intlLocale } from "@/lib/intl-locale";
 import { notify } from "@/lib/notify";
 import { type SubscriptionDetail, useReverseCancel } from "../api/queries";
 
-const ACTION_LABELS: Record<string, string> = {
+const ACTION_LABELS: Record<string, MsgKey> = {
 	cancel: msg("Your plan cancels on {date}"),
 	pause: msg("Your plan pauses on {date}"),
 	resume: msg("Your plan resumes on {date}"),

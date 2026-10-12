@@ -6,11 +6,8 @@ import { type MsgKey, type UIText, untranslated } from "@/i18n/ui-text";
 // 422 on submit. The split between catalogs is UI-only; the wire shape is
 // a flat `tools: string[]`.
 
-export interface ToolOption {
+export type ToolOption = {
 	slug: string;
-	label: MsgKey | UIText;
-	/** Set on labels written with `msg()`. Brand names stay as written, even when one equals a catalog key. */
-	translate?: true;
 	hint?: MsgKey;
 	/**
 	 * Set when the tool cannot connect to Engram for a reason outside our
@@ -18,8 +15,12 @@ export interface ToolOption {
 	 * explanation. Such a slug is deliberately absent from the backend
 	 * `@valid_tools`, so it can never reach a profile even if the UI is bypassed.
 	 */
-	unavailable?: string;
-}
+	unavailable?: MsgKey;
+} & (
+	| { label: UIText; translate?: undefined }
+	/** Set on labels written with `msg()`. Brand names stay as written, even when one equals a catalog key. */
+	| { label: MsgKey; translate: true }
+);
 
 export const TOOL_ASSISTANTS: ToolOption[] = [
 	{ slug: "claude", label: untranslated("Claude") },
@@ -72,8 +73,10 @@ export const TOOL_CODING: ToolOption[] = [
  * reads as "Claude Code (engram)" in the connections list. Once the slug is
  * resolved we already know the product, so prefer the catalog's spelling.
  */
-export const TOOL_LABELS: Record<string, string> = Object.fromEntries(
-	[...TOOL_ASSISTANTS, ...TOOL_CODING].map(({ slug, label }) => [slug, label]),
+// Brand names only: a msg() label ("Another MCP client") names no product, and
+// it is an untranslated key, so it must not be rendered from here.
+export const TOOL_LABELS: Record<string, UIText> = Object.fromEntries(
+	[...TOOL_ASSISTANTS, ...TOOL_CODING].flatMap((o) => (o.translate ? [] : [[o.slug, o.label]])),
 );
 
 /**
@@ -86,8 +89,9 @@ export const TOOL_LABELS: Record<string, string> = Object.fromEntries(
  * Slug stays `web_only` for wire compatibility: it is already in the backend
  * `@valid_tools` and in saved profiles. Only the presentation changed.
  */
-export const NO_AI_TOOL: ToolOption = {
+export const NO_AI_TOOL = {
 	slug: "web_only",
 	label: msg("I'm not connecting an AI tool yet"),
+	translate: true,
 	hint: msg("Use Engram in the web app. You can connect a tool later from Settings."),
-};
+} as const satisfies ToolOption;

@@ -620,7 +620,9 @@ describe("ConnectionsPage", () => {
 			.getAllByRole("button", { name: /^Revoke$/u })
 			.find((b) => b.closest('[role="dialog"]'))!;
 		fireEvent.click(confirmButton);
-		await waitFor(() => expect(screen.getByText("Boom")).toBeInTheDocument());
+		// The thrown text is not shown (server text is English in every locale).
+		await waitFor(() => expect(screen.getByText("Revoke failed")).toBeInTheDocument());
+		expect(screen.queryByText("Boom")).toBeNull();
 		// Dialog still mounted so the user can retry or cancel.
 		expect(screen.getByRole("dialog")).toBeInTheDocument();
 	});

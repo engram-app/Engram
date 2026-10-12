@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import type { MsgKey } from "@/i18n/ui-text";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
 import { FeedbackDialog } from "../feedback/feedback-dialog";
 import { isMember } from "../lib/is-member";
@@ -26,7 +27,7 @@ import { useTheme } from "../theme/theme-provider";
 // Account). Clerk supplies a generated imageUrl; local auth falls back to the
 // email initial. Theme picker folded in here as radio rows so the rail's
 // 32px-button slot doesn't need a second control.
-const THEME_OPTIONS: ReadonlyArray<{ value: ThemeChoice; label: string; Icon: typeof Sun }> = [
+const THEME_OPTIONS: ReadonlyArray<{ value: ThemeChoice; label: MsgKey; Icon: typeof Sun }> = [
 	{ value: "light", label: msg("Light"), Icon: Sun },
 	{ value: "dark", label: msg("Dark"), Icon: Moon },
 	{ value: "system", label: msg("System"), Icon: Monitor },

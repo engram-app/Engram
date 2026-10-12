@@ -34,8 +34,8 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"账号已禁用。联系管理员恢复访问。",
 	"Incorrect email or password.": "邮箱或密码错误。",
-	"Login failed": "登录失败",
 	"Login not available for this auth provider": "无法使用此认证方式登录",
+	"Login failed": "登录失败",
 	"Sign-ups require an invite link. Contact your admin to request one.":
 		"注册需要邀请链接。联系管理员获取。",
 	"Sign-ups are closed on this instance.": "此实例已关闭注册。",
@@ -46,8 +46,11 @@ export default {
 	"Signing in…": "正在登录…",
 	"Sign in": "登录",
 	"Don't have an account? {signup}": "还没有账号？{signup}",
-	"Registration failed": "注册失败",
+	"That password is too short.": "密码太短。",
+	"That password is too long.": "密码太长。",
+	"This invite link is invalid or has already been used.": "邀请链接无效或已使用。",
 	"Registration not available for this auth provider": "无法使用此认证方式注册",
+	"Registration failed": "注册失败",
 	"Passwords do not match": "密码不匹配",
 	Loading: "加载中",
 	"Sign-ups are closed": "停止接受注册",
@@ -179,10 +182,10 @@ export default {
 	"50 GB attachments": "50 GB 附件",
 	"Cross-vault search": "跨知识库搜索",
 	"API access": "API 访问",
-	"{hidden} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
+	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			other:
-				"您的 {hidden} 笔记不可搜索。仅索引最近 {indexed} 的笔记，因此最新的笔记不会出现在搜索结果中。",
+				"您的 {count} 笔记无法搜索。仅索引最近 {indexed} 个笔记，因此最新的笔记不会出现在搜索结果中。",
 		},
 	"Change plan": "更改套餐",
 	"Loading plan options…": "正在加载方案选项…",
@@ -355,8 +358,8 @@ export default {
 	Create: "创建",
 	"Search vaults": "搜索知识库",
 	default: "默认",
-	"{n} notes": { other: "{n} 笔记" },
-	"{n} files": { other: "{n} 个文件" },
+	"{count} notes": { other: "{count} 笔记" },
+	"{count} files": { other: "{count} 个文件" },
 	text: "文本",
 	"What kind of note this is. Search can filter on it.": "笔记类型。搜索可以根据此进行过滤。",
 	"a list, or one name": "列表或单个名称",
@@ -518,7 +521,7 @@ export default {
 	Filters: "筛选器",
 	Type: "类型",
 	"What is type?": "类型是什么？",
-	"Open Knowledge Format": "开放知识格式",
+	"Open Knowledge Format": "Open Knowledge Format",
 	"Any type": "任何类型",
 	"No matching type": "未找到匹配的类型",
 	Folder: "文件夹",
@@ -538,6 +541,7 @@ export default {
 	"Clear filters": "清除筛选",
 	"Searching…": "搜索中…",
 	"Search failed: {message}": "搜索失败：{message}",
+	"unknown error": "未知错误",
 	'No results for "{term}"': '没有找到 "{term}" 的结果',
 	"Upgrade to search everything": "升级以搜索全部内容",
 	Recent: "最近",
@@ -611,6 +615,12 @@ export default {
 	"This subscription is paused. It will resume on {date}.": "此订阅已暂停。将于 {date} 恢复。",
 	"This subscription is paused.": "此订阅已暂停。",
 	"Your trial ends on {date}.": "您的试用期将于 {date} 结束。",
+	"Can't remove the last admin.": "无法删除最后一位管理员。",
+	"Check the invite's label, uses and expiry, then try again.":
+		"检查邀请的标签、用途和有效期，然后重试。",
+	"Incorrect password.": "密码错误。",
+	"You don't have permission to do that.": "你没有权限执行此操作。",
+	"Too many requests. Try again in a moment.": "请求过多。请稍后再试。",
 	"Invalid authorization request": "无效的授权请求",
 	"Missing required OAuth parameters:": "缺少必需的 OAuth 参数：",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -809,13 +819,11 @@ export default {
 	"Copy failed, click the field and press Cmd/Ctrl+C to copy manually.":
 		"复制失败，点击该字段并按 Cmd/Ctrl+C 手动复制。",
 	Done: "完成",
-	"{status}: {message}": "{status}: {message}",
 	"Revoke failed": "撤销失败",
 	'Revoke "{name}"?': '撤销 "{name}"？',
 	"Revoking…": "正在撤销…",
 	"Close dialog": "关闭对话框",
 	"Failed to load: {message}": "加载失败：{message}",
-	"unknown error": "未知错误",
 	Connections: "连接",
 	"Search connections": "搜索连接",
 	"Manage what's connected to your Engram account.": "管理与你的 Engram 账号相关的连接。",
@@ -954,7 +962,6 @@ export default {
 	Uses: "用途",
 	Expires: "到期时间",
 	never: "永久",
-	"Can't remove the last admin.": "无法删除最后一位管理员。",
 	"{label}: {error}": "{label}: {error}",
 	"Update role": "更新角色",
 	"Update status": "更新状态",
@@ -1071,7 +1078,6 @@ export default {
 	"Delete failed": "删除失败",
 	"You're the only admin on this instance. Promote another user to admin first, then try again.":
 		"你是这个实例的唯一管理员。先将其他用户提升为管理员，然后重试。",
-	"Incorrect password.": "密码错误。",
 	"Danger zone": "危险区域",
 	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
 		"永久性操作。删除你的账号会让你注销，并阻止将来再次登录。",
@@ -1113,7 +1119,6 @@ export default {
 		"它会移动到回收站并被 {recoverable}，然后永久删除。",
 	"This only deletes the copy stored on Engram. Files already {synced} stay where they are.":
 		"这只会删除存储在 Engram 上的副本。已经 {synced} 的文件保持原位。",
-	"{count} notes": { other: "{count} 笔记" },
 	"{count} attachments": { other: "{count} 个附件" },
 	"Restoring would exceed your vault limit. Upgrade or delete another vault first.":
 		"恢复会超过你的知识库限制。请先升级或删除另一个知识库。",

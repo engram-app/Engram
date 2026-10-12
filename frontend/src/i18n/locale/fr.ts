@@ -37,9 +37,9 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"Ce compte est suspendu. Contacte un administrateur pour rétablir l'accès.",
 	"Incorrect email or password.": "Adresse e-mail ou mot de passe incorrect.",
-	"Login failed": "Échec de la connexion",
 	"Login not available for this auth provider":
 		"La connexion n'est pas disponible pour ce fournisseur d'authentification",
+	"Login failed": "Échec de la connexion",
 	"Sign-ups require an invite link. Contact your admin to request one.":
 		"L'inscription nécessite un lien d'invitation. Contacte ton administrateur pour en demander un.",
 	"Sign-ups are closed on this instance.": "Les inscriptions sont fermées sur cette instance.",
@@ -50,9 +50,13 @@ export default {
 	"Signing in…": "Connexion en cours…",
 	"Sign in": "Connexion",
 	"Don't have an account? {signup}": "Pas de compte ? {signup}",
-	"Registration failed": "L'inscription a échoué",
+	"That password is too short.": "Ce mot de passe est trop court.",
+	"That password is too long.": "Ce mot de passe est trop long.",
+	"This invite link is invalid or has already been used.":
+		"Ce lien d'invitation n'est pas valide ou a déjà été utilisé.",
 	"Registration not available for this auth provider":
 		"L'inscription n'est pas disponible pour ce fournisseur d'authentification",
+	"Registration failed": "L'inscription a échoué",
 	"Passwords do not match": "Les mots de passe ne correspondent pas",
 	Loading: "Chargement",
 	"Sign-ups are closed": "Les inscriptions sont fermées",
@@ -197,12 +201,12 @@ export default {
 	"50 GB attachments": "50 Go de pièces jointes",
 	"Cross-vault search": "Recherche entre les coffres",
 	"API access": "Accès API",
-	"{hidden} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
+	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
-			one: "{hidden} de tes notes n'est pas indexable. Seules tes {indexed} notes les plus anciennes sont indexées, donc tes notes les plus récentes n'apparaîtront pas dans les recherches.",
-			many: "{hidden} de tes notes ne sont pas consultables. Seules tes {indexed} notes les plus anciennes sont indexées, donc tes notes les plus récentes n'apparaîtront pas dans les recherches.",
+			one: "{count} de tes notes n'est pas consultable. Seules tes {indexed} notes les plus anciennes sont indexées, donc tes notes les plus récentes n'apparaîtront pas dans la recherche.",
+			many: "{count} de tes notes ne sont pas consultables. Seules tes {indexed} les plus anciennes sont indexées, donc tes notes les plus récentes n'apparaîtront pas dans les recherches.",
 			other:
-				"{hidden} de tes notes ne sont pas consultables. Seules tes {indexed} notes les plus anciennes sont indexées, donc tes notes les plus récentes n'apparaîtront pas dans les recherches.",
+				"{count} de tes notes ne sont pas consultables. Seules tes {indexed} les plus anciennes sont indexées, donc tes notes les plus récentes n'apparaîtront pas dans les résultats de recherche.",
 		},
 	"Change plan": "Changer d'abonnement",
 	"Loading plan options…": "Chargement des options de plan…",
@@ -386,8 +390,8 @@ export default {
 	Create: "Créer",
 	"Search vaults": "Rechercher des coffres",
 	default: "par défaut",
-	"{n} notes": { one: "{n} note", many: "{n} de notes", other: "{n} notes" },
-	"{n} files": { one: "{n} fichier", many: "{n} fichiers", other: "{n} fichiers" },
+	"{count} notes": { one: "{count} note", many: "{count} notes", other: "{count} notes" },
+	"{count} files": { one: "{count} fichier", many: "{count} fichiers", other: "{count} fichiers" },
 	text: "texte",
 	"What kind of note this is. Search can filter on it.":
 		"Le type de note. La recherche peut filtrer selon ce critère.",
@@ -581,7 +585,7 @@ export default {
 	Filters: "Filtres",
 	Type: "Type",
 	"What is type?": "Quel type ?",
-	"Open Knowledge Format": "Format de connaissance ouvert",
+	"Open Knowledge Format": "Open Knowledge Format",
 	"Any type": "Tout type",
 	"No matching type": "Aucun type correspondant",
 	Folder: "Dossier",
@@ -601,6 +605,7 @@ export default {
 	"Clear filters": "Effacer les filtres",
 	"Searching…": "Recherche en cours…",
 	"Search failed: {message}": "Recherche impossible : {message}",
+	"unknown error": "erreur inconnue",
 	'No results for "{term}"': 'Aucun résultat pour "{term}"',
 	"Upgrade to search everything": "Passe à une version supérieure pour tout rechercher",
 	Recent: "Récents",
@@ -679,6 +684,12 @@ export default {
 		"Cet abonnement est suspendu. Il reprendra le {date}.",
 	"This subscription is paused.": "Cet abonnement est suspendu.",
 	"Your trial ends on {date}.": "Ton essai se termine le {date}.",
+	"Can't remove the last admin.": "Impossible de supprimer le dernier administrateur.",
+	"Check the invite's label, uses and expiry, then try again.":
+		"Vérifie l'étiquette, les utilisations et la date d'expiration de l'invitation, puis réessaie.",
+	"Incorrect password.": "Mot de passe incorrect.",
+	"You don't have permission to do that.": "Tu n'as pas la permission de faire cela.",
+	"Too many requests. Try again in a moment.": "Trop de requêtes. Réessaie dans un instant.",
 	"Invalid authorization request": "Requête d'autorisation invalide",
 	"Missing required OAuth parameters:": "Paramètres OAuth requis manquants :",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -885,13 +896,11 @@ export default {
 	"Copy failed, click the field and press Cmd/Ctrl+C to copy manually.":
 		"Copie échouée, clique dans le champ et appuie sur Cmd/Ctrl+C pour copier manuellement.",
 	Done: "Terminé",
-	"{status}: {message}": "{status} : {message}",
 	"Revoke failed": "Annulation échouée",
 	'Revoke "{name}"?': 'Révoquer "{name}" ?',
 	"Revoking…": "Révoque…",
 	"Close dialog": "Fermer la boîte de dialogue",
 	"Failed to load: {message}": "Impossible de charger : {message}",
-	"unknown error": "erreur inconnue",
 	Connections: "Connexions",
 	"Search connections": "Rechercher les connexions",
 	"Manage what's connected to your Engram account.": "Gère les connexions à ton compte Engram.",
@@ -948,8 +957,8 @@ export default {
 	"Failed to load folders.": "Impossible de charger les dossiers.",
 	"No notes yet.": "Aucune note pour le moment.",
 	"Copied {count} wikilinks": {
-		one: "Wikilink copié",
-		many: "Copiés {count} wikilinks",
+		one: "{count} wikilink copié",
+		many: "{count} wikilinks copiés",
 		other: "{count} wikilinks copiés",
 	},
 	"Rename note": "Renommer la note",
@@ -1040,7 +1049,6 @@ export default {
 	Uses: "Utilisations",
 	Expires: "Expiration",
 	never: "jamais",
-	"Can't remove the last admin.": "Impossible de supprimer le dernier administrateur.",
 	"{label}: {error}": "{label} : {error}",
 	"Update role": "Mettre à jour le rôle",
 	"Update status": "Mettre à jour le statut",
@@ -1165,7 +1173,6 @@ export default {
 	"Delete failed": "Suppression échouée",
 	"You're the only admin on this instance. Promote another user to admin first, then try again.":
 		"Tu es le seul administrateur de cette instance. Promouvois un autre utilisateur au statut d'administrateur, puis réessaie.",
-	"Incorrect password.": "Mot de passe incorrect.",
 	"Danger zone": "Zone dangereuse",
 	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
 		"Actions permanentes. Supprimer ton compte te déconnecte et bloque toute nouvelle tentative de connexion pour cet utilisateur.",
@@ -1211,7 +1218,6 @@ export default {
 		"Il est déplacé vers la corbeille et est {recoverable}, puis supprimé définitivement.",
 	"This only deletes the copy stored on Engram. Files already {synced} stay where they are.":
 		"Cela ne supprime que la copie stockée sur Engram. Les fichiers déjà {synced} restent où ils sont.",
-	"{count} notes": { one: "{count} note", many: "{count} de notes", other: "{count} notes" },
 	"{count} attachments": {
 		one: "{count} pièce jointe",
 		many: "{count} pièces jointes",
@@ -1441,8 +1447,8 @@ export default {
 		other: "Déplacer {count} éléments vers…",
 	},
 	"Copy {count} wikilinks": {
-		one: "Copier le wikilink",
-		many: "Copier {count} wikilinks",
+		one: "Copier {count} wikilink",
+		many: "Copier {count} de wikilinks",
 		other: "Copier {count} wikilinks",
 	},
 	"Delete {count} items": {

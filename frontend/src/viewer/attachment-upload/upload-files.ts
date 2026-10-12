@@ -1,5 +1,5 @@
 import { LimitExceededError } from "@/api/client";
-import { englishT, type Translate } from "@/i18n/translate";
+import type { Translate } from "@/i18n/translate";
 import { notify } from "@/lib/notify";
 import { uniqueAttachmentName } from "../attachment-blob";
 import { fileToBase64 } from "./file-to-base64";
@@ -48,10 +48,10 @@ export async function uploadFilesTo(opts: {
 	existing: { path: string }[];
 	files: File[];
 	folder: string;
-	/** The caller's translate function (`useT()`); English when omitted. */
-	t?: Translate;
+	/** The caller's translate function (`useT()`). */
+	t: Translate;
 }): Promise<string[]> {
-	const t = opts.t ?? englishT;
+	const { t } = opts;
 	const taken = [...opts.existing, ...reservedPaths(Date.now())];
 	const done: string[] = [];
 	for (const file of opts.files) {

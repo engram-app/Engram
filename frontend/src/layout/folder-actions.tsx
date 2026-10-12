@@ -24,7 +24,7 @@ const ICON = "size-5";
 
 interface SortSection {
 	label: MsgKey;
-	options: ReadonlyArray<{ value: SortKey; label: string }>;
+	options: ReadonlyArray<{ value: SortKey; label: MsgKey }>;
 }
 
 const SORT_SECTIONS: readonly SortSection[] = [

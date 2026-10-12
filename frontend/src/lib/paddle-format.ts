@@ -1,5 +1,6 @@
 import { msg } from "@/i18n/msg";
 import type { Tn, Translate } from "@/i18n/translate";
+import type { MsgKey } from "@/i18n/ui-text";
 import { formatDate as formatShortDate } from "./format-date";
 
 // Structural alias — accepts both CheckoutEventsTimePeriod and TimePeriod
@@ -12,14 +13,14 @@ interface TimePeriodLike {
 // https://developer.paddle.com/concepts/payment-methods/currencies
 const ZERO_DECIMAL_CURRENCIES = new Set(["JPY", "KRW", "VND", "CLP"]);
 
-const INTERVAL_LABELS: Record<string, { noun: string; adjective: string }> = {
+const INTERVAL_LABELS: Record<string, { noun: MsgKey; adjective: MsgKey }> = {
 	day: { noun: msg("Daily"), adjective: msg("daily") },
 	week: { noun: msg("Weekly"), adjective: msg("weekly") },
 	month: { noun: msg("Monthly"), adjective: msg("monthly") },
 	year: { noun: msg("Annually"), adjective: msg("annual") },
 };
 
-const PRORATION_LABELS: Record<string, string> = {
+const PRORATION_LABELS: Record<string, MsgKey> = {
 	prorated_immediately: msg("Charge prorated amount now"),
 	full_immediately: msg("Charge full amount now"),
 	prorated_next_billing_period: msg("Prorated at next billing"),

@@ -13,12 +13,13 @@ import { EMPTY_REASON, ReasonFields, reasonComplete } from "@/feedback/reason-fi
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { Trans } from "@/i18n/trans";
+import type { MsgKey } from "@/i18n/ui-text";
 import { intlLocale } from "@/lib/intl-locale";
 import { notify } from "@/lib/notify";
 import type { SubscriptionDetail } from "../api/queries";
 import { type BillingStatus, useCancelSubscription, useSubmitFeedback } from "../api/queries";
 
-const TIER_LABELS: Partial<Record<BillingStatus["tier"], string>> = {
+const TIER_LABELS: Partial<Record<BillingStatus["tier"], MsgKey>> = {
 	starter: msg("Starter"),
 	pro: msg("Pro"),
 };

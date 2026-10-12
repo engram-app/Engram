@@ -17,6 +17,8 @@ import { useStableT, useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { Trans } from "@/i18n/trans";
 import type { Tn, Translate } from "@/i18n/translate";
+import type { MsgKey } from "@/i18n/ui-text";
+import { serverErrorMessage } from "@/lib/server-error";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { track } from "../analytics/track";
@@ -60,7 +62,7 @@ type Step = "enter-code" | "verifying" | "pick-vault" | "success";
 // The heading names the step you're on. It used to be a single ternary that
 // only special-cased pick-vault, so the success screen kept announcing "Link
 // Obsidian Vault" for a job that was already done.
-const STEP_TITLES: Record<Step, string> = {
+const STEP_TITLES: Record<Step, MsgKey> = {
 	"enter-code": msg("Link Obsidian Vault"),
 	// Same job as enter-code, just without the form — keep the same title so
 	// the heading doesn't change under the user when the verify resolves.
@@ -454,7 +456,7 @@ function DeviceLinkPage() {
 			if (notFound) {
 				setError(t("This code is invalid or has expired. Please try again from Obsidian."));
 			} else {
-				setError(message);
+				setError(serverErrorMessage(e, t("Authorization failed"), t));
 			}
 			track("plugin_connect_failed", { reason: notFound ? "not_found" : "unknown" });
 		} finally {

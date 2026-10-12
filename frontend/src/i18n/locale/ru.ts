@@ -37,9 +37,9 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"Эта учетная запись заблокирована. Обратитесь к администратору для восстановления доступа.",
 	"Incorrect email or password.": "Неверный адрес электронной почты или пароль.",
-	"Login failed": "Не удалось войти",
 	"Login not available for this auth provider":
 		"Вход не доступен для этого провайдера аутентификации",
+	"Login failed": "Не удалось войти",
 	"Sign-ups require an invite link. Contact your admin to request one.":
 		"Для регистрации требуется ссылка-приглашение. Обратитесь к администратору, чтобы запросить её.",
 	"Sign-ups are closed on this instance.": "Регистрация закрыта в этой системе.",
@@ -50,9 +50,13 @@ export default {
 	"Signing in…": "Вход в систему…",
 	"Sign in": "Войти",
 	"Don't have an account? {signup}": "У вас нет аккаунта? {signup}",
-	"Registration failed": "Регистрация не удалась",
+	"That password is too short.": "Этот пароль слишком короткий.",
+	"That password is too long.": "Этот пароль слишком длинный.",
+	"This invite link is invalid or has already been used.":
+		"Эта ссылка-приглашение недействительна или уже использована.",
 	"Registration not available for this auth provider":
 		"Регистрация недоступна для этого провайдера аутентификации",
+	"Registration failed": "Регистрация не удалась",
 	"Passwords do not match": "Пароли не совпадают",
 	Loading: "Загрузка",
 	"Sign-ups are closed": "Регистрация временно приостановлена",
@@ -198,13 +202,13 @@ export default {
 	"50 GB attachments": "50 ГБ вложений",
 	"Cross-vault search": "Поиск по всем хранилищам",
 	"API access": "Доступ к API",
-	"{hidden} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
+	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
-			one: "{hidden} ваших заметок не подлежат поиску. Индексируются только ваши самые старые {indexed}, поэтому новые заметки не будут отображаться в результатах поиска.",
-			few: "{hidden} ваших заметок не подлежат поиску. Индексируются только ваши самые старые {indexed}, поэтому новые заметки не будут отображаться в результатах поиска.",
-			many: "{hidden} ваших заметок не подлежат поиску. Индексируются только ваши самые старые {indexed}, поэтому новые заметки не будут отображаться в результатах поиска.",
+			one: "{count} из ваших заметок не подлежит поиску. Индексируются только ваши самые старые {indexed}, поэтому новые заметки не отображаются в результатах поиска.",
+			few: "{count} из ваших заметок не доступны для поиска. Индексируются только ваши самые старые {indexed}, поэтому новые заметки не отображаются в результатах поиска.",
+			many: "{count} ваших заметок не подлежат поиску. Индексируются только ваши самые старые {indexed}, поэтому новые заметки не отображаются в результатах поиска.",
 			other:
-				"{hidden} ваших заметок не подлежат поиску. Индексируются только ваши самые старые {indexed}, поэтому новые заметки не будут отображаться в результатах поиска.",
+				"{count} ваших заметок не подлежат поиску. Индексируются только ваши самые старые {indexed}, поэтому новые заметки не отображаются в результатах поиска.",
 		},
 	"Change plan": "Изменить тарифный план",
 	"Loading plan options…": "Загрузка вариантов тарифных планов…",
@@ -389,13 +393,18 @@ export default {
 	Create: "Создать",
 	"Search vaults": "Поиск хранилищ",
 	default: "по умолчанию",
-	"{n} notes": {
-		one: "{n} заметка",
-		few: "{n} заметок",
-		many: "{n} заметок",
-		other: "{n} заметок",
+	"{count} notes": {
+		one: "{count} заметка",
+		few: "{count} заметки",
+		many: "{count} заметок",
+		other: "{count} заметки",
 	},
-	"{n} files": { one: "{n} файл", few: "{n} файлов", many: "{n} файлов", other: "{n} файлов" },
+	"{count} files": {
+		one: "{count} файл",
+		few: "{count} файла",
+		many: "{count} файлов",
+		other: "{count} файла",
+	},
 	text: "текст",
 	"What kind of note this is. Search can filter on it.":
 		"Тип заметки. Поиск может фильтровать по этому параметру.",
@@ -597,7 +606,7 @@ export default {
 	Filters: "Фильтры",
 	Type: "Тип",
 	"What is type?": "Что такое тип?",
-	"Open Knowledge Format": "Открытый формат знаний",
+	"Open Knowledge Format": "Open Knowledge Format",
 	"Any type": "Любой тип",
 	"No matching type": "Нет подходящих типов",
 	Folder: "Папка",
@@ -617,6 +626,7 @@ export default {
 	"Clear filters": "Очистить фильтры",
 	"Searching…": "Поиск…",
 	"Search failed: {message}": "Поиск не удался: {message}",
+	"unknown error": "неизвестная ошибка",
 	'No results for "{term}"': 'Нет результатов для "{term}"',
 	"Upgrade to search everything": "Обновите, чтобы искать всё",
 	Recent: "Недавние",
@@ -716,6 +726,13 @@ export default {
 		"Эта подписка приостановлена. Она возобновится {date}.",
 	"This subscription is paused.": "Эта подписка приостановлена.",
 	"Your trial ends on {date}.": "Ваш пробный период заканчивается {date}.",
+	"Can't remove the last admin.": "Невозможно удалить последнего администратора.",
+	"Check the invite's label, uses and expiry, then try again.":
+		"Проверьте метку, использование и срок действия приглашения, затем попробуйте снова.",
+	"Incorrect password.": "Неверный пароль.",
+	"You don't have permission to do that.": "У вас нет разрешения на это.",
+	"Too many requests. Try again in a moment.":
+		"Слишком много запросов. Попробуйте повторить позже.",
 	"Invalid authorization request": "Неверный запрос авторизации",
 	"Missing required OAuth parameters:": "Отсутствуют необходимые параметры OAuth:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -922,13 +939,11 @@ export default {
 	"Copy failed, click the field and press Cmd/Ctrl+C to copy manually.":
 		"Копирование не удалось. Нажмите на поле и используйте Cmd/Ctrl+C для ручного копирования.",
 	Done: "Готово",
-	"{status}: {message}": "{status}: {message}",
 	"Revoke failed": "Отмена не удалась",
 	'Revoke "{name}"?': 'Отменить "{name}"?',
 	"Revoking…": "Отмена…",
 	"Close dialog": "Закрыть диалоговое окно",
 	"Failed to load: {message}": "Не удалось загрузить: {message}",
-	"unknown error": "неизвестная ошибка",
 	Connections: "Подключения",
 	"Search connections": "Поиск подключений",
 	"Manage what's connected to your Engram account.":
@@ -988,7 +1003,7 @@ export default {
 	"Failed to load folders.": "Не удалось загрузить папки.",
 	"No notes yet.": "Заметок пока нет.",
 	"Copied {count} wikilinks": {
-		one: "Скопирована вики-ссылка",
+		one: "Скопировано {count} вики-ссылку",
 		few: "Скопировано {count} вики-ссылки",
 		many: "Скопировано {count} вики-ссылок",
 		other: "Скопировано {count} вики-ссылок",
@@ -1082,7 +1097,6 @@ export default {
 	Uses: "Использования",
 	Expires: "Срок действия",
 	never: "никогда",
-	"Can't remove the last admin.": "Невозможно удалить последнего администратора.",
 	"{label}: {error}": "{label}: {error}",
 	"Update role": "Обновить роль",
 	"Update status": "Обновить статус",
@@ -1210,7 +1224,6 @@ export default {
 	"Delete failed": "Удаление не удалось",
 	"You're the only admin on this instance. Promote another user to admin first, then try again.":
 		"Вы единственный администратор в этой системе. Сначала назначьте другого пользователя администратором, затем попробуйте ещё раз.",
-	"Incorrect password.": "Неверный пароль.",
 	"Danger zone": "Осторожно",
 	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
 		"Необратимые действия. Удаление вашей учётной записи выводит вас из системы и блокирует будущие входы для этого пользователя.",
@@ -1258,12 +1271,6 @@ export default {
 		"Оно перемещается в корзину и будет {recoverable}, а затем окончательно удалено.",
 	"This only deletes the copy stored on Engram. Files already {synced} stay where they are.":
 		"Это удаляет только копию, хранящуюся в Engram. Файлы, которые уже {synced}, остаются на своих местах.",
-	"{count} notes": {
-		one: "{count} заметка",
-		few: "{count} заметки",
-		many: "{count} заметок",
-		other: "{count} заметки",
-	},
 	"{count} attachments": {
 		one: "{count} вложение",
 		few: "{count} вложения",
@@ -1496,9 +1503,9 @@ export default {
 		other: "Переместить {count} элементов в…",
 	},
 	"Copy {count} wikilinks": {
-		one: "Копировать вики-ссылку",
+		one: "Скопировать {count} вики-ссылку",
 		few: "Копировать {count} вики-ссылки",
-		many: "Скопировать {count} вики-ссылок",
+		many: "Копировать {count} вики-ссылок",
 		other: "Копировать {count} вики-ссылок",
 	},
 	"Delete {count} items": {

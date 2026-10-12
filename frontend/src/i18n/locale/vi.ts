@@ -36,9 +36,9 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"Tài khoản này đã bị khóa. Liên hệ với quản trị viên để khôi phục quyền truy cập.",
 	"Incorrect email or password.": "Địa chỉ email hoặc mật khẩu không chính xác.",
-	"Login failed": "Đăng nhập không thành công",
 	"Login not available for this auth provider":
 		"Đăng nhập không khả dụng cho nhà cung cấp xác thực này",
+	"Login failed": "Đăng nhập không thành công",
 	"Sign-ups require an invite link. Contact your admin to request one.":
 		"Đăng ký yêu cầu liên kết mời. Liên hệ với quản trị viên để yêu cầu một liên kết.",
 	"Sign-ups are closed on this instance.": "Đăng ký đã bị đóng trên phiên bản này.",
@@ -49,9 +49,13 @@ export default {
 	"Signing in…": "Đang đăng nhập…",
 	"Sign in": "Đăng nhập",
 	"Don't have an account? {signup}": "Chưa có tài khoản? {signup}",
-	"Registration failed": "Đăng ký không thành công",
+	"That password is too short.": "Mật khẩu đó quá ngắn.",
+	"That password is too long.": "Mật khẩu đó quá dài.",
+	"This invite link is invalid or has already been used.":
+		"Liên kết mời này không hợp lệ hoặc đã được sử dụng.",
 	"Registration not available for this auth provider":
 		"Không thể đăng ký với nhà cung cấp xác thực này",
+	"Registration failed": "Đăng ký không thành công",
 	"Passwords do not match": "Mật khẩu không khớp",
 	Loading: "Đang tải",
 	"Sign-ups are closed": "Đăng ký đã đóng",
@@ -191,10 +195,10 @@ export default {
 	"50 GB attachments": "50 GB tệp đính kèm",
 	"Cross-vault search": "Tìm kiếm trên nhiều kho lưu trữ",
 	"API access": "Truy cập API",
-	"{hidden} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
+	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			other:
-				"Một số {hidden} ghi chú của bạn không thể tìm kiếm được. Chỉ {indexed} ghi chú cũ nhất được lập chỉ mục, vì vậy các ghi chú mới nhất sẽ không hiển thị trong kết quả tìm kiếm.",
+				"{count} trong số ghi chú của bạn không thể tìm kiếm được. Chỉ các ghi chú cũ nhất của bạn ({indexed}) được lập chỉ mục, vì vậy các ghi chú mới nhất sẽ không hiển thị trong kết quả tìm kiếm.",
 		},
 	"Change plan": "Thay đổi gói cước",
 	"Loading plan options…": "Đang tải các tùy chọn gói...",
@@ -373,8 +377,8 @@ export default {
 	Create: "Tạo",
 	"Search vaults": "Tìm kiếm kho lưu trữ",
 	default: "mặc định",
-	"{n} notes": { other: "{n} ghi chú" },
-	"{n} files": { other: "{n} tệp" },
+	"{count} notes": { other: "{count} ghi chú" },
+	"{count} files": { other: "{count} tệp" },
 	text: "văn bản",
 	"What kind of note this is. Search can filter on it.":
 		"Loại ghi chú này là gì. Tìm kiếm có thể lọc theo.",
@@ -546,7 +550,7 @@ export default {
 	Filters: "Bộ lọc",
 	Type: "Loại",
 	"What is type?": "Loại là gì?",
-	"Open Knowledge Format": "Định dạng tri thức mở",
+	"Open Knowledge Format": "Open Knowledge Format",
 	"Any type": "Bất kỳ loại nào",
 	"No matching type": "Không tìm thấy loại nào phù hợp",
 	Folder: "Thư mục",
@@ -566,6 +570,7 @@ export default {
 	"Clear filters": "Xóa bộ lọc",
 	"Searching…": "Đang tìm kiếm…",
 	"Search failed: {message}": "Tìm kiếm thất bại: {message}",
+	"unknown error": "lỗi không xác định",
 	'No results for "{term}"': 'Không có kết quả cho "{term}"',
 	"Upgrade to search everything": "Nâng cấp để tìm kiếm mọi thứ",
 	Recent: "Gần đây",
@@ -640,6 +645,12 @@ export default {
 		"Đăng ký này đang tạm dừng. Nó sẽ tiếp tục vào ngày {date}.",
 	"This subscription is paused.": "Đăng ký này đang tạm dừng.",
 	"Your trial ends on {date}.": "Thời gian dùng thử của bạn kết thúc vào ngày {date}.",
+	"Can't remove the last admin.": "Không thể xóa người quản trị cuối cùng.",
+	"Check the invite's label, uses and expiry, then try again.":
+		"Kiểm tra nhãn mục đích và thời hạn của lời mời, sau đó thử lại.",
+	"Incorrect password.": "Mật khẩu không chính xác.",
+	"You don't have permission to do that.": "Bạn không có quyền thực hiện việc đó.",
+	"Too many requests. Try again in a moment.": "Quá nhiều yêu cầu. Thử lại sau một lát.",
 	"Invalid authorization request": "Yêu cầu xác thực không hợp lệ",
 	"Missing required OAuth parameters:": "Thiếu các tham số OAuth bắt buộc:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -845,13 +856,11 @@ export default {
 	"Copy failed, click the field and press Cmd/Ctrl+C to copy manually.":
 		"Sao chép thất bại, hãy nhấp vào trường và nhấn Cmd/Ctrl+C để sao chép thủ công.",
 	Done: "Hoàn thành",
-	"{status}: {message}": "{status}: {message}",
 	"Revoke failed": "Thu hồi thất bại",
 	'Revoke "{name}"?': 'Thu hồi "{name}"?',
 	"Revoking…": "Đang thu hồi…",
 	"Close dialog": "Đóng hộp thoại",
 	"Failed to load: {message}": "Không thể tải: {message}",
-	"unknown error": "lỗi không xác định",
 	Connections: "Kết nối",
 	"Search connections": "Tìm kiếm kết nối",
 	"Manage what's connected to your Engram account.":
@@ -999,7 +1008,6 @@ export default {
 	Uses: "Số lần sử dụng",
 	Expires: "Hết hạn",
 	never: "không bao giờ",
-	"Can't remove the last admin.": "Không thể xóa người quản trị cuối cùng.",
 	"{label}: {error}": "{label}: {error}",
 	"Update role": "Cập nhật vai trò",
 	"Update status": "Cập nhật trạng thái",
@@ -1122,7 +1130,6 @@ export default {
 	"Delete failed": "Xóa thất bại",
 	"You're the only admin on this instance. Promote another user to admin first, then try again.":
 		"Bạn là quản trị viên duy nhất trên phiên bản này. Hãy chỉ định một người dùng khác làm quản trị viên trước, sau đó thử lại.",
-	"Incorrect password.": "Mật khẩu không chính xác.",
 	"Danger zone": "Khu vực nguy hiểm",
 	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
 		"Các hành động không thể hoàn tác. Xóa tài khoản của bạn sẽ đăng xuất và chặn các lần đăng nhập trong tương lai cho người dùng này.",
@@ -1165,7 +1172,6 @@ export default {
 		"Nó sẽ được chuyển đến thùng rác và {recoverable}, sau đó bị xóa vĩnh viễn.",
 	"This only deletes the copy stored on Engram. Files already {synced} stay where they are.":
 		"Điều này chỉ xóa bản sao được lưu trữ trên Engram. Các tệp đã {synced} vẫn ở nguyên vị trí.",
-	"{count} notes": { other: "{count} ghi chú" },
 	"{count} attachments": { other: "{count} tệp đính kèm" },
 	"Restoring would exceed your vault limit. Upgrade or delete another vault first.":
 		"Khôi phục sẽ vượt quá giới hạn kho lưu trữ của bạn. Hãy nâng cấp hoặc xóa một kho lưu trữ khác trước.",

@@ -36,8 +36,8 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"이 계정은 정지되었습니다. 접근 권한을 복구하려면 관리자에게 문의하세요.",
 	"Incorrect email or password.": "이메일 또는 비밀번호가 올바르지 않습니다.",
-	"Login failed": "로그인에 실패했습니다",
 	"Login not available for this auth provider": "이 인증 방식을 사용할 수 없습니다",
+	"Login failed": "로그인에 실패했습니다",
 	"Sign-ups require an invite link. Contact your admin to request one.":
 		"가입은 초대 링크가 필요합니다. 초대 링크를 요청하려면 관리자에게 문의하세요.",
 	"Sign-ups are closed on this instance.": "이 인스턴스에서는 가입이 중단되었습니다.",
@@ -48,8 +48,12 @@ export default {
 	"Signing in…": "로그인 중입니다…",
 	"Sign in": "로그인",
 	"Don't have an account? {signup}": "계정이 없으신가요? {signup}",
-	"Registration failed": "등록 실패",
+	"That password is too short.": "해당 비밀번호는 너무 짧습니다.",
+	"That password is too long.": "해당 비밀번호는 너무 깁니다.",
+	"This invite link is invalid or has already been used.":
+		"이 초대 링크가 유효하지 않거나 이미 사용되었습니다.",
 	"Registration not available for this auth provider": "이 인증 방식을 사용할 수 없습니다",
+	"Registration failed": "등록 실패",
 	"Passwords do not match": "비밀번호가 일치하지 않습니다",
 	Loading: "로딩 중",
 	"Sign-ups are closed": "현재 신규 가입이 제한되었습니다",
@@ -186,10 +190,10 @@ export default {
 	"50 GB attachments": "50GB 첨부 파일",
 	"Cross-vault search": "보관함 간 검색",
 	"API access": "API 접근",
-	"{hidden} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
+	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			other:
-				"노트 중 {hidden} 개는 검색되지 않습니다. 가장 오래된 {indexed} 개의 노트만 색인되므로, 최근 노트는 검색 결과에 나타나지 않습니다.",
+				"귀하의 노트 중 {count}개는 검색할 수 없습니다. 가장 오래된 {indexed} 노트만 인덱싱되므로, 최근 작성한 노트는 검색 결과에 나타나지 않습니다.",
 		},
 	"Change plan": "요금제 변경",
 	"Loading plan options…": "요금제 옵션을 불러오는 중…",
@@ -370,8 +374,8 @@ export default {
 	Create: "만들기",
 	"Search vaults": "보관함 검색",
 	default: "기본값",
-	"{n} notes": { other: "{n} 노트" },
-	"{n} files": { other: "{n} 개의 파일" },
+	"{count} notes": { other: "{count}개의 노트" },
+	"{count} files": { other: "{count}개의 파일" },
 	text: "텍스트",
 	"What kind of note this is. Search can filter on it.":
 		"노트의 종류입니다. 검색 시 필터로 사용할 수 있습니다.",
@@ -536,7 +540,7 @@ export default {
 	Filters: "필터",
 	Type: "유형",
 	"What is type?": "유형은 무엇인가요?",
-	"Open Knowledge Format": "오픈 지식 형식",
+	"Open Knowledge Format": "Open Knowledge Format",
 	"Any type": "모든 유형",
 	"No matching type": "일치하는 유형 없음",
 	Folder: "폴더",
@@ -556,6 +560,7 @@ export default {
 	"Clear filters": "필터 초기화",
 	"Searching…": "검색 중…",
 	"Search failed: {message}": "검색 실패: {message}",
+	"unknown error": "알 수 없는 오류",
 	'No results for "{term}"': '"{term}"에 대한 검색 결과 없음',
 	"Upgrade to search everything": "모든 내용을 검색하려면 업그레이드하세요",
 	Recent: "최근",
@@ -631,6 +636,12 @@ export default {
 		"이 구독은 일시 중단되었습니다. {date}에 다시 시작됩니다.",
 	"This subscription is paused.": "이 구독은 일시 중단되었습니다.",
 	"Your trial ends on {date}.": "체험 기간은 {date}에 종료됩니다.",
+	"Can't remove the last admin.": "마지막 관리자를 삭제할 수 없습니다.",
+	"Check the invite's label, uses and expiry, then try again.":
+		"초대 링크의 정보(라벨, 사용 횟수, 만료일)를 확인한 후 다시 시도해 주세요.",
+	"Incorrect password.": "비밀번호가 올바르지 않습니다.",
+	"You don't have permission to do that.": "해당 작업을 수행할 권한이 없습니다.",
+	"Too many requests. Try again in a moment.": "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
 	"Invalid authorization request": "잘못된 인증 요청",
 	"Missing required OAuth parameters:": "필수 OAuth 매개변수가 누락되었습니다:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -831,13 +842,11 @@ export default {
 	"Copy failed, click the field and press Cmd/Ctrl+C to copy manually.":
 		"복사에 실패했습니다. 필드를 클릭하고 Cmd/Ctrl+C를 눌러 수동으로 복사하세요.",
 	Done: "완료",
-	"{status}: {message}": "{status}: {message}",
 	"Revoke failed": "권한 취소 실패",
 	'Revoke "{name}"?': '"{name}" 권취소하시겠습니까?',
 	"Revoking…": "권취소 중…",
 	"Close dialog": "대화 상자 닫기",
 	"Failed to load: {message}": "불러오기 실패: {message}",
-	"unknown error": "알 수 없는 오류",
 	Connections: "연결",
 	"Search connections": "연결 검색",
 	"Manage what's connected to your Engram account.": "Engram 계정에 연결된 항목을 관리하세요.",
@@ -982,7 +991,6 @@ export default {
 	Uses: "사용 횟수",
 	Expires: "만료일",
 	never: "영구",
-	"Can't remove the last admin.": "마지막 관리자를 삭제할 수 없습니다.",
 	"{label}: {error}": "{label}: {error}",
 	"Update role": "역할 업데이트",
 	"Update status": "상태 업데이트",
@@ -1105,7 +1113,6 @@ export default {
 	"Delete failed": "삭제 실패",
 	"You're the only admin on this instance. Promote another user to admin first, then try again.":
 		"이 인스턴스의 유일한 관리자입니다. 다른 사용자를 먼저 관리자로 지정한 후 다시 시도하세요.",
-	"Incorrect password.": "비밀번호가 올바르지 않습니다.",
 	"Danger zone": "위험 구역",
 	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
 		"영구적인 작업입니다. 계정을 삭제하면 로그아웃되며, 해당 사용자 계정으로 다시 로그인할 수 없습니다.",
@@ -1150,7 +1157,6 @@ export default {
 		"휴지통으로 이동되며 {recoverable} 상태가 되고, 이후 영구 삭제됩니다.",
 	"This only deletes the copy stored on Engram. Files already {synced} stay where they are.":
 		"이는 Engram에 저장된 복사본만 삭제합니다. 이미 {synced}된 파일은 그대로 유지됩니다.",
-	"{count} notes": { other: "{count}개의 노트" },
 	"{count} attachments": { other: "{count}개의 첨부 파일" },
 	"Restoring would exceed your vault limit. Upgrade or delete another vault first.":
 		"복원을 하면 보관함 제한을 초과합니다. 업그레이드하거나 다른 보관함을 먼저 삭제하세요.",

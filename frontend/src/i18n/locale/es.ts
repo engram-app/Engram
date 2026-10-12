@@ -37,9 +37,9 @@ export default {
 	"This account is suspended. Contact an admin to restore access.":
 		"Esta cuenta está suspendida. Contacta a un administrador para restablecer el acceso.",
 	"Incorrect email or password.": "Correo electrónico o contraseña incorrectos.",
-	"Login failed": "Falló el inicio de sesión",
 	"Login not available for this auth provider":
 		"El inicio de sesión no está disponible para este proveedor de autenticación",
+	"Login failed": "Falló el inicio de sesión",
 	"Sign-ups require an invite link. Contact your admin to request one.":
 		"Para registrarte, necesitas un enlace de invitación. Contacta a tu administrador para solicitar uno.",
 	"Sign-ups are closed on this instance.": "El registro está cerrado en esta instancia.",
@@ -50,9 +50,13 @@ export default {
 	"Signing in…": "Iniciando sesión…",
 	"Sign in": "Iniciar sesión",
 	"Don't have an account? {signup}": "¿No tienes cuenta? {signup}",
-	"Registration failed": "Registro fallido",
+	"That password is too short.": "Esa contraseña es demasiado corta.",
+	"That password is too long.": "Esa contraseña es demasiado larga.",
+	"This invite link is invalid or has already been used.":
+		"Este enlace de invitación no es válido o ya se ha utilizado.",
 	"Registration not available for this auth provider":
 		"El registro no está disponible para este proveedor de autenticación",
+	"Registration failed": "Registro fallido",
 	"Passwords do not match": "Las contraseñas no coinciden",
 	Loading: "Cargando",
 	"Sign-ups are closed": "El registro está cerrado",
@@ -195,12 +199,12 @@ export default {
 	"50 GB attachments": "50 GB de adjuntos",
 	"Cross-vault search": "Búsqueda entre bóvedas",
 	"API access": "Acceso a la API",
-	"{hidden} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
+	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
-			one: "{hidden} de tus notas no es buscable. Solo se indexan tus {indexed} notas más antiguas, así que tus notas más recientes no aparecerán en la búsqueda.",
-			many: "{hidden} de tus notas no se pueden buscar. Solo se indexan tus {indexed} notas más antiguas, así que tus notas más recientes no aparecerán en la búsqueda.",
+			one: "{count} de tus notas no es buscable. Solo se indexan tus {indexed} notas más antiguas, así que tus notas más recientes no aparecerán en la búsqueda.",
+			many: "{count} de tus notas no se pueden buscar. Solo se indexan tus {indexed} notas más antiguas, así que tus notas más recientes no aparecerán en la búsqueda.",
 			other:
-				"{hidden} de tus notas no se pueden buscar. Solo se indexan tus {indexed} notas más antiguas, así que tus notas más recientes no aparecerán en la búsqueda.",
+				"{count} de tus notas no se pueden buscar. Solo se indexan tus {indexed} notas más antiguas, así que tus notas más recientes no aparecerán en la búsqueda.",
 		},
 	"Change plan": "Cambiar de plan",
 	"Loading plan options…": "Cargando opciones de plan…",
@@ -383,8 +387,8 @@ export default {
 	Create: "Crear",
 	"Search vaults": "Buscar bóvedas",
 	default: "predeterminado",
-	"{n} notes": { one: "{n} nota", many: "{n} notas", other: "{n} notas" },
-	"{n} files": { one: "{n} archivo", many: "{n} archivos", other: "{n} archivos" },
+	"{count} notes": { one: "{count} nota", many: "{count} Notas", other: "{count} notas" },
+	"{count} files": { one: "{count} archivo", many: "{count} archivos", other: "{count} archivos" },
 	text: "texto",
 	"What kind of note this is. Search can filter on it.":
 		"Qué tipo de nota es. La búsqueda puede filtrar por esto.",
@@ -579,7 +583,7 @@ export default {
 	Filters: "Filtros",
 	Type: "Tipo",
 	"What is type?": "¿Qué tipo es?",
-	"Open Knowledge Format": "Formato de conocimiento abierto",
+	"Open Knowledge Format": "Open Knowledge Format",
 	"Any type": "Cualquier tipo",
 	"No matching type": "Ningún tipo coincide",
 	Folder: "Carpeta",
@@ -599,6 +603,7 @@ export default {
 	"Clear filters": "Borrar filtros",
 	"Searching…": "Buscando…",
 	"Search failed: {message}": "Error al buscar: {message}",
+	"unknown error": "error desconocido",
 	'No results for "{term}"': 'Sin resultados para "{term}"',
 	"Upgrade to search everything": "Actualiza para buscar todo",
 	Recent: "Recientes",
@@ -677,6 +682,13 @@ export default {
 		"Esta suscripción está pausada. Se reanudará el {date}.",
 	"This subscription is paused.": "Esta suscripción está pausada.",
 	"Your trial ends on {date}.": "Tu período de prueba termina el {date}.",
+	"Can't remove the last admin.": "No puedes eliminar al último administrador.",
+	"Check the invite's label, uses and expiry, then try again.":
+		"Revisa la etiqueta, los usos y la fecha de caducidad de la invitación, y vuelve a intentarlo.",
+	"Incorrect password.": "Contraseña incorrecta.",
+	"You don't have permission to do that.": "No tienes permiso para hacer eso.",
+	"Too many requests. Try again in a moment.":
+		"Demasiadas solicitudes. Inténtalo de nuevo en un momento.",
 	"Invalid authorization request": "Solicitud de autorización inválida",
 	"Missing required OAuth parameters:": "Faltan parámetros OAuth requeridos:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -882,13 +894,11 @@ export default {
 	"Copy failed, click the field and press Cmd/Ctrl+C to copy manually.":
 		"Error al copiar, haz clic en el campo y presiona Cmd/Ctrl+C para copiar manualmente.",
 	Done: "Hecho",
-	"{status}: {message}": "{status}: {message}",
 	"Revoke failed": "Revocación fallida",
 	'Revoke "{name}"?': '¿Revocar "{name}"?',
 	"Revoking…": "Revocando…",
 	"Close dialog": "Cerrar diálogo",
 	"Failed to load: {message}": "No se pudo cargar: {message}",
-	"unknown error": "error desconocido",
 	Connections: "Conexiones",
 	"Search connections": "Buscar conexiones",
 	"Manage what's connected to your Engram account.":
@@ -1039,7 +1049,6 @@ export default {
 	Uses: "Usos",
 	Expires: "Vence",
 	never: "nunca",
-	"Can't remove the last admin.": "No puedes eliminar al último administrador.",
 	"{label}: {error}": "{label}: {error}",
 	"Update role": "Actualizar rol",
 	"Update status": "Actualizar estado",
@@ -1165,7 +1174,6 @@ export default {
 	"Delete failed": "Eliminación fallida",
 	"You're the only admin on this instance. Promote another user to admin first, then try again.":
 		"Eres el único administrador en esta instancia. Promociona a otro usuario a administrador primero, luego intenta de nuevo.",
-	"Incorrect password.": "Contraseña incorrecta.",
 	"Danger zone": "Zona de peligro",
 	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
 		"Acciones permanentes. Eliminar tu cuenta te desconecta y bloquea futuros inicios de sesión para este usuario.",
@@ -1210,7 +1218,6 @@ export default {
 		"Se mueve a la papelera y es {recoverable}, luego se elimina permanentemente.",
 	"This only deletes the copy stored on Engram. Files already {synced} stay where they are.":
 		"Esto solo elimina la copia almacenada en Engram. Los archivos ya {synced} permanecen donde están.",
-	"{count} notes": { one: "{count} nota", many: "{count} Notas", other: "{count} notas" },
 	"{count} attachments": {
 		one: "{count} adjunto",
 		many: "{count} adjuntos",

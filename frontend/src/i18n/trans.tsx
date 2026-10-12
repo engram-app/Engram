@@ -1,10 +1,18 @@
 import { Fragment, type ReactNode } from "react";
 import { useT } from "./locale-provider";
+import type { Key } from "./translate";
 
 // Renders one translated sentence around React children, so a styled span or
 // link can sit anywhere the target language needs it. Slot names must be
 // unique within one sentence.
-export function Trans({ text, slots }: { text: string; slots: Record<string, ReactNode> }) {
+// `text` takes the same keys as the translate function: a literal or a msg() key.
+export function Trans<K extends string>({
+	text,
+	slots,
+}: {
+	text: Key<K>;
+	slots: Record<string, ReactNode>;
+}) {
 	const { t } = useT();
 	// split() with a capture group puts slot names at odd indexes.
 	const parts = t(text).split(/\{(?<slot>\w+)\}/u);
