@@ -25,7 +25,7 @@ import {
 	useIndexStatus,
 	useMe,
 } from "../api/queries";
-import { useT } from "../i18n/locale-provider";
+import { useStableT, useT } from "../i18n/locale-provider";
 import { msg } from "../i18n/msg";
 import { paddleLocale } from "../i18n/vendor-locales";
 import BillingHistoryTable from "./billing-history-table";
@@ -271,6 +271,7 @@ export default function BillingPage({
 	// Per-checkout, NOT in the init effect: that effect rebuilds the Paddle
 	// instance, which strands an open checkout (see the theme note there).
 	const { t, renderedLocale } = useT();
+	const { t: tLater } = useStableT();
 	const checkoutLocale = paddleLocale(renderedLocale);
 	// Ref mirror: the Paddle init effect must not re-run (and strand an open
 	// checkout) when the UI language changes, so its eventCallback reads t here.
@@ -604,9 +605,9 @@ export default function BillingPage({
 			}
 		} catch {
 			setFinalizing(false);
-			toast.error("Could not simulate checkout. Please try again.");
+			toast.error(tLater(msg("Could not simulate checkout. Please try again.")));
 		}
-	}, [qc]);
+	}, [qc, tLater]);
 
 	// Tell the onboarding wrapper when the inline checkout view is showing (paddle
 	// frame or the slow-activation banner) so it can hide its own header + free
@@ -789,7 +790,7 @@ export default function BillingPage({
 											type="button"
 											onClick={() => {
 												setCheckingOut(false);
-												toast.error("Payment did not go through. Please try again.");
+												toast.error(t("Payment did not go through. Please try again."));
 											}}
 											className="rounded-lg border border-gray-300 px-4 py-2 font-medium text-gray-900 text-sm hover:bg-gray-100"
 										>

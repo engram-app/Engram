@@ -123,17 +123,20 @@ describe("repo catalogs", () => {
 	it("has no translator call the scanner cannot see", () => {
 		expect(sources.flatMap(hiddenCalls)).toEqual([]);
 	});
-	// Biome's noJsxLiterals only sees text children; its noStrings mode would flag every className.
-	it("has no raw English in user-facing attributes", () => {
-		const allowed = new Set(["Engram", "XXXX-XXXX"]);
-		// src/dev is DEV-only, same carve-out as the noJsxLiterals override.
-		const shipped = Object.values(
-			import.meta.glob<string>(["../**/*.tsx", "!../**/*.test.*", "!../dev/**"], {
+	// Shipped UI source: src/dev is DEV-only, same carve-out as the noJsxLiterals override.
+	const shipped = Object.values(
+		import.meta.glob<string>(
+			["../**/*.{ts,tsx}", "!../**/*.test.*", "!../dev/**", "!../i18n/locale/**"],
+			{
 				query: "?raw",
 				import: "default",
 				eager: true,
-			}),
-		);
+			},
+		),
+	);
+	// Biome's noJsxLiterals only sees text children; its noStrings mode would flag every className.
+	it("has no raw English in user-facing attributes", () => {
+		const allowed = new Set(["Engram", "XXXX-XXXX"]);
 		const raw = shipped.flatMap((s) =>
 			[
 				...s.matchAll(
@@ -142,6 +145,18 @@ describe("repo catalogs", () => {
 			]
 				.map((m) => m.groups?.text ?? "")
 				.filter((text) => !allowed.has(text)),
+		);
+		expect(raw).toEqual([]);
+	});
+
+	// Text that reaches the user without JSX: toasts, inline errors, browser dialogs, the tab title.
+	it("has no raw English passed to toasts, errors or dialogs", () => {
+		const raw = shipped.flatMap((s) =>
+			[
+				...s.matchAll(
+					/(?:\btoast(?:\.\w+)?|\bset(?:Error|Message)|\b(?:window\.)?(?:confirm|alert))\(\s*"(?<text>[^"]*\p{L}{2}[^"]*)"|document\.title\s*=\s*"(?<title>[^"]*\p{L}{2}[^"]*)"/gu,
+				),
+			].map((m) => m.groups?.text ?? m.groups?.title ?? ""),
 		);
 		expect(raw).toEqual([]);
 	});
