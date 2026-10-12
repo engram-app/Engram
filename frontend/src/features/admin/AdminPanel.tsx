@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { toast } from "sonner";
 import { useMe } from "@/api/queries";
 import { Button } from "@/components/ui/button";
 import { useConfig } from "@/config-context";
 import { useT } from "@/i18n/locale-provider";
 import { copyToClipboard } from "@/lib/clipboard";
+import { notify } from "@/lib/notify";
 import InvitesTab from "./InvitesTab";
 import MembersTab from "./MembersTab";
 import RegistrationTab from "./RegistrationTab";
@@ -26,9 +26,9 @@ export default function AdminPanel() {
 		// does not exist — reaching through it threw before any promise existed,
 		// and the success toast below fired for a copy that never happened.
 		if (await copyToClipboard(resetUrl)) {
-			toast.success(t("Copied to clipboard"));
+			notify.success(t("Copied to clipboard"));
 		} else {
-			toast.error(t("Could not copy"));
+			notify.error(t("Could not copy"));
 		}
 	}
 

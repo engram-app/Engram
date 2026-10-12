@@ -1,11 +1,15 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { untranslated } from "@/i18n/ui-text";
 import { SettingsSectionCard } from "./section-card";
 
 describe("SettingsSectionCard", () => {
 	it("renders title, description, and children", () => {
 		render(
-			<SettingsSectionCard title="Profile" description="Your name and avatar">
+			<SettingsSectionCard
+				title={untranslated("Profile")}
+				description={untranslated("Your name and avatar")}
+			>
 				<p>body content</p>
 			</SettingsSectionCard>,
 		);
@@ -20,7 +24,7 @@ describe("SettingsSectionCard", () => {
 	// has no layout engine, so this asserts the mechanism, not the pixels.
 	it("cancels the container's padding on mobile so content gets one inset, not two", () => {
 		render(
-			<SettingsSectionCard title="Profile">
+			<SettingsSectionCard title={untranslated("Profile")}>
 				<p>body content</p>
 			</SettingsSectionCard>,
 		);
@@ -31,7 +35,7 @@ describe("SettingsSectionCard", () => {
 
 	it("omits the description node when not provided", () => {
 		render(
-			<SettingsSectionCard title="Sessions">
+			<SettingsSectionCard title={untranslated("Sessions")}>
 				<span>x</span>
 			</SettingsSectionCard>,
 		);
@@ -40,7 +44,10 @@ describe("SettingsSectionCard", () => {
 
 	it("renders a header action and lets the header wrap it below on narrow widths", () => {
 		render(
-			<SettingsSectionCard title="Appearance" headerAction={<button type="button">act</button>} />,
+			<SettingsSectionCard
+				title={untranslated("Appearance")}
+				headerAction={<button type="button">act</button>}
+			/>,
 		);
 		expect(screen.getByRole("button", { name: "act" })).toBeInTheDocument();
 		const header = screen.getByRole("heading", { name: "Appearance" }).closest("header");
@@ -48,14 +55,16 @@ describe("SettingsSectionCard", () => {
 	});
 
 	it("renders without children and leaves no spacing below the header", () => {
-		render(<SettingsSectionCard title="Language" headerAction={<span>ctl</span>} />);
+		render(
+			<SettingsSectionCard title={untranslated("Language")} headerAction={<span>ctl</span>} />,
+		);
 		const header = screen.getByRole("heading", { name: "Language" }).closest("header");
 		expect(header?.className).not.toContain("mb-4");
 	});
 
 	it("keeps the header spacing when there is a body", () => {
 		render(
-			<SettingsSectionCard title="Profile">
+			<SettingsSectionCard title={untranslated("Profile")}>
 				<p>body</p>
 			</SettingsSectionCard>,
 		);
@@ -64,8 +73,10 @@ describe("SettingsSectionCard", () => {
 	});
 
 	it("centers the action against the title block only when asked", () => {
-		render(<SettingsSectionCard title="A" headerAction={<span>x</span>} centerAction />);
-		render(<SettingsSectionCard title="B" headerAction={<span>y</span>} />);
+		render(
+			<SettingsSectionCard title={untranslated("A")} headerAction={<span>x</span>} centerAction />,
+		);
+		render(<SettingsSectionCard title={untranslated("B")} headerAction={<span>y</span>} />);
 		expect(screen.getByRole("heading", { name: "A" }).closest("header")?.className).toContain(
 			"items-center",
 		);

@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { toast } from "sonner";
-import { ApiError } from "@/api/client";
 import { useStableT, useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { Trans } from "@/i18n/trans";
+import { notify } from "@/lib/notify";
+import { serverErrorMessage } from "@/lib/server-error";
 import { adminApi, type TelemetryState } from "./api";
 
 export default function TelemetryTab() {
@@ -18,7 +18,7 @@ export default function TelemetryTab() {
 			.getTelemetry()
 			.then(setState)
 			.catch((e: unknown) => {
-				toast.error(e instanceof ApiError ? e.message : tLater(msg("Failed to load setting")));
+				notify.error(serverErrorMessage(e, tLater(msg("Failed to load setting")), tLater));
 			});
 	}, [tLater]);
 
@@ -30,7 +30,7 @@ export default function TelemetryTab() {
 		try {
 			setState(await adminApi.setTelemetry(enabled));
 		} catch (e) {
-			toast.error(e instanceof ApiError ? e.message : t("Save failed"));
+			notify.error(serverErrorMessage(e, t("Save failed"), t));
 		} finally {
 			setSaving(false);
 		}

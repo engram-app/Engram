@@ -1,5 +1,6 @@
 import { msg } from "@/i18n/msg";
 import type { Tn, Translate } from "@/i18n/translate";
+import type { MsgKey } from "@/i18n/ui-text";
 import { formatDate as formatShortDate } from "./format-date";
 
 // Structural alias — accepts both CheckoutEventsTimePeriod and TimePeriod
@@ -12,14 +13,14 @@ interface TimePeriodLike {
 // https://developer.paddle.com/concepts/payment-methods/currencies
 const ZERO_DECIMAL_CURRENCIES = new Set(["JPY", "KRW", "VND", "CLP"]);
 
-const INTERVAL_LABELS: Record<string, { noun: string; adjective: string }> = {
+const INTERVAL_LABELS: Record<string, { noun: MsgKey; adjective: MsgKey }> = {
 	day: { noun: msg("Daily"), adjective: msg("daily") },
 	week: { noun: msg("Weekly"), adjective: msg("weekly") },
 	month: { noun: msg("Monthly"), adjective: msg("monthly") },
 	year: { noun: msg("Annually"), adjective: msg("annual") },
 };
 
-const PRORATION_LABELS: Record<string, string> = {
+const PRORATION_LABELS: Record<string, MsgKey> = {
 	prorated_immediately: msg("Charge prorated amount now"),
 	full_immediately: msg("Charge full amount now"),
 	prorated_next_billing_period: msg("Prorated at next billing"),
@@ -68,35 +69,8 @@ export function formatBillingCycle(
 				? t("year")
 				: tn({ one: "{count} year", other: "{count} years" }, frequency);
 		default:
-			// Unknown Paddle interval: show the raw value rather than guess a translation.
-			return frequency === 1 ? interval : `${frequency} ${interval}s`;
-	}
-}
-
-/**
- * Formats a trial period for display.
- * @param trialPeriod - The trial period to format
- * @param tn - Plural translator from `useT()`
- * @returns Formatted string like "7 days" or "1 month"
- *
- * @example
- * formatTrialPeriod({ frequency: 7, interval: "day" }, tn) // "7 days"
- * formatTrialPeriod({ frequency: 1, interval: "month" }, tn) // "1 month"
- */
-export function formatTrialPeriod(trialPeriod: TimePeriodLike, tn: Tn): string {
-	const { frequency, interval } = trialPeriod;
-	switch (interval) {
-		case "day":
-			return tn({ one: "{count} day", other: "{count} days" }, frequency);
-		case "week":
-			return tn({ one: "{count} week", other: "{count} weeks" }, frequency);
-		case "month":
-			return tn({ one: "{count} month", other: "{count} months" }, frequency);
-		case "year":
-			return tn({ one: "{count} year", other: "{count} years" }, frequency);
-		default:
-			// Unknown Paddle interval: show the raw value rather than guess a translation.
-			return `${frequency} ${frequency === 1 ? interval : `${interval}s`}`;
+			// Unknown Paddle interval: a generic label, never the untranslated wire value.
+			return t("Unknown");
 	}
 }
 
@@ -157,7 +131,7 @@ export function parseAmount(raw: string, currencyCode: string): number {
  */
 export function formatProrationMode(mode: string, t: Translate): string {
 	const label = PRORATION_LABELS[mode];
-	return label ? t(label) : mode;
+	return t(label ?? msg("Unknown"));
 }
 
 /**
@@ -178,8 +152,5 @@ export function formatIntervalLabel(
 	style: "noun" | "adjective" = "noun",
 ): string {
 	const entry = INTERVAL_LABELS[interval];
-	if (entry) {
-		return t(entry[style]);
-	}
-	return interval.charAt(0).toUpperCase() + interval.slice(1);
+	return t(entry ? entry[style] : msg("Unknown"));
 }

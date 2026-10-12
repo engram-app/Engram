@@ -9,6 +9,7 @@ import {
 	useState,
 } from "react";
 import { msg } from "@/i18n/msg";
+import type { MsgKey } from "@/i18n/ui-text";
 import { isMember } from "../lib/is-member";
 
 // The right sidebar used to be a single pushed slot: NotePage called
@@ -27,7 +28,7 @@ type RightToolId = "outline" | "backlinks" | "reference";
 
 interface RightToolDescriptor {
 	id: RightToolId;
-	label: string;
+	label: MsgKey;
 	Icon: LucideIcon;
 	/** True when a page must publish this tool's content for it to be usable. */
 	contextual: boolean;

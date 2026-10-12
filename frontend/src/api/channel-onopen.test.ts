@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { englishT } from "@/i18n/translate";
 import { connectChannel, disconnectChannel } from "./channel";
 
 // Minimal phoenix mock: capture the onOpen callback and the channel handlers.
@@ -50,6 +51,7 @@ describe("connectChannel onOpen — structural backfill", () => {
 			vaultId: "v1",
 			getToken: async () => "t",
 			queryClient,
+			t: englishT,
 		});
 
 		const registered = onOpen.mock.calls[0]![0] as () => void;

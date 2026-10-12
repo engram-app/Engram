@@ -7,8 +7,10 @@ import { Input } from "@/components/ui/input";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { useT } from "@/i18n/locale-provider";
 import { Trans } from "@/i18n/trans";
+import type { UIText } from "@/i18n/ui-text";
 import { DEFAULT_VAULT_NAME } from "@/i18n/vault-name";
 import AuthPanel from "@/layout/auth-panel";
+import { serverErrorMessage } from "@/lib/server-error";
 import { heading } from "@/lib/ui-classes";
 import { track } from "../analytics/track";
 import { setActiveVaultId } from "../api/active-vault";
@@ -225,8 +227,8 @@ function SourceScreen({
 
 interface SourceCardProps {
 	icon: React.ReactNode;
-	title: string;
-	body: string;
+	title: UIText;
+	body: UIText;
 	selected: boolean;
 	onClick: () => void;
 }
@@ -364,7 +366,7 @@ function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlineP
 
 function StatusRow({ stage }: { stage: "waiting" | "detected" | "syncing" }) {
 	const { t } = useT();
-	const labels: Record<typeof stage, string> = {
+	const labels: Record<typeof stage, UIText> = {
 		waiting: t("Waiting for the plugin to sign in…"),
 		detected: t("Vault detected. Waiting for your first sync…"),
 		syncing: t("Syncing your notes, almost there…"),
@@ -393,7 +395,7 @@ function FreshInlinePanel({ isCommitting, onCommit }: FreshInlinePanelProps) {
 		try {
 			await onCommit(typed ?? DEFAULT_VAULT_NAME);
 		} catch (err) {
-			setError(err instanceof Error ? err.message : t("Could not create vault"));
+			setError(serverErrorMessage(err, t("Could not create vault"), t));
 		}
 	}
 

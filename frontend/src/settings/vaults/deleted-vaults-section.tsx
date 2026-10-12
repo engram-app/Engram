@@ -1,6 +1,5 @@
 import { RotateCcw, Trash2 } from "lucide-react";
 import { useSearchParams } from "react-router";
-import { toast } from "sonner";
 import {
 	useBillingConfig,
 	useDeletedVaults,
@@ -12,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import { intlLocale } from "@/lib/intl-locale";
+import { notify } from "@/lib/notify";
 import { SettingsSectionCard } from "@/settings/account/section-card";
 
 function DeletedRow({ vault }: { vault: Vault }) {
@@ -58,8 +58,8 @@ function DeletedRow({ vault }: { vault: Vault }) {
 						}
 						onClick={() =>
 							restore.mutate(vault.id, {
-								onSuccess: () => toast.success(t("Vault restored")),
-								onError: () => toast.error(t("Could not restore (vault limit reached?)")),
+								onSuccess: () => notify.success(t("Vault restored")),
+								onError: () => notify.error(t("Could not restore (vault limit reached?)")),
 							})
 						}
 					>
@@ -81,8 +81,8 @@ function DeletedRow({ vault }: { vault: Vault }) {
 								)
 							) {
 								purge.mutate(vault.id, {
-									onSuccess: () => toast.success(t("Vault permanently deleted")),
-									onError: () => toast.error(t("Could not delete")),
+									onSuccess: () => notify.success(t("Vault permanently deleted")),
+									onError: () => notify.error(t("Could not delete")),
 								});
 							}
 						}}

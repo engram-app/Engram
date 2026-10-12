@@ -6,8 +6,10 @@ const localesArray = [
 	"it",
 	"ja",
 	"ko",
+	"ms",
 	"pt-BR",
 	"ru",
+	"vi",
 	"zh-CN",
 	"zh-TW",
 ] as const;
@@ -25,8 +27,10 @@ const localeNames: Record<Locale, string> = {
 	it: "Italiano",
 	ja: "日本語",
 	ko: "한국어",
+	ms: "Bahasa Melayu",
 	"pt-BR": "Português (Brasil)",
 	ru: "Русский",
+	vi: "Tiếng Việt",
 	"zh-CN": "简体中文",
 	"zh-TW": "繁體中文",
 };

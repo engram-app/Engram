@@ -1,7 +1,6 @@
 import { Loader2 } from "lucide-react";
 import { RadioGroup as RadioGroupPrimitive } from "radix-ui";
 import { useRef, useState } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -14,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useT } from "@/i18n/locale-provider";
+import { notify } from "@/lib/notify";
 import { useSubmitFeedback } from "../api/queries";
 import { parseSettingsHash } from "../settings/settings-hash";
 import { FEEDBACK_CATEGORIES, MOOD_FACES } from "./options";
@@ -67,7 +67,7 @@ export function FeedbackDialog({ open, onOpenChange }: FeedbackDialogProps) {
 		} catch {
 			return;
 		}
-		toast.success(t("Thanks, we read every message."));
+		notify.success(t("Thanks, we read every message."));
 		setMessage("");
 		setCategory("");
 		setMood("");

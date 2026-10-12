@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { formatMoney } from "./format";
+import type { Translate } from "@/i18n/translate";
+import { untranslated } from "@/i18n/ui-text";
+import { formatMoney, statusLabel } from "./format";
 
 describe("formatMoney", () => {
 	it("formats two-decimal currencies from minor units", () => {
@@ -19,5 +21,15 @@ describe("formatMoney", () => {
 
 	it("returns null when currency is missing", () => {
 		expect(formatMoney("2000", null)).toBeNull();
+	});
+});
+
+describe("statusLabel", () => {
+	const shout: Translate = (en) => untranslated(en.toUpperCase());
+	it("translates a known status", () => {
+		expect(statusLabel("past_due", shout)).toBe("PAST DUE");
+	});
+	it("shows a translated generic label, never the wire value, for an unknown status", () => {
+		expect(statusLabel("on_hold", shout)).toBe("UNKNOWN");
 	});
 });

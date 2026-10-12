@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
+import { notify } from "@/lib/notify";
+import { serverErrorMessage } from "@/lib/server-error";
 import { api } from "../../api/client";
 import { useAuthAdapter } from "../../auth/use-auth-adapter";
 import { ROUTES } from "../../routes";
@@ -35,12 +36,11 @@ export function PasswordSectionLocal() {
 		setSubmitting(true);
 		try {
 			await api.post("/auth/password/change", { old_password: oldPw, new_password: newPw });
-			toast.success(t("Password changed — please sign in again"));
+			notify.success(t("Password changed — please sign in again"));
 			await logout();
 			navigate(ROUTES.SIGN_IN);
 		} catch (err) {
-			const msg = err instanceof Error ? err.message : t("Password change failed");
-			setError(msg);
+			setError(serverErrorMessage(err, t("Password change failed"), t));
 		} finally {
 			setSubmitting(false);
 		}

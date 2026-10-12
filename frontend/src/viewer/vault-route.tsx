@@ -1,8 +1,8 @@
 import { useEffect } from "react";
 import { Navigate, Outlet, useParams } from "react-router";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useStableT, useT } from "@/i18n/locale-provider";
+import { notify } from "@/lib/notify";
 import { setActiveVaultId, useActiveVaultId } from "../api/active-vault";
 import { useVaults } from "../api/queries";
 import { vaultBySlug } from "../api/vault-slug";
@@ -20,7 +20,9 @@ function UnknownVault({ slug }: { slug: string }) {
 	const { t } = useStableT();
 	useEffect(() => {
 		// Fixed id: StrictMode runs this twice in dev, and sonner dedupes by id.
-		toast.error(t("No vault named \u0022{slug}\u0022.", { slug }), { id: `unknown-vault:${slug}` });
+		notify.error(t("No vault named \u0022{slug}\u0022.", { slug }), {
+			id: `unknown-vault:${slug}`,
+		});
 	}, [slug, t]);
 	return <Navigate to={ROUTES.HOME} replace />;
 }

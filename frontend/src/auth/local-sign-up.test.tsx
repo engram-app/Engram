@@ -48,6 +48,20 @@ describe("LocalSignUp", () => {
 		fireEvent.click(screen.getByRole("button", { name: /create account/iu }));
 		await waitFor(() => expect(register).toHaveBeenCalledWith("a@b.com", "secret123", undefined));
 	});
+
+	it.each([
+		["password_too_short", "That password is too short."],
+		["invite_invalid", "This invite link is invalid or has already been used."],
+		["Some server sentence", "Registration failed"],
+	])("shows a translated message for the %s error", async (code, shown) => {
+		register.mockRejectedValueOnce(new Error(code));
+		renderPage();
+		fireEvent.change(screen.getByLabelText("Email"), { target: { value: "a@b.com" } });
+		fireEvent.change(screen.getByLabelText("Password"), { target: { value: "secret123" } });
+		fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "secret123" } });
+		fireEvent.click(screen.getByRole("button", { name: /create account/iu }));
+		expect(await screen.findByRole("alert")).toHaveTextContent(shown);
+	});
 });
 
 const CONSENT_SEARCH = "?return_to=%2Foauth%2Fconsent%3Fclient_id%3Dabc";

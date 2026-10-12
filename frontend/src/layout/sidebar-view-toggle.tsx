@@ -1,9 +1,10 @@
 import { FolderTree, Search } from "lucide-react";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import type { MsgKey } from "@/i18n/ui-text";
 import { type RailView, useRailView } from "./rail-view-context";
 
-const VIEWS: ReadonlyArray<{ id: RailView; label: string; Icon: typeof Search }> = [
+const VIEWS: ReadonlyArray<{ id: RailView; label: MsgKey; Icon: typeof Search }> = [
 	{ id: "files", label: msg("Files"), Icon: FolderTree },
 	{ id: "search", label: msg("Search"), Icon: Search },
 ];

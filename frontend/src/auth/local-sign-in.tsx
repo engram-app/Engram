@@ -15,19 +15,19 @@ import { useAuthAdapter } from "./use-auth-adapter";
 import { type BootstrapState, useBootstrap } from "./use-bootstrap";
 
 // `code` is an API error code or one of the English fallbacks thrown by the
-// auth provider; anything unrecognized (a server-written message) shows as-is.
+// auth provider. Anything else is server-written English: show the generic line.
 function loginErrorMessage(code: string, t: Translate): string {
 	switch (code) {
 		case "account_suspended":
 			return t("This account is suspended. Contact an admin to restore access.");
 		case "invalid_credentials":
 			return t("Incorrect email or password.");
-		case "Login failed":
-			return t("Login failed");
+		case "rate_limited":
+			return t("Too many requests. Try again in a moment.");
 		case "Login not available for this auth provider":
 			return t("Login not available for this auth provider");
 		default:
-			return code;
+			return t("Login failed");
 	}
 }
 

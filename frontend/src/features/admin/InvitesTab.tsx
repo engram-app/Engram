@@ -1,12 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
-import { toast } from "sonner";
-import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
 import { copyToClipboard } from "@/lib/clipboard";
 import { intlLocale } from "@/lib/intl-locale";
+import { notify } from "@/lib/notify";
+import { serverErrorMessage } from "@/lib/server-error";
 import { adminApi, type Invite } from "./api";
 
 const INVITES_KEY = ["admin", "invites"] as const;
@@ -47,11 +47,10 @@ export default function InvitesTab() {
 			});
 			setLastUrl(res.url);
 			setLabel("");
-			toast.success(t("Invite created — copy the link before leaving this page."));
+			notify.success(t("Invite created — copy the link before leaving this page."));
 			await refresh();
 		} catch (err) {
-			const msg = err instanceof ApiError ? err.message : t("Create failed");
-			toast.error(msg);
+			notify.error(serverErrorMessage(err, t("Create failed"), t));
 		} finally {
 			setCreating(false);
 		}
@@ -60,11 +59,10 @@ export default function InvitesTab() {
 	async function revoke(id: string) {
 		try {
 			await adminApi.revokeInvite(id);
-			toast.success(t("Invite revoked"));
+			notify.success(t("Invite revoked"));
 			await refresh();
 		} catch (err) {
-			const msg = err instanceof ApiError ? err.message : t("Revoke failed");
-			toast.error(msg);
+			notify.error(serverErrorMessage(err, t("Revoke failed"), t));
 		}
 	}
 
@@ -72,9 +70,9 @@ export default function InvitesTab() {
 		// Invites are the one flow an admin runs from a fresh self-host box, which
 		// is exactly where navigator.clipboard is missing (non-secure origin).
 		if (await copyToClipboard(url)) {
-			toast.success(t("Copied to clipboard"));
+			notify.success(t("Copied to clipboard"));
 		} else {
-			toast.error(t("Could not copy"));
+			notify.error(t("Could not copy"));
 		}
 	}
 
@@ -148,9 +146,7 @@ export default function InvitesTab() {
 				<p className="text-muted-foreground text-sm">{t("Loading invites…")}</p>
 			) : invitesQuery.error ? (
 				<p role="alert" className="text-destructive text-sm">
-					{invitesQuery.error instanceof ApiError
-						? invitesQuery.error.message
-						: t("Failed to load invites")}
+					{serverErrorMessage(invitesQuery.error, t("Failed to load invites"), t)}
 				</p>
 			) : invites.length === 0 ? (
 				<p className="text-muted-foreground text-sm">{t("No active invites.")}</p>

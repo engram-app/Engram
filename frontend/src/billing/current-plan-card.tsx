@@ -2,13 +2,14 @@ import { Sparkles } from "lucide-react";
 import { Children, type ReactNode } from "react";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import type { MsgKey } from "@/i18n/ui-text";
 import { intlLocale } from "@/lib/intl-locale";
 import { cn } from "@/lib/utils";
 import type { BillingStatus, IndexStatus } from "../api/queries";
 import { statusLabel } from "./format";
 import { unsearchableNotesNotice } from "./plan-cards";
 
-const TIER_LABELS: Record<BillingStatus["tier"], string> = {
+const TIER_LABELS: Record<BillingStatus["tier"], MsgKey> = {
 	free: msg("Free"),
 	starter: msg("Starter"),
 	pro: msg("Pro"),

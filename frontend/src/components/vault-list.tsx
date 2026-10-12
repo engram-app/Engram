@@ -6,9 +6,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { useT } from "@/i18n/locale-provider";
-import type { Locale } from "@/i18n/locales";
 import type { Tn } from "@/i18n/translate";
-import { intlLocale } from "@/lib/intl-locale";
 import { selectableRow } from "@/lib/ui-classes";
 
 // Above this many vaults the list gets a search box. Below it, the box is
@@ -43,16 +41,11 @@ function SearchInput({ search, status }: { search: VaultSearch; status?: string 
 	);
 }
 
-function countLabel(tn: Tn, locale: Locale, notes?: number, files?: number): string {
-	const tag = intlLocale(locale);
+function countLabel(tn: Tn, notes?: number, files?: number): string {
 	const noteCount = notes ?? 0;
-	const parts = [
-		tn({ one: "{n} note", other: "{n} notes" }, noteCount, { n: noteCount.toLocaleString(tag) }),
-	];
+	const parts = [tn({ one: "{count} note", other: "{count} notes" }, noteCount)];
 	if (files) {
-		parts.push(
-			tn({ one: "{n} file", other: "{n} files" }, files, { n: files.toLocaleString(tag) }),
-		);
+		parts.push(tn({ one: "{count} file", other: "{count} files" }, files));
 	}
 	return parts.join(" · ");
 }
@@ -69,7 +62,7 @@ interface VaultOptionProps {
 // multi-select). The counts sit under the name, never beside it: side by side,
 // a long name on a narrow phone collides with them.
 export function VaultOption({ vault, type, checked, onChange, name }: VaultOptionProps) {
-	const { t, tn, renderedLocale } = useT();
+	const { t, tn } = useT();
 	return (
 		<label className={selectableRow(checked)}>
 			<input
@@ -87,7 +80,7 @@ export function VaultOption({ vault, type, checked, onChange, name }: VaultOptio
 					) : null}
 				</span>
 				<span className="text-muted-foreground text-xs">
-					{countLabel(tn, renderedLocale, vault.note_count, vault.attachment_count)}
+					{countLabel(tn, vault.note_count, vault.attachment_count)}
 				</span>
 			</span>
 		</label>

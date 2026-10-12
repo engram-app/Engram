@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { untranslated } from "./ui-text";
 import { DEFAULT_VAULT_NAME, displayVaultName } from "./vault-name";
 
-const t = (key: string) => (key === "My Vault" ? "Mein Tresor" : key);
+const t = (key: string) => untranslated(key === "My Vault" ? "Mein Tresor" : key);
 
 describe("displayVaultName", () => {
 	it("translates the stored English default", () => {

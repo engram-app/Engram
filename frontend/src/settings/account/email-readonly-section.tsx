@@ -1,8 +1,8 @@
 import { Copy } from "lucide-react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import { copyToClipboard } from "@/lib/clipboard";
+import { notify } from "@/lib/notify";
 import { useMe } from "../../api/queries";
 import { SettingsSectionCard } from "./section-card";
 
@@ -16,9 +16,9 @@ export function EmailReadonlySection() {
 		// namespace — but it could never actually copy on a non-secure origin.
 		// The shared helper adds the execCommand fallback that can.
 		if (await copyToClipboard(email)) {
-			toast.success(t("Email copied"));
+			notify.success(t("Email copied"));
 		} else {
-			toast.error(t("Could not copy"));
+			notify.error(t("Could not copy"));
 		}
 	}
 

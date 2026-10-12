@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useT } from "@/i18n/locale-provider";
 import { Trans } from "@/i18n/trans";
+import type { UIText } from "@/i18n/ui-text";
 import AuthPanel from "@/layout/auth-panel";
 import { heading, selectableRow } from "@/lib/ui-classes";
 import { track } from "../analytics/track";
@@ -155,7 +156,7 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
 }
 
 interface ToolColumnProps {
-	title: string;
+	title: UIText;
 	options: ToolOption[];
 	selected: Set<string>;
 	onToggle: (slug: string) => void;

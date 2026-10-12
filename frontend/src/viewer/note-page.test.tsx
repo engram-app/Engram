@@ -245,7 +245,7 @@ describe("NotePage (CRDT)", () => {
 				error: new ApiError(500, "server exploded"),
 			});
 			renderPage();
-			await screen.findByText(/Failed to load note: server exploded/);
+			await screen.findByText("Failed to load note: unknown error");
 			expect(navigateMock).not.toHaveBeenCalled();
 		});
 	});

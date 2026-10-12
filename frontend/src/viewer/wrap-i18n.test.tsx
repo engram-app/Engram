@@ -6,6 +6,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
 import * as Y from "yjs";
 import { addKey } from "../crdt/frontmatter-doc";
+import { untranslated } from "../i18n/ui-text";
 import { uploadFilesTo } from "./attachment-upload/upload-files";
 import { headingFoldWith } from "./editor/heading-fold";
 import { translator } from "./editor/translator";
@@ -54,7 +55,7 @@ test("uploadFilesTo reports a failure through the translate function it is given
 	toastError.mockReset();
 	const upload = vi.fn().mockRejectedValue(new Error("boom"));
 	const t = (en: string, vars?: Record<string, string | number>) =>
-		`[${en.replace("{name}", String(vars?.name))}]`;
+		untranslated(`[${en.replace("{name}", String(vars?.name))}]`);
 	await uploadFilesTo({
 		upload,
 		existing: [],
@@ -66,7 +67,7 @@ test("uploadFilesTo reports a failure through the translate function it is given
 });
 
 test("the translator facet defaults to English and carries the editor's translate function", () => {
-	const t = (en: string) => `<${en}>`;
+	const t = (en: string) => untranslated(`<${en}>`);
 	const view = new EditorView({
 		state: EditorState.create({
 			doc: "# Title\n\nbody\n",

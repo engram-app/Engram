@@ -60,7 +60,8 @@ describe("ProfileSectionLocal", () => {
 		fireEvent.click(screen.getByRole("button", { name: /save/iu }));
 
 		await waitFor(() =>
-			expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/validation_failed/iu)),
+			// Server text is English in every locale: the translated fallback shows instead.
+			expect(toast.error).toHaveBeenCalledWith("Could not update profile"),
 		);
 	});
 });

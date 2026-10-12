@@ -35,6 +35,11 @@ describe("paddleLocale", () => {
 		expect(paddleLocale("zh-TW")).toBe("zh-TW");
 		expect(paddleLocale("pt-BR")).toBe("pt-BR");
 	});
+
+	it("falls back to English for locales Paddle checkout does not offer", () => {
+		expect(paddleLocale("vi")).toBe("en");
+		expect(paddleLocale("ms")).toBe("en");
+	});
 });
 
 describe("clerkLocalizationLoaders", () => {

@@ -1,5 +1,6 @@
 import { msg } from "@/i18n/msg";
 import type { Translate } from "@/i18n/translate";
+import type { MsgKey } from "@/i18n/ui-text";
 
 // Payment-method names that are brands stay as-is; the generic ones are marked
 // for translation and live in GENERIC_METHOD_LABELS.
@@ -21,7 +22,7 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
 	wechat_pay: "WeChat Pay",
 };
 
-const GENERIC_METHOD_LABELS: Record<string, string> = {
+const GENERIC_METHOD_LABELS: Record<string, MsgKey> = {
 	card: msg("Card"),
 	south_korea_local_card: msg("Korea local card"),
 	offline: msg("Offline"),
@@ -42,18 +43,9 @@ const CARD_BRAND_LABELS: Record<string, string> = {
 	visa: "Visa",
 };
 
+// An unknown brand or type gets a translated generic label, never the raw wire value.
 function cardBrandLabel(cardBrand: string, t: Translate): string {
-	if (cardBrand === "unknown") {
-		return t("Card");
-	}
-	return CARD_BRAND_LABELS[cardBrand] ?? formatUnknownType(cardBrand);
-}
-
-function formatUnknownType(type: string): string {
-	return type
-		.split("_")
-		.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-		.join(" ");
+	return CARD_BRAND_LABELS[cardBrand] ?? t("Card");
 }
 
 export type PaddlePaymentMethodType =
@@ -124,6 +116,5 @@ export function getPaymentMethodDisplay(
 		const brand = cardBrand ? cardBrandLabel(cardBrand, t) : t("Card");
 		return last4 ? t("{brand} ending {last4}", { brand, last4 }) : brand;
 	}
-	const generic = GENERIC_METHOD_LABELS[type];
-	return generic ? t(generic) : (PAYMENT_METHOD_LABELS[type] ?? formatUnknownType(type));
+	return PAYMENT_METHOD_LABELS[type] ?? t(GENERIC_METHOD_LABELS[type] ?? msg("Payment method"));
 }

@@ -7,6 +7,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import type { MsgKey } from "@/i18n/ui-text";
 import { intlLocale } from "@/lib/intl-locale";
 import { formatDate, formatMoney } from "@/lib/paddle-format";
 import type { PlanChangeBreakdownData, PlanChangeTransactionSectionData } from "@/lib/paddle-types";
@@ -14,7 +15,7 @@ import { cn } from "@/lib/utils";
 
 const SECTION_TITLES: Record<
 	"immediate" | "next" | "recurring",
-	{ automatic: string; manual: string }
+	{ automatic: MsgKey; manual: MsgKey }
 > = {
 	immediate: { automatic: msg("Charged today"), manual: msg("Invoice created") },
 	next: { automatic: msg("Next invoice"), manual: msg("Next invoice") },

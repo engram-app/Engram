@@ -11,7 +11,7 @@ import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { useT } from "@/i18n/locale-provider";
-import { englishT, type Translate } from "@/i18n/translate";
+import type { Translate } from "@/i18n/translate";
 import { useAttachments, useUploadAttachment } from "../api/queries";
 import { useTheme } from "../theme/theme-provider";
 import { loadAttachmentUrl, resolveAttachmentTarget } from "./attachment-blob";
@@ -132,10 +132,10 @@ export function buildEditorState(
 	openWikiLink: (name: string) => void,
 	wikiCompletionPaths: () => string[],
 	openMarkdownLink: (href: string) => boolean,
+	translateText: Translate,
 	onFrontmatterShortcut?: () => boolean,
 	resolveAttachment?: (target: string) => string | null,
 	drop?: Parameters<typeof itemDrop>[0],
-	translateText: Translate = englishT,
 ): EditorState {
 	return EditorState.create({
 		doc: ytext.toString(),
@@ -304,10 +304,10 @@ export default function NoteEditor({
 				openWikiLink,
 				wikiCompletionPaths,
 				openMarkdownLink,
+				translateText,
 				() => Boolean(onShortcutRef.current?.()),
 				resolveAttachment,
 				drop,
-				translateText,
 			),
 			parent,
 		});

@@ -1876,14 +1876,15 @@ class CdpClient:
     async def get_activity_entries(self) -> list[dict]:
         """Return [{action, path, status}] from the activity list.
 
-        Source has no data-action / data-path / data-status attributes —
-        reads .engram-sync-center-activity-action, -path text content and
+        Reads the row's data-action (the visible label is translated), else
+        the .engram-sync-center-activity-action text; -path text content and
         infers status from the row's CSS class (is-ok, is-error, is-skipped).
         """
         return await self._settings_evaluate(
             "Array.from(document.querySelectorAll("
             "'.engram-sync-center .engram-sync-center-activity-row')).map(el => ({"
-            "action: el.querySelector('.engram-sync-center-activity-action')"
+            # data-action is the raw action; the visible label is translated.
+            "action: el.dataset.action || el.querySelector('.engram-sync-center-activity-action')"
             "?.textContent?.trim() || '',"
             "path: el.querySelector('.engram-sync-center-activity-path')"
             "?.textContent?.trim() || '',"

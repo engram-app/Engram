@@ -9,8 +9,8 @@
  * so they stay pure and unit-testable; `channel.ts` supplies the live singleton.
  */
 
-import { toast } from "sonner";
 import type { Translate } from "@/i18n/translate";
+import { notify } from "@/lib/notify";
 
 /**
  * `crdt:` join refusals a plain rejoin can never clear (#1430). Phoenix keeps
@@ -75,7 +75,7 @@ export function isPermanentJoinRefusal(resp: unknown): resp is { reason: string 
  * the shared id collapses them into a single toast instead of one per op.
  */
 export function toastJoinRefused(t: Translate): void {
-	toast.error(t("Changes can't be saved: your account can't sync right now."), {
+	notify.error(t("Changes can't be saved: your account can't sync right now."), {
 		id: "crdt-join-refused",
 	});
 }

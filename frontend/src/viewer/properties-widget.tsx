@@ -1,12 +1,12 @@
 import { ChevronRight, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
 import type * as Y from "yjs";
 import { HelpTip } from "@/components/help-tip";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useT } from "@/i18n/locale-provider";
 import { Trans } from "@/i18n/trans";
+import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
 import {
 	addKey,
@@ -81,7 +81,7 @@ function PropertyKeyInput({
 			// a value snapping back is easy to miss, and the user walks away
 			// believing the rename landed.
 			if (next !== "") {
-				toast.error(t("A property named \u0022{name}\u0022 already exists", { name: next }));
+				notify.error(t("A property named \u0022{name}\u0022 already exists", { name: next }));
 			}
 			setDraft(name);
 		}
@@ -259,7 +259,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 			return "empty";
 		}
 		if (!addKey(doc, newKey, newType)) {
-			toast.error(t("A property named \u0022{name}\u0022 already exists", { name: key }));
+			notify.error(t("A property named \u0022{name}\u0022 already exists", { name: key }));
 			return "duplicate";
 		}
 		if (newValue !== "") {

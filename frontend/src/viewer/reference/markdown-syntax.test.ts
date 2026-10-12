@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { englishT } from "@/i18n/translate";
 import { noteBody } from "../note-body";
 import { filterSyntax, groupByCategory, previewSource, SYNTAX_ENTRIES } from "./markdown-syntax";
 
@@ -49,7 +50,7 @@ describe("markdown-syntax catalogue", () => {
 		for (const entry of SYNTAX_ENTRIES) {
 			if (!entry.block) {
 				expect(entry.syntax.includes("\n"), `${entry.id} template`).toBe(false);
-				expect(previewSource(entry).includes("\n"), `${entry.id} demo`).toBe(false);
+				expect(previewSource(entry, englishT).includes("\n"), `${entry.id} demo`).toBe(false);
 			}
 		}
 	});
@@ -61,7 +62,7 @@ describe("markdown-syntax catalogue", () => {
 		// to demonstrate something while showing nothing.
 		for (const entry of SYNTAX_ENTRIES) {
 			if (entry.renderable !== false) {
-				expect(noteBody(previewSource(entry)).trim(), entry.id).not.toBe("");
+				expect(noteBody(previewSource(entry, englishT)).trim(), entry.id).not.toBe("");
 			}
 		}
 	});
@@ -74,7 +75,7 @@ describe("markdown-syntax catalogue", () => {
 		for (const entry of SYNTAX_ENTRIES) {
 			if (entry.templateLed) {
 				expect(entry.demo, `${entry.id} must render its own template`).toBeUndefined();
-				expect(previewSource(entry), entry.id).toBe(entry.syntax);
+				expect(previewSource(entry, englishT), entry.id).toBe(entry.syntax);
 			}
 		}
 	});
@@ -93,7 +94,7 @@ describe("markdown-syntax catalogue", () => {
 				continue;
 			}
 			const label = entry.label.toLowerCase();
-			expect(previewSource(entry).toLowerCase(), entry.id).not.toContain(label);
+			expect(previewSource(entry, englishT).toLowerCase(), entry.id).not.toContain(label);
 		}
 	});
 });
@@ -114,7 +115,7 @@ describe("callout gallery", () => {
 
 	test("titles each demo with its own type name", () => {
 		for (const entry of gallery) {
-			expect(previewSource(entry), entry.id).toMatch(
+			expect(previewSource(entry, englishT), entry.id).toMatch(
 				new RegExp(`^> \\[!${entry.label}\\] ${entry.label}\\n> .+`, "u"),
 			);
 		}
@@ -130,58 +131,58 @@ describe("callout gallery", () => {
 describe("previewSource", () => {
 	test("prefers the worked example", () => {
 		const callout = SYNTAX_ENTRIES.find((e) => e.id === "callout-warning");
-		expect(previewSource(callout as never)).toBe(callout?.demo);
+		expect(previewSource(callout as never, englishT)).toBe(callout?.demo);
 	});
 
 	test("falls back to the template when there is no demo", () => {
 		// A tag already teaches on its own — no worked example needed.
 		const tag = SYNTAX_ENTRIES.find((e) => e.id === "tag");
 		expect(tag?.demo).toBeUndefined();
-		expect(previewSource(tag as never)).toBe(tag?.syntax);
+		expect(previewSource(tag as never, englishT)).toBe(tag?.syntax);
 	});
 });
 
 describe("filterSyntax", () => {
 	test("returns everything for an empty query", () => {
-		expect(filterSyntax("")).toHaveLength(SYNTAX_ENTRIES.length);
-		expect(filterSyntax("   ")).toHaveLength(SYNTAX_ENTRIES.length);
+		expect(filterSyntax("", englishT)).toHaveLength(SYNTAX_ENTRIES.length);
+		expect(filterSyntax("   ", englishT)).toHaveLength(SYNTAX_ENTRIES.length);
 	});
 
 	test("matches on the label", () => {
-		expect(filterSyntax("strikethrough").map((e) => e.id)).toEqual(["strikethrough"]);
+		expect(filterSyntax("strikethrough", englishT).map((e) => e.id)).toEqual(["strikethrough"]);
 	});
 
 	test("matches on a keyword that appears nowhere else in the entry", () => {
 		// "admonition" is not in any callout label, syntax, or blurb.
-		const ids = filterSyntax("admonition").map((e) => e.id);
+		const ids = filterSyntax("admonition", englishT).map((e) => e.id);
 		expect(ids).toContain("callout-note");
 		expect(ids).toContain("callout-warning");
 	});
 
 	test("matches on the snippet text itself", () => {
-		expect(filterSyntax("[[").map((e) => e.id)).toContain("wikilink");
+		expect(filterSyntax("[[", englishT).map((e) => e.id)).toContain("wikilink");
 	});
 
 	test("is case-insensitive", () => {
-		expect(filterSyntax("MERMAID").map((e) => e.id)).toContain("mermaid");
+		expect(filterSyntax("MERMAID", englishT).map((e) => e.id)).toContain("mermaid");
 	});
 
 	test("requires every term, in any order", () => {
-		const forward = filterSyntax("block math").map((e) => e.id);
-		const reverse = filterSyntax("math block").map((e) => e.id);
+		const forward = filterSyntax("block math", englishT).map((e) => e.id);
+		const reverse = filterSyntax("math block", englishT).map((e) => e.id);
 		expect(forward).toContain("math-block");
 		expect(forward).toEqual(reverse);
 	});
 
 	test("returns nothing when a term matches no entry", () => {
-		expect(filterSyntax("mermaid nonsenseterm")).toHaveLength(0);
+		expect(filterSyntax("mermaid nonsenseterm", englishT)).toHaveLength(0);
 	});
 
 	test("finds syntax by the problem, not just the name", () => {
 		// A user hunting for a divider will not type "thematic break".
-		expect(filterSyntax("divider").map((e) => e.id)).toContain("rule");
-		expect(filterSyntax("checkbox").map((e) => e.id)).toContain("task-list");
-		expect(filterSyntax("latex").map((e) => e.id)).toContain("math-inline");
+		expect(filterSyntax("divider", englishT).map((e) => e.id)).toContain("rule");
+		expect(filterSyntax("checkbox", englishT).map((e) => e.id)).toContain("task-list");
+		expect(filterSyntax("latex", englishT).map((e) => e.id)).toContain("math-inline");
 	});
 });
 
@@ -208,7 +209,7 @@ describe("groupByCategory", () => {
 	});
 
 	test("returns no empty groups for a narrow filter", () => {
-		const grouped = groupByCategory(filterSyntax("callout"));
+		const grouped = groupByCategory(filterSyntax("callout", englishT));
 		expect(grouped).toHaveLength(1);
 		expect(grouped[0]?.[0]).toBe("Callouts");
 	});
@@ -229,7 +230,7 @@ describe("escaping", () => {
 
 	test("is findable by what someone would actually type into the search box", () => {
 		for (const query of ["escape", "backslash", "literal", "asterisk"]) {
-			expect(filterSyntax(query).map((e) => e.id)).toContain("escape");
+			expect(filterSyntax(query, englishT).map((e) => e.id)).toContain("escape");
 		}
 	});
 });

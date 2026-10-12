@@ -1,11 +1,12 @@
 import { msg } from "@/i18n/msg";
+import type { MsgKey } from "@/i18n/ui-text";
 
 // Slugs must match Engram.Feedback (lib/engram/feedback.ex); the backend 422s
 // anything else.
 
 export interface FeedbackOption {
 	slug: string;
-	label: string;
+	label: MsgKey;
 }
 
 export const HEARD_FROM: FeedbackOption[] = [

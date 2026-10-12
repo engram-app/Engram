@@ -18,7 +18,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { Trans } from "@/i18n/trans";
+import type { MsgKey } from "@/i18n/ui-text";
 import { noteName } from "@/lib/note-name";
+import { serverErrorMessage } from "@/lib/server-error";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import {
 	type SearchFilters,
@@ -45,7 +47,7 @@ const TAG_FILTER_ID = "engram-search-tag";
 type DatePreset = "any" | "7d" | "30d" | "year" | "custom";
 type DateField = "updated" | "created";
 
-const DATE_PRESETS: ReadonlyArray<{ id: DatePreset; label: string }> = [
+const DATE_PRESETS: ReadonlyArray<{ id: DatePreset; label: MsgKey }> = [
 	{ id: "any", label: msg("Any time") },
 	{ id: "7d", label: msg("7 days") },
 	{ id: "30d", label: msg("30 days") },
@@ -53,7 +55,7 @@ const DATE_PRESETS: ReadonlyArray<{ id: DatePreset; label: string }> = [
 	{ id: "custom", label: msg("Custom…") },
 ];
 
-const DATE_FIELDS: ReadonlyArray<{ id: DateField; label: string }> = [
+const DATE_FIELDS: ReadonlyArray<{ id: DateField; label: MsgKey }> = [
 	{ id: "updated", label: msg("Updated") },
 	{ id: "created", label: msg("Created") },
 ];
@@ -602,7 +604,9 @@ function SearchPanel({
 				)}
 				{error ? (
 					<p className="px-3 py-2 text-destructive text-xs">
-						{t("Search failed: {message}", { message: error.message })}
+						{t("Search failed: {message}", {
+							message: serverErrorMessage(error, t("unknown error"), t),
+						})}
 					</p>
 				) : null}
 				{deferred && results && results.length === 0 && !isLoading && (

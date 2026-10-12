@@ -7,10 +7,10 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Translate } from "@/i18n/translate";
+import { notify } from "@/lib/notify";
 import type { CheckoutMethod } from "../analytics/events";
 import { track } from "../analytics/track";
 import { api } from "../api/client";
@@ -25,7 +25,7 @@ import {
 	useIndexStatus,
 	useMe,
 } from "../api/queries";
-import { useT } from "../i18n/locale-provider";
+import { useStableT, useT } from "../i18n/locale-provider";
 import { msg } from "../i18n/msg";
 import { paddleLocale } from "../i18n/vendor-locales";
 import BillingHistoryTable from "./billing-history-table";
@@ -145,7 +145,7 @@ async function downloadInvoice(transactionId: string, t: Translate) {
 		);
 		window.open(url, "_blank", "noopener");
 	} catch {
-		toast.error(t("Could not fetch that invoice. Please try again."));
+		notify.error(t("Could not fetch that invoice. Please try again."));
 	}
 }
 
@@ -271,6 +271,7 @@ export default function BillingPage({
 	// Per-checkout, NOT in the init effect: that effect rebuilds the Paddle
 	// instance, which strands an open checkout (see the theme note there).
 	const { t, renderedLocale } = useT();
+	const { t: tLater } = useStableT();
 	const checkoutLocale = paddleLocale(renderedLocale);
 	// Ref mirror: the Paddle init effect must not re-run (and strand an open
 	// checkout) when the UI language changes, so its eventCallback reads t here.
@@ -514,7 +515,9 @@ export default function BillingPage({
 						setCompletedAt(null);
 						setSlow(false);
 						// msg() marks the key for the scanner, which cannot see a call through tRef.
-						toast.error(tRef.current(msg("Something went wrong with checkout. Please try again.")));
+						notify.error(
+							tRef.current(msg("Something went wrong with checkout. Please try again.")),
+						);
 						break;
 					}
 					default:
@@ -604,9 +607,9 @@ export default function BillingPage({
 			}
 		} catch {
 			setFinalizing(false);
-			toast.error("Could not simulate checkout. Please try again.");
+			notify.error(tLater(msg("Could not simulate checkout. Please try again.")));
 		}
-	}, [qc]);
+	}, [qc, tLater]);
 
 	// Tell the onboarding wrapper when the inline checkout view is showing (paddle
 	// frame or the slow-activation banner) so it can hide its own header + free
@@ -647,7 +650,7 @@ export default function BillingPage({
 			const { url } = await api.get<{ url: string }>(path);
 			window.location.href = url;
 		} catch {
-			toast.error(t("Could not open the billing portal. Please try again."));
+			notify.error(t("Could not open the billing portal. Please try again."));
 			setPortalLoading(false);
 		}
 	}
@@ -668,7 +671,7 @@ export default function BillingPage({
 				settings: { ...checkoutSettings(isInline), locale: checkoutLocale },
 			});
 		} catch {
-			toast.error(t("Could not start the payment update. Please try again."));
+			notify.error(t("Could not start the payment update. Please try again."));
 		} finally {
 			setPortalLoading(false);
 		}
@@ -769,10 +772,13 @@ export default function BillingPage({
 								// onboard-billing-page.tsx), so text-foreground/text-muted-foreground
 								// would resolve to their dark-mode (light-on-light) values here.
 								<div className="rounded-lg border border-primary/50 border-dashed bg-gray-50 p-6 text-center">
-									<p className="font-medium text-gray-900 text-sm">Test checkout (dev only)</p>
+									<p className="font-medium text-gray-900 text-sm">
+										{t("Test checkout (dev only)")}
+									</p>
 									<p className="mx-auto mt-1 max-w-sm text-gray-500 text-xs">
-										Paddle's checkout can't embed on localhost, so this stand-in lets you walk the
-										flow. Not shown in production.
+										{t(
+											"Paddle's checkout can't embed on localhost, so this stand-in lets you walk the flow. Not shown in production.",
+										)}
 									</p>
 									<div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center">
 										<button
@@ -780,17 +786,17 @@ export default function BillingPage({
 											onClick={handleDevCheckoutSuccess}
 											className="rounded-lg bg-gray-900 px-4 py-2 font-medium text-sm text-white hover:bg-gray-700"
 										>
-											Simulate successful payment
+											{t("Simulate successful payment")}
 										</button>
 										<button
 											type="button"
 											onClick={() => {
 												setCheckingOut(false);
-												toast.error("Payment did not go through. Please try again.");
+												notify.error(t("Payment did not go through. Please try again."));
 											}}
 											className="rounded-lg border border-gray-300 px-4 py-2 font-medium text-gray-900 text-sm hover:bg-gray-100"
 										>
-											Simulate failure
+											{t("Simulate failure")}
 										</button>
 									</div>
 								</div>

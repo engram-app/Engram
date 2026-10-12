@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import type { MsgKey } from "@/i18n/ui-text";
 import {
 	indentSelection,
 	insertLink,
@@ -92,7 +93,7 @@ const HEADING_LEVELS = [1, 2, 3, 4, 5, 6];
  * is nesting a list item, so beside `Undo` they read as history controls.
  */
 const COMMAND_GROUPS: ReadonlyArray<
-	ReadonlyArray<{ label: string; Icon: LucideIcon; act?: (view: EditorView) => void }>
+	ReadonlyArray<{ label: MsgKey; Icon: LucideIcon; act?: (view: EditorView) => void }>
 > = [
 	[
 		{ label: msg("Undo"), Icon: Undo2, act: undoEdit },

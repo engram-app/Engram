@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
 import { useAttachments, useFolders, useUploadAttachment } from "@/api/queries";
 import { useStableT } from "@/i18n/locale-provider";
+import { notify } from "@/lib/notify";
 import { AttachmentUploadDialog } from "./upload-dialog";
 import { uploadFilesTo } from "./upload-files";
 
@@ -70,13 +70,13 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 			});
 			if (done.length === 1) {
 				const name = done[0]?.split("/").pop() ?? t("file");
-				toast.success(
+				notify.success(
 					folder
 						? t("Uploaded {name} to {folder}", { name, folder })
 						: t("Uploaded {name}", { name }),
 				);
 			} else if (done.length > 1) {
-				toast.success(
+				notify.success(
 					folder
 						? tn(
 								{

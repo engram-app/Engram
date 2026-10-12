@@ -20,16 +20,24 @@ interface InvitePreview {
 	label?: string | null;
 }
 
-// `raw` is a server-written message or one of the English fallbacks thrown by
-// the auth provider; only the fallbacks are ours to translate.
+// `raw` is an API error code (local_auth_controller) or one of the provider's
+// English fallbacks. Anything else is server-written English: show the generic line.
 function registrationErrorMessage(raw: string, t: Translate): string {
 	switch (raw) {
-		case "Registration failed":
-			return t("Registration failed");
+		case "password_too_short":
+			return t("That password is too short.");
+		case "password_too_long":
+			return t("That password is too long.");
+		case "registration_closed":
+			return t("Sign-ups are closed on this instance.");
+		case "invite_required":
+			return t("Sign-ups require an invite link. Contact your admin to request one.");
+		case "invite_invalid":
+			return t("This invite link is invalid or has already been used.");
 		case "Registration not available for this auth provider":
 			return t("Registration not available for this auth provider");
 		default:
-			return raw;
+			return t("Registration failed");
 	}
 }
 

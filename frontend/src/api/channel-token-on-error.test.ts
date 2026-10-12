@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { englishT } from "@/i18n/translate";
 import { connectChannel, disconnectChannel } from "./channel";
 
 // A socket auth-reject loop replayed one frozen expired token for hours (prod
@@ -57,6 +58,7 @@ describe("token refresh on socket error", () => {
 			vaultId: "v1",
 			getToken: async () => current,
 			queryClient,
+			t: englishT,
 		});
 		expect(sockets[0]!.opts.params()).toEqual({ token: "tok-A" });
 		expect(sockets[0]!.onError).toHaveBeenCalled();
@@ -81,6 +83,7 @@ describe("token refresh on socket error", () => {
 				return "tok-A";
 			},
 			queryClient,
+			t: englishT,
 		});
 
 		fail = true;
@@ -104,6 +107,7 @@ describe("token refresh on socket error", () => {
 						})
 					: Promise.resolve("tok-A"),
 			queryClient,
+			t: englishT,
 		});
 		slow = true;
 		const errorCb = sockets[0]!.onError.mock.calls[0]![0] as () => void;
@@ -115,6 +119,7 @@ describe("token refresh on socket error", () => {
 			vaultId: "v2",
 			getToken: async () => "tok-NEW",
 			queryClient,
+			t: englishT,
 		});
 
 		release("tok-STALE");
@@ -131,6 +136,7 @@ describe("stuck refresh flag (review 2026-07-15)", () => {
 			vaultId: "v1",
 			getToken: () => (hang ? new Promise<string>(() => {}) : Promise.resolve("tok-A")),
 			queryClient,
+			t: englishT,
 		});
 		hang = true;
 		(sockets[0]!.onError.mock.calls[0]![0] as () => void)(); // refresh now hangs forever
@@ -141,6 +147,7 @@ describe("stuck refresh flag (review 2026-07-15)", () => {
 			vaultId: "v2",
 			getToken: async () => "tok-NEW",
 			queryClient,
+			t: englishT,
 		});
 		let current = "tok-NEW";
 		// Swap the getToken result and fire an error on the new socket: without
@@ -152,6 +159,7 @@ describe("stuck refresh flag (review 2026-07-15)", () => {
 			vaultId: "v2",
 			getToken: async () => current,
 			queryClient,
+			t: englishT,
 		});
 		(sockets[2]!.onError.mock.calls[0]![0] as () => void)();
 		current = "tok-FINAL";

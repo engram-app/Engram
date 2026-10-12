@@ -17,7 +17,8 @@ vi.mock("../api/oauth", () => ({ fetchOAuthClient, postOAuthConsent }));
 
 const { apiDel } = vi.hoisted(() => ({ apiDel: vi.fn() }));
 
-vi.mock("../api/client", () => ({
+vi.mock("../api/client", async (importOriginal) => ({
+	ApiError: (await importOriginal<typeof import("../api/client")>()).ApiError,
 	api: { del: apiDel, get: vi.fn(), post: vi.fn(), put: vi.fn() },
 }));
 

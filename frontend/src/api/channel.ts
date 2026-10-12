@@ -1,8 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { type Channel, Socket } from "phoenix";
-import { toast } from "sonner";
-
-import { englishT, type Translate } from "@/i18n/translate";
+import type { Translate } from "@/i18n/translate";
+import { notify } from "@/lib/notify";
 import { buildGenesisFrame } from "../crdt/genesis";
 import { CrdtOpQueueController } from "../crdt/op-queue-controller";
 import { createIndexedDbPersister } from "../crdt/op-queue-persist";
@@ -123,8 +122,8 @@ interface ConnectOptions {
 	vaultId: string;
 	getToken: () => Promise<string | null>;
 	queryClient: QueryClient;
-	// The caller's `t` (useT) for the plan-limit toast; English when omitted.
-	t?: Translate;
+	// The caller's `t` (useT) for the plan-limit toast.
+	t: Translate;
 }
 
 type NoteChangedListener = (payload: NoteChangedPayload) => void;
@@ -442,7 +441,7 @@ export async function connectChannel({
 	vaultId,
 	getToken,
 	queryClient,
-	t = englishT,
+	t,
 }: ConnectOptions) {
 	disconnectChannel();
 	const gen = connectGeneration;
@@ -573,7 +572,7 @@ export async function connectChannel({
 		},
 		onDropSurfaced: (op, reason) =>
 			rlog().warn("crdt", `crdt_${op.kind} dropped (${reason}) undelivered: ${op.docId}`),
-		onLimitSurfaced: () => toast.error(t("You've hit your note limit — upgrade to add more.")),
+		onLimitSurfaced: () => notify.error(t("You've hit your note limit — upgrade to add more.")),
 		persister: createIndexedDbPersister(userId, vaultId),
 		mintId: () => uuid7(),
 	});

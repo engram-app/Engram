@@ -1,3 +1,5 @@
+import type { UIText } from "@/i18n/ui-text";
+
 /**
  * Live status indicator for the plugin-sync handshake. Used by both the
  * onboarding wizard's Obsidian branch and the `/link` success step, which
@@ -7,7 +9,7 @@
  * one line of muted copy. Centralized so the two surfaces can't drift.
  */
 interface SyncStatusPillProps {
-	message: string;
+	message: UIText;
 }
 
 export function SyncStatusPill({ message }: SyncStatusPillProps) {

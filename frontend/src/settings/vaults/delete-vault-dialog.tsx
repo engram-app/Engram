@@ -1,6 +1,5 @@
 import { Trash2 } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
 import { useDeleteVault, type Vault } from "@/api/queries";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,6 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
 import { Trans } from "@/i18n/trans";
+import { notify } from "@/lib/notify";
 
 export function DeleteVaultDialog({
 	vault,
@@ -34,10 +34,10 @@ export function DeleteVaultDialog({
 	function confirmDelete() {
 		del.mutate(vault.id, {
 			onSuccess: () => {
-				toast.success(t("Vault moved to trash"));
+				notify.success(t("Vault moved to trash"));
 				onOpenChange(false);
 			},
-			onError: () => toast.error(t("Delete failed")),
+			onError: () => notify.error(t("Delete failed")),
 		});
 	}
 

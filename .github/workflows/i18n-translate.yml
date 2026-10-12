@@ -1,0 +1,181 @@
+name: Translate web-app strings
+
+# Keeps frontend/src/i18n/locale/*.ts in step with the English strings in the
+# SPA. English is the catalog key, so a new or edited string is a key every
+# catalog lacks; `bun run i18n:translate` fills only those (diff-only) with
+# translategemma on FastRaid's Ollama and drops keys the source no longer uses.
+# The result lands as a bot PR, so a human still sees every translation before
+# it ships. Runners reach 10.0.20.214:11434 through the runner VM allowlist
+# (docs/context/runner-vm-setup.md in the workspace repo).
+#
+# A change to the prompt, profile or model digest redoes every catalog on its own
+# (core fingerprint in state.json); the nightly resumes a redo that hit the timeout.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/src/**"
+      # The bot's own merges touch only catalogs; nothing new to translate.
+      - "!frontend/src/i18n/locale/**"
+  # Nightly: resumes a redo that hit the job timeout, retries failed keys, and
+  # fails on keys stuck past I18N_STUCK_DAYS. With nothing stale it is ~1 min.
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+
+# One run at a time: two merges in a row would race on the shared bot branch.
+concurrency:
+  group: i18n-translate
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # gh pr list: is there an open bot PR to resume from?
+  pull-requests: read
+
+jobs:
+  translate:
+    runs-on: [self-hosted, linux, x64, isolated, light]
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # create-pull-request sets its own Authorization header; a persisted
+          # checkout credential would send a second one (GitHub returns 400).
+          persist-credentials: false
+
+      - name: Resolve latest bun version
+        id: bun
+        run: |
+          set -euo pipefail
+          v=$(curl -sSfL --max-time 20 \
+                -H "Authorization: Bearer ${{ github.token }}" \
+                https://api.github.com/repos/oven-sh/bun/releases/latest \
+              | jq -r '.tag_name' | sed 's/^bun-v//')
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::could not resolve latest bun version (got '$v')"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      # Private HOME: never rewrite the shared ~/.bun (Text-file-busy race, see verify.yml).
+      - uses: oven-sh/setup-bun@v2
+        env:
+          HOME: ${{ runner.temp }}
+        with:
+          bun-version: ${{ steps.bun.outputs.version }}
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: bun install --frozen-lockfile --registry http://10.0.20.214:4873
+
+      # Progress lives on the bot branch until its PR merges. The script reuses its
+      # translations for keys this run would translate anyway; never the whole
+      # directory, which would revert catalog or state changes merged to main since
+      # the branch was cut. A closed (rejected) bot PR is not resumed from.
+      - name: Fetch the open bot PR's catalogs
+        id: resume
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          open=$(gh pr list --repo "$GITHUB_REPOSITORY" --head bot/i18n-translate --state open --json number --jq 'length')
+          if [ "$open" = "0" ]; then
+            echo "No open bot PR; starting from main."
+            exit 0
+          fi
+          git fetch --depth=1 "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" bot/i18n-translate
+          mkdir -p "$RUNNER_TEMP/resume"
+          git archive FETCH_HEAD frontend/src/i18n/locale | tar -x -C "$RUNNER_TEMP/resume"
+          echo "dir=$RUNNER_TEMP/resume/frontend/src/i18n/locale" >> "$GITHUB_OUTPUT"
+
+      # Step timeout below the job's, so finished locales (each written, with its
+      # state stamp, the moment it completes) still reach the PR. A timed-out
+      # step fails, so continue-on-error lets the PR steps run; the parity step
+      # still gates a genuinely broken catalog.
+      - name: Translate
+        id: translate
+        working-directory: frontend
+        timeout-minutes: 300
+        continue-on-error: true
+        env:
+          I18N_OLLAMA_URL: http://10.0.20.214:11434
+          RESUME: ${{ steps.resume.outputs.dir }}
+        run: |
+          set -euo pipefail
+          bun run i18n:translate ${RESUME:+--resume "$RESUME"} | tee "$RUNNER_TEMP/i18n-summary.txt"
+
+      # The same gate the PR will face, so a bad catalog fails here, not in review.
+      - name: Catalog parity
+        working-directory: frontend
+        run: bun run test src/i18n
+
+      - name: Summary for the PR body
+        id: summary
+        run: |
+          {
+            echo 'text<<EOF'
+            cat "$RUNNER_TEMP/i18n-summary.txt"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      # A failed run that wrote nothing (Ollama down before any locale) leaves the
+      # tree equal to main; create-pull-request would then CLOSE the bot PR and
+      # delete its branch, losing its unmerged translations. Skip the PR steps then.
+      - name: Did the run change any catalog
+        id: changed
+        run: |
+          if [ -n "$(git status --porcelain -- frontend/src/i18n/locale)" ]; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "any=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate App token
+        id: app-token
+        if: steps.translate.outcome == 'success' || steps.changed.outputs.any == 'true'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: engram-app
+          repositories: Engram
+
+      - name: Open / update PR
+        if: steps.translate.outcome == 'success' || steps.changed.outputs.any == 'true'
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          branch: bot/i18n-translate
+          delete-branch: true
+          add-paths: |
+            frontend/src/i18n/locale/*.ts
+            frontend/src/i18n/locale/state.json
+          # main requires verified signatures; this routes the commit through
+          # createCommitOnBranch, which GitHub signs for the App.
+          sign-commits: true
+          commit-message: |
+            feat(i18n): translate new web-app strings
+
+            Automated by i18n-translate.yml (translategemma) from ${{ github.sha }}.
+          title: "feat(i18n): translate new web-app strings"
+          body: |
+            Machine translations from translategemma on FastRaid's Ollama for
+            strings added or edited since the catalogs were last updated.
+
+            ```
+            ${{ steps.summary.outputs.text }}
+            ```
+
+            "failed" keys are tracked in state.json `failed`: they keep the old entry
+            or show English, and every run retries them. The job fails once one is
+            stuck past I18N_STUCK_DAYS.
+            Source commit: ${{ github.repository }}@${{ github.sha }}
+          labels: |
+            automated
+            i18n
+
+      # continue-on-error above must not turn an outage or a timeout green.
+      - name: Fail if translation did not finish
+        if: steps.translate.outcome == 'failure'
+        run: |
+          echo "::error::i18n:translate failed, hit its timeout, or reported keys stuck past I18N_STUCK_DAYS (see the Translate log). Finished locales are in the bot PR; the next run resumes from it."
+          exit 1

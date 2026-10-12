@@ -1,3 +1,4 @@
+import type { UIText } from "@/i18n/ui-text";
 import { parseAmount } from "@/lib/paddle-format";
 import type { PlanChangePreviewData } from "@/lib/paddle-types";
 
@@ -77,7 +78,7 @@ interface PaddleSubscription {
 // Full Discount catalog entity — fetched separately via paddle.discounts.get(id)
 interface PaddleDiscount {
 	id: string;
-	description: string;
+	description: UIText;
 	code?: string | null;
 	type: "flat" | "flat_per_seat" | "percentage";
 	amount: string;

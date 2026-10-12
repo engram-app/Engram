@@ -20,6 +20,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import type { MsgKey, UIText } from "@/i18n/ui-text";
 import { intlLocale } from "@/lib/intl-locale";
 import { formatBillingCycle, formatDate, formatMoney } from "@/lib/paddle-format";
 import type { SubscriptionStatusData } from "@/lib/paddle-types";
@@ -31,7 +32,7 @@ type SubscriptionStatus = "active" | "canceled" | "past_due" | "paused" | "trial
 
 const STATUS_CONFIG: Record<
 	SubscriptionStatus,
-	{ label: string; icon: React.ElementType; className: string }
+	{ label: MsgKey; icon: React.ElementType; className: string }
 > = {
 	active: {
 		label: msg("Active"),
@@ -63,8 +64,9 @@ const STATUS_CONFIG: Record<
 function StatusBadge({ status }: { status: SubscriptionStatus }) {
 	const { t } = useT();
 	const known = STATUS_CONFIG[status];
+	// An unknown status gets a translated generic label, never the raw wire value.
 	const config = known ?? {
-		label: status.replace(/_/gu, " ").replace(/\b\w/gu, (c) => c.toUpperCase()),
+		label: msg("Unknown"),
 		icon: AlertCircle,
 		className: "bg-muted text-muted-foreground border-border",
 	};
@@ -72,7 +74,7 @@ function StatusBadge({ status }: { status: SubscriptionStatus }) {
 	return (
 		<Badge variant="outline" className={cn("gap-1 font-medium", config.className)}>
 			<Icon className="size-3" />
-			{known ? t(known.label) : config.label}
+			{t(config.label)}
 		</Badge>
 	);
 }
@@ -107,7 +109,7 @@ function getValidScheduledChange(
 function getNextBillingLabel(
 	status: SubscriptionStatus,
 	scheduledChange?: SubscriptionStatusData["scheduledChange"],
-): string | undefined {
+): MsgKey | undefined {
 	if (scheduledChange?.action === "cancel" || scheduledChange?.action === "pause") {
 		return;
 	}
@@ -198,7 +200,7 @@ function SubscriptionStatusCardSkeleton({ className }: { className?: string }) {
 export interface SubscriptionStatusCardProps {
 	subscription?: SubscriptionStatusData;
 	/** Override the card title. Defaults to the first item's product name (single-item) or "Subscription" (multi-item). */
-	title?: string;
+	title?: UIText;
 	/** Position of the status badge: "inline" next to name, or "end" aligned to card end */
 	statusBadgePosition?: "inline" | "end";
 	/**

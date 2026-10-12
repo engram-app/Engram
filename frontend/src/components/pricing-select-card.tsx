@@ -1,3 +1,5 @@
+import type { UIText } from "@/i18n/ui-text";
+
 export { PricingSelectCardGrid, type PricingSelectCardGridProps } from "./pricing-select-card-grid";
 export {
 	PricingSelectCardGroup,
@@ -16,7 +18,7 @@ export {
 export interface PricingSelectPlan {
 	priceId: string;
 	name: string;
-	description?: string;
+	description?: UIText;
 	badge?: string;
 	icon?: React.ReactNode;
 }
