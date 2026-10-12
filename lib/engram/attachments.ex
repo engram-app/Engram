@@ -394,8 +394,17 @@ defmodule Engram.Attachments do
   wastes storage but doesn't cause data loss, unlike the reverse (ghost row pointing to nothing).
   """
   def delete_attachment(user, vault, path, opts \\ []) do
-    _ = do_delete_attachment(fresh_user(user), vault, path, opts)
+    _ = delete_attachment_reporting(user, vault, path, opts)
     :ok
+  end
+
+  @doc """
+  `delete_attachment/4`, reporting whether a live attachment was there:
+  `:deleted` or `:absent`.
+  """
+  @spec delete_attachment_reporting(map(), map(), String.t(), keyword()) :: :deleted | :absent
+  def delete_attachment_reporting(user, vault, path, opts \\ []) do
+    if do_delete_attachment(fresh_user(user), vault, path, opts), do: :deleted, else: :absent
   end
 
   # Soft-deletes one attachment and returns whether a live row actually

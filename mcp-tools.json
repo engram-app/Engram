@@ -1086,7 +1086,7 @@
         "readOnlyHint": false,
         "title": "Delete Note"
       },
-      "description": "Permanently delete one note by path; the deletion syncs to all connected Obsidian devices. Deleting a path that holds no note succeeds and reports deleted: false. To remove a whole folder use delete_folder. To move a note instead use rename_note.",
+      "description": "Permanently delete one note by path; the deletion syncs to all connected Obsidian devices. Deleting a path that holds no note succeeds and reports deleted: false. To remove a whole folder use delete_folder. To move a note instead use rename_note. For an image, PDF, or other binary file use delete_attachment.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1225,6 +1225,50 @@
         "type": "object"
       },
       "title": "Move Attachment"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Delete Attachment"
+      },
+      "description": "Delete a single attachment (image, PDF, or other binary file) by path. Syncs the delete to all connected Obsidian devices. Deleting a path with no attachment succeeds and reports deleted: false. For notes use delete_note; to remove a whole folder use delete_folder.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "description": "Path of the attachment to delete",
+            "type": "string"
+          },
+          "vault_id": {
+            "description": "Target vault: its name (e.g. \"Engram\") or its UUID. REQUIRED when you own more than one vault; the server keeps no active-vault state between calls, so it must be passed on every vault-scoped call. Omit only if you have a single vault. Call list_vaults if a name does not resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "name": "delete_attachment",
+      "outputSchema": {
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "deleted"
+        ],
+        "type": "object"
+      },
+      "title": "Delete Attachment"
     },
     {
       "annotations": {

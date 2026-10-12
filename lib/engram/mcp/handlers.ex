@@ -594,6 +594,21 @@ defmodule Engram.MCP.Handlers do
     end
   end
 
+  def handle("delete_attachment", user, vault, args) do
+    case args["path"] || "" do
+      "" ->
+        {:error, "path is required"}
+
+      path ->
+        # Same contract as delete_note: an absent path is a successful no-op,
+        # and the payload says whether anything was there.
+        existed? = Engram.Attachments.delete_attachment_reporting(user, vault, path) == :deleted
+
+        text = if existed?, do: "Attachment deleted: #{path}", else: "No attachment at: #{path}"
+        {:ok, text, %{"path" => path, "deleted" => existed?}}
+    end
+  end
+
   def handle("get_attachment_upload_target", user, vault, _args) do
     base = attachment_api_base_url()
     max_bytes = render_limit(Engram.Billing.cap(user, :max_file_bytes))
