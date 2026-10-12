@@ -1,0 +1,202 @@
+import { describe, expect, it } from "vitest";
+import {
+	batchText,
+	buildPrompt,
+	cleanOutput,
+	fromSample,
+	isValid,
+	maskPlaceholders,
+	mergeCatalog,
+	parseBatch,
+	pluralSamples,
+	problems,
+	todoKeys,
+	unmaskPlaceholders,
+} from "./auto-translate";
+
+describe("cleanOutput", () => {
+	it("drops a period the source lacks", () => {
+		expect(cleanOutput("All vaults", "Alle Vaults.", "de")).toBe("Alle Vaults");
+		expect(cleanOutput("Sync", "同期。", "ja")).toBe("同期");
+	});
+
+	it("keeps a period the source has", () => {
+		expect(cleanOutput("No matches.", "Keine Treffer.", "de")).toBe("Keine Treffer.");
+	});
+
+	it("strips wrapping quotes the source lacks", () => {
+		expect(cleanOutput("Revoke", '"Widerrufen"', "de")).toBe("Widerrufen");
+	});
+
+	it("removes the space after CJK sentence ends", () => {
+		expect(cleanOutput("A. B.", "あ。 い。", "ja")).toBe("あ。い。");
+	});
+
+	it("restores newline markers and drops stray ones", () => {
+		expect(cleanOutput("a\n\nb", "x ⏎ ⏎ y", "de")).toBe("x\n\ny");
+		expect(cleanOutput("Done.", "Fertig. ⏎", "de")).toBe("Fertig.");
+	});
+});
+
+describe("isValid", () => {
+	it("accepts a clean translation", () => {
+		expect(isValid("API keys ({total})", "API-Schlüssel ({total})", "de")).toBe(true);
+	});
+
+	it("rejects an empty result", () => {
+		expect(isValid("Revoke", "", "de")).toBe(false);
+	});
+
+	it("rejects dropped or invented placeholders", () => {
+		expect(isValid("Your {plan} plan", "Ihr Tarif", "de")).toBe(false);
+		expect(isValid("Plan", "Tarif {plan}", "de")).toBe(false);
+	});
+
+	it("rejects a lost newline", () => {
+		expect(isValid("a\nb", "a b", "de")).toBe(false);
+	});
+
+	it("rejects a lost URL, code span or brand", () => {
+		expect(isValid("See https://engram.page", "Siehe die Seite", "de")).toBe(false);
+		expect(isValid("Run `npx x`", "Führe x aus", "de")).toBe(false);
+		expect(isValid("Open Obsidian", "Öffne die App", "de")).toBe(false);
+	});
+
+	it("rejects a runaway answer", () => {
+		expect(isValid("Sync", "Synchronisieren ".repeat(5), "de")).toBe(false);
+	});
+
+	it("rejects the wrong register unless the old catalog already used it", () => {
+		expect(isValid("Try again.", "Bitte versuchen Sie es erneut.", "de")).toBe(false);
+		expect(isValid("Try again.", "Réessayez, vous.", "fr")).toBe(false);
+		expect(isValid("Try again.", "Réessayez, vous.", "fr", "Réessayez, vous.")).toBe(true);
+		expect(isValid("Your notes", "Твои заметки", "ru")).toBe(false);
+	});
+
+	it("rejects output in the wrong script", () => {
+		expect(
+			isValid("Open a note to insert", "Open the note to insert", "ja", "挿入するノートを開く"),
+		).toBe(false);
+	});
+
+	it("rejects untranslated English when the old catalog had a translation", () => {
+		expect(isValid("Unnamed", "Unnamed", "de", "Ohne Namen")).toBe(false);
+		expect(isValid("YouTube", "YouTube", "de", "YouTube")).toBe(true);
+	});
+});
+
+describe("batchText / parseBatch", () => {
+	it("numbers each string and marks newlines", () => {
+		expect(batchText(["One", "a\nb"])).toBe("[1] One\n[2] a ⏎ b");
+	});
+
+	it("reads [n] and n. numbering, ignoring chatter and out-of-range lines", () => {
+		const out = parseBatch("Here you go:\n[1] Eins\n2. Zwei\n[7] Sieben", 2);
+		expect(out).toEqual(["Eins", "Zwei"]);
+	});
+
+	it("leaves a missing line undefined", () => {
+		expect(parseBatch("[2] Zwei", 2)).toEqual([undefined, "Zwei"]);
+	});
+});
+
+describe("buildPrompt", () => {
+	it("carries glossary, tone and the newline rule only when needed", () => {
+		const p = buildPrompt("de", { Vaults: "Vaults" }, "[1] Sync", true);
+		expect(p).toContain("German");
+		expect(p).toContain("Vaults = Vaults");
+		expect(p).toContain("du");
+		expect(p).toContain("numbered line");
+		expect(p).not.toContain("⏎ marker");
+		expect(p.endsWith("[1] Sync")).toBe(true);
+		expect(buildPrompt("de", {}, "a ⏎ b", false)).toContain("⏎ marker");
+	});
+});
+
+describe("pluralSamples / fromSample", () => {
+	it("gives one integer per category where one exists", () => {
+		expect(pluralSamples("de")).toEqual([
+			{ category: "one", sample: "1" },
+			{ category: "other", sample: "2" },
+		]);
+		expect(
+			pluralSamples("ru")
+				.map((s) => s.category)
+				.sort(),
+		).toEqual(["few", "many", "one", "other"]);
+		expect(pluralSamples("ja")).toEqual([{ category: "other", sample: "1" }]);
+	});
+
+	it("uses a decimal sample for a fraction-only category", () => {
+		expect(pluralSamples("ru").find((s) => s.category === "other")?.sample).toBe("1.5");
+	});
+
+	it("puts {count} back where the sample number landed", () => {
+		expect(fromSample("5 файлов", "5")).toBe("{count} файлов");
+		expect(fromSample("1,5 файла", "1.5")).toBe("{count} файла");
+	});
+
+	it("refuses when the number is missing or repeated", () => {
+		expect(fromSample("файлов", "5")).toBeNull();
+		expect(fromSample("5 из 5", "5")).toBeNull();
+	});
+});
+
+describe("todoKeys", () => {
+	const entries = [{ key: "A" }, { key: "B" }, { key: "A" }];
+
+	it("returns only keys the catalog lacks, deduplicated", () => {
+		expect(todoKeys(entries, { A: "a" }, false)).toEqual(["B"]);
+	});
+
+	it("returns every key in --all mode", () => {
+		expect(todoKeys(entries, { A: "a" }, true)).toEqual(["A", "B"]);
+	});
+});
+
+describe("mergeCatalog", () => {
+	it("prefers fresh, falls back to old, drops orphans, follows source order", () => {
+		const merged = mergeCatalog(
+			[{ key: "B" }, { key: "A" }, { key: "C" }],
+			{ A: "old-a", Gone: "x" },
+			{ B: "new-b" },
+		);
+		expect(merged).toEqual({ B: "new-b", A: "old-a" });
+		expect(Object.keys(merged)).toEqual(["B", "A"]);
+	});
+});
+
+describe("problems", () => {
+	it("names every failed check", () => {
+		expect(problems("Your {plan} plan", "Ihr Tarif", "de")).toEqual(["placeholders", "register"]);
+		expect(problems("Open Obsidian", "Öffne die App", "de")).toEqual(["brand"]);
+		expect(problems("API keys", "API-Schlüssel", "de")).toEqual([]);
+	});
+
+	it("requires the locale's script even with no old entry", () => {
+		expect(problems("Open a note to insert", "Open a note to insert it", "ja")).toEqual(["script"]);
+		expect(problems("Identity:", "ID:", "ja")).toEqual([]);
+		expect(problems("{status}: {message}", "{status}：{message}", "zh-CN")).toEqual([]);
+	});
+});
+
+describe("maskPlaceholders / unmaskPlaceholders", () => {
+	it("swaps names for numbered tokens the model will not translate", () => {
+		expect(maskPlaceholders("Vaults ({used} / {cap})")).toEqual({
+			masked: "Vaults ({0} / {1})",
+			names: ["{used}", "{cap}"],
+		});
+	});
+
+	it("reuses one token for a repeated name", () => {
+		expect(maskPlaceholders("{a} and {a}").masked).toBe("{0} and {0}");
+	});
+
+	it("restores names even when the translation reorders them", () => {
+		expect(unmaskPlaceholders("{1} / {0}", ["{used}", "{cap}"])).toBe("{cap} / {used}");
+	});
+
+	it("leaves a string without placeholders alone", () => {
+		expect(maskPlaceholders("Sync")).toEqual({ masked: "Sync", names: [] });
+	});
+});

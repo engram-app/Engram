@@ -769,10 +769,13 @@ export default function BillingPage({
 								// onboard-billing-page.tsx), so text-foreground/text-muted-foreground
 								// would resolve to their dark-mode (light-on-light) values here.
 								<div className="rounded-lg border border-primary/50 border-dashed bg-gray-50 p-6 text-center">
-									<p className="font-medium text-gray-900 text-sm">Test checkout (dev only)</p>
+									<p className="font-medium text-gray-900 text-sm">
+										{t("Test checkout (dev only)")}
+									</p>
 									<p className="mx-auto mt-1 max-w-sm text-gray-500 text-xs">
-										Paddle's checkout can't embed on localhost, so this stand-in lets you walk the
-										flow. Not shown in production.
+										{t(
+											"Paddle's checkout can't embed on localhost, so this stand-in lets you walk the flow. Not shown in production.",
+										)}
 									</p>
 									<div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center">
 										<button
@@ -780,7 +783,7 @@ export default function BillingPage({
 											onClick={handleDevCheckoutSuccess}
 											className="rounded-lg bg-gray-900 px-4 py-2 font-medium text-sm text-white hover:bg-gray-700"
 										>
-											Simulate successful payment
+											{t("Simulate successful payment")}
 										</button>
 										<button
 											type="button"
@@ -790,7 +793,7 @@ export default function BillingPage({
 											}}
 											className="rounded-lg border border-gray-300 px-4 py-2 font-medium text-gray-900 text-sm hover:bg-gray-100"
 										>
-											Simulate failure
+											{t("Simulate failure")}
 										</button>
 									</div>
 								</div>

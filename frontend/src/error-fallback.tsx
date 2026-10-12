@@ -87,7 +87,9 @@ export default function ErrorFallback({ error, eventId, reported = false }: Erro
 
 						{import.meta.env.DEV ? (
 							<details className="mt-4 w-full rounded-lg border border-destructive/50 bg-destructive/5 p-4 text-left text-sm">
-								<summary className="cursor-pointer font-medium">Error detail (dev only)</summary>
+								<summary className="cursor-pointer font-medium">
+									{t("Error detail (dev only)")}
+								</summary>
 								<pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words text-xs">
 									{message}
 									{error instanceof Error && error.stack ? `\n\n${error.stack}` : ""}

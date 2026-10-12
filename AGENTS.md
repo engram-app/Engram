@@ -227,6 +227,16 @@ mix dialyzer                              # ~32s warm; ~8 min the FIRST time in 
 
 **Ratchet semantics** (Phase 3 onward): each phase fixes findings to zero, then promotes the CI step to fatal. Numbers strictly decrease — new PRs that introduce findings fail.
 
+## Web-app translations: translategemma is the translator
+
+Every catalog entry in `frontend/src/i18n/locale/*.ts` comes from `translategemma:12b` on FastRaid's Ollama via `bun run i18n:translate`. Agents do not write translations themselves.
+
+- **Adding or editing a UI string:** wrap it (`t`, `tn`, `msg`, `<Trans text>`), then run `cd frontend && I18N_OLLAMA_URL=http://10.0.20.214:11434 bun run i18n:translate`. It translates only the keys a catalog lacks and drops orphans, in minutes. Commit the catalog diff in the same PR. If Ollama is unreachable, merge without catalogs: the `i18n-translate.yml` bot PR fills them after merge (English is the designed fallback until then).
+- **Never hand-translate or translate with your own model.** The pipeline holds the glossary and per-language register (de/es/fr/it informal, ru formal) fixed. Hand edits drift, and the next `--all` overwrites them. To fix a bad translation, change the prompt or glossary in `src/i18n/auto-translate.ts`, then rerun with `--all --locale <code>`.
+- **Adding a language:** add it to `LOCALES`/`LOCALE_NAMES` (`src/i18n/locales.ts`), `SPECS` (`src/i18n/auto-translate.ts`) and `vendor-locales.ts` (Clerk + Paddle), then run `bun run i18n:translate --locale <code>`.
+- **Never suppress the gates:** `noJsxLiterals` (Biome), `keys.test.ts` and `catalog-quality.test.ts`. A genuinely untranslatable string (brand, symbol, code format) goes on the rule's `allowedStrings` in `biome.json`, or on the attribute test's allowlist.
+- Full design, checks and failure modes: `docs/context/webapp-i18n.md`.
+
 ## Logging conventions
 
 **Principle:** every log line must earn its place by serving *alerting* or *diagnosis*. Healthy systems are quiet — logs are for the exceptional. Routine success (e.g. a per-request 2xx) is not logged to Loki.
@@ -572,7 +582,8 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 **Frontend / SPA**
 - Frontend SPA map — bootstrap chain, runtime router, api/sync/realtime layer, viewer/editor (start here for web-app work) → `docs/context/frontend-architecture.md`
 - Form controls and buttons: the one control height (`--spacing-control`), `<Input>` vs raw `<input>`, button role -> variant/size, the `<Button>` className rule → `docs/context/form-controls.md`
-- Spot-checking the ten web-app translations in a browser (language switch and auto-detect, surface checklist, per-locale native-speaker review list, known gaps) → `docs/context/webapp-i18n-spot-check.md`
+- Adding/editing a UI string, adding a language, or a bad translation (translategemma pipeline, diff-only CI bot, model-free gates) → `docs/context/webapp-i18n.md`
+- Spot-checking the twelve web-app translations in a browser (language switch and auto-detect, surface checklist, per-locale native-speaker review list, known gaps) → `docs/context/webapp-i18n-spot-check.md`
 - Wikilink (`[[...]]`) → note resolution in the SPA viewer → `docs/context/spa-wikilink-resolution.md`
 - Footnotes in the CM6 editor: build vs adopt → `docs/context/codemirror-footnote-options.md`
 - Matching Obsidian's real Properties panel CSS/geometry → `docs/context/obsidian-properties-parity.md`

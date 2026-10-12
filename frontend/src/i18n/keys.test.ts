@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { findProblems, hiddenCalls, usedEntries, usedKeys } from "./keys-scan";
+import { LOCALES } from "./locales";
 import type { Catalog } from "./translate";
 
 describe("findProblems (self-check)", () => {
@@ -117,12 +118,32 @@ describe("repo catalogs", () => {
 	);
 
 	it("ships a catalog for every non-English locale", () => {
-		expect(Object.keys(catalogs).sort()).toEqual(
-			["de", "es", "fr", "it", "ja", "ko", "pt-BR", "ru", "zh-CN", "zh-TW"].sort(),
-		);
+		expect(Object.keys(catalogs).sort()).toEqual(LOCALES.filter((l) => l !== "en").sort());
 	});
 	it("has no translator call the scanner cannot see", () => {
 		expect(sources.flatMap(hiddenCalls)).toEqual([]);
+	});
+	// Biome's noJsxLiterals only sees text children; its noStrings mode would flag every className.
+	it("has no raw English in user-facing attributes", () => {
+		const allowed = new Set(["Engram", "XXXX-XXXX"]);
+		// src/dev is DEV-only, same carve-out as the noJsxLiterals override.
+		const shipped = Object.values(
+			import.meta.glob<string>(["../**/*.tsx", "!../**/*.test.*", "!../dev/**"], {
+				query: "?raw",
+				import: "default",
+				eager: true,
+			}),
+		);
+		const raw = shipped.flatMap((s) =>
+			[
+				...s.matchAll(
+					/\b(?:placeholder|aria-label|aria-description|title|alt|label)="(?<text>[^"]*\p{L}{2}[^"]*)"/gu,
+				),
+			]
+				.map((m) => m.groups?.text ?? "")
+				.filter((text) => !allowed.has(text)),
+		);
+		expect(raw).toEqual([]);
 	});
 	it("has no orphan keys, dropped placeholders, or cross-locale gaps", () => {
 		expect(findProblems(usedKeys(sources), catalogs)).toEqual([]);

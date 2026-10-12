@@ -1,21 +1,21 @@
 # Context Doc: Web-app i18n foundation
 
-_Last verified: 2026-10-04_
+_Last verified: 2026-10-11_
 
 ## Status
 
-Foundation and all ten translated catalogs shipped, and the language switcher is always visible (the temporary `import.meta.env.DEV` gate is gone).
+Foundation and all twelve translated catalogs shipped (`vi` and `ms` added 2026-10-11 for signups from Vietnam and Malaysia), and the language switcher is always visible (the temporary `import.meta.env.DEV` gate is gone).
 
-**Translations are LLM-generated and have not been reviewed by native speakers.** Glossary references (UI nouns such as "vault", "note", "sync") were taken from the Obsidian plugin's locale files and the marketing site's locale files, so terminology matches those surfaces. Expect tone and terminology slips, especially in `ja`, `ko`, `zh-*`, `ru`; do not market a language as supported without review.
+**Translations are machine-generated (translategemma since 2026-10-11, see Automated translation) and have not been reviewed by native speakers.** Glossary references (UI nouns such as "vault", "note", "sync") were taken from the Obsidian plugin's locale files and the marketing site's locale files, so terminology matches those surfaces. Expect tone and terminology slips, especially in `ja`, `ko`, `zh-*`, `ru`; do not market a language as supported without review.
 
 ## What exists
 
 All under `frontend/src/i18n/`:
 
-- `locales.ts`: `LOCALES` (11 codes, `en` plus ten translated), `LOCALE_NAMES` (each in its own language), `matchLocale`/`resolveLocale` (browser tags to a supported locale; `zh-TW/HK/MO/Hant` map to `zh-TW`, other `zh` to `zh-CN`, `pt` to `pt-BR`).
+- `locales.ts`: `LOCALES` (13 codes, `en` plus twelve translated), `LOCALE_NAMES` (each in its own language), `matchLocale`/`resolveLocale` (browser tags to a supported locale; `zh-TW/HK/MO/Hant` map to `zh-TW`, other `zh` to `zh-CN`, `pt` to `pt-BR`).
 - `locale-provider.tsx`: `LocaleProvider` and `useT()` returning `{ locale, setLocale, t, tn }`. Mounted in `main.tsx` as the outermost element, above `RootErrorBoundary` and the top-level `Suspense`, so `ErrorFallback` and `LoadingScreen` translate too (`main.locale-wiring.test.ts` guards it). Sets `<html lang>` to `renderedLocale` (the locale of the catalog actually on screen). The LAST SUCCESSFULLY LOADED catalog stays rendered until a newly selected language's chunk resolves, then swaps atomically, so a switch never drops to English in between; a failed, `undefined` or empty load keeps the previous catalog and is reported to Sentry (the picker then shows the selected `locale` over the old `renderedLocale`). Selecting `en` (no loader) switches at once. Chunks load lazily via `import.meta.glob`.
 - `translate.ts`, `trans.tsx` (`<Trans text slots>` for sentences around React children), `storage.ts` (`engram:locale` in localStorage).
-- `locale/<code>.ts`: ten catalogs (no `en`).
+- `locale/<code>.ts`: twelve catalogs (no `en`).
 - `keys.test.ts`: the drift guard.
 
 Proof surface: the Language `<select>` in its own card, Settings > Account > Language (`language-section.tsx`, rendered after Appearance; a shadcn `Select`; always visible), and the 404 page (`not-found.tsx`).
@@ -48,13 +48,15 @@ The scanner (`src/i18n/keys-scan.ts`, shared by `keys.test.ts` and `i18n:missing
 - `<Trans text="Type {w}" slots={{...}} />`: a sentence around React children. Plain `text="..."` only, not `text={"..."}`.
 - `msg("Settings")` (`src/i18n/msg.ts`): returns the string unchanged and marks it as a key. Use it for labels in module-scope constants, then render with `t(item.label)`.
 
+Raw JSX text (`<p>Save</p>`) is a lint error: Biome's `style/noJsxLiterals` is on in `biome.json`, with an `allowedStrings` list for symbols and brand names (`·`, `×`, `/`, `Engram`, `PayPal`, ...) and an override turning it off for `**/*.test.tsx` and `src/dev/**` (DEV-only routes). A genuinely untranslatable string goes on the allowlist, not behind a suppression. Attribute strings are not Biome-linted (the rule's `noStrings` option would also flag every `className`); instead `keys.test.ts` "has no raw English in user-facing attributes" fails on a literal `placeholder`, `aria-label`, `aria-description`, `title`, `alt` or `label` outside tests and `src/dev`, with its own small allowlist.
+
 Not allowed (the scanner cannot see them, so the string is never tracked or translated): template literals, concatenation (`"a" + b`), `t(variable)` on an unmarked variable, single-quoted or `{"..."}`-wrapped literals. Keep escapes JSON-valid (`\"`).
 
 ## Add a string
 
 1. Wrap it: `t("Save changes")`, `tn(...)` for counts, `<Trans text>` around React children, or `msg(...)` in module-scope constants (see Marking strings).
 2. Run `cd frontend && bun run i18n:missing -- --count` to see what each locale lacks.
-3. Translate every locale (all ten `locale/*.ts`), keeping `{placeholders}` identical.
+3. Run `bun run i18n:translate` (see Automated translation), or let the CI bot PR do it after merge. Hand-edit a catalog entry only to fix a bad translation.
 4. `bunx vitest run src/i18n` : `keys.test.ts` fails on cross-locale gaps (parity), orphans and placeholder mismatches. `--count` all zero means done.
 
 ## Add a locale
@@ -75,6 +77,19 @@ tn({ one: "{count} file", other: "{count} files" }, n, { count: n })
 
 Catalog entry: `"{count} files": { one: "…", other: "…" }` (add `few`/`many` etc. where the language needs them).
 
+## Automated translation (translategemma)
+
+`cd frontend && I18N_OLLAMA_URL=http://10.0.20.214:11434 bun run i18n:translate` fills catalogs with `translategemma:12b` on FastRaid's Ollama. Pure logic (prompt, output cleanup, acceptance checks, plural samples, merge) is `src/i18n/auto-translate.ts` with unit tests; `scripts/i18n-translate.ts` is the IO.
+
+- **Diff-only by default.** English is the key, so a new or edited string is a key the catalog lacks; only those are sent. Keys the source no longer uses are dropped (no orphans for `keys.test.ts`). `--all` retranslates everything (about 3h for twelve locales; run it after changing the prompt, glossary or model). `--locale vi,ms` limits the run.
+- **CI:** `.github/workflows/i18n-translate.yml` runs on every main push touching `frontend/src/**` (not the catalogs) and opens/updates the signed bot PR `bot/i18n-translate`. Dispatch it with `all: true` for a full pass. Runners reach Ollama through the runner VM allowlist (port 11434 on FastRaid).
+- **Prompt:** the model's own template plus a UI-context line, a fixed glossary (the locale's current `Vaults`, `Attachments`, `Folder`, `Settings`, `Search`, and a sentence that sets the register; a new locale gets gemma's own term first, then it is held fixed) and the register rule per language: `de`/`es`/`fr`/`it` informal, `ru` formal `вы`, `pt-BR` `você`, `vi` `bạn`, `ms` `anda`. Without the glossary the model rendered "vault" as Tresor/Speicherbereich/金庫/セーフティボックス in one run and switched German to Sie.
+- **Batching:** 12 numbered strings per request, 4 concurrent (about 2.5x faster than one per request; the model keeps the numbering). A line that is missing or fails a check is retried alone at temperature 0, 0.3, 0.6.
+- **Acceptance checks** (`isValid`): same `{placeholder}` set, same newline count, URLs/code spans/e-mails and brand names kept, no runaway length, no wrong-register pronouns (unless the old entry already had them), the expected script for `ja`/`ko`/`zh`/`ru`, and not plain English where the old catalog had a translation. A string that never passes keeps its old translation, or stays English (the designed fallback) for a new key.
+- **Plurals:** each `Intl.PluralRules` category is translated from a concrete number (`5 files` for `ru` many, `1.5` for a fraction-only `other`), then the number is swapped back to `{count}`, so the model picks the case form. If any category fails, the whole entry keeps its old forms.
+- **Per-PR gate, no model:** `src/i18n/catalog-quality.test.ts` runs the same `problems()` checks over every committed catalog inside the normal vitest job (well under a second). With `keys.test.ts` (parity, orphans, placeholders) it is the fast translation check; the gemma run itself only happens on main. The script check applies only to sentences of more than 3 words, so `ID:` or `A → Z` may stay Latin in `ja`/`ko`/`zh`; a plural `one` form may drop `{count}`.
+- **Output** is written per locale when that locale finishes (resume a killed `--all` with `--locale` for the rest) and formatted with `bun run biome format`.
+
 ## i18n:missing (for translators)
 
 `cd frontend && bun run i18n:missing` scans `src/**/*.{ts,tsx}` (not tests or `src/i18n/locale/`) with the same scanner and compares against each `locale/*.ts` catalog. It is a report, always exit 0.
@@ -93,7 +108,7 @@ It scans source for `t`, `msg`, `tn` (`other`) and `<Trans text>` keys, then fai
 
 Both follow `renderedLocale` from `useT()` (the locale of the catalog on screen, `"en"` before any loads; the same value `<html lang>` uses), NOT the raw `locale`. This keeps Clerk and Paddle in step with the app text, never flickering through English on a switch and never going foreign over an app whose catalog failed to load.
 
-- **Mapping:** `src/i18n/vendor-locales.ts`. Paddle codes equal ours except `zh-CN` -> `zh-Hans`.
+- **Mapping:** `src/i18n/vendor-locales.ts`. Paddle codes equal ours except `zh-CN` -> `zh-Hans`, and `vi`/`ms` -> `en` (Paddle checkout offers neither). Clerk has both (`vi-VN`, `ms-MY`).
 - **Clerk:** `<ClerkProvider localization>` in `clerk-auth-provider.tsx`. Catalogs come from `@clerk/localizations` as one lazy chunk per language (literal dynamic imports; a variable specifier would not bundle). English, loading and a failed load all leave `localization` undefined (Clerk's English), failures go to `captureError`. `@clerk/react` pushes a changed `localization` prop into the mounted instance, so no remount. Clerk marks localization experimental. `@clerk/localizations` is pinned to 4.17.0: newer minors require `@clerk/shared` >= 4.34, but this repo overrides `@clerk/shared` to the 4.33 that `@clerk/react` uses.
 - **Paddle:** the locale is applied per `paddle.Checkout.open(...)`, NOT in the `initializePaddle` effect. That effect rebuilds the Paddle instance and strands an open checkout (same reason the theme is fixed), so it must not depend on the locale. `checkoutSettings(isInline)` in `billing-page.tsx` builds the shared settings from stable inputs only; init uses it with `locale: "en"` as the default, and each open (new checkout and the `transactionId` payment-update open) passes `{ ...checkoutSettings(isInline), locale }` in FULL. Reason: Paddle.js's merge of partial per-open `settings` over the init defaults is undocumented, and this is the payments path, so we never depend on it.
 - **Clerk pin:** `@clerk/localizations` stays at 4.17.0 because the repo's `@clerk/shared` override holds 4.33 (4.21.x needs >= 4.38), so a dependabot bump to 4.21.x needs the override lifted first. Strings added to Clerk's UI after 4.17 show in English.
@@ -109,7 +124,7 @@ Playwright specs in `frontend/e2e/` prove that language selection and catalog co
 
 | Spec (project) | What it checks |
 |---|---|
-| `i18n-detection.spec.ts` (`local`) | Each of the ten browser locales (`de-DE` ... `zh-TW`) lands on the right `<html lang>` and shows the catalog's own "Sign in to Engram" heading. Fallbacks: `en-GB` -> `en`, `zh-HK` -> `zh-TW`, `pt-PT` -> `pt-BR`, unsupported `nl-NL` -> `en`. A stored `engram:locale=ja` beats a `de-DE` browser; an unknown stored value is ignored. The Settings > Account picker switches `<html lang>` and text without a reload and the pick survives one (this test registers a user, tagged `[registers user]`). |
+| `i18n-detection.spec.ts` (`local`) | Each of the twelve browser locales (`de-DE` ... `zh-TW`, including `vi-VN` and `ms-MY`) lands on the right `<html lang>` and shows the catalog's own "Sign in to Engram" heading. Fallbacks: `en-GB` -> `en`, `zh-HK` -> `zh-TW`, `pt-PT` -> `pt-BR`, unsupported `nl-NL` -> `en`. A stored `engram:locale=ja` beats a `de-DE` browser; an unknown stored value is ignored. The Settings > Account picker switches `<html lang>` and text without a reload and the pick survives one (this test registers a user, tagged `[registers user]`). |
 | `i18n-onboarding.spec.ts` (`local`, self-host) | Per locale: sign-up, tools, tools with the opt-out ticked, vault, vault > Obsidian panel, vault > starting fresh, dashboard, Settings > Account. |
 | `i18n-onboarding-clerk.spec.ts` (`clerk`, SaaS) | Same walk, plus agreement and billing, with Clerk's `.cl-rootBox` excluded from the scan; the Clerk sign-up screen's title must equal `@clerk/localizations`' string for the locale. Needs `E2E_CLERK_SECRET_KEY`, skipped without it. |
 

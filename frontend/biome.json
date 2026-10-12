@@ -126,7 +126,40 @@
 						"noMagicNumbers": "off",
 						"noDefaultExport": "off",
 						"noImplicitBoolean": "off",
-						"noJsxLiterals": "off",
+						"noJsxLiterals": {
+							"level": "error",
+							"options": {
+								"allowedStrings": [
+									"&nbsp;",
+									"·",
+									"••••",
+									"&#10003;",
+									"−",
+									"/",
+									"&times;",
+									"×",
+									"↗",
+									"↳",
+									"?",
+									"#",
+									"---",
+									"x",
+									"H",
+									"404",
+									".md",
+									"type",
+									"Engram",
+									"Engram Vault Sync",
+									"AMEX",
+									"PayPal",
+									"GPay",
+									"github.com/engram-app/Engram",
+									"support@engram.page",
+									"ENGRAM_TELEMETRY=false",
+									"engram_••••••"
+								]
+							}
+						},
 						"noTernary": "off",
 						"noHexColors": "off",
 						"useGlobalThis": "off",
@@ -155,6 +188,10 @@
 		{
 			"includes": ["src/components/ui/input-group.tsx"],
 			"linter": { "rules": { "nursery": { "useTailwindShorthandClasses": "off" } } }
+		},
+		{
+			"includes": ["**/*.test.tsx", "src/dev/**"],
+			"linter": { "rules": { "style": { "noJsxLiterals": "off" } } }
 		},
 		{
 			"includes": ["src/i18n/locale/*.ts"],

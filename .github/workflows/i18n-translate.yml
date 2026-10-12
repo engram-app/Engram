@@ -1,0 +1,130 @@
+name: Translate web-app strings
+
+# Keeps frontend/src/i18n/locale/*.ts in step with the English strings in the
+# SPA. English is the catalog key, so a new or edited string is a key every
+# catalog lacks; `bun run i18n:translate` fills only those (diff-only) with
+# translategemma on FastRaid's Ollama and drops keys the source no longer uses.
+# The result lands as a bot PR, so a human still sees every translation before
+# it ships. Runners reach 10.0.20.214:11434 through the runner VM allowlist
+# (docs/context/runner-vm-setup.md in the workspace repo).
+#
+# workflow_dispatch with `all: true` retranslates every key (hours); use it
+# after changing the prompt, glossary or model, not routinely.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/src/**"
+      # The bot's own merges touch only catalogs; nothing new to translate.
+      - "!frontend/src/i18n/locale/**"
+  workflow_dispatch:
+    inputs:
+      all:
+        description: "Retranslate every key, not only missing ones (slow)"
+        type: boolean
+        default: false
+
+# One run at a time: two merges in a row would race on the shared bot branch.
+concurrency:
+  group: i18n-translate
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  translate:
+    runs-on: [self-hosted, linux, x64, isolated, light]
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # create-pull-request sets its own Authorization header; a persisted
+          # checkout credential would send a second one (GitHub returns 400).
+          persist-credentials: false
+
+      - name: Resolve latest bun version
+        id: bun
+        run: |
+          set -euo pipefail
+          v=$(curl -sSfL --max-time 20 \
+                -H "Authorization: Bearer ${{ github.token }}" \
+                https://api.github.com/repos/oven-sh/bun/releases/latest \
+              | jq -r '.tag_name' | sed 's/^bun-v//')
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::could not resolve latest bun version (got '$v')"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      # Private HOME: never rewrite the shared ~/.bun (Text-file-busy race, see verify.yml).
+      - uses: oven-sh/setup-bun@v2
+        env:
+          HOME: ${{ runner.temp }}
+        with:
+          bun-version: ${{ steps.bun.outputs.version }}
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: bun install --frozen-lockfile --registry http://10.0.20.214:4873
+
+      - name: Translate
+        working-directory: frontend
+        env:
+          I18N_OLLAMA_URL: http://10.0.20.214:11434
+          ALL: ${{ inputs.all && '--all' || '' }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086 # ALL is empty or one flag
+          bun run i18n:translate $ALL | tee "$RUNNER_TEMP/i18n-summary.txt"
+
+      # The same gate the PR will face, so a bad catalog fails here, not in review.
+      - name: Catalog parity
+        working-directory: frontend
+        run: bun run test src/i18n
+
+      - name: Summary for the PR body
+        id: summary
+        run: |
+          {
+            echo 'text<<EOF'
+            cat "$RUNNER_TEMP/i18n-summary.txt"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: engram-app
+          repositories: Engram
+
+      - name: Open / update PR
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          branch: bot/i18n-translate
+          delete-branch: true
+          add-paths: frontend/src/i18n/locale/*.ts
+          # main requires verified signatures; this routes the commit through
+          # createCommitOnBranch, which GitHub signs for the App.
+          sign-commits: true
+          commit-message: |
+            feat(i18n): translate new web-app strings
+
+            Automated by i18n-translate.yml (translategemma) from ${{ github.sha }}.
+          title: "feat(i18n): translate new web-app strings"
+          body: |
+            Machine translations from translategemma on FastRaid's Ollama for
+            strings added or edited since the catalogs were last updated.
+
+            ```
+            ${{ steps.summary.outputs.text }}
+            ```
+
+            "kept old" and "still English" are strings the model's answer
+            failed a check on (placeholders, brand names, register, script).
+            Source commit: ${{ github.repository }}@${{ github.sha }}
+          labels: |
+            automated
+            i18n
