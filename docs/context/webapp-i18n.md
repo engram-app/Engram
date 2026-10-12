@@ -20,6 +20,17 @@ All under `frontend/src/i18n/`:
 
 Proof surface: the Language `<select>` in its own card, Settings > Account > Language (`language-section.tsx`, rendered after Appearance; a shadcn `Select`; always visible), and the 404 page (`not-found.tsx`).
 
+## Typed text: UIText and MsgKey (tsc is the main gate)
+
+`src/i18n/ui-text.ts`. Raw English reaching the user is a **type error**, which also covers what no regex can see (a literal returned from a helper, a custom prop, a variable):
+
+- `UIText`: branded string. Only `t`/`tn` (via `interpolate`) and `untranslated(text)` produce it. UI text props (`SettingsSectionCard` title, `HelpTip` label, onboarding/billing copy, ...) and `notify()` take it.
+- `notify()` (`src/lib/notify.ts`) is the only toast API; Biome `noRestrictedImports` bans importing sonner's `toast` outside it and tests. It forwards exactly the arguments given, so `vi.mock("sonner")` assertions keep working.
+- `untranslated(text)`: the explicit exception for text we show as-is: backend `ApiError.message`, Clerk API errors (English; only Clerk's components are localized), tool brand names. `grep -rn "untranslated(" src` lists every exception.
+- `MsgKey`: what `msg()` returns. Module-scope label arrays (`settings/sections.ts`, `tree-actions/action-list.ts`, `billing/limit-copy.ts`, `feedback/options.ts`, ...) type their fields as `MsgKey`, so a raw `label: "Foo"` (invisible to the scanner, so never translated) fails tsc. A field that mixes keys and already-translated labels is `MsgKey | UIText` (`Action.label`).
+- Props that carry user data (note and connection names, property keys, ids) stay `string`. When the types were introduced each candidate prop was retyped alone and tsc showed what flows in: `t()` output means UI copy, `msg()` means a key holder, everything else is data.
+- Brands are built by a type predicate, not `as`: shipped code lints type assertions.
+
 ## The model: English is the key
 
 `t("Page not found")` returns the catalog entry for that exact English string, or the string itself if there is none. Consequences:
