@@ -30,7 +30,9 @@ PLUGIN = "app.plugins.plugins['engram-vault-sync']"
 
 
 @pytest.mark.asyncio
-async def test_drifted_map_self_heals_on_inbound_edit(vault_a, vault_b, cdp_a, cdp_b, api_sync):
+async def test_drifted_map_self_heals_on_inbound_edit(
+    vault_a, vault_b, cdp_a, cdp_b, api_sync
+):
     path = "E2E/Crdt/Drift.md"
 
     # Shared CRDT base on both devices.
