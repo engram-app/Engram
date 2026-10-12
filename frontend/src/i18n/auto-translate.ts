@@ -87,6 +87,13 @@ const NEWLINE = "⏎";
 const PLACEHOLDER = /\{[^{}]+\}/gu;
 const LITERAL = /`[^`]+`|https?:\/\/\S+|[\w.+-]+@[\w-]+\.[\w.]+/gu;
 const CJK_STOP = /(?<stop>[。！？])\s+/gu;
+// Labels lead with an emoji or a mark ("🔄 Sync Center", "✓ {count} synced"); the
+// model sometimes drops one, or pastes a glossary term's emoji into a sentence.
+const SYMBOL = /\p{Extended_Pictographic}|[✓✕✔✖•]/gu;
+
+function symbols(s: string): string {
+	return [...new Set(s.match(SYMBOL) ?? [])].sort().join();
+}
 
 function wordCount(s: string): number {
 	return s
@@ -107,15 +114,18 @@ function buildPrompt(
 	multi: boolean,
 ): string {
 	const { name, tone } = SPECS[code];
+	// Without the emoji: "🔄 Sync Center = 🔄 ..." made the model paste 🔄 into every
+	// sentence that mentions the Sync Center (seen in the plugin).
+	const bare = (term: string): string => term.replace(SYMBOL, "").trim();
 	const terms = Object.entries(glossary)
-		.map(([en, tr]) => `${en} = ${tr}`)
+		.map(([en, tr]) => `${bare(en)} = ${bare(tr)}`)
 		.join("\n");
 	return [
 		`You are a professional English (en) to ${name} (${code}) translator localizing the user interface of Engram, a notes app that syncs an Obsidian vault and exposes it to AI assistants.`,
 		multi
 			? "Each numbered line is a separate UI string. Translate every line independently and return exactly the same numbered lines, one per line, in the same order."
 			: "",
-		`Rules: keep each string as short as its source. Copy every {placeholder} in curly braces exactly, untranslated. Do not add punctuation a source lacks. Keep brand names (${BRANDS.join(", ")}) unchanged. ${text.includes(NEWLINE) ? `Keep the ${NEWLINE} marker. ` : ""}${tone}`,
+		`Rules: keep each string as short as its source. ${placeholders(text).length > 0 ? "Copy every token in curly braces exactly, untranslated. " : ""}Do not add punctuation a source lacks. Keep brand names (${BRANDS.join(", ")}) unchanged. ${text.includes(NEWLINE) ? `Keep the ${NEWLINE} marker. ` : ""}${tone}`,
 		terms ? `Use this established terminology and tone:\n${terms}` : "",
 		`Produce only the ${name} translation, without any additional explanations or commentary. Please translate the following English text into ${name}:\n\n\n${text}`,
 	]
@@ -160,6 +170,8 @@ function problems(src: string, out: string, code: Target, old?: string): string[
 		newlines: out.split("\n").length !== src.split("\n").length,
 		literal: !(src.match(LITERAL) ?? []).every((lit) => out.includes(lit)),
 		brand: !BRANDS.every((b) => !src.includes(b) || out.includes(b)),
+		// Both ways: a label keeps its emoji, and a sentence does not gain one.
+		symbols: symbols(src) !== symbols(out),
 		length: out.length > lengthCap,
 		register: Boolean(formal?.test(out) && !(old && formal.test(old))),
 		// Only sentences: "ID:", "A → Z" or a bare "{status}: {message}" may stay Latin.

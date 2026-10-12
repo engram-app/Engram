@@ -109,6 +109,21 @@ describe("batchText / parseBatch", () => {
 });
 
 describe("buildPrompt", () => {
+	it("states the placeholder rule only when there is one, and never spells out a token", () => {
+		// The model copied the rule's own "{placeholder}" into "2 days left" answers.
+		const none = buildPrompt("vi", {}, "2 days left in your trial.", false);
+		expect(none).not.toMatch(/\{[^}]*\}/u);
+		const some = buildPrompt("vi", {}, "Hi {0}", false);
+		expect(some).toContain("curly braces");
+		expect(some.replace("Hi {0}", "")).not.toMatch(/\{[^}]*\}/u);
+	});
+
+	it("pins glossary terms without their emoji, so the model does not paste it into sentences", () => {
+		const p = buildPrompt("de", { "🔄 Sync Center": "🔄 Sync-Zentrale" }, "Open it", false);
+		expect(p).toContain("Sync Center = Sync-Zentrale");
+		expect(p).not.toContain("🔄");
+	});
+
 	it("carries glossary, tone and the newline rule only when needed", () => {
 		const p = buildPrompt("de", { Vaults: "Vaults" }, "[1] Sync", true);
 		expect(p).toContain("German");
@@ -235,6 +250,13 @@ describe("problems", () => {
 		expect(problems("Your {plan} plan", "Ihr Tarif", "de")).toEqual(["placeholders", "register"]);
 		expect(problems("Open Obsidian", "Öffne die App", "de")).toEqual(["brand"]);
 		expect(problems("API keys", "API-Schlüssel", "de")).toEqual([]);
+	});
+
+	it("keeps a label's emoji or mark, and adds none to a sentence", () => {
+		expect(problems("🔄 Sync Center", "Sync-Zentrale", "de")).toEqual(["symbols"]);
+		expect(problems("✓ {count} synced", "{count} synchronisiert", "de")).toEqual(["symbols"]);
+		expect(problems("Open sync center", "Buka 🔄 Pusat Sync", "ms")).toEqual(["symbols"]);
+		expect(problems("✓ Saved", "✓ Gespeichert", "de")).toEqual([]);
 	});
 
 	it("requires the locale's script even with no old entry", () => {
