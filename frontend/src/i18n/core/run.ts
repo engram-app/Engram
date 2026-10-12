@@ -1,4 +1,4 @@
-// i18n-core bee71125
+// i18n-core 5ca202df
 // The translategemma run loop shared by every repo's `scripts/i18n-translate.ts`.
 // Diff-only: per locale it fills keys the catalog lacks, retries failed keys, heals
 // entries that fail a current check, and redoes everything when the fingerprint
@@ -375,6 +375,12 @@ async function run<T extends string>(opts: RunOptions<T>): Promise<LocaleResult[
 		for (const k of glossaryStale(entries, prev?.glossary, terms)) {
 			todo.add(k);
 			delete fresh[k];
+		}
+		for (const k of tr.pinned[code] ?? []) {
+			const v = old[k];
+			if (v !== undefined) {
+				fresh[k] = v;
+			}
 		}
 		for (const k of todo) {
 			if (!(k in fresh || byKey.get(k)?.plural) && tr.isBrandOnly(k)) {

@@ -1320,7 +1320,7 @@ export default {
 	"Mermaid Diagram": "Mermaid 圖表",
 	"Flowchart, sequence, class and state diagrams.": "流程圖、序列圖、類別圖和狀態圖。",
 	"Mermaid syntax reference": "Mermaid 語法參考",
-	Math: "数学公式",
+	Math: "數學",
 	"Inline Math": "行內數學公式",
 	"Block Math": "區塊數學公式",
 	Frontmatter: "前置資料",

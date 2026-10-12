@@ -968,7 +968,7 @@ export default {
 		'Öffnet noch "{target}" – zeigt "{name}", bis es fertig ist.',
 	"Still opening that note — showing “{name}” until it does.":
 		'Öffnet diese Notiz noch – zeigt "{name}", bis es fertig ist.',
-	"Reading view": "Anzeigenmodus",
+	"Reading view": "Leseansicht",
 	"Loading editor…": "Editor wird geladen…",
 	"Table of contents": "Inhaltsverzeichnis",
 	"On this page": "Auf dieser Seite",

@@ -75,6 +75,21 @@ const GLOSSARY_KEYS = [
 	"Search",
 	"Manage your profile, password, and account.",
 ];
+// Hand overrides, each copied from Obsidian's own translation of the same
+// string: the model's answer meant something else ("Strikethrough" as underline,
+// "Reading" as loading) or differed from the word Obsidian users already know.
+const PINNED: Partial<Record<Target, readonly string[]>> = {
+	de: ["Reading view"],
+	it: ["Outline", "Strikethrough"],
+	ja: ["Dark", "Light", "Outline", "Reading", "Reading view"],
+	ms: ["Outline", "Reading", "Reading view", "Strikethrough"],
+	"pt-BR": ["Reading"],
+	ru: ["Outline"],
+	vi: ["Light", "Outline", "Reading", "Reading view", "Strikethrough"],
+	"zh-CN": ["Dark", "Outline", "Reading"],
+	"zh-TW": ["Math"],
+};
+
 // Product and plan names: never translated. Plan names match invoices and Paddle
 // checkout (its catalog is English); "Free" describes the price, so it is translated.
 const BRANDS = [
@@ -98,6 +113,7 @@ const profile: Profile<Target> = {
 	specs: SPECS,
 	brands: BRANDS,
 	glossary: GLOSSARY_KEYS,
+	pinned: PINNED,
 };
 
 const tr = translator(profile);

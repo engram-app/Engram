@@ -610,7 +610,7 @@ export default {
 	"App navigation": "Навигация по приложению",
 	"Engram home": "Главная страница Engram",
 	"Collapse panel": "Свернуть панель",
-	Outline: "Оглавление",
+	Outline: "Структура",
 	Backlinks: "Обратные ссылки",
 	Reference: "Ссылка",
 	"{results} (first 20)": "{results} (первые 20)",

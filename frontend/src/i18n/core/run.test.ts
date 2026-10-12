@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { type Catalog, type Entry, HttpError, type Profile, type StoredState } from "./core";
+import {
+	type Catalog,
+	type Entry,
+	HttpError,
+	type Profile,
+	type StoredState,
+	translator,
+} from "./core";
 import { type RunIo, type RunOptions, run } from "./run";
 
 type Code = "de" | "fr" | "vi" | "ru";
@@ -171,6 +178,23 @@ describe("run", () => {
 		h.io.fetch = fakeOllama("sha256:bbb").fetch;
 		await run(opts([{ key: "Save" }], h.io));
 		expect(h.files.de).toEqual({ Save: "Speichern" });
+	});
+
+	it("keeps a pinned entry through a full redo, without changing the fingerprint", async () => {
+		const h = harness({ de: {} });
+		await run(opts([{ key: "Save" }], h.io));
+		const fp = h.state().de?.translator;
+		h.files.de = { Save: "Sichern" };
+		h.io.fetch = fakeOllama("sha256:bbb").fetch;
+		const pinned = { ...profile, pinned: { de: ["Save"] } };
+		await run(opts([{ key: "Save" }], h.io, { profile: pinned }));
+		expect(h.files.de).toEqual({ Save: "Sichern" });
+		expect(h.state().de?.failed).toEqual({});
+		// Adding a pin must not redo every locale.
+		expect(translator(pinned).fingerprintSource("de")).toBe(
+			translator(profile).fingerprintSource("de"),
+		);
+		expect(fp).toMatch(/^[0-9a-f]{8}$/u);
 	});
 
 	it("reuses the open bot PR's work only for keys this run would translate", async () => {

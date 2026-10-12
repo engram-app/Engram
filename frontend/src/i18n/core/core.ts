@@ -1,4 +1,4 @@
-// i18n-core 0aaa1ff5
+// i18n-core c3b12588
 // The translategemma pipeline shared by the web app, the Obsidian plugin and the
 // marketing site: prompts, the checks an answer must pass, and catalog state.
 // Canonical copy: engram-app/Engram frontend/src/i18n/core/. The other repos
@@ -33,6 +33,10 @@ interface Profile<T extends string> {
 	brands: readonly string[];
 	// Terms pinned across every batch. Must be real keys.
 	glossary: readonly string[];
+	// Per locale, keys kept exactly as committed: a hand override copied from
+	// Obsidian's own translation. Never sent to the model, and not part of the
+	// fingerprint, so adding one redoes nothing.
+	pinned?: Partial<Record<T, readonly string[]>>;
 }
 
 // Per locale, in `locale/state.json`.
@@ -297,6 +301,7 @@ function exactOne(code: string): boolean {
 
 function translator<T extends string>(profile: Profile<T>) {
 	const { specs, brands, glossary } = profile;
+	const pinned: Partial<Record<T, readonly string[]>> = profile.pinned ?? {};
 	// Longest first, so "Engram Vault Sync" wins over "Engram" in the alternation.
 	// The `pre` group stands in for a lookbehind: the character before the brand.
 	const BRAND_WORD = `(?<pre>^|[^A-Za-z0-9])(?<brand>${[...brands]
@@ -581,6 +586,7 @@ function translator<T extends string>(profile: Profile<T>) {
 
 	return {
 		buildPrompt,
+		pinned,
 		catalogProblems,
 		cleanOutput,
 		entryProblems,

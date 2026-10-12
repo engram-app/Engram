@@ -1448,7 +1448,7 @@ export default {
 	"New subfolder": "Nova subpasta",
 	Edit: "Editar",
 	Raw: "Bruto",
-	Reading: "Lendo",
+	Reading: "Leitura",
 	"Move {count} items to…": {
 		one: "Mover {count} item para…",
 		many: "Mover {count} itens para…",
