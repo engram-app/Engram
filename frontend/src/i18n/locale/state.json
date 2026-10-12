@@ -172,8 +172,8 @@
 		},
 		"glossary": {
 			"Note": "Nota",
-			"Vault": "Archivio",
-			"Vaults": "Archivi",
+			"Vault": "Vault",
+			"Vaults": "Vault",
 			"Sync": "Sincronizza",
 			"Attachments": "Allegati",
 			"Folder": "Cartella",
@@ -501,8 +501,8 @@
 		},
 		"glossary": {
 			"Note": "笔记",
-			"Vault": "知识库",
-			"Vaults": "知识库",
+			"Vault": "仓库",
+			"Vaults": "仓库",
 			"Sync": "同步",
 			"Attachments": "附件",
 			"Folder": "文件夹",
@@ -548,8 +548,8 @@
 		},
 		"glossary": {
 			"Note": "筆記",
-			"Vault": "知識庫",
-			"Vaults": "知識庫",
+			"Vault": "儲存庫",
+			"Vaults": "儲存庫",
 			"Sync": "同步",
 			"Attachments": "附件",
 			"Folder": "資料夾",
