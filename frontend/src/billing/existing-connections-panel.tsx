@@ -1,10 +1,10 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Plug } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import { intlLocale } from "@/lib/intl-locale";
+import { notify } from "@/lib/notify";
 
 import { api } from "../api/client";
 import { type Connection, useConnections } from "../api/queries";
@@ -52,10 +52,10 @@ export function ExistingConnectionsPanel({
 			const path = c.kind === "obsidian" ? `/connections/device/${id}` : `/connections/oauth/${id}`;
 			await api.del(path);
 			await qc.invalidateQueries({ queryKey: ["connections"] });
-			toast.success(t("Disconnected. Retry the new connection now."));
+			notify.success(t("Disconnected. Retry the new connection now."));
 			onChanged();
 		} catch {
-			toast.error(t("Couldn't disconnect. Try Settings → Connections."));
+			notify.error(t("Couldn't disconnect. Try Settings → Connections."));
 		} finally {
 			setBusyId(null);
 		}

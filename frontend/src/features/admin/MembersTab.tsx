@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Loader2 } from "lucide-react";
 import { Fragment, useCallback, useState } from "react";
-import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
+import { untranslated } from "@/i18n/ui-text";
 import { intlLocale } from "@/lib/intl-locale";
+import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
 import { type AdminUser, adminApi } from "./api";
 
@@ -130,9 +131,9 @@ export default function MembersTab({
 			if (snapshot) {
 				qc.setQueryData(USERS_KEY, snapshot);
 			}
-			const raw = e instanceof ApiError ? e.message : t("unknown error");
+			const raw = e instanceof ApiError ? untranslated(e.message) : t("unknown error");
 			const friendly = raw === "last_admin" ? t("Can't remove the last admin.") : raw;
-			toast.error(`${label}: ${friendly}`);
+			notify.error(t("{label}: {error}", { label, error: friendly }));
 		} finally {
 			setPending((p) => {
 				const next = { ...p };
@@ -166,7 +167,7 @@ export default function MembersTab({
 			const { url } = await adminApi.issueReset(u.id);
 			onResetIssued(url);
 		} catch (e) {
-			toast.error(e instanceof ApiError ? e.message : t("Reset link failed"));
+			notify.error(e instanceof ApiError ? untranslated(e.message) : t("Reset link failed"));
 		} finally {
 			setPending((p) => {
 				const next = { ...p };

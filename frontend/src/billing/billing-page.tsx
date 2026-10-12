@@ -7,10 +7,10 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Translate } from "@/i18n/translate";
+import { notify } from "@/lib/notify";
 import type { CheckoutMethod } from "../analytics/events";
 import { track } from "../analytics/track";
 import { api } from "../api/client";
@@ -145,7 +145,7 @@ async function downloadInvoice(transactionId: string, t: Translate) {
 		);
 		window.open(url, "_blank", "noopener");
 	} catch {
-		toast.error(t("Could not fetch that invoice. Please try again."));
+		notify.error(t("Could not fetch that invoice. Please try again."));
 	}
 }
 
@@ -515,7 +515,9 @@ export default function BillingPage({
 						setCompletedAt(null);
 						setSlow(false);
 						// msg() marks the key for the scanner, which cannot see a call through tRef.
-						toast.error(tRef.current(msg("Something went wrong with checkout. Please try again.")));
+						notify.error(
+							tRef.current(msg("Something went wrong with checkout. Please try again.")),
+						);
 						break;
 					}
 					default:
@@ -605,7 +607,7 @@ export default function BillingPage({
 			}
 		} catch {
 			setFinalizing(false);
-			toast.error(tLater(msg("Could not simulate checkout. Please try again.")));
+			notify.error(tLater(msg("Could not simulate checkout. Please try again.")));
 		}
 	}, [qc, tLater]);
 
@@ -648,7 +650,7 @@ export default function BillingPage({
 			const { url } = await api.get<{ url: string }>(path);
 			window.location.href = url;
 		} catch {
-			toast.error(t("Could not open the billing portal. Please try again."));
+			notify.error(t("Could not open the billing portal. Please try again."));
 			setPortalLoading(false);
 		}
 	}
@@ -669,7 +671,7 @@ export default function BillingPage({
 				settings: { ...checkoutSettings(isInline), locale: checkoutLocale },
 			});
 		} catch {
-			toast.error(t("Could not start the payment update. Please try again."));
+			notify.error(t("Could not start the payment update. Please try again."));
 		} finally {
 			setPortalLoading(false);
 		}
@@ -790,7 +792,7 @@ export default function BillingPage({
 											type="button"
 											onClick={() => {
 												setCheckingOut(false);
-												toast.error(t("Payment did not go through. Please try again."));
+												notify.error(t("Payment did not go through. Please try again."));
 											}}
 											className="rounded-lg border border-gray-300 px-4 py-2 font-medium text-gray-900 text-sm hover:bg-gray-100"
 										>

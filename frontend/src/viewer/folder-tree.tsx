@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router";
-import { toast } from "sonner";
 import { useT } from "@/i18n/locale-provider";
+import { notify } from "@/lib/notify";
 import {
 	type AttachmentSummary,
 	type Folder,
@@ -527,10 +527,10 @@ export default function FolderTree() {
 		}
 		copyToClipboard(links.join("\n")).then((ok) =>
 			ok
-				? toast.success(
+				? notify.success(
 						tn({ one: "Copied wikilink", other: "Copied {count} wikilinks" }, links.length),
 					)
-				: toast.error(t("Copy failed")),
+				: notify.error(t("Copy failed")),
 		);
 	}
 
@@ -602,7 +602,7 @@ export default function FolderTree() {
 				// here too put a second, vaguer toast on top of the useful one.
 				duplicateNote.mutate(
 					{ src_path: note.path, new_path },
-					{ onSuccess: () => toast.success(t("Duplicated")) },
+					{ onSuccess: () => notify.success(t("Duplicated")) },
 				);
 				break;
 			}

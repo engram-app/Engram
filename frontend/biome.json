@@ -126,6 +126,17 @@
 						"noMagicNumbers": "off",
 						"noDefaultExport": "off",
 						"noImplicitBoolean": "off",
+						"noRestrictedImports": {
+							"level": "error",
+							"options": {
+								"paths": {
+									"sonner": {
+										"importNames": ["toast"],
+										"message": "Use notify() from @/lib/notify: it only accepts translated text (UIText)."
+									}
+								}
+							}
+						},
 						"noJsxLiterals": {
 							"level": "error",
 							"options": {
@@ -188,6 +199,10 @@
 		{
 			"includes": ["src/components/ui/input-group.tsx"],
 			"linter": { "rules": { "nursery": { "useTailwindShorthandClasses": "off" } } }
+		},
+		{
+			"includes": ["src/lib/notify.ts", "**/*.test.ts", "**/*.test.tsx"],
+			"linter": { "rules": { "style": { "noRestrictedImports": "off" } } }
 		},
 		{
 			"includes": ["**/*.test.tsx", "src/dev/**"],

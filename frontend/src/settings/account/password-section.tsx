@@ -1,10 +1,10 @@
 import { useReverification, useUser } from "@clerk/react";
 import { isReverificationCancelledError } from "@clerk/react/errors";
 import { useState } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
+import { notify } from "@/lib/notify";
 import { SettingsSectionCard } from "./section-card";
 
 export function PasswordSection() {
@@ -31,12 +31,12 @@ export function PasswordSection() {
 			});
 			setCurrent("");
 			setNext("");
-			toast.success(t("Password updated"));
+			notify.success(t("Password updated"));
 		} catch (e) {
 			if (isReverificationCancelledError(e)) {
 				return;
 			}
-			toast.error(t("Could not update password"));
+			notify.error(t("Could not update password"));
 		}
 	}
 

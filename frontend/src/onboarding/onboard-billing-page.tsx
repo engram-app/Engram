@@ -1,10 +1,10 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useStableT, useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
 import { api } from "../api/client";
 import { type OnboardingStatus, useBillingStatus, useOnboardingStatus } from "../api/queries";
@@ -46,7 +46,7 @@ export default function OnboardBillingPage() {
 			const next = onboardingNext(status);
 			navigate(next, { replace: true });
 		} catch {
-			toast.error(tLater(msg("Could not continue. Please try again.")));
+			notify.error(tLater(msg("Could not continue. Please try again.")));
 		} finally {
 			setFreeLoading(false);
 		}

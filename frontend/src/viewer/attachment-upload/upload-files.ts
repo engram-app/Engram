@@ -1,6 +1,6 @@
-import { toast } from "sonner";
 import { LimitExceededError } from "@/api/client";
 import { englishT, type Translate } from "@/i18n/translate";
+import { notify } from "@/lib/notify";
 import { uniqueAttachmentName } from "../attachment-blob";
 import { fileToBase64 } from "./file-to-base64";
 
@@ -74,7 +74,7 @@ export async function uploadFilesTo(opts: {
 			done.push(path);
 		} catch (err) {
 			if (!(err instanceof LimitExceededError)) {
-				toast.error(t("Couldn't upload {name}", { name: file.name }));
+				notify.error(t("Couldn't upload {name}", { name: file.name }));
 			}
 		}
 	}

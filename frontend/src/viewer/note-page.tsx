@@ -10,12 +10,12 @@ import {
 	useState,
 } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
-import { toast } from "sonner";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
+import { notify } from "@/lib/notify";
 import { isInvalidId, isNotFound } from "../api/client";
 import type { Note } from "../api/queries";
 import {
@@ -587,7 +587,7 @@ export default function NotePage() {
 			chromeIsPlaceholder &&
 			(action === "rename" || action === "move" || action === "duplicate")
 		) {
-			toast.info(t("Still loading this note — try again in a moment"));
+			notify.info(t("Still loading this note — try again in a moment"));
 			return;
 		}
 		switch (action) {
@@ -618,14 +618,14 @@ export default function NotePage() {
 				// here too put a second, vaguer toast on top of the useful one.
 				duplicateNote.mutate(
 					{ src_path: note.path, new_path },
-					{ onSuccess: () => toast.success(t("Duplicated")) },
+					{ onSuccess: () => notify.success(t("Duplicated")) },
 				);
 				break;
 			}
 			case "copy-wikilink":
 				// Wikilinks resolve by filename in Obsidian, never by H1 title.
 				copyToClipboard(`[[${name || note.path}]]`).then((ok) =>
-					ok ? toast.success(t("Copied wikilink")) : toast.error(t("Copy failed")),
+					ok ? notify.success(t("Copied wikilink")) : notify.error(t("Copy failed")),
 				);
 				break;
 			case "add-property":

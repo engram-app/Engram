@@ -1,6 +1,5 @@
 import { Loader2 } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -12,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useT } from "@/i18n/locale-provider";
+import { notify } from "@/lib/notify";
 import { useSubmitFeedback } from "../api/queries";
 
 interface FeedbackDialogProps {
@@ -33,7 +33,7 @@ export function FeedbackDialog({ open, onOpenChange }: FeedbackDialogProps) {
 		} catch {
 			return;
 		}
-		toast.success(t("Thanks, we read every message."));
+		notify.success(t("Thanks, we read every message."));
 		setMessage("");
 		onOpenChange(false);
 	}

@@ -1,8 +1,8 @@
 import { useSession, useSessionList } from "@clerk/react";
 import type { SessionResource, SessionWithActivitiesResource } from "@clerk/shared/types";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
+import { notify } from "@/lib/notify";
 import { SettingsSectionCard } from "./section-card";
 
 function hasActivities(s: SessionResource): s is SessionResource & SessionWithActivitiesResource {
@@ -32,9 +32,9 @@ export function SessionsSection() {
 	async function revoke(s: SessionWithActivitiesResource) {
 		try {
 			await s.revoke();
-			toast.success(t("Session revoked"));
+			notify.success(t("Session revoked"));
 		} catch {
-			toast.error(t("Could not revoke"));
+			notify.error(t("Could not revoke"));
 		}
 	}
 

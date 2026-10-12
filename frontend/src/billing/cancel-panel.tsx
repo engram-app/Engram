@@ -1,6 +1,5 @@
 import { Loader2 } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,6 +8,7 @@ import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { Trans } from "@/i18n/trans";
 import { intlLocale } from "@/lib/intl-locale";
+import { notify } from "@/lib/notify";
 import { selectableRow } from "@/lib/ui-classes";
 import type { SubscriptionDetail } from "../api/queries";
 import { type BillingStatus, useCancelSubscription, useSubmitFeedback } from "../api/queries";
@@ -60,10 +60,10 @@ export default function CancelPanel({ detail, tier, onClose }: CancelPanelProps)
 			// files a reason. Fire-and-forget: a React Query mutation outlives
 			// the panel unmounting below.
 			submitFeedback.mutate({ kind: "cancel", reason, detail: text });
-			toast.success(t("Subscription scheduled to cancel."));
+			notify.success(t("Subscription scheduled to cancel."));
 			onClose();
 		} catch {
-			toast.error(t("Could not cancel subscription. Please try again."));
+			notify.error(t("Could not cancel subscription. Please try again."));
 		}
 	}
 

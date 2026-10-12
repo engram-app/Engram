@@ -1,10 +1,10 @@
 import { useClerk, useReverification, useUser } from "@clerk/react";
 import { isReverificationCancelledError } from "@clerk/react/errors";
 import { useState } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
+import { notify } from "@/lib/notify";
 import { ROUTES } from "@/routes";
 
 const CONFIRM = "delete my account";
@@ -27,7 +27,7 @@ export function DangerZoneSection() {
 			if (isReverificationCancelledError(e)) {
 				return;
 			}
-			toast.error(t("Could not delete account"));
+			notify.error(t("Could not delete account"));
 		}
 	}
 

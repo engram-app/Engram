@@ -1,10 +1,10 @@
 import { useReverification, useUser } from "@clerk/react";
 import { isReverificationCancelledError } from "@clerk/react/errors";
 import { useState } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
+import { notify } from "@/lib/notify";
 import { clerkErrorMessage } from "./clerk-errors";
 import { SettingsSectionCard } from "./section-card";
 
@@ -63,7 +63,7 @@ export function EmailSection() {
 		setPending(null);
 		setNewEmail("");
 		setCode("");
-		toast.success(t("Email updated"));
+		notify.success(t("Email updated"));
 	}
 
 	async function startChange() {
@@ -72,7 +72,7 @@ export function EmailSection() {
 			return;
 		}
 		if (target.toLowerCase() === currentEmail.toLowerCase()) {
-			toast.error(t("That's already your email"));
+			notify.error(t("That's already your email"));
 			return;
 		}
 		try {
@@ -91,7 +91,7 @@ export function EmailSection() {
 					id: existing.id,
 					attemptVerification: (p) => existing.attemptVerification(p),
 				});
-				toast.success(t("Verification code sent"));
+				notify.success(t("Verification code sent"));
 				return;
 			}
 
@@ -101,12 +101,12 @@ export function EmailSection() {
 				id: created.id,
 				attemptVerification: (p) => created.attemptVerification(p),
 			});
-			toast.success(t("Verification code sent"));
+			notify.success(t("Verification code sent"));
 		} catch (e) {
 			if (isReverificationCancelledError(e)) {
 				return;
 			}
-			toast.error(clerkErrorMessage(e, t("Could not update email")));
+			notify.error(clerkErrorMessage(e, t("Could not update email")));
 		}
 	}
 
@@ -118,7 +118,7 @@ export function EmailSection() {
 		try {
 			await pending.attemptVerification({ code });
 		} catch {
-			toast.error(t("Invalid code"));
+			notify.error(t("Invalid code"));
 			return;
 		}
 		// Code accepted; promotion is a separate step so its errors aren't
@@ -129,7 +129,7 @@ export function EmailSection() {
 			if (isReverificationCancelledError(e)) {
 				return;
 			}
-			toast.error(clerkErrorMessage(e, t("Could not update email")));
+			notify.error(clerkErrorMessage(e, t("Could not update email")));
 		}
 	}
 

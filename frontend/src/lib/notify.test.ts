@@ -10,16 +10,16 @@ vi.mock("sonner", () => ({
 describe("notify", () => {
 	beforeEach(() => vi.clearAllMocks());
 
-	it("forwards to sonner, options included", () => {
+	it("forwards exactly the arguments given, options included", () => {
 		const text = untranslated("Saved");
 		notify(text);
 		notify.error(text, { id: "x" });
 		notify.success(text);
 		notify.info(text);
-		expect(toast).toHaveBeenCalledWith(text, undefined);
+		expect(toast).toHaveBeenCalledWith(text);
 		expect(toast.error).toHaveBeenCalledWith(text, { id: "x" });
-		expect(toast.success).toHaveBeenCalledWith(text, undefined);
-		expect(toast.info).toHaveBeenCalledWith(text, undefined);
+		expect(toast.success).toHaveBeenCalledWith(text);
+		expect(toast.info).toHaveBeenCalledWith(text);
 	});
 
 	it("only takes translated text, so a raw string fails tsc", () => {

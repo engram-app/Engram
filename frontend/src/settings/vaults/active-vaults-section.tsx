@@ -1,7 +1,6 @@
 import { Pencil, Star, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Link, useLocation } from "react-router";
-import { toast } from "sonner";
 import { useBillingStatus, useUpdateVault, useVaults, type Vault } from "@/api/queries";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +8,7 @@ import { VaultCreateForm } from "@/components/vault-create-form";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { useT } from "@/i18n/locale-provider";
 import { displayVaultName } from "@/i18n/vault-name";
+import { notify } from "@/lib/notify";
 import { SettingsSectionCard } from "@/settings/account/section-card";
 import { settingsTo } from "../settings-hash";
 import { DeleteVaultDialog } from "./delete-vault-dialog";
@@ -26,7 +26,7 @@ function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 		if (next && next !== label) {
 			update.mutate(
 				{ id: vault.id, name: next },
-				{ onError: () => toast.error(t("Rename failed")) },
+				{ onError: () => notify.error(t("Rename failed")) },
 			);
 		}
 		setRenaming(false);
@@ -73,7 +73,7 @@ function VaultRow({ vault, onDelete }: { vault: Vault; onDelete: () => void }) {
 							onClick={() =>
 								update.mutate(
 									{ id: vault.id, is_default: true },
-									{ onError: () => toast.error(t("Could not set default")) },
+									{ onError: () => notify.error(t("Could not set default")) },
 								)
 							}
 						>

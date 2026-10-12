@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -15,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
+import { notify } from "@/lib/notify";
 import { useDeleteSelf } from "../../api/queries";
 import { useAuthAdapter } from "../../auth/use-auth-adapter";
 import { ROUTES } from "../../routes";
@@ -40,7 +40,7 @@ export function DangerZoneSectionLocal() {
 		setError(null);
 		try {
 			await deleter.mutateAsync({ password });
-			toast.success(t("Account deleted"));
+			notify.success(t("Account deleted"));
 			await logout();
 			navigate(ROUTES.SIGN_IN);
 		} catch (err) {

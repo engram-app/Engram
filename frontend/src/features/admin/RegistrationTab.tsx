@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { useStableT, useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import { untranslated } from "@/i18n/ui-text";
+import { notify } from "@/lib/notify";
 import { adminApi, type RegistrationMode } from "./api";
 
 const MODES: { value: RegistrationMode; label: string; hint: string }[] = [
@@ -35,8 +36,9 @@ export default function RegistrationTab() {
 			.getRegistration()
 			.then((r) => setMode(r.registration_mode))
 			.catch((e: unknown) => {
-				const message = e instanceof ApiError ? e.message : tLater(msg("Failed to load setting"));
-				toast.error(message);
+				const message =
+					e instanceof ApiError ? untranslated(e.message) : tLater(msg("Failed to load setting"));
+				notify.error(message);
 			});
 	}, [tLater]);
 
@@ -48,10 +50,10 @@ export default function RegistrationTab() {
 		try {
 			await adminApi.setRegistration(next);
 			setMode(next);
-			toast.success(t("Registration mode: {mode}", { mode: next }));
+			notify.success(t("Registration mode: {mode}", { mode: next }));
 		} catch (e) {
-			const message = e instanceof ApiError ? e.message : t("Save failed");
-			toast.error(message);
+			const message = e instanceof ApiError ? untranslated(e.message) : t("Save failed");
+			notify.error(message);
 		} finally {
 			setSaving(false);
 		}

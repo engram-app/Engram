@@ -7,26 +7,28 @@ import type { UIText } from "../i18n/ui-text";
 
 type Message = UIText | ReactElement;
 type Options = Omit<ExternalToast, "description"> & { description?: Message };
-type Notify = ((message: Message, options?: Options) => void) & {
-	error: (message: Message, options?: Options) => void;
-	success: (message: Message, options?: Options) => void;
-	info: (message: Message, options?: Options) => void;
+type Args = [message: Message, options?: Options];
+type Notify = ((...args: Args) => void) & {
+	error: (...args: Args) => void;
+	success: (...args: Args) => void;
+	info: (...args: Args) => void;
 };
 
-// Looks `toast` up on each call, so a test's vi.mock("sonner") still applies.
+// Looks `toast` up on each call, so a test's vi.mock("sonner") still applies, and
+// forwards exactly the arguments given, so `toast.error("x")` assertions still match.
 const notify: Notify = Object.assign(
-	(message: Message, options?: Options) => {
-		toast(message, options);
+	(...args: Args) => {
+		toast(...args);
 	},
 	{
-		error: (message: Message, options?: Options) => {
-			toast.error(message, options);
+		error: (...args: Args) => {
+			toast.error(...args);
 		},
-		success: (message: Message, options?: Options) => {
-			toast.success(message, options);
+		success: (...args: Args) => {
+			toast.success(...args);
 		},
-		info: (message: Message, options?: Options) => {
-			toast.info(message, options);
+		info: (...args: Args) => {
+			toast.info(...args);
 		},
 	},
 );

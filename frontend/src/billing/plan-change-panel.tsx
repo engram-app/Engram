@@ -1,12 +1,12 @@
 import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import type { Locale } from "@/i18n/locales";
 import { Trans } from "@/i18n/trans";
 import type { Translate } from "@/i18n/translate";
 import { intlLocale } from "@/lib/intl-locale";
+import { notify } from "@/lib/notify";
 import {
 	type BillingCadence,
 	type BillingStatus,
@@ -98,10 +98,10 @@ function PlanChangePicker({ billing, onClose }: { billing: BillingStatus; onClos
 		}
 		try {
 			await confirm.mutateAsync(targetPriceId);
-			toast.success(t("Plan change confirmed."));
+			notify.success(t("Plan change confirmed."));
 			onClose();
 		} catch {
-			toast.error(t("Could not change plan. Please try again."));
+			notify.error(t("Could not change plan. Please try again."));
 		}
 	}
 

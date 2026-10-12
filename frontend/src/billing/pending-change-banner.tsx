@@ -1,9 +1,9 @@
 import { Loader2 } from "lucide-react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { intlLocale } from "@/lib/intl-locale";
+import { notify } from "@/lib/notify";
 import { type SubscriptionDetail, useReverseCancel } from "../api/queries";
 
 const ACTION_LABELS: Record<string, string> = {
@@ -23,9 +23,9 @@ function ReverseCancelButton() {
 	async function onReverse() {
 		try {
 			await reverseCancel.mutateAsync();
-			toast.success(t("Cancellation reversed. Your subscription will keep renewing."));
+			notify.success(t("Cancellation reversed. Your subscription will keep renewing."));
 		} catch {
-			toast.error(t("Could not reverse the cancellation. Please try again."));
+			notify.error(t("Could not reverse the cancellation. Please try again."));
 		}
 	}
 
