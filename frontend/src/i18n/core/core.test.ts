@@ -164,6 +164,9 @@ describe("problems", () => {
 		expect(tr.problems("💬 Feedback", "💬 Feedback", "de")).toEqual([]);
 		expect(tr.problems("Engram: offline", "Engram: offline", "de")).toEqual([]);
 		expect(tr.problems("Vaults ({used} / {cap})", "Vaults ({used} / {cap})", "de")).toEqual([]);
+		// A product name is matched whole, so its word alone is still a miss.
+		expect(tr.problems("Obsidian Sync", "Obsidian Sync", "fr")).toEqual([]);
+		expect(tr.problems("Sync", "Sync", "fr")).toEqual(["untranslated"]);
 		// A loanword list is per language: German keeps Feedback, French does not.
 		expect(tr.problems("💬 Feedback", "💬 Feedback", "fr")).toEqual(["untranslated"]);
 		// A loanword may not replace a real translation.

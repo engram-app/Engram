@@ -1,4 +1,4 @@
-// i18n-core 00e133e9
+// i18n-core 90ce9156
 // The translategemma pipeline shared by the web app, the Obsidian plugin and the
 // marketing site: prompts, the checks an answer must pass, and catalog state.
 // Canonical copy: engram-app/Engram frontend/src/i18n/core/. The other repos
@@ -116,7 +116,10 @@ function numbers(s: string, source = false): string[] {
 // Lowercase, letters only, brands already removed ("💬 Feedback" is "feedback").
 const LOANWORDS: Record<string, readonly string[]> = {
 	// Names every language keeps, for profiles that do not list them as brands.
-	"*": ["docker compose", "docker compose up", "mcp", "reddit", "relay", "sponsors", "youtube"],
+	"*": [
+		...["chatgpt web", "docker compose", "docker compose up", "mcp", "obsidian sync"],
+		...["reddit", "relay", "sponsors", "youtube"],
+	],
 	de: [
 		"alternative",
 		"backend",
@@ -229,11 +232,13 @@ const LOANWORDS: Record<string, readonly string[]> = {
 	zh: ["bug", "markdown"],
 };
 
-// `text` is a source with its tokens and brands removed (see prose()).
-function isLoanword(code: string, text: string): boolean {
-	const phrase = (text.toLowerCase().match(/\p{L}+/gu) ?? []).join(" ");
+// True when any of `texts` (a source, and the source without its tokens and
+// brands) reads as one listed phrase: "Obsidian Sync" whole, "Feedback" alone.
+function isLoanword(code: string, ...texts: string[]): boolean {
 	const kept = [...(LOANWORDS["*"] ?? []), ...(LOANWORDS[code.split("-")[0] ?? code] ?? [])];
-	return kept.includes(phrase);
+	return texts.some((text) =>
+		kept.includes((text.toLowerCase().match(/\p{L}+/gu) ?? []).join(" ")),
+	);
 }
 
 function words(s: string): number {
@@ -430,7 +435,7 @@ function translator<T extends string>(profile: Profile<T>) {
 			untranslated:
 				out === src &&
 				!isBrandOnly(src) &&
-				(!isLoanword(code, prose(src)) || (old !== undefined && old !== src)),
+				(!isLoanword(code, src, prose(src)) || (old !== undefined && old !== src)),
 		};
 		return Object.keys(failed).filter((name) => failed[name]);
 	}
