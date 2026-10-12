@@ -22,6 +22,11 @@ function Wrapper({ children }: { children: ReactNode }) {
 }
 
 describe("FeedbackDialog", () => {
+	it("starts in the text box", () => {
+		render(<FeedbackDialog open onOpenChange={vi.fn()} />, { wrapper: Wrapper });
+		expect(screen.getByRole("textbox")).toHaveFocus();
+	});
+
 	it("keeps Send disabled until something is typed", () => {
 		render(<FeedbackDialog open onOpenChange={vi.fn()} />, { wrapper: Wrapper });
 		const send = screen.getByRole("button", { name: /send/iu });
