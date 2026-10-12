@@ -242,7 +242,7 @@ for (const code of targets) {
 	const merged = mergeCatalog(entries, old, fresh);
 	format(writeCatalog(code, merged));
 	// Written per locale, so a killed run resumes: an unstamped locale is redone.
-	state[code] = nextLocaleState(todo, fresh);
+	state[code] = nextLocaleState(todo, fresh, entries);
 	writeFileSync(stateFile, `${JSON.stringify(state, null, "\t")}\n`);
 	format(stateFile);
 	const failed = todo.filter((k) => !(k in fresh));

@@ -179,6 +179,17 @@ describe("todoKeys", () => {
 		]);
 	});
 
+	it("retranslates a plural whose English `one` form changed", () => {
+		const plural = [
+			{ key: "{count} files", plural: { one: "{count} file", other: "{count} files" } },
+		];
+		const catalog = { "{count} files": { one: "x", other: "y" } };
+		const seen = { ...current, one: { "{count} files": "{count} file" } };
+		expect(todoKeys(plural, catalog, false, seen)).toEqual([]);
+		const edited = { ...current, one: { "{count} files": "one file" } };
+		expect(todoKeys(plural, catalog, false, edited)).toEqual(["{count} files"]);
+	});
+
 	it("returns every key in --all mode", () => {
 		expect(todoKeys(entries, { A: "a" }, true, current)).toEqual(["A", "B", "C"]);
 	});
@@ -186,9 +197,21 @@ describe("todoKeys", () => {
 
 describe("nextLocaleState", () => {
 	it("stamps the current version and lists what is still untranslated, sorted", () => {
-		expect(nextLocaleState(["B", "A", "C"], { C: "c" })).toEqual({
+		expect(nextLocaleState(["B", "A", "C"], { C: "c" }, [])).toEqual({
 			version: TRANSLATOR_VERSION,
 			failed: ["A", "B"],
+			one: {},
+		});
+	});
+
+	it("records the English `one` form of every plural that did not fail", () => {
+		const entries = [
+			{ key: "{count} files", plural: { one: "{count} file", other: "{count} files" } },
+			{ key: "{count} notes", plural: { one: "{count} note", other: "{count} notes" } },
+			{ key: "Save" },
+		];
+		expect(nextLocaleState(["{count} notes"], {}, entries).one).toEqual({
+			"{count} files": "{count} file",
 		});
 	});
 });

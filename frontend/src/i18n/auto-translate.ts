@@ -238,11 +238,14 @@ function uniqueKeys(entries: readonly Entry[]): string[] {
 // older translator is redone on the next run, so a fix reaches old entries too.
 const TRANSLATOR_VERSION = 1;
 
-// Per locale, in `locale/state.json`: the translator that built the catalog and the
-// keys whose answers failed every check (they keep the old entry, or stay English).
+// Per locale, in `locale/state.json`: the translator that built the catalog, the
+// keys whose answers failed every check (they keep the old entry, or stay English),
+// and each plural's English `one` form. A plural's key is its `other` form, so an
+// edit to `one` alone would otherwise leave the key, and the old translation, as is.
 interface LocaleState {
 	version: number;
 	failed: string[];
+	one?: Record<string, string>;
 }
 
 function todoKeys(
@@ -253,11 +256,29 @@ function todoKeys(
 ): string[] {
 	const stale = all || !state || state.version < TRANSLATOR_VERSION;
 	const failed = new Set(state?.failed);
-	return uniqueKeys(entries).filter((k) => stale || !(k in catalog) || failed.has(k));
+	const oneChanged = new Set(
+		entries
+			.filter((e) => e.plural?.one !== undefined && state?.one?.[e.key] !== e.plural.one)
+			.map((e) => e.key),
+	);
+	return uniqueKeys(entries).filter(
+		(k) => stale || !(k in catalog) || failed.has(k) || oneChanged.has(k),
+	);
 }
 
-function nextLocaleState(todo: readonly string[], fresh: Catalog): LocaleState {
-	return { version: TRANSLATOR_VERSION, failed: todo.filter((k) => !(k in fresh)).sort() };
+function nextLocaleState(
+	todo: readonly string[],
+	fresh: Catalog,
+	entries: readonly Entry[],
+): LocaleState {
+	const failed = todo.filter((k) => !(k in fresh)).sort();
+	const one: Record<string, string> = {};
+	for (const { key, plural } of entries) {
+		if (plural?.one !== undefined && !failed.includes(key)) {
+			one[key] = plural.one;
+		}
+	}
+	return { version: TRANSLATOR_VERSION, failed, one };
 }
 
 // Source order, fresh over old; a key no longer in the source (an edited or
