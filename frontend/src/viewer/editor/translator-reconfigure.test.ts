@@ -88,5 +88,7 @@ describe("widgets follow a translator change in place", () => {
 		await vi.waitFor(() => expect(text()).toBe("Mermaid error: bad diagram"));
 		expect(switchToGerman()).toBe(true);
 		await vi.waitFor(() => expect(text()).toBe("de:Mermaid error: bad diagram"));
+		const detail = view.dom.querySelector('.cm-mermaid-error [lang="en"]');
+		expect(detail?.textContent).toBe("bad diagram");
 	});
 });

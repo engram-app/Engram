@@ -4,7 +4,7 @@ import type { MsgKey } from "@/i18n/ui-text";
 
 // Subscription and transaction statuses arrive as snake_case enum values. Known
 // ones get a translated lowercase label (CSS capitalizes it on screen); an
-// unknown status falls back to its raw value with the underscore opened up.
+// unknown status gets a translated generic label, never the raw wire value.
 const STATUS_LABELS: Record<string, MsgKey> = {
 	active: msg("active"),
 	trialing: msg("trialing"),
@@ -52,5 +52,5 @@ export function formatMoney(
 
 export function statusLabel(status: string, t: Translate): string {
 	const label = STATUS_LABELS[status];
-	return label ? t(label) : status.replace("_", " ");
+	return t(label ?? msg("Unknown"));
 }

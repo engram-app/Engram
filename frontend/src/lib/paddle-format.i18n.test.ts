@@ -19,7 +19,6 @@ describe("paddle display helpers take t", () => {
 	it("formats billing cycles singular and plural", () => {
 		expect(formatBillingCycle({ frequency: 1, interval: "month" }, t, tn)).toBe("month");
 		expect(formatBillingCycle({ frequency: 3, interval: "month" }, t, tn)).toBe("3 months");
-		expect(formatBillingCycle({ frequency: 2, interval: "fortnight" }, t, tn)).toBe("2 fortnights");
 		expect(formatBillingCycle(null, t, tn)).toBeUndefined();
 	});
 
@@ -27,7 +26,23 @@ describe("paddle display helpers take t", () => {
 		const shout: Translate = (en) => untranslated(en.toUpperCase());
 		expect(formatIntervalLabel("year", shout, "adjective")).toBe("ANNUAL");
 		expect(formatProrationMode("do_not_bill", shout)).toBe("NO CHARGE");
-		expect(formatProrationMode("mystery", shout)).toBe("mystery");
+	});
+
+	// An unknown wire value must never reach the screen untranslated.
+	it("shows a translated generic label for unknown enum values", () => {
+		const shout: Translate = (en) => untranslated(en.toUpperCase());
+		const shoutN: Tn = (en) => untranslated(en.other.toUpperCase());
+		expect(formatProrationMode("mystery", shout)).toBe("UNKNOWN");
+		expect(formatIntervalLabel("fortnight", shout)).toBe("UNKNOWN");
+		expect(formatIntervalLabel("fortnight", shout, "adjective")).toBe("UNKNOWN");
+		expect(formatBillingCycle({ frequency: 1, interval: "fortnight" }, shout, shoutN)).toBe(
+			"UNKNOWN",
+		);
+		expect(formatBillingCycle({ frequency: 2, interval: "fortnight" }, shout, shoutN)).toBe(
+			"UNKNOWN",
+		);
+		expect(getPaymentMethodDisplay(shout, "carrier_pigeon")).toBe("PAYMENT METHOD");
+		expect(getPaymentMethodDisplay(shout, "card", "space_card")).toBe("CARD");
 	});
 
 	it("keeps brand names untranslated and translates generic labels", () => {

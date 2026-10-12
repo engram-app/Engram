@@ -64,8 +64,9 @@ const STATUS_CONFIG: Record<
 function StatusBadge({ status }: { status: SubscriptionStatus }) {
 	const { t } = useT();
 	const known = STATUS_CONFIG[status];
+	// An unknown status gets a translated generic label, never the raw wire value.
 	const config = known ?? {
-		label: status.replace(/_/gu, " ").replace(/\b\w/gu, (c) => c.toUpperCase()),
+		label: msg("Unknown"),
 		icon: AlertCircle,
 		className: "bg-muted text-muted-foreground border-border",
 	};
@@ -73,7 +74,7 @@ function StatusBadge({ status }: { status: SubscriptionStatus }) {
 	return (
 		<Badge variant="outline" className={cn("gap-1 font-medium", config.className)}>
 			<Icon className="size-3" />
-			{known ? t(known.label) : config.label}
+			{t(config.label)}
 		</Badge>
 	);
 }

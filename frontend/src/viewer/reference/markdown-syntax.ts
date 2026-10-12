@@ -655,12 +655,12 @@ const ENTRY_DEFS: readonly EntryDef[] = [
 const SYNTAX_ENTRIES: readonly SyntaxEntry[] = ENTRY_DEFS.map(build);
 
 /** What Insert drops at the caret, in the reader's language. */
-export function entrySyntax(entry: SyntaxEntry, t: Translate = englishT): string {
+export function entrySyntax(entry: SyntaxEntry, t: Translate): string {
 	return resolveSample(entry.sample.syntax, t);
 }
 
 /** What the preview renders: the worked example if there is one, else the template. */
-export function previewSource(entry: SyntaxEntry, t: Translate = englishT): string {
+export function previewSource(entry: SyntaxEntry, t: Translate): string {
 	return resolveSample(entry.sample.demo ?? entry.sample.syntax, t);
 }
 
@@ -677,7 +677,7 @@ export function entryLabel(entry: SyntaxEntry, t: Translate): UIText {
 export function filterSyntax(
 	query: string,
 	// Also match the words the user is reading, not only the English source.
-	t: Translate = englishT,
+	t: Translate,
 ): readonly SyntaxEntry[] {
 	const terms = query.toLowerCase().split(/\s+/u).filter(Boolean);
 	if (terms.length === 0) {

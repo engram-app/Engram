@@ -4,6 +4,7 @@ import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
+import { englishT } from "@/i18n/translate";
 import { buildEditorState, decorationsCompartment, decorationsFor } from "./note-editor";
 
 const resolveWikiLink = (n: string) => `/w/wiki/${n}`;
@@ -30,6 +31,7 @@ describe("buildEditorState", () => {
 			openWikiLink,
 			wikiCompletionPaths,
 			openMarkdownLink,
+			englishT,
 		);
 
 		expect(state.doc.toString()).toBe("# Seeded heading\n\nbody text");
@@ -54,6 +56,7 @@ describe("buildEditorState", () => {
 				openWikiLink,
 				wikiCompletionPaths,
 				openMarkdownLink,
+				englishT,
 			),
 		});
 		try {
@@ -77,6 +80,7 @@ describe("buildEditorState", () => {
 			openWikiLink,
 			wikiCompletionPaths,
 			openMarkdownLink,
+			englishT,
 		);
 
 		expect(state.doc.toString()).toBe("");
@@ -98,6 +102,7 @@ describe("buildEditorState", () => {
 			openWikiLink,
 			wikiCompletionPaths,
 			openMarkdownLink,
+			englishT,
 		);
 
 		expect(state.doc.toString()).toBe("first second");
@@ -118,6 +123,7 @@ describe("buildEditorState", () => {
 			openWikiLink,
 			wikiCompletionPaths,
 			openMarkdownLink,
+			englishT,
 		);
 
 		// historyField is the StateField that @codemirror/commands history() adds.
@@ -142,6 +148,7 @@ describe("buildEditorState", () => {
 			openWikiLink,
 			wikiCompletionPaths,
 			openMarkdownLink,
+			englishT,
 		);
 		const raw = buildEditorState(
 			ytext,
@@ -152,6 +159,7 @@ describe("buildEditorState", () => {
 			openWikiLink,
 			wikiCompletionPaths,
 			openMarkdownLink,
+			englishT,
 		);
 
 		// Both seed identical, unaltered doc bytes (view-only decorations).
@@ -195,6 +203,7 @@ describe("CRDT undo behaviour (EditorView + yCollab)", () => {
 				openWikiLink,
 				wikiCompletionPaths,
 				openMarkdownLink,
+				englishT,
 			),
 			parent,
 		});
@@ -239,6 +248,7 @@ describe("CRDT undo behaviour (EditorView + yCollab)", () => {
 				openWikiLink,
 				wikiCompletionPaths,
 				openMarkdownLink,
+				englishT,
 			),
 			parent,
 		});
@@ -315,6 +325,7 @@ describe("mode switch via decorationsCompartment.reconfigure (yCollab must survi
 				openWikiLink,
 				wikiCompletionPaths,
 				openMarkdownLink,
+				englishT,
 			),
 			parent,
 		});
