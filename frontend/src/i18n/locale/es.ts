@@ -1452,7 +1452,7 @@ export default {
 	"New subfolder": "Nueva subcarpeta",
 	Edit: "Editar",
 	Raw: "Sin formato",
-	Reading: "Leyendo",
+	Reading: "Lectura",
 	"Move {count} items to…": {
 		one: "Mover {count} elemento a…",
 		many: "Mover {count} elementos a…",

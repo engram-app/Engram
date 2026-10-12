@@ -562,7 +562,7 @@ export default {
 	"Switched to another tool": "Перешёл на другой инструмент",
 	"Not using it enough": "Не использую его достаточно часто",
 	Bug: "Ошибка",
-	Idea: "Предложение",
+	Idea: "Идея",
 	Confusing: "Непонятно",
 	"Love it": "Мне это нравится",
 	"Tell us more": "Расскажите нам подробнее",

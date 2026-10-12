@@ -44,6 +44,11 @@
 			"Settings": "Einstellungen",
 			"Search": "Suchen",
 			"Manage your profile, password, and account.": "Verwalte dein Profil, dein Passwort und dein Konto."
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"es": {
@@ -91,6 +96,11 @@
 			"Settings": "Ajustes",
 			"Search": "Buscar",
 			"Manage your profile, password, and account.": "Gestiona tu perfil, tu contraseña y tu cuenta."
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"fr": {
@@ -138,6 +148,11 @@
 			"Settings": "Paramètres",
 			"Search": "Rechercher",
 			"Manage your profile, password, and account.": "Gère ton profil, ton mot de passe et ton compte."
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"it": {
@@ -185,6 +200,11 @@
 			"Settings": "Impostazioni",
 			"Search": "Cerca",
 			"Manage your profile, password, and account.": "Gestisci il tuo profilo, la password e l'account."
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"ja": {
@@ -232,6 +252,11 @@
 			"Settings": "設定",
 			"Search": "検索",
 			"Manage your profile, password, and account.": "プロフィール、パスワード、アカウントを管理します。"
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"ko": {
@@ -279,6 +304,11 @@
 			"Settings": "설정",
 			"Search": "검색",
 			"Manage your profile, password, and account.": "프로필, 비밀번호, 계정을 관리하세요."
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"ms": {
@@ -326,6 +356,11 @@
 			"Settings": "Tetapan",
 			"Search": "Carian",
 			"Manage your profile, password, and account.": "Urus profil, kata laluan dan akaun anda."
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"pt-BR": {
@@ -373,6 +408,11 @@
 			"Settings": "Configurações",
 			"Search": "Buscar",
 			"Manage your profile, password, and account.": "Gerencie seu perfil, sua senha e sua conta."
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"ru": {
@@ -420,6 +460,11 @@
 			"Settings": "Настройки",
 			"Search": "Поиск",
 			"Manage your profile, password, and account.": "Управляйте профилем, паролем и учётной записью."
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"vi": {
@@ -467,6 +512,11 @@
 			"Settings": "Cài đặt",
 			"Search": "Tìm kiếm",
 			"Manage your profile, password, and account.": "Quản lý hồ sơ mật khẩu và tài khoản của bạn."
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"zh-CN": {
@@ -514,6 +564,11 @@
 			"Settings": "设置",
 			"Search": "搜索",
 			"Manage your profile, password, and account.": "管理你的资料、密码和账号。"
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"zh-TW": {
@@ -561,6 +616,11 @@
 			"Settings": "設定",
 			"Search": "搜尋",
 			"Manage your profile, password, and account.": "管理你的個人資料、密碼與帳號。"
+		},
+		"descriptions": {
+			"Idea": "Feedback category: suggest a feature.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	}
 }

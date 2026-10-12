@@ -148,6 +148,10 @@ describe("repo catalogs", () => {
 		const used = usedKeys(sources);
 		expect(profile.glossary.filter((k) => !used.has(k))).toEqual([]);
 	});
+	it("describes only real keys", () => {
+		const used = usedKeys(sources);
+		expect(Object.keys(profile.descriptions ?? {}).filter((k) => !used.has(k))).toEqual([]);
+	});
 	it("pins only overrides that are real keys", () => {
 		const used = usedKeys(sources);
 		const pins = Object.values(profile.pinned ?? {}).flat();

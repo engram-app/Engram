@@ -181,6 +181,11 @@ describe("problems", () => {
 		).toEqual(["untranslated"]);
 	});
 
+	it("rejects an answer that copies the prompt's arrow format", () => {
+		expect(tr.problems("Quote", 'Quote" -> "Cita', "es")).toContain("stray");
+		expect(tr.problems("Settings -> Sync", "Einstellungen -> Sync", "de")).toEqual([]);
+	});
+
 	it("keeps every number but a lone 1, which a language may spell out", () => {
 		// The model once put a placeholder where the plural sample "2" was.
 		expect(tr.problems("2 of {indexed} notes", "{indexed} 件のうち {indexed} 件", "ja")).toEqual([

@@ -993,7 +993,7 @@ export default {
 		"Ainda abrindo “{target}” — exibindo “{name}” até que isso aconteça.",
 	"Still opening that note — showing “{name}” until it does.":
 		"Ainda abrindo essa nota — exibindo “{name}” até que isso aconteça.",
-	"Reading view": "Visualização de leitura",
+	"Reading view": "Modo de leitura",
 	"Loading editor…": "Carregando o editor...",
 	"Table of contents": "Sumário",
 	"On this page": "Nesta página",

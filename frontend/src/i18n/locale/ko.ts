@@ -1377,7 +1377,7 @@ export default {
 	"New subfolder": "새 하위 폴더 생성",
 	Edit: "편집",
 	Raw: "원본",
-	Reading: "읽기",
+	Reading: "보기 모드",
 	"Move {count} items to…": { other: "{count}개의 항목을 이동합니다…" },
 	"Copy {count} wikilinks": { other: "위키링크 {count}개 복사" },
 	"Delete {count} items": { other: "{count}개 항목 삭제" },

@@ -480,7 +480,7 @@ export default {
 	"Switched to another tool": "切换到其他工具",
 	"Not using it enough": "使用频率不足",
 	Bug: "错误",
-	Idea: "建议",
+	Idea: "想法",
 	Confusing: "困惑",
 	"Love it": "非常喜欢",
 	"Tell us more": "详细说明",
@@ -906,7 +906,7 @@ export default {
 		"仍在打开“{target}” — 显示“{name}”直到打开完成。",
 	"Still opening that note — showing “{name}” until it does.":
 		"仍在打开该笔记 — 显示“{name}”直到打开完成。",
-	"Reading view": "阅读视图",
+	"Reading view": "阅读模式",
 	"Loading editor…": "加载编辑器...",
 	"Table of contents": "目录",
 	"On this page": "本页面",

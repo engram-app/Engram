@@ -197,6 +197,31 @@ describe("run", () => {
 		expect(fp).toMatch(/^[0-9a-f]{8}$/u);
 	});
 
+	it("sends a description with its string alone, and redoes the string when it changes", async () => {
+		const ollama = fakeOllama();
+		const h = harness({ de: { Save: "Sichern", Vault: "Tresor" } }, {}, { fetch: ollama.fetch });
+		const entries = [{ key: "Vault" }, { key: "Save" }, { key: "Open the vault" }];
+		await run(opts(entries, h.io));
+		const described = {
+			...profile,
+			descriptions: { Save: "Button that writes the note to disk." },
+		};
+		const before = ollama.prompts.length;
+		await run(opts(entries, h.io, { profile: described }));
+		const sent = ollama.prompts.slice(before);
+		expect(sent).toHaveLength(1);
+		expect(sent[0]).toContain("Button that writes the note to disk.");
+		expect(sent[0]?.endsWith("\n\n\nSave")).toBe(true);
+		expect(h.files.de?.Save).toBe("Speichern");
+		// Unchanged description: nothing to redo, and adding one did not move the fingerprint.
+		const again = ollama.prompts.length;
+		await run(opts(entries, h.io, { profile: described }));
+		expect(ollama.prompts.length).toBe(again);
+		expect(translator(described).fingerprintSource("de")).toBe(
+			translator(profile).fingerprintSource("de"),
+		);
+	});
+
 	it("reuses the open bot PR's work only for keys this run would translate", async () => {
 		const ollama = fakeOllama();
 		const h = harness({ de: { Save: "Speichern" } }, {}, { fetch: ollama.fetch });

@@ -1,4 +1,4 @@
-// i18n-core c3b12588
+// i18n-core c0dc8502
 // The translategemma pipeline shared by the web app, the Obsidian plugin and the
 // marketing site: prompts, the checks an answer must pass, and catalog state.
 // Canonical copy: engram-app/Engram frontend/src/i18n/core/. The other repos
@@ -37,6 +37,11 @@ interface Profile<T extends string> {
 	// Obsidian's own translation. Never sent to the model, and not part of the
 	// fingerprint, so adding one redoes nothing.
 	pinned?: Partial<Record<T, readonly string[]>>;
+	// A note for the translator on what a string means where it shows, keyed by
+	// the English: FormatJS's message `description`, gettext's translator comment.
+	// For short labels whose sense the words alone do not fix ("Reading" as a view
+	// mode, not loading). Sent with that string alone; a changed one redoes it.
+	descriptions?: Readonly<Record<string, string>>;
 }
 
 // Per locale, in `locale/state.json`.
@@ -52,6 +57,8 @@ interface LocaleState {
 	one?: Record<string, string>;
 	// The glossary the catalog was built with: a changed term redoes its sentences.
 	glossary?: Record<string, string>;
+	// The descriptions it was built with: a changed one redoes its string.
+	descriptions?: Record<string, string>;
 }
 
 const NEWLINE = "⏎";
@@ -302,6 +309,7 @@ function exactOne(code: string): boolean {
 function translator<T extends string>(profile: Profile<T>) {
 	const { specs, brands, glossary } = profile;
 	const pinned: Partial<Record<T, readonly string[]>> = profile.pinned ?? {};
+	const descriptions = profile.descriptions ?? {};
 	// Longest first, so "Engram Vault Sync" wins over "Engram" in the alternation.
 	// The `pre` group stands in for a lookbehind: the character before the brand.
 	const BRAND_WORD = `(?<pre>^|[^A-Za-z0-9])(?<brand>${[...brands]
@@ -339,6 +347,7 @@ function translator<T extends string>(profile: Profile<T>) {
 		terms: Record<string, string>,
 		text: string,
 		multi: boolean,
+		description?: string,
 	): string {
 		const { name, tone } = specs[code];
 		// Without the emoji: "🔄 Sync Center = 🔄 ..." made the model paste 🔄 into every
@@ -368,6 +377,7 @@ function translator<T extends string>(profile: Profile<T>) {
 				: "",
 			`Rules: keep each string as short as its source. ${tokenRules}Do not add punctuation a source lacks. Keep brand names (${brands.join(", ")}) unchanged. ${tone}`,
 			pinned ? `Use this established terminology and tone:\n${pinned}` : "",
+			description ? `Context for this string (do not translate it): ${description}` : "",
 			`Produce only the ${name} translation, without any additional explanations or commentary. Please translate the following English text into ${name}:\n\n\n${text}`,
 		]
 			.filter(Boolean)
@@ -424,7 +434,10 @@ function translator<T extends string>(profile: Profile<T>) {
 			placeholders: placeholders(out).join() !== placeholders(src).join(),
 			tags: tags(out) !== tags(src),
 			// A numbered token left after unmasking was invented by the model.
-			stray: NUMBERED.test(out) && !NUMBERED.test(src),
+			stray:
+				(NUMBERED.test(out) && !NUMBERED.test(src)) ||
+				// Or it copied a prompt's `English -> answer` format.
+				(/->|=>/u.test(out) && !/->|=>/u.test(src)),
 			// A plural sample ("2 of {indexed} notes") came back as "{indexed} of {indexed}".
 			numbers: !numbers(src, true).every((n) => numbers(out).includes(n)),
 			newlines: out.split("\n").length !== src.split("\n").length,
@@ -586,6 +599,7 @@ function translator<T extends string>(profile: Profile<T>) {
 
 	return {
 		buildPrompt,
+		descriptions,
 		pinned,
 		catalogProblems,
 		cleanOutput,
@@ -693,6 +707,7 @@ interface StoredState {
 	failed?: string[] | Record<string, string>;
 	one?: Record<string, string>;
 	glossary?: Record<string, string>;
+	descriptions?: Record<string, string>;
 }
 
 function upgradeState(
@@ -712,7 +727,13 @@ function upgradeState(
 	const stamp =
 		s.translator ??
 		(legacyVersion !== undefined && s.version === legacyVersion ? fingerprint : "legacy");
-	return { translator: stamp, failed, one: s.one, glossary: s.glossary };
+	return {
+		translator: stamp,
+		failed,
+		one: s.one,
+		glossary: s.glossary,
+		descriptions: s.descriptions,
+	};
 }
 
 // Plurals whose English `one` form changed since the catalog was built.
@@ -734,6 +755,17 @@ function todoKeys(
 	const keys = [...new Set(entries.map((e) => e.key))];
 	const oneChanged = new Set(oneChangedKeys(entries, state));
 	return keys.filter((k) => stale || !(k in catalog) || k in failed || oneChanged.has(k));
+}
+
+// Strings whose description was added, edited or removed since the catalog was built.
+function descriptionChangedKeys(
+	entries: readonly Entry[],
+	state: LocaleState | undefined,
+	descriptions: Readonly<Record<string, string>>,
+): string[] {
+	return entries
+		.filter((e) => (state?.descriptions ?? {})[e.key] !== descriptions[e.key])
+		.map((e) => e.key);
 }
 
 // Sentences that use a glossary term whose translation changed since the catalog
@@ -767,6 +799,7 @@ function nextLocaleState(
 	fingerprint: string,
 	glossary: Record<string, string>,
 	today: string,
+	descriptions: Readonly<Record<string, string>> = {},
 ): LocaleState {
 	const since: Record<string, string> = {};
 	for (const k of [...failed].sort()) {
@@ -778,7 +811,16 @@ function nextLocaleState(
 			one[key] = plural.one;
 		}
 	}
-	return { translator: fingerprint, failed: since, one, glossary };
+	const described: Record<string, string> = {};
+	for (const { key } of entries) {
+		const note = descriptions[key];
+		if (note !== undefined && !(key in since)) {
+			described[key] = note;
+		}
+	}
+	const state: LocaleState = { translator: fingerprint, failed: since, one, glossary };
+	// Omitted when empty, so a repo without descriptions keeps its state file as is.
+	return Object.keys(described).length > 0 ? { ...state, descriptions: described } : state;
 }
 
 // Failed keys older than `days`: the model cannot translate them, so a person must
@@ -840,6 +882,7 @@ export type { Catalog, Entry, LocaleState, PluralForms, Profile, Spec, StoredSta
 export {
 	batchText,
 	coreHeaderOk,
+	descriptionChangedKeys,
 	exactOne,
 	formSource,
 	fromSample,

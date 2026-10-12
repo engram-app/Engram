@@ -82,12 +82,23 @@ const PINNED: Partial<Record<Target, readonly string[]>> = {
 	de: ["Reading view"],
 	it: ["Outline", "Strikethrough"],
 	ja: ["Dark", "Light", "Outline", "Reading", "Reading view"],
-	ms: ["Outline", "Reading", "Reading view", "Strikethrough"],
+	ms: ["Idea", "Outline", "Reading", "Reading view", "Strikethrough"],
 	"pt-BR": ["Reading"],
 	ru: ["Outline"],
 	vi: ["Light", "Outline", "Reading", "Reading view", "Strikethrough"],
 	"zh-CN": ["Dark", "Outline", "Reading"],
-	"zh-TW": ["Math"],
+	"zh-TW": ["Math", "Redo edit"],
+};
+
+// What a short label means where it shows, for the translator (see Profile).
+// Add one when a label's words allow two senses; editing one redoes it. Check
+// the result: with translategemma a note fixes some labels and breaks others
+// (on 2026-10-12 it turned ms "Light" into "lightweight"), so keep only notes
+// whose output you reviewed.
+const DESCRIPTIONS: Readonly<Record<string, string>> = {
+	Reading: "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view.",
+	"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+	Idea: "Feedback category: suggest a feature.",
 };
 
 // Product and plan names: never translated. Plan names match invoices and Paddle
@@ -114,6 +125,7 @@ const profile: Profile<Target> = {
 	brands: BRANDS,
 	glossary: GLOSSARY_KEYS,
 	pinned: PINNED,
+	descriptions: DESCRIPTIONS,
 };
 
 const tr = translator(profile);

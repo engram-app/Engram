@@ -992,7 +992,7 @@ export default {
 		"Ancora in fase di apertura di “{target}” — mostra “{name}” fino a quando non lo fa.",
 	"Still opening that note — showing “{name}” until it does.":
 		"Ancora in fase di apertura di quella nota — mostra “{name}” fino a quando non lo fa.",
-	"Reading view": "Visualizzazione lettura",
+	"Reading view": "Modalità lettura",
 	"Loading editor…": "Caricamento editor...",
 	"Table of contents": "Indice",
 	"On this page": "In questa pagina",
