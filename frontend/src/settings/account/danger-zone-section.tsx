@@ -76,6 +76,7 @@ export function DangerZoneSection() {
 
 	return (
 		<SettingsSectionCard
+			destructive
 			title={t("Danger zone")}
 			description={t(
 				"Permanently delete your account and all associated data. This cannot be undone.",
