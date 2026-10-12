@@ -7,9 +7,11 @@ import {
 	isValid,
 	maskPlaceholders,
 	mergeCatalog,
+	nextLocaleState,
 	parseBatch,
 	pluralSamples,
 	problems,
+	TRANSLATOR_VERSION,
 	todoKeys,
 	unmaskPlaceholders,
 } from "./auto-translate";
@@ -148,14 +150,46 @@ describe("pluralSamples / fromSample", () => {
 });
 
 describe("todoKeys", () => {
-	const entries = [{ key: "A" }, { key: "B" }, { key: "A" }];
+	const entries = [{ key: "A" }, { key: "B" }, { key: "C" }, { key: "A" }];
+	const current = { version: TRANSLATOR_VERSION, failed: [] };
 
 	it("returns only keys the catalog lacks, deduplicated", () => {
-		expect(todoKeys(entries, { A: "a" }, false)).toEqual(["B"]);
+		expect(todoKeys(entries, { A: "a", C: "c" }, false, current)).toEqual(["B"]);
+	});
+
+	it("retries keys that failed last run", () => {
+		expect(
+			todoKeys(entries, { A: "a", B: "b", C: "c" }, false, { ...current, failed: ["C"] }),
+		).toEqual(["C"]);
+	});
+
+	it("ignores a failed key the source no longer uses", () => {
+		expect(
+			todoKeys(entries, { A: "a", B: "b", C: "c" }, false, { ...current, failed: ["Gone"] }),
+		).toEqual([]);
+	});
+
+	it("returns every key when the catalog was built by an older translator", () => {
+		const stale = { version: TRANSLATOR_VERSION - 1, failed: [] };
+		expect(todoKeys(entries, { A: "a", B: "b", C: "c" }, false, stale)).toEqual(["A", "B", "C"]);
+		expect(todoKeys(entries, { A: "a", B: "b", C: "c" }, false, undefined)).toEqual([
+			"A",
+			"B",
+			"C",
+		]);
 	});
 
 	it("returns every key in --all mode", () => {
-		expect(todoKeys(entries, { A: "a" }, true)).toEqual(["A", "B"]);
+		expect(todoKeys(entries, { A: "a" }, true, current)).toEqual(["A", "B", "C"]);
+	});
+});
+
+describe("nextLocaleState", () => {
+	it("stamps the current version and lists what is still untranslated, sorted", () => {
+		expect(nextLocaleState(["B", "A", "C"], { C: "c" })).toEqual({
+			version: TRANSLATOR_VERSION,
+			failed: ["A", "B"],
+		});
 	});
 });
 

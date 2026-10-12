@@ -16,8 +16,10 @@ import {
 	fromSample,
 	GLOSSARY_KEYS,
 	isValid,
+	type LocaleState,
 	maskPlaceholders,
 	mergeCatalog,
+	nextLocaleState,
 	parseBatch,
 	pluralSamples,
 	type Target,
@@ -205,11 +207,15 @@ function isPlural(entry: Entry | undefined): boolean {
 }
 
 const byKey = new Map(entries.map((e) => [e.key, e]));
-const written: string[] = [];
+const stateFile = join(localeDir, "state.json");
+const state: Partial<Record<Target, LocaleState>> = existsSync(stateFile)
+	? JSON.parse(readFileSync(stateFile, "utf8"))
+	: {};
+const written: string[] = [stateFile];
 for (const code of targets) {
 	const old = await loadCatalog(code);
 	const fresh: Catalog = {};
-	const todo = todoKeys(entries, old, all);
+	const todo = todoKeys(entries, old, all, state[code]);
 	const glossary = await glossaryFor(code, old, fresh);
 	const strings = todo.filter((k) => !(isPlural(byKey.get(k)) || k in fresh));
 	const plurals = todo.filter((k) => isPlural(byKey.get(k)));
@@ -223,6 +229,9 @@ for (const code of targets) {
 	await pool(code, tasks);
 	const merged = mergeCatalog(entries, old, fresh);
 	written.push(writeCatalog(code, merged));
+	// Written per locale, so a killed run resumes: an unstamped locale is redone.
+	state[code] = nextLocaleState(todo, fresh);
+	writeFileSync(stateFile, `${JSON.stringify(state, null, "\t")}\n`);
 	const failed = todo.filter((k) => !(k in fresh));
 	const dropped = Object.keys(old).filter((k) => !(k in merged));
 	console.log(
@@ -230,7 +239,7 @@ for (const code of targets) {
 	);
 }
 
-if (written.length > 0) {
+if (targets.length > 0) {
 	// `bun run`, not the raw bin: its node shebang fails on runners without node.
 	const fmt = spawnSync(process.execPath, ["run", "biome", "format", "--write", ...written], {
 		cwd: join(import.meta.dir, ".."),

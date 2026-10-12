@@ -17,6 +17,10 @@ on:
       - "frontend/src/**"
       # The bot's own merges touch only catalogs; nothing new to translate.
       - "!frontend/src/i18n/locale/**"
+  # Nightly: resumes a full redo (TRANSLATOR_VERSION bump) that hit the job
+  # timeout, and retries failed keys. With nothing stale it is ~1 min of install.
+  schedule:
+    - cron: "17 9 * * *"
   workflow_dispatch:
     inputs:
       all:
@@ -105,7 +109,9 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           branch: bot/i18n-translate
           delete-branch: true
-          add-paths: frontend/src/i18n/locale/*.ts
+          add-paths: |
+            frontend/src/i18n/locale/*.ts
+            frontend/src/i18n/locale/state.json
           # main requires verified signatures; this routes the commit through
           # createCommitOnBranch, which GitHub signs for the App.
           sign-commits: true

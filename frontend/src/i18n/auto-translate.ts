@@ -234,8 +234,30 @@ function uniqueKeys(entries: readonly Entry[]): string[] {
 	return [...new Set(entries.map((e) => e.key))];
 }
 
-function todoKeys(entries: readonly Entry[], catalog: Catalog, all: boolean): string[] {
-	return uniqueKeys(entries).filter((k) => all || !(k in catalog));
+// Bump when the prompt, a check or the model changes: every catalog built by an
+// older translator is redone on the next run, so a fix reaches old entries too.
+const TRANSLATOR_VERSION = 1;
+
+// Per locale, in `locale/state.json`: the translator that built the catalog and the
+// keys whose answers failed every check (they keep the old entry, or stay English).
+interface LocaleState {
+	version: number;
+	failed: string[];
+}
+
+function todoKeys(
+	entries: readonly Entry[],
+	catalog: Catalog,
+	all: boolean,
+	state: LocaleState | undefined,
+): string[] {
+	const stale = all || !state || state.version < TRANSLATOR_VERSION;
+	const failed = new Set(state?.failed);
+	return uniqueKeys(entries).filter((k) => stale || !(k in catalog) || failed.has(k));
+}
+
+function nextLocaleState(todo: readonly string[], fresh: Catalog): LocaleState {
+	return { version: TRANSLATOR_VERSION, failed: todo.filter((k) => !(k in fresh)).sort() };
 }
 
 // Source order, fresh over old; a key no longer in the source (an edited or
@@ -251,7 +273,7 @@ function mergeCatalog(entries: readonly Entry[], old: Catalog, fresh: Catalog): 
 	return merged;
 }
 
-export type { Target };
+export type { LocaleState, Target };
 export {
 	batchText,
 	buildPrompt,
@@ -261,10 +283,12 @@ export {
 	isValid,
 	maskPlaceholders,
 	mergeCatalog,
+	nextLocaleState,
 	parseBatch,
 	pluralSamples,
 	problems,
 	SPECS,
+	TRANSLATOR_VERSION,
 	todoKeys,
 	unmaskPlaceholders,
 };
