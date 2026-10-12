@@ -5,7 +5,8 @@
 //   bun scripts/i18n-translate.ts                 every locale, missing keys only
 //   bun scripts/i18n-translate.ts --locale vi,ms  only these locales
 //   bun scripts/i18n-translate.ts --all           retranslate every key (hours; one-off)
-// Env: I18N_OLLAMA_URL (default http://localhost:11434), I18N_MODEL, I18N_CONCURRENCY.
+// Env: I18N_OLLAMA_URL (default http://localhost:11434), I18N_MODEL, I18N_CONCURRENCY,
+// I18N_REQUEST_TIMEOUT_MS.
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -34,7 +35,10 @@ import type { Catalog, PluralForms } from "../src/i18n/translate";
 
 const OLLAMA = process.env.I18N_OLLAMA_URL ?? "http://localhost:11434";
 const MODEL = process.env.I18N_MODEL ?? "translategemma:12b";
-const CONCURRENCY = Number(process.env.I18N_CONCURRENCY ?? 4);
+// Ollama queues requests, and a queued request's timeout runs while it waits, so
+// more in flight than the server works on at once only adds timeouts. 2 measured
+// within 1.4x of 4 on an idle FastRaid and survives a busy one.
+const CONCURRENCY = Number(process.env.I18N_CONCURRENCY ?? 2);
 const BATCH = 12;
 const RETRY_TEMPS = [0, 0.3, 0.6];
 
@@ -56,7 +60,7 @@ const entries = usedEntries(sources);
 const pluralOne = new Map(entries.filter((e) => e.plural).map((e) => [e.key, e.plural?.one]));
 
 const RETRY_DELAYS = [10_000, 30_000, 90_000];
-const REQUEST_TIMEOUT = 300_000;
+const REQUEST_TIMEOUT = Number(process.env.I18N_REQUEST_TIMEOUT_MS ?? 600_000);
 
 function generate(prompt: string, temperature: number): Promise<string> {
 	return withRetry(
