@@ -1031,7 +1031,7 @@ export default {
 	"Failed to load note: {message}": "Не удалось загрузить заметку: {message}",
 	"Still loading this note — try again in a moment":
 		"Все еще загружается эта заметка — попробуйте еще раз через некоторое время",
-	"Copied wikilink": "Вики-ссылка скопирована",
+	"Copied wikilink": "Скопирована Wiki-ссылка",
 	"Not syncing - reconnecting...":
 		"Синхронизация не происходит — попытка повторного подключения...",
 	"Still opening “{target}” — showing “{name}” until it does.":
@@ -1470,8 +1470,8 @@ export default {
 	"Numbered automatically, with a link back. Reading view only — the editor leaves [^1] as text.":
 		"Нумеруется автоматически, со ссылкой обратно. Только в режиме просмотра — редактор оставляет [^1] как текст.",
 	Links: "Ссылки",
-	Wikilink: "Вики-ссылка",
-	"Wikilink with alias": "Вики-ссылка с псевдонимом",
+	Wikilink: "Wiki-ссылка",
+	"Wikilink with alias": "Wiki-ссылка с псевдонимом",
 	"The pipe sets the display text.": "Вертикальная черта задает отображаемый текст.",
 	"External link": "Внешняя ссылка",
 	"Image by URL": "Изображение по URL",
@@ -1502,7 +1502,7 @@ export default {
 	Rename: "Переименовать",
 	"Move to…": "Переместить в…",
 	Duplicate: "Дублировать",
-	"Copy wikilink": "Скопировать вики-ссылку",
+	"Copy wikilink": "Скопировать Wiki-ссылку",
 	"New note here": "Новая заметка здесь",
 	"New subfolder": "Новая подпапка",
 	Edit: "Редактировать",

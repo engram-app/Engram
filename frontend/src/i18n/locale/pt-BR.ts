@@ -604,8 +604,8 @@ export default {
 	Folder: "Pasta",
 	"Any folder": "Qualquer pasta",
 	"No matching folder": "Nenhuma pasta correspondente",
-	Tags: "Tags",
-	"Any tags": "Qualquer tag",
+	Tags: "Etiquetas",
+	"Any tags": "Qualquer etiqueta",
 	"No matching tag": "Nenhuma tag correspondente",
 	"Remove {tag}": "Remover {tag}",
 	Modified: "Modificado",
@@ -1322,7 +1322,7 @@ export default {
 	"Open a note to insert snippets.": "Abra uma nota para inserir trechos.",
 	"No syntax matches “{query}”.": 'Nenhuma correspondência encontrada para "{query}".',
 	"A Markdown-formatted document should be publishable as-is, as plain text, without looking like it's been marked up with tags or formatting instructions.":
-		"Um documento formatado em Markdown deve poder ser publicado como está, em texto simples, sem parecer que foi marcado com tags ou instruções de formatação.",
+		"Um documento formatado em Markdown deve poder ser publicado como está, como texto simples, sem parecer que foi marcado com etiquetas ou instruções de formatação.",
 	"Gruber's syntax guide": "Guia de sintaxe do Gruber",
 	"CommonMark in 10 minutes": "CommonMark em 10 minutos",
 	"Obsidian's flavour": "O estilo do Obsidian",
@@ -1437,7 +1437,7 @@ export default {
 		"Deve ser a primeira coisa na nota. Aparece como propriedades da nota.",
 	Tag: "Tag",
 	"Also settable via the tags frontmatter key.":
-		'Também pode ser definido via a chave "tags" no frontmatter.',
+		'Também pode ser configurado via a chave "tags" no frontmatter.',
 	"Close menu": "Fechar menu",
 	"Select more": "Selecionar mais",
 	Rename: "Renomear",

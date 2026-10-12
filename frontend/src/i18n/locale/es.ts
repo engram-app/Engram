@@ -588,7 +588,7 @@ export default {
 	"Engram home": "Inicio de Engram",
 	"Collapse panel": "Ocultar panel",
 	Outline: "Esquema",
-	Backlinks: "Retroenlaces",
+	Backlinks: "Enlaces entrantes",
 	Reference: "Referencia",
 	"{results} (first 20)": "{results} (primeros 20)",
 	"Close search": "Cerrar búsqueda",
@@ -955,7 +955,7 @@ export default {
 	"Preview not supported for {filename}. Use Download above to save it.":
 		'La vista previa no es compatible con {filename}. Usa "Descargar" arriba para guardarlo.',
 	"Download {filename}": "Descargar {filename}",
-	"No backlinks yet": "Aún no hay retroenlaces",
+	"No backlinks yet": "Aún no hay enlaces entrantes",
 	"Failed to load notes.": "No se pudieron cargar las notas.",
 	"No notes in this folder.": "No hay notas en esta carpeta.",
 	"Notes in {folder}": "Notas en {folder}",
@@ -984,7 +984,7 @@ export default {
 	"Failed to load note: {message}": "No se pudo cargar la nota: {message}",
 	"Still loading this note — try again in a moment":
 		"Aún cargando esta nota — inténtalo de nuevo en un momento",
-	"Copied wikilink": "Wikienlace copiado",
+	"Copied wikilink": "Enlace wiki copiado",
 	"Not syncing - reconnecting...": "No se está sincronizando — reconectando...",
 	"Still opening “{target}” — showing “{name}” until it does.":
 		"Aún abriendo “{target}” — mostrando “{name}” hasta que lo haga.",
@@ -1415,8 +1415,8 @@ export default {
 	"Numbered automatically, with a link back. Reading view only — the editor leaves [^1] as text.":
 		"Numerada automáticamente, con un enlace de retorno. Solo en la vista de lectura; el editor deja [^1] como texto.",
 	Links: "Enlaces",
-	Wikilink: "Wikienlace",
-	"Wikilink with alias": "Wikienlace con alias",
+	Wikilink: "Enlace wiki",
+	"Wikilink with alias": "Enlace wiki con alias",
 	"The pipe sets the display text.": 'El símbolo "|" define el texto que se muestra.',
 	"External link": "Enlace externo",
 	"Image by URL": "Imagen por URL",
@@ -1447,7 +1447,7 @@ export default {
 	Rename: "Renombrar",
 	"Move to…": "Mover a…",
 	Duplicate: "Duplicar",
-	"Copy wikilink": "Copiar wikienlace",
+	"Copy wikilink": "Copiar enlace wiki",
 	"New note here": "Nueva nota aquí",
 	"New subfolder": "Nueva subcarpeta",
 	Edit: "Editar",

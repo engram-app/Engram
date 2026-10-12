@@ -928,7 +928,7 @@ export default {
 	"Failed to load note: {message}": "노트 로드 실패: {message}",
 	"Still loading this note — try again in a moment":
 		"해당 노드를 아직 불러오는 중입니다. 잠시 후 다시 시도해 주세요",
-	"Copied wikilink": "위키링크 복사됨",
+	"Copied wikilink": "위키 링크 복사",
 	"Not syncing - reconnecting...": "동기화 중 - 다시 연결 중...",
 	"Still opening “{target}” — showing “{name}” until it does.":
 		'"{target}"을 아직 열고 있습니다. 완료될 때까지 "{name}"을 표시합니다.',
@@ -1341,8 +1341,8 @@ export default {
 	"Numbered automatically, with a link back. Reading view only — the editor leaves [^1] as text.":
 		"자동으로 번호가 매겨지며, 링크가 연결됩니다. 읽기 모드에서만 표시되며, 편집기에서는 [^1]이 텍스트로 유지됩니다.",
 	Links: "링크",
-	Wikilink: "위키링크",
-	"Wikilink with alias": "별칭이 있는 위키링크",
+	Wikilink: "위키 링크",
+	"Wikilink with alias": "별칭이 있는 위키 링크",
 	"The pipe sets the display text.": "파이프(|)는 표시 텍스트를 설정합니다.",
 	"External link": "외부 링크",
 	"Image by URL": "URL로 이미지 삽입",
@@ -1372,7 +1372,7 @@ export default {
 	Rename: "이름 바꾸기",
 	"Move to…": "이동",
 	Duplicate: "복사",
-	"Copy wikilink": "위키링크 복사",
+	"Copy wikilink": "위키 링크 복사",
 	"New note here": "여기 새 노트 생성",
 	"New subfolder": "새 하위 폴더 생성",
 	Edit: "편집",
