@@ -294,6 +294,39 @@ function mergeCatalog(entries: readonly Entry[], old: Catalog, fresh: Catalog): 
 	return merged;
 }
 
+// A non-2xx answer from Ollama. 5xx is transient (busy, loading); 4xx is not.
+class HttpError extends Error {
+	readonly status: number;
+
+	constructor(status: number, message: string) {
+		super(message);
+		this.status = status;
+	}
+}
+
+// FastRaid's Ollama is shared: another model loading can stall one request for
+// minutes. A timeout, a dropped connection or a 5xx is retried after each delay
+// (ms); a 4xx (wrong model name) fails at once. One hung request used to kill a
+// whole multi-hour run.
+async function withRetry<T>(
+	fn: () => Promise<T>,
+	delays: readonly number[],
+	sleep: (ms: number) => Promise<void>,
+): Promise<T> {
+	for (const delay of delays) {
+		try {
+			return await fn();
+		} catch (error) {
+			if (error instanceof HttpError && error.status < 500) {
+				throw error;
+			}
+			console.warn(`Ollama request failed (${String(error)}); retrying in ${delay / 1000}s`);
+			await sleep(delay);
+		}
+	}
+	return fn();
+}
+
 export type { LocaleState, Target };
 export {
 	batchText,
@@ -301,6 +334,7 @@ export {
 	cleanOutput,
 	fromSample,
 	GLOSSARY_KEYS,
+	HttpError,
 	isValid,
 	maskPlaceholders,
 	mergeCatalog,
@@ -312,4 +346,5 @@ export {
 	TRANSLATOR_VERSION,
 	todoKeys,
 	unmaskPlaceholders,
+	withRetry,
 };

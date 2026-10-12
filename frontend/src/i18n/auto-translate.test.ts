@@ -4,6 +4,7 @@ import {
 	buildPrompt,
 	cleanOutput,
 	fromSample,
+	HttpError,
 	isValid,
 	maskPlaceholders,
 	mergeCatalog,
@@ -14,6 +15,7 @@ import {
 	TRANSLATOR_VERSION,
 	todoKeys,
 	unmaskPlaceholders,
+	withRetry,
 } from "./auto-translate";
 
 describe("cleanOutput", () => {
@@ -260,5 +262,50 @@ describe("maskPlaceholders / unmaskPlaceholders", () => {
 
 	it("leaves a string without placeholders alone", () => {
 		expect(maskPlaceholders("Sync")).toEqual({ masked: "Sync", names: [] });
+	});
+});
+
+describe("withRetry", () => {
+	const noSleep = () => Promise.resolve();
+
+	it("retries a transient failure, then returns", async () => {
+		let calls = 0;
+		const fn = () => {
+			calls += 1;
+			return calls < 3
+				? Promise.reject(new DOMException("timed out", "TimeoutError"))
+				: Promise.resolve("ok");
+		};
+		await expect(withRetry(fn, [1, 1, 1], noSleep)).resolves.toBe("ok");
+		expect(calls).toBe(3);
+	});
+
+	it("gives up after the last delay and rethrows", async () => {
+		let calls = 0;
+		const fn = () => {
+			calls += 1;
+			return Promise.reject(new TypeError("fetch failed"));
+		};
+		await expect(withRetry(fn, [1, 1], noSleep)).rejects.toThrow("fetch failed");
+		expect(calls).toBe(3);
+	});
+
+	it("does not retry a permanent failure", async () => {
+		let calls = 0;
+		const fn = () => {
+			calls += 1;
+			return Promise.reject(new HttpError(404, "model not found"));
+		};
+		await expect(withRetry(fn, [1, 1], noSleep)).rejects.toThrow("model not found");
+		expect(calls).toBe(1);
+	});
+
+	it("retries a server error", async () => {
+		let calls = 0;
+		const fn = () => {
+			calls += 1;
+			return calls === 1 ? Promise.reject(new HttpError(503, "busy")) : Promise.resolve("ok");
+		};
+		await expect(withRetry(fn, [1], noSleep)).resolves.toBe("ok");
 	});
 });

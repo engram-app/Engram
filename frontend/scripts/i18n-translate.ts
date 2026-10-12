@@ -15,6 +15,7 @@ import {
 	cleanOutput,
 	fromSample,
 	GLOSSARY_KEYS,
+	HttpError,
 	isValid,
 	type LocaleState,
 	maskPlaceholders,
@@ -25,6 +26,7 @@ import {
 	type Target,
 	todoKeys,
 	unmaskPlaceholders,
+	withRetry,
 } from "../src/i18n/auto-translate";
 import { type Entry, usedEntries } from "../src/i18n/keys-scan";
 import { LOCALES } from "../src/i18n/locales";
@@ -53,22 +55,33 @@ const sources = readdirSync(src, { recursive: true, encoding: "utf8" })
 const entries = usedEntries(sources);
 const pluralOne = new Map(entries.filter((e) => e.plural).map((e) => [e.key, e.plural?.one]));
 
-async function generate(prompt: string, temperature: number): Promise<string> {
-	const res = await fetch(`${OLLAMA}/api/generate`, {
-		method: "POST",
-		body: JSON.stringify({
-			model: MODEL,
-			prompt,
-			stream: false,
-			options: { temperature, num_ctx: 4096 },
-		}),
-		signal: AbortSignal.timeout(900_000),
-	});
-	if (!res.ok) {
-		throw new Error(`Ollama ${res.status}: ${await res.text()}`);
-	}
-	const body: { response: string } = await res.json();
-	return body.response;
+const RETRY_DELAYS = [10_000, 30_000, 90_000];
+const REQUEST_TIMEOUT = 300_000;
+
+function generate(prompt: string, temperature: number): Promise<string> {
+	return withRetry(
+		async () => {
+			const res = await fetch(`${OLLAMA}/api/generate`, {
+				method: "POST",
+				body: JSON.stringify({
+					model: MODEL,
+					prompt,
+					stream: false,
+					// Keep gemma loaded between requests on the shared Ollama.
+					keep_alive: "30m",
+					options: { temperature, num_ctx: 4096 },
+				}),
+				signal: AbortSignal.timeout(REQUEST_TIMEOUT),
+			});
+			if (!res.ok) {
+				throw new HttpError(res.status, `Ollama ${res.status}: ${await res.text()}`);
+			}
+			const body: { response: string } = await res.json();
+			return body.response;
+		},
+		RETRY_DELAYS,
+		(ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+	);
 }
 
 async function pool(code: Target, tasks: (() => Promise<void>)[]): Promise<void> {
