@@ -88,8 +88,9 @@ function wordCount(s: string): number {
 		.filter((w) => /\p{L}/u.test(w)).length;
 }
 
+// A set, not a count: repeating {name} renders fine; dropping or inventing one does not.
 function placeholders(s: string): string[] {
-	return (s.match(PLACEHOLDER) ?? []).sort();
+	return [...new Set(s.match(PLACEHOLDER) ?? [])].sort();
 }
 
 function buildPrompt(
@@ -210,10 +211,14 @@ function parseBatch(response: string, n: number): (string | undefined)[] {
 function pluralSamples(code: Target): { category: Intl.LDMLPluralRule; sample: string }[] {
 	const rules = new Intl.PluralRules(code);
 	return rules.resolvedOptions().pluralCategories.map((category) => {
-		for (let n = 1; n <= 200; n++) {
-			if (rules.select(n) === category) {
-				return { category, sample: String(n) };
-			}
+		// `one` gets 1; anything else starts at 2, so "1 days" never reaches the model.
+		const candidates = category === "one" ? [1] : [];
+		for (let n = 2; n <= 200; n++) {
+			candidates.push(n);
+		}
+		const n = candidates.find((c) => rules.select(c) === category);
+		if (n !== undefined) {
+			return { category, sample: String(n) };
 		}
 		return { category, sample: "1.5" };
 	});

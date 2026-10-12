@@ -47,6 +47,10 @@ describe("isValid", () => {
 		expect(isValid("Revoke", "", "de")).toBe(false);
 	});
 
+	it("allows a placeholder the translation repeats", () => {
+		expect(isValid("Disconnect {name}", "Ngắt {name}, {name} sẽ dừng", "vi")).toBe(true);
+	});
+
 	it("rejects dropped or invented placeholders", () => {
 		expect(isValid("Your {plan} plan", "Ihr Tarif", "de")).toBe(false);
 		expect(isValid("Plan", "Tarif {plan}", "de")).toBe(false);
@@ -124,7 +128,8 @@ describe("pluralSamples / fromSample", () => {
 				.map((s) => s.category)
 				.sort(),
 		).toEqual(["few", "many", "one", "other"]);
-		expect(pluralSamples("ja")).toEqual([{ category: "other", sample: "1" }]);
+		expect(pluralSamples("ja")).toEqual([{ category: "other", sample: "2" }]);
+		expect(pluralSamples("vi")).toEqual([{ category: "other", sample: "2" }]);
 	});
 
 	it("uses a decimal sample for a fraction-only category", () => {
