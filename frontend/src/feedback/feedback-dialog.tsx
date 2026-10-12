@@ -19,7 +19,7 @@ import { parseSettingsHash } from "../settings/settings-hash";
 import { FEEDBACK_CATEGORIES, MOOD_FACES } from "./options";
 
 const chip =
-	"inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-sm transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 border-border hover:border-primary/50 data-[state=checked]:border-primary data-[state=checked]:bg-primary/10";
+	"inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-full border px-2.5 py-1 text-sm transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 border-border hover:border-primary/50 data-[state=checked]:border-primary data-[state=checked]:bg-primary/10";
 
 interface FeedbackDialogProps {
 	open: boolean;
@@ -98,7 +98,7 @@ export function FeedbackDialog({ open, onOpenChange }: FeedbackDialogProps) {
 						value={category}
 						onValueChange={setCategory}
 						aria-label={t("What kind of feedback?")}
-						className="flex flex-wrap gap-1.5 border-input border-b p-2"
+						className="grid grid-cols-2 gap-1.5 border-input border-b p-2 sm:grid-cols-4"
 					>
 						{FEEDBACK_CATEGORIES.map((c) => (
 							<RadioGroupPrimitive.Item key={c.slug} value={c.slug} className={chip}>
