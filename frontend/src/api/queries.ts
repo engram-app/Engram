@@ -1480,6 +1480,7 @@ export type FeedbackBody =
 			heard_from_detail?: string;
 	  }
 	| { kind: "cancel"; reason: string; detail?: string }
+	| { kind: "delete_account"; reason?: string; detail?: string }
 	| { kind: "general"; message: string };
 
 // User-voice answers -> backend -> PostHog (server-side, so ad blockers can't

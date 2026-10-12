@@ -957,7 +957,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 		});
 	});
 
-	it("subscribed flow: Cancel button opens CancelPanel inline (no portal redirect)", async () => {
+	it("subscribed flow: Cancel button opens the cancel dialog (no portal redirect)", async () => {
 		initializePaddleMock.mockResolvedValue({
 			Checkout: { open: vi.fn(), close: vi.fn() },
 		});
@@ -1013,8 +1013,7 @@ describe("BillingPage — Paddle effect cleanup", () => {
 			cancelButton.click();
 		});
 
-		// CancelPanel header is visible; button row collapses.
-		await screen.findByRole("region", { name: /cancel subscription/iu });
+		await screen.findByRole("dialog", { name: /cancel subscription/iu });
 		expect(screen.getByRole("button", { name: /cancel at period end/iu })).toBeInTheDocument();
 	});
 

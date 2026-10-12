@@ -61,6 +61,7 @@ export function DangerZoneSectionLocal() {
 
 	return (
 		<SettingsSectionCard
+			destructive
 			title={t("Danger zone")}
 			description={t(
 				"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.",

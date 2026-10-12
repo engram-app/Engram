@@ -628,7 +628,7 @@ describe("DeviceLinkPage", () => {
 				target: { value: "ENGR7X4K" },
 			});
 			fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
-			expect(await screen.findByText("Suggested")).toBeInTheDocument();
+			expect(await screen.findByText("Sync with your matching vault")).toBeInTheDocument();
 			expect(screen.getByRole("radio", { name: /health/iu })).toBeChecked();
 			expect(screen.getByLabelText(/new vault name/iu)).toHaveValue("");
 			// Listed once: the suggestion is not repeated in the list below.
@@ -656,7 +656,7 @@ describe("DeviceLinkPage", () => {
 
 		it("shows no suggestion when the name matches nothing", async () => {
 			await reachPicker([{ id: 7, name: "Personal", note_count: 3 }]);
-			expect(screen.queryByText("Suggested")).toBeNull();
+			expect(screen.queryByText("Sync with your matching vault")).toBeNull();
 		});
 
 		it("omits the label when the user clears it", async () => {

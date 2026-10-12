@@ -90,74 +90,12 @@ export default {
 	Status: "Stato",
 	Invoice: "Fattura",
 	Download: "Scarica",
-	"Could not fetch that invoice. Please try again.": "Impossibile recuperare la fattura. Riprova.",
-	"Payment received. We're finishing your activation in the background.":
-		"Pagamento ricevuto. Stiamo completando l'attivazione in background.",
-	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
-		"Di solito, questa operazione richiede pochi secondi. Ricarica tra un istante, oppure contatta l'assistenza se il problema persiste.",
-	Refresh: "Ricarica",
-	"Contact support": "Contatta l'assistenza",
-	"Loading billing": "Caricamento fatturazione",
-	"Could not open the billing portal. Please try again.":
-		"Impossibile aprire il portale di fatturazione. Riprova.",
-	"Could not start the payment update. Please try again.":
-		"Impossibile avviare l'aggiornamento del pagamento. Riprova.",
-	Billing: "Fatturazione",
-	"Manage your plan and payment method.": "Gestisci il tuo piano e il metodo di pagamento.",
-	"Change plan": "Cambia piano",
-	"Cancel subscription": "Annulla l'abbonamento",
-	"Setting up your account…": "Configurazione del tuo account…",
-	"← Choose a different plan": "← Scegli un piano diverso",
-	"Test checkout (dev only)": "Test di pagamento (solo per sviluppatori)",
-	"Paddle's checkout can't embed on localhost, so this stand-in lets you walk the flow. Not shown in production.":
-		"Il sistema di pagamento di Paddle non può essere integrato in locale, quindi questa versione di prova ti permette di simulare il processo. Non visibile nella versione finale.",
-	"Simulate successful payment": "Simula un pagamento riuscito",
-	"Payment did not go through. Please try again.":
-		"Il pagamento non è andato a buon fine. Riprova.",
-	"Simulate failure": "Simula un errore",
-	"Choose a Plan": "Scegli un piano",
-	"Both plans include a 7-day free trial.":
-		"Entrambi i piani includono una prova gratuita di 7 giorni.",
-	"Unlimited vaults · 50 GB · cross-vault search + API":
-		"Archivi illimitati · 50 GB · ricerca tra archivi + API",
-	"Choose Pro": "Scegli Pro",
-	"7-day free trial · cancel anytime":
-		"Prova gratuita di 7 giorni · puoi cancellare in qualsiasi momento",
-	"10 vaults · 10 GB · unlimited AI": "10 archivi · 10 GB · AI illimitata",
-	"Choose Starter": "Scegli Starter",
-	"Choose Free": "Scegli Gratuito",
-	"Opening Paddle…": "Apertura di Paddle…",
-	"Open Paddle billing portal": "Apri il portale di fatturazione di Paddle",
-	"Paddle is our payment processor. Use this if the controls above don't cover what you need.":
-		"Paddle è il nostro processore di pagamenti. Usalo se i controlli precedenti non coprono le tue esigenze.",
-	"Something went wrong with checkout. Please try again.":
-		"Si è verificato un errore durante il pagamento. Riprova.",
-	"Could not simulate checkout. Please try again.": "Impossibile simulare il pagamento. Riprova.",
-	paid: "pagato",
-	"Subscription scheduled to cancel.": "Abbonamento in scadenza.",
-	"Could not cancel subscription. Please try again.":
-		"Impossibile annullare l'abbonamento. Riprova.",
-	"You'll keep paid access through the end of your current billing period.":
-		"Continuerai ad avere accesso a pagamento fino alla fine del tuo periodo di fatturazione corrente.",
-	"Your notes stay. Sync still works for vaults within Free limits.":
-		"Le tue note rimangono. La sincronizzazione funziona ancora per gli archivi entro i limiti della versione gratuita.",
-	"Vaults or notes that exceed Free limits become read-only.":
-		"Archivi o note che superano i limiti della versione gratuita diventano di sola lettura.",
-	"You can reverse this any time before the effective date.":
-		"Puoi cambiare idea in qualsiasi momento prima della data di effettiva disdetta.",
-	"Why are you canceling?": "Perché stai cancellando?",
-	"Tell us more": "Raccontaci di più",
-	"Keep my subscription": "Mantieni l'abbonamento",
-	"Canceling…": "Cancellazione in corso…",
-	"Cancel at period end": "Cancella alla fine del periodo",
-	Starter: "Base",
-	Pro: "Pro",
-	"You'll keep your {tier} plan until {date}, then drop to Free.":
-		"Continuerai ad avere il tuo piano {tier} fino al {date}, poi passerai al piano gratuito.",
 	"Access ends on": "L'accesso termina il",
 	"Renews on": "Rinnovo il",
 	"Current Plan": "Piano attuale",
 	Free: "Gratuito",
+	Starter: "Base",
+	Pro: "Pro",
 	"{count} days remaining in your free trial.": {
 		one: "{count} giorno rimanente per la tua prova gratuita.",
 		many: "Rimangono {count} giorni alla fine della tua prova gratuita.",
@@ -179,6 +117,7 @@ export default {
 	canceled: "annullato",
 	completed: "completato",
 	billed: "fatturato",
+	paid: "pagato",
 	ready: "pronto",
 	draft: "bozza",
 	"You've hit your note limit": "Hai raggiunto il limite di note",
@@ -223,6 +162,7 @@ export default {
 	"Could not reverse the cancellation. Please try again.":
 		"Impossibile annullare la cancellazione. Riprova.",
 	"Reversing…": "Annullamento in corso…",
+	"Keep my subscription": "Mantieni l'abbonamento",
 	"Your plan changes on {date}": "Il tuo piano cambia il {date}",
 	"Your plan cancels on {date}": "Il tuo piano viene cancellato il {date}",
 	"Your plan pauses on {date}": "Il tuo piano viene sospeso il {date}",
@@ -262,6 +202,7 @@ export default {
 			other:
 				"{hidden} delle tue note non sono ricercabili. Solo le tue {indexed} note più vecchie sono indicizzate, quindi le note più recenti non appariranno nella ricerca.",
 		},
+	"Change plan": "Cambia piano",
 	"Loading plan options…": "Caricamento delle opzioni del piano…",
 	"Plan change confirmed.": "Modifica del piano confermata.",
 	"Could not change plan. Please try again.": "Impossibile modificare il piano. Riprova.",
@@ -299,6 +240,64 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Sei in prova gratuita. Paddle, il nostro processore di pagamenti, non permette modifiche al piano durante il periodo di prova: la tua prova terminerà il {date}.",
 	Upgrade: "Aggiorna",
+	"Could not fetch that invoice. Please try again.": "Impossibile recuperare la fattura. Riprova.",
+	"Payment received. We're finishing your activation in the background.":
+		"Pagamento ricevuto. Stiamo completando l'attivazione in background.",
+	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
+		"Di solito, questa operazione richiede pochi secondi. Ricarica tra un istante, oppure contatta l'assistenza se il problema persiste.",
+	Refresh: "Ricarica",
+	"Contact support": "Contatta l'assistenza",
+	"Loading billing": "Caricamento fatturazione",
+	"Could not open the billing portal. Please try again.":
+		"Impossibile aprire il portale di fatturazione. Riprova.",
+	"Could not start the payment update. Please try again.":
+		"Impossibile avviare l'aggiornamento del pagamento. Riprova.",
+	Billing: "Fatturazione",
+	"Manage your plan and payment method.": "Gestisci il tuo piano e il metodo di pagamento.",
+	"Cancel subscription": "Annulla l'abbonamento",
+	"Setting up your account…": "Configurazione del tuo account…",
+	"← Choose a different plan": "← Scegli un piano diverso",
+	"Test checkout (dev only)": "Test di pagamento (solo per sviluppatori)",
+	"Paddle's checkout can't embed on localhost, so this stand-in lets you walk the flow. Not shown in production.":
+		"Il sistema di pagamento di Paddle non può essere integrato in locale, quindi questa versione di prova ti permette di simulare il processo. Non visibile nella versione finale.",
+	"Simulate successful payment": "Simula un pagamento riuscito",
+	"Payment did not go through. Please try again.":
+		"Il pagamento non è andato a buon fine. Riprova.",
+	"Simulate failure": "Simula un errore",
+	"Choose a Plan": "Scegli un piano",
+	"Both plans include a 7-day free trial.":
+		"Entrambi i piani includono una prova gratuita di 7 giorni.",
+	"Unlimited vaults · 50 GB · cross-vault search + API":
+		"Archivi illimitati · 50 GB · ricerca tra archivi + API",
+	"Choose Pro": "Scegli Pro",
+	"7-day free trial · cancel anytime":
+		"Prova gratuita di 7 giorni · puoi cancellare in qualsiasi momento",
+	"10 vaults · 10 GB · unlimited AI": "10 archivi · 10 GB · AI illimitata",
+	"Choose Starter": "Scegli Starter",
+	"Choose Free": "Scegli Gratuito",
+	"Opening Paddle…": "Apertura di Paddle…",
+	"Open Paddle billing portal": "Apri il portale di fatturazione di Paddle",
+	"Paddle is our payment processor. Use this if the controls above don't cover what you need.":
+		"Paddle è il nostro processore di pagamenti. Usalo se i controlli precedenti non coprono le tue esigenze.",
+	"Something went wrong with checkout. Please try again.":
+		"Si è verificato un errore durante il pagamento. Riprova.",
+	"Could not simulate checkout. Please try again.": "Impossibile simulare il pagamento. Riprova.",
+	"Subscription scheduled to cancel.": "Abbonamento in scadenza.",
+	"Could not cancel subscription. Please try again.":
+		"Impossibile annullare l'abbonamento. Riprova.",
+	"You'll keep paid access through the end of your current billing period.":
+		"Continuerai ad avere accesso a pagamento fino alla fine del tuo periodo di fatturazione corrente.",
+	"Your notes stay. Sync still works for vaults within Free limits.":
+		"Le tue note rimangono. La sincronizzazione funziona ancora per gli archivi entro i limiti della versione gratuita.",
+	"Vaults or notes that exceed Free limits become read-only.":
+		"Archivi o note che superano i limiti della versione gratuita diventano di sola lettura.",
+	"You can reverse this any time before the effective date.":
+		"Puoi cambiare idea in qualsiasi momento prima della data di effettiva disdetta.",
+	"Why are you canceling?": "Perché stai cancellando?",
+	"Canceling…": "Cancellazione in corso…",
+	"Cancel at period end": "Cancella alla fine del periodo",
+	"You'll keep your {tier} plan until {date}, then drop to Free.":
+		"Continuerai ad avere il tuo piano {tier} fino al {date}, poi passerai al piano gratuito.",
 	"An invoice will be created for this amount": "Verrà creata una fattura per questo importo",
 	"This amount will be charged immediately": "Questo importo verrà addebitato immediatamente",
 	"Charged on {date}": "Addebitato il {date}",
@@ -382,6 +381,7 @@ export default {
 	"Creating…": "Creazione in corso…",
 	Create: "Crea",
 	"Search vaults": "Cerca archivi",
+	default: "predefinito",
 	"{n} notes": { one: "{n} nota", many: "{n} note", other: "{n} note" },
 	"{n} files": { one: "{n} file", many: "{n} file", other: "{n} file" },
 	text: "testo",
@@ -433,14 +433,12 @@ export default {
 		"Le tue note appariranno qui durante la sincronizzazione. Puoi tornare quando vuoi.",
 	"Continue to web app": "Continua all'app web",
 	"Open Obsidian": "Apri Obsidian",
-	default: "predefinito",
 	"Selected: {name}": "Selezionato: {name}",
 	"Creating a new vault": "Creazione di un nuovo archivio",
 	"choose a new name": "scegli un nuovo nome",
 	"New vault name": "Nome del nuovo archivio",
 	"Where should these notes sync?": "Dove vuoi sincronizzare queste note?",
-	Suggested: "Suggeriti",
-	"matches your Obsidian vault": "corrispondono al tuo archivio Obsidian",
+	"Sync with your matching vault": "Sincronizza con il tuo archivio corrispondente",
 	"Or sync with a different vault": "Oppure sincronizza con un archivio diverso",
 	"Sync with an existing vault": "Sincronizza con un archivio esistente",
 	"(choose from {count} vaults)": "(scegli tra {count} archivi)",
@@ -520,6 +518,7 @@ export default {
 	"Sync problems or bugs": "Problemi di sincronizzazione o bug",
 	"Switched to another tool": "Passato a un altro strumento",
 	"Not using it enough": "Non lo uso abbastanza",
+	"Tell us more": "Raccontaci di più",
 	Language: "Lingua",
 	"My Vault": "Il mio archivio",
 	"{count} days left in your trial.": {
@@ -1108,25 +1107,6 @@ export default {
 	Connected: "Collegato",
 	"Disconnect {name}": "Disconnetti {name}",
 	"Connect {name}": "Connetti {name}",
-	"Account deleted": "Account eliminato",
-	"Delete failed": "Eliminazione fallita",
-	"You're the only admin on this instance. Promote another user to admin first, then try again.":
-		"Sei l'unico amministratore in questa istanza. Promuovi un altro utente a amministratore prima, quindi riprova.",
-	"Incorrect password.": "Password errata.",
-	"Danger zone": "Zona pericolosa",
-	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
-		"Azioni permanenti. Eliminare il tuo account ti disconnette e impedisce futuri accessi con questo utente.",
-	"Delete account": "Elimina account",
-	"Delete your account?": "Vuoi eliminare il tuo account?",
-	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"Questo elimina temporaneamente il tuo account. Non potrai più accedere. Un amministratore può eliminare definitivamente i tuoi dati in seguito.",
-	"I understand this is irreversible": "Capisco che questa operazione è irreversibile",
-	Delete: "Elimina",
-	"Could not delete account": "Impossibile eliminare l'account",
-	"Permanently delete your account and all associated data. This cannot be undone.":
-		"Elimina definitivamente il tuo account e tutti i dati associati. Questa operazione non può essere annullata.",
-	'Type "{phrase}" to confirm': 'Digita "{phrase}" per confermare',
-	"Delete my account": "Elimina il mio account",
 	"Email copied": "Email copiata",
 	"To change your email, contact your admin.":
 		"Per cambiare la tua email, contatta il tuo amministratore.",
@@ -1182,6 +1162,28 @@ export default {
 	Device: "Dispositivo",
 	Browser: "Browser",
 	"Revoke {name}": "Termina {name}",
+	"Account deleted": "Account eliminato",
+	"Delete failed": "Eliminazione fallita",
+	"You're the only admin on this instance. Promote another user to admin first, then try again.":
+		"Sei l'unico amministratore in questa istanza. Promuovi un altro utente a amministratore prima, quindi riprova.",
+	"Incorrect password.": "Password errata.",
+	"Danger zone": "Zona pericolosa",
+	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
+		"Azioni permanenti. Eliminare il tuo account ti disconnette e impedisce futuri accessi con questo utente.",
+	"Delete account": "Elimina account",
+	"Delete your account?": "Vuoi eliminare il tuo account?",
+	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
+		"Questo elimina temporaneamente il tuo account. Non potrai più accedere. Un amministratore può eliminare definitivamente i tuoi dati in seguito.",
+	"I understand this is irreversible": "Capisco che questa operazione è irreversibile",
+	Delete: "Elimina",
+	"Could not delete account": "Impossibile eliminare l'account",
+	"Permanently delete your account and all associated data. This cannot be undone.":
+		"Elimina definitivamente il tuo account e tutti i dati associati. Questa operazione non può essere annullata.",
+	"Why are you deleting your account?": "Perché stai eliminando il tuo account?",
+	"Your answer is kept after your account is deleted, without your name or email.":
+		"La tua risposta viene conservata anche dopo l'eliminazione del tuo account, senza il tuo nome o indirizzo email.",
+	'Type "{phrase}" to confirm': 'Digita "{phrase}" per confermare',
+	"Delete my account": "Elimina il mio account",
 	"Rename failed": "Rinomina fallita",
 	Default: "Predefinito",
 	"Set {name} as default": "Imposta {name} come predefinito",

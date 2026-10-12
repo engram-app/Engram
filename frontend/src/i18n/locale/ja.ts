@@ -89,72 +89,12 @@ export default {
 	Status: "ステータス",
 	Invoice: "請求書",
 	Download: "ダウンロード",
-	"Could not fetch that invoice. Please try again.":
-		"請求書を読み込めませんでした。もう一度お試しください。",
-	"Payment received. We're finishing your activation in the background.":
-		"支払いが完了しました。バックグラウンドでアクティベーションを完了しています。",
-	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
-		"通常、数秒で完了します。しばらくお待ちいただくか、問題が続く場合はサポートまでご連絡ください。",
-	Refresh: "更新",
-	"Contact support": "サポートへ連絡",
-	"Loading billing": "課金情報を読み込み中",
-	"Could not open the billing portal. Please try again.":
-		"課金ポータルを開けませんでした。再度お試しください。",
-	"Could not start the payment update. Please try again.":
-		"支払い情報の更新を開始できませんでした。再度お試しください。",
-	Billing: "課金",
-	"Manage your plan and payment method.": "契約プランと支払い方法を管理します。",
-	"Change plan": "プランを変更",
-	"Cancel subscription": "購読をキャンセル",
-	"Setting up your account…": "アカウントを設定中…",
-	"← Choose a different plan": "← 別のプランを選択",
-	"Test checkout (dev only)": "テスト購入 (開発者向け)",
-	"Paddle's checkout can't embed on localhost, so this stand-in lets you walk the flow. Not shown in production.":
-		"Paddleの購入機能はローカル環境では利用できません。この代替機能で、購入の流れを体験できます。本番環境では表示されません。",
-	"Simulate successful payment": "決済成功をシミュレート",
-	"Payment did not go through. Please try again.": "決済が完了しませんでした。再度お試しください。",
-	"Simulate failure": "決済失敗をシミュレート",
-	"Choose a Plan": "プランを選択",
-	"Both plans include a 7-day free trial.": "両プランとも7日間の無料トライアルが含まれます。",
-	"Unlimited vaults · 50 GB · cross-vault search + API":
-		"無制限の保管庫 · 50 GB · 保管庫間の検索 + API",
-	"Choose Pro": "Proプランを選択",
-	"7-day free trial · cancel anytime": "7日間の無料トライアル · いつでも解約可能",
-	"10 vaults · 10 GB · unlimited AI": "10個の保管庫 · 10 GB · 無制限のAI",
-	"Choose Starter": "Starterプランを選択",
-	"Choose Free": "無料版を選択",
-	"Opening Paddle…": "Paddle を開いています…",
-	"Open Paddle billing portal": "Paddle の決済ポータルを開く",
-	"Paddle is our payment processor. Use this if the controls above don't cover what you need.":
-		"Paddle は決済代行業者です。上記のオプションでご希望に沿えない場合はこちらをご利用ください。",
-	"Something went wrong with checkout. Please try again.":
-		"決済中にエラーが発生しました。再度お試しください。",
-	"Could not simulate checkout. Please try again.":
-		"決済のシミュレーションに失敗しました。再度お試しください。",
-	paid: "支払い済み",
-	"Subscription scheduled to cancel.": "解約がスケジュールされています。",
-	"Could not cancel subscription. Please try again.": "解約に失敗しました。再度お試しください。",
-	"You'll keep paid access through the end of your current billing period.":
-		"現在の請求期間の終了まで、引き続き有料版をご利用いただけます。",
-	"Your notes stay. Sync still works for vaults within Free limits.":
-		"ノートはそのままです。同期は、無料版の制限内で利用可能な保管庫に対して引き続き機能します。",
-	"Vaults or notes that exceed Free limits become read-only.":
-		"無料版の制限を超える保管庫またはノートは、読み取り専用になります。",
-	"You can reverse this any time before the effective date.":
-		"いつでも、有効期限になる前にこの操作を元に戻せます。",
-	"Why are you canceling?": "なぜ解約されますか？",
-	"Tell us more": "詳細を教えてください",
-	"Keep my subscription": "購読を継続します",
-	"Canceling…": "解約中…",
-	"Cancel at period end": "期間満了時に解約",
-	Starter: "スターター",
-	Pro: "プロ",
-	"You'll keep your {tier} plan until {date}, then drop to Free.":
-		"{tier} のプランは {date} まで継続され、その後は無料プランに移行します。",
 	"Access ends on": "アクセス終了日",
 	"Renews on": "契約更新日",
 	"Current Plan": "現在のプラン",
 	Free: "無料",
+	Starter: "スターター",
+	Pro: "プロ",
 	"{count} days remaining in your free trial.": { other: "無料トライアルは残り{count}日です。" },
 	"Loading current connection…": "接続中です…",
 	"Disconnected. Retry the new connection now.": "接続解除されました。新しい接続を試してください。",
@@ -172,6 +112,7 @@ export default {
 	canceled: "キャンセル",
 	completed: "完了",
 	billed: "請求済",
+	paid: "支払い済み",
 	ready: "準備完了",
 	draft: "下書き",
 	"You've hit your note limit": "ノートの制限に達しました",
@@ -217,6 +158,7 @@ export default {
 	"Could not reverse the cancellation. Please try again.":
 		"解約の解除に失敗しました。再度お試しください。",
 	"Reversing…": "解除中…",
+	"Keep my subscription": "購読を継続します",
 	"Your plan changes on {date}": "料金プランは{date}に変わります",
 	"Your plan cancels on {date}": "料金プランは{date}に解約されます",
 	"Your plan pauses on {date}": "料金プランは{date}に一時停止されます",
@@ -254,6 +196,7 @@ export default {
 			other:
 				"あなたのノートのうち、{hidden} は検索できません。最も古い {indexed} しかインデックス化されないため、最新のノートは検索結果に表示されません。",
 		},
+	"Change plan": "プランを変更",
 	"Loading plan options…": "プランのオプションを読み込み中…",
 	"Plan change confirmed.": "変更内容を確認しました。",
 	"Could not change plan. Please try again.": "変更できませんでした。再度お試しください。",
@@ -291,6 +234,62 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"無料トライアル中です。支払い処理サービス Paddle では、トライアル期間中のプラン変更はできません。トライアルは {date} に終了します。",
 	Upgrade: "アップグレード",
+	"Could not fetch that invoice. Please try again.":
+		"請求書を読み込めませんでした。もう一度お試しください。",
+	"Payment received. We're finishing your activation in the background.":
+		"支払いが完了しました。バックグラウンドでアクティベーションを完了しています。",
+	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
+		"通常、数秒で完了します。しばらくお待ちいただくか、問題が続く場合はサポートまでご連絡ください。",
+	Refresh: "更新",
+	"Contact support": "サポートへ連絡",
+	"Loading billing": "課金情報を読み込み中",
+	"Could not open the billing portal. Please try again.":
+		"課金ポータルを開けませんでした。再度お試しください。",
+	"Could not start the payment update. Please try again.":
+		"支払い情報の更新を開始できませんでした。再度お試しください。",
+	Billing: "課金",
+	"Manage your plan and payment method.": "契約プランと支払い方法を管理します。",
+	"Cancel subscription": "購読をキャンセル",
+	"Setting up your account…": "アカウントを設定中…",
+	"← Choose a different plan": "← 別のプランを選択",
+	"Test checkout (dev only)": "テスト購入 (開発者向け)",
+	"Paddle's checkout can't embed on localhost, so this stand-in lets you walk the flow. Not shown in production.":
+		"Paddleの購入機能はローカル環境では利用できません。この代替機能で、購入の流れを体験できます。本番環境では表示されません。",
+	"Simulate successful payment": "決済成功をシミュレート",
+	"Payment did not go through. Please try again.": "決済が完了しませんでした。再度お試しください。",
+	"Simulate failure": "決済失敗をシミュレート",
+	"Choose a Plan": "プランを選択",
+	"Both plans include a 7-day free trial.": "両プランとも7日間の無料トライアルが含まれます。",
+	"Unlimited vaults · 50 GB · cross-vault search + API":
+		"無制限の保管庫 · 50 GB · 保管庫間の検索 + API",
+	"Choose Pro": "Proプランを選択",
+	"7-day free trial · cancel anytime": "7日間の無料トライアル · いつでも解約可能",
+	"10 vaults · 10 GB · unlimited AI": "10個の保管庫 · 10 GB · 無制限のAI",
+	"Choose Starter": "Starterプランを選択",
+	"Choose Free": "無料版を選択",
+	"Opening Paddle…": "Paddle を開いています…",
+	"Open Paddle billing portal": "Paddle の決済ポータルを開く",
+	"Paddle is our payment processor. Use this if the controls above don't cover what you need.":
+		"Paddle は決済代行業者です。上記のオプションでご希望に沿えない場合はこちらをご利用ください。",
+	"Something went wrong with checkout. Please try again.":
+		"決済中にエラーが発生しました。再度お試しください。",
+	"Could not simulate checkout. Please try again.":
+		"決済のシミュレーションに失敗しました。再度お試しください。",
+	"Subscription scheduled to cancel.": "解約がスケジュールされています。",
+	"Could not cancel subscription. Please try again.": "解約に失敗しました。再度お試しください。",
+	"You'll keep paid access through the end of your current billing period.":
+		"現在の請求期間の終了まで、引き続き有料版をご利用いただけます。",
+	"Your notes stay. Sync still works for vaults within Free limits.":
+		"ノートはそのままです。同期は、無料版の制限内で利用可能な保管庫に対して引き続き機能します。",
+	"Vaults or notes that exceed Free limits become read-only.":
+		"無料版の制限を超える保管庫またはノートは、読み取り専用になります。",
+	"You can reverse this any time before the effective date.":
+		"いつでも、有効期限になる前にこの操作を元に戻せます。",
+	"Why are you canceling?": "なぜ解約されますか？",
+	"Canceling…": "解約中…",
+	"Cancel at period end": "期間満了時に解約",
+	"You'll keep your {tier} plan until {date}, then drop to Free.":
+		"{tier} のプランは {date} まで継続され、その後は無料プランに移行します。",
 	"An invoice will be created for this amount": "この金額で請求書が作成されます",
 	"This amount will be charged immediately": "この金額は即時請求されます",
 	"Charged on {date}": "{date} に請求されます",
@@ -374,6 +373,7 @@ export default {
 	"Creating…": "作成中…",
 	Create: "作成",
 	"Search vaults": "保管庫を検索",
+	default: "デフォルト",
 	"{n} notes": { other: "{n} ノート" },
 	"{n} files": { other: "{n} 個のファイル" },
 	text: "テキスト",
@@ -425,14 +425,12 @@ export default {
 		"ノートは同期されるとここに表示されます。いつでも戻ってきてください。",
 	"Continue to web app": "ウェブアプリへ",
 	"Open Obsidian": "Obsidian を開く",
-	default: "デフォルト",
 	"Selected: {name}": "選択中: {name}",
 	"Creating a new vault": "新しい保管庫を作成中",
 	"choose a new name": "新しい名前を選択",
 	"New vault name": "新しい保管庫名",
 	"Where should these notes sync?": "これらのノートはどこに同期しますか？",
-	Suggested: "推奨",
-	"matches your Obsidian vault": "は、Obsidianの保管庫と一致します",
+	"Sync with your matching vault": "対応する保管庫との同期",
 	"Or sync with a different vault": "または、別の保管庫と同期します",
 	"Sync with an existing vault": "既存の保管庫と同期します",
 	"(choose from {count} vaults)": "( {count} 個の保管庫から選択)",
@@ -496,6 +494,7 @@ export default {
 	"Sync problems or bugs": "同期の問題またはバグ",
 	"Switched to another tool": "他のツールに切り替えました",
 	"Not using it enough": "十分に使っていません",
+	"Tell us more": "詳細を教えてください",
 	Language: "言語",
 	"My Vault": "私の保管庫",
 	"{count} days left in your trial.": { other: "トライアル期間は残り{count}日です。" },
@@ -1064,25 +1063,6 @@ export default {
 	Connected: "接続済み",
 	"Disconnect {name}": "{name} を切断",
 	"Connect {name}": "{name} を接続",
-	"Account deleted": "アカウントを削除しました",
-	"Delete failed": "削除に失敗しました",
-	"You're the only admin on this instance. Promote another user to admin first, then try again.":
-		"このインスタンスの管理者はいません。まず別のユーザーを管理者として昇格させてから、再度お試しください。",
-	"Incorrect password.": "パスワードが正しくありません。",
-	"Danger zone": "危険区域",
-	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
-		"永続的な操作です。アカウントを削除すると、サインアウトされ、このユーザーによる今後のサインインがブロックされます。",
-	"Delete account": "アカウントを削除",
-	"Delete your account?": "アカウントを削除しますか？",
-	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"この操作により、ユーザーアカウントが削除されます。再ログインできなくなります。管理者が後で保管庫のデータを完全に削除する場合があります。",
-	"I understand this is irreversible": "これは取り消しできないことを理解しています",
-	Delete: "削除",
-	"Could not delete account": "アカウントの削除に失敗しました",
-	"Permanently delete your account and all associated data. This cannot be undone.":
-		"アカウントと関連データを完全に削除します。この操作は元に戻せません。",
-	'Type "{phrase}" to confirm': '確認のため、"{phrase}" と入力してください',
-	"Delete my account": "私のアカウントを削除",
 	"Email copied": "メールをコピーしました",
 	"To change your email, contact your admin.":
 		"メールアドレスの変更は、管理者にお問い合わせください。",
@@ -1137,6 +1117,28 @@ export default {
 	Device: "デバイス",
 	Browser: "ブラウザ",
 	"Revoke {name}": "{name} を終了",
+	"Account deleted": "アカウントを削除しました",
+	"Delete failed": "削除に失敗しました",
+	"You're the only admin on this instance. Promote another user to admin first, then try again.":
+		"このインスタンスの管理者はいません。まず別のユーザーを管理者として昇格させてから、再度お試しください。",
+	"Incorrect password.": "パスワードが正しくありません。",
+	"Danger zone": "危険区域",
+	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
+		"永続的な操作です。アカウントを削除すると、サインアウトされ、このユーザーによる今後のサインインがブロックされます。",
+	"Delete account": "アカウントを削除",
+	"Delete your account?": "アカウントを削除しますか？",
+	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
+		"この操作により、ユーザーアカウントが削除されます。再ログインできなくなります。管理者が後で保管庫のデータを完全に削除する場合があります。",
+	"I understand this is irreversible": "これは取り消しできないことを理解しています",
+	Delete: "削除",
+	"Could not delete account": "アカウントの削除に失敗しました",
+	"Permanently delete your account and all associated data. This cannot be undone.":
+		"アカウントと関連データを完全に削除します。この操作は元に戻せません。",
+	"Why are you deleting your account?": "アカウントを削除する理由は何ですか？",
+	"Your answer is kept after your account is deleted, without your name or email.":
+		"アカウント削除後も、回答は氏名やメールアドレスなしで保存されます。",
+	'Type "{phrase}" to confirm': '確認のため、"{phrase}" と入力してください',
+	"Delete my account": "私のアカウントを削除",
 	"Rename failed": "名前変更に失敗しました",
 	Default: "デフォルト",
 	"Set {name} as default": "{name} をデフォルトに設定",

@@ -453,6 +453,43 @@ defmodule Engram.Accounts.LifecycleTest do
       assert :ok = Lifecycle.hard_delete(user, :user)
     end
 
+    test "hard_delete sends the stashed delete reason once the account is gone",
+         %{bypass: bypass} do
+      prev_capture_key = Application.get_env(:engram, :posthog_key)
+      Application.put_env(:engram, :posthog_key, "phc_test_token")
+      on_exit(fn -> Application.put_env(:engram, :posthog_key, prev_capture_key) end)
+
+      user =
+        insert(:user,
+          external_id: nil,
+          email: "leaving@example.com",
+          onboarding_profile: %{"delete_reason" => "not_using", "delete_detail" => "busy"}
+        )
+
+      Bypass.stub(bypass, "GET", "/api/projects/1/persons/", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"results":[]}))
+      end)
+
+      parent = self()
+
+      Bypass.expect_once(bypass, "POST", "/capture/", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:posthog, Jason.decode!(body)})
+        Plug.Conn.resp(conn, 200, "1")
+      end)
+
+      assert :ok = Lifecycle.hard_delete(user, :user)
+
+      assert_receive {:posthog,
+                      %{
+                        "event" => "account_delete_reason",
+                        "properties" => %{"reason" => "not_using"}
+                      }},
+                     1_000
+    end
+
     test "hard_delete tolerates a person that does not exist", %{bypass: bypass} do
       user = insert(:user, external_id: nil, email: "gone@example.com")
 

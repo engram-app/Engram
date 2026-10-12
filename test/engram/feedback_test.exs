@@ -121,6 +121,68 @@ defmodule Engram.FeedbackTest do
     end
   end
 
+  describe "delete_account" do
+    test "stashes the answer on the user row and sends nothing yet", %{user: user} do
+      assert :ok =
+               Feedback.submit(user, "delete_account", %{
+                 "reason" => "switched_tool",
+                 "detail" => " went back to Obsidian, mail me at jane.doe@example.com "
+               })
+
+      assert %{
+               "tools" => ["claude"],
+               "delete_reason" => "switched_tool",
+               "delete_detail" => "went back to Obsidian, mail me at [email]"
+             } = profile(user)
+
+      refute_receive {:posthog, _}, 200
+    end
+
+    test "a second submit replaces the first", %{user: user} do
+      assert :ok = Feedback.submit(user, "delete_account", %{"reason" => "too_expensive"})
+      assert :ok = Feedback.submit(user, "delete_account", %{"detail" => "just leaving"})
+
+      assert %{"delete_reason" => nil, "delete_detail" => "just leaving"} = profile(user)
+    end
+
+    test "rejects an unknown reason and an empty answer", %{user: user} do
+      assert {:error, :invalid_reason} =
+               Feedback.submit(user, "delete_account", %{"reason" => "meh"})
+
+      assert {:error, :empty_message} =
+               Feedback.submit(user, "delete_account", %{"detail" => "   "})
+    end
+  end
+
+  describe "capture_delete_reason/1" do
+    test "sends the stashed answer anonymously" do
+      assert :ok =
+               Feedback.capture_delete_reason(%{
+                 "delete_reason" => "switched_tool",
+                 "delete_detail" => "went back to Obsidian"
+               })
+
+      assert_receive {:posthog,
+                      %{
+                        "event" => "account_delete_reason",
+                        "distinct_id" => distinct_id,
+                        "properties" => props
+                      }},
+                     1_000
+
+      assert {:ok, _} = Ecto.UUID.cast(distinct_id)
+      assert props["reason"] == "switched_tool"
+      assert props["detail"] == "went back to Obsidian"
+      assert props["$process_person_profile"] == false
+    end
+
+    test "sends nothing when no answer was given" do
+      assert :ok = Feedback.capture_delete_reason(%{"tools" => ["claude"]})
+      assert :ok = Feedback.capture_delete_reason(nil)
+      refute_receive {:posthog, _}, 200
+    end
+  end
+
   describe "general" do
     test "captures the message", %{user: user} do
       assert :ok = Feedback.submit(user, "general", %{"message" => "  search misses tags  "})

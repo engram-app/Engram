@@ -89,71 +89,12 @@ export default {
 	Status: "Trạng thái",
 	Invoice: "Hóa đơn",
 	Download: "Tải xuống",
-	"Could not fetch that invoice. Please try again.": "Không thể tải hóa đơn này. Vui lòng thử lại.",
-	"Payment received. We're finishing your activation in the background.":
-		"Đã nhận thanh toán. Chúng tôi đang hoàn tất quá trình kích hoạt của bạn.",
-	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
-		"Thông thường, quá trình này mất vài giây. Vui lòng đợi một lát để tải lại, hoặc liên hệ hỗ trợ nếu sự cố vẫn tiếp diễn.",
-	Refresh: "Tải lại",
-	"Contact support": "Liên hệ hỗ trợ",
-	"Loading billing": "Đang tải thông tin thanh toán",
-	"Could not open the billing portal. Please try again.":
-		"Không thể mở trang thanh toán. Vui lòng thử lại.",
-	"Could not start the payment update. Please try again.":
-		"Không thể cập nhật thông tin thanh toán. Vui lòng thử lại.",
-	Billing: "Thanh toán",
-	"Manage your plan and payment method.": "Quản lý gói cước và phương thức thanh toán của bạn.",
-	"Change plan": "Thay đổi gói cước",
-	"Cancel subscription": "Hủy đăng ký",
-	"Setting up your account…": "Đang thiết lập tài khoản của bạn…",
-	"← Choose a different plan": "← Chọn một gói cước khác",
-	"Test checkout (dev only)": "Kiểm tra thanh toán (chỉ dành cho nhà phát triển)",
-	"Paddle's checkout can't embed on localhost, so this stand-in lets you walk the flow. Not shown in production.":
-		"Thanh toán của Paddle không thể nhúng trên localhost, vì vậy tùy chọn này cho phép bạn trải nghiệm quy trình. Không hiển thị trên môi trường chính thức.",
-	"Simulate successful payment": "Mô phỏng thanh toán thành công",
-	"Payment did not go through. Please try again.": "Thanh toán không thành công. Vui lòng thử lại.",
-	"Simulate failure": "Mô phỏng lỗi",
-	"Choose a Plan": "Chọn gói",
-	"Both plans include a 7-day free trial.": "Cả hai gói đều có bản dùng thử miễn phí 7 ngày.",
-	"Unlimited vaults · 50 GB · cross-vault search + API":
-		"Kho lưu trữ không giới hạn · 50 GB · tìm kiếm đa kho lưu trữ + API",
-	"Choose Pro": "Chọn gói Pro",
-	"7-day free trial · cancel anytime": "Bản dùng thử miễn phí 7 ngày · hủy bất cứ lúc nào",
-	"10 vaults · 10 GB · unlimited AI": "10 kho lưu trữ · 10 GB · AI không giới hạn",
-	"Choose Starter": "Chọn gói Starter",
-	"Choose Free": "Chọn Miễn phí",
-	"Opening Paddle…": "Đang mở Paddle…",
-	"Open Paddle billing portal": "Mở trang thanh toán của Paddle",
-	"Paddle is our payment processor. Use this if the controls above don't cover what you need.":
-		"Paddle là bộ xử lý thanh toán của chúng tôi. Sử dụng tùy chọn này nếu các tùy chọn trên không đáp ứng nhu cầu của bạn.",
-	"Something went wrong with checkout. Please try again.":
-		"Đã xảy ra lỗi trong quá trình thanh toán. Vui lòng thử lại.",
-	"Could not simulate checkout. Please try again.":
-		"Không thể mô phỏng quá trình thanh toán. Vui lòng thử lại.",
-	paid: "Đã thanh toán",
-	"Subscription scheduled to cancel.": "Đăng ký sẽ bị hủy.",
-	"Could not cancel subscription. Please try again.": "Không thể hủy đăng ký. Vui lòng thử lại.",
-	"You'll keep paid access through the end of your current billing period.":
-		"Bạn vẫn sẽ có quyền truy cập trả phí cho đến hết chu kỳ thanh toán hiện tại.",
-	"Your notes stay. Sync still works for vaults within Free limits.":
-		"Ghi chú của bạn vẫn được giữ lại. Đồng bộ hóa vẫn hoạt động cho các kho lưu trữ trong giới hạn của gói Miễn phí.",
-	"Vaults or notes that exceed Free limits become read-only.":
-		"Các kho lưu trữ hoặc ghi chú vượt quá giới hạn của gói Miễn phí sẽ chỉ cho phép đọc.",
-	"You can reverse this any time before the effective date.":
-		"Bạn có thể thay đổi điều này bất cứ lúc nào trước ngày có hiệu lực.",
-	"Why are you canceling?": "Tại sao bạn lại hủy?",
-	"Tell us more": "Hãy cho chúng tôi biết thêm",
-	"Keep my subscription": "Giữ lại gói đăng ký của tôi",
-	"Canceling…": "Đang hủy...",
-	"Cancel at period end": "Hủy vào cuối kỳ",
-	Starter: "Bản tiêu chuẩn",
-	Pro: "Bản chuyên nghiệp",
-	"You'll keep your {tier} plan until {date}, then drop to Free.":
-		"Bạn sẽ giữ gói {tier} cho đến {date}, sau đó chuyển sang gói miễn phí.",
 	"Access ends on": "Hết hạn vào ngày",
 	"Renews on": "Tự động gia hạn vào ngày",
 	"Current Plan": "Gói hiện tại",
 	Free: "Miễn phí",
+	Starter: "Bản tiêu chuẩn",
+	Pro: "Bản chuyên nghiệp",
 	"{count} days remaining in your free trial.": {
 		other: "Còn {count} ngày trong thời gian dùng thử miễn phí của bạn.",
 	},
@@ -173,6 +114,7 @@ export default {
 	canceled: "Đã hủy",
 	completed: "Đã hoàn thành",
 	billed: "Đã thanh toán",
+	paid: "Đã thanh toán",
 	ready: "Sẵn sàng",
 	draft: "Bản nháp",
 	"You've hit your note limit": "Bạn đã đạt giới hạn ghi chú",
@@ -216,6 +158,7 @@ export default {
 	"Could not reverse the cancellation. Please try again.":
 		"Không thể hủy bỏ việc hủy đăng ký. Vui lòng thử lại.",
 	"Reversing…": "Đang hủy bỏ...",
+	"Keep my subscription": "Giữ lại gói đăng ký của tôi",
 	"Your plan changes on {date}": "Gói của bạn thay đổi vào ngày {date}",
 	"Your plan cancels on {date}": "Gói của bạn bị hủy vào ngày {date}",
 	"Your plan pauses on {date}": "Gói của bạn tạm dừng vào ngày {date}",
@@ -253,6 +196,7 @@ export default {
 			other:
 				"Một số {hidden} ghi chú của bạn không thể tìm kiếm được. Chỉ {indexed} ghi chú cũ nhất được lập chỉ mục, vì vậy các ghi chú mới nhất sẽ không hiển thị trong kết quả tìm kiếm.",
 		},
+	"Change plan": "Thay đổi gói cước",
 	"Loading plan options…": "Đang tải các tùy chọn gói...",
 	"Plan change confirmed.": "Thay đổi đã được xác nhận.",
 	"Could not change plan. Please try again.": "Không thể thay đổi gói. Vui lòng thử lại.",
@@ -290,6 +234,61 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Bạn đang dùng bản dùng thử miễn phí. Paddle, dịch vụ thanh toán của chúng tôi, không cho phép thay đổi gói trong thời gian dùng thử — bản dùng thử của bạn sẽ kết thúc vào ngày {date}.",
 	Upgrade: "Nâng cấp",
+	"Could not fetch that invoice. Please try again.": "Không thể tải hóa đơn này. Vui lòng thử lại.",
+	"Payment received. We're finishing your activation in the background.":
+		"Đã nhận thanh toán. Chúng tôi đang hoàn tất quá trình kích hoạt của bạn.",
+	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
+		"Thông thường, quá trình này mất vài giây. Vui lòng đợi một lát để tải lại, hoặc liên hệ hỗ trợ nếu sự cố vẫn tiếp diễn.",
+	Refresh: "Tải lại",
+	"Contact support": "Liên hệ hỗ trợ",
+	"Loading billing": "Đang tải thông tin thanh toán",
+	"Could not open the billing portal. Please try again.":
+		"Không thể mở trang thanh toán. Vui lòng thử lại.",
+	"Could not start the payment update. Please try again.":
+		"Không thể cập nhật thông tin thanh toán. Vui lòng thử lại.",
+	Billing: "Thanh toán",
+	"Manage your plan and payment method.": "Quản lý gói cước và phương thức thanh toán của bạn.",
+	"Cancel subscription": "Hủy đăng ký",
+	"Setting up your account…": "Đang thiết lập tài khoản của bạn…",
+	"← Choose a different plan": "← Chọn một gói cước khác",
+	"Test checkout (dev only)": "Kiểm tra thanh toán (chỉ dành cho nhà phát triển)",
+	"Paddle's checkout can't embed on localhost, so this stand-in lets you walk the flow. Not shown in production.":
+		"Thanh toán của Paddle không thể nhúng trên localhost, vì vậy tùy chọn này cho phép bạn trải nghiệm quy trình. Không hiển thị trên môi trường chính thức.",
+	"Simulate successful payment": "Mô phỏng thanh toán thành công",
+	"Payment did not go through. Please try again.": "Thanh toán không thành công. Vui lòng thử lại.",
+	"Simulate failure": "Mô phỏng lỗi",
+	"Choose a Plan": "Chọn gói",
+	"Both plans include a 7-day free trial.": "Cả hai gói đều có bản dùng thử miễn phí 7 ngày.",
+	"Unlimited vaults · 50 GB · cross-vault search + API":
+		"Kho lưu trữ không giới hạn · 50 GB · tìm kiếm đa kho lưu trữ + API",
+	"Choose Pro": "Chọn gói Pro",
+	"7-day free trial · cancel anytime": "Bản dùng thử miễn phí 7 ngày · hủy bất cứ lúc nào",
+	"10 vaults · 10 GB · unlimited AI": "10 kho lưu trữ · 10 GB · AI không giới hạn",
+	"Choose Starter": "Chọn gói Starter",
+	"Choose Free": "Chọn Miễn phí",
+	"Opening Paddle…": "Đang mở Paddle…",
+	"Open Paddle billing portal": "Mở trang thanh toán của Paddle",
+	"Paddle is our payment processor. Use this if the controls above don't cover what you need.":
+		"Paddle là bộ xử lý thanh toán của chúng tôi. Sử dụng tùy chọn này nếu các tùy chọn trên không đáp ứng nhu cầu của bạn.",
+	"Something went wrong with checkout. Please try again.":
+		"Đã xảy ra lỗi trong quá trình thanh toán. Vui lòng thử lại.",
+	"Could not simulate checkout. Please try again.":
+		"Không thể mô phỏng quá trình thanh toán. Vui lòng thử lại.",
+	"Subscription scheduled to cancel.": "Đăng ký sẽ bị hủy.",
+	"Could not cancel subscription. Please try again.": "Không thể hủy đăng ký. Vui lòng thử lại.",
+	"You'll keep paid access through the end of your current billing period.":
+		"Bạn vẫn sẽ có quyền truy cập trả phí cho đến hết chu kỳ thanh toán hiện tại.",
+	"Your notes stay. Sync still works for vaults within Free limits.":
+		"Ghi chú của bạn vẫn được giữ lại. Đồng bộ hóa vẫn hoạt động cho các kho lưu trữ trong giới hạn của gói Miễn phí.",
+	"Vaults or notes that exceed Free limits become read-only.":
+		"Các kho lưu trữ hoặc ghi chú vượt quá giới hạn của gói Miễn phí sẽ chỉ cho phép đọc.",
+	"You can reverse this any time before the effective date.":
+		"Bạn có thể thay đổi điều này bất cứ lúc nào trước ngày có hiệu lực.",
+	"Why are you canceling?": "Tại sao bạn lại hủy?",
+	"Canceling…": "Đang hủy...",
+	"Cancel at period end": "Hủy vào cuối kỳ",
+	"You'll keep your {tier} plan until {date}, then drop to Free.":
+		"Bạn sẽ giữ gói {tier} cho đến {date}, sau đó chuyển sang gói miễn phí.",
 	"An invoice will be created for this amount": "Một hóa đơn sẽ được tạo với số tiền này",
 	"This amount will be charged immediately": "Số tiền này sẽ được tính ngay lập tức",
 	"Charged on {date}": "Tính phí vào ngày {date}",
@@ -373,6 +372,7 @@ export default {
 	"Creating…": "Đang tạo...",
 	Create: "Tạo",
 	"Search vaults": "Tìm kiếm kho lưu trữ",
+	default: "mặc định",
 	"{n} notes": { other: "{n} ghi chú" },
 	"{n} files": { other: "{n} tệp" },
 	text: "văn bản",
@@ -424,14 +424,12 @@ export default {
 		"Các ghi chú của bạn sẽ xuất hiện ở đây khi chúng được đồng bộ hóa. Bạn có thể quay lại bất cứ lúc nào.",
 	"Continue to web app": "Tiếp tục đến ứng dụng web",
 	"Open Obsidian": "Mở Obsidian",
-	default: "mặc định",
 	"Selected: {name}": "Đã chọn: {name}",
 	"Creating a new vault": "Đang tạo kho lưu trữ mới",
 	"choose a new name": "chọn một tên mới",
 	"New vault name": "Tên kho lưu trữ mới",
 	"Where should these notes sync?": "Các ghi chú này sẽ được đồng bộ hóa đến đâu?",
-	Suggested: "Đề xuất",
-	"matches your Obsidian vault": "phù hợp với kho lưu trữ Obsidian của bạn",
+	"Sync with your matching vault": "Đồng bộ hóa với kho lưu trữ của bạn",
 	"Or sync with a different vault": "Hoặc đồng bộ hóa với một kho lưu trữ khác",
 	"Sync with an existing vault": "Đồng bộ hóa với một kho lưu trữ hiện có",
 	"(choose from {count} vaults)": "(chọn từ {count} kho lưu trữ)",
@@ -495,6 +493,7 @@ export default {
 	"Sync problems or bugs": "Vấn đề đồng bộ hoặc lỗi",
 	"Switched to another tool": "Đã chuyển sang một công cụ khác",
 	"Not using it enough": "Không sử dụng đủ",
+	"Tell us more": "Hãy cho chúng tôi biết thêm",
 	Language: "Ngôn ngữ",
 	"My Vault": "Kho lưu trữ của tôi",
 	"{count} days left in your trial.": {
@@ -1065,25 +1064,6 @@ export default {
 	Connected: "Đã kết nối",
 	"Disconnect {name}": "Ngắt kết nối {name}",
 	"Connect {name}": "Kết nối {name}",
-	"Account deleted": "Tài khoản đã bị xóa",
-	"Delete failed": "Xóa thất bại",
-	"You're the only admin on this instance. Promote another user to admin first, then try again.":
-		"Bạn là quản trị viên duy nhất trên phiên bản này. Hãy chỉ định một người dùng khác làm quản trị viên trước, sau đó thử lại.",
-	"Incorrect password.": "Mật khẩu không chính xác.",
-	"Danger zone": "Khu vực nguy hiểm",
-	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
-		"Các hành động không thể hoàn tác. Xóa tài khoản của bạn sẽ đăng xuất và chặn các lần đăng nhập trong tương lai cho người dùng này.",
-	"Delete account": "Xóa tài khoản",
-	"Delete your account?": "Xóa tài khoản của bạn?",
-	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"Hành động này sẽ xóa tài khoản của bạn. Bạn sẽ không thể đăng nhập lại. Một quản trị viên có thể xóa dữ liệu kho lưu trữ của bạn sau này.",
-	"I understand this is irreversible": "Tôi hiểu rằng việc này là không thể hoàn tác",
-	Delete: "Xóa",
-	"Could not delete account": "Không thể xóa tài khoản",
-	"Permanently delete your account and all associated data. This cannot be undone.":
-		"Xóa vĩnh viễn tài khoản của bạn và tất cả dữ liệu liên quan. Hành động này không thể hoàn tác.",
-	'Type "{phrase}" to confirm': 'Nhập "{phrase}" để xác nhận',
-	"Delete my account": "Xóa tài khoản của tôi",
 	"Email copied": "Địa chỉ email đã được sao chép",
 	"To change your email, contact your admin.":
 		"Để thay đổi địa chỉ email của bạn, hãy liên hệ với quản trị viên của bạn.",
@@ -1138,6 +1118,28 @@ export default {
 	Device: "Thiết bị",
 	Browser: "Trình duyệt",
 	"Revoke {name}": "Hủy {name}",
+	"Account deleted": "Tài khoản đã bị xóa",
+	"Delete failed": "Xóa thất bại",
+	"You're the only admin on this instance. Promote another user to admin first, then try again.":
+		"Bạn là quản trị viên duy nhất trên phiên bản này. Hãy chỉ định một người dùng khác làm quản trị viên trước, sau đó thử lại.",
+	"Incorrect password.": "Mật khẩu không chính xác.",
+	"Danger zone": "Khu vực nguy hiểm",
+	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
+		"Các hành động không thể hoàn tác. Xóa tài khoản của bạn sẽ đăng xuất và chặn các lần đăng nhập trong tương lai cho người dùng này.",
+	"Delete account": "Xóa tài khoản",
+	"Delete your account?": "Xóa tài khoản của bạn?",
+	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
+		"Hành động này sẽ xóa tài khoản của bạn. Bạn sẽ không thể đăng nhập lại. Một quản trị viên có thể xóa dữ liệu kho lưu trữ của bạn sau này.",
+	"I understand this is irreversible": "Tôi hiểu rằng việc này là không thể hoàn tác",
+	Delete: "Xóa",
+	"Could not delete account": "Không thể xóa tài khoản",
+	"Permanently delete your account and all associated data. This cannot be undone.":
+		"Xóa vĩnh viễn tài khoản của bạn và tất cả dữ liệu liên quan. Hành động này không thể hoàn tác.",
+	"Why are you deleting your account?": "Tại sao bạn xóa tài khoản?",
+	"Your answer is kept after your account is deleted, without your name or email.":
+		"Câu trả lời của bạn được lưu sau khi tài khoản bị xóa, không có tên hoặc email của bạn.",
+	'Type "{phrase}" to confirm': 'Nhập "{phrase}" để xác nhận',
+	"Delete my account": "Xóa tài khoản của tôi",
 	"Rename failed": "Đổi tên thất bại",
 	Default: "Mặc định",
 	"Set {name} as default": "Đặt {name} làm mặc định",

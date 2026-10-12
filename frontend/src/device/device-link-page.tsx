@@ -6,8 +6,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-	countLabel,
 	useVaultSearch,
+	VaultOption,
 	VaultRows,
 	VaultSearchField,
 	VaultSearchToggle,
@@ -17,7 +17,6 @@ import { useStableT, useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { Trans } from "@/i18n/trans";
 import type { Tn, Translate } from "@/i18n/translate";
-import type { UIText } from "@/i18n/ui-text";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { track } from "../analytics/track";
@@ -753,41 +752,6 @@ interface VaultPickerFieldsetProps {
 	atVaultCap: boolean;
 }
 
-function VaultRadio({
-	vault,
-	active,
-	onSelect,
-	hint,
-}: {
-	vault: Vault;
-	active: boolean;
-	onSelect: (next: string) => void;
-	hint?: UIText;
-}) {
-	const { t, tn, renderedLocale } = useT();
-	return (
-		<label className={selectableRow(active)}>
-			<input
-				type="radio"
-				name="vault-target"
-				checked={active}
-				onChange={() => onSelect(vault.id)}
-				className="accent-primary"
-			/>
-			<span className="flex min-w-0 flex-1 items-baseline gap-2">
-				<span className="font-medium text-foreground text-sm">{vault.name}</span>
-				{vault.is_default ? (
-					<span className="text-muted-foreground text-xs">{t("default")}</span>
-				) : null}
-				{hint ? <span className="text-muted-foreground text-xs">{hint}</span> : null}
-			</span>
-			<span className="shrink-0 text-muted-foreground text-xs">
-				{countLabel(tn, renderedLocale, vault.note_count, vault.attachment_count)}
-			</span>
-		</label>
-	);
-}
-
 // Picker for the /link consent page, in two blocks:
 //   1. Existing vaults as radio rows (the one matching the plugin's suggested
 //      name first). Selecting one links into it, no creation.
@@ -840,12 +804,13 @@ function VaultPickerFieldset({
 			<legend className="sr-only">{t("Where should these notes sync?")}</legend>
 			{matchedExisting ? (
 				<>
-					<p className={sectionTitle}>{t("Suggested")}</p>
-					<VaultRadio
+					<p className={sectionTitle}>{t("Sync with your matching vault")}</p>
+					<VaultOption
 						vault={matchedExisting}
-						active={selection === matchedExisting.id}
-						onSelect={onSelect}
-						hint={t("matches your Obsidian vault")}
+						type="radio"
+						name="vault-target"
+						checked={selection === matchedExisting.id}
+						onChange={() => onSelect(matchedExisting.id)}
 					/>
 				</>
 			) : null}
@@ -862,7 +827,7 @@ function VaultPickerFieldset({
 								? t("Or sync with a different vault")
 								: t("Sync with an existing vault")}
 							{search.showFilter ? (
-								<span className="ml-2 font-normal text-muted-foreground text-sm">
+								<span className="block font-normal text-muted-foreground text-sm sm:ml-2 sm:inline">
 									{t("(choose from {count} vaults)", { count: otherVaults.length })}
 								</span>
 							) : null}
@@ -872,7 +837,14 @@ function VaultPickerFieldset({
 					<VaultSearchField search={search} status={search.needle ? selectionStatus : undefined} />
 					<VaultRows scroll={search.showFilter}>
 						{search.shown.map((v) => (
-							<VaultRadio key={v.id} vault={v} active={selection === v.id} onSelect={onSelect} />
+							<VaultOption
+								key={v.id}
+								vault={v}
+								type="radio"
+								name="vault-target"
+								checked={selection === v.id}
+								onChange={() => onSelect(v.id)}
+							/>
 						))}
 						{search.showFilter && search.needle && search.shown.length === 0 && (
 							<p className="p-3 text-muted-foreground text-sm">

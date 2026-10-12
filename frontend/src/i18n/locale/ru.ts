@@ -92,75 +92,12 @@ export default {
 	Status: "Статус",
 	Invoice: "Счёт",
 	Download: "Скачать",
-	"Could not fetch that invoice. Please try again.":
-		"Не удалось получить этот счёт. Пожалуйста, попробуйте ещё раз.",
-	"Payment received. We're finishing your activation in the background.":
-		"Платеж получен. Мы завершаем активацию в фоновом режиме.",
-	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
-		"Обычно это занимает несколько секунд. Обновите страницу через некоторое время или обратитесь в службу поддержки, если проблема не исчезнет.",
-	Refresh: "Обновить",
-	"Contact support": "Связаться со службой поддержки",
-	"Loading billing": "Загрузка информации о платежах",
-	"Could not open the billing portal. Please try again.":
-		"Не удалось открыть страницу оплаты. Пожалуйста, попробуйте ещё раз.",
-	"Could not start the payment update. Please try again.":
-		"Не удалось начать обновление платежной информации. Пожалуйста, попробуйте ещё раз.",
-	Billing: "Платежи",
-	"Manage your plan and payment method.": "Управляйте своим тарифным планом и способом оплаты.",
-	"Change plan": "Изменить тарифный план",
-	"Cancel subscription": "Отменить подписку",
-	"Setting up your account…": "Настройка вашей учётной записи…",
-	"← Choose a different plan": "← Выберите другой тарифный план",
-	"Test checkout (dev only)": "Тестовая оплата (только для разработчиков)",
-	"Paddle's checkout can't embed on localhost, so this stand-in lets you walk the flow. Not shown in production.":
-		"Оплата через Paddle не поддерживается на localhost, поэтому этот временный вариант позволяет вам ознакомиться с процессом. Не отображается в рабочей среде.",
-	"Simulate successful payment": "Имитировать успешную оплату",
-	"Payment did not go through. Please try again.":
-		"Оплата не прошла. Пожалуйста, попробуйте еще раз.",
-	"Simulate failure": "Имитировать ошибку",
-	"Choose a Plan": "Выберите тарифный план",
-	"Both plans include a 7-day free trial.":
-		"Оба тарифа включают 7-дневный бесплатный пробный период.",
-	"Unlimited vaults · 50 GB · cross-vault search + API":
-		"Неограниченное количество хранилищ · 50 ГБ · поиск по всем хранилищам + API",
-	"Choose Pro": 'Выбрать тариф "Pro"',
-	"7-day free trial · cancel anytime": "7-дневный бесплатный пробный период · отмена в любое время",
-	"10 vaults · 10 GB · unlimited AI": "10 хранилищ · 10 ГБ · неограниченное использование ИИ",
-	"Choose Starter": 'Выбрать тариф "Starter"',
-	"Choose Free": 'Выберите "Бесплатно"',
-	"Opening Paddle…": "Открытие Paddle…",
-	"Open Paddle billing portal": "Открыть платежный портал Paddle",
-	"Paddle is our payment processor. Use this if the controls above don't cover what you need.":
-		"Paddle – наш платежный процессор. Используйте его, если вышеуказанные опции не соответствуют вашим потребностям.",
-	"Something went wrong with checkout. Please try again.":
-		"Произошла ошибка при оформлении заказа. Пожалуйста, попробуйте еще раз.",
-	"Could not simulate checkout. Please try again.":
-		"Не удалось имитировать оформление заказа. Пожалуйста, попробуйте еще раз.",
-	paid: "Оплачено",
-	"Subscription scheduled to cancel.": "Подписка запланирована для отмены.",
-	"Could not cancel subscription. Please try again.":
-		"Не удалось отменить подписку. Пожалуйста, попробуйте еще раз.",
-	"You'll keep paid access through the end of your current billing period.":
-		"Вы сохраните доступ по истечении текущего периода оплаты.",
-	"Your notes stay. Sync still works for vaults within Free limits.":
-		"Ваши заметки останутся. Синхронизация по-прежнему работает для хранилищ в пределах ограничений бесплатной версии.",
-	"Vaults or notes that exceed Free limits become read-only.":
-		"Хранилища или заметки, превышающие ограничения бесплатной версии, станут доступными только для чтения.",
-	"You can reverse this any time before the effective date.":
-		"Вы можете изменить это решение в любое время до даты вступления изменений в силу.",
-	"Why are you canceling?": "Почему вы отменяете?",
-	"Tell us more": "Расскажите нам подробнее",
-	"Keep my subscription": "Сохранить подписку",
-	"Canceling…": "Отмена…",
-	"Cancel at period end": "Отмена в конце периода",
-	Starter: "Базовый",
-	Pro: "Продвинутый",
-	"You'll keep your {tier} plan until {date}, then drop to Free.":
-		"Вы будете пользоваться вашим планом {tier} до {date}, после чего он будет понижен до бесплатного.",
 	"Access ends on": "Доступ прекращается",
 	"Renews on": "Продление",
 	"Current Plan": "Текущий план",
 	Free: "Бесплатно",
+	Starter: "Базовый",
+	Pro: "Продвинутый",
 	"{count} days remaining in your free trial.": {
 		one: "До конца бесплатного пробного периода остался {count} день.",
 		few: "До конца бесплатного пробного периода осталось {count} дня.",
@@ -183,6 +120,7 @@ export default {
 	canceled: "отменено",
 	completed: "завершено",
 	billed: "оплачено",
+	paid: "Оплачено",
 	ready: "готово",
 	draft: "черновик",
 	"You've hit your note limit": "Вы достигли лимита заметок",
@@ -227,6 +165,7 @@ export default {
 	"Could not reverse the cancellation. Please try again.":
 		"Не удалось отменить отмену. Пожалуйста, попробуйте ещё раз.",
 	"Reversing…": "Отмена…",
+	"Keep my subscription": "Сохранить подписку",
 	"Your plan changes on {date}": "Изменения в вашем плане {date}",
 	"Your plan cancels on {date}": "Отмена вашего плана {date}",
 	"Your plan pauses on {date}": "Приостановка вашего плана {date}",
@@ -267,6 +206,7 @@ export default {
 			other:
 				"{hidden} ваших заметок не подлежат поиску. Индексируются только ваши самые старые {indexed}, поэтому новые заметки не будут отображаться в результатах поиска.",
 		},
+	"Change plan": "Изменить тарифный план",
 	"Loading plan options…": "Загрузка вариантов тарифных планов…",
 	"Plan change confirmed.": "Изменение плана подтверждено.",
 	"Could not change plan. Please try again.":
@@ -305,6 +245,65 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Вы используете бесплатный пробный период. Paddle, наш платежный процессор, не позволяет изменять тарифный план во время пробного периода — ваш пробный период закончится {date}.",
 	Upgrade: "Обновить",
+	"Could not fetch that invoice. Please try again.":
+		"Не удалось получить этот счёт. Пожалуйста, попробуйте ещё раз.",
+	"Payment received. We're finishing your activation in the background.":
+		"Платеж получен. Мы завершаем активацию в фоновом режиме.",
+	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
+		"Обычно это занимает несколько секунд. Обновите страницу через некоторое время или обратитесь в службу поддержки, если проблема не исчезнет.",
+	Refresh: "Обновить",
+	"Contact support": "Связаться со службой поддержки",
+	"Loading billing": "Загрузка информации о платежах",
+	"Could not open the billing portal. Please try again.":
+		"Не удалось открыть страницу оплаты. Пожалуйста, попробуйте ещё раз.",
+	"Could not start the payment update. Please try again.":
+		"Не удалось начать обновление платежной информации. Пожалуйста, попробуйте ещё раз.",
+	Billing: "Платежи",
+	"Manage your plan and payment method.": "Управляйте своим тарифным планом и способом оплаты.",
+	"Cancel subscription": "Отменить подписку",
+	"Setting up your account…": "Настройка вашей учётной записи…",
+	"← Choose a different plan": "← Выберите другой тарифный план",
+	"Test checkout (dev only)": "Тестовая оплата (только для разработчиков)",
+	"Paddle's checkout can't embed on localhost, so this stand-in lets you walk the flow. Not shown in production.":
+		"Оплата через Paddle не поддерживается на localhost, поэтому этот временный вариант позволяет вам ознакомиться с процессом. Не отображается в рабочей среде.",
+	"Simulate successful payment": "Имитировать успешную оплату",
+	"Payment did not go through. Please try again.":
+		"Оплата не прошла. Пожалуйста, попробуйте еще раз.",
+	"Simulate failure": "Имитировать ошибку",
+	"Choose a Plan": "Выберите тарифный план",
+	"Both plans include a 7-day free trial.":
+		"Оба тарифа включают 7-дневный бесплатный пробный период.",
+	"Unlimited vaults · 50 GB · cross-vault search + API":
+		"Неограниченное количество хранилищ · 50 ГБ · поиск по всем хранилищам + API",
+	"Choose Pro": 'Выбрать тариф "Pro"',
+	"7-day free trial · cancel anytime": "7-дневный бесплатный пробный период · отмена в любое время",
+	"10 vaults · 10 GB · unlimited AI": "10 хранилищ · 10 ГБ · неограниченное использование ИИ",
+	"Choose Starter": 'Выбрать тариф "Starter"',
+	"Choose Free": 'Выберите "Бесплатно"',
+	"Opening Paddle…": "Открытие Paddle…",
+	"Open Paddle billing portal": "Открыть платежный портал Paddle",
+	"Paddle is our payment processor. Use this if the controls above don't cover what you need.":
+		"Paddle – наш платежный процессор. Используйте его, если вышеуказанные опции не соответствуют вашим потребностям.",
+	"Something went wrong with checkout. Please try again.":
+		"Произошла ошибка при оформлении заказа. Пожалуйста, попробуйте еще раз.",
+	"Could not simulate checkout. Please try again.":
+		"Не удалось имитировать оформление заказа. Пожалуйста, попробуйте еще раз.",
+	"Subscription scheduled to cancel.": "Подписка запланирована для отмены.",
+	"Could not cancel subscription. Please try again.":
+		"Не удалось отменить подписку. Пожалуйста, попробуйте еще раз.",
+	"You'll keep paid access through the end of your current billing period.":
+		"Вы сохраните доступ по истечении текущего периода оплаты.",
+	"Your notes stay. Sync still works for vaults within Free limits.":
+		"Ваши заметки останутся. Синхронизация по-прежнему работает для хранилищ в пределах ограничений бесплатной версии.",
+	"Vaults or notes that exceed Free limits become read-only.":
+		"Хранилища или заметки, превышающие ограничения бесплатной версии, станут доступными только для чтения.",
+	"You can reverse this any time before the effective date.":
+		"Вы можете изменить это решение в любое время до даты вступления изменений в силу.",
+	"Why are you canceling?": "Почему вы отменяете?",
+	"Canceling…": "Отмена…",
+	"Cancel at period end": "Отмена в конце периода",
+	"You'll keep your {tier} plan until {date}, then drop to Free.":
+		"Вы будете пользоваться вашим планом {tier} до {date}, после чего он будет понижен до бесплатного.",
 	"An invoice will be created for this amount": "Будет создан счёт на эту сумму",
 	"This amount will be charged immediately": "Сумма будет списана немедленно",
 	"Charged on {date}": "Списано {date}",
@@ -389,6 +388,7 @@ export default {
 	"Creating…": "Создание…",
 	Create: "Создать",
 	"Search vaults": "Поиск хранилищ",
+	default: "по умолчанию",
 	"{n} notes": {
 		one: "{n} заметка",
 		few: "{n} заметок",
@@ -445,14 +445,12 @@ export default {
 		"Ваши заметки появятся здесь по мере синхронизации. Вы можете вернуться сюда в любое время.",
 	"Continue to web app": "Перейти в веб-приложение",
 	"Open Obsidian": "Открыть Obsidian",
-	default: "по умолчанию",
 	"Selected: {name}": "Выбрано: {name}",
 	"Creating a new vault": "Создание нового хранилища",
 	"choose a new name": "выберите новое имя",
 	"New vault name": "Имя нового хранилища",
 	"Where should these notes sync?": "Куда следует синхронизировать эти заметки?",
-	Suggested: "Предложено",
-	"matches your Obsidian vault": "соответствует вашему хранилищу Obsidian",
+	"Sync with your matching vault": "Синхронизировать с вашим хранилищем",
 	"Or sync with a different vault": "Или синхронизируйте с другим хранилищем",
 	"Sync with an existing vault": "Синхронизировать с существующим хранилищем",
 	"(choose from {count} vaults)": "(выберите из {count} хранилищ)",
@@ -543,6 +541,7 @@ export default {
 	"Sync problems or bugs": "Проблемы синхронизации или ошибки",
 	"Switched to another tool": "Перешёл на другой инструмент",
 	"Not using it enough": "Не использую его достаточно часто",
+	"Tell us more": "Расскажите нам подробнее",
 	Language: "Язык",
 	"My Vault": "Моё хранилище",
 	"{count} days left in your trial.": {
@@ -1151,25 +1150,6 @@ export default {
 	Connected: "Подключено",
 	"Disconnect {name}": "Отключить {name}",
 	"Connect {name}": "Подключить {name}",
-	"Account deleted": "Учётная запись удалена",
-	"Delete failed": "Удаление не удалось",
-	"You're the only admin on this instance. Promote another user to admin first, then try again.":
-		"Вы единственный администратор в этой системе. Сначала назначьте другого пользователя администратором, затем попробуйте ещё раз.",
-	"Incorrect password.": "Неверный пароль.",
-	"Danger zone": "Осторожно",
-	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
-		"Необратимые действия. Удаление вашей учётной записи выводит вас из системы и блокирует будущие входы для этого пользователя.",
-	"Delete account": "Удалить учётную запись",
-	"Delete your account?": "Удалить вашу учётную запись?",
-	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"Это временно удалит вашу учётную запись. Вы не сможете войти снова. Администратор может позже удалить данные вашего хранилища.",
-	"I understand this is irreversible": "Я понимаю, что это необратимо",
-	Delete: "Удалить",
-	"Could not delete account": "Не удалось удалить учётную запись",
-	"Permanently delete your account and all associated data. This cannot be undone.":
-		"Постоянно удалите вашу учётную запись и все связанные данные. Это действие нельзя отменить.",
-	'Type "{phrase}" to confirm': 'Введите "{phrase}", чтобы подтвердить',
-	"Delete my account": "Удалить мою учётную запись",
 	"Email copied": "Электронная почта скопирована",
 	"To change your email, contact your admin.":
 		"Чтобы изменить адрес электронной почты, обратитесь к вашему администратору.",
@@ -1226,6 +1206,28 @@ export default {
 	Device: "Устройство",
 	Browser: "Браузер",
 	"Revoke {name}": "Завершить сессию {name}",
+	"Account deleted": "Учётная запись удалена",
+	"Delete failed": "Удаление не удалось",
+	"You're the only admin on this instance. Promote another user to admin first, then try again.":
+		"Вы единственный администратор в этой системе. Сначала назначьте другого пользователя администратором, затем попробуйте ещё раз.",
+	"Incorrect password.": "Неверный пароль.",
+	"Danger zone": "Осторожно",
+	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
+		"Необратимые действия. Удаление вашей учётной записи выводит вас из системы и блокирует будущие входы для этого пользователя.",
+	"Delete account": "Удалить учётную запись",
+	"Delete your account?": "Удалить вашу учётную запись?",
+	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
+		"Это временно удалит вашу учётную запись. Вы не сможете войти снова. Администратор может позже удалить данные вашего хранилища.",
+	"I understand this is irreversible": "Я понимаю, что это необратимо",
+	Delete: "Удалить",
+	"Could not delete account": "Не удалось удалить учётную запись",
+	"Permanently delete your account and all associated data. This cannot be undone.":
+		"Постоянно удалите вашу учётную запись и все связанные данные. Это действие нельзя отменить.",
+	"Why are you deleting your account?": "Почему вы удаляете свою учётную запись?",
+	"Your answer is kept after your account is deleted, without your name or email.":
+		"Ваш ответ сохраняется после удаления учётной записи, без вашего имени или адреса электронной почты.",
+	'Type "{phrase}" to confirm': 'Введите "{phrase}", чтобы подтвердить',
+	"Delete my account": "Удалить мою учётную запись",
 	"Rename failed": "Переименование не удалось",
 	Default: "По умолчанию",
 	"Set {name} as default": "Установить {name} как хранилище по умолчанию",

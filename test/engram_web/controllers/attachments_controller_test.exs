@@ -711,6 +711,18 @@ defmodule EngramWeb.AttachmentsControllerTest do
       conn = delete(conn, "/api/attachments/photos/ghost.png")
       assert %{"deleted" => true} = json_response(conn, 200)
     end
+
+    test "a delete that could not run is a 500, not deleted: true", %{conn: conn, user: user} do
+      Engram.Crypto.DekCache.invalidate(user.id)
+
+      {:ok, _} =
+        user
+        |> Ecto.Changeset.change(encrypted_dek: :crypto.strong_rand_bytes(32))
+        |> Engram.Repo.update(skip_tenant_check: true)
+
+      conn = delete(conn, "/api/attachments/photos/any.png")
+      assert %{"error" => "failed to delete attachment"} = json_response(conn, 500)
+    end
   end
 
   # ---------------------------------------------------------------------------

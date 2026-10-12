@@ -178,6 +178,13 @@ defmodule Engram.Accounts.Lifecycle do
     _ = PostHog.delete_person(PostHog.analytics_id(user.email))
     _ = if user.external_id, do: PostHog.delete_person(user.external_id), else: :ok
 
+    # Read before Step 4 deletes the row: the answer a delete_account feedback
+    # submit stashed there is sent only once the delete commits.
+    profile =
+      Repo.one(from(u in User, where: u.id == ^user.id, select: u.onboarding_profile),
+        skip_tenant_check: true
+      )
+
     # Step 4: COMMIT POINT — Postgres cascade, wrapped in a transaction so
     # the two writes (vault delete + user delete) either both land or both
     # roll back. Without the txn, a failure between them would leave the
@@ -236,6 +243,8 @@ defmodule Engram.Accounts.Lifecycle do
         # outlive ours. Future Clerk webhooks find_by_external_id →
         # :user_not_found → :ok.
         _ = delete_clerk_identity(user)
+
+        _ = Engram.Feedback.capture_delete_reason(profile)
 
         :ok
 

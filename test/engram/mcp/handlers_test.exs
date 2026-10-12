@@ -150,6 +150,98 @@ defmodule Engram.MCP.HandlersTest do
     end
   end
 
+  describe "delete_attachment handler" do
+    test "deletes the attachment and broadcasts the delete to plugins", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "img/a.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert {:ok, msg, %{"path" => "img/a.png", "deleted" => true}} =
+               Handlers.handle("delete_attachment", user, vault, %{"path" => "img/a.png"})
+
+      assert msg =~ "Attachment deleted: img/a.png"
+      assert {:ok, []} = Attachments.list_attachments(user, vault)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "delete", "kind" => "attachment", "path" => "img/a.png"}
+      }
+    end
+
+    test "an absent path says so instead of reporting a delete", %{user: user, vault: vault} do
+      assert {:ok, msg, %{"path" => "nope.png", "deleted" => false}} =
+               Handlers.handle("delete_attachment", user, vault, %{"path" => "nope.png"})
+
+      assert msg =~ "No attachment at: nope.png"
+    end
+
+    test "removes the stored blob", %{user: user, vault: vault} do
+      {:ok, att} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "b.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      test_pid = self()
+
+      Mox.stub(Engram.MockStorage, :delete, fn key ->
+        send(test_pid, {:blob_deleted, key})
+        :ok
+      end)
+
+      assert {:ok, _, %{"deleted" => true}} =
+               Handlers.handle("delete_attachment", user, vault, %{"path" => "b.png"})
+
+      storage_key = att.storage_key
+      assert_receive {:blob_deleted, ^storage_key}
+    end
+
+    test "reports the sanitized path that was deleted", %{user: user, vault: vault} do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "img/c.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      assert {:ok, msg, %{"path" => "img/c.png", "deleted" => true}} =
+               Handlers.handle("delete_attachment", user, vault, %{"path" => "/img/c.png"})
+
+      assert msg =~ "Attachment deleted: img/c.png"
+    end
+
+    test "an empty path, or one that sanitizes to empty, is refused", %{user: user, vault: vault} do
+      for args <- [%{}, %{"path" => ""}, %{"path" => "/"}, %{"path" => ".."}] do
+        assert {:error, "path is required"} =
+                 Handlers.handle("delete_attachment", user, vault, args)
+      end
+    end
+
+    test "a crypto failure is an error, not a reported no-op", %{user: user, vault: vault} do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "d.png",
+          "content_base64" => Base.encode64("x")
+        })
+
+      Engram.Crypto.DekCache.invalidate(user.id)
+      corrupt = user |> Ecto.Changeset.change(encrypted_dek: :crypto.strong_rand_bytes(32))
+      {:ok, corrupt_user} = Engram.Repo.update(corrupt, skip_tenant_check: true)
+
+      assert {:error, msg} =
+               Handlers.handle("delete_attachment", corrupt_user, vault, %{"path" => "d.png"})
+
+      assert msg =~ "Could not delete attachment"
+      refute msg =~ "unrecognised_blob"
+    end
+  end
+
   describe "rename_folder handler error path" do
     # Bug 2: Folders.rename's spec is {:ok, counts()} | {:error, term()} — it can
     # surface a non-:conflict {:error, reason} (the attachment leg's move can

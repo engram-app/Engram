@@ -91,74 +91,12 @@ export default {
 	Status: "Status",
 	Invoice: "Invois",
 	Download: "Muat turun",
-	"Could not fetch that invoice. Please try again.":
-		"Tidak dapat mendapatkan invois itu. Sila cuba lagi.",
-	"Payment received. We're finishing your activation in the background.":
-		"Pembayaran diterima. Kami sedang menyelesaikan aktivasi anda.",
-	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
-		"Ini biasanya mengambil beberapa saat. Segarkan semula dalam sekejap, atau hubungi sokongan jika masalah berterusan.",
-	Refresh: "Segarkan semula",
-	"Contact support": "Hubungi sokongan",
-	"Loading billing": "Memuatkan maklumat pembayaran",
-	"Could not open the billing portal. Please try again.":
-		"Tidak dapat membuka portal pembayaran. Sila cuba lagi.",
-	"Could not start the payment update. Please try again.":
-		"Tidak dapat memulakan kemas kini pembayaran. Sila cuba lagi.",
-	Billing: "Pembayaran",
-	"Manage your plan and payment method.": "Urus langganan dan kaedah pembayaran anda.",
-	"Change plan": "Tukar langganan",
-	"Cancel subscription": "Batalkan langganan",
-	"Setting up your account…": "Mengkonfigurasi akaun anda…",
-	"← Choose a different plan": "← Pilih langganan yang berbeza",
-	"Test checkout (dev only)": "Ujian pembayaran (hanya untuk pembangunan)",
-	"Paddle's checkout can't embed on localhost, so this stand-in lets you walk the flow. Not shown in production.":
-		"Sistem pembayaran Paddle tidak boleh dipaparkan pada localhost, jadi pengganti ini membolehkan anda mencuba prosesnya. Tidak ditunjukkan dalam versi akhir.",
-	"Simulate successful payment": "Simulasikan pembayaran berjaya",
-	"Payment did not go through. Please try again.": "Pembayaran gagal. Sila cuba lagi.",
-	"Simulate failure": "Simulasikan kegagalan",
-	"Choose a Plan": "Pilih Pelan",
-	"Both plans include a 7-day free trial.": "Kedua-dua pelan termasuk tempoh percubaan 7 hari.",
-	"Unlimited vaults · 50 GB · cross-vault search + API":
-		"Peti nota tanpa had · 50 GB · carian lintas peti nota + API",
-	"Choose Pro": "Pilih Pro",
-	"7-day free trial · cancel anytime":
-		"Tempoh percubaan 7 hari · boleh dibatalkan pada bila-bila masa",
-	"10 vaults · 10 GB · unlimited AI": "10 peti nota · 10 GB · AI tanpa had",
-	"Choose Starter": "Pilih Starter",
-	"Choose Free": "Pilih Percuma",
-	"Opening Paddle…": "Membuka Paddle…",
-	"Open Paddle billing portal": "Buka portal pembayaran Paddle",
-	"Paddle is our payment processor. Use this if the controls above don't cover what you need.":
-		"Paddle ialah pemproses pembayaran kami. Gunakan ini jika butang di atas tidak memenuhi keperluan anda.",
-	"Something went wrong with checkout. Please try again.":
-		"Sesatu berlaku salah semasa pembayaran. Sila cuba lagi.",
-	"Could not simulate checkout. Please try again.":
-		"Tidak dapat memulakan proses pembayaran. Sila cuba lagi.",
-	paid: "Telah dibayar",
-	"Subscription scheduled to cancel.": "Langganan akan dibatalkan.",
-	"Could not cancel subscription. Please try again.":
-		"Tidak dapat membatalkan langganan. Sila cuba lagi.",
-	"You'll keep paid access through the end of your current billing period.":
-		"Anda akan terus menikmati akses berbayar sehingga akhir tempoh pembayaran semasa anda.",
-	"Your notes stay. Sync still works for vaults within Free limits.":
-		"Nota anda kekal. Sync masih berfungsi untuk peti nota dalam had percuma.",
-	"Vaults or notes that exceed Free limits become read-only.":
-		"Peti nota atau nota yang melebihi had percuma akan menjadi baca sahaja.",
-	"You can reverse this any time before the effective date.":
-		"Anda boleh membatalkan ini pada bila-bila masa sebelum tarikh berkuatkuasa.",
-	"Why are you canceling?": "Mengapa anda membatalkan?",
-	"Tell us more": "Beritahu kami lebih lanjut",
-	"Keep my subscription": "Pertahankan langganan saya",
-	"Canceling…": "Membatalkan…",
-	"Cancel at period end": "Batalkan pada akhir tempoh",
-	Starter: "Permulaan",
-	Pro: "Pro",
-	"You'll keep your {tier} plan until {date}, then drop to Free.":
-		"Anda akan terus menggunakan pelan {tier} anda sehingga {date}, kemudian beralih ke percuma.",
 	"Access ends on": "Akses berakhir pada",
 	"Renews on": "Diperbaharui pada",
 	"Current Plan": "Pelan semasa",
 	Free: "Percuma",
+	Starter: "Permulaan",
+	Pro: "Pro",
 	"{count} days remaining in your free trial.": {
 		other: "{count} hari lagi untuk tempoh percubaan percuma anda.",
 	},
@@ -178,6 +116,7 @@ export default {
 	canceled: "dibatalkan",
 	completed: "selesai",
 	billed: "telah dicaj",
+	paid: "Telah dibayar",
 	ready: "bersedia",
 	draft: "draf",
 	"You've hit your note limit": "Anda telah mencapai had nota anda",
@@ -221,6 +160,7 @@ export default {
 	"Could not reverse the cancellation. Please try again.":
 		"Tidak dapat membatalkan pembatalan. Sila cuba lagi.",
 	"Reversing…": "Membatalkan…",
+	"Keep my subscription": "Pertahankan langganan saya",
 	"Your plan changes on {date}": "Pelan anda berubah pada {date}",
 	"Your plan cancels on {date}": "Pelan anda dibatalkan pada {date}",
 	"Your plan pauses on {date}": "Pelan anda ditangguhkan pada {date}",
@@ -258,6 +198,7 @@ export default {
 			other:
 				"{hidden} daripada nota anda tidak dapat dicari. Hanya {indexed} nota tertua anda yang diindeks, jadi nota terbaru anda tidak akan muncul dalam carian.",
 		},
+	"Change plan": "Tukar langganan",
 	"Loading plan options…": "Memuatkan pilihan pelan…",
 	"Plan change confirmed.": "Perubahan pelan telah disahkan.",
 	"Could not change plan. Please try again.": "Tidak dapat mengubah pelan. Sila cuba lagi.",
@@ -295,6 +236,64 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Anda sedang dalam tempoh percubaan. Paddle, pemproses pembayaran kami, tidak membenarkan perubahan pelan semasa langganan dalam tempoh percubaan — tempoh percubaan anda akan tamat pada {date}.",
 	Upgrade: "Tingkatkan",
+	"Could not fetch that invoice. Please try again.":
+		"Tidak dapat mendapatkan invois itu. Sila cuba lagi.",
+	"Payment received. We're finishing your activation in the background.":
+		"Pembayaran diterima. Kami sedang menyelesaikan aktivasi anda.",
+	"This usually takes seconds. Refresh in a moment, or contact support if it persists.":
+		"Ini biasanya mengambil beberapa saat. Segarkan semula dalam sekejap, atau hubungi sokongan jika masalah berterusan.",
+	Refresh: "Segarkan semula",
+	"Contact support": "Hubungi sokongan",
+	"Loading billing": "Memuatkan maklumat pembayaran",
+	"Could not open the billing portal. Please try again.":
+		"Tidak dapat membuka portal pembayaran. Sila cuba lagi.",
+	"Could not start the payment update. Please try again.":
+		"Tidak dapat memulakan kemas kini pembayaran. Sila cuba lagi.",
+	Billing: "Pembayaran",
+	"Manage your plan and payment method.": "Urus langganan dan kaedah pembayaran anda.",
+	"Cancel subscription": "Batalkan langganan",
+	"Setting up your account…": "Mengkonfigurasi akaun anda…",
+	"← Choose a different plan": "← Pilih langganan yang berbeza",
+	"Test checkout (dev only)": "Ujian pembayaran (hanya untuk pembangunan)",
+	"Paddle's checkout can't embed on localhost, so this stand-in lets you walk the flow. Not shown in production.":
+		"Sistem pembayaran Paddle tidak boleh dipaparkan pada localhost, jadi pengganti ini membolehkan anda mencuba prosesnya. Tidak ditunjukkan dalam versi akhir.",
+	"Simulate successful payment": "Simulasikan pembayaran berjaya",
+	"Payment did not go through. Please try again.": "Pembayaran gagal. Sila cuba lagi.",
+	"Simulate failure": "Simulasikan kegagalan",
+	"Choose a Plan": "Pilih Pelan",
+	"Both plans include a 7-day free trial.": "Kedua-dua pelan termasuk tempoh percubaan 7 hari.",
+	"Unlimited vaults · 50 GB · cross-vault search + API":
+		"Peti nota tanpa had · 50 GB · carian lintas peti nota + API",
+	"Choose Pro": "Pilih Pro",
+	"7-day free trial · cancel anytime":
+		"Tempoh percubaan 7 hari · boleh dibatalkan pada bila-bila masa",
+	"10 vaults · 10 GB · unlimited AI": "10 peti nota · 10 GB · AI tanpa had",
+	"Choose Starter": "Pilih Starter",
+	"Choose Free": "Pilih Percuma",
+	"Opening Paddle…": "Membuka Paddle…",
+	"Open Paddle billing portal": "Buka portal pembayaran Paddle",
+	"Paddle is our payment processor. Use this if the controls above don't cover what you need.":
+		"Paddle ialah pemproses pembayaran kami. Gunakan ini jika butang di atas tidak memenuhi keperluan anda.",
+	"Something went wrong with checkout. Please try again.":
+		"Sesatu berlaku salah semasa pembayaran. Sila cuba lagi.",
+	"Could not simulate checkout. Please try again.":
+		"Tidak dapat memulakan proses pembayaran. Sila cuba lagi.",
+	"Subscription scheduled to cancel.": "Langganan akan dibatalkan.",
+	"Could not cancel subscription. Please try again.":
+		"Tidak dapat membatalkan langganan. Sila cuba lagi.",
+	"You'll keep paid access through the end of your current billing period.":
+		"Anda akan terus menikmati akses berbayar sehingga akhir tempoh pembayaran semasa anda.",
+	"Your notes stay. Sync still works for vaults within Free limits.":
+		"Nota anda kekal. Sync masih berfungsi untuk peti nota dalam had percuma.",
+	"Vaults or notes that exceed Free limits become read-only.":
+		"Peti nota atau nota yang melebihi had percuma akan menjadi baca sahaja.",
+	"You can reverse this any time before the effective date.":
+		"Anda boleh membatalkan ini pada bila-bila masa sebelum tarikh berkuatkuasa.",
+	"Why are you canceling?": "Mengapa anda membatalkan?",
+	"Canceling…": "Membatalkan…",
+	"Cancel at period end": "Batalkan pada akhir tempoh",
+	"You'll keep your {tier} plan until {date}, then drop to Free.":
+		"Anda akan terus menggunakan pelan {tier} anda sehingga {date}, kemudian beralih ke percuma.",
 	"An invoice will be created for this amount": "Invois akan dibuat untuk jumlah ini",
 	"This amount will be charged immediately": "Jumlah ini akan dicaj segera",
 	"Charged on {date}": "Dicaj pada {date}",
@@ -378,6 +377,7 @@ export default {
 	"Creating…": "Sedang mencipta…",
 	Create: "Cipta",
 	"Search vaults": "Cari peti nota",
+	default: "lalai",
 	"{n} notes": { other: "{n} nota" },
 	"{n} files": { other: "{n} fail" },
 	text: "teks",
@@ -430,14 +430,12 @@ export default {
 		"Nota anda akan muncul di sini semasa proses sinkronisasi. Anda boleh kembali pada bila-bila masa.",
 	"Continue to web app": "Teruskan ke aplikasi web",
 	"Open Obsidian": "Buka Obsidian",
-	default: "lalai",
 	"Selected: {name}": "Dipilih: {name}",
 	"Creating a new vault": "Mencipta peti nota baharu",
 	"choose a new name": "pilih nama baharu",
 	"New vault name": "Nama peti nota baharu",
 	"Where should these notes sync?": "Ke mana nota ini akan disinkronkan?",
-	Suggested: "Dicadangkan",
-	"matches your Obsidian vault": "sepadan dengan peti nota Obsidian anda",
+	"Sync with your matching vault": "Sync dengan peti nota anda",
 	"Or sync with a different vault": "Atau, langkan dengan peti nota yang berbeza",
 	"Sync with an existing vault": "Langkan dengan peti nota yang sedia ada",
 	"(choose from {count} vaults)": "(pilih daripada {count} peti nota)",
@@ -500,6 +498,7 @@ export default {
 	"Sync problems or bugs": "Masalah atau ralat penyinkronan",
 	"Switched to another tool": "Beralih ke alat lain",
 	"Not using it enough": "Tidak menggunakannya dengan cukup",
+	"Tell us more": "Beritahu kami lebih lanjut",
 	Language: "Bahasa",
 	"My Vault": "Peti Nota Saya",
 	"{count} days left in your trial.": { other: "{count} hari lagi untuk tempoh percubaan anda." },
@@ -1068,25 +1067,6 @@ export default {
 	Connected: "Disambungkan",
 	"Disconnect {name}": "Putuskan sambungan {name}",
 	"Connect {name}": "Sambungkan {name}",
-	"Account deleted": "Akaun telah dipadam",
-	"Delete failed": "Pemadaman gagal",
-	"You're the only admin on this instance. Promote another user to admin first, then try again.":
-		"Anda adalah pentadbir tunggal dalam sistem ini. Promosikan pengguna lain sebagai pentadbir terlebih dahulu, kemudian cuba lagi.",
-	"Incorrect password.": "Kata laluan tidak betul.",
-	"Danger zone": "Kawasan berbahaya",
-	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
-		"Tindakan kekal. Memadam akaun anda akan mengeluarkan anda dan menghalang log masuk di masa depan untuk pengguna ini.",
-	"Delete account": "Padam akaun",
-	"Delete your account?": "Padam akaun anda?",
-	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"Ini akan memadamkan akaun anda. Anda tidak akan dapat log masuk semula. Seorang pentadbir boleh memadam data peti nota anda kemudian.",
-	"I understand this is irreversible": "Saya faham ini tidak dapat dipulihkan",
-	Delete: "Padam",
-	"Could not delete account": "Tidak dapat padam akaun",
-	"Permanently delete your account and all associated data. This cannot be undone.":
-		"Padamkan secara kekal akaun anda dan semua data yang berkaitan. Ini tidak boleh dibatalkan.",
-	'Type "{phrase}" to confirm': 'Taip "{phrase}" untuk mengesahkan',
-	"Delete my account": "Padam akaun saya",
 	"Email copied": "E-mel telah disalin",
 	"To change your email, contact your admin.": "Untuk menukar e-mel anda, hubungi pentadbir anda.",
 	"Copy email": "Salin emel",
@@ -1141,6 +1121,28 @@ export default {
 	Device: "Peranti",
 	Browser: "Penyemak imbas",
 	"Revoke {name}": "Batalkan {name}",
+	"Account deleted": "Akaun telah dipadam",
+	"Delete failed": "Pemadaman gagal",
+	"You're the only admin on this instance. Promote another user to admin first, then try again.":
+		"Anda adalah pentadbir tunggal dalam sistem ini. Promosikan pengguna lain sebagai pentadbir terlebih dahulu, kemudian cuba lagi.",
+	"Incorrect password.": "Kata laluan tidak betul.",
+	"Danger zone": "Kawasan berbahaya",
+	"Permanent actions. Deleting your account signs you out and blocks future sign-ins to this user.":
+		"Tindakan kekal. Memadam akaun anda akan mengeluarkan anda dan menghalang log masuk di masa depan untuk pengguna ini.",
+	"Delete account": "Padam akaun",
+	"Delete your account?": "Padam akaun anda?",
+	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
+		"Ini akan memadamkan akaun anda. Anda tidak akan dapat log masuk semula. Seorang pentadbir boleh memadam data peti nota anda kemudian.",
+	"I understand this is irreversible": "Saya faham ini tidak dapat dipulihkan",
+	Delete: "Padam",
+	"Could not delete account": "Tidak dapat padam akaun",
+	"Permanently delete your account and all associated data. This cannot be undone.":
+		"Padamkan secara kekal akaun anda dan semua data yang berkaitan. Ini tidak boleh dibatalkan.",
+	"Why are you deleting your account?": "Mengapa anda memadam akaun anda?",
+	"Your answer is kept after your account is deleted, without your name or email.":
+		"Jawapan anda disimpan selepas akaun anda dipadam, tanpa nama atau emel anda.",
+	'Type "{phrase}" to confirm': 'Taip "{phrase}" untuk mengesahkan',
+	"Delete my account": "Padam akaun saya",
 	"Rename failed": "Penamaan semula gagal",
 	Default: "Lalai",
 	"Set {name} as default": "Tetapkan {name} sebagai lalai",

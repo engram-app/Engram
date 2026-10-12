@@ -9,6 +9,8 @@ interface Props {
 	// Settings-style row: the action is a form control that lines up with the
 	// title block and, once wrapped below it, fills the row (below sm).
 	centerAction?: boolean;
+	// Irreversible actions: red title and border, but no red fill.
+	destructive?: boolean;
 	children?: ReactNode;
 }
 
@@ -17,6 +19,7 @@ export function SettingsSectionCard({
 	description,
 	headerAction,
 	centerAction = false,
+	destructive = false,
 	children,
 }: Props) {
 	return (
@@ -27,7 +30,10 @@ export function SettingsSectionCard({
 		// any card. Above md it returns to a bordered, rounded card.
 		<section
 			aria-label={title}
-			className="-mx-4 border-border border-y bg-card p-4 md:mx-0 md:rounded-lg md:border md:p-6"
+			className={cn(
+				"-mx-4 border-y bg-card p-4 md:mx-0 md:rounded-lg md:border md:p-6",
+				destructive ? "border-destructive/40" : "border-border",
+			)}
 		>
 			<header
 				className={cn(
@@ -37,7 +43,14 @@ export function SettingsSectionCard({
 				)}
 			>
 				<div>
-					<h2 className="font-semibold text-base text-foreground">{title}</h2>
+					<h2
+						className={cn(
+							"font-semibold text-base",
+							destructive ? "text-destructive" : "text-foreground",
+						)}
+					>
+						{title}
+					</h2>
 					{Boolean(description) && (
 						<p className="mt-1 text-muted-foreground text-sm">{description}</p>
 					)}

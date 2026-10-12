@@ -76,6 +76,7 @@ defmodule Engram.MCP.Tools do
     "delete_note" => {"Delete Note", false, true, true},
     "delete_folder" => {"Delete Folder", false, true, true},
     "move_attachment" => {"Move Attachment", false, false, false},
+    "delete_attachment" => {"Delete Attachment", false, true, true},
     "get_attachment_upload_target" => {"Get Attachment Upload Target", true, false, true}
   }
 
@@ -102,6 +103,7 @@ defmodule Engram.MCP.Tools do
       delete_note_def(),
       delete_folder_def(),
       move_attachment_def(),
+      delete_attachment_def(),
       get_attachment_upload_target_def()
     ]
     |> Enum.map(&(&1 |> with_vault_id() |> with_annotations()))
@@ -1102,7 +1104,8 @@ defmodule Engram.MCP.Tools do
       description:
         "Permanently delete one note by path; the deletion syncs to all connected Obsidian " <>
           "devices. Deleting a path that holds no note succeeds and reports deleted: false. " <>
-          "To remove a whole folder use delete_folder. To move a note instead use rename_note.",
+          "To remove a whole folder use delete_folder. To move a note instead use rename_note. " <>
+          "For an image, PDF, or other binary file use delete_attachment.",
       inputSchema: %{
         "type" => "object",
         "properties" => %{
@@ -1223,6 +1226,34 @@ defmodule Engram.MCP.Tools do
         "required" => ["old_path", "new_path"]
       },
       handler: &Handlers.handle("move_attachment", &1, &2, &3)
+    }
+  end
+
+  defp delete_attachment_def do
+    %{
+      name: "delete_attachment",
+      description:
+        "Permanently delete a single attachment (image, PDF, or other binary file) by " <>
+          "path; the stored file is removed and cannot be restored. Syncs the delete to " <>
+          "all connected Obsidian devices. Deleting a path " <>
+          "with no attachment succeeds and reports deleted: false. For notes use " <>
+          "delete_note; to remove a whole folder use delete_folder.",
+      inputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{"type" => "string", "description" => "Path of the attachment to delete"}
+        },
+        "required" => ["path"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "path" => %{"type" => "string"},
+          "deleted" => %{"type" => "boolean"}
+        },
+        "required" => ["path", "deleted"]
+      },
+      handler: &Handlers.handle("delete_attachment", &1, &2, &3)
     }
   end
 end
