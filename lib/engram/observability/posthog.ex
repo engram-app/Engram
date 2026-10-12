@@ -91,6 +91,10 @@ defmodule Engram.Observability.PostHog do
 
   def capture_throttled(_user, _event, _dedupe, _window_ms, _props), do: :ok
 
+  @doc "Whether capture is configured (false on self-host, dev and test by default)."
+  @spec enabled?() :: boolean()
+  def enabled?, do: config() != :disabled
+
   defp config do
     case Application.get_env(:engram, :posthog_key) do
       key when is_binary(key) and byte_size(key) > 0 ->

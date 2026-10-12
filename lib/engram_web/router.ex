@@ -75,6 +75,11 @@ defmodule EngramWeb.Router do
     plug EngramWeb.Plugs.RequireSession, allow_api_key: true
   end
 
+  # As above, plus the plugin's device token. Only for the feedback box.
+  pipeline :require_session_allow_plugin do
+    plug EngramWeb.Plugs.RequireSession, allow_api_key: true, allow_device_token: true
+  end
+
   # First-party browser session only. `RequireAdmin` checks WHO the user is,
   # not HOW they authenticated, so without `RequireSession` any API key, OAuth
   # grant or plugin token an admin issued inherits the admin plane, including
@@ -544,8 +549,13 @@ defmodule EngramWeb.Router do
       post "/onboarding/accept_free_tier", OnboardingController, :accept_free_tier
       # FTUX questionnaire — PATCH (frontend api client has no PUT helper).
       patch "/onboarding/profile", OnboardingController, :set_profile
-      # User-voice answers (onboarding survey, cancel reason, feedback box).
-      # Here, not the vault scope: the survey is answered mid-wizard.
+    end
+
+    # User-voice answers (onboarding survey, cancel reason, feedback box).
+    # Not the vault scope: the survey is answered mid-wizard. Admits the
+    # plugin's device token too, since its feedback modal posts here.
+    scope "/" do
+      pipe_through :require_session_allow_plugin
       post "/feedback", FeedbackController, :create
     end
 
