@@ -934,7 +934,7 @@ defmodule EngramWeb.McpController do
     # engram-app/engram-infra#340 — span emits
     # [:engram, :mcp, :tool, :stop] for the PromEx Mcp plugin.
     # Cardinality contract: only `:tool` (bounded enum from
-    # `Engram.MCP.Tools.list/0`, ~16 tools) + `:status`.
+    # `Engram.MCP.Tools.list/0`, ~18 tools) + `:status`.
     tool_atom = Map.get(@tool_atoms, tool.name, :unknown)
     start_mono = System.monotonic_time()
 
