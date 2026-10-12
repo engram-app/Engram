@@ -1481,7 +1481,15 @@ export type FeedbackBody =
 	  }
 	| { kind: "cancel"; reason: string; detail?: string }
 	| { kind: "delete_account"; reason?: string; detail?: string }
-	| { kind: "general"; message: string };
+	| {
+			kind: "general";
+			message: string;
+			category?: string;
+			mood?: number;
+			contact_ok: boolean;
+			source: "web";
+			area: string;
+	  };
 
 // User-voice answers -> backend -> PostHog (server-side, so ad blockers can't
 // drop them). An onboarding submit (answer or skip) also completes the wizard's

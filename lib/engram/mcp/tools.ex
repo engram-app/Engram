@@ -31,7 +31,7 @@ defmodule Engram.MCP.Tools do
 
   # Tools that do NOT operate on a single vault's contents, so they take no
   # `vault_id`: `list_vaults` spans all of them, `set_vault` has its own.
-  @vault_scoping_exempt ~w(list_vaults set_vault)
+  @vault_scoping_exempt ~w(list_vaults set_vault send_feedback)
 
   # MCP is stateless HTTP JSON-RPC: there is no session to hold an "active vault"
   # between tool calls, so every vault-scoped tool advertises an optional
@@ -56,6 +56,7 @@ defmodule Engram.MCP.Tools do
   # Each value: {title, readOnlyHint, destructiveHint, idempotentHint}.
   @annotations %{
     "list_vaults" => {"List Vaults", true, false, true},
+    "send_feedback" => {"Send Feedback", false, false, false},
     "set_vault" => {"Check Vault", true, false, true},
     "search_notes" => {"Search Notes", true, false, true},
     "list_tags" => {"List Tags", true, false, true},
@@ -104,7 +105,8 @@ defmodule Engram.MCP.Tools do
       delete_folder_def(),
       move_attachment_def(),
       delete_attachment_def(),
-      get_attachment_upload_target_def()
+      get_attachment_upload_target_def(),
+      send_feedback_def()
     ]
     |> Enum.map(&(&1 |> with_vault_id() |> with_annotations()))
   end
@@ -256,6 +258,54 @@ defmodule Engram.MCP.Tools do
         "required" => ["vaults"]
       },
       handler: &Handlers.handle("list_vaults", &1, &2, &3)
+    }
+  end
+
+  # Model-initiated as well as user-initiated: a model sees friction (a failed
+  # call, a poor result, a missing capability) the user would never report.
+  # The note-content ban matters more here than for most vendors' feedback
+  # tools: our results ARE the user's private notes.
+  defp send_feedback_def do
+    %{
+      name: "send_feedback",
+      description:
+        "Send feedback to the Engram team: a bug, an idea, something confusing, something " <>
+          "that works well, or a capability Engram lacks. Use it when the user asks to send " <>
+          "feedback, or on your own when an Engram tool failed, gave a poor result, or could " <>
+          "not do what was needed. Never include note content, note titles, file paths or " <>
+          "personal data: describe the problem in general terms.",
+      inputSchema: %{
+        "type" => "object",
+        "properties" => %{
+          "message" => %{
+            "type" => "string",
+            "minLength" => 1,
+            "maxLength" => 2_000,
+            "description" => "What happened or what you wish Engram did, with no note content."
+          },
+          "category" => %{
+            "type" => "string",
+            "enum" => ~w(bug idea confusing love missing_capability),
+            "description" => "missing_capability when Engram has no tool for what was needed."
+          },
+          "initiated_by" => %{
+            "type" => "string",
+            "enum" => ~w(user model),
+            "description" => "user if the user asked to send this, model if you chose to."
+          },
+          "tool_name" => %{
+            "type" => "string",
+            "description" => "The Engram tool this is about, if any."
+          }
+        },
+        "required" => ["message", "initiated_by"]
+      },
+      outputSchema: %{
+        "type" => "object",
+        "properties" => %{"status" => %{"type" => "string", "enum" => ["sent"]}},
+        "required" => ["status"]
+      },
+      handler: &Handlers.handle("send_feedback", &1, &2, &3)
     }
   end
 

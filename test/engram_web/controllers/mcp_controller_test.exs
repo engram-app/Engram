@@ -92,12 +92,12 @@ defmodule EngramWeb.McpControllerTest do
       assert resp["result"]["capabilities"]["tools"]
     end
 
-    test "tools/list returns 18 tools", %{conn: conn} do
+    test "tools/list returns 19 tools", %{conn: conn} do
       conn = jsonrpc(conn, "tools/list")
       resp = json_response(conn, 200)
 
       tools = resp["result"]["tools"]
-      assert length(tools) == 18
+      assert length(tools) == 19
 
       names = Enum.map(tools, & &1["name"])
       assert "list_vaults" in names

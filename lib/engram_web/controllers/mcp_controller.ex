@@ -1128,6 +1128,13 @@ defmodule EngramWeb.McpController do
 
   # -- Tool dispatch (vault context) --
 
+  # Feedback names the client the way the web form does: from the request's
+  # user agent, stamped here so the model cannot set it.
+  defp dispatch_tool(%{name: "send_feedback"} = tool, user, args, conn) do
+    ua = conn |> get_req_header("user-agent") |> List.first()
+    call_tool(tool, user, [], Map.put(args, "user_agent", ua))
+  end
+
   # `list_vaults` and `set_vault` don't operate on a single vault's contents, so
   # they aren't blocked by the controller's own vault resolution — `list_vaults`
   # is the discovery call a client uses to pick a vault in a multi-vault account,

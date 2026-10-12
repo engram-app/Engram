@@ -40,3 +40,13 @@ export const CANCEL_REASONS: FeedbackOption[] = [
 	{ slug: "not_using", label: msg("Not using it enough") },
 	{ slug: "other", label: msg("Something else") },
 ];
+
+export const FEEDBACK_CATEGORIES: (FeedbackOption & { emoji: string })[] = [
+	{ slug: "bug", emoji: "🐛", label: msg("Bug") },
+	{ slug: "idea", emoji: "💡", label: msg("Idea") },
+	{ slug: "confusing", emoji: "😕", label: msg("Confusing") },
+	{ slug: "love", emoji: "❤️", label: msg("Love it") },
+];
+
+// Index + 1 is the mood score the backend stores (1-5).
+export const MOOD_FACES = ["😡", "🙁", "😐", "🙂", "😍"];

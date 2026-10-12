@@ -36,6 +36,35 @@ defmodule EngramWeb.FeedbackControllerTest do
     assert json_response(conn, 429) == %{"error" => "rate_limited"}
   end
 
+  test "stamps the request's user agent onto general feedback", %{conn: conn} do
+    prior_key = Application.get_env(:engram, :posthog_key)
+    prior_host = Application.get_env(:engram, :posthog_host)
+
+    on_exit(fn ->
+      Application.put_env(:engram, :posthog_key, prior_key)
+      Application.put_env(:engram, :posthog_host, prior_host)
+    end)
+
+    bypass = Bypass.open()
+    parent = self()
+
+    Bypass.stub(bypass, "POST", "/capture/", fn c ->
+      {:ok, body, c} = Plug.Conn.read_body(c)
+      send(parent, {:posthog, Jason.decode!(body)})
+      Plug.Conn.resp(c, 200, "1")
+    end)
+
+    Application.put_env(:engram, :posthog_key, "phc_test_token")
+    Application.put_env(:engram, :posthog_host, "http://localhost:#{bypass.port}")
+
+    conn
+    |> put_req_header("user-agent", "TestBrowser/1.0")
+    |> post("/api/feedback", %{"kind" => "general", "message" => "hi", "user_agent" => "spoof"})
+    |> json_response(200)
+
+    assert_receive {:posthog, %{"properties" => %{"user_agent" => "TestBrowser/1.0"}}}, 1_000
+  end
+
   test "401 without auth" do
     conn = post(build_conn(), "/api/feedback", %{"kind" => "general", "message" => "hi"})
     assert conn.status == 401
