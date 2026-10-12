@@ -1,13 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { isMember } from "../lib/is-member";
-import { problems } from "./auto-translate";
+import type { Catalog, LocaleState } from "./core/core";
+import { sourceProblems } from "./core/core";
+import { usedEntries } from "./keys-scan";
+import state from "./locale/state.json" with { type: "json" };
 import { LOCALES } from "./locales";
-import type { Catalog } from "./translate";
+import { tr } from "./translate-profile";
 
-// The checks translategemma's answers must pass, run over the committed catalogs.
-// No model, so it stays in the per-PR unit gate: it catches a hand edit or a bad
-// merge that drops a brand name, a URL, a placeholder or the register.
+// The gate the translator's answers must pass, run over the committed catalogs with
+// the same checks (core catalogProblems). No model, so it stays in the per-PR unit
+// gate: it catches a hand edit, a bad merge, a missing key or an orphan. A key the
+// translator gave up on is tolerated only while it is listed in state.json.
 const TARGETS = LOCALES.filter((l) => l !== "en");
+const sources = Object.values(
+	import.meta.glob<string>(["../**/*.{ts,tsx}", "!../**/*.test.*", "!../i18n/locale/**"], {
+		query: "?raw",
+		import: "default",
+		eager: true,
+	}),
+);
+const entries = usedEntries(sources);
+const states = state as unknown as Record<string, LocaleState>;
 const catalogs = Object.entries(
 	import.meta.glob<{ default: Catalog }>("./locale/*.ts", { eager: true }),
 ).flatMap(([path, mod]) => {
@@ -15,16 +28,14 @@ const catalogs = Object.entries(
 	return isMember(TARGETS, code) ? [[code, mod.default] as const] : [];
 });
 
-describe("committed catalogs pass the translation checks", () => {
-	it.each(catalogs)("%s", (code, catalog) => {
-		const failures = Object.entries(catalog).flatMap(([key, value]) =>
-			// A plural form is checked against the `other` key; a `one` form may drop {count}.
-			(typeof value === "string" ? [value] : Object.values(value)).flatMap((form) => {
-				const src = form.includes("{count}") ? key : key.replaceAll("{count}", "");
-				const found = problems(src, form, code);
-				return found.length > 0 ? [{ key, form, found }] : [];
-			}),
-		);
-		expect(failures).toEqual([]);
+describe("committed catalogs", () => {
+	it("ships a catalog for every non-English locale", () => {
+		expect(catalogs.map(([code]) => code).sort()).toEqual([...TARGETS].sort());
+	});
+	it.each(catalogs)("%s passes the translation checks", (code, catalog) => {
+		expect(tr.catalogProblems(entries, catalog, code, states[code])).toEqual([]);
+	});
+	it("source strings can be translated", () => {
+		expect(sourceProblems(entries)).toEqual([]);
 	});
 });
