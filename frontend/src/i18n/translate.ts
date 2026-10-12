@@ -1,4 +1,5 @@
 import type { Locale } from "./locales";
+import { type UIText, untranslated } from "./ui-text";
 
 type PluralEn = PluralForms & { other: string };
 
@@ -8,16 +9,19 @@ export type PluralForms = Partial<Record<Intl.LDMLPluralRule, string>>;
 export type Catalog = Record<string, string | PluralForms>;
 export type Vars = Record<string, string | number>;
 
-export function interpolate(template: string, vars?: Vars): string {
+// The one place catalog text becomes UIText: every translator ends here.
+export function interpolate(template: string, vars?: Vars): UIText {
 	if (!vars) {
-		return template;
+		return untranslated(template);
 	}
-	return template.replace(PLACEHOLDER, (match, name: string) =>
-		Object.hasOwn(vars, name) ? String(vars[name]) : match,
+	return untranslated(
+		template.replace(PLACEHOLDER, (match, name: string) =>
+			Object.hasOwn(vars, name) ? String(vars[name]) : match,
+		),
 	);
 }
 
-export function translate(catalog: Catalog, en: string, vars?: Vars): string {
+export function translate(catalog: Catalog, en: string, vars?: Vars): UIText {
 	const hit = catalog[en];
 	return interpolate(typeof hit === "string" ? hit : en, vars);
 }
@@ -29,7 +33,7 @@ export function translatePlural(
 	en: PluralForms & { other: string },
 	count: number,
 	vars?: Vars,
-): string {
+): UIText {
 	const hit = catalog[en.other];
 	const translated = typeof hit === "object";
 	const forms = translated ? hit : en;
@@ -38,8 +42,8 @@ export function translatePlural(
 }
 // The shapes of `t` / `tn` from useT(), for helpers that cannot call the hook and
 // take the translator as a parameter.
-export type Translate = (en: string, vars?: Vars) => string;
-export type Tn = (en: PluralEn, count: number, vars?: Vars) => string;
+export type Translate = (en: string, vars?: Vars) => UIText;
+export type Tn = (en: PluralEn, count: number, vars?: Vars) => UIText;
 
 // The English identity translators: no catalog, so every key reads as itself.
 export const englishT: Translate = (en, vars) => translate({}, en, vars);

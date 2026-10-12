@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { englishT, type Translate } from "@/i18n/translate";
+import { untranslated } from "../../i18n/ui-text";
 import {
 	CATEGORY_INTROS,
 	entrySyntax,
@@ -48,7 +49,7 @@ const GERMAN: Record<string, string> = {
 	"Worth knowing, but not urgent.": "Gut zu wissen, aber nicht dringend.",
 	"Example text.": "Beispieltext.",
 };
-const de: Translate = (en) => GERMAN[en] ?? en;
+const de: Translate = (en) => untranslated(GERMAN[en] ?? en);
 const entry = (id: string) => {
 	const found = SYNTAX_ENTRIES.find((e) => e.id === id);
 	if (!found) {

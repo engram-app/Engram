@@ -4,6 +4,7 @@ import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { Translate } from "@/i18n/translate";
+import { untranslated } from "../../i18n/ui-text";
 import { attachmentEmbeds } from "./attachment-embed";
 import { headingFoldWith } from "./heading-fold";
 import { mermaidDecoration } from "./mermaid-decoration";
@@ -17,8 +18,8 @@ vi.mock("../mermaid-render", () => ({
 // A language switch must repaint widgets that are ALREADY on screen, in place:
 // same view, same doc, same selection.
 const en: Translate = (s, vars) =>
-	s.replace(/\{(?<k>\w+)\}/gu, (_m, k: string) => String(vars?.[k] ?? ""));
-const de: Translate = (s, vars) => `de:${en(s, vars)}`;
+	untranslated(s.replace(/\{(?<k>\w+)\}/gu, (_m, k: string) => String(vars?.[k] ?? "")));
+const de: Translate = (s, vars) => untranslated(`de:${en(s, vars)}`);
 
 let view: EditorView;
 afterEach(() => view?.destroy());

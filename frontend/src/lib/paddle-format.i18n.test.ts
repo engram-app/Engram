@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Tn, Translate } from "@/i18n/translate";
 import { translate, translatePlural } from "@/i18n/translate";
+import { untranslated } from "../i18n/ui-text";
 import { intlLocale } from "./intl-locale";
 import {
 	formatBillingCycle,
@@ -23,7 +24,7 @@ describe("paddle display helpers take t", () => {
 	});
 
 	it("routes interval and proration labels through the translator", () => {
-		const shout: Translate = (en) => en.toUpperCase();
+		const shout: Translate = (en) => untranslated(en.toUpperCase());
 		expect(formatIntervalLabel("year", shout, "adjective")).toBe("ANNUAL");
 		expect(formatProrationMode("do_not_bill", shout)).toBe("NO CHARGE");
 		expect(formatProrationMode("mystery", shout)).toBe("mystery");
