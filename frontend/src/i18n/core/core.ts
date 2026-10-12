@@ -1,4 +1,4 @@
-// i18n-core bd2681eb
+// i18n-core 5cfb0b93
 // The translategemma pipeline shared by the web app, the Obsidian plugin and the
 // marketing site: prompts, the checks an answer must pass, and catalog state.
 // Canonical copy: engram-app/Engram frontend/src/i18n/core/. The other repos
@@ -354,7 +354,7 @@ function translator<T extends string>(profile: Profile<T>) {
 		// Without the emoji: "🔄 Sync Center = 🔄 ..." made the model paste 🔄 into every
 		// sentence that mentions the Sync Center.
 		const bare = (term: string): string => term.replace(SYMBOL, "").trim();
-		const pinned = Object.entries(terms)
+		const terminology = Object.entries(terms)
 			.map(([en, tr]) => `${bare(en)} = ${bare(tr)}`)
 			.join("\n");
 		// Token rules only when the text has such a token, and never spelled out: the
@@ -377,7 +377,7 @@ function translator<T extends string>(profile: Profile<T>) {
 				? "Each numbered line is a separate string. Translate every line independently and return exactly the same numbered lines, one per line, in the same order."
 				: "",
 			`Rules: keep each string as short as its source. ${tokenRules}Do not add punctuation a source lacks. Keep brand names (${brands.join(", ")}) unchanged. ${tone}`,
-			pinned ? `Use this established terminology and tone:\n${pinned}` : "",
+			terminology ? `Use this established terminology and tone:\n${terminology}` : "",
 			description ? `Context for this string (do not translate it): ${description}` : "",
 			`Produce only the ${name} translation, without any additional explanations or commentary. Please translate the following English text into ${name}:\n\n\n${text}`,
 		]

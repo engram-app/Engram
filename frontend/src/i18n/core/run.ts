@@ -1,4 +1,4 @@
-// i18n-core d9736e35
+// i18n-core df603bbe
 // The translategemma run loop shared by every repo's `scripts/i18n-translate.ts`.
 // Diff-only: per locale it fills keys the catalog lacks, retries failed keys, heals
 // entries that fail a current check, and redoes everything when the fingerprint
@@ -412,8 +412,8 @@ async function run<T extends string>(opts: RunOptions<T>): Promise<LocaleResult[
 		}
 		for (const k of alone) {
 			tasks.push(async () => {
-				const prev = typeof old[k] === "string" ? old[k] : undefined;
-				const out = await translateOne(code, terms, k, prev, tr.descriptions[k]);
+				const was = typeof old[k] === "string" ? old[k] : undefined;
+				const out = await translateOne(code, terms, k, was, tr.descriptions[k]);
 				if (out !== null) {
 					fresh[k] = out;
 				}
