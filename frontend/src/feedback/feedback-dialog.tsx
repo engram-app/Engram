@@ -101,12 +101,16 @@ export function FeedbackDialog({ open, onOpenChange }: FeedbackDialogProps) {
 					aria-label={t("Your feedback")}
 					onChange={(e) => setMessage(e.target.value)}
 				/>
-				<fieldset className="flex items-center justify-between gap-3">
-					<legend className="sr-only">{t("How do you feel about Engram?")}</legend>
-					<span aria-hidden className="text-muted-foreground text-sm">
+				<div className="flex items-center justify-between gap-3">
+					<span id="feedback-mood" className="text-muted-foreground text-sm">
 						{t("How do you feel about Engram?")}
 					</span>
-					<RadioGroupPrimitive.Root value={mood} onValueChange={setMood} className="flex gap-1">
+					<RadioGroupPrimitive.Root
+						value={mood}
+						onValueChange={setMood}
+						aria-labelledby="feedback-mood"
+						className="flex gap-1"
+					>
 						{MOOD_FACES.map((face, i) => {
 							const label = t("{n} of 5", { n: i + 1 });
 							return (
@@ -122,7 +126,7 @@ export function FeedbackDialog({ open, onOpenChange }: FeedbackDialogProps) {
 							);
 						})}
 					</RadioGroupPrimitive.Root>
-				</fieldset>
+				</div>
 				<label className="flex items-center gap-2 text-sm">
 					<Checkbox
 						checked={contactOk}
