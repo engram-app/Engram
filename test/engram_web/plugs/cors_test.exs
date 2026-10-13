@@ -39,6 +39,19 @@ defmodule EngramWeb.Plugs.CORSTest do
     assert String.contains?(String.downcase(allow_headers), "x-device-id")
   end
 
+  test "preflight allows the X-Idempotency-Key header the SPA's batch ops send" do
+    # The SPA sends X-Idempotency-Key on /folders/batch-* and
+    # /attachments/batch-* (api/queries.ts idempotencyHeaders). Missing it here
+    # blocked every web folder delete in prod with a CORS error.
+    conn =
+      build_conn()
+      |> put_req_header("origin", "https://app.engram.dev")
+      |> options("/api/health")
+
+    [allow_headers] = get_resp_header(conn, "access-control-allow-headers")
+    assert String.contains?(String.downcase(allow_headers), "x-idempotency-key")
+  end
+
   test "preflight allows the W3C traceparent header the SPA's OTel fetch instrumentation sends" do
     conn =
       build_conn()

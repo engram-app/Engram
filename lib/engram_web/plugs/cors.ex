@@ -54,7 +54,7 @@ defmodule EngramWeb.Plugs.CORS do
     |> put_resp_header("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
     |> put_resp_header(
       "access-control-allow-headers",
-      "authorization, content-type, x-vault-id, x-device-id, traceparent, if-none-match"
+      "authorization, content-type, x-vault-id, x-device-id, x-idempotency-key, traceparent, if-none-match"
     )
     |> put_resp_header("access-control-max-age", "86400")
     |> expose_etag()
