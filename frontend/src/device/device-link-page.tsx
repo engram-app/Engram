@@ -203,7 +203,8 @@ function DeviceLinkPage() {
 			setVaults(data.vaults ?? []);
 			// The plugin's own name wins. Without one, guess from this browser,
 			// which assumes it is on the device being linked; editable when not.
-			const suggestedLabel = data.suggested_device_name?.trim() || (await guessDeviceLabel()) || "";
+			const suggestedLabel =
+				data.suggested_device_name?.trim() || (await guessDeviceLabel(tLater)) || "";
 			// Verifying again (back, fix the code) must not wipe a name already typed.
 			setLabel((typed) => typed || suggestedLabel);
 			const suggested = data.suggested_vault_name?.trim() || "";

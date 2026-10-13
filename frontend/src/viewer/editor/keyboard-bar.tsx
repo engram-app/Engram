@@ -96,8 +96,8 @@ const COMMAND_GROUPS: ReadonlyArray<
 	ReadonlyArray<{ label: MsgKey; Icon: LucideIcon; act?: (view: EditorView) => void }>
 > = [
 	[
-		{ label: msg("Undo"), Icon: Undo2, act: undoEdit },
-		{ label: msg("Redo"), Icon: Redo2, act: redoEdit },
+		{ label: msg("Undo edit"), Icon: Undo2, act: undoEdit },
+		{ label: msg("Redo edit"), Icon: Redo2, act: redoEdit },
 	],
 	[
 		{ label: msg("Bold"), Icon: Bold, act: (v) => toggleWrap(v, "**") },

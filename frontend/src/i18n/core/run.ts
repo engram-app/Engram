@@ -1,4 +1,4 @@
-// i18n-core bee71125
+// i18n-core df603bbe
 // The translategemma run loop shared by every repo's `scripts/i18n-translate.ts`.
 // Diff-only: per locale it fills keys the catalog lacks, retries failed keys, heals
 // entries that fail a current check, and redoes everything when the fingerprint
@@ -8,6 +8,7 @@
 import {
 	batchText,
 	type Catalog,
+	descriptionChangedKeys,
 	type Entry,
 	exactOne,
 	formSource,
@@ -166,11 +167,12 @@ async function run<T extends string>(opts: RunOptions<T>): Promise<LocaleResult[
 		terms: Record<string, string>,
 		en: string,
 		old?: string,
+		description?: string,
 	): Promise<string | null> {
 		const { masked, names } = tr.mask(en);
 		for (const temp of RETRY_TEMPS) {
 			const raw = await generate(
-				tr.buildPrompt(code, terms, batchText([masked]).slice("[1] ".length), false),
+				tr.buildPrompt(code, terms, batchText([masked]).slice("[1] ".length), false, description),
 				temp,
 			);
 			const out = tr.cleanOutput(en, tr.unmask(raw, names), code);
@@ -186,7 +188,7 @@ async function run<T extends string>(opts: RunOptions<T>): Promise<LocaleResult[
 		}
 		const parts: string[] = [];
 		for (const line of split.inner) {
-			const part = await translateOne(code, terms, line);
+			const part = await translateOne(code, terms, line, undefined, description);
 			if (part === null) {
 				return null;
 			}
@@ -233,8 +235,9 @@ async function run<T extends string>(opts: RunOptions<T>): Promise<LocaleResult[
 		const forms: PluralForms = {};
 		// One form only (ja, zh, vi): no grammar to pick, so {count} stays a masked
 		// placeholder. A sample number next to other tokens got swapped for one.
+		const description = tr.descriptions[entry.key];
 		if (pluralCategories(code).length === 1) {
-			const out = await translateOne(code, terms, entry.key);
+			const out = await translateOne(code, terms, entry.key, undefined, description);
 			if (out !== null) {
 				fresh[entry.key] = { other: out };
 			}
@@ -251,6 +254,8 @@ async function run<T extends string>(opts: RunOptions<T>): Promise<LocaleResult[
 				code,
 				terms,
 				withCount ? en.replaceAll("{count}", sample) : en,
+				undefined,
+				description,
 			);
 			let form = out !== null && withCount ? fromSample(out, sample) : out;
 			// "Eine Notiz": the number spelled out, fine where `one` is only ever 1.
@@ -368,13 +373,25 @@ async function run<T extends string>(opts: RunOptions<T>): Promise<LocaleResult[
 		const terms = await glossaryFor(code, old, fresh);
 		// Content redos: the English or a pinned term changed, so the old entry has the
 		// old meaning even though it passes every check. Not redone = failed.
+		const described = descriptionChangedKeys(entries, prev, tr.descriptions);
 		const redo = new Set([
 			...oneChangedKeys(entries, prev),
 			...glossaryStale(entries, prev?.glossary, terms),
+			...described,
 		]);
+		for (const k of described) {
+			todo.add(k);
+			delete fresh[k];
+		}
 		for (const k of glossaryStale(entries, prev?.glossary, terms)) {
 			todo.add(k);
 			delete fresh[k];
+		}
+		for (const k of tr.pinned[code] ?? []) {
+			const v = old[k];
+			if (v !== undefined) {
+				fresh[k] = v;
+			}
 		}
 		for (const k of todo) {
 			if (!(k in fresh || byKey.get(k)?.plural) && tr.isBrandOnly(k)) {
@@ -382,7 +399,9 @@ async function run<T extends string>(opts: RunOptions<T>): Promise<LocaleResult[
 			}
 		}
 		const pending = [...todo].filter((k) => !(k in fresh));
-		const strings = pending.filter((k) => !byKey.get(k)?.plural);
+		// A described string goes alone, so its note cannot bleed into a neighbour.
+		const strings = pending.filter((k) => !(byKey.get(k)?.plural || k in tr.descriptions));
+		const alone = pending.filter((k) => !byKey.get(k)?.plural && k in tr.descriptions);
 		const plurals = pending.flatMap((k) => {
 			const e = byKey.get(k);
 			return e?.plural ? [e] : [];
@@ -390,6 +409,15 @@ async function run<T extends string>(opts: RunOptions<T>): Promise<LocaleResult[
 		const tasks: (() => Promise<void>)[] = [];
 		for (let i = 0; i < strings.length; i += BATCH) {
 			tasks.push(() => translateBatch(code, terms, strings.slice(i, i + BATCH), old, fresh));
+		}
+		for (const k of alone) {
+			tasks.push(async () => {
+				const was = typeof old[k] === "string" ? old[k] : undefined;
+				const out = await translateOne(code, terms, k, was, tr.descriptions[k]);
+				if (out !== null) {
+					fresh[k] = out;
+				}
+			});
 		}
 		for (const e of plurals) {
 			tasks.push(() => translatePlural(code, terms, e, fresh));
@@ -410,7 +438,15 @@ async function run<T extends string>(opts: RunOptions<T>): Promise<LocaleResult[
 				(redo.has(k) && !(k in fresh))
 			);
 		});
-		const next = nextLocaleState(failed, entries, prev, fingerprint, terms, opts.today);
+		const next = nextLocaleState(
+			failed,
+			entries,
+			prev,
+			fingerprint,
+			terms,
+			opts.today,
+			tr.descriptions,
+		);
 		state[code] = next;
 		io.writeState(state);
 		const result: LocaleResult = {

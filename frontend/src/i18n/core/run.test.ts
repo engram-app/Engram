@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { type Catalog, type Entry, HttpError, type Profile, type StoredState } from "./core";
+import {
+	type Catalog,
+	type Entry,
+	HttpError,
+	type Profile,
+	type StoredState,
+	translator,
+} from "./core";
 import { type RunIo, type RunOptions, run } from "./run";
 
 type Code = "de" | "fr" | "vi" | "ru";
@@ -171,6 +178,48 @@ describe("run", () => {
 		h.io.fetch = fakeOllama("sha256:bbb").fetch;
 		await run(opts([{ key: "Save" }], h.io));
 		expect(h.files.de).toEqual({ Save: "Speichern" });
+	});
+
+	it("keeps a pinned entry through a full redo, without changing the fingerprint", async () => {
+		const h = harness({ de: {} });
+		await run(opts([{ key: "Save" }], h.io));
+		const fp = h.state().de?.translator;
+		h.files.de = { Save: "Sichern" };
+		h.io.fetch = fakeOllama("sha256:bbb").fetch;
+		const pinned = { ...profile, pinned: { de: ["Save"] } };
+		await run(opts([{ key: "Save" }], h.io, { profile: pinned }));
+		expect(h.files.de).toEqual({ Save: "Sichern" });
+		expect(h.state().de?.failed).toEqual({});
+		// Adding a pin must not redo every locale.
+		expect(translator(pinned).fingerprintSource("de")).toBe(
+			translator(profile).fingerprintSource("de"),
+		);
+		expect(fp).toMatch(/^[0-9a-f]{8}$/u);
+	});
+
+	it("sends a description with its string alone, and redoes the string when it changes", async () => {
+		const ollama = fakeOllama();
+		const h = harness({ de: { Save: "Sichern", Vault: "Tresor" } }, {}, { fetch: ollama.fetch });
+		const entries = [{ key: "Vault" }, { key: "Save" }, { key: "Open the vault" }];
+		await run(opts(entries, h.io));
+		const described = {
+			...profile,
+			descriptions: { Save: "Button that writes the note to disk." },
+		};
+		const before = ollama.prompts.length;
+		await run(opts(entries, h.io, { profile: described }));
+		const sent = ollama.prompts.slice(before);
+		expect(sent).toHaveLength(1);
+		expect(sent[0]).toContain("Button that writes the note to disk.");
+		expect(sent[0]?.endsWith("\n\n\nSave")).toBe(true);
+		expect(h.files.de?.Save).toBe("Speichern");
+		// Unchanged description: nothing to redo, and adding one did not move the fingerprint.
+		const again = ollama.prompts.length;
+		await run(opts(entries, h.io, { profile: described }));
+		expect(ollama.prompts.length).toBe(again);
+		expect(translator(described).fingerprintSource("de")).toBe(
+			translator(profile).fingerprintSource("de"),
+		);
 	});
 
 	it("reuses the open bot PR's work only for keys this run would translate", async () => {

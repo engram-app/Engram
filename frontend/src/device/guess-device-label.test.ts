@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { Translate } from "@/i18n/translate";
 import { guessDeviceLabel } from "./guess-device-label";
+
+// Marks what went through t(), so a label that skips translation shows.
+const t = ((en: string) => `«${en}»`) as unknown as Translate;
 
 const UA = {
 	win: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36",
@@ -17,20 +21,20 @@ const UA = {
 
 describe("guessDeviceLabel", () => {
 	it.each([
-		[UA.win, "Windows PC"],
+		[UA.win, "«Windows PC»"],
 		[UA.mac, "Mac"],
-		[UA.linux, "Linux PC"],
+		[UA.linux, "«Linux PC»"],
 		[UA.cros, "Chromebook"],
 		[UA.iphone, "iPhone"],
 		[UA.ipad, "iPad"],
 		[UA.pixel, "Pixel 8"],
-		[UA.reducedAndroid, "Android device"],
+		[UA.reducedAndroid, "«Android device»"],
 	])("names %#", async (userAgent, expected) => {
-		expect(await guessDeviceLabel({ userAgent })).toBe(expected);
+		expect(await guessDeviceLabel(t, { userAgent })).toBe(expected);
 	});
 
 	it("prefers the Client Hints model on a reduced Android user agent", async () => {
-		const label = await guessDeviceLabel({
+		const label = await guessDeviceLabel(t, {
 			userAgent: UA.reducedAndroid,
 			userAgentData: { getHighEntropyValues: async () => ({ model: "Pixel 9 Pro" }) },
 		});
@@ -38,7 +42,7 @@ describe("guessDeviceLabel", () => {
 	});
 
 	it("falls back when Client Hints reject", async () => {
-		const label = await guessDeviceLabel({
+		const label = await guessDeviceLabel(t, {
 			userAgent: UA.pixel,
 			userAgentData: {
 				getHighEntropyValues: () => Promise.reject(new Error("blocked by permissions policy")),
@@ -48,7 +52,7 @@ describe("guessDeviceLabel", () => {
 	});
 
 	it("falls back when Client Hints throw synchronously", async () => {
-		const label = await guessDeviceLabel({
+		const label = await guessDeviceLabel(t, {
 			userAgent: UA.pixel,
 			userAgentData: {
 				getHighEntropyValues: () => {
@@ -60,12 +64,12 @@ describe("guessDeviceLabel", () => {
 	});
 
 	it("tells an iPad in desktop mode from a Mac by touch support", async () => {
-		expect(await guessDeviceLabel({ userAgent: UA.mac, maxTouchPoints: 5 })).toBe("iPad");
-		expect(await guessDeviceLabel({ userAgent: UA.mac, maxTouchPoints: 0 })).toBe("Mac");
+		expect(await guessDeviceLabel(t, { userAgent: UA.mac, maxTouchPoints: 5 })).toBe("iPad");
+		expect(await guessDeviceLabel(t, { userAgent: UA.mac, maxTouchPoints: 0 })).toBe("Mac");
 	});
 
 	it("returns null when there is nothing to go on", async () => {
-		expect(await guessDeviceLabel({ userAgent: "" })).toBeNull();
-		expect(await guessDeviceLabel({ userAgent: "curl/8" })).toBeNull();
+		expect(await guessDeviceLabel(t, { userAgent: "" })).toBeNull();
+		expect(await guessDeviceLabel(t, { userAgent: "curl/8" })).toBeNull();
 	});
 });

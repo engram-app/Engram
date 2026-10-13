@@ -43,6 +43,8 @@ services:
       SECRET_KEY_BASE: "ci-test-secret-base-not-for-production-at-least-64-bytes-long-enough-for-phoenix"
       DATABASE_URL: postgresql://engram:engram@postgres:5432/engram
       JWT_SECRET: ci-test-secret-not-for-production
+      # Prod build: keep CI out of the self-host install census.
+      ENGRAM_TELEMETRY: "false"
       PHX_SERVER: "true"
       # Tell the stack the URL it is actually reachable at. The container
       # listens on 4000 but is published on CI_ENGRAM_PORT, and without these

@@ -1,3 +1,5 @@
+import type { Translate } from "@/i18n/translate";
+
 // Client Hints (Chromium only). `model` is only populated on Android; desktop
 // Chromium gives a platform but no model; Safari and Firefox expose neither.
 interface UserAgentData {
@@ -22,7 +24,10 @@ function isModelName(model: string | undefined): model is string {
 
 // A suggested connection name for the device this browser is on. iOS never
 // reports a model, so an iPhone is just "iPhone"; only Android sometimes does.
-export async function guessDeviceLabel(nav: BrowserInfo = navigator): Promise<string | null> {
+export async function guessDeviceLabel(
+	t: Translate,
+	nav: BrowserInfo = navigator,
+): Promise<string | null> {
 	const ua = nav.userAgent;
 	if (/ipad/iu.test(ua)) {
 		return "iPad";
@@ -40,20 +45,20 @@ export async function guessDeviceLabel(nav: BrowserInfo = navigator): Promise<st
 			hinted = undefined;
 		}
 		const model = hinted?.trim() || ANDROID_MODEL.exec(ua)?.groups?.model?.trim();
-		return isModelName(model) ? model : "Android device";
+		return isModelName(model) ? model : t("Android device");
 	}
 	if (/mac os|macintosh/iu.test(ua)) {
 		// iPadOS Safari reports a Mac user agent; only touch support gives it away.
 		return (nav.maxTouchPoints ?? 0) > 1 ? "iPad" : "Mac";
 	}
 	if (/windows/iu.test(ua)) {
-		return "Windows PC";
+		return t("Windows PC");
 	}
 	if (/cros/iu.test(ua)) {
 		return "Chromebook";
 	}
 	if (/linux/iu.test(ua)) {
-		return "Linux PC";
+		return t("Linux PC");
 	}
 	return null;
 }
