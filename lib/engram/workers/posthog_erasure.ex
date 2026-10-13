@@ -6,7 +6,9 @@ defmodule Engram.Workers.PostHogErasure do
   A failed delete returns an error, so Oban retries it. Args carry keyed
   analytics ids and the legacy Clerk id, never an email.
   """
-  use Oban.Worker, queue: :events, max_attempts: 5
+  # Erasure is a legal obligation: 20 attempts on Oban's exponential backoff
+  # span days, so a PostHog outage delays it rather than dropping it.
+  use Oban.Worker, queue: :events, max_attempts: 20
 
   alias Engram.Observability.PostHog
 

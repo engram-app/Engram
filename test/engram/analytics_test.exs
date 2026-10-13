@@ -30,6 +30,16 @@ defmodule Engram.AnalyticsTest do
     :ok
   end
 
+  defp enable_erasure do
+    for k <- [:posthog_erasure_api_key, :posthog_project_id] do
+      prev = Application.get_env(:engram, k)
+      on_exit(fn -> Application.put_env(:engram, k, prev) end)
+    end
+
+    Application.put_env(:engram, :posthog_erasure_api_key, "phx_test_key")
+    Application.put_env(:engram, :posthog_project_id, "1")
+  end
+
   describe "track/3" do
     test "sends the event under the user's analytics id" do
       user = insert(:user, email: "t@example.com")
@@ -117,7 +127,14 @@ defmodule Engram.AnalyticsTest do
   end
 
   describe "forget/1" do
+    test "queues nothing when erasure is not configured (self-host, dev)" do
+      Application.delete_env(:engram, :posthog_erasure_api_key)
+      assert :ok = Analytics.forget(insert(:user))
+      assert all_enqueued(worker: PostHogErasure) == []
+    end
+
     test "erases every id the user is known by, now and again after any in-flight sync" do
+      enable_erasure()
       user = insert(:user, email: "f@example.com", external_id: "user_legacy")
       ids = [PostHog.analytics_id("f@example.com"), "user_legacy"]
 

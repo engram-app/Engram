@@ -269,7 +269,6 @@ defmodule Engram.Accounts do
            |> Ecto.Changeset.change(analytics_opt_out_at: DateTime.utc_now())
            |> Repo.update(skip_tenant_check: true) do
       :ok = Engram.Analytics.forget(user)
-      evict_user(user.id)
       {:ok, updated}
     end
   end

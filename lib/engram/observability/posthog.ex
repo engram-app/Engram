@@ -221,6 +221,10 @@ defmodule Engram.Observability.PostHog do
     {:error, {:posthog_erasure_failed, step}}
   end
 
+  @doc "Whether person erasure is configured (needs the admin key and project id)."
+  @spec erasure_enabled?() :: boolean()
+  def erasure_enabled?, do: admin_config() != :disabled
+
   defp admin_config do
     key = Application.get_env(:engram, :posthog_erasure_api_key)
     project = Application.get_env(:engram, :posthog_project_id)

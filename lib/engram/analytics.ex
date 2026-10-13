@@ -105,16 +105,33 @@ defmodule Engram.Analytics do
   """
   @spec forget(map()) :: :ok
   def forget(user) do
-    case known_ids(user) do
-      [] ->
+    case {PostHog.erasure_enabled?(), known_ids(user)} do
+      {false, _} ->
         :ok
 
-      ids ->
+      {_, []} ->
+        :ok
+
+      {true, ids} ->
         _ = PostHogErasure.enqueue(ids)
         _ = PostHogErasure.enqueue(ids, schedule_in: @reerase_after)
         :ok
     end
   end
+
+  @doc """
+  Erase the person a user leaves behind when their email changes. A change
+  that maps to the same analytics id (case or whitespace only) keeps the same
+  person, so nothing is erased.
+  """
+  @spec forget_previous_email(String.t() | nil, String.t()) :: :ok
+  def forget_previous_email(old, new) when is_binary(old) do
+    if PostHog.analytics_id(old) == PostHog.analytics_id(new),
+      do: :ok,
+      else: forget(%{email: old})
+  end
+
+  def forget_previous_email(_old, _new), do: :ok
 
   @doc "The id the web client identifies with, or nil when it must send nothing."
   @spec client_id(map()) :: String.t() | nil

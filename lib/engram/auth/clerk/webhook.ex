@@ -190,7 +190,7 @@ defmodule Engram.Auth.Clerk.Webhook do
           # new person. Erase the old one now: account erasure only ever finds
           # the current email's person, and the old one holds email and name.
           # Trade-off: the user's pre-change analytics history goes with it.
-          :ok = Engram.Analytics.forget(%{email: user.email})
+          :ok = Engram.Analytics.forget_previous_email(user.email, email)
           :ok
 
         {:error, _changeset} ->
