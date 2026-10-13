@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.50.2](https://github.com/engram-app/Engram/compare/0.50.1...0.50.2) (2026-10-13)
+
+
+### Bug Fixes
+
+* **ci:** reap runner disk daily on every host ([#1953](https://github.com/engram-app/Engram/issues/1953)) ([5cc8d78](https://github.com/engram-app/Engram/commit/5cc8d78f2983b1d9417b8f0ac5afbb5906d3e5cd))
+* **cors:** allow X-Idempotency-Key in preflight ([#1955](https://github.com/engram-app/Engram/issues/1955)) ([3ef34fe](https://github.com/engram-app/Engram/commit/3ef34fec5046b7e0e0e77b77e55a004e7e9c46b0))
+
 ## [0.50.1](https://github.com/engram-app/Engram/compare/0.50.0...0.50.1) (2026-10-13)
 
 
