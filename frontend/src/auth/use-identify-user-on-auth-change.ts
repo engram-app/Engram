@@ -1,5 +1,5 @@
-import posthog from "posthog-js";
 import { useEffect } from "react";
+import { forgetUser, identifyUser, stopCapture } from "../analytics/identity";
 import { setSentryUser } from "../sentry";
 
 /** Bind the authenticated user to both telemetry sinks, and clear both on
@@ -37,16 +37,15 @@ export function useIdentifyUserOnAuthChange({
 			return;
 		}
 		if (isSignedIn && analyticsOptOut) {
-			// The user objected to analytics: send nothing, anonymous included.
-			posthog.opt_out_capturing();
+			stopCapture();
 			setSentryUser(id ?? null);
 		} else if (isSignedIn && analyticsId) {
-			posthog.identify(analyticsId);
+			identifyUser(analyticsId);
 			// Id only — never email, and never the Clerk id. See the privacy
 			// policy's sub-processor table.
 			setSentryUser(id ?? null);
 		} else if (!isSignedIn) {
-			posthog.reset();
+			forgetUser();
 			setSentryUser(null);
 		}
 	}, [isLoaded, isSignedIn, id, analyticsId, analyticsOptOut]);
