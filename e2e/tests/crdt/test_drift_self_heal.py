@@ -13,6 +13,7 @@ so a mid-session drift never self-heals. This test drives that exact state.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 
@@ -26,6 +27,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 CRDT_TIMEOUT = 30
+DRIFT_ATTEMPTS = 5
+DRIFT_HOLD_S = 1.0
 PLUGIN = "app.plugins.plugins['engram-vault-sync']"
 
 
@@ -47,11 +50,22 @@ async def test_drifted_map_self_heals_on_inbound_edit(
     # Delete and read back in ONE synchronous evaluate. As two round-trips, a
     # late index/pull `set()` from the base sync could re-learn the mapping in
     # between, i.e. the self-heal fired before the drift was ever observed.
-    after = await cdp_b.evaluate(
+    inject = (
         f"(() => {{ const m = {PLUGIN}.noteIdMap; m.delete({json.dumps(path)}); "
         f"return m.pathForId({json.dumps(note_id)}); }})()"
     )
-    assert after is None, "drift injection should have removed the reverse mapping"
+    still_drifted = f"{PLUGIN}.noteIdMap.pathForId({json.dumps(note_id)}) === null"
+    # The same late `set()` can also land after the injection and before A's
+    # edit, which heals the map without the code under test and passes vacuously.
+    # So the drift must hold for a full second before the edit goes out.
+    for _ in range(DRIFT_ATTEMPTS):
+        after = await cdp_b.evaluate(inject)
+        assert after is None, "drift injection should have removed the reverse mapping"
+        await asyncio.sleep(DRIFT_HOLD_S)
+        if await cdp_b.evaluate(still_drifted):
+            break
+    else:
+        pytest.fail(f"B kept re-learning the mapping; drift never held {DRIFT_HOLD_S}s")
 
     # A edits over CRDT. B must re-resolve id->path and materialize the edit,
     # not strand it forever.
