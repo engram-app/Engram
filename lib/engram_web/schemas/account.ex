@@ -17,7 +17,7 @@ defmodule EngramWeb.Schemas.User do
         description:
           "Keyed pseudonymous identifier (HMAC of the user's email) for client-side " <>
             "analytics identify calls; null when the user opted out. See " <>
-            "Engram.Observability.PostHog.distinct_id/1."
+            "Engram.Analytics.client_id/1."
       },
       analytics_opt_out: %Schema{
         type: :boolean,

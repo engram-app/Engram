@@ -216,10 +216,11 @@ defmodule EngramWeb.ClerkWebhookTest do
       payload = clerk_user_updated_payload("user_email", email: "fresh@gmail.com")
       post_clerk(conn, "evt_email_ph", payload)
 
-      assert_enqueued(
-        worker: Engram.Workers.PostHogErasure,
-        args: %{"distinct_id" => Engram.Observability.PostHog.analytics_id("old@gmail.com")}
-      )
+      # Only the old email's person: the legacy Clerk-id one belongs to the
+      # same, still-live account.
+      jobs = all_enqueued(worker: Engram.Workers.PostHogErasure)
+      old_id = Engram.Observability.PostHog.analytics_id("old@gmail.com")
+      assert Enum.map(jobs, & &1.args) == List.duplicate(%{"distinct_ids" => [old_id]}, 2)
     end
 
     test "is a no-op when primary email is unchanged", %{conn: conn, user: user} do

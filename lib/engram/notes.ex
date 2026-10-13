@@ -31,7 +31,6 @@ defmodule Engram.Notes do
     Revisions
   }
 
-  alias Engram.Observability.PostHog
   alias Engram.Repo
   alias Engram.Sync.Broadcast
   alias Engram.Telemetry
@@ -547,7 +546,7 @@ defmodule Engram.Notes do
             # doesn't double-count idempotent re-pushes of unchanged notes.
             :ok =
               Repo.after_commit(fn ->
-                PostHog.capture(PostHog.distinct_id(user), "note_created", %{
+                Engram.Analytics.track(user, "note_created", %{
                   vault_id: vault.id
                 })
               end)

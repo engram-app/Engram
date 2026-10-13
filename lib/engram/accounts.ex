@@ -258,7 +258,7 @@ defmodule Engram.Accounts do
   @doc """
   Record a user's objection to analytics (privacy policy 2026-10-12) and erase
   their PostHog person. Every emitter then skips them via
-  `PostHog.distinct_id/1`. Operator-run from a release shell today:
+  `Engram.Analytics`. Operator-run from a release shell today:
   `{:ok, u} = find_by_normalized_email(EmailNormalizer.normalize(email))`, then
   `set_analytics_opt_out(u)`.
   """
@@ -268,7 +268,7 @@ defmodule Engram.Accounts do
            user
            |> Ecto.Changeset.change(analytics_opt_out_at: DateTime.utc_now())
            |> Repo.update(skip_tenant_check: true) do
-      _ = if user.email, do: Engram.Workers.PostHogErasure.enqueue(user.email)
+      :ok = Engram.Analytics.forget(user)
       evict_user(user.id)
       {:ok, updated}
     end

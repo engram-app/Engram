@@ -17,7 +17,6 @@ defmodule Engram.Analytics.PersonProperties do
   alias Engram.Billing
   alias Engram.Billing.Subscription
   alias Engram.Notes.Note
-  alias Engram.Observability.PostHog
   alias Engram.Repo
   alias Engram.Vaults.Vault
 
@@ -34,8 +33,8 @@ defmodule Engram.Analytics.PersonProperties do
     end
   end
 
-  @doc "`{distinct_id, properties}` for every live, non-opted-out user."
-  @spec all() :: [{String.t(), map()}]
+  @doc "`{%{email: _}, traits}` for every live, non-opted-out user, for `Engram.Analytics.set_traits/1`."
+  @spec all() :: [{map(), map()}]
   def all, do: Enum.map(rows(), &to_person/1)
 
   # Cross-tenant on purpose: one aggregate over every user. Maintenance repo so
@@ -96,7 +95,7 @@ defmodule Engram.Analytics.PersonProperties do
   end
 
   defp to_person(row) do
-    {PostHog.analytics_id(row.email),
+    {%{email: row.email},
      %{
        email: row.email,
        name: row.name,

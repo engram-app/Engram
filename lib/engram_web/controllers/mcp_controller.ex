@@ -13,7 +13,6 @@ defmodule EngramWeb.McpController do
   alias Engram.MCP.Prompts
   alias Engram.MCP.Resources
   alias Engram.MCP.Tools
-  alias Engram.Observability.PostHog
 
   require Logger
 
@@ -977,9 +976,9 @@ defmodule EngramWeb.McpController do
 
   defp emit_client_connected(user, params) do
     family = client_family(params)
-    PostHog.capture_activity(user, :mcp)
+    Engram.Analytics.track_activity(user, :mcp)
 
-    PostHog.capture_throttled(user, "mcp_client_connected", family, :timer.hours(1), %{
+    Engram.Analytics.track_throttled(user, "mcp_client_connected", family, :timer.hours(1), %{
       client: family
     })
   end
@@ -1000,12 +999,18 @@ defmodule EngramWeb.McpController do
   # throttled per user and tool (1/min) so an agent loop cannot flood PostHog:
   # it measures minutes a tool was in use, not raw call count.
   defp emit_tool_analytics(user, tool_atom, status) do
-    PostHog.capture_activity(user, :mcp)
+    Engram.Analytics.track_activity(user, :mcp)
 
-    PostHog.capture_throttled(user, "mcp_tool_called", Atom.to_string(tool_atom), 60_000, %{
-      tool: Atom.to_string(tool_atom),
-      status: Atom.to_string(status)
-    })
+    Engram.Analytics.track_throttled(
+      user,
+      "mcp_tool_called",
+      Atom.to_string(tool_atom),
+      60_000,
+      %{
+        tool: Atom.to_string(tool_atom),
+        status: Atom.to_string(status)
+      }
+    )
   end
 
   # Every tool call runs in ONE tenant transaction (its with_tenant blocks

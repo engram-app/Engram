@@ -14,18 +14,17 @@ defmodule Engram.Accounts.Lifecycle do
 
   alias Engram.Accounts
   alias Engram.Accounts.User
+  alias Engram.Analytics
   alias Engram.Auth.SessionInvalidator
   alias Engram.Billing.Subscription
   alias Engram.Crypto.HMAC
   alias Engram.Indexing
   alias Engram.Logger.Metadata
   alias Engram.Mailer
-  alias Engram.Observability.PostHog
   alias Engram.Repo
   alias Engram.Storage
   alias Engram.Vector.Qdrant
   alias Engram.Workers.PaddleCancelSubscription
-  alias Engram.Workers.PostHogErasure
 
   require Logger
 
@@ -176,8 +175,9 @@ defmodule Engram.Accounts.Lifecycle do
     # Also deletes the legacy Clerk-id-keyed person: every person created
     # before this work is keyed on the raw Clerk id, not the analytics id, so
     # erasing only the new key would leave the old record behind.
-    _ = PostHog.delete_person(PostHog.analytics_id(user.email))
-    _ = if user.external_id, do: PostHog.delete_person(user.external_id), else: :ok
+    # Erases the analytics-id person and the legacy Clerk-id one, now and again
+    # 10 minutes later (see `Engram.Analytics.forget/1`).
+    :ok = Analytics.forget(user)
 
     # Read before Step 4 deletes the row: the answer a delete_account feedback
     # submit stashed there is sent only once the delete commits.
@@ -246,10 +246,6 @@ defmodule Engram.Accounts.Lifecycle do
         _ = delete_clerk_identity(user)
 
         _ = Engram.Feedback.capture_delete_reason(profile)
-
-        # Step 3b again, after any in-flight PostHogPersonSync batch that read
-        # this user before Step 4 could re-create the person.
-        _ = if user.email, do: PostHogErasure.enqueue(user.email, schedule_in: {10, :minutes})
 
         :ok
 

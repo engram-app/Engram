@@ -6,7 +6,17 @@ Read this before touching `Engram.Observability.PostHog`, adding an event, or
 trusting a "daily active users" number. For the **client-side** (posthog-js)
 traps, see `posthog-instrumentation-traps.md`.
 
-## What is emitted (server-side, `lib/engram/observability/posthog.ex`)
+## One module: `Engram.Analytics`
+
+Application code calls only `Engram.Analytics` (`track/3`, `track_activity/3`,
+`track_throttled/5`, `track_anonymous/2`, `set_traits/1`, `forget/1`,
+`client_id/1`). It owns opt-out, throttling and erasure, and re-reads the user
+through the `:user` cache so a long-lived socket's stale struct cannot outlive
+an opt-out or email change. `Engram.Observability.PostHog` is the vendor
+adapter; `test/lint/analytics_boundary_test.exs` fails if anything else calls
+it. Replacing PostHog means rewriting that one adapter.
+
+## What is emitted (server-side, via `Engram.Analytics`)
 
 | Event | When | Throttle | Props |
 |---|---|---|---|

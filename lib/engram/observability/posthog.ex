@@ -1,20 +1,13 @@
 defmodule Engram.Observability.PostHog do
   @moduledoc """
-  Server-side PostHog event emitter. Thin wrapper around the
-  capture endpoint; no Hex dep — Req is already in the tree.
+  The PostHog adapter: the ONLY module that knows PostHog's wire format
+  (`/capture/`, `/batch/`, `$set`, the persons API). Application code never
+  calls this; it calls `Engram.Analytics`, so swapping vendors is a rewrite of
+  this one file.
 
-  No-op when `:engram, :posthog_key` is unset (self-host, dev, test).
-  Fire-and-forget: the caller never blocks on the POST, and failures
-  are logged at `:warning` but don't propagate. Missing analytics
-  events must never break the request that emitted them.
-
-  The frontend's `posthog.identify(...)` (see
-  `frontend/src/auth/use-identify-user-on-auth-change.ts`) binds anonymous
-  device events to the user's distinct_id. Server-side events use the same
-  distinct_id so funnels join across the timeline. Live call sites: notes.ex
-  (note create/search), search.ex, vaults_controller.ex, the MCP controller and
-  CRDT channel (`capture_activity/3`), and
-  `EngramWeb.Webhooks.PostHogForwarder` for the Clerk/Paddle webhook events.
+  No Hex dep — Req is already in the tree. No-op when `:engram, :posthog_key`
+  is unset (self-host, dev, test). `capture/3` is fire-and-forget: failures are
+  logged at `:warning` and never reach the caller.
   """
 
   alias Engram.Logger.Metadata
@@ -22,6 +15,10 @@ defmodule Engram.Observability.PostHog do
   require Logger
 
   @capture_path "/capture/"
+
+  # Every event here is sent FROM the server, so PostHog's GeoIP would place
+  # every user at the AWS region and overwrite their real country.
+  @server_props %{"$geoip_disable" => true}
 
   @doc """
   Send an event to PostHog. `distinct_id` should match the
@@ -36,6 +33,8 @@ defmodule Engram.Observability.PostHog do
   def capture(nil, _event, _properties), do: :ok
 
   def capture(distinct_id, event, properties) when is_binary(event) do
+    properties = Map.merge(properties, @server_props)
+
     case config() do
       {key, host} ->
         # Task.start/1 — detached, no supervisor wiring needed.
@@ -53,49 +52,14 @@ defmodule Engram.Observability.PostHog do
     end
   end
 
-  @surfaces [:obsidian_sync, :mcp, :web]
-  @type surface :: :obsidian_sync | :mcp | :web
-  @activity_window_ms :timer.minutes(5)
-
   @doc """
-  Record that `user` was active on `surface` (`:obsidian_sync`, `:mcp`, `:web`).
-
-  Emits `surface_active`, throttled to one per user and surface per 5-minute
-  fixed window (epoch-aligned, so two events can land a few seconds apart across
-  a window edge). The limiter is cluster-shared under `:distributed_ets`. `props`
-  are merged in but can never set `surface`, under either key type.
+  Send an event no person is attached to (`$process_person_profile: false`),
+  under a throwaway distinct id.
   """
-  @spec capture_activity(map(), surface(), map()) :: :ok
-  def capture_activity(user, surface, props \\ %{}) when surface in @surfaces do
-    props = props |> Map.drop([:surface, "surface"]) |> Map.put(:surface, Atom.to_string(surface))
-    capture_throttled(user, "surface_active", Atom.to_string(surface), @activity_window_ms, props)
+  @spec capture_anonymous(String.t(), map()) :: :ok
+  def capture_anonymous(event, properties) do
+    capture(Ecto.UUID.generate(), event, Map.put(properties, "$process_person_profile", false))
   end
-
-  @doc """
-  Like `capture/3` for a signed-in user, but at most one `event` per user and
-  `dedupe` value per `window_ms`. Cheap on the disabled path (no limiter hit, no
-  HMAC), and a user without an email is skipped rather than raising, so an
-  analytics call can never break the request that made it.
-  """
-  @spec capture_throttled(map(), String.t(), String.t(), pos_integer(), map()) :: :ok
-  def capture_throttled(%{id: id, email: email} = user, event, dedupe, window_ms, props)
-      when is_binary(email) do
-    with {_key, _host} <- config(),
-         nil <- Map.get(user, :analytics_opt_out_at),
-         {:allow, _} <-
-           EngramWeb.RateLimiter.hit(
-             "ph:#{event}:#{id}:#{dedupe}",
-             window_ms,
-             1,
-             :analytics_activity
-           ) do
-      capture(analytics_id(email), event, props)
-    else
-      _ -> :ok
-    end
-  end
-
-  def capture_throttled(_user, _event, _dedupe, _window_ms, _props), do: :ok
 
   @batch_size 1_000
 
@@ -124,7 +88,11 @@ defmodule Engram.Observability.PostHog do
   defp post_batch(key, host, chunk) do
     batch =
       Enum.map(chunk, fn {distinct_id, props} ->
-        %{event: "$set", distinct_id: distinct_id, properties: %{"$set" => props}}
+        %{
+          event: "$set",
+          distinct_id: distinct_id,
+          properties: Map.put(@server_props, "$set", props)
+        }
       end)
 
     case Req.post(host <> "/batch/",
@@ -191,12 +159,12 @@ defmodule Engram.Observability.PostHog do
   Requires a personal API key with person:write scope; the capture key cannot
   delete.
 
-  Always returns `:ok` — erasure must not block on a PostHog outage — but a
-  failed lookup or delete (as opposed to a lookup that legitimately finds no
-  person) logs at `:warning`, same as `capture/3`. Silence here means an
-  operator believes a person was erased when they were not.
+  A failed lookup or delete (as opposed to a lookup that legitimately finds no
+  person) logs at `:warning` and returns `{:error, _}`, so the
+  `Engram.Workers.PostHogErasure` job that calls this retries. Silence here
+  means an operator believes a person was erased when they were not.
   """
-  @spec delete_person(String.t()) :: :ok
+  @spec delete_person(String.t()) :: :ok | {:error, {:posthog_erasure_failed, String.t()}}
   def delete_person(distinct_id) when is_binary(distinct_id) do
     case admin_config() do
       :disabled -> :ok
@@ -250,7 +218,7 @@ defmodule Engram.Observability.PostHog do
       Metadata.with_category(:warning, :boot, [])
     )
 
-    :ok
+    {:error, {:posthog_erasure_failed, step}}
   end
 
   defp admin_config do

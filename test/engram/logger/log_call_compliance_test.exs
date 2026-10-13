@@ -112,7 +112,7 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/workers/",
     # Queries the notes table (counts only) and holds user emails and names
     # bound for PostHog; scanned so a future log line cannot leak either.
-    "lib/engram/analytics/",
+    "lib/engram/analytics",
     "lib/engram/folders.ex",
     "lib/engram/search.ex",
     "lib/engram/search/",

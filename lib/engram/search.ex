@@ -244,15 +244,11 @@ defmodule Engram.Search do
        when is_list(results) do
     latency_ms = System.monotonic_time(:millisecond) - started_at
 
-    Engram.Observability.PostHog.capture(
-      Engram.Observability.PostHog.distinct_id(user),
-      "search_performed",
-      %{
-        result_count: length(results),
-        latency_ms: latency_ms,
-        cross_vault: cross_vault
-      }
-    )
+    Engram.Analytics.track(user, "search_performed", %{
+      result_count: length(results),
+      latency_ms: latency_ms,
+      cross_vault: cross_vault
+    })
   end
 
   defp emit_search_performed(_user, _other, _started_at, _cross_vault), do: :ok

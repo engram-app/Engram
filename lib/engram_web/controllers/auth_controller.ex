@@ -51,11 +51,7 @@ defmodule EngramWeb.AuthController do
 
     case Accounts.create_api_key(user, name) do
       {:ok, raw_key, api_key} ->
-        Engram.Observability.PostHog.capture(
-          Engram.Observability.PostHog.distinct_id(user),
-          "api_key_created",
-          %{}
-        )
+        Engram.Analytics.track(user, "api_key_created", %{})
 
         json(conn, %{key: raw_key, name: api_key.name, id: api_key.id})
 

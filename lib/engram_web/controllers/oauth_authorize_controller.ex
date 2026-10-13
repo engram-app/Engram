@@ -56,11 +56,7 @@ defmodule EngramWeb.OAuthAuthorizeController do
                params["label"]
              ) do
           {:ok, redirect_url} ->
-            Engram.Observability.PostHog.capture(
-              Engram.Observability.PostHog.distinct_id(user),
-              "mcp_oauth_granted",
-              %{}
-            )
+            Engram.Analytics.track(user, "mcp_oauth_granted", %{})
 
             json(conn, %{redirect_uri: redirect_url})
 

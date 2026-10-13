@@ -12,16 +12,16 @@ defmodule Engram.Workers.PostHogPersonSync do
   """
   use Oban.Worker, queue: :maintenance, max_attempts: 3
 
+  alias Engram.Analytics
   alias Engram.Analytics.PersonProperties
-  alias Engram.Observability.PostHog
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
 
   @impl Oban.Worker
   def perform(%Oban.Job{}) do
-    if PostHog.enabled?() and PersonProperties.policy_in_effect?() do
-      PersonProperties.all() |> PostHog.set_people()
+    if Analytics.enabled?() and PersonProperties.policy_in_effect?() do
+      PersonProperties.all() |> Analytics.set_traits()
     else
       :ok
     end

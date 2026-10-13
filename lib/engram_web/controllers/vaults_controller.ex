@@ -131,11 +131,7 @@ defmodule EngramWeb.VaultsController do
           # /vaults (index/2) is the picker fetch — emitting there would
           # conflate browsing with opening, so the event stays on show/2.
           _ =
-            Engram.Observability.PostHog.capture(
-              Engram.Observability.PostHog.distinct_id(user),
-              "vault_opened",
-              %{vault_id: vault.id}
-            )
+            Engram.Analytics.track(user, "vault_opened", %{vault_id: vault.id})
 
           json(conn, %{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
 

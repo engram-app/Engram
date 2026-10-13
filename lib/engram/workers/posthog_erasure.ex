@@ -1,25 +1,18 @@
 defmodule Engram.Workers.PostHogErasure do
   @moduledoc """
-  Deletes a PostHog person (and its events) out of band.
+  Deletes PostHog persons (and their events) by distinct id. Enqueued only by
+  `Engram.Analytics.forget/1`; see there for when and why it runs twice.
 
-  Used where the inline delete is not enough or not safe to block on:
-
-    * account erasure re-runs it 10 minutes later, so a `PostHogPersonSync`
-      batch that read the user before the delete cannot leave a resurrected
-      person behind (the sync's timeout is 5 minutes);
-    * an email change erases the person keyed on the OLD email, which account
-      erasure would otherwise never find;
-    * an analytics opt-out.
-
-  Args carry the keyed analytics id, never the email.
+  A failed delete returns an error, so Oban retries it. Args carry keyed
+  analytics ids and the legacy Clerk id, never an email.
   """
-  use Oban.Worker, queue: :events, max_attempts: 3
+  use Oban.Worker, queue: :events, max_attempts: 5
 
   alias Engram.Observability.PostHog
 
-  @spec enqueue(String.t(), keyword()) :: {:ok, Oban.Job.t()} | {:error, term()}
-  def enqueue(email, opts \\ []) when is_binary(email) do
-    %{"distinct_id" => PostHog.analytics_id(email)}
+  @spec enqueue([String.t()], keyword()) :: {:ok, Oban.Job.t()} | {:error, term()}
+  def enqueue(distinct_ids, opts \\ []) when is_list(distinct_ids) do
+    %{"distinct_ids" => distinct_ids}
     |> new(opts)
     |> Oban.insert()
   end
@@ -28,7 +21,7 @@ defmodule Engram.Workers.PostHogErasure do
   def timeout(_job), do: :timer.seconds(30)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"distinct_id" => distinct_id}}) do
-    PostHog.delete_person(distinct_id)
+  def perform(%Oban.Job{args: %{"distinct_ids" => ids}}) do
+    Enum.find(Enum.map(ids, &PostHog.delete_person/1), :ok, &(&1 != :ok))
   end
 end
