@@ -29,6 +29,13 @@ defmodule Engram.Legal.Seeder do
         effective_date: nil,
         changelog:
           "Accuracy fixes: scope clarified to cover the app (not just the marketing site); Grafana Cloud added to sub-processors."
+      },
+      # Notice-only: legitimate-interest analytics needs notice, not consent.
+      "2026-10-12" => %{
+        material: false,
+        effective_date: nil,
+        changelog:
+          "App analytics now linked to your account (email, plan, usage counts); masked web-app session recording outside the EEA/UK/CH. Note content is never sent."
       }
     }
   }

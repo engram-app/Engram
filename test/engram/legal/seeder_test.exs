@@ -11,7 +11,12 @@ defmodule Engram.Legal.SeederTest do
     assert Legal.hash_for("terms_of_service", "2026-05-19") ==
              "372e3b55589eaa8e77311beefacc3818f0691cc378a06f0a12f243323769691c"
 
+    # 2026-10-12 (identified analytics) is notice-only, so the floor stays put.
     assert Legal.required_floor("privacy_policy") == "2026-06-20"
+
+    assert Legal.hash_for("privacy_policy", "2026-10-12") ==
+             "4bd57debdb64f008d995ab668f7bb54f27c65e5bfd1289f3c4f789b56b7a63fe"
+
     # seed→verify round-trips cleanly when the DB matches the manifest.
     assert :ok = Seeder.verify()
   end
@@ -20,7 +25,7 @@ defmodule Engram.Legal.SeederTest do
     assert :ok = Seeder.seed()
     assert :ok = Seeder.seed()
     rows = Engram.Repo.all(Engram.Legal.TermsVersion, skip_tenant_check: true)
-    assert length(rows) == 2
+    assert length(rows) == 3
   end
 
   test "verify/0 raises when a DB row's hash diverges from the manifest" do
