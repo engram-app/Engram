@@ -249,6 +249,9 @@ defmodule Engram.Logs do
           Metadata.with_category(level, :client,
             conn_id: entry.conn_id,
             device_id: entry.device_id,
+            # web vs plugin: both ship through this pipe, and a web-only alert
+            # (broken SPA API requests) has to tell them apart.
+            platform: entry.platform,
             user_id: hashed_user,
             client_severity: entry.level,
             # The whole point of `forced` is answering "does this signal cover
