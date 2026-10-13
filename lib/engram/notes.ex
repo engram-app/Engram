@@ -547,7 +547,7 @@ defmodule Engram.Notes do
             # doesn't double-count idempotent re-pushes of unchanged notes.
             :ok =
               Repo.after_commit(fn ->
-                PostHog.capture(PostHog.analytics_id(user.email), "note_created", %{
+                PostHog.capture(PostHog.distinct_id(user), "note_created", %{
                   vault_id: vault.id
                 })
               end)

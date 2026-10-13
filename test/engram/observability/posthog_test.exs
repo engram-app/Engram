@@ -229,4 +229,57 @@ defmodule Engram.Observability.PostHogTest do
       refute_receive {:posthog_body, _}, 200
     end
   end
+
+  describe "opt-out" do
+    test "distinct_id/1 is the analytics id, or nil for an opted-out or emailless user" do
+      assert PostHog.distinct_id(%{email: "a@b.co"}) == PostHog.analytics_id("a@b.co")
+
+      assert PostHog.distinct_id(%{email: "a@b.co", analytics_opt_out_at: DateTime.utc_now()}) ==
+               nil
+
+      assert PostHog.distinct_id(%{email: nil}) == nil
+    end
+
+    test "capture/3 with a nil distinct id sends nothing" do
+      bypass = Bypass.open()
+      Application.put_env(:engram, :posthog_key, "phc_test_token")
+      Application.put_env(:engram, :posthog_host, "http://localhost:#{bypass.port}")
+      Bypass.stub(bypass, "POST", "/capture/", fn _ -> flunk("captured an opted-out user") end)
+
+      assert :ok = PostHog.capture(nil, "note_created")
+      Process.sleep(100)
+    end
+
+    test "capture_activity/3 skips an opted-out user" do
+      EngramWeb.RateLimiter.reset_buckets!()
+      bypass = Bypass.open()
+      Application.put_env(:engram, :posthog_key, "phc_test_token")
+      Application.put_env(:engram, :posthog_host, "http://localhost:#{bypass.port}")
+      Bypass.stub(bypass, "POST", "/capture/", fn _ -> flunk("captured an opted-out user") end)
+
+      user = %{id: 1, email: "x@y.co", analytics_opt_out_at: DateTime.utc_now()}
+      assert :ok = PostHog.capture_activity(user, :web)
+      Process.sleep(100)
+    end
+  end
+
+  describe "set_people/2" do
+    test "sends every chunk even when one fails, then reports the failure" do
+      bypass = Bypass.open()
+      Application.put_env(:engram, :posthog_key, "phc_test_token")
+      Application.put_env(:engram, :posthog_host, "http://localhost:#{bypass.port}")
+      parent = self()
+
+      Bypass.expect(bypass, "POST", "/batch/", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        [%{"distinct_id" => id}] = Jason.decode!(body)["batch"]
+        send(parent, {:sent, id})
+        Plug.Conn.resp(conn, if(id == "a", do: 503, else: 200), "{}")
+      end)
+
+      assert {:error, _} = PostHog.set_people([{"a", %{}}, {"b", %{}}], 1)
+      assert_received {:sent, "a"}
+      assert_received {:sent, "b"}
+    end
+  end
 end

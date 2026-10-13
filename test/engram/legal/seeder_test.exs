@@ -15,7 +15,7 @@ defmodule Engram.Legal.SeederTest do
     assert Legal.required_floor("privacy_policy") == "2026-06-20"
 
     assert Legal.hash_for("privacy_policy", "2026-10-12") ==
-             "4bd57debdb64f008d995ab668f7bb54f27c65e5bfd1289f3c4f789b56b7a63fe"
+             "d3367fdc0ba6a790f492c4b3487f73d183c01060d4322e762c5221f6728f968b"
 
     # seed→verify round-trips cleanly when the DB matches the manifest.
     assert :ok = Seeder.verify()

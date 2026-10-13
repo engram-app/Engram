@@ -29,8 +29,13 @@ defmodule Engram.Observability.PostHog do
   (see `analytics_id/1`); for anonymous flows pass `:anon` and PostHog
   buckets the event under a fallback id.
   """
-  @spec capture(String.t() | :anon, String.t(), map()) :: :ok
-  def capture(distinct_id, event, properties \\ %{}) when is_binary(event) do
+  @spec capture(String.t() | :anon | nil, String.t(), map()) :: :ok
+  def capture(distinct_id, event, properties \\ %{})
+
+  # nil = opted out or no email (see `distinct_id/1`): send nothing.
+  def capture(nil, _event, _properties), do: :ok
+
+  def capture(distinct_id, event, properties) when is_binary(event) do
     case config() do
       {key, host} ->
         # Task.start/1 — detached, no supervisor wiring needed.
@@ -73,9 +78,10 @@ defmodule Engram.Observability.PostHog do
   analytics call can never break the request that made it.
   """
   @spec capture_throttled(map(), String.t(), String.t(), pos_integer(), map()) :: :ok
-  def capture_throttled(%{id: id, email: email}, event, dedupe, window_ms, props)
+  def capture_throttled(%{id: id, email: email} = user, event, dedupe, window_ms, props)
       when is_binary(email) do
     with {_key, _host} <- config(),
+         nil <- Map.get(user, :analytics_opt_out_at),
          {:allow, _} <-
            EngramWeb.RateLimiter.hit(
              "ph:#{event}:#{id}:#{dedupe}",
@@ -99,21 +105,19 @@ defmodule Engram.Observability.PostHog do
   `people` is `[{distinct_id, props}]`. Unlike `capture/3` this is synchronous
   and returns the failure, because its caller is an Oban job that should retry.
   """
-  @spec set_people([{String.t(), map()}]) :: :ok | {:error, term()}
-  def set_people(people) do
+  @spec set_people([{String.t(), map()}], pos_integer()) :: :ok | {:error, term()}
+  def set_people(people, batch_size \\ @batch_size) do
     case config() do
       :disabled ->
         :ok
 
       {key, host} ->
+        # Every chunk is sent even after one fails, so a bad chunk cannot
+        # starve the ones behind it; the first error is returned for a retry.
         people
-        |> Enum.chunk_every(@batch_size)
-        |> Enum.reduce_while(:ok, fn chunk, :ok ->
-          case post_batch(key, host, chunk) do
-            :ok -> {:cont, :ok}
-            error -> {:halt, error}
-          end
-        end)
+        |> Enum.chunk_every(batch_size)
+        |> Enum.map(&post_batch(key, host, &1))
+        |> Enum.find(:ok, &(&1 != :ok))
     end
   end
 
@@ -260,6 +264,18 @@ defmodule Engram.Observability.PostHog do
       :disabled
     end
   end
+
+  @doc """
+  The PostHog distinct id for a user, or nil when nothing may be sent: the user
+  objected to analytics (`analytics_opt_out_at`) or has no email. `capture/3`
+  treats nil as "send nothing", so callers pass this straight through.
+  """
+  @spec distinct_id(map()) :: String.t() | nil
+  def distinct_id(%{email: email} = user) when is_binary(email) do
+    if Map.get(user, :analytics_opt_out_at), do: nil, else: analytics_id(email)
+  end
+
+  def distinct_id(_user), do: nil
 
   @doc """
   Pseudonymous analytics identifier for an email address.

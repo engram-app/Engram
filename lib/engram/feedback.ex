@@ -298,13 +298,11 @@ defmodule Engram.Feedback do
 
   # A user with no email has no analytics id; their answer still lands in the
   # profile (onboarding) but has nowhere to go in PostHog.
-  defp capture(%{email: email}, event, props) when is_binary(email) do
+  defp capture(user, event, props) do
     PostHog.capture(
-      PostHog.analytics_id(email),
+      PostHog.distinct_id(user),
       event,
       Map.reject(props, fn {_k, v} -> is_nil(v) end)
     )
   end
-
-  defp capture(_user, _event, _props), do: :ok
 end

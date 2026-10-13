@@ -22,11 +22,13 @@ export function useIdentifyUserOnAuthChange({
 	isSignedIn,
 	id,
 	analyticsId,
+	analyticsOptOut,
 }: {
 	isLoaded: boolean;
 	isSignedIn: boolean;
 	id?: string;
 	analyticsId?: string;
+	analyticsOptOut?: boolean;
 }): void {
 	useEffect(() => {
 		// Clerk reports isSignedIn:false while still resolving; acting on that
@@ -34,7 +36,11 @@ export function useIdentifyUserOnAuthChange({
 		if (!isLoaded) {
 			return;
 		}
-		if (isSignedIn && analyticsId) {
+		if (isSignedIn && analyticsOptOut) {
+			// The user objected to analytics: send nothing, anonymous included.
+			posthog.opt_out_capturing();
+			setSentryUser(id ?? null);
+		} else if (isSignedIn && analyticsId) {
 			posthog.identify(analyticsId);
 			// Id only — never email, and never the Clerk id. See the privacy
 			// policy's sub-processor table.
@@ -43,5 +49,5 @@ export function useIdentifyUserOnAuthChange({
 			posthog.reset();
 			setSentryUser(null);
 		}
-	}, [isLoaded, isSignedIn, id, analyticsId]);
+	}, [isLoaded, isSignedIn, id, analyticsId, analyticsOptOut]);
 }

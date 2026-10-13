@@ -1,5 +1,6 @@
 defmodule EngramWeb.ClerkWebhookTest do
   use EngramWeb.ConnCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   import Mox
 
@@ -209,6 +210,16 @@ defmodule EngramWeb.ClerkWebhookTest do
       reloaded = Repo.reload!(user)
       assert reloaded.email == "New.Primary+tag@gmail.com"
       assert reloaded.normalized_email == "newprimary@gmail.com"
+    end
+
+    test "erases the analytics person keyed on the old email", %{conn: conn} do
+      payload = clerk_user_updated_payload("user_email", email: "fresh@gmail.com")
+      post_clerk(conn, "evt_email_ph", payload)
+
+      assert_enqueued(
+        worker: Engram.Workers.PostHogErasure,
+        args: %{"distinct_id" => Engram.Observability.PostHog.analytics_id("old@gmail.com")}
+      )
     end
 
     test "is a no-op when primary email is unchanged", %{conn: conn, user: user} do

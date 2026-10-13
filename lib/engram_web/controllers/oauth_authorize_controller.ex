@@ -57,7 +57,7 @@ defmodule EngramWeb.OAuthAuthorizeController do
              ) do
           {:ok, redirect_url} ->
             Engram.Observability.PostHog.capture(
-              Engram.Observability.PostHog.analytics_id(user.email),
+              Engram.Observability.PostHog.distinct_id(user),
               "mcp_oauth_granted",
               %{}
             )

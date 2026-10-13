@@ -25,6 +25,7 @@ defmodule Engram.Accounts.Lifecycle do
   alias Engram.Storage
   alias Engram.Vector.Qdrant
   alias Engram.Workers.PaddleCancelSubscription
+  alias Engram.Workers.PostHogErasure
 
   require Logger
 
@@ -245,6 +246,10 @@ defmodule Engram.Accounts.Lifecycle do
         _ = delete_clerk_identity(user)
 
         _ = Engram.Feedback.capture_delete_reason(profile)
+
+        # Step 3b again, after any in-flight PostHogPersonSync batch that read
+        # this user before Step 4 could re-create the person.
+        _ = if user.email, do: PostHogErasure.enqueue(user.email, schedule_in: {10, :minutes})
 
         :ok
 

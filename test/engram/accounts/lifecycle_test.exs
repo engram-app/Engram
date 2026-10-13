@@ -453,6 +453,24 @@ defmodule Engram.Accounts.LifecycleTest do
       assert :ok = Lifecycle.hard_delete(user, :user)
     end
 
+    test "hard_delete re-erases the PostHog person after any in-flight person sync",
+         %{bypass: bypass} do
+      Bypass.stub(bypass, "GET", "/api/projects/1/persons/", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"results":[]}))
+      end)
+
+      user = insert(:user, external_id: nil, email: "racer@example.com")
+      assert :ok = Lifecycle.hard_delete(user, :user)
+
+      assert_enqueued(
+        worker: Engram.Workers.PostHogErasure,
+        args: %{"distinct_id" => Engram.Observability.PostHog.analytics_id("racer@example.com")},
+        scheduled_at: {DateTime.add(DateTime.utc_now(), 10, :minute), delta: 60}
+      )
+    end
+
     test "hard_delete sends the stashed delete reason once the account is gone",
          %{bypass: bypass} do
       prev_capture_key = Application.get_env(:engram, :posthog_key)

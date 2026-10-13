@@ -134,7 +134,7 @@ defmodule EngramWeb.DeviceAuthController do
       {:ok, result} ->
         # Activation milestone: the plugin actually holds credentials now.
         Engram.Observability.PostHog.capture(
-          Engram.Observability.PostHog.analytics_id(result.user_email),
+          Engram.Observability.PostHog.distinct_id(result.user),
           "plugin_linked",
           %{}
         )

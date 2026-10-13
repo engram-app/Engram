@@ -186,6 +186,11 @@ defmodule Engram.Auth.Clerk.Webhook do
       |> Repo.update(skip_tenant_check: true)
       |> case do
         {:ok, _user} ->
+          # The PostHog person is keyed on the email, so a new email starts a
+          # new person. Erase the old one now: account erasure only ever finds
+          # the current email's person, and the old one holds email and name.
+          # Trade-off: the user's pre-change analytics history goes with it.
+          _ = if user.email, do: Engram.Workers.PostHogErasure.enqueue(user.email)
           :ok
 
         {:error, _changeset} ->

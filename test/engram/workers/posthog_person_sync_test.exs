@@ -2,6 +2,7 @@ defmodule Engram.Workers.PostHogPersonSyncTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  alias Engram.Legal.TermsVersion
   alias Engram.Observability.PostHog
   alias Engram.Workers.PostHogPersonSync
 
@@ -14,7 +15,17 @@ defmodule Engram.Workers.PostHogPersonSyncTest do
       Application.put_env(:engram, :posthog_host, prior_host)
     end)
 
+    Engram.Legal.Seeder.seed()
+    policy_effective_on(Date.add(Date.utc_today(), -1))
     :ok
+  end
+
+  defp policy_effective_on(date) do
+    Repo.update_all(
+      from(v in TermsVersion, where: v.document == "privacy_policy" and v.version == "2026-10-12"),
+      [set: [effective_date: date]],
+      skip_tenant_check: true
+    )
   end
 
   defp enable_posthog do
@@ -46,6 +57,15 @@ defmodule Engram.Workers.PostHogPersonSyncTest do
     assert :ok = perform_job(PostHogPersonSync, %{})
   end
 
+  test "sends nothing before the privacy policy that announces it takes effect" do
+    bypass = enable_posthog()
+    Bypass.stub(bypass, "POST", "/batch/", fn _ -> flunk("sent before effective date") end)
+    policy_effective_on(Date.add(Date.utc_today(), 1))
+    insert(:user)
+
+    assert :ok = perform_job(PostHogPersonSync, %{})
+  end
+
   test "sets account properties on every live user in one batch" do
     bypass = enable_posthog()
     capture_batch(bypass)
@@ -56,10 +76,8 @@ defmodule Engram.Workers.PostHogPersonSyncTest do
     insert(:vault, user: paid)
     insert(:attachment, user: paid, vault: vault, size_bytes: 1_000)
     insert(:attachment, user: paid, vault: vault, size_bytes: 500)
-
-    Repo.insert!(%Engram.UsageMeters.Meter{user_id: paid.id, notes_count: 42},
-      skip_tenant_check: true
-    )
+    insert(:note, user: paid, vault: vault)
+    insert(:note, user: paid, vault: vault)
 
     insert(:user, email: "free@example.com")
 
@@ -76,16 +94,39 @@ defmodule Engram.Workers.PostHogPersonSyncTest do
     assert set["plan"] == "pro"
     assert set["subscription_status"] == "active"
     assert set["vault_count"] == 2
-    assert set["storage_bytes"] == 1_500
-    assert set["notes_count"] == 42
+    assert set["attachment_bytes"] == 1_500
+    assert set["notes_count"] == 2
     assert is_binary(set["signed_up_at"])
 
     f = person(batch, "free@example.com")["properties"]["$set"]
     assert f["plan"] == "free"
     assert f["subscription_status"] == nil
     assert f["vault_count"] == 0
-    assert f["storage_bytes"] == 0
+    assert f["attachment_bytes"] == 0
     assert f["notes_count"] == 0
+  end
+
+  test "counts only live notes and attachments in live vaults" do
+    bypass = enable_posthog()
+    capture_batch(bypass)
+
+    u = insert(:user, email: "counts@example.com")
+    live = insert(:vault, user: u)
+    gone = insert(:vault, user: u, deleted_at: DateTime.utc_now(:second))
+
+    insert(:note, user: u, vault: live)
+    insert(:note, user: u, vault: live, deleted_at: DateTime.utc_now())
+    insert(:note, user: u, vault: gone)
+    insert(:attachment, user: u, vault: live, size_bytes: 10)
+    insert(:attachment, user: u, vault: gone, size_bytes: 1_000)
+
+    assert :ok = perform_job(PostHogPersonSync, %{})
+    assert_receive {:batch, batch}, 1_000
+
+    set = person(batch, "counts@example.com")["properties"]["$set"]
+    assert set["notes_count"] == 1
+    assert set["attachment_bytes"] == 10
+    assert set["vault_count"] == 1
   end
 
   test "a lapsed paid subscription reads as free" do
@@ -103,11 +144,12 @@ defmodule Engram.Workers.PostHogPersonSyncTest do
     assert set["subscription_status"] == "canceled"
   end
 
-  test "skips deleted users and never sends note data" do
+  test "skips deleted and opted-out users and never sends note data" do
     bypass = enable_posthog()
     capture_batch(bypass)
 
     insert(:user, email: "gone@example.com", deleted_at: DateTime.utc_now())
+    insert(:user, email: "objected@example.com", analytics_opt_out_at: DateTime.utc_now())
     live = insert(:user, email: "live@example.com")
     insert(:note, user: live, vault: insert(:vault, user: live))
 
@@ -115,11 +157,12 @@ defmodule Engram.Workers.PostHogPersonSyncTest do
     assert_receive {:batch, batch}, 1_000
 
     assert person(batch, "gone@example.com") == nil
+    assert person(batch, "objected@example.com") == nil
 
     keys = person(batch, "live@example.com")["properties"]["$set"] |> Map.keys() |> Enum.sort()
 
     assert keys ==
-             ~w(email name notes_count plan signed_up_at storage_bytes subscription_status vault_count)
+             ~w(attachment_bytes email name notes_count plan signed_up_at subscription_status vault_count)
   end
 
   test "a rejected batch fails the job so Oban retries" do

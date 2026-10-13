@@ -256,6 +256,25 @@ defmodule Engram.Accounts do
   @max_display_name_chars 80
 
   @doc """
+  Record a user's objection to analytics (privacy policy 2026-10-12) and erase
+  their PostHog person. Every emitter then skips them via
+  `PostHog.distinct_id/1`. Operator-run from a release shell today:
+  `{:ok, u} = find_by_normalized_email(EmailNormalizer.normalize(email))`, then
+  `set_analytics_opt_out(u)`.
+  """
+  @spec set_analytics_opt_out(User.t()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
+  def set_analytics_opt_out(%User{} = user) do
+    with {:ok, updated} <-
+           user
+           |> Ecto.Changeset.change(analytics_opt_out_at: DateTime.utc_now())
+           |> Repo.update(skip_tenant_check: true) do
+      _ = if user.email, do: Engram.Workers.PostHogErasure.enqueue(user.email)
+      evict_user(user.id)
+      {:ok, updated}
+    end
+  end
+
+  @doc """
   Updates the editable profile fields on a user. Currently just `display_name`.
   Empty/whitespace string clears the field (stored as nil).
   """

@@ -29,7 +29,7 @@ scope), `crdt_channel.ex` `note_sync_activity/1` (edits only), `mcp_controller.e
 Since privacy policy 2026-10-12, PostHog persons are identified. A daily job
 (06:25 UTC) `$set`s on every live user: `email`, `name`, `signed_up_at`,
 `plan` (`free`/`starter`/`pro`, same rule as `Billing.tier/1`),
-`subscription_status`, `notes_count`, `vault_count`, `storage_bytes`. One
+`subscription_status`, `notes_count`, `vault_count`, `attachment_bytes`. One
 `/batch/` request per 1,000 users. The `distinct_id` is still the HMAC
 `analytics_id`, so no second identity cutover.
 

@@ -110,6 +110,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # that way; `folders.ex` is the constraint's own `Medical/` example and was
     # somehow still not listed after two passes.
     "lib/engram/workers/",
+    # Queries the notes table (counts only) and holds user emails and names
+    # bound for PostHog; scanned so a future log line cannot leak either.
+    "lib/engram/analytics/",
     "lib/engram/folders.ex",
     "lib/engram/search.ex",
     "lib/engram/search/",

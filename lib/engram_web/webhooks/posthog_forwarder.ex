@@ -53,8 +53,8 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   # handler runs), drop silently — there's no analytics identity to join on.
   defp capture_by_clerk_id(clerk_id, event) do
     case Accounts.find_by_external_id(clerk_id) do
-      {:ok, %{email: email}} when is_binary(email) and byte_size(email) > 0 ->
-        _ = PostHog.capture(PostHog.analytics_id(email), event, %{})
+      {:ok, %{email: email} = user} when is_binary(email) and byte_size(email) > 0 ->
+        _ = PostHog.capture(PostHog.distinct_id(user), event, %{})
         :ok
 
       _ ->
@@ -75,11 +75,11 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
         %Engram.Billing.Subscription{} = sub
       ) do
     case Accounts.get_user(sub.user_id) do
-      %{email: email} when is_binary(email) and byte_size(email) > 0 ->
+      %{email: email} = user when is_binary(email) and byte_size(email) > 0 ->
         price_id = data |> Map.get("items", []) |> List.first(%{}) |> get_in(["price", "id"])
 
         _ =
-          PostHog.capture(PostHog.analytics_id(email), "subscription_started", %{
+          PostHog.capture(PostHog.distinct_id(user), "subscription_started", %{
             tier: sub.tier,
             price_id: price_id,
             paddle_subscription_id: sub.paddle_subscription_id

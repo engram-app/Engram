@@ -24,7 +24,8 @@ defmodule EngramWeb.UsersController do
         email: user.email,
         role: user.role,
         display_name: user.display_name,
-        analytics_id: Engram.Observability.PostHog.analytics_id(user.email)
+        analytics_id: Engram.Observability.PostHog.distinct_id(user),
+        analytics_opt_out: not is_nil(user.analytics_opt_out_at)
       }
     })
   end
@@ -56,7 +57,8 @@ defmodule EngramWeb.UsersController do
             email: updated.email,
             role: updated.role,
             display_name: updated.display_name,
-            analytics_id: Engram.Observability.PostHog.analytics_id(updated.email)
+            analytics_id: Engram.Observability.PostHog.distinct_id(updated),
+            analytics_opt_out: not is_nil(updated.analytics_opt_out_at)
           }
         })
 
