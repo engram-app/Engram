@@ -7,14 +7,12 @@ vi.mock("../observability/remote-log", () => ({
 }));
 
 function respond(status: number) {
-	globalThis.fetch = vi
-		.fn()
-		.mockResolvedValue(
-			new Response(JSON.stringify({ error: "boom" }), {
-				status,
-				headers: { "Content-Type": "application/json" },
-			}),
-		);
+	globalThis.fetch = vi.fn().mockResolvedValue(
+		new Response(JSON.stringify({ error: "boom" }), {
+			status,
+			headers: { "Content-Type": "application/json" },
+		}),
+	);
 }
 
 // Handled request failures used to reach no one: every mutation's onError

@@ -1,6 +1,6 @@
 import { track } from "../analytics/track";
-import { newTraceContext, tracingEnabled } from "../observability/trace";
 import { rlog } from "../observability/remote-log";
+import { newTraceContext, tracingEnabled } from "../observability/trace";
 import { scrubUrl } from "../sentry";
 import { getActiveVaultId } from "./active-vault";
 import { getApiBase, joinApiUrl } from "./base";
