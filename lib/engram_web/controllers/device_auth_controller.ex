@@ -133,11 +133,7 @@ defmodule EngramWeb.DeviceAuthController do
     case DeviceFlow.exchange_device_code(device_code) do
       {:ok, result} ->
         # Activation milestone: the plugin actually holds credentials now.
-        Engram.Observability.PostHog.capture(
-          Engram.Observability.PostHog.analytics_id(result.user_email),
-          "plugin_linked",
-          %{}
-        )
+        Engram.Analytics.track(result.user, "plugin_linked", %{})
 
         json(conn, %{
           access_token: result.access_token,

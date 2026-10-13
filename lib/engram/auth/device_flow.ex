@@ -317,6 +317,7 @@ defmodule Engram.Auth.DeviceFlow do
        refresh_token: raw_refresh,
        vault_id: auth.vault_id,
        user_email: auth.user.email,
+       user: auth.user,
        expires_in: Engram.Token.ttl_seconds()
      }}
   end

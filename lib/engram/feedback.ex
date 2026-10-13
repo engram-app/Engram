@@ -16,8 +16,8 @@ defmodule Engram.Feedback do
   import Ecto.Query
 
   alias Engram.Accounts.User
+  alias Engram.Analytics
   alias Engram.Billing
-  alias Engram.Observability.PostHog
   alias Engram.Repo
 
   @heard_from ~w(search reddit youtube obsidian_community obsidian_plugins friend ai_assistant social other)
@@ -69,7 +69,7 @@ defmodule Engram.Feedback do
 
   @doc "Whether feedback reaches anyone: false on self-host, where analytics is off."
   @spec collected?() :: boolean()
-  def collected?, do: PostHog.enabled?()
+  def collected?, do: Analytics.enabled?()
 
   @spec submit(User.t(), String.t(), map()) :: :ok | {:error, error()}
   def submit(user, "onboarding", params) do
@@ -169,13 +169,9 @@ defmodule Engram.Feedback do
         :ok
 
       {reason, detail} ->
-        PostHog.capture(
-          Ecto.UUID.generate(),
+        Analytics.track_anonymous(
           "account_delete_reason",
-          Map.reject(
-            %{"reason" => reason, "detail" => detail, "$process_person_profile" => false},
-            fn {_k, v} -> is_nil(v) end
-          )
+          Map.reject(%{"reason" => reason, "detail" => detail}, fn {_k, v} -> is_nil(v) end)
         )
     end
   end
@@ -298,13 +294,7 @@ defmodule Engram.Feedback do
 
   # A user with no email has no analytics id; their answer still lands in the
   # profile (onboarding) but has nowhere to go in PostHog.
-  defp capture(%{email: email}, event, props) when is_binary(email) do
-    PostHog.capture(
-      PostHog.analytics_id(email),
-      event,
-      Map.reject(props, fn {_k, v} -> is_nil(v) end)
-    )
+  defp capture(user, event, props) do
+    Analytics.track(user, event, Map.reject(props, fn {_k, v} -> is_nil(v) end))
   end
-
-  defp capture(_user, _event, _props), do: :ok
 end

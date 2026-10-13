@@ -77,7 +77,8 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 		isLoaded,
 		isSignedIn: isSignedIn ?? false,
 		id: clerkUserId,
-		analyticsId: me?.analytics_id,
+		analyticsId: me?.analytics_id ?? undefined,
+		analyticsOptOut: me?.analytics_opt_out,
 	});
 	const adapter: AuthAdapter = useMemo(
 		() => ({

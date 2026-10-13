@@ -29,6 +29,15 @@ defmodule Engram.Legal.Seeder do
         effective_date: nil,
         changelog:
           "Accuracy fixes: scope clarified to cover the app (not just the marketing site); Grafana Cloud added to sub-processors."
+      },
+      # Notice-only: legitimate-interest analytics needs notice, not consent.
+      # Notice-only, but the 30-day notice ToS §13 promises still runs:
+      # PostHogPersonSync sends nothing before this effective_date.
+      "2026-10-12" => %{
+        material: false,
+        effective_date: ~D[2026-11-11],
+        changelog:
+          "App analytics now linked to your account (email, plan, usage counts). Note content is never sent."
       }
     }
   }
