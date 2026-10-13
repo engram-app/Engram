@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.50.1](https://github.com/engram-app/Engram/compare/0.50.0...0.50.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* **ci:** keep CI stacks out of the install census ([#1950](https://github.com/engram-app/Engram/issues/1950)) ([f6a42aa](https://github.com/engram-app/Engram/commit/f6a42aa791e64fe983efe19b25f8d6db4d338899))
+* **i18n:** reject English echoes, add pins and translator descriptions ([#1952](https://github.com/engram-app/Engram/issues/1952)) ([4d44ce0](https://github.com/engram-app/Engram/commit/4d44ce090785b7d7efeb4353edfdcd93a24726c7))
+
 ## [0.50.0](https://github.com/engram-app/Engram/compare/0.49.0...0.50.0) (2026-10-12)
 
 
