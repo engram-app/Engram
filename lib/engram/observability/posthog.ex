@@ -91,6 +91,49 @@ defmodule Engram.Observability.PostHog do
 
   def capture_throttled(_user, _event, _dedupe, _window_ms, _props), do: :ok
 
+  @batch_size 1_000
+
+  @doc """
+  Set person properties for many people in as few requests as possible.
+
+  `people` is `[{distinct_id, props}]`. Unlike `capture/3` this is synchronous
+  and returns the failure, because its caller is an Oban job that should retry.
+  """
+  @spec set_people([{String.t(), map()}]) :: :ok | {:error, term()}
+  def set_people(people) do
+    case config() do
+      :disabled ->
+        :ok
+
+      {key, host} ->
+        people
+        |> Enum.chunk_every(@batch_size)
+        |> Enum.reduce_while(:ok, fn chunk, :ok ->
+          case post_batch(key, host, chunk) do
+            :ok -> {:cont, :ok}
+            error -> {:halt, error}
+          end
+        end)
+    end
+  end
+
+  defp post_batch(key, host, chunk) do
+    batch =
+      Enum.map(chunk, fn {distinct_id, props} ->
+        %{event: "$set", distinct_id: distinct_id, properties: %{"$set" => props}}
+      end)
+
+    case Req.post(host <> "/batch/",
+           json: %{api_key: key, batch: batch},
+           receive_timeout: 15_000,
+           retry: false
+         ) do
+      {:ok, %{status: status}} when status in 200..299 -> :ok
+      {:ok, %{status: status}} -> {:error, {:posthog_status, status}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   @doc "Whether capture is configured (false on self-host, dev and test by default)."
   @spec enabled?() :: boolean()
   def enabled?, do: config() != :disabled
