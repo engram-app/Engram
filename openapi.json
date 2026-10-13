@@ -5,7 +5,7 @@
       "User": {
         "properties": {
           "analytics_id": {
-            "description": "Keyed pseudonymous identifier (HMAC of the user's email) for client-side analytics identify calls; null when the user opted out. See Engram.Observability.PostHog.distinct_id/1.",
+            "description": "Keyed pseudonymous identifier (HMAC of the user's email) for client-side analytics identify calls; null when the user opted out. See Engram.Analytics.client_id/1.",
             "nullable": true,
             "type": "string",
             "x-struct": null,
