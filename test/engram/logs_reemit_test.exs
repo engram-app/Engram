@@ -129,6 +129,33 @@ defmodule Engram.LogsReemitTest do
     assert meta[:client_severity] == "error"
   end
 
+  # Web and plugin both ship through this pipe; without the platform on the
+  # Loki line a web-only alert (broken SPA API requests) cannot be written.
+  test "client platform reaches the Loki re-emit metadata" do
+    user = insert(:user)
+    parent = self()
+    ref = make_ref()
+    handler_id = :logs_reemit_platform_test_handler
+
+    :logger.add_handler(handler_id, __MODULE__, %{config: %{parent: parent, ref: ref}})
+    on_exit(fn -> :logger.remove_handler(handler_id) end)
+
+    {:ok, 1} =
+      Logs.insert_logs(user, [
+        %{
+          "ts" => DateTime.utc_now() |> DateTime.to_iso8601(),
+          "level" => "error",
+          "category" => "api_request",
+          "message" => "network_error POST /folders/:seg",
+          "platform" => "web",
+          "conn_id" => "c1"
+        }
+      ])
+
+    assert_receive {^ref, _level, meta}, 1000
+    assert meta[:platform] == "web"
+  end
+
   # The re-emit is the surface that is greppable in ONE Loki query without the
   # read-only DB bastion, so it is where "does this signal cover the whole
   # fleet, or only opted-in users?" actually gets asked. Persisting `forced` to

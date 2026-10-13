@@ -1,12 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { captureError } from "../sentry";
 import { ApiError, api } from "./client";
 
-vi.mock("../sentry", async (orig) => ({
-	...(await orig<typeof import("../sentry")>()),
-	captureError: vi.fn().mockResolvedValue(undefined),
+const mockError = vi.hoisted(() => vi.fn());
+vi.mock("../observability/remote-log", () => ({
+	rlog: () => ({ info: vi.fn(), warn: vi.fn(), error: mockError }),
 }));
-const mockCapture = vi.mocked(captureError);
 
 function respond(status: number) {
 	globalThis.fetch = vi
@@ -21,10 +19,10 @@ function respond(status: number) {
 
 // Handled request failures used to reach no one: every mutation's onError
 // toasts and stops, so a CORS-blocked /folders/batch-delete broke folder
-// delete in prod with nothing in Sentry.
-describe("api client reports broken requests to Sentry", () => {
+// delete in prod with nothing reported anywhere.
+describe("api client reports broken requests to the log pipe", () => {
 	beforeEach(() => {
-		mockCapture.mockClear();
+		mockError.mockClear();
 		vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
 	});
 
@@ -34,12 +32,12 @@ describe("api client reports broken requests to Sentry", () => {
 
 		await expect(api.post("/folders/batch-delete", { ids: [] })).rejects.toBe(err);
 
-		expect(mockCapture).toHaveBeenCalledTimes(1);
-		const reported = mockCapture.mock.calls[0]?.[0] as Error;
-		expect(reported.name).toBe("ApiRequestError");
+		expect(mockError).toHaveBeenCalledTimes(1);
+		expect(mockError.mock.calls[0]?.[0]).toBe("api_request");
+		const reported = String(mockError.mock.calls[0]?.[1]);
 		// URL goes through scrubUrl: note paths travel in URLs, so only the
 		// route shape is reported (prod keeps the resource, e.g. /folders/:seg).
-		expect(reported.message).toMatch(/^network_error POST \S*\/:seg/);
+		expect(reported).toMatch(/^network_error POST \S*\/:seg/);
 	});
 
 	it("reports a 5xx and still throws ApiError", async () => {
@@ -47,9 +45,8 @@ describe("api client reports broken requests to Sentry", () => {
 
 		await expect(api.get("/folders")).rejects.toBeInstanceOf(ApiError);
 
-		expect(mockCapture).toHaveBeenCalledTimes(1);
-		const reported = mockCapture.mock.calls[0]?.[0] as Error;
-		expect(reported.message).toMatch(/^http_500 GET /);
+		expect(mockError).toHaveBeenCalledTimes(1);
+		expect(String(mockError.mock.calls[0]?.[1])).toMatch(/^http_500 GET /);
 	});
 
 	it.each([400, 401, 403, 404, 409, 422])("does not report an expected %i", async (status) => {
@@ -57,7 +54,7 @@ describe("api client reports broken requests to Sentry", () => {
 
 		await expect(api.get("/folders")).rejects.toBeInstanceOf(ApiError);
 
-		expect(mockCapture).not.toHaveBeenCalled();
+		expect(mockError).not.toHaveBeenCalled();
 	});
 
 	it("does not report an aborted request", async () => {
@@ -65,7 +62,7 @@ describe("api client reports broken requests to Sentry", () => {
 
 		await expect(api.get("/folders")).rejects.toThrow("aborted");
 
-		expect(mockCapture).not.toHaveBeenCalled();
+		expect(mockError).not.toHaveBeenCalled();
 	});
 
 	it("does not report a network failure while the browser is offline", async () => {
@@ -74,6 +71,6 @@ describe("api client reports broken requests to Sentry", () => {
 
 		await expect(api.get("/folders")).rejects.toThrow("Failed to fetch");
 
-		expect(mockCapture).not.toHaveBeenCalled();
+		expect(mockError).not.toHaveBeenCalled();
 	});
 });

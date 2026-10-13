@@ -1,6 +1,7 @@
 import { track } from "../analytics/track";
 import { newTraceContext, tracingEnabled } from "../observability/trace";
-import { captureError, scrubUrl } from "../sentry";
+import { rlog } from "../observability/remote-log";
+import { scrubUrl } from "../sentry";
 import { getActiveVaultId } from "./active-vault";
 import { getApiBase, joinApiUrl } from "./base";
 import { getDeviceId } from "./device-id";
@@ -29,25 +30,20 @@ function firstValidationError(errors: unknown): string | undefined {
 	return typeof msg === "string" ? `${field}: ${msg}` : field;
 }
 
-/** A request that failed in a way that means "broken", not "no": a network or
- *  CORS failure, or a 5xx. Reported from here because every caller HANDLES its
- *  errors (a mutation's onError toasts and stops), so none of them ever reach
- *  Sentry's global handlers. A CORS-blocked /folders/batch-delete broke folder
- *  delete in prod with nothing reported anywhere. */
-// ponytail: the URL is scrubbed to its route shape (prod keeps the resource,
-// `/folders/:seg`), so issues group per resource, not per endpoint. Report the
-// caller's route template if per-endpoint alerts are ever needed.
-class ApiRequestError extends Error {
-	constructor(kind: string, method: string, url: string) {
-		super(`${kind} ${method} ${scrubUrl(url)}`);
-		this.name = "ApiRequestError";
-	}
-}
-
+/** Report a request that failed in a way that means "broken", not "no": a
+ *  network or CORS failure, or a 5xx. Reported from here because every caller
+ *  HANDLES its errors (a mutation's onError toasts and stops), so nothing else
+ *  ever sees them. A CORS-blocked /folders/batch-delete broke folder delete in
+ *  prod with nothing reported anywhere.
+ *
+ *  Goes to the backend log pipe (Loki, `platform=web`, `[client:api_request]`)
+ *  where the Grafana alert reads it. The URL is scrubbed: note paths travel in
+ *  URLs, so only the route shape is kept.
+ *
+ *  ponytail: prod keeps the resource (`/folders/:seg`), not the endpoint.
+ *  Report the caller's route template if per-endpoint alerts are ever needed. */
 function reportFailure(kind: string, method: string, url: string) {
-	// Not awaited: captureError never rejects, and awaiting it would hold the
-	// caller's error behind a Sentry flush.
-	captureError(new ApiRequestError(kind, method, url));
+	rlog().error("api_request", `${kind} ${method} ${scrubUrl(url)}`);
 }
 
 async function authFetch(path: string, options: RequestInit = {}): Promise<Response> {
