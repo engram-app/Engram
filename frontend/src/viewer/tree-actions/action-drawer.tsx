@@ -39,7 +39,7 @@ export function ActionDrawer({ title, actions, onPick, onClose, onSelectMore }: 
 				onClick={() => setClosing(true)}
 				className={cn(
 					"fixed inset-0 z-40 bg-black/40 duration-200",
-					closing ? "fade-out-0 fill-mode-forwards animate-out" : "fade-in-0 animate-in",
+					closing ? "fade-out-0 animate-out fill-mode-forwards" : "fade-in-0 animate-in",
 				)}
 			/>
 			<div
@@ -47,7 +47,7 @@ export function ActionDrawer({ title, actions, onPick, onClose, onSelectMore }: 
 				className={cn(
 					"fixed inset-x-0 bottom-0 z-50 rounded-t-2xl bg-popover text-popover-foreground duration-200",
 					closing
-						? "slide-out-to-bottom fill-mode-forwards animate-out ease-in"
+						? "slide-out-to-bottom animate-out fill-mode-forwards ease-in"
 						: "slide-in-from-bottom animate-in ease-out",
 				)}
 			>
@@ -57,9 +57,7 @@ export function ActionDrawer({ title, actions, onPick, onClose, onSelectMore }: 
 					const Icon = ACTION_ICONS[a.id];
 					return (
 						<Fragment key={a.id}>
-							{startsGroup(a, i) ? (
-								<div role="separator" className="mx-4 my-1 border-border border-t" />
-							) : null}
+							{startsGroup(a, i) ? <hr className="mx-4 my-1 border-border border-t" /> : null}
 							<button
 								type="button"
 								role="menuitem"

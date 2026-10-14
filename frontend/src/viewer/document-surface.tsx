@@ -174,7 +174,7 @@ export function DocumentSurface({
 			)}
 			style={{ maxWidth: width }}
 		>
-			<section className="flex size-full min-h-0 min-w-0 flex-col overflow-hidden border-border md:border-x bg-card text-card-foreground">
+			<section className="flex size-full min-h-0 min-w-0 flex-col overflow-hidden border-border bg-card text-card-foreground md:border-x">
 				{children}
 			</section>
 			{handle("left")}

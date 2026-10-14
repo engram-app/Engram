@@ -103,7 +103,7 @@ describe("NoteMenu", () => {
 		openMenu();
 		const divided = screen
 			.getAllByRole("menuitem")
-			.filter((el) => el.previousElementSibling?.getAttribute("role") === "separator")
+			.filter((el) => el.previousElementSibling?.tagName === "HR")
 			.map((el) => el.textContent);
 		expect(divided).toEqual(["Rename", "Delete"]);
 	});
