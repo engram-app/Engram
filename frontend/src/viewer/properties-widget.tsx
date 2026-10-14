@@ -29,11 +29,12 @@ import { coerceValue, effectiveType, type PropertyType } from "./property-types"
 // border is Obsidian's --metadata-divider turned on: stock Obsidian ships it
 // at 0 width, which leaves an empty value as an invisible target with no hint
 // that the row is even editable.
-const KEY_CELL =
-	"flex min-h-7 w-36 min-w-36 shrink-0 items-center overflow-hidden border-border border-r";
+const KEY_CELL = "flex min-h-7 min-w-0 items-center overflow-hidden border-border border-r";
 
 // One box per row so the key/value boundary and the row boundary both read.
-const ROW = "flex items-stretch rounded-md border border-border";
+// Each row is a subgrid of the list, so every key cell shares one column that
+// is as wide as the longest key (capped at half the width; longer truncates).
+const ROW = "col-span-2 grid grid-cols-subgrid items-stretch rounded-md border border-border";
 
 // Anything this editor opens that renders outside its own DOM subtree. Treated
 // as "inside" for the click-away rule.
@@ -98,7 +99,7 @@ function PropertyKeyInput({
 			// No tooltip: the `?` beside the heading is where the explanation
 			// lives, and a per-key hover repeating it is noise on every row.
 			className={cn(
-				"w-full min-w-0 truncate border-0 bg-transparent px-2 py-1 text-sm outline-none",
+				"field-sizing-content min-w-0 max-w-full truncate border-0 bg-transparent px-2 py-1 text-sm outline-none",
 				okf ? "text-primary" : "text-muted-foreground",
 			)}
 			value={draft}
@@ -427,7 +428,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 						</HelpTip>
 					</span>
 				</summary>
-				<dl className="flex flex-col gap-[3px]">
+				<dl className="grid grid-cols-[fit-content(50%)_1fr] gap-y-[3px]">
 					{rows.map((row) => {
 						const type = effectiveType(row.value, row.typeOverride);
 						return (
@@ -487,7 +488,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 								/>
 								<input
 									ref={newKeyRef}
-									className="w-full min-w-0 border-0 bg-transparent px-2 py-1 text-muted-foreground text-sm outline-none placeholder:text-muted-foreground/60"
+									className="field-sizing-content min-w-0 max-w-full border-0 bg-transparent px-2 py-1 text-muted-foreground text-sm outline-none placeholder:text-muted-foreground/60"
 									placeholder={t("Property name")}
 									value={newKey}
 									onChange={(e) => setNewKey(e.target.value)}
