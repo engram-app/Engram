@@ -234,7 +234,7 @@ function ChecklistWidget() {
 				className="fixed right-4 bottom-[calc(var(--editor-toolbar-offset,0px)+var(--spacing)*4)] z-40 shadow-xl"
 				onClick={() => setCollapsed(false)}
 			>
-				<Waypoints aria-hidden />
+				<Waypoints aria-hidden className="size-5.5" />
 				<span className="absolute -top-1 -right-1 flex size-5 items-center justify-center rounded-full bg-background font-medium text-[11px] text-foreground ring-1 ring-border">
 					{remaining}
 				</span>
