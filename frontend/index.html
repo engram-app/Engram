@@ -13,25 +13,29 @@
          --muted-foreground, --border and --primary, so the handoff to the
          Tailwind-styled splash is seamless; keep them in sync. -->
     <style>
-      html { background: oklch(100% 0 0); }
-      html.dark { background: oklch(18.76% 0.004 286.01); }
-      body { margin: 0; }
-      #root > main[role="status"] {
-        display: flex; height: 100vh; flex-direction: column; align-items: center;
-        justify-content: center; gap: 0.75rem; font: 0.875rem/1.25rem system-ui, sans-serif;
-        color: oklch(44.19% 0.0146 285.79);
+      /* A layer declared before Tailwind's: lowest precedence, so the real
+         styles win the moment they load. */
+      @layer splash {
+        html { background: oklch(100% 0 0); }
+        html.dark { background: oklch(18.76% 0.004 286.01); }
+        body { margin: 0; }
+        #root > main[role="status"] {
+          display: flex; height: 100vh; flex-direction: column; align-items: center;
+          justify-content: center; gap: 0.75rem; font: 0.875rem/1.25rem system-ui, sans-serif;
+          color: oklch(44.19% 0.0146 285.79);
+        }
+        html.dark #root > main[role="status"] { color: oklch(82.64% 0.0186 201.07); }
+        #root > main[role="status"] p { margin: 0; }
+        #root > main[role="status"] > span {
+          width: 1.5rem; height: 1.5rem; box-sizing: border-box; border-radius: 9999px;
+          border: 2px solid oklch(91.97% 0.004 286.32); border-top-color: oklch(60.89% 0.1109 221.72);
+          animation: engram-splash-spin 1s linear infinite;
+        }
+        html.dark #root > main[role="status"] > span {
+          border-color: oklch(39.39% 0.0182 207.04); border-top-color: oklch(87% 0.1481 202.88);
+        }
+        @keyframes engram-splash-spin { to { transform: rotate(360deg); } }
       }
-      html.dark #root > main[role="status"] { color: oklch(82.64% 0.0186 201.07); }
-      #root > main[role="status"] p { margin: 0; }
-      #root > main[role="status"] > span {
-        width: 1.5rem; height: 1.5rem; box-sizing: border-box; border-radius: 9999px;
-        border: 2px solid oklch(91.97% 0.004 286.32); border-top-color: oklch(60.89% 0.1109 221.72);
-        animation: engram-splash-spin 1s linear infinite;
-      }
-      html.dark #root > main[role="status"] > span {
-        border-color: oklch(39.39% 0.0182 207.04); border-top-color: oklch(87% 0.1481 202.88);
-      }
-      @keyframes engram-splash-spin { to { transform: rotate(360deg); } }
     </style>
     <script>"use strict";
       (() => {
