@@ -679,7 +679,7 @@ export default function NotePage() {
 	};
 
 	return (
-		<DocumentSurface>
+		<DocumentSurface underHeader>
 			{syncStatus === "error" && (
 				<p role="status" className="shrink-0 bg-destructive/10 px-4 py-1 text-destructive text-xs">
 					{t("Not syncing - reconnecting...")}
@@ -762,7 +762,7 @@ export default function NotePage() {
 				className={mode === "reading" ? "min-h-0 flex-1" : "min-h-0 flex-1 cursor-text"}
 				onMouseDown={focusEditorFromEmptyPage}
 			>
-				<div ref={pageRef} className="w-full pb-5">
+				<div ref={pageRef} className="w-full pt-(--mobile-header,0px) pb-5">
 					<InlineTitle
 						name={name}
 						renaming={renamingAt === "title"}

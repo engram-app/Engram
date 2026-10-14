@@ -64,10 +64,13 @@ export default function MobileLayout() {
 	}, [pathname]);
 
 	return (
-		<section className="flex h-dvh flex-col bg-background text-foreground">
-			{/* Obsidian-style: no title bar, just a row holding the corner buttons.
-			    main scrolls on its own, so this row stays put. */}
-			<header className="z-20 flex shrink-0 items-center justify-between bg-card px-2 py-1">
+		<section className="relative flex h-dvh flex-col bg-background text-foreground [--mobile-header:3rem]">
+			{/* Obsidian-style: no title bar, just the corner buttons floating over
+			    the page, so text scrolls past behind them. Only the icons get a small
+			    translucent chip, so passing text never sits under a bare glyph.
+			    --mobile-header is its height: main pads by it, and a note's
+			    surface bleeds up under it (DocumentSurface `underHeader`). */}
+			<header className="absolute inset-x-0 top-0 z-20 flex h-(--mobile-header) items-center justify-between px-2 [&_button]:bg-secondary/90 [&_button]:backdrop-blur-sm">
 				<Sheet open={leftOpen} onOpenChange={setLeftOpen}>
 					<SheetTrigger asChild>
 						<Button variant="ghost" size="icon-lg" aria-label={t("Open files")}>
@@ -150,7 +153,7 @@ export default function MobileLayout() {
 					</Sheet>
 				</nav>
 			</header>
-			<main className="flex-1 overflow-y-auto bg-muted/40 text-foreground">
+			<main className="flex-1 overflow-y-auto bg-muted/40 pt-(--mobile-header) text-foreground">
 				<MobileHeaderSlot.Provider value={actionSlot}>
 					<Outlet />
 				</MobileHeaderSlot.Provider>

@@ -17,7 +17,9 @@ interface Props {
 // (`.cm-content`'s top padding in note-editor.tsx, mirrored by the `pt-5` on
 // the reading-mode wrapper), so 20px is the floor and this only sets what sits
 // above it. Total today is 24px.
-const FRAME = "px-5 pt-6 pb-1";
+// Mobile already clears the floating header (--mobile-header), so only a hair
+// more; desktop keeps the full gap under its header row.
+const FRAME = "px-5 pt-1 pb-1 md:pt-6";
 // One source for the heading's type so the rename box cannot drift out of
 // step with the h1 it stands in for.
 const TITLE_TYPE = "font-semibold text-3xl tracking-tight";
