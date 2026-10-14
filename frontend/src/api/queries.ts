@@ -1119,8 +1119,12 @@ export function useUpdateProfile(options?: {
 			// Write back only the fields this call sent: a slower response must not
 			// undo a newer edit to a different field.
 			const sent: Partial<User> = {};
-			if ("display_name" in body) sent.display_name = data.user.display_name;
-			if ("locale" in body) sent.locale = data.user.locale;
+			if ("display_name" in body) {
+				sent.display_name = data.user.display_name;
+			}
+			if ("locale" in body) {
+				sent.locale = data.user.locale;
+			}
 			qc.setQueryData<{ user: User }>(["me"], (old) =>
 				old ? { user: { ...old.user, ...sent } } : data,
 			);
