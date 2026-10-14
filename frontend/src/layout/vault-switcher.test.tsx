@@ -130,12 +130,15 @@ describe("VaultSwitcher", () => {
 
 	// Same rhythm as the file tree: its row height, the gap between rows, and the
 	// inset around the list (so the first and last row never touch the borders).
+	// The tree's geometry under a mouse (h-6 = LIST_ROW_HEIGHT); a taller,
+	// finger-sized row on touch screens.
 	it("lays its rows out with the file tree's geometry", async () => {
 		renderSwitcher();
 		openMenu();
 		const option = await screen.findByRole("option", { name: "Work" });
 		const list = screen.getByRole("listbox", { name: "Vaults" });
-		expect(option.style.height).toBe(`${LIST_ROW_HEIGHT}px`);
+		expect(LIST_ROW_HEIGHT).toBe(24);
+		expect(option).toHaveClass("h-6", "pointer-coarse:h-10");
 		expect(list.style.gap).toBe(`${LIST_ROW_GAP}px`);
 		for (const cls of listContainer.split(" ")) {
 			expect(list).toHaveClass(cls);

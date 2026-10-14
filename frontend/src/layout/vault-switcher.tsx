@@ -15,17 +15,16 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { VaultCreateForm } from "@/components/vault-create-form";
 import { useT } from "@/i18n/locale-provider";
 import { displayVaultName } from "@/i18n/vault-name";
-import {
-	LIST_ROW_GAP,
-	LIST_ROW_HEIGHT,
-	listContainer,
-	listEmpty,
-	listRowClass,
-} from "@/lib/ui-classes";
+import { LIST_ROW_GAP, listContainer, listEmpty, listRowClass } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { useActiveVaultId } from "../api/active-vault";
 import { useVaults } from "../api/queries";
 import { vaultPath } from "../routes";
+
+// The tree's 24px row (LIST_ROW_HEIGHT), but a finger needs more than a
+// cursor, so touch screens get 40px. The tree's virtualizer pins its own
+// height; this list has no virtualizer, so it can grow.
+const VAULT_ROW_HEIGHT = "h-6 pointer-coarse:h-10";
 
 function VaultSwitcher() {
 	const { t } = useT();
@@ -156,9 +155,9 @@ function VaultSwitcher() {
 									tabIndex={-1}
 									aria-selected={v.id === active.id}
 									data-highlighted={v.id === highlighted?.id || undefined}
-									style={{ height: LIST_ROW_HEIGHT }}
 									className={cn(
 										listRowClass({ selected: v.id === active.id }),
+										VAULT_ROW_HEIGHT,
 										"cursor-default justify-between pl-2 outline-none",
 									)}
 									onClick={() => pick(v.id)}
@@ -184,8 +183,11 @@ function VaultSwitcher() {
 					<div className={cn("border-border border-t", listContainer)}>
 						<button
 							type="button"
-							style={{ height: LIST_ROW_HEIGHT }}
-							className={cn(listRowClass(), "pl-2 outline-none focus-visible:bg-accent")}
+							className={cn(
+								listRowClass(),
+								VAULT_ROW_HEIGHT,
+								"pl-2 outline-none focus-visible:bg-accent",
+							)}
 							onClick={() => {
 								setOpen(false);
 								setCreateOpen(true);
