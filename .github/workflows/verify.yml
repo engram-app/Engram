@@ -4385,6 +4385,16 @@ jobs:
           bun install --frozen-lockfile --registry http://10.0.20.214:4873
           bunx playwright install chromium
 
+      # e2e/lighthouse.spec.ts audits the PRODUCTION bundle Phoenix serves at
+      # `/` (priv/static/app): the Vite dev server injects CSS from JS and
+      # reports a layout shift production never has. The other specs use Vite
+      # and are unaffected. Self-host shape, to match the `local` project.
+      - name: Build SPA for the Lighthouse spec
+        working-directory: frontend
+        run: |
+          export PATH="$HOME/.bun/bin:$PATH"
+          bun run build:selfhost
+
       - name: Run Playwright tests
         working-directory: frontend
         env:
