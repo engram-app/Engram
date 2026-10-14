@@ -60,6 +60,7 @@ jobs:
         run: cp openapi.json marketing/src/openapi/engram.json
 
       - name: Open / update PR in engram-marketing
+        id: open-pr
         uses: peter-evans/create-pull-request@v8
         with:
           path: marketing
@@ -90,3 +91,14 @@ jobs:
           labels: |
             automated
             docs
+
+      - name: Enable auto-merge on bot PR
+        # Same pattern as the engram-infra image bump in verify.yml: without
+        # this the spec PR sits open until someone clicks merge. Marketing has
+        # allow_auto_merge=true; required checks still gate the merge.
+        if: steps.open-pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ steps.open-pr.outputs.pull-request-number }}
+        run: |
+          gh pr merge --auto --squash --repo engram-app/engram-marketing "$PR_NUMBER"
