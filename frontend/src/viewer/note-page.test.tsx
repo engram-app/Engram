@@ -179,12 +179,8 @@ describe("NotePage (CRDT)", () => {
 		paramsMock.itemId = "note-1";
 		paramsMock.slug = "my-vault";
 		locationMock.mockReturnValue({ pathname: "/v/my-vault/note-1", state: null });
-		const doc = new Y.Doc();
-		openDoc.mockResolvedValue({
-			ytext: doc.getText("content"),
-			awareness: new Awareness(doc),
-			doc,
-		});
+		// The doc holds what REST says the note holds: an opened, synced note.
+		openDoc.mockResolvedValue(docWith(NOTE.content));
 		useNoteMock.mockReturnValue({ data: NOTE, isLoading: false, error: null });
 	});
 
@@ -320,14 +316,50 @@ describe("NotePage (CRDT)", () => {
 		expect(screen.queryByText("Connecting…")).not.toBeInTheDocument();
 		expect(closeDoc).not.toHaveBeenCalled();
 
-		const doc2 = new Y.Doc();
 		await act(async () => {
-			openNote2({ ytext: doc2.getText("content"), awareness: new Awareness(doc2), doc: doc2 });
+			openNote2(docWith(NOTE.content));
 		});
 
 		expect(screen.getByTestId("note-editor")).toBeInTheDocument();
 		expect(enroll).toHaveBeenCalledWith("note-2");
 		await waitFor(() => expect(closeDoc).toHaveBeenCalledWith("note-1"));
+	});
+
+	// No local copy: the doc opens empty and the server state lands later.
+	// Painting the editor in between showed a blank note that the properties
+	// block then shoved down (mobile Lighthouse CLS 0.146).
+	it("holds the placeholder until an empty-opened doc receives the note", async () => {
+		const doc = new Y.Doc();
+		openDoc.mockResolvedValue({
+			ytext: doc.getText("content"),
+			awareness: new Awareness(doc),
+			doc,
+		});
+		renderPage();
+		await waitFor(() => expect(enroll).toHaveBeenCalledWith("note-1"));
+		// Let the opened handle commit and any lazy editor chunk settle.
+		await act(async () => {
+			await new Promise((r) => setTimeout(r, 50));
+		});
+		expect(screen.getByText("Connecting…")).toBeInTheDocument();
+		expect(screen.queryByTestId("note-editor")).not.toBeInTheDocument();
+
+		act(() => {
+			Y.applyUpdate(doc, Y.encodeStateAsUpdate(docWith(NOTE.content).doc));
+		});
+		expect(await screen.findByTestId("note-editor")).toBeInTheDocument();
+	});
+
+	it("shows the editor at once for a note the server says is empty", async () => {
+		const doc = new Y.Doc();
+		openDoc.mockResolvedValue({
+			ytext: doc.getText("content"),
+			awareness: new Awareness(doc),
+			doc,
+		});
+		useNoteMock.mockReturnValue({ data: { ...NOTE, content: "" }, isLoading: false, error: null });
+		renderPage();
+		expect(await screen.findByTestId("note-editor")).toBeInTheDocument();
 	});
 
 	// The other side of holding the previous editor: if the next doc fails to
@@ -1153,7 +1185,7 @@ describe("NotePage (CRDT)", () => {
 		// write path end to end from the real note page, so a fix for it can't be
 		// mistaken for a styling change.
 		it("writes a value typed into a property row", async () => {
-			const doc = new Y.Doc();
+			const { doc } = docWith(NOTE.content);
 			openDoc.mockResolvedValue({
 				ytext: doc.getText("content"),
 				awareness: new Awareness(doc),
@@ -1188,7 +1220,7 @@ describe("NotePage (CRDT)", () => {
 		// A second use collided with the first, addKey refused it, and the menu item
 		// did nothing at all — no row, no error.
 		it("reopens the adder after a property has already been added", async () => {
-			const doc = new Y.Doc();
+			const { doc } = docWith(NOTE.content);
 			openDoc.mockResolvedValue({
 				ytext: doc.getText("content"),
 				awareness: new Awareness(doc),
