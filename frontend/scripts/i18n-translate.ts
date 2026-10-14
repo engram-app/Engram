@@ -6,8 +6,8 @@
 //   bun scripts/i18n-translate.ts --all               retranslate every key (one-off)
 //   bun scripts/i18n-translate.ts --resume <dir>      reuse an open bot PR's locale dir
 //   bun scripts/i18n-translate.ts --resume-email <dir> same, for the email catalogs
-// Two runs share the profile: the web app's catalogs (src/i18n/locale/*.ts), then
-// the backend's email strings (priv/i18n/email/*.json, see src/i18n/email-keys.ts).
+// Two runs share the profile: the backend's email strings (priv/i18n/email/*.json,
+// see src/i18n/email-keys.ts), then the web app's catalogs (src/i18n/locale/*.ts).
 // Env: I18N_OLLAMA_URL (default http://localhost:11434), I18N_MODEL, I18N_CONCURRENCY,
 // I18N_REQUEST_TIMEOUT_MS, I18N_STUCK_DAYS (default 14).
 // Exits 1 when a key has failed for longer than I18N_STUCK_DAYS: the model cannot
@@ -120,6 +120,22 @@ function translate(opts: {
 	});
 }
 
+// Email first: it is ~45 keys, so a web run that hits the step timeout
+// cannot starve it.
+const backend = join(root, "..");
+const emailResults = await translate({
+	entries: emailEntries(EMAIL_SOURCES.map((f) => readFileSync(join(backend, f), "utf8"))),
+	dir: join(backend, "priv", "i18n", "email"),
+	resumeDir: flag("--resume-email"),
+	load: (dir, code) => {
+		const file = join(dir, `${code}.json`);
+		const catalog: Catalog = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+		return Promise.resolve(catalog);
+	},
+	ext: "json",
+	format: false,
+	write: (file, catalog) => writeFileSync(file, `${JSON.stringify(catalog, null, "\t")}\n`),
+});
 const webResults = await translate({
 	entries: usedEntries(sources),
 	dir: localeDir,
@@ -138,21 +154,7 @@ const webResults = await translate({
 	},
 });
 
-const backend = join(root, "..");
-const emailResults = await translate({
-	entries: emailEntries(EMAIL_SOURCES.map((f) => readFileSync(join(backend, f), "utf8"))),
-	dir: join(backend, "priv", "i18n", "email"),
-	resumeDir: flag("--resume-email"),
-	load: (dir, code) => {
-		const file = join(dir, `${code}.json`);
-		const catalog: Catalog = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
-		return Promise.resolve(catalog);
-	},
-	ext: "json",
-	format: false,
-	write: (file, catalog) => writeFileSync(file, `${JSON.stringify(catalog, null, "\t")}\n`),
-});
-const results = [...webResults, ...emailResults];
+const results = [...emailResults, ...webResults];
 
 const stuck = results.flatMap((r) => r.stuck.map((k) => `${r.code}: ${JSON.stringify(k)}`));
 if (stuck.length > 0) {

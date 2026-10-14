@@ -90,9 +90,15 @@ jobs:
           fi
           git fetch --depth=1 "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" bot/i18n-translate
           mkdir -p "$RUNNER_TEMP/resume"
-          git archive FETCH_HEAD frontend/src/i18n/locale priv/i18n/email | tar -x -C "$RUNNER_TEMP/resume"
+          # A bot PR opened before the email catalogs existed has no
+          # priv/i18n/email; archiving a missing path fails the whole step.
+          paths="frontend/src/i18n/locale"
+          if [ -n "$(git ls-tree FETCH_HEAD priv/i18n/email)" ]; then paths="$paths priv/i18n/email"; fi
+          git archive FETCH_HEAD $paths | tar -x -C "$RUNNER_TEMP/resume"
           echo "dir=$RUNNER_TEMP/resume/frontend/src/i18n/locale" >> "$GITHUB_OUTPUT"
-          echo "email_dir=$RUNNER_TEMP/resume/priv/i18n/email" >> "$GITHUB_OUTPUT"
+          if [ -d "$RUNNER_TEMP/resume/priv/i18n/email" ]; then
+            echo "email_dir=$RUNNER_TEMP/resume/priv/i18n/email" >> "$GITHUB_OUTPUT"
+          fi
 
       # Step timeout below the job's, so finished locales (each written, with its
       # state stamp, the moment it completes) still reach the PR. A timed-out
@@ -162,10 +168,10 @@ jobs:
           # createCommitOnBranch, which GitHub signs for the App.
           sign-commits: true
           commit-message: |
-            feat(i18n): translate new web-app strings
+            feat(i18n): translate new web-app and email strings
 
             Automated by i18n-translate.yml (translategemma) from ${{ github.sha }}.
-          title: "feat(i18n): translate new web-app strings"
+          title: "feat(i18n): translate new web-app and email strings"
           body: |
             Machine translations from translategemma on FastRaid's Ollama for
             strings added or edited since the catalogs were last updated.

@@ -21,6 +21,10 @@ describe("emailEntries", () => {
 			"Analytics linked.",
 		]);
 	});
+	it("ignores translate calls in comments", () => {
+		const elixir = ['  # Each sentence is one `t(l, "...")` call.', '  t(l, "Real.")'].join("\n");
+		expect(emailEntries([elixir]).map((e) => e.key)).toEqual(["Real."]);
+	});
 });
 
 // The gate over the committed email catalogs (same checks as the web app's),
