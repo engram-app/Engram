@@ -158,6 +158,15 @@ defmodule Engram.Workers.CimdRefreshTest do
       end
     end
 
+    # The cron entry: its own worker, so the crontab stays {expr, worker}.
+    test "CimdJwksRefresh runs the same sweep" do
+      cimd_client(jwks_uri: @jwks_uri)
+      expect(FetcherMock, :fetch, 1, fn @jwks_uri -> {:ok, %{"keys" => []}} end)
+
+      assert {:ok, %{refreshed: 1}} =
+               perform_job(Engram.Workers.CimdJwksRefresh, %{"jitter_ms" => 0})
+    end
+
     test "a failing vendor keeps its last good keys" do
       keys = [%{"kty" => "RSA", "kid" => "k1"}]
 

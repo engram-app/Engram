@@ -224,12 +224,12 @@ config :engram, Oban,
         # O(collection); revisit around 1M points with a resumable cursor.
         {"0 5 * * *", Engram.Workers.OrphanSweep},
         # Daily self-host install census; no-op on SaaS and unless opted in.
-        {"16 5 * * *", Engram.Workers.TelemetryHeartbeat},
+        {"14 5 * * *", Engram.Workers.TelemetryHeartbeat},
         # CIMD document refresh (#1642): documents carry a 24 h TTL.
         {"40 5 * * *", Engram.Workers.CimdRefresh},
         # CIMD JWKS refresh (#1974): keeps the persisted key set fresh so the
         # token path never fetches. Jittered inside the job.
-        {"*/5 * * * *", Engram.Workers.CimdRefresh, args: %{kind: "jwks", jitter_ms: 30_000}},
+        {"1-59/5 * * * *", Engram.Workers.CimdJwksRefresh},
         # Account facts onto PostHog persons; no-op unless PostHog is configured.
         {"25 6 * * *", Engram.Workers.PostHogPersonSync}
       ]
