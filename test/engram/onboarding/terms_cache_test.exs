@@ -47,7 +47,15 @@ defmodule Engram.Onboarding.TermsCacheTest do
   test "the gate reads the accepted version through the cache" do
     prev = Application.get_env(:engram, :billing_enabled)
     Application.put_env(:engram, :billing_enabled, true)
-    on_exit(fn -> Application.put_env(:engram, :billing_enabled, prev) end)
+
+    on_exit(fn ->
+      Application.put_env(:engram, :billing_enabled, prev)
+      Engram.LegalFixtures.reset_version_cache()
+    end)
+
+    # A floor to compare against: with none, the gate needs no acceptance read.
+    Engram.LegalFixtures.insert_version(version: "2026-05-19")
+    Engram.LegalFixtures.reset_version_cache()
     user = insert(:user)
     {:ok, _} = Onboarding.accept_terms(user, "2026-06-01", %{})
     Cache.evict_local(:terms, {user.id, "terms_of_service"})

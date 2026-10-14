@@ -612,7 +612,6 @@ defmodule Engram.Onboarding do
   end
 
   defp accepted_satisfies?(nil, _floor), do: false
-  defp accepted_satisfies?(_accepted, nil), do: true
   defp accepted_satisfies?(accepted, floor), do: accepted >= floor
 
   defp query_accepted_version(user, document) do
