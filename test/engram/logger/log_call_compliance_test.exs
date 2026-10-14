@@ -161,7 +161,10 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # as a scalar on purpose. So this entry buys the raw-term net, not a
     # name-specific one; a deliberate `vault.name` in a log line still needs a
     # reviewer.
-    "lib/engram/permissions.ex"
+    "lib/engram/permissions.ex",
+    # Fills email copy with caller values, vault names among them. It logs
+    # nothing today; in scope so a log line added later is scanned.
+    "lib/engram/i18n.ex"
   ]
 
   # Everything in `lib/` that is deliberately NOT scanned, with the reason.

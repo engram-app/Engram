@@ -18,7 +18,15 @@ defmodule Engram.Legal.Seeder do
   # IMPORTANT: every version present in the vendored manifest MUST have an entry
   # here, or `meta!/2` raises at boot (fail-loud). So a legal bump is a TWO-file
   # change: add the version→hash to priv/legal/legal-manifest.json AND its
-  # material/effective_date/changelog here. (P5 will automate this cross-repo.)
+  # material/effective_date/changelog here.
+  #
+  # Users are told automatically (`Engram.Workers.LegalNoticeDispatch`): a
+  # version with a FUTURE effective_date emails everyone and shows the in-app
+  # notice until that date. `effective_date: nil` means effective at once and
+  # silent, which is for wording fixes only. Changing an announced version's
+  # effective_date or material sends the notice again. A material change after a
+  # document's first version needs an effective_date 30+ days after its
+  # version date (ToS §13); `notice_violations/0` enforces it in CI.
   @version_meta %{
     "terms_of_service" => %{
       "2026-05-19" => %{material: true, effective_date: nil, changelog: "Initial version."}
@@ -37,7 +45,7 @@ defmodule Engram.Legal.Seeder do
         material: false,
         effective_date: ~D[2026-11-11],
         changelog:
-          "App analytics now linked to your account (email, plan, usage counts). Note content is never sent."
+          "App analytics now linked to your account (email, plan, usage counts). The content of your notes is never sent."
       }
     }
   }
@@ -58,7 +66,7 @@ defmodule Engram.Legal.Seeder do
         changelog: meta.changelog
       })
       |> Repo.insert!(
-        on_conflict: {:replace, [:content_hash, :material, :effective_date, :changelog]},
+        on_conflict: upsert(),
         conflict_target: [:document, :version],
         skip_tenant_check: true
       )
@@ -66,6 +74,53 @@ defmodule Engram.Legal.Seeder do
 
     :ok
   end
+
+  # Replace the meta. The sent stamps survive a reboot, but a changed date or
+  # materiality clears them: the email already sent said the wrong thing, so
+  # `LegalNoticeDispatch` tells users again. SET reads the OLD row's columns.
+  defp upsert do
+    from(v in TermsVersion,
+      update: [
+        set: [
+          content_hash: fragment("EXCLUDED.content_hash"),
+          material: fragment("EXCLUDED.material"),
+          effective_date: fragment("EXCLUDED.effective_date"),
+          changelog: fragment("EXCLUDED.changelog"),
+          notified_at:
+            fragment(
+              "CASE WHEN (?, ?) IS DISTINCT FROM (EXCLUDED.effective_date, EXCLUDED.material) THEN NULL ELSE ? END",
+              v.effective_date,
+              v.material,
+              v.notified_at
+            ),
+          reminded_at:
+            fragment(
+              "CASE WHEN (?, ?) IS DISTINCT FROM (EXCLUDED.effective_date, EXCLUDED.material) THEN NULL ELSE ? END",
+              v.effective_date,
+              v.material,
+              v.reminded_at
+            )
+        ]
+      ]
+    )
+  end
+
+  @notice_days 30
+
+  @doc "Material versions that give less than #{@notice_days} days' notice. Must be []."
+  @spec notice_violations(map()) :: [{String.t(), String.t()}]
+  def notice_violations(meta \\ @version_meta) do
+    for {document, versions} <- Enum.sort(meta),
+        # The first version per document is the publish-day baseline.
+        {version, %{material: true} = m} <- versions |> Enum.sort() |> Enum.drop(1),
+        not gives_notice?(version, m.effective_date),
+        do: {document, version}
+  end
+
+  defp gives_notice?(_version, nil), do: false
+
+  defp gives_notice?(version, effective_date),
+    do: Date.diff(effective_date, Date.from_iso8601!(version)) >= @notice_days
 
   @spec verify() :: :ok
   def verify do

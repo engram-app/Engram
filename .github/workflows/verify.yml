@@ -4093,8 +4093,10 @@ jobs:
             exit 0
           fi
           git fetch origin main --depth=50 >/dev/null 2>&1 || true
-          if git diff --quiet origin/main HEAD -- frontend/ 2>/dev/null; then
-            echo "Skipped — no frontend/ changes vs main."
+          # The email catalog gate (frontend/src/i18n/email-keys.test.ts) reads
+          # these backend files, so an email-only change must run it too.
+          if git diff --quiet origin/main HEAD -- frontend/ lib/engram/mailer.ex lib/engram/email/template.ex lib/engram/legal/seeder.ex priv/i18n/email/ 2>/dev/null; then
+            echo "Skipped: no frontend/ or email-string changes vs main."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "frontend/ changed — running lint."

@@ -707,6 +707,12 @@ export default {
 	"A vault holds its own notes and folders, separate from your other vaults.":
 		"Sebuah peti nota mengandungi nota dan folder sendiri, berasingan daripada peti nota anda yang lain.",
 	"Create vault": "Buat peti nota",
+	"Terms of Service": "Syarat Perkhidmatan",
+	"Privacy Policy": "Dasar Privasi",
+	"{document} update, effective {date}.": "Kemas kini {document}, berkuat kuasa {date}.",
+	"Read it": "Baca",
+	"Review and accept": "Semak dan terima",
+	"Got it": "Faham",
 	day: "hari",
 	week: "minggu",
 	month: "bulan",
@@ -795,6 +801,8 @@ export default {
 	"What will you use Engram for?": "Apa yang akan anda gunakan Engram untuk?",
 	"Review the Terms": "Semak Terma",
 	"privacy notice": "Notis privasi",
+	"What changed": "Apa yang berubah",
+	"{document}, effective {date}:": "{document}, berkuat kuasa {date}:",
 	"The current agreement isn’t available right now.": "Perjanjian semasa tidak tersedia sekarang.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"Kami tidak dapat memaparkan terma terkini pada masa ini, jadi pendaftaran ditangguhkan daripada meminta anda bersetuju dengan sesuatu yang tidak dapat anda baca. Sila cuba lagi sebentar.",

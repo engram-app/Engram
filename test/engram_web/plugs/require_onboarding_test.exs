@@ -231,6 +231,33 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
       refute body["message"] =~ "missing"
     end
 
+    # An onboarded user blocked only by a material legal change that took
+    # effect. "Setup is not finished" is false for them, and an MCP-only user
+    # has no banner to explain it.
+    test "a material change in effect says so, not \"setup is not finished\"", %{conn: conn} do
+      Application.put_env(:engram, :frontend_base_url, "https://app.engram.page")
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+      insert(:subscription, user: user, status: "active")
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, tools: ["claude"]})
+
+      LegalFixtures.insert_version(
+        version: "2026-06-01",
+        material: true,
+        effective_date: Date.add(Date.utc_today(), -1)
+      )
+
+      VersionCache.invalidate_all()
+
+      conn = conn |> assign(:current_user, user) |> RequireOnboarding.call([])
+
+      body = Phoenix.ConnTest.json_response(conn, 403)
+      assert body["missing"] == ["terms"]
+      assert body["message"] =~ "Terms of Service or Privacy Policy changed"
+      assert body["message"] =~ "https://app.engram.page/onboard"
+      refute body["message"] =~ "not finished"
+    end
+
     test "the 401 path carries no resume_url (nothing to resume)", %{conn: conn} do
       conn = RequireOnboarding.call(conn, [])
 

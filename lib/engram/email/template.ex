@@ -18,9 +18,9 @@ defmodule Engram.Email.Template do
   Returns `{:error, reason}` on a compilation failure rather than raising, so a
   single bad render is a per-recipient failure (not an aborted broadcast).
   """
-  @spec render(String.t()) :: {:ok, String.t()} | {:error, term()}
-  def render(body_mjml) when is_binary(body_mjml) do
-    Mjml.to_html(layout(body_mjml))
+  @spec render(String.t(), Engram.I18n.locale()) :: {:ok, String.t()} | {:error, term()}
+  def render(body_mjml, locale \\ "en") when is_binary(body_mjml) do
+    Mjml.to_html(layout(body_mjml, locale))
   end
 
   @doc "HTML-escape an untrusted value before interpolating it into MJML."
@@ -38,11 +38,12 @@ defmodule Engram.Email.Template do
   # /api/email -> 404. engram.page serves the asset reliably from public/.
   @mark_url "https://engram.page/engram-mark.png"
 
-  defp layout(body) do
+  defp layout(body, locale) do
     mark_url = @mark_url
+    tagline = esc(Engram.I18n.t(locale, "Your notes are your AI's memory."))
 
     """
-    <mjml>
+    <mjml lang="#{locale}">
       <mj-head>
         <mj-attributes>
           <mj-all font-family="Helvetica, Arial, sans-serif" />
@@ -63,7 +64,7 @@ defmodule Engram.Email.Template do
         </mj-section>
         <mj-section padding="16px 0">
           <mj-column>
-            <mj-text font-size="12px" color="#{Tokens.text_muted()}" align="center">Your notes are your AI's memory.</mj-text>
+            <mj-text font-size="12px" color="#{Tokens.text_muted()}" align="center">#{tagline}</mj-text>
           </mj-column>
         </mj-section>
       </mj-body>

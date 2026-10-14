@@ -60,13 +60,22 @@ defmodule EngramWeb.Plugs.RequireOnboarding do
               missing: missing,
               next_step: next_step,
               resume_url: url,
-              message:
-                "Your Engram account setup is not finished. Complete it at #{url}, " <>
-                  "then try again."
+              message: message(missing, url)
             })
         end
     end
   end
+
+  # Terms alone means everything after the agreement step is done, so this is
+  # an onboarded user held by a material legal change in effect. The resolver
+  # URL forwards them to the agreement page, which shows what changed.
+  defp message(["terms"], url),
+    do:
+      "Engram's Terms of Service or Privacy Policy changed. Review and accept " <>
+        "the new version at #{url}, then try again."
+
+  defp message(_missing, url),
+    do: "Your Engram account setup is not finished. Complete it at #{url}, then try again."
 
   # ABSOLUTE, not a path. The consumer that most needs this is an MCP client
   # that reached us through OAuth and has never seen our host — `/onboard` is

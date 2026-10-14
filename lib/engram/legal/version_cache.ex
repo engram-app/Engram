@@ -10,9 +10,29 @@ defmodule Engram.Legal.VersionCache do
   alias Engram.Cache
   alias Engram.Legal
 
-  @spec required_floor(String.t()) :: String.t() | nil
-  def required_floor(document),
-    do: Cache.fetch(:legal_version, {:floor, document}, fn -> Legal.required_floor(document) end)
+  # Stored with the date it was computed for: the floor moves when a material
+  # version's effective_date arrives, which no publish or reseed announces. One
+  # entry per document, replaced when the date changes. The date is an ISO
+  # string, never a %Date{} (a struct makes Cache's match-spec store fail).
+  @spec required_floor(String.t(), Date.t()) :: String.t() | nil
+  def required_floor(document, today \\ Date.utc_today()) do
+    day = Date.to_iso8601(today)
+    load = fn -> {day, Legal.required_floor(document, today)} end
+
+    case Cache.fetch(:legal_version, {:floor, document}, load) do
+      {^day, floor} ->
+        floor
+
+      _other_day ->
+        {^day, floor} = entry = load.()
+        :ok = Cache.put(:legal_version, {:floor, document}, entry)
+        floor
+    end
+  end
+
+  @spec versions(String.t()) :: [Engram.Legal.TermsVersion.t()]
+  def versions(document),
+    do: Cache.fetch(:legal_version, {:versions, document}, fn -> Legal.versions(document) end)
 
   @spec current_version(String.t()) :: String.t() | nil
   def current_version(document),

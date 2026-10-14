@@ -46,7 +46,7 @@ defmodule Engram.Workers.VaultDeletedEmail do
 
       true ->
         purge_at = DateTime.add(vault.deleted_at, @retention_days * 86_400, :second)
-        purge_date = Calendar.strftime(purge_at, "%B %-d, %Y")
+        purge_date = DateTime.to_date(purge_at)
 
         # The section goes in the hash and `highlight` stays in the real query
         # string: a query placed inside a hash is never parsed by

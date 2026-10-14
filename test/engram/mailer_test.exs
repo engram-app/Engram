@@ -78,11 +78,23 @@ defmodule Engram.MailerTest do
       assert :ok = Mailer.send_welcome(user)
     end
 
-    test "body falls back to 'there' when display_name is nil" do
+    test "without a display name the heading drops the name" do
       user = insert(:user, email: "user@example.com", display_name: nil)
 
       expect(Engram.Email.ProviderMock, :send, fn _to, _subject, html, _opts ->
-        assert html =~ "Welcome to Engram, there"
+        assert html =~ "Welcome to Engram."
+        refute html =~ "Welcome to Engram, "
+        :ok
+      end)
+
+      assert :ok = Mailer.send_welcome(user)
+    end
+
+    test "is written in the user's stored language" do
+      user = insert(:user, email: "user@example.com", locale: "de-AT")
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, subject, _html, _opts ->
+        assert subject == Engram.I18n.t("de", "Welcome to Engram")
         :ok
       end)
 
@@ -215,7 +227,7 @@ defmodule Engram.MailerTest do
                Mailer.send_vault_deletion_notice(
                  user,
                  "My Vault",
-                 "June 27, 2026",
+                 ~D[2026-06-27],
                  "https://app.engram.page/?highlight=1#settings/vaults"
                )
     end
@@ -233,7 +245,71 @@ defmodule Engram.MailerTest do
                Mailer.send_vault_deletion_notice(
                  user,
                  "<script>alert(1)</script>",
-                 "June 27, 2026",
+                 ~D[2026-06-27],
+                 "https://app.engram.page/?highlight=1#settings/vaults"
+               )
+    end
+  end
+
+  # The riskiest localized paths: a translated sentence with a user-supplied
+  # var, the translated changelog nested in another sentence, and ISO dates.
+  describe "localized (de)" do
+    test "legal notice: translated subject, changelog and ISO date" do
+      user = insert(:user, email: "u@example.com", locale: "de")
+
+      version = %Engram.Legal.TermsVersion{
+        document: "privacy_policy",
+        version: "2026-10-12",
+        material: false,
+        effective_date: ~D[2026-11-11],
+        changelog:
+          "App analytics now linked to your account (email, plan, usage counts). The content of your notes is never sent."
+      }
+
+      doc = Engram.I18n.t("de", "Privacy Policy")
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, subject, html, _opts ->
+        assert subject == Engram.I18n.t("de", "Engram {document} Update", document: doc)
+        assert html =~ "2026-11-11"
+        refute html =~ "November"
+
+        changelog = Engram.I18n.t("de", version.changelog)
+        refute changelog == version.changelog, "the changelog must be translated"
+
+        expected =
+          Engram.I18n.t("de", "What changed: {changelog}", changelog: changelog)
+          |> Engram.Email.Template.esc()
+
+        assert html =~ expected
+        :ok
+      end)
+
+      assert :ok = Mailer.send_legal_notice(user, version, "notice")
+    end
+
+    test "vault deletion: escapes the vault name inside the translated sentence" do
+      user = insert(:user, email: "u@example.com", locale: "de")
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, subject, html, _opts ->
+        assert subject == Engram.I18n.t("de", "Your Engram vault was deleted")
+        refute html =~ "<script>alert(1)</script>"
+
+        expected =
+          Engram.I18n.t("de", "Your Engram vault \"{vault}\" has been deleted.",
+            vault: "<script>alert(1)</script>"
+          )
+          |> Engram.Email.Template.esc()
+
+        assert html =~ expected
+        assert html =~ "2026-06-27"
+        :ok
+      end)
+
+      assert :ok =
+               Mailer.send_vault_deletion_notice(
+                 user,
+                 "<script>alert(1)</script>",
+                 ~D[2026-06-27],
                  "https://app.engram.page/?highlight=1#settings/vaults"
                )
     end

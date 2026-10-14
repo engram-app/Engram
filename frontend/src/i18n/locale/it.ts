@@ -735,6 +735,12 @@ export default {
 	"A vault holds its own notes and folders, separate from your other vaults.":
 		"Un vault contiene le tue note e cartelle, separate dagli altri vault.",
 	"Create vault": "Crea vault",
+	"Terms of Service": "Termini di servizio",
+	"Privacy Policy": "Informativa sulla privacy",
+	"{document} update, effective {date}.": "Aggiornamento di {document}, valido dal {date}.",
+	"Read it": "Leggi",
+	"Review and accept": "Rivedi e accetta",
+	"Got it": "Ok",
 	day: "giorno",
 	week: "settimana",
 	month: "mese",
@@ -828,6 +834,8 @@ export default {
 	"What will you use Engram for?": "A cosa userai Engram?",
 	"Review the Terms": "Leggi i Termini",
 	"privacy notice": "Informativa sulla privacy",
+	"What changed": "Cosa è cambiato",
+	"{document}, effective {date}:": "{document}, in vigore dal {date}:",
 	"The current agreement isn’t available right now.":
 		"L'accordo attuale non è disponibile al momento.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":

@@ -7,6 +7,7 @@ import { useT } from "@/i18n/locale-provider";
 import { useBillingStatus } from "../api/queries";
 import { useChannel } from "../api/use-channel";
 import { useReportLocale } from "../i18n/report-locale";
+import { LegalNoticeBanner } from "../legal/legal-notice-banner";
 import { AttachmentUploadProvider } from "../viewer/attachment-upload/provider";
 import { ActiveEditorProvider } from "../viewer/editor/active-editor-context";
 import { preloadNoteChunks } from "../viewer/note-chunks";
@@ -91,6 +92,7 @@ function DesktopLayout() {
 							className="grid-overlay pointer-events-none absolute inset-0 z-0 opacity-30"
 						/>
 						<TrialBanner />
+						<LegalNoticeBanner />
 						{/* No floating expand button: the rail's tool group is now the one
 						    discoverable way to open this panel, for every tool. */}
 						<div className="relative z-10 flex-1 overflow-hidden p-6">

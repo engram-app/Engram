@@ -63,7 +63,7 @@ defmodule EngramWeb.OnboardingControllerTest do
       assert body["next_step"] == "done"
     end
 
-    test "status forwards terms_notice when present", %{conn: conn} do
+    test "status forwards legal_notices", %{conn: conn} do
       LegalFixtures.insert_version(
         document: "terms_of_service",
         version: "2026-06-01",
@@ -76,7 +76,9 @@ defmodule EngramWeb.OnboardingControllerTest do
 
       conn = get(conn, "/api/onboarding/status")
       body = json_response(conn, 200)
-      assert body["terms_notice"]["version"] == "2026-06-01"
+
+      assert [%{"document" => "terms_of_service", "version" => "2026-06-01", "material" => true}] =
+               body["legal_notices"]
     end
 
     test "self-host mode reports enabled=true but skips agreement + billing", %{conn: conn} do
