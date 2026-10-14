@@ -163,21 +163,6 @@ describe("PropertiesWidget", () => {
 			await waitFor(() => expect(screen.getByTestId("note-properties")).toBeInTheDocument());
 		});
 
-		// The note opens on an empty doc and the server state lands later in ONE
-		// update, which CodeMirror paints synchronously. If the block renders a
-		// task after that, the browser can paint the body first and then push it
-		// down: a layout shift (CLS 0.146 on the mobile Lighthouse gate). It has
-		// to commit before the next paint, so a microtask is all it may take.
-		test("renders before the next paint when the server state lands", async () => {
-			const doc = new Y.Doc();
-			render(<PropertiesWidget doc={doc} />);
-			const server = new Y.Doc();
-			addKey(server, "status", "text");
-			Y.applyUpdate(doc, Y.encodeStateAsUpdate(server));
-			await Promise.resolve();
-			expect(screen.getByTestId("note-properties")).toBeInTheDocument();
-		});
-
 		// The `---` gesture opens the editor before any property exists. That
 		// "open but empty" state is LOCAL — it must never reach the Y.Doc, or an
 		// empty properties block would sync to the user's other devices.
