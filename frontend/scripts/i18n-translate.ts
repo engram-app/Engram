@@ -35,6 +35,8 @@ const sources = readdirSync(src, { recursive: true, encoding: "utf8" })
 	.filter(
 		(f) => /\.tsx?$/u.test(f) && !(f.includes(".test.") || f.startsWith(join("i18n", "locale"))),
 	)
+	// Catalog key order follows this list, and readdir order is filesystem-dependent.
+	.sort()
 	.map((f) => readFileSync(join(src, f), "utf8"));
 
 async function loadFrom(dir: string, code: Target): Promise<Catalog> {
