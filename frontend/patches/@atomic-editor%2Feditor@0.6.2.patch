@@ -31,6 +31,9 @@ index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-91f638c52efbe856 b/.bun-tag-91f638c52efbe856
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@atomic-editor/editor/.bun-tag-930f0f00cb202c74 b/.bun-tag-930f0f00cb202c74
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-98993e5371c62686 b/.bun-tag-98993e5371c62686
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
@@ -61,6 +64,66 @@ index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2
 diff --git a/node_modules/@atomic-editor/editor/.bun-tag-dd3a78e122bc9c02 b/.bun-tag-dd3a78e122bc9c02
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/dist/inline-preview.js b/dist/inline-preview.js
+index 67f18b3d3f9856530dd5cda94bb18d900657c8ca..15884b2c6a34016d35d16a3033c79d2cba4fb408 100644
+--- a/dist/inline-preview.js
++++ b/dist/inline-preview.js
+@@ -347,6 +347,10 @@ function buildInlineDecorations(view) {
+     // `.focus()` can't accidentally reveal source under reading mode.
+     const readOnly = state.facet(readOnlyFacet);
+     const activeLines = new Set();
++    // [engram patch] Lines whose task marker the caret touches. Those show
++    // `- [ ] ` as typed (Obsidian's reveal) instead of the checkbox widget.
++    // Filled by the ListMark branch, read by TaskMarker (visited after it).
++    const revealedTaskLines = new Set();
+     if (view.hasFocus && !readOnly) {
+         for (const r of state.selection.ranges) {
+             const firstLine = doc.lineAt(r.from).number;
+@@ -509,6 +513,17 @@ function buildInlineDecorations(view) {
+                 // taskFrom exactly on the `[` (matching TaskMarker.from).
+                 const taskLead = line.text.match(/^(\s*[-*+]\s+)\[[ xX]\]/);
+                 const taskFrom = taskLead != null ? line.from + taskLead[1].length : undefined;
++                // [engram patch] Any task, bullet or ordered: the marker span
++                // runs from the line start through `[ ] ` and its space.
++                // Touching it (inclusive) reveals the source.
++                const anyTask = line.text.match(/^\s*(?:[-*+]|\d+[.)])\s+\[[ xX]\] ?/);
++                let revealTask = false;
++                if (anyTask != null && view.hasFocus && !readOnly) {
++                    const markerEnd = line.from + anyTask[0].length;
++                    revealTask = state.selection.ranges.some((r) => r.from <= markerEnd && r.to >= line.from);
++                    if (revealTask)
++                        revealedTaskLines.add(line.number);
++                }
+                 // Hanging-indent every physical line owned by this list item.
+                 // Ownership and depth come from the parsed tree, not raw source
+                 // indentation: CommonMark allows up to three leading spaces on a
+@@ -568,7 +583,10 @@ function buildInlineDecorations(view) {
+                 // spurious leading space.
+                 const hasTrailingSpace = doc.sliceString(node.to, node.to + 1) === ' ';
+                 const markEnd = hasTrailingSpace ? node.to + 1 : node.to;
+-                if (taskFrom !== undefined) {
++                if (revealTask) {
++                    // [engram patch] Leave the marker as typed.
++                }
++                else if (taskFrom !== undefined) {
+                     // Hide `- ` (ListMark through the space before `[`).
+                     pushReplace(ranges, doc, node.from, taskFrom);
+                 }
+@@ -642,9 +660,11 @@ function buildInlineDecorations(view) {
+                 const hasTrailingSpace = node.to < doc.length &&
+                     doc.sliceString(node.to, node.to + 1) === ' ';
+                 const replaceTo = hasTrailingSpace ? node.to + 1 : node.to;
+-                pushReplace(ranges, doc, node.from, replaceTo, {
+-                    widget: new TaskCheckboxWidget(checked),
+-                });
++                if (!revealedTaskLines.has(doc.lineAt(node.from).number)) {
++                    pushReplace(ranges, doc, node.from, replaceTo, {
++                        widget: new TaskCheckboxWidget(checked),
++                    });
++                }
+                 if (checked) {
+                     const lineNum = doc.lineAt(node.from).number;
+                     const line = doc.line(lineNum);
 diff --git a/dist/styles/inline-preview.css b/dist/styles/inline-preview.css
 index 15beebd23538eb9da9a5e6de92c362e5c0ff21e8..7df2b278455bbc3f6cdd75755cc2bc3921adff2f 100644
 --- a/dist/styles/inline-preview.css
