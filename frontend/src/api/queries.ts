@@ -1107,13 +1107,23 @@ export function useMe(options?: { enabled?: boolean; client?: QueryClient }) {
 	);
 }
 
-export function useUpdateProfile() {
+export function useUpdateProfile(options?: {
+	retry?: (failureCount: number, error: Error) => boolean;
+}) {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (body: { display_name?: string | null; locale?: string }) =>
 			api.patch<{ user: User }>("/me", body),
-		onSuccess: (data) => {
-			qc.setQueryData(["me"], data);
+		retry: options?.retry ?? false,
+		onSuccess: (data, body) => {
+			// Write back only the fields this call sent: a slower response must not
+			// undo a newer edit to a different field.
+			const sent: Partial<User> = {};
+			if ("display_name" in body) sent.display_name = data.user.display_name;
+			if ("locale" in body) sent.locale = data.user.locale;
+			qc.setQueryData<{ user: User }>(["me"], (old) =>
+				old ? { user: { ...old.user, ...sent } } : data,
+			);
 		},
 	});
 }

@@ -32,3 +32,11 @@ export function stopCapture(): void {
 export function forgetUser(): void {
 	posthog.reset();
 }
+
+/** Person properties for the signed-in user. The caller must skip a user who
+ *  objected: on a fresh sign-in this can run before `stopCapture()` has. */
+export function setPersonProperties(properties: Record<string, string>): void {
+	if (posthog.__loaded && !posthog.has_opted_out_capturing()) {
+		posthog.setPersonProperties(properties);
+	}
+}
