@@ -1011,9 +1011,23 @@ defmodule Engram.OAuth do
   # self-concealing — `:rate_limited` is deliberately never logged (see
   # `Engram.OAuth.Cimd`), so before this split a user in a retry loop produced a
   # stream of `invalid_client` pages and not one line of evidence.
+  #
+  # Explicit shapes, not `Cimd.transient_fetch_error?/1`: that predicate
+  # defaults unknown reasons to transient, and this function also sees
+  # document-validation refusals (a bad `client_id` binding), which are terminal.
+  # Every transient shape `Cimd.HttpFetcher` can return is listed (#1974 review).
   defp cimd_error(reason)
-       when reason in [:rate_limited, :fetch_failed, :store_conflict],
+       when reason in [
+              :rate_limited,
+              :fetch_failed,
+              :store_conflict,
+              :dns_failure,
+              :budget_exhausted
+            ],
        do: {:server_error, "temporarily_unavailable"}
+
+  defp cimd_error({:transport_error, _phase, _reason}),
+    do: {:server_error, "temporarily_unavailable"}
 
   defp cimd_error({:http_status, status}) when status >= 500 or status == 429,
     do: {:server_error, "temporarily_unavailable"}
