@@ -40,9 +40,18 @@ export default defineConfig({
 		{
 			name: "local",
 			testMatch:
-				/\/(?:local-auth|dark-mode|lighthouse|mobile|note-live-update|note-properties|tree-ops-sync|wiki-nav|i18n-detection|i18n-onboarding|device-link)\.spec\.ts$/u,
+				/\/(?:local-auth|dark-mode|mobile|note-live-update|note-properties|tree-ops-sync|wiki-nav|i18n-detection|i18n-onboarding|device-link)\.spec\.ts$/u,
 			use: {
 				baseURL: `http://localhost:${LOCAL_VITE_PORT}`,
+			},
+		},
+		{
+			// Audits the production bundle Phoenix serves, not the Vite dev server
+			// (see the spec), so its baseURL is the backend.
+			name: "lighthouse",
+			testMatch: /\/lighthouse\.spec\.ts$/u,
+			use: {
+				baseURL: `http://localhost:${LOCAL_BACKEND_PORT}`,
 			},
 		},
 		{

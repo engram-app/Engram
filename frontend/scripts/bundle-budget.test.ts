@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { initialScripts, overBudget } from "./bundle-budget";
+import { initialScripts } from "./bundle-budget";
 
 const HTML = `<!doctype html><html><head>
 <script type="module" crossorigin src="/assets/index-abc.js"></script>
@@ -17,12 +17,5 @@ describe("initialScripts", () => {
 
 	it("refuses an index.html with no entry module", () => {
 		expect(() => initialScripts("<html></html>")).toThrow(/entry/u);
-	});
-});
-
-describe("overBudget", () => {
-	it("passes at or under the budget and fails over it", () => {
-		expect(overBudget(200 * 1024, 200)).toBe(false);
-		expect(overBudget(200 * 1024 + 1, 200)).toBe(true);
 	});
 });

@@ -13,7 +13,3 @@ export function initialScripts(html: string): string[] {
 	const preloads = [...html.matchAll(PRELOAD)].flatMap((m) => m.groups?.file ?? []);
 	return [entry, ...preloads];
 }
-
-export function overBudget(bytes: number, budgetKb: number): boolean {
-	return bytes > budgetKb * 1024;
-}

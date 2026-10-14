@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
-import posthog from "posthog-js";
+import type { PostHog } from "posthog-js";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setAnalyticsClient } from "../analytics/client";
@@ -14,13 +14,11 @@ vi.mock("../api/client", async (orig) => ({
 	api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), del: vi.fn() },
 	setTokenGetter: vi.fn(),
 }));
-vi.mock("posthog-js", () => ({
-	default: { __loaded: true, has_opted_out_capturing: () => false, setPersonProperties: vi.fn() },
-}));
 
 const get = vi.mocked(api.get);
-// track/identity reach PostHog through the loaded client, not the import.
-setAnalyticsClient(posthog);
+// track/identity reach PostHog through the loaded client, so a stand-in is enough.
+const posthog = { has_opted_out_capturing: () => false, setPersonProperties: vi.fn() };
+setAnalyticsClient(posthog as unknown as PostHog);
 const patch = vi.mocked(api.patch);
 
 function user(locale: string | null, extra: Record<string, unknown> = {}) {

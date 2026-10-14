@@ -4,7 +4,13 @@ import { join } from "node:path";
 import { type BrowserContext, chromium, expect, test } from "@playwright/test";
 import lighthouse, { type Flags } from "lighthouse";
 import desktopConfig from "lighthouse/core/config/desktop-config.js";
-import { createVault, deleteAccount, PASS, registerAndLogin, upsertNote } from "./support/api";
+import {
+	createVault,
+	deleteAccount,
+	registerAndLogin,
+	signInForNote,
+	upsertNote,
+} from "./support/api";
 
 // Lighthouse gate on a signed-in note page, the screen the app lives on.
 //
@@ -16,7 +22,11 @@ import { createVault, deleteAccount, PASS, registerAndLogin, upsertNote } from "
 //
 // Gated: accessibility, best practices, CLS. Reported only: performance score
 // and LCP. Shared CI runners are too noisy to gate load time on.
-const BACKEND = `http://localhost:${process.env.PW_LOCAL_BACKEND_PORT ?? 4000}`;
+//
+// Its own Playwright project, whose baseURL is the backend (playwright.config).
+
+// One Lighthouse run (navigation + audits) on a shared runner, with headroom.
+const AUDIT_TIMEOUT_MS = 180_000;
 
 const NOTE = `---
 tags: [lighthouse]
@@ -31,6 +41,7 @@ Some **bold** text and a [[Missing link]].
 `;
 
 let context: BrowserContext;
+let backend: string;
 let port: number;
 let noteUrl: string;
 let profile: string;
@@ -39,23 +50,25 @@ const email = `e2e-lighthouse-${Date.now()}@test.com`;
 test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async () => {
-	const index = await fetch(`${BACKEND}/`);
+	backend = test.info().project.use.baseURL ?? "";
+	const index = await fetch(`${backend}/`);
 	const html = await index.text();
 	if (!(index.ok && html.includes('id="root"') && !html.includes("/src/main.tsx"))) {
 		throw new Error(
-			`${BACKEND}/ is not serving a production SPA build. Run \`bun run build:selfhost\` first.`,
+			`${backend}/ is not serving a production SPA build. Run \`bun run build:selfhost\` first.`,
 		);
 	}
 
-	const token = await registerAndLogin(BACKEND, email);
-	const vault = await createVault(BACKEND, token, "Lighthouse Vault");
-	const note = await upsertNote(BACKEND, token, vault.id, "Lighthouse.md", NOTE);
+	const token = await registerAndLogin(backend, email);
+	const vault = await createVault(backend, token, "Lighthouse Vault");
+	const note = await upsertNote(backend, token, vault.id, "Lighthouse.md", NOTE);
 
 	// A persistent context IS the browser's default context, so the session
 	// cookie set here is the one Lighthouse's own tab sees. Port 0 lets Chrome
 	// pick a free port and write it to DevToolsActivePort.
 	profile = mkdtempSync(join(tmpdir(), "engram-lh-"));
 	context = await chromium.launchPersistentContext(profile, {
+		baseURL: backend,
 		args: ["--remote-debugging-port=0"],
 	});
 	const portFile = join(profile, "DevToolsActivePort");
@@ -63,38 +76,22 @@ test.beforeAll(async () => {
 	port = Number(readFileSync(portFile, "utf8").split("\n")[0]);
 
 	const page = await context.newPage();
-	await page.goto(`${BACKEND}/sign-in`);
-	await page.evaluate(
-		async ({ email, password, vaultId }) => {
-			localStorage.setItem("engram.activeVaultId", String(vaultId));
-			const res = await fetch("/api/auth/login", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				credentials: "include",
-				body: JSON.stringify({ email, password }),
-			});
-			if (!res.ok) {
-				throw new Error(`login ${res.status}`);
-			}
-		},
-		{ email, password: PASS, vaultId: vault.id },
-	);
-	await page.goto(`${BACKEND}/note/${note.id}`);
-	await expect(page.locator(".cm-content")).toBeVisible({ timeout: 20_000 });
+	await signInForNote(page, email, vault.id, note.id);
+	await expect(page.locator(".cm-content")).toBeVisible();
 	noteUrl = page.url();
 	await page.close();
 });
 
 test.afterAll(async () => {
 	await context?.close();
-	await deleteAccount(BACKEND, email);
+	await deleteAccount(backend, email);
 	if (profile) {
 		rmSync(profile, { recursive: true, force: true });
 	}
 });
 
 async function audit(formFactor: "mobile" | "desktop"): Promise<void> {
-	test.setTimeout(180_000);
+	test.setTimeout(AUDIT_TIMEOUT_MS);
 	const testInfo = test.info();
 	const flags: Flags = {
 		port,

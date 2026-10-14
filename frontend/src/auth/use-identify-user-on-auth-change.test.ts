@@ -1,4 +1,5 @@
 import { renderHook } from "@testing-library/react";
+import type { PostHog } from "posthog-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setAnalyticsClient } from "../analytics/client";
 import { useIdentifyUserOnAuthChange } from "./use-identify-user-on-auth-change";
@@ -10,19 +11,15 @@ const optIn = vi.fn();
 let optedOut = false;
 const setSentryUser = vi.fn((_id: string | null) => Promise.resolve());
 
-vi.mock("posthog-js", () => ({
-	default: {
-		identify: (...args: unknown[]) => identify(...args),
-		reset: () => reset(),
-		opt_out_capturing: () => optOut(),
-		opt_in_capturing: (...args: unknown[]) => optIn(...args),
-		has_opted_out_capturing: () => optedOut,
-		__loaded: true,
-	},
-}));
 vi.mock("../sentry", () => ({ setSentryUser: (id: string | null) => setSentryUser(id) }));
-// identity.ts reaches PostHog through the loaded client, not the import.
-setAnalyticsClient((await import("posthog-js")).default);
+// identity.ts reaches PostHog through the loaded client, so a stand-in is enough.
+setAnalyticsClient({
+	identify,
+	reset,
+	opt_out_capturing: optOut,
+	opt_in_capturing: optIn,
+	has_opted_out_capturing: () => optedOut,
+} as unknown as PostHog);
 
 const render = (props: {
 	isLoaded: boolean;

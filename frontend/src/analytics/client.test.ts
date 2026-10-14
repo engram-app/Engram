@@ -1,17 +1,15 @@
-import posthog from "posthog-js";
+import type { PostHog } from "posthog-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setAnalyticsClient } from "./client";
 import { forgetUser, identifyUser } from "./identity";
 import { track } from "./track";
 
-vi.mock("posthog-js", () => ({
-	default: {
-		capture: vi.fn(),
-		identify: vi.fn(),
-		reset: vi.fn(),
-		has_opted_out_capturing: () => false,
-	},
-}));
+const posthog = {
+	capture: vi.fn(),
+	identify: vi.fn(),
+	reset: vi.fn(),
+	has_opted_out_capturing: () => false,
+};
 
 afterEach(() => setAnalyticsClient(null));
 
@@ -29,7 +27,7 @@ describe("analytics client", () => {
 	});
 
 	it("routes calls to the loaded instance", () => {
-		setAnalyticsClient(posthog);
+		setAnalyticsClient(posthog as unknown as PostHog);
 		identifyUser("a1");
 		expect(posthog.identify).toHaveBeenCalledWith("a1");
 	});

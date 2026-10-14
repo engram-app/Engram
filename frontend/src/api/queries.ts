@@ -405,19 +405,6 @@ function restoreTree(
 // for legacy path-keyed consumers. `id` + `parent_id` were added by
 // backend commit 935b7bbf so headless-tree can key nodes by id and
 // discover tree shape via parent_id without parsing path strings.
-/** One note's body. Shared by useNote and the first-view prefetch so both hit
- *  the same cache entry. */
-export function noteQueryOptions(vaultId: string | null, id: string) {
-	return {
-		queryKey: ["note", vaultId, id] as const,
-		queryFn: () => fetchNoteById(id),
-		// Long enough that a body prefetched at boot (layout/first-view.ts) is
-		// not fetched again the moment NotePage mounts; short enough that a
-		// revisit refetches. The live content comes from the CRDT doc anyway.
-		staleTime: 5000,
-	};
-}
-
 export interface Folder {
 	id: string;
 	parent_id: string | null;
@@ -737,6 +724,17 @@ export function invalidateVaultTree(qc: QueryClient, vaultId: string | null | un
 	// user is over their index cap. Riding the tree invalidation rather than
 	// hand-listing the mutations means a future write path cannot forget it.
 	qc.invalidateQueries({ queryKey: ["index_status"] });
+}
+
+/** One note's body. Shared by useNote and the first-view prefetch so both hit
+ *  the same cache entry; the client's default staleTime keeps a body
+ *  prefetched at boot (layout/first-view.ts) from refetching as NotePage
+ *  mounts. */
+export function noteQueryOptions(vaultId: string | null, id: string) {
+	return {
+		queryKey: ["note", vaultId, id] as const,
+		queryFn: () => fetchNoteById(id),
+	};
 }
 
 export function useNote(id: string | null) {

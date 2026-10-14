@@ -5,8 +5,8 @@ import { setAnalyticsClient } from "./client";
 // [[reference_cookie_audit_2026_05_24]] so the no-banner launch posture
 // holds. Autocapture is OFF — explicit events only is the single biggest
 // cost lever on the free tier, per [[project_observability_stack_plan]].
-// The identify call happens in the Clerk auth provider as soon as the user
-// resolves, NOT here — firing it pre-auth would burn a permanent anonymous
+// The identify call happens in the auth provider (use-identify-user-on-auth-
+// change, through identity.ts) as soon as the user resolves, NOT here — firing it pre-auth would burn a permanent anonymous
 // distinct_id.
 //
 // Own module (mirrors sentry.ts) so main.tsx's inline call site stays a
