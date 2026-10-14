@@ -59,6 +59,19 @@ defmodule EngramWeb.OAuthTokenControllerTest do
     )
   end
 
+  # Moves a consumed refresh token's `consumed_at` past the 60 s reuse grace
+  # window (#1974), so a replay of it is reuse rather than a lost-response retry.
+  defp age_past_grace(raw) do
+    hash = Engram.Crypto.sha256_hex(raw)
+    past = DateTime.utc_now() |> DateTime.add(-61) |> DateTime.truncate(:second)
+
+    Repo.update_all(
+      from(r in RefreshToken, where: r.token_hash == ^hash),
+      [set: [consumed_at: past]],
+      skip_tenant_check: true
+    )
+  end
+
   describe "POST /oauth/token — authorization_code grant" do
     test "exchanges valid code for access + refresh tokens", %{conn: conn} do
       user = insert(:user)
@@ -474,7 +487,9 @@ defmodule EngramWeb.OAuthTokenControllerTest do
                200
              )
 
-      # Reuse → reject
+      # Reuse after the #1974 grace window → reject
+      age_past_grace(first_refresh)
+
       conn2 =
         post(build_conn(), "/oauth/token", %{
           "grant_type" => "refresh_token",
@@ -516,7 +531,10 @@ defmodule EngramWeb.OAuthTokenControllerTest do
           200
         )
 
-      # Replay rt1 → must reject AND invalidate rt2 (whole family burned)
+      # Replay rt1 after the grace window → must reject AND invalidate rt2
+      # (whole family burned)
+      age_past_grace(rt1)
+
       assert json_response(
                post(build_conn(), "/oauth/token", %{
                  "grant_type" => "refresh_token",

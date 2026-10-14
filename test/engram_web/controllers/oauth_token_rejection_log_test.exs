@@ -13,6 +13,7 @@ defmodule EngramWeb.OAuthTokenRejectionLogTest do
   use EngramWeb.ConnCase, async: true
 
   import Engram.OAuthHelpers, only: [code_from_redirect: 1, pkce_pair: 0]
+  import Ecto.Query
   import ExUnit.CaptureLog
 
   alias Engram.OAuth
@@ -221,6 +222,16 @@ defmodule EngramWeb.OAuthTokenRejectionLogTest do
 
       json_response(post(build_conn(), "/oauth/token", params), 200)
       assert_received {:oauth_token, %{result: :issued}}
+
+      # Past the 60 s grace window, so this is reuse, not a lost-response retry.
+      hash = Engram.Crypto.sha256_hex(rt)
+      past = DateTime.utc_now() |> DateTime.add(-61) |> DateTime.truncate(:second)
+
+      Repo.update_all(
+        from(r in Engram.OAuth.RefreshToken, where: r.token_hash == ^hash),
+        [set: [consumed_at: past]],
+        skip_tenant_check: true
+      )
 
       meta = reject(params, 400, "invalid_grant")
       assert_rejected(meta, :refresh_token, "invalid_grant", :refresh_token_reuse)

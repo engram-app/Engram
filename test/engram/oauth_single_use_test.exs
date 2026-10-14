@@ -3,6 +3,8 @@ defmodule Engram.OAuthSingleUseTest do
 
   import Engram.OAuthHelpers, only: [code_from_redirect: 1, pkce_pair: 0]
 
+  import Ecto.Query
+
   alias Engram.OAuth
 
   defp mint_code(user, client, redirect_uri, challenge) do
@@ -75,10 +77,25 @@ defmodule Engram.OAuthSingleUseTest do
         |> Task.await_many(30_000)
 
       # A loser of the race revokes the family (RFC 6749 §10.4 replay
-      # response), which may race the winner's own mint — so the winner
-      # count is 0 or 1, never more.
-      assert Enum.count(results, &match?({:ok, _}, &1)) <= 1
-      assert Enum.count(results, &match?({:error, {:invalid_grant, _}}, &1)) >= 7
+      # response), which may race the winner's own mint. One loser that reads
+      # only after the winner committed may instead take the #1974 grace
+      # re-issue, which revokes the winner's successor. So: at most two
+      # successes, and — the property that matters — the family never ends
+      # with more than one live token.
+      successes = for {:ok, %{refresh_token: rt}} <- results, do: rt
+      assert length(successes) <= 2
+      assert Enum.count(results, &match?({:error, {:invalid_grant, _}}, &1)) >= 6
+
+      live =
+        Engram.Repo.aggregate(
+          from(r in Engram.OAuth.RefreshToken,
+            where: r.user_id == ^user.id and is_nil(r.consumed_at) and is_nil(r.revoked_at)
+          ),
+          :count,
+          skip_tenant_check: true
+        )
+
+      assert live <= 1
     end
   end
 

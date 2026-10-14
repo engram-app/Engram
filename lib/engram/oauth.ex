@@ -514,6 +514,11 @@ defmodule Engram.OAuth do
     end
   end
 
+  # How long after a refresh token is consumed a replay of it may still
+  # re-issue (see grace_reissue/2). Long enough for a client to time out and
+  # retry once; short enough that a stolen token is useless soon after.
+  @refresh_reuse_grace_seconds 60
+
   @doc """
   Rotates a refresh token: marks the presented one consumed, mints + issues
   a successor in the same family. If the presented token is already
@@ -550,8 +555,11 @@ defmodule Engram.OAuth do
   defp rotate_existing(%RefreshToken{revoked_at: %DateTime{}} = rt, _client_id, _ip),
     do: replay(rt, :refresh_token_revoked)
 
-  defp rotate_existing(%RefreshToken{consumed_at: %DateTime{}} = rt, _client_id, _ip),
-    do: replay(rt, :refresh_token_reuse)
+  defp rotate_existing(%RefreshToken{consumed_at: %DateTime{} = at} = rt, _client_id, ip) do
+    if DateTime.diff(DateTime.utc_now(), at) <= @refresh_reuse_grace_seconds,
+      do: grace_reissue(rt, ip),
+      else: replay(rt, :refresh_token_reuse, within_grace: false)
+  end
 
   defp rotate_existing(%RefreshToken{expires_at: exp} = rt, _client_id, ip) do
     if DateTime.compare(DateTime.utc_now(), exp) == :gt do
@@ -572,7 +580,7 @@ defmodule Engram.OAuth do
     # race, so the token we hold is a now-consumed one being replayed.
     case from(r in RefreshToken, where: r.id == ^rt.id and is_nil(r.consumed_at))
          |> Repo.update_all([set: [consumed_at: now]], skip_tenant_check: true) do
-      {0, _} -> replay(rt, :refresh_token_reuse)
+      {0, _} -> replay(rt, :refresh_token_reuse, within_grace: false)
       {1, _} -> mint_rotation_successor(rt, ip)
     end
   end
@@ -608,9 +616,81 @@ defmodule Engram.OAuth do
   # atomic UPDATE losing its race — and that split is deliberate and stays
   # (see do_rotate/2). The RESPONSE to all three is identical, and is this;
   # only the logged reason differs (revoked vs reused).
-  defp replay(rt, reason) do
+  defp replay(rt, reason, log \\ nil) do
+    if log, do: log_reuse(rt, log)
     revoke_family(rt.family_id)
     grant_error(reason)
+  end
+
+  # #1974: a client whose rotation response was lost retries with the token it
+  # still holds. Revoking the family for that killed the connection every
+  # time a response went missing, and access tokens last 15 min.
+  #
+  # So inside the window, and only while the successor has NEVER been used
+  # (the client cannot have received it, or it would have used it), the replay
+  # re-issues instead: the old token and its unused successor are revoked and
+  # one new successor is minted. Both updates are compare-and-set inside one
+  # transaction, so two concurrent replays cannot both win and the family
+  # never has two live tokens. The old token is now revoked, so the grace is
+  # spent: any later replay of it revokes the family as before.
+  #
+  # The raw successor cannot simply be returned again: only its hash is stored.
+  defp grace_reissue(rt, ip) do
+    now = DateTime.utc_now(:second)
+
+    Repo.transaction(fn ->
+      with {1, _} <- revoke_if_live(from(r in RefreshToken, where: r.id == ^rt.id), now),
+           [successor] <- successors(rt),
+           {1, _} <-
+             revoke_if_live(
+               from(r in RefreshToken, where: r.id == ^successor.id and is_nil(r.consumed_at)),
+               now
+             ),
+           {:ok, response} <- mint_rotation_successor(rt, ip) do
+        response
+      else
+        _ -> Repo.rollback(:not_eligible)
+      end
+    end)
+    |> case do
+      {:ok, response} ->
+        log_reuse(rt, within_grace: true)
+        {:ok, response}
+
+      {:error, _} ->
+        replay(rt, :refresh_token_reuse, within_grace: false)
+    end
+  end
+
+  # Everything minted in this family since `rt` was consumed. Exactly one,
+  # unused, is the lost-response case; a second means the successor was
+  # itself rotated, i.e. the client did receive it.
+  defp successors(rt) do
+    Repo.all(
+      from(r in RefreshToken,
+        where:
+          r.family_id == ^rt.family_id and r.id != ^rt.id and r.inserted_at >= ^rt.consumed_at
+      ),
+      skip_tenant_check: true
+    )
+  end
+
+  defp revoke_if_live(query, now) do
+    query
+    |> where([r], is_nil(r.revoked_at))
+    |> Repo.update_all([set: [revoked_at: now]], skip_tenant_check: true)
+  end
+
+  defp log_reuse(rt, within_grace: within_grace) do
+    Logger.warning(
+      "oauth_refresh_reuse",
+      Metadata.with_category(:warning, :lifecycle,
+        # A string: the text formatter drops `false` metadata entirely.
+        within_grace: to_string(within_grace),
+        client_id: rt.client_id,
+        family_id: rt.family_id
+      )
+    )
   end
 
   @typedoc """

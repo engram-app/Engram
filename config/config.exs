@@ -338,6 +338,7 @@ config :logger, :default_formatter,
     :user_agent,
     :user_id,
     :vault_id,
+    :within_grace,
     :worker
   ]
 
