@@ -248,10 +248,14 @@
    1.2em x 1.05em rectangle whose right edge touched the text. The input is now
    an invisible slot and ::before draws a true square, pulled 0.35em into the
    list's base indent so ~0.5em of real space separates it from the text.
-   1.05em matches Reading mode's checkbox (markdown.css). */
+   --task-box (main.css) is the square, shared with Reading mode. */
+.cm-atomic-task-checkbox {
+	--task-pull: -0.35em;
+}
+
 .cm-atomic-list-marker.cm-atomic-task-checkbox,
 .cm-atomic-list-marker.cm-atomic-task-checkbox:checked {
-	height: 1.05em;
+	height: var(--task-box);
 	/* Atomic's 0.1em lift plus translate sat the box above the text's
 	   centre line once the slot stopped drawing it. */
 	vertical-align: -0.15em;
@@ -264,8 +268,8 @@
 .cm-atomic-task-checkbox::before {
 	content: "";
 	position: absolute;
-	inset: 0 auto 0 -0.35em;
-	width: 1.05em;
+	inset: 0 auto 0 var(--task-pull);
+	width: var(--task-box);
 	box-sizing: border-box;
 	border: 1.5px solid var(--atomic-editor-fg-muted, #888);
 	border-radius: 0.22em;
@@ -279,8 +283,8 @@
 /* The tick, centred on the square rather than on the wider slot. */
 .cm-atomic-list-marker.cm-atomic-task-checkbox::after {
 	position: absolute;
-	left: calc(-0.35em + (1.05em - 0.26em) / 2);
-	top: calc((1.05em - 0.5em) / 2 - 0.05em);
+	left: calc(var(--task-pull) + (var(--task-box) - 0.26em) / 2);
+	top: calc((var(--task-box) - 0.5em) / 2 - 0.05em);
 }
 
 /* ── Collapsible headings (editor/heading-fold.ts) ────────────────────────────

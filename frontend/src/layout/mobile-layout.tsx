@@ -74,7 +74,7 @@ export default function MobileLayout() {
 			    runs under a bare glyph. The tools drawer has no button here; the
 			    note menu opens it (MobileHeaderSlot.openTools).
 			    --mobile-header is its height: main pads by it, and a note's
-			    surface bleeds up under it (DocumentSurface `underHeader`). */}
+			    surface bleeds up under it (note-page.tsx). */}
 			<header className="absolute inset-x-0 top-0 z-20 flex h-(--mobile-header) items-end justify-between px-2 [&>button]:size-11 [&>button]:bg-secondary/90">
 				<Sheet open={leftOpen} onOpenChange={setLeftOpen}>
 					<SheetTrigger asChild>

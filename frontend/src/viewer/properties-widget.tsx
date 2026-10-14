@@ -36,6 +36,14 @@ const KEY_CELL = "flex min-h-7 min-w-0 items-center overflow-hidden border-borde
 // is as wide as the longest key (capped at half the width; longer truncates).
 const ROW = "col-span-2 grid grid-cols-subgrid items-stretch rounded-md border border-border";
 
+// A key's name, committed or being authored. field-sizing-content sizes the
+// input to its text, which is what lets the key column fit the longest key.
+const KEY_INPUT =
+	"field-sizing-content min-w-0 max-w-full border-0 bg-transparent px-2 py-1 text-sm outline-none";
+
+// The value side of a row.
+const VALUE_CELL = "flex min-h-7 items-center gap-1 pl-2";
+
 // Anything this editor opens that renders outside its own DOM subtree. Treated
 // as "inside" for the click-away rule.
 const PORTALLED_SURFACES =
@@ -98,10 +106,7 @@ function PropertyKeyInput({
 			// Highlighted when Engram READS the key rather than merely storing it.
 			// No tooltip: the `?` beside the heading is where the explanation
 			// lives, and a per-key hover repeating it is noise on every row.
-			className={cn(
-				"field-sizing-content min-w-0 max-w-full truncate border-0 bg-transparent px-2 py-1 text-sm outline-none",
-				okf ? "text-primary-ink" : "text-muted-foreground",
-			)}
+			className={cn(KEY_INPUT, "truncate", okf ? "text-primary-ink" : "text-muted-foreground")}
 			value={draft}
 			onChange={(e) => setDraft(e.target.value)}
 			onBlur={commit}
@@ -200,6 +205,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 	const { t } = useT();
 	const [rows, setRows] = useState<PropertyRow[]>(() => readRows(doc));
 	const newKeyRef = useRef<HTMLInputElement>(null);
+	const addButtonRef = useRef<HTMLButtonElement>(null);
 	// Holds whichever control the chosen type renders — a checkbox is a
 	// button, not an input, so this is widened to HTMLElement.
 	const newValueRef = useRef<HTMLElement | null>(null);
@@ -432,13 +438,18 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 					{rows.map((row) => {
 						const type = effectiveType(row.value, row.typeOverride);
 						return (
-							<div key={row.key} className={`group ${ROW}`} data-testid={`property-row-${row.key}`}>
+							<div key={row.key} className={ROW} data-testid={`property-row-${row.key}`}>
 								<dt className={KEY_CELL}>
 									<PropertyTypeMenu
 										value={type}
 										onChange={(next) => setType(doc, row.key, next)}
 										focusAfterSelect={() => keyEls.current.get(row.key) ?? null}
 										onRemove={() => removeKey(doc, row.key)}
+										focusAfterRemove={() => {
+											const i = rows.findIndex((r) => r.key === row.key);
+											const next = rows[i + 1] ?? rows[i - 1];
+											return (next && keyEls.current.get(next.key)) ?? addButtonRef.current;
+										}}
 									/>
 									<PropertyKeyInput
 										doc={doc}
@@ -453,7 +464,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 										}}
 									/>
 								</dt>
-								<dd className="flex min-h-7 flex-1 items-center gap-1 pl-2">
+								<dd className={VALUE_CELL}>
 									<PropertyField
 										type={type}
 										value={row.value}
@@ -488,7 +499,10 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 								/>
 								<input
 									ref={newKeyRef}
-									className="field-sizing-content min-w-0 max-w-full border-0 bg-transparent px-2 py-1 text-muted-foreground text-sm outline-none placeholder:text-muted-foreground/60"
+									className={cn(
+										KEY_INPUT,
+										"text-muted-foreground placeholder:text-muted-foreground/60",
+									)}
 									placeholder={t("Property name")}
 									value={newKey}
 									onChange={(e) => setNewKey(e.target.value)}
@@ -506,7 +520,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 									}}
 								/>
 							</dt>
-							<dd className="flex min-h-7 flex-1 items-center gap-1 pl-2">
+							<dd className={VALUE_CELL}>
 								{newType === "checkbox" ? (
 									<Checkbox
 										ref={(el) => {
@@ -564,6 +578,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 					type="button"
 					variant="ghost"
 					size="sm"
+					ref={addButtonRef}
 					aria-label={t("Add property")}
 					className="mt-2"
 					onClick={() => setAdding(true)}

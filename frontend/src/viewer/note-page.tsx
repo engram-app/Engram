@@ -74,6 +74,8 @@ import {
 	wikiHref,
 } from "./wiki-link";
 
+const UNDER_MOBILE_HEADER = "-mt-(--mobile-header,0px) h-[calc(100%+var(--mobile-header,0px))]";
+
 /** How long the routed note may fail to open before the pane explains itself. */
 const STALL_NOTICE_MS = 1500;
 
@@ -678,7 +680,10 @@ export default function NotePage() {
 	};
 
 	return (
-		<DocumentSurface underHeader>
+		// Mobile: the surface reaches up under the floating header so text
+		// scrolls behind it, and the page below pads back down by the same
+		// --mobile-header. Both are no-ops where the variable is unset (desktop).
+		<DocumentSurface className={UNDER_MOBILE_HEADER}>
 			{syncStatus === "error" && (
 				<p role="status" className="shrink-0 bg-destructive/10 px-4 py-1 text-destructive text-xs">
 					{t("Not syncing - reconnecting...")}

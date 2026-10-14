@@ -274,6 +274,24 @@ describe("PropertiesWidget", () => {
 			});
 		});
 
+		// The deleted row takes the menu's trigger with it, so Radix's focus
+		// restore landed on <body> and a keyboard user lost their place.
+		test.each([
+			["the next property's name", "a", "Rename b"],
+			["the previous one's when the last row goes", "b", "Rename a"],
+		])("deleting a property moves focus to %s", async (_case, removed, focusLabel) => {
+			const doc = new Y.Doc();
+			addKey(doc, "a", "text");
+			addKey(doc, "b", "text");
+			render(<PropertiesWidget doc={doc} />);
+			const row = await screen.findByTestId(`property-row-${removed}`);
+			const trigger = within(row).getByRole("button", { name: /property type/i });
+			fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+			fireEvent.click(trigger);
+			fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+			await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText(focusLabel)));
+		});
+
 		test("goes away again when the last property is removed", async () => {
 			const doc = new Y.Doc();
 			addKey(doc, "status", "text");

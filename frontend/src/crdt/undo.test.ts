@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import * as Y from "yjs";
 import { addKey, frontmatterMaps, rawMap, removeKey, setValue } from "./frontmatter-doc";
+import { REMOTE_ORIGIN } from "./manager";
 import { undoKeyHandler, undoManagerFor } from "./undo";
 
 // No capture window, so every transaction is its own undo step.
@@ -63,7 +64,7 @@ describe("undoManagerFor", () => {
 		const { doc, um } = fresh();
 		const peer = new Y.Doc();
 		addKey(peer, "remote", "text");
-		Y.applyUpdate(doc, Y.encodeStateAsUpdate(peer), "remote-origin");
+		Y.applyUpdate(doc, Y.encodeStateAsUpdate(peer), REMOTE_ORIGIN);
 		expect(um.undoStack).toHaveLength(0);
 		um.undo();
 		expect(frontmatterMaps(doc).values.has("remote")).toBe(true);
@@ -94,6 +95,7 @@ describe("undoKeyHandler", () => {
 		press(btn, { key: "z", ctrlKey: true, shiftKey: true });
 		expect(frontmatterMaps(doc).values.has("tags")).toBe(true);
 		press(btn, { key: "z", metaKey: true });
+		expect(frontmatterMaps(doc).values.has("tags")).toBe(false);
 		press(btn, { key: "y", ctrlKey: true });
 		expect(frontmatterMaps(doc).values.has("tags")).toBe(true);
 		cleanup();

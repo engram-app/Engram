@@ -51,13 +51,10 @@ const HANDLE_SIDE: Record<Side, string> = {
 // width is user-resizable from either edge (symmetrically, since it is centred).
 export function DocumentSurface({
 	children,
-	underHeader = false,
+	className,
 }: {
 	children: ReactNode;
-	/** Extend up under the mobile layout's floating header, so the content
-	 *  scrolls behind it. The caller pads its scroll content by
-	 *  `--mobile-header`. A no-op where that variable is unset (desktop). */
-	underHeader?: boolean;
+	className?: string;
 }) {
 	const { t } = useT();
 	const [width, setWidth] = useState(readDocumentWidth);
@@ -170,7 +167,7 @@ export function DocumentSurface({
 			data-testid="document-surface"
 			className={cn(
 				"relative mx-auto size-full min-h-0 min-w-0 md:-my-6 md:h-[calc(100%+3rem)]",
-				underHeader && "-mt-(--mobile-header,0px) h-[calc(100%+var(--mobile-header,0px))]",
+				className,
 			)}
 			style={{ maxWidth: width }}
 		>

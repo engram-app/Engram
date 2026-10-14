@@ -47,11 +47,10 @@ import { useKeyboardInset, useKeyboardOpen } from "./use-keyboard-inset";
  *
  * Run the keymap's own bindings rather than reaching for a manager directly.
  * The package does not export its undo/redo commands from its root and its
- * `exports` map blocks deep imports, and the one manager that IS reachable —
- * `ySyncFacet(...).undoManager` — is a decoy: YSyncConfig's constructor mints
- * its own Y.UndoManager, a DIFFERENT instance from the one yCollab registers
- * tracked origins on, so undo() on it silently does nothing against an empty
- * stack. Going through the keymap guarantees the same manager Ctrl+Z drives.
+ * `exports` map blocks deep imports. `ySyncFacet(...).undoManager` is a decoy:
+ * YSyncConfig's constructor mints its own Y.UndoManager, not the one yCollab
+ * is given. The real one is crdt/undo.ts's undoManagerFor(doc), but this bar
+ * only holds the view; the keymap reaches that same manager from it.
  */
 function runBinding(key: string, view: EditorView): void {
 	yUndoManagerKeymap.find((b) => b.key === key)?.run?.(view);

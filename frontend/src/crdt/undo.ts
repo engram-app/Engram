@@ -36,8 +36,10 @@ function isTextEntry(el: EventTarget | null): boolean {
 /**
  * The note's one undo history: body text AND every frontmatter type, so Ctrl+Z
  * walks back a property edit the same as a typed word, in the order they were
- * made. The editor hands this to yCollab and the properties widget drives it
- * directly, so both reach the SAME stack. Keyed on the doc; dies with it.
+ * made. The editor hands this to yCollab (so its Ctrl+Z keymap and the mobile
+ * keyboard bar drive it), and the note page's document keydown listener
+ * (undoKeyHandler) drives it everywhere else, so both reach the SAME stack.
+ * Keyed on the doc; dies with it.
  *
  * Tracks the default `null` origin, which is what local `doc.transact` and the
  * editor's sync origin (added by yCollab) produce. Remote updates arrive with
@@ -65,6 +67,8 @@ export function undoManagerFor(doc: Y.Doc): Y.UndoManager {
  * marks them handled), and a property text field keeps native undo for the
  * characters being typed.
  */
+// The chords mirror y-codemirror.next's yUndoManagerKeymap (Mod-z, Mod-y,
+// Mod-Shift-z), which the editor binds; keep the two in step.
 export function undoKeyHandler(doc: Y.Doc): (e: KeyboardEvent) => void {
 	return (e) => {
 		if (e.defaultPrevented || !(e.ctrlKey || e.metaKey) || e.altKey || isTextEntry(e.target)) {
