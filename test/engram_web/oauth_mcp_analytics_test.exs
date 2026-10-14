@@ -253,6 +253,59 @@ defmodule EngramWeb.OAuthMcpAnalyticsTest do
     end
   end
 
+  # Review #13: the JWKS source lives in the request process, and a
+  # keep-alive connection reuses it. A refused assertion must not leave its
+  # source behind for the next request to report.
+  test "a refused assertion does not leak its jwks_source into the next request", %{
+    client: client,
+    user: user
+  } do
+    jwk = JOSE.JWK.generate_key({:rsa, 2048})
+    {_, public} = JOSE.JWK.to_public_map(jwk)
+    jwks_uri = "https://chatgpt.com/oauth/jwks.json"
+    cimd_url = "https://chatgpt.com/oauth/client.json"
+
+    expect(FetcherMock, :fetch, fn ^jwks_uri ->
+      {:ok, %{"keys" => [Map.put(public, "kid", "k")]}}
+    end)
+
+    Engram.Repo.insert!(
+      %Client{
+        cimd_url: cimd_url,
+        cimd_fetched_at: DateTime.utc_now(),
+        client_name: "ChatGPT",
+        redirect_uris: ["https://chatgpt.com/cb"],
+        token_endpoint_auth_method: "private_key_jwt",
+        token_endpoint_auth_signing_alg: "RS256",
+        jwks_uri: jwks_uri,
+        kind: "mcp"
+      },
+      skip_tenant_check: true
+    )
+
+    # Signed by a DIFFERENT key: the JWKS is fetched (source set), then refused.
+    {_, wrong} = JOSE.JWK.generate_key({:rsa, 2048}) |> JOSE.JWK.to_map()
+    signer = Joken.Signer.create("RS256", wrong, %{"kid" => "k"})
+    {:ok, assertion, _} = Joken.encode_and_sign(%{"iss" => cimd_url, "sub" => cimd_url}, signer)
+
+    json_response(
+      post(build_conn(), "/oauth/token", %{
+        "grant_type" => "refresh_token",
+        "refresh_token" => "engram_oauth_rt_x",
+        "client_id" => cimd_url,
+        "client_assertion" => assertion,
+        "client_assertion_type" => Jwks.assertion_type()
+      }),
+      401
+    )
+
+    {verifier, challenge} = pkce_pair()
+    json_response(exchange(client, mint_code(client, user, challenge), verifier), 200)
+
+    e = event(drain(), "mcp_oauth_token_issued")
+    assert e["properties"]["jwks_source"] == "none"
+  end
+
   test "no code, verifier or token value ever reaches PostHog", %{client: client, user: user} do
     {verifier, challenge} = pkce_pair()
     code = mint_code(client, user, challenge)

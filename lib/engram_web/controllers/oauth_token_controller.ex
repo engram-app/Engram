@@ -15,6 +15,12 @@ defmodule EngramWeb.OAuthTokenController do
   alias EngramWeb.OAuthMetadata
   alias EngramWeb.RequestMeta
 
+  # The JWKS source and the grant's user live in the request process (they are
+  # set several frames below this controller). A keep-alive connection reuses
+  # that process, so both are cleared before every request and again as the
+  # response goes out, whatever the outcome (#1974 review #13).
+  plug :clear_request_state
+
   def exchange(conn, %{"grant_type" => "authorization_code"} = params) do
     with {:ok, client_id, secret, assertion} <- client_credentials(conn, params),
          :ok <- OAuth.authenticate_client(client_id, secret, auth_opts(conn, assertion)) do
@@ -111,16 +117,27 @@ defmodule EngramWeb.OAuthTokenController do
     })
   end
 
+  defp clear_request_state(conn, _opts) do
+    forget_request_state()
+
+    register_before_send(conn, fn conn ->
+      forget_request_state()
+      conn
+    end)
+  end
+
+  defp forget_request_state do
+    _ = JwksCache.take_source()
+    _ = OAuth.take_grant_user_id()
+    :ok
+  end
+
   # ── Product analytics (#1974) ──────────────────────────────────────
   #
   # The funnel events behind the telemetry above, through `Engram.Analytics`.
   # Every prop is a bounded label: never a code, verifier, token or raw id.
 
   defp track_issued(conn, grant_type, client_id, response) do
-    # Both are per-request process state; take it so a keep-alive connection's
-    # next request (same process) cannot inherit it.
-    _ = OAuth.take_grant_user_id()
-
     props =
       client_id
       |> client_props()
