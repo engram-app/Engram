@@ -17,8 +17,10 @@ defmodule EngramWeb.Plugs.OAuthRateLimitTest do
     :ok
   end
 
-  defp token(client_id) do
-    post(build_conn(), "/oauth/token", %{
+  defp token(client_id, ip \\ {127, 0, 0, 1}, path \\ "/oauth/token") do
+    build_conn()
+    |> Map.put(:remote_ip, ip)
+    |> post(path, %{
       "grant_type" => "refresh_token",
       "refresh_token" => "engram_oauth_rt_nope",
       "client_id" => client_id
@@ -33,6 +35,25 @@ defmodule EngramWeb.Plugs.OAuthRateLimitTest do
     assert token(a).status == 429
 
     refute token(b).status == 429
+  end
+
+  # Review #1: a CIMD client_id is a public URL shared by every ChatGPT user,
+  # so a bucket keyed on it alone let ANY caller exhaust the whole vendor.
+  test "an attacker exhausting a client_id from one IP does not 429 it from another IP" do
+    shared = "https://chatgpt.com/oauth/client.json"
+    attacker = {203, 0, 113, 9}
+    vendor = {198, 51, 100, 7}
+
+    for _ <- 1..@limit, do: token(shared, attacker)
+    assert token(shared, attacker).status == 429
+
+    refute token(shared, vendor).status == 429
+  end
+
+  test "/oauth/token/ (trailing slash) draws from the same bucket as /oauth/token" do
+    a = Ecto.UUID.generate()
+    for _ <- 1..@limit, do: token(a)
+    assert token(a, {127, 0, 0, 1}, "/oauth/token/").status == 429
   end
 
   test "a client over its limit gets 429 with Retry-After and an RFC 6749 body" do

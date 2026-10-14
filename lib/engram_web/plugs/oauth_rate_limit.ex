@@ -8,9 +8,12 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
   IPs, so every one of their users drew from ONE bucket, and a busy minute
   refused everyone's refresh: the connector dies and the user re-authorizes.
 
-    * `/oauth/token`, `/oauth/revoke`: per CLIENT (`client_id` from the body
-      or HTTP Basic), #{60}/min, plus a coarse per-IP bucket (#{300}/min) so a
-      caller cannot dodge the limit by inventing client ids.
+    * `/oauth/token`, `/oauth/revoke`: per CLIENT PER IP (`client_id` from
+      the body or HTTP Basic, with the caller's IP), #{300}/min, plus a coarse
+      per-IP bucket (#{300}/min) so a caller cannot dodge it by inventing
+      client ids. Never per client alone: a CIMD `client_id` is a public URL
+      shared by every user of a vendor, so a client-only bucket let anyone
+      exhaust ChatGPT for everybody (review of #1974).
     * `/oauth/register`: per IP, #{60}/min. Vendor backends register per
       connecting user; 10/min refused them.
     * `/oauth/authorize`: per IP, #{10}/min. A browser navigation; the strict
@@ -34,8 +37,8 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
 
   @period_ms 60_000
   @policy %{
-    "/oauth/token" => {:client, 60},
-    "/oauth/revoke" => {:client, 60},
+    "/oauth/token" => {:client, 300},
+    "/oauth/revoke" => {:client, 300},
     "/oauth/register" => {:ip, 60},
     "/oauth/authorize" => {:ip, 10}
   }
@@ -47,26 +50,29 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
   def init(opts), do: opts
 
   def call(conn, _opts) do
-    {kind, limit} = Map.get(@policy, conn.request_path, @default_policy)
+    # The ROUTED path: `/oauth/token/` reaches the same action as
+    # `/oauth/token`, so it must draw from the same bucket.
+    path = "/" <> Enum.join(conn.path_info, "/")
+    {kind, limit} = Map.get(@policy, path, @default_policy)
     ip = conn |> EngramWeb.RemoteIp.resolve() |> :inet.ntoa() |> to_string()
 
-    with :ok <- coarse_ip(kind, conn.request_path, ip),
-         :ok <- hit(primary_key(kind, conn, ip), primary_limit(limit)) do
+    with :ok <- coarse_ip(kind, path, ip),
+         :ok <- hit(primary_key(kind, conn, path, ip), primary_limit(limit)) do
       conn
     else
-      {:deny, retry_after_ms} -> deny(conn, retry_after_ms)
+      {:deny, retry_after_ms} -> deny(conn, path, retry_after_ms)
     end
   end
 
   defp coarse_ip(:client, path, ip), do: hit("oauth:ip:#{path}:#{ip}", coarse_limit())
   defp coarse_ip(:ip, _path, _ip), do: :ok
 
-  defp primary_key(:ip, conn, ip), do: "oauth:ip:#{conn.request_path}:#{ip}"
+  defp primary_key(:ip, _conn, path, ip), do: "oauth:ip:#{path}:#{ip}"
 
-  defp primary_key(:client, conn, ip) do
+  defp primary_key(:client, conn, path, ip) do
     case client_id(conn) do
-      nil -> "oauth:ip:#{conn.request_path}:#{ip}:anon"
-      id -> "oauth:client:#{conn.request_path}:#{digest(id)}"
+      nil -> "oauth:ip:#{path}:#{ip}:anon"
+      id -> "oauth:client:#{path}:#{digest(id)}:#{ip}"
     end
   end
 
@@ -92,7 +98,7 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
     end
   end
 
-  defp deny(%Plug.Conn{request_path: "/oauth/token"} = conn, retry_after_ms) do
+  defp deny(conn, "/oauth/token", retry_after_ms) do
     seconds = retry_after_seconds(retry_after_ms)
 
     conn
@@ -103,7 +109,7 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
     })
   end
 
-  defp deny(conn, retry_after_ms) do
+  defp deny(conn, _path, retry_after_ms) do
     conn
     |> Plug.Conn.put_resp_header(
       "retry-after",
