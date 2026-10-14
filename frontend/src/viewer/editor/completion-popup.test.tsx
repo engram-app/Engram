@@ -81,9 +81,12 @@ test("the editor's aria-activedescendant points at OUR selected row, not the hid
 	await act(async () => {
 		startCompletion(view);
 	});
+	// Both in one wait: CodeMirror writes the attribute synchronously, but the
+	// rows render through a React root that commits a tick later. Checking the
+	// row after the attribute alone raced that commit under CI load.
 	await vi.waitFor(() => {
 		expect(view.contentDOM.getAttribute("aria-activedescendant")).toBe("engram-completion-opt-0");
+		expect(document.getElementById("engram-completion-opt-0")).not.toBeNull();
 	});
 	expect(view.contentDOM.getAttribute("aria-controls")).toBe("engram-completion-list");
-	expect(document.getElementById("engram-completion-opt-0")).not.toBeNull();
 });
