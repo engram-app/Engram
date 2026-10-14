@@ -99,6 +99,12 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
 	Reading: "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view.",
 	"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 	Idea: "Feedback category: suggest a feature.",
+	// Email strings (priv/i18n/email). zh/ja greeted with a casual "嗨" while the
+	// body used the polite form.
+	"Hi,":
+		"Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
+	"Hi {name},":
+		"Email greeting by first name. Warm, at the same politeness level as the rest of the email.",
 };
 
 // Product and plan names: never translated. Plan names match invoices and Paddle

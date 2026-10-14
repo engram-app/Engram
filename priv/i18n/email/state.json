@@ -3,72 +3,180 @@
 		"translator": "861e3a5f",
 		"failed": {},
 		"one": {},
-		"glossary": {}
+		"glossary": {
+			"Note": "Notiz",
+			"Vault": "Vault",
+			"Sync": "Synchronisieren",
+			"Settings": "Einstellungen"
+		},
+		"descriptions": {
+			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+		}
 	},
 	"es": {
 		"translator": "e304b913",
 		"failed": {},
 		"one": {},
-		"glossary": {}
+		"glossary": {
+			"Note": "Nota",
+			"Vault": "Bóveda",
+			"Sync": "Sincronizar",
+			"Settings": "Ajustes"
+		},
+		"descriptions": {
+			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+		}
 	},
 	"fr": {
 		"translator": "1e9aab3e",
 		"failed": {},
 		"one": {},
-		"glossary": {}
+		"glossary": {
+			"Note": "Note",
+			"Vault": "Coffre",
+			"Sync": "Synchroniser",
+			"Settings": "Paramètres"
+		},
+		"descriptions": {
+			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+		}
 	},
 	"it": {
 		"translator": "bc8c6e7e",
 		"failed": {},
 		"one": {},
-		"glossary": {}
+		"glossary": {
+			"Note": "Nota",
+			"Vault": "Vault",
+			"Sync": "Sincronizza",
+			"Settings": "Impostazioni"
+		},
+		"descriptions": {
+			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+		}
 	},
 	"ja": {
 		"translator": "202d8f78",
 		"failed": {},
 		"one": {},
-		"glossary": {}
+		"glossary": {
+			"Note": "ノート",
+			"Vault": "保管庫",
+			"Sync": "同期",
+			"Settings": "設定"
+		},
+		"descriptions": {
+			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+		}
 	},
 	"ko": {
 		"translator": "4f2fe20b",
 		"failed": {},
 		"one": {},
-		"glossary": {}
+		"glossary": {
+			"Note": "노트",
+			"Vault": "보관함",
+			"Sync": "동기화",
+			"Settings": "설정"
+		},
+		"descriptions": {
+			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+		}
 	},
 	"ms": {
 		"translator": "8729e02e",
 		"failed": {},
 		"one": {},
-		"glossary": {}
+		"glossary": {
+			"Note": "Nota",
+			"Vault": "Peti Nota",
+			"Sync": "Segerakkan",
+			"Settings": "Tetapan"
+		},
+		"descriptions": {
+			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+		}
 	},
 	"pt-BR": {
 		"translator": "bc28769b",
 		"failed": {},
 		"one": {},
-		"glossary": {}
+		"glossary": {
+			"Note": "Nota",
+			"Vault": "Cofre",
+			"Sync": "Sincronizar",
+			"Settings": "Configurações"
+		},
+		"descriptions": {
+			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+		}
 	},
 	"ru": {
 		"translator": "02588615",
 		"failed": {},
 		"one": {},
-		"glossary": {}
+		"glossary": {
+			"Note": "Заметка",
+			"Vault": "Хранилище",
+			"Sync": "Синхронизировать",
+			"Settings": "Настройки"
+		},
+		"descriptions": {
+			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+		}
 	},
 	"vi": {
 		"translator": "231582ae",
 		"failed": {},
 		"one": {},
-		"glossary": {}
+		"glossary": {
+			"Note": "Ghi chú",
+			"Vault": "Kho lưu trữ",
+			"Sync": "Đồng bộ hóa",
+			"Settings": "Cài đặt"
+		},
+		"descriptions": {
+			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+		}
 	},
 	"zh-CN": {
 		"translator": "5c2ee588",
 		"failed": {},
 		"one": {},
-		"glossary": {}
+		"glossary": {
+			"Note": "笔记",
+			"Vault": "仓库",
+			"Sync": "同步",
+			"Settings": "设置"
+		},
+		"descriptions": {
+			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+		}
 	},
 	"zh-TW": {
 		"translator": "9297c3e4",
 		"failed": {},
 		"one": {},
-		"glossary": {}
+		"glossary": {
+			"Note": "筆記",
+			"Vault": "儲存庫",
+			"Sync": "同步",
+			"Settings": "設定"
+		},
+		"descriptions": {
+			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+		}
 	}
 }

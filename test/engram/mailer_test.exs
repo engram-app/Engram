@@ -266,10 +266,8 @@ defmodule Engram.MailerTest do
           "App analytics now linked to your account (email, plan, usage counts). The content of your notes is never sent."
       }
 
-      doc = Engram.I18n.t("de", "Privacy Policy")
-
       expect(Engram.Email.ProviderMock, :send, fn _to, subject, html, _opts ->
-        assert subject == Engram.I18n.t("de", "Engram {document} Update", document: doc)
+        assert subject == Engram.I18n.t("de", "Engram Privacy Policy Update")
         assert html =~ "2026-11-11"
         refute html =~ "November"
 
@@ -277,7 +275,7 @@ defmodule Engram.MailerTest do
         refute changelog == version.changelog, "the changelog must be translated"
 
         expected =
-          Engram.I18n.t("de", "What changed: {changelog}", changelog: changelog)
+          Engram.I18n.t("de", "Summary of the changes: {changelog}", changelog: changelog)
           |> Engram.Email.Template.esc()
 
         assert html =~ expected
