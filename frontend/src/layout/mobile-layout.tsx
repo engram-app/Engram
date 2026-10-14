@@ -1,5 +1,5 @@
 import { PanelLeftOpen, X } from "lucide-react";
-import { type MouseEvent, useEffect, useState } from "react";
+import { lazy, type MouseEvent, Suspense, useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -19,10 +19,13 @@ import { MobileHeaderSlot } from "./mobile-header-slot";
 import { useRailView } from "./rail-view-context";
 import RightToolPanel from "./right-tool-panel";
 import { RIGHT_TOOLS, useRightTools } from "./right-tools-context";
-import SearchPanel from "./search-panel";
 import SidebarViewToggle from "./sidebar-view-toggle";
 import UserMenu from "./user-menu";
 import VaultSwitcher from "./vault-switcher";
+
+// Lazy: search pulls in @base-ui's combobox (~90 KB, the type filter) and is
+// only on screen after switching to the Search view.
+const SearchPanel = lazy(() => import("./search-panel"));
 
 // Close the drawer only when the click originated on a navigation link.
 // Buttons (e.g. folder-expand toggles in FolderTree) must keep the drawer open.
@@ -104,7 +107,9 @@ export default function MobileLayout() {
 								// that also covers tapping the result for the note you are
 								// ALREADY on, where the route never changes and the
 								// pathname effect below never fires.
-								<SearchPanel hideHeader onNavigate={() => setLeftOpen(false)} />
+								<Suspense fallback={null}>
+									<SearchPanel hideHeader onNavigate={() => setLeftOpen(false)} />
+								</Suspense>
 							) : (
 								<>
 									<ScrollArea
@@ -135,7 +140,7 @@ export default function MobileLayout() {
 					// Direct children only: the note menu's drawer also mounts in here, and
 					// a descendant rule resized its rows. No backdrop-filter either: it
 					// makes this the containing block for the drawer's position: fixed.
-					className="flex items-center rounded-md bg-secondary/90 empty:hidden [&>button]:size-11 [&>button>svg]:size-5.5"
+					className="flex items-center rounded-md bg-secondary/90 empty:hidden [&>button>svg]:size-5.5 [&>button]:size-11"
 					aria-label={t("Main navigation")}
 				/>
 				<Sheet open={rightOpen} onOpenChange={setRightOpen}>
