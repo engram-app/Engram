@@ -278,7 +278,11 @@ describe("PropertiesWidget", () => {
 			const doc = new Y.Doc();
 			addKey(doc, "status", "text");
 			render(<PropertiesWidget doc={doc} />);
-			fireEvent.click(await screen.findByRole("button", { name: "Remove status" }));
+			expect(screen.queryByRole("button", { name: "Remove status" })).not.toBeInTheDocument();
+			const trigger = await screen.findByRole("button", { name: /property type/i });
+			fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+			fireEvent.click(trigger);
+			fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
 			await waitFor(() => expect(screen.queryByTestId("note-properties")).not.toBeInTheDocument());
 		});
 	});

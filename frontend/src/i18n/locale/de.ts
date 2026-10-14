@@ -1261,7 +1261,6 @@ export default {
 	or: "oder",
 	Properties: "Eigenschaften",
 	"About properties": "Über Eigenschaften",
-	"Remove {key}": "{key} entfernen",
 	"Property name": "Name der Eigenschaft",
 	"New property value": "Neuer Wert für die Eigenschaft",
 	Value: "Wert",

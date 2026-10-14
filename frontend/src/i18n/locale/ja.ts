@@ -1233,7 +1233,6 @@ export default {
 	or: "または",
 	Properties: "プロパティ",
 	"About properties": "プロパティについて",
-	"Remove {key}": "{key} を削除",
 	"Property name": "プロパティ名",
 	"New property value": "新しいプロパティの値",
 	Value: "値",

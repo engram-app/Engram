@@ -1175,7 +1175,6 @@ export default {
 	or: "或",
 	Properties: "屬性",
 	"About properties": "關於屬性",
-	"Remove {key}": "移除 {key}",
 	"Property name": "屬性名稱",
 	"New property value": "新屬性值",
 	Value: "值",

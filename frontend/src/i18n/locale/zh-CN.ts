@@ -1173,7 +1173,6 @@ export default {
 	or: "或者",
 	Properties: "属性",
 	"About properties": "关于属性",
-	"Remove {key}": "移除 {key}",
 	"Property name": "属性名称",
 	"New property value": "新属性值",
 	Value: "值",

@@ -1342,7 +1342,6 @@ export default {
 	or: "или",
 	Properties: "Свойства",
 	"About properties": "О свойствах",
-	"Remove {key}": "Удалить {key}",
 	"Property name": "Имя свойства",
 	"New property value": "Новое значение свойства",
 	Value: "Значение",

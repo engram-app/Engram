@@ -1234,7 +1234,6 @@ export default {
 	or: "atau",
 	Properties: "Sifat",
 	"About properties": "Mengenai sifat",
-	"Remove {key}": "Buang {key}",
 	"Property name": "Nama sifat",
 	"New property value": "Nilai sifat baharu",
 	Value: "Nilai",

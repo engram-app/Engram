@@ -1228,7 +1228,6 @@ export default {
 	or: "hoặc",
 	Properties: "Thuộc tính",
 	"About properties": "Về thuộc tính",
-	"Remove {key}": "Xóa {key}",
 	"Property name": "Tên thuộc tính",
 	"New property value": "Giá trị thuộc tính mới",
 	Value: "Giá trị",

@@ -1,4 +1,4 @@
-import { ChevronRight, Plus, X } from "lucide-react";
+import { ChevronRight, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type * as Y from "yjs";
 import { HelpTip } from "@/components/help-tip";
@@ -437,6 +437,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 										value={type}
 										onChange={(next) => setType(doc, row.key, next)}
 										focusAfterSelect={() => keyEls.current.get(row.key) ?? null}
+										onRemove={() => removeKey(doc, row.key)}
 									/>
 									<PropertyKeyInput
 										doc={doc}
@@ -459,19 +460,6 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 										onCommit={(v) => setValue(doc, row.key, v)}
 									/>
 								</dd>
-								{/* Remove only. Reordering was two permanent buttons per row for
-							    something you do once in a while; `moveKey` is still there
-							    for a right-click menu, which is where Obsidian keeps it. */}
-								<Button
-									type="button"
-									variant="ghost"
-									size="icon-sm"
-									aria-label={t("Remove {key}", { key: row.key })}
-									onClick={() => removeKey(doc, row.key)}
-									className="mr-1 self-center opacity-0 focus:opacity-100 group-hover:opacity-100"
-								>
-									<X aria-hidden="true" />
-								</Button>
 							</div>
 						);
 					})}

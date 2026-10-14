@@ -1287,7 +1287,6 @@ export default {
 	or: "o",
 	Properties: "Propiedades",
 	"About properties": "Acerca de las propiedades",
-	"Remove {key}": "Eliminar {key}",
 	"Property name": "Nombre de la propiedad",
 	"New property value": "Nuevo valor de la propiedad",
 	Value: "Valor",

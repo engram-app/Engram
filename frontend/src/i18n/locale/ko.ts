@@ -1213,7 +1213,6 @@ export default {
 	or: "또는",
 	Properties: "속성",
 	"About properties": "속성에 대한 설명",
-	"Remove {key}": "{key} 삭제",
 	"Property name": "속성 이름",
 	"New property value": "새 속성 값",
 	Value: "값",

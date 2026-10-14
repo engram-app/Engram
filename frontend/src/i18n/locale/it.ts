@@ -1287,7 +1287,6 @@ export default {
 	or: "oppure",
 	Properties: "Proprietà",
 	"About properties": "Informazioni sulle proprietà",
-	"Remove {key}": "Rimuovi {key}",
 	"Property name": "Nome della proprietà",
 	"New property value": "Nuovo valore della proprietà",
 	Value: "Valore",

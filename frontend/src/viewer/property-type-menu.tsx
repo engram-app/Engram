@@ -1,9 +1,19 @@
-import { Calendar, Clock, Hash, List, type LucideIcon, SquareCheck, Text } from "lucide-react";
+import {
+	Calendar,
+	Clock,
+	Hash,
+	List,
+	type LucideIcon,
+	SquareCheck,
+	Text,
+	Trash2,
+} from "lucide-react";
 import { useRef } from "react";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
+	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useT } from "@/i18n/locale-provider";
@@ -38,6 +48,7 @@ export function PropertyTypeMenu({
 	value,
 	onChange,
 	focusAfterSelect,
+	onRemove,
 }: {
 	value: PropertyType;
 	onChange: (t: PropertyType) => void;
@@ -46,6 +57,9 @@ export function PropertyTypeMenu({
 	 *  restores focus to the trigger on close, so this has to be done in
 	 *  `onCloseAutoFocus`; focusing from `onSelect` is overwritten a tick later. */
 	focusAfterSelect?: () => HTMLInputElement | null;
+	/** Adds a Delete item at the bottom. The menu is the row's only remove
+	 *  control, the way Obsidian's property icon menu carries it. */
+	onRemove?: () => void;
 }) {
 	const { t } = useT();
 	const Icon = TYPE_ICONS[value];
@@ -101,6 +115,15 @@ export function PropertyTypeMenu({
 						</DropdownMenuItem>
 					);
 				})}
+				{onRemove ? (
+					<>
+						<DropdownMenuSeparator />
+						<DropdownMenuItem variant="destructive" onSelect={onRemove}>
+							<Trash2 aria-hidden="true" className="size-4" />
+							{t("Delete")}
+						</DropdownMenuItem>
+					</>
+				) : null}
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);
