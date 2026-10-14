@@ -92,14 +92,11 @@ export default function MobileLayout() {
 								<SheetDescription className="sr-only">
 									{view === "search" ? t("Search your notes") : t("Folder navigation")}
 								</SheetDescription>
-								<section className="flex items-center gap-1">
-									<UserMenu />
-									<SheetClose asChild>
-										<Button variant="ghost" size="icon-sm" aria-label={t("Close")}>
-											<X />
-										</Button>
-									</SheetClose>
-								</section>
+								<SheetClose asChild>
+									<Button variant="ghost" size="icon-sm" aria-label={t("Close")}>
+										<X />
+									</Button>
+								</SheetClose>
 							</section>
 							{view === "search" ? (
 								// onNavigate rather than the closeOnLinkClick delegation used
@@ -121,7 +118,15 @@ export default function MobileLayout() {
 								</>
 							)}
 							<SidebarViewToggle />
-							<VaultSwitcher />
+							{/* Account sits at the end of the vault row, where Obsidian mobile
+							    keeps its settings gear: no extra row under the tree. The
+							    wrapper owns the seam, so the switcher drops its own. */}
+							<section className="flex items-center gap-1 border-border border-t pr-2">
+								<div className="min-w-0 flex-1 [&>section]:border-t-0">
+									<VaultSwitcher />
+								</div>
+								<UserMenu />
+							</section>
 						</FolderTreeProvider>
 					</SheetContent>
 				</Sheet>

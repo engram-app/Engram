@@ -127,6 +127,9 @@ function VaultSwitcher() {
 					// button read as one object; the trigger's own border-t is the seam, so the
 					// panel drops its bottom border rather than doubling it.
 					sideOffset={0}
+					// The shared Popover keeps 8px off the viewport edge, which slid the
+					// panel off its trigger on mobile, where the drawer starts at x=0.
+					collisionPadding={0}
 					className="w-[var(--radix-popover-trigger-width)] min-w-64 overflow-hidden rounded-none border-b-0 p-0"
 					// Land in the search box, not on whichever element Radix finds first.
 					onOpenAutoFocus={(e) => {
