@@ -250,4 +250,68 @@ defmodule Engram.MailerTest do
                )
     end
   end
+
+  # The riskiest localized paths: a translated sentence with a user-supplied
+  # var, the translated changelog nested in another sentence, and ISO dates.
+  describe "localized (de)" do
+    test "legal notice: translated subject, changelog and ISO date" do
+      user = insert(:user, email: "u@example.com", locale: "de")
+
+      version = %Engram.Legal.TermsVersion{
+        document: "privacy_policy",
+        version: "2026-10-12",
+        material: false,
+        effective_date: ~D[2026-11-11],
+        changelog:
+          "App analytics now linked to your account (email, plan, usage counts). The content of your notes is never sent."
+      }
+
+      doc = Engram.I18n.t("de", "Privacy Policy")
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, subject, html, _opts ->
+        assert subject == Engram.I18n.t("de", "Engram {document} Update", document: doc)
+        assert html =~ "2026-11-11"
+        refute html =~ "November"
+
+        changelog = Engram.I18n.t("de", version.changelog)
+        refute changelog == version.changelog, "the changelog must be translated"
+
+        expected =
+          Engram.I18n.t("de", "What changed: {changelog}", changelog: changelog)
+          |> Engram.Email.Template.esc()
+
+        assert html =~ expected
+        :ok
+      end)
+
+      assert :ok = Mailer.send_legal_notice(user, version, "notice")
+    end
+
+    test "vault deletion: escapes the vault name inside the translated sentence" do
+      user = insert(:user, email: "u@example.com", locale: "de")
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, subject, html, _opts ->
+        assert subject == Engram.I18n.t("de", "Your Engram vault was deleted")
+        refute html =~ "<script>alert(1)</script>"
+
+        expected =
+          Engram.I18n.t("de", "Your Engram vault \"{vault}\" has been deleted.",
+            vault: "<script>alert(1)</script>"
+          )
+          |> Engram.Email.Template.esc()
+
+        assert html =~ expected
+        assert html =~ "2026-06-27"
+        :ok
+      end)
+
+      assert :ok =
+               Mailer.send_vault_deletion_notice(
+                 user,
+                 "<script>alert(1)</script>",
+                 ~D[2026-06-27],
+                 "https://app.engram.page/?highlight=1#settings/vaults"
+               )
+    end
+  end
 end

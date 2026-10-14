@@ -40,6 +40,29 @@ defmodule Engram.Workers.LegalNoticeDispatchTest do
     assert length(all_enqueued(worker: LegalNoticeEmail)) == 1
   end
 
+  # The claim and the job inserts commit together. A failed insert must leave
+  # the version unclaimed, or the notice is never sent.
+  test "a failed job insert rolls back the claim; the next run sends", %{live: live} do
+    row = version(version: "2026-10-12", material: false, effective_date: days(29))
+
+    # Transactional DDL: the sandbox rolls the trigger back with the test.
+    Repo.query!("""
+    CREATE FUNCTION pg_temp.refuse_jobs() RETURNS trigger AS $$
+    BEGIN RAISE EXCEPTION 'refused'; END $$ LANGUAGE plpgsql
+    """)
+
+    Repo.query!(
+      "CREATE TRIGGER refuse_jobs BEFORE INSERT ON oban_jobs FOR EACH ROW EXECUTE FUNCTION pg_temp.refuse_jobs()"
+    )
+
+    assert_raise Postgrex.Error, ~r/refused/, fn -> perform_job(LegalNoticeDispatch, %{}) end
+    assert reload(row).notified_at == nil
+
+    Repo.query!("DROP TRIGGER refuse_jobs ON oban_jobs")
+    assert :ok = perform_job(LegalNoticeDispatch, %{})
+    assert email_jobs() == [{live.id, "notice", "2026-10-12"}]
+  end
+
   test "ignores versions effective now, in the past, or with no date" do
     for {v, date} <- [{"2026-05-19", nil}, {"2026-06-01", days(-1)}, {"2026-07-01", days(0)}],
         do: version(version: v, effective_date: date)
