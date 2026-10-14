@@ -23,7 +23,7 @@ version is the whole procedure; the app announces it everywhere.
 
 | Channel | When | Where |
 |---|---|---|
-| Email | Within the hour after deploy, once per user | `Workers.LegalNoticeDispatch` (hourly cron, `:18`) fans out `Workers.LegalNoticeEmail` |
+| Email | Within the hour after deploy, once per user (again if the date or materiality changes) | `Workers.LegalNoticeDispatch` (hourly cron, `:18`) fans out `Workers.LegalNoticeEmail` |
 | Reminder email | 7 days before a MATERIAL change, to users who have not accepted | same dispatch |
 | Web banner | Until accepted or the effective date | `frontend/src/legal/legal-notice-banner.tsx` |
 | Agreement page | "What changed" list | `frontend/src/onboarding/agreement-page.tsx` |
@@ -54,6 +54,11 @@ tracked hold an older or no privacy acceptance.
   the Oban inserts, so two nodes or a retry never double-send and a crash never
   loses one. That claim is the only dedupe: `Oban.insert_all` ignores `unique`
   on Oban OSS. To resend, null the column.
+- **Changing an announced version's `effective_date` or `material` emails
+  everyone again.** The seeder's upsert clears both stamps when either
+  changes, because the first email named the wrong date or said no action was
+  needed. A date fix after announcing is a mass email; get the date right
+  before deploying.
 - **The latest accepted version is the highest version, not the newest row.**
   Two accepts in one second tie on `accepted_at` (second precision).
 - **`Engram.Cache` cannot hold a struct in its key.** Its match-spec store
