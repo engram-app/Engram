@@ -5,10 +5,20 @@ import MermaidBlock from "./mermaid-block";
 vi.mock("./mermaid-render", () => ({
 	nextMermaidId: () => "m1",
 	renderMermaid: () => Promise.reject(new Error("Parse error on line 2")),
+	rememberedMermaidHeight: (_surface: string, code: string) =>
+		code === "graph TD" ? 178 : undefined,
+	rememberMermaidHeight: () => undefined,
 }));
 vi.mock("../theme/theme-provider", () => ({ useTheme: () => ({ resolved: "light" }) }));
 
 describe("MermaidBlock", () => {
+	// Reserved up front, so the diagram drawing in late does not push the note
+	// below it down.
+	it("reserves the height the diagram last drew at", () => {
+		const { container } = render(<MermaidBlock code="graph TD" />);
+		expect(container.querySelector<HTMLElement>(".mermaid")?.style.minHeight).toBe("178px");
+	});
+
 	// Mermaid's parse error is third-party English: keep it verbatim, but mark its language.
 	it("renders the parse error verbatim inside a lang=en element", async () => {
 		render(<MermaidBlock code="graph LR" />);

@@ -9,7 +9,12 @@ import {
 } from "@codemirror/view";
 import type { Translate } from "@/i18n/translate";
 import { onceVisible } from "@/lib/once-visible";
-import { nextMermaidId, renderMermaid } from "../mermaid-render";
+import {
+	nextMermaidId,
+	rememberedMermaidHeight,
+	rememberMermaidHeight,
+	renderMermaid,
+} from "../mermaid-render";
 import { selectionTouches } from "./decoration-utils";
 import { translator } from "./translator";
 import "./mermaid.css";
@@ -37,6 +42,12 @@ class MermaidWidget extends WidgetType {
 	toDOM(view: EditorView) {
 		const el = document.createElement("div");
 		el.className = "cm-mermaid-widget";
+		// Holds the diagram's last drawn height until the SVG lands, so the
+		// lines below don't jump down a beat after the note opens.
+		const reserved = rememberedMermaidHeight("editor", this.code);
+		if (reserved) {
+			el.style.minHeight = `${reserved}px`;
+		}
 		// CM6 measured this widget's height while it was still empty. Once the SVG
 		// lands the box grows, and without a re-measure the heightmap keeps the old
 		// height — every line below the diagram then maps to the wrong screen
@@ -52,6 +63,11 @@ class MermaidWidget extends WidgetType {
 		return el;
 	}
 
+	// Same reservation, for CM6's heightmap before the widget is measured.
+	get estimatedHeight() {
+		return rememberedMermaidHeight("editor", this.code) ?? -1;
+	}
+
 	private readonly cancel = new WeakMap<HTMLElement, () => void>();
 
 	destroy(dom: HTMLElement) {
@@ -62,6 +78,8 @@ class MermaidWidget extends WidgetType {
 		renderMermaid(nextMermaidId(), this.code, this.dark)
 			.then((svg) => {
 				el.innerHTML = svg;
+				el.style.minHeight = "";
+				rememberMermaidHeight("editor", this.code, el.getBoundingClientRect().height);
 				measure();
 			})
 			.catch((err: unknown) => {
@@ -69,6 +87,7 @@ class MermaidWidget extends WidgetType {
 				// source visible so it can be fixed. Mermaid rejects on any syntax
 				// slip, which is a normal state while typing.
 				el.classList.add("cm-mermaid-error");
+				el.style.minHeight = "";
 				// Mermaid's own message is third-party English: keep it verbatim, but
 				// tag its language so the translated prefix and it are not read as one.
 				const detail = document.createElement("span");

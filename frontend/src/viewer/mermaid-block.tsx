@@ -2,7 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { Trans } from "@/i18n/trans";
 import { onceVisible } from "@/lib/once-visible";
 import { useTheme } from "../theme/theme-provider";
-import { nextMermaidId, renderMermaid } from "./mermaid-render";
+import {
+	nextMermaidId,
+	rememberedMermaidHeight,
+	rememberMermaidHeight,
+	renderMermaid,
+} from "./mermaid-render";
 
 export default function MermaidBlock({ code }: { code: string }) {
 	const ref = useRef<HTMLDivElement>(null);
@@ -26,6 +31,8 @@ export default function MermaidBlock({ code }: { code: string }) {
 						return;
 					}
 					ref.current.innerHTML = svg;
+					ref.current.style.minHeight = "";
+					rememberMermaidHeight("reading", code, ref.current.getBoundingClientRect().height);
 					setError(null);
 				})
 				.catch((err) => {
@@ -56,7 +63,13 @@ export default function MermaidBlock({ code }: { code: string }) {
 					{`\n\n${code}`}
 				</pre>
 			) : null}
-			<div ref={ref} className={`mermaid my-4 justify-center ${error ? "hidden" : "flex"}`} />
+			{/* min-height: the diagram's last drawn height, held until the SVG lands
+			    so the note below doesn't jump down a beat after it opens. */}
+			<div
+				ref={ref}
+				className={`mermaid my-4 justify-center ${error ? "hidden" : "flex"}`}
+				style={{ minHeight: rememberedMermaidHeight("reading", code) }}
+			/>
 		</>
 	);
 }
