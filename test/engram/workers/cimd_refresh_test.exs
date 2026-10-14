@@ -44,6 +44,18 @@ defmodule Engram.Workers.CimdRefreshTest do
 
   defp aged(days), do: DateTime.add(DateTime.utc_now(), -days * 86_400, :second)
 
+  # The JWKS sweep only covers clients that made a token request recently: a
+  # refresh token's `last_used_at` is that evidence.
+  defp used(client, days_ago \\ 0) do
+    insert(:oauth_refresh_token,
+      client_id: client.client_id,
+      user_id: insert(:user).id,
+      last_used_at: aged(days_ago)
+    )
+
+    client
+  end
+
   describe "perform/1" do
     # The whole point: nobody authorized, and the document still got re-read.
     test "refetches a row past its TTL" do
@@ -137,16 +149,16 @@ defmodule Engram.Workers.CimdRefreshTest do
     @jwks_uri "https://claude.ai/.well-known/jwks.json"
 
     test "refetches every distinct jwks_uri once and persists the result" do
-      a = cimd_client(jwks_uri: @jwks_uri)
+      a = [jwks_uri: @jwks_uri] |> cimd_client() |> used()
 
       b =
-        insert(:oauth_client,
-          kind: "mcp",
-          cimd_url: "https://claude.ai/other",
-          jwks_uri: @jwks_uri
-        )
+        :oauth_client
+        |> insert(kind: "mcp", cimd_url: "https://claude.ai/other", jwks_uri: @jwks_uri)
+        |> used()
 
-      insert(:oauth_client, kind: "mcp", cimd_url: "https://claude.ai/third")
+      [kind: "mcp", cimd_url: "https://claude.ai/third"]
+      |> then(&insert(:oauth_client, &1))
+      |> used()
 
       keys = [%{"kty" => "RSA", "kid" => "k1", "n" => "abc", "e" => "AQAB"}]
       expect(FetcherMock, :fetch, 1, fn @jwks_uri -> {:ok, %{"keys" => keys}} end)
@@ -160,7 +172,7 @@ defmodule Engram.Workers.CimdRefreshTest do
 
     # The cron entry: its own worker, so the crontab stays {expr, worker}.
     test "CimdJwksRefresh runs the same sweep" do
-      cimd_client(jwks_uri: @jwks_uri)
+      [jwks_uri: @jwks_uri] |> cimd_client() |> used()
       expect(FetcherMock, :fetch, 1, fn @jwks_uri -> {:ok, %{"keys" => []}} end)
 
       assert {:ok, %{refreshed: 1}} =
@@ -176,11 +188,63 @@ defmodule Engram.Workers.CimdRefreshTest do
           jwks_cached: %{"keys" => keys},
           jwks_fetched_at: aged(1)
         )
+        |> used()
 
       expect(FetcherMock, :fetch, fn @jwks_uri -> {:error, {:http_status, 503}} end)
 
       assert {:ok, %{failed: 1}} = perform_job(CimdRefresh, %{"kind" => "jwks"})
       assert reload(client).jwks_cached == %{"keys" => keys}
+    end
+
+    # Review of #1974: a client nobody has used is not worth a vendor fetch
+    # every 5 min. The token path still fetches on demand if one comes back.
+    test "skips clients idle for 30 days and clients never used" do
+      [jwks_uri: "https://a.example/jwks.json"] |> cimd_client() |> used(1)
+
+      :oauth_client
+      |> insert(
+        kind: "mcp",
+        cimd_url: "https://b.example/c",
+        jwks_uri: "https://b.example/jwks.json"
+      )
+      |> used(31)
+
+      insert(:oauth_client,
+        kind: "mcp",
+        cimd_url: "https://c.example/c",
+        jwks_uri: "https://c.example/jwks.json"
+      )
+
+      expect(FetcherMock, :fetch, 1, fn "https://a.example/jwks.json" ->
+        {:ok, %{"keys" => []}}
+      end)
+
+      assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{"kind" => "jwks"})
+    end
+
+    test "runs at most 4 vendor fetches at once" do
+      for i <- 1..8 do
+        :oauth_client
+        |> insert(
+          kind: "mcp",
+          cimd_url: "https://v#{i}.example/c",
+          jwks_uri: "https://v#{i}.example/jwks.json"
+        )
+        |> used()
+      end
+
+      {:ok, gauge} = Agent.start_link(fn -> {0, 0} end)
+
+      expect(FetcherMock, :fetch, 8, fn _uri ->
+        Agent.update(gauge, fn {now, peak} -> {now + 1, max(peak, now + 1)} end)
+        Process.sleep(50)
+        Agent.update(gauge, fn {now, peak} -> {now - 1, peak} end)
+        {:ok, %{"keys" => []}}
+      end)
+
+      assert {:ok, %{refreshed: 8}} = perform_job(CimdRefresh, %{"kind" => "jwks"})
+      {_, peak} = Agent.get(gauge, & &1)
+      assert peak in 2..4
     end
   end
 end

@@ -8,7 +8,10 @@ defmodule Engram.Workers.CimdJwksRefresh do
   The start is jittered up to 30 s so vendor fetches do not land on the exact
   cron minute; a job's `jitter_ms` arg overrides it (tests pass 0).
   """
-  use Oban.Worker, queue: :maintenance, max_attempts: 1
+  # Its own 1-slot queue, not `maintenance`: a 5-minute sweep of vendor
+  # fetches would otherwise sit in one of that lane's 2 slots most of every
+  # hour (ObanQueueConfigTest @own_queue_crons).
+  use Oban.Worker, queue: :cimd_refresh, max_attempts: 1
 
   alias Engram.Workers.CimdRefresh
 

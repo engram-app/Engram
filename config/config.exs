@@ -121,6 +121,10 @@ config :engram, Oban,
     # re-encode's safety against a rotation is its per-batch RotationGate
     # check and CAS write, not this queue.
     crypto_backfill: 1,
+    # The 5-minute CIMD JWKS sweep (Engram.Workers.CimdJwksRefresh), off
+    # `maintenance` so its vendor fetches never hold a backstop's slot. Ships
+    # with the worker itself, so a rollback strands nothing that existed before.
+    cimd_refresh: 1,
     # Hourly CRDT representation backfills (BackfillCrdtState, BackfillCrdtHead),
     # off crypto_backfill so they never hold a rotation's slot.
     crdt_backfill: 1,

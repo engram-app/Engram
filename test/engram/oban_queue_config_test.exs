@@ -42,8 +42,24 @@ defmodule Engram.ObanQueueConfigTest do
     Engram.Workers.VaultDeletedEmail
   ]
 
+  # Cron workers with a queue of their own, and why. Each needs a reason a
+  # 2-slot shared lane is wrong for it.
+  #
+  # CimdJwksRefresh: every 5 min, up to 4 vendor fetches in flight (#1974
+  # review). On `maintenance` it would hold a slot most of every hour and push
+  # the daily backstops behind it; on its own 1-slot queue a slow vendor delays
+  # only the next JWKS sweep.
+  @own_queue_crons %{Engram.Workers.CimdJwksRefresh => :cimd_refresh}
+
+  test "the cron workers with their own queue run there" do
+    for {mod, queue} <- @own_queue_crons, do: assert(worker_queue(mod) == queue)
+  end
+
   test "maintenance runs exactly the cron workers" do
-    crons = MapSet.new(ObanWorkers.crontab(), fn {_expr, worker} -> worker end)
+    crons =
+      ObanWorkers.crontab()
+      |> MapSet.new(fn {_expr, worker} -> worker end)
+      |> MapSet.difference(MapSet.new(Map.keys(@own_queue_crons)))
 
     on_maintenance =
       for mod <- ObanWorkers.all(),
@@ -127,7 +143,7 @@ defmodule Engram.ObanQueueConfigTest do
   end
 
   # The whole point of the runtime override is that it raises ONE queue without
-  # dropping the other nine. Config deep-merges nested keyword lists, but that
+  # dropping the others. Config deep-merges nested keyword lists, but that
   # is a language guarantee this config leans on hard enough to pin down: get it
   # wrong and the worker silently boots with crdt_checkpoint as its ONLY queue,
   # and embeds stop for everyone.

@@ -63,9 +63,17 @@ defmodule Engram.Workers.CimdRefresh do
   alias Engram.OAuth.Cimd
   alias Engram.OAuth.Cimd.JwksCache
   alias Engram.OAuth.Client
+  alias Engram.OAuth.RefreshToken
   alias Engram.Repo
 
   require Logger
+
+  # The JWKS sweep: vendor fetches in flight at once, the per-fetch ceiling
+  # (the fetcher's own 3 s budget plus DNS and the persist), and how recently
+  # a client must have made a token request to be swept.
+  @jwks_concurrency 4
+  @jwks_fetch_timeout_ms 15_000
+  @jwks_active_days 30
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(10)
@@ -74,7 +82,19 @@ defmodule Engram.Workers.CimdRefresh do
   def perform(%Oban.Job{args: %{"kind" => "jwks"} = args}) do
     jitter(args)
     uris = jwks_uris()
-    tally = Enum.reduce(uris, %{}, &tally_jwks/2)
+
+    tally =
+      uris
+      |> Task.async_stream(&refresh_jwks/1,
+        max_concurrency: @jwks_concurrency,
+        ordered: false,
+        timeout: @jwks_fetch_timeout_ms,
+        on_timeout: :kill_task
+      )
+      |> Enum.reduce(%{}, fn
+        {:ok, outcome}, acc -> Map.update(acc, outcome, 1, &(&1 + 1))
+        {:exit, _reason}, acc -> Map.update(acc, :failed, 1, &(&1 + 1))
+      end)
 
     log_sweep("mcp_jwks_refresh_sweep", length(uris), tally)
 
@@ -107,25 +127,32 @@ defmodule Engram.Workers.CimdRefresh do
   # persisted key set instead of fetching. One fetch per distinct URI; the
   # result lands on every row naming it (`JwksCache.refresh_background/1`). A
   # failure leaves the last good keys in place.
+  #
+  # Only clients that made a token request in the last 30 days (a refresh
+  # token's `last_used_at`), most recent first, so a burst of registrations
+  # that never connect costs no vendor fetches. One that comes back fetches on
+  # demand in the token path.
   defp jwks_uris do
+    cutoff = DateTime.add(DateTime.utc_now(), -@jwks_active_days * 86_400, :second)
+
     Repo.all(
       from(c in Client,
-        where: not is_nil(c.cimd_url) and not is_nil(c.jwks_uri),
-        distinct: true,
+        join: rt in RefreshToken,
+        on: rt.client_id == c.client_id,
+        where: not is_nil(c.cimd_url) and not is_nil(c.jwks_uri) and rt.last_used_at > ^cutoff,
+        group_by: c.jwks_uri,
+        order_by: [desc: max(rt.last_used_at)],
         select: c.jwks_uri
       ),
       skip_tenant_check: true
     )
   end
 
-  defp tally_jwks(uri, acc) do
-    outcome =
-      case JwksCache.refresh_background(uri) do
-        {:ok, _keys} -> :refreshed
-        {:error, _reason} -> :failed
-      end
-
-    Map.update(acc, outcome, 1, &(&1 + 1))
+  defp refresh_jwks(uri) do
+    case JwksCache.refresh_background(uri) do
+      {:ok, _keys} -> :refreshed
+      {:error, _reason} -> :failed
+    end
   end
 
   # Spreads the vendor-facing fetches off the exact cron minute. Cron args set
