@@ -13,6 +13,7 @@ import type * as Y from "yjs";
 import { useT } from "@/i18n/locale-provider";
 import type { Translate } from "@/i18n/translate";
 import { useAttachments, useUploadAttachment } from "../api/queries";
+import { undoManagerFor } from "../crdt/undo";
 import { useTheme } from "../theme/theme-provider";
 import { loadAttachmentUrl, resolveAttachmentTarget } from "./attachment-blob";
 import { uploadFilesTo } from "./attachment-upload/upload-files";
@@ -208,7 +209,9 @@ export function buildEditorState(
 			// wires local edits back into the Y.Text (→ CRDT channel). MUST stay in
 			// the base extensions (never in the compartment) -- reconfiguring the
 			// compartment on mode switch must never detach this binding.
-			yCollab(ytext, awareness),
+			// The shared per-doc history, so Ctrl+Z here also walks back
+			// property edits made in the widget (crdt/undo.ts).
+			yCollab(ytext, awareness, ytext.doc ? { undoManager: undoManagerFor(ytext.doc) } : undefined),
 		],
 	});
 }

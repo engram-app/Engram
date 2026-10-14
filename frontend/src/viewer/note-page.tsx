@@ -39,6 +39,7 @@ import {
 	openDoc,
 	subscribeToCrdtSyncStatus,
 } from "../crdt/session";
+import { undoKeyHandler } from "../crdt/undo";
 import { uuid7 } from "../crdt/uuid7";
 import { useRightToolSlot } from "../layout/right-tools-context";
 import { copyToClipboard } from "../lib/clipboard";
@@ -378,6 +379,18 @@ export default function NotePage() {
 
 	// Subscribe to CRDT sync status changes (non-blocking -- editor still works offline).
 	useEffect(() => subscribeToCrdtSyncStatus(setSyncStatus), []);
+
+	// Ctrl+Z outside the editor (after a property change, with focus on a chip,
+	// checkbox or nothing) walks the same history the editor does.
+	const historyDoc = handle?.doc ?? null;
+	useEffect(() => {
+		if (!historyDoc) {
+			return;
+		}
+		const onKey = undoKeyHandler(historyDoc);
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
+	}, [historyDoc]);
 
 	// The note actually on screen, not the one being routed to. Every consumer
 	// below reads these, never the routed note -- that is the invariant.
