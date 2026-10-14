@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.51.0](https://github.com/engram-app/Engram/compare/0.50.2...0.51.0) (2026-10-14)
+
+
+### Features
+
+* **accounts:** record each user's UI language ([#1944](https://github.com/engram-app/Engram/issues/1944)) ([6a78bd9](https://github.com/engram-app/Engram/commit/6a78bd9b659eca11308e152baf6fe7e13dfa9c70))
+* **analytics:** identified PostHog persons behind Engram.Analytics ([#1959](https://github.com/engram-app/Engram/issues/1959)) ([7c8b58d](https://github.com/engram-app/Engram/commit/7c8b58d421cc518691a5a843c390b348bf639c2d))
+* **legal:** automatic legal change notices in every language ([#1967](https://github.com/engram-app/Engram/issues/1967)) ([14d040a](https://github.com/engram-app/Engram/commit/14d040a8074fe100e09b4be6d61232a2c94e4aaa))
+* **web:** Obsidian-style mobile pass, Lighthouse CI, faster load ([#1968](https://github.com/engram-app/Engram/issues/1968)) ([7dc2aa2](https://github.com/engram-app/Engram/commit/7dc2aa248f3283927b9160f0a44218828143012b))
+
+
+### Bug Fixes
+
+* **email:** grammatical legal notices in every language ([#1971](https://github.com/engram-app/Engram/issues/1971)) ([5082548](https://github.com/engram-app/Engram/commit/50825482b2f00c0e3885c4eaa39433a3cd8c0f24))
+* **frontend:** report broken API requests to Loki ([#1958](https://github.com/engram-app/Engram/issues/1958)) ([2386d4d](https://github.com/engram-app/Engram/commit/2386d4d902b66c5f03d3d67a1e4ba95620562611))
+* **i18n:** sort source files before key scan ([#1963](https://github.com/engram-app/Engram/issues/1963)) ([cd80d28](https://github.com/engram-app/Engram/commit/cd80d28b80be204172eb5aadc4b8af50e4f4d7eb))
+
 ## [0.50.2](https://github.com/engram-app/Engram/compare/0.50.1...0.50.2) (2026-10-13)
 
 
