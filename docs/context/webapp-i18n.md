@@ -122,6 +122,14 @@ locales, English when unset or unknown. Catalogs are
   `lib/engram/email/template.ex`. No HTML inside a key; `{name}` placeholders
   only. `frontend/src/i18n/email-keys.ts` finds keys by that shape and skips
   whole-line `#` comments.
+- **Never splice a translated noun into a sentence** (`"I updated {document}."`
+  with `{document}` = "Privacy Policy"). The words around a noun change with it
+  (article, case, gender, word order), and the model never sees the noun, so
+  9 of 12 locales came out wrong. Write one whole sentence per value instead
+  (`Engram.Mailer.legal_text/4`). Placeholders are for names, dates and counts.
+- **Emails get the web glossary** (`EMAIL_GLOSSARY` in `email-keys.ts`, seeded
+  from the web catalogs). The core passes a glossary term only when the catalog
+  holds it, so without this every email locale picked its own word for "vault".
 - **Legal changelogs** in `lib/engram/legal/seeder.ex` are keys too, so the
   "what changed" line arrives translated. Word them so a short word cannot be
   read two ways: "Note content is never sent" came back in German as "take
