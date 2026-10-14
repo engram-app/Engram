@@ -13,7 +13,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import type { MsgKey } from "@/i18n/ui-text";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
+import { useConfig } from "../config-context";
 import { FeedbackDialog } from "../feedback/feedback-dialog";
 import { isMember } from "../lib/is-member";
 import { settingsTo } from "../settings/settings-hash";
@@ -26,7 +28,7 @@ import { useTheme } from "../theme/theme-provider";
 // Account). Clerk supplies a generated imageUrl; local auth falls back to the
 // email initial. Theme picker folded in here as radio rows so the rail's
 // 32px-button slot doesn't need a second control.
-const THEME_OPTIONS: ReadonlyArray<{ value: ThemeChoice; label: string; Icon: typeof Sun }> = [
+const THEME_OPTIONS: ReadonlyArray<{ value: ThemeChoice; label: MsgKey; Icon: typeof Sun }> = [
 	{ value: "light", label: msg("Light"), Icon: Sun },
 	{ value: "dark", label: msg("Dark"), Icon: Moon },
 	{ value: "system", label: msg("System"), Icon: Monitor },
@@ -42,6 +44,9 @@ export default function UserMenu() {
 	const location = useLocation();
 	const initial = user?.email?.[0]?.toUpperCase() ?? "?";
 	const [feedbackOpen, setFeedbackOpen] = useState(false);
+	// Feedback goes to the hosted service's analytics; a self-hosted server
+	// (billing off) has none, so the form would thank the user for nothing.
+	const { billingEnabled } = useConfig();
 
 	return (
 		<>
@@ -69,13 +74,15 @@ export default function UserMenu() {
 							{t("Settings")}
 						</Link>
 					</DropdownMenuItem>
-					<DropdownMenuItem
-						className="gap-2.5 px-3 py-2.5 text-sm"
-						onSelect={() => setFeedbackOpen(true)}
-					>
-						<MessageSquare className="size-4" />
-						{t("Send feedback")}
-					</DropdownMenuItem>
+					{billingEnabled ? (
+						<DropdownMenuItem
+							className="gap-2.5 px-3 py-2.5 text-sm"
+							onSelect={() => setFeedbackOpen(true)}
+						>
+							<MessageSquare className="size-4" />
+							{t("Send feedback")}
+						</DropdownMenuItem>
+					) : null}
 					<DropdownMenuSeparator />
 					<DropdownMenuLabel className="px-3 pt-2 pb-1 text-muted-foreground text-xs uppercase tracking-wide">
 						{t("Theme")}

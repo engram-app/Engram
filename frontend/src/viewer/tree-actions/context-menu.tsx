@@ -60,7 +60,7 @@ export function ContextMenu({ actions, position, onPick, onClose }: Props) {
 					>
 						{/* aria-hidden so the menuitem's accessible name stays the label */}
 						<Icon aria-hidden="true" className="size-3.5 shrink-0" />
-						{t(a.label)}
+						{a.translated ? a.label : t(a.label)}
 					</button>
 				);
 			})}

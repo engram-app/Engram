@@ -51,10 +51,16 @@ class MermaidWidget extends WidgetType {
 				// source visible so it can be fixed. Mermaid rejects on any syntax
 				// slip, which is a normal state while typing.
 				el.classList.add("cm-mermaid-error");
+				// Mermaid's own message is third-party English: keep it verbatim, but
+				// tag its language so the translated prefix and it are not read as one.
+				const detail = document.createElement("span");
+				detail.lang = "en";
+				detail.textContent = err instanceof Error ? err.message : String(err);
 				const { t } = this;
-				el.textContent = t("Mermaid error: {error}", {
-					error: err instanceof Error ? err.message : String(err),
-				});
+				const [before, after = ""] = t("Mermaid error: {error}", { error: "{error}" }).split(
+					"{error}",
+				);
+				el.replaceChildren(before ?? "", detail, after);
 				measure();
 			});
 		return el;

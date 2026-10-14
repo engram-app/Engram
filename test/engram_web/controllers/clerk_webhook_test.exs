@@ -1,5 +1,6 @@
 defmodule EngramWeb.ClerkWebhookTest do
   use EngramWeb.ConnCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   import Mox
 
@@ -7,6 +8,16 @@ defmodule EngramWeb.ClerkWebhookTest do
   alias Engram.Repo
 
   setup :verify_on_exit!
+
+  defp enable_erasure do
+    for k <- [:posthog_erasure_api_key, :posthog_project_id] do
+      prev = Application.get_env(:engram, k)
+      on_exit(fn -> Application.put_env(:engram, k, prev) end)
+    end
+
+    Application.put_env(:engram, :posthog_erasure_api_key, "phx_test_key")
+    Application.put_env(:engram, :posthog_project_id, "1")
+  end
 
   describe "POST /webhooks/clerk — signature verification" do
     test "returns 400 when svix-signature header missing", %{conn: conn} do
@@ -209,6 +220,28 @@ defmodule EngramWeb.ClerkWebhookTest do
       reloaded = Repo.reload!(user)
       assert reloaded.email == "New.Primary+tag@gmail.com"
       assert reloaded.normalized_email == "newprimary@gmail.com"
+    end
+
+    test "erases the analytics person keyed on the old email", %{conn: conn} do
+      enable_erasure()
+      payload = clerk_user_updated_payload("user_email", email: "fresh@gmail.com")
+      post_clerk(conn, "evt_email_ph", payload)
+
+      # Only the old email's person: the legacy Clerk-id one belongs to the
+      # same, still-live account.
+      jobs = all_enqueued(worker: Engram.Workers.PostHogErasure)
+      old_id = Engram.Observability.PostHog.analytics_id("old@gmail.com")
+      assert Enum.map(jobs, & &1.args) == List.duplicate(%{"distinct_ids" => [old_id]}, 2)
+    end
+
+    # analytics_id/1 trims and downcases, so a case-only change keeps the same
+    # PostHog person: erasing "the old one" would erase the live one.
+    test "a case-only email change erases nothing", %{conn: conn} do
+      enable_erasure()
+      payload = clerk_user_updated_payload("user_email", email: "Old@Gmail.com")
+      post_clerk(conn, "evt_email_case", payload)
+
+      assert all_enqueued(worker: Engram.Workers.PostHogErasure) == []
     end
 
     test "is a no-op when primary email is unchanged", %{conn: conn, user: user} do

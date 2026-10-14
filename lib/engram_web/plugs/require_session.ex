@@ -36,6 +36,9 @@ defmodule EngramWeb.Plugs.RequireSession do
     * `allow_api_key: true` — let API keys through and reject only OAuth
       grants. For routes where a first-party API key is a legitimate caller
       but a third-party app never is (onboarding consent writes).
+    * `allow_device_token: true` — also let the plugin's device-flow token
+      through. Only for writes a copied token could abuse no further than
+      the plugin itself (the rate-limited feedback box).
   """
 
   import Plug.Conn
@@ -50,7 +53,7 @@ defmodule EngramWeb.Plugs.RequireSession do
       conn.assigns[:oauth_scope] ->
         reject(conn, "oauth_grant_not_allowed")
 
-      conn.assigns[:device_token] ->
+      conn.assigns[:device_token] && !Keyword.get(opts, :allow_device_token, false) ->
         reject(conn, "device_token_not_allowed")
 
       true ->

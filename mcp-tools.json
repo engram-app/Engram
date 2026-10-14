@@ -1323,6 +1323,71 @@
         "type": "object"
       },
       "title": "Get Attachment Upload Target"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Send Feedback"
+      },
+      "description": "Send feedback to the Engram team: a bug, an idea, something confusing, something that works well, or a capability Engram lacks. Use it when the user asks to send feedback, or on your own when an Engram tool failed, gave a poor result, or could not do what was needed. Never include note content, note titles, file paths or personal data: describe the problem in general terms.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "description": "missing_capability when Engram has no tool for what was needed.",
+            "enum": [
+              "bug",
+              "idea",
+              "confusing",
+              "love",
+              "missing_capability"
+            ],
+            "type": "string"
+          },
+          "initiated_by": {
+            "description": "user if the user asked to send this, model if you chose to.",
+            "enum": [
+              "user",
+              "model"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "What happened or what you wish Engram did, with no note content.",
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "tool_name": {
+            "description": "The Engram tool this is about, if any.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "initiated_by"
+        ],
+        "type": "object"
+      },
+      "name": "send_feedback",
+      "outputSchema": {
+        "properties": {
+          "status": {
+            "enum": [
+              "sent"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "title": "Send Feedback"
     }
   ]
 }

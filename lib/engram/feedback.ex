@@ -16,13 +16,27 @@ defmodule Engram.Feedback do
   import Ecto.Query
 
   alias Engram.Accounts.User
-  alias Engram.Observability.PostHog
+  alias Engram.Analytics
+  alias Engram.Billing
   alias Engram.Repo
 
   @heard_from ~w(search reddit youtube obsidian_community obsidian_plugins friend ai_assistant social other)
   @use_cases ~w(ai_memory obsidian_sync web_access search backup sharing other)
   @cancel_reasons ~w(too_expensive missing_feature sync_issues switched_tool not_using other)
+  @categories ~w(bug idea confusing love missing_capability)
+  @sources ~w(web plugin mcp)
+  @initiators ~w(user model)
+  # Each submit is a billed PostHog event with up to 2,000 chars of free text,
+  # shared by every surface (web, plugin, MCP), so one budget covers them all.
+  @hourly_limit 20
+  @model_hourly_limit 5
   @max_text 2_000
+
+  # Client context must be a plain token: anything else (a newline, an email,
+  # free text) is dropped rather than stored as an analytics property.
+  @version_format ~r/\A[\w.+-]{1,40}\z/u
+  @area_format ~r/\A[\w.\/-]{1,80}\z/u
+  @tool_name_format ~r/\A[a-z_]{1,64}\z/
 
   def heard_from_options, do: @heard_from
   def use_case_options, do: @use_cases
@@ -34,6 +48,28 @@ defmodule Engram.Feedback do
           | :invalid_use_cases
           | :invalid_reason
           | :empty_message
+          | :invalid_category
+          | :invalid_mood
+          | :invalid_source
+          | :invalid_initiated_by
+
+  @doc """
+  Spend one unit of the user's hourly feedback budget. Feedback a model sends
+  unasked (MCP `initiated_by: "model"`) draws on its own smaller budget, so a
+  session of failing tools cannot use up the user's own.
+  """
+  @spec allow?(User.t(), :user | :model) :: boolean()
+  def allow?(user, by \\ :user)
+
+  def allow?(user, :user), do: hit("feedback:#{user.id}", @hourly_limit)
+  def allow?(user, :model), do: hit("feedback:model:#{user.id}", @model_hourly_limit)
+
+  defp hit(key, limit),
+    do: match?({:allow, _}, EngramWeb.RateLimiter.hit(key, :timer.hours(1), limit, :feedback))
+
+  @doc "Whether feedback reaches anyone: false on self-host, where analytics is off."
+  @spec collected?() :: boolean()
+  def collected?, do: Analytics.enabled?()
 
   @spec submit(User.t(), String.t(), map()) :: :ok | {:error, error()}
   def submit(user, "onboarding", params) do
@@ -111,9 +147,9 @@ defmodule Engram.Feedback do
   end
 
   def submit(user, "general", params) do
-    case text(params["message"]) do
-      nil -> {:error, :empty_message}
-      message -> capture(user, "user_feedback", %{"message" => message})
+    with {:ok, message} <- required_message(params["message"]),
+         {:ok, props} <- general_props(user, params) do
+      capture(user, "user_feedback", Map.put(props, "message", message))
     end
   end
 
@@ -133,13 +169,9 @@ defmodule Engram.Feedback do
         :ok
 
       {reason, detail} ->
-        PostHog.capture(
-          Ecto.UUID.generate(),
+        Analytics.track_anonymous(
           "account_delete_reason",
-          Map.reject(
-            %{"reason" => reason, "detail" => detail, "$process_person_profile" => false},
-            fn {_k, v} -> is_nil(v) end
-          )
+          Map.reject(%{"reason" => reason, "detail" => detail}, fn {_k, v} -> is_nil(v) end)
         )
     end
   end
@@ -171,15 +203,86 @@ defmodule Engram.Feedback do
     end
   end
 
-  # Free text is trimmed and capped; blank means absent.
-  defp text(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      trimmed -> String.slice(trimmed, 0, @max_text)
+  defp required_message(value) do
+    case text(value) do
+      nil -> {:error, :empty_message}
+      message -> {:ok, message}
     end
   end
 
-  defp text(_), do: nil
+  # Category, mood and reply consent come from the user; source, version and
+  # area from the client; plan, server version and user agent from the server
+  # (the controller stamps the request's user agent over any sent in the body).
+  defp general_props(user, params) do
+    category = params["category"]
+    mood = params["mood"]
+    source = params["source"] || "web"
+    initiated_by = params["initiated_by"]
+
+    cond do
+      not (is_nil(category) or category in @categories) ->
+        {:error, :invalid_category}
+
+      not (is_nil(mood) or (is_integer(mood) and mood in 1..5)) ->
+        {:error, :invalid_mood}
+
+      source not in @sources ->
+        {:error, :invalid_source}
+
+      not (is_nil(initiated_by) or initiated_by in @initiators) ->
+        {:error, :invalid_initiated_by}
+
+      true ->
+        props =
+          %{
+            "category" => category,
+            "mood" => mood,
+            "contact_ok" => params["contact_ok"] == true,
+            # Only with consent: the one place a reply address is stored.
+            "contact_email" => if(params["contact_ok"] == true, do: user.email),
+            "source" => source,
+            # MCP only: whether the user asked, or the model filed it unasked.
+            "initiated_by" => initiated_by,
+            "tool_name" => token(params["tool_name"], @tool_name_format),
+            "app_version" => token(params["app_version"], @version_format),
+            "area" => token(params["area"], @area_format),
+            "user_agent" => text(params["user_agent"], 300),
+            "plan" => user |> Billing.tier() |> Atom.to_string(),
+            "server_version" => server_version()
+          }
+          |> Map.reject(fn {_k, v} -> is_nil(v) end)
+
+        {:ok, props}
+    end
+  end
+
+  defp server_version do
+    vsn = :engram |> Application.spec(:vsn) |> to_string()
+
+    case System.get_env("RELEASE_SHA") do
+      sha when is_binary(sha) and sha != "" -> "#{vsn} (#{String.slice(sha, 0, 7)})"
+      _ -> vsn
+    end
+  end
+
+  defp token(value, format) when is_binary(value) do
+    trimmed = String.trim(value)
+    if Regex.match?(format, trimmed), do: trimmed
+  end
+
+  defp token(_, _), do: nil
+
+  # Free text is trimmed and capped; blank means absent.
+  defp text(value, max \\ @max_text)
+
+  defp text(value, max) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> String.slice(trimmed, 0, max)
+    end
+  end
+
+  defp text(_, _), do: nil
 
   # The delete answer outlives the account with no link back to it, so an email
   # typed into it could never be found or erased later. Possessive quantifiers:
@@ -191,13 +294,7 @@ defmodule Engram.Feedback do
 
   # A user with no email has no analytics id; their answer still lands in the
   # profile (onboarding) but has nowhere to go in PostHog.
-  defp capture(%{email: email}, event, props) when is_binary(email) do
-    PostHog.capture(
-      PostHog.analytics_id(email),
-      event,
-      Map.reject(props, fn {_k, v} -> is_nil(v) end)
-    )
+  defp capture(user, event, props) do
+    Analytics.track(user, event, Map.reject(props, fn {_k, v} -> is_nil(v) end))
   end
-
-  defp capture(_user, _event, _props), do: :ok
 end

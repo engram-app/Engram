@@ -89,7 +89,7 @@ export function NoteMenu({ mode, title, onPick }: Props) {
 								onSelect={() => onPick(action.id)}
 							>
 								<Icon aria-hidden="true" className="size-4" />
-								{t(action.label)}
+								{action.translated ? action.label : t(action.label)}
 							</DropdownMenuItem>
 						</Fragment>
 					);

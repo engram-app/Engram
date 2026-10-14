@@ -1,5 +1,7 @@
 import { track } from "../analytics/track";
+import { rlog } from "../observability/remote-log";
 import { newTraceContext, tracingEnabled } from "../observability/trace";
+import { scrubUrl } from "../sentry";
 import { getActiveVaultId } from "./active-vault";
 import { getApiBase, joinApiUrl } from "./base";
 import { getDeviceId } from "./device-id";
@@ -28,6 +30,22 @@ function firstValidationError(errors: unknown): string | undefined {
 	return typeof msg === "string" ? `${field}: ${msg}` : field;
 }
 
+/** Report a request that failed in a way that means "broken", not "no": a
+ *  network or CORS failure, or a 5xx. Reported from here because every caller
+ *  HANDLES its errors (a mutation's onError toasts and stops), so nothing else
+ *  ever sees them. A CORS-blocked /folders/batch-delete broke folder delete in
+ *  prod with nothing reported anywhere.
+ *
+ *  Goes to the backend log pipe (Loki, `platform=web`, `[client:api_request]`)
+ *  where the Grafana alert reads it. The URL is scrubbed: note paths travel in
+ *  URLs, so only the route shape is kept.
+ *
+ *  ponytail: prod keeps the resource (`/folders/:seg`), not the endpoint.
+ *  Report the caller's route template if per-endpoint alerts are ever needed. */
+function reportFailure(kind: string, method: string, url: string) {
+	rlog().error("api_request", `${kind} ${method} ${scrubUrl(url)}`);
+}
+
 async function authFetch(path: string, options: RequestInit = {}): Promise<Response> {
 	const token = await getAuthToken();
 
@@ -52,9 +70,25 @@ async function authFetch(path: string, options: RequestInit = {}): Promise<Respo
 	// (saas, `https://api.engram.page`). For selfhost apiBase is "" so
 	// this composes to `/api${path}` identically to the pre-eject shape.
 	const url = joinApiUrl(getApiBase(), `/api${path}`);
-	const response = await fetch(url, { ...options, headers });
+	const method = options.method ?? "GET";
+	let response: Response;
+	try {
+		response = await fetch(url, { ...options, headers });
+	} catch (err) {
+		// Aborts are the caller's choice and offline is the user's network, not
+		// ours. Everything else (CORS, DNS, TLS, connection reset) is a TypeError
+		// the browser deliberately leaves vague.
+		const aborted = err instanceof Error && err.name === "AbortError";
+		if (!aborted && navigator.onLine) {
+			reportFailure("network_error", method, url);
+		}
+		throw err;
+	}
 
 	if (!response.ok) {
+		if (response.status >= 500) {
+			reportFailure(`http_${response.status}`, method, url);
+		}
 		const body = await response.json().catch(() => ({}));
 		// EngramWeb.Plugs.RequireOnboarding's 403 shape. Every caller routes
 		// through this one function, so this is the single place that can see

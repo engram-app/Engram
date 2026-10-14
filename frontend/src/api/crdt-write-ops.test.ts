@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { englishT } from "@/i18n/translate";
 import {
 	connectChannel,
 	crdtCreateNote,
@@ -64,6 +65,7 @@ const opts = {
 	vaultId: "v1",
 	getToken: async () => "t",
 	queryClient: { invalidateQueries: vi.fn() } as never,
+	t: englishT,
 };
 
 describe("crdtCreateNote / crdtDeleteNote — offline gate", () => {

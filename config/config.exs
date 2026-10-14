@@ -223,7 +223,9 @@ config :engram, Oban,
         # Daily self-host install census; no-op on SaaS and unless opted in.
         {"16 5 * * *", Engram.Workers.TelemetryHeartbeat},
         # CIMD document refresh (#1642): documents carry a 24 h TTL.
-        {"40 5 * * *", Engram.Workers.CimdRefresh}
+        {"40 5 * * *", Engram.Workers.CimdRefresh},
+        # Account facts onto PostHog persons; no-op unless PostHog is configured.
+        {"25 6 * * *", Engram.Workers.PostHogPersonSync}
       ]
     }
   ]
@@ -295,6 +297,7 @@ config :logger, :default_formatter,
     :payment_method,
     :payment_status,
     :phase,
+    :platform,
     :prefix,
     :price_id,
     :qdrant_id,

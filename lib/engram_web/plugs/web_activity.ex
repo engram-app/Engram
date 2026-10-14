@@ -10,15 +10,13 @@ defmodule EngramWeb.Plugs.WebActivity do
   should still send one.
 
   Throttling (one event per user per 5 minutes) lives in
-  `PostHog.capture_activity/3`, so this is safe on every request.
+  `Engram.Analytics.track_activity/3`, so this is safe on every request.
   """
-
-  alias Engram.Observability.PostHog
 
   def init(opts), do: opts
 
   def call(%Plug.Conn{assigns: %{current_user: user} = assigns} = conn, _opts) do
-    if web_credential?(assigns), do: PostHog.capture_activity(user, :web)
+    if web_credential?(assigns), do: Engram.Analytics.track_activity(user, :web)
     conn
   end
 

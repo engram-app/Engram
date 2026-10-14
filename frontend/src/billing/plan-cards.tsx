@@ -4,13 +4,14 @@ import { useT } from "@/i18n/locale-provider";
 import type { Locale } from "@/i18n/locales";
 import { msg } from "@/i18n/msg";
 import type { Tn, Translate } from "@/i18n/translate";
+import type { MsgKey } from "@/i18n/ui-text";
 import { intlLocale } from "@/lib/intl-locale";
 import { cn } from "@/lib/utils";
 import type { BillingCadence, IndexStatus } from "../api/queries";
 
 // Feature checklist shared by the full card and the accordion row. `className`
 // merges extra layout (e.g. `flex-1` on the full card).
-function FeatureList({ features, className }: { features: string[]; className?: string }) {
+function FeatureList({ features, className }: { features: readonly MsgKey[]; className?: string }) {
 	const { t } = useT();
 	return (
 		<ul className={cn("space-y-1 text-muted-foreground text-sm", className)}>
@@ -27,11 +28,11 @@ function FeatureList({ features, className }: { features: string[]; className?: 
 }
 
 interface PlanCardProps {
-	name: string;
+	name: MsgKey;
 	cadence: BillingCadence;
 	monthlyPrice: number;
 	annualPrice: number;
-	features: string[];
+	features: readonly MsgKey[];
 	tier: PlanTier;
 	onAction: (tier: PlanTier) => void;
 	disabled?: boolean;
@@ -49,10 +50,10 @@ interface PlanCardProps {
 export type PlanTier = "starter" | "pro";
 
 export interface PlanCardCatalog {
-	name: string;
+	name: MsgKey;
 	monthlyPrice: number;
 	annualPrice: number;
-	features: string[];
+	features: readonly MsgKey[];
 }
 
 // Display price for a plan at the given cadence. Single formatter so the
@@ -106,13 +107,12 @@ export function unsearchableNotesNotice(
 	}
 	return tn(
 		{
-			one: "{hidden} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
+			one: "{count} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
 			other:
-				"{hidden} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
+				"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
 		},
 		hidden,
 		{
-			hidden: hidden.toLocaleString(intlLocale(locale)),
 			indexed: indexed.toLocaleString(intlLocale(locale)),
 		},
 	);
@@ -332,10 +332,10 @@ export function PlanAccordionRow({
 	recommended = false,
 	quietCta = false,
 }: {
-	name: string;
+	name: MsgKey;
 	price: string;
 	summary: string;
-	features: string[];
+	features: readonly MsgKey[];
 	ctaLabel: string;
 	ctaNote?: string;
 	onClick: () => void;

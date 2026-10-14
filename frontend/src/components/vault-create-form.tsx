@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { toast } from "sonner";
 import { useCreateVault, type Vault } from "@/api/queries";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { useT } from "@/i18n/locale-provider";
+import { notify } from "@/lib/notify";
 
 interface Props {
 	// The whole vault, not just the id — callers that navigate on create need
@@ -42,7 +42,7 @@ export function VaultCreateForm({
 			{ name: next, client_id: clientId },
 			{
 				onSuccess: (vault) => {
-					toast.success(t("Vault created"));
+					notify.success(t("Vault created"));
 					setName("");
 					setClientId(crypto.randomUUID());
 					onCreated?.(vault);
@@ -54,7 +54,7 @@ export function VaultCreateForm({
 					if (err instanceof Error && err.name === "LimitExceededError") {
 						return;
 					}
-					toast.error(t("Could not create vault"));
+					notify.error(t("Could not create vault"));
 				},
 			},
 		);

@@ -3,7 +3,6 @@
 //
 // This module is part of the scanned tree, so its comments must not contain
 // literal call sites of the translate function, msg, tn or the Trans element.
-import type { Catalog } from "./translate";
 
 interface Entry {
 	key: string;
@@ -14,19 +13,16 @@ const LITERAL = String.raw`"(?:[^"\\]|\\.)*"`;
 const KEY_CALLS = [
 	/\bt\(\s*"(?<key>(?:[^"\\]|\\.)*)"/gu,
 	/\bmsg\(\s*"(?<key>(?:[^"\\]|\\.)*)"/gu,
-	/<Trans\s[^>]*?\btext="(?<key>(?:[^"\\]|\\.)*)"/gu,
+	// Up to the element's first text attribute, across slot elements (their `>`) but
+	// never past another text attribute or into another Trans.
+	/<Trans\s(?:(?!<Trans\b|\btext=)[\s\S])*?\btext="(?<key>(?:[^"\\]|\\.)*)"/gu,
 ];
 const TN_CALL = new RegExp(String.raw`\btn\(\s*\{(?<body>(?:${LITERAL}|[^"}])*)\}`, "gu");
 const FORM = /\b(?<name>one|other):\s*"(?<text>(?:[^"\\]|\\.)*)"/gu;
-const TOKEN = /\{(?<name>\w+)\}/gu;
 
 function parseLiteral(raw: string): string {
 	const text: unknown = JSON.parse(`"${raw}"`);
 	return typeof text === "string" ? text : "";
-}
-
-function tokens(text: string): Set<string> {
-	return new Set([...text.matchAll(TOKEN)].map((m) => m.groups?.name ?? ""));
 }
 
 function usedEntries(sources: readonly string[]): Entry[] {
@@ -60,38 +56,17 @@ function usedKeys(sources: readonly string[]): Set<string> {
 // another object's member, with a literal first argument. Such a key is in no catalog.
 // The same goes for an aliased translator named like `tLater` (`t` plus a capital).
 const HIDDEN_CALL = /(?:\b(?:t|translate)Ref\.current|\w\.(?:t|tn|msg)|\bt[A-Z]\w*)\(\s*["{]/gu;
+// Keys the scanner cannot read at all: a single-quoted or template key, a plural
+// that is not an inline object, a marker around anything but a double-quoted
+// literal, or a Trans text written any way but text="...". A variable key is left
+// to tsc, which only accepts one typed as a marked key. Member calls forward a key
+// they were given, and a declaration is not a call.
+const UNREADABLE_KEY =
+	/(?<![.\w]|function )(?:t\(\s*['`]|tn\(\s*(?!\{)[^\s)]|msg\(\s*(?!")[^\s)])|<Trans\s(?:(?!<Trans\b|\btext=)[\s\S])*?\btext=(?:'|\{\s*["'`])/gu;
 
 function hiddenCalls(source: string): string[] {
-	return [...source.matchAll(HIDDEN_CALL)].map((m) => m[0]);
-}
-
-function findProblems(used: Set<string>, catalogs: Record<string, Catalog>): string[] {
-	const problems: string[] = [];
-	const everyKey = new Set(Object.values(catalogs).flatMap((c) => Object.keys(c)));
-	for (const [locale, catalog] of Object.entries(catalogs)) {
-		for (const [key, value] of Object.entries(catalog)) {
-			if (!used.has(key)) {
-				problems.push(`${locale}: orphan key ${JSON.stringify(key)}`);
-			}
-			const want = tokens(key);
-			const forms = typeof value === "string" ? [value] : Object.values(value);
-			for (const form of forms) {
-				const got = tokens(form);
-				const dropped = typeof value === "string" && [...want].some((x) => !got.has(x));
-				const invented = [...got].some((x) => !want.has(x));
-				if (dropped || invented) {
-					problems.push(`${locale}: placeholder mismatch in ${JSON.stringify(key)}`);
-				}
-			}
-		}
-		for (const key of everyKey) {
-			if (!(key in catalog)) {
-				problems.push(`${locale}: missing key ${JSON.stringify(key)}`);
-			}
-		}
-	}
-	return problems;
+	return [...source.matchAll(HIDDEN_CALL), ...source.matchAll(UNREADABLE_KEY)].map((m) => m[0]);
 }
 
 export type { Entry };
-export { findProblems, hiddenCalls, usedEntries, usedKeys };
+export { hiddenCalls, usedEntries, usedKeys };

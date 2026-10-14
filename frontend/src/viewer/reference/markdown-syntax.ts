@@ -1,6 +1,7 @@
 import { defaultConfig } from "@portaljs/remark-callouts";
 import { msg } from "@/i18n/msg";
 import { englishT, type Translate } from "@/i18n/translate";
+import { type MsgKey, type UIText, untranslated } from "@/i18n/ui-text";
 
 // The markdown surface Engram actually renders, as data.
 //
@@ -52,11 +53,13 @@ const BELOW_DIVIDER = msg("Text below the divider");
 const WIKI_TARGET = msg("Deployment Runbook");
 const CALLOUT_FALLBACK = msg("Example text.");
 
+// A catalog key, or (callout type names) text that stays as written on purpose.
+type EntryLabel = { label: MsgKey; verbatim?: undefined } | { label: UIText; verbatim: true };
+
 /** An entry as authored: `syntax` and `demo` may be translatable samples. */
-interface EntryDef {
+interface EntryFields {
 	id: string;
-	category: string;
-	label: string;
+	category: MsgKey;
 	/** Inserted at the caret. A neutral template, not a worked example. */
 	syntax: Sample;
 	/** Rendered in the preview. Defaults to `syntax`. Set it when realism teaches more. */
@@ -65,7 +68,7 @@ interface EntryDef {
 	 * Only set when it says something the label and preview cannot. A blurb that
 	 * restates the label ("Bold — strong emphasis") is noise and belongs nowhere.
 	 */
-	blurb?: string;
+	blurb?: MsgKey;
 	/** Only valid at the start of a line — insertSnippet adds the breaks. */
 	block?: boolean;
 	/** Extra search terms that do not appear in the label, syntax, or blurb. */
@@ -121,7 +124,7 @@ interface EntryDef {
 	 * Distinct from the inert anchors in previews, which only need to LOOK like
 	 * links. Category-wide equivalents live in CATEGORY_INTROS.
 	 */
-	link?: { href: string; label: string };
+	link?: { href: string; label: MsgKey };
 }
 
 /**
@@ -129,15 +132,19 @@ interface EntryDef {
  * non-React callers and the invariants in the tests keep working unchanged;
  * `sample` keeps the translatable originals for `entrySyntax` / `previewSource`.
  */
-type SyntaxEntry = Omit<EntryDef, "syntax" | "demo"> & {
-	syntax: string;
-	demo?: string;
-	sample: { syntax: Sample; demo?: Sample };
-};
+type EntryDef = EntryFields & EntryLabel;
 
-function build({ syntax, demo, ...rest }: EntryDef): SyntaxEntry {
+type SyntaxEntry = Omit<EntryFields, "syntax" | "demo"> &
+	EntryLabel & {
+		syntax: string;
+		demo?: string;
+		sample: { syntax: Sample; demo?: Sample };
+	};
+
+function build(def: EntryDef): SyntaxEntry {
+	const { syntax, demo } = def;
 	return {
-		...rest,
+		...def,
 		syntax: resolveSample(syntax, englishT),
 		demo: demo === undefined ? undefined : resolveSample(demo, englishT),
 		sample: { syntax, demo },
@@ -150,7 +157,7 @@ function build({ syntax, demo, ...rest }: EntryDef): SyntaxEntry {
  * type the library adds later falls back to something neutral rather than
  * breaking the build.
  */
-const CALLOUT_BODIES: Record<string, string> = {
+const CALLOUT_BODIES: Record<string, MsgKey> = {
 	note: msg("Worth knowing, but not urgent."),
 	tip: msg("A better way to do the same thing."),
 	warning: msg("Check this before you continue."),
@@ -182,7 +189,8 @@ const CALLOUT_GALLERY: readonly EntryDef[] = Object.entries(defaultConfig.types)
 	.map(([type]) => ({
 		id: `callout-${type}`,
 		category: msg("Callouts"),
-		label: type,
+		label: untranslated(type),
+		verbatim: true as const,
 		// The type identifier is the keyword the user types and the demo title is
 		// the name -> icon -> colour mapping, so both stay English.
 		syntax: (t: Translate) => `> [!${type}] ${t(TITLE)}\n> ${t(BODY)}`,
@@ -196,7 +204,7 @@ const CALLOUT_GALLERY: readonly EntryDef[] = Object.entries(defaultConfig.types)
 /** Shown once, prominently, above a category whose rows all share one format. */
 const CATEGORY_INTROS: Record<
 	string,
-	{ syntax?: Sample; note: string; link?: { href: string; label: string } }
+	{ syntax?: Sample; note: MsgKey; link?: { href: string; label: MsgKey } }
 > = {
 	Headings: {
 		// Deliberately worded as convention, because that is what it is: WCAG
@@ -647,13 +655,17 @@ const ENTRY_DEFS: readonly EntryDef[] = [
 const SYNTAX_ENTRIES: readonly SyntaxEntry[] = ENTRY_DEFS.map(build);
 
 /** What Insert drops at the caret, in the reader's language. */
-export function entrySyntax(entry: SyntaxEntry, t: Translate = englishT): string {
+export function entrySyntax(entry: SyntaxEntry, t: Translate): string {
 	return resolveSample(entry.sample.syntax, t);
 }
 
 /** What the preview renders: the worked example if there is one, else the template. */
-export function previewSource(entry: SyntaxEntry, t: Translate = englishT): string {
+export function previewSource(entry: SyntaxEntry, t: Translate): string {
 	return resolveSample(entry.sample.demo ?? entry.sample.syntax, t);
+}
+
+export function entryLabel(entry: SyntaxEntry, t: Translate): UIText {
+	return entry.verbatim ? entry.label : t(entry.label);
 }
 
 /**
@@ -665,7 +677,7 @@ export function previewSource(entry: SyntaxEntry, t: Translate = englishT): stri
 export function filterSyntax(
 	query: string,
 	// Also match the words the user is reading, not only the English source.
-	t: Translate = englishT,
+	t: Translate,
 ): readonly SyntaxEntry[] {
 	const terms = query.toLowerCase().split(/\s+/u).filter(Boolean);
 	if (terms.length === 0) {
@@ -677,7 +689,7 @@ export function filterSyntax(
 			entry.category,
 			entry.syntax,
 			entry.blurb ?? "",
-			t(entry.label),
+			entryLabel(entry, t),
 			t(entry.category),
 			entrySyntax(entry, t),
 			entry.blurb ? t(entry.blurb) : "",
@@ -692,8 +704,8 @@ export function filterSyntax(
 /** Entries grouped by category, preserving the declaration order of both. */
 export function groupByCategory(
 	entries: readonly SyntaxEntry[],
-): readonly [string, readonly SyntaxEntry[]][] {
-	const groups = new Map<string, SyntaxEntry[]>();
+): readonly [MsgKey, readonly SyntaxEntry[]][] {
+	const groups = new Map<MsgKey, SyntaxEntry[]>();
 	for (const entry of entries) {
 		const bucket = groups.get(entry.category);
 		if (bucket) {

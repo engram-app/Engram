@@ -44,6 +44,23 @@ defmodule EngramWeb.UsersControllerTest do
     end
   end
 
+  describe "analytics opt-out" do
+    test "an opted-out user gets no analytics id and the opt-out flag" do
+      user = insert_user(email: "objector@example.com", external_id: "user_obj")
+      {:ok, user} = Engram.Accounts.set_analytics_opt_out(user)
+      assert %DateTime{} = user.analytics_opt_out_at
+
+      body = auth_conn(user) |> get("/api/me") |> json_response(200)
+      assert body["user"]["analytics_id"] == nil
+      assert body["user"]["analytics_opt_out"] == true
+    end
+
+    test "a normal user reports analytics_opt_out false", %{user: user} do
+      body = auth_conn(user) |> get("/api/me") |> json_response(200)
+      assert body["user"]["analytics_opt_out"] == false
+    end
+  end
+
   describe "PATCH /api/me" do
     test "updates display_name", %{user: user} do
       conn =

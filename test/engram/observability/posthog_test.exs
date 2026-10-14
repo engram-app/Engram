@@ -137,96 +137,73 @@ defmodule Engram.Observability.PostHogTest do
     end
   end
 
-  describe "capture_activity/3" do
-    setup do
-      EngramWeb.RateLimiter.reset_buckets!()
+  describe "opt-out" do
+    test "distinct_id/1 is the analytics id, or nil for an opted-out or emailless user" do
+      assert PostHog.distinct_id(%{email: "a@b.co"}) == PostHog.analytics_id("a@b.co")
+
+      assert PostHog.distinct_id(%{email: "a@b.co", analytics_opt_out_at: DateTime.utc_now()}) ==
+               nil
+
+      assert PostHog.distinct_id(%{email: nil}) == nil
+    end
+
+    test "capture/3 with a nil distinct id sends nothing" do
+      bypass = Bypass.open()
+      Application.put_env(:engram, :posthog_key, "phc_test_token")
+      Application.put_env(:engram, :posthog_host, "http://localhost:#{bypass.port}")
+      Bypass.stub(bypass, "POST", "/capture/", fn _ -> flunk("captured an opted-out user") end)
+
+      assert :ok = PostHog.capture(nil, "note_created")
+      Process.sleep(100)
+    end
+  end
+
+  describe "server-side properties" do
+    test "every server event disables GeoIP, which would locate users at the AWS region" do
       bypass = Bypass.open()
       Application.put_env(:engram, :posthog_key, "phc_test_token")
       Application.put_env(:engram, :posthog_host, "http://localhost:#{bypass.port}")
       parent = self()
 
-      Bypass.stub(bypass, "POST", "/capture/", fn conn ->
+      Bypass.expect_once(bypass, "POST", "/capture/", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         send(parent, {:posthog_body, Jason.decode!(body)})
         Plug.Conn.resp(conn, 200, "1")
       end)
 
-      %{user: %{id: System.unique_integer([:positive]), email: "Activity@Example.com"}}
+      Bypass.expect_once(bypass, "POST", "/batch/", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:batch_body, Jason.decode!(body)})
+        Plug.Conn.resp(conn, 200, "{}")
+      end)
+
+      PostHog.capture("id", "note_created")
+      assert :ok = PostHog.set_people([{"id", %{plan: "pro"}}])
+
+      assert_receive {:posthog_body, %{"properties" => %{"$geoip_disable" => true}}}, 1_000
+      assert_receive {:batch_body, %{"batch" => [%{"properties" => props}]}}, 1_000
+      assert props["$geoip_disable"] == true
+      assert props["$set"] == %{"plan" => "pro"}
     end
+  end
 
-    test "emits surface_active with the keyed analytics id and the surface", %{user: user} do
-      assert :ok = PostHog.capture_activity(user, :obsidian_sync)
-
-      assert_receive {:posthog_body, body}, 1_000
-      assert body["event"] == "surface_active"
-      assert body["distinct_id"] == PostHog.analytics_id(user.email)
-      assert body["properties"]["surface"] == "obsidian_sync"
-    end
-
-    test "throttles repeat calls for the same user and surface", %{user: user} do
-      for _ <- 1..5, do: assert(:ok = PostHog.capture_activity(user, :mcp))
-
-      assert_receive {:posthog_body, _}, 1_000
-      refute_receive {:posthog_body, _}, 300
-    end
-
-    test "a different surface or user is not throttled", %{user: user} do
-      other = %{user | id: user.id + 1}
-
-      PostHog.capture_activity(user, :mcp)
-      PostHog.capture_activity(user, :obsidian_sync)
-      PostHog.capture_activity(other, :mcp)
-
-      for _ <- 1..3, do: assert_receive({:posthog_body, _}, 1_000)
-    end
-
-    test "merges extra properties but the surface cannot be overridden", %{user: user} do
-      PostHog.capture_activity(user, :mcp, %{tool: "search_notes", surface: "evil"})
-
-      assert_receive {:posthog_body, body}, 1_000
-      assert body["properties"]["tool"] == "search_notes"
-      assert body["properties"]["surface"] == "mcp"
-    end
-
-    test "a string-key surface cannot override either", %{user: user} do
-      PostHog.capture_activity(user, :mcp, %{"surface" => "evil"})
-
-      assert_receive {:posthog_body, body}, 1_000
-      assert body["properties"]["surface"] == "mcp"
-    end
-
-    test "a user without an email is skipped, not raised", %{user: user} do
-      assert :ok = PostHog.capture_activity(%{user | email: nil}, :mcp)
-      refute_receive {:posthog_body, _}, 200
-    end
-
-    test "the disabled path never touches the rate limiter", %{user: user} do
-      Application.delete_env(:engram, :posthog_key)
-      handler = "ph-disabled-#{System.unique_integer([:positive])}"
+  describe "set_people/2" do
+    test "sends every chunk even when one fails, then reports the failure" do
+      bypass = Bypass.open()
+      Application.put_env(:engram, :posthog_key, "phc_test_token")
+      Application.put_env(:engram, :posthog_host, "http://localhost:#{bypass.port}")
       parent = self()
 
-      :telemetry.attach(
-        handler,
-        [:engram, :rate_limiter, :hit],
-        fn _, _, meta, _ -> send(parent, {:limiter_hit, meta}) end,
-        nil
-      )
+      Bypass.expect(bypass, "POST", "/batch/", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        [%{"distinct_id" => id}] = Jason.decode!(body)["batch"]
+        send(parent, {:sent, id})
+        Plug.Conn.resp(conn, if(id == "a", do: 503, else: 200), "{}")
+      end)
 
-      on_exit(fn -> :telemetry.detach(handler) end)
-
-      assert :ok = PostHog.capture_activity(user, :mcp)
-      refute_receive {:limiter_hit, _}, 200
-    end
-
-    test "rejects a surface outside the allowlist", %{user: user} do
-      assert_raise FunctionClauseError, fn -> PostHog.capture_activity(user, :nope) end
-    end
-
-    test "is a no-op when posthog_key is unset", %{user: user} do
-      Application.delete_env(:engram, :posthog_key)
-
-      assert :ok = PostHog.capture_activity(user, :web)
-      refute_receive {:posthog_body, _}, 200
+      assert {:error, _} = PostHog.set_people([{"a", %{}}, {"b", %{}}], 1)
+      assert_received {:sent, "a"}
+      assert_received {:sent, "b"}
     end
   end
 end

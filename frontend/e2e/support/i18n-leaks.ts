@@ -5,8 +5,10 @@ import fr from "../../src/i18n/locale/fr";
 import it from "../../src/i18n/locale/it";
 import ja from "../../src/i18n/locale/ja";
 import ko from "../../src/i18n/locale/ko";
+import ms from "../../src/i18n/locale/ms";
 import ptBR from "../../src/i18n/locale/pt-BR";
 import ru from "../../src/i18n/locale/ru";
+import vi from "../../src/i18n/locale/vi";
 import zhCN from "../../src/i18n/locale/zh-CN";
 import zhTW from "../../src/i18n/locale/zh-TW";
 import {
@@ -41,8 +43,10 @@ const CATALOGS: Record<string, CatalogLike> = {
 	it,
 	ja,
 	ko,
+	ms,
 	"pt-BR": ptBR,
 	ru,
+	vi,
 	"zh-CN": zhCN,
 	"zh-TW": zhTW,
 };
@@ -55,8 +59,10 @@ const BROWSER_LOCALES = [
 	{ tag: "it-IT", code: "it" },
 	{ tag: "ja-JP", code: "ja" },
 	{ tag: "ko-KR", code: "ko" },
+	{ tag: "ms-MY", code: "ms" },
 	{ tag: "pt-BR", code: "pt-BR" },
 	{ tag: "ru-RU", code: "ru" },
+	{ tag: "vi-VN", code: "vi" },
 	{ tag: "zh-CN", code: "zh-CN" },
 	{ tag: "zh-TW", code: "zh-TW" },
 ] as const;

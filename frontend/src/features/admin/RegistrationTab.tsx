@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { toast } from "sonner";
-import { ApiError } from "@/api/client";
 import { useStableT, useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import type { MsgKey } from "@/i18n/ui-text";
+import { notify } from "@/lib/notify";
+import { serverErrorMessage } from "@/lib/server-error";
 import { adminApi, type RegistrationMode } from "./api";
 
-const MODES: { value: RegistrationMode; label: string; hint: string }[] = [
+const MODES: { value: RegistrationMode; label: MsgKey; hint: MsgKey }[] = [
 	{
 		value: "invite_only",
 		label: msg("Invite only"),
@@ -35,12 +36,12 @@ export default function RegistrationTab() {
 			.getRegistration()
 			.then((r) => setMode(r.registration_mode))
 			.catch((e: unknown) => {
-				const message = e instanceof ApiError ? e.message : tLater(msg("Failed to load setting"));
-				toast.error(message);
+				notify.error(serverErrorMessage(e, tLater(msg("Failed to load setting")), tLater));
 			});
 	}, [tLater]);
 
-	async function choose(next: RegistrationMode) {
+	async function choose(m: (typeof MODES)[number]) {
+		const next = m.value;
 		if (next === mode || saving) {
 			return;
 		}
@@ -48,10 +49,9 @@ export default function RegistrationTab() {
 		try {
 			await adminApi.setRegistration(next);
 			setMode(next);
-			toast.success(t("Registration mode: {mode}", { mode: next }));
+			notify.success(t("Registration mode: {mode}", { mode: t(m.label) }));
 		} catch (e) {
-			const message = e instanceof ApiError ? e.message : t("Save failed");
-			toast.error(message);
+			notify.error(serverErrorMessage(e, t("Save failed"), t));
 		} finally {
 			setSaving(false);
 		}
@@ -76,7 +76,7 @@ export default function RegistrationTab() {
 						name="registration-mode"
 						value={m.value}
 						checked={mode === m.value}
-						onChange={() => choose(m.value)}
+						onChange={() => choose(m)}
 						className="mt-1"
 					/>
 					<span className="flex-1">

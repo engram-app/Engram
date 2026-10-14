@@ -1,4 +1,5 @@
 import type * as Y from "yjs";
+import type { MsgKey } from "@/i18n/ui-text";
 import { msg } from "../i18n/msg";
 import { coerceValue, type PropertyType } from "../viewer/property-types";
 import { emitFrontmatter } from "./frontmatter-codec";
@@ -48,8 +49,8 @@ export const OKF_FIELD_HELP: ReadonlyArray<{
 	key: string;
 	aliases: readonly string[];
 	expects: readonly PropertyType[];
-	expectsLabel: string;
-	what: string;
+	expectsLabel: MsgKey;
+	what: MsgKey;
 }> = [
 	{
 		key: "type",

@@ -19,12 +19,18 @@ defmodule EngramWeb.Schemas.User do
       },
       analytics_id: %Schema{
         type: :string,
+        nullable: true,
         description:
           "Keyed pseudonymous identifier (HMAC of the user's email) for client-side " <>
-            "analytics identify calls. See Engram.Observability.PostHog.analytics_id/1."
+            "analytics identify calls; null when the user opted out. See " <>
+            "Engram.Analytics.client_id/1."
+      },
+      analytics_opt_out: %Schema{
+        type: :boolean,
+        description: "The user objected to analytics; the client must send nothing."
       }
     },
-    required: [:id, :email, :analytics_id]
+    required: [:id, :email, :analytics_id, :analytics_opt_out]
   })
 end
 

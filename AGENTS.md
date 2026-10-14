@@ -227,6 +227,22 @@ mix dialyzer                              # ~32s warm; ~8 min the FIRST time in 
 
 **Ratchet semantics** (Phase 3 onward): each phase fixes findings to zero, then promotes the CI step to fatal. Numbers strictly decrease — new PRs that introduce findings fail.
 
+## Web-app translations: translategemma is the translator
+
+Every catalog entry in `frontend/src/i18n/locale/*.ts` comes from `translategemma:12b` on FastRaid's Ollama via `bun run i18n:translate`. Agents do not write translations themselves.
+
+- **Adding or editing a UI string:** wrap it (`t`, `tn`, `msg`, `<Trans text>`), then run `cd frontend && I18N_OLLAMA_URL=http://10.0.20.214:11434 bun run i18n:translate`. It translates only the keys a catalog lacks and drops orphans, in minutes. Commit the catalog diff in the same PR. If Ollama is unreachable, merge without catalogs: the `i18n-translate.yml` bot PR fills them after merge (English is the designed fallback until then).
+- **Never hand-translate or translate with your own model.** The pipeline holds the glossary and per-language register (de/es/fr/it informal, ru formal) fixed. Hand edits drift, and the next redo overwrites them. To fix a bad translation, change the profile (`src/i18n/translate-profile.ts`) or a check in the core, then rerun. Glossary terms are the one exception: they come from Obsidian's official translations and are edited by hand.
+- **No version to bump.** `locale/state.json` stores a fingerprint of the prompt, the profile and the Ollama model digest per locale. Change any of them and the next run (local or the CI bot) redoes that locale. A new check heals failing entries on the next run (`invalidKeys`).
+- **The pipeline is shared:** `src/i18n/core/` is the canonical copy of the core the plugin and marketing repos vendor byte for byte. After editing it, run `make i18n-core-sync` from the workspace and commit in all three repos (`core/README.md`). A vendored copy edited in place fails its `core-header` test.
+- **Product and plan names are never translated** ("Engram", "Obsidian", "Starter", "Pro", "Open Knowledge Format"; add new ones to `BRANDS` in `translate-profile.ts`). "Free" is translated: it describes the price.
+- **A key the model cannot translate** is recorded in `state.json` `failed` with the day it first failed; the gate tolerates it while listed (English shows meanwhile). The script and the nightly bot fail once it is stuck past 14 days: reword the source string or fix the prompt.
+- **Adding a language:** copy the glossary terms for it from Obsidian's official translations (`obsidianmd/obsidian-translations`) into the new catalog first, then add it to `LOCALES`/`LOCALE_NAMES` (`src/i18n/locales.ts`), `SPECS` (`src/i18n/translate-profile.ts`) and `vendor-locales.ts` (Clerk + Paddle), then run `bun run i18n:translate --locale <code>`.
+- **A counted string is a plural with `{count}`:** `tn()` fills and locale-formats `{count}` itself, so never pass a formatted number under another name (`{n}`); the plural sampler needs `{count}` (`catalog-quality.test.ts` "source strings can be translated").
+- **User-facing text is typed, and tsc enforces it.** `t`/`tn` return `UIText`; UI text props and `notify()` (the only toast API; importing sonner's `toast` is a lint error) accept only `UIText`. Text we show as-is (a server/Clerk error message, user data, a brand name) goes through `untranslated(text)`, the one reviewable exception: grep it. Module-scope label arrays hold `msg()` keys typed `MsgKey`, rendered with `t()`. Never widen a `UIText`/`MsgKey` field back to `string` to make an error go away; a new user-facing prop is `UIText` from day one.
+- **Never suppress the gates:** `noJsxLiterals` (Biome), `keys.test.ts` and `catalog-quality.test.ts`. A genuinely untranslatable string (brand, symbol, code format) goes on the rule's `allowedStrings` in `biome.json`, or on the attribute test's allowlist.
+- Full design, checks and failure modes: `docs/context/webapp-i18n.md`.
+
 ## Logging conventions
 
 **Principle:** every log line must earn its place by serving *alerting* or *diagnosis*. Healthy systems are quiet — logs are for the exceptional. Routine success (e.g. a per-request 2xx) is not logged to Loki.
@@ -572,7 +588,8 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 **Frontend / SPA**
 - Frontend SPA map — bootstrap chain, runtime router, api/sync/realtime layer, viewer/editor (start here for web-app work) → `docs/context/frontend-architecture.md`
 - Form controls and buttons: the one control height (`--spacing-control`), `<Input>` vs raw `<input>`, button role -> variant/size, the `<Button>` className rule → `docs/context/form-controls.md`
-- Spot-checking the ten web-app translations in a browser (language switch and auto-detect, surface checklist, per-locale native-speaker review list, known gaps) → `docs/context/webapp-i18n-spot-check.md`
+- Adding/editing a UI string, adding a language, or a bad translation (translategemma pipeline, diff-only CI bot, model-free gates) → `docs/context/webapp-i18n.md`
+- Spot-checking the twelve web-app translations in a browser (language switch and auto-detect, surface checklist, per-locale native-speaker review list, known gaps) → `docs/context/webapp-i18n-spot-check.md`
 - Wikilink (`[[...]]`) → note resolution in the SPA viewer → `docs/context/spa-wikilink-resolution.md`
 - Footnotes in the CM6 editor: build vs adopt → `docs/context/codemirror-footnote-options.md`
 - Matching Obsidian's real Properties panel CSS/geometry → `docs/context/obsidian-properties-parity.md`

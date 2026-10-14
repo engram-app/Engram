@@ -12,9 +12,9 @@ import {
 	TextCursorInput,
 	Trash2,
 } from "lucide-react";
-import type { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
-import { englishT, englishTn } from "@/i18n/translate";
+import type { Tn } from "@/i18n/translate";
+import type { MsgKey, UIText } from "@/i18n/ui-text";
 
 // Keyed by id rather than carried on each Action — the three lists below repeat
 // the same ids, so one map keeps a single icon per action instead of three.
@@ -69,8 +69,9 @@ const ROOT_ACTIONS: readonly Action[] = [
 	{ id: "new-folder", label: msg("New folder") },
 ];
 
-type Translator = Pick<ReturnType<typeof useT>, "t" | "tn">;
-const ENGLISH: Translator = { t: englishT, tn: englishTn };
+interface Translator {
+	tn: Tn;
+}
 
 export type ActionId =
 	| "new-note"
@@ -85,13 +86,15 @@ export type ActionId =
 	| "view-raw"
 	| "view-reading";
 
-export interface Action {
+// A msg() key for the fixed menus, rendered through t(); selectionActions() builds
+// counted labels already translated (UIText) and flags them, so menus never
+// pass translated text back through t() as if it were a key.
+export type Action = {
 	id: ActionId;
-	label: string;
 	destructive?: boolean;
 	/** Set by `noteMenuActions` for the current view mode. The tree omits it. */
 	active?: boolean;
-}
+} & ({ label: MsgKey; translated?: undefined } | { label: UIText; translated: true });
 
 // Every folder gets the same menu, derived or not. A derived folder has no id
 // to send to the id-keyed batch endpoints, but rename, move and delete all have
@@ -120,28 +123,31 @@ export function actionsFor({
 // folder. Labels carry the count so it's obvious the action hits them all.
 //
 // These labels carry a count, so they are built per call with the caller's
-// translator (`useT()`); the default is the untranslated English one.
+// translator (`useT()`).
 export function selectionActions(
 	kinds: readonly ("file" | "folder" | "attachment")[],
-	{ tn }: Translator = ENGLISH,
+	{ tn }: Translator,
 ): readonly Action[] {
 	const notes = kinds.filter((k) => k === "file").length;
 	return [
 		{
 			id: "move",
 			label: tn({ one: "Move {count} item to…", other: "Move {count} items to…" }, kinds.length),
+			translated: true,
 		},
 		...(notes > 0
 			? [
 					{
 						id: "copy-wikilink" as const,
 						label: tn({ one: "Copy wikilink", other: "Copy {count} wikilinks" }, notes),
+						translated: true as const,
 					},
 				]
 			: []),
 		{
 			id: "delete",
 			label: tn({ one: "Delete {count} item", other: "Delete {count} items" }, kinds.length),
+			translated: true,
 			destructive: true,
 		},
 	];

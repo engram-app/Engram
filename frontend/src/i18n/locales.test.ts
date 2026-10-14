@@ -16,6 +16,10 @@ describe("matchLocale", () => {
 		["zh-Hant-HK", "zh-TW"],
 		["en-GB", "en"],
 		["ja-JP", "ja"],
+		["vi-VN", "vi"],
+		["vi", "vi"],
+		["ms-MY", "ms"],
+		["ms", "ms"],
 	])("%s -> %s", (tag, expected) => {
 		expect(matchLocale(tag)).toBe(expected);
 	});

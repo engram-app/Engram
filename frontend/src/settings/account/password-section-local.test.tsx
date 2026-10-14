@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "../../api/client";
 import { PasswordSectionLocal } from "./password-section-local";
 
 const { logout, apiPost, navigate } = vi.hoisted(() => ({
@@ -12,7 +13,8 @@ vi.mock("../../auth/use-auth-adapter", () => ({
 	useAuthAdapter: () => ({ logout }),
 }));
 
-vi.mock("../../api/client", () => ({
+vi.mock("../../api/client", async (importOriginal) => ({
+	ApiError: (await importOriginal<typeof import("../../api/client")>()).ApiError,
 	api: { post: apiPost },
 }));
 
@@ -59,8 +61,9 @@ describe("PasswordSectionLocal", () => {
 		await waitFor(() => expect(navigate).toHaveBeenCalledWith("/sign-in"));
 	});
 
+	// The server's code maps to a translated sentence; its raw text never shows.
 	it("surfaces backend error and does not sign out", async () => {
-		apiPost.mockReset().mockRejectedValueOnce(new Error("invalid_password"));
+		apiPost.mockReset().mockRejectedValueOnce(new ApiError(422, "invalid_password"));
 		render(<PasswordSectionLocal />);
 		fireEvent.change(screen.getByLabelText(/current password/iu), {
 			target: { value: "wrongpass" },
@@ -71,7 +74,8 @@ describe("PasswordSectionLocal", () => {
 		});
 		fireEvent.click(screen.getByRole("button", { name: /change password/iu }));
 
-		expect(await screen.findByText(/invalid_password/iu)).toBeInTheDocument();
+		expect(await screen.findByText("Incorrect password.")).toBeInTheDocument();
+		expect(screen.queryByText(/invalid_password/iu)).toBeNull();
 		expect(logout).not.toHaveBeenCalled();
 		expect(navigate).not.toHaveBeenCalled();
 	});

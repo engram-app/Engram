@@ -14,7 +14,7 @@ on the other". It was still missed on MCP, because the plug's first clause is:
 def call(%Plug.Conn{method: "POST", request_path: "/api/search"} = conn, _opts)
 ```
 
-MCP is a single route. Every tool (`search_notes`, `create_note`, all 18 of
+MCP is a single route. Every tool (`search_notes`, `create_note`, all 19 of
 them) arrives as `POST /api/mcp` with the operation named in the **JSON-RPC
 body**, not the path. A plug matching on `request_path` therefore sees `/api/mcp`
 and falls through to the `def call(conn, _opts), do: conn` catch-all for the

@@ -19,7 +19,7 @@ name: cron
 on:
   schedule:
     - cron: '30 * * * *'    # e2e-orphans (clerk + qdrant)  (hourly, :30)
-    - cron: '0 3 * * 0'     # runner-cleanup           (Sun 03:00 UTC)
+    - cron: '15 3 * * *'    # runner-cleanup           (daily 03:15 UTC)
     - cron: '0 4 * * 1'     # obsidian-update          (Mon 04:00 UTC)
     - cron: '17 13 * * 1'   # frontend-major-updates   (Mon 13:17 UTC)
     - cron: '0 14 * * 1'    # plan-triage              (Mon 14:00 UTC)
@@ -135,20 +135,50 @@ jobs:
           fi
           python3 e2e/scripts/cleanup_qdrant_collections.py
 
-  # ── Weekly Docker + /tmp prune on the self-hosted runner. Keeps disk
-  # usage bounded so long-running runner VMs don't fill up.
+  # ── Daily disk reap on EVERY runner host. Keeps disk bounded so long-running
+  # runner VMs don't fill up. One leg per host for the same reason as
+  # obsidian-update below: an unpinned job only ever cleaned whichever host it
+  # landed on. On 2026-10-13 the SlowRaid VM hit 96% and killed a release gate
+  # mid-run (no space left on device): a buildx builder leaked by a dead job
+  # (11 GB), 8 cached CodeQL versions (13 GB), a dead job's e2e containers and
+  # 1.4 GB of e2e files in the desktop Trash were none of them reaped.
   runner-cleanup:
     if: |
-      github.event.schedule == '0 3 * * 0'
+      github.event.schedule == '15 3 * * *'
       || github.event.inputs.task == 'runner-cleanup'
-    runs-on: [self-hosted, linux, x64, isolated]
+    strategy:
+      fail-fast: false  # one host being wedged must not skip the other
+      matrix:
+        host: [fastraid, slowraid]
+    runs-on: [self-hosted, linux, x64, isolated, "${{ matrix.host }}"]
     permissions:
       contents: read
     steps:
       - name: Docker cleanup
         run: |
           echo "=== Before ==="
+          df -h / /tmp
           docker system df
+
+          # 0. Reap what a job that died mid-run never tore down. A live job is
+          # far younger than these limits, so only leftovers match.
+          #    - buildx builders (setup-buildx-action removes its builder in a
+          #      post step that never runs when the job dies), with their
+          #      multi-GB `_state` cache volume
+          #    - per-run e2e stacks (engram-e2e-*, engram-unit-test-*)
+          reap() {  # $1 = name regex, $2 = max age in hours
+            now=$(date +%s)
+            docker ps -a --filter "name=$1" --format '{{.Names}}' | while read -r c; do
+              created=$(date -d "$(docker inspect -f '{{.Created}}' "$c")" +%s)
+              if [ $(( (now - created) / 3600 )) -ge "$2" ]; then
+                echo "reaping $c"
+                docker rm -f -v "$c" >/dev/null 2>&1 || true
+                docker volume rm "${c}_state" >/dev/null 2>&1 || true
+              fi
+            done
+          }
+          reap '^buildx_buildkit_' 24
+          reap '^engram-(e2e|unit-test)' 6
 
           # 1. Remove stopped containers + their volumes
           docker container prune -f 2>/dev/null || true
@@ -191,7 +221,21 @@ jobs:
             ! -name 'claude-*' \
             ! -name 'bunx-*' \
             -exec rm -rf {} + 2>/dev/null || true
+          # 10. setup-codeql caches every CodeQL release it ever used
+          #     (~1.5 GB each); keep only the newest.
+          if [ -d /opt/hostedtoolcache/CodeQL ]; then
+            ls -1 /opt/hostedtoolcache/CodeQL | grep -v '\.complete$' | sort -V | head -n -1 \
+              | while read -r v; do
+                  echo "removing CodeQL $v"
+                  rm -rf "/opt/hostedtoolcache/CodeQL/$v" "/opt/hostedtoolcache/CodeQL/$v.complete"
+                done
+          fi
+
+          # 11. Obsidian e2e trashes notes to the desktop Trash, never emptied.
+          find "$HOME/.local/share/Trash" -mindepth 2 -delete 2>/dev/null || true
+
           echo "=== After ==="
+          df -h / /tmp
           docker system df
           echo "=== /tmp ==="
           du -sh /tmp/ 2>/dev/null || true

@@ -94,7 +94,8 @@ defmodule EngramWeb.UsersController do
       role: user.role,
       display_name: user.display_name,
       locale: user.locale,
-      analytics_id: Engram.Observability.PostHog.analytics_id(user.email)
+      analytics_id: Engram.Analytics.client_id(user),
+      analytics_opt_out: Engram.Analytics.opted_out?(user)
     }
   end
 end

@@ -1,15 +1,15 @@
-Config.CSP: Missing Content-Security-Policy,lib/engram_web/router.ex:200,214FBA
+Config.CSP: Missing Content-Security-Policy,lib/engram_web/router.ex:205,1200FE4
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:9,68D560D
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:36,141C874
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:57,107CCB3
 Config.HTTPS: HTTPS Not Enabled,config/prod.exs:0,2B5C077
 Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/crypto.ex:615,29E4953
 Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/crypto/user_dek_rotation.ex:1409,3992A82
-Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:4706,4D97099
-Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:5095,2548BB7
+Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:4705,702004
+Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:5094,2D055C0
 SQL.Query: SQL injection,lib/engram/attachments.ex:1100,5F5BB29
-SQL.Query: SQL injection,lib/engram/notes.ex:6854,3F3495C
-Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/legal/seeder.ex:84,12C6307
+SQL.Query: SQL injection,lib/engram/notes.ex:6853,6905A79
+Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/legal/seeder.ex:93,66A0004
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/release/preflight.ex:117,4094D02
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram_web/controllers/spa_controller.ex:44,6BED2D7
 Traversal.FileModule: Directory Traversal in `File.read`,lib/engram/spa_integrity.ex:43,5D1BE94

@@ -14,11 +14,12 @@ import { Input } from "@/components/ui/input";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { useT } from "@/i18n/locale-provider";
 import type { Translate } from "@/i18n/translate";
+import type { UIText } from "@/i18n/ui-text";
 import { copyToClipboard } from "@/lib/clipboard";
 import { formatDate } from "@/lib/format-date";
 import { intlLocale } from "@/lib/intl-locale";
+import { serverErrorMessage } from "@/lib/server-error";
 import { SettingsSectionCard } from "@/settings/account/section-card";
-import { ApiError } from "../api/client";
 import {
 	type Connection,
 	type CreatedApiKey,
@@ -62,7 +63,7 @@ function useTierCaps() {
 
 interface PendingRevoke {
 	name: string;
-	description: string;
+	description: UIText;
 	onConfirm: () => Promise<unknown>;
 }
 
@@ -447,9 +448,7 @@ function CreatePatModal({
 
 				{Boolean(create.error) && (
 					<p className="text-destructive text-sm" role="alert">
-						{create.error instanceof ApiError
-							? create.error.message
-							: t("Could not create key. Try again.")}
+						{serverErrorMessage(create.error, t("Could not create key. Try again."), t)}
 					</p>
 				)}
 
@@ -575,7 +574,7 @@ function ConfirmRevokeModal({
 	onClose,
 }: {
 	name: string;
-	description: string;
+	description: UIText;
 	onConfirm: () => Promise<unknown>;
 	onClose: () => void;
 }) {
@@ -590,13 +589,7 @@ function ConfirmRevokeModal({
 			await onConfirm();
 			onClose();
 		} catch (e) {
-			setError(
-				e instanceof ApiError
-					? t("{status}: {message}", { status: e.status, message: e.message })
-					: e instanceof Error
-						? e.message
-						: t("Revoke failed"),
-			);
+			setError(serverErrorMessage(e, t("Revoke failed"), t));
 			setSubmitting(false);
 		}
 	}
@@ -643,7 +636,7 @@ function ModalShell({
 	onClose,
 	children,
 }: {
-	title: string;
+	title: UIText;
 	onClose: () => void;
 	children: React.ReactNode;
 }) {
@@ -695,7 +688,7 @@ export default function ConnectionsPage() {
 		return (
 			<p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-destructive text-sm">
 				{t("Failed to load: {message}", {
-					message: error instanceof Error ? error.message : t("unknown error"),
+					message: serverErrorMessage(error, t("unknown error"), t),
 				})}
 			</p>
 		);

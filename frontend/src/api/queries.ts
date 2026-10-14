@@ -8,11 +8,11 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
 import { useNavigate } from "react-router";
-import { toast } from "sonner";
 import { useT } from "@/i18n/locale-provider";
 import type { Translate } from "@/i18n/translate";
 import { collideBump } from "@/lib/collide-bump";
 import { noteName } from "@/lib/note-name";
+import { notify } from "@/lib/notify";
 import { encodePathSegments } from "@/lib/path";
 import { randomUuid } from "@/lib/random-uuid";
 import { uuid7 } from "../crdt/uuid7";
@@ -131,15 +131,15 @@ function renameErrorToast(err: unknown, kind: "file" | "folder", t: Translate) {
 		(err instanceof CrdtOpError && err.reason === "create_failed");
 	const gone = err instanceof ApiError && err.status === 404;
 	if (conflict) {
-		toast.error(
+		notify.error(
 			kind === "file"
 				? t("A note with that name already exists.")
 				: t("A folder with that name already exists."),
 		);
 	} else if (gone) {
-		toast.error(kind === "file" ? t("Note no longer exists.") : t("Folder no longer exists."));
+		notify.error(kind === "file" ? t("Note no longer exists.") : t("Folder no longer exists."));
 	} else {
-		toast.error(t("Rename failed."));
+		notify.error(t("Rename failed."));
 	}
 }
 
@@ -148,9 +148,9 @@ function deleteErrorToast(err: ApiError, kind: "file" | "folder", t: Translate) 
 		return;
 	}
 	if (err.status === 404) {
-		toast.error(kind === "file" ? t("Note no longer exists.") : t("Folder no longer exists."));
+		notify.error(kind === "file" ? t("Note no longer exists.") : t("Folder no longer exists."));
 	} else {
-		toast.error(t("Delete failed."));
+		notify.error(t("Delete failed."));
 	}
 }
 
@@ -456,10 +456,9 @@ export interface User {
 	locale: string | null;
 	// Keyed HMAC of the email, 64-char lowercase hex. Analytics identifies with
 	// this, never with `email` above — see src/auth/use-identify-user-on-auth-change.ts.
-	// Required: GET /me always populates it (schemas/account.ex:21 agrees) —
-	// an optional type here would silently degrade a missing field to "no
-	// identify call" with no type error and no runtime signal.
-	analytics_id: string;
+	// Null only when the user opted out of analytics (`analytics_opt_out`).
+	analytics_id: string | null;
+	analytics_opt_out: boolean;
 }
 
 // Query hooks
@@ -954,11 +953,11 @@ export function useCreateNote() {
 				return;
 			}
 			if (err instanceof CrdtOpError && err.reason === "notes_cap_reached") {
-				toast.error(t("You've hit your note limit — upgrade to add more."));
+				notify.error(t("You've hit your note limit — upgrade to add more."));
 			} else if (err instanceof CrdtOpError && err.reason === "disconnected") {
-				toast.error(t("Reconnecting — can't create notes while offline."));
+				notify.error(t("Reconnecting — can't create notes while offline."));
 			} else {
-				toast.error(t("Couldn't create the note. Try again."));
+				notify.error(t("Couldn't create the note. Try again."));
 			}
 		},
 	});
@@ -1005,11 +1004,11 @@ export function useCreateFolder() {
 		},
 		onError: (err) => {
 			if (err instanceof ApiError && err.status === 422) {
-				toast.error(t("That folder name isn't allowed."));
+				notify.error(t("That folder name isn't allowed."));
 			} else if (err instanceof ApiError && err.status === 403) {
-				toast.error(t("You don't have permission to create folders here."));
+				notify.error(t("You don't have permission to create folders here."));
 			} else {
-				toast.error(t("Couldn't create the folder. Try again."));
+				notify.error(t("Couldn't create the folder. Try again."));
 			}
 		},
 	});
@@ -1484,7 +1483,15 @@ export type FeedbackBody =
 	  }
 	| { kind: "cancel"; reason: string; detail?: string }
 	| { kind: "delete_account"; reason?: string; detail?: string }
-	| { kind: "general"; message: string };
+	| {
+			kind: "general";
+			message: string;
+			category?: string;
+			mood?: number;
+			contact_ok: boolean;
+			source: "web";
+			area: string;
+	  };
 
 // User-voice answers -> backend -> PostHog (server-side, so ad blockers can't
 // drop them). An onboarding submit (answer or skip) also completes the wizard's
@@ -2086,9 +2093,9 @@ export function useDuplicateNote() {
 				(err instanceof ApiError && err.status === 409) ||
 				(err instanceof CrdtOpError && err.reason === "create_failed");
 			if (conflict) {
-				toast.error(t("A note with that name already exists."));
+				notify.error(t("A note with that name already exists."));
 			} else if (!joinRefused(err, t)) {
-				toast.error(t("Failed to duplicate."));
+				notify.error(t("Failed to duplicate."));
 			}
 		},
 		onSettled: () => {
@@ -2150,7 +2157,7 @@ export function useBatchDeleteNotes() {
 		onError: (err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
 			if (!joinRefused(err, t)) {
-				toast.error(t("Batch delete failed."));
+				notify.error(t("Batch delete failed."));
 			}
 		},
 		onSettled: () => {
@@ -2211,7 +2218,7 @@ export function useBatchMoveNotes() {
 		onError: (err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
 			if (!joinRefused(err, t)) {
-				toast.error(t("Batch move failed."));
+				notify.error(t("Batch move failed."));
 			}
 		},
 		onSettled: () => {
@@ -2245,7 +2252,7 @@ export function useBatchDeleteFolders() {
 		onError: (err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
 			if (!joinRefused(err, t)) {
-				toast.error(t("Batch delete failed."));
+				notify.error(t("Batch delete failed."));
 			}
 		},
 		onSettled: () => {
@@ -2292,7 +2299,7 @@ export function useBatchMoveFolders() {
 		onError: (err, _vars, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
 			if (!joinRefused(err, t)) {
-				toast.error(t("Batch move failed."));
+				notify.error(t("Batch move failed."));
 			}
 		},
 		onSettled: () => {
@@ -2347,7 +2354,7 @@ export function useBatchMoveAttachments() {
 		// failures here, matching the note/folder batch hooks.
 		onError: (err) => {
 			if (!joinRefused(err, t)) {
-				toast.error(t("Batch move failed."));
+				notify.error(t("Batch move failed."));
 			}
 		},
 	});
@@ -2369,7 +2376,7 @@ export function useBatchDeleteAttachments() {
 		},
 		onError: (err) => {
 			if (!joinRefused(err, t)) {
-				toast.error(t("Batch delete failed."));
+				notify.error(t("Batch delete failed."));
 			}
 		},
 	});

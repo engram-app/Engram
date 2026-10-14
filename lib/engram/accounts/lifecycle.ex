@@ -14,13 +14,13 @@ defmodule Engram.Accounts.Lifecycle do
 
   alias Engram.Accounts
   alias Engram.Accounts.User
+  alias Engram.Analytics
   alias Engram.Auth.SessionInvalidator
   alias Engram.Billing.Subscription
   alias Engram.Crypto.HMAC
   alias Engram.Indexing
   alias Engram.Logger.Metadata
   alias Engram.Mailer
-  alias Engram.Observability.PostHog
   alias Engram.Repo
   alias Engram.Storage
   alias Engram.Vector.Qdrant
@@ -169,15 +169,6 @@ defmodule Engram.Accounts.Lifecycle do
     _ = wipe_storage_prefix(user, "#{user.id}/")
     _ = wipe_storage_prefix(user, "exports/#{user.id}/")
 
-    # Step 3b: analytics. Right to erasure covers PostHog too — this was
-    # missing until 2026-09-17, so accounts erased before then still have live
-    # person records. Best-effort and non-blocking, same as Qdrant and S3.
-    # Also deletes the legacy Clerk-id-keyed person: every person created
-    # before this work is keyed on the raw Clerk id, not the analytics id, so
-    # erasing only the new key would leave the old record behind.
-    _ = PostHog.delete_person(PostHog.analytics_id(user.email))
-    _ = if user.external_id, do: PostHog.delete_person(user.external_id), else: :ok
-
     # Read before Step 4 deletes the row: the answer a delete_account feedback
     # submit stashed there is sent only once the delete commits.
     profile =
@@ -245,6 +236,12 @@ defmodule Engram.Accounts.Lifecycle do
         _ = delete_clerk_identity(user)
 
         _ = Engram.Feedback.capture_delete_reason(profile)
+
+        # Analytics erasure, only once the delete has committed: queued before
+        # Step 4, a rolled-back delete would still wipe a live user's analytics
+        # (the Step 1 Paddle-retry rule). Covers the analytics-id person and the
+        # legacy Clerk-id one, now and again 10 minutes later; the jobs retry.
+        :ok = Analytics.forget(user)
 
         :ok
 

@@ -2,9 +2,9 @@ import { useReverification, useUser } from "@clerk/react";
 import { isReverificationCancelledError } from "@clerk/react/errors";
 import type { OAuthStrategy } from "@clerk/shared/types";
 import type { ReactNode } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
+import { notify } from "@/lib/notify";
 import { settingsHash } from "../settings-hash";
 import { DiscordIcon } from "./discord-icon";
 import { SettingsSectionCard } from "./section-card";
@@ -76,12 +76,12 @@ export function ConnectedAccountsSection({ providers }: { providers: OAuthStrate
 		try {
 			await disconnect(destroy);
 			await user!.reload();
-			toast.success(t("Account disconnected"));
+			notify.success(t("Account disconnected"));
 		} catch (e) {
 			if (isReverificationCancelledError(e)) {
 				return;
 			}
-			toast.error(t("Could not disconnect account"));
+			notify.error(t("Could not disconnect account"));
 		}
 	}
 
@@ -99,7 +99,7 @@ export function ConnectedAccountsSection({ providers }: { providers: OAuthStrate
 			if (isReverificationCancelledError(e)) {
 				return;
 			}
-			toast.error(t("Could not start connection"));
+			notify.error(t("Could not start connection"));
 		}
 	}
 

@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import type { MsgKey } from "@/i18n/ui-text";
 import type { PropertyType } from "./property-types";
 
 const TYPES: PropertyType[] = ["text", "list", "number", "checkbox", "date", "datetime"];
@@ -15,7 +16,7 @@ const TYPES: PropertyType[] = ["text", "list", "number", "checkbox", "date", "da
 // Obsidian shows the property's type as the leading icon of the key cell, and
 // that icon IS the type picker. The old uppercase text label ate most of the
 // key column for something the icon says in 16px.
-const TYPE_LABELS: Record<PropertyType, string> = {
+const TYPE_LABELS: Record<PropertyType, MsgKey> = {
 	text: msg("text"),
 	list: msg("list"),
 	number: msg("number"),

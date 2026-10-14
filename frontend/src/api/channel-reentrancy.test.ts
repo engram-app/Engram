@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { englishT } from "@/i18n/translate";
 import { connectChannel, disconnectChannel } from "./channel";
 
 // connectChannel runs disconnectChannel() then `await getToken()` before it
@@ -42,6 +43,7 @@ describe("connectChannel re-entrancy", () => {
 					releaseToken = r;
 				}),
 			queryClient,
+			t: englishT,
 		});
 
 		// A vault switch / teardown tears down while the token is still in flight.
@@ -63,6 +65,7 @@ describe("connectChannel re-entrancy", () => {
 					release1 = r;
 				}),
 			queryClient,
+			t: englishT,
 		});
 		const p2 = connectChannel({
 			userId: "u1",
@@ -72,6 +75,7 @@ describe("connectChannel re-entrancy", () => {
 					release2 = r;
 				}),
 			queryClient,
+			t: englishT,
 		});
 
 		release1("t1");

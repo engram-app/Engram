@@ -2,11 +2,12 @@ import { Monitor, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import type { MsgKey } from "@/i18n/ui-text";
 import type { ThemeChoice } from "@/theme/storage";
 import { useTheme } from "@/theme/theme-provider";
 import { SettingsSectionCard } from "./section-card";
 
-const OPTIONS: ReadonlyArray<{ value: ThemeChoice; label: string; Icon: typeof Sun }> = [
+const OPTIONS: ReadonlyArray<{ value: ThemeChoice; label: MsgKey; Icon: typeof Sun }> = [
 	{ value: "light", label: msg("Light"), Icon: Sun },
 	{ value: "dark", label: msg("Dark"), Icon: Moon },
 	{ value: "system", label: msg("System"), Icon: Monitor },

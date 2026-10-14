@@ -4,12 +4,19 @@ import { useIdentifyUserOnAuthChange } from "./use-identify-user-on-auth-change"
 
 const identify = vi.fn();
 const reset = vi.fn();
+const optOut = vi.fn();
+const optIn = vi.fn();
+let optedOut = false;
 const setSentryUser = vi.fn((_id: string | null) => Promise.resolve());
 
 vi.mock("posthog-js", () => ({
 	default: {
 		identify: (...args: unknown[]) => identify(...args),
 		reset: () => reset(),
+		opt_out_capturing: () => optOut(),
+		opt_in_capturing: (...args: unknown[]) => optIn(...args),
+		has_opted_out_capturing: () => optedOut,
+		__loaded: true,
 	},
 }));
 vi.mock("../sentry", () => ({ setSentryUser: (id: string | null) => setSentryUser(id) }));
@@ -19,12 +26,17 @@ const render = (props: {
 	isSignedIn: boolean;
 	id?: string;
 	analyticsId?: string;
+	analyticsOptOut?: boolean;
 }) => renderHook((p: typeof props) => useIdentifyUserOnAuthChange(p), { initialProps: props });
 
 describe("useIdentifyUserOnAuthChange", () => {
 	afterEach(() => {
 		identify.mockClear();
 		reset.mockClear();
+		optOut.mockClear();
+		optIn.mockClear();
+		optedOut = false;
+		vi.unstubAllGlobals();
 		setSentryUser.mockClear();
 	});
 
@@ -51,6 +63,34 @@ describe("useIdentifyUserOnAuthChange", () => {
 		// One argument only. A second argument is how a raw email reaches PostHog,
 		// and our privacy policy says it does not.
 		expect(identify.mock.calls[0]).toHaveLength(1);
+	});
+
+	// The privacy policy promises an objecting user's analytics stop entirely,
+	// including the anonymous events the SPA would otherwise keep sending.
+	it("stops all capture for a user who opted out of analytics", () => {
+		render({ isLoaded: true, isSignedIn: true, id: "user_x", analyticsOptOut: true });
+		expect(optOut).toHaveBeenCalledTimes(1);
+		expect(identify).not.toHaveBeenCalled();
+	});
+
+	// posthog-js persists an opt-out in localStorage, which is what keeps an
+	// objecting user silent from page load, before /me answers. It must not
+	// also silence the next person to sign in on this browser.
+	it("lifts a previous user's persisted opt-out before identifying", () => {
+		optedOut = true;
+		render({ isLoaded: true, isSignedIn: true, id: "u2", analyticsId: "b".repeat(64) });
+		expect(optIn).toHaveBeenCalledWith({ captureEventName: false });
+		expect(identify).toHaveBeenCalledWith("b".repeat(64));
+		const [optInAt] = optIn.mock.invocationCallOrder;
+		const [identifyAt] = identify.mock.invocationCallOrder;
+		expect(optInAt).toBeLessThan(identifyAt ?? 0);
+	});
+
+	it("never opts back in a browser that sends Do Not Track", () => {
+		optedOut = true;
+		vi.stubGlobal("navigator", { ...navigator, doNotTrack: "1" });
+		render({ isLoaded: true, isSignedIn: true, id: "u2", analyticsId: "b".repeat(64) });
+		expect(optIn).not.toHaveBeenCalled();
 	});
 
 	it("does not identify before the analytics id has loaded", () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { englishTn } from "@/i18n/translate";
 import { ACTION_ICONS, actionsFor, noteMenuActions, selectionActions } from "./action-list";
 
 describe("actionsFor", () => {
@@ -92,22 +93,24 @@ describe("noteMenuActions", () => {
 
 describe("selectionActions", () => {
 	it("offers move, copy-wikilink and delete, with the count in each label", () => {
-		expect(selectionActions(["file", "file", "folder"])).toEqual([
-			{ id: "move", label: "Move 3 items to…" },
-			{ id: "copy-wikilink", label: "Copy 2 wikilinks" },
-			{ id: "delete", label: "Delete 3 items", destructive: true },
+		expect(selectionActions(["file", "file", "folder"], { tn: englishTn })).toEqual([
+			{ id: "move", label: "Move 3 items to…", translated: true },
+			{ id: "copy-wikilink", label: "Copy 2 wikilinks", translated: true },
+			{ id: "delete", label: "Delete 3 items", destructive: true, translated: true },
 		]);
 	});
 
 	// Only notes have a wikilink worth copying; folders and attachments are
 	// skipped, so the label counts what will actually land on the clipboard.
 	it("drops copy-wikilink when no note is selected", () => {
-		const ids = selectionActions(["folder", "attachment"]).map((a) => a.id);
+		const ids = selectionActions(["folder", "attachment"], { tn: englishTn }).map((a) => a.id);
 		expect(ids).toEqual(["move", "delete"]);
 	});
 
 	it("singular wikilink label for one note", () => {
-		const copy = selectionActions(["file", "attachment"]).find((a) => a.id === "copy-wikilink");
+		const copy = selectionActions(["file", "attachment"], { tn: englishTn }).find(
+			(a) => a.id === "copy-wikilink",
+		);
 		expect(copy?.label).toBe("Copy wikilink");
 	});
 });

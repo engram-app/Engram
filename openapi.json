@@ -5,8 +5,15 @@
       "User": {
         "properties": {
           "analytics_id": {
-            "description": "Keyed pseudonymous identifier (HMAC of the user's email) for client-side analytics identify calls. See Engram.Observability.PostHog.analytics_id/1.",
+            "description": "Keyed pseudonymous identifier (HMAC of the user's email) for client-side analytics identify calls; null when the user opted out. See Engram.Analytics.client_id/1.",
+            "nullable": true,
             "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "analytics_opt_out": {
+            "description": "The user objected to analytics; the client must send nothing.",
+            "type": "boolean",
             "x-struct": null,
             "x-validate": null
           },
@@ -46,7 +53,8 @@
         "required": [
           "id",
           "email",
-          "analytics_id"
+          "analytics_id",
+          "analytics_opt_out"
         ],
         "title": "User",
         "type": "object",

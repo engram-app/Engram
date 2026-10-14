@@ -1,9 +1,9 @@
 import { useReverification, useUser } from "@clerk/react";
 import { isReverificationCancelledError } from "@clerk/react/errors";
 import { useRef } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
+import { notify } from "@/lib/notify";
 import { clerkErrorMessage } from "./clerk-errors";
 import { SettingsSectionCard } from "./section-card";
 
@@ -25,12 +25,12 @@ export function ProfileSection() {
 		}
 		try {
 			await setProfileImage(file);
-			toast.success(t("Profile image updated"));
+			notify.success(t("Profile image updated"));
 		} catch (err) {
 			if (isReverificationCancelledError(err)) {
 				return;
 			}
-			toast.error(clerkErrorMessage(err, t("Could not update image")));
+			notify.error(clerkErrorMessage(err, t("Could not update image")));
 		} finally {
 			// Reset so picking the same file again still fires onChange.
 			e.target.value = "";

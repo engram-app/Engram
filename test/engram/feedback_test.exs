@@ -195,6 +195,127 @@ defmodule Engram.FeedbackTest do
       assert {:error, :empty_message} = Feedback.submit(user, "general", %{"message" => "   "})
       assert {:error, :empty_message} = Feedback.submit(user, "general", %{})
     end
+
+    test "carries category, mood, contact consent and client context", %{user: user} do
+      assert :ok =
+               Feedback.submit(user, "general", %{
+                 "message" => "sync stalls",
+                 "category" => "bug",
+                 "mood" => 2,
+                 "contact_ok" => true,
+                 "source" => "plugin",
+                 "app_version" => "1.33.4",
+                 "area" => "settings/sync",
+                 "user_agent" => "Mozilla/5.0 obsidian/1.9.10"
+               })
+
+      assert_receive {:posthog, %{"event" => "user_feedback", "properties" => props}}, 1_000
+
+      assert %{
+               "category" => "bug",
+               "mood" => 2,
+               "contact_ok" => true,
+               "source" => "plugin",
+               "app_version" => "1.33.4",
+               "area" => "settings/sync",
+               "user_agent" => "Mozilla/5.0 obsidian/1.9.10",
+               "plan" => "free"
+             } = props
+
+      assert is_binary(props["server_version"])
+    end
+
+    test "defaults source to web and contact_ok to false", %{user: user} do
+      assert :ok = Feedback.submit(user, "general", %{"message" => "hi"})
+      assert_receive {:posthog, %{"properties" => props}}, 1_000
+      assert props["source"] == "web"
+      assert props["contact_ok"] == false
+      refute Map.has_key?(props, "category")
+      refute Map.has_key?(props, "mood")
+    end
+
+    test "accepts MCP fields and rejects a bad initiated_by or tool_name", %{user: user} do
+      assert :ok =
+               Feedback.submit(user, "general", %{
+                 "message" => "hi",
+                 "source" => "mcp",
+                 "category" => "missing_capability",
+                 "initiated_by" => "model",
+                 "tool_name" => "search_notes"
+               })
+
+      assert_receive {:posthog, %{"properties" => props}}, 1_000
+      assert props["initiated_by"] == "model"
+      assert props["tool_name"] == "search_notes"
+
+      base = %{"message" => "hi", "source" => "mcp"}
+
+      assert {:error, :invalid_initiated_by} =
+               Feedback.submit(user, "general", Map.put(base, "initiated_by", "bot"))
+
+      # A tool name that is not a plain identifier is dropped, not stored.
+      assert :ok =
+               Feedback.submit(user, "general", Map.put(base, "tool_name", "Diary.md secret"))
+
+      assert_receive {:posthog, %{"properties" => props}}, 1_000
+      refute Map.has_key?(props, "tool_name")
+    end
+
+    test "rejects an unknown category, mood or source", %{user: user} do
+      base = %{"message" => "hi"}
+
+      assert {:error, :invalid_category} =
+               Feedback.submit(user, "general", Map.put(base, "category", "rant"))
+
+      for mood <- [0, 6, "3", 2.5] do
+        assert {:error, :invalid_mood} =
+                 Feedback.submit(user, "general", Map.put(base, "mood", mood))
+      end
+
+      assert {:error, :invalid_source} =
+               Feedback.submit(user, "general", Map.put(base, "source", "ios"))
+    end
+
+    test "drops overlong client tokens and caps the user agent", %{user: user} do
+      assert :ok =
+               Feedback.submit(user, "general", %{
+                 "message" => "hi",
+                 "app_version" => String.duplicate("9", 500),
+                 "area" => String.duplicate("a", 500),
+                 "user_agent" => String.duplicate("u", 500)
+               })
+
+      assert_receive {:posthog, %{"properties" => props}}, 1_000
+      # Overlong tokens are dropped, not truncated: a cut value is a wrong one.
+      refute Map.has_key?(props, "app_version")
+      refute Map.has_key?(props, "area")
+      assert String.length(props["user_agent"]) == 300
+    end
+  end
+
+  describe "general reply consent" do
+    test "carries the email only when the user said we can reply", %{user: user} do
+      assert :ok = Feedback.submit(user, "general", %{"message" => "hi"})
+      assert_receive {:posthog, %{"properties" => props}}, 1_000
+      refute Map.has_key?(props, "contact_email")
+
+      assert :ok = Feedback.submit(user, "general", %{"message" => "hi", "contact_ok" => true})
+      assert_receive {:posthog, %{"properties" => props}}, 1_000
+      assert props["contact_email"] == user.email
+    end
+
+    test "drops a client area or version that is not a plain token", %{user: user} do
+      assert :ok =
+               Feedback.submit(user, "general", %{
+                 "message" => "hi",
+                 "area" => "x`\nuser forged a@b.com",
+                 "app_version" => "1.0 a@b.com"
+               })
+
+      assert_receive {:posthog, %{"properties" => props}}, 1_000
+      refute Map.has_key?(props, "area")
+      refute Map.has_key?(props, "app_version")
+    end
   end
 
   test "caps free text at 2000 chars", %{user: user} do

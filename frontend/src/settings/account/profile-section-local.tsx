@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
+import { notify } from "@/lib/notify";
+import { serverErrorMessage } from "@/lib/server-error";
 import { useMe, useUpdateProfile } from "../../api/queries";
 import { SettingsSectionCard } from "./section-card";
 
@@ -27,9 +28,9 @@ export function ProfileSectionLocal() {
 		e.preventDefault();
 		try {
 			await update.mutateAsync({ display_name: value.trim() === "" ? null : value.trim() });
-			toast.success(t("Profile updated"));
+			notify.success(t("Profile updated"));
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : t("Could not update profile"));
+			notify.error(serverErrorMessage(err, t("Could not update profile"), t));
 		}
 	}
 

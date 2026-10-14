@@ -1960,7 +1960,7 @@ defmodule EngramWeb.CrdtChannel do
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new()
 
-    Engram.Observability.PostHog.capture_activity(
+    Engram.Analytics.track_activity(
       socket.assigns.current_user,
       :obsidian_sync,
       props

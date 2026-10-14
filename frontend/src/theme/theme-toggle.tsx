@@ -8,10 +8,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
+import type { MsgKey } from "@/i18n/ui-text";
 import type { ThemeChoice } from "./storage";
 import { useTheme } from "./theme-provider";
 
-const OPTIONS: ReadonlyArray<{ value: ThemeChoice; label: string; Icon: typeof Sun }> = [
+const OPTIONS: ReadonlyArray<{ value: ThemeChoice; label: MsgKey; Icon: typeof Sun }> = [
 	{ value: "light", label: msg("Light"), Icon: Sun },
 	{ value: "dark", label: msg("Dark"), Icon: Moon },
 	{ value: "system", label: msg("System"), Icon: Monitor },
@@ -19,7 +20,7 @@ const OPTIONS: ReadonlyArray<{ value: ThemeChoice; label: string; Icon: typeof S
 
 // Whole-sentence keys so each language orders the words itself (and English stays
 // "Theme: system", lowercase, exactly as before the app was translated).
-const THEME_LABELS: Record<ThemeChoice, string> = {
+const THEME_LABELS: Record<ThemeChoice, MsgKey> = {
 	light: msg("Theme: light"),
 	dark: msg("Theme: dark"),
 	system: msg("Theme: system"),

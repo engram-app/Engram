@@ -1,11 +1,12 @@
 import { CreditCard, type LucideIcon, Plug, ShieldCheck, User, Vault } from "lucide-react";
 import { msg } from "@/i18n/msg";
+import type { MsgKey } from "@/i18n/ui-text";
 import type { EngramConfig } from "../config";
 import type { SettingsSectionKey } from "./settings-hash";
 
 export interface SettingsSection {
 	key: SettingsSectionKey;
-	label: string;
+	label: MsgKey;
 	// The nav's leading glyph. Lives here rather than in settings-layout so the
 	// section list stays the single place a new section is declared.
 	icon: LucideIcon;

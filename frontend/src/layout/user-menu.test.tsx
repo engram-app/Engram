@@ -8,6 +8,9 @@ vi.mock("../auth/use-auth-adapter", () => ({
 	useAuthAdapter: () => ({ user: { email: "todd@example.com" }, logout: vi.fn() }),
 }));
 
+const config = vi.hoisted(() => ({ billingEnabled: true }));
+vi.mock("../config-context", () => ({ useConfig: () => config }));
+
 vi.mock("../feedback/feedback-dialog", () => ({
 	FeedbackDialog: ({ open }: { open: boolean }) => (open ? <p>feedback dialog open</p> : null),
 }));
@@ -59,6 +62,14 @@ describe("UserMenu — theme row", () => {
 });
 
 describe("UserMenu — feedback", () => {
+	it("hides Send feedback on self-host, where nobody receives it", () => {
+		config.billingEnabled = false;
+		renderUserMenu();
+		openMenu();
+		expect(screen.queryByRole("menuitem", { name: /send feedback/iu })).toBeNull();
+		config.billingEnabled = true;
+	});
+
 	it("opens the feedback dialog from the menu", () => {
 		renderUserMenu();
 		openMenu();
