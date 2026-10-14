@@ -11,6 +11,12 @@ defmodule EngramWeb.Schemas.User do
       email: %Schema{type: :string, format: :email},
       role: %Schema{type: :string, example: "user"},
       display_name: %Schema{type: :string, nullable: true},
+      locale: %Schema{
+        type: :string,
+        nullable: true,
+        description: "UI language as a BCP 47 tag, as last reported by a client.",
+        example: "pt-BR"
+      },
       analytics_id: %Schema{
         type: :string,
         nullable: true,
@@ -48,8 +54,17 @@ defmodule EngramWeb.Schemas.UpdateProfileRequest do
   OpenApiSpex.schema(%{
     title: "UpdateProfileRequest",
     type: :object,
-    properties: %{display_name: %Schema{type: :string, nullable: true}},
-    example: %{"display_name" => "Ada Lovelace"}
+    properties: %{
+      display_name: %Schema{type: :string, nullable: true},
+      locale: %Schema{
+        type: :string,
+        description: "BCP 47 language tag, stored in canonical casing",
+        pattern: "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$",
+        maxLength: 35,
+        example: "pt-BR"
+      }
+    },
+    example: %{"display_name" => "Ada Lovelace", "locale" => "en"}
   })
 end
 

@@ -4,8 +4,60 @@ defmodule Engram.Accounts.ProfileTest do
   import Mox
 
   alias Engram.Accounts
+  alias Engram.Repo
 
   describe "update_profile/2" do
+    test "stores the UI language as a BCP 47 tag" do
+      {:ok, user} = Accounts.create_user_with_password("lena@example.com", "password123")
+
+      assert {:ok, updated} = Accounts.update_profile(user, %{locale: "pt-BR"})
+      assert updated.locale == "pt-BR"
+
+      assert {:ok, updated} = Accounts.update_profile(updated, %{locale: "vi"})
+      assert updated.locale == "vi"
+    end
+
+    test "rejects a locale that is not a language tag" do
+      {:ok, user} = Accounts.create_user_with_password("mo@example.com", "password123")
+
+      for bad <- ["", "english", "en_US", "en-", "<script>", String.duplicate("a", 36)] do
+        assert {:error, %Ecto.Changeset{} = cs} = Accounts.update_profile(user, %{locale: bad}),
+               "accepted #{inspect(bad)}"
+
+        assert %{locale: [_ | _]} = errors_on(cs)
+      end
+    end
+
+    test "rejects a null locale instead of wiping the stored one" do
+      {:ok, user} = Accounts.create_user_with_password("ola@example.com", "password123")
+      {:ok, tagged} = Accounts.update_profile(user, %{locale: "de"})
+
+      assert {:error, cs} = Accounts.update_profile(tagged, %{locale: nil})
+      assert %{locale: [_ | _]} = errors_on(cs)
+      assert Repo.reload!(tagged).locale == "de"
+    end
+
+    test "stores the canonical casing of a language tag" do
+      {:ok, user} = Accounts.create_user_with_password("pia@example.com", "password123")
+
+      for {sent, stored} <- [
+            {"PT-br", "pt-BR"},
+            {"ZH-hant-tw", "zh-Hant-TW"},
+            {"ES-419", "es-419"},
+            {"EN", "en"}
+          ] do
+        assert {:ok, updated} = Accounts.update_profile(user, %{locale: sent})
+        assert updated.locale == stored, "#{sent} stored as #{updated.locale}"
+      end
+    end
+
+    test "leaves locale alone when only display_name changes" do
+      {:ok, user} = Accounts.create_user_with_password("ned@example.com", "password123")
+      {:ok, tagged} = Accounts.update_profile(user, %{locale: "de"})
+      {:ok, renamed} = Accounts.update_profile(tagged, %{display_name: "Ned"})
+      assert renamed.locale == "de"
+    end
+
     test "updates display_name" do
       {:ok, user} = Accounts.create_user_with_password("alice@example.com", "password123")
 

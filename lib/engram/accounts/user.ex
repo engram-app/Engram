@@ -15,6 +15,8 @@ defmodule Engram.Accounts.User do
     field :password_hash, :string, redact: true
     field :role, :string, default: "member"
     field :display_name, :string, redact: true
+    # UI language as a BCP 47 tag ("pt-BR"), reported by the web app / plugin.
+    field :locale, :string
     field :encrypted_dek, :binary, redact: true
     field :dek_version, :integer, default: 1, redact: true
     field :key_provider, :string, default: "local", redact: true
