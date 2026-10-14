@@ -88,7 +88,7 @@ defmodule Engram.OAuthRefreshGraceTest do
       end)
 
     assert_received {:rt3, rt3}
-    assert log =~ "oauth_refresh_reuse"
+    assert log =~ "oauth_refresh_grace_reissue"
     assert log =~ "within_grace=true"
 
     assert row(rt2).revoked_at
@@ -129,5 +129,61 @@ defmodule Engram.OAuthRefreshGraceTest do
 
     assert {:error, {:invalid_grant, _}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
     assert live_in_family(row(rt3).family_id) == 0
+  end
+
+  # Review of #1974: every re-issue is visible, with whether it came from the
+  # address that received the successor. A thief replaying from elsewhere
+  # inside the window still gets a token, so this is the trail.
+  test "a re-issue logs the client and whether the IP matched the rotation", ctx do
+    {:ok, _} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id, ip: "203.0.113.7")
+
+    log =
+      capture_log(fn ->
+        assert {:ok, _} =
+                 OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id, ip: "198.51.100.9")
+      end)
+
+    assert log =~ "oauth_refresh_grace_reissue"
+    assert log =~ "client_id=#{row(ctx.rt1).client_id}"
+    assert log =~ "ip_matched=false"
+  end
+
+  test "a re-issue from the rotation's own IP logs ip_matched=true", ctx do
+    {:ok, _} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id, ip: "203.0.113.7")
+
+    log =
+      capture_log(fn ->
+        assert {:ok, _} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id, ip: "203.0.113.7")
+      end)
+
+    assert log =~ "oauth_refresh_grace_reissue"
+    assert log =~ "ip_matched=true"
+  end
+
+  # Only one of the two holders can be the client. If the successor the grace
+  # revoked turns up later, someone else had a copy: the family dies.
+  test "the revoked successor used after a re-issue revokes the family", ctx do
+    {:ok, %{refresh_token: rt2}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+    {:ok, %{refresh_token: rt3}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+
+    assert {:error, {:invalid_grant, :refresh_token_revoked}} =
+             OAuth.rotate_refresh_token(rt2, ctx.client_id)
+
+    assert live_in_family(row(rt3).family_id) == 0
+  end
+
+  test "a replay from another client never re-issues", ctx do
+    {:ok, other} =
+      OAuth.register_client(%{
+        "redirect_uris" => ["https://example.com/cb"],
+        "client_name" => "Other"
+      })
+
+    {:ok, %{refresh_token: rt2}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+
+    assert {:error, {:invalid_grant, :client_mismatch}} =
+             OAuth.rotate_refresh_token(ctx.rt1, other.client_id)
+
+    refute row(rt2).revoked_at
   end
 end

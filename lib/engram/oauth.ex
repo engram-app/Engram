@@ -582,26 +582,48 @@ defmodule Engram.OAuth do
     # rotate_existing/3 — those read a value that was already set, which is a
     # TOCTOU and cannot serialize concurrent rotations; only `WHERE consumed_at
     # IS NULL` in the UPDATE can. A 0-row result means another request won that
-    # race, so the token we hold is a now-consumed one being replayed.
-    case from(r in RefreshToken, where: r.id == ^rt.id and is_nil(r.consumed_at))
-         |> Repo.update_all([set: [consumed_at: now]], skip_tenant_check: true) do
-      {0, _} -> replay(rt, :refresh_token_reuse, within_grace: false)
-      {1, _} -> mint_rotation_successor(rt, ip)
+    # race.
+    #
+    # The consume and the mint commit together, so the loser's UPDATE waits on
+    # the winner's row lock and, once it returns 0 rows, the winner's successor
+    # is already visible. The loser then re-reads the row and goes back through
+    # rotate_existing/3: a racing duplicate is the lost-response case and gets
+    # the grace path, not a family revoke (review of #1974).
+    Repo.transaction(fn ->
+      case from(r in RefreshToken, where: r.id == ^rt.id and is_nil(r.consumed_at))
+           |> Repo.update_all([set: [consumed_at: now]], skip_tenant_check: true) do
+        {0, _} -> Repo.rollback(:lost_race)
+        {1, _} -> rt |> mint_rotation_successor(ip) |> commit_or_rollback()
+      end
+    end)
+    |> case do
+      {:ok, response} -> {:ok, response}
+      {:error, :lost_race} -> rotate_lost_race(rt, ip)
+      {:error, reason} -> {:error, reason}
     end
   end
 
+  # Re-read, so the row's own state picks the clause. Nil means it was deleted
+  # meanwhile; a row still unconsumed cannot happen (the UPDATE saw it
+  # consumed), but recursing on it again would loop, so it is reuse.
+  defp rotate_lost_race(rt, ip) do
+    case Repo.get(RefreshToken, rt.id, skip_tenant_check: true) do
+      nil -> grant_error(:refresh_token_unknown)
+      %RefreshToken{consumed_at: nil} -> replay(rt, :refresh_token_reuse, within_grace: false)
+      fresh -> rotate_existing(fresh, fresh.client_id, ip)
+    end
+  end
+
+  defp commit_or_rollback({:ok, response}), do: response
+  defp commit_or_rollback({:error, reason}), do: Repo.rollback(reason)
+
+  # Callers run this inside a transaction, which undoes the insert when the
+  # user lookup fails (it should not: the user_id FK guarantees the row).
   defp mint_rotation_successor(rt, ip) do
     {:ok, refresh_raw, refresh_row} = insert_refresh_token(grant_attrs(rt, rt.family_id, ip))
 
-    case fetch_user(rt.user_id) do
-      {:ok, user} ->
-        {:ok, build_token_response(user, rt, refresh_raw, refresh_row)}
-
-      err ->
-        # Roll back the new refresh row if user lookup failed (shouldn't
-        # happen — user_id FK guarantees existence — but keep tidy).
-        Repo.delete!(refresh_row, skip_tenant_check: true)
-        err
+    with {:ok, user} <- fetch_user(rt.user_id) do
+      {:ok, build_token_response(user, rt, refresh_raw, refresh_row)}
     end
   end
 
@@ -640,6 +662,13 @@ defmodule Engram.OAuth do
   # spent: any later replay of it revokes the family as before.
   #
   # The raw successor cannot simply be returned again: only its hash is stored.
+  #
+  # The tradeoff (docs/context/api-access-and-mcp-limits.md): inside the window
+  # whoever presents the old token first gets the new one. The client check
+  # (rotate_existing/3) and client authentication (the token controller, before
+  # this runs) still apply, every re-issue logs whether the caller's IP matched
+  # the rotation's, and the revoked successor turning up later revokes the
+  # family through the `revoked_at` clause.
   defp grace_reissue(rt, ip) do
     now = DateTime.utc_now(:second)
 
@@ -652,14 +681,14 @@ defmodule Engram.OAuth do
                now
              ),
            {:ok, response} <- mint_rotation_successor(rt, ip) do
-        response
+        {response, successor.last_used_ip == ip}
       else
         _ -> Repo.rollback(:not_eligible)
       end
     end)
     |> case do
-      {:ok, response} ->
-        log_reuse(rt, within_grace: true)
+      {:ok, {response, ip_matched}} ->
+        log_reuse(rt, within_grace: true, ip_matched: ip_matched)
         {:ok, response}
 
       {:error, _} ->
@@ -686,7 +715,9 @@ defmodule Engram.OAuth do
     |> Repo.update_all([set: [revoked_at: now]], skip_tenant_check: true)
   end
 
-  defp log_reuse(rt, within_grace: within_grace) do
+  defp log_reuse(rt, opts) do
+    within_grace = Keyword.fetch!(opts, :within_grace)
+
     {family, _registration} =
       Client |> Repo.get(rt.client_id, skip_tenant_check: true) |> McpClient.of_client()
 
@@ -695,14 +726,14 @@ defmodule Engram.OAuth do
       client: family
     })
 
+    # Strings: the text formatter drops `false` metadata entirely.
+    metadata =
+      [within_grace: to_string(within_grace), client_id: rt.client_id, family_id: rt.family_id] ++
+        if(within_grace, do: [ip_matched: to_string(Keyword.fetch!(opts, :ip_matched))], else: [])
+
     Logger.warning(
-      "oauth_refresh_reuse",
-      Metadata.with_category(:warning, :lifecycle,
-        # A string: the text formatter drops `false` metadata entirely.
-        within_grace: to_string(within_grace),
-        client_id: rt.client_id,
-        family_id: rt.family_id
-      )
+      if(within_grace, do: "oauth_refresh_grace_reissue", else: "oauth_refresh_reuse"),
+      Metadata.with_category(:warning, :lifecycle, metadata)
     )
   end
 

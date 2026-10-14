@@ -99,6 +99,35 @@ defmodule Engram.OAuthSingleUseTest do
     end
   end
 
+  # Review of #1974: two rotations of one token racing (a client retrying
+  # before the first response landed) are the lost-response case, not theft.
+  # The loser goes through the grace path instead of revoking the family.
+  test "two concurrent rotations both succeed and leave one live token" do
+    user = insert(:user)
+    params = exchange_params(user)
+    {:ok, %{refresh_token: refresh_raw}} = OAuth.exchange_authorization_code(params)
+
+    results =
+      1..2
+      |> Enum.map(fn _ ->
+        Task.async(fn -> OAuth.rotate_refresh_token(refresh_raw, params["client_id"]) end)
+      end)
+      |> Task.await_many(30_000)
+
+    assert [{:ok, _}, {:ok, _}] = results
+
+    live =
+      Engram.Repo.aggregate(
+        from(r in Engram.OAuth.RefreshToken,
+          where: r.user_id == ^user.id and is_nil(r.consumed_at) and is_nil(r.revoked_at)
+        ),
+        :count,
+        skip_tenant_check: true
+      )
+
+    assert live == 1
+  end
+
   test "authorization code and refresh token both accept a vault_ids array" do
     a = Ecto.UUID.generate()
     b = Ecto.UUID.generate()
