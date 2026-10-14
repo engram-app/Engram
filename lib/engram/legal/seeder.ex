@@ -18,7 +18,14 @@ defmodule Engram.Legal.Seeder do
   # IMPORTANT: every version present in the vendored manifest MUST have an entry
   # here, or `meta!/2` raises at boot (fail-loud). So a legal bump is a TWO-file
   # change: add the version→hash to priv/legal/legal-manifest.json AND its
-  # material/effective_date/changelog here. (P5 will automate this cross-repo.)
+  # material/effective_date/changelog here.
+  #
+  # Users are told automatically (`Engram.Workers.LegalNoticeDispatch`): a
+  # version with a FUTURE effective_date emails everyone and shows the in-app
+  # notice until that date. `effective_date: nil` means effective at once and
+  # silent, which is for wording fixes only. A material change after a
+  # document's first version needs an effective_date 30+ days after its
+  # version date (ToS §13); `notice_violations/0` enforces it in CI.
   @version_meta %{
     "terms_of_service" => %{
       "2026-05-19" => %{material: true, effective_date: nil, changelog: "Initial version."}
@@ -66,6 +73,23 @@ defmodule Engram.Legal.Seeder do
 
     :ok
   end
+
+  @notice_days 30
+
+  @doc "Material versions that give less than #{@notice_days} days' notice. Must be []."
+  @spec notice_violations(map()) :: [{String.t(), String.t()}]
+  def notice_violations(meta \\ @version_meta) do
+    for {document, versions} <- Enum.sort(meta),
+        # The first version per document is the publish-day baseline.
+        {version, %{material: true} = m} <- versions |> Enum.sort() |> Enum.drop(1),
+        not gives_notice?(version, m.effective_date),
+        do: {document, version}
+  end
+
+  defp gives_notice?(_version, nil), do: false
+
+  defp gives_notice?(version, effective_date),
+    do: Date.diff(effective_date, Date.from_iso8601!(version)) >= @notice_days
 
   @spec verify() :: :ok
   def verify do

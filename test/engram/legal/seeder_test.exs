@@ -39,4 +39,27 @@ defmodule Engram.Legal.SeederTest do
 
     assert_raise RuntimeError, ~r/hash drift/i, fn -> Seeder.verify() end
   end
+
+  describe "notice_violations" do
+    test "the shipped version meta gives every material change 30 days' notice" do
+      assert Seeder.notice_violations() == []
+    end
+
+    test "flags a material change after the first with no or short notice" do
+      meta = %{
+        "terms_of_service" => %{
+          "2026-05-19" => %{material: true, effective_date: nil},
+          "2026-07-01" => %{material: true, effective_date: nil},
+          "2026-08-01" => %{material: true, effective_date: ~D[2026-08-20]},
+          "2026-09-01" => %{material: true, effective_date: ~D[2026-10-01]},
+          "2026-09-02" => %{material: false, effective_date: nil}
+        }
+      }
+
+      assert Seeder.notice_violations(meta) == [
+               {"terms_of_service", "2026-07-01"},
+               {"terms_of_service", "2026-08-01"}
+             ]
+    end
+  end
 end

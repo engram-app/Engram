@@ -18,10 +18,21 @@ defmodule Engram.Legal do
   # it only equals calendar ordering because versions are constrained to
   # YYYY-MM-DD by TermsVersion's validate_format. Keep that constraint.
 
-  @spec required_floor(document :: String.t()) :: String.t() | nil
-  def required_floor(document) do
-    today = Date.utc_today()
+  @urls %{
+    "terms_of_service" => "https://engram.page/terms",
+    "privacy_policy" => "https://engram.page/privacy"
+  }
 
+  @doc "Public page for a document."
+  @spec url(String.t()) :: String.t()
+  def url(document), do: Map.fetch!(@urls, document)
+
+  @doc "Where a signed-in user reviews and accepts the current versions."
+  @spec accept_url() :: String.t()
+  def accept_url, do: "https://app.engram.page/onboard/agreement"
+
+  @spec required_floor(document :: String.t(), today :: Date.t()) :: String.t() | nil
+  def required_floor(document, today \\ Date.utc_today()) do
     from(v in TermsVersion,
       where: v.document == ^document and v.material == true,
       where: is_nil(v.effective_date) or v.effective_date <= ^today,

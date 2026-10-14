@@ -17,6 +17,9 @@ defmodule Engram.Legal.TermsVersion do
     field :material, :boolean, default: true
     field :effective_date, :date
     field :changelog, :string
+    # Stamped by `Engram.Workers.LegalNoticeDispatch`; never cast, never seeded.
+    field :notified_at, :utc_datetime_usec
+    field :reminded_at, :utc_datetime_usec
 
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end

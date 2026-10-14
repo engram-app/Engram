@@ -454,7 +454,7 @@ defmodule Engram.OnboardingTest do
     end
   end
 
-  describe "computed floor gate + terms_notice" do
+  describe "computed floor gate + legal_notices" do
     setup do
       prev_enabled = Application.get_env(:engram, :billing_enabled)
       LegalFixtures.reset_version_cache()
@@ -482,7 +482,7 @@ defmodule Engram.OnboardingTest do
 
       status = Onboarding.status(user)
       assert status.terms_ok
-      assert status.terms_notice == nil
+      assert status.legal_notices == []
     end
 
     test "notice present but terms_ok still true during the window (new material version, future effective_date)" do
@@ -506,8 +506,7 @@ defmodule Engram.OnboardingTest do
 
       status = Onboarding.status(user)
       assert status.terms_ok
-      assert status.terms_notice.version == "2026-06-01"
-      assert status.terms_notice.effective_date == ~D[2099-01-01]
+      assert [%{version: "2026-06-01", effective_date: ~D[2099-01-01]}] = status.legal_notices
     end
 
     test "terms_ok false once the new material version is effective and unaccepted" do

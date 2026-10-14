@@ -21,7 +21,6 @@ defmodule EngramWeb.OnboardingController do
     Onboarding.status(user)
     |> Map.update!(:next_step, &Atom.to_string/1)
     |> Map.update!(:steps, fn steps -> Enum.map(steps, &Atom.to_string/1) end)
-    |> reject_nil_notice()
     |> reject_empty_profile()
     |> Map.put(:actions, Onboarding.list_actions(user.id))
     |> Map.put(:vault_count, Engram.Vaults.count_for(user))
@@ -42,10 +41,6 @@ defmodule EngramWeb.OnboardingController do
   def record(conn, _params) do
     conn |> put_status(422) |> json(%{error: "missing_action"})
   end
-
-  # Drop terms_notice from the wire when there's nothing to notify.
-  defp reject_nil_notice(%{terms_notice: nil} = s), do: Map.delete(s, :terms_notice)
-  defp reject_nil_notice(s), do: s
 
   # Drop profile from the wire until the user has actually saved one — keeps
   # the questionnaire-incomplete payload identical to its pre-profile shape.
@@ -113,7 +108,6 @@ defmodule EngramWeb.OnboardingController do
         Onboarding.status(updated)
         |> Map.update!(:next_step, &Atom.to_string/1)
         |> Map.update!(:steps, fn steps -> Enum.map(steps, &Atom.to_string/1) end)
-        |> reject_nil_notice()
         |> reject_empty_profile()
 
       json(conn, payload)

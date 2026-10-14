@@ -11,6 +11,7 @@ defmodule Engram.Mailer do
   - `send_inactivity_warning_80/1`
   - `send_account_deleted_notice/2`
   - `send_vault_deletion_notice/4`
+  - `send_legal_notice/3`
   """
 
   alias Engram.Accounts.User
@@ -147,6 +148,50 @@ defmodule Engram.Mailer do
     """
 
     render_and_deliver(email, "Your Engram vault was deleted", body)
+  end
+
+  @document_names %{
+    "terms_of_service" => "Terms of Service",
+    "privacy_policy" => "Privacy Policy"
+  }
+
+  @doc """
+  Tells a user about a legal change (`kind` "notice" when it is published,
+  "reminder" before a material change takes effect). `version` is the
+  `Engram.Legal.TermsVersion` row; its changelog is the "what changed" line.
+  """
+  def send_legal_notice(%User{email: email} = user, version, kind)
+      when kind in ["notice", "reminder"] do
+    doc = Map.fetch!(@document_names, version.document)
+    date = Calendar.strftime(version.effective_date, "%B %-d, %Y")
+
+    subject =
+      if kind == "reminder",
+        do: "Reminder: Engram's #{doc} changes on #{date}",
+        else: "We updated Engram's #{doc}"
+
+    action =
+      if version.material,
+        do: """
+        <mj-text>To keep using Engram after that date, review and accept the new
+        version in the app.</mj-text>
+        <mj-button href="#{Engram.Legal.accept_url()}" background-color="#{Tokens.brand_purple()}" color="#{Tokens.brand_purple_fg()}">Review and accept</mj-button>
+        <mj-text><a href="#{Engram.Legal.url(version.document)}">Read the full #{doc}</a></mj-text>
+        """,
+        else: """
+        <mj-text>No action is needed. It applies from that date.</mj-text>
+        <mj-button href="#{Engram.Legal.url(version.document)}" background-color="#{Tokens.brand_purple()}" color="#{Tokens.brand_purple_fg()}">Read the #{doc}</mj-button>
+        """
+
+    body = """
+    <mj-text font-size="18px" font-weight="600">Hi #{Template.esc(greeting_name(user))}, we updated our #{doc}.</mj-text>
+    <mj-text>What changed: #{Template.esc(version.changelog || "")}</mj-text>
+    <mj-text>The new version takes effect on #{date}.</mj-text>
+    #{action}
+    <mj-text>Questions or objections: privacy@engram.page</mj-text>
+    """
+
+    render_and_deliver(email, subject, body)
   end
 
   # Render an MJML body to HTML, then deliver. A render failure becomes a

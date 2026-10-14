@@ -12,7 +12,6 @@ defmodule Engram.Onboarding do
 
   alias Engram.Accounts
   alias Engram.Cache
-  alias Engram.Legal
   alias Engram.Legal.VersionCache
   alias Engram.Logger.Metadata
   alias Engram.Onboarding.Action
@@ -170,20 +169,12 @@ defmodule Engram.Onboarding do
     * `:subscription_ok` — user has trialing/active/past_due subscription
     * `:current_tos_version` — latest published ToS version (from `terms_versions`)
     * `:current_privacy_version` — latest published Privacy version
-    * `:terms_notice` — metadata for the newest published ToS version the user
-      has not yet accepted (version/effective_date/material/changelog/accept_url),
-      or `nil` when the user is already on the current version
+    * `:legal_notices` — `legal_notices/1`
     * `:next_step` — one of `:agreement | :billing | :tools | :about | :vault | :done`
 
   The gate is computed from the `terms_versions` table via
   `Engram.Legal.VersionCache`: `terms_ok` compares the user's latest accepted
   version against the required floor (latest MATERIAL version effective now).
-
-  `:terms_notice` is independent of `:terms_ok`: it carries the pending version's
-  metadata whenever a newer published version exists unaccepted, and is the same
-  payload the client renders both as the non-blocking notice (while `terms_ok`
-  is still true, before the version's `effective_date`) and as the accept prompt
-  once the version is effective and `terms_ok` has flipped false.
 
   When `billing_enabled` is false (self-host), agreement + billing steps
   short-circuit to ok and the chain falls through to tools → vault. The
@@ -194,8 +185,7 @@ defmodule Engram.Onboarding do
   def status(user) do
     billing_active = Application.get_env(:engram, :billing_enabled, false)
 
-    {terms_ok, current_tos, current_privacy, terms_notice} =
-      terms_state(user, billing_active)
+    {terms_ok, current_tos, current_privacy} = terms_state(user, billing_active)
 
     # Under the Free-tier model: paid tiers (:starter / :pro) pass on tier alone;
     # Free users must EXPLICITLY accept the Free tier via the onboarding wizard
@@ -230,7 +220,7 @@ defmodule Engram.Onboarding do
       has_vault: has_vault,
       current_tos_version: current_tos,
       current_privacy_version: current_privacy,
-      terms_notice: terms_notice,
+      legal_notices: legal_notices(user),
       next_step: next,
       steps: steps
     }
@@ -409,7 +399,7 @@ defmodule Engram.Onboarding do
 
   # Self-host (billing_enabled=false) doesn't run a ToS gate — operators own
   # their legal posture. Hosted mode performs the real cache-backed check.
-  defp terms_state(_user, false), do: {true, nil, nil, nil}
+  defp terms_state(_user, false), do: {true, nil, nil}
 
   defp terms_state(user, true) do
     floor = VersionCache.required_floor(@terms_document)
@@ -417,7 +407,62 @@ defmodule Engram.Onboarding do
     current_privacy = VersionCache.current_version(@privacy_document)
     accepted_tos = accepted_version(user, @terms_document)
     terms_ok = accepted_satisfies?(accepted_tos, floor)
-    {terms_ok, current_tos, current_privacy, notice(@terms_document, current_tos, accepted_tos)}
+    {terms_ok, current_tos, current_privacy}
+  end
+
+  @doc """
+  Legal changes `user` has not accepted whose notice window is open: published,
+  effective on a future date. One map per document (ToS first) with
+  `document/version/effective_date/material/changelog/url/accept_url`.
+
+  The same list feeds the web banner, the plugin, MCP tool results and the
+  notice email (`Engram.Workers.LegalNoticeEmail`). Once the effective date
+  arrives the notice drops: a material change then fails `terms_ok` and the
+  wizard asks for acceptance; a notice-only one simply applies. Empty on
+  self-host. Cached reads only, so per-request callers are cheap.
+  """
+  @spec legal_notices(map()) :: [map()]
+  def legal_notices(user) do
+    if Application.get_env(:engram, :billing_enabled, false) do
+      today = Date.utc_today()
+
+      Enum.flat_map([@terms_document, @privacy_document], &pending_notice(user, &1, today))
+    else
+      []
+    end
+  end
+
+  defp pending_notice(user, document, today) do
+    # The acceptance read comes last: outside a notice window it never runs.
+    with current when is_binary(current) <- VersionCache.current_version(document),
+         %{effective_date: %Date{} = date} = row <- VersionCache.get(document, current),
+         true <- Date.after?(date, today),
+         false <- accepted?(user, document, current) do
+      [notice_map(row)]
+    else
+      _ -> []
+    end
+  end
+
+  @doc "Whether `user` has accepted `version` of `document` (or a later one)."
+  @spec accepted?(map(), String.t(), String.t()) :: boolean()
+  def accepted?(user, document, version) do
+    case accepted_version(user, document) do
+      nil -> false
+      accepted -> accepted >= version
+    end
+  end
+
+  defp notice_map(row) do
+    %{
+      document: row.document,
+      version: row.version,
+      effective_date: row.effective_date,
+      material: row.material,
+      changelog: row.changelog,
+      url: Engram.Legal.url(row.document),
+      accept_url: Engram.Legal.accept_url()
+    }
   end
 
   @doc """
@@ -550,29 +595,6 @@ defmodule Engram.Onboarding do
   defp accepted_satisfies?(_accepted, nil), do: true
   defp accepted_satisfies?(accepted, floor), do: accepted >= floor
 
-  # A notice is due when there is a current version the user hasn't accepted yet.
-  defp notice(_document, nil, _accepted), do: nil
-
-  defp notice(document, current, accepted)
-       when is_nil(accepted) or current > accepted do
-    case Legal.get(document, current) do
-      nil ->
-        nil
-
-      row ->
-        %{
-          document: document,
-          version: row.version,
-          effective_date: row.effective_date,
-          material: row.material,
-          changelog: row.changelog,
-          accept_url: "https://app.engram.page/onboard/agreement"
-        }
-    end
-  end
-
-  defp notice(_document, _current, _accepted), do: nil
-
   defp query_accepted_version(user, document) do
     import Ecto.Query
 
@@ -588,7 +610,9 @@ defmodule Engram.Onboarding do
       Repo.with_tenant(user.id, fn ->
         from(a in Agreement,
           where: a.user_id == ^user.id and a.document == ^document,
-          order_by: [desc: a.accepted_at],
+          # Highest version, not newest row: two accepts in one second tie on
+          # accepted_at (second precision). Versions sort as dates.
+          order_by: [desc: a.version],
           limit: 1,
           select: a.version
         )
