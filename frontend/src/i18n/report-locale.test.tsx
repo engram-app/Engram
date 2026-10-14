@@ -3,6 +3,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import posthog from "posthog-js";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setAnalyticsClient } from "../analytics/client";
 import { ApiError, api } from "../api/client";
 import { useMe, useUpdateProfile } from "../api/queries";
 import { LocaleProvider } from "./locale-provider";
@@ -18,6 +19,8 @@ vi.mock("posthog-js", () => ({
 }));
 
 const get = vi.mocked(api.get);
+// track/identity reach PostHog through the loaded client, not the import.
+setAnalyticsClient(posthog);
 const patch = vi.mocked(api.patch);
 
 function user(locale: string | null, extra: Record<string, unknown> = {}) {

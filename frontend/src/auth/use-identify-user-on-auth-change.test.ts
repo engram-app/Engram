@@ -1,5 +1,6 @@
 import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setAnalyticsClient } from "../analytics/client";
 import { useIdentifyUserOnAuthChange } from "./use-identify-user-on-auth-change";
 
 const identify = vi.fn();
@@ -20,6 +21,8 @@ vi.mock("posthog-js", () => ({
 	},
 }));
 vi.mock("../sentry", () => ({ setSentryUser: (id: string | null) => setSentryUser(id) }));
+// identity.ts reaches PostHog through the loaded client, not the import.
+setAnalyticsClient((await import("posthog-js")).default);
 
 const render = (props: {
 	isLoaded: boolean;

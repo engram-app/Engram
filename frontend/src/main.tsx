@@ -43,10 +43,9 @@ window.addEventListener("vite:preloadError", (event) => {
 // PostHog — product analytics. See ./analytics/init for the init options and
 // their rationale (cookieless posture, no-autocapture, GPC guard). Fire-and-
 // forget: init is async (posthog-js is dynamically imported so it stays OUT
-// of the eager main bundle) and identify happens later in the Clerk auth
-// provider, so nothing on the critical path needs it synchronously. The
-// clerk-auth-provider imports posthog-js too, so both resolve to one shared
-// async chunk.
+// of the eager main bundle) and identify happens later in the auth provider,
+// so nothing on the critical path needs it synchronously. Everything else
+// reaches PostHog through analytics/client.ts, never a static import.
 initAnalytics(import.meta.env.VITE_POSTHOG_KEY ?? "");
 
 // Both auth providers are declared lazy at module scope; only one is

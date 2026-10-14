@@ -1,6 +1,6 @@
-import posthog from "posthog-js";
 import { isMember } from "../lib/is-member";
 import { captureError } from "../sentry";
+import { analyticsClient } from "./client";
 import {
 	CHECKLIST_ACTIONS,
 	CHECKLIST_ITEMS,
@@ -100,5 +100,5 @@ export function track(event: EngramEvent, props: Record<string, unknown> = {}): 
 		return; // Drop the whole event. A partial event is a silent lie.
 	}
 
-	posthog.capture(event, props);
+	analyticsClient()?.capture(event, props);
 }

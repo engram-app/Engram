@@ -1,6 +1,7 @@
 import posthog from "posthog-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureError } from "../sentry";
+import { setAnalyticsClient } from "./client";
 import { track } from "./track";
 
 vi.mock("posthog-js", () => ({ default: { capture: vi.fn() } }));
@@ -8,6 +9,8 @@ vi.mock("posthog-js", () => ({ default: { capture: vi.fn() } }));
 // reported without a real Sentry SDK. Default: "delivered nothing".
 vi.mock("../sentry", () => ({ captureError: vi.fn(() => Promise.resolve(undefined)) }));
 const mockCapture = vi.mocked(captureError);
+// track/identity reach PostHog through the loaded client, not the import.
+setAnalyticsClient(posthog);
 
 afterEach(() => {
 	vi.unstubAllEnvs();

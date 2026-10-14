@@ -1,4 +1,5 @@
 import type { PostHogConfig } from "posthog-js";
+import { setAnalyticsClient } from "./client";
 
 // PostHog — product analytics. Cookieless by `persistence: 'memory'` per
 // [[reference_cookie_audit_2026_05_24]] so the no-banner launch posture
@@ -47,6 +48,7 @@ export async function initAnalytics(key: string): Promise<void> {
 
 	const { default: posthog } = await import("posthog-js");
 	posthog.init(key, posthogInitOptions());
+	setAnalyticsClient(posthog);
 }
 
 /** The exact options passed to `posthog.init`. Exported so a test can pin every
