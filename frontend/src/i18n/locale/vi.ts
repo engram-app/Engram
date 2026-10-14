@@ -1028,8 +1028,8 @@ export default {
 	"Registered redirects:": "Đường dẫn chuyển hướng đã đăng ký:",
 	"API keys ({total})": "Khóa API ({total})",
 	"+ New Key": "+ Tạo khóa mới",
-	"Upgrade to Pro to create API keys for scripting and external integrations.":
-		"Nâng cấp lên phiên bản Pro để tạo khóa API cho các script và tích hợp bên ngoài.",
+	"API keys on your plan work with MCP clients. Upgrade to Pro to use them with the REST API.":
+		"Các khóa API trong gói của bạn hoạt động với MCP ứng dụng. Nâng cấp lên Pro để sử dụng chúng với REST API.",
 	"No matches.": "Không có kết quả nào.",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"Chưa có khóa API nào. Tạo một khóa để kết nối các script hoặc công cụ bên ngoài.",

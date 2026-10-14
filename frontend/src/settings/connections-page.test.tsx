@@ -31,7 +31,7 @@ vi.mock("../api/queries", async () => {
 			error: null,
 		}),
 		// Mirror the real payload: the page reads `caps`, not the tier string.
-		// API keys are Pro-only, so only Pro resolves api_write_enabled true.
+		// The REST API is Pro-only, so only Pro resolves api_write_enabled true.
 		useBillingStatus: () => ({
 			data: {
 				tier: mockTier,
@@ -497,23 +497,24 @@ describe("ConnectionsPage", () => {
 		expect(screen.getByRole("button", { name: /\+ New Key/iu })).toBeInTheDocument();
 	});
 
-	it("shows upgrade CTA when tier is free", () => {
+	// #1974: an API key works with MCP on every tier; only the REST API is
+	// Pro. So Free and Starter can create a key, and are told what it covers.
+	it.each(["free", "starter"])("lets %s create a key for MCP and points REST at Pro", (tier) => {
 		mockConnections.splice(0, mockConnections.length, basePat);
-		mockTier = "free";
+		mockTier = tier;
 		renderPage();
-		expect(screen.getByText(/Upgrade to Pro to create API keys/iu)).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /\+ New Key/iu })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /\+ New Key/iu })).toBeInTheDocument();
+		expect(screen.getByText(/work with MCP clients/iu)).toBeInTheDocument();
+		expect(screen.getByText(/Upgrade to Pro to use them with the REST API/iu)).toBeInTheDocument();
 	});
 
-	// API keys moved to Pro-only. Starter is a PAID tier that still must not
-	// see the create affordance — the old gate keyed on "not free" and would
-	// have offered Starter a button the server refuses with 402.
-	it("shows upgrade CTA when tier is starter", () => {
+	it("does not show the REST upsell on pro", () => {
 		mockConnections.splice(0, mockConnections.length, basePat);
-		mockTier = "starter";
+		mockTier = "pro";
 		renderPage();
-		expect(screen.getByText(/Upgrade to Pro to create API keys/iu)).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /\+ New Key/iu })).not.toBeInTheDocument();
+		expect(
+			screen.queryByText(/Upgrade to Pro to use them with the REST API/iu),
+		).not.toBeInTheDocument();
 	});
 
 	it("Upgrade CTA click actually navigates (not just a correct href)", () => {

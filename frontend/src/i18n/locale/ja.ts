@@ -1028,8 +1028,8 @@ export default {
 	"Registered redirects:": "登録済みのリダイレクト先:",
 	"API keys ({total})": "APIキー ({total})",
 	"+ New Key": "新規キーの追加",
-	"Upgrade to Pro to create API keys for scripting and external integrations.":
-		"スクリプトや外部連携のためのAPIキーを作成するには、Pro版にアップグレードしてください。",
+	"API keys on your plan work with MCP clients. Upgrade to Pro to use them with the REST API.":
+		"ご契約プランのAPIキーは、MCPクライアントで使用できます。REST APIで使用するには、Proにアップグレードしてください。",
 	"No matches.": "一致するものがありません。",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"まだAPIキーがありません。スクリプトや外部ツールと連携するために、新しいキーを作成してください。",

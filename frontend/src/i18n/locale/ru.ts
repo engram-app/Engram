@@ -1116,8 +1116,8 @@ export default {
 	"Registered redirects:": "Зарегистрированные перенаправления:",
 	"API keys ({total})": "Ключи API ({total})",
 	"+ New Key": "+ Новый ключ",
-	"Upgrade to Pro to create API keys for scripting and external integrations.":
-		"Обновите до версии Pro, чтобы создавать ключи API для скриптов и внешних интеграций.",
+	"API keys on your plan work with MCP clients. Upgrade to Pro to use them with the REST API.":
+		"Ключи API в вашем плане работают с MCP клиентами. Обновите до Pro, чтобы использовать их с REST API.",
 	"No matches.": "Нет совпадений.",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"Ключей API пока нет. Сгенерируйте один, чтобы подключить скрипты или внешние инструменты.",

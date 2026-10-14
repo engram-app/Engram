@@ -1031,8 +1031,8 @@ export default {
 	"Registered redirects:": "Pengalihan yang didaftarkan:",
 	"API keys ({total})": "Kekunci API ({total})",
 	"+ New Key": "+ Kekunci Baru",
-	"Upgrade to Pro to create API keys for scripting and external integrations.":
-		"Tingkatkan ke Pro untuk mencipta kekunci API untuk skrip dan integrasi luaran.",
+	"API keys on your plan work with MCP clients. Upgrade to Pro to use them with the REST API.":
+		"Kunci API pada pelan anda berfungsi dengan MCP klien. Tingkatkan ke Pro untuk menggunakannya dengan API REST.",
 	"No matches.": "Tiada sebarang padanan.",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"Tiada kekunci API lagi. Jana satu untuk menyambungkan skrip atau alat luaran.",

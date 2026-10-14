@@ -3762,7 +3762,7 @@
     "/api/connections/pat": {
       "post": {
         "callbacks": {},
-        "description": "The raw `key` is returned once. Subject to the per-plan PAT creation limit.",
+        "description": "The raw `key` is returned once. Any plan can create a key: it works with MCP on every plan, and the REST API requires Pro.",
         "operationId": "connections-create-pat",
         "parameters": [],
         "requestBody": {

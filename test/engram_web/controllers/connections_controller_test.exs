@@ -424,7 +424,10 @@ defmodule EngramWeb.ConnectionsControllerTest do
   end
 
   describe "POST /api/connections/pat" do
-    test "402 on Free (PAT minting blocked)", %{conn: conn} do
+    # #1974: a key works with MCP on every tier, so every tier can mint one.
+    # What it may do is gated where it is used (REST: api_rps_cap /
+    # api_write_enabled; MCP: mcp_connections_cap), not at minting.
+    test "201 on Free: a key is usable for MCP on every tier", %{conn: conn} do
       free = insert(:user)
 
       conn =
@@ -432,9 +435,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
         |> jwt_authed(free)
         |> post("/api/connections/pat", %{name: "x"})
 
-      body = json_response(conn, 402)
-      assert body["error"] == "pat_disabled_on_free"
-      assert body["upgrade_url"] == "/#settings/billing"
+      assert %{"key" => "engram_" <> _} = json_response(conn, 201)
     end
 
     test "201 on paid tier, returns raw key once", %{conn: conn} do

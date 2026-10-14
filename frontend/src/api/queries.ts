@@ -1610,11 +1610,6 @@ export interface CapErrorBody {
 	upgrade_url: string;
 }
 
-export interface PatDisabledErrorBody {
-	error: "pat_disabled_on_free";
-	upgrade_url: string;
-}
-
 export function useConnections(opts?: { enabled?: boolean }) {
 	return useQuery({
 		queryKey: ["connections"],

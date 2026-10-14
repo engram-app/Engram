@@ -49,10 +49,9 @@ function useTierCaps() {
 	return {
 		tier,
 		isFree,
-		// Fail CLOSED while caps are loading. This used to be `?? !isFree`,
-		// which granted the key UI to every paid tier — now that API keys are
-		// Pro-only, that fallback would offer Starter a button the server
-		// refuses.
+		// Fail CLOSED while caps are loading: REST API access is Pro-only, so
+		// the upsell shows until the caps say otherwise. Key creation itself is
+		// open on every tier (#1974): a key always works with MCP.
 		apiWriteEnabled: caps?.api_write_enabled ?? false,
 		obsidianCap: caps ? caps.obsidian_connections : isFree ? 1 : null,
 		mcpCap: caps ? caps.mcp_connections : isFree ? 1 : null,
@@ -288,7 +287,7 @@ function PatSection({
 	pats,
 	total,
 	filtering,
-	canCreate,
+	restApi,
 	onRevoke,
 }: {
 	pats: Connection[];
@@ -296,7 +295,8 @@ function PatSection({
 	// rows a search left standing.
 	total: number;
 	filtering: boolean;
-	canCreate: boolean;
+	// Whether the plan includes the REST API. MCP works with a key on every tier.
+	restApi: boolean;
 	onRevoke: (pat: Connection) => void;
 }) {
 	const { t, renderedLocale } = useT();
@@ -308,16 +308,14 @@ function PatSection({
 	return (
 		<SettingsSectionCard
 			title={t("API keys ({total})", { total })}
-			headerAction={
-				canCreate ? (
-					<Button onClick={() => setShowCreate(true)}>{t("+ New Key")}</Button>
-				) : undefined
-			}
+			headerAction={<Button onClick={() => setShowCreate(true)}>{t("+ New Key")}</Button>}
 		>
-			{!canCreate && (
+			{!restApi && (
 				<aside className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/50 px-4 py-3">
 					<p className="text-muted-foreground text-sm">
-						{t("Upgrade to Pro to create API keys for scripting and external integrations.")}
+						{t(
+							"API keys on your plan work with MCP clients. Upgrade to Pro to use them with the REST API.",
+						)}
 					</p>
 					<Button asChild className="shrink-0">
 						<Link to={settingsTo("billing", location.search)}>{t("Upgrade")}</Link>
@@ -855,7 +853,7 @@ export default function ConnectionsPage() {
 				pats={pats}
 				total={list.filter((c) => c.kind === "pat").length}
 				filtering={Boolean(needle)}
-				canCreate={caps.apiWriteEnabled}
+				restApi={caps.apiWriteEnabled}
 				onRevoke={(p) =>
 					setPendingRevoke({
 						name: p.name ?? t("this key"),

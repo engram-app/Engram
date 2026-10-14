@@ -980,8 +980,8 @@ export default {
 	"Registered redirects:": "已注册的重定向：",
 	"API keys ({total})": "API 密钥 ({total})",
 	"+ New Key": "+ 新建密钥",
-	"Upgrade to Pro to create API keys for scripting and external integrations.":
-		"升级到 Pro 版本，创建 API 密钥，用于脚本和外部集成。",
+	"API keys on your plan work with MCP clients. Upgrade to Pro to use them with the REST API.":
+		"你的套餐中的 API 密钥可用于 MCP 个客户端。升级到 Pro 以在 REST API 中使用它们。",
 	"No matches.": "未找到匹配项。",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"尚未创建 API 密钥。生成一个密钥，以连接脚本或外部工具。",

@@ -21,6 +21,12 @@ defmodule EngramWeb.Plugs.RequireApiWriteEnabled do
 
   def init(opts), do: opts
 
+  # MCP is exempt (#1974): this key prices the REST API, and MCP over an API
+  # key is open on every tier, limited by `mcp_connections_cap` instead
+  # (`EngramWeb.Plugs.EnforceMcpApiKeySlot`). Matched on the routed path, so
+  # the `mcp.engram.page` host (rewritten to `/api/mcp`) is covered too.
+  def call(%Plug.Conn{request_path: "/api/mcp"} = conn, _opts), do: conn
+
   # Reads are never gated.
   def call(%Plug.Conn{method: m} = conn, _opts) when m in ["GET", "HEAD"], do: conn
 

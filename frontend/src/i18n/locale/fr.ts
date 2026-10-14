@@ -1070,8 +1070,8 @@ export default {
 	"Registered redirects:": "Redirections enregistrées :",
 	"API keys ({total})": "Clés API ({total})",
 	"+ New Key": "+ Nouvelle clé",
-	"Upgrade to Pro to create API keys for scripting and external integrations.":
-		"Passe à la version Pro pour créer des clés API pour les scripts et les intégrations externes.",
+	"API keys on your plan work with MCP clients. Upgrade to Pro to use them with the REST API.":
+		"Les clés API de ton abonnement fonctionnent avec MCP clients. Passe à Pro pour les utiliser avec l'API REST.",
 	"No matches.": "Aucun résultat.",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"Aucune clé API pour le moment. En génère une pour connecter des scripts ou des outils externes.",
