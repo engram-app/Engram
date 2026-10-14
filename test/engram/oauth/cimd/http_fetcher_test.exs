@@ -204,6 +204,66 @@ defmodule Engram.OAuth.Cimd.HttpFetcherTest do
     end
   end
 
+  # Review of #1974: Req starts one Finch instance per distinct pool-option
+  # set, keyed by a hashed atom, and never stops it. A connect timeout derived
+  # from the remaining budget made every retry a new, permanent pool.
+  describe "Finch pools and timeout phases" do
+    # Accepts every connection and, after `hold_ms`, closes it without a byte.
+    defp silent_server(hold_ms) do
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen)
+
+      acceptor =
+        spawn(fn ->
+          Stream.repeatedly(fn -> :gen_tcp.accept(listen) end)
+          |> Enum.each(fn
+            {:ok, socket} ->
+              spawn(fn ->
+                Process.sleep(hold_ms)
+                :gen_tcp.close(socket)
+              end)
+
+            {:error, _} ->
+              exit(:normal)
+          end)
+        end)
+
+      on_exit(fn ->
+        Process.exit(acceptor, :kill)
+        :gen_tcp.close(listen)
+      end)
+
+      port
+    end
+
+    defp finch_pools, do: DynamicSupervisor.count_children(Req.FinchSupervisor).active
+
+    test "a retry with less budget left reuses the first attempt's pool" do
+      port = silent_server(1_600)
+      target = %{url: "http://127.0.0.1:#{port}/doc.json", host: "pool-reuse.test"}
+      before = finch_pools()
+
+      {result, _log} = with_log(fn -> HttpFetcher.fetch_target(target) end)
+
+      assert {:error, {:transport_error, _, _}} = result
+      assert finch_pools() - before <= 1
+    end
+
+    # A TLS handshake to a server that never answers stalls inside connect. When
+    # the budget, not the connect timeout, ends it, that is still the connect
+    # phase.
+    test "a stall inside connect reports phase=connect" do
+      port = silent_server(10_000)
+      target = %{url: "https://127.0.0.1:#{port}/doc.json", host: "connect-stall.test"}
+
+      {result, log} = with_log(fn -> HttpFetcher.fetch_target(target) end)
+
+      assert {:error, {:transport_error, :connect, _}} = result
+      assert log =~ "phase=connect"
+      refute log =~ "phase=recv"
+    end
+  end
+
   # fetch/1 is guard-then-fetch. Proving the guard is actually wired in matters
   # more than proving it works twice.
   describe "fetch/1 applies the SSRF guard" do

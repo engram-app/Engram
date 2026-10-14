@@ -24,6 +24,34 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
 
   @user_agent "Engram-OAuth/1.0 (+https://engram.page)"
 
+  # Where an attempt has got to, reported by Finch's own telemetry from inside
+  # the attempt's process. Only the deadline needs it: Req's errors say nothing
+  # about the phase a `:timeout` happened in.
+  @phase_key {__MODULE__, :phase_to}
+  @phase_events [[:finch, :connect, :start], [:finch, :send, :start], [:finch, :recv, :start]]
+
+  @doc "Attaches the phase-tracking telemetry handler. Called once at boot."
+  @spec attach() :: :ok
+  def attach do
+    case :telemetry.attach_many(
+           "#{__MODULE__}.phase",
+           @phase_events,
+           &__MODULE__.handle_phase/4,
+           nil
+         ) do
+      :ok -> :ok
+      {:error, :already_exists} -> :ok
+    end
+  end
+
+  @doc false
+  def handle_phase([:finch, step, :start], _measurements, _metadata, _config) do
+    case Process.get(@phase_key) do
+      {parent, ref} -> send(parent, {ref, if(step == :connect, do: :connect, else: :recv)})
+      nil -> :ok
+    end
+  end
+
   @doc "The hard budget for one `fetch_target/1`, every attempt included, in ms."
   @spec budget_ms() :: pos_integer()
   def budget_ms, do: @budget_ms
@@ -111,7 +139,8 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
     # token request that is waiting on it.
     task =
       Task.Supervisor.async_nolink(Engram.TaskSupervisor, fn ->
-        request(url, host, remaining, fn -> send(parent, {ref, :recv}) end)
+        Process.put(@phase_key, {parent, ref})
+        Req.get(request_options(url, host))
       end)
 
     result =
@@ -129,19 +158,19 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
           {:error, {:transport_error, :connect, reason_of(reason)}}
 
         nil ->
-          {:error, {:transport_error, :recv, :timeout}}
+          {:error, {:transport_error, last_phase(ref, :connect), :timeout}}
       end
 
-    flush_progress(ref)
+    last_phase(ref, nil)
     log_failure(result, host, ip, now_ms() - started)
     result
   end
 
-  defp request(url, host, remaining, on_progress) do
-    Req.get(request_options(url, host, remaining, on_progress))
-  end
-
-  defp request_options(url, host, remaining, on_progress) do
+  # Every pool option here is a constant. Req starts a Finch instance per
+  # distinct pool-option set and never stops it, so a value derived from the
+  # remaining budget made each retry a new, permanent pool. The deadline is
+  # enforced outside Req, by `Task.yield/2` in `attempt/4`.
+  defp request_options(url, host) do
     [
       # The pinned address, with the real hostname supplied separately.
       url: url,
@@ -153,31 +182,34 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
       # `hostname:` is what makes TLS verify the NAME rather than the address.
       # Without it the handshake fails against every real vendor, because the
       # certificate does not cover the IP we dialed.
-      connect_options: [hostname: host, timeout: min(@connect_timeout_ms, remaining)],
-      # Just past the hard deadline, so the deadline (and its `:recv` phase)
-      # is what fires, not Req's per-read timer.
-      receive_timeout: remaining + 100,
-      # The Finch pool key includes the pinned address, so a long-lived idle pool
-      # per vendor IP is pure accumulation.
-      pool_max_idle_time: 30_000,
+      # (Req's `connect_options:`, spelled as Finch pool options, because Req
+      # refuses `connect_options:` alongside `finch:`.) The Finch pool key
+      # includes the pinned address, so a long-lived idle pool per vendor IP is
+      # pure accumulation: `pool_max_idle_time` reaps it.
+      finch: [
+        conn_opts: [hostname: host, transport_opts: [timeout: @connect_timeout_ms]],
+        pool_max_idle_time: 30_000
+      ],
+      # Past the whole budget, so the deadline is what fires, not Req's per-read
+      # timer.
+      receive_timeout: @budget_ms + 100,
       # A redirect is a NEW URL, and following it would bypass the guard that
       # approved the first one. A vendor that redirects its metadata document
       # therefore does not work, which is the correct outcome.
       redirect: false,
       retry: false,
       decode_body: false,
-      into: fn chunk, acc ->
-        on_progress.()
-        collect_capped(chunk, acc)
-      end
+      into: &collect_capped/2
     ]
   end
 
-  defp flush_progress(ref) do
+  # Drains the attempt's phase messages and returns the latest, or `default`
+  # when the attempt never reached a connect (a pool checkout, say).
+  defp last_phase(ref, default) do
     receive do
-      {^ref, :recv} -> flush_progress(ref)
+      {^ref, phase} -> last_phase(ref, phase)
     after
-      0 -> :ok
+      0 -> default
     end
   end
 
