@@ -78,11 +78,23 @@ defmodule Engram.MailerTest do
       assert :ok = Mailer.send_welcome(user)
     end
 
-    test "body falls back to 'there' when display_name is nil" do
+    test "without a display name the heading drops the name" do
       user = insert(:user, email: "user@example.com", display_name: nil)
 
       expect(Engram.Email.ProviderMock, :send, fn _to, _subject, html, _opts ->
-        assert html =~ "Welcome to Engram, there"
+        assert html =~ "Welcome to Engram."
+        refute html =~ "Welcome to Engram, "
+        :ok
+      end)
+
+      assert :ok = Mailer.send_welcome(user)
+    end
+
+    test "is written in the user's stored language" do
+      user = insert(:user, email: "user@example.com", locale: "de-AT")
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, subject, _html, _opts ->
+        assert subject == Engram.I18n.t("de", "Welcome to Engram")
         :ok
       end)
 
@@ -215,7 +227,7 @@ defmodule Engram.MailerTest do
                Mailer.send_vault_deletion_notice(
                  user,
                  "My Vault",
-                 "June 27, 2026",
+                 ~D[2026-06-27],
                  "https://app.engram.page/?highlight=1#settings/vaults"
                )
     end
@@ -233,7 +245,7 @@ defmodule Engram.MailerTest do
                Mailer.send_vault_deletion_notice(
                  user,
                  "<script>alert(1)</script>",
-                 "June 27, 2026",
+                 ~D[2026-06-27],
                  "https://app.engram.page/?highlight=1#settings/vaults"
                )
     end

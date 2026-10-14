@@ -1,7 +1,9 @@
 name: Translate web-app strings
 
 # Keeps frontend/src/i18n/locale/*.ts in step with the English strings in the
-# SPA. English is the catalog key, so a new or edited string is a key every
+# SPA, and priv/i18n/email/*.json in step with the backend's email strings
+# (frontend/src/i18n/email-keys.ts). English is the catalog key, so a new or
+# edited string is a key every
 # catalog lacks; `bun run i18n:translate` fills only those (diff-only) with
 # translategemma on FastRaid's Ollama and drops keys the source no longer uses.
 # The result lands as a bot PR, so a human still sees every translation before
@@ -15,6 +17,10 @@ on:
     branches: [main]
     paths:
       - "frontend/src/**"
+      # Email strings and the legal changelogs they include.
+      - "lib/engram/mailer.ex"
+      - "lib/engram/email/template.ex"
+      - "lib/engram/legal/seeder.ex"
       # The bot's own merges touch only catalogs; nothing new to translate.
       - "!frontend/src/i18n/locale/**"
   # Nightly: resumes a redo that hit the job timeout, retries failed keys, and
@@ -84,8 +90,9 @@ jobs:
           fi
           git fetch --depth=1 "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" bot/i18n-translate
           mkdir -p "$RUNNER_TEMP/resume"
-          git archive FETCH_HEAD frontend/src/i18n/locale | tar -x -C "$RUNNER_TEMP/resume"
+          git archive FETCH_HEAD frontend/src/i18n/locale priv/i18n/email | tar -x -C "$RUNNER_TEMP/resume"
           echo "dir=$RUNNER_TEMP/resume/frontend/src/i18n/locale" >> "$GITHUB_OUTPUT"
+          echo "email_dir=$RUNNER_TEMP/resume/priv/i18n/email" >> "$GITHUB_OUTPUT"
 
       # Step timeout below the job's, so finished locales (each written, with its
       # state stamp, the moment it completes) still reach the PR. A timed-out
@@ -99,9 +106,10 @@ jobs:
         env:
           I18N_OLLAMA_URL: http://10.0.20.214:11434
           RESUME: ${{ steps.resume.outputs.dir }}
+          RESUME_EMAIL: ${{ steps.resume.outputs.email_dir }}
         run: |
           set -euo pipefail
-          bun run i18n:translate ${RESUME:+--resume "$RESUME"} | tee "$RUNNER_TEMP/i18n-summary.txt"
+          bun run i18n:translate ${RESUME:+--resume "$RESUME"} ${RESUME_EMAIL:+--resume-email "$RESUME_EMAIL"} | tee "$RUNNER_TEMP/i18n-summary.txt"
 
       # The same gate the PR will face, so a bad catalog fails here, not in review.
       - name: Catalog parity
@@ -123,7 +131,7 @@ jobs:
       - name: Did the run change any catalog
         id: changed
         run: |
-          if [ -n "$(git status --porcelain -- frontend/src/i18n/locale)" ]; then
+          if [ -n "$(git status --porcelain -- frontend/src/i18n/locale priv/i18n/email)" ]; then
             echo "any=true" >> "$GITHUB_OUTPUT"
           else
             echo "any=false" >> "$GITHUB_OUTPUT"
@@ -149,6 +157,7 @@ jobs:
           add-paths: |
             frontend/src/i18n/locale/*.ts
             frontend/src/i18n/locale/state.json
+            priv/i18n/email/*.json
           # main requires verified signatures; this routes the commit through
           # createCommitOnBranch, which GitHub signs for the App.
           sign-commits: true

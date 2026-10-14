@@ -110,6 +110,27 @@ Catalog entry: `"{count} files": { one: "…", other: "…" }` (add `few`/`many`
 - **Per-PR gate, no model:** `src/i18n/catalog-quality.test.ts` runs core `catalogProblems` (missing keys, orphans, plural shape per `Intl.PluralRules`, every `problems()` check) over every committed catalog inside the normal vitest job (well under a second), plus `sourceProblems` (a plural without `{count}` cannot be sampled: `{n} notes` shipped Russian `few` = `many`). With `keys.test.ts` (scanner guards) it is the fast translation check; the gemma run itself only happens on main. The script check applies only to sentences of more than 3 words, so `ID:` or `A → Z` may stay Latin in `ja`/`ko`/`zh`; a plural `one` form may drop `{count}`.
 - **Output** is written per locale when that locale finishes (resume a killed `--all` with `--locale` for the rest) and formatted with `bun run biome format`.
 
+## Email (backend)
+
+Every email is written in the recipient's language. `Engram.I18n` maps
+`users.locale` (BCP 47, reported by the web app and plugin) onto the same 13
+locales, English when unset or unknown. Catalogs are
+`priv/i18n/email/<locale>.json`, compiled into `Engram.I18n` at build time.
+
+- **Add an email string:** write it as one `t(l, "...")` call on one line in
+  `lib/engram/mailer.ex` (or `I18n.t(locale, "...")` in
+  `lib/engram/email/template.ex`). No HTML inside a key; `{name}` placeholders
+  only. `frontend/src/i18n/email-keys.ts` finds keys by that shape.
+- **Legal changelogs** in `lib/engram/legal/seeder.ex` are keys too, so the
+  "what changed" line arrives translated. Word them so a short word cannot be
+  read two ways: "Note content is never sent" came back in German as "take
+  note that content is never sent".
+- `bun run i18n:translate` runs the web catalogs, then the email catalogs, with
+  one profile. The nightly bot carries both; `email-keys.test.ts` is the PR gate.
+- A missing key ships in English until the bot fills it. Dates: "November 11,
+  2026" in English, ISO 8601 elsewhere (no CLDR dependency).
+- The linked legal documents themselves stay English only.
+
 ## i18n:missing (for translators)
 
 `cd frontend && bun run i18n:missing` scans `src/**/*.{ts,tsx}` (not tests or `src/i18n/locale/`) with the same scanner and compares against each `locale/*.ts` catalog. It is a report, always exit 0.

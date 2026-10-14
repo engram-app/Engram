@@ -60,6 +60,10 @@ tracked hold an older or no privacy acceptance.
   fails and the `rescue ArgumentError` swallows it, so the cache silently never
   hits. Structs in the VALUE are fine. The floor entry stores its date as an
   ISO string for that reason.
+- **The email is in the user's language** (`users.locale`, see
+  `webapp-i18n.md` "Email"), including the changelog line. A new changelog
+  goes out in English if it ships before the nightly bot translates it, so
+  run `bun run i18n:translate` in the publishing PR.
 - Legal email is transactional: analytics opt-out does not apply, but
   bounced/complained addresses (`Email.Suppression`) are skipped.
 - Self-host has no notices (`billing_enabled` false, nothing seeded).

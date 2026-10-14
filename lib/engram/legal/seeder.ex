@@ -44,7 +44,7 @@ defmodule Engram.Legal.Seeder do
         material: false,
         effective_date: ~D[2026-11-11],
         changelog:
-          "App analytics now linked to your account (email, plan, usage counts). Note content is never sent."
+          "App analytics now linked to your account (email, plan, usage counts). The content of your notes is never sent."
       }
     }
   }

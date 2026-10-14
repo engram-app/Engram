@@ -4,6 +4,14 @@ defmodule Engram.Email.TemplateTest do
   alias Engram.Email.Template
   alias Engram.Email.Tokens
 
+  describe "render/2 with a locale" do
+    test "marks the document language and translates the layout" do
+      {:ok, html} = Template.render("<mj-text>x</mj-text>", "de")
+      assert html =~ ~s(lang="de")
+      assert html =~ Template.esc(Engram.I18n.t("de", "Your notes are your AI's memory."))
+    end
+  end
+
   describe "render/1" do
     setup do
       {:ok, html} = Template.render("<mj-text>Hello there</mj-text>")
@@ -35,9 +43,9 @@ defmodule Engram.Email.TemplateTest do
     end
 
     test "footer copy matches the memory-layer positioning", %{html: html} do
-      # MJML passes apostrophes through unescaped (literal U+0027, not &#x27;).
-      # The assertion uses the literal character — verified against rendered output.
-      assert html =~ "Your notes are your AI\x27s memory.",
+      # The tagline goes through Engram.I18n and is HTML-escaped like every
+      # translated string, so the apostrophe arrives as &#39;.
+      assert html =~ "Your notes are your AI&#39;s memory.",
              ~S[expected the footer phrase "Your notes are your AI's memory." in rendered HTML]
     end
 
