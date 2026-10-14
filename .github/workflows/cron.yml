@@ -99,7 +99,7 @@ jobs:
         # --break-system-packages: isolated runner VM runs Python 3.12
         # with PEP 668 (externally-managed-environment); pip --user
         # fails closed without it. Safe — VM is single-purpose CI.
-        run: python3 -m pip install --user --quiet --break-system-packages "requests>=2.31"
+        run: python3 -m pip install --user --quiet --break-system-packages "requests>=2.33.0"
 
       - name: Reap orphan e2e Clerk users older than 1h
         env:

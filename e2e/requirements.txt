@@ -1,5 +1,5 @@
 pytest>=9.0.3
-pytest-asyncio>=0.23
+pytest-asyncio>=1.0
 pytest-timeout>=2.3
 requests>=2.33.0
 websockets>=12.0
