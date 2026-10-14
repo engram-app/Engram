@@ -1,7 +1,9 @@
 // One mermaid instance, shared by Reading mode's <MermaidBlock> and the
-// editor's live-preview decoration. Both need the same lazy import and the same
-// per-render theme handling, and two copies of that would be two chances to
-// drift.
+// editor's live-preview decoration. Both need the same lazy import, the same
+// per-render theme handling and the same lazy draw (drawMermaid), and two
+// copies of that would be two chances to drift.
+
+import { onceVisible } from "@/lib/once-visible";
 
 // A diagram draws late (lazy chunk, drawn when scrolled near), so its box grew
 // from empty to full height after the note was on screen and shoved every line
@@ -23,9 +25,17 @@ function heightKey(surface: Surface, code: string): string {
 	return `${surface}:${code.length}:${h}`;
 }
 
+// Parsed once per page load: the editor asks on every heightmap estimate.
+let heightsCache: Record<string, number> | null = null;
+
 // Storage failures (private mode, quota, a hand-edited value) are swallowed on
 // purpose: this is a layout hint, and losing it only brings the jump back.
 function readHeights(): Record<string, number> {
+	heightsCache ??= parseHeights();
+	return heightsCache;
+}
+
+function parseHeights(): Record<string, number> {
 	try {
 		const parsed: unknown = JSON.parse(localStorage.getItem(HEIGHTS_KEY) ?? "{}");
 		const heights: Record<string, number> = {};
@@ -111,7 +121,7 @@ function scratchSpace(): HTMLElement {
 let idCounter = 0;
 
 /** Mermaid needs a unique DOM id per render; it uses it to key its own scratch node. */
-export function nextMermaidId(): string {
+function nextMermaidId(): string {
 	idCounter += 1;
 	return `mermaid-${idCounter}`;
 }
@@ -120,11 +130,11 @@ export function nextMermaidId(): string {
  * Render `code` to SVG markup. `dark` re-draws rather than restyles, because
  * the palette is baked into the output.
  */
-export function renderMermaid(id: string, code: string, dark: boolean): Promise<string> {
+export function renderMermaid(code: string, dark: boolean): Promise<string> {
 	const result = queue.then(async () => {
 		const mermaid = await loadMermaid();
 		mermaid.initialize({ ...BASE_CONFIG, theme: dark ? "dark" : "default" });
-		const { svg } = await mermaid.render(id, code, scratchSpace());
+		const { svg } = await mermaid.render(nextMermaidId(), code, scratchSpace());
 		return svg;
 	});
 	// The queue must survive a bad diagram: chaining the rejection would fail
@@ -153,4 +163,49 @@ export function rememberMermaidHeight(surface: Surface, code: string, height: nu
 	} catch {
 		// See readHeights.
 	}
+}
+
+/**
+ * Draw `code` into `el` once it is scrolled near (see lib/once-visible.ts):
+ * a diagram further down a note cost ~0.6s of main thread under mobile
+ * throttling while the editor was still starting. Until the SVG lands, `el`
+ * holds the height this diagram last drew at, so the content below it does
+ * not jump. Returns a cancel function; a cancelled draw never touches `el`.
+ */
+export function drawMermaid(
+	el: HTMLElement,
+	surface: Surface,
+	code: string,
+	dark: boolean,
+	on: { drawn: () => void; failed: (err: unknown) => void },
+): () => void {
+	const reserved = rememberedMermaidHeight(surface, code);
+	if (reserved) {
+		el.style.minHeight = `${reserved}px`;
+	}
+	let cancelled = false;
+	const stop = onceVisible(el, () => {
+		renderMermaid(code, dark).then(
+			(svg) => {
+				if (cancelled) {
+					return;
+				}
+				el.innerHTML = svg;
+				el.style.minHeight = "";
+				rememberMermaidHeight(surface, code, el.getBoundingClientRect().height);
+				on.drawn();
+			},
+			(err: unknown) => {
+				if (cancelled) {
+					return;
+				}
+				el.style.minHeight = "";
+				on.failed(err);
+			},
+		);
+	});
+	return () => {
+		cancelled = true;
+		stop();
+	};
 }

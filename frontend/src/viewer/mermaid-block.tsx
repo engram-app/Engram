@@ -1,51 +1,26 @@
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { Trans } from "@/i18n/trans";
-import { onceVisible } from "@/lib/once-visible";
 import { useTheme } from "../theme/theme-provider";
-import {
-	nextMermaidId,
-	rememberedMermaidHeight,
-	rememberMermaidHeight,
-	renderMermaid,
-} from "./mermaid-render";
+import { drawMermaid } from "./mermaid-render";
 
 export default function MermaidBlock({ code }: { code: string }) {
 	const ref = useRef<HTMLDivElement>(null);
 	const [error, setError] = useState<string | null>(null);
-	const [id] = useState(nextMermaidId);
 	const { resolved } = useTheme();
 
-	useEffect(() => {
-		let cancelled = false;
+	// Keyed on `resolved`: switching light/dark has to re-draw, because the
+	// palette is baked into the SVG rather than applied as CSS. A layout effect
+	// so drawMermaid's height reservation is in place before the first paint.
+	useLayoutEffect(() => {
 		const target = ref.current;
 		if (!target) {
 			return;
 		}
-		// Keyed on `resolved`: switching light/dark has to re-draw, because the
-		// palette is baked into the SVG rather than applied as CSS. Drawn when
-		// scrolled near, not on open (see lib/once-visible.ts).
-		const draw = () =>
-			renderMermaid(id, code, resolved === "dark")
-				.then((svg) => {
-					if (cancelled || !ref.current) {
-						return;
-					}
-					ref.current.innerHTML = svg;
-					ref.current.style.minHeight = "";
-					rememberMermaidHeight("reading", code, ref.current.getBoundingClientRect().height);
-					setError(null);
-				})
-				.catch((err) => {
-					if (!cancelled) {
-						setError(err?.message ?? String(err));
-					}
-				});
-		const stop = onceVisible(target, draw);
-		return () => {
-			cancelled = true;
-			stop();
-		};
-	}, [code, id, resolved]);
+		return drawMermaid(target, "reading", code, resolved === "dark", {
+			drawn: () => setError(null),
+			failed: (err) => setError(err instanceof Error ? err.message : String(err)),
+		});
+	}, [code, resolved]);
 
 	// The target div stays MOUNTED even while erroring, rather than being swapped
 	// for the <pre>. Returning early on error unmounted it, so `ref.current` was
@@ -63,13 +38,7 @@ export default function MermaidBlock({ code }: { code: string }) {
 					{`\n\n${code}`}
 				</pre>
 			) : null}
-			{/* min-height: the diagram's last drawn height, held until the SVG lands
-			    so the note below doesn't jump down a beat after it opens. */}
-			<div
-				ref={ref}
-				className={`mermaid my-4 justify-center ${error ? "hidden" : "flex"}`}
-				style={{ minHeight: rememberedMermaidHeight("reading", code) }}
-			/>
+			<div ref={ref} className={`mermaid my-4 justify-center ${error ? "hidden" : "flex"}`} />
 		</>
 	);
 }

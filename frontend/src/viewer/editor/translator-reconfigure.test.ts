@@ -10,11 +10,10 @@ import { headingFoldWith } from "./heading-fold";
 import { mermaidDecoration } from "./mermaid-decoration";
 import { translator, translatorCompartment } from "./translator";
 
-vi.mock("../mermaid-render", () => ({
-	nextMermaidId: () => "m1",
-	renderMermaid: () => Promise.reject(new Error("bad diagram")),
-	rememberedMermaidHeight: () => undefined,
-	rememberMermaidHeight: () => undefined,
+// Mocked at the library, not at mermaid-render: the real module's lazy draw is
+// what is under test, and a hand-listed mock of it drifted with every export.
+vi.mock("mermaid", () => ({
+	default: { initialize: () => undefined, render: () => Promise.reject(new Error("bad diagram")) },
 }));
 
 // A language switch must repaint widgets that are ALREADY on screen, in place:
