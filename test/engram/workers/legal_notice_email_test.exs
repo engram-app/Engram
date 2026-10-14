@@ -49,10 +49,12 @@ defmodule Engram.Workers.LegalNoticeEmailTest do
   test "emails the change, its effective date and the policy link", %{user: user} do
     expect(Engram.Email.ProviderMock, :send, fn to, subject, html, _opts ->
       assert to == "u@example.com"
-      assert subject == "We updated Engram's Privacy Policy"
+      assert subject == "Engram Privacy Policy Update"
       assert html =~ "November 11, 2099"
       assert html =~ "Analytics &lt;now&gt; linked to your account."
       assert html =~ "https://engram.page/privacy"
+      assert html =~ "You do not need to do anything."
+      refute html =~ "Review and accept"
       :ok
     end)
 
@@ -61,11 +63,29 @@ defmodule Engram.Workers.LegalNoticeEmailTest do
 
   test "a reminder says so in the subject", %{user: user} do
     expect(Engram.Email.ProviderMock, :send, fn _to, subject, _html, _opts ->
-      assert subject == "Reminder: Engram's Privacy Policy changes on November 11, 2099"
+      assert subject == "Engram Privacy Policy Reminder"
       :ok
     end)
 
     assert :ok = perform_job(LegalNoticeEmail, args(user, "reminder"))
+  end
+
+  test "a material change asks the user to accept it", %{user: user} do
+    LegalFixtures.insert_version(
+      version: "2026-10-12",
+      material: true,
+      effective_date: ~D[2099-11-11]
+    )
+
+    expect(Engram.Email.ProviderMock, :send, fn _to, subject, html, _opts ->
+      assert subject == "Engram Terms of Service Update"
+      assert html =~ "Review and accept"
+      assert html =~ "https://app.engram.page/onboard/agreement"
+      :ok
+    end)
+
+    args = %{args(user) | "document" => "terms_of_service"}
+    assert :ok = perform_job(LegalNoticeEmail, args)
   end
 
   test "skips a user who already accepted the version", %{user: user} do

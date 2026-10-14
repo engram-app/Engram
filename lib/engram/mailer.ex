@@ -154,40 +154,52 @@ defmodule Engram.Mailer do
   Tells a user about a legal change (`kind` "notice" when it is published,
   "reminder" before a material change takes effect). `version` is the
   `Engram.Legal.TermsVersion` row; its changelog is the "what changed" line.
+  Voice per the workspace `docs/context/customer-email-voice.md`: first person,
+  plain branded subject. Points at privacy@ because hello@ is not routed.
   """
   def send_legal_notice(%User{email: email} = user, version, kind)
       when kind in ["notice", "reminder"] do
     doc = Engram.Legal.name(version.document)
     date = Calendar.strftime(version.effective_date, "%B %-d, %Y")
+    button = &legal_button(&1, &2)
 
     subject =
+      if kind == "reminder", do: "Engram #{doc} Reminder", else: "Engram #{doc} Update"
+
+    opening =
       if kind == "reminder",
-        do: "Reminder: Engram's #{doc} changes on #{date}",
-        else: "We updated Engram's #{doc}"
+        do: "A quick reminder that Engram's updated #{doc} takes effect on #{date}.",
+        else:
+          "Thank you for using Engram. I wanted to let you know that I updated Engram's #{doc}. The new version takes effect on #{date}."
 
     action =
       if version.material,
         do: """
-        <mj-text>To keep using Engram after that date, review and accept the new
+        <mj-text>To keep using Engram after #{date}, please review and accept the new
         version in the app.</mj-text>
-        <mj-button href="#{Engram.Legal.accept_url()}" background-color="#{Tokens.brand_purple()}" color="#{Tokens.brand_purple_fg()}">Review and accept</mj-button>
+        #{button.(Engram.Legal.accept_url(), "Review and accept")}
         <mj-text><a href="#{Engram.Legal.url(version.document)}">Read the full #{doc}</a></mj-text>
         """,
         else: """
-        <mj-text>No action is needed. It applies from that date.</mj-text>
-        <mj-button href="#{Engram.Legal.url(version.document)}" background-color="#{Tokens.brand_purple()}" color="#{Tokens.brand_purple_fg()}">Read the #{doc}</mj-button>
+        <mj-text>You do not need to do anything.</mj-text>
+        #{button.(Engram.Legal.url(version.document), "Read the #{doc}")}
         """
 
     body = """
-    <mj-text font-size="18px" font-weight="600">Hi #{Template.esc(greeting_name(user))}, we updated our #{doc}.</mj-text>
+    <mj-text>Hi #{Template.esc(greeting_name(user))},</mj-text>
+    <mj-text>#{opening}</mj-text>
     <mj-text>What changed: #{Template.esc(version.changelog || "")}</mj-text>
-    <mj-text>The new version takes effect on #{date}.</mj-text>
     #{action}
-    <mj-text>Questions or objections: privacy@engram.page</mj-text>
+    <mj-text>If you have any questions or concerns, write to me at privacy@engram.page.</mj-text>
+    <mj-text>Todd</mj-text>
     """
 
     render_and_deliver(email, subject, body)
   end
+
+  defp legal_button(href, label),
+    do:
+      ~s(<mj-button href="#{href}" background-color="#{Tokens.brand_purple()}" color="#{Tokens.brand_purple_fg()}">#{label}</mj-button>)
 
   # Render an MJML body to HTML, then deliver. A render failure becomes a
   # {:error, {:render_failed, reason}} return rather than a raise.

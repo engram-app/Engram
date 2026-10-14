@@ -169,7 +169,7 @@ defmodule Engram.Onboarding do
     * `:subscription_ok` — user has trialing/active/past_due subscription
     * `:current_tos_version` — latest published ToS version (from `terms_versions`)
     * `:current_privacy_version` — latest published Privacy version
-    * `:legal_notices` — `legal_notices/1`
+    * `:legal_notices`: pending legal changes, see `legal_notices/1`
     * `:next_step` — one of `:agreement | :billing | :tools | :about | :vault | :done`
 
   The gate is computed from the `terms_versions` table via
