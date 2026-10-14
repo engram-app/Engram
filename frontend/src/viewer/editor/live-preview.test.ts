@@ -251,6 +251,13 @@ describe("task marker reveal", () => {
 		expect(line(1)?.textContent).toBe("1. [x] second");
 	});
 
+	// Lighthouse `label`: a bare checkbox is announced as just "checkbox".
+	test("names each checkbox after its task", () => {
+		mountTasks(9);
+		const boxes = [...view.dom.querySelectorAll(".cm-atomic-task-checkbox")];
+		expect(boxes.map((b) => b.getAttribute("aria-label"))).toEqual(["first", "second"]);
+	});
+
 	test("never reveals while unfocused", () => {
 		view = new EditorView({
 			state: EditorState.create({

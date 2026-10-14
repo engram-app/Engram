@@ -649,7 +649,6 @@ export default {
 	"Search your notes": "Suche in deinen Notizen",
 	"Folder navigation": "Ordnernavigation",
 	"Main navigation": "Hauptnavigation",
-	"Open tools": "Tools öffnen",
 	"Sidebar tools": "Tools in der Seitenleiste",
 	"Note outline and markdown reference": "Notizübersicht und Markdown-Referenz",
 	"{label} (open a note first)": "{label} (öffne zuerst eine Notiz)",
@@ -1232,7 +1231,9 @@ export default {
 	"Copied {count} wikilinks": { one: "Kopierter Wikilink", other: "{count} Wikilinks kopiert" },
 	"Rename note": "Notiz umbenennen",
 	"Click to rename": "Zum Umbenennen anklicken",
+	"Note text": "Notiztext",
 	"Note options": "Notiz-Optionen",
+	"Open tools": "Tools öffnen",
 	"Note not found": "Notiz nicht gefunden",
 	"This note may have been moved or deleted.":
 		"Diese Notiz wurde möglicherweise verschoben oder gelöscht.",

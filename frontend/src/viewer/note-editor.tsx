@@ -150,6 +150,14 @@ export function buildEditorState(
 			// override it back on — the browser's native spellcheck is the only
 			// squiggly-underline signal this editor gets, there's no in-app one.
 			EditorView.contentAttributes.of({ spellcheck: "true" }),
+			// The editable region is a textbox; unnamed, a screen reader says only
+			// "edit text". Read from the translator facet so a language switch
+			// (which swaps the compartment) renames it without a rebuild.
+			EditorView.contentAttributes.compute([translator], (state) => {
+				// Bound to `t` so the i18n key scanner sees the literal.
+				const t = state.facet(translator);
+				return { "aria-label": t("Note text") };
+			}),
 			drawSelection(),
 			EditorView.lineWrapping,
 			// Base, not the mode compartment: the fold service comes from

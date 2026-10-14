@@ -660,7 +660,6 @@ export default {
 	"Search your notes": "Cerca nelle note",
 	"Folder navigation": "Navigazione cartelle",
 	"Main navigation": "Navigazione principale",
-	"Open tools": "Strumenti",
 	"Sidebar tools": "Strumenti laterali",
 	"Note outline and markdown reference": "Struttura della nota e riferimento Markdown",
 	"{label} (open a note first)": "{label} (apri prima una nota)",
@@ -1259,7 +1258,9 @@ export default {
 	},
 	"Rename note": "Rinomina la nota",
 	"Click to rename": "Clicca per rinominare",
+	"Note text": "Testo della nota",
 	"Note options": "Opzioni della nota",
+	"Open tools": "Strumenti",
 	"Note not found": "Nota non trovata",
 	"This note may have been moved or deleted.":
 		"Questa nota potrebbe essere stata spostata o eliminata.",
