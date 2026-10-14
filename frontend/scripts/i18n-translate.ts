@@ -14,7 +14,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Catalog, StoredState } from "../src/i18n/core/core";
 import { run } from "../src/i18n/core/run";
-import { usedEntries } from "../src/i18n/keys-scan";
+import { scannedFiles, usedEntries } from "../src/i18n/keys-scan";
 import { LOCALES } from "../src/i18n/locales";
 import { LEGACY_VERSION, profile, type Target } from "../src/i18n/translate-profile";
 
@@ -31,13 +31,9 @@ const targets = LOCALES.filter((l): l is Target => l !== "en").filter(
 const root = join(import.meta.dir, "..");
 const src = join(root, "src");
 const localeDir = join(src, "i18n", "locale");
-const sources = readdirSync(src, { recursive: true, encoding: "utf8" })
-	.filter(
-		(f) => /\.tsx?$/u.test(f) && !(f.includes(".test.") || f.startsWith(join("i18n", "locale"))),
-	)
-	// Catalog key order follows this list, and readdir order is filesystem-dependent.
-	.sort()
-	.map((f) => readFileSync(join(src, f), "utf8"));
+const sources = scannedFiles(readdirSync(src, { recursive: true, encoding: "utf8" })).map((f) =>
+	readFileSync(join(src, f), "utf8"),
+);
 
 async function loadFrom(dir: string, code: Target): Promise<Catalog> {
 	const file = join(dir, `${code}.ts`);

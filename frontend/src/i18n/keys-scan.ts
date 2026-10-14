@@ -41,11 +41,27 @@ function usedEntries(sources: readonly string[]): Entry[] {
 			}
 			const { one, other } = forms;
 			if (other !== undefined) {
-				entries.set(other, { key: other, plural: one === undefined ? { other } : { one, other } });
+				// A later call of the same plural that omits one must not drop it.
+				const kept = one ?? entries.get(other)?.plural?.one;
+				entries.set(other, {
+					key: other,
+					plural: kept === undefined ? { other } : { one: kept, other },
+				});
 			}
 		}
 	}
 	return [...entries.values()];
+}
+
+// The source files a scan reads, from a recursive readdir of src/. Sorted: entry
+// order, and so catalog key order, follows this list, and readdir order is
+// filesystem-dependent.
+function scannedFiles(listed: readonly string[]): string[] {
+	return listed
+		.filter(
+			(f) => /\.tsx?$/u.test(f) && !(f.includes(".test.") || /^i18n[\\/]locale[\\/]/u.test(f)),
+		)
+		.sort();
 }
 
 function usedKeys(sources: readonly string[]): Set<string> {
@@ -69,4 +85,4 @@ function hiddenCalls(source: string): string[] {
 }
 
 export type { Entry };
-export { hiddenCalls, usedEntries, usedKeys };
+export { hiddenCalls, scannedFiles, usedEntries, usedKeys };

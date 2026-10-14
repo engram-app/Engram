@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hiddenCalls, usedEntries, usedKeys } from "./keys-scan";
+import { hiddenCalls, scannedFiles, usedEntries, usedKeys } from "./keys-scan";
 import { profile } from "./translate-profile";
 
 describe("usedKeys (self-check)", () => {
@@ -58,6 +58,26 @@ describe("usedEntries (self-check)", () => {
 	});
 	it("returns plain entries without plural and dedupes", () => {
 		expect(usedEntries([`t("A") msg("A") t("B")`])).toEqual([{ key: "A" }, { key: "B" }]);
+	});
+	it("keeps a one form a later call of the same plural omits", () => {
+		const first = `tn({ one: "{count} item", other: "{count} items" }, n)`;
+		const later = `tn({ other: "{count} items" }, n)`;
+		expect(usedEntries([first, later])).toEqual([
+			{ key: "{count} items", plural: { one: "{count} item", other: "{count} items" } },
+		]);
+	});
+});
+
+describe("scannedFiles", () => {
+	it("keeps source files in sorted order, whatever order readdir returned", () => {
+		const listed = ["b.tsx", "a/z.ts", "a/b.ts", "A.ts"];
+		expect(scannedFiles(listed)).toEqual(["A.ts", "a/b.ts", "a/z.ts", "b.tsx"]);
+		expect(scannedFiles([...listed].reverse())).toEqual(scannedFiles(listed));
+	});
+	it("drops tests, locale catalogs and non-TS files", () => {
+		expect(
+			scannedFiles(["x.test.ts", "i18n/locale/de.ts", "i18n\\locale\\fr.ts", "y.css", "", "z.ts"]),
+		).toEqual(["z.ts"]);
 	});
 });
 
