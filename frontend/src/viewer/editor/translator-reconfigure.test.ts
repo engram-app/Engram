@@ -13,6 +13,8 @@ import { translator, translatorCompartment } from "./translator";
 vi.mock("../mermaid-render", () => ({
 	nextMermaidId: () => "m1",
 	renderMermaid: () => Promise.reject(new Error("bad diagram")),
+	rememberedMermaidHeight: () => undefined,
+	rememberMermaidHeight: () => undefined,
 }));
 
 // A language switch must repaint widgets that are ALREADY on screen, in place:
