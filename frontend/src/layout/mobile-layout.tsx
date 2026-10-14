@@ -76,7 +76,7 @@ export default function MobileLayout() {
 				<Sheet open={leftOpen} onOpenChange={setLeftOpen}>
 					<SheetTrigger asChild>
 						<Button variant="ghost" size="icon-lg" aria-label={t("Open files")}>
-							<PanelLeftOpen />
+							<PanelLeftOpen className="size-5.5" />
 						</Button>
 					</SheetTrigger>
 					<SheetContent
@@ -130,7 +130,7 @@ export default function MobileLayout() {
 					// Direct children only: the note menu's drawer also mounts in here, and
 					// a descendant rule resized its rows. No backdrop-filter either: it
 					// makes this the containing block for the drawer's position: fixed.
-					className="flex items-center rounded-md bg-secondary/90 empty:hidden [&>button]:size-11"
+					className="flex items-center rounded-md bg-secondary/90 empty:hidden [&>button]:size-11 [&>button>svg]:size-5.5"
 					aria-label={t("Main navigation")}
 				/>
 				<Sheet open={rightOpen} onOpenChange={setRightOpen}>
