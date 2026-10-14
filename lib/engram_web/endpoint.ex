@@ -97,8 +97,14 @@ defmodule EngramWeb.Endpoint do
   # time, so the `Tidewave` module (an `only: :dev` dep, absent in
   # prod/test) is never referenced outside dev — same pattern as the
   # `Phoenix.CodeReloader` guard below.
+  #
+  # toolbar: false keeps the MCP endpoint but stops Tidewave injecting its
+  # in-page toolbar (scripts fetched from tidewave.ai) into every HTML response.
+  # That injection cost ~2.5s of main-thread time under mobile throttling and
+  # skewed every dev-server measurement, including the Lighthouse e2e spec,
+  # which runs against this dev endpoint.
   if code_reloading? do
-    plug Tidewave
+    plug Tidewave, toolbar: false
   end
 
   # HostRewrite runs BEFORE Plug.Static so saas-only host rejection (410
