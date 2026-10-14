@@ -148,9 +148,6 @@ class WebSpaPeer:
         await field.fill(value)
         await field.blur()
 
-    async def remove_property(self, key: str) -> None:
-        await self._page.get_by_label(f"Remove {key}").click()
-
     async def stop(self) -> None:
         try:
             if self._ctx is not None:

@@ -44,7 +44,9 @@ export function HelpTip({
 				// one affordance this icon has -- that it is clickable -- was missing.
 				// Worse inside a container that sets its own cursor-pointer, where the
 				// arrow reappearing over the icon reads as "not this bit".
-				className={`inline-flex shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:text-foreground ${className}`}
+				// size-6 -m-1: a 24px hit area (WCAG target-size; the 16px icon alone
+				// failed it) that still takes the icon's 16px in the layout.
+				className={`-m-1 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:text-foreground ${className}`}
 			>
 				<CircleHelp className="size-4" />
 			</PopoverTrigger>

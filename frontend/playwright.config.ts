@@ -46,6 +46,15 @@ export default defineConfig({
 			},
 		},
 		{
+			// Audits the production bundle Phoenix serves, not the Vite dev server
+			// (see the spec), so its baseURL is the backend.
+			name: "lighthouse",
+			testMatch: /\/lighthouse\.spec\.ts$/u,
+			use: {
+				baseURL: `http://localhost:${LOCAL_BACKEND_PORT}`,
+			},
+		},
+		{
 			name: "clerk",
 			testMatch:
 				/\/(?:clerk-auth|onboarding-ftux|oauth-consent-onboarding|i18n-onboarding-clerk)\.spec\.ts$/u,

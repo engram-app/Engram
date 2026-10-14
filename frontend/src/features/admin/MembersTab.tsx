@@ -219,7 +219,7 @@ export default function MembersTab({
 										<td className="py-3 pr-2 pl-4">
 											<span className="text-foreground">{u.email}</span>
 											{isSelf && (
-												<span className="ml-2 rounded-sm bg-primary/15 px-1.5 py-0.5 font-medium text-[10px] text-primary uppercase tracking-wider">
+												<span className="ml-2 rounded-sm bg-primary/15 px-1.5 py-0.5 font-medium text-[10px] text-primary-ink uppercase tracking-wider">
 													{t("you")}
 												</span>
 											)}

@@ -17,17 +17,17 @@ import { useT } from "@/i18n/locale-provider";
 import { displayVaultName } from "@/i18n/vault-name";
 import {
 	LIST_ROW_GAP,
-	LIST_ROW_HEIGHT,
 	listContainer,
 	listEmpty,
 	listRowClass,
+	PICKER_ROW_HEIGHT,
 } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { useActiveVaultId } from "../api/active-vault";
 import { useVaults } from "../api/queries";
 import { vaultPath } from "../routes";
 
-function VaultSwitcher() {
+function VaultSwitcher({ className }: { className?: string }) {
 	const { t } = useT();
 	const { data: vaults, isLoading } = useVaults();
 	const activeId = useActiveVaultId();
@@ -106,7 +106,7 @@ function VaultSwitcher() {
 	}
 
 	return (
-		<section className="border-border border-t">
+		<section className={cn("border-border border-t", className)}>
 			<Popover open={open} onOpenChange={onOpenChange}>
 				<PopoverTrigger className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left outline-none hover:bg-muted aria-expanded:bg-muted">
 					<span className="min-w-0 flex-1">
@@ -128,6 +128,9 @@ function VaultSwitcher() {
 					// button read as one object; the trigger's own border-t is the seam, so the
 					// panel drops its bottom border rather than doubling it.
 					sideOffset={0}
+					// The shared Popover keeps 8px off the viewport edge, which slid the
+					// panel off its trigger on mobile, where the drawer starts at x=0.
+					collisionPadding={0}
 					className="w-[var(--radix-popover-trigger-width)] min-w-64 overflow-hidden rounded-none border-b-0 p-0"
 					// Land in the search box, not on whichever element Radix finds first.
 					onOpenAutoFocus={(e) => {
@@ -156,9 +159,9 @@ function VaultSwitcher() {
 									tabIndex={-1}
 									aria-selected={v.id === active.id}
 									data-highlighted={v.id === highlighted?.id || undefined}
-									style={{ height: LIST_ROW_HEIGHT }}
 									className={cn(
 										listRowClass({ selected: v.id === active.id }),
+										PICKER_ROW_HEIGHT,
 										"cursor-default justify-between pl-2 outline-none",
 									)}
 									onClick={() => pick(v.id)}
@@ -175,7 +178,9 @@ function VaultSwitcher() {
 									}}
 								>
 									<span className="truncate">{displayVaultName(v.name, t)}</span>
-									{v.id === active.id ? <Check className="size-4 shrink-0 text-primary" /> : null}
+									{v.id === active.id ? (
+										<Check className="size-4 shrink-0 text-primary-ink" />
+									) : null}
 								</div>
 							))}
 							{matches.length === 0 ? <p className={listEmpty}>{t("No vaults match")}</p> : null}
@@ -184,8 +189,11 @@ function VaultSwitcher() {
 					<div className={cn("border-border border-t", listContainer)}>
 						<button
 							type="button"
-							style={{ height: LIST_ROW_HEIGHT }}
-							className={cn(listRowClass(), "pl-2 outline-none focus-visible:bg-accent")}
+							className={cn(
+								listRowClass(),
+								PICKER_ROW_HEIGHT,
+								"pl-2 outline-none focus-visible:bg-accent",
+							)}
 							onClick={() => {
 								setOpen(false);
 								setCreateOpen(true);

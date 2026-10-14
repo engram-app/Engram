@@ -176,3 +176,10 @@ export function noteMenuActions(mode: ViewMode): readonly Action[] {
 }
 
 export { ACTION_ICONS };
+
+/** Whether a divider goes above this row: one before the file actions, one
+ *  before the destructive action. Shared by the
+ *  desktop dropdown and the mobile drawer so both group the same way. */
+export function startsGroup(action: Action, index: number): boolean {
+	return index > 0 && (action.id === "rename" || Boolean(action.destructive));
+}

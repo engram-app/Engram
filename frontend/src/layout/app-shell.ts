@@ -7,4 +7,7 @@
 
 export { default as OnboardingGate } from "../onboarding/onboarding-gate";
 export { OnboardingShell } from "../onboarding/onboarding-shell";
+// Here, not its own lazy chunk: alone it cost a whole sequential round trip
+// after the shell on every vault page.
+export { default as VaultRoute } from "../viewer/vault-route";
 export { default as AppLayout } from "./app-layout";

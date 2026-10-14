@@ -333,7 +333,7 @@ export default function OAuthAuthorizePage() {
 							text="Taking you to setup so you can finish connecting {app}."
 							slots={{
 								app: (
-									<span className="text-primary">
+									<span className="text-primary-ink">
 										{clientQuery.data?.client_name ?? t("this app")}
 									</span>
 								),
@@ -464,7 +464,7 @@ export default function OAuthAuthorizePage() {
 					<h1 className={heading}>
 						<Trans
 							text="Authorize {client}"
-							slots={{ client: <span className="text-primary">{clientName}</span> }}
+							slots={{ client: <span className="text-primary-ink">{clientName}</span> }}
 						/>
 					</h1>
 					<p className="text-muted-foreground text-sm">

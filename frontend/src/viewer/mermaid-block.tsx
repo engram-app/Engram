@@ -1,35 +1,26 @@
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { Trans } from "@/i18n/trans";
 import { useTheme } from "../theme/theme-provider";
-import { nextMermaidId, renderMermaid } from "./mermaid-render";
+import { drawMermaid } from "./mermaid-render";
 
 export default function MermaidBlock({ code }: { code: string }) {
 	const ref = useRef<HTMLDivElement>(null);
 	const [error, setError] = useState<string | null>(null);
-	const [id] = useState(nextMermaidId);
 	const { resolved } = useTheme();
 
-	useEffect(() => {
-		let cancelled = false;
-		// Keyed on `resolved`: switching light/dark has to re-draw, because the
-		// palette is baked into the SVG rather than applied as CSS.
-		renderMermaid(id, code, resolved === "dark")
-			.then((svg) => {
-				if (cancelled || !ref.current) {
-					return;
-				}
-				ref.current.innerHTML = svg;
-				setError(null);
-			})
-			.catch((err) => {
-				if (!cancelled) {
-					setError(err?.message ?? String(err));
-				}
-			});
-		return () => {
-			cancelled = true;
-		};
-	}, [code, id, resolved]);
+	// Keyed on `resolved`: switching light/dark has to re-draw, because the
+	// palette is baked into the SVG rather than applied as CSS. A layout effect
+	// so drawMermaid's height reservation is in place before the first paint.
+	useLayoutEffect(() => {
+		const target = ref.current;
+		if (!target) {
+			return;
+		}
+		return drawMermaid(target, "reading", code, resolved === "dark", {
+			drawn: () => setError(null),
+			failed: (err) => setError(err instanceof Error ? err.message : String(err)),
+		});
+	}, [code, resolved]);
 
 	// The target div stays MOUNTED even while erroring, rather than being swapped
 	// for the <pre>. Returning early on error unmounted it, so `ref.current` was

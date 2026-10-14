@@ -1,9 +1,19 @@
-import { Calendar, Clock, Hash, List, type LucideIcon, SquareCheck, Text } from "lucide-react";
+import {
+	Calendar,
+	Clock,
+	Hash,
+	List,
+	type LucideIcon,
+	SquareCheck,
+	Text,
+	Trash2,
+} from "lucide-react";
 import { useRef } from "react";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
+	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useT } from "@/i18n/locale-provider";
@@ -38,6 +48,8 @@ export function PropertyTypeMenu({
 	value,
 	onChange,
 	focusAfterSelect,
+	onRemove,
+	focusAfterRemove,
 }: {
 	value: PropertyType;
 	onChange: (t: PropertyType) => void;
@@ -46,17 +58,24 @@ export function PropertyTypeMenu({
 	 *  restores focus to the trigger on close, so this has to be done in
 	 *  `onCloseAutoFocus`; focusing from `onSelect` is overwritten a tick later. */
 	focusAfterSelect?: () => HTMLInputElement | null;
+	/** Adds a Delete item at the bottom. The menu is the row's only remove
+	 *  control, the way Obsidian's property icon menu carries it. */
+	onRemove?: () => void;
+	/** Element to hand focus to once the property is deleted. The trigger goes
+	 *  with its row, so Radix's own restore would land on <body>. */
+	focusAfterRemove?: () => HTMLElement | null;
 }) {
 	const { t } = useT();
 	const Icon = TYPE_ICONS[value];
-	// Only a SELECTION redirects focus. Escape and click-away are the user
-	// backing out, and there the trigger is the right place to land.
-	const picked = useRef(false);
+	// Where focus goes on close, set by the item chosen. Escape and click-away
+	// leave it null: that is the user backing out, and the trigger is the right
+	// place to land.
+	const focusTarget = useRef<(() => HTMLElement | null) | null>(null);
 	return (
 		<DropdownMenu
 			onOpenChange={(open) => {
 				if (open) {
-					picked.current = false;
+					focusTarget.current = null;
 				}
 			}}
 		>
@@ -75,10 +94,7 @@ export function PropertyTypeMenu({
 			<DropdownMenuContent
 				align="start"
 				onCloseAutoFocus={(e) => {
-					if (!picked.current) {
-						return;
-					}
-					const el = focusAfterSelect?.();
+					const el = focusTarget.current?.();
 					if (!el) {
 						return;
 					}
@@ -92,7 +108,7 @@ export function PropertyTypeMenu({
 						<DropdownMenuItem
 							key={type}
 							onSelect={() => {
-								picked.current = true;
+								focusTarget.current = focusAfterSelect ?? null;
 								onChange(type);
 							}}
 						>
@@ -101,6 +117,21 @@ export function PropertyTypeMenu({
 						</DropdownMenuItem>
 					);
 				})}
+				{onRemove ? (
+					<>
+						<DropdownMenuSeparator />
+						<DropdownMenuItem
+							variant="destructive"
+							onSelect={() => {
+								focusTarget.current = focusAfterRemove ?? null;
+								onRemove();
+							}}
+						>
+							<Trash2 aria-hidden="true" className="size-4" />
+							{t("Delete")}
+						</DropdownMenuItem>
+					</>
+				) : null}
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);

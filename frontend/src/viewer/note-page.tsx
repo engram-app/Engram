@@ -39,6 +39,7 @@ import {
 	openDoc,
 	subscribeToCrdtSyncStatus,
 } from "../crdt/session";
+import { undoKeyHandler } from "../crdt/undo";
 import { uuid7 } from "../crdt/uuid7";
 import { useRightToolSlot } from "../layout/right-tools-context";
 import { copyToClipboard } from "../lib/clipboard";
@@ -53,11 +54,10 @@ import { KeyboardBar } from "./editor/keyboard-bar";
 import { RawFrontmatterEditor } from "./editor/raw-frontmatter-editor";
 import { InlineTitle } from "./inline-title";
 import LoadingPane from "./loading-pane";
-import { NoteEditor } from "./note-chunks";
+import { NoteEditor, NoteView } from "./note-chunks";
 import { NoteMenu } from "./note-menu";
 import NoteNotFoundPane from "./note-not-found-pane";
 import NoteToc from "./note-toc";
-import NoteView from "./note-view";
 import { PropertiesWidget } from "./properties-widget";
 import type { ActionId, ViewMode } from "./tree-actions/action-list";
 import { DeleteConfirm } from "./tree-actions/delete-confirm";
@@ -73,6 +73,8 @@ import {
 	wikiCreateTarget,
 	wikiHref,
 } from "./wiki-link";
+
+const UNDER_MOBILE_HEADER = "-mt-(--mobile-header,0px) h-[calc(100%+var(--mobile-header,0px))]";
 
 /** How long the routed note may fail to open before the pane explains itself. */
 const STALL_NOTICE_MS = 1500;
@@ -379,6 +381,18 @@ export default function NotePage() {
 	// Subscribe to CRDT sync status changes (non-blocking -- editor still works offline).
 	useEffect(() => subscribeToCrdtSyncStatus(setSyncStatus), []);
 
+	// Ctrl+Z outside the editor (after a property change, with focus on a chip,
+	// checkbox or nothing) walks the same history the editor does.
+	const historyDoc = handle?.doc ?? null;
+	useEffect(() => {
+		if (!historyDoc) {
+			return;
+		}
+		const onKey = undoKeyHandler(historyDoc);
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
+	}, [historyDoc]);
+
 	// The note actually on screen, not the one being routed to. Every consumer
 	// below reads these, never the routed note -- that is the invariant.
 	const shownPath = shown?.note.path;
@@ -666,7 +680,10 @@ export default function NotePage() {
 	};
 
 	return (
-		<DocumentSurface>
+		// Mobile: the surface reaches up under the floating header so text
+		// scrolls behind it, and the page below pads back down by the same
+		// --mobile-header. Both are no-ops where the variable is unset (desktop).
+		<DocumentSurface className={UNDER_MOBILE_HEADER}>
 			{syncStatus === "error" && (
 				<p role="status" className="shrink-0 bg-destructive/10 px-4 py-1 text-destructive text-xs">
 					{t("Not syncing - reconnecting...")}
@@ -686,6 +703,7 @@ export default function NotePage() {
 			    path stays pinned here — it is the only rename affordance still
 			    reachable once you have scrolled the title out of view. */}
 			<DocumentHeader
+				inlineTitle
 				folder={note.folder}
 				title={titlePath}
 				name={
@@ -749,7 +767,7 @@ export default function NotePage() {
 				className={mode === "reading" ? "min-h-0 flex-1" : "min-h-0 flex-1 cursor-text"}
 				onMouseDown={focusEditorFromEmptyPage}
 			>
-				<div ref={pageRef} className="w-full pb-5">
+				<div ref={pageRef} className="w-full pt-(--mobile-header,0px) pb-5">
 					<InlineTitle
 						name={name}
 						renaming={renamingAt === "title"}
@@ -772,13 +790,15 @@ export default function NotePage() {
 						// the title sits the same distance above the body in reading mode
 						// as it does in the editor.
 						<div className="px-5 pt-5">
-							<NoteView
-								content={liveContent}
-								tags={note.tags}
-								links={note.links}
-								manifestNotes={manifest?.notes}
-								onCreateWikiTarget={createWikiTarget}
-							/>
+							<Suspense fallback={<p className="text-muted-foreground">{t("Loading…")}</p>}>
+								<NoteView
+									content={liveContent}
+									tags={note.tags}
+									links={note.links}
+									manifestNotes={manifest?.notes}
+									onCreateWikiTarget={createWikiTarget}
+								/>
+							</Suspense>
 						</div>
 					) : (
 						<Suspense

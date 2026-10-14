@@ -248,7 +248,7 @@ function SourceCard({ icon, title, body, selected, onClick }: SourceCardProps) {
 		>
 			<span className="flex items-center gap-2">
 				{icon}
-				<span className="font-semibold text-base text-foreground group-hover:text-primary">
+				<span className="font-semibold text-base text-foreground group-hover:text-primary-ink">
 					{title}
 				</span>
 			</span>
@@ -315,7 +315,7 @@ function ObsidianInlinePanel({ userId, isCommitting, onCommit }: ObsidianInlineP
 											target="_blank"
 											rel="noreferrer noopener"
 											onClick={() => track("plugin_listing_opened")}
-											className="font-medium text-primary underline-offset-2 hover:underline"
+											className="font-medium text-primary-ink underline-offset-2 hover:underline"
 										>
 											{t("plugin listing")}
 										</a>

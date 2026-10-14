@@ -66,6 +66,31 @@ describe("buildEditorState", () => {
 		}
 	});
 
+	// Lighthouse aria-input-field-name: the editable region is a textbox, and an
+	// unnamed one is announced as just "edit text".
+	it("names the editable region for screen readers", () => {
+		const doc = new Y.Doc();
+		const awareness = new Awareness(doc);
+		const view = new EditorView({
+			state: buildEditorState(
+				doc.getText("content"),
+				awareness,
+				false,
+				"rendered",
+				resolveWikiLink,
+				openWikiLink,
+				wikiCompletionPaths,
+				openMarkdownLink,
+				englishT,
+			),
+		});
+		try {
+			expect(view.contentDOM).toHaveAccessibleName("Note text");
+		} finally {
+			view.destroy();
+		}
+	});
+
 	it("produces an empty document when the Y.Text is empty", () => {
 		const doc = new Y.Doc();
 		const ytext = doc.getText("content");

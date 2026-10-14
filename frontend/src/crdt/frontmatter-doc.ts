@@ -213,23 +213,6 @@ export function renameKey(doc: Y.Doc, from: string, to: string): boolean {
 	return true;
 }
 
-export function moveKey(doc: Y.Doc, key: string, dir: "up" | "down"): void {
-	const { order } = frontmatterMaps(doc);
-	const arr = order.toArray();
-	const idx = arr.indexOf(key);
-	if (idx < 0) {
-		return;
-	}
-	const target = dir === "up" ? idx - 1 : idx + 1;
-	if (target < 0 || target >= arr.length) {
-		return;
-	}
-	doc.transact(() => {
-		order.delete(idx, 1);
-		order.insert(target, [key]);
-	});
-}
-
 export function setType(doc: Y.Doc, key: string, type: PropertyType): void {
 	const { values, types } = frontmatterMaps(doc);
 	const rows = readRows(doc);

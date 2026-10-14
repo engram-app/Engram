@@ -182,3 +182,96 @@ describe("image embeds", () => {
 		});
 	});
 });
+
+// Obsidian reveals a task's `- [ ] ` source when the caret touches it, so the
+// marker can be edited or backspaced away. Elsewhere on the line, and with the
+// editor unfocused, the checkbox stays rendered.
+describe("task marker reveal", () => {
+	//            0         1
+	//            0123456789012345678
+	const TASKS = "- [ ] first\n1. [x] second\n\nplain\n";
+
+	function mountTasks(anchor: number): EditorView {
+		view = new EditorView({
+			state: EditorState.create({
+				doc: TASKS,
+				selection: { anchor },
+				extensions: livePreviewExtensions({
+					resolveWikiLink: (n) => `/w/wiki/${n}`,
+					openWikiLink: () => {},
+					wikiCompletionPaths: () => [],
+					openMarkdownLink: () => false,
+				}),
+			}),
+			parent: document.body,
+		});
+		view.focus();
+		// hasFocus is read when decorations build; rebuild now that it is true.
+		view.dispatch({ selection: { anchor } });
+		return view;
+	}
+
+	const line = (n: number) => [...view.dom.querySelectorAll(".cm-line")][n];
+
+	test.each([
+		["inside the marker", 3],
+		["at the start of the line", 0],
+		["right after the marker", 6],
+	])("shows `- [ ] ` raw with the caret %s", (_where, anchor) => {
+		mountTasks(anchor);
+		expect(line(0)?.querySelector(".cm-atomic-task-checkbox")).toBeNull();
+		expect(line(0)?.textContent).toBe("- [ ] first");
+	});
+
+	test("keeps the checkbox with the caret further along the line", () => {
+		mountTasks(9);
+		expect(line(0)?.querySelector(".cm-atomic-task-checkbox")).not.toBeNull();
+		expect(line(0)?.textContent).toBe("first");
+	});
+
+	test("reveals only the task the caret touches", () => {
+		mountTasks(3);
+		expect(line(1)?.querySelector(".cm-atomic-task-checkbox")).not.toBeNull();
+	});
+
+	// lezer tags TaskMarker `atom`, which Atomic paints in its accent blue.
+	// Revealed, `[ ]` should read as one piece with the `-` before it.
+	test("paints the revealed `[ ]` like the `-` beside it", () => {
+		mountTasks(3);
+		const spans = [...(line(0)?.querySelectorAll("span") ?? [])];
+		const dash = spans.find((s) => s.textContent === "-");
+		const box = spans.find((s) => s.textContent === "[ ]");
+		expect(box).toBeDefined();
+		expect(getComputedStyle(box as Element).color).toBe(getComputedStyle(dash as Element).color);
+	});
+
+	test("ordered tasks reveal too", () => {
+		mountTasks(14);
+		expect(line(1)?.querySelector(".cm-atomic-task-checkbox")).toBeNull();
+		expect(line(1)?.textContent).toBe("1. [x] second");
+	});
+
+	// Lighthouse `label`: a bare checkbox is announced as just "checkbox".
+	test("names each checkbox after its task", () => {
+		mountTasks(9);
+		const boxes = [...view.dom.querySelectorAll(".cm-atomic-task-checkbox")];
+		expect(boxes.map((b) => b.getAttribute("aria-label"))).toEqual(["first", "second"]);
+	});
+
+	test("never reveals while unfocused", () => {
+		view = new EditorView({
+			state: EditorState.create({
+				doc: TASKS,
+				selection: { anchor: 3 },
+				extensions: livePreviewExtensions({
+					resolveWikiLink: (n) => `/w/wiki/${n}`,
+					openWikiLink: () => {},
+					wikiCompletionPaths: () => [],
+					openMarkdownLink: () => false,
+				}),
+			}),
+			parent: document.body,
+		});
+		expect(line(0)?.querySelector(".cm-atomic-task-checkbox")).not.toBeNull();
+	});
+});

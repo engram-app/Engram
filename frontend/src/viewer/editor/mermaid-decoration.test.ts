@@ -1,6 +1,7 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, test } from "vitest";
+import { rememberMermaidHeight } from "../mermaid-render";
 import { enterMermaidDown, enterMermaidUp, mermaidDecoration } from "./mermaid-decoration";
 
 let view: EditorView;
@@ -41,6 +42,22 @@ function widgetCode(v: EditorView): string | null {
 }
 
 describe("mermaidDecoration", () => {
+	test("reserves the height the diagram last drew at, before it draws", () => {
+		// Without it the box opened empty and grew once the SVG landed, a beat
+		// after the note was on screen, shoving every line below it down.
+		const doc = `before\n\n${FENCE}\n\nafter\n`;
+		mount(doc, 0);
+		const code = widgetCode(view) ?? "";
+		const fresh = view.dom.querySelector<HTMLElement>(".cm-mermaid-widget");
+		expect(fresh?.style.minHeight).toBe("");
+		view.destroy();
+
+		rememberMermaidHeight("editor", code, 178);
+		mount(doc, 0);
+		const box = view.dom.querySelector<HTMLElement>(".cm-mermaid-widget");
+		expect(box?.style.minHeight).toBe("178px");
+	});
+
 	test("replaces a mermaid fence with a widget, leaving the document untouched", () => {
 		// The whole extension is view-only: it decorates the source but must never
 		// mutate EditorState.doc, or it would fight the yCollab Y.Text binding.

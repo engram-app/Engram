@@ -714,8 +714,8 @@ describe("FolderTree (HT)", () => {
 		// and wait the configured 500ms.
 		fireEvent.pointerDown(projects, { pointerType: "touch", clientX: 5, clientY: 5 });
 		await new Promise((resolve) => setTimeout(resolve, 600));
-		// The ActionDrawer (with its backdrop) is shown for the long-pressed row.
-		expect(await screen.findByTestId("action-drawer-backdrop")).toBeInTheDocument();
+		// The ActionDrawer is shown for the long-pressed row.
+		expect(await screen.findByTestId("action-drawer")).toBeInTheDocument();
 	});
 
 	it("shows loading state", () => {

@@ -1,18 +1,21 @@
-import posthog from "posthog-js";
+import type { PostHog } from "posthog-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureError } from "../sentry";
+import { setAnalyticsClient } from "./client";
 import { track } from "./track";
 
-vi.mock("posthog-js", () => ({ default: { capture: vi.fn() } }));
 // Mirrors route-error-boundary.test.tsx's convention: assert WHAT gets
 // reported without a real Sentry SDK. Default: "delivered nothing".
 vi.mock("../sentry", () => ({ captureError: vi.fn(() => Promise.resolve(undefined)) }));
 const mockCapture = vi.mocked(captureError);
+// track/identity reach PostHog through the loaded client, so a stand-in is enough.
+const posthog = { capture: vi.fn() };
+setAnalyticsClient(posthog as unknown as PostHog);
 
 afterEach(() => {
 	vi.unstubAllEnvs();
 	mockCapture.mockClear();
-	vi.mocked(posthog.capture).mockClear();
+	posthog.capture.mockClear();
 });
 
 /* A rejected event must (1) never reach PostHog and (2) be reported — and it

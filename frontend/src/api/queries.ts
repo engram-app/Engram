@@ -726,6 +726,17 @@ export function invalidateVaultTree(qc: QueryClient, vaultId: string | null | un
 	qc.invalidateQueries({ queryKey: ["index_status"] });
 }
 
+/** One note's body. Shared by useNote and the first-view prefetch so both hit
+ *  the same cache entry; the client's default staleTime keeps a body
+ *  prefetched at boot (layout/first-view.ts) from refetching as NotePage
+ *  mounts. */
+export function noteQueryOptions(vaultId: string | null, id: string) {
+	return {
+		queryKey: ["note", vaultId, id] as const,
+		queryFn: () => fetchNoteById(id),
+	};
+}
+
 export function useNote(id: string | null) {
 	const vaultId = useActiveVaultId();
 	const qc = useQueryClient();
@@ -754,8 +765,7 @@ export function useNote(id: string | null) {
 	);
 
 	return useQuery({
-		queryKey: ["note", vaultId, id],
-		queryFn: () => fetchNoteById(id ?? ""),
+		...noteQueryOptions(vaultId, id ?? ""),
 		enabled: id !== null,
 		select: withTreePath,
 		// Two different blank-outs, one setting.

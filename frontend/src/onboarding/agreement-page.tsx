@@ -48,7 +48,7 @@ export default function AgreementPage() {
 								href={PRIVACY_URL}
 								target="_blank"
 								rel="noreferrer noopener"
-								className="font-medium text-primary underline-offset-4 hover:underline"
+								className="font-medium text-primary-ink underline-offset-4 hover:underline"
 							>
 								{t("privacy notice")}
 							</a>

@@ -13,6 +13,7 @@ import type * as Y from "yjs";
 import { useT } from "@/i18n/locale-provider";
 import type { Translate } from "@/i18n/translate";
 import { useAttachments, useUploadAttachment } from "../api/queries";
+import { undoManagerFor } from "../crdt/undo";
 import { useTheme } from "../theme/theme-provider";
 import { loadAttachmentUrl, resolveAttachmentTarget } from "./attachment-blob";
 import { uploadFilesTo } from "./attachment-upload/upload-files";
@@ -149,6 +150,14 @@ export function buildEditorState(
 			// override it back on — the browser's native spellcheck is the only
 			// squiggly-underline signal this editor gets, there's no in-app one.
 			EditorView.contentAttributes.of({ spellcheck: "true" }),
+			// The editable region is a textbox; unnamed, a screen reader says only
+			// "edit text". Read from the translator facet so a language switch
+			// (which swaps the compartment) renames it without a rebuild.
+			EditorView.contentAttributes.compute([translator], (state) => {
+				// Bound to `t` so the i18n key scanner sees the literal.
+				const t = state.facet(translator);
+				return { "aria-label": t("Note text") };
+			}),
 			drawSelection(),
 			EditorView.lineWrapping,
 			// Base, not the mode compartment: the fold service comes from
@@ -208,7 +217,9 @@ export function buildEditorState(
 			// wires local edits back into the Y.Text (→ CRDT channel). MUST stay in
 			// the base extensions (never in the compartment) -- reconfiguring the
 			// compartment on mode switch must never detach this binding.
-			yCollab(ytext, awareness),
+			// The shared per-doc history, so Ctrl+Z here also walks back
+			// property edits made in the widget (crdt/undo.ts).
+			yCollab(ytext, awareness, ytext.doc ? { undoManager: undoManagerFor(ytext.doc) } : undefined),
 		],
 	});
 }

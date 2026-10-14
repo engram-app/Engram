@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { useMobileHeaderSlot } from "@/layout/mobile-header-slot";
 
 // The strip across the top of a document: folder crumb, the item's name, and
 // actions on the right. Notes and attachment previews both render it, so the two
@@ -8,12 +10,21 @@ export function DocumentHeader({
 	name,
 	title,
 	actions,
+	inlineTitle = false,
 }: {
 	folder?: string;
 	name: ReactNode;
 	title?: string;
 	actions?: ReactNode;
+	/** The page shows its own title (a note's InlineTitle). Then mobile drops
+	 *  the strip and floats only the actions top-right, Obsidian-style. A page
+	 *  without one keeps the strip, or a phone would show no name at all. */
+	inlineTitle?: boolean;
 }) {
+	const slot = useMobileHeaderSlot()?.slot;
+	if (slot && inlineTitle) {
+		return actions ? createPortal(actions, slot) : null;
+	}
 	return (
 		<div className="flex shrink-0 items-center gap-2 border-border border-b px-4 py-2">
 			<p className="flex min-w-0 flex-1 items-baseline gap-1 text-sm" title={title}>

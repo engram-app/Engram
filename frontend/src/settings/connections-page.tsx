@@ -760,7 +760,7 @@ export default function ConnectionsPage() {
 						rel="noreferrer"
 						className="group rounded-lg border border-border bg-card p-3 hover:border-primary"
 					>
-						<p className="font-medium text-foreground text-sm group-hover:text-primary">
+						<p className="font-medium text-foreground text-sm group-hover:text-primary-ink">
 							{t("AI integrations →")}
 						</p>
 						<p className="mt-0.5 text-muted-foreground text-xs">
@@ -775,7 +775,7 @@ export default function ConnectionsPage() {
 						rel="noreferrer"
 						className="group rounded-lg border border-border bg-card p-3 hover:border-primary"
 					>
-						<p className="font-medium text-foreground text-sm group-hover:text-primary">
+						<p className="font-medium text-foreground text-sm group-hover:text-primary-ink">
 							{t("MCP protocol →")}
 						</p>
 						<p className="mt-0.5 text-muted-foreground text-xs">

@@ -6,6 +6,7 @@ import {
 	useState,
 } from "react";
 import { useT } from "@/i18n/locale-provider";
+import { cn } from "@/lib/utils";
 import {
 	clampDocumentWidth,
 	DEFAULT_DOCUMENT_WIDTH,
@@ -48,7 +49,13 @@ const HANDLE_SIDE: Record<Side, string> = {
 // The white paper column a note renders on. Shared so states that stand in for a
 // note (not-found, etc.) sit on the same surface instead of the bare grid. Its
 // width is user-resizable from either edge (symmetrically, since it is centred).
-export function DocumentSurface({ children }: { children: ReactNode }) {
+export function DocumentSurface({
+	children,
+	className,
+}: {
+	children: ReactNode;
+	className?: string;
+}) {
 	const { t } = useT();
 	const [width, setWidth] = useState(readDocumentWidth);
 	const [dragging, setDragging] = useState<Side | null>(null);
@@ -158,10 +165,13 @@ export function DocumentSurface({ children }: { children: ReactNode }) {
 		<div
 			ref={wrapperRef}
 			data-testid="document-surface"
-			className="relative mx-auto size-full min-h-0 min-w-0 md:-my-6 md:h-[calc(100%+3rem)]"
+			className={cn(
+				"relative mx-auto size-full min-h-0 min-w-0 md:-my-6 md:h-[calc(100%+3rem)]",
+				className,
+			)}
 			style={{ maxWidth: width }}
 		>
-			<section className="flex size-full min-h-0 min-w-0 flex-col overflow-hidden border-border border-x bg-card text-card-foreground">
+			<section className="flex size-full min-h-0 min-w-0 flex-col overflow-hidden border-border bg-card text-card-foreground md:border-x">
 				{children}
 			</section>
 			{handle("left")}

@@ -2,6 +2,7 @@ import { FolderTree, Search } from "lucide-react";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import type { MsgKey } from "@/i18n/ui-text";
+import { activeTabClass } from "@/lib/ui-classes";
 import { type RailView, useRailView } from "./rail-view-context";
 
 const VIEWS: ReadonlyArray<{ id: RailView; label: MsgKey; Icon: typeof Search }> = [
@@ -39,11 +40,7 @@ export default function SidebarViewToggle() {
 						// showing, they do not toggle something open and shut.
 						aria-current={active ? "page" : undefined}
 						onClick={() => setView(id)}
-						className={`flex flex-1 items-center justify-center gap-2 font-medium text-sm transition-colors ${
-							active
-								? "bg-primary/15 text-primary"
-								: "text-muted-foreground hover:bg-primary/10 hover:text-primary"
-						}`}
+						className={`flex flex-1 items-center justify-center gap-2 font-medium text-sm transition-colors ${activeTabClass(active)}`}
 					>
 						<Icon className="size-4" />
 						{t(label)}

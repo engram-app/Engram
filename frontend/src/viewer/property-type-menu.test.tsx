@@ -18,6 +18,30 @@ describe("PropertyTypeMenu", () => {
 		fireEvent.click(item);
 		expect(onChange).toHaveBeenCalledWith("list");
 	});
+
+	test("ends with a separated, destructive Delete when removable", async () => {
+		const onRemove = vi.fn();
+		const onChange = vi.fn();
+		render(<PropertyTypeMenu value="text" onChange={onChange} onRemove={onRemove} />);
+		const trigger = screen.getByRole("button", { name: /property type/i });
+		fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+		fireEvent.click(trigger);
+		const del = await screen.findByRole("menuitem", { name: "Delete" });
+		expect(del).toHaveAttribute("data-variant", "destructive");
+		expect(screen.getByRole("separator")).toBeInTheDocument();
+		fireEvent.click(del);
+		expect(onRemove).toHaveBeenCalledOnce();
+		expect(onChange).not.toHaveBeenCalled();
+	});
+
+	test("has no Delete without onRemove", async () => {
+		render(<PropertyTypeMenu value="text" onChange={vi.fn()} />);
+		const trigger = screen.getByRole("button", { name: /property type/i });
+		fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+		fireEvent.click(trigger);
+		await screen.findByRole("menuitem", { name: "list" });
+		expect(screen.queryByRole("menuitem", { name: "Delete" })).not.toBeInTheDocument();
+	});
 });
 
 // Choosing a type should leave the caret on the property's NAME: the type is

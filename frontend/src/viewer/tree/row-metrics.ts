@@ -1,4 +1,4 @@
-import { LIST_ROW_GAP, LIST_ROW_HEIGHT } from "../../lib/ui-classes";
+import { LIST_ROW_GAP, LIST_ROW_HEIGHT, TREE_TOUCH_ROW_HEIGHT } from "../../lib/ui-classes";
 
 // Row height and gap are shared with the vault picker, so their values live in
 // lib/ui-classes; these are the tree's names for them.
@@ -18,6 +18,11 @@ import { LIST_ROW_GAP, LIST_ROW_HEIGHT } from "../../lib/ui-classes";
 // font-size changes, TREE_ROW_HEIGHT changes with it or the text clips. Switch
 // to `measureElement` only if rows ever need to be genuinely variable-height —
 // and re-measure the expand interaction if you do.
-export const TREE_ROW_HEIGHT = LIST_ROW_HEIGHT;
+//
+// Touch screens get a taller row (TREE_TOUCH_ROW_HEIGHT) so a finger lands on
+// one item. ponytail: read once at load, so flipping devtools touch emulation needs a
+// reload. A real device never switches pointer type mid-session.
+const COARSE_POINTER = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+export const TREE_ROW_HEIGHT = COARSE_POINTER ? TREE_TOUCH_ROW_HEIGHT : LIST_ROW_HEIGHT;
 export const TREE_ROW_GAP = LIST_ROW_GAP;
 export const TREE_SLOT_HEIGHT = TREE_ROW_HEIGHT + TREE_ROW_GAP;

@@ -1,4 +1,4 @@
-import { ChevronRight, Plus, X } from "lucide-react";
+import { ChevronRight, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type * as Y from "yjs";
 import { HelpTip } from "@/components/help-tip";
@@ -29,11 +29,20 @@ import { coerceValue, effectiveType, type PropertyType } from "./property-types"
 // border is Obsidian's --metadata-divider turned on: stock Obsidian ships it
 // at 0 width, which leaves an empty value as an invisible target with no hint
 // that the row is even editable.
-const KEY_CELL =
-	"flex min-h-7 w-36 min-w-36 shrink-0 items-center overflow-hidden border-border border-r";
+const KEY_CELL = "flex min-h-7 min-w-0 items-center overflow-hidden border-border border-r";
 
 // One box per row so the key/value boundary and the row boundary both read.
-const ROW = "flex items-start rounded-md border border-border";
+// Each row is a subgrid of the list, so every key cell shares one column that
+// is as wide as the longest key (capped at half the width; longer truncates).
+const ROW = "col-span-2 grid grid-cols-subgrid items-stretch rounded-md border border-border";
+
+// A key's name, committed or being authored. field-sizing-content sizes the
+// input to its text, which is what lets the key column fit the longest key.
+const KEY_INPUT =
+	"field-sizing-content min-w-0 max-w-full border-0 bg-transparent px-2 py-1 text-sm outline-none";
+
+// The value side of a row.
+const VALUE_CELL = "flex min-h-7 items-center gap-1 pl-2";
 
 // Anything this editor opens that renders outside its own DOM subtree. Treated
 // as "inside" for the click-away rule.
@@ -97,10 +106,7 @@ function PropertyKeyInput({
 			// Highlighted when Engram READS the key rather than merely storing it.
 			// No tooltip: the `?` beside the heading is where the explanation
 			// lives, and a per-key hover repeating it is noise on every row.
-			className={cn(
-				"w-full min-w-0 truncate border-0 bg-transparent px-2 py-1 text-sm outline-none",
-				okf ? "text-primary" : "text-muted-foreground",
-			)}
+			className={cn(KEY_INPUT, "truncate", okf ? "text-primary-ink" : "text-muted-foreground")}
 			value={draft}
 			onChange={(e) => setDraft(e.target.value)}
 			onBlur={commit}
@@ -183,7 +189,7 @@ function PropertiesHelp() {
 								href="https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf"
 								target="_blank"
 								rel="noreferrer noopener"
-								className="text-primary underline underline-offset-2"
+								className="text-primary-ink underline underline-offset-2"
 							>
 								{t("Open Knowledge Format")}
 							</a>
@@ -199,6 +205,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 	const { t } = useT();
 	const [rows, setRows] = useState<PropertyRow[]>(() => readRows(doc));
 	const newKeyRef = useRef<HTMLInputElement>(null);
+	const addButtonRef = useRef<HTMLButtonElement>(null);
 	// Holds whichever control the chosen type renders — a checkbox is a
 	// button, not an input, so this is widened to HTMLElement.
 	const newValueRef = useRef<HTMLElement | null>(null);
@@ -427,16 +434,22 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 						</HelpTip>
 					</span>
 				</summary>
-				<dl className="flex flex-col gap-[3px]">
+				<dl className="grid grid-cols-[fit-content(50%)_1fr] gap-y-[3px]">
 					{rows.map((row) => {
 						const type = effectiveType(row.value, row.typeOverride);
 						return (
-							<div key={row.key} className={`group ${ROW}`} data-testid={`property-row-${row.key}`}>
+							<div key={row.key} className={ROW} data-testid={`property-row-${row.key}`}>
 								<dt className={KEY_CELL}>
 									<PropertyTypeMenu
 										value={type}
 										onChange={(next) => setType(doc, row.key, next)}
 										focusAfterSelect={() => keyEls.current.get(row.key) ?? null}
+										onRemove={() => removeKey(doc, row.key)}
+										focusAfterRemove={() => {
+											const i = rows.findIndex((r) => r.key === row.key);
+											const next = rows[i + 1] ?? rows[i - 1];
+											return (next && keyEls.current.get(next.key)) ?? addButtonRef.current;
+										}}
 									/>
 									<PropertyKeyInput
 										doc={doc}
@@ -451,7 +464,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 										}}
 									/>
 								</dt>
-								<dd className="flex min-h-7 flex-1 items-center gap-1 pl-2">
+								<dd className={VALUE_CELL}>
 									<PropertyField
 										type={type}
 										value={row.value}
@@ -459,19 +472,6 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 										onCommit={(v) => setValue(doc, row.key, v)}
 									/>
 								</dd>
-								{/* Remove only. Reordering was two permanent buttons per row for
-							    something you do once in a while; `moveKey` is still there
-							    for a right-click menu, which is where Obsidian keeps it. */}
-								<Button
-									type="button"
-									variant="ghost"
-									size="icon-sm"
-									aria-label={t("Remove {key}", { key: row.key })}
-									onClick={() => removeKey(doc, row.key)}
-									className="mr-1 opacity-0 focus:opacity-100 group-hover:opacity-100"
-								>
-									<X aria-hidden="true" />
-								</Button>
 							</div>
 						);
 					})}
@@ -499,7 +499,10 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 								/>
 								<input
 									ref={newKeyRef}
-									className="w-full min-w-0 border-0 bg-transparent px-2 py-1 text-muted-foreground text-sm outline-none placeholder:text-muted-foreground/60"
+									className={cn(
+										KEY_INPUT,
+										"text-muted-foreground placeholder:text-muted-foreground/60",
+									)}
 									placeholder={t("Property name")}
 									value={newKey}
 									onChange={(e) => setNewKey(e.target.value)}
@@ -517,7 +520,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 									}}
 								/>
 							</dt>
-							<dd className="flex min-h-7 flex-1 items-center gap-1 pl-2">
+							<dd className={VALUE_CELL}>
 								{newType === "checkbox" ? (
 									<Checkbox
 										ref={(el) => {
@@ -575,6 +578,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 					type="button"
 					variant="ghost"
 					size="sm"
+					ref={addButtonRef}
 					aria-label={t("Add property")}
 					className="mt-2"
 					onClick={() => setAdding(true)}

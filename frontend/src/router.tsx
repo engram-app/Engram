@@ -9,6 +9,12 @@ import type { EngramConfig } from "./config";
 import LoadingScreen from "./layout/loading-screen";
 import RouteErrorBoundary from "./route-error-boundary";
 import { ROUTES, VAULT_PREFIX } from "./routes";
+// Settings is a hash overlay mounted at the AuthGuard level (not inside
+// AppLayout) so /link and /oauth/consent, which sit outside the app shell
+// and link to `#settings/billing`, still resolve the overlay. Eager: it is a
+// ~2 KB pass-through (the dialog itself stays lazy), and as its own chunk it
+// sat alone in the boot path as one more sequential round trip.
+import SettingsOverlayHost from "./settings/settings-overlay-host";
 import LoadingPane from "./viewer/loading-pane";
 import { VaultItemPage } from "./viewer/note-chunks";
 
@@ -37,7 +43,9 @@ const OnboardRedirect = lazy(() =>
 	import("./onboarding/onboard-entry").then((m) => ({ default: m.OnboardRedirect })),
 );
 const Dashboard = lazy(() => import("./viewer/dashboard"));
-const VaultRoute = lazy(() => import("./viewer/vault-route"));
+const VaultRoute = lazy(() =>
+	import("./layout/app-shell").then((m) => ({ default: m.VaultRoute })),
+);
 const VaultRedirect = lazy(() => import("./viewer/vault-redirect"));
 const LegacyNoteRedirect = lazy(() => import("./viewer/legacy-note-redirect"));
 // Wikilink hrefs name notes by path/title; this resolves them to /v/:slug/:id.
@@ -51,10 +59,6 @@ const OAuthAuthorizePage = lazy(() => import("./oauth/oauth-authorize-page"));
 // dead weight. With the dynamic import in a statically-false branch, Rollup
 // drops it entirely.
 const ConnectorQcPage = import.meta.env.DEV ? lazy(() => import("./dev/connector-qc-page")) : null;
-// Settings is a hash overlay mounted at the AuthGuard level (not inside
-// AppLayout) so /link and /oauth/consent, which sit outside the app shell
-// and link to `#settings/billing`, still resolve the overlay.
-const SettingsOverlayHost = lazy(() => import("./settings/settings-overlay-host"));
 // `/settings` and `/settings/*` are the old path route. Phoenix still serves
 // the SPA for those paths, so old bookmarks boot and land here.
 const LegacySettingsRedirect = lazy(() => import("./settings/legacy-settings-redirect"));

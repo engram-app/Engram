@@ -58,6 +58,10 @@ function renderSidebar() {
 	);
 }
 
+// SearchPanel is a lazy chunk. Load it once up front so the lazy() resolves in
+// a tick; a cold first import (it pulls in @base-ui) outlasts findBy's timeout.
+await import("./search-panel");
+
 describe("AppSidebar", () => {
 	beforeEach(() => {
 		window.localStorage.clear();
@@ -73,10 +77,11 @@ describe("AppSidebar", () => {
 		expect(screen.getByRole("heading", { name: "Files", level: 2 })).toBeInTheDocument();
 	});
 
-	it("switches to SearchPanel when Search icon is clicked", () => {
+	it("switches to SearchPanel when Search icon is clicked", async () => {
 		renderSidebar();
 		fireEvent.click(screen.getByRole("button", { name: "Search" }));
-		expect(screen.getByRole("heading", { name: "Search", level: 2 })).toBeInTheDocument();
+		// SearchPanel is a lazy chunk, so it mounts a tick after the switch.
+		expect(await screen.findByRole("heading", { name: "Search", level: 2 })).toBeInTheDocument();
 		expect(screen.queryByRole("heading", { name: "Files", level: 2 })).toBeNull();
 	});
 });
@@ -103,10 +108,10 @@ describe("AppSidebar — collapse button", () => {
 		expect(inert).not.toContainElement(screen.getByRole("button", { name: "Files" }));
 	});
 
-	it("the Search header has one too, next to its own close button", () => {
+	it("the Search header has one too, next to its own close button", async () => {
 		renderSidebar();
 		fireEvent.click(screen.getByRole("button", { name: "Search" }));
-		expect(screen.getByRole("button", { name: "Close search" })).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Close search" })).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
 		expect(window.localStorage.getItem("engram:sidebar-open")).toBe("false");
 	});

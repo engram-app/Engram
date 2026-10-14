@@ -18,7 +18,7 @@ import "./blockquote-depth.css";
 import { ATOMIC_CODE_LANGUAGES } from "@atomic-editor/editor/code-languages";
 import { autocompletion } from "@codemirror/autocomplete";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { HighlightStyle, type Language, syntaxHighlighting } from "@codemirror/language";
 import { type Extension, Prec } from "@codemirror/state";
 import { tags } from "@lezer/highlight";
 import { attachmentEmbeds, isImageEmbedTarget } from "./attachment-embed";
@@ -64,6 +64,20 @@ const syntaxOverrides = HighlightStyle.define([
 	{ tag: tags.special(tags.processingInstruction), color: "var(--atomic-editor-fg-faint)" },
 ]);
 
+/**
+ * TASK MARKER: a revealed `[ ]` / `[x]` (see the task reveal in the Atomic
+ * patch). lezer tags it `atom`, which Atomic paints its accent blue; it is
+ * list syntax, so it takes the body colour of the `-` beside it. Scoped to markdown
+ * because `atom` inside a fenced code block (true, null, …) keeps its colour.
+ * The scope must be the Language `markdown({...})` returns: passing extensions
+ * builds a new one, so the exported `markdownLanguage` never matches.
+ */
+function taskMarkerColour(language: Language): HighlightStyle {
+	return HighlightStyle.define([{ tag: tags.atom, color: "var(--atomic-editor-fg, #dcddde)" }], {
+		scope: language,
+	});
+}
+
 export interface LivePreviewOpts {
 	resolveWikiLink: (name: string) => string;
 	// Click-to-open. Comes from the React tree (NotePage's useNavigate) — do
@@ -95,23 +109,25 @@ export interface LivePreviewOpts {
  * decoration extensions (see callout-decoration.ts, katex-decoration.ts).
  */
 export function livePreviewExtensions(opts: LivePreviewOpts): Extension[] {
+	// codeLanguages is what makes a fenced block highlight as its LANGUAGE.
+	// Without it lang-markdown never parses the fence body, so ```ts rendered
+	// as undifferentiated code text in the editor while Reading mode (which
+	// highlights via rehype-highlight) coloured it — the same note looked
+	// different per pane. ATOMIC_CODE_LANGUAGES is the curated 21-language list
+	// the editor package ships for exactly this; every grammar sits behind a
+	// dynamic import, so they stay lazy chunks rather than eager bundle weight.
+	const md = markdown({
+		base: markdownLanguage,
+		codeLanguages: ATOMIC_CODE_LANGUAGES,
+		// calloutMarker must come before Link in the inline parser list, which
+		// it declares itself; order here is irrelevant.
+		extensions: [highlightMarkdown, calloutMarker, noParagraphFold, bareBulletAsText],
+	});
 	return [
-		// codeLanguages is what makes a fenced block highlight as its LANGUAGE.
-		// Without it lang-markdown never parses the fence body, so ```ts rendered
-		// as undifferentiated code text in the editor while Reading mode (which
-		// highlights via rehype-highlight) coloured it — the same note looked
-		// different per pane. ATOMIC_CODE_LANGUAGES is the curated 21-language list
-		// the editor package ships for exactly this; every grammar sits behind a
-		// dynamic import, so they stay lazy chunks rather than eager bundle weight.
-		markdown({
-			base: markdownLanguage,
-			codeLanguages: ATOMIC_CODE_LANGUAGES,
-			// calloutMarker must come before Link in the inline parser list, which
-			// it declares itself; order here is irrelevant.
-			extensions: [highlightMarkdown, calloutMarker, noParagraphFold, bareBulletAsText],
-		}),
+		md,
 		// See syntaxOverrides above — two tags, both overriding atomicMarkdownSyntax.
 		Prec.highest(syntaxHighlighting(syntaxOverrides)),
+		Prec.highest(syntaxHighlighting(taskMarkerColour(md.language))),
 		// Applies the syntax-highlight *colors* for the markdown grammar tags
 		// `highlightMarkdown` adds (headings, emphasis, etc). Without this the
 		// live-preview text renders unstyled — atomicEditorTheme alone only sets

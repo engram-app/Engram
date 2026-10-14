@@ -7,7 +7,6 @@ import {
 	FRONTMATTER_KEY,
 	frontmatterMaps,
 	isOkfMatch,
-	moveKey,
 	ORDER_KEY,
 	rawMap,
 	readRaws,
@@ -93,16 +92,6 @@ describe("frontmatter-doc mutations", () => {
 		addKey(doc, "b", "text");
 		removeKey(doc, "a");
 		expect(readRows(doc).map((r) => r.key)).toEqual(["b"]);
-	});
-
-	test("moveKey swaps neighbors and no-ops at ends", () => {
-		const doc = new Y.Doc();
-		addKey(doc, "a", "text");
-		addKey(doc, "b", "text");
-		moveKey(doc, "b", "up");
-		expect(readRows(doc).map((r) => r.key)).toEqual(["b", "a"]);
-		moveKey(doc, "b", "up");
-		expect(readRows(doc).map((r) => r.key)).toEqual(["b", "a"]);
 	});
 
 	test("renameKey keeps the value, the type and the position", () => {

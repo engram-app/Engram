@@ -1,4 +1,4 @@
-import { MoreVertical } from "lucide-react";
+import { MoreVertical, PanelRightOpen } from "lucide-react";
 import { Fragment, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,11 +10,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useT } from "@/i18n/locale-provider";
+import { useMobileHeaderSlot } from "@/layout/mobile-header-slot";
 import { ActionDrawer } from "./tree-actions/action-drawer";
 import {
 	ACTION_ICONS,
 	type ActionId,
 	noteMenuActions,
+	startsGroup,
 	type ViewMode,
 } from "./tree-actions/action-list";
 
@@ -35,6 +37,7 @@ export function NoteMenu({ mode, title, onPick }: Props) {
 	const isDesktop = useMediaQuery("(min-width: 768px)");
 	const [drawerOpen, setDrawerOpen] = useState(false);
 	const actions = noteMenuActions(mode);
+	const openTools = useMobileHeaderSlot()?.openTools;
 
 	if (!isDesktop) {
 		return (
@@ -53,6 +56,12 @@ export function NoteMenu({ mode, title, onPick }: Props) {
 						actions={actions}
 						onPick={onPick}
 						onClose={() => setDrawerOpen(false)}
+						// The mobile header has no tools button; its drawer opens from here.
+						extra={
+							openTools
+								? { label: t("Open tools"), icon: PanelRightOpen, onSelect: openTools }
+								: undefined
+						}
 					/>
 				) : null}
 			</>
@@ -74,12 +83,9 @@ export function NoteMenu({ mode, title, onPick }: Props) {
 			<DropdownMenuContent align="end">
 				{actions.map((action, i) => {
 					const Icon = ACTION_ICONS[action.id];
-					// Separate the view-mode group from the file actions, and the
-					// destructive one from everything above it.
-					const separatorBefore = action.id === "rename" || action.destructive;
 					return (
 						<Fragment key={action.id}>
-							{separatorBefore && i > 0 ? <DropdownMenuSeparator /> : null}
+							{startsGroup(action, i) ? <DropdownMenuSeparator /> : null}
 							<DropdownMenuItem
 								// aria-current rather than a checkbox item: the modes are a
 								// single-select group, and this keeps one code path for

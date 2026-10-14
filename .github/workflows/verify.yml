@@ -4190,14 +4190,13 @@ jobs:
       # Deliberately NOT grepping for "us.i.posthog.com": posthog-js ships
       # that hostname as its own internal default constant, so the literal
       # string is present in ANY bundle that imports the library at all
-      # (verified — it's already there on main via src/analytics/track.ts and
-      # src/auth/use-identify-user-on-auth-change.ts, both used regardless of
-      # whether a key is configured). It's inert dead-code text, not a
-      # network destination our config points at; asserting on it would be a
-      # permanently-red check against a third-party SDK's own source, not a
-      # real leak. The key is the actual secret and the only thing that turns
-      # that inert code live.
-      - name: Self-host bundle carries no PostHog key leakage
+      # (it rides in the lazy posthog chunk src/analytics/init.ts imports, which
+      # every build emits whether or not a key is configured). It's inert
+      # dead-code text, not a network destination our config points at;
+      # asserting on it would be a permanently-red check against a
+      # third-party SDK's own source, not a real leak. The key is the actual
+      # secret and the only thing that turns that inert code live.
+      - name: Self-host bundle carries no PostHog key leakage, initial JS under budget
         if: steps.guard.outputs.skip != 'true'
         working-directory: frontend
         run: |
@@ -4214,6 +4213,9 @@ jobs:
             echo "::error::PostHog key leaked into self-host bundle"; exit 1
           fi
           echo "OK: self-host bundle carries no PostHog key"
+          # Same build, second check: the JS needed before the app can start
+          # stays under budget (scripts/check-bundle-budget.ts).
+          bun scripts/check-bundle-budget.ts "$OUT"
 
   e2e-browser:
     # Runs in parallel with the Obsidian suites on a `heavy` runner (max 2
@@ -4386,6 +4388,22 @@ jobs:
           export PATH="$HOME/.bun/bin:$PATH"
           bun install --frozen-lockfile --registry http://10.0.20.214:4873
           bunx playwright install chromium
+
+      # e2e/lighthouse.spec.ts audits the PRODUCTION bundle Phoenix serves at
+      # `/` (priv/static/app): the Vite dev server injects CSS from JS and
+      # reports a layout shift production never has. The other specs use Vite
+      # and are unaffected. Self-host shape, to match the `local` project.
+      #
+      # Writing priv/static/app here is safe for the [clerk] project in this
+      # same job: it runs against its own Vite dev server, never this bundle.
+      # Plain `vite build`, not build:selfhost: the legal-manifest and tsc
+      # checks it chains are already gated in frontend-lint, and no PostHog
+      # key is set in this job for its key-clearing to matter.
+      - name: Build SPA for the Lighthouse spec
+        working-directory: frontend
+        run: |
+          export PATH="$HOME/.bun/bin:$PATH"
+          bunx vite build --mode selfhost
 
       - name: Run Playwright tests
         working-directory: frontend
@@ -5863,6 +5881,12 @@ jobs:
           # build:selfhost, and Dockerfile:42-46 exists so self-host bundles
           # never carry the SaaS token.
           VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
+
+      # The PR gate (frontend-lint) measures the self-host build; this is the
+      # bundle production actually ships (Clerk, inline bootstrap config).
+      - name: SaaS initial JS under budget
+        working-directory: frontend
+        run: bun scripts/check-bundle-budget.ts dist
 
       - name: Upload frontend version (nightly, zero-traffic)
         working-directory: frontend

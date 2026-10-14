@@ -255,8 +255,8 @@
 	box-sizing: border-box;
 	display: inline-grid;
 	place-content: center;
-	width: 1.05em;
-	height: 1.05em;
+	width: var(--task-box);
+	height: var(--task-box);
 	/* The editor's rule pulls left by -0.16em to hang the box into the cm-line's
 	 * own padding. A read-mode list has padding-left: 0, so the same negative
 	 * margin puts the box OUTSIDE its container instead — clipped against the

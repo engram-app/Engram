@@ -161,7 +161,7 @@ export default function LocalSignUp() {
 					<p className="text-center text-muted-foreground text-sm">
 						<Link
 							to={authUrlWithReturnTo(ROUTES.SIGN_IN, returnTo)}
-							className="font-medium text-primary hover:underline"
+							className="font-medium text-primary-ink hover:underline"
 						>
 							{t("Back to sign in")}
 						</Link>
@@ -210,7 +210,7 @@ export default function LocalSignUp() {
 											href="https://github.com/engram-app/Engram/issues"
 											target="_blank"
 											rel="noreferrer noopener"
-											className="font-medium text-primary hover:underline"
+											className="font-medium text-primary-ink hover:underline"
 										>
 											github.com/engram-app/Engram
 										</a>
@@ -218,7 +218,7 @@ export default function LocalSignUp() {
 									email: (
 										<a
 											href="mailto:support@engram.page"
-											className="font-medium text-primary hover:underline"
+											className="font-medium text-primary-ink hover:underline"
 										>
 											support@engram.page
 										</a>
@@ -299,7 +299,7 @@ export default function LocalSignUp() {
 							signin: (
 								<Link
 									to={authUrlWithReturnTo(ROUTES.SIGN_IN, returnTo)}
-									className="font-medium text-primary hover:underline"
+									className="font-medium text-primary-ink hover:underline"
 								>
 									{t("Sign in")}
 								</Link>

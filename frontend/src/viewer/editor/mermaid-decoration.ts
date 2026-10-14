@@ -8,10 +8,15 @@ import {
 	WidgetType,
 } from "@codemirror/view";
 import type { Translate } from "@/i18n/translate";
-import { nextMermaidId, renderMermaid } from "../mermaid-render";
+import { drawMermaid, rememberedMermaidHeight } from "../mermaid-render";
 import { selectionTouches } from "./decoration-utils";
 import { translator } from "./translator";
 import "./mermaid.css";
+
+// Keyed by DOM node, not held per widget: when a rebuilt widget is `eq` to the
+// old one, CM6 keeps the DOM and later calls destroy(dom) on the NEW instance,
+// whose own map would be empty, leaking the draw.
+const drawCancels = new WeakMap<HTMLElement, () => void>();
 
 /**
  * Renders one mermaid fence. The SVG arrives asynchronously, so toDOM returns an
@@ -41,29 +46,43 @@ class MermaidWidget extends WidgetType {
 		// height — every line below the diagram then maps to the wrong screen
 		// position, which shows up as clicks landing on the neighbouring line.
 		const measure = () => view.requestMeasure();
-		renderMermaid(nextMermaidId(), this.code, this.dark)
-			.then((svg) => {
-				el.innerHTML = svg;
-				measure();
-			})
-			.catch((err: unknown) => {
-				// Show the diagram's own error rather than an empty box, and keep the
-				// source visible so it can be fixed. Mermaid rejects on any syntax
-				// slip, which is a normal state while typing.
-				el.classList.add("cm-mermaid-error");
-				// Mermaid's own message is third-party English: keep it verbatim, but
-				// tag its language so the translated prefix and it are not read as one.
-				const detail = document.createElement("span");
-				detail.lang = "en";
-				detail.textContent = err instanceof Error ? err.message : String(err);
-				const { t } = this;
-				const [before, after = ""] = t("Mermaid error: {error}", { error: "{error}" }).split(
-					"{error}",
-				);
-				el.replaceChildren(before ?? "", detail, after);
-				measure();
-			});
+		// Cancelled in destroy() if the widget goes first.
+		drawCancels.set(
+			el,
+			drawMermaid(el, "editor", this.code, this.dark, {
+				drawn: measure,
+				failed: (err) => {
+					this.showError(el, err);
+					measure();
+				},
+			}),
+		);
 		return el;
+	}
+
+	// The reservation drawMermaid holds, for CM6's heightmap before the widget
+	// is measured.
+	get estimatedHeight() {
+		return rememberedMermaidHeight("editor", this.code) ?? -1;
+	}
+
+	destroy(dom: HTMLElement) {
+		drawCancels.get(dom)?.();
+	}
+
+	// Show the diagram's own error rather than an empty box, and keep the source
+	// visible so it can be fixed. Mermaid rejects on any syntax slip, which is a
+	// normal state while typing.
+	private showError(el: HTMLElement, err: unknown) {
+		el.classList.add("cm-mermaid-error");
+		// Mermaid's own message is third-party English: keep it verbatim, but tag
+		// its language so the translated prefix and it are not read as one.
+		const detail = document.createElement("span");
+		detail.lang = "en";
+		detail.textContent = err instanceof Error ? err.message : String(err);
+		const { t } = this;
+		const [before, after = ""] = t("Mermaid error: {error}", { error: "{error}" }).split("{error}");
+		el.replaceChildren(before ?? "", detail, after);
 	}
 
 	// The widget is inert content, not a control; let clicks through so the caret

@@ -274,11 +274,33 @@ describe("PropertiesWidget", () => {
 			});
 		});
 
+		// The deleted row takes the menu's trigger with it, so Radix's focus
+		// restore landed on <body> and a keyboard user lost their place.
+		test.each([
+			["the next property's name", "a", "Rename b"],
+			["the previous one's when the last row goes", "b", "Rename a"],
+		])("deleting a property moves focus to %s", async (_case, removed, focusLabel) => {
+			const doc = new Y.Doc();
+			addKey(doc, "a", "text");
+			addKey(doc, "b", "text");
+			render(<PropertiesWidget doc={doc} />);
+			const row = await screen.findByTestId(`property-row-${removed}`);
+			const trigger = within(row).getByRole("button", { name: /property type/i });
+			fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+			fireEvent.click(trigger);
+			fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+			await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText(focusLabel)));
+		});
+
 		test("goes away again when the last property is removed", async () => {
 			const doc = new Y.Doc();
 			addKey(doc, "status", "text");
 			render(<PropertiesWidget doc={doc} />);
-			fireEvent.click(await screen.findByRole("button", { name: "Remove status" }));
+			expect(screen.queryByRole("button", { name: "Remove status" })).not.toBeInTheDocument();
+			const trigger = await screen.findByRole("button", { name: /property type/i });
+			fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+			fireEvent.click(trigger);
+			fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
 			await waitFor(() => expect(screen.queryByTestId("note-properties")).not.toBeInTheDocument());
 		});
 	});
@@ -511,7 +533,7 @@ describe("OKF keys are highlighted", () => {
 	// suites fail OTHER files by starving them.
 	test("an indexed key renders in the accent colour", async () => {
 		await renderWith("type", "text", "meeting-note");
-		expect(keyInput("type")).toHaveClass("text-primary");
+		expect(keyInput("type")).toHaveClass("text-primary-ink");
 	});
 
 	test("a key the backend would drop stays muted", async () => {

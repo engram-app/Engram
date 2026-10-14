@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MobileHeaderSlot } from "@/layout/mobile-header-slot";
 import { NoteMenu } from "./note-menu";
 
 const matches = vi.fn();
@@ -54,8 +55,8 @@ describe("NoteMenu", () => {
 		const onPick = vi.fn();
 		render(<NoteMenu mode="rendered" title="note" onPick={onPick} />);
 		openMenu();
-		// The drawer renders its own backdrop; the dropdown does not.
-		expect(screen.getByTestId("action-drawer-backdrop")).toBeInTheDocument();
+		// The bottom sheet, not the dropdown.
+		expect(screen.getByTestId("action-drawer")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
 		expect(onPick).toHaveBeenCalledWith("delete");
 	});
@@ -65,6 +66,45 @@ describe("NoteMenu", () => {
 		render(<NoteMenu mode="rendered" title="note" onPick={vi.fn()} />);
 		openMenu();
 		fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
-		expect(screen.queryByTestId("action-drawer-backdrop")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("action-drawer")).not.toBeInTheDocument();
+	});
+
+	// The mobile header has no tools button; the drawer opens from the kebab.
+	it("puts Open tools just above Delete when the layout provides it", () => {
+		matches.mockReturnValue(false);
+		const openTools = vi.fn();
+		const onPick = vi.fn();
+		render(
+			<MobileHeaderSlot.Provider value={{ slot: null, openTools }}>
+				<NoteMenu mode="rendered" title="note" onPick={onPick} />
+			</MobileHeaderSlot.Provider>,
+		);
+		openMenu();
+		const names = screen.getAllByRole("menuitem").map((el) => el.textContent);
+		// Above Delete, which stays last.
+		expect(names.slice(-2)).toEqual(["Open tools", "Delete"]);
+		fireEvent.click(screen.getByRole("menuitem", { name: "Open tools" }));
+		expect(openTools).toHaveBeenCalledOnce();
+		expect(onPick).not.toHaveBeenCalled();
+		expect(screen.queryByTestId("action-drawer")).not.toBeInTheDocument();
+	});
+
+	it("has no Open tools outside the mobile layout", async () => {
+		render(<NoteMenu mode="rendered" title="note" onPick={vi.fn()} />);
+		openMenu();
+		await screen.findByRole("menuitem", { name: "Duplicate" });
+		expect(screen.queryByRole("menuitem", { name: "Open tools" })).not.toBeInTheDocument();
+	});
+
+	// Same groups as the desktop dropdown: view modes | file actions | Delete.
+	it("divides the mobile drawer's groups", () => {
+		matches.mockReturnValue(false);
+		render(<NoteMenu mode="rendered" title="note" onPick={vi.fn()} />);
+		openMenu();
+		const divided = screen
+			.getAllByRole("menuitem")
+			.filter((el) => el.previousElementSibling?.tagName === "HR")
+			.map((el) => el.textContent);
+		expect(divided).toEqual(["Rename", "Delete"]);
 	});
 });
