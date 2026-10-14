@@ -56,7 +56,13 @@ defmodule EngramWeb.Schemas.UpdateProfileRequest do
     type: :object,
     properties: %{
       display_name: %Schema{type: :string, nullable: true},
-      locale: %Schema{type: :string, description: "BCP 47 language tag", example: "pt-BR"}
+      locale: %Schema{
+        type: :string,
+        description: "BCP 47 language tag, stored in canonical casing",
+        pattern: "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$",
+        maxLength: 35,
+        example: "pt-BR"
+      }
     },
     example: %{"display_name" => "Ada Lovelace", "locale" => "en"}
   })

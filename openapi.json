@@ -140,8 +140,10 @@
             "x-validate": null
           },
           "locale": {
-            "description": "BCP 47 language tag",
+            "description": "BCP 47 language tag, stored in canonical casing",
             "example": "pt-BR",
+            "maxLength": 35,
+            "pattern": "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$",
             "type": "string",
             "x-struct": null,
             "x-validate": null

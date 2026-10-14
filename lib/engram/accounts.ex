@@ -308,7 +308,31 @@ defmodule Engram.Accounts do
     )
     |> Ecto.Changeset.validate_length(:locale, max: @max_locale_chars)
     |> Ecto.Changeset.validate_format(:locale, @locale_format)
+    |> reject_null_locale()
+    |> Ecto.Changeset.update_change(:locale, &canonical_locale/1)
   end
+
+  # The account always has a language once set: a client that serializes an
+  # unset field as null must not erase it. (validate_* skip nil changes.)
+  defp reject_null_locale(changeset) do
+    case Ecto.Changeset.fetch_change(changeset, :locale) do
+      {:ok, nil} -> Ecto.Changeset.add_error(changeset, :locale, "can't be blank")
+      _ -> changeset
+    end
+  end
+
+  # BCP 47 casing ("PT-br" -> "pt-BR", "zh-hant-tw" -> "zh-Hant-TW"), so one
+  # language is stored one way. Runs after validate_format: the tag is ASCII.
+  defp canonical_locale(nil), do: nil
+
+  defp canonical_locale(tag) do
+    [language | subtags] = String.split(tag, "-")
+    Enum.join([String.downcase(language) | Enum.map(subtags, &canonical_subtag/1)], "-")
+  end
+
+  defp canonical_subtag(<<_::binary-size(4)>> = script), do: String.capitalize(script)
+  defp canonical_subtag(<<_::binary-size(2)>> = region), do: String.upcase(region)
+  defp canonical_subtag(other), do: String.downcase(other)
 
   @doc "Sets a new bcrypt password hash for a user (local auth)."
   def update_password(%User{} = user, new_password)

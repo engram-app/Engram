@@ -4,6 +4,7 @@ defmodule Engram.Accounts.ProfileTest do
   import Mox
 
   alias Engram.Accounts
+  alias Engram.Repo
 
   describe "update_profile/2" do
     test "stores the UI language as a BCP 47 tag" do
@@ -24,6 +25,29 @@ defmodule Engram.Accounts.ProfileTest do
                "accepted #{inspect(bad)}"
 
         assert %{locale: [_ | _]} = errors_on(cs)
+      end
+    end
+
+    test "rejects a null locale instead of wiping the stored one" do
+      {:ok, user} = Accounts.create_user_with_password("ola@example.com", "password123")
+      {:ok, tagged} = Accounts.update_profile(user, %{locale: "de"})
+
+      assert {:error, cs} = Accounts.update_profile(tagged, %{locale: nil})
+      assert %{locale: [_ | _]} = errors_on(cs)
+      assert Repo.reload!(tagged).locale == "de"
+    end
+
+    test "stores the canonical casing of a language tag" do
+      {:ok, user} = Accounts.create_user_with_password("pia@example.com", "password123")
+
+      for {sent, stored} <- [
+            {"PT-br", "pt-BR"},
+            {"ZH-hant-tw", "zh-Hant-TW"},
+            {"ES-419", "es-419"},
+            {"EN", "en"}
+          ] do
+        assert {:ok, updated} = Accounts.update_profile(user, %{locale: sent})
+        assert updated.locale == stored, "#{sent} stored as #{updated.locale}"
       end
     end
 
