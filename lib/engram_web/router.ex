@@ -721,10 +721,9 @@ defmodule EngramWeb.Router do
       # stamps app.user_id (app.vault_id stays nil — MCP is multi-vault per
       # connection, so there is no single request-level vault to tag).
       EngramWeb.Plugs.TraceUserAttrs,
-      EngramWeb.Plugs.OAuthScopeEnforce,
-      # An API key here is exempt from the REST API's Pro gates (inside
-      # :authed_api) and takes an MCP connection slot instead (#1974).
-      EngramWeb.Plugs.EnforceMcpApiKeySlot
+      # An API key here is exempt from the REST API's Pro gates inside
+      # :authed_api (#1974); MCP is metered by ai_searches_per_day only.
+      EngramWeb.Plugs.OAuthScopeEnforce
     ]
 
     post "/mcp", McpController, :handle

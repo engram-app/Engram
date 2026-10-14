@@ -426,7 +426,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
   describe "POST /api/connections/pat" do
     # #1974: a key works with MCP on every tier, so every tier can mint one.
     # What it may do is gated where it is used (REST: api_rps_cap /
-    # api_write_enabled; MCP: mcp_connections_cap), not at minting.
+    # api_write_enabled; MCP: the ai_searches_per_day meter), not at minting.
     test "201 on Free: a key is usable for MCP on every tier", %{conn: conn} do
       free = insert(:user)
 

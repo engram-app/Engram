@@ -111,7 +111,6 @@ grant_starter_overrides = fn user ->
   overrides = [
     {"api_write_enabled", true},
     {"obsidian_connections_cap", -1},
-    {"mcp_connections_cap", -1},
     {"vaults_cap", -1}
   ]
 

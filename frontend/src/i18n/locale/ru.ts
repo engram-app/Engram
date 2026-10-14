@@ -910,7 +910,7 @@ export default {
 	"{completed} of {total} done": "Выполнено {completed} из {total}",
 	"Setup guide": "Руководство по настройке",
 	"Dismiss {label}": "Закрыть {label}",
-	"You're on Free, 1 connection.": "У вас бесплатный тариф, 1 подключение.",
+	"You're on the Free plan.": "Вы используете бесплатный тариф.",
 	"Connect Claude Desktop": "Подключить Claude Desktop",
 	"Connect Cursor": "Подключить Cursor",
 	"Connect Devin": "Подключить Devin",

@@ -15,10 +15,7 @@ import { settingsTo } from "@/settings/settings-hash";
 import { ExistingConnectionsPanel } from "./existing-connections-panel";
 import { copyFor } from "./limit-copy";
 
-function isConnectionCap(reason: string): "mcp" | "obsidian" | null {
-	if (reason === "mcp_connections_exceeded") {
-		return "mcp";
-	}
+function isConnectionCap(reason: string): "obsidian" | null {
 	// concurrent_devices_exceeded (device-flow) and obsidian_connections_exceeded
 	// (OAuth consent) both bottom out on Obsidian-kind grants — the user wants
 	// to swap whichever one is occupying the slot.

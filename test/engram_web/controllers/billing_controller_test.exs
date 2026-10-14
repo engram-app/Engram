@@ -59,7 +59,8 @@ defmodule EngramWeb.BillingControllerTest do
       assert body["subscription"] == nil
       # Bundled connection counts let the cap UI on /link and /oauth/consent
       # decide atCap from a single fetch — a brand-new user has zero of each.
-      assert body["current_connections"] == %{"obsidian" => 0, "mcp" => 0}
+      # No MCP count: MCP connections are uncapped (#1974).
+      assert body["current_connections"] == %{"obsidian" => 0}
       # No prior device revoke → no swap cooldown in flight.
       assert body["device_swap_cooldown_remaining_hours"] == nil
     end
@@ -82,11 +83,13 @@ defmodule EngramWeb.BillingControllerTest do
       # The shared setup grants api_write_enabled=true via grant_api_write!/1
       # (PAT auth precondition), so only obsidian/mcp connection caps still
       # reflect free-tier defaults here. Obsidian is 2 (it tracks
-      # concurrent_devices); MCP stays at 1.
+      # concurrent_devices). MCP connections are uncapped (#1974), so the
+      # payload carries no MCP cap at all.
       conn = get(conn, "/api/billing/status")
       body = json_response(conn, 200)
       assert body["caps"]["obsidian_connections"] == 2
-      assert body["caps"]["mcp_connections"] == 1
+      refute Map.has_key?(body["caps"], "mcp_connections")
+      refute Map.has_key?(body["current_connections"], "mcp")
       assert body["caps"]["api_write_enabled"] == true
     end
 
@@ -102,12 +105,14 @@ defmodule EngramWeb.BillingControllerTest do
         value: %{"v" => -1}
       )
 
+      # A leftover row for the removed `mcp_connections_cap` key (#1974) must
+      # be inert: nothing reads it, nothing crashes on it.
       insert(:user_limit_override, user: user, key: "mcp_connections_cap", value: %{"v" => -1})
 
       conn = get(conn, "/api/billing/status")
       body = json_response(conn, 200)
       assert body["caps"]["obsidian_connections"] == nil
-      assert body["caps"]["mcp_connections"] == nil
+      refute Map.has_key?(body["caps"], "mcp_connections")
     end
   end
 

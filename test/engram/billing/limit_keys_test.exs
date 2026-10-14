@@ -4,9 +4,9 @@ defmodule Engram.Billing.LimitKeysTest do
   alias Engram.Billing.LimitKeys
 
   describe "all/0" do
-    test "returns the 27 catalog keys" do
+    test "returns the 26 catalog keys" do
       keys = LimitKeys.all()
-      assert length(keys) == 27
+      assert length(keys) == 26
       assert :notes_cap in keys
       assert :vaults_cap in keys
       assert :reranker_enabled in keys
@@ -153,11 +153,10 @@ defmodule Engram.Billing.LimitKeysTest do
       end
     end
 
-    test "mcp_connections_cap is 1 on free, nil on paid" do
-      assert LimitKeys.defined?(:mcp_connections_cap)
-      assert LimitKeys.default_for(:mcp_connections_cap, :free) == 1
-      assert LimitKeys.default_for(:mcp_connections_cap, :starter) == nil
-      assert LimitKeys.default_for(:mcp_connections_cap, :pro) == nil
+    # #1974: MCP connections are uncapped on every tier; ai_searches_per_day
+    # meters use. The key is gone, not defaulted to nil.
+    test "there is no MCP connection cap" do
+      refute LimitKeys.defined?(:mcp_connections_cap)
     end
   end
 

@@ -20,7 +20,7 @@
 </head>
 <body>
 <h1>Engram OAuth Dummy Client</h1>
-<p class="lede">Pretends to be an MCP client (like Claude Desktop). Runs the full DCR + Authorization Code + PKCE flow against the local backend. Use this to exercise <code>mcp_connections_cap</code> on Free tier — first click works, second click 402s at consent.</p>
+<p class="lede">Pretends to be an MCP client (like Claude Desktop). Runs the full DCR + Authorization Code + PKCE flow against the local backend. Every tier may hold any number of MCP connections (#1974), so repeated clicks should all succeed.</p>
 
 <div class="step">
   <strong>Pre-flight:</strong>
@@ -116,9 +116,6 @@ async function handleRedirect() {
 
   if (error) {
     log(`Authorize returned error=${error}${errorDesc ? ` — ${errorDesc}` : ''}`, 'err');
-    if (errorDesc?.includes('mcp_connections')) {
-      log('⛔ This is the Free-tier MCP connection cap hitting. Upgrade to add more.', 'err');
-    }
     return;
   }
 

@@ -828,7 +828,7 @@ export default {
 	"{completed} of {total} done": "{completed} daripada {total} selesai",
 	"Setup guide": "Panduan persediaan",
 	"Dismiss {label}": "Tutup {label}",
-	"You're on Free, 1 connection.": "Anda menggunakan pakej percuma, 1 sambungan.",
+	"You're on the Free plan.": "Anda menggunakan pelan percuma.",
 	"Connect Claude Desktop": "Sambungkan Claude Desktop",
 	"Connect Cursor": "Sambung Cursor",
 	"Connect Devin": "Sambung Devin",

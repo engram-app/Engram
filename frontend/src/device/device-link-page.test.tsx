@@ -47,11 +47,10 @@ vi.mock("../theme/theme-toggle", () => ({
 interface FakeBilling {
 	caps: {
 		obsidian_connections: number | null;
-		mcp_connections: number | null;
 		api_write_enabled: boolean;
 		vaults?: number | null;
 	};
-	current_connections: { obsidian: number; mcp: number };
+	current_connections: { obsidian: number };
 	device_swap_cooldown_remaining_hours: number | null;
 }
 const billingPending = vi.hoisted(() => ({ current: false }));
@@ -64,8 +63,8 @@ const onboardingState = vi.hoisted(() => ({
 }));
 const billingState = vi.hoisted(() => ({
 	current: {
-		caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: true },
-		current_connections: { obsidian: 0, mcp: 0 },
+		caps: { obsidian_connections: null, api_write_enabled: true },
+		current_connections: { obsidian: 0 },
 		device_swap_cooldown_remaining_hours: null,
 	} as FakeBilling,
 }));
@@ -151,8 +150,8 @@ afterEach(() => {
 	window.history.replaceState({}, "", "/link");
 	authState.current = { isSignedIn: true };
 	billingState.current = {
-		caps: { obsidian_connections: null, mcp_connections: null, api_write_enabled: true },
-		current_connections: { obsidian: 0, mcp: 0 },
+		caps: { obsidian_connections: null, api_write_enabled: true },
+		current_connections: { obsidian: 0 },
 		device_swap_cooldown_remaining_hours: null,
 	};
 });
@@ -383,11 +382,10 @@ describe("DeviceLinkPage", () => {
 			billingState.current = {
 				caps: {
 					obsidian_connections: null,
-					mcp_connections: null,
 					api_write_enabled: true,
 					vaults,
 				},
-				current_connections: { obsidian: 0, mcp: 0 },
+				current_connections: { obsidian: 0 },
 				device_swap_cooldown_remaining_hours: null,
 			};
 		};
@@ -943,8 +941,8 @@ describe("DeviceLinkPage", () => {
 		// shows a banner explaining the swap (this device will replace the existing
 		// one), but the code input stays visible so they can still proceed.
 		billingState.current = {
-			caps: { obsidian_connections: 1, mcp_connections: 1, api_write_enabled: true },
-			current_connections: { obsidian: 1, mcp: 0 },
+			caps: { obsidian_connections: 1, api_write_enabled: true },
+			current_connections: { obsidian: 1 },
 			device_swap_cooldown_remaining_hours: null,
 		};
 		renderPage();
@@ -959,8 +957,8 @@ describe("DeviceLinkPage", () => {
 		// existing device and then trip the 402 on authorize, leaving them at 0
 		// connections — so we block the action and surface the wait time instead.
 		billingState.current = {
-			caps: { obsidian_connections: 1, mcp_connections: 1, api_write_enabled: true },
-			current_connections: { obsidian: 1, mcp: 0 },
+			caps: { obsidian_connections: 1, api_write_enabled: true },
+			current_connections: { obsidian: 1 },
 			device_swap_cooldown_remaining_hours: 17,
 		};
 		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });

@@ -122,13 +122,15 @@ defmodule EngramWeb.Plugs.EnforceConnectionCapTest do
       refute conn.halted
     end
 
-    # The cap must apply to CIMD clients too. Resolving the URL is only half the
-    # fix: if it resolved but counted against nothing, CIMD would be an
-    # accidental bypass of the paid tier.
-    test "enforces the mcp cap for a CIMD client at its limit", %{conn: conn, user: user} do
+    # #1974: MCP connections are uncapped on every tier; usage is metered by
+    # `ai_searches_per_day` instead. A cap here only made reconnecting a broken
+    # grant a 402. CIMD and DCR clients alike, however many grants exist.
+    test "never caps MCP consent, even with existing MCP grants", %{conn: conn, user: user} do
       url = "https://claude.ai/oauth/claude-code-client-metadata"
       client = insert(:oauth_client, kind: "mcp", cimd_url: url)
+      other = insert(:oauth_client, kind: "mcp")
       insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
+      insert(:oauth_refresh_token, user_id: user.id, client_id: other.client_id)
 
       conn =
         conn
@@ -138,10 +140,7 @@ defmodule EngramWeb.Plugs.EnforceConnectionCapTest do
         |> assign(:current_user, user)
         |> EnforceConnectionCap.call([])
 
-      assert conn.halted
-      assert conn.status == 402
-      body = Phoenix.ConnTest.json_response(conn, 402)
-      assert body["reason"] == "mcp_connections_exceeded"
+      refute conn.halted
     end
 
     # A non-UUID that is also not a CIMD URL stays unknown — the fix must widen
@@ -165,7 +164,7 @@ defmodule EngramWeb.Plugs.EnforceConnectionCapTest do
     test "passes when limits_enforced is false (self-host / unlimited tier)", %{
       conn: conn,
       user: user,
-      mcp: client
+      obs: client
     } do
       # Disable enforcement — simulates self-host bypass or unlimited tier.
       # effective_limit/2 returns :unlimited when enforced? is false.
@@ -179,7 +178,9 @@ defmodule EngramWeb.Plugs.EnforceConnectionCapTest do
       end)
 
       # Even with an existing connection, :unlimited bypass passes
+      other = insert(:oauth_client, kind: "obsidian")
       insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
+      insert(:oauth_refresh_token, user_id: user.id, client_id: other.client_id)
 
       conn =
         conn
@@ -195,18 +196,20 @@ defmodule EngramWeb.Plugs.EnforceConnectionCapTest do
     test "passes when override sets cap to -1 (unlimited sentinel)", %{
       conn: conn,
       user: user,
-      mcp: client
+      obs: client
     } do
       # -1 is the canonical unlimited sentinel; cap_json/-1 → nil on the
       # wire, and the plug must treat it the same as :unlimited / nil.
       insert(:user_limit_override,
         user: user,
-        key: "mcp_connections_cap",
+        key: "obsidian_connections_cap",
         value: %{"v" => -1}
       )
 
-      # Existing connection: even with one live grant, -1 still passes.
+      # At the Free cap (2 distinct clients): -1 still passes.
+      other = insert(:oauth_client, kind: "obsidian")
       insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
+      insert(:oauth_refresh_token, user_id: user.id, client_id: other.client_id)
 
       conn =
         conn

@@ -1166,16 +1166,15 @@ export interface BillingStatus {
 	} | null;
 	caps: {
 		obsidian_connections: number | null;
-		mcp_connections: number | null;
 		api_write_enabled: boolean;
 		vaults: number | null;
 	};
 	// Bundled into /billing/status so the proactive cap UI (on /link and
 	// /oauth/consent) can decide atCap from a single fetch — no separate
 	// /connections call just to count.
+	// MCP connections are uncapped (#1974), so only Obsidian is counted.
 	current_connections: {
 		obsidian: number;
-		mcp: number;
 	};
 	// Hours remaining on the Free-tier device-swap cooldown after a recent
 	// device revoke; `null` when no cooldown is in effect. Lets /link render

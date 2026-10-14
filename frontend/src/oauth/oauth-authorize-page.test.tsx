@@ -27,11 +27,10 @@ vi.mock("../api/client", async (importOriginal) => ({
 interface FakeBilling {
 	caps: {
 		obsidian_connections: number | null;
-		mcp_connections: number | null;
 		api_write_enabled: boolean;
 		vaults: number | null;
 	};
-	current_connections: { obsidian: number; mcp: number };
+	current_connections: { obsidian: number };
 	device_swap_cooldown_remaining_hours: number | null;
 }
 // Two vaults by default — below SEARCH_THRESHOLD, so the picker renders bare.
@@ -96,11 +95,10 @@ const billingState = vi.hoisted(() => ({
 	current: {
 		caps: {
 			obsidian_connections: null,
-			mcp_connections: null,
 			api_write_enabled: true,
 			vaults: null,
 		},
-		current_connections: { obsidian: 0, mcp: 0 },
+		current_connections: { obsidian: 0 },
 		device_swap_cooldown_remaining_hours: null,
 	} as FakeBilling,
 }));
@@ -114,8 +112,8 @@ vi.mock("../api/queries", () => ({
 	useConnections: () => ({
 		data: [
 			{
-				kind: "mcp",
-				client_id: "existing-mcp-id",
+				kind: "obsidian",
+				client_id: "existing-obsidian-id",
 				key_id: null,
 				name: "Claude Desktop (old)",
 				software_id: null,
@@ -185,11 +183,10 @@ afterEach(() => {
 	billingState.current = {
 		caps: {
 			obsidian_connections: null,
-			mcp_connections: null,
 			api_write_enabled: true,
 			vaults: null,
 		},
-		current_connections: { obsidian: 0, mcp: 0 },
+		current_connections: { obsidian: 0 },
 		device_swap_cooldown_remaining_hours: null,
 	};
 });
@@ -420,20 +417,20 @@ describe("OAuthAuthorizePage", () => {
 		);
 	});
 
-	it("shows a heads-up banner at the MCP cap and swaps on Approve", async () => {
-		// A free-tier user already has one MCP connection — landing on /oauth/consent
-		// for a new MCP client should see a heads-up banner above the normal
+	it("shows a heads-up banner at the Obsidian cap and swaps on Approve", async () => {
+		// A free-tier user already at the Obsidian connection cap — landing on
+		// /oauth/consent for a new Obsidian client should see a heads-up banner above the normal
 		// picker + Approve, and Approve disconnects the existing connection
 		// BEFORE posting consent.
 		billingState.current = {
-			caps: { obsidian_connections: 1, mcp_connections: 1, api_write_enabled: true, vaults: null },
-			current_connections: { obsidian: 0, mcp: 1 },
+			caps: { obsidian_connections: 1, api_write_enabled: true, vaults: null },
+			current_connections: { obsidian: 1 },
 			device_swap_cooldown_remaining_hours: null,
 		};
 		fetchOAuthClient.mockResolvedValue({
 			client_id: "cli",
 			client_name: "Claude Desktop",
-			kind: "mcp",
+			kind: "obsidian",
 		});
 		apiDel.mockResolvedValue(undefined);
 		postOAuthConsent.mockResolvedValue({ redirect_uri: "https://app/cb?code=ok" });
@@ -457,7 +454,9 @@ describe("OAuthAuthorizePage", () => {
 		fireEvent.click(confirm);
 
 		// Disconnect runs first, then consent.
-		await waitFor(() => expect(apiDel).toHaveBeenCalledWith("/connections/oauth/existing-mcp-id"));
+		await waitFor(() =>
+			expect(apiDel).toHaveBeenCalledWith("/connections/device/existing-obsidian-id"),
+		);
 		await waitFor(() =>
 			expect(postOAuthConsent).toHaveBeenCalledWith(expect.objectContaining({ client_id: "cli" })),
 		);
@@ -469,20 +468,39 @@ describe("OAuthAuthorizePage", () => {
 		await waitFor(() => expect(assign).toHaveBeenCalledWith("https://app/cb?code=ok"));
 	});
 
-	it("clicking Upgrade in the at-cap banner keeps the OAuth query params (regression: settingsTo)", async () => {
-		// Regression for the bug where `navigate({ hash: settingsHash("billing") })`
-		// dropped the query string (react-router's resolvePath inherits pathname
-		// but not search). Losing client_id/redirect_uri/etc mid-consent re-renders
-		// this page into "Invalid authorization request", destroying the flow.
+	// #1974: MCP connections are uncapped on every tier, so consent for an MCP
+	// client never shows the cap banner, whatever the user already has.
+	it("never shows a cap banner for an MCP client", async () => {
 		billingState.current = {
-			caps: { obsidian_connections: 1, mcp_connections: 1, api_write_enabled: true, vaults: null },
-			current_connections: { obsidian: 0, mcp: 1 },
+			caps: { obsidian_connections: 1, api_write_enabled: true, vaults: null },
+			current_connections: { obsidian: 1 },
 			device_swap_cooldown_remaining_hours: null,
 		};
 		fetchOAuthClient.mockResolvedValue({
 			client_id: "cli",
 			client_name: "Claude Desktop",
 			kind: "mcp",
+		});
+
+		renderAt(VALID_QS);
+		expect(await screen.findByRole("button", { name: /approve/iu })).toBeInTheDocument();
+		expect(screen.queryByText(/Approving will disconnect/iu)).not.toBeInTheDocument();
+	});
+
+	it("clicking Upgrade in the at-cap banner keeps the OAuth query params (regression: settingsTo)", async () => {
+		// Regression for the bug where `navigate({ hash: settingsHash("billing") })`
+		// dropped the query string (react-router's resolvePath inherits pathname
+		// but not search). Losing client_id/redirect_uri/etc mid-consent re-renders
+		// this page into "Invalid authorization request", destroying the flow.
+		billingState.current = {
+			caps: { obsidian_connections: 1, api_write_enabled: true, vaults: null },
+			current_connections: { obsidian: 1 },
+			device_swap_cooldown_remaining_hours: null,
+		};
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude Desktop",
+			kind: "obsidian",
 		});
 
 		renderWithProbeAt(VALID_QS);

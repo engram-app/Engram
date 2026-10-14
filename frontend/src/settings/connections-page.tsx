@@ -54,7 +54,6 @@ function useTierCaps() {
 		// open on every tier (#1974): a key always works with MCP.
 		apiWriteEnabled: caps?.api_write_enabled ?? false,
 		obsidianCap: caps ? caps.obsidian_connections : isFree ? 1 : null,
-		mcpCap: caps ? caps.mcp_connections : isFree ? 1 : null,
 	};
 }
 
@@ -706,7 +705,8 @@ export default function ConnectionsPage() {
 	const obsTotal = list.filter((c) => c.kind === "obsidian").length;
 	const mcpTotal = list.filter((c) => c.kind === "mcp").length;
 	const obsCount = caps.obsidianCap === null ? `${obsTotal}` : `${obsTotal} / ${caps.obsidianCap}`;
-	const mcpCount = caps.mcpCap === null ? `${mcpTotal}` : `${mcpTotal} / ${caps.mcpCap}`;
+	// Uncapped (#1974): a count, never "n / limit".
+	const mcpCount = `${mcpTotal}`;
 
 	return (
 		<article className="space-y-8">

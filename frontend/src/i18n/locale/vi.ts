@@ -825,7 +825,7 @@ export default {
 	"{completed} of {total} done": "{completed} trong {total} đã hoàn thành",
 	"Setup guide": "Hướng dẫn thiết lập",
 	"Dismiss {label}": "Bỏ qua {label}",
-	"You're on Free, 1 connection.": "Bạn đang sử dụng gói Free, 1 kết nối.",
+	"You're on the Free plan.": "Bạn đang sử dụng gói miễn phí.",
 	"Connect Claude Desktop": "Kết nối với Claude Desktop",
 	"Connect Cursor": "Kết nối Cursor",
 	"Connect Devin": "Kết nối Devin",

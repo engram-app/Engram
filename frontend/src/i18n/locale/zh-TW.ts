@@ -788,7 +788,7 @@ export default {
 	"{completed} of {total} done": "已完成 {completed} 個，總共 {total} 個",
 	"Setup guide": "設定指南",
 	"Dismiss {label}": "關閉 {label}",
-	"You're on Free, 1 connection.": "您正在使用免費方案，1 個連線。",
+	"You're on the Free plan.": "您正在使用免費方案。",
 	"Connect Claude Desktop": "連接 Claude Desktop",
 	"Connect Cursor": "連接 Cursor",
 	"Connect Devin": "連接 Devin",

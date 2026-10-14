@@ -842,7 +842,7 @@ export default {
 	"{completed} of {total} done": "{completed} von {total} erledigt",
 	"Setup guide": "Installationsanleitung",
 	"Dismiss {label}": "{label} schließen",
-	"You're on Free, 1 connection.": "Du nutzt die kostenlose Version, 1 Verbindung.",
+	"You're on the Free plan.": "Du nutzt den kostenlosen Plan.",
 	"Connect Claude Desktop": "Verbinde Claude Desktop",
 	"Connect Cursor": "Cursor verbinden",
 	"Connect Devin": "Devin verbinden",

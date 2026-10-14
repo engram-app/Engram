@@ -864,7 +864,7 @@ export default {
 	"{completed} of {total} done": "{completed} de {total} completados",
 	"Setup guide": "Guía de configuración",
 	"Dismiss {label}": "Cerrar {label}",
-	"You're on Free, 1 connection.": "Estás en la versión gratuita, 1 conexión.",
+	"You're on the Free plan.": "Estás en el plan gratuito.",
 	"Connect Claude Desktop": "Conectar Claude Desktop",
 	"Connect Cursor": "Conectar Cursor",
 	"Connect Devin": "Conectar Devin",

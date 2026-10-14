@@ -68,7 +68,7 @@ defmodule Engram.Billing.LimitEnforcementTest do
   # `api_write_enabled` / `api_rps_cap` describe API-KEY traffic specifically:
   # both gates exempt any request without `:current_api_key` by design (pricing
   # decision 2026-08-24), so there is no context-level operation to hang them
-  # on. The four connection/device keys gate the single endpoint that mints a
+  # on. The three connection/device keys gate the single endpoint that mints a
   # connection — OAuth consent and device-flow authorize — which no other
   # transport can reach.
   @transport_scoped ~w(
@@ -77,7 +77,6 @@ defmodule Engram.Billing.LimitEnforcementTest do
     concurrent_devices
     device_swap_cooldown_hours
     obsidian_connections_cap
-    mcp_connections_cap
   )a
 
   setup_all do

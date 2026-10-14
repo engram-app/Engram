@@ -32,9 +32,9 @@ export function useConnectionCap(kind: "mcp" | "obsidian"): ConnectionCapState {
 		};
 	}
 
-	const limit =
-		kind === "obsidian" ? billing.caps.obsidian_connections : billing.caps.mcp_connections;
-	const current = billing.current_connections?.[kind] ?? 0;
+	// MCP connections are uncapped on every tier (#1974): never at cap.
+	const limit = kind === "obsidian" ? billing.caps.obsidian_connections : null;
+	const current = kind === "obsidian" ? (billing.current_connections?.obsidian ?? 0) : 0;
 	const atCap = typeof limit === "number" && limit > 0 && current >= limit;
 
 	return {

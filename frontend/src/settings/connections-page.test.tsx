@@ -38,7 +38,6 @@ vi.mock("../api/queries", async () => {
 				caps: {
 					api_write_enabled: mockTier === "pro",
 					obsidian_connections: mockTier === "free" ? 2 : null,
-					mcp_connections: mockTier === "free" ? 1 : null,
 					vaults: mockTier === "free" ? 1 : null,
 				},
 			},

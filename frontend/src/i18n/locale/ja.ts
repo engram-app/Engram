@@ -826,7 +826,7 @@ export default {
 	"{completed} of {total} done": "{completed} / {total} 完了",
 	"Setup guide": "セットアップガイド",
 	"Dismiss {label}": "{label} を閉じる",
-	"You're on Free, 1 connection.": "現在は無料プラン、接続数: 1",
+	"You're on the Free plan.": "無料プランをお使いです。",
 	"Connect Claude Desktop": "Claude Desktopに接続",
 	"Connect Cursor": "Cursorに接続",
 	"Connect Devin": "Devinに接続",

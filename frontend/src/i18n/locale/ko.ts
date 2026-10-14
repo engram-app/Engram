@@ -813,7 +813,7 @@ export default {
 	"{completed} of {total} done": "{completed} / {total} 완료",
 	"Setup guide": "설정 안내",
 	"Dismiss {label}": "{label} 닫기",
-	"You're on Free, 1 connection.": "무료 플랜, 1개의 연결 사용 중입니다.",
+	"You're on the Free plan.": "무료 플랜을 사용 중입니다.",
 	"Connect Claude Desktop": "Claude Desktop 연결",
 	"Connect Cursor": "Cursor 연결",
 	"Connect Devin": "Devin 연결",

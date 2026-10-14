@@ -132,7 +132,6 @@ const TEST_USER_OVERRIDES: Record<string, unknown> = {
 	api_write_enabled: true,
 	api_rps_cap: 1000,
 	obsidian_connections_cap: -1,
-	mcp_connections_cap: -1,
 	concurrent_devices: -1,
 };
 

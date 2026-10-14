@@ -29,7 +29,6 @@ TEST_USER_OVERRIDES = {
     "api_write_enabled": True,
     "api_rps_cap": 1000,
     "obsidian_connections_cap": -1,
-    "mcp_connections_cap": -1,
     # Free-tier launch (§G) gates attachments behind `attachments_enabled`
     # which defaults false for Free. Existing attachment-bearing e2e tests
     # (test_19 write isolation, test_40 storage endpoint, test_70 MIME

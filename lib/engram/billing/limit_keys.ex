@@ -102,17 +102,18 @@ defmodule Engram.Billing.LimitKeys do
     # slot. The consequence is that a user's NEWEST work falls outside the cap,
     # which is why the count is surfaced in the UI rather than failing silently.
     indexed_notes_cap: %{type: :integer, defaults: %{free: 2_000, starter: nil, pro: nil}},
-    # THE REST API IS PRO-ONLY; API KEYS ARE NOT (#1974). Any plan can mint a
-    # key. These two keys gate exactly one thing: API-key-authed REST and
-    # socket traffic. `RequireApiWriteEnabled` and `RequireApiRpsBudget` exempt
-    # requests without `:current_api_key` AND `/api/mcp`; `ChannelGate
-    # .api_access/2` only rejects an API-key socket when the cap is 0.
+    # THE REST API IS PRO-ONLY; API KEYS ARE NOT (#1974). Any plan can mint any
+    # number of keys. These two keys gate exactly one thing: API-key-authed
+    # REST and socket traffic. `RequireApiWriteEnabled` and
+    # `RequireApiRpsBudget` exempt requests without `:current_api_key` AND
+    # `/api/mcp`; `ChannelGate.api_access/2` only rejects an API-key socket
+    # when the cap is 0.
     #
-    # NOT gated by them: MCP over an API key (limited by `mcp_connections_cap`
-    # via `EnforceMcpApiKeySlot`, and by the AI usage meter below), MCP over
-    # OAuth and the Obsidian plugin (`:internal_jwt`), and the web app (Clerk
-    # JWT). So Free and Starter keep MCP, vault sync and the web app, and can
-    # use a key with MCP clients; programmatic REST access is Pro.
+    # NOT gated by them: MCP over an API key, MCP over OAuth and the Obsidian
+    # plugin (`:internal_jwt`), and the web app (Clerk JWT). MCP on any
+    # transport is limited only by `ai_searches_per_day` below and the rate
+    # limiters. So Free and Starter keep MCP (with or without a key), vault
+    # sync and the web app; programmatic REST access is Pro.
     api_write_enabled: %{type: :boolean, defaults: %{free: false, starter: false, pro: true}},
     # 0 means "an API key cannot make a single call" — REST via
     # `RequireApiRpsBudget`, socket via `ChannelGate`. Keep this at 0 on any
@@ -165,7 +166,12 @@ defmodule Engram.Billing.LimitKeys do
     # track `concurrent_devices` (see the note there): same underlying count,
     # two enforcement points.
     obsidian_connections_cap: %{type: :integer, defaults: %{free: 2, starter: nil, pro: nil}},
-    mcp_connections_cap: %{type: :integer, defaults: %{free: 1, starter: nil, pro: nil}},
+    # No MCP connection cap (#1974, removed). Every tier may hold any number of
+    # MCP connections, OAuth grants and API keys alike: a connection costs
+    # nothing, and use is metered by `ai_searches_per_day`. The cap only made
+    # reconnecting a broken grant a 402. A leftover `mcp_connections_cap`
+    # override row, plan key or env var is inert: every lookup is keyed by the
+    # requested key, so nothing reads it.
     # Account export caps — free gets 1 lifetime, paid tiers get 1/24h with 200 GB size cap
     account_exports_lifetime: %{type: :integer, defaults: %{free: 1, starter: nil, pro: nil}},
     account_export_rate_per_24h: %{

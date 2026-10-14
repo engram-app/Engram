@@ -38,9 +38,9 @@ defmodule EngramWeb.Plugs.RequireApiRpsBudget do
   def init(opts), do: opts
 
   # MCP is exempt (#1974): this key prices the REST API, and MCP over an API
-  # key is open on every tier, limited by `mcp_connections_cap` instead
-  # (`EngramWeb.Plugs.EnforceMcpApiKeySlot`). Matched on the routed path, so
-  # the `mcp.engram.page` host (rewritten to `/api/mcp`) is covered too.
+  # key is open on every tier, metered like every MCP call by
+  # `ai_searches_per_day`. Matched on the routed path, so the
+  # `mcp.engram.page` host (rewritten to `/api/mcp`) is covered too.
   def call(%Plug.Conn{request_path: "/api/mcp"} = conn, _opts), do: conn
 
   # JWT-authed (no API key) is exempt — web app is not subject to this gate.

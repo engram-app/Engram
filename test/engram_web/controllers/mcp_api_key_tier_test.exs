@@ -5,9 +5,9 @@ defmodule EngramWeb.McpApiKeyTierTest do
   The REST API stays Pro: `api_rps_cap` / `api_write_enabled` still gate it.
   But `/api/mcp` is the same product a Free user already gets over OAuth, and
   an API key is the fallback for clients whose OAuth flow is broken (Muse,
-  key-oriented clients). So the key is held to the MCP limits instead: it
-  takes one `mcp_connections_cap` slot, and retrieval is metered by the AI
-  usage meter like every other transport.
+  key-oriented clients). MCP connections are uncapped on every tier, OAuth
+  and keys alike: the only MCP limit is the `ai_searches_per_day` meter,
+  charged in `Engram.Search.search/4` for every transport.
   """
   # async: false — the rate-limiter bucket store is global.
   use EngramWeb.ConnCase, async: false
@@ -16,7 +16,7 @@ defmodule EngramWeb.McpApiKeyTierTest do
 
   setup %{conn: conn} do
     EngramWeb.RateLimiter.reset_buckets!()
-    # A Free user: api_rps_cap 0, api_write_enabled false, mcp_connections_cap 1.
+    # A Free user: api_rps_cap 0, api_write_enabled false.
     user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     {:ok, _vault, _} = Engram.Vaults.register_vault(user, "V", Ecto.UUID.generate())
@@ -40,20 +40,17 @@ defmodule EngramWeb.McpApiKeyTierTest do
     assert %{"error" => "api_rps_exceeded"} = json_response(conn, 429)
   end
 
-  test "the key takes an MCP connection slot: refused when OAuth already fills the cap", %{
-    conn: conn,
-    user: user
-  } do
-    {:ok, client} =
-      OAuth.register_client(%{
-        "redirect_uris" => ["https://claude.ai/api/mcp/auth_callback"],
-        "client_name" => "Claude"
-      })
+  test "a key works alongside any number of OAuth MCP grants", %{conn: conn, user: user} do
+    for name <- ["Claude", "ChatGPT"] do
+      {:ok, client} =
+        OAuth.register_client(%{
+          "redirect_uris" => ["https://claude.ai/api/mcp/auth_callback"],
+          "client_name" => name
+        })
 
-    insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
+      insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
+    end
 
-    conn = tools_list(conn)
-    assert conn.status == 402
-    assert conn.resp_body =~ "mcp_connections_exceeded"
+    assert conn |> tools_list() |> json_response(200)
   end
 end
