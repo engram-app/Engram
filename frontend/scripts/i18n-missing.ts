@@ -5,19 +5,18 @@
 //   bun scripts/i18n-missing.ts --count         "code: missingCount" per locale
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { usedEntries } from "../src/i18n/keys-scan";
+import { scannedFiles, usedEntries } from "../src/i18n/keys-scan";
 import { findMissing } from "../src/i18n/missing";
 import type { Catalog } from "../src/i18n/translate";
 
 const src = join(import.meta.dir, "..", "src");
-const files = readdirSync(src, { recursive: true, encoding: "utf8" }).filter(
-	(f) => /\.tsx?$/u.test(f) && !(f.includes(".test.") || f.startsWith(join("i18n", "locale"))),
+const sources = scannedFiles(readdirSync(src, { recursive: true, encoding: "utf8" })).map((f) =>
+	readFileSync(join(src, f), "utf8"),
 );
-const sources = files.map((f) => readFileSync(join(src, f), "utf8"));
 
 const catalogs: Record<string, Catalog> = {};
 const localeDir = join(src, "i18n", "locale");
-for (const file of readdirSync(localeDir)) {
+for (const file of readdirSync(localeDir).filter((f) => f.endsWith(".ts"))) {
 	const mod: { default: Catalog } = await import(join(localeDir, file));
 	catalogs[file.slice(0, -".ts".length)] = mod.default;
 }
