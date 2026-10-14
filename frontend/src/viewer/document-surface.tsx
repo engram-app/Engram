@@ -161,7 +161,7 @@ export function DocumentSurface({ children }: { children: ReactNode }) {
 			className="relative mx-auto size-full min-h-0 min-w-0 md:-my-6 md:h-[calc(100%+3rem)]"
 			style={{ maxWidth: width }}
 		>
-			<section className="flex size-full min-h-0 min-w-0 flex-col overflow-hidden border-border border-x bg-card text-card-foreground">
+			<section className="flex size-full min-h-0 min-w-0 flex-col overflow-hidden border-border md:border-x bg-card text-card-foreground">
 				{children}
 			</section>
 			{handle("left")}
