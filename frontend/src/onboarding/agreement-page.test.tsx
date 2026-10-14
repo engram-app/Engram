@@ -149,4 +149,25 @@ describe("AgreementPage: consent chrome is translated, the legal body is not", (
 		).toBeInTheDocument();
 		expect(screen.getByText(/Ich habe die oben gezeigte Vereinbarung/u)).toBeInTheDocument();
 	});
+
+	it("lists what changed when a legal change is pending", () => {
+		statusRef.current = {
+			...DEFAULT_STATUS,
+			legal_notices: [
+				{
+					document: "privacy_policy",
+					version: "2026-10-12",
+					effective_date: "2026-11-11",
+					material: false,
+					changelog: "App analytics now linked to your account.",
+					url: "https://engram.page/privacy",
+					accept_url: "https://app.engram.page/onboard/agreement",
+				},
+			],
+		};
+		renderPage();
+		expect(screen.getByRole("heading", { name: /what changed/iu })).toBeInTheDocument();
+		expect(screen.getByText(/Privacy Policy, effective November 11, 2026:/u)).toBeInTheDocument();
+		expect(screen.getByText(/App analytics now linked to your account/u)).toBeInTheDocument();
+	});
 });

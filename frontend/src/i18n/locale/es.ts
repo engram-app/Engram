@@ -744,6 +744,12 @@ export default {
 	"A vault holds its own notes and folders, separate from your other vaults.":
 		"Una bóveda contiene tus propias notas y carpetas, separadas de tus otras bóvedas.",
 	"Create vault": "Crear bóveda",
+	"Terms of Service": "Términos del servicio",
+	"Privacy Policy": "Política de privacidad",
+	"{document} update, effective {date}.": "{document} actualización, vigente a partir del {date}.",
+	"Read it": "Léelo",
+	"Review and accept": "Revisa y acepta",
+	"Got it": "Entendido",
 	day: "día",
 	week: "semana",
 	month: "mes",
@@ -831,6 +837,8 @@ export default {
 	"What will you use Engram for?": "¿Para qué usarás Engram?",
 	"Review the Terms": "Revisa los términos",
 	"privacy notice": "aviso de privacidad",
+	"What changed": "¿Qué cambió?",
+	"{document}, effective {date}:": "{document}, vigente a partir del {date}:",
 	"The current agreement isn’t available right now.": "El acuerdo actual no está disponible ahora.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"No podemos mostrar los términos más recientes en este momento, así que el registro está pausado en lugar de pedirte que aceptes algo que no puedes leer. Inténtalo de nuevo en breve.",

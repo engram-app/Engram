@@ -175,7 +175,7 @@ config :engram, Oban,
       # 2-slot maintenance queue and one database.
       #
       # Minutes: reconcile owns every :x2/:x7, device-auth :04/:19/:34/:49,
-      # hourly jobs sit on :x3/:x8 or :10 (data-migrations runner :33,
+      # hourly jobs sit on :x3/:x8 or :10 (data-migrations runner :33, legal notices :18,
       # CRDT head re-warm :48),
       # dailies on :00/:16/:25/:30/:40.
       crontab: [
@@ -201,6 +201,9 @@ config :engram, Oban,
         # within the hour of a run is deduped by the worker's `unique` (intended).
         {"@reboot", Engram.Workers.DataMigrationsRunner},
         {"33 * * * *", Engram.Workers.DataMigrationsRunner},
+        # Legal-change emails (notice + reminder): hourly so a deploy that
+        # publishes a version announces it within the hour.
+        {"18 * * * *", Engram.Workers.LegalNoticeDispatch},
         {"38 * * * *", Engram.Workers.IdempotencyPrune},
         # Note-version outbox copies whose FinalizeRevision job was lost
         # between commit and enqueue (#1710).

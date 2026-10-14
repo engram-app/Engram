@@ -672,6 +672,12 @@ export default {
 	"A vault holds its own notes and folders, separate from your other vaults.":
 		"每個儲存庫包含自己的筆記和資料夾，與其他儲存庫分開。",
 	"Create vault": "建立儲存庫",
+	"Terms of Service": "服務條款",
+	"Privacy Policy": "隱私權政策",
+	"{document} update, effective {date}.": "{document} 更新，自 {date} 起生效。",
+	"Read it": "閱讀",
+	"Review and accept": "檢閱並同意",
+	"Got it": "知道了",
 	day: "天",
 	week: "星期",
 	month: "月份",
@@ -757,6 +763,8 @@ export default {
 	"What will you use Engram for?": "您將如何使用 Engram？",
 	"Review the Terms": "檢閱條款",
 	"privacy notice": "隱私權聲明",
+	"What changed": "變更內容",
+	"{document}, effective {date}:": "{document}，自 {date} 生效：",
 	"The current agreement isn’t available right now.": "目前無法提供最新協議。",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"我們目前無法顯示最新條款，因此暫停註冊，避免您同意無法閱讀的內容。請稍後再試。",

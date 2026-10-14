@@ -83,7 +83,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/indexing.ex" => 2,
     "engram/indexing/index_cap.ex" => 2,
     "engram/instance.ex" => 7,
-    "engram/legal.ex" => 4,
+    "engram/legal.ex" => 5,
     "engram/legal/seeder.ex" => 2,
     "engram/links.ex" => 15,
     "engram/logs.ex" => 2,
@@ -108,6 +108,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/workers/cleanup_vault.ex" => 1,
     "engram/workers/finalize_revision_sweep.ex" => 1,
     "engram/workers/inactivity_cleanup.ex" => 4,
+    "engram/workers/legal_notice_dispatch.ex" => 4,
     "engram/workers/vault_deleted_email.ex" => 1,
     "engram_web/controllers/admin/user_controller.ex" => 3
   }

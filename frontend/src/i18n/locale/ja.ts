@@ -704,6 +704,12 @@ export default {
 	"A vault holds its own notes and folders, separate from your other vaults.":
 		"保管庫は、他の保管庫とは別に、独自のノートやフォルダを保持します。",
 	"Create vault": "保管庫を作成",
+	"Terms of Service": "利用規約",
+	"Privacy Policy": "プライバシーポリシー",
+	"{document} update, effective {date}.": "{document} の更新。適用日: {date}.",
+	"Read it": "詳しくはこちら",
+	"Review and accept": "確認と同意",
+	"Got it": "承知しました",
 	day: "日",
 	week: "週",
 	month: "月",
@@ -794,6 +800,8 @@ export default {
 	"What will you use Engram for?": "Engramをどのように利用しますか？",
 	"Review the Terms": "利用規約を確認",
 	"privacy notice": "プライバシーポリシー",
+	"What changed": "変更点",
+	"{document}, effective {date}:": "{document}、適用開始日 {date}:",
 	"The current agreement isn’t available right now.": "現在の利用規約は利用できません。",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"最新の利用規約を表示できないため、サインアップを一時停止しています。しばらくしてから再度お試しください。",

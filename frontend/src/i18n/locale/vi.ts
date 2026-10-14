@@ -705,6 +705,12 @@ export default {
 	"A vault holds its own notes and folders, separate from your other vaults.":
 		"Một kho lưu trữ chứa các ghi chú và thư mục riêng, khác với các kho lưu trữ khác của bạn.",
 	"Create vault": "Tạo kho lưu trữ",
+	"Terms of Service": "Điều khoản dịch vụ",
+	"Privacy Policy": "Chính sách bảo mật",
+	"{document} update, effective {date}.": "Cập nhật {document}, có hiệu lực từ {date}.",
+	"Read it": "Đọc",
+	"Review and accept": "Xem xét và chấp nhận",
+	"Got it": "Hiểu rồi",
 	day: "ngày",
 	week: "tuần",
 	month: "tháng",
@@ -793,6 +799,8 @@ export default {
 	"What will you use Engram for?": "Bạn sẽ sử dụng Engram cho mục đích gì?",
 	"Review the Terms": "Xem lại Điều khoản",
 	"privacy notice": "Thông báo về quyền riêng tư",
+	"What changed": "Những thay đổi là gì",
+	"{document}, effective {date}:": "{document}, có hiệu lực từ {date}:",
 	"The current agreement isn’t available right now.":
 		"Bản hợp đồng hiện tại không khả dụng ngay bây giờ.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":

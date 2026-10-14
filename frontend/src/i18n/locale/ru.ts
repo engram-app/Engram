@@ -769,6 +769,12 @@ export default {
 	"A vault holds its own notes and folders, separate from your other vaults.":
 		"Хранилище содержит свои заметки и папки, отдельно от других ваших хранилищ.",
 	"Create vault": "Создать хранилище",
+	"Terms of Service": "Условия использования",
+	"Privacy Policy": "Политика конфиденциальности",
+	"{document} update, effective {date}.": "Обновление {document}, вступает в силу {date}.",
+	"Read it": "Ознакомиться",
+	"Review and accept": "Просмотреть и принять",
+	"Got it": "Понятно",
 	day: "день",
 	week: "неделя",
 	month: "месяц",
@@ -877,6 +883,8 @@ export default {
 	"What will you use Engram for?": "Для чего вы будете использовать Engram?",
 	"Review the Terms": "Ознакомьтесь с условиями",
 	"privacy notice": "Уведомление о конфиденциальности",
+	"What changed": "Что изменилось",
+	"{document}, effective {date}:": "{document}, действует с {date}:",
 	"The current agreement isn’t available right now.":
 		"Текущее соглашение недоступно в данный момент.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
