@@ -110,7 +110,11 @@ defmodule EngramWeb.McpActivityTest do
   test "an unknown tool name never reaches PostHog", %{conn: conn} do
     call(conn, "totally_made_up_tool_name")
 
-    assert drain() == []
+    # The connection itself is reported (#1974: every authenticated request
+    # counts as MCP activity), but no tool event, and never the name.
+    events = drain()
+    refute Enum.any?(events, &(&1["event"] == "mcp_tool_called"))
+    refute Jason.encode!(events) =~ "totally_made_up_tool_name"
   end
 
   defp initialize(conn, client_info) do

@@ -13,6 +13,7 @@ defmodule Engram.OAuth do
   """
   import Ecto.Query
   alias Engram.Accounts
+  alias Engram.Analytics.McpClient
   alias Engram.Logger.Metadata
   alias Engram.OAuth.{AuthorizationCode, Cimd, Client, RefreshToken}
   alias Engram.Repo
@@ -536,6 +537,7 @@ defmodule Engram.OAuth do
         grant_error(:refresh_token_unknown)
 
       %RefreshToken{} = rt ->
+        put_grant_user_id(rt.user_id)
         rotate_existing(rt, internal_client_id(client_id, rt.client_id), ip)
     end
   end
@@ -685,6 +687,14 @@ defmodule Engram.OAuth do
   end
 
   defp log_reuse(rt, within_grace: within_grace) do
+    {family, _registration} =
+      Client |> Repo.get(rt.client_id, skip_tenant_check: true) |> McpClient.of_client()
+
+    Engram.Analytics.track(%Accounts.User{id: rt.user_id}, "mcp_oauth_refresh_reuse", %{
+      within_grace: within_grace,
+      client: family
+    })
+
     Logger.warning(
       "oauth_refresh_reuse",
       Metadata.with_category(:warning, :lifecycle,
@@ -717,13 +727,33 @@ defmodule Engram.OAuth do
           | :refresh_token_reuse
           | :refresh_token_expired
 
+  # Analytics attribution for a refused grant (#1974): the code or refresh
+  # token often resolved to a user before it was refused. Kept in the request
+  # process rather than widened into the error tuple, because only the token
+  # controller's analytics reads it; `take_grant_user_id/0` clears it.
+  @grant_user_key :engram_oauth_grant_user_id
+
+  defp put_grant_user_id(user_id), do: Process.put(@grant_user_key, user_id)
+
+  defp put_code_user_id({:ok, %AuthorizationCode{user_id: user_id}}),
+    do: put_grant_user_id(user_id)
+
+  defp put_code_user_id(_), do: :ok
+
+  @doc """
+  The user the last grant attempt in this process resolved to, if any, and
+  forgets it. For attributing `mcp_oauth_token_failed`.
+  """
+  @spec take_grant_user_id() :: String.t() | nil
+  def take_grant_user_id, do: Process.delete(@grant_user_key)
+
   @spec grant_error(grant_reason()) :: {:error, {:invalid_grant, grant_reason()}}
   defp grant_error(reason), do: {:error, {:invalid_grant, reason}}
 
   defp find_unconsumed_code(nil), do: grant_error(:code_missing)
 
   defp find_unconsumed_code(raw_code) do
-    case get_authorization_code_by_raw(raw_code) do
+    case get_authorization_code_by_raw(raw_code) |> tap(&put_code_user_id/1) do
       {:ok, %AuthorizationCode{consumed_at: nil} = code} ->
         if DateTime.compare(DateTime.utc_now(), code.expires_at) == :gt,
           do: grant_error(:code_expired),

@@ -21,6 +21,7 @@ defmodule EngramWeb.OAuthAuthorizeController do
 
   plug EngramWeb.Plugs.EnforceConnectionCap when action in [:consent]
 
+  alias Engram.Analytics.McpClient
   alias Engram.OAuth
 
   # Params we forward to the SPA consent route. RFC 8707 `resource` is
@@ -31,6 +32,8 @@ defmodule EngramWeb.OAuthAuthorizeController do
   def show(conn, params) do
     case OAuth.validate_authorization_request(params) do
       {:ok, validated} ->
+        # Anonymous: the browser carries no session on this navigation.
+        Engram.Analytics.track_anonymous("mcp_oauth_authorize_started", funnel_props(validated))
         redirect_to_spa(conn, validated, params)
 
       {:client_error, code} ->
@@ -56,7 +59,7 @@ defmodule EngramWeb.OAuthAuthorizeController do
                params["label"]
              ) do
           {:ok, redirect_url} ->
-            Engram.Analytics.track(user, "mcp_oauth_granted", %{})
+            Engram.Analytics.track(user, "mcp_oauth_granted", funnel_props(validated))
 
             json(conn, %{redirect_uri: redirect_url})
 
@@ -90,6 +93,18 @@ defmodule EngramWeb.OAuthAuthorizeController do
           redirect_uri: OAuth.build_redirect(redirect_uri, %{error: error, state: state})
         })
     end
+  end
+
+  # Client family + registration method, and the requested vs granted scopes
+  # (#1974: a narrowed `offline_access` should be visible, not silent). All
+  # bounded labels; never the raw client name, URL or scope text.
+  defp funnel_props(validated) do
+    validated.client
+    |> McpClient.client_props()
+    |> Map.merge(%{
+      scopes_requested: McpClient.scope_labels(validated.scope_requested),
+      scopes_granted: McpClient.scope_labels(validated.scope)
+    })
   end
 
   defp redirect_to_spa(conn, _validated, raw_params) do

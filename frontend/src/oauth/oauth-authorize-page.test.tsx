@@ -513,6 +513,22 @@ describe("OAuthAuthorizePage", () => {
 		expect(assign).toHaveBeenCalledWith("https://app/cb?error=access_denied&state=xyz");
 	});
 
+	// #1974: a denial never reaches the server, so it is only visible here.
+	it("emits mcp_connect_denied on cancel", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude Desktop",
+			kind: "mcp",
+			slug: "claude",
+		});
+		vi.spyOn(window.location, "assign").mockImplementation(() => {});
+
+		renderAt(VALID_QS);
+		fireEvent.click(await screen.findByRole("button", { name: /cancel/iu }));
+
+		expect(mockTrack).toHaveBeenCalledWith("mcp_connect_denied", { client: "claude" });
+	});
+
 	it("submits only the checked vaults", async () => {
 		fetchOAuthClient.mockResolvedValue({
 			client_id: "cli",

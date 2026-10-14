@@ -447,6 +447,7 @@ export default function OAuthAuthorizePage() {
 	};
 
 	const handleCancel = () => {
+		track("mcp_connect_denied", { client: toMcpClient(clientQuery.data?.slug) });
 		window.location.assign(buildCancelUrl(values.redirect_uri, values.state));
 	};
 

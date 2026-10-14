@@ -43,6 +43,7 @@ defmodule Engram.OAuth.Cimd.JwksCache do
 
   import Ecto.Query
 
+  alias Engram.Analytics.McpClient
   alias Engram.Cache
   alias Engram.OAuth
   alias Engram.OAuth.Cimd
@@ -52,6 +53,7 @@ defmodule Engram.OAuth.Cimd.JwksCache do
   alias EngramWeb.RateLimiter
 
   @flights __MODULE__.Flights
+  @source_key :engram_jwks_source
 
   @fresh_ms 15 * 60_000
   @stale_ms 7 * 86_400_000
@@ -71,9 +73,15 @@ defmodule Engram.OAuth.Cimd.JwksCache do
   @spec keys(String.t()) :: {:ok, [map()]} | {:error, reason()}
   def keys(jwks_uri) when is_binary(jwks_uri) do
     case lookup(jwks_uri) do
-      {:fresh, keys} -> {:ok, keys}
-      {:stale, keys} -> fetch(jwks_uri, {"cimd:jwks:miss:", @miss_limit}, keys)
-      :none -> fetch(jwks_uri, {"cimd:jwks:miss:", @miss_limit}, nil)
+      {:fresh, keys, source} ->
+        put_source(source)
+        {:ok, keys}
+
+      {:stale, keys, _source} ->
+        fetch(jwks_uri, {"cimd:jwks:miss:", @miss_limit}, keys)
+
+      :none ->
+        fetch(jwks_uri, {"cimd:jwks:miss:", @miss_limit}, nil)
     end
   end
 
@@ -103,6 +111,16 @@ defmodule Engram.OAuth.Cimd.JwksCache do
   def refresh_background(jwks_uri) when is_binary(jwks_uri),
     do: fetch(jwks_uri, nil, nil)
 
+  @doc """
+  Where the keys behind the last `keys/1` / `refresh/1` in this process came
+  from (`:cache | :persisted | :fetched | :stale`), and forgets it. For the
+  `mcp_oauth_token_issued` analytics prop; nil when no assertion was checked.
+  """
+  @spec take_source() :: :cache | :persisted | :fetched | :stale | nil
+  def take_source, do: Process.delete(@source_key)
+
+  defp put_source(source), do: Process.put(@source_key, source)
+
   @doc false
   # Test hook standing in for 30 s passing.
   @spec expire_kid_miss_cooldown(String.t()) :: :ok
@@ -121,7 +139,7 @@ defmodule Engram.OAuth.Cimd.JwksCache do
 
   defp usable_keys(jwks_uri) do
     case classify(newest_entry(jwks_uri)) do
-      {_, keys} -> keys
+      {_, keys, _source} -> keys
       :none -> nil
     end
   end
@@ -142,7 +160,7 @@ defmodule Engram.OAuth.Cimd.JwksCache do
         row ->
           if node == nil or row.fetched_at > node.fetched_at do
             Cache.put(:jwks, jwks_uri, row)
-            row
+            Map.put(row, :source, :persisted)
           else
             node
           end
@@ -152,7 +170,7 @@ defmodule Engram.OAuth.Cimd.JwksCache do
 
   defp node_entry(jwks_uri) do
     case Cache.get(:jwks, jwks_uri) do
-      {:ok, %{keys: _, fetched_at: _} = entry} -> entry
+      {:ok, %{keys: _, fetched_at: _} = entry} -> Map.put(entry, :source, :cache)
       _ -> nil
     end
   end
@@ -182,12 +200,12 @@ defmodule Engram.OAuth.Cimd.JwksCache do
 
   defp classify(nil), do: :none
 
-  defp classify(%{keys: keys, fetched_at: at}) do
+  defp classify(%{keys: keys, fetched_at: at, source: source}) do
     age = wall_ms() - at
 
     cond do
-      age < @fresh_ms -> {:fresh, keys}
-      age < @stale_ms -> {:stale, keys}
+      age < @fresh_ms -> {:fresh, keys, source}
+      age < @stale_ms -> {:stale, keys, source}
       true -> :none
     end
   end
@@ -213,16 +231,20 @@ defmodule Engram.OAuth.Cimd.JwksCache do
       {:ok, keys} ->
         store(jwks_uri, keys)
         Cimd.emit_fetch(:jwks, :ok, nil, duration)
+        put_source(:fetched)
         {:ok, keys}
 
       {:error, cause} when is_list(held) ->
         log_unusable("mcp_jwks_stale_served", jwks_uri, cause)
         Cimd.emit_fetch(:jwks, :stale, cause, duration)
+        track_fetch_failed(jwks_uri, :stale, cause)
+        put_source(:stale)
         {:ok, held}
 
       {:error, cause} ->
         log_unusable("mcp_jwks_unusable", jwks_uri, cause)
         Cimd.emit_fetch(:jwks, :error, cause, duration)
+        track_fetch_failed(jwks_uri, :error, cause)
         {:error, classify_error(cause)}
     end
   end
@@ -248,6 +270,23 @@ defmodule Engram.OAuth.Cimd.JwksCache do
 
     Cache.put(:jwks, jwks_uri, %{keys: keys, fetched_at: DateTime.to_unix(now, :millisecond)})
   end
+
+  # Server-side and about a vendor, not a person: anonymous (#1974). `host` is
+  # the vendor's own domain, `reason` the bounded fetch label.
+  defp track_fetch_failed(jwks_uri, result, cause) do
+    host = Cimd.host_of(jwks_uri)
+
+    Engram.Analytics.track_anonymous("mcp_oauth_jwks_fetch_failed", %{
+      host: host,
+      client: McpClient.family(host),
+      reason: Atom.to_string(Cimd.fetch_reason_label(cause)),
+      phase: phase_of(cause),
+      result: Atom.to_string(result)
+    })
+  end
+
+  defp phase_of({:transport_error, phase, _}) when is_atom(phase), do: Atom.to_string(phase)
+  defp phase_of(_cause), do: nil
 
   # Logged with the host because a vendor failing must be attributable to
   # THAT vendor.

@@ -365,17 +365,19 @@ defmodule Engram.OAuth.Cimd do
     })
   end
 
-  defp fetch_reason_label(nil), do: :none
+  @doc "The bounded metric/analytics label for a fetch failure cause."
+  @spec fetch_reason_label(term()) :: atom()
+  def fetch_reason_label(nil), do: :none
 
-  defp fetch_reason_label({:transport_error, phase, _}) when phase in [:connect, :tls, :recv],
+  def fetch_reason_label({:transport_error, phase, _}) when phase in [:connect, :tls, :recv],
     do: phase
 
-  defp fetch_reason_label({:http_status, 429}), do: :http_429
-  defp fetch_reason_label({:http_status, s}) when is_integer(s) and s >= 500, do: :http_5xx
-  defp fetch_reason_label({:http_status, s}) when is_integer(s) and s >= 400, do: :http_4xx
-  defp fetch_reason_label({:http_status, s}) when is_integer(s), do: :http_3xx
-  defp fetch_reason_label(reason) when reason in @labelled_fetch_errors, do: reason
-  defp fetch_reason_label(_reason), do: :other
+  def fetch_reason_label({:http_status, 429}), do: :http_429
+  def fetch_reason_label({:http_status, s}) when is_integer(s) and s >= 500, do: :http_5xx
+  def fetch_reason_label({:http_status, s}) when is_integer(s) and s >= 400, do: :http_4xx
+  def fetch_reason_label({:http_status, s}) when is_integer(s), do: :http_3xx
+  def fetch_reason_label(reason) when reason in @labelled_fetch_errors, do: reason
+  def fetch_reason_label(_reason), do: :other
 
   @doc """
   The host of a URL, or `"unknown"`.

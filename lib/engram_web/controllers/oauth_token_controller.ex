@@ -7,8 +7,11 @@ defmodule EngramWeb.OAuthTokenController do
   """
   use EngramWeb, :controller
 
+  alias Engram.Accounts.User
+  alias Engram.Analytics.McpClient
   alias Engram.OAuth
   alias Engram.OAuth.Cimd.Jwks
+  alias Engram.OAuth.Cimd.JwksCache
   alias EngramWeb.OAuthMetadata
   alias EngramWeb.RequestMeta
 
@@ -58,8 +61,9 @@ defmodule EngramWeb.OAuthTokenController do
   #
   # The non-grant error is `insert_refresh_token/1`'s changeset. It was already
   # answered `invalid_grant`; that stays, under its own reason so it is visible.
-  defp grant_result({:ok, response}, conn, grant_type, _client_id) do
+  defp grant_result({:ok, response}, conn, grant_type, client_id) do
     emit(grant_type, :issued, nil, :none)
+    track_issued(conn, grant_type, client_id, response)
     json(conn, response)
   end
 
@@ -87,6 +91,7 @@ defmodule EngramWeb.OAuthTokenController do
     )
 
     emit(grant_type, :rejected, error, reason)
+    track_failed(conn, grant_type, client_id, error, reason)
 
     conn
     |> put_status(:bad_request)
@@ -104,6 +109,95 @@ defmodule EngramWeb.OAuthTokenController do
       error: error,
       reason: reason
     })
+  end
+
+  # ── Product analytics (#1974) ──────────────────────────────────────
+  #
+  # The funnel events behind the telemetry above, through `Engram.Analytics`.
+  # Every prop is a bounded label: never a code, verifier, token or raw id.
+
+  defp track_issued(conn, grant_type, client_id, response) do
+    # Both are per-request process state; take it so a keep-alive connection's
+    # next request (same process) cannot inherit it.
+    _ = OAuth.take_grant_user_id()
+
+    props =
+      client_id
+      |> client_props()
+      |> Map.merge(%{
+        grant_type: Atom.to_string(grant_type),
+        auth_method: auth_method(conn),
+        jwks_source: jwks_source()
+      })
+
+    case issued_user(response) do
+      nil -> Engram.Analytics.track_anonymous("mcp_oauth_token_issued", props)
+      user -> Engram.Analytics.track(user, "mcp_oauth_token_issued", props)
+    end
+  end
+
+  # The user is known whenever the code or refresh token resolved to a row
+  # (`OAuth.take_grant_user_id/0`); otherwise the event is anonymous.
+  defp track_failed(conn, grant_type, client_id, error, reason) do
+    props =
+      client_id
+      |> client_props()
+      |> Map.merge(%{
+        grant_type: Atom.to_string(grant_type),
+        auth_method: auth_method(conn),
+        error: error,
+        reason: Atom.to_string(reason)
+      })
+
+    case OAuth.take_grant_user_id() do
+      nil -> Engram.Analytics.track_anonymous("mcp_oauth_token_failed", props)
+      user_id -> Engram.Analytics.track(%User{id: user_id}, "mcp_oauth_token_failed", props)
+    end
+  end
+
+  defp client_props(client_id) do
+    client =
+      case OAuth.get_client(client_id) do
+        {:ok, client} -> client
+        _ -> nil
+      end
+
+    McpClient.client_props(client)
+  end
+
+  # The access token we just minted names its user; reading our own claim
+  # back is cheaper than threading the user out of `Engram.OAuth`.
+  defp issued_user(%{access_token: token}) when is_binary(token) do
+    case Joken.peek_claims(token) do
+      {:ok, %{"user_id" => id}} when is_binary(id) -> %User{id: id}
+      _ -> nil
+    end
+  end
+
+  defp issued_user(_response), do: nil
+
+  defp auth_method(conn) do
+    cond do
+      is_binary(blank_to_nil(conn.params["client_assertion"])) -> "private_key_jwt"
+      Plug.BasicAuth.parse_basic_auth(conn) != :error -> "client_secret_basic"
+      is_binary(blank_to_nil(conn.params["client_secret"])) -> "client_secret_post"
+      true -> "none"
+    end
+  end
+
+  defp jwks_source do
+    case JwksCache.take_source() do
+      nil -> "none"
+      source -> Atom.to_string(source)
+    end
+  end
+
+  # For the client-authentication failures, which never resolved a client id.
+  defp request_client_id(conn) do
+    case Plug.BasicAuth.parse_basic_auth(conn) do
+      {id, _secret} -> id
+      :error -> conn.params["client_id"]
+    end
   end
 
   defp uuid_or_nil(id) when is_binary(id) do
@@ -236,6 +330,7 @@ defmodule EngramWeb.OAuthTokenController do
   # the Authorization header gets a WWW-Authenticate challenge back.
   defp invalid_client(conn, grant_type) do
     emit(grant_type, :rejected, "invalid_client", :client_auth_failed)
+    track_failed(conn, grant_type, request_client_id(conn), "invalid_client", :client_auth_failed)
 
     conn
     |> maybe_challenge()
@@ -257,6 +352,14 @@ defmodule EngramWeb.OAuthTokenController do
   # authorize path, and the same string it uses.
   defp temporarily_unavailable(conn, grant_type) do
     emit(grant_type, :rejected, "temporarily_unavailable", :client_auth_unavailable)
+
+    track_failed(
+      conn,
+      grant_type,
+      request_client_id(conn),
+      "temporarily_unavailable",
+      :client_auth_unavailable
+    )
 
     # A hint to retry soon (#1974): ChatGPT did not retry the 2026-10-13 503 at
     # all, and the condition behind it clears within seconds.
