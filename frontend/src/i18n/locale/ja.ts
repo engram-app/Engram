@@ -706,7 +706,7 @@ export default {
 	"Create vault": "保管庫を作成",
 	"Terms of Service": "利用規約",
 	"Privacy Policy": "プライバシーポリシー",
-	"{document} changes on {date}.": "{document} の {date} における変更点。",
+	"{document} update, effective {date}.": "{document} の更新。適用日: {date}.",
 	"Read it": "詳しくはこちら",
 	"Review and accept": "確認と同意",
 	"Got it": "承知しました",

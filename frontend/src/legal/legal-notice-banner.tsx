@@ -40,7 +40,7 @@ export function LegalNoticeBanner() {
 			<ul>
 				{notices.map((n) => (
 					<li key={n.document}>
-						{t("{document} changes on {date}.", {
+						{t("{document} update, effective {date}.", {
 							document: name(n),
 							date: formatEffectiveDate(n.effective_date, renderedLocale),
 						})}{" "}

@@ -746,7 +746,7 @@ export default {
 	"Create vault": "Crear bóveda",
 	"Terms of Service": "Términos del servicio",
 	"Privacy Policy": "Política de privacidad",
-	"{document} changes on {date}.": "{document} cambios en {date}.",
+	"{document} update, effective {date}.": "{document} actualización, vigente a partir del {date}.",
 	"Read it": "Léelo",
 	"Review and accept": "Revisa y acepta",
 	"Got it": "Entendido",

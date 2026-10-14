@@ -8,15 +8,10 @@ defmodule Engram.Workers.LegalNoticeEmail do
   provider failure is returned so Oban retries. Legal notices are transactional,
   so analytics opt-out does not apply.
   """
-  # Unique across completed jobs too: one user never gets the same notice twice.
-  use Oban.Worker,
-    queue: :events,
-    max_attempts: 10,
-    unique: [
-      period: :infinity,
-      keys: [:user_id, :document, :version, :kind],
-      states: [:available, :scheduled, :executing, :retryable, :completed]
-    ]
+  # No `unique`: the dispatch inserts with `Oban.insert_all`, which Oban OSS
+  # inserts without a uniqueness check. Once-per-user comes from the dispatch's
+  # claim on `notified_at` / `reminded_at`; clearing one is how you resend.
+  use Oban.Worker, queue: :events, max_attempts: 10
 
   alias Engram.Accounts
   alias Engram.Accounts.User

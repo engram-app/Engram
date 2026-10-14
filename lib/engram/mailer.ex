@@ -161,7 +161,6 @@ defmodule Engram.Mailer do
       when kind in ["notice", "reminder"] do
     doc = Engram.Legal.name(version.document)
     date = Calendar.strftime(version.effective_date, "%B %-d, %Y")
-    button = &legal_button(&1, &2)
 
     subject =
       if kind == "reminder", do: "Engram #{doc} Reminder", else: "Engram #{doc} Update"
@@ -175,14 +174,14 @@ defmodule Engram.Mailer do
     action =
       if version.material,
         do: """
-        <mj-text>To keep using Engram after #{date}, please review and accept the new
-        version in the app.</mj-text>
-        #{button.(Engram.Legal.accept_url(), "Review and accept")}
+        <mj-text>To keep using Engram from #{date}, please review and accept the new
+        version in the app before then.</mj-text>
+        #{legal_button(Engram.Legal.accept_url(), "Review and accept")}
         <mj-text><a href="#{Engram.Legal.url(version.document)}">Read the full #{doc}</a></mj-text>
         """,
         else: """
         <mj-text>You do not need to do anything.</mj-text>
-        #{button.(Engram.Legal.url(version.document), "Read the #{doc}")}
+        #{legal_button(Engram.Legal.url(version.document), "Read the #{doc}")}
         """
 
     body = """

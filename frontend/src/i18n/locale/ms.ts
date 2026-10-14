@@ -710,7 +710,7 @@ export default {
 	"Create vault": "Buat peti nota",
 	"Terms of Service": "Syarat Perkhidmatan",
 	"Privacy Policy": "Dasar Privasi",
-	"{document} changes on {date}.": "{document} perubahan pada {date}.",
+	"{document} update, effective {date}.": "Kemas kini {document}, berkuat kuasa {date}.",
 	"Read it": "Baca",
 	"Review and accept": "Semak dan terima",
 	"Got it": "Faham",

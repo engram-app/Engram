@@ -120,6 +120,16 @@ defmodule Engram.Cache.Registry do
       cache_nil: true,
       evict_match: :key,
       pg_channel: nil
+    },
+    # User ids whose MCP tool result already carried today's legal notice line
+    # (McpController). Node-local on purpose: a second node may repeat the
+    # line once, which beats a cluster broadcast on every tool call.
+    %{
+      name: :mcp_legal_note,
+      ttl: 86_400_000,
+      cache_nil: false,
+      evict_match: :key,
+      pg_channel: nil
     }
   ]
 

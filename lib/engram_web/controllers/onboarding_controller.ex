@@ -73,9 +73,15 @@ defmodule EngramWeb.OnboardingController do
         user_agent: RequestMeta.get_user_agent(conn)
       }
 
-      case Onboarding.accept_terms(conn.assigns.current_user, tv, th, pv, ph, meta) do
+      user = conn.assigns.current_user
+      # Re-accepting the same Terms (dismissing a privacy notice, or accepting a
+      # privacy change) is not the onboarding step.
+      step =
+        if Onboarding.accepted?(user, "terms_of_service", tv), do: "legal_update", else: "terms"
+
+      case Onboarding.accept_terms(user, tv, th, pv, ph, meta) do
         {:ok, agreement} ->
-          log_step(conn.assigns.current_user, "terms")
+          log_step(user, step)
 
           conn
           |> put_status(:created)

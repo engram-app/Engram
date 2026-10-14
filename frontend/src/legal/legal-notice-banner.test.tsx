@@ -51,7 +51,9 @@ describe("LegalNoticeBanner", () => {
 	it("shows what changed, when, and a link to the document", () => {
 		status([privacyNotice]);
 		renderBanner();
-		expect(screen.getByText(/Privacy Policy changes on November 11, 2026/u)).toBeInTheDocument();
+		expect(
+			screen.getByText(/Privacy Policy update, effective November 11, 2026/u),
+		).toBeInTheDocument();
 		expect(screen.getByText(/App analytics now linked to your account/u)).toBeInTheDocument();
 		expect(screen.getByRole("link", { name: /read it/iu })).toHaveAttribute(
 			"href",

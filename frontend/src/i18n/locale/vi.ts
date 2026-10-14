@@ -707,7 +707,7 @@ export default {
 	"Create vault": "Tạo kho lưu trữ",
 	"Terms of Service": "Điều khoản dịch vụ",
 	"Privacy Policy": "Chính sách bảo mật",
-	"{document} changes on {date}.": "{document} thay đổi vào {date}.",
+	"{document} update, effective {date}.": "Cập nhật {document}, có hiệu lực từ {date}.",
 	"Read it": "Đọc",
 	"Review and accept": "Xem xét và chấp nhận",
 	"Got it": "Hiểu rồi",

@@ -745,7 +745,7 @@ export default {
 	"Create vault": "Criar cofre",
 	"Terms of Service": "Termos de Serviço",
 	"Privacy Policy": "Política de Privacidade",
-	"{document} changes on {date}.": "{document} alterações em {date}.",
+	"{document} update, effective {date}.": "{document} atualização, válida a partir de {date}.",
 	"Read it": "Ler",
 	"Review and accept": "Revisar e aceitar",
 	"Got it": "Entendido",

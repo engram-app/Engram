@@ -771,7 +771,7 @@ export default {
 	"Create vault": "Создать хранилище",
 	"Terms of Service": "Условия использования",
 	"Privacy Policy": "Политика конфиденциальности",
-	"{document} changes on {date}.": "{document} изменений на {date}.",
+	"{document} update, effective {date}.": "Обновление {document}, вступает в силу {date}.",
 	"Read it": "Ознакомиться",
 	"Review and accept": "Просмотреть и принять",
 	"Got it": "Понятно",

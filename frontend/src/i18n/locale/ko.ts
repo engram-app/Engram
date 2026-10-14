@@ -696,7 +696,7 @@ export default {
 	"Create vault": "보관함 만들기",
 	"Terms of Service": "서비스 약관",
 	"Privacy Policy": "개인정보 처리방침",
-	"{document} changes on {date}.": "{document}에서 {date} 변경 사항이 있습니다.",
+	"{document} update, effective {date}.": "{document} 업데이트, 적용일 {date}.",
 	"Read it": "확인하기",
 	"Review and accept": "검토 및 동의",
 	"Got it": "알겠습니다",

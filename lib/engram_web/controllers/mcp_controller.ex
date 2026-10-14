@@ -1108,14 +1108,12 @@ defmodule EngramWeb.McpController do
   defp deprecation_note(_tool, text), do: text
 
   # MCP-only users never see the web banner, so a pending legal change rides
-  # on a tool result for the model to relay (#321). Once a day per user, not
-  # every call. The limiter is only hit while a notice is pending.
-  @legal_note_every :timer.hours(24)
-
+  # on a tool result for the model to relay (#321). Once a day per user (the
+  # `:mcp_legal_note` cache TTL), not every call.
   defp legal_note(text, user) do
-    with [_ | _] = notices <- Engram.Onboarding.legal_notices(user),
-         {:allow, _} <-
-           EngramWeb.RateLimiter.hit("mcp_legal_note:#{user.id}", @legal_note_every, 1) do
+    with :miss <- Engram.Cache.get(:mcp_legal_note, user.id),
+         [_ | _] = notices <- Engram.Onboarding.legal_notices(user) do
+      :ok = Engram.Cache.put(:mcp_legal_note, user.id, true)
       text <> "\n\n" <> Enum.map_join(notices, "\n", &legal_sentence/1)
     else
       _ -> text
@@ -1126,7 +1124,7 @@ defmodule EngramWeb.McpController do
     date = Calendar.strftime(notice.effective_date, "%B %-d, %Y")
 
     base =
-      "(Please tell the user: Engram's #{Engram.Legal.name(notice.document)} changes on #{date}. " <>
+      "(Please tell the user: Engram's #{Engram.Legal.name(notice.document)} has an update, effective #{date}. " <>
         "#{notice.changelog} Read it at #{notice.url}."
 
     if notice.material,

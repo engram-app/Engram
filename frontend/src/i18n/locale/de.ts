@@ -723,7 +723,7 @@ export default {
 	"Create vault": "Vault erstellen",
 	"Terms of Service": "Nutzungsbedingungen",
 	"Privacy Policy": "Datenschutzrichtlinie",
-	"{document} changes on {date}.": "{document} Änderungen am {date}.",
+	"{document} update, effective {date}.": "{document} Update, gültig ab {date}.",
 	"Read it": "Lesen",
 	"Review and accept": "Überprüfen und akzeptieren",
 	"Got it": "Verstanden",

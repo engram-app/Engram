@@ -45,7 +45,7 @@ defmodule EngramWeb.McpLegalNoticeTest do
     LegalFixtures.reset_version_cache()
 
     first = text(tool, user)
-    assert first =~ "Engram's Privacy Policy changes on November 11, 2099"
+    assert first =~ "Engram's Privacy Policy has an update, effective November 11, 2099"
     assert first =~ "Analytics linked to your account."
     assert first =~ "https://engram.page/privacy"
     refute first =~ "accept"

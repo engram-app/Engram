@@ -41,12 +41,28 @@ defmodule Engram.Legal do
   def required_floor(document, today \\ Date.utc_today()) do
     from(v in TermsVersion,
       where: v.document == ^document and v.material == true,
-      where: is_nil(v.effective_date) or v.effective_date <= ^today,
+      where:
+        v.effective_date <= ^today or (^baseline_counts?(document) and is_nil(v.effective_date)),
       order_by: [desc: v.version],
       limit: 1,
       select: v.version
     )
     |> Repo.one(skip_tenant_check: true)
+  end
+
+  # A version with no effective_date is a publish-day baseline. For the Terms
+  # it is the floor every signup must reach. For privacy it never gates:
+  # accounts from before privacy versions were tracked hold an older (or no)
+  # privacy acceptance, and signup already records both documents together.
+  # A privacy change gates only once announced with an effective_date.
+  defp baseline_counts?("privacy_policy"), do: false
+  defp baseline_counts?(_document), do: true
+
+  @doc "Every version of `document`, newest first."
+  @spec versions(String.t()) :: [TermsVersion.t()]
+  def versions(document) do
+    from(v in TermsVersion, where: v.document == ^document, order_by: [desc: v.version])
+    |> Repo.all(skip_tenant_check: true)
   end
 
   @spec current_version(document :: String.t()) :: String.t() | nil

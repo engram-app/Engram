@@ -674,7 +674,7 @@ export default {
 	"Create vault": "建立儲存庫",
 	"Terms of Service": "服務條款",
 	"Privacy Policy": "隱私權政策",
-	"{document} changes on {date}.": "{document} 在 {date} 的變更。",
+	"{document} update, effective {date}.": "{document} 更新，自 {date} 起生效。",
 	"Read it": "閱讀",
 	"Review and accept": "檢閱並同意",
 	"Got it": "知道了",

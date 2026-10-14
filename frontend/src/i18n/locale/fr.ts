@@ -747,7 +747,7 @@ export default {
 	"Create vault": "Créer un coffre",
 	"Terms of Service": "Conditions d'utilisation",
 	"Privacy Policy": "Politique de confidentialité",
-	"{document} changes on {date}.": "{document} modifications sur {date}.",
+	"{document} update, effective {date}.": "Mise à jour {document}, effective le {date}.",
 	"Read it": "Lire",
 	"Review and accept": "Examiner et accepter",
 	"Got it": "Compris",

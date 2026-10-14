@@ -672,7 +672,7 @@ export default {
 	"Create vault": "创建仓库",
 	"Terms of Service": "服务条款",
 	"Privacy Policy": "隐私政策",
-	"{document} changes on {date}.": "{document} 在 {date} 的变化。",
+	"{document} update, effective {date}.": "{document} 更新，生效于 {date}。",
 	"Read it": "查看",
 	"Review and accept": "审查并同意",
 	"Got it": "知道了",

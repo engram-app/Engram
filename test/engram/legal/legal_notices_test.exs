@@ -111,12 +111,91 @@ defmodule Engram.Legal.LegalNoticesTest do
     assert Onboarding.legal_notices(user) == []
   end
 
+  test "a later silent wording fix does not hide a pending material change", %{user: user} do
+    publish(
+      version: "2026-11-01",
+      material: true,
+      effective_date: ~D[2099-01-01],
+      changelog: "Big change."
+    )
+
+    publish(version: "2026-11-05", material: false, effective_date: nil, changelog: "Typo.")
+
+    assert [%{version: "2026-11-01", changelog: "Big change."}] = Onboarding.legal_notices(user)
+  end
+
+  test "a material change stays listed once effective, so the accept page can show it", %{
+    user: user
+  } do
+    publish(version: "2026-10-12", material: true, effective_date: Date.add(Date.utc_today(), -1))
+
+    assert [%{version: "2026-10-12", material: true}] = Onboarding.legal_notices(user)
+    refute Onboarding.status(user).terms_ok
+  end
+
+  describe "material privacy changes" do
+    test "block once effective, like the Terms", %{user: user} do
+      publish(
+        document: "privacy_policy",
+        version: "2026-10-12",
+        material: true,
+        effective_date: Date.add(Date.utc_today(), -1)
+      )
+
+      refute Onboarding.status(user).terms_ok
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-10-12", "h", %{})
+      assert Onboarding.status(user).terms_ok
+    end
+
+    test "do not block before their effective date", %{user: user} do
+      publish(
+        document: "privacy_policy",
+        version: "2026-10-12",
+        material: true,
+        effective_date: ~D[2099-01-01]
+      )
+
+      assert Onboarding.status(user).terms_ok
+    end
+
+    test "a baseline privacy version (no effective date) never blocks an older acceptance" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
+
+      publish(
+        document: "privacy_policy",
+        version: "2026-06-20",
+        material: true,
+        effective_date: nil
+      )
+
+      assert Onboarding.status(user).terms_ok
+    end
+  end
+
   describe "VersionCache.required_floor/2" do
     test "the floor moves on the effective date without a cache reset" do
       publish(version: "2026-10-12", material: true, effective_date: ~D[2026-11-11])
 
       assert VersionCache.required_floor("terms_of_service", ~D[2026-11-10]) == "2026-05-19"
       assert VersionCache.required_floor("terms_of_service", ~D[2026-11-11]) == "2026-10-12"
+      assert VersionCache.required_floor("terms_of_service", ~D[2026-11-11]) == "2026-10-12"
+    end
+
+    test "the version list is really cached (structs in the value store fine)" do
+      VersionCache.versions("terms_of_service")
+      assert {:ok, [_ | _]} = Engram.Cache.get(:legal_version, {:versions, "terms_of_service"})
+    end
+
+    test "one cache entry per document, not one per day" do
+      for d <- [~D[2026-11-09], ~D[2026-11-10], ~D[2026-11-11]],
+          do: VersionCache.required_floor("terms_of_service", d)
+
+      entries =
+        :ets.tab2list(Engram.Cache.Registry.table(:legal_version))
+        |> Enum.filter(&match?({{:floor, "terms_of_service"}, _, _}, &1))
+
+      assert length(entries) == 1
     end
   end
 end

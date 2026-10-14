@@ -110,10 +110,4 @@ defmodule Engram.Workers.LegalNoticeEmailTest do
     expect(Engram.Email.ProviderMock, :send, fn _, _, _, _ -> {:error, :rate_limited} end)
     assert {:error, :rate_limited} = perform_job(LegalNoticeEmail, args(user))
   end
-
-  test "enqueueing the same user, version and kind twice keeps one job", %{user: user} do
-    {:ok, _} = args(user) |> LegalNoticeEmail.new() |> Oban.insert()
-    {:ok, dup} = args(user) |> LegalNoticeEmail.new() |> Oban.insert()
-    assert dup.conflict?
-  end
 end

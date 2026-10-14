@@ -165,7 +165,8 @@ defmodule Engram.Onboarding do
   Compute the onboarding state for a user. Returns a map with:
 
     * `:enabled` — true when billing (and therefore the wizard) is active
-    * `:terms_ok` — latest accepted ToS version satisfies the computed floor
+    * `:terms_ok` — the user's accepted ToS and Privacy versions satisfy each
+      document's computed floor
     * `:subscription_ok` — user has trialing/active/past_due subscription
     * `:current_tos_version` — latest published ToS version (from `terms_versions`)
     * `:current_privacy_version` — latest published Privacy version
@@ -402,24 +403,35 @@ defmodule Engram.Onboarding do
   defp terms_state(_user, false), do: {true, nil, nil}
 
   defp terms_state(user, true) do
-    floor = VersionCache.required_floor(@terms_document)
     current_tos = VersionCache.current_version(@terms_document)
     current_privacy = VersionCache.current_version(@privacy_document)
-    accepted_tos = accepted_version(user, @terms_document)
-    terms_ok = accepted_satisfies?(accepted_tos, floor)
+    terms_ok = Enum.all?([@terms_document, @privacy_document], &meets_floor?(user, &1))
     {terms_ok, current_tos, current_privacy}
   end
 
-  @doc """
-  Legal changes `user` has not accepted whose notice window is open: published,
-  effective on a future date. One map per document (ToS first) with
-  `document/version/effective_date/material/changelog/url/accept_url`.
+  # No floor, no acceptance read: privacy has none until a material change is
+  # announced (`Engram.Legal.required_floor/2`).
+  defp meets_floor?(user, document) do
+    case VersionCache.required_floor(document) do
+      nil -> true
+      floor -> accepted_satisfies?(accepted_version(user, document), floor)
+    end
+  end
 
-  The same list feeds the web banner, the plugin, MCP tool results and the
-  notice email (`Engram.Workers.LegalNoticeEmail`). Once the effective date
-  arrives the notice drops: a material change then fails `terms_ok` and the
-  wizard asks for acceptance; a notice-only one simply applies. Empty on
-  self-host. Cached reads only, so per-request callers are cheap.
+  @doc """
+  Announced legal changes `user` has not accepted: at most one per document
+  (ToS first), as `document/version/effective_date/material/changelog/url/
+  accept_url`. Announced means it has an effective_date; a version without one
+  is a silent wording fix and never hides an announced change behind it.
+
+  A notice-only change is listed until its effective date, then simply
+  applies. A material change stays listed after its date too, because that is
+  when `terms_ok` fails and the agreement page must show what changed. When
+  several are pending, the material one wins, then the earliest date.
+
+  The same list feeds the web banner, the agreement page, the plugin and MCP
+  tool results. Empty on self-host. Cached reads only; the acceptance read runs
+  only when an announced change exists.
   """
   @spec legal_notices(map()) :: [map()]
   def legal_notices(user) do
@@ -433,16 +445,24 @@ defmodule Engram.Onboarding do
   end
 
   defp pending_notice(user, document, today) do
-    # The acceptance read comes last: outside a notice window it never runs.
-    with current when is_binary(current) <- VersionCache.current_version(document),
-         %{effective_date: %Date{} = date} = row <- VersionCache.get(document, current),
-         true <- Date.after?(date, today),
-         false <- accepted?(user, document, current) do
-      [notice_map(row)]
-    else
-      _ -> []
+    case Enum.filter(VersionCache.versions(document), &open?(&1, today)) do
+      [] ->
+        []
+
+      open ->
+        accepted = accepted_version(user, document)
+
+        open
+        |> Enum.filter(&(is_nil(accepted) or &1.version > accepted))
+        |> Enum.sort_by(&{not &1.material, Date.to_iso8601(&1.effective_date)})
+        |> Enum.take(1)
+        |> Enum.map(&notice_map/1)
     end
   end
+
+  defp open?(%{effective_date: nil}, _today), do: false
+  defp open?(%{material: true}, _today), do: true
+  defp open?(%{effective_date: date}, today), do: Date.after?(date, today)
 
   @doc "Whether `user` has accepted `version` of `document` (or a later one)."
   @spec accepted?(map(), String.t(), String.t()) :: boolean()

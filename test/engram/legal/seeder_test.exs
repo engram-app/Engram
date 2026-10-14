@@ -11,8 +11,9 @@ defmodule Engram.Legal.SeederTest do
     assert Legal.hash_for("terms_of_service", "2026-05-19") ==
              "372e3b55589eaa8e77311beefacc3818f0691cc378a06f0a12f243323769691c"
 
-    # 2026-10-12 (identified analytics) is notice-only, so the floor stays put.
-    assert Legal.required_floor("privacy_policy") == "2026-06-20"
+    # No privacy floor: 2026-06-20 is the baseline (no effective date, never
+    # gates) and 2026-10-12 (identified analytics) is notice-only.
+    assert Legal.required_floor("privacy_policy") == nil
 
     assert Legal.hash_for("privacy_policy", "2026-10-12") ==
              "f4d33b4d28e376d0180fac57825ae9e37b79d3458c4123f22a41afd8002ce067"
