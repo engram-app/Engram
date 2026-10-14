@@ -139,6 +139,8 @@ defmodule EngramWeb.WellKnownControllerTest do
       body = json_response(conn, 200)
 
       assert "mcp" in body["scopes_supported"]
+      # Refresh tokens are always issued, so say so (#1974).
+      assert "offline_access" in body["scopes_supported"]
     end
 
     test "advertises every auth method some registration path accepts", %{

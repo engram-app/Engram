@@ -29,6 +29,7 @@ defmodule Engram.OAuth do
   # drift into three different strengths.
   @token_bytes 32
   @valid_scopes ~w(mcp)
+  @max_requested_scopes 16
 
   # ── Clients (Phase 2) ────────────────────────────────────────────
 
@@ -371,8 +372,9 @@ defmodule Engram.OAuth do
          {:ok, redirect_uri} <- match_redirect_uri(client, params["redirect_uri"]),
          :ok <- check_response_type(params, redirect_uri),
          :ok <- check_pkce(params, redirect_uri),
-         :ok <- check_state_length(params),
-         :ok <- check_scope(params, redirect_uri) do
+         :ok <- check_state_length(params) do
+      {granted, requested} = narrow_scope(params["scope"])
+
       {:ok,
        %{
          client: client,
@@ -381,7 +383,8 @@ defmodule Engram.OAuth do
          redirect_uri: redirect_uri,
          code_challenge: params["code_challenge"],
          code_challenge_method: params["code_challenge_method"] || "S256",
-         scope: params["scope"] || "mcp",
+         scope: granted,
+         scope_requested: requested,
          state: params["state"]
        }}
     end
@@ -1056,20 +1059,28 @@ defmodule Engram.OAuth do
   defp check_pkce(params, redirect_uri),
     do: {:redirect_error, redirect_uri, "invalid_request", params["state"]}
 
-  defp check_scope(%{"scope" => nil}, _), do: :ok
-  defp check_scope(%{"scope" => ""}, _), do: :ok
+  # RFC 6749 §3.3: the server may issue a narrower scope than requested, and
+  # says so in the token response. Unknown scopes are dropped, never refused
+  # (#1974): connectors add `offline_access`, `openid` or `profile` by habit,
+  # and an `invalid_scope` redirect killed the connection with a message the
+  # user never saw. `offline_access` is meaningful but needs no grant scope:
+  # every grant gets a refresh token. Nothing requested that we know → `mcp`.
+  #
+  # Returns `{granted, requested}`; `requested` is only for analytics, capped so
+  # a hostile scope string stays bounded.
+  defp narrow_scope(scope) when is_binary(scope) do
+    requested = scope |> String.split(" ", trim: true) |> Enum.take(@max_requested_scopes)
 
-  defp check_scope(%{"scope" => scope} = params, redirect_uri) when is_binary(scope) do
-    requested = String.split(scope, " ", trim: true)
+    granted =
+      case Enum.filter(requested, &(&1 in @valid_scopes)) do
+        [] -> "mcp"
+        known -> known |> Enum.uniq() |> Enum.join(" ")
+      end
 
-    if Enum.all?(requested, &(&1 in @valid_scopes)) do
-      :ok
-    else
-      {:redirect_error, redirect_uri, "invalid_scope", params["state"]}
-    end
+    {granted, requested}
   end
 
-  defp check_scope(_params, _redirect_uri), do: :ok
+  defp narrow_scope(_scope), do: {"mcp", []}
 
   # Resolves a vault selection to the id list stored on the grant.
   #
