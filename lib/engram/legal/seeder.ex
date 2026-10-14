@@ -23,7 +23,8 @@ defmodule Engram.Legal.Seeder do
   # Users are told automatically (`Engram.Workers.LegalNoticeDispatch`): a
   # version with a FUTURE effective_date emails everyone and shows the in-app
   # notice until that date. `effective_date: nil` means effective at once and
-  # silent, which is for wording fixes only. A material change after a
+  # silent, which is for wording fixes only. Changing an announced version's
+  # effective_date or material sends the notice again. A material change after a
   # document's first version needs an effective_date 30+ days after its
   # version date (ToS §13); `notice_violations/0` enforces it in CI.
   @version_meta %{
@@ -65,13 +66,43 @@ defmodule Engram.Legal.Seeder do
         changelog: meta.changelog
       })
       |> Repo.insert!(
-        on_conflict: {:replace, [:content_hash, :material, :effective_date, :changelog]},
+        on_conflict: upsert(),
         conflict_target: [:document, :version],
         skip_tenant_check: true
       )
     end
 
     :ok
+  end
+
+  # Replace the meta. The sent stamps survive a reboot, but a changed date or
+  # materiality clears them: the email already sent said the wrong thing, so
+  # `LegalNoticeDispatch` tells users again. SET reads the OLD row's columns.
+  defp upsert do
+    from(v in TermsVersion,
+      update: [
+        set: [
+          content_hash: fragment("EXCLUDED.content_hash"),
+          material: fragment("EXCLUDED.material"),
+          effective_date: fragment("EXCLUDED.effective_date"),
+          changelog: fragment("EXCLUDED.changelog"),
+          notified_at:
+            fragment(
+              "CASE WHEN (?, ?) IS DISTINCT FROM (EXCLUDED.effective_date, EXCLUDED.material) THEN NULL ELSE ? END",
+              v.effective_date,
+              v.material,
+              v.notified_at
+            ),
+          reminded_at:
+            fragment(
+              "CASE WHEN (?, ?) IS DISTINCT FROM (EXCLUDED.effective_date, EXCLUDED.material) THEN NULL ELSE ? END",
+              v.effective_date,
+              v.material,
+              v.reminded_at
+            )
+        ]
+      ]
+    )
   end
 
   @notice_days 30

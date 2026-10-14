@@ -1,5 +1,6 @@
 defmodule Engram.Legal.SeederTest do
   use Engram.DataCase, async: true
+  import Ecto.Query
   alias Engram.Legal
   alias Engram.Legal.Seeder
 
@@ -27,6 +28,36 @@ defmodule Engram.Legal.SeederTest do
     assert :ok = Seeder.seed()
     rows = Engram.Repo.all(Engram.Legal.TermsVersion, skip_tenant_check: true)
     assert length(rows) == 3
+  end
+
+  # A date or materiality change after the email went out told users the
+  # wrong thing ("no action needed", or the old date), so they are told again.
+  test "seed/0 clears the sent stamps when effective_date or material changed" do
+    :ok = Seeder.seed()
+    sent = ~U[2026-10-01 12:00:00.000000Z]
+    rows = from(v in Legal.TermsVersion, where: v.document == "privacy_policy")
+
+    stamp = fn version, extra ->
+      rows
+      |> where(version: ^version)
+      |> Repo.update_all([set: [notified_at: sent, reminded_at: sent] ++ extra],
+        skip_tenant_check: true
+      )
+    end
+
+    # 2026-10-12 as announced with an older date; 2026-06-20 unchanged.
+    stamp.("2026-10-12", effective_date: ~D[2026-11-01])
+    stamp.("2026-06-20", [])
+
+    :ok = Seeder.seed()
+
+    stamps =
+      Repo.all(select(rows, [v], {v.version, v.notified_at, v.reminded_at}),
+        skip_tenant_check: true
+      )
+
+    assert {"2026-10-12", nil, nil} in stamps
+    assert {"2026-06-20", sent, sent} in stamps
   end
 
   test "verify/0 raises when a DB row's hash diverges from the manifest" do
