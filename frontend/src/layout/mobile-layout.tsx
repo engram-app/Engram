@@ -64,7 +64,7 @@ export default function MobileLayout() {
 	}, [pathname]);
 
 	return (
-		<section className="relative flex h-dvh flex-col bg-background text-foreground [--mobile-header:3rem]">
+		<section className="relative flex h-dvh flex-col bg-background text-foreground [--mobile-header:3.5rem]">
 			{/* Obsidian-style: no title bar, just the corner buttons floating over
 			    the page, so text scrolls past behind them. The icons sit on small
 			    grey chips (the page's own actions share one), so passing text never
@@ -72,7 +72,7 @@ export default function MobileLayout() {
 			    note menu opens it (MobileHeaderSlot.openTools).
 			    --mobile-header is its height: main pads by it, and a note's
 			    surface bleeds up under it (DocumentSurface `underHeader`). */}
-			<header className="absolute inset-x-0 top-0 z-20 flex h-(--mobile-header) items-center justify-between px-2 [&>button]:size-11 [&>button]:bg-secondary/90">
+			<header className="absolute inset-x-0 top-0 z-20 flex h-(--mobile-header) items-end justify-between px-2 [&>button]:size-11 [&>button]:bg-secondary/90">
 				<Sheet open={leftOpen} onOpenChange={setLeftOpen}>
 					<SheetTrigger asChild>
 						<Button variant="ghost" size="icon-lg" aria-label={t("Open files")}>
