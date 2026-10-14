@@ -8,6 +8,7 @@ import {
 	WidgetType,
 } from "@codemirror/view";
 import type { Translate } from "@/i18n/translate";
+import { onceVisible } from "@/lib/once-visible";
 import { nextMermaidId, renderMermaid } from "../mermaid-render";
 import { selectionTouches } from "./decoration-utils";
 import { translator } from "./translator";
@@ -41,6 +42,23 @@ class MermaidWidget extends WidgetType {
 		// height — every line below the diagram then maps to the wrong screen
 		// position, which shows up as clicks landing on the neighbouring line.
 		const measure = () => view.requestMeasure();
+		// Drawn when scrolled near, not on open: a diagram further down the note
+		// cost ~0.6s of main thread under mobile throttling while the editor was
+		// still starting. Cancelled in destroy() if the widget goes first.
+		this.cancel.set(
+			el,
+			onceVisible(el, () => this.draw(el, measure)),
+		);
+		return el;
+	}
+
+	private readonly cancel = new WeakMap<HTMLElement, () => void>();
+
+	destroy(dom: HTMLElement) {
+		this.cancel.get(dom)?.();
+	}
+
+	private draw(el: HTMLElement, measure: () => void) {
 		renderMermaid(nextMermaidId(), this.code, this.dark)
 			.then((svg) => {
 				el.innerHTML = svg;
@@ -63,7 +81,6 @@ class MermaidWidget extends WidgetType {
 				el.replaceChildren(before ?? "", detail, after);
 				measure();
 			});
-		return el;
 	}
 
 	// The widget is inert content, not a control; let clicks through so the caret

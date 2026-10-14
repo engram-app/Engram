@@ -30,3 +30,27 @@ if (typeof HTMLElement !== "undefined") {
 		get: () => 800,
 	});
 }
+
+// happy-dom has no layout, so its IntersectionObserver never reports anything
+// and work deferred until visible (lib/once-visible.ts) would never run. Treat
+// every observed element as on screen, consistent with the faked sizes above.
+class OnScreenObserver implements IntersectionObserver {
+	readonly root = null;
+	readonly rootMargin = "";
+	readonly scrollMargin = "";
+	readonly thresholds = [];
+	private readonly callback: IntersectionObserverCallback;
+	constructor(callback: IntersectionObserverCallback) {
+		this.callback = callback;
+	}
+	observe(target: Element) {
+		const entry = { isIntersecting: true, target } as IntersectionObserverEntry;
+		this.callback([entry], this);
+	}
+	unobserve() {}
+	disconnect() {}
+	takeRecords() {
+		return [];
+	}
+}
+globalThis.IntersectionObserver = OnScreenObserver;

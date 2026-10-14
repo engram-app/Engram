@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Trans } from "@/i18n/trans";
+import { onceVisible } from "@/lib/once-visible";
 import { useTheme } from "../theme/theme-provider";
 import { nextMermaidId, renderMermaid } from "./mermaid-render";
 
@@ -11,23 +12,31 @@ export default function MermaidBlock({ code }: { code: string }) {
 
 	useEffect(() => {
 		let cancelled = false;
+		const target = ref.current;
+		if (!target) {
+			return;
+		}
 		// Keyed on `resolved`: switching light/dark has to re-draw, because the
-		// palette is baked into the SVG rather than applied as CSS.
-		renderMermaid(id, code, resolved === "dark")
-			.then((svg) => {
-				if (cancelled || !ref.current) {
-					return;
-				}
-				ref.current.innerHTML = svg;
-				setError(null);
-			})
-			.catch((err) => {
-				if (!cancelled) {
-					setError(err?.message ?? String(err));
-				}
-			});
+		// palette is baked into the SVG rather than applied as CSS. Drawn when
+		// scrolled near, not on open (see lib/once-visible.ts).
+		const draw = () =>
+			renderMermaid(id, code, resolved === "dark")
+				.then((svg) => {
+					if (cancelled || !ref.current) {
+						return;
+					}
+					ref.current.innerHTML = svg;
+					setError(null);
+				})
+				.catch((err) => {
+					if (!cancelled) {
+						setError(err?.message ?? String(err));
+					}
+				});
+		const stop = onceVisible(target, draw);
 		return () => {
 			cancelled = true;
+			stop();
 		};
 	}, [code, id, resolved]);
 
