@@ -53,7 +53,7 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
   end
 
   @doc "The hard budget for one `fetch_target/1`, every attempt included, in ms."
-  @spec budget_ms() :: pos_integer()
+  @spec budget_ms() :: unquote(@budget_ms)
   def budget_ms, do: @budget_ms
 
   @typedoc "A validated, address-pinned fetch target."

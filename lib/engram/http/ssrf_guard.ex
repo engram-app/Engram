@@ -58,7 +58,7 @@ defmodule Engram.Http.SsrfGuard do
   @dns_timeout_ms 1_000
 
   @doc "The DNS deadline `resolve/2` enforces, in ms."
-  @spec dns_timeout_ms() :: pos_integer()
+  @spec dns_timeout_ms() :: unquote(@dns_timeout_ms)
   def dns_timeout_ms, do: @dns_timeout_ms
   # Split by what it takes to decide them: the shape rules need only the URL,
   # the resolution rules need a lookup. `validate_url/1` can only ever return

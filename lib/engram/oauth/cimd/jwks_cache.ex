@@ -349,8 +349,6 @@ defmodule Engram.OAuth.Cimd.JwksCache do
 
   # NOT laundered into :jwks_unavailable. A throttle is OUR side of the wire
   # and clears on its own (same split as `Engram.OAuth.cimd_error/1`).
-  defp rate_limit(_jwks_uri, nil), do: :ok
-
   defp rate_limit(jwks_uri, {prefix, limit}) do
     case RateLimiter.hit(prefix <> Cimd.host_of(jwks_uri), @window_ms, limit, :cimd_fetch) do
       {:allow, _} -> :ok

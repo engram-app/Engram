@@ -118,6 +118,8 @@ defmodule Engram.OAuth.Cimd do
           | :store_conflict
           | :fetch_failed
           | {:http_status, pos_integer()}
+          | {:transport_error, Engram.OAuth.Cimd.HttpFetcher.phase(), atom()}
+          | :budget_exhausted
           | SsrfGuard.reason()
 
   @doc """
