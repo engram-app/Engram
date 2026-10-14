@@ -88,8 +88,8 @@ defmodule EngramWeb.ConnectionsController do
     summary: "Create a personal access token",
     tags: ["Connections"],
     description:
-      "The raw `key` is returned once. Any plan can create a key: it works with MCP on every " <>
-        "plan, and the REST API requires Pro.",
+      "The raw `key` is returned once. Any plan can create a key, and it works on every route " <>
+        "(REST, MCP, sync sockets) on every plan, rate limited per user (`api_rps_cap`).",
     request_body: {"PAT name", "application/json", Schemas.CreatePatRequest, required: true},
     responses: [
       created: {"Created (raw key)", "application/json", Schemas.ApiKeyCreated},

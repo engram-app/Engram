@@ -499,11 +499,10 @@ defmodule EngramWeb.Router do
   end
 
   # Onboarding scope — same as the user-scoped pipeline above, but WITHOUT
-  # `RequireApiRpsBudget`. Free tier defaults `api_rps_cap=0` (Pricing v2 §G),
-  # which would 429 the very first onboarding write for any Free user
-  # authenticating with an API key — they could never complete onboarding.
-  # Onboarding endpoints are bounded by the Auth-pipe rate limit; per-plan
-  # RPS gating only applies once the user is past onboarding.
+  # `RequireApiRpsBudget`. Every tier's `api_rps_cap` is 30/s (#1974), but an
+  # override of 0 is the per-user kill switch, and onboarding must still
+  # complete for a user so switched off. Onboarding endpoints are bounded by
+  # the Auth-pipe rate limit instead.
   scope "/api", EngramWeb do
     pipe_through [
       :api,

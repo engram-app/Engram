@@ -3762,7 +3762,7 @@
     "/api/connections/pat": {
       "post": {
         "callbacks": {},
-        "description": "The raw `key` is returned once. Any plan can create a key: it works with MCP on every plan, and the REST API requires Pro.",
+        "description": "The raw `key` is returned once. Any plan can create a key, and it works on every route (REST, MCP, sync sockets) on every plan, rate limited per user (`api_rps_cap`).",
         "operationId": "connections-create-pat",
         "parameters": [],
         "requestBody": {
