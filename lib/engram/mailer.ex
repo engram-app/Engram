@@ -156,8 +156,8 @@ defmodule Engram.Mailer do
   "reminder" before a material change takes effect). `version` is the
   `Engram.Legal.TermsVersion` row; its changelog is the "what changed" line,
   translated like every other string (the seeder's changelogs are scanned).
-  Voice per the workspace `docs/context/customer-email-voice.md`: first person,
-  plain branded subject. Points at privacy@ because hello@ is not routed. The
+  Voice per the workspace `docs/context/customer-email-voice.md`: "we", signed
+  by the Engram team, plain branded subject. Points at privacy@ because hello@ is not routed. The
   linked documents themselves are English only.
   """
   def send_legal_notice(%User{email: email} = user, version, kind)
@@ -184,8 +184,8 @@ defmodule Engram.Mailer do
     <mj-text>#{legal_text(l, doc, kind, date: date)}</mj-text>
     <mj-text>#{t(l, "Summary of the changes: {changelog}", changelog: I18n.t(l, version.changelog || ""))}</mj-text>
     #{action}
-    <mj-text>#{t(l, "If you have any questions or concerns, write to me at {email}.", email: "privacy@engram.page")}</mj-text>
-    <mj-text>Todd</mj-text>
+    <mj-text>#{t(l, "If you have any questions or concerns, write to us at {email}.", email: "privacy@engram.page")}</mj-text>
+    <mj-text>#{t(l, "The Engram team")}</mj-text>
     """
 
     render_and_deliver(email, legal_subject(l, doc, kind), body, l)
@@ -211,7 +211,7 @@ defmodule Engram.Mailer do
     do:
       t(
         l,
-        "Thank you for using Engram. I wanted to let you know that I updated the Privacy Policy for Engram. The new version takes effect on {date}.",
+        "Thank you for using Engram. We have updated our Privacy Policy. The new version takes effect on {date}.",
         vars
       )
 
@@ -219,7 +219,7 @@ defmodule Engram.Mailer do
     do:
       t(
         l,
-        "Thank you for using Engram. I wanted to let you know that I updated the Terms of Service for Engram. The new version takes effect on {date}.",
+        "Thank you for using Engram. We have updated our Terms of Service. The new version takes effect on {date}.",
         vars
       )
 
@@ -227,7 +227,7 @@ defmodule Engram.Mailer do
     do:
       t(
         l,
-        "A quick reminder that the updated Privacy Policy for Engram takes effect on {date}.",
+        "A quick reminder that our updated Privacy Policy takes effect on {date}.",
         vars
       )
 
@@ -235,7 +235,7 @@ defmodule Engram.Mailer do
     do:
       t(
         l,
-        "A quick reminder that the updated Terms of Service for Engram take effect on {date}.",
+        "A quick reminder that our updated Terms of Service take effect on {date}.",
         vars
       )
 

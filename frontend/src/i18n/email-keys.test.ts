@@ -40,6 +40,15 @@ const dir = join(backend, "priv", "i18n", "email");
 const read = (file: string): unknown => JSON.parse(readFileSync(join(dir, file), "utf8"));
 const states = read("state.json") as Record<string, LocaleState>;
 
+// House voice: emails speak as "we", never "I" (one person reads as a tiny
+// company). See the workspace docs/context/customer-email-voice.md.
+describe("email voice", () => {
+	it("no email string speaks in the first person singular", () => {
+		const firstPerson = /\b(?:I|I'm|I've|I'd|I'll|me|my|mine)\b/u;
+		expect(entries.map((e) => e.key).filter((k) => firstPerson.test(k))).toEqual([]);
+	});
+});
+
 describe("committed email catalogs", () => {
 	it("finds the email strings", () => {
 		expect(entries.length).toBeGreaterThan(20);
