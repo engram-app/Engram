@@ -81,10 +81,15 @@ function preloadable<P extends object>(load: () => Promise<{ default: ComponentT
 const vaultItemPage = preloadable(() => import("./vault-item-page"));
 const notePage = preloadable(() => import("./note-page"));
 const noteEditor = preloadable(() => import("./note-editor"));
+// Reading mode's renderer (~440 KB with its markdown pipeline). Lazy so an
+// editing session never downloads or parses it, and deliberately NOT in
+// preloadNoteChunks: warming it would spend the same main-thread time.
+const noteView = preloadable(() => import("./note-view"));
 
 export const VaultItemPage = vaultItemPage.Component;
 export const NotePage = notePage.Component;
 export const NoteEditor = noteEditor.Component;
+export const NoteView = noteView.Component;
 
 /**
  * Fetch and resolve the note-viewing chunks ahead of the first open.

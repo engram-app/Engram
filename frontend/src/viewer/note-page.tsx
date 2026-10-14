@@ -54,11 +54,10 @@ import { KeyboardBar } from "./editor/keyboard-bar";
 import { RawFrontmatterEditor } from "./editor/raw-frontmatter-editor";
 import { InlineTitle } from "./inline-title";
 import LoadingPane from "./loading-pane";
-import { NoteEditor } from "./note-chunks";
+import { NoteEditor, NoteView } from "./note-chunks";
 import { NoteMenu } from "./note-menu";
 import NoteNotFoundPane from "./note-not-found-pane";
 import NoteToc from "./note-toc";
-import NoteView from "./note-view";
 import { PropertiesWidget } from "./properties-widget";
 import type { ActionId, ViewMode } from "./tree-actions/action-list";
 import { DeleteConfirm } from "./tree-actions/delete-confirm";
@@ -785,13 +784,15 @@ export default function NotePage() {
 						// the title sits the same distance above the body in reading mode
 						// as it does in the editor.
 						<div className="px-5 pt-5">
-							<NoteView
-								content={liveContent}
-								tags={note.tags}
-								links={note.links}
-								manifestNotes={manifest?.notes}
-								onCreateWikiTarget={createWikiTarget}
-							/>
+							<Suspense fallback={<p className="text-muted-foreground">{t("Loading…")}</p>}>
+								<NoteView
+									content={liveContent}
+									tags={note.tags}
+									links={note.links}
+									manifestNotes={manifest?.notes}
+									onCreateWikiTarget={createWikiTarget}
+								/>
+							</Suspense>
 						</div>
 					) : (
 						<Suspense

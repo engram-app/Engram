@@ -711,7 +711,8 @@ describe("NotePage (CRDT)", () => {
 		const { rerender } = render(pageTree());
 		await openMenu();
 		fireEvent.click(screen.getByRole("menuitem", { name: "Reading" }));
-		expect(screen.getByTestId("note-view")).toHaveTextContent("");
+		// NoteView is a lazy chunk now, so it mounts a tick after the mode switch.
+		expect(await screen.findByTestId("note-view")).toHaveTextContent("");
 
 		// REST lands. Same note id, still no handle.
 		useNoteMock.mockReturnValue({
