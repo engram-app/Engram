@@ -5,6 +5,12 @@
 
 let mermaidPromise: Promise<typeof import("mermaid").default> | null = null;
 
+// Mermaid 12 defaults `layout` to "elk", which downloads a 1.4 MB layout engine
+// for every diagram. Obsidian draws with dagre, Mermaid's classic layout, so
+// diagrams look the same in both. A diagram can still opt into ELK through its
+// own config; mermaid then loads it on demand.
+const BASE_CONFIG = { startOnLoad: false, securityLevel: "strict", layout: "dagre" } as const;
+
 // Theme is NOT set here. Mermaid bakes the palette into the SVG at render time,
 // so a module-level `theme: "default"` drew dark-on-transparent diagrams that
 // were unreadable in dark mode. `initialize` is idempotent and merges, so
@@ -13,7 +19,7 @@ function loadMermaid() {
 	if (!mermaidPromise) {
 		mermaidPromise = import("mermaid")
 			.then((m) => {
-				m.default.initialize({ startOnLoad: false, securityLevel: "strict" });
+				m.default.initialize(BASE_CONFIG);
 				return m.default;
 			})
 			.catch((err) => {
@@ -52,11 +58,7 @@ export function nextMermaidId(): string {
 export function renderMermaid(id: string, code: string, dark: boolean): Promise<string> {
 	const result = queue.then(async () => {
 		const mermaid = await loadMermaid();
-		mermaid.initialize({
-			startOnLoad: false,
-			securityLevel: "strict",
-			theme: dark ? "dark" : "default",
-		});
+		mermaid.initialize({ ...BASE_CONFIG, theme: dark ? "dark" : "default" });
 		const { svg } = await mermaid.render(id, code);
 		return svg;
 	});
