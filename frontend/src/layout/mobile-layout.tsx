@@ -12,6 +12,7 @@ import {
 	SheetTrigger,
 } from "@/components/ui/sheet";
 import { useT } from "@/i18n/locale-provider";
+import { LegalNoticeBanner } from "../legal/legal-notice-banner";
 import FolderTree from "../viewer/folder-tree";
 import FolderActions from "./folder-actions";
 import { FolderTreeProvider } from "./folder-tree-context";
@@ -148,6 +149,7 @@ export default function MobileLayout() {
 					</Sheet>
 				</nav>
 			</header>
+			<LegalNoticeBanner />
 			<main className="flex-1 overflow-y-auto bg-muted/40 text-foreground">
 				<Outlet />
 			</main>

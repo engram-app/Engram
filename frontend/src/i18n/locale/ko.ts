@@ -694,6 +694,12 @@ export default {
 	"A vault holds its own notes and folders, separate from your other vaults.":
 		"보관함은 자체 노트와 폴더를 포함하며, 다른 보관함과는 분리되어 있습니다.",
 	"Create vault": "보관함 만들기",
+	"Terms of Service": "서비스 약관",
+	"Privacy Policy": "개인정보 처리방침",
+	"{document} changes on {date}.": "{document}에서 {date} 변경 사항이 있습니다.",
+	"Read it": "확인하기",
+	"Review and accept": "검토 및 동의",
+	"Got it": "알겠습니다",
 	day: "일",
 	week: "주",
 	month: "월",
@@ -782,6 +788,8 @@ export default {
 	"What will you use Engram for?": "Engram을 어디에 사용하시겠습니까?",
 	"Review the Terms": "이용 약관 확인",
 	"privacy notice": "개인정보 처리방침",
+	"What changed": "변경 내역",
+	"{document}, effective {date}:": "{document}, 적용일자 {date}:",
 	"The current agreement isn’t available right now.": "현재 약관은 이용 불가합니다.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"최신 약관을 표시할 수 없으므로, 읽을 수 없는 내용에 동의하도록 안내하는 대신 가입을 잠시 중단합니다. 잠시 후 다시 시도해주세요.",

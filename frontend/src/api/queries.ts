@@ -1282,6 +1282,10 @@ export interface OnboardingStatus {
 	has_vault?: boolean;
 	current_tos_version?: string;
 	current_privacy_version?: string;
+	// Unaccepted legal changes whose effective date is still ahead. Drives the
+	// app banner and the "what changed" list on /onboard/agreement. Empty on
+	// self-host.
+	legal_notices?: LegalNotice[];
 	next_step: OnboardingStep | "done";
 	// The authoritative runtime verdict: may this user reach vault data? Ask
 	// this, never `next_step === "done"`. The two deliberately disagree for
@@ -1299,6 +1303,18 @@ export interface OnboardingStatus {
 	actions: OnboardingAction[];
 	// Live vault count for checklist gating.
 	vault_count: number;
+}
+
+export interface LegalNotice {
+	document: "terms_of_service" | "privacy_policy";
+	version: string;
+	// ISO date (YYYY-MM-DD), always in the future while the notice exists.
+	effective_date: string;
+	// Material: must be accepted by the effective date. Otherwise notice-only.
+	material: boolean;
+	changelog: string | null;
+	url: string;
+	accept_url: string;
 }
 
 export type OnboardingStep = "agreement" | "billing" | "tools" | "about" | "vault";

@@ -8,57 +8,27 @@ import { Trans } from "@/i18n/trans";
 import AuthPanel from "@/layout/auth-panel";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { track } from "../analytics/track";
-import { useAcceptTerms, useOnboardingStatus } from "../api/queries";
+import { useOnboardingStatus } from "../api/queries";
 import { LegalDoc } from "../legal/legal-doc";
-import { loadVersion, sha256Hex } from "../legal/load";
+import { formatEffectiveDate, useDocumentName } from "../legal/legal-notice-banner";
+import { useAcceptCurrentAgreements } from "../legal/use-accept-current";
 
 const PRIVACY_URL = "https://engram.page/privacy";
 
-// loadVersion throws if the backend reports a version this build hasn't vendored
-// (e.g. backend deployed ahead of an app sync). Don't crash the route over it:
-// log loudly and degrade to an error panel with Continue disabled, so a user can
-// never accept text we can't display, but onboarding doesn't white-screen.
-function tryLoadVersion(doc: "terms" | "privacy", version: string | undefined): string | undefined {
-	if (!version) {
-		return;
-	}
-	try {
-		return loadVersion(doc, version);
-	} catch (err) {
-		console.error(err);
-	}
-}
-
 export default function AgreementPage() {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
+	const name = useDocumentName();
 	const [agreed, setAgreed] = useState(false);
 	const navigate = useNavigate();
 	const { data } = useOnboardingStatus();
-	const { mutateAsync, isPending } = useAcceptTerms();
+	const { accept, isPending, ready, unavailable, tosText } = useAcceptCurrentAgreements();
 	const [mountedAt] = useState(() => Date.now());
-
-	const tosV = data?.current_tos_version;
-	const privV = data?.current_privacy_version;
-
-	const tosText = tryLoadVersion("terms", tosV);
-	const privText = tryLoadVersion("privacy", privV);
-
-	// Backend named a version whose text isn't bundled in this build — a skew we
-	// must not let the user accept past.
-	const unavailable = Boolean((tosV && !tosText) || (privV && !privText));
-	const ready = Boolean(tosV && privV && tosText && privText);
+	const notices = data?.legal_notices ?? [];
 
 	async function submit() {
-		if (!(tosV && privV && tosText && privText)) {
+		if (!(await accept())) {
 			return;
 		}
-		const [tos_hash, privacy_hash] = await Promise.all([sha256Hex(tosText), sha256Hex(privText)]);
-		await mutateAsync({
-			tos_version: tosV,
-			tos_hash,
-			privacy_version: privV,
-			privacy_hash,
-		});
 		track("onboarding_step_completed", {
 			step: "agreement",
 			duration_ms: Date.now() - mountedAt,
@@ -86,6 +56,37 @@ export default function AgreementPage() {
 					}}
 				/>
 			</p>
+			{notices.length > 0 ? (
+				<section
+					aria-labelledby="what-changed"
+					className="rounded-lg border border-border p-4 text-sm"
+				>
+					<h2 id="what-changed" className="font-medium text-foreground">
+						{t("What changed")}
+					</h2>
+					<ul className="mt-2 flex flex-col gap-2 text-muted-foreground">
+						{notices.map((n) => (
+							<li key={n.document}>
+								<span className="font-medium text-foreground">
+									{t("{document}, effective {date}:", {
+										document: name(n),
+										date: formatEffectiveDate(n.effective_date, renderedLocale),
+									})}
+								</span>{" "}
+								{n.changelog}{" "}
+								<a
+									href={n.url}
+									target="_blank"
+									rel="noreferrer noopener"
+									className="font-medium text-primary underline-offset-4 hover:underline"
+								>
+									{t("Read it")}
+								</a>
+							</li>
+						))}
+					</ul>
+				</section>
+			) : null}
 			{unavailable ? (
 				<div role="alert" className={destructiveAlert}>
 					<p className="font-medium text-foreground">
