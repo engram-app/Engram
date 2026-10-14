@@ -234,6 +234,17 @@ describe("task marker reveal", () => {
 		expect(line(1)?.querySelector(".cm-atomic-task-checkbox")).not.toBeNull();
 	});
 
+	// lezer tags TaskMarker `atom`, which Atomic paints in its accent blue.
+	// Revealed, `[ ]` should read as one piece with the `-` before it.
+	test("paints the revealed `[ ]` like the `-` beside it", () => {
+		mountTasks(3);
+		const spans = [...(line(0)?.querySelectorAll("span") ?? [])];
+		const dash = spans.find((s) => s.textContent === "-");
+		const box = spans.find((s) => s.textContent === "[ ]");
+		expect(box).toBeDefined();
+		expect(getComputedStyle(box as Element).color).toBe(getComputedStyle(dash as Element).color);
+	});
+
 	test("ordered tasks reveal too", () => {
 		mountTasks(14);
 		expect(line(1)?.querySelector(".cm-atomic-task-checkbox")).toBeNull();
