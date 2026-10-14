@@ -93,7 +93,7 @@ defmodule EngramWeb.OAuthTokenController do
       error_code: error,
       grant_type: Atom.to_string(grant_type),
       client_id: uuid_or_nil(client_id),
-      user_agent: user_agent(conn)
+      user_agent: RequestMeta.log_user_agent(conn)
     )
 
     emit(grant_type, :rejected, error, reason)
@@ -225,14 +225,6 @@ defmodule EngramWeb.OAuthTokenController do
   end
 
   defp uuid_or_nil(_id), do: nil
-
-  @user_agent_log_limit 200
-  defp user_agent(conn) do
-    case RequestMeta.get_user_agent(conn) do
-      nil -> nil
-      ua -> String.slice(ua, 0, @user_agent_log_limit)
-    end
-  end
 
   # RFC 7523 §3 permits either the token endpoint URL or the issuer identifier
   # in `aud`. Both are derived from the host the client actually dialed, so a

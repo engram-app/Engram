@@ -21,4 +21,20 @@ defmodule EngramWeb.RequestMeta do
       _ -> nil
     end
   end
+
+  # The user agent is attacker-controlled, RedactFilter neither scrubs nor
+  # bounds `:user_agent`, and prod serializes all metadata: with Bandit's
+  # 10_000-byte header cap, an unbounded one is ~10 KB of arbitrary text per
+  # request in a long-retention aggregator. 200 chars holds every real UA (the
+  # Obsidian one is ~120) and nothing else.
+  @user_agent_log_limit 200
+
+  @doc "The user agent, bounded for a log line or metadata. Nil when absent."
+  @spec log_user_agent(Plug.Conn.t()) :: String.t() | nil
+  def log_user_agent(conn) do
+    case get_user_agent(conn) do
+      nil -> nil
+      ua -> String.slice(ua, 0, @user_agent_log_limit)
+    end
+  end
 end
