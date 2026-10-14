@@ -54,7 +54,7 @@ defmodule Engram.Analytics.McpClient do
   @doc """
   The props every OAuth funnel event carries about its client.
   """
-  @spec client_props(Client.t() | nil) :: map()
+  @spec client_props(Client.t() | nil) :: %{client: String.t(), registration: String.t() | nil}
   def client_props(client) do
     {family, registration} = of_client(client)
     %{client: family, registration: registration}
