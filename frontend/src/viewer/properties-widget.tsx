@@ -1,5 +1,5 @@
 import { ChevronRight, Plus } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type * as Y from "yjs";
 import { HelpTip } from "@/components/help-tip";
 import { Button } from "@/components/ui/button";
@@ -201,9 +201,46 @@ function PropertiesHelp() {
 	);
 }
 
+/**
+ * The note opens on an empty doc and the server state lands later in one
+ * update, which CodeMirror paints synchronously. A useState refresh renders a
+ * task later, so the browser could paint the body and then push it down under
+ * the block (a layout shift). useSyncExternalStore commits before that paint.
+ */
+function useRows(doc: Y.Doc): PropertyRow[] {
+	const cache = useRef<{ doc: Y.Doc; rows: PropertyRow[] } | null>(null);
+	const subscribe = useCallback(
+		(onChange: () => void) => {
+			const refresh = () => {
+				cache.current = { doc, rows: readRows(doc) };
+				onChange();
+			};
+			const { values, order, types } = frontmatterMaps(doc);
+			values.observeDeep(refresh);
+			order.observe(refresh);
+			types.observe(refresh);
+			// Catches an edit that landed between render and subscribe.
+			refresh();
+			return () => {
+				values.unobserveDeep(refresh);
+				order.unobserve(refresh);
+				types.unobserve(refresh);
+			};
+		},
+		[doc],
+	);
+	const snapshot = () => {
+		if (cache.current?.doc !== doc) {
+			cache.current = { doc, rows: readRows(doc) };
+		}
+		return cache.current.rows;
+	};
+	return useSyncExternalStore(subscribe, snapshot);
+}
+
 export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) {
 	const { t } = useT();
-	const [rows, setRows] = useState<PropertyRow[]>(() => readRows(doc));
+	const rows = useRows(doc);
 	const newKeyRef = useRef<HTMLInputElement>(null);
 	const addButtonRef = useRef<HTMLButtonElement>(null);
 	// Holds whichever control the chosen type renders — a checkbox is a
@@ -215,20 +252,6 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 	// name it belongs to. Keyed by name rather than index: a rename swaps the
 	// key and an index would then point at a different row.
 	const keyEls = useRef(new Map<string, HTMLInputElement>());
-
-	useEffect(() => {
-		const refresh = () => setRows(readRows(doc));
-		const { values, order, types } = frontmatterMaps(doc);
-		values.observeDeep(refresh);
-		order.observe(refresh);
-		types.observe(refresh);
-		refresh();
-		return () => {
-			values.unobserveDeep(refresh);
-			order.unobserve(refresh);
-			types.unobserve(refresh);
-		};
-	}, [doc]);
 
 	const [newKey, setNewKey] = useState("");
 	const [newValue, setNewValue] = useState("");
