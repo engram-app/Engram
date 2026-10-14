@@ -4195,7 +4195,7 @@ jobs:
       # permanently-red check against a third-party SDK's own source, not a
       # real leak. The key is the actual secret and the only thing that turns
       # that inert code live.
-      - name: Self-host bundle carries no PostHog key leakage
+      - name: Self-host bundle carries no PostHog key leakage, initial JS under budget
         if: steps.guard.outputs.skip != 'true'
         working-directory: frontend
         run: |
@@ -4212,6 +4212,9 @@ jobs:
             echo "::error::PostHog key leaked into self-host bundle"; exit 1
           fi
           echo "OK: self-host bundle carries no PostHog key"
+          # Same build, second check: the JS needed before the app can start
+          # stays under budget (scripts/check-bundle-budget.ts).
+          bun scripts/check-bundle-budget.ts "$OUT"
 
   e2e-browser:
     # Runs in parallel with the Obsidian suites on a `heavy` runner (max 2
