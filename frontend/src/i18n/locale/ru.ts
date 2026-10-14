@@ -691,7 +691,7 @@ export default {
 	Search: "Поиск",
 	"Search your notes": "Поиск по заметкам",
 	"Folder navigation": "Навигация по папкам",
-	"Main navigation": "Главное меню",
+	"Page actions": "Действия со страницей",
 	"Sidebar tools": "Инструменты боковой панели",
 	"Note outline and markdown reference": "Структура заметки и справочник по Markdown",
 	"{label} (open a note first)": "{label} (сначала откройте заметку)",
@@ -1494,7 +1494,6 @@ export default {
 	Tag: "Тег",
 	"Also settable via the tags frontmatter key.":
 		'Также можно установить через ключ frontmatter "tags".',
-	"Close menu": "Закрыть меню",
 	"Select more": "Выбрать ещё",
 	Rename: "Переименовать",
 	"Move to…": "Переместить в…",

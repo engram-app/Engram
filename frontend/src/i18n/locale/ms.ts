@@ -635,7 +635,7 @@ export default {
 	Search: "Carian",
 	"Search your notes": "Cari nota anda",
 	"Folder navigation": "Navigasi folder",
-	"Main navigation": "Navigasi utama",
+	"Page actions": "Tindakan halaman",
 	"Sidebar tools": "Alat sisi",
 	"Note outline and markdown reference": "Garis besar nota dan rujukan Markdown",
 	"{label} (open a note first)": "{label} (buka nota dahulu)",
@@ -1385,7 +1385,6 @@ export default {
 	Tag: "Tanda",
 	"Also settable via the tags frontmatter key.":
 		"Boleh ditetapkan melalui kekunci frontmatter tag.",
-	"Close menu": "Tutup menu",
 	"Select more": "Pilih lagi",
 	Rename: "Tukar nama",
 	"Move to…": "Pindahkan ke…",

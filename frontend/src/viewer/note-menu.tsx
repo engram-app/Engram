@@ -1,4 +1,4 @@
-import { MoreVertical } from "lucide-react";
+import { MoreVertical, PanelRightOpen } from "lucide-react";
 import { Fragment, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,7 +10,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useT } from "@/i18n/locale-provider";
-import { msg } from "@/i18n/msg";
 import { useMobileHeaderSlot } from "@/layout/mobile-header-slot";
 import { ActionDrawer } from "./tree-actions/action-drawer";
 import {
@@ -41,16 +40,6 @@ export function NoteMenu({ mode, title, onPick }: Props) {
 	const openTools = useMobileHeaderSlot()?.openTools;
 
 	if (!isDesktop) {
-		// The mobile header has no tools button; its drawer opens from here,
-		// just above the destructive action so Delete stays last.
-		const del = actions.findIndex((a) => a.destructive);
-		const mobileActions = openTools
-			? [
-					...actions.slice(0, del),
-					{ id: "open-tools" as const, label: msg("Open tools") },
-					...actions.slice(del),
-				]
-			: actions;
 		return (
 			<>
 				<Button
@@ -64,9 +53,15 @@ export function NoteMenu({ mode, title, onPick }: Props) {
 				{drawerOpen ? (
 					<ActionDrawer
 						title={title}
-						actions={mobileActions}
-						onPick={(id) => (id === "open-tools" ? openTools?.() : onPick(id))}
+						actions={actions}
+						onPick={onPick}
 						onClose={() => setDrawerOpen(false)}
+						// The mobile header has no tools button; its drawer opens from here.
+						extra={
+							openTools
+								? { label: t("Open tools"), icon: PanelRightOpen, onSelect: openTools }
+								: undefined
+						}
 					/>
 				) : null}
 			</>

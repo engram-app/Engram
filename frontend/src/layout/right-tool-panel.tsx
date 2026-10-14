@@ -3,6 +3,7 @@ import { lazy, type ReactNode, Suspense } from "react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
+import { activeTabClass } from "@/lib/ui-classes";
 import { RIGHT_TOOLS, type RightToolId, useRightTools } from "./right-tools-context";
 
 // Lazy on purpose. The reference panel reaches insertSnippet, which pulls in
@@ -43,11 +44,7 @@ export default function RightToolPanel({ onCollapse }: { onCollapse: () => void 
 							aria-selected={resolvedId === tool.id}
 							aria-controls="right-tool-panel"
 							onClick={() => setActive(tool.id)}
-							className={`rounded px-2 py-1 font-medium text-xs transition-colors ${
-								resolvedId === tool.id
-									? "bg-primary/15 text-primary-ink"
-									: "text-muted-foreground hover:bg-primary/10 hover:text-primary-ink"
-							}`}
+							className={`rounded px-2 py-1 font-medium text-xs transition-colors ${activeTabClass(resolvedId === tool.id)}`}
 						>
 							{t(tool.label)}
 						</button>

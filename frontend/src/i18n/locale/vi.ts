@@ -632,7 +632,7 @@ export default {
 	Search: "Tìm kiếm",
 	"Search your notes": "Tìm kiếm ghi chú của bạn",
 	"Folder navigation": "Điều hướng thư mục",
-	"Main navigation": "Điều hướng chính",
+	"Page actions": "Các hành động trên trang",
 	"Sidebar tools": "Các công cụ ở thanh bên",
 	"Note outline and markdown reference": "Dàn ý ghi chú và tham khảo Markdown",
 	"{label} (open a note first)": "{label} (mở một ghi chú trước)",
@@ -1380,7 +1380,6 @@ export default {
 	Tag: "Thẻ",
 	"Also settable via the tags frontmatter key.":
 		"Cũng có thể đặt thông qua khóa frontmatter của thẻ.",
-	"Close menu": "Đóng menu",
 	"Select more": "Chọn thêm",
 	Rename: "Đổi tên",
 	"Move to…": "Di chuyển đến…",

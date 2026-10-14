@@ -10,15 +10,19 @@ export function DocumentHeader({
 	name,
 	title,
 	actions,
+	inlineTitle = false,
 }: {
 	folder?: string;
 	name: ReactNode;
 	title?: string;
 	actions?: ReactNode;
+	/** The page shows its own title (a note's InlineTitle). Then mobile drops
+	 *  the strip and floats only the actions top-right, Obsidian-style. A page
+	 *  without one keeps the strip, or a phone would show no name at all. */
+	inlineTitle?: boolean;
 }) {
-	// Mobile drops the strip; only the actions survive, floated top-right.
 	const slot = useMobileHeaderSlot()?.slot;
-	if (slot) {
+	if (slot && inlineTitle) {
 		return actions ? createPortal(actions, slot) : null;
 	}
 	return (

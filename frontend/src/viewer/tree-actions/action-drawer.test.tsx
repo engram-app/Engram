@@ -1,5 +1,8 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { PanelRightOpen } from "lucide-react";
 import { describe, expect, it, vi } from "vitest";
+import { msg } from "@/i18n/msg";
+import { untranslated } from "@/i18n/ui-text";
 import { ActionDrawer, CLOSE_MS } from "./action-drawer";
 import { actionsFor } from "./action-list";
 
@@ -17,8 +20,8 @@ describe("ActionDrawer", () => {
 		expect(screen.getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
 	});
 
-	// Tapping out slides the sheet down first; it closes once that has played.
-	it("backdrop click slides the sheet out, then closes", () => {
+	// Dismissing slides the sheet down first; it closes once that has played.
+	it("Escape slides the sheet out, then closes once", () => {
 		vi.useFakeTimers();
 		const onClose = vi.fn();
 		render(
@@ -29,16 +32,17 @@ describe("ActionDrawer", () => {
 				onClose={onClose}
 			/>,
 		);
-		fireEvent.click(screen.getByTestId("action-drawer-backdrop"));
+		const sheet = screen.getByTestId("action-drawer");
+		fireEvent.keyDown(sheet, { key: "Escape" });
 		expect(onClose).not.toHaveBeenCalled();
-		expect(screen.getByRole("menu")).toHaveClass("animate-out", "slide-out-to-bottom");
+		expect(sheet).toHaveAttribute("data-state", "closed");
 		act(() => vi.advanceTimersByTime(CLOSE_MS));
 		expect(onClose).toHaveBeenCalledOnce();
 		vi.useRealTimers();
 	});
 
-	it("a second tap while sliding out does not close twice", () => {
-		vi.useFakeTimers();
+	it("puts an extra row in its own group just above the destructive action", () => {
+		const onSelect = vi.fn();
 		const onClose = vi.fn();
 		render(
 			<ActionDrawer
@@ -46,13 +50,28 @@ describe("ActionDrawer", () => {
 				actions={actionsFor({ kind: "file" })}
 				onPick={() => {}}
 				onClose={onClose}
+				extra={{ label: untranslated("Open tools"), icon: PanelRightOpen, onSelect }}
 			/>,
 		);
-		fireEvent.click(screen.getByTestId("action-drawer-backdrop"));
-		fireEvent.click(screen.getByTestId("action-drawer-backdrop"));
-		act(() => vi.advanceTimersByTime(CLOSE_MS));
+		const names = screen.getAllByRole("menuitem").map((el) => el.textContent);
+		expect(names.slice(-2)).toEqual(["Open tools", "Delete"]);
+		fireEvent.click(screen.getByRole("menuitem", { name: "Open tools" }));
+		expect(onSelect).toHaveBeenCalledOnce();
 		expect(onClose).toHaveBeenCalledOnce();
-		vi.useRealTimers();
+	});
+
+	it("puts the extra row last when nothing is destructive", () => {
+		render(
+			<ActionDrawer
+				title="a.md"
+				actions={[{ id: "rename", label: msg("Rename") }]}
+				onPick={() => {}}
+				onClose={() => {}}
+				extra={{ label: untranslated("Open tools"), icon: PanelRightOpen, onSelect: () => {} }}
+			/>,
+		);
+		const names = screen.getAllByRole("menuitem").map((el) => el.textContent);
+		expect(names).toEqual(["Rename", "Open tools"]);
 	});
 
 	it("click on action calls onPick then onClose", () => {

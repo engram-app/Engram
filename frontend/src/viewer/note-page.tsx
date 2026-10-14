@@ -703,6 +703,7 @@ export default function NotePage() {
 			    path stays pinned here — it is the only rename affordance still
 			    reachable once you have scrolled the title out of view. */}
 			<DocumentHeader
+				inlineTitle
 				folder={note.folder}
 				title={titlePath}
 				name={

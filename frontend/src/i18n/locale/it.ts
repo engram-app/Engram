@@ -659,7 +659,7 @@ export default {
 	Search: "Cerca",
 	"Search your notes": "Cerca nelle note",
 	"Folder navigation": "Navigazione cartelle",
-	"Main navigation": "Navigazione principale",
+	"Page actions": "Azioni della pagina",
 	"Sidebar tools": "Strumenti laterali",
 	"Note outline and markdown reference": "Struttura della nota e riferimento Markdown",
 	"{label} (open a note first)": "{label} (apri prima una nota)",
@@ -1439,7 +1439,6 @@ export default {
 	Tag: "Tag",
 	"Also settable via the tags frontmatter key.":
 		'Impostabile anche tramite la chiave "tags" nel frontmatter.',
-	"Close menu": "Chiudi menu",
 	"Select more": "Seleziona altro",
 	Rename: "Rinomina",
 	"Move to…": "Sposta in…",

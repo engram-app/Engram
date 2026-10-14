@@ -43,6 +43,14 @@ export function selectableRow(active: boolean, compact = false): string {
 /** Pinned row height in px. The tree's virtualizer positions rows by it (see
  *  viewer/tree/row-metrics), and the picker's rows must be exactly as tall. */
 export const LIST_ROW_HEIGHT = 24;
+// Touch screens are the one place the two lists part ways on purpose: a
+// finger needs more than a cursor. The tree is scanned, so it grows a little
+// (TREE_TOUCH_ROW_HEIGHT); the picker's few rows get a full 40px target.
+// Both read `pointer: coarse`.
+/** The tree's row height on a touch screen, in px. */
+export const TREE_TOUCH_ROW_HEIGHT = 32;
+/** The picker's row height: LIST_ROW_HEIGHT, or 40px on a touch screen. */
+export const PICKER_ROW_HEIGHT = "h-6 pointer-coarse:h-10";
 /** Gap between rows in px. */
 export const LIST_ROW_GAP = 2;
 
@@ -66,3 +74,11 @@ export const listContainer = "p-2 text-base";
 
 /** The "nothing matches" line inside a list. */
 export const listEmpty = "px-2 py-6 text-center text-muted-foreground text-xs";
+
+/** The cyan look of the chosen tab in a set (rail views, sidebar views, tool
+ *  tabs) and the hover hint on the rest. Layout is the caller's. */
+export function activeTabClass(active: boolean): string {
+	return active
+		? "bg-primary/15 text-primary-ink"
+		: "text-muted-foreground hover:bg-primary/10 hover:text-primary-ink";
+}

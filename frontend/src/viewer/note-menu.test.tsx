@@ -55,8 +55,8 @@ describe("NoteMenu", () => {
 		const onPick = vi.fn();
 		render(<NoteMenu mode="rendered" title="note" onPick={onPick} />);
 		openMenu();
-		// The drawer renders its own backdrop; the dropdown does not.
-		expect(screen.getByTestId("action-drawer-backdrop")).toBeInTheDocument();
+		// The bottom sheet, not the dropdown.
+		expect(screen.getByTestId("action-drawer")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
 		expect(onPick).toHaveBeenCalledWith("delete");
 	});
@@ -66,7 +66,7 @@ describe("NoteMenu", () => {
 		render(<NoteMenu mode="rendered" title="note" onPick={vi.fn()} />);
 		openMenu();
 		fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
-		expect(screen.queryByTestId("action-drawer-backdrop")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("action-drawer")).not.toBeInTheDocument();
 	});
 
 	// The mobile header has no tools button; the drawer opens from the kebab.
@@ -86,7 +86,7 @@ describe("NoteMenu", () => {
 		fireEvent.click(screen.getByRole("menuitem", { name: "Open tools" }));
 		expect(openTools).toHaveBeenCalledOnce();
 		expect(onPick).not.toHaveBeenCalled();
-		expect(screen.queryByTestId("action-drawer-backdrop")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("action-drawer")).not.toBeInTheDocument();
 	});
 
 	it("has no Open tools outside the mobile layout", async () => {

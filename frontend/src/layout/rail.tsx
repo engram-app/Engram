@@ -2,6 +2,7 @@ import { FolderTree, Search } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useT } from "@/i18n/locale-provider";
+import { activeTabClass } from "@/lib/ui-classes";
 import { isSettingsHash } from "../settings/settings-hash";
 import { type RailView, useRailView } from "./rail-view-context";
 import { RIGHT_TOOLS, type RightToolDescriptor, useRightTools } from "./right-tools-context";
@@ -15,11 +16,9 @@ import UserMenu from "./user-menu";
 //            never cost you the file tree.
 // Shared button chrome keeps it reading as one control surface.
 function railButtonClass(active: boolean): string {
-	return `flex h-8 w-8 items-center justify-center rounded-md transition-colors ${
-		active
-			? "bg-primary/15 text-primary-ink hover:bg-primary/25"
-			: "text-muted-foreground hover:bg-primary/10 hover:text-primary-ink"
-	}`;
+	// The active rail button also darkens on hover: it stays a target, since a
+	// second click collapses the panel.
+	return `flex h-8 w-8 items-center justify-center rounded-md transition-colors ${activeTabClass(active)} ${active ? "hover:bg-primary/25" : ""}`;
 }
 
 // The shared Tooltip (themed, like the rest of the UI) instead of the browser's

@@ -648,7 +648,7 @@ export default {
 	Search: "Suchen",
 	"Search your notes": "Suche in deinen Notizen",
 	"Folder navigation": "Ordnernavigation",
-	"Main navigation": "Hauptnavigation",
+	"Page actions": "Seitenaktionen",
 	"Sidebar tools": "Tools in der Seitenleiste",
 	"Note outline and markdown reference": "Notizübersicht und Markdown-Referenz",
 	"{label} (open a note first)": "{label} (öffne zuerst eine Notiz)",
@@ -1413,7 +1413,6 @@ export default {
 	Tag: "Tag",
 	"Also settable via the tags frontmatter key.":
 		'Kann auch über den Frontmatter-Schlüssel "tags" festgelegt werden.',
-	"Close menu": "Menü schließen",
 	"Select more": "Mehr auswählen",
 	Rename: "Umbenennen",
 	"Move to…": "Verschieben nach…",

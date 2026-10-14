@@ -1,5 +1,5 @@
 import { PanelLeftOpen, X } from "lucide-react";
-import { lazy, type MouseEvent, Suspense, useEffect, useState } from "react";
+import { type MouseEvent, useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -15,6 +15,7 @@ import { useT } from "@/i18n/locale-provider";
 import FolderTree from "../viewer/folder-tree";
 import FolderActions from "./folder-actions";
 import { FolderTreeProvider } from "./folder-tree-context";
+import LazySearchPanel from "./lazy-search-panel";
 import { MobileHeaderSlot } from "./mobile-header-slot";
 import { useRailView } from "./rail-view-context";
 import RightToolPanel from "./right-tool-panel";
@@ -23,9 +24,9 @@ import SidebarViewToggle from "./sidebar-view-toggle";
 import UserMenu from "./user-menu";
 import VaultSwitcher from "./vault-switcher";
 
-// Lazy: search pulls in @base-ui's combobox (~90 KB, the type filter) and is
-// only on screen after switching to the Search view.
-const SearchPanel = lazy(() => import("./search-panel"));
+// The grey chip under the header's buttons, so passing text never runs under
+// a bare glyph. Not the page background colour, or it would vanish.
+const CHIP = "rounded-md bg-secondary/90";
 
 // Close the drawer only when the click originated on a navigation link.
 // Buttons (e.g. folder-expand toggles in FolderTree) must keep the drawer open.
@@ -74,12 +75,15 @@ export default function MobileLayout() {
 			    runs under a bare glyph. The tools drawer has no button here; the
 			    note menu opens it (MobileHeaderSlot.openTools).
 			    --mobile-header is its height: main pads by it, and a note's
-			    surface bleeds up under it (note-page.tsx). */}
-			<header className="absolute inset-x-0 top-0 z-20 flex h-(--mobile-header) items-end justify-between px-2 [&>button]:size-11 [&>button]:bg-secondary/90">
+			    surface bleeds up under it (note-page.tsx).
+			    The bar itself lets touches through to the text behind it; only
+			    its buttons take them. Every button in it, the page's portalled
+			    actions included, is sized here so the corners match. */}
+			<header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex h-(--mobile-header) items-end justify-between px-2 *:pointer-events-auto [&_button]:size-11 [&_button_svg]:size-5.5">
 				<Sheet open={leftOpen} onOpenChange={setLeftOpen}>
 					<SheetTrigger asChild>
-						<Button variant="ghost" size="icon-lg" aria-label={t("Open files")}>
-							<PanelLeftOpen className="size-5.5" />
+						<Button variant="ghost" size="icon-lg" aria-label={t("Open files")} className={CHIP}>
+							<PanelLeftOpen />
 						</Button>
 					</SheetTrigger>
 					<SheetContent
@@ -107,9 +111,7 @@ export default function MobileLayout() {
 								// that also covers tapping the result for the note you are
 								// ALREADY on, where the route never changes and the
 								// pathname effect below never fires.
-								<Suspense fallback={null}>
-									<SearchPanel hideHeader onNavigate={() => setLeftOpen(false)} />
-								</Suspense>
+								<LazySearchPanel hideHeader onNavigate={() => setLeftOpen(false)} />
 							) : (
 								<>
 									<ScrollArea
@@ -124,24 +126,21 @@ export default function MobileLayout() {
 							)}
 							<SidebarViewToggle />
 							{/* Account sits at the end of the vault row, where Obsidian mobile
-							    keeps its settings gear: no extra row under the tree. The
-							    wrapper owns the seam, so the switcher drops its own. */}
+							    keeps its settings gear: no extra row under the tree. The row
+							    owns the seam, so the switcher drops its own. */}
 							<section className="flex items-center gap-1 border-border border-t pr-2">
-								<div className="min-w-0 flex-1 [&>section]:border-t-0">
-									<VaultSwitcher />
-								</div>
+								<VaultSwitcher className="min-w-0 flex-1 border-t-0" />
 								<UserMenu />
 							</section>
 						</FolderTreeProvider>
 					</SheetContent>
 				</Sheet>
-				<nav
+				{/* The page's own actions (reading toggle, note menu), portalled in;
+				    they share one chip. */}
+				<fieldset
 					ref={setActionSlot}
-					// Direct children only: the note menu's drawer also mounts in here, and
-					// a descendant rule resized its rows. No backdrop-filter either: it
-					// makes this the containing block for the drawer's position: fixed.
-					className="flex items-center rounded-md bg-secondary/90 empty:hidden [&>button>svg]:size-5.5 [&>button]:size-11"
-					aria-label={t("Main navigation")}
+					aria-label={t("Page actions")}
+					className={`flex items-center empty:hidden ${CHIP}`}
 				/>
 				<Sheet open={rightOpen} onOpenChange={setRightOpen}>
 					<SheetContent

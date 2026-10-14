@@ -15,18 +15,19 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { VaultCreateForm } from "@/components/vault-create-form";
 import { useT } from "@/i18n/locale-provider";
 import { displayVaultName } from "@/i18n/vault-name";
-import { LIST_ROW_GAP, listContainer, listEmpty, listRowClass } from "@/lib/ui-classes";
+import {
+	LIST_ROW_GAP,
+	listContainer,
+	listEmpty,
+	listRowClass,
+	PICKER_ROW_HEIGHT,
+} from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { useActiveVaultId } from "../api/active-vault";
 import { useVaults } from "../api/queries";
 import { vaultPath } from "../routes";
 
-// The tree's 24px row (LIST_ROW_HEIGHT), but a finger needs more than a
-// cursor, so touch screens get 40px. The tree's virtualizer pins its own
-// height; this list has no virtualizer, so it can grow.
-const VAULT_ROW_HEIGHT = "h-6 pointer-coarse:h-10";
-
-function VaultSwitcher() {
+function VaultSwitcher({ className }: { className?: string }) {
 	const { t } = useT();
 	const { data: vaults, isLoading } = useVaults();
 	const activeId = useActiveVaultId();
@@ -105,7 +106,7 @@ function VaultSwitcher() {
 	}
 
 	return (
-		<section className="border-border border-t">
+		<section className={cn("border-border border-t", className)}>
 			<Popover open={open} onOpenChange={onOpenChange}>
 				<PopoverTrigger className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left outline-none hover:bg-muted aria-expanded:bg-muted">
 					<span className="min-w-0 flex-1">
@@ -160,7 +161,7 @@ function VaultSwitcher() {
 									data-highlighted={v.id === highlighted?.id || undefined}
 									className={cn(
 										listRowClass({ selected: v.id === active.id }),
-										VAULT_ROW_HEIGHT,
+										PICKER_ROW_HEIGHT,
 										"cursor-default justify-between pl-2 outline-none",
 									)}
 									onClick={() => pick(v.id)}
@@ -190,7 +191,7 @@ function VaultSwitcher() {
 							type="button"
 							className={cn(
 								listRowClass(),
-								VAULT_ROW_HEIGHT,
+								PICKER_ROW_HEIGHT,
 								"pl-2 outline-none focus-visible:bg-accent",
 							)}
 							onClick={() => {
