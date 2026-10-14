@@ -108,7 +108,7 @@ function ListField({ value, onCommit, onFocusChange, label }: ListFieldProps) {
 	};
 
 	return (
-		<div className="flex flex-wrap items-center gap-1">
+		<div className="flex flex-wrap items-center gap-1 py-1">
 			{value.map((item, i) => (
 				<span
 					// biome-ignore lint/suspicious/noArrayIndexKey: list items are plain strings that may duplicate and are removed by position (filter on index), so the array index is the stable identity; the chips hold no internal state, so index-keying cannot mismatch state.
