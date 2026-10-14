@@ -1,5 +1,6 @@
 import { readOnlyExtension, tables } from "@atomic-editor/editor";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { forceParsing } from "@codemirror/language";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -29,6 +30,11 @@ function mount(doc: string, anchor: number, readOnly = false): EditorView {
 		}),
 		parent: document.body,
 	});
+	// The initial parse has a 20ms budget. Past it (a loaded CI runner) the tree
+	// is partial, the parse finishes later and the table widget is rebuilt, so
+	// the cell a test grabbed is detached and its arrow handler does nothing.
+	// CI symptom: "expected 7 to be 46", passes alone. See heading-fold.test.ts.
+	forceParsing(view, view.state.doc.length, 1e9);
 	return view;
 }
 
