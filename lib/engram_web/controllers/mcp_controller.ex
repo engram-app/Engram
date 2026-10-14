@@ -1027,14 +1027,14 @@ defmodule EngramWeb.McpController do
   def run_tool_handler(tool, user, vault, args) do
     case call_handler(tool, user, vault, args) do
       {:ok, text} ->
-        text = deprecation_note(tool, text)
+        text = tool |> deprecation_note(text) |> legal_note(user)
         {{:ok, text_result(text)}, :ok, byte_size_safe(text)}
 
       # A converted tool (#1660) answers with both renderings. `content` stays
       # mandatory — `structuredContent` is additive, and a client that ignores
       # it must still get a usable answer.
       {:ok, text, structured} when is_map(structured) ->
-        text = deprecation_note(tool, text)
+        text = tool |> deprecation_note(text) |> legal_note(user)
         result = Map.put(text_result(text), "structuredContent", structured)
         # `text` only, deliberately. A previous pass added a second Jason.encode
         # here so the size metric would count structuredContent too. That was
@@ -1106,6 +1106,33 @@ defmodule EngramWeb.McpController do
   end
 
   defp deprecation_note(_tool, text), do: text
+
+  # MCP-only users never see the web banner, so a pending legal change rides
+  # on a tool result for the model to relay (#321). Once a day per user, not
+  # every call. The limiter is only hit while a notice is pending.
+  @legal_note_every :timer.hours(24)
+
+  defp legal_note(text, user) do
+    with [_ | _] = notices <- Engram.Onboarding.legal_notices(user),
+         {:allow, _} <-
+           EngramWeb.RateLimiter.hit("mcp_legal_note:#{user.id}", @legal_note_every, 1) do
+      text <> "\n\n" <> Enum.map_join(notices, "\n", &legal_sentence/1)
+    else
+      _ -> text
+    end
+  end
+
+  defp legal_sentence(notice) do
+    date = Calendar.strftime(notice.effective_date, "%B %-d, %Y")
+
+    base =
+      "(Please tell the user: Engram's #{Engram.Legal.name(notice.document)} changes on #{date}. " <>
+        "#{notice.changelog} Read it at #{notice.url}."
+
+    if notice.material,
+      do: base <> " They must accept it at #{notice.accept_url} to keep using Engram.)",
+      else: base <> ")"
+  end
 
   # Builds a client-safe message for a trapped tool-handler failure.
   #

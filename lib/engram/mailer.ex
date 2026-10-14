@@ -150,11 +150,6 @@ defmodule Engram.Mailer do
     render_and_deliver(email, "Your Engram vault was deleted", body)
   end
 
-  @document_names %{
-    "terms_of_service" => "Terms of Service",
-    "privacy_policy" => "Privacy Policy"
-  }
-
   @doc """
   Tells a user about a legal change (`kind` "notice" when it is published,
   "reminder" before a material change takes effect). `version` is the
@@ -162,7 +157,7 @@ defmodule Engram.Mailer do
   """
   def send_legal_notice(%User{email: email} = user, version, kind)
       when kind in ["notice", "reminder"] do
-    doc = Map.fetch!(@document_names, version.document)
+    doc = Engram.Legal.name(version.document)
     date = Calendar.strftime(version.effective_date, "%B %-d, %Y")
 
     subject =

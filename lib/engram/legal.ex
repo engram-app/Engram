@@ -23,6 +23,12 @@ defmodule Engram.Legal do
     "privacy_policy" => "https://engram.page/privacy"
   }
 
+  @names %{"terms_of_service" => "Terms of Service", "privacy_policy" => "Privacy Policy"}
+
+  @doc "Display name for a document."
+  @spec name(String.t()) :: String.t()
+  def name(document), do: Map.fetch!(@names, document)
+
   @doc "Public page for a document."
   @spec url(String.t()) :: String.t()
   def url(document), do: Map.fetch!(@urls, document)
