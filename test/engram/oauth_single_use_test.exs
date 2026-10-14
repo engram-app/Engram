@@ -55,7 +55,7 @@ defmodule Engram.OAuthSingleUseTest do
         |> Task.await_many(30_000)
 
       assert Enum.count(results, &match?({:ok, _}, &1)) == 1
-      assert Enum.count(results, &match?({:error, :invalid_grant}, &1)) == 7
+      assert Enum.count(results, &match?({:error, {:invalid_grant, :code_consumed}}, &1)) == 7
     end
   end
 
@@ -78,7 +78,7 @@ defmodule Engram.OAuthSingleUseTest do
       # response), which may race the winner's own mint — so the winner
       # count is 0 or 1, never more.
       assert Enum.count(results, &match?({:ok, _}, &1)) <= 1
-      assert Enum.count(results, &match?({:error, :invalid_grant}, &1)) >= 7
+      assert Enum.count(results, &match?({:error, {:invalid_grant, _}}, &1)) >= 7
     end
   end
 

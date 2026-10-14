@@ -937,7 +937,9 @@ defmodule Engram.OAuth.CimdTest do
 
       # And on revocation, which must actually revoke rather than silently no-op.
       assert :ok = OAuth.revoke_token(rotated.refresh_token, @url, nil)
-      assert {:error, :invalid_grant} = OAuth.rotate_refresh_token(rotated.refresh_token, @url)
+
+      assert {:error, {:invalid_grant, :refresh_token_revoked}} =
+               OAuth.rotate_refresh_token(rotated.refresh_token, @url)
     end
 
     test "another client's URL cannot redeem this client's code", %{client: client} do
@@ -963,7 +965,7 @@ defmodule Engram.OAuth.CimdTest do
       {:ok, redirect} = OAuth.mint_authorization_code(user, validated, [vault.id], nil)
       code = code_from_redirect(redirect)
 
-      assert {:error, :invalid_grant} =
+      assert {:error, {:invalid_grant, :client_mismatch}} =
                OAuth.exchange_authorization_code(%{
                  "code" => code,
                  "client_id" => other.cimd_url,

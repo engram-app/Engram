@@ -276,14 +276,20 @@ defmodule Engram.OAuth do
   a CIMD `client_id` is a URL supplied by an unauthenticated caller, so logging
   it whole is an unbounded value in a log field, and a DCR id is an opaque UUID
   with no triage value.
+
+  `extra` appends caller-specific fields. The token endpoint adds `error_code`,
+  `grant_type`, `user_agent` and a UUID-validated `client_id`. UUID-only keeps
+  it bounded, and on a grant refusal the client has already authenticated, so
+  the id names a row we can look up: the triage value an unverified id lacks.
   """
-  @spec log_refusal(String.t(), Client.t() | String.t() | nil, term()) :: :ok
-  def log_refusal(event, subject, reason) do
+  @spec log_refusal(String.t(), Client.t() | String.t() | nil, term(), keyword()) :: :ok
+  def log_refusal(event, subject, reason, extra \\ []) do
     Logger.warning(
       event,
-      Metadata.with_category(:warning, :lifecycle,
-        cimd_host: refusal_host(subject),
-        reason: refusal_reason(reason)
+      Metadata.with_category(
+        :warning,
+        :lifecycle,
+        [cimd_host: refusal_host(subject), reason: refusal_reason(reason)] ++ extra
       )
     )
   end
@@ -490,6 +496,8 @@ defmodule Engram.OAuth do
   Exchanges an authorization code for an access + refresh token pair.
   Validates: code exists, unconsumed, unexpired, matching client_id,
   matching redirect_uri, PKCE verifier hashes to stored challenge.
+
+  A refusal is `{:error, {:invalid_grant, grant_reason()}}`.
   """
   def exchange_authorization_code(params, opts \\ []) do
     ip = Keyword.get(opts, :ip)
@@ -510,14 +518,14 @@ defmodule Engram.OAuth do
   Rotates a refresh token: marks the presented one consumed, mints + issues
   a successor in the same family. If the presented token is already
   consumed (replay) or revoked, this revokes the entire family per
-  RFC 6749 §10.4.
+  RFC 6749 §10.4. A refusal is `{:error, {:invalid_grant, grant_reason()}}`.
   """
   def rotate_refresh_token(raw_token, client_id, opts \\ []) do
     ip = Keyword.get(opts, :ip)
 
     case refresh_token_by_raw(raw_token) do
       nil ->
-        {:error, :invalid_grant}
+        grant_error(:refresh_token_unknown)
 
       %RefreshToken{} = rt ->
         rotate_existing(rt, internal_client_id(client_id, rt.client_id), ip)
@@ -537,17 +545,17 @@ defmodule Engram.OAuth do
   end
 
   defp rotate_existing(%RefreshToken{client_id: actual}, requested, _ip) when actual != requested,
-    do: {:error, :invalid_grant}
+    do: grant_error(:client_mismatch)
 
   defp rotate_existing(%RefreshToken{revoked_at: %DateTime{}} = rt, _client_id, _ip),
-    do: replay(rt)
+    do: replay(rt, :refresh_token_revoked)
 
   defp rotate_existing(%RefreshToken{consumed_at: %DateTime{}} = rt, _client_id, _ip),
-    do: replay(rt)
+    do: replay(rt, :refresh_token_reuse)
 
   defp rotate_existing(%RefreshToken{expires_at: exp} = rt, _client_id, ip) do
     if DateTime.compare(DateTime.utc_now(), exp) == :gt do
-      {:error, :invalid_grant}
+      grant_error(:refresh_token_expired)
     else
       do_rotate(rt, ip)
     end
@@ -564,7 +572,7 @@ defmodule Engram.OAuth do
     # race, so the token we hold is a now-consumed one being replayed.
     case from(r in RefreshToken, where: r.id == ^rt.id and is_nil(r.consumed_at))
          |> Repo.update_all([set: [consumed_at: now]], skip_tenant_check: true) do
-      {0, _} -> replay(rt)
+      {0, _} -> replay(rt, :refresh_token_reuse)
       {1, _} -> mint_rotation_successor(rt, ip)
     end
   end
@@ -598,23 +606,51 @@ defmodule Engram.OAuth do
   #
   # THREE detections reach this — already-revoked, already-consumed, and the
   # atomic UPDATE losing its race — and that split is deliberate and stays
-  # (see do_rotate/2). The RESPONSE to all three is identical, and is this.
-  defp replay(rt) do
+  # (see do_rotate/2). The RESPONSE to all three is identical, and is this;
+  # only the logged reason differs (revoked vs reused).
+  defp replay(rt, reason) do
     revoke_family(rt.family_id)
-    {:error, :invalid_grant}
+    grant_error(reason)
   end
 
-  defp find_unconsumed_code(nil), do: {:error, :invalid_grant}
+  @typedoc """
+  Why a grant was refused. The wire response is always `invalid_grant` (RFC
+  6749 §5.2 says nothing about which part was bad); the reason is for our logs
+  and the `engram_prom_ex_oauth_token_total` `reason` label, so it is a closed
+  set. Add a value here before returning it.
+  """
+  @type grant_reason ::
+          :code_missing
+          | :code_unknown
+          | :code_consumed
+          | :code_expired
+          | :client_mismatch
+          | :redirect_uri_mismatch
+          | :pkce_verifier_missing
+          | :pkce_mismatch
+          | :user_not_found
+          | :refresh_token_unknown
+          | :refresh_token_revoked
+          | :refresh_token_reuse
+          | :refresh_token_expired
+
+  @spec grant_error(grant_reason()) :: {:error, {:invalid_grant, grant_reason()}}
+  defp grant_error(reason), do: {:error, {:invalid_grant, reason}}
+
+  defp find_unconsumed_code(nil), do: grant_error(:code_missing)
 
   defp find_unconsumed_code(raw_code) do
     case get_authorization_code_by_raw(raw_code) do
       {:ok, %AuthorizationCode{consumed_at: nil} = code} ->
         if DateTime.compare(DateTime.utc_now(), code.expires_at) == :gt,
-          do: {:error, :invalid_grant},
+          do: grant_error(:code_expired),
           else: {:ok, code}
 
+      {:ok, %AuthorizationCode{}} ->
+        grant_error(:code_consumed)
+
       _ ->
-        {:error, :invalid_grant}
+        grant_error(:code_unknown)
     end
   end
 
@@ -626,25 +662,27 @@ defmodule Engram.OAuth do
   # so the separate fast-path clause this used to have was a second copy of that
   # same check.
   defp check_code_client(%{client_id: actual}, requested) do
-    if actual == internal_client_id(requested, actual), do: :ok, else: {:error, :invalid_grant}
+    if actual == internal_client_id(requested, actual),
+      do: :ok,
+      else: grant_error(:client_mismatch)
   end
 
   defp check_code_redirect_uri(%{redirect_uri: actual}, requested) when actual == requested,
     do: :ok
 
-  defp check_code_redirect_uri(_, _), do: {:error, :invalid_grant}
+  defp check_code_redirect_uri(_, _), do: grant_error(:redirect_uri_mismatch)
 
-  defp check_pkce_verifier(_code, nil), do: {:error, :invalid_grant}
+  defp check_pkce_verifier(_code, nil), do: grant_error(:pkce_verifier_missing)
 
   defp check_pkce_verifier(%{code_challenge: challenge}, verifier) when is_binary(verifier) do
     derived = :crypto.hash(:sha256, verifier) |> Base.url_encode64(padding: false)
 
     if Plug.Crypto.secure_compare(derived, challenge),
       do: :ok,
-      else: {:error, :invalid_grant}
+      else: grant_error(:pkce_mismatch)
   end
 
-  defp check_pkce_verifier(_, _), do: {:error, :invalid_grant}
+  defp check_pkce_verifier(_, _), do: grant_error(:pkce_mismatch)
 
   # Single-use enforcement (OAuth 2.1 §4.1.3): the conditional UPDATE is the
   # sole guarantee against an authorization-code double-spend race. The
@@ -656,14 +694,14 @@ defmodule Engram.OAuth do
     |> Repo.update_all([set: [consumed_at: DateTime.utc_now(:second)]], skip_tenant_check: true)
     |> case do
       {1, _} -> :ok
-      {0, _} -> {:error, :invalid_grant}
+      {0, _} -> grant_error(:code_consumed)
     end
   end
 
   defp fetch_user(user_id) do
     case Accounts.get_user(user_id) do
       %Accounts.User{} = user -> {:ok, user}
-      _ -> {:error, :invalid_grant}
+      _ -> grant_error(:user_not_found)
     end
   end
 

@@ -21,12 +21,10 @@ defmodule EngramWeb.OAuthTokenController do
       # rather than the body, and the grant check compares the code's client
       # against this param. Reading the body directly would fail every
       # Basic-authenticated exchange that omits the redundant body field.
-      case OAuth.exchange_authorization_code(Map.put(params, "client_id", client_id), ip: ip) do
-        {:ok, response} -> json(conn, response)
-        {:error, _reason} -> invalid_grant(conn)
-      end
+      OAuth.exchange_authorization_code(Map.put(params, "client_id", client_id), ip: ip)
+      |> grant_result(conn, :authorization_code, client_id)
     else
-      {:error, reason} -> auth_error(conn, reason)
+      {:error, reason} -> auth_error(conn, :authorization_code, reason)
     end
   end
 
@@ -35,30 +33,93 @@ defmodule EngramWeb.OAuthTokenController do
          :ok <- OAuth.authenticate_client(client_id, secret, auth_opts(conn, assertion)) do
       case params["refresh_token"] do
         raw when is_binary(raw) and raw != "" ->
-          do_refresh(conn, raw, client_id)
+          ip = RequestMeta.format_ip(conn.remote_ip)
+
+          OAuth.rotate_refresh_token(raw, client_id, ip: ip)
+          |> grant_result(conn, :refresh_token, client_id)
 
         _ ->
-          invalid_request(conn)
+          reject(conn, :refresh_token, client_id, "invalid_request", :refresh_token_missing)
       end
     else
-      {:error, reason} -> auth_error(conn, reason)
+      {:error, reason} -> auth_error(conn, :refresh_token, reason)
     end
   end
 
-  def exchange(conn, %{"grant_type" => _other}) do
-    conn
-    |> put_status(:bad_request)
-    |> json(%{error: "unsupported_grant_type"})
+  def exchange(conn, %{"grant_type" => _other} = params),
+    do:
+      reject(conn, :other, params["client_id"], "unsupported_grant_type", :unsupported_grant_type)
+
+  def exchange(conn, params),
+    do: reject(conn, :missing, params["client_id"], "invalid_request", :grant_type_missing)
+
+  # RFC 6749 §5.2: a bad grant is 400 `invalid_grant`, and says nothing about
+  # WHICH part of the grant was bad. The reason goes to our log and metric only.
+  #
+  # The non-grant error is `insert_refresh_token/1`'s changeset. It was already
+  # answered `invalid_grant`; that stays, under its own reason so it is visible.
+  defp grant_result({:ok, response}, conn, grant_type, _client_id) do
+    emit(grant_type, :issued, nil, :none)
+    json(conn, response)
   end
 
-  def exchange(conn, _params), do: invalid_request(conn)
+  defp grant_result({:error, {:invalid_grant, reason}}, conn, grant_type, client_id),
+    do: reject(conn, grant_type, client_id, "invalid_grant", reason)
 
-  defp do_refresh(conn, raw_token, client_id) do
-    ip = RequestMeta.format_ip(conn.remote_ip)
+  defp grant_result({:error, _changeset}, conn, grant_type, client_id),
+    do: reject(conn, grant_type, client_id, "invalid_grant", :token_persist_failed)
 
-    case OAuth.rotate_refresh_token(raw_token, client_id, ip: ip) do
-      {:ok, response} -> json(conn, response)
-      {:error, _reason} -> invalid_grant(conn)
+  # Every 400 this endpoint returns goes through here, so each one leaves
+  # exactly one `oauth_token_rejected` line and one telemetry event (#1974).
+  # Before this the grant refusals were silent, and a connector whose refresh
+  # kept failing showed nothing until the user re-authorized by hand.
+  #
+  # Nothing request-supplied is logged raw: `client_id` only when it is a UUID
+  # (a CIMD URL id is reduced to its host by `log_refusal/4`), and the user
+  # agent truncated as `EngramWeb.RequestLogger` does. Codes, verifiers and
+  # tokens never reach this function.
+  defp reject(conn, grant_type, client_id, error, reason) do
+    OAuth.log_refusal("oauth_token_rejected", client_id, reason,
+      error_code: error,
+      grant_type: Atom.to_string(grant_type),
+      client_id: uuid_or_nil(client_id),
+      user_agent: user_agent(conn)
+    )
+
+    emit(grant_type, :rejected, error, reason)
+
+    conn
+    |> put_status(:bad_request)
+    |> json(%{error: error})
+  end
+
+  # One event for both outcomes, because the PromEx counter keys its telemetry
+  # handler on the metric name: two events feeding one
+  # `engram_prom_ex_oauth_token_total` would silently drop the second. All
+  # three labels are closed atom sets; never add the client here.
+  defp emit(grant_type, result, error, reason) do
+    :telemetry.execute([:engram, :oauth, :token], %{count: 1}, %{
+      grant_type: grant_type,
+      result: result,
+      error: error,
+      reason: reason
+    })
+  end
+
+  defp uuid_or_nil(id) when is_binary(id) do
+    case Ecto.UUID.cast(id) do
+      {:ok, uuid} -> uuid
+      :error -> nil
+    end
+  end
+
+  defp uuid_or_nil(_id), do: nil
+
+  @user_agent_log_limit 200
+  defp user_agent(conn) do
+    case RequestMeta.get_user_agent(conn) do
+      nil -> nil
+      ua -> String.slice(ua, 0, @user_agent_log_limit)
     end
   end
 
@@ -173,7 +234,9 @@ defmodule EngramWeb.OAuthTokenController do
 
   # RFC 6749 §5.2: failed client authentication is 401, and a request that used
   # the Authorization header gets a WWW-Authenticate challenge back.
-  defp invalid_client(conn) do
+  defp invalid_client(conn, grant_type) do
+    emit(grant_type, :rejected, "invalid_client", :client_auth_failed)
+
     conn
     |> maybe_challenge()
     |> put_status(:unauthorized)
@@ -192,31 +255,23 @@ defmodule EngramWeb.OAuthTokenController do
   # an unreachable vendor JWKS endpoint both clear on their own, so they must be
   # retryable. Same split `Engram.OAuth.cimd_error/1` already makes on the
   # authorize path, and the same string it uses.
-  defp temporarily_unavailable(conn) do
+  defp temporarily_unavailable(conn, grant_type) do
+    emit(grant_type, :rejected, "temporarily_unavailable", :client_auth_unavailable)
+
     conn
     |> put_status(:service_unavailable)
     |> json(%{error: "temporarily_unavailable"})
-  end
-
-  defp invalid_request(conn) do
-    conn
-    |> put_status(:bad_request)
-    |> json(%{error: "invalid_request"})
-  end
-
-  # RFC 6749 §5.2: a bad grant is 400, and says nothing about WHICH part of the
-  # grant was bad. Both grant types fail this way, and both used to spell it out
-  # inline in a module that already named its other three error shapes.
-  defp invalid_grant(conn) do
-    conn
-    |> put_status(:bad_request)
-    |> json(%{error: "invalid_grant"})
   end
 
   # Both `exchange/2` clauses authenticate the client identically, so they fail
   # identically. Two clauses rather than a catch-all: a reason neither
   # `authenticate_client/3` nor `client_credentials/2` can return must crash
   # loudly instead of being reported as one of these two.
-  defp auth_error(conn, :invalid_client), do: invalid_client(conn)
-  defp auth_error(conn, :temporarily_unavailable), do: temporarily_unavailable(conn)
+  #
+  # These already log inside `Engram.OAuth` (`oauth_client_rejected` and
+  # siblings, with the precise reason), so they only add the metric here.
+  defp auth_error(conn, grant_type, :invalid_client), do: invalid_client(conn, grant_type)
+
+  defp auth_error(conn, grant_type, :temporarily_unavailable),
+    do: temporarily_unavailable(conn, grant_type)
 end
