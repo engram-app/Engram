@@ -65,7 +65,7 @@
 		"@lobehub/icons-static-svg": "^1.95.1",
 		"@paddle/paddle-js": "^1.6.5",
 		"@portaljs/remark-callouts": "^1.0.5",
-		"@sentry/react": "^10.75.2",
+		"@sentry/react": "^11.1.0",
 		"@sentry/vite-plugin": "^5.3.0",
 		"@tailwindcss/typography": "^0.5.19",
 		"@tanstack/react-query": "^5.104.0",
