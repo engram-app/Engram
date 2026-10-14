@@ -24,6 +24,9 @@ defmodule Engram.Workers.LegalNoticeDispatch do
   alias Engram.Repo
   alias Engram.Workers.LegalNoticeEmail
 
+  # skip_tenant_check, not Repo.maintenance(): `terms_versions` and `users`
+  # carry no tenant policy, and the claim must share Oban's connection so it
+  # commits or rolls back with the job inserts.
   @reminder_days 7
   @insert_chunk 1_000
 

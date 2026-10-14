@@ -18,12 +18,12 @@ defmodule Engram.Workers.LegalNoticeEmail do
       states: [:available, :scheduled, :executing, :retryable, :completed]
     ]
 
+  alias Engram.Accounts
   alias Engram.Accounts.User
   alias Engram.Legal
   alias Engram.Legal.TermsVersion
   alias Engram.Mailer
   alias Engram.Onboarding
-  alias Engram.Repo
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.seconds(30)
@@ -33,7 +33,7 @@ defmodule Engram.Workers.LegalNoticeEmail do
         args: %{"user_id" => id, "document" => doc, "version" => v, "kind" => kind}
       }) do
     with %User{deleted_at: nil, email: email} = user when is_binary(email) <-
-           Repo.get(User, id, skip_tenant_check: true),
+           Accounts.get_user(id),
          false <- Onboarding.accepted?(user, doc, v),
          %TermsVersion{} = version <- Legal.get(doc, v) do
       case Mailer.send_legal_notice(user, version, kind) do

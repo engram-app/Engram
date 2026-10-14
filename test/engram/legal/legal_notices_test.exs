@@ -1,8 +1,8 @@
 defmodule Engram.Legal.LegalNoticesTest do
   use Engram.DataCase, async: false
 
-  alias Engram.LegalFixtures
   alias Engram.Legal.VersionCache
+  alias Engram.LegalFixtures
   alias Engram.Onboarding
 
   setup do
