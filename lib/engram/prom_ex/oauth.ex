@@ -15,8 +15,16 @@ defmodule Engram.PromEx.OAuth do
       `:unsupported_grant_type`, `:grant_type_missing`, `:token_persist_failed`,
       `:client_auth_failed`, `:client_auth_unavailable`.
 
+    * `[:engram, :cimd, :fetch]` → `engram_prom_ex_cimd_fetch_total`, tags
+      `[:kind, :result, :reason]`, and
+      `engram_prom_ex_cimd_fetch_duration_milliseconds`, tags `[:kind, :result]`.
+      `kind` is `:jwks | :doc`; `result` is `:ok | :stale | :error` (stale =
+      the fetch failed and held keys were served: warn; error = nothing
+      usable: page); `reason` is `Engram.OAuth.Cimd.emit_fetch/4`'s closed
+      label set.
+
   Cardinality contract: never the client id, host or user agent. Those live on
-  the `oauth_token_rejected` log line.
+  the `oauth_token_rejected` / `mcp_cimd_fetch_failed` log lines.
   """
 
   use PromEx.Plugin
@@ -25,6 +33,7 @@ defmodule Engram.PromEx.OAuth do
   def event_metrics(opts) do
     otp_app = Keyword.fetch!(opts, :otp_app)
     metric_prefix = PromEx.metric_prefix(otp_app, :oauth)
+    cimd_prefix = PromEx.metric_prefix(otp_app, :cimd)
 
     Event.build(
       :engram_oauth_event_metrics,
@@ -34,6 +43,20 @@ defmodule Engram.PromEx.OAuth do
           event_name: [:engram, :oauth, :token],
           description: "OAuth token-endpoint outcomes by grant type, result and reason.",
           tags: [:grant_type, :result, :reason]
+        ),
+        counter(
+          cimd_prefix ++ [:fetch, :total],
+          event_name: [:engram, :cimd, :fetch],
+          description: "CIMD document and JWKS fetches by kind, result and reason.",
+          tags: [:kind, :result, :reason]
+        ),
+        distribution(
+          cimd_prefix ++ [:fetch, :duration, :milliseconds],
+          event_name: [:engram, :cimd, :fetch],
+          measurement: :duration_ms,
+          description: "CIMD document and JWKS fetch duration.",
+          tags: [:kind, :result],
+          reporter_options: [buckets: [50, 100, 250, 500, 1_000, 1_500, 2_000, 3_000, 5_000]]
         )
       ]
     )

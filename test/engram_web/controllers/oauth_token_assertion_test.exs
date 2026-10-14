@@ -366,8 +366,10 @@ defmodule EngramWeb.OAuthTokenAssertionTest do
           "client_assertion_type" => Jwks.assertion_type()
         })
 
-      body = conn |> post("/oauth/token", params) |> json_response(503)
+      conn = post(conn, "/oauth/token", params)
+      body = json_response(conn, 503)
       assert body["error"] == "temporarily_unavailable"
+      assert get_resp_header(conn, "retry-after") == ["2"]
     end
   end
 end

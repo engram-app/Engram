@@ -227,6 +227,9 @@ config :engram, Oban,
         {"16 5 * * *", Engram.Workers.TelemetryHeartbeat},
         # CIMD document refresh (#1642): documents carry a 24 h TTL.
         {"40 5 * * *", Engram.Workers.CimdRefresh},
+        # CIMD JWKS refresh (#1974): keeps the persisted key set fresh so the
+        # token path never fetches. Jittered inside the job.
+        {"*/5 * * * *", Engram.Workers.CimdRefresh, args: %{kind: "jwks", jitter_ms: 30_000}},
         # Account facts onto PostHog persons; no-op unless PostHog is configured.
         {"25 6 * * *", Engram.Workers.PostHogPersonSync}
       ]
@@ -255,6 +258,7 @@ config :logger, :default_formatter,
   metadata: [
     :attachment_id,
     :attempt,
+    :aud_form,
     :body_size,
     :cap,
     :category,
@@ -271,6 +275,7 @@ config :logger, :default_formatter,
     :conn_id,
     :customer_id,
     :device_id,
+    :dialed_ip,
     :drift_kind,
     :duration_ms,
     :error_code,
@@ -280,6 +285,7 @@ config :logger, :default_formatter,
     :exception,
     :exception_struct,
     :failed_count,
+    :family,
     :family_id,
     :field,
     :fields,

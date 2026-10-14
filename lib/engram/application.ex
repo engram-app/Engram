@@ -343,6 +343,9 @@ defmodule Engram.Application do
       # legal version, ...); subscribes to CacheSync (after PubSub) and gets
       # NOTIFY evictions from the listener above.
       Engram.Cache.Server,
+      # Single-flight lock per jwks_uri (Engram.OAuth.Cimd.JwksCache): ten
+      # token requests missing the same key on one node make one fetch.
+      {Registry, keys: :unique, name: Engram.OAuth.Cimd.JwksCache.Flights},
       Engram.Auth.SignupRejections,
       # Per-request origin counters, flushed in one statement every 30s. After
       # Repo so the shutdown flush can still write.

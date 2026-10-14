@@ -11,6 +11,8 @@ defmodule Engram.OAuth.Cimd.HttpFetcherTest do
   # :timeout}` in unrelated suites rather than as a failure here.
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Engram.OAuth.Cimd.HttpFetcher
 
   setup do
@@ -114,9 +116,92 @@ defmodule Engram.OAuth.Cimd.HttpFetcherTest do
     assert {:ok, %{"padding" => ^padding}} = HttpFetcher.fetch_target(target)
   end
 
-  test "reports a transport failure when nothing is listening", %{bypass: bypass, target: target} do
+  # Replaces the old `{:error, :fetch_failed}` assertion: that atom threw away
+  # the exception, which is why the 2026-10-13 ChatGPT 503 has no known cause.
+  test "reports a transport failure with its phase and reason", %{bypass: bypass, target: target} do
     Bypass.down(bypass)
-    assert {:error, :fetch_failed} = HttpFetcher.fetch_target(target)
+
+    {result, log} = with_log(fn -> HttpFetcher.fetch_target(target) end)
+
+    assert {:error, {:transport_error, :connect, :econnrefused}} = result
+    assert log =~ "mcp_cimd_fetch_failed"
+    assert log =~ "phase=connect"
+    assert log =~ "dialed_ip=127.0.0.1"
+  end
+
+  test "accepts application/jwk-set+json", %{bypass: bypass, target: target} do
+    Bypass.expect_once(bypass, "GET", "/doc.json", fn conn ->
+      respond(conn, 200, ~s({"keys":[]}), "application/jwk-set+json")
+    end)
+
+    assert {:ok, %{"keys" => []}} = HttpFetcher.fetch_target(target)
+  end
+
+  test "identifies itself with a user agent", %{bypass: bypass, target: target} do
+    Bypass.expect_once(bypass, "GET", "/doc.json", fn conn ->
+      assert ["Engram-OAuth/1.0 (+https://engram.page)"] =
+               Plug.Conn.get_req_header(conn, "user-agent")
+
+      respond(conn, 200, "{}", "application/json")
+    end)
+
+    assert {:ok, %{}} = HttpFetcher.fetch_target(target)
+  end
+
+  describe "address failover and the time budget" do
+    # TEST-NET-1 is never routed: a connect there either times out or fails
+    # fast, and both must fall through to the next validated address.
+    test "a black-holed first address fails over to the second within 3 s", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "GET", "/doc.json", fn conn ->
+        respond(conn, 200, ~s({"ok":true}), "application/json")
+      end)
+
+      target = %{
+        url: endpoint_url(bypass),
+        host: "localhost",
+        ips: [{192, 0, 2, 1}, {127, 0, 0, 1}]
+      }
+
+      {micros, result} = :timer.tc(fn -> HttpFetcher.fetch_target(target) end)
+
+      assert {:ok, %{"ok" => true}} = result
+      assert micros < 3_000_000
+    end
+
+    # A raw socket rather than Bypass: Bypass fails the test on exit when its
+    # handler is still mid-request, which is exactly the state under test.
+    test "a stalled body returns within the budget and logs phase=recv" do
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen)
+
+      server =
+        spawn(fn ->
+          {:ok, socket} = :gen_tcp.accept(listen)
+          {:ok, _request} = :gen_tcp.recv(socket, 0)
+
+          :ok =
+            :gen_tcp.send(
+              socket,
+              "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 64\r\n\r\n{\"keys\":"
+            )
+
+          Process.sleep(10_000)
+        end)
+
+      on_exit(fn ->
+        Process.exit(server, :kill)
+        :gen_tcp.close(listen)
+      end)
+
+      target = %{url: "http://127.0.0.1:#{port}/doc.json", host: "localhost"}
+
+      {{micros, result}, log} =
+        with_log(fn -> :timer.tc(fn -> HttpFetcher.fetch_target(target) end) end)
+
+      assert {:error, {:transport_error, :recv, _}} = result
+      assert micros < 3_500_000
+      assert log =~ "phase=recv"
+    end
   end
 
   # fetch/1 is guard-then-fetch. Proving the guard is actually wired in matters

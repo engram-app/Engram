@@ -65,6 +65,8 @@ defmodule Engram.OAuth.Cimd.Jwks do
   that matters.
   """
 
+  alias Engram.Logger.Metadata
+  alias Engram.OAuth.Cimd
   alias Engram.OAuth.Cimd.JwksCache
   alias Engram.OAuth.Client
 
@@ -87,6 +89,14 @@ defmodule Engram.OAuth.Cimd.Jwks do
   # a policy violation and is not.
   @clock_skew_seconds 120
 
+  # Leeway on `exp` only (#1974): a vendor a minute slow mints assertions that
+  # look just-expired on arrival. `nbf` keeps the wider skew above.
+  @exp_leeway_seconds 60
+
+  # NIST SP 800-131A floor. A smaller RSA key is factorable, so an assertion it
+  # signs proves nothing.
+  @min_rsa_bits 2048
+
   @type reason ::
           :no_jwks_uri
           | :malformed_assertion
@@ -97,7 +107,9 @@ defmodule Engram.OAuth.Cimd.Jwks do
           | :unknown_kid
           | :unusable_key
           | :jwks_unavailable
+          | :jwks_invalid
           | :jwks_rate_limited
+          | :key_too_small
           | :bad_signature
           | :wrong_issuer
           | :wrong_audience
@@ -130,6 +142,7 @@ defmodule Engram.OAuth.Cimd.Jwks do
     with {:ok, header} <- peek_header(assertion),
          {:ok, alg} <- allowed_alg(header, client),
          {:ok, key} <- resolve_key(client.jwks_uri, header["kid"], alg),
+         :ok <- check_key_size(key),
          {:ok, claims} <- verify_signature(assertion, alg, key) do
       validate_claims(claims, client, audiences)
     end
@@ -210,6 +223,21 @@ defmodule Engram.OAuth.Cimd.Jwks do
 
   defp usable_key?(_key, _alg), do: false
 
+  defp check_key_size(%{"kty" => "RSA", "n" => n}) when is_binary(n) do
+    case Base.url_decode64(n, padding: false) do
+      {:ok, modulus} ->
+        if modulus |> :binary.decode_unsigned() |> Integer.digits(2) |> length() < @min_rsa_bits,
+          do: {:error, :key_too_small},
+          else: :ok
+
+      # Unparseable: `build_signer/2` reports it as :unusable_key.
+      :error ->
+        :ok
+    end
+  end
+
+  defp check_key_size(_key), do: :ok
+
   # `Joken.Signer.create/2` raises on a key it cannot parse — a truncated or
   # standard-base64 `n`, a missing `kty`, an alg/key-family mismatch. That is a
   # vendor publishing something broken, which will never self-heal, and it must
@@ -246,22 +274,61 @@ defmodule Engram.OAuth.Cimd.Jwks do
     now = DateTime.utc_now() |> DateTime.to_unix()
     wire_id = client.cimd_url
 
+    result =
+      cond do
+        claims["iss"] != wire_id -> {:error, :wrong_issuer}
+        claims["sub"] != wire_id -> {:error, :wrong_issuer}
+        not audience_match?(claims["aud"], audiences) -> {:error, :wrong_audience}
+        not_yet_valid?(claims["nbf"], now) -> {:error, :assertion_not_yet_valid}
+        true -> validate_expiry(claims["exp"], now)
+      end
+
+    log_audience_form(client, claims["aud"], audiences)
+    result
+  end
+
+  # `aud` is a string or an array of strings. A trailing slash is ignored on
+  # both sides: vendors differ on `https://host` vs `https://host/`, and the
+  # two name the same issuer (#1974).
+  defp audience_match?(aud, audiences) when is_binary(aud),
+    do: normalize_aud(aud) in Enum.map(audiences, &normalize_aud/1)
+
+  defp audience_match?(aud, audiences) when is_list(aud),
+    do: Enum.any?(aud, &(is_binary(&1) and audience_match?(&1, audiences)))
+
+  defp audience_match?(_aud, _audiences), do: false
+
+  defp normalize_aud(aud), do: String.trim_trailing(aud, "/")
+
+  # rfc7523bis will require `aud` = our issuer, not the token endpoint. This
+  # line says which form each vendor sends today, so we know who breaks when
+  # we tighten. Only our own audience strings or a shape tag are logged, never
+  # the claim's raw value.
+  defp log_audience_form(client, aud, audiences) do
+    Logger.info(
+      "mcp_assertion_audience",
+      Metadata.with_category(:info, :lifecycle,
+        cimd_host: Cimd.host_of(client.cimd_url || ""),
+        aud_form: audience_form(aud, audiences)
+      )
+    )
+  end
+
+  defp audience_form(aud, audiences) when is_list(aud) do
+    "list:" <> Enum.map_join(aud, ",", &audience_form(&1, audiences))
+  end
+
+  defp audience_form(aud, [token_endpoint, issuer | _]) when is_binary(aud) do
+    slash = if String.ends_with?(aud, "/"), do: "+slash", else: ""
+
     cond do
-      claims["iss"] != wire_id -> {:error, :wrong_issuer}
-      claims["sub"] != wire_id -> {:error, :wrong_issuer}
-      not audience_match?(claims["aud"], audiences) -> {:error, :wrong_audience}
-      not_yet_valid?(claims["nbf"], now) -> {:error, :assertion_not_yet_valid}
-      true -> validate_expiry(claims["exp"], now)
+      normalize_aud(aud) == normalize_aud(token_endpoint) -> "token_endpoint" <> slash
+      normalize_aud(aud) == normalize_aud(issuer) -> "issuer" <> slash
+      true -> "other"
     end
   end
 
-  # `aud` is a string or an array of strings.
-  defp audience_match?(aud, audiences) when is_binary(aud), do: aud in audiences
-
-  defp audience_match?(aud, audiences) when is_list(aud),
-    do: Enum.any?(aud, &(&1 in audiences))
-
-  defp audience_match?(_aud, _audiences), do: false
+  defp audience_form(_aud, _audiences), do: "other"
 
   defp not_yet_valid?(nbf, now) when is_integer(nbf), do: nbf > now + @clock_skew_seconds
   defp not_yet_valid?(_nbf, _now), do: false
@@ -272,7 +339,7 @@ defmodule Engram.OAuth.Cimd.Jwks do
   # vendor doing something wrong — the second is us being stricter than the RFC.
   defp validate_expiry(exp, now) when is_integer(exp) do
     cond do
-      exp <= now ->
+      exp + @exp_leeway_seconds <= now ->
         {:error, :assertion_expired}
 
       exp - now > @max_lifetime_seconds + @clock_skew_seconds ->

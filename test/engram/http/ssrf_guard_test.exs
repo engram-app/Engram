@@ -153,6 +153,53 @@ defmodule Engram.Http.SsrfGuardTest do
     end
   end
 
+  describe "resolve/2 resolution deadline and candidates (#1974)" do
+    defp resolver(answers) do
+      fn _host, family -> Map.get(answers, family, []) end
+    end
+
+    test "a slow resolver gives up within 1 s" do
+      slow = fn _host, _family ->
+        Process.sleep(5_000)
+        [{93, 184, 216, 34}]
+      end
+
+      {micros, result} =
+        :timer.tc(fn -> SsrfGuard.resolve("https://slow.example/x", getaddrs: slow) end)
+
+      assert {:error, :dns_failure} = result
+      assert micros < 1_300_000
+    end
+
+    test "returns every IPv4 answer as a failover candidate, IPv4 only" do
+      answers = %{
+        inet: [{93, 184, 216, 34}, {93, 184, 216, 35}],
+        inet6: [{0x2606, 0x2800, 0x220, 1, 0x248, 0x1893, 0x25C8, 0x1946}]
+      }
+
+      assert {:ok, target} =
+               SsrfGuard.resolve("https://example.com/x", getaddrs: resolver(answers))
+
+      assert target.ips == [{93, 184, 216, 34}, {93, 184, 216, 35}]
+      assert target.ip == {93, 184, 216, 34}
+    end
+
+    test "falls back to IPv6 only when there is no IPv4 answer" do
+      v6 = {0x2606, 0x2800, 0x220, 1, 0x248, 0x1893, 0x25C8, 0x1946}
+      answers = %{inet6: [v6]}
+
+      assert {:ok, %{ips: [^v6]}} =
+               SsrfGuard.resolve("https://example.com/x", getaddrs: resolver(answers))
+    end
+
+    test "still refuses the whole name when any answer, of either family, is private" do
+      answers = %{inet: [{93, 184, 216, 34}], inet6: [{0, 0, 0, 0, 0, 0, 0, 1}]}
+
+      assert {:error, :private_address} =
+               SsrfGuard.resolve("https://example.com/x", getaddrs: resolver(answers))
+    end
+  end
+
   describe "public_address?/1" do
     test "accepts ordinary public addresses" do
       assert SsrfGuard.public_address?({93, 184, 216, 34})

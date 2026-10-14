@@ -130,4 +130,48 @@ defmodule Engram.Workers.CimdRefreshTest do
       assert {:ok, %{}} = perform_job(CimdRefresh, %{})
     end
   end
+
+  # #1974: the token path must never block on the network once a key exists,
+  # so the JWKS of every CIMD client is refetched in the background.
+  describe "perform/1 with kind=jwks" do
+    @jwks_uri "https://claude.ai/.well-known/jwks.json"
+
+    test "refetches every distinct jwks_uri once and persists the result" do
+      a = cimd_client(jwks_uri: @jwks_uri)
+
+      b =
+        insert(:oauth_client,
+          kind: "mcp",
+          cimd_url: "https://claude.ai/other",
+          jwks_uri: @jwks_uri
+        )
+
+      insert(:oauth_client, kind: "mcp", cimd_url: "https://claude.ai/third")
+
+      keys = [%{"kty" => "RSA", "kid" => "k1", "n" => "abc", "e" => "AQAB"}]
+      expect(FetcherMock, :fetch, 1, fn @jwks_uri -> {:ok, %{"keys" => keys}} end)
+
+      assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{"kind" => "jwks"})
+
+      for client <- [a, b] do
+        assert reload(client).jwks_cached == %{"keys" => keys}
+      end
+    end
+
+    test "a failing vendor keeps its last good keys" do
+      keys = [%{"kty" => "RSA", "kid" => "k1"}]
+
+      client =
+        cimd_client(
+          jwks_uri: @jwks_uri,
+          jwks_cached: %{"keys" => keys},
+          jwks_fetched_at: aged(1)
+        )
+
+      expect(FetcherMock, :fetch, fn @jwks_uri -> {:error, {:http_status, 503}} end)
+
+      assert {:ok, %{failed: 1}} = perform_job(CimdRefresh, %{"kind" => "jwks"})
+      assert reload(client).jwks_cached == %{"keys" => keys}
+    end
+  end
 end

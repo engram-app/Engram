@@ -1,6 +1,7 @@
 defmodule Engram.Workers.CimdRefresh do
   @moduledoc """
-  Daily refresh of every stored CIMD client document.
+  Daily refresh of every stored CIMD client document, and (`kind: "jwks"`,
+  every 5 min) of every CIMD client's JWKS. See `perform/1`.
 
   `Engram.OAuth.Cimd.ensure_client/1` is called from exactly one place,
   `Engram.OAuth.fetch_client/1`, which only the authorize path reaches. So
@@ -60,6 +61,7 @@ defmodule Engram.Workers.CimdRefresh do
 
   alias Engram.Logger.Metadata
   alias Engram.OAuth.Cimd
+  alias Engram.OAuth.Cimd.JwksCache
   alias Engram.OAuth.Client
   alias Engram.Repo
 
@@ -69,11 +71,21 @@ defmodule Engram.Workers.CimdRefresh do
   def timeout(_job), do: :timer.minutes(10)
 
   @impl Oban.Worker
+  def perform(%Oban.Job{args: %{"kind" => "jwks"} = args}) do
+    jitter(args)
+    uris = jwks_uris()
+    tally = Enum.reduce(uris, %{}, &tally_jwks/2)
+
+    log_sweep("mcp_jwks_refresh_sweep", length(uris), tally)
+
+    {:ok, tally}
+  end
+
   def perform(%Oban.Job{}) do
     rows = cimd_rows()
     tally = Enum.reduce(rows, %{}, &tally_refresh/2)
 
-    log_sweep(length(rows), tally)
+    log_sweep("mcp_cimd_refresh_sweep", length(rows), tally)
 
     {:ok, tally}
   end
@@ -90,6 +102,38 @@ defmodule Engram.Workers.CimdRefresh do
       skip_tenant_check: true
     )
   end
+
+  # #1974: the JWKS sweep. Every 5 min, so the token path finds a fresh
+  # persisted key set instead of fetching. One fetch per distinct URI; the
+  # result lands on every row naming it (`JwksCache.refresh_background/1`). A
+  # failure leaves the last good keys in place.
+  defp jwks_uris do
+    Repo.all(
+      from(c in Client,
+        where: not is_nil(c.cimd_url) and not is_nil(c.jwks_uri),
+        distinct: true,
+        select: c.jwks_uri
+      ),
+      skip_tenant_check: true
+    )
+  end
+
+  defp tally_jwks(uri, acc) do
+    outcome =
+      case JwksCache.refresh_background(uri) do
+        {:ok, _keys} -> :refreshed
+        {:error, _reason} -> :failed
+      end
+
+    Map.update(acc, outcome, 1, &(&1 + 1))
+  end
+
+  # Spreads the vendor-facing fetches off the exact cron minute. Cron args set
+  # it; a direct perform (tests) passes none and does not sleep.
+  defp jitter(%{"jitter_ms" => max}) when is_integer(max) and max > 0,
+    do: Process.sleep(:rand.uniform(max))
+
+  defp jitter(_args), do: :ok
 
   defp tally_refresh({url, before_at}, acc) do
     outcome =
@@ -112,9 +156,9 @@ defmodule Engram.Workers.CimdRefresh do
   # One line per sweep. Stays at `:info`: with failures folded into `unchanged`
   # this worker has nothing to escalate that its two existing signals do not
   # already carry, and a routine all-fresh sweep is not news.
-  defp log_sweep(total, tally) do
+  defp log_sweep(event, total, tally) do
     Logger.info(
-      "mcp_cimd_refresh_sweep total=#{total} #{format_tally(tally)}",
+      "#{event} total=#{total} #{format_tally(tally)}",
       Metadata.with_category(:info, :lifecycle)
     )
   end

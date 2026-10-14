@@ -9,6 +9,7 @@ defmodule Engram.OAuth.Cimd.JwksTest do
   alias Engram.OAuth.Cimd.FetcherMock
   alias Engram.OAuth.Cimd.Jwks
   alias Engram.OAuth.Client
+  alias Engram.Repo
 
   setup :verify_on_exit!
 
@@ -248,6 +249,198 @@ defmodule Engram.OAuth.Cimd.JwksTest do
       expect(FetcherMock, :fetch, fn @jwks_uri -> {:error, :fetch_failed} end)
 
       assert {:error, :jwks_unavailable} =
+               Jwks.verify_assertion(client(), sign(private, claims()), [@audience])
+    end
+  end
+
+  # #1974 PR 2 spec. The 2026-10-13 ChatGPT 503 was a JWKS fetch timeout on a
+  # key we had already verified many times: every one of these fails on a
+  # cache that forgets the key the moment a refetch fails.
+  describe "never fail when we already hold a good key" do
+    defp persisted_client(public, fetched_at) do
+      Repo.insert!(
+        %Client{
+          cimd_url: @client_url,
+          cimd_fetched_at: DateTime.utc_now(),
+          client_name: "ChatGPT",
+          redirect_uris: ["https://chatgpt.com/cb"],
+          token_endpoint_auth_method: "private_key_jwt",
+          token_endpoint_auth_signing_alg: "RS256",
+          jwks_uri: @jwks_uri,
+          jwks_cached: %{"keys" => [public]},
+          jwks_fetched_at: fetched_at,
+          kind: "mcp"
+        },
+        skip_tenant_check: true
+      )
+    end
+
+    defp ago(seconds),
+      do: DateTime.add(DateTime.utc_now(), -seconds) |> DateTime.truncate(:second)
+
+    test "a new node with a persisted JWKS verifies with no outbound fetch", %{
+      private: private,
+      public: public
+    } do
+      persisted_client(public, ago(60))
+      # No FetcherMock expectation: any fetch fails the test.
+      assert :ok = Jwks.verify_assertion(client(), sign(private, claims()), [@audience])
+    end
+
+    test "an expired key set is still served while the vendor is failing", %{
+      private: private,
+      public: public
+    } do
+      persisted_client(public, ago(2 * 24 * 3600))
+
+      expect(FetcherMock, :fetch, fn @jwks_uri ->
+        {:error, {:transport_error, :connect, :timeout}}
+      end)
+
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :cimd, :fetch]])
+
+      assert :ok = Jwks.verify_assertion(client(), sign(private, claims()), [@audience])
+
+      # Stale-served is a warning, not a page: the metric must tell them apart.
+      assert_received {[:engram, :cimd, :fetch], ^ref, %{duration_ms: _},
+                       %{kind: :jwks, result: :stale, reason: :connect}}
+
+      :telemetry.detach(ref)
+    end
+
+    test "a key set older than the stale limit is not served", %{private: private, public: public} do
+      persisted_client(public, ago(8 * 24 * 3600))
+      expect(FetcherMock, :fetch, fn @jwks_uri -> {:error, {:http_status, 503}} end)
+
+      assert {:error, :jwks_unavailable} =
+               Jwks.verify_assertion(client(), sign(private, claims()), [@audience])
+    end
+
+    test "a successful fetch is persisted on every client row naming that jwks_uri", %{
+      private: private,
+      public: public
+    } do
+      row = persisted_client(%{"kid" => "old"}, ago(2 * 24 * 3600))
+      expect_jwks(public)
+
+      assert :ok = Jwks.verify_assertion(client(), sign(private, claims()), [@audience])
+
+      reloaded = Repo.get!(Client, row.client_id, skip_tenant_check: true)
+      assert reloaded.jwks_cached == %{"keys" => [public]}
+      assert DateTime.diff(DateTime.utc_now(), reloaded.jwks_fetched_at) < 5
+    end
+
+    test "10 concurrent cold misses fetch exactly once", %{private: private, public: public} do
+      Mox.set_mox_global()
+
+      expect(FetcherMock, :fetch, 1, fn @jwks_uri ->
+        Process.sleep(200)
+        {:ok, %{"keys" => [public]}}
+      end)
+
+      assertion = sign(private, claims())
+
+      results =
+        1..10
+        |> Enum.map(fn _ ->
+          Task.async(fn -> Jwks.verify_assertion(client(), assertion, [@audience]) end)
+        end)
+        |> Task.await_many(5_000)
+
+      assert Enum.all?(results, &(&1 == :ok))
+    end
+
+    # Without a per-URI cooldown, 10 random kids exhaust the 10/min rotation
+    # bucket and the vendor's genuine rotation is refused for up to a minute.
+    test "random-kid probes cannot starve a real rotation", %{private: private, public: public} do
+      # 1 initial fetch + 1 kid-miss refetch; the other 19 probes are inside
+      # the cooldown and cost nothing.
+      expect_jwks(public, 2)
+
+      for n <- 1..20 do
+        probe = sign(private, claims(), "RS256", %{"kid" => "probe-#{n}"})
+        assert {:error, :unknown_kid} = Jwks.verify_assertion(client(), probe, [@audience])
+      end
+
+      # 30 s later the vendor really rotates.
+      Engram.OAuth.Cimd.JwksCache.expire_kid_miss_cooldown(@jwks_uri)
+      rotated = %{public | "kid" => "rotated"}
+      expect_jwks(rotated, 1)
+
+      assertion = sign(private, claims(), "RS256", %{"kid" => "rotated"})
+      assert :ok = Jwks.verify_assertion(client(), assertion, [@audience])
+    end
+  end
+
+  describe "error classification" do
+    for status <- [404, 301] do
+      test "HTTP #{status} from the vendor is terminal", %{private: private} do
+        expect(FetcherMock, :fetch, fn @jwks_uri -> {:error, {:http_status, unquote(status)}} end)
+
+        assert {:error, :jwks_invalid} =
+                 Jwks.verify_assertion(client(), sign(private, claims()), [@audience])
+      end
+    end
+
+    test "a non-JSON body is terminal", %{private: private} do
+      expect(FetcherMock, :fetch, fn @jwks_uri -> {:error, :not_json} end)
+
+      assert {:error, :jwks_invalid} =
+               Jwks.verify_assertion(client(), sign(private, claims()), [@audience])
+    end
+
+    test "a document with no keys array is terminal", %{private: private} do
+      expect(FetcherMock, :fetch, fn @jwks_uri -> {:ok, %{"nope" => 1}} end)
+
+      assert {:error, :jwks_invalid} =
+               Jwks.verify_assertion(client(), sign(private, claims()), [@audience])
+    end
+
+    for error <- [{:http_status, 502}, {:http_status, 429}, {:transport_error, :recv, :timeout}] do
+      test "#{inspect(error)} is transient", %{private: private} do
+        expect(FetcherMock, :fetch, fn @jwks_uri -> {:error, unquote(Macro.escape(error))} end)
+
+        assert {:error, :jwks_unavailable} =
+                 Jwks.verify_assertion(client(), sign(private, claims()), [@audience])
+      end
+    end
+
+    test "jwks_invalid is not transient" do
+      refute Jwks.transient?(:jwks_invalid)
+    end
+  end
+
+  describe "assertion checks (P2)" do
+    test "tolerates an exp up to 60 s in the past", %{private: private, public: public} do
+      expect_jwks(public)
+      exp = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.-(30)
+
+      assert :ok =
+               Jwks.verify_assertion(client(), sign(private, claims(%{"exp" => exp})), [@audience])
+    end
+
+    test "accepts aud with a trailing slash", %{private: private, public: public} do
+      expect_jwks(public)
+      assertion = sign(private, claims(%{"aud" => @issuer <> "/"}))
+      assert :ok = Jwks.verify_assertion(client(), assertion, [@audience, @issuer])
+    end
+
+    test "accepts aud without the trailing slash we were configured with", %{
+      private: private,
+      public: public
+    } do
+      expect_jwks(public)
+      assertion = sign(private, claims(%{"aud" => @issuer}))
+      assert :ok = Jwks.verify_assertion(client(), assertion, [@issuer <> "/"])
+    end
+
+    test "refuses an RSA key under 2048 bits" do
+      jwk = JOSE.JWK.generate_key({:rsa, 1024})
+      {_, private} = JOSE.JWK.to_map(jwk)
+      {_, public} = JOSE.JWK.to_public_map(jwk)
+      expect_jwks(Map.put(public, "kid", @kid))
+
+      assert {:error, :key_too_small} =
                Jwks.verify_assertion(client(), sign(private, claims()), [@audience])
     end
   end

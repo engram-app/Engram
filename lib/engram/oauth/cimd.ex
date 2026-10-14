@@ -78,6 +78,17 @@ defmodule Engram.OAuth.Cimd do
   alias Engram.Repo
   alias EngramWeb.RateLimiter
 
+  # Fetch failures a retry cannot fix: the vendor answered, with something
+  # that is not a usable document, or the URL itself is refused.
+  @permanent_fetch_errors ~w(not_json invalid_json body_too_large no_keys_array
+                             private_address invalid_url url_too_long not_https
+                             missing_host userinfo_present fragment_present
+                             unsupported_port)a
+
+  # Reasons that are already a bounded atom and become their own metric label.
+  @labelled_fetch_errors @permanent_fetch_errors ++
+                           ~w(dns_failure budget_exhausted jwks_rate_limited rate_limited)a
+
   @ttl_seconds 24 * 3600
 
   # Per minute. The global bucket is the one that matters: an attacker varying
@@ -174,7 +185,7 @@ defmodule Engram.OAuth.Cimd do
 
   defp fetch_and_store(url, existing) do
     with :ok <- rate_limit(url, existing),
-         {:ok, document} <- Fetcher.impl().fetch(url),
+         {:ok, document} <- timed_fetch(url, existing),
          :ok <- validate_document(document, url),
          {:ok, negotiated} <- negotiate(document),
          {:ok, client} <- store(url, negotiated, existing) do
@@ -184,6 +195,19 @@ defmodule Engram.OAuth.Cimd do
         log_unless_rate_limited("mcp_cimd_rejected", url, reason)
         {:error, reason}
     end
+  end
+
+  defp timed_fetch(url, existing) do
+    started = System.monotonic_time(:millisecond)
+    result = Fetcher.impl().fetch(url)
+    duration = System.monotonic_time(:millisecond) - started
+
+    case result do
+      {:ok, _} -> emit_fetch(:doc, :ok, nil, duration)
+      {:error, cause} -> emit_fetch(:doc, if(existing, do: :stale, else: :error), cause, duration)
+    end
+
+    result
   end
 
   # Capability metadata is NEGOTIATED, not enforced.
@@ -310,6 +334,48 @@ defmodule Engram.OAuth.Cimd do
       {:deny, _} -> {:error, :rate_limited}
     end
   end
+
+  # ── Fetch telemetry and error classification (#1974) ────────────────
+
+  @doc """
+  True when a fetch failure is ours or the vendor's TRANSIENT problem and a
+  retry could succeed: a transport error, a 5xx, a 429, DNS, or a reason we do
+  not recognise (retryable is the safer default). A vendor answering with a
+  4xx/3xx or something that is not a usable document is not transient.
+  """
+  @spec transient_fetch_error?(term()) :: boolean()
+  def transient_fetch_error?({:http_status, status}) when is_integer(status),
+    do: status >= 500 or status == 429
+
+  def transient_fetch_error?(reason) when reason in @permanent_fetch_errors, do: false
+  def transient_fetch_error?(_reason), do: true
+
+  @doc """
+  Emits `[:engram, :cimd, :fetch]` for `engram_prom_ex_cimd_fetch_total` and
+  its duration histogram. `result` is `:ok`, `:stale` (the fetch failed and a
+  held key set was served: a warning) or `:error` (nothing usable: a page).
+  Every metadata value is a closed atom set.
+  """
+  @spec emit_fetch(:jwks | :doc, :ok | :stale | :error, term(), non_neg_integer()) :: :ok
+  def emit_fetch(kind, result, cause, duration_ms) do
+    :telemetry.execute([:engram, :cimd, :fetch], %{duration_ms: duration_ms}, %{
+      kind: kind,
+      result: result,
+      reason: fetch_reason_label(cause)
+    })
+  end
+
+  defp fetch_reason_label(nil), do: :none
+
+  defp fetch_reason_label({:transport_error, phase, _}) when phase in [:connect, :tls, :recv],
+    do: phase
+
+  defp fetch_reason_label({:http_status, 429}), do: :http_429
+  defp fetch_reason_label({:http_status, s}) when is_integer(s) and s >= 500, do: :http_5xx
+  defp fetch_reason_label({:http_status, s}) when is_integer(s) and s >= 400, do: :http_4xx
+  defp fetch_reason_label({:http_status, s}) when is_integer(s), do: :http_3xx
+  defp fetch_reason_label(reason) when reason in @labelled_fetch_errors, do: reason
+  defp fetch_reason_label(_reason), do: :other
 
   @doc """
   The host of a URL, or `"unknown"`.

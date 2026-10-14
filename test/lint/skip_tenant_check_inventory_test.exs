@@ -89,6 +89,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/logs.ex" => 2,
     "engram/oauth.ex" => 14,
     "engram/oauth/cimd.ex" => 3,
+    "engram/oauth/cimd/jwks_cache.ex" => 2,
     "engram/onboarding.ex" => 2,
     # TenancyGuard's behavioural probe. The one site in this inventory where
     # the keyword is an accurate DECLARATION rather than a concession: the
@@ -104,7 +105,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/telemetry/install_pings.ex" => 1,
     "engram/usage_meters.ex" => 11,
     "engram/workers/backfill_crdt_head.ex" => 1,
-    "engram/workers/cimd_refresh.ex" => 1,
+    "engram/workers/cimd_refresh.ex" => 2,
     "engram/workers/cleanup_vault.ex" => 1,
     "engram/workers/finalize_revision_sweep.ex" => 1,
     "engram/workers/inactivity_cleanup.ex" => 4,

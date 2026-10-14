@@ -258,7 +258,10 @@ defmodule EngramWeb.OAuthTokenController do
   defp temporarily_unavailable(conn, grant_type) do
     emit(grant_type, :rejected, "temporarily_unavailable", :client_auth_unavailable)
 
+    # A hint to retry soon (#1974): ChatGPT did not retry the 2026-10-13 503 at
+    # all, and the condition behind it clears within seconds.
     conn
+    |> put_resp_header("retry-after", "2")
     |> put_status(:service_unavailable)
     |> json(%{error: "temporarily_unavailable"})
   end
