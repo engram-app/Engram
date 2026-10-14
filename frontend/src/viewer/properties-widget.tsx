@@ -33,7 +33,7 @@ const KEY_CELL =
 	"flex min-h-7 w-36 min-w-36 shrink-0 items-center overflow-hidden border-border border-r";
 
 // One box per row so the key/value boundary and the row boundary both read.
-const ROW = "flex items-start rounded-md border border-border";
+const ROW = "flex items-stretch rounded-md border border-border";
 
 // Anything this editor opens that renders outside its own DOM subtree. Treated
 // as "inside" for the click-away rule.
@@ -468,7 +468,7 @@ export function PropertiesWidget({ doc, draft = false, onAbandonDraft }: Props) 
 									size="icon-sm"
 									aria-label={t("Remove {key}", { key: row.key })}
 									onClick={() => removeKey(doc, row.key)}
-									className="mr-1 opacity-0 focus:opacity-100 group-hover:opacity-100"
+									className="mr-1 self-center opacity-0 focus:opacity-100 group-hover:opacity-100"
 								>
 									<X aria-hidden="true" />
 								</Button>
