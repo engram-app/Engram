@@ -17,7 +17,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Catalog, StoredState } from "../src/i18n/core/core";
 import { run } from "../src/i18n/core/run";
-import { EMAIL_SOURCES, emailEntries } from "../src/i18n/email-keys";
+import { EMAIL_GLOSSARY, EMAIL_SOURCES, emailEntries } from "../src/i18n/email-keys";
 import { scannedFiles, usedEntries } from "../src/i18n/keys-scan";
 import { LOCALES } from "../src/i18n/locales";
 import { LEGACY_VERSION, profile, type Target } from "../src/i18n/translate-profile";
@@ -127,10 +127,17 @@ const emailResults = await translate({
 	entries: emailEntries(EMAIL_SOURCES.map((f) => readFileSync(join(backend, f), "utf8"))),
 	dir: join(backend, "priv", "i18n", "email"),
 	resumeDir: flag("--resume-email"),
-	load: (dir, code) => {
+	// Glossary terms come from the web catalog, so both say "vault" the same way.
+	load: async (dir, code) => {
 		const file = join(dir, `${code}.json`);
 		const catalog: Catalog = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
-		return Promise.resolve(catalog);
+		const web = await loadFrom(localeDir, code);
+		for (const term of EMAIL_GLOSSARY) {
+			if (typeof web[term] === "string") {
+				catalog[term] = web[term];
+			}
+		}
+		return catalog;
 	},
 	ext: "json",
 	format: false,

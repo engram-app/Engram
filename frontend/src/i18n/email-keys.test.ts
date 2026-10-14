@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Catalog, LocaleState } from "./core/core";
 import { sourceProblems } from "./core/core";
-import { EMAIL_SOURCES, emailEntries } from "./email-keys";
+import { EMAIL_GLOSSARY, EMAIL_SOURCES, emailEntries } from "./email-keys";
 import { LOCALES } from "./locales";
 import { tr } from "./translate-profile";
 
@@ -19,11 +19,16 @@ describe("emailEntries", () => {
 			"Hi {name},",
 			'Your vault "{vault}" was deleted.',
 			"Analytics linked.",
+			...EMAIL_GLOSSARY,
 		]);
+	});
+	it("adds the glossary terms, so emails say vault the way the app does", () => {
+		const keys = emailEntries(['t(l, "Hi.")']).map((e) => e.key);
+		expect(keys).toEqual(["Hi.", ...EMAIL_GLOSSARY]);
 	});
 	it("ignores translate calls in comments", () => {
 		const elixir = ['  # Each sentence is one `t(l, "...")` call.', '  t(l, "Real.")'].join("\n");
-		expect(emailEntries([elixir]).map((e) => e.key)).toEqual(["Real."]);
+		expect(emailEntries([elixir]).map((e) => e.key)).toEqual(["Real.", ...EMAIL_GLOSSARY]);
 	});
 });
 
@@ -44,4 +49,14 @@ describe("committed email catalogs", () => {
 		const catalog = read(`${code}.json`) as Catalog;
 		expect(tr.catalogProblems(entries, catalog, code, states[code])).toEqual([]);
 	});
+	it.each(LOCALES.filter((l) => l !== "en"))(
+		"%s uses the web app's glossary terms",
+		async (code) => {
+			const email = read(`${code}.json`) as Catalog;
+			const web: { default: Catalog } = await import(`./locale/${code}.ts`);
+			for (const term of EMAIL_GLOSSARY) {
+				expect(email[term]).toBe(web.default[term]);
+			}
+		},
+	);
 });

@@ -85,7 +85,7 @@ defmodule Engram.Mailer do
       """
       <p>#{t(l, "Hi,")}</p>
       <p>#{t(l, "This is your final notice. Your Engram vault will be auto-deleted in about 10 days unless you sync at least once before then.")}</p>
-      <p>#{t(l, "Open Obsidian with the Engram plugin enabled to keep your vault. Already moved on? No action needed, your data will be removed automatically.")}</p>
+      <p>#{t(l, "Open Obsidian with the Engram plugin enabled to keep your vault. Not using Engram anymore? No action needed, your data will be removed automatically.")}</p>
       <p>Engram</p>
       """,
       []
@@ -143,7 +143,7 @@ defmodule Engram.Mailer do
 
     body = """
     <mj-text>#{t(l, "Your Engram vault \"{vault}\" has been deleted.", vault: vault_name)}</mj-text>
-    <mj-text>#{t(l, "It will be permanently removed on {date}. Until then you can restore it, or if you meant to delete it, remove it permanently now, from your vault settings.", date: I18n.date(l, purge_date))}</mj-text>
+    <mj-text>#{t(l, "It will be permanently removed on {date}.", date: I18n.date(l, purge_date))} #{t(l, "Until then you can restore it from your vault settings, or remove it permanently now if you meant to delete it.")}</mj-text>
     #{button(manage_url, t(l, "Manage vault"))}
     <mj-text>#{t(l, "No action is needed if you want it gone; it will be cleaned up automatically.")}</mj-text>
     """
@@ -163,60 +163,92 @@ defmodule Engram.Mailer do
   def send_legal_notice(%User{email: email} = user, version, kind)
       when kind in ["notice", "reminder"] do
     l = I18n.locale_for(user)
-    doc = document_name(l, version.document)
+    doc = version.document
     date = I18n.date(l, version.effective_date)
-    page = Legal.url(version.document)
-
-    subject =
-      if kind == "reminder",
-        do: I18n.t(l, "Engram {document} Reminder", document: doc),
-        else: I18n.t(l, "Engram {document} Update", document: doc)
-
-    opening =
-      if kind == "reminder",
-        do:
-          t(l, "A quick reminder that Engram's updated {document} takes effect on {date}.",
-            document: doc,
-            date: date
-          ),
-        else:
-          t(
-            l,
-            "Thank you for using Engram. I wanted to let you know that I updated Engram's {document}. The new version takes effect on {date}.",
-            document: doc,
-            date: date
-          )
+    page = Legal.url(doc)
 
     action =
       if version.material,
         do: """
-        <mj-text>#{t(l, "To keep using Engram from {date}, please review and accept the new version in the app before then.", date: date)}</mj-text>
+        <mj-text>#{t(l, "Starting {date}, you need to accept the new version to keep using Engram. Please review it in the app before then.", date: date)}</mj-text>
         #{button(Legal.accept_url(), t(l, "Review and accept"))}
-        <mj-text><a href="#{page}">#{t(l, "Read the full {document}", document: doc)}</a></mj-text>
+        <mj-text><a href="#{page}">#{legal_text(l, doc, :read_full)}</a></mj-text>
         """,
         else: """
         <mj-text>#{t(l, "You do not need to do anything.")}</mj-text>
-        #{button(page, t(l, "Read the {document}", document: doc))}
+        #{button(page, legal_text(l, doc, :read))}
         """
 
     body = """
     <mj-text>#{greeting(l, user)}</mj-text>
-    <mj-text>#{opening}</mj-text>
-    <mj-text>#{t(l, "What changed: {changelog}", changelog: I18n.t(l, version.changelog || ""))}</mj-text>
+    <mj-text>#{legal_text(l, doc, kind, date: date)}</mj-text>
+    <mj-text>#{t(l, "Summary of the changes: {changelog}", changelog: I18n.t(l, version.changelog || ""))}</mj-text>
     #{action}
     <mj-text>#{t(l, "If you have any questions or concerns, write to me at {email}.", email: "privacy@engram.page")}</mj-text>
     <mj-text>Todd</mj-text>
     """
 
-    render_and_deliver(email, subject, body, l)
+    render_and_deliver(email, legal_subject(l, doc, kind), body, l)
   end
+
+  # Whole sentences per document, never "{document}" spliced into one: the
+  # article, case and gender around the name differ per language and per
+  # document, and the model cannot fix grammar it does not see.
+  defp legal_subject(l, "privacy_policy", "notice"), do: I18n.t(l, "Engram Privacy Policy Update")
+
+  defp legal_subject(l, "privacy_policy", "reminder"),
+    do: I18n.t(l, "Engram Privacy Policy Reminder")
+
+  defp legal_subject(l, "terms_of_service", "notice"),
+    do: I18n.t(l, "Engram Terms of Service Update")
+
+  defp legal_subject(l, "terms_of_service", "reminder"),
+    do: I18n.t(l, "Engram Terms of Service Reminder")
+
+  defp legal_text(l, doc, line, vars \\ [])
+
+  defp legal_text(l, "privacy_policy", "notice", vars),
+    do:
+      t(
+        l,
+        "Thank you for using Engram. I wanted to let you know that I updated the Privacy Policy for Engram. The new version takes effect on {date}.",
+        vars
+      )
+
+  defp legal_text(l, "terms_of_service", "notice", vars),
+    do:
+      t(
+        l,
+        "Thank you for using Engram. I wanted to let you know that I updated the Terms of Service for Engram. The new version takes effect on {date}.",
+        vars
+      )
+
+  defp legal_text(l, "privacy_policy", "reminder", vars),
+    do:
+      t(
+        l,
+        "A quick reminder that the updated Privacy Policy for Engram takes effect on {date}.",
+        vars
+      )
+
+  defp legal_text(l, "terms_of_service", "reminder", vars),
+    do:
+      t(
+        l,
+        "A quick reminder that the updated Terms of Service for Engram take effect on {date}.",
+        vars
+      )
+
+  defp legal_text(l, "privacy_policy", :read, _), do: t(l, "Read the Privacy Policy")
+  defp legal_text(l, "terms_of_service", :read, _), do: t(l, "Read the Terms of Service")
+  defp legal_text(l, "privacy_policy", :read_full, _), do: t(l, "Read the full Privacy Policy")
+
+  defp legal_text(l, "terms_of_service", :read_full, _),
+    do: t(l, "Read the full Terms of Service")
 
   # Plain-text values (names, dates) go into `vars`; the result is escaped
   # once, here, so translated text and user input both reach HTML safely.
   defp t(l, key, vars \\ []), do: Template.esc(I18n.t(l, key, vars))
-
-  defp document_name(l, "terms_of_service"), do: I18n.t(l, "Terms of Service")
-  defp document_name(l, "privacy_policy"), do: I18n.t(l, "Privacy Policy")
 
   defp button(href, label),
     do:
