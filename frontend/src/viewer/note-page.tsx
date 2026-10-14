@@ -65,6 +65,7 @@ import { nextCopyName } from "./tree-actions/duplicate";
 import { MoveDialog } from "./tree-actions/move-dialog";
 import { RenameInput } from "./tree-actions/rename-input";
 import { renameBaseName } from "./tree-actions/rename-path";
+import { useDocReady } from "./use-doc-ready";
 import { useLiveContent } from "./use-live-content";
 import {
 	buildWikiMap,
@@ -405,6 +406,9 @@ export default function NotePage() {
 	const notePath = shownPath;
 	const noteContent = shown?.note.content;
 	const liveContent = useLiveContent(handle?.ytext ?? null, noteContent ?? "");
+	// `handle`, once it holds the note. Until then the editor slot
+	// keeps its placeholder; see useDocReady for the layout shift this avoids.
+	const readyHandle = useDocReady(handle?.doc ?? null, (noteContent ?? "") !== "") ? handle : null;
 	const outlineNode = useMemo(
 		() => (notePath === undefined ? null : <NoteToc content={liveContent} />),
 		[notePath, liveContent],
@@ -776,14 +780,14 @@ export default function NotePage() {
 						onCancelRename={() => setRenaming(null)}
 					/>
 
-					{handle && mode === "rendered" ? (
+					{readyHandle && mode === "rendered" ? (
 						<PropertiesWidget
-							doc={handle.doc}
+							doc={readyHandle.doc}
 							draft={frontmatterDraft}
 							onAbandonDraft={() => setFrontmatterDraft(false)}
 						/>
 					) : null}
-					{handle && mode === "raw" ? <RawFrontmatterEditor doc={handle.doc} /> : null}
+					{readyHandle && mode === "raw" ? <RawFrontmatterEditor doc={readyHandle.doc} /> : null}
 
 					{mode === "reading" ? (
 						// pt matches .cm-content's 20px top padding in note-editor.tsx so
@@ -804,10 +808,10 @@ export default function NotePage() {
 						<Suspense
 							fallback={<p className="p-5 text-muted-foreground">{t("Loading editor…")}</p>}
 						>
-							{handle ? (
+							{readyHandle ? (
 								<NoteEditor
-									ytext={handle.ytext}
-									awareness={handle.awareness}
+									ytext={readyHandle.ytext}
+									awareness={readyHandle.awareness}
 									mode={mode === "raw" ? "raw" : "rendered"}
 									resolveWikiLink={resolveWikiLink}
 									openWikiLink={openWikiLink}
