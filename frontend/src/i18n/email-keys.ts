@@ -15,6 +15,12 @@ const PATTERNS = [
 // Whole-line `#` comments, but not a heredoc line opening with `#{...}`.
 const COMMENT = /^\s*#(?!\{).*$/gmu;
 
+// Web-app glossary terms the emails use. The core passes a glossary term to the
+// model only when the catalog holds it, so without these "vault" came out as a
+// different word in every email. The translate script seeds them from the web
+// catalogs, so the emails and the app agree.
+const EMAIL_GLOSSARY = ["Vault", "Note", "Sync", "Settings"] as const;
+
 const EMAIL_SOURCES = [
 	"lib/engram/mailer.ex",
 	"lib/engram/email/template.ex",
@@ -34,7 +40,7 @@ function emailEntries(sources: readonly string[]): Entry[] {
 			}
 		}
 	}
-	return [...keys].map((key) => ({ key }));
+	return [...keys, ...EMAIL_GLOSSARY].map((key) => ({ key }));
 }
 
-export { EMAIL_SOURCES, emailEntries };
+export { EMAIL_GLOSSARY, EMAIL_SOURCES, emailEntries };

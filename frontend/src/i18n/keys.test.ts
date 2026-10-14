@@ -1,4 +1,7 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { EMAIL_SOURCES, emailEntries } from "./email-keys";
 import { hiddenCalls, scannedFiles, usedEntries, usedKeys } from "./keys-scan";
 import { profile } from "./translate-profile";
 
@@ -169,7 +172,10 @@ describe("repo catalogs", () => {
 		expect(profile.glossary.filter((k) => !used.has(k))).toEqual([]);
 	});
 	it("describes only real keys", () => {
-		const used = usedKeys(sources);
+		// The profile is shared with the email run, so an email key counts too.
+		const backend = join(__dirname, "..", "..", "..");
+		const email = emailEntries(EMAIL_SOURCES.map((f) => readFileSync(join(backend, f), "utf8")));
+		const used = new Set([...usedKeys(sources), ...email.map((e) => e.key)]);
 		expect(Object.keys(profile.descriptions ?? {}).filter((k) => !used.has(k))).toEqual([]);
 	});
 	it("pins only overrides that are real keys", () => {
