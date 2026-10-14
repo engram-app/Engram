@@ -357,9 +357,15 @@ defmodule Engram.OAuth.Cimd.JwksTest do
       # the cooldown and cost nothing.
       expect_jwks(public, 2)
 
-      for n <- 1..20 do
+      # The first probe's refetch succeeds, so its kid is genuinely unknown
+      # (401). The rest land in the cooldown and are told to retry (503,
+      # review #3): an unchecked kid must never read as a terminal refusal.
+      first = sign(private, claims(), "RS256", %{"kid" => "probe-1"})
+      assert {:error, :unknown_kid} = Jwks.verify_assertion(client(), first, [@audience])
+
+      for n <- 2..20 do
         probe = sign(private, claims(), "RS256", %{"kid" => "probe-#{n}"})
-        assert {:error, :unknown_kid} = Jwks.verify_assertion(client(), probe, [@audience])
+        assert {:error, :jwks_unavailable} = Jwks.verify_assertion(client(), probe, [@audience])
       end
 
       # 30 s later the vendor really rotates.
@@ -369,6 +375,140 @@ defmodule Engram.OAuth.Cimd.JwksTest do
 
       assertion = sign(private, claims(), "RS256", %{"kid" => "rotated"})
       assert :ok = Jwks.verify_assertion(client(), assertion, [@audience])
+    end
+  end
+
+  # Review #3: on an unknown kid the held keys cannot help (the kid is not in
+  # them), so a refetch that does not happen or does not succeed must be a
+  # retryable 503, never the held set (which turns into a terminal 401).
+  describe "unknown kid when the refetch cannot answer" do
+    test "a failing refetch is transient", %{private: private, public: public} do
+      expect_jwks(public)
+
+      expect(FetcherMock, :fetch, fn @jwks_uri ->
+        {:error, {:transport_error, :connect, :timeout}}
+      end)
+
+      rotated = sign(private, claims(), "RS256", %{"kid" => "rotated"})
+      assert {:error, :jwks_unavailable} = Jwks.verify_assertion(client(), rotated, [@audience])
+      assert Jwks.transient?(:jwks_unavailable)
+    end
+
+    test "a refetch inside the cooldown is transient", %{private: private, public: public} do
+      expect_jwks(public, 2)
+
+      a = sign(private, claims(), "RS256", %{"kid" => "a"})
+      b = sign(private, claims(), "RS256", %{"kid" => "b"})
+      assert {:error, :unknown_kid} = Jwks.verify_assertion(client(), a, [@audience])
+      assert {:error, :jwks_unavailable} = Jwks.verify_assertion(client(), b, [@audience])
+    end
+  end
+
+  # Review #9.
+  describe "single-flight waiters" do
+    alias Engram.OAuth.Cimd.JwksCache
+
+    # Holds the flight lock for `jwks_uri` from another process, the way a
+    # concurrent token request would, until told to stop.
+    defp hold_flight(deadline_ms) do
+      test_pid = self()
+
+      pid =
+        spawn(fn ->
+          {:ok, _} = Registry.register(JwksCache.Flights, @jwks_uri, deadline_ms)
+          send(test_pid, :flight_held)
+
+          receive do
+            :release -> :ok
+          end
+        end)
+
+      assert_receive :flight_held
+      on_exit(fn -> send(pid, :release) end)
+      pid
+    end
+
+    test "a waiter holding stale keys uses them without waiting", %{
+      private: private,
+      public: public
+    } do
+      persisted_client(public, ago(2 * 24 * 3600))
+      hold_flight(System.monotonic_time(:millisecond) + 60_000)
+
+      {micros, result} =
+        :timer.tc(fn -> Jwks.verify_assertion(client(), sign(private, claims()), [@audience]) end)
+
+      assert :ok = result
+      assert micros < 500_000
+      assert JwksCache.take_source() == :stale
+    end
+
+    test "a waiter with no keys waits until the flight's own deadline, not a fixed timer", %{
+      private: private
+    } do
+      hold_flight(System.monotonic_time(:millisecond) + 300)
+
+      {micros, result} =
+        :timer.tc(fn -> Jwks.verify_assertion(client(), sign(private, claims()), [@audience]) end)
+
+      assert {:error, :jwks_unavailable} = result
+      assert micros >= 250_000 and micros < 1_500_000
+    end
+
+    test "a waiter served by the flight reports source :fetched", %{
+      private: private,
+      public: public
+    } do
+      pid = hold_flight(System.monotonic_time(:millisecond) + 5_000)
+
+      Task.start(fn ->
+        Process.sleep(100)
+
+        Engram.Cache.put(:jwks, @jwks_uri, %{
+          keys: [public],
+          fetched_at: System.system_time(:millisecond)
+        })
+
+        send(pid, :release)
+      end)
+
+      assert :ok = Jwks.verify_assertion(client(), sign(private, claims()), [@audience])
+      assert JwksCache.take_source() == :fetched
+    end
+  end
+
+  # Review #5: the background sweep must not page while usable keys exist.
+  describe "background refresh" do
+    alias Engram.OAuth.Cimd.JwksCache
+
+    test "a failed sweep fetch with usable stale keys warns and reports :stale", %{public: public} do
+      persisted_client(public, ago(2 * 24 * 3600))
+      expect(FetcherMock, :fetch, fn @jwks_uri -> {:error, {:http_status, 503}} end)
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :cimd, :fetch]])
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, _} = JwksCache.refresh_background(@jwks_uri)
+        end)
+
+      assert log =~ "mcp_jwks_refresh_failed"
+      refute log =~ "mcp_jwks_unusable"
+      assert_received {[:engram, :cimd, :fetch], ^ref, _, %{kind: :jwks, result: :stale}}
+      :telemetry.detach(ref)
+    end
+
+    test "a failed sweep fetch with nothing usable is :error / mcp_jwks_unusable" do
+      expect(FetcherMock, :fetch, fn @jwks_uri -> {:error, {:http_status, 503}} end)
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :cimd, :fetch]])
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, _} = JwksCache.refresh_background(@jwks_uri)
+        end)
+
+      assert log =~ "mcp_jwks_unusable"
+      assert_received {[:engram, :cimd, :fetch], ^ref, _, %{kind: :jwks, result: :error}}
+      :telemetry.detach(ref)
     end
   end
 

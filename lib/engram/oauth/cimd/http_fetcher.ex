@@ -24,6 +24,10 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
 
   @user_agent "Engram-OAuth/1.0 (+https://engram.page)"
 
+  @doc "The hard budget for one `fetch_target/1`, every attempt included, in ms."
+  @spec budget_ms() :: pos_integer()
+  def budget_ms, do: @budget_ms
+
   @typedoc "A validated, address-pinned fetch target."
   @type target :: %{
           required(:url) => String.t(),

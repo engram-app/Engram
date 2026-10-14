@@ -205,8 +205,10 @@ defmodule EngramWeb.OAuthMcpAnalyticsTest do
     e = event(drain(), "mcp_oauth_jwks_fetch_failed")
     assert e["properties"]["$process_person_profile"] == false
 
-    assert Map.take(e["properties"], ~w(host client reason phase result)) == %{
-             "host" => "chatgpt.com",
+    # Review #11: never the raw host, only the bounded family.
+    refute Map.has_key?(e["properties"], "host")
+
+    assert Map.take(e["properties"], ~w(client reason phase result)) == %{
              "client" => "chatgpt",
              "reason" => "connect",
              "phase" => "connect",

@@ -56,6 +56,10 @@ defmodule Engram.Http.SsrfGuard do
   # resolver that stalls must not eat the fetch budget: the 2026-10-13 ChatGPT
   # timeout spent its full 5 s somewhere we could not see (#1974).
   @dns_timeout_ms 1_000
+
+  @doc "The DNS deadline `resolve/2` enforces, in ms."
+  @spec dns_timeout_ms() :: pos_integer()
+  def dns_timeout_ms, do: @dns_timeout_ms
   # Split by what it takes to decide them: the shape rules need only the URL,
   # the resolution rules need a lookup. `validate_url/1` can only ever return
   # the first set, so promising it might return `:dns_failure` is a lie —
