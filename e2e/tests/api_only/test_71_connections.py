@@ -231,6 +231,269 @@ def _make_clerk_user(clerk_client) -> tuple[str, str, str]:
     return clerk_user_id, jwt_token, email
 
 
+# ── Tests ─────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_connections_empty_for_fresh_user(clerk_client):
+    """A freshly-created user with no OAuth grants or PATs sees []."""
+    clerk_user_id, jwt, _email = _make_clerk_user(clerk_client)
+    try:
+        rows = list_connections(jwt)
+        # May include the bootstrap PAT created during provisioning but no OAuth rows
+        oauth_rows = [r for r in rows if r["kind"] != "pat"]
+        assert oauth_rows == [], f"expected no OAuth connections, got {oauth_rows}"
+    finally:
+        clerk_client.delete_user(clerk_user_id)
+
+
+@pytest.mark.asyncio
+async def test_dcr_rejects_kind_obsidian(clerk_client):
+    """DCR with kind=obsidian must be rejected: revoke routing in the
+    Connections UI only handles device-flow Obsidian today. Accepting a
+    DCR-minted Obsidian client would silently 404 on revoke. The real
+    Obsidian flow goes through device-flow — see
+    test_device_flow_connection_appears_in_list below."""
+    clerk_user_id, _jwt, _email = _make_clerk_user(clerk_client)
+    try:
+        # DCR lives at OAUTH_BASE/oauth/register (not under /api), so call
+        # requests directly with the un-prefixed base — register_client/3
+        # raises on non-201, which would mask the 400 we want to assert.
+        resp = requests.post(
+            f"{OAUTH_BASE}/oauth/register",
+            json={
+                "software_id": "engram-vault-sync",
+                "client_name": "Engram Vault Sync",
+                "redirect_uris": ["http://127.0.0.1:51234/cb"],
+                "kind": "obsidian",
+            },
+            timeout=10,
+        )
+        assert resp.status_code == 400, (
+            f"expected 400 on DCR kind=obsidian, got {resp.status_code}: {resp.text}"
+        )
+        body = resp.json()
+        assert body["error"] == "invalid_client_metadata"
+        assert "obsidian" in body.get("error_description", "")
+    finally:
+        clerk_client.delete_user(clerk_user_id)
+
+
+@pytest.mark.asyncio
+async def test_unknown_software_id_shows_unverified(clerk_client):
+    """DCR with kind=mcp + unknown software_id → verified=False in /api/connections."""
+    clerk_user_id, jwt, email = _make_clerk_user(clerk_client)
+    grant_test_plan(email)
+    try:
+        software_id = f"unknown-client-{secrets.token_hex(4)}"
+        client = register_client(
+            software_id=software_id,
+            client_name="Unknown Tool",
+            kind="mcp",
+        )
+        client_id = client["client_id"]
+
+        resp = consent(jwt, client_id)
+        assert resp.status_code == 200, (
+            f"consent failed: {resp.status_code} {resp.text}"
+        )
+        code = _extract_code(resp.json()["redirect_uri"])
+        exchange_code(client_id, code)
+
+        rows = list_connections(jwt)
+        match = next((r for r in rows if r["client_id"] == client_id), None)
+        assert match is not None, "connection not found in list"
+        assert match["verified"] is False, (
+            f"unknown software_id should be unverified, got verified={match['verified']}"
+        )
+    finally:
+        clerk_client.delete_user(clerk_user_id)
+
+
+@pytest.mark.asyncio
+async def test_revoke_oauth_removes_from_list(clerk_client):
+    """DELETE /api/connections/oauth/:client_id removes the connection.
+    Second revoke is also 204 (idempotent — history record exists)."""
+    clerk_user_id, jwt, email = _make_clerk_user(clerk_client)
+    grant_test_plan(email)
+    try:
+        client = register_client(
+            software_id="anthropic-claude-desktop",
+            client_name="Claude Desktop",
+            kind="mcp",
+        )
+        cid = client["client_id"]
+
+        resp = consent(jwt, cid)
+        assert resp.status_code == 200, (
+            f"consent failed: {resp.status_code} {resp.text}"
+        )
+        code = _extract_code(resp.json()["redirect_uri"])
+        exchange_code(cid, code)
+
+        # Confirm present
+        assert any(r["client_id"] == cid for r in list_connections(jwt)), (
+            "connection not found after consent+exchange"
+        )
+
+        # Revoke
+        status = revoke_oauth(jwt, cid)
+        assert status == 204, f"expected 204 on revoke, got {status}"
+
+        # Gone from list
+        assert not any(r["client_id"] == cid for r in list_connections(jwt)), (
+            "connection still listed after revoke"
+        )
+
+        # Second revoke is idempotent (history row exists → :ok → 204)
+        status2 = revoke_oauth(jwt, cid)
+        assert status2 == 204, (
+            f"expected 204 on second (idempotent) revoke, got {status2}"
+        )
+    finally:
+        clerk_client.delete_user(clerk_user_id)
+
+
+@pytest.mark.asyncio
+async def test_consent_vault_ids_scopes_the_grant_to_those_vaults(clerk_client):
+    """Multi-vault consent, end to end against a live stack.
+
+    Every other consent here posts the legacy `vault_choice`, which can only
+    say "one vault" or "all vaults" — so the `vault_ids` path that the consent
+    screen actually sends had no integration coverage at all. This drives it:
+    three vaults exist, two are granted, and the third must stay unreachable
+    through the resulting access token.
+
+    `create_vault` is used rather than the wizard because the grant, not vault
+    creation, is what is under test.
+    """
+    clerk_user_id, jwt, email = _make_clerk_user(clerk_client)
+    grant_test_plan(email)
+    # Free caps vaults at 1 and this test needs three; the cap itself is
+    # asserted by test_32, so lifting it here removes an unrelated gate.
+    grant_vault_headroom(email)
+    try:
+        ts = _ts()
+        granted_a = create_vault(jwt, f"e2e-granted-a-{ts}")
+        granted_b = create_vault(jwt, f"e2e-granted-b-{ts}")
+        withheld = create_vault(jwt, f"e2e-withheld-{ts}")
+
+        client = register_client(
+            software_id=f"multi-vault-client-{secrets.token_hex(4)}",
+            client_name="Multi Vault Tool",
+            kind="mcp",
+        )
+        cid = client["client_id"]
+
+        resp = consent(jwt, cid, vault_ids=[granted_a, granted_b])
+        assert resp.status_code == 200, (
+            f"multi-vault consent failed: {resp.status_code} {resp.text}"
+        )
+        tokens = exchange_code(cid, _extract_code(resp.json()["redirect_uri"]))
+        access_token = tokens["access_token"]
+        grant_headers = {"Authorization": f"Bearer {access_token}"}
+
+        # 1. The connection the user sees names exactly the two vaults granted.
+        row = next(
+            (r for r in list_connections(jwt) if r["client_id"] == cid), None
+        )
+        assert row is not None, "multi-vault grant not found in /api/connections"
+        assert sorted(row["vault_ids"]) == sorted([granted_a, granted_b]), (
+            f"grant should carry exactly the chosen vaults, got {row['vault_ids']}"
+        )
+
+        # 2. The token itself is scoped, not just the listing: GET /api/vaults
+        #    through the grant filters to the two, never the third.
+        visible = requests.get(f"{API_URL}/vaults", headers=grant_headers, timeout=10)
+        visible.raise_for_status()
+        visible_ids = {v["id"] for v in visible.json()["vaults"]}
+        assert visible_ids == {granted_a, granted_b}, (
+            f"grant-scoped vault list should be the two granted, got {visible_ids}"
+        )
+
+        # 3. And a vault-scoped read is allowed for a granted vault and refused
+        #    for the withheld one. This is the assertion that would catch a
+        #    grant that merely LOOKS scoped: the row and the /vaults filter both
+        #    read the same claim, VaultPlug enforces it.
+        allowed = requests.get(
+            f"{API_URL}/folders",
+            headers={**grant_headers, "X-Vault-ID": str(granted_a)},
+            timeout=10,
+        )
+        assert allowed.status_code == 200, (
+            f"granted vault should be readable, got {allowed.status_code}: {allowed.text}"
+        )
+
+        denied = requests.get(
+            f"{API_URL}/folders",
+            headers={**grant_headers, "X-Vault-ID": str(withheld)},
+            timeout=10,
+        )
+        assert denied.status_code == 403, (
+            f"withheld vault should be 403, got {denied.status_code}: {denied.text}"
+        )
+    finally:
+        clerk_client.delete_user(clerk_user_id)
+
+
+@pytest.mark.asyncio
+async def test_free_tier_holds_multiple_mcp_connections_and_a_key(clerk_client):
+    """#1974: a Free user may hold any number of MCP connections (OAuth and
+    API keys alike). Two MCP consents both succeed, and a minted key works on
+    /api/mcp. MCP use is metered by ai_searches_per_day, not by a count."""
+    clerk_user_id, jwt, _email = _make_clerk_user(clerk_client)
+    # Do NOT call grant_test_plan: this asserts the Free defaults.
+    try:
+        for software_id, name in [
+            ("anthropic-claude-desktop", "Claude Desktop"),
+            ("cursor.sh", "Cursor"),
+        ]:
+            client = register_client(software_id=software_id, client_name=name, kind="mcp")
+            resp = consent(jwt, client["client_id"])
+            assert resp.status_code == 200, (
+                f"MCP consent for {name} should succeed on Free, got "
+                f"{resp.status_code}: {resp.text}"
+            )
+            exchange_code(client["client_id"], _extract_code(resp.json()["redirect_uri"]))
+
+        pat = mint_pat(jwt, "mcp-key")
+        assert pat.status_code == 201, f"Free PAT mint failed: {pat.status_code} {pat.text}"
+
+        mcp = requests.post(
+            f"{API_URL}/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+            headers={"Authorization": f"Bearer {pat.json()['key']}"},
+            timeout=10,
+        )
+        assert mcp.status_code == 200, f"API key on /mcp failed: {mcp.status_code} {mcp.text}"
+    finally:
+        clerk_client.delete_user(clerk_user_id)
+
+
+@pytest.mark.asyncio
+async def test_free_tier_can_mint_pat(clerk_client):
+    """#1974: any plan can mint an API key (it works with MCP on every plan)."""
+    clerk_user_id, jwt, _email = _make_clerk_user(clerk_client)
+    try:
+        resp = mint_pat(jwt, "ci-bot")
+        assert resp.status_code == 201, (
+            f"expected 201 for Free user PAT mint, got {resp.status_code}: {resp.text}"
+        )
+        key = resp.json()["key"]
+        assert key.startswith("engram_")
+
+        # And it works on REST, not just MCP: no tier gate on any route.
+        me = requests.get(
+            f"{API_URL}/me", headers={"Authorization": f"Bearer {key}"}, timeout=10
+        )
+        assert me.status_code == 200, f"Free API key on /me failed: {me.status_code} {me.text}"
+    finally:
+        clerk_client.delete_user(clerk_user_id)
+
+
+# ── Device-flow helpers ───────────────────────────────────────────────────────
+
+
 def device_start(
     client_id: str = "e2e-plugin",
     vault_name: str | None = None,
