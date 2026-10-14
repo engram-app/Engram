@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.51.1](https://github.com/engram-app/Engram/compare/0.51.0...0.51.1) (2026-10-14)
+
+
+### Bug Fixes
+
+* **web:** hold the editor until the note doc syncs ([#1978](https://github.com/engram-app/Engram/issues/1978)) ([b3bb9ff](https://github.com/engram-app/Engram/commit/b3bb9ff46d7a73c4a7cd9ef6f9edad3bb0314b8d))
+
 ## [0.51.0](https://github.com/engram-app/Engram/compare/0.50.2...0.51.0) (2026-10-14)
 
 
