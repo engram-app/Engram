@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { ActionDrawer } from "./action-drawer";
+import { ActionDrawer, CLOSE_MS } from "./action-drawer";
 import { actionsFor } from "./action-list";
 
 describe("ActionDrawer", () => {
@@ -17,7 +17,9 @@ describe("ActionDrawer", () => {
 		expect(screen.getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
 	});
 
-	it("backdrop click closes", () => {
+	// Tapping out slides the sheet down first; it closes once that has played.
+	it("backdrop click slides the sheet out, then closes", () => {
+		vi.useFakeTimers();
 		const onClose = vi.fn();
 		render(
 			<ActionDrawer
@@ -28,7 +30,29 @@ describe("ActionDrawer", () => {
 			/>,
 		);
 		fireEvent.click(screen.getByTestId("action-drawer-backdrop"));
-		expect(onClose).toHaveBeenCalled();
+		expect(onClose).not.toHaveBeenCalled();
+		expect(screen.getByRole("menu")).toHaveClass("animate-out", "slide-out-to-bottom");
+		act(() => vi.advanceTimersByTime(CLOSE_MS));
+		expect(onClose).toHaveBeenCalledOnce();
+		vi.useRealTimers();
+	});
+
+	it("a second tap while sliding out does not close twice", () => {
+		vi.useFakeTimers();
+		const onClose = vi.fn();
+		render(
+			<ActionDrawer
+				title="a.md"
+				actions={actionsFor({ kind: "file" })}
+				onPick={() => {}}
+				onClose={onClose}
+			/>,
+		);
+		fireEvent.click(screen.getByTestId("action-drawer-backdrop"));
+		fireEvent.click(screen.getByTestId("action-drawer-backdrop"));
+		act(() => vi.advanceTimersByTime(CLOSE_MS));
+		expect(onClose).toHaveBeenCalledOnce();
+		vi.useRealTimers();
 	});
 
 	it("click on action calls onPick then onClose", () => {

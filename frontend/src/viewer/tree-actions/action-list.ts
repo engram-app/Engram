@@ -7,6 +7,7 @@ import {
 	Link2,
 	ListPlus,
 	type LucideIcon,
+	PanelRightOpen,
 	Pencil,
 	SquareCode,
 	TextCursorInput,
@@ -33,6 +34,7 @@ const ACTION_ICONS: Record<ActionId, LucideIcon> = {
 	"view-rendered": Pencil,
 	"view-raw": SquareCode,
 	"view-reading": BookOpen,
+	"open-tools": PanelRightOpen,
 };
 
 const FILE_ACTIONS: readonly Action[] = [
@@ -84,7 +86,8 @@ export type ActionId =
 	| "add-property"
 	| "view-rendered"
 	| "view-raw"
-	| "view-reading";
+	| "view-reading"
+	| "open-tools";
 
 // A msg() key for the fixed menus, rendered through t(); selectionActions() builds
 // counted labels already translated (UIText) and flags them, so menus never
@@ -176,3 +179,13 @@ export function noteMenuActions(mode: ViewMode): readonly Action[] {
 }
 
 export { ACTION_ICONS };
+
+/** Whether a divider goes above this row: one before the file actions, one
+ *  before the tools drawer, one before the destructive action. Shared by the
+ *  desktop dropdown and the mobile drawer so both group the same way. */
+export function startsGroup(action: Action, index: number): boolean {
+	return (
+		index > 0 &&
+		(action.id === "rename" || action.id === "open-tools" || Boolean(action.destructive))
+	);
+}

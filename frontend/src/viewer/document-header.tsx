@@ -17,7 +17,7 @@ export function DocumentHeader({
 	actions?: ReactNode;
 }) {
 	// Mobile drops the strip; only the actions survive, floated top-right.
-	const slot = useMobileHeaderSlot();
+	const slot = useMobileHeaderSlot()?.slot;
 	if (slot) {
 		return actions ? createPortal(actions, slot) : null;
 	}

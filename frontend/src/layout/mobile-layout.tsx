@@ -1,4 +1,4 @@
-import { PanelLeftOpen, PanelRightOpen, X } from "lucide-react";
+import { PanelLeftOpen, X } from "lucide-react";
 import { type MouseEvent, useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
@@ -66,11 +66,13 @@ export default function MobileLayout() {
 	return (
 		<section className="relative flex h-dvh flex-col bg-background text-foreground [--mobile-header:3rem]">
 			{/* Obsidian-style: no title bar, just the corner buttons floating over
-			    the page, so text scrolls past behind them. Only the icons get a small
-			    translucent chip, so passing text never sits under a bare glyph.
+			    the page, so text scrolls past behind them. The icons sit on small
+			    grey chips (the page's own actions share one), so passing text never
+			    runs under a bare glyph. The tools drawer has no button here; the
+			    note menu opens it (MobileHeaderSlot.openTools).
 			    --mobile-header is its height: main pads by it, and a note's
 			    surface bleeds up under it (DocumentSurface `underHeader`). */}
-			<header className="absolute inset-x-0 top-0 z-20 flex h-(--mobile-header) items-center justify-between px-2 [&_button]:bg-secondary/90 [&_button]:backdrop-blur-sm">
+			<header className="absolute inset-x-0 top-0 z-20 flex h-(--mobile-header) items-center justify-between px-2 [&>button]:size-11 [&>button]:bg-secondary/90">
 				<Sheet open={leftOpen} onOpenChange={setLeftOpen}>
 					<SheetTrigger asChild>
 						<Button variant="ghost" size="icon-lg" aria-label={t("Open files")}>
@@ -123,38 +125,31 @@ export default function MobileLayout() {
 						</FolderTreeProvider>
 					</SheetContent>
 				</Sheet>
-				<nav className="flex items-center gap-1" aria-label={t("Main navigation")}>
-					<div ref={setActionSlot} className="contents" />
-					{/* Always available now — the reference tool is valid on every route,
-					    unlike the outline this drawer used to be gated on. */}
-					<Sheet open={rightOpen} onOpenChange={setRightOpen}>
-						<SheetTrigger asChild>
-							<Button
-								variant="ghost"
-								size="icon-lg"
-								aria-label={t("Open tools")}
-								onClick={openRight}
-							>
-								<PanelRightOpen />
-							</Button>
-						</SheetTrigger>
-						<SheetContent
-							side="right"
-							showCloseButton={false}
-							className="flex flex-col gap-0 p-0 data-[side=right]:w-[85vw] sm:max-w-none"
-							onClick={closeOnLinkClick(() => setRightOpen(false))}
-						>
-							<SheetTitle className="sr-only">{t("Sidebar tools")}</SheetTitle>
-							<SheetDescription className="sr-only">
-								{t("Note outline and markdown reference")}
-							</SheetDescription>
-							<RightToolPanel onCollapse={() => setRightOpen(false)} />
-						</SheetContent>
-					</Sheet>
-				</nav>
+				<nav
+					ref={setActionSlot}
+					// Direct children only: the note menu's drawer also mounts in here, and
+					// a descendant rule resized its rows. No backdrop-filter either: it
+					// makes this the containing block for the drawer's position: fixed.
+					className="flex items-center rounded-md bg-secondary/90 empty:hidden [&>button]:size-11"
+					aria-label={t("Main navigation")}
+				/>
+				<Sheet open={rightOpen} onOpenChange={setRightOpen}>
+					<SheetContent
+						side="right"
+						showCloseButton={false}
+						className="flex flex-col gap-0 p-0 data-[side=right]:w-[85vw] sm:max-w-none"
+						onClick={closeOnLinkClick(() => setRightOpen(false))}
+					>
+						<SheetTitle className="sr-only">{t("Sidebar tools")}</SheetTitle>
+						<SheetDescription className="sr-only">
+							{t("Note outline and markdown reference")}
+						</SheetDescription>
+						<RightToolPanel onCollapse={() => setRightOpen(false)} />
+					</SheetContent>
+				</Sheet>
 			</header>
 			<main className="flex-1 overflow-y-auto bg-muted/40 pt-(--mobile-header) text-foreground">
-				<MobileHeaderSlot.Provider value={actionSlot}>
+				<MobileHeaderSlot.Provider value={{ slot: actionSlot, openTools: openRight }}>
 					<Outlet />
 				</MobileHeaderSlot.Provider>
 			</main>
