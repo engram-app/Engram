@@ -1,6 +1,6 @@
-import { Menu, PanelRightOpen, X } from "lucide-react";
+import { PanelLeftOpen, PanelRightOpen, X } from "lucide-react";
 import { type MouseEvent, useEffect, useState } from "react";
-import { Link, Outlet, useLocation } from "react-router";
+import { Outlet, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -15,6 +15,7 @@ import { useT } from "@/i18n/locale-provider";
 import FolderTree from "../viewer/folder-tree";
 import FolderActions from "./folder-actions";
 import { FolderTreeProvider } from "./folder-tree-context";
+import { MobileHeaderSlot } from "./mobile-header-slot";
 import { useRailView } from "./rail-view-context";
 import RightToolPanel from "./right-tool-panel";
 import { RIGHT_TOOLS, useRightTools } from "./right-tools-context";
@@ -39,6 +40,7 @@ export default function MobileLayout() {
 	const { view } = useRailView();
 	const [leftOpen, setLeftOpen] = useState(false);
 	const [rightOpen, setRightOpen] = useState(false);
+	const [actionSlot, setActionSlot] = useState<HTMLElement | null>(null);
 	const { pathname } = useLocation();
 
 	// The drawer has no persistent rail to pick a tool from, so opening it with
@@ -63,63 +65,63 @@ export default function MobileLayout() {
 
 	return (
 		<section className="flex h-dvh flex-col bg-background text-foreground">
-			<header className="sticky top-0 z-20 flex shrink-0 items-center justify-between border-border border-b bg-card p-2">
-				<section className="flex items-center gap-1">
-					<Sheet open={leftOpen} onOpenChange={setLeftOpen}>
-						<SheetTrigger asChild>
-							<Button variant="ghost" size="icon-lg" aria-label={t("Open files")}>
-								<Menu />
-							</Button>
-						</SheetTrigger>
-						<SheetContent
-							side="left"
-							showCloseButton={false}
-							className="flex flex-col gap-0 p-0 data-[side=left]:w-[85vw] sm:max-w-none"
-						>
-							<FolderTreeProvider>
-								<section className="flex shrink-0 items-center justify-between border-border border-b px-3 py-2">
-									<SheetTitle className="font-medium text-base">
-										{view === "search" ? t("Search") : t("Files")}
-									</SheetTitle>
-									<SheetDescription className="sr-only">
-										{view === "search" ? t("Search your notes") : t("Folder navigation")}
-									</SheetDescription>
+			{/* Obsidian-style: no title bar, just a row holding the corner buttons.
+			    main scrolls on its own, so this row stays put. */}
+			<header className="z-20 flex shrink-0 items-center justify-between bg-card px-2 py-1">
+				<Sheet open={leftOpen} onOpenChange={setLeftOpen}>
+					<SheetTrigger asChild>
+						<Button variant="ghost" size="icon-lg" aria-label={t("Open files")}>
+							<PanelLeftOpen />
+						</Button>
+					</SheetTrigger>
+					<SheetContent
+						side="left"
+						showCloseButton={false}
+						className="flex flex-col gap-0 p-0 data-[side=left]:w-[85vw] sm:max-w-none"
+					>
+						<FolderTreeProvider>
+							<section className="flex shrink-0 items-center justify-between border-border border-b px-3 py-2">
+								<SheetTitle className="font-medium text-base">
+									{view === "search" ? t("Search") : t("Files")}
+								</SheetTitle>
+								<SheetDescription className="sr-only">
+									{view === "search" ? t("Search your notes") : t("Folder navigation")}
+								</SheetDescription>
+								<section className="flex items-center gap-1">
+									<UserMenu />
 									<SheetClose asChild>
 										<Button variant="ghost" size="icon-sm" aria-label={t("Close")}>
 											<X />
 										</Button>
 									</SheetClose>
 								</section>
-								{view === "search" ? (
-									// onNavigate rather than the closeOnLinkClick delegation used
-									// for the tree: the handler belongs on the link itself, and
-									// that also covers tapping the result for the note you are
-									// ALREADY on, where the route never changes and the
-									// pathname effect below never fires.
-									<SearchPanel hideHeader onNavigate={() => setLeftOpen(false)} />
-								) : (
-									<>
-										<ScrollArea
-											className="min-h-0 flex-1"
-											onClick={closeOnLinkClick(() => setLeftOpen(false))}
-										>
-											<FolderTree />
-										</ScrollArea>
-										{/* New note / new folder belong to the files view only. */}
-										<FolderActions />
-									</>
-								)}
-								<SidebarViewToggle />
-								<VaultSwitcher />
-							</FolderTreeProvider>
-						</SheetContent>
-					</Sheet>
-					<Link to="/" className="font-semibold text-base text-foreground">
-						Engram
-					</Link>
-				</section>
+							</section>
+							{view === "search" ? (
+								// onNavigate rather than the closeOnLinkClick delegation used
+								// for the tree: the handler belongs on the link itself, and
+								// that also covers tapping the result for the note you are
+								// ALREADY on, where the route never changes and the
+								// pathname effect below never fires.
+								<SearchPanel hideHeader onNavigate={() => setLeftOpen(false)} />
+							) : (
+								<>
+									<ScrollArea
+										className="min-h-0 flex-1"
+										onClick={closeOnLinkClick(() => setLeftOpen(false))}
+									>
+										<FolderTree />
+									</ScrollArea>
+									{/* New note / new folder belong to the files view only. */}
+									<FolderActions />
+								</>
+							)}
+							<SidebarViewToggle />
+							<VaultSwitcher />
+						</FolderTreeProvider>
+					</SheetContent>
+				</Sheet>
 				<nav className="flex items-center gap-1" aria-label={t("Main navigation")}>
-					<UserMenu />
+					<div ref={setActionSlot} className="contents" />
 					{/* Always available now — the reference tool is valid on every route,
 					    unlike the outline this drawer used to be gated on. */}
 					<Sheet open={rightOpen} onOpenChange={setRightOpen}>
@@ -149,7 +151,9 @@ export default function MobileLayout() {
 				</nav>
 			</header>
 			<main className="flex-1 overflow-y-auto bg-muted/40 text-foreground">
-				<Outlet />
+				<MobileHeaderSlot.Provider value={actionSlot}>
+					<Outlet />
+				</MobileHeaderSlot.Provider>
 			</main>
 		</section>
 	);
