@@ -13,6 +13,9 @@ config :engram, Engram.Native, features: ["test-hooks"]
 # of 10 req/min would be exhausted immediately across the full test suite.
 # The RateLimitTest validates the 10-req limit explicitly, with per-test resets.
 config :engram, :rate_limit_override, 10_000
+# The OAuth limiter's coarse per-IP bucket (EngramWeb.Plugs.OAuthRateLimit):
+# every test shares 127.0.0.1, so it needs the same high ceiling.
+config :engram, :oauth_ip_rate_limit_override, 10_000
 
 # Same rationale for the pre-auth (vault-pipeline) limiter: it now covers
 # every vault path, so without a high ceiling the shared 127.0.0.1 test IP
