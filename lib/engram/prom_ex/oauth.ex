@@ -23,6 +23,11 @@ defmodule Engram.PromEx.OAuth do
       usable: page); `reason` is `Engram.OAuth.Cimd.emit_fetch/4`'s closed
       label set.
 
+    * `[:engram, :cimd, :assertion_audience]` →
+      `engram_prom_ex_cimd_assertion_audience_total`, tag `[:aud_form]`, one
+      per `private_key_jwt` assertion checked: `:token_endpoint | :issuer |
+      :trailing_slash | :other` (`Engram.OAuth.Cimd.Jwks.aud_form()`).
+
   Cardinality contract: never the client id, host or user agent. Those live on
   the `oauth_token_rejected` / `mcp_cimd_fetch_failed` log lines.
   """
@@ -49,6 +54,12 @@ defmodule Engram.PromEx.OAuth do
           event_name: [:engram, :cimd, :fetch],
           description: "CIMD document and JWKS fetches by kind, result and reason.",
           tags: [:kind, :result, :reason]
+        ),
+        counter(
+          cimd_prefix ++ [:assertion_audience, :total],
+          event_name: [:engram, :cimd, :assertion_audience],
+          description: "private_key_jwt assertions by which of our audiences aud named.",
+          tags: [:aud_form]
         ),
         distribution(
           cimd_prefix ++ [:fetch, :duration, :milliseconds],

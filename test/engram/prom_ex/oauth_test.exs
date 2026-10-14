@@ -38,4 +38,13 @@ defmodule Engram.PromEx.OAuthTest do
     assert %Telemetry.Metrics.Distribution{} = histogram
     assert histogram.tags == [:kind, :result]
   end
+
+  test "declares engram_prom_ex_cimd_assertion_audience_total with only aud_form" do
+    m =
+      Enum.find(metrics(), &(&1.name == [:engram, :prom_ex, :cimd, :assertion_audience, :total]))
+
+    assert %Telemetry.Metrics.Counter{} = m
+    assert m.event_name == [:engram, :cimd, :assertion_audience]
+    assert m.tags == [:aud_form]
+  end
 end

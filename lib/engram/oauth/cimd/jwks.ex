@@ -301,34 +301,47 @@ defmodule Engram.OAuth.Cimd.Jwks do
   defp normalize_aud(aud), do: String.trim_trailing(aud, "/")
 
   # rfc7523bis will require `aud` = our issuer, not the token endpoint. This
-  # line says which form each vendor sends today, so we know who breaks when
-  # we tighten. Only our own audience strings or a shape tag are logged, never
-  # the claim's raw value.
+  # counts which form each assertion sends, so we know who breaks when we
+  # tighten: `engram_prom_ex_cimd_assertion_audience_total{aud_form}`, a closed
+  # label set computed once per assertion. A log line only for `:other` (none
+  # of ours, a refusal), which carries the vendor host and never the raw claim.
   defp log_audience_form(client, aud, audiences) do
-    Logger.info(
-      "mcp_assertion_audience",
-      Metadata.with_category(:info, :lifecycle,
-        cimd_host: Cimd.host_of(client.cimd_url || ""),
-        aud_form: audience_form(aud, audiences)
+    form = audience_form(aud, audiences)
+    :telemetry.execute([:engram, :cimd, :assertion_audience], %{count: 1}, %{aud_form: form})
+
+    if form == :other do
+      Logger.info(
+        "mcp_assertion_audience",
+        Metadata.with_category(:info, :lifecycle,
+          cimd_host: Cimd.host_of(client.cimd_url || ""),
+          aud_form: form
+        )
       )
-    )
-  end
-
-  defp audience_form(aud, audiences) when is_list(aud) do
-    "list:" <> Enum.map_join(aud, ",", &audience_form(&1, audiences))
-  end
-
-  defp audience_form(aud, [token_endpoint, issuer | _]) when is_binary(aud) do
-    slash = if String.ends_with?(aud, "/"), do: "+slash", else: ""
-
-    cond do
-      normalize_aud(aud) == normalize_aud(token_endpoint) -> "token_endpoint" <> slash
-      normalize_aud(aud) == normalize_aud(issuer) -> "issuer" <> slash
-      true -> "other"
     end
   end
 
-  defp audience_form(_aud, _audiences), do: "other"
+  @typedoc "Which of our audience strings an assertion's `aud` named."
+  @type aud_form :: :token_endpoint | :issuer | :trailing_slash | :other
+
+  # A list names us if any element does; the first such element decides.
+  defp audience_form(aud, audiences) when is_list(aud) do
+    aud
+    |> Enum.map(&audience_form(&1, audiences))
+    |> Enum.find(:other, &(&1 != :other))
+  end
+
+  defp audience_form(aud, [token_endpoint | rest]) when is_binary(aud) do
+    issuer = List.first(rest)
+
+    cond do
+      aud == token_endpoint -> :token_endpoint
+      aud == issuer -> :issuer
+      audience_match?(aud, [token_endpoint | rest]) -> :trailing_slash
+      true -> :other
+    end
+  end
+
+  defp audience_form(_aud, _audiences), do: :other
 
   defp not_yet_valid?(nbf, now) when is_integer(nbf), do: nbf > now + @clock_skew_seconds
   defp not_yet_valid?(_nbf, _now), do: false

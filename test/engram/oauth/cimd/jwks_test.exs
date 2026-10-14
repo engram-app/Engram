@@ -119,6 +119,65 @@ defmodule Engram.OAuth.Cimd.JwksTest do
       assert :ok = Jwks.verify_assertion(client(), assertion, [@audience, @issuer])
     end
 
+    # Review of #1974: which `aud` form each assertion used is a bounded
+    # counter label, computed once per assertion, not an info line per token
+    # request. rfc7523bis will require the issuer form; this is how we see
+    # who still sends the token endpoint before we tighten.
+    test "counts the aud form once per assertion, with a bounded label", %{
+      private: private,
+      public: public
+    } do
+      expect_jwks(public)
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :cimd, :assertion_audience]])
+      audiences = [@audience, @issuer]
+
+      for {aud, form} <- [
+            {@audience, :token_endpoint},
+            {@issuer, :issuer},
+            {@issuer <> "/", :trailing_slash},
+            {["https://elsewhere", @issuer], :issuer}
+          ] do
+        assert :ok =
+                 Jwks.verify_assertion(
+                   client(),
+                   sign(private, claims(%{"aud" => aud})),
+                   audiences
+                 )
+
+        assert_received {[:engram, :cimd, :assertion_audience], ^ref, %{count: 1},
+                         %{aud_form: ^form}}
+
+        refute_received {[:engram, :cimd, :assertion_audience], ^ref, _, _}
+      end
+
+      :telemetry.detach(ref)
+    end
+
+    test "logs the audience only when it is none of ours", %{private: private, public: public} do
+      expect_jwks(public)
+      previous = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      accepted =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :ok = Jwks.verify_assertion(client(), sign(private, claims()), [@audience])
+        end)
+
+      refute accepted =~ "mcp_assertion_audience"
+
+      refused =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assertion = sign(private, claims(%{"aud" => "https://elsewhere"}))
+
+          assert {:error, :wrong_audience} =
+                   Jwks.verify_assertion(client(), assertion, [@audience])
+        end)
+
+      assert refused =~ "mcp_assertion_audience"
+      assert refused =~ "aud_form=other"
+    end
+
     # The whole point of checking `aud`: an assertion minted for another
     # authorization server must not be replayable against this one.
     test "rejects an assertion addressed elsewhere", %{private: private, public: public} do
