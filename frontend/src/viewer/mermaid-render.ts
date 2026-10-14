@@ -82,6 +82,32 @@ function loadMermaid() {
 // is exactly the window that produces a diagram in the wrong palette.
 let queue: Promise<unknown> = Promise.resolve();
 
+// Mermaid measures each diagram in a scratch div it appends to whatever it is
+// given, <body> by default. On <body> that div overflowed the page for the
+// length of a render, so the window scrollbar flashed in and out and narrowed
+// the note. This box keeps it in layout (mermaid needs real text metrics) but
+// clipped to nothing and out of the page's scrollable area.
+let scratch: HTMLElement | null = null;
+
+function scratchSpace(): HTMLElement {
+	if (!scratch?.isConnected) {
+		scratch = document.createElement("div");
+		scratch.setAttribute("aria-hidden", "true");
+		Object.assign(scratch.style, {
+			position: "fixed",
+			top: "0",
+			left: "0",
+			width: "100vw",
+			height: "0px",
+			overflow: "hidden",
+			visibility: "hidden",
+			pointerEvents: "none",
+		});
+		document.body.append(scratch);
+	}
+	return scratch;
+}
+
 let idCounter = 0;
 
 /** Mermaid needs a unique DOM id per render; it uses it to key its own scratch node. */
@@ -98,7 +124,7 @@ export function renderMermaid(id: string, code: string, dark: boolean): Promise<
 	const result = queue.then(async () => {
 		const mermaid = await loadMermaid();
 		mermaid.initialize({ ...BASE_CONFIG, theme: dark ? "dark" : "default" });
-		const { svg } = await mermaid.render(id, code);
+		const { svg } = await mermaid.render(id, code, scratchSpace());
 		return svg;
 	});
 	// The queue must survive a bad diagram: chaining the rejection would fail

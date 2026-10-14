@@ -21,6 +21,24 @@ describe("renderMermaid", () => {
 	});
 });
 
+// Without a container, mermaid measures each diagram in a scratch div appended
+// to <body>. That overflowed the page for the length of a render, so the
+// window scrollbar flashed in and out and narrowed the note while it was there.
+describe("render scratch space", () => {
+	it("measures in a clipped, fixed container instead of <body>", async () => {
+		render.mockClear();
+		await renderMermaid(nextMermaidId(), "graph TD; A-->B", false);
+		const [call] = render.mock.calls as unknown[][];
+		const [, , container] = call ?? [];
+		expect(container).toBeInstanceOf(HTMLElement);
+		const el = container as HTMLElement;
+		expect(el.isConnected).toBe(true);
+		expect(el.style.position).toBe("fixed");
+		expect(el.style.overflow).toBe("hidden");
+		expect(el.style.height).toBe("0px");
+	});
+});
+
 // A diagram draws late (lazy chunk, drawn when scrolled near), so its box grew
 // from empty to full height after the note was already on screen, shoving every
 // line below it down. Its last drawn height survives a reload so the box can be
