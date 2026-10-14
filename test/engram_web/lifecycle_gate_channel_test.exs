@@ -288,14 +288,14 @@ defmodule EngramWeb.LifecycleGateChannelTest do
     end
 
     # An ENTITLEMENT refusal is the opposite, and deliberately so: the account
-    # is healthy, only its API plan is not. HTTP stamps here too — BumpActivity
-    # is router.ex:57, RequireApiRpsBudget is :66 — so a Pro user with a PAT
-    # integration who downgrades to Free stays visibly alive on both
-    # transports. Stamping after the entitlement gate instead would let
-    # InactivityCleanup soft-delete an account generating daily traffic.
+    # is healthy, only its API access is not. Every tier has API access now
+    # (#1974), so the refusal is the per-user `api_rps_cap = 0` kill switch.
+    # HTTP stamps here too — BumpActivity runs before RequireApiRpsBudget — so
+    # a refused integration stays visibly alive on both transports.
     test "an ENTITLEMENT refusal still stamps", %{user: user, vault: vault} do
       Engram.Cache.clear_local(:activity)
       {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "no-entitlement")
+      disable_api_access!(user)
 
       assert {:error, %{reason: "api_access_not_available"}} =
                subscribe_and_join(
@@ -372,14 +372,15 @@ defmodule EngramWeb.LifecycleGateChannelTest do
   # the only `api_access_not_available` assertion in the repo was on
   # CrdtChannel, leaving the SyncChannel gate and the JWT exemption unpinned
   # — and `sync:` grants Presence + note_changed fan-out.
-  describe "API-key join entitlement (#1433 join half, NOT reverted)" do
+  describe "API-key join entitlement (#1433 join half; every tier since #1974)" do
     setup %{user: user} do
       {:ok, _raw, api_key} = Engram.Accounts.create_api_key(user, "join-gate")
       {:ok, api_key: api_key}
     end
 
-    test "a Free PAT cannot join sync:", %{user: user, vault: vault, api_key: api_key} do
-      assert {:error, %{reason: "api_access_not_available"}} =
+    # #1974: API keys work on every tier, sockets included.
+    test "a Free PAT joins sync:", %{user: user, vault: vault, api_key: api_key} do
+      assert {:ok, _, _} =
                subscribe_and_join(
                  user_socket(user, api_key),
                  EngramWeb.SyncChannel,
@@ -387,7 +388,21 @@ defmodule EngramWeb.LifecycleGateChannelTest do
                )
     end
 
-    test "a Free PAT cannot join crdt:", %{user: user, vault: vault, api_key: api_key} do
+    # `api_rps_cap = 0` stays the per-user kill switch on both transports.
+    test "a PAT whose api_rps_cap is overridden to 0 cannot join sync: or crdt:", %{
+      user: user,
+      vault: vault,
+      api_key: api_key
+    } do
+      disable_api_access!(user)
+
+      assert {:error, %{reason: "api_access_not_available"}} =
+               subscribe_and_join(
+                 user_socket(user, api_key),
+                 EngramWeb.SyncChannel,
+                 "sync:#{user.id}:#{vault.id}"
+               )
+
       assert {:error, %{reason: "api_access_not_available"}} =
                subscribe_and_join(
                  user_socket(user, api_key),
@@ -412,6 +427,11 @@ defmodule EngramWeb.LifecycleGateChannelTest do
                  "sync:#{user.id}:#{vault.id}"
                )
     end
+  end
+
+  defp disable_api_access!(user) do
+    insert(:user_limit_override, user: user, key: "api_rps_cap", value: %{"v" => 0})
+    Engram.Billing.OverrideCache.evict(user.id)
   end
 
   describe "healthy accounts" do

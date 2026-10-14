@@ -132,7 +132,6 @@ const BILLING_INACTIVE = {
 	subscription: null,
 	caps: {
 		obsidian_connections: null,
-		api_write_enabled: false,
 		vaults: null,
 	},
 };
@@ -144,7 +143,6 @@ const BILLING_ACTIVE = {
 	subscription: { status: "trialing", tier: "starter", current_period_end: "2026-07-01" },
 	caps: {
 		obsidian_connections: null,
-		api_write_enabled: true,
 		vaults: null,
 	},
 };

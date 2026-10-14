@@ -1,9 +1,10 @@
 """E2E billing helpers — grant plan limits to test users.
 
-Pricing v2 §G gates default Free-tier values that block API-key traffic
-(`api_rps_cap=0` → 429, `api_write_enabled=false` → 403). The unit-test
-suite has `EngramWeb.ConnCase.grant_api_write!/1` for the same problem;
-this is the e2e equivalent. Insert overrides via SQL keyed on email so
+API keys work on every route on every tier (#1974), capped at
+`api_rps_cap` = 30 requests/s per user; an e2e run bursts past that, so
+the cap is lifted. The unit-test suite has
+`EngramWeb.ConnCase.lift_api_rps_cap!/1` for the same reason; this is the
+e2e equivalent. Insert overrides via SQL keyed on email so
 no API hit is required (the first /me would itself 429).
 """
 
@@ -16,8 +17,8 @@ logger = logging.getLogger(__name__)
 
 CI_POSTGRES_CONTAINER = os.environ.get("CI_POSTGRES_CONTAINER", "engram-postgres-1")
 
-# Mirror EngramWeb.ConnCase.grant_api_write!/1 — lift the §G gates that
-# block API-key-authed traffic. Keep this minimal: only override the keys
+# Mirror EngramWeb.ConnCase.lift_api_rps_cap!/1 — lift the caps an e2e run
+# would trip. Keep this minimal: only override the keys
 # whose Free defaults would prevent e2e from exercising the surface.
 # Tests that need to assert a specific gate (e.g. test_32 vault cap) set
 # their own override on top via their own SQL helper.
@@ -26,7 +27,6 @@ CI_POSTGRES_CONTAINER = os.environ.get("CI_POSTGRES_CONTAINER", "engram-postgres
 # wire; check_limit/-1 → :ok). A nil-valued override would fall through
 # to plan/tier defaults via wrap_lookup, so it does NOT unlock anything.
 TEST_USER_OVERRIDES = {
-    "api_write_enabled": True,
     "api_rps_cap": 1000,
     "obsidian_connections_cap": -1,
     # Free-tier launch (§G) gates attachments behind `attachments_enabled`

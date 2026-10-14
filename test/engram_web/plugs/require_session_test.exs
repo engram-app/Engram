@@ -215,7 +215,7 @@ defmodule EngramWeb.Plugs.RequireSessionTest do
       # `RequireApiRpsBudget` sits BEFORE `RequireSession` on this pipeline and
       # 429s a Free user's API key outright, which would green this test without
       # ever reaching the plug under test. Lift the budget so the 403 is real.
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
       {:ok, raw_key, _} = Engram.Accounts.create_api_key(user, "billing-boundary")
 
       for {verb, path} <- @billing_writes do
@@ -266,7 +266,7 @@ defmodule EngramWeb.Plugs.RequireSessionTest do
     end
 
     test "no billing PII read is reachable by an api key", %{conn: base, user: user} do
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
       {:ok, raw_key, _} = Engram.Accounts.create_api_key(user, "billing-pii")
 
       for path <- @billing_pii do
@@ -397,7 +397,7 @@ defmodule EngramWeb.Plugs.RequireSessionTest do
       # case, so the tightening is deliberate — pinned here rather than left to
       # be discovered as a regression.
       {:ok, raw_key, _} = Engram.Accounts.create_api_key(user, "device-key")
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
 
       conn =
         conn
@@ -418,7 +418,7 @@ defmodule EngramWeb.Plugs.RequireSessionTest do
       # Free tier caps api_rps_cap at 0, so an ungranted key 429s in the outer
       # pipeline before RequireSession ever runs — which would make this assert
       # nothing about the plug.
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
 
       conn =
         conn

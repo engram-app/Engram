@@ -251,7 +251,6 @@ export default {
 	"Unlimited vaults": "Cofres ilimitados",
 	"50 GB attachments": "50 GB de anexos",
 	"Cross-vault search": "Busca entre cofres",
-	"API access": "Acesso à API",
 	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			one: "{count} de suas notas não está pesquisável. Apenas suas notas mais antigas {indexed} são indexadas, então suas notas mais recentes não aparecerão na busca.",
@@ -1069,8 +1068,6 @@ export default {
 	"Registered redirects:": "Redirecionamentos registrados:",
 	"API keys ({total})": "Chaves de API ({total})",
 	"+ New Key": "+ Nova Chave",
-	"API keys on your plan work with MCP clients. Upgrade to Pro to use them with the REST API.":
-		"As chaves de API do seu plano funcionam com MCP clientes. Faça upgrade para Pro para usá-las com a API REST.",
 	"No matches.": "Nenhum resultado encontrado.",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"Ainda não há chaves de API. Gere uma para conectar scripts ou ferramentas externas.",

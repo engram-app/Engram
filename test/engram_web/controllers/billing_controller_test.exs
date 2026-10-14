@@ -23,7 +23,7 @@ defmodule EngramWeb.BillingControllerTest do
   setup %{conn: conn} do
     user = insert(:user)
     {:ok, raw_key, _api_key} = Accounts.create_api_key(user, "test")
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
     conn = put_req_header(conn, "authorization", "Bearer #{raw_key}")
     {:ok, conn: conn, user: user}
   end
@@ -80,9 +80,8 @@ defmodule EngramWeb.BillingControllerTest do
     end
 
     test "caps reflect free-tier defaults for connection limits", %{conn: conn} do
-      # The shared setup grants api_write_enabled=true via grant_api_write!/1
-      # (PAT auth precondition), so only obsidian/mcp connection caps still
-      # reflect free-tier defaults here. Obsidian is 2 (it tracks
+      # The shared setup lifts api_rps_cap via lift_api_rps_cap!/1; the
+      # connection caps still reflect free-tier defaults here. Obsidian is 2 (it tracks
       # concurrent_devices). MCP connections are uncapped (#1974), so the
       # payload carries no MCP cap at all.
       conn = get(conn, "/api/billing/status")
@@ -90,7 +89,7 @@ defmodule EngramWeb.BillingControllerTest do
       assert body["caps"]["obsidian_connections"] == 2
       refute Map.has_key?(body["caps"], "mcp_connections")
       refute Map.has_key?(body["current_connections"], "mcp")
-      assert body["caps"]["api_write_enabled"] == true
+      refute Map.has_key?(body["caps"], "api_write_enabled")
     end
 
     test "explicit UserLimitOverride unlocks unlimited connection caps", %{

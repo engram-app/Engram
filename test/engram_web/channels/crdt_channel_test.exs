@@ -67,7 +67,7 @@ defmodule EngramWeb.CrdtChannelTest do
   describe "join/3 with restricted API key" do
     test "restricted key cannot join an unauthorized vault", %{user: user, vault: vault} do
       {:ok, vault_b, _} = Vaults.register_vault(user, "Vault B", Ecto.UUID.generate())
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
       {:ok, _raw, api_key_record} = Engram.Accounts.create_api_key(user, "restricted-crdt")
 
       # Only grant access to vault_b — NOT the vault we then try to join.

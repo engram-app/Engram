@@ -12,7 +12,7 @@ defmodule EngramWeb.McpControllerTest do
     # decrypts back to "Test Vault" — not random factory bytes.
     {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test Vault", Ecto.UUID.generate())
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
 
     # Seed some notes for read tool tests
@@ -477,7 +477,7 @@ defmodule EngramWeb.McpControllerTest do
       {:ok, default, _} = Engram.Vaults.register_vault(user, "Personal", Ecto.UUID.generate())
       {:ok, vault_b, _} = Engram.Vaults.register_vault(user, "Health", Ecto.UUID.generate())
       {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "multi-key")
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
 
       # A note that lives ONLY in the default vault.
       Engram.Notes.upsert_note(
@@ -1115,7 +1115,7 @@ defmodule EngramWeb.McpControllerTest do
       {:ok, vault_b, _} = Engram.Vaults.register_vault(user, "Vault B", Ecto.UUID.generate())
 
       {:ok, api_key, api_key_record} = Engram.Accounts.create_api_key(user, "restricted-key")
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
 
       # Restrict key to vault_a only
       Engram.Repo.insert_all("api_key_vaults", [
@@ -1248,7 +1248,7 @@ defmodule EngramWeb.McpControllerTest do
       {:ok, vc, _} = Engram.Vaults.register_vault(user, "C", Ecto.UUID.generate())
 
       {:ok, api_key, key_rec} = Engram.Accounts.create_api_key(user, "subset-key")
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
 
       # Permit the key to A and B only — NOT C. accessible = 2, total = 3.
       Engram.Repo.insert_all("api_key_vaults", [
@@ -1361,7 +1361,7 @@ defmodule EngramWeb.McpControllerTest do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
       {:ok, vault_b, _} = Engram.Vaults.register_vault(user, "B", Ecto.UUID.generate())
       {:ok, api_key, key_rec} = Engram.Accounts.create_api_key(user, "b-only")
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
 
       # Restrict the key to vault B — which is NOT the account default (A).
       Engram.Repo.insert_all("api_key_vaults", [
@@ -1386,7 +1386,7 @@ defmodule EngramWeb.McpControllerTest do
       v1 = insert(:vault, user: user, is_default: false, name: "One")
       _v2 = insert(:vault, user: user, is_default: false, name: "Two")
       {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "k")
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
 
       conn =
         build_conn()

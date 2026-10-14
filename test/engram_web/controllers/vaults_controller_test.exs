@@ -18,7 +18,7 @@ defmodule EngramWeb.VaultsControllerTest do
     # Give the user unlimited vaults for most tests
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
     {:ok, raw_key, _api_key} = Accounts.create_api_key(user, "test")
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
     conn = put_req_header(conn, "authorization", "Bearer #{raw_key}")
     {:ok, conn: conn, user: user}
   end
@@ -146,7 +146,7 @@ defmodule EngramWeb.VaultsControllerTest do
       {:ok, other_raw_key, _api_key} =
         Engram.Accounts.create_api_key(other_user, "probe")
 
-      grant_api_write!(other_user)
+      lift_api_rps_cap!(other_user)
 
       conn2 =
         Phoenix.ConnTest.build_conn()
@@ -390,7 +390,7 @@ defmodule EngramWeb.VaultsControllerTest do
       # fresh user with default cap (1), no override
       other = insert(:user)
       {:ok, raw_key, _} = Engram.Accounts.create_api_key(other, "k")
-      grant_api_write!(other)
+      lift_api_rps_cap!(other)
       oconn = build_conn() |> put_req_header("authorization", "Bearer #{raw_key}")
 
       {:ok, first, _} = Vaults.register_vault(other, "First", Ecto.UUID.generate())
@@ -425,7 +425,7 @@ defmodule EngramWeb.VaultsControllerTest do
       {:ok, v, _} = Vaults.register_vault(user, "KeyDoomed", Ecto.UUID.generate())
       {:ok, _} = Vaults.delete_vault(user, v.id)
       {:ok, raw_key, _} = Accounts.create_api_key(user, "purge-key")
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
 
       assert %{"error" => "api_key_not_allowed"} =
                build_conn()
@@ -527,7 +527,7 @@ defmodule EngramWeb.VaultsControllerTest do
 
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 1})
       # Re-grant API access after wiping all overrides above.
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
 
       {:ok, _, _} = Vaults.register_vault(user, "First", Ecto.UUID.generate())
 
@@ -571,7 +571,7 @@ defmodule EngramWeb.VaultsControllerTest do
         insert(:user, free_tier_accepted_at: DateTime.utc_now(), suspended_at: nil)
 
       {:ok, raw_key, _} = Engram.Accounts.create_api_key(user, "ft-test-key")
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
       {:ok, _first, _} = Vaults.register_vault(user, "First", Ecto.UUID.generate())
 
       authed =

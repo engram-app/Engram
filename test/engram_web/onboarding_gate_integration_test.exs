@@ -39,7 +39,7 @@ defmodule EngramWeb.OnboardingGateIntegrationTest do
     user = insert_user()
     vault = insert(:vault, user: user, is_default: true)
     {:ok, raw_key, _api_key} = Accounts.create_api_key(user, "test")
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
 
     # Two credentials on purpose. The vault-pipeline tests below keep the API
     # key — proving the gate halts an API key is part of what they assert.

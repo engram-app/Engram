@@ -252,7 +252,6 @@ export default {
 	"Unlimited vaults": "Неограниченное количество хранилищ",
 	"50 GB attachments": "50 ГБ вложений",
 	"Cross-vault search": "Поиск по всем хранилищам",
-	"API access": "Доступ к API",
 	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			one: "{count} из ваших заметок не подлежит поиску. Индексируются только ваши самые старые {indexed}, поэтому новые заметки не отображаются в результатах поиска.",
@@ -1116,8 +1115,6 @@ export default {
 	"Registered redirects:": "Зарегистрированные перенаправления:",
 	"API keys ({total})": "Ключи API ({total})",
 	"+ New Key": "+ Новый ключ",
-	"API keys on your plan work with MCP clients. Upgrade to Pro to use them with the REST API.":
-		"Ключи API в вашем плане работают с MCP клиентами. Обновите до Pro, чтобы использовать их с REST API.",
 	"No matches.": "Нет совпадений.",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"Ключей API пока нет. Сгенерируйте один, чтобы подключить скрипты или внешние инструменты.",

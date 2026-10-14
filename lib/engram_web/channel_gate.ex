@@ -29,30 +29,8 @@ defmodule EngramWeb.ChannelGate do
 
     * `RequireApiRpsBudget`'s POSITIVE caps. `CrdtChannel.check_rate/2` is not
       a substitute: it uses fixed compile-time budgets per device and never
-      reads the plan, so Starter (10 req/s) and Pro (30 req/s) are metered
-      identically and both far above their REST entitlement. #1433.
-    * `RequireApiWriteEnabled`. Attempted and REVERTED — **this is a real,
-      currently-open entitlement gap, not a no-op**. An earlier version of
-      this note claimed "no tier has `api_rps_cap > 0` with
-      `api_write_enabled: false`". That is wrong: `Billing.do_effective_limit/2`
-      resolves EACH KEY independently (override → env → plan → tier default),
-      so raising a Free user's `api_rps_cap` leaves `api_write_enabled` at
-      false. Three layers can do it — the `user_limit_overrides` table, the
-      `:plan_overrides` env config (which opens it for a whole TIER at once),
-      and the plan's own limits JSON. That user is refused
-      every non-GET REST route except `POST /api/search` (exempt as a read)
-      and, after the revert, writes freely over
-      `crdt_create`, `crdt_delete`, `sync_update` and `crdt_index_msg`. The mechanism is
-      first-class (dedicated table, pg NOTIFY trigger, OverrideCache, expiry
-      sweeper), so treat it as reachable in prod.
-
-      It was reverted because screening `crdt_msg` by payload broke reads
-      twice.
-      SyncStep1 is a read, but the server answers it with its own SyncStep1
-      whose protocol-mandated reply is a SyncStep2, so "block SyncStep2"
-      breaks the handshake. Entitlement decided on a wire byte also sits
-      ahead of `ensure_room/3`, i.e. ahead of real side effects. If this is
-      ever wanted, gate it where the write happens, not on the frame. #1433.
+      reads the plan, so a key's 30 req/s REST budget is not the socket's.
+      #1433.
     * `WebActivity`, analytics only (PostHog `:web` event for Clerk-session
       requests); not mirrored on join. `CrdtChannel` emits its own `:crdt`
       activity event instead, so there is no socket-side `:web` count.
@@ -67,10 +45,10 @@ defmodule EngramWeb.ChannelGate do
       plug count wrong as a result. There is no channel search either way.
 
   (`Auth` (2) is not listed above because `UserSocket.connect/3` IS it. The
-  arithmetic: 7 mirrored + 4 genuinely-not-mirrored (`PreAuthRateLimit`,
-  `DeviceFingerprint`, `RequireApiWriteEnabled`, `WebActivity`) + `Auth` = 12. The twelfth
-  and last in router order is `RequireApiWriteEnabled`, the gap declared open
-  above.)
+  arithmetic: 7 mirrored + 3 genuinely-not-mirrored (`PreAuthRateLimit`,
+  `DeviceFingerprint`, `WebActivity`) + `Auth` = 11. `RequireApiWriteEnabled`
+  used to be the twelfth, an open write gap on sockets; it was deleted in
+  #1974 when API keys became every tier's, so the gap went with it.)
 
   `RequireActiveSubscription` collapses into the suspended check — since
   2026-06-07 it passes every tier (Free counts as active) and only rejects
@@ -344,11 +322,10 @@ defmodule EngramWeb.ChannelGate do
       :ok
   end
 
-  # Pricing v2 §G, mirroring `RequireApiRpsBudget` (#1433). That plug has no
-  # GET exemption, so for an API-key caller it gates EVERY request — and
-  # Free's `api_rps_cap` default is 0. A Free key therefore cannot make a
-  # single REST call, and must not be able to open a sync socket and read the
-  # whole vault instead.
+  # Mirrors `RequireApiRpsBudget` (#1433). Every tier's `api_rps_cap` is 30
+  # since #1974, so this refuses only a per-user override of 0: the kill
+  # switch that stops a key over REST must stop it over the sync socket too,
+  # or the socket reads the whole vault the REST API just refused.
   #
   # The exemption keys on the key being non-nil, NOT on the assign existing.
   # The plug uses `not is_map_key(assigns, :current_api_key)`, but
@@ -357,9 +334,7 @@ defmodule EngramWeb.ChannelGate do
   #
   # ONLY the `cap == 0` half is mirrored. `CrdtChannel.check_rate/2` is NOT
   # the socket's `api_rps_cap`: it uses fixed compile-time budgets per device
-  # and never reads the plan, so a Starter key entitled to 10 req/s over REST
-  # sustains far more over the socket, and Starter and Pro are metered
-  # identically. See the NOT-mirrored list above.
+  # and never reads the plan. See the NOT-mirrored list above.
   defp api_access(_user, nil), do: :ok
 
   defp api_access(user, _api_key) do

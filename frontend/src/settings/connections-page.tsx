@@ -1,6 +1,5 @@
 import { Plug, Search } from "lucide-react";
 import { useRef, useState } from "react";
-import { Link, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -33,7 +32,6 @@ import {
 import { useIsFreeTier } from "../billing/use-is-free-tier";
 import { TOOL_LABELS } from "../onboarding/onboarding-tools";
 import { ToolMark } from "../onboarding/tool-icon";
-import { settingsTo } from "./settings-hash";
 
 // ── Tier caps ─────────────────────────────────────────────────
 
@@ -49,10 +47,6 @@ function useTierCaps() {
 	return {
 		tier,
 		isFree,
-		// Fail CLOSED while caps are loading: REST API access is Pro-only, so
-		// the upsell shows until the caps say otherwise. Key creation itself is
-		// open on every tier (#1974): a key always works with MCP.
-		apiWriteEnabled: caps?.api_write_enabled ?? false,
 		obsidianCap: caps ? caps.obsidian_connections : isFree ? 1 : null,
 	};
 }
@@ -286,7 +280,6 @@ function PatSection({
 	pats,
 	total,
 	filtering,
-	restApi,
 	onRevoke,
 }: {
 	pats: Connection[];
@@ -294,34 +287,18 @@ function PatSection({
 	// rows a search left standing.
 	total: number;
 	filtering: boolean;
-	// Whether the plan includes the REST API. MCP works with a key on every tier.
-	restApi: boolean;
 	onRevoke: (pat: Connection) => void;
 }) {
 	const { t, renderedLocale } = useT();
 
 	const [showCreate, setShowCreate] = useState(false);
 	const [newKey, setNewKey] = useState<{ key: string; id: string; name: string } | null>(null);
-	const location = useLocation();
 
 	return (
 		<SettingsSectionCard
 			title={t("API keys ({total})", { total })}
 			headerAction={<Button onClick={() => setShowCreate(true)}>{t("+ New Key")}</Button>}
 		>
-			{!restApi && (
-				<aside className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/50 px-4 py-3">
-					<p className="text-muted-foreground text-sm">
-						{t(
-							"API keys on your plan work with MCP clients. Upgrade to Pro to use them with the REST API.",
-						)}
-					</p>
-					<Button asChild className="shrink-0">
-						<Link to={settingsTo("billing", location.search)}>{t("Upgrade")}</Link>
-					</Button>
-				</aside>
-			)}
-
 			{pats.length === 0 ? (
 				<EmptyState
 					text={
@@ -853,7 +830,6 @@ export default function ConnectionsPage() {
 				pats={pats}
 				total={list.filter((c) => c.kind === "pat").length}
 				filtering={Boolean(needle)}
-				restApi={caps.apiWriteEnabled}
 				onRevoke={(p) =>
 					setPendingRevoke({
 						name: p.name ?? t("this key"),

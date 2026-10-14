@@ -123,13 +123,12 @@ async function jsonFetch(pathname: string, init: RequestInit): Promise<{ status:
 	return { status: res.status, body };
 }
 
-// Pricing v2 §G gates default Free-tier limits that block API-key traffic
-// (api_rps_cap=0 -> 429, api_write_enabled=false -> 403) and cap devices at 1
+// API keys work on every tier (#1974) but are capped at api_rps_cap=30/s,
+// which a test run bursts past; Free also caps devices
 // (our two replicas = two devices on one account). Lift them via SQL keyed on
 // email, exactly as e2e/helpers/billing.py grant_test_plan does — the first
 // api-key-authed request would itself 429 before any HTTP grant could land.
 const TEST_USER_OVERRIDES: Record<string, unknown> = {
-	api_write_enabled: true,
 	api_rps_cap: 1000,
 	obsidian_connections_cap: -1,
 	concurrent_devices: -1,

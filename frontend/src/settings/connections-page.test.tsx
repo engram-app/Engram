@@ -31,12 +31,10 @@ vi.mock("../api/queries", async () => {
 			error: null,
 		}),
 		// Mirror the real payload: the page reads `caps`, not the tier string.
-		// The REST API is Pro-only, so only Pro resolves api_write_enabled true.
 		useBillingStatus: () => ({
 			data: {
 				tier: mockTier,
 				caps: {
-					api_write_enabled: mockTier === "pro",
 					obsidian_connections: mockTier === "free" ? 2 : null,
 					vaults: mockTier === "free" ? 1 : null,
 				},
@@ -496,33 +494,15 @@ describe("ConnectionsPage", () => {
 		expect(screen.getByRole("button", { name: /\+ New Key/iu })).toBeInTheDocument();
 	});
 
-	// #1974: an API key works with MCP on every tier; only the REST API is
-	// Pro. So Free and Starter can create a key, and are told what it covers.
-	it.each(["free", "starter"])("lets %s create a key for MCP and points REST at Pro", (tier) => {
+	// #1974: API keys work on every route on every tier, so every tier can
+	// create one and no plan is told to upgrade for API access.
+	it.each(["free", "starter", "pro"])("lets %s create a key with no API upsell", (tier) => {
 		mockConnections.splice(0, mockConnections.length, basePat);
 		mockTier = tier;
 		renderPage();
 		expect(screen.getByRole("button", { name: /\+ New Key/iu })).toBeInTheDocument();
-		expect(screen.getByText(/work with MCP clients/iu)).toBeInTheDocument();
-		expect(screen.getByText(/Upgrade to Pro to use them with the REST API/iu)).toBeInTheDocument();
-	});
-
-	it("does not show the REST upsell on pro", () => {
-		mockConnections.splice(0, mockConnections.length, basePat);
-		mockTier = "pro";
-		renderPage();
-		expect(
-			screen.queryByText(/Upgrade to Pro to use them with the REST API/iu),
-		).not.toBeInTheDocument();
-	});
-
-	it("Upgrade CTA click actually navigates (not just a correct href)", () => {
-		mockConnections.splice(0, mockConnections.length, basePat);
-		mockTier = "free";
-		renderPage();
-		expect(screen.getByTestId("loc-hash")).toHaveTextContent("");
-		fireEvent.click(screen.getByRole("link", { name: /upgrade/iu }));
-		expect(screen.getByTestId("loc-hash")).toHaveTextContent("#settings/billing");
+		expect(screen.queryByText(/REST API/iu)).not.toBeInTheDocument();
+		expect(screen.queryByText(/Upgrade to Pro/iu)).not.toBeInTheDocument();
 	});
 
 	it("shows unverified badge for MCP connection with verified=false", () => {

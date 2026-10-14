@@ -13,7 +13,7 @@ defmodule EngramWeb.McpActivityTest do
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     {:ok, _vault, _} = Engram.Vaults.register_vault(user, "V", Ecto.UUID.generate())
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "k")
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
 
     bypass = Bypass.open()
 

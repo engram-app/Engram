@@ -28,6 +28,7 @@ defmodule EngramWeb.Plugs.RequireApiRpsBudgetTest do
   test "the window defaults to one second when unconfigured" do
     Application.delete_env(:engram, :api_rps_period_ms)
     user = insert(:user)
+    insert(:user_limit_override, user: user, key: "api_rps_cap", value: %{"v" => 0})
     api_key = %Engram.Accounts.ApiKey{id: 1, user_id: user.id, name: "test"}
 
     conn =
@@ -36,8 +37,8 @@ defmodule EngramWeb.Plugs.RequireApiRpsBudgetTest do
       |> assign(:current_api_key, api_key)
       |> RequireApiRpsBudget.call([])
 
-    # Free tier caps at 0, so this denies immediately and the body carries the
-    # window the plug actually used.
+    # A cap of 0 denies immediately, and the body carries the window the plug
+    # actually used.
     assert Phoenix.ConnTest.json_response(conn, 429)["period_ms"] == 1_000
   end
 
@@ -52,8 +53,24 @@ defmodule EngramWeb.Plugs.RequireApiRpsBudgetTest do
     end
   end
 
-  describe "API-key-authed — Free (api_rps_cap=0)" do
+  # #1974: every tier's default is 30/s, so a Free key is allowed.
+  describe "API-key-authed — Free default (30/s)" do
+    test "passes through", %{conn: conn, user: user, api_key: api_key} do
+      conn =
+        conn
+        |> assign(:current_user, user)
+        |> assign(:current_api_key, api_key)
+        |> RequireApiRpsBudget.call([])
+
+      refute conn.halted
+    end
+  end
+
+  # 0 stays the per-user kill switch: an override refuses every key call.
+  describe "API-key-authed — api_rps_cap overridden to 0" do
     test "halts 429 immediately on every request", %{conn: conn, user: user, api_key: api_key} do
+      insert(:user_limit_override, user: user, key: "api_rps_cap", value: %{"v" => 0})
+
       conn =
         conn
         |> assign(:current_user, user)

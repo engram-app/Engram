@@ -240,7 +240,6 @@ export default {
 	"Unlimited vaults": "Số lượng kho lưu trữ không giới hạn",
 	"50 GB attachments": "50 GB tệp đính kèm",
 	"Cross-vault search": "Tìm kiếm trên nhiều kho lưu trữ",
-	"API access": "Truy cập API",
 	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			other:
@@ -1028,8 +1027,6 @@ export default {
 	"Registered redirects:": "Đường dẫn chuyển hướng đã đăng ký:",
 	"API keys ({total})": "Khóa API ({total})",
 	"+ New Key": "+ Tạo khóa mới",
-	"API keys on your plan work with MCP clients. Upgrade to Pro to use them with the REST API.":
-		"Các khóa API trong gói của bạn hoạt động với MCP ứng dụng. Nâng cấp lên Pro để sử dụng chúng với REST API.",
 	"No matches.": "Không có kết quả nào.",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"Chưa có khóa API nào. Tạo một khóa để kết nối các script hoặc công cụ bên ngoài.",

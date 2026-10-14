@@ -65,14 +65,13 @@ defmodule Engram.Billing.LimitEnforcementTest do
   # correct rather than a gap. Everything else must be gated under a context or
   # worker, where every transport routes through it.
   #
-  # `api_write_enabled` / `api_rps_cap` describe API-KEY traffic specifically:
-  # both gates exempt any request without `:current_api_key` by design (pricing
-  # decision 2026-08-24), so there is no context-level operation to hang them
-  # on. The three connection/device keys gate the single endpoint that mints a
+  # `api_rps_cap` describes API-KEY traffic specifically: its gate exempts any
+  # request without `:current_api_key` by design (pricing decision
+  # 2026-08-24), so there is no context-level operation to hang it on. The
+  # three connection/device keys gate the single endpoint that mints a
   # connection — OAuth consent and device-flow authorize — which no other
   # transport can reach.
   @transport_scoped ~w(
-    api_write_enabled
     api_rps_cap
     concurrent_devices
     device_swap_cooldown_hours

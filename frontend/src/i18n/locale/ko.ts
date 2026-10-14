@@ -237,7 +237,6 @@ export default {
 	"Unlimited vaults": "보관함 수 제한 없음",
 	"50 GB attachments": "50GB 첨부 파일",
 	"Cross-vault search": "보관함 간 검색",
-	"API access": "API 접근",
 	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			other:
@@ -1012,8 +1011,6 @@ export default {
 	"Registered redirects:": "등록된 리디렉션 주소:",
 	"API keys ({total})": "API 키 ({total})",
 	"+ New Key": "새 키 추가",
-	"API keys on your plan work with MCP clients. Upgrade to Pro to use them with the REST API.":
-		"구독 플랜에 포함된 API 키는 MCP개의 클라이언트에서 사용 가능합니다. REST API를 사용하려면 Pro 플랜으로 업그레이드하세요.",
 	"No matches.": "일치하는 항목이 없습니다.",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"아직 API 키가 없습니다. 스크립트나 외부 도구를 연결하려면 하나를 생성하세요.",

@@ -4,9 +4,9 @@ defmodule Engram.Billing.LimitKeysTest do
   alias Engram.Billing.LimitKeys
 
   describe "all/0" do
-    test "returns the 26 catalog keys" do
+    test "returns the 25 catalog keys" do
       keys = LimitKeys.all()
-      assert length(keys) == 26
+      assert length(keys) == 25
       assert :notes_cap in keys
       assert :vaults_cap in keys
       assert :reranker_enabled in keys
@@ -40,7 +40,6 @@ defmodule Engram.Billing.LimitKeysTest do
 
     test "returns :boolean for feature flags" do
       assert LimitKeys.type(:reranker_enabled) == :boolean
-      assert LimitKeys.type(:api_write_enabled) == :boolean
     end
 
     test "raises FunctionClauseError on unknown key" do
@@ -65,8 +64,10 @@ defmodule Engram.Billing.LimitKeysTest do
       # Semantic search is every tier's; the key was removed, not flipped.
       refute :search_semantic_enabled in LimitKeys.all()
       assert LimitKeys.default_for(:indexed_notes_cap, :free) == 2_000
-      assert LimitKeys.default_for(:api_write_enabled, :free) == false
-      assert LimitKeys.default_for(:api_rps_cap, :free) == 0
+      # #1974: API keys work on every route on every tier; api_rps_cap is the
+      # abuse bound, the same 30/s everywhere. There is no write flag.
+      assert LimitKeys.default_for(:api_rps_cap, :free) == 30
+      refute LimitKeys.defined?(:api_write_enabled)
       assert LimitKeys.default_for(:inactivity_warnings_exempt, :free) == false
       assert LimitKeys.default_for(:inactivity_delete_days, :free) == 90
     end
@@ -79,10 +80,7 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:max_file_bytes, :starter) == 209_715_200
       assert LimitKeys.default_for(:lifetime_embed_token_cap, :starter) == nil
       assert LimitKeys.default_for(:indexed_notes_cap, :starter) == nil
-      # API keys are Pro-only. Starter keeps MCP + vault sync + web app,
-      # which authenticate without an API key and so bypass both gates.
-      assert LimitKeys.default_for(:api_write_enabled, :starter) == false
-      assert LimitKeys.default_for(:api_rps_cap, :starter) == 0
+      assert LimitKeys.default_for(:api_rps_cap, :starter) == 30
     end
 
     test "pro tier matrix matches spec §9.2" do
@@ -96,7 +94,6 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:max_file_bytes, :pro) == 524_288_000
       assert LimitKeys.default_for(:reranker_enabled, :pro) == true
       assert LimitKeys.default_for(:indexed_notes_cap, :pro) == nil
-      assert LimitKeys.default_for(:api_write_enabled, :pro) == true
       assert LimitKeys.default_for(:api_rps_cap, :pro) == 30
     end
 

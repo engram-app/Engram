@@ -654,7 +654,7 @@ defmodule EngramWeb.NotesControllerTest do
 
       _vault = insert(:vault, user: user, is_default: true)
       {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "ft-test-key")
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       # Fast-set the maintained meter to the Free-tier default cap (10_000)
@@ -693,7 +693,7 @@ defmodule EngramWeb.NotesControllerTest do
 
       vault = insert(:vault, user: user, is_default: true)
       {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "ex-pro-test-key")
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
       # Simulate a user well over the Free-tier 10_000-note cap (e.g. they

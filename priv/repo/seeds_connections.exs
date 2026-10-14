@@ -109,7 +109,6 @@ grant_starter_overrides = fn user ->
   # defaults (see Engram.Billing.wrap_lookup/1), which would re-impose the
   # free cap on this demo user.
   overrides = [
-    {"api_write_enabled", true},
     {"obsidian_connections_cap", -1},
     {"vaults_cap", -1}
   ]
@@ -129,7 +128,7 @@ grant_starter_overrides = fn user ->
     )
   end
 
-  IO.puts("    starter overrides applied (api_write_enabled=true + unlimited caps)")
+  IO.puts("    starter overrides applied (unlimited caps)")
 end
 
 # ── Wipe previous demo state ───────────────────────────────────────

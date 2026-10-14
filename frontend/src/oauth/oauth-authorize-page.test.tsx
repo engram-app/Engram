@@ -27,7 +27,6 @@ vi.mock("../api/client", async (importOriginal) => ({
 interface FakeBilling {
 	caps: {
 		obsidian_connections: number | null;
-		api_write_enabled: boolean;
 		vaults: number | null;
 	};
 	current_connections: { obsidian: number };
@@ -95,7 +94,6 @@ const billingState = vi.hoisted(() => ({
 	current: {
 		caps: {
 			obsidian_connections: null,
-			api_write_enabled: true,
 			vaults: null,
 		},
 		current_connections: { obsidian: 0 },
@@ -183,7 +181,6 @@ afterEach(() => {
 	billingState.current = {
 		caps: {
 			obsidian_connections: null,
-			api_write_enabled: true,
 			vaults: null,
 		},
 		current_connections: { obsidian: 0 },
@@ -423,7 +420,7 @@ describe("OAuthAuthorizePage", () => {
 		// picker + Approve, and Approve disconnects the existing connection
 		// BEFORE posting consent.
 		billingState.current = {
-			caps: { obsidian_connections: 1, api_write_enabled: true, vaults: null },
+			caps: { obsidian_connections: 1, vaults: null },
 			current_connections: { obsidian: 1 },
 			device_swap_cooldown_remaining_hours: null,
 		};
@@ -472,7 +469,7 @@ describe("OAuthAuthorizePage", () => {
 	// client never shows the cap banner, whatever the user already has.
 	it("never shows a cap banner for an MCP client", async () => {
 		billingState.current = {
-			caps: { obsidian_connections: 1, api_write_enabled: true, vaults: null },
+			caps: { obsidian_connections: 1, vaults: null },
 			current_connections: { obsidian: 1 },
 			device_swap_cooldown_remaining_hours: null,
 		};
@@ -493,7 +490,7 @@ describe("OAuthAuthorizePage", () => {
 		// but not search). Losing client_id/redirect_uri/etc mid-consent re-renders
 		// this page into "Invalid authorization request", destroying the flow.
 		billingState.current = {
-			caps: { obsidian_connections: 1, api_write_enabled: true, vaults: null },
+			caps: { obsidian_connections: 1, vaults: null },
 			current_connections: { obsidian: 1 },
 			device_swap_cooldown_remaining_hours: null,
 		};

@@ -5,9 +5,10 @@ defmodule EngramWeb.Plugs.RequireApiRpsBudget do
   Looks up the user's `api_rps_cap` from `Engram.Billing` and rate-limits
   via `EngramWeb.RateLimiter` with a 1-second window. JWT-authed requests
   (web app) are exempt; the gate only fires for API-key-authed traffic,
-  mirroring the policy shape in `RequireApiWriteEnabled`.
+  JWT-authed traffic is bounded by `PreAuthRateLimit` instead.
 
-  Free defaults to `0` (no API access). Starter `10`, Pro `30`. When the
+  Every tier defaults to `30` (#1974: API keys work everywhere on every
+  tier); a per-user override of `0` refuses every API-key call. When the
   cap is exhausted within the window, responds 429 with
   `{"error": "api_rps_exceeded", "limit": N, "period_ms": 1000}`.
 
@@ -36,12 +37,6 @@ defmodule EngramWeb.Plugs.RequireApiRpsBudget do
   end
 
   def init(opts), do: opts
-
-  # MCP is exempt (#1974): this key prices the REST API, and MCP over an API
-  # key is open on every tier, metered like every MCP call by
-  # `ai_searches_per_day`. Matched on the routed path, so the
-  # `mcp.engram.page` host (rewritten to `/api/mcp`) is covered too.
-  def call(%Plug.Conn{request_path: "/api/mcp"} = conn, _opts), do: conn
 
   # JWT-authed (no API key) is exempt — web app is not subject to this gate.
   def call(%Plug.Conn{assigns: assigns} = conn, _opts)

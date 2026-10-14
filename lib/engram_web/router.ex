@@ -65,7 +65,6 @@ defmodule EngramWeb.Router do
     # words: "data loss beats a stale row". Message precedence is worth less.
     plug EngramWeb.Plugs.RequirePluginVersion
     plug EngramWeb.Plugs.RequireApiRpsBudget
-    plug EngramWeb.Plugs.RequireApiWriteEnabled
   end
 
   # RequireSession that still admits API keys: rejects third-party OAuth grants
@@ -721,8 +720,6 @@ defmodule EngramWeb.Router do
       # stamps app.user_id (app.vault_id stays nil — MCP is multi-vault per
       # connection, so there is no single request-level vault to tag).
       EngramWeb.Plugs.TraceUserAttrs,
-      # An API key here is exempt from the REST API's Pro gates inside
-      # :authed_api (#1974); MCP is metered by ai_searches_per_day only.
       EngramWeb.Plugs.OAuthScopeEnforce
     ]
 

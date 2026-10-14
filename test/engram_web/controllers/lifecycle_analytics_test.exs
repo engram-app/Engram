@@ -47,7 +47,7 @@ defmodule EngramWeb.LifecycleAnalyticsTest do
   defp session_conn(conn, user) do
     user = ensure_external_id(user)
     {:ok, token} = Engram.Auth.Providers.Local.issue_access_token(user.external_id, user.email)
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
     put_req_header(conn, "authorization", "Bearer #{token}")
   end
 

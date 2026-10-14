@@ -77,7 +77,7 @@ defmodule EngramWeb.VaultPlugOAuthScopeTest do
       # An API-key request is gated by `RequireApiRpsBudget` BEFORE it reaches
       # VaultPlug, and Free caps `api_rps_cap` at 0 — without this the request
       # 429s and never exercises the scope check at all.
-      Engram.ApiEntitlementHelpers.grant_api_write!(user)
+      Engram.ApiEntitlementHelpers.lift_api_rps_cap!(user)
       {:ok, _raw, key} = Engram.Accounts.create_api_key(user, "restricted")
       %{key: key, both: [granted, other]}
     end

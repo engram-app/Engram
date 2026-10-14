@@ -5,7 +5,7 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
     user = insert(:user)
     vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
     %{conn: authed, user: user, vault: vault}
   end

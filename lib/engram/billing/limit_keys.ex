@@ -102,24 +102,21 @@ defmodule Engram.Billing.LimitKeys do
     # slot. The consequence is that a user's NEWEST work falls outside the cap,
     # which is why the count is surfaced in the UI rather than failing silently.
     indexed_notes_cap: %{type: :integer, defaults: %{free: 2_000, starter: nil, pro: nil}},
-    # THE REST API IS PRO-ONLY; API KEYS ARE NOT (#1974). Any plan can mint any
-    # number of keys. These two keys gate exactly one thing: API-key-authed
-    # REST and socket traffic. `RequireApiWriteEnabled` and
-    # `RequireApiRpsBudget` exempt requests without `:current_api_key` AND
-    # `/api/mcp`; `ChannelGate.api_access/2` only rejects an API-key socket
-    # when the cap is 0.
+    # API KEYS WORK EVERYWHERE, ON EVERY TIER (#1974). A personal API key may
+    # call every route (REST, MCP, the sync sockets) on Free, Starter and Pro,
+    # and there is no write flag: `api_write_enabled` and the MCP connection
+    # cap were removed. Cost is metered where it is incurred, whatever the
+    # credential: `ai_searches_per_day` at the search cost site
+    # (`Engram.Search.search/4`) and `notes_cap` / `indexed_notes_cap` on
+    # writes. Abuse is bounded by `PreAuthRateLimit` (600/min per endpoint
+    # family) and this key.
     #
-    # NOT gated by them: MCP over an API key, MCP over OAuth and the Obsidian
-    # plugin (`:internal_jwt`), and the web app (Clerk JWT). MCP on any
-    # transport is limited only by `ai_searches_per_day` below and the rate
-    # limiters. So Free and Starter keep MCP (with or without a key), vault
-    # sync and the web app; programmatic REST access is Pro.
-    api_write_enabled: %{type: :boolean, defaults: %{free: false, starter: false, pro: true}},
-    # 0 means "an API key cannot make a single call" — REST via
-    # `RequireApiRpsBudget`, socket via `ChannelGate`. Keep this at 0 on any
-    # tier where `api_write_enabled` is false, or a key gets read access to
-    # the whole vault through the sync socket while REST writes are refused.
-    api_rps_cap: %{type: :integer, defaults: %{free: 0, starter: 0, pro: 30}},
+    # `api_rps_cap` is per user, per second, for API-KEY traffic only (REST via
+    # `RequireApiRpsBudget`, which exempts requests without `:current_api_key`).
+    # Kept as a key, not hardcoded, so a per-user override can lift it or set
+    # it to 0: 0 refuses every API-key call, REST and socket
+    # (`ChannelGate.api_access/2`), which is the per-user kill switch.
+    api_rps_cap: %{type: :integer, defaults: %{free: 30, starter: 30, pro: 30}},
     # THE AI usage meter. One key, one number, every transport.
     #
     # Charged in `Engram.Search.search/4` — the single funnel every retrieval

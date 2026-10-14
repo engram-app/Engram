@@ -1,27 +1,21 @@
 defmodule Engram.ApiEntitlementHelpers do
   @moduledoc """
-  Grants paid-tier API entitlements via `user_limit_overrides`.
+  Lifts a test user's `api_rps_cap` via `user_limit_overrides`.
 
-  Pricing v2 §G gives Free `api_write_enabled: false` and `api_rps_cap: 0`,
-  and `RequireApiRpsBudget` has no GET exemption — so a Free API key cannot
-  make a single REST call, and (since #1433) cannot open a `sync:`/`crdt:`
-  socket either.
+  Every tier has API access since #1974, capped at 30 requests/s per user.
+  A test that fires a burst of API-key requests (or mints a key to exercise
+  something else and should never trip the cap by accident) lifts it to
+  1000. Shared by `ConnCase` and `ChannelCase` so the two cannot drift.
 
-  That means **any test that mints an API key to exercise something else** —
-  vault restriction, join tracing, channel logging — has to represent a paid
-  user, or it fails on entitlement before reaching what it is actually
-  testing. Shared by `ConnCase` and `ChannelCase` so the two cannot drift.
-
-  JWT-authed sockets and requests are exempt from both gates, so tests that
-  do not mint a key need none of this.
+  JWT-authed sockets and requests are exempt from the cap, so tests that do
+  not mint a key need none of this.
   """
 
   @doc """
-  Grants `api_write_enabled=true` and a generous `api_rps_cap=1000`.
-  Idempotent. Returns `user` for pipe-friendliness.
+  Sets a generous `api_rps_cap=1000`. Idempotent. Returns `user` for
+  pipe-friendliness.
   """
-  def grant_api_write!(%Engram.Accounts.User{} = user) do
-    upsert_override!(user, "api_write_enabled", true)
+  def lift_api_rps_cap!(%Engram.Accounts.User{} = user) do
     upsert_override!(user, "api_rps_cap", 1_000)
     user
   end

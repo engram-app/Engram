@@ -222,7 +222,6 @@ export default {
 	"Unlimited vaults": "无限仓库",
 	"50 GB attachments": "50 GB 附件",
 	"Cross-vault search": "跨仓库搜索",
-	"API access": "API 访问",
 	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			other:
@@ -980,8 +979,6 @@ export default {
 	"Registered redirects:": "已注册的重定向：",
 	"API keys ({total})": "API 密钥 ({total})",
 	"+ New Key": "+ 新建密钥",
-	"API keys on your plan work with MCP clients. Upgrade to Pro to use them with the REST API.":
-		"你的套餐中的 API 密钥可用于 MCP 个客户端。升级到 Pro 以在 REST API 中使用它们。",
 	"No matches.": "未找到匹配项。",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"尚未创建 API 密钥。生成一个密钥，以连接脚本或外部工具。",

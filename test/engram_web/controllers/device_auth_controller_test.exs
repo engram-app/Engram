@@ -16,7 +16,7 @@ defmodule EngramWeb.DeviceAuthControllerTest do
   defp create_authed_conn(%{conn: conn}) do
     user = insert(:user) |> ensure_external_id()
     {:ok, token} = Engram.Auth.Providers.Local.issue_access_token(user.external_id, user.email)
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
     authed_conn = put_req_header(conn, "authorization", "Bearer #{token}")
 
     %{conn: conn, authed_conn: authed_conn, user: user}

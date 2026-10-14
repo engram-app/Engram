@@ -21,8 +21,8 @@ defmodule EngramWeb.Plugs.Auth do
   def init(opts), do: opts
 
   # Every branch loads the subscription once (Billing.with_subscription/1) so
-  # the downstream billing gates (RequireOnboarding, RequireApiRpsBudget,
-  # RequireApiWriteEnabled) reuse it instead of each re-querying.
+  # the downstream billing gates (RequireOnboarding, RequireApiRpsBudget)
+  # reuse it instead of each re-querying.
   def call(conn, _opts) do
     case authenticate(conn) do
       {:ok, user} ->

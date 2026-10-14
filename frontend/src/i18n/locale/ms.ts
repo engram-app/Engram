@@ -245,7 +245,6 @@ export default {
 	"Unlimited vaults": "Peti nota tanpa had",
 	"50 GB attachments": "50 GB lampiran",
 	"Cross-vault search": "Carian merentasi peti nota",
-	"API access": "Akses API",
 	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			other:
@@ -1031,8 +1030,6 @@ export default {
 	"Registered redirects:": "Pengalihan yang didaftarkan:",
 	"API keys ({total})": "Kekunci API ({total})",
 	"+ New Key": "+ Kekunci Baru",
-	"API keys on your plan work with MCP clients. Upgrade to Pro to use them with the REST API.":
-		"Kunci API pada pelan anda berfungsi dengan MCP klien. Tingkatkan ke Pro untuk menggunakannya dengan API REST.",
 	"No matches.": "Tiada sebarang padanan.",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"Tiada kekunci API lagi. Jana satu untuk menyambungkan skrip atau alat luaran.",

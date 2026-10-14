@@ -130,7 +130,6 @@ defmodule EngramWeb.BillingController do
         end,
       caps: %{
         obsidian_connections: cap_json(Billing.cap(user, :obsidian_connections_cap)),
-        api_write_enabled: Billing.granted?(user, :api_write_enabled),
         vaults: cap_json(Billing.cap(user, :vaults_cap))
       },
       # Bundled into /billing/status so the proactive cap UI on /link and

@@ -11,7 +11,6 @@ function status(overrides: Partial<BillingStatus> = {}): BillingStatus {
 		subscription: { status: "active", tier: "starter", current_period_end: "2026-07-01T12:00:00Z" },
 		caps: {
 			obsidian_connections: null,
-			api_write_enabled: true,
 			vaults: null,
 		},
 		current_connections: { obsidian: 0 },

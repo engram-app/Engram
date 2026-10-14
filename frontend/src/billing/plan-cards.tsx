@@ -143,16 +143,11 @@ export const PLAN_CATALOG: Record<PlanTier, PlanCardCatalog> = {
 		// Lead with what is actually Pro-ONLY. Unlimited devices and unlimited
 		// AI searches are true here too, but they are table stakes on paid and
 		// listing them made Pro read as "Starter with more storage" at double
-		// the price. `cross_vault_search` and `api_write_enabled` are the two
-		// keys that are genuinely pro-true in `LimitKeys`. Reranking is also
+		// the price. `cross_vault_search` is the key that is genuinely pro-true
+		// in `LimitKeys` (API access is every tier's since #1974). Reranking is also
 		// pro-only but ships with RERANKER_BACKEND unset, so it stays off this
 		// list until the backend is actually deployed.
-		features: [
-			msg("Unlimited vaults"),
-			msg("50 GB attachments"),
-			msg("Cross-vault search"),
-			msg("API access"),
-		],
+		features: [msg("Unlimited vaults"), msg("50 GB attachments"), msg("Cross-vault search")],
 	},
 };
 

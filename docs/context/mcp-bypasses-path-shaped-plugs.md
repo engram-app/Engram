@@ -76,10 +76,12 @@ every `Billing.*` call site is under `lib/engram_web/` fails.** That directory
 is plugs, controllers and channels — all transport. A key gated only there is
 gated for whoever knocks on that door and nobody else.
 
-`@transport_scoped` exempts the six keys where the endpoint genuinely IS the
-operation: `api_write_enabled` / `api_rps_cap` (defined in terms of API-key
-auth, which no context can see) and the four device/connection caps (OAuth
-consent and device-flow authorize are the only paths that mint a connection).
+`@transport_scoped` exempts the four keys where the endpoint genuinely IS the
+operation: `api_rps_cap` (defined in terms of API-key auth, which no context
+can see) and the three device/connection caps (OAuth consent and device-flow
+authorize are the only paths that mint a connection). `api_write_enabled`
+and `mcp_connections_cap` were removed in #1974; see
+`api-access-and-mcp-limits.md`.
 
 Verified by mutation: deleting the `check_feature` line from
 `move_attachment/4` fails the test naming `:attachments_enabled`.

@@ -242,7 +242,6 @@ export default {
 	"Unlimited vaults": "保管庫数無制限",
 	"50 GB attachments": "50 GBの添付ファイル",
 	"Cross-vault search": "保管庫間検索",
-	"API access": "APIアクセス",
 	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			other:
@@ -1028,8 +1027,6 @@ export default {
 	"Registered redirects:": "登録済みのリダイレクト先:",
 	"API keys ({total})": "APIキー ({total})",
 	"+ New Key": "新規キーの追加",
-	"API keys on your plan work with MCP clients. Upgrade to Pro to use them with the REST API.":
-		"ご契約プランのAPIキーは、MCPクライアントで使用できます。REST APIで使用するには、Proにアップグレードしてください。",
 	"No matches.": "一致するものがありません。",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"まだAPIキーがありません。スクリプトや外部ツールと連携するために、新しいキーを作成してください。",

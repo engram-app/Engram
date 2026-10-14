@@ -390,9 +390,9 @@ def sync_user(ts, auth_provider, sync_password):
     """
     email = f"e2e-sync-{ts}+clerk_test@example.com"
     provider_user_id, api_key = auth_provider.provision_user(email, sync_password)
-    # Lift pricing v2 §G Free-tier defaults (api_rps_cap=0, api_write_enabled=false)
-    # before any api-key-authed request hits the user — mirrors
-    # EngramWeb.ConnCase.grant_api_write!/1 for the e2e layer.
+    # Lift api_rps_cap (30/s on every tier, #1974) and the Free caps before
+    # any api-key-authed request hits the user — mirrors
+    # EngramWeb.ConnCase.lift_api_rps_cap!/1 for the e2e layer.
     grant_test_plan(email)
     return email, provider_user_id, api_key
 

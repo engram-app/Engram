@@ -63,13 +63,13 @@ defmodule EngramWeb.ConnectionsControllerTest do
     end
 
     test "returns 403 for API-key-authed requests (PAT must not list connections)", %{conn: conn} do
-      # The nested RequireSession plug gates the route. grant_api_write! lets
+      # The nested RequireSession plug gates the route. lift_api_rps_cap! lets
       # the request pass RequireApiRpsBudget so it reaches RequireSession,
       # which then returns 403 with api_key_not_allowed, matching the pattern
       # in auth_controller_test.exs.
       user = insert(:user)
       {:ok, raw_key, _api_key} = Engram.Accounts.create_api_key(user, "test-key")
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
 
       conn =
         conn
@@ -331,7 +331,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
 
     test "returns 401/403 for API-key-authed requests", %{conn: conn} do
       user = insert(:user)
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
       {:ok, raw_key, _api_key} = Engram.Accounts.create_api_key(user, "test-key")
 
       conn =
@@ -411,7 +411,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
 
     test "401/403 for API-key-authed requests", %{conn: conn} do
       user = insert(:user)
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
       {:ok, raw_key, _api_key} = Engram.Accounts.create_api_key(user, "test-key")
 
       conn =
@@ -424,10 +424,9 @@ defmodule EngramWeb.ConnectionsControllerTest do
   end
 
   describe "POST /api/connections/pat" do
-    # #1974: a key works with MCP on every tier, so every tier can mint one.
-    # What it may do is gated where it is used (REST: api_rps_cap /
-    # api_write_enabled; MCP: the ai_searches_per_day meter), not at minting.
-    test "201 on Free: a key is usable for MCP on every tier", %{conn: conn} do
+    # #1974: a key works on every route on every tier, so every tier can mint
+    # one. Cost is metered where it is incurred, not at minting.
+    test "201 on Free: a key is usable on every tier", %{conn: conn} do
       free = insert(:user)
 
       conn =
@@ -440,12 +439,6 @@ defmodule EngramWeb.ConnectionsControllerTest do
 
     test "201 on paid tier, returns raw key once", %{conn: conn} do
       paid = insert(:user)
-
-      insert(:user_limit_override,
-        user: paid,
-        key: "api_write_enabled",
-        value: %{"v" => true}
-      )
 
       conn =
         conn
@@ -460,7 +453,6 @@ defmodule EngramWeb.ConnectionsControllerTest do
 
     test "422 when name is missing on paid tier", %{conn: conn} do
       paid = insert(:user)
-      insert(:user_limit_override, user: paid, key: "api_write_enabled", value: %{"v" => true})
 
       conn =
         conn
@@ -476,7 +468,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
 
     test "401/403 for API-key-authed requests", %{conn: conn} do
       user = insert(:user)
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
       {:ok, raw_key, _api_key} = Engram.Accounts.create_api_key(user, "test-key")
 
       conn =
@@ -491,7 +483,6 @@ defmodule EngramWeb.ConnectionsControllerTest do
   describe "DELETE /api/connections/pat/:id" do
     test "204 deletes the user's own PAT", %{conn: conn} do
       user = insert(:user)
-      insert(:user_limit_override, user: user, key: "api_write_enabled", value: %{"v" => true})
       {:ok, _raw_key, api_key} = Engram.Accounts.create_api_key(user, "to-delete")
 
       conn =
@@ -509,7 +500,6 @@ defmodule EngramWeb.ConnectionsControllerTest do
     test "404 for foreign user's PAT (no cross-user revoke)", %{conn: conn} do
       user = insert(:user)
       other = insert(:user)
-      insert(:user_limit_override, user: other, key: "api_write_enabled", value: %{"v" => true})
       {:ok, _raw_key, foreign_key} = Engram.Accounts.create_api_key(other, "foreign")
 
       conn =
@@ -537,7 +527,7 @@ defmodule EngramWeb.ConnectionsControllerTest do
 
     test "401/403 for API-key-authed requests", %{conn: conn} do
       user = insert(:user)
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
       {:ok, raw_key, api_key} = Engram.Accounts.create_api_key(user, "test-key")
 
       conn =

@@ -20,8 +20,9 @@ defmodule Engram.Billing.CapabilitiesTest do
     assert caps.tier == "free"
     assert caps.limits["notes_cap"] == 10_000
     assert caps.limits["vaults_cap"] == 1
-    # Boolean feature stays a boolean; integer "unlimited" caps serialize to nil.
-    assert caps.limits["api_write_enabled"] == false
+    # #1974: API access is every tier's; there is no write flag any more.
+    assert caps.limits["api_rps_cap"] == 30
+    refute Map.has_key?(caps.limits, "api_write_enabled")
     assert caps.limits["ai_searches_per_day"] == 20
   end
 
@@ -34,15 +35,19 @@ defmodule Engram.Billing.CapabilitiesTest do
     assert caps.tier == "starter"
     assert caps.limits["notes_cap"] == 50_000
     assert caps.limits["vaults_cap"] == 10
-    # API keys are Pro-only — Starter resolves the same `false` as Free here.
-    assert caps.limits["api_write_enabled"] == false
+    assert caps.limits["api_rps_cap"] == 30
   end
 
-  test "api_write_enabled is the Pro-only capability" do
+  # Removing a limit key needs no migration: lookups are keyed by the
+  # requested key, so a leftover override row is never read.
+  test "a leftover override row for a removed key is inert" do
     user = insert(:user)
-    insert(:subscription, user: user, tier: "pro", status: "active")
+    insert(:user_limit_override, user: user, key: "api_write_enabled", value: %{"v" => false})
+    insert(:user_limit_override, user: user, key: "mcp_connections_cap", value: %{"v" => 1})
 
-    assert Billing.capabilities(user).limits["api_write_enabled"] == true
+    caps = Billing.capabilities(user)
+    refute Map.has_key?(caps.limits, "api_write_enabled")
+    refute Map.has_key?(caps.limits, "mcp_connections_cap")
   end
 
   test "exposes every defined limit key as a JSON-safe value" do

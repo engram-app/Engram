@@ -11,7 +11,7 @@ defmodule EngramWeb.VaultTreeControllerTest do
     insert(:subscription, user: user, tier: "pro", status: "active")
     vault = insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
     %{conn: authed, user: user, vault: vault}
   end
@@ -39,7 +39,7 @@ defmodule EngramWeb.VaultTreeControllerTest do
       insert(:subscription, user: user, tier: "pro", status: "active")
       insert(:vault, user: user, is_default: true)
       {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "dek-test-key")
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
       conn = build_conn() |> put_req_header("authorization", "Bearer #{api_key}")
 
       body = conn |> get("/api/vault/tree") |> json_response(200)
@@ -128,7 +128,7 @@ defmodule EngramWeb.VaultTreeControllerTest do
       insert(:subscription, user: other, tier: "pro", status: "active")
       _other_vault = insert(:vault, user: other, is_default: true)
       {:ok, other_key, _} = Engram.Accounts.create_api_key(other, "other-key")
-      grant_api_write!(other)
+      lift_api_rps_cap!(other)
 
       other_conn =
         build_conn()
@@ -262,7 +262,7 @@ defmodule EngramWeb.VaultTreeTenantBlocksTest do
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     {:ok, _vault, _} = Engram.Vaults.register_vault(user, "Blocks", Ecto.UUID.generate())
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
     %{conn: put_req_header(conn, "authorization", "Bearer #{api_key}")}
   end
 
