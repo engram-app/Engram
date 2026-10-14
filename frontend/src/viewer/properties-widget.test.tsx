@@ -515,7 +515,7 @@ describe("OKF keys are highlighted", () => {
 	// suites fail OTHER files by starving them.
 	test("an indexed key renders in the accent colour", async () => {
 		await renderWith("type", "text", "meeting-note");
-		expect(keyInput("type")).toHaveClass("text-primary");
+		expect(keyInput("type")).toHaveClass("text-primary-ink");
 	});
 
 	test("a key the backend would drop stays muted", async () => {

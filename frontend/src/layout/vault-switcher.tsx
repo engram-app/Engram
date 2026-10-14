@@ -177,7 +177,9 @@ function VaultSwitcher() {
 									}}
 								>
 									<span className="truncate">{displayVaultName(v.name, t)}</span>
-									{v.id === active.id ? <Check className="size-4 shrink-0 text-primary" /> : null}
+									{v.id === active.id ? (
+										<Check className="size-4 shrink-0 text-primary-ink" />
+									) : null}
 								</div>
 							))}
 							{matches.length === 0 ? <p className={listEmpty}>{t("No vaults match")}</p> : null}

@@ -41,8 +41,8 @@ export default function SidebarViewToggle() {
 						onClick={() => setView(id)}
 						className={`flex flex-1 items-center justify-center gap-2 font-medium text-sm transition-colors ${
 							active
-								? "bg-primary/15 text-primary"
-								: "text-muted-foreground hover:bg-primary/10 hover:text-primary"
+								? "bg-primary/15 text-primary-ink"
+								: "text-muted-foreground hover:bg-primary/10 hover:text-primary-ink"
 						}`}
 					>
 						<Icon className="size-4" />

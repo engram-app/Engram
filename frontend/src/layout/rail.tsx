@@ -17,8 +17,8 @@ import UserMenu from "./user-menu";
 function railButtonClass(active: boolean): string {
 	return `flex h-8 w-8 items-center justify-center rounded-md transition-colors ${
 		active
-			? "bg-primary/15 text-primary hover:bg-primary/25"
-			: "text-muted-foreground hover:bg-primary/10 hover:text-primary"
+			? "bg-primary/15 text-primary-ink hover:bg-primary/25"
+			: "text-muted-foreground hover:bg-primary/10 hover:text-primary-ink"
 	}`;
 }
 

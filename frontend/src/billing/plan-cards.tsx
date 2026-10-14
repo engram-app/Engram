@@ -17,7 +17,7 @@ function FeatureList({ features, className }: { features: readonly MsgKey[]; cla
 		<ul className={cn("space-y-1 text-muted-foreground text-sm", className)}>
 			{features.map((f) => (
 				<li key={f} className="flex items-center gap-2">
-					<span className="text-primary" aria-hidden="true">
+					<span className="text-primary-ink" aria-hidden="true">
 						&#10003;
 					</span>
 					{t(f)}
@@ -205,7 +205,7 @@ export function CadenceToggle({
 					<span
 						className={cn(
 							"ml-1 text-xs",
-							cadence === "annual" ? "text-primary-foreground/90" : "text-primary",
+							cadence === "annual" ? "text-primary-foreground/90" : "text-primary-ink",
 						)}
 					>
 						{t("save 17%")}
@@ -283,7 +283,7 @@ export function PlanCard({
 					<div
 						role="status"
 						aria-label={t("Your current plan")}
-						className="flex w-full items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2 font-medium text-primary text-sm"
+						className="flex w-full items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2 font-medium text-primary-ink text-sm"
 					>
 						<span aria-hidden="true">&#10003;</span>
 						<span>{t("You're on this plan")}</span>

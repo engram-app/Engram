@@ -45,8 +45,8 @@ export default function RightToolPanel({ onCollapse }: { onCollapse: () => void 
 							onClick={() => setActive(tool.id)}
 							className={`rounded px-2 py-1 font-medium text-xs transition-colors ${
 								resolvedId === tool.id
-									? "bg-primary/15 text-primary"
-									: "text-muted-foreground hover:bg-primary/10 hover:text-primary"
+									? "bg-primary/15 text-primary-ink"
+									: "text-muted-foreground hover:bg-primary/10 hover:text-primary-ink"
 							}`}
 						>
 							{t(tool.label)}

@@ -100,7 +100,7 @@ function PropertyKeyInput({
 			// lives, and a per-key hover repeating it is noise on every row.
 			className={cn(
 				"field-sizing-content min-w-0 max-w-full truncate border-0 bg-transparent px-2 py-1 text-sm outline-none",
-				okf ? "text-primary" : "text-muted-foreground",
+				okf ? "text-primary-ink" : "text-muted-foreground",
 			)}
 			value={draft}
 			onChange={(e) => setDraft(e.target.value)}
@@ -184,7 +184,7 @@ function PropertiesHelp() {
 								href="https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf"
 								target="_blank"
 								rel="noreferrer noopener"
-								className="text-primary underline underline-offset-2"
+								className="text-primary-ink underline underline-offset-2"
 							>
 								{t("Open Knowledge Format")}
 							</a>

@@ -171,7 +171,7 @@ function FieldHelp({ question, children }: { question: string; children: ReactNo
 
 /** Chip chrome for the visually-hidden radios above. */
 const chipClasses =
-	"inline-block rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors peer-checked:border-primary/40 peer-checked:bg-primary/15 peer-checked:text-primary peer-focus-visible:ring-2 peer-focus-visible:ring-ring hover:bg-accent";
+	"inline-block rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors peer-checked:border-primary/40 peer-checked:bg-primary/15 peer-checked:text-primary-ink peer-focus-visible:ring-2 peer-focus-visible:ring-ring hover:bg-accent";
 
 /**
  * `hideHeader` is for the mobile drawer, which supplies its own titled header
@@ -381,7 +381,7 @@ function SearchPanel({
 													href="https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf"
 													target="_blank"
 													rel="noreferrer noopener"
-													className="text-primary underline underline-offset-2"
+													className="text-primary-ink underline underline-offset-2"
 												>
 													{t("Open Knowledge Format")}
 												</a>

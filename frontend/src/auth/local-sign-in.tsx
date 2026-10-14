@@ -67,7 +67,7 @@ function SignUpFooter({ bootstrap, returnTo }: { bootstrap: BootstrapState; retu
 					signup: (
 						<Link
 							to={authUrlWithReturnTo(ROUTES.SIGN_UP, returnTo)}
-							className="font-medium text-primary hover:underline"
+							className="font-medium text-primary-ink hover:underline"
 						>
 							{t("Sign up")}
 						</Link>

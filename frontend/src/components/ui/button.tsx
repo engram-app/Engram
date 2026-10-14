@@ -17,7 +17,7 @@ const buttonVariants = cva(
 				// Solid red fill. Red text on a red tint read as muddy on dark.
 				destructive:
 					"bg-destructive text-destructive-foreground hover:bg-destructive/85 focus-visible:border-destructive focus-visible:ring-destructive/30 dark:focus-visible:ring-destructive/40",
-				link: "text-primary underline-offset-4 hover:underline",
+				link: "text-primary-ink underline-offset-4 hover:underline",
 			},
 			size: {
 				default:
