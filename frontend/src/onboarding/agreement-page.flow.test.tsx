@@ -15,7 +15,8 @@ vi.mock("../api/client", () => ({
 // Stub the legal doc loaders so this test doesn't depend on which version
 // strings are bundled in the build.
 vi.mock("../legal/load", () => ({
-	loadVersion: () => "# Terms\n\nMock terms content.",
+	loadVersion: async (doc: string, version: string) => `# ${doc} ${version}\n\nMock content.`,
+	renderableVersion: (_doc: string, version: string) => version,
 	sha256Hex: async () => "a".repeat(64),
 }));
 
@@ -108,7 +109,10 @@ describe("AgreementPage accept-then-redirect flow", () => {
 		// 1s testing-library defaults flake on loaded CI runners (the full suite
 		// runs ~8 min); the 20ms/80ms mock delays are the only real time here.
 		fireEvent.click(await screen.findByRole("checkbox", { name: /agree/iu }, { timeout: 10_000 }));
-		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
+		// The legal texts load as lazy chunks; Continue enables once both have.
+		const cont = screen.getByRole("button", { name: /continue/iu });
+		await waitFor(() => expect(cont).toBeEnabled(), { timeout: 10_000 });
+		fireEvent.click(cont);
 
 		// With the fix, the mutation only resolves after the cache is refreshed,
 		// so OnboardRedirect reads STATUS_AFTER and routes to /onboard/billing.

@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import type { LegalNotice } from "../api/queries";
 import { useOnboardingStatus } from "../api/queries";
-import { useAcceptCurrentAgreements } from "./use-accept-current";
+import { useAcceptAgreements } from "./use-accept-current";
 
 export function formatEffectiveDate(isoDate: string, locale: string): string {
 	return new Intl.DateTimeFormat(locale, { dateStyle: "long", timeZone: "UTC" }).format(
@@ -19,14 +19,17 @@ export function useDocumentName() {
 
 // Pending legal changes, until the user accepts or the change takes effect.
 // A notice-only change can be dismissed (that records acceptance of the
-// current versions, so it stays dismissed on every device). A material change
+// version shown, so it stays dismissed on every device). A material change
 // can only be reviewed and accepted.
 export function LegalNoticeBanner() {
 	const { t, renderedLocale } = useT();
 	const name = useDocumentName();
 	const { data } = useOnboardingStatus();
-	const { accept, isPending, ready } = useAcceptCurrentAgreements();
 	const notices = data?.legal_notices ?? [];
+	const { accept, isPending, ready } = useAcceptAgreements({
+		terms: notices.find((n) => n.document === "terms_of_service")?.version,
+		privacy: notices.find((n) => n.document === "privacy_policy")?.version,
+	});
 	if (notices.length === 0) {
 		return null;
 	}

@@ -11,9 +11,7 @@ import { track } from "../analytics/track";
 import { useOnboardingStatus } from "../api/queries";
 import { LegalDoc } from "../legal/legal-doc";
 import { formatEffectiveDate, useDocumentName } from "../legal/legal-notice-banner";
-import { useAcceptCurrentAgreements } from "../legal/use-accept-current";
-
-const PRIVACY_URL = "https://engram.page/privacy";
+import { useAcceptAgreements } from "../legal/use-accept-current";
 
 export default function AgreementPage() {
 	const { t, renderedLocale } = useT();
@@ -21,7 +19,8 @@ export default function AgreementPage() {
 	const [agreed, setAgreed] = useState(false);
 	const navigate = useNavigate();
 	const { data } = useOnboardingStatus();
-	const { accept, isPending, ready, unavailable, tosText } = useAcceptCurrentAgreements();
+	const { accept, isPending, ready, unavailable, tosText, privacyText } = useAcceptAgreements();
+	const [showPrivacy, setShowPrivacy] = useState(false);
 	const [mountedAt] = useState(() => Date.now());
 	const notices = data?.legal_notices ?? [];
 
@@ -43,19 +42,32 @@ export default function AgreementPage() {
 				<Trans
 					text="Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data."
 					slots={{
+						// The exact version being accepted, in-app: the public page
+						// is unversioned and can differ from the hash recorded.
 						privacy: (
-							<a
-								href={PRIVACY_URL}
-								target="_blank"
-								rel="noreferrer noopener"
+							<button
+								type="button"
+								aria-expanded={showPrivacy}
+								aria-controls="privacy-notice"
+								onClick={() => setShowPrivacy((v) => !v)}
 								className="font-medium text-primary-ink underline-offset-4 hover:underline"
 							>
 								{t("privacy notice")}
-							</a>
+							</button>
 						),
 					}}
 				/>
 			</p>
+			{showPrivacy && privacyText ? (
+				<ScrollArea
+					id="privacy-notice"
+					className="h-[44dvh] rounded-lg border border-border bg-background sm:h-80"
+				>
+					<div className="p-4">
+						<LegalDoc source={privacyText} />
+					</div>
+				</ScrollArea>
+			) : null}
 			{notices.length > 0 ? (
 				<section
 					aria-labelledby="what-changed"
