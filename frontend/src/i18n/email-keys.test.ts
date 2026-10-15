@@ -22,6 +22,15 @@ describe("emailEntries", () => {
 			...EMAIL_GLOSSARY,
 		]);
 	});
+	// A version with no effective date is silent: no email or notice ever
+	// shows its changelog, so translating it only adds dead catalog entries.
+	it("skips the changelog of a silent (nil effective_date) version", () => {
+		const elixir = [
+			'  "2026-10-12" => %{material: false, effective_date: ~D[2026-11-11], changelog: "Told."}',
+			'  "2026-10-14" => %{\n    material: false,\n    effective_date: nil,\n    changelog:\n      "Silent."\n  }',
+		].join("\n");
+		expect(emailEntries([elixir]).map((e) => e.key)).toEqual(["Told.", ...EMAIL_GLOSSARY]);
+	});
 	it("adds the glossary terms, so emails say vault the way the app does", () => {
 		const keys = emailEntries(['t(l, "Hi.")']).map((e) => e.key);
 		expect(keys).toEqual(["Hi.", ...EMAIL_GLOSSARY]);
