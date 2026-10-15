@@ -2,11 +2,11 @@ defmodule Engram.AnalyticsTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  import Ecto.Query, only: [where: 2]
+
   alias Engram.Analytics
   alias Engram.Observability.PostHog
   alias Engram.Workers.PostHogErasure
-
-  import Ecto.Query, only: [where: 2]
 
   setup do
     prior_key = Application.get_env(:engram, :posthog_key)
