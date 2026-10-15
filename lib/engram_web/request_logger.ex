@@ -184,25 +184,15 @@ defmodule EngramWeb.RequestLogger do
   #
   # If per-source correlation is ever needed here (device-code guessing), the
   # answer is a keyed digest via Engram.Crypto.HMAC, not the raw address.
-  # TRUNCATED, because this is an unauthenticated trust boundary. The header is
-  # attacker-controlled, RedactFilter neither scrubs nor bounds `:user_agent`,
-  # and prod serializes all metadata — so with Bandit's 10_000-byte header cap
-  # a client hammering /api/auth/device/token could push ~10KB of arbitrary text
-  # per request into a hosted, long-retention aggregator. That is the same
-  # ingest-cost failure mode this PR exists to fix. 200 chars holds every real
-  # UA (the Obsidian one is ~120) and nothing else.
-  @user_agent_log_limit 200
-
+  # TRUNCATED (`RequestMeta.log_user_agent/1`), because this is an
+  # unauthenticated trust boundary.
   defp maybe_put_client_identity(meta, %Plug.Conn{private: private} = conn) do
     if private[:phoenix_controller] == EngramWeb.DeviceAuthController do
-      Keyword.put(meta, :user_agent, truncate_user_agent(RequestMeta.get_user_agent(conn)))
+      Keyword.put(meta, :user_agent, RequestMeta.log_user_agent(conn))
     else
       meta
     end
   end
-
-  defp truncate_user_agent(nil), do: nil
-  defp truncate_user_agent(ua), do: String.slice(ua, 0, @user_agent_log_limit)
 
   defp current_user_id(%Plug.Conn{assigns: %{current_user: %{id: id}}}), do: id
   defp current_user_id(_), do: nil

@@ -360,6 +360,30 @@ defmodule Engram.OAuth.CimdTest do
       end
     end
 
+    # Approved follow-up #2: the jwks_uri's ADDRESS is checked when the client
+    # is created or refreshed, not only pinned at fetch time. A document naming
+    # keys at a private, link-local, loopback or metadata address is refused
+    # legibly at authorize instead of failing every later token exchange.
+    # (`private.example` resolves to 10.0.0.7 via Engram.Test.StubResolver.)
+    test "rejects a jwks_uri that resolves to a non-public address" do
+      for private <- [
+            "https://169.254.169.254/jwks.json",
+            "https://10.0.0.5/jwks.json",
+            "https://127.0.0.1/jwks.json",
+            "https://[fe80::1]/jwks.json",
+            "https://[fd00::1]/jwks.json",
+            "https://private.example/jwks.json"
+          ] do
+        expect(FetcherMock, :fetch, fn @url ->
+          {:ok,
+           document(%{"token_endpoint_auth_method" => "private_key_jwt", "jwks_uri" => private})}
+        end)
+
+        assert {:error, :jwks_uri_unfetchable} = Cimd.ensure_client(@url),
+               "expected jwks_uri #{private} to be refused"
+      end
+    end
+
     # ChatGPT's real published connector document, fetched 2026-09-15. Every
     # other fixture in this file is Claude-shaped, which is precisely why a
     # vendor declaring a different auth method was invisible here for weeks.
@@ -937,7 +961,9 @@ defmodule Engram.OAuth.CimdTest do
 
       # And on revocation, which must actually revoke rather than silently no-op.
       assert :ok = OAuth.revoke_token(rotated.refresh_token, @url, nil)
-      assert {:error, :invalid_grant} = OAuth.rotate_refresh_token(rotated.refresh_token, @url)
+
+      assert {:error, {:invalid_grant, :refresh_token_revoked}} =
+               OAuth.rotate_refresh_token(rotated.refresh_token, @url)
     end
 
     test "another client's URL cannot redeem this client's code", %{client: client} do
@@ -963,7 +989,7 @@ defmodule Engram.OAuth.CimdTest do
       {:ok, redirect} = OAuth.mint_authorization_code(user, validated, [vault.id], nil)
       code = code_from_redirect(redirect)
 
-      assert {:error, :invalid_grant} =
+      assert {:error, {:invalid_grant, :client_mismatch}} =
                OAuth.exchange_authorization_code(%{
                  "code" => code,
                  "client_id" => other.cimd_url,

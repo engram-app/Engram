@@ -6,8 +6,10 @@ defmodule EngramWeb.Plugs.HostRewrite do
   any rewrite. Behavior:
 
     * `api.engram.page` — prefix `/api` if the path doesn't already start
-      with `/api`, `/socket`, `/webhooks`, or `/.well-known`. After rewrite,
-      reject anything that would have resolved outside those scopes.
+      with `/api`, `/socket`, `/webhooks`, or `/.well-known`, and is not one
+      of the advertised OAuth endpoints (`/oauth/authorize|token|register|revoke`,
+      passed through). After rewrite, reject anything that would have resolved
+      outside those scopes.
     * `mcp.engram.page` — pass `/.well-known/oauth-*`, the MCP server card and
       the AI catalog through unmodified; map `/server-card` to
       `/api/mcp/server-card`;
@@ -29,6 +31,12 @@ defmodule EngramWeb.Plugs.HostRewrite do
   # by `/`) so `/api-keys` does NOT match `/api` — `/api-keys` is a known
   # API segment that needs rewriting to `/api/api-keys`.
   @api_allowed_prefixes ~w(/api /socket /webhooks /.well-known)
+
+  # The top-level OAuth endpoints discovery advertises on this host
+  # (`OAuthMetadata.base_url/1` echoes it). They live at `/oauth/*`, not
+  # `/api/oauth/*`, so rewriting them 404'd every client that dialed the
+  # advertised URL (#1974). `/oauth/clients/...` still maps to `/api/oauth`.
+  @api_oauth_passthrough ~w(/oauth/authorize /oauth/token /oauth/register /oauth/revoke)
   # Every top-level segment under `scope "/api", EngramWeb` in router.ex.
   # Missing entries silently 404 in prod — guarded by a regression test.
   @api_top_segments ~w(
@@ -129,6 +137,7 @@ defmodule EngramWeb.Plugs.HostRewrite do
     cond do
       path == "/" or path == "" -> reject(conn)
       under_any?(path, @api_allowed_prefixes) -> conn
+      path in @api_oauth_passthrough -> conn
       not known_api_segment?(path) -> reject(conn)
       true -> rewrite_path(conn, "/api" <> path)
     end

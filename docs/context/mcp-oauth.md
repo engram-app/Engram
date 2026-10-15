@@ -29,17 +29,33 @@ CIMD clients (Claude, ChatGPT) skip step 3: they send an HTTPS URL as `client_id
 |---------------|------|---------|
 | `GET /.well-known/oauth-protected-resource` | none | RFC 9728 — points clients at `/api/mcp` + lists auth server |
 | `GET /.well-known/oauth-authorization-server` | none | RFC 8414 — server metadata (endpoints, grant types, PKCE S256, scopes) |
-| `POST /oauth/register` | none, rate-limited 10/IP/min | RFC 7591 DCR. Public (`none`) or confidential (`client_secret_post` / `client_secret_basic`, secret returned once); PKCE mandatory either way |
+| `POST /oauth/register` | none, rate-limited 60/IP/min | RFC 7591 DCR. Public (`none`) or confidential (`client_secret_post` / `client_secret_basic`, secret returned once); PKCE mandatory either way |
 | `GET /oauth/authorize` | none, rate-limited 10/IP/min | Validates request, 302s to `/oauth/consent` (SPA mediation, Phase 7.A) |
 | `GET /api/oauth/clients/:client_id` | none, rate-limited 10/IP/min | Public client metadata — `{client_id, client_name}` only, for SPA consent UI |
 | `POST /api/oauth/authorize/consent` | Bearer JWT | SPA submits w/ `vault_choice`. Mints code. JSON `{redirect_uri: "..."}` for SPA `window.location` |
-| `POST /oauth/token` | none, rate-limited 10/IP/min | RFC 6749 §3.2 — auth code → tokens, refresh → rotated tokens |
-| `POST /oauth/revoke` | none, rate-limited 10/IP/min | RFC 7009 — 200 always |
+| `POST /oauth/token` | client auth, rate-limited 300/min per {client_id, IP} plus 3,000/min per IP | RFC 6749 §3.2 — auth code → tokens, refresh → rotated tokens |
+| `POST /oauth/revoke` | client auth, rate-limited 300/min per {client_id, IP} plus 3,000/min per IP | RFC 7009 — 200 always |
 
 ## Token model
 
 - **Access token** — internal HS256 JWT minted by `Engram.Accounts.generate_jwt/2` with optional `scope` + `vault_id` claims. 15-min TTL. Stateless (no DB row, can't revoke mid-life — short TTL is the mitigation). `EngramWeb.Plugs.Auth` validates via `TokenResolver`'s third fallback path (already existed pre-OAuth for the device flow).
-- **Refresh token**: `engram_oauth_rt_<...>` opaque random, sha256-hashed at rest. 90-day TTL. Stored in `oauth_refresh_tokens` with a `family_id` per RFC 6749 §10.4. Rotation on use; replay of a consumed token revokes the entire family. Unlike the device and local-auth paths, there is no leeway window (see `refresh-token-reuse-detection.md`).
+- **Refresh token**: `engram_oauth_rt_<...>` opaque random, sha256-hashed at rest. 90-day TTL. Stored in `oauth_refresh_tokens` with a `family_id` per RFC 6749 §10.4. Rotation on use; replay of a consumed token revokes the entire family, except inside the 60 s grace window below. The device and local-auth paths have their own leeway (see `refresh-token-reuse-detection.md`).
+
+### Refresh grace window (#1974) and its tradeoff
+
+A client whose rotation response is lost retries with the token it still holds. Before #1974 that revoked the family, so every lost response killed the connection. Now a replay of a consumed token **within 60 s**, while its successor has **never been used**, re-issues: the unused successor is revoked and one new successor is minted, so the family never has two live tokens. Every duplicate inside the window is handled the same way, up to **5 re-issues per token**; the window is anchored at the token's first use (`consumed_at`, set once), so replays cannot slide it. The 6th replay is reuse and revokes the family. The count is the successor rows the re-issue already locks, so no column is needed (Hydra caps the same way, `used_times < N`).
+
+Every decision about a refresh token runs in one transaction holding `FOR UPDATE` on the presented row, so rotations of one token serialize and the second sees the first one's result. Every Disconnect path revokes through `Engram.OAuth.revoke_refresh_tokens/2`, which first locks the live rows (waiting for any rotation holding one) and then revokes with a fresh statement, so a successor a rotation just committed is revoked too. `Engram.OAuthRotationRaceTest` proves both on separate committing connections.
+
+The cost: inside the window, whoever presents the consumed token first gets the new one. What bounds it:
+
+- The replay must come from the **same `client_id`** (`:client_mismatch` otherwise), and a `private_key_jwt` or secret client must pass client authentication first (the token controller authenticates before `rotate_refresh_token/3` runs).
+- Nothing minted since may have been **used**: a consumed successor means the client had it, so the replay is theft and the family is revoked.
+- At least one successor must still be live: one revoked any other way (RFC 7009, Disconnect) is never resurrected by replaying its parent.
+- A token found revoked under the lock is refused as `refresh_token_revoked`, not logged as reuse.
+- The successors are locked and the revoke must hit every live one read; anything else is treated as reuse.
+- If the successor the grace revoked turns up later, two parties held the lineage: the `revoked_at` clause revokes the family.
+- Every re-issue logs `oauth_refresh_grace_reissue` with `client_id`, `family_id` and `ip_matched` (whether the replay came from the IP that received the successor). `ip_matched=false` is the line to read when looking for theft; it is not refused, because a vendor backend (ChatGPT, Claude) may retry from a different egress IP.
 
 ## Scope grammar
 

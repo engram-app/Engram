@@ -121,6 +121,10 @@ config :engram, Oban,
     # re-encode's safety against a rotation is its per-batch RotationGate
     # check and CAS write, not this queue.
     crypto_backfill: 1,
+    # The 5-minute CIMD JWKS sweep (Engram.Workers.CimdJwksRefresh), off
+    # `maintenance` so its vendor fetches never hold a backstop's slot. Ships
+    # with the worker itself, so a rollback strands nothing that existed before.
+    cimd_refresh: 1,
     # Hourly CRDT representation backfills (BackfillCrdtState, BackfillCrdtHead),
     # off crypto_backfill so they never hold a rotation's slot.
     crdt_backfill: 1,
@@ -224,9 +228,12 @@ config :engram, Oban,
         # O(collection); revisit around 1M points with a resumable cursor.
         {"0 5 * * *", Engram.Workers.OrphanSweep},
         # Daily self-host install census; no-op on SaaS and unless opted in.
-        {"16 5 * * *", Engram.Workers.TelemetryHeartbeat},
+        {"14 5 * * *", Engram.Workers.TelemetryHeartbeat},
         # CIMD document refresh (#1642): documents carry a 24 h TTL.
         {"40 5 * * *", Engram.Workers.CimdRefresh},
+        # CIMD JWKS refresh (#1974): keeps the persisted key set fresh so the
+        # token path never fetches. Jittered inside the job.
+        {"1-59/5 * * * *", Engram.Workers.CimdJwksRefresh},
         # Account facts onto PostHog persons; no-op unless PostHog is configured.
         {"25 6 * * *", Engram.Workers.PostHogPersonSync}
       ]
@@ -255,6 +262,7 @@ config :logger, :default_formatter,
   metadata: [
     :attachment_id,
     :attempt,
+    :aud_form,
     :body_size,
     :cap,
     :category,
@@ -265,11 +273,13 @@ config :logger, :default_formatter,
     # and test output. Prod was unaffected (all_except, see config/prod.exs).
     :cimd_host,
     :clerk_user_id,
+    :client_id,
     :client_version,
     :column,
     :conn_id,
     :customer_id,
     :device_id,
+    :dialed_ip,
     :drift_kind,
     :duration_ms,
     :error_code,
@@ -279,10 +289,13 @@ config :logger, :default_formatter,
     :exception,
     :exception_struct,
     :failed_count,
+    :family,
     :family_id,
     :field,
     :fields,
     :first_reason,
+    :grant_type,
+    :ip_matched,
     :job_id,
     :kind,
     :loki_ship,
@@ -330,6 +343,7 @@ config :logger, :default_formatter,
     :user_agent,
     :user_id,
     :vault_id,
+    :within_grace,
     :worker
   ]
 

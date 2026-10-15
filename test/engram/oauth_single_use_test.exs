@@ -3,6 +3,8 @@ defmodule Engram.OAuthSingleUseTest do
 
   import Engram.OAuthHelpers, only: [code_from_redirect: 1, pkce_pair: 0]
 
+  import Ecto.Query
+
   alias Engram.OAuth
 
   defp mint_code(user, client, redirect_uri, challenge) do
@@ -55,18 +57,19 @@ defmodule Engram.OAuthSingleUseTest do
         |> Task.await_many(30_000)
 
       assert Enum.count(results, &match?({:ok, _}, &1)) == 1
-      assert Enum.count(results, &match?({:error, :invalid_grant}, &1)) == 7
+      assert Enum.count(results, &match?({:error, {:invalid_grant, :code_consumed}}, &1)) == 7
     end
   end
 
   describe "rotate_refresh_token/3 single-use guarantee" do
-    test "concurrent rotations of the same refresh token yield at most one success" do
+    test "concurrent rotations of the same refresh token leave one live token" do
       user = insert(:user)
       params = exchange_params(user)
       {:ok, %{refresh_token: refresh_raw}} = OAuth.exchange_authorization_code(params)
 
+      # One rotation plus the 5 re-issues the grace cap allows.
       results =
-        1..8
+        1..6
         |> Enum.map(fn _ ->
           Task.async(fn ->
             OAuth.rotate_refresh_token(refresh_raw, params["client_id"])
@@ -74,11 +77,23 @@ defmodule Engram.OAuthSingleUseTest do
         end)
         |> Task.await_many(30_000)
 
-      # A loser of the race revokes the family (RFC 6749 §10.4 replay
-      # response), which may race the winner's own mint — so the winner
-      # count is 0 or 1, never more.
-      assert Enum.count(results, &match?({:ok, _}, &1)) <= 1
-      assert Enum.count(results, &match?({:error, :invalid_grant}, &1)) >= 7
+      # On the one sandbox connection these run one after another, so the
+      # first rotates and the rest are re-issues inside the grace window
+      # (#1974): all succeed and exactly one token is live. The genuinely
+      # concurrent version, on separate connections, is
+      # Engram.OAuthRotationRaceTest.
+      assert Enum.all?(results, &match?({:ok, _}, &1))
+
+      live =
+        Engram.Repo.aggregate(
+          from(r in Engram.OAuth.RefreshToken,
+            where: r.user_id == ^user.id and is_nil(r.consumed_at) and is_nil(r.revoked_at)
+          ),
+          :count,
+          skip_tenant_check: true
+        )
+
+      assert live <= 1
     end
   end
 

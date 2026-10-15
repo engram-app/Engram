@@ -106,6 +106,41 @@ defmodule EngramWeb.McpTransportTest do
       assert body["authorization_servers"] != []
     end
 
+    # RFC 6750 §3.1 (#1974): a presented-but-bad bearer (expired, garbage) is
+    # `error="invalid_token"`, which tells the client to refresh rather than
+    # start over. It must ride alongside the discovery pointer, not replace it.
+    test "a bad bearer gets error=\"invalid_token\" plus the resource_metadata pointer", %{
+      conn: conn
+    } do
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer not-a-real-token")
+        |> post("/api/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
+
+      assert conn.status == 401
+      assert [challenge] = get_resp_header(conn, "www-authenticate")
+      assert challenge =~ ~s(resource_metadata=")
+      assert challenge =~ ~s(error="invalid_token")
+    end
+
+    test "no credentials at all carries no error code (RFC 6750 §3.1)", %{conn: conn} do
+      conn = post(conn, "/api/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
+      assert [challenge] = get_resp_header(conn, "www-authenticate")
+      refute challenge =~ "error="
+    end
+
+    test "a bad bearer on a non-MCP route gets invalid_token without the MCP pointer", %{
+      conn: conn
+    } do
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer not-a-real-token")
+        |> get("/api/notes")
+
+      assert conn.status == 401
+      assert get_resp_header(conn, "www-authenticate") == [~s(Bearer error="invalid_token")]
+    end
+
     # Scoping guard. `Plugs.Auth` is shared by six pipelines — the vault REST
     # scope, admin, invites. Attaching the challenge there would advertise MCP
     # resource metadata on every `/api/notes` 401, pointing SPA and plugin

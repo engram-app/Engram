@@ -147,9 +147,75 @@ defmodule Engram.Http.SsrfGuardTest do
       assert {:error, :private_address} = SsrfGuard.resolve("https://localhost/d.json")
     end
 
-    test "reports dns_failure for a name that does not resolve" do
+    # Every DNS failure is transient. OTP's :inet.getaddrs reports
+    # `{:error, :nxdomain}` for SERVFAIL, REFUSED, an unreachable resolver and
+    # timeouts too (third review of #1974), so "the name does not exist"
+    # cannot be told apart from "the resolver is broken".
+    test "reports a transient dns_failure for a name that does not resolve" do
       assert {:error, :dns_failure} =
                SsrfGuard.resolve("https://this-host-does-not-exist.invalid/d.json")
+    end
+  end
+
+  describe "resolve/2 resolution deadline and candidates (#1974)" do
+    defp resolver(answers) do
+      fn _host, family ->
+        case Map.get(answers, family, []) do
+          [] -> {:error, :nxdomain}
+          {:error, _} = error -> error
+          addresses -> {:ok, addresses}
+        end
+      end
+    end
+
+    test "a slow resolver gives up within 1 s" do
+      slow = fn _host, _family ->
+        Process.sleep(5_000)
+        {:ok, [{93, 184, 216, 34}]}
+      end
+
+      {micros, result} =
+        :timer.tc(fn -> SsrfGuard.resolve("https://slow.example/x", getaddrs: slow) end)
+
+      assert {:error, :dns_failure} = result
+      assert micros < 1_300_000
+    end
+
+    for error <- [:nxdomain, :timeout, :einval] do
+      test "a #{error} on a family with no other answer is transient" do
+        answers = %{inet: {:error, unquote(error)}, inet6: {:error, unquote(error)}}
+
+        assert {:error, :dns_failure} =
+                 SsrfGuard.resolve("https://flaky.example/x", getaddrs: resolver(answers))
+      end
+    end
+
+    test "returns every IPv4 answer as a failover candidate, IPv4 only" do
+      answers = %{
+        inet: [{93, 184, 216, 34}, {93, 184, 216, 35}],
+        inet6: [{0x2606, 0x2800, 0x220, 1, 0x248, 0x1893, 0x25C8, 0x1946}]
+      }
+
+      assert {:ok, target} =
+               SsrfGuard.resolve("https://example.com/x", getaddrs: resolver(answers))
+
+      assert target.ips == [{93, 184, 216, 34}, {93, 184, 216, 35}]
+      assert target.ip == {93, 184, 216, 34}
+    end
+
+    test "falls back to IPv6 only when there is no IPv4 answer" do
+      v6 = {0x2606, 0x2800, 0x220, 1, 0x248, 0x1893, 0x25C8, 0x1946}
+      answers = %{inet6: [v6]}
+
+      assert {:ok, %{ips: [^v6]}} =
+               SsrfGuard.resolve("https://example.com/x", getaddrs: resolver(answers))
+    end
+
+    test "still refuses the whole name when any answer, of either family, is private" do
+      answers = %{inet: [{93, 184, 216, 34}], inet6: [{0, 0, 0, 0, 0, 0, 0, 1}]}
+
+      assert {:error, :private_address} =
+               SsrfGuard.resolve("https://example.com/x", getaddrs: resolver(answers))
     end
   end
 

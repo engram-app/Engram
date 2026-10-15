@@ -78,6 +78,17 @@ defmodule Engram.OAuth.Cimd do
   alias Engram.Repo
   alias EngramWeb.RateLimiter
 
+  # Fetch failures a retry cannot fix: the vendor answered, with something
+  # that is not a usable document, or the URL itself is refused.
+  @permanent_fetch_errors ~w(not_json invalid_json body_too_large no_keys_array
+                             private_address invalid_url url_too_long not_https
+                             missing_host userinfo_present fragment_present
+                             unsupported_port)a
+
+  # Reasons that are already a bounded atom and become their own metric label.
+  @labelled_fetch_errors @permanent_fetch_errors ++
+                           ~w(dns_failure budget_exhausted jwks_rate_limited rate_limited)a
+
   @ttl_seconds 24 * 3600
 
   # Per minute. The global bucket is the one that matters: an attacker varying
@@ -107,6 +118,8 @@ defmodule Engram.OAuth.Cimd do
           | :store_conflict
           | :fetch_failed
           | {:http_status, pos_integer()}
+          | {:transport_error, Engram.OAuth.Cimd.HttpFetcher.phase(), atom()}
+          | :budget_exhausted
           | SsrfGuard.reason()
 
   @doc """
@@ -174,8 +187,9 @@ defmodule Engram.OAuth.Cimd do
 
   defp fetch_and_store(url, existing) do
     with :ok <- rate_limit(url, existing),
-         {:ok, document} <- Fetcher.impl().fetch(url),
+         {:ok, document} <- timed_fetch(url, existing),
          :ok <- validate_document(document, url),
+         :ok <- check_jwks_address(document),
          {:ok, negotiated} <- negotiate(document),
          {:ok, client} <- store(url, negotiated, existing) do
       {:ok, client}
@@ -184,6 +198,44 @@ defmodule Engram.OAuth.Cimd do
         log_unless_rate_limited("mcp_cimd_rejected", url, reason)
         {:error, reason}
     end
+  end
+
+  # The jwks_uri's ADDRESS, at creation and on every refresh, not only pinned
+  # at fetch time: keys named at a private, link-local, loopback or metadata
+  # address are refused here, legibly, instead of failing every later token
+  # exchange. Only a non-public answer refuses. A DNS failure does not: a
+  # resolver blip must not become a permanent verdict on the document, and the
+  # fetch-time pin still guards the request itself.
+  defp check_jwks_address(%{"jwks_uri" => uri} = document) when is_binary(uri) do
+    with true <- Client.document_permits_assertion?(document),
+         {:error, :private_address} <- jwks_resolver().(uri) do
+      {:error, :jwks_uri_unfetchable}
+    else
+      _ -> :ok
+    end
+  end
+
+  defp check_jwks_address(_document), do: :ok
+
+  # Swappable so tests stub DNS (`Engram.Test.StubResolver`).
+  defp jwks_resolver do
+    case Application.get_env(:engram, :cimd_jwks_resolver) do
+      {module, fun} -> &apply(module, fun, [&1])
+      nil -> &SsrfGuard.resolve/1
+    end
+  end
+
+  defp timed_fetch(url, existing) do
+    started = System.monotonic_time(:millisecond)
+    result = Fetcher.impl().fetch(url)
+    duration = System.monotonic_time(:millisecond) - started
+
+    case result do
+      {:ok, _} -> emit_fetch(:doc, :ok, nil, duration)
+      {:error, cause} -> emit_fetch(:doc, if(existing, do: :stale, else: :error), cause, duration)
+    end
+
+    result
   end
 
   # Capability metadata is NEGOTIATED, not enforced.
@@ -311,6 +363,50 @@ defmodule Engram.OAuth.Cimd do
     end
   end
 
+  # ── Fetch telemetry and error classification (#1974) ────────────────
+
+  @doc """
+  True when a fetch failure is ours or the vendor's TRANSIENT problem and a
+  retry could succeed: a transport error, a 5xx, a 429, DNS, or a reason we do
+  not recognise (retryable is the safer default). A vendor answering with a
+  4xx/3xx or something that is not a usable document is not transient.
+  """
+  @spec transient_fetch_error?(term()) :: boolean()
+  def transient_fetch_error?({:http_status, status}) when is_integer(status),
+    do: status >= 500 or status == 429
+
+  def transient_fetch_error?(reason) when reason in @permanent_fetch_errors, do: false
+  def transient_fetch_error?(_reason), do: true
+
+  @doc """
+  Emits `[:engram, :cimd, :fetch]` for `engram_prom_ex_cimd_fetch_total` and
+  its duration histogram. `result` is `:ok`, `:stale` (the fetch failed and a
+  held key set was served: a warning) or `:error` (nothing usable: a page).
+  Every metadata value is a closed atom set.
+  """
+  @spec emit_fetch(:jwks | :doc, :ok | :stale | :error, term(), non_neg_integer()) :: :ok
+  def emit_fetch(kind, result, cause, duration_ms) do
+    :telemetry.execute([:engram, :cimd, :fetch], %{duration_ms: duration_ms}, %{
+      kind: kind,
+      result: result,
+      reason: fetch_reason_label(cause)
+    })
+  end
+
+  @doc "The bounded metric/analytics label for a fetch failure cause."
+  @spec fetch_reason_label(term()) :: atom()
+  def fetch_reason_label(nil), do: :none
+
+  def fetch_reason_label({:transport_error, phase, _}) when phase in [:connect, :tls, :recv],
+    do: phase
+
+  def fetch_reason_label({:http_status, 429}), do: :http_429
+  def fetch_reason_label({:http_status, s}) when is_integer(s) and s >= 500, do: :http_5xx
+  def fetch_reason_label({:http_status, s}) when is_integer(s) and s >= 400, do: :http_4xx
+  def fetch_reason_label({:http_status, s}) when is_integer(s), do: :http_3xx
+  def fetch_reason_label(reason) when reason in @labelled_fetch_errors, do: reason
+  def fetch_reason_label(_reason), do: :other
+
   @doc """
   The host of a URL, or `"unknown"`.
 
@@ -419,8 +515,9 @@ defmodule Engram.OAuth.Cimd do
       # this check does not fail loudly later: `SsrfGuard` refuses it at the
       # transport, `jwks.ex` maps that to `:jwks_unavailable`, and that reason
       # is TRANSIENT, so the connector retries a permanent misconfiguration
-      # forever. DNS stays out on purpose: a resolver blip must not become a
-      # permanent verdict on the document.
+      # forever. DNS stays out of THIS check on purpose (a resolver blip must
+      # not become a permanent verdict); the address itself is checked right
+      # after, in check_jwks_address/1, where only a non-public answer refuses.
       Client.document_permits_assertion?(document) and
           SsrfGuard.validate_url(document["jwks_uri"]) != :ok ->
         {:error, :jwks_uri_unfetchable}

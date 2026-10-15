@@ -42,7 +42,7 @@ defmodule EngramWeb.McpVaultRefAdversarialTest do
       )
 
     {:ok, api_key, key_row} = Engram.Accounts.create_api_key(user, "test-key")
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
 
     %{
       conn: put_req_header(conn, "authorization", "Bearer #{api_key}"),

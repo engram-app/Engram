@@ -92,11 +92,7 @@ def test_free_attachment_uploads_and_402_shape():
     _clerk_user_id, clerk_auth, _api_key = provision_clerk_user(
         clerk, email, password, API_URL,
     )
-    # Use Clerk JWT auth (not the API key). Free's §G defaults set
-    # api_rps_cap=0 / api_write_enabled=false, which gate ALL API-key-
-    # authed writes — we'd 429/403 on the create_vault below before ever
-    # reaching the attachment 402 we're trying to assert. JWT traffic is
-    # exempt from those gates per RequireApiRpsBudget. We still skip
+    # Use Clerk JWT auth (the SPA path). We still skip
     # grant_test_plan() — the user must stay Free-tier so
     # attachments_enabled=false (the actual key under test) holds.
     api = ApiClient(API_URL, clerk_auth)

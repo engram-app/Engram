@@ -231,47 +231,6 @@ def _make_clerk_user(clerk_client) -> tuple[str, str, str]:
     return clerk_user_id, jwt_token, email
 
 
-def _set_mcp_cap(email: str, cap: int) -> None:
-    """Insert/update user_limit_overrides to set mcp_connections_cap via docker exec SQL."""
-    sql = (
-        f"INSERT INTO user_limit_overrides (user_id, key, value, reason, set_by) "
-        f"VALUES ((SELECT id FROM users WHERE email = '{email}'), "
-        f"'mcp_connections_cap', '{{\"v\": {cap}}}'::jsonb, 'e2e-test', 'e2e') "
-        f"ON CONFLICT (user_id, key) DO UPDATE "
-        f"SET value = EXCLUDED.value, set_at = NOW()"
-    )
-    result = subprocess.run(
-        [
-            "docker", "exec", "-i", CI_POSTGRES_CONTAINER,
-            "psql", "-U", "engram", "-d", "engram", "-c", sql,
-        ],
-        capture_output=True, text=True, timeout=10,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"_set_mcp_cap failed: {result.stderr.strip()}")
-
-
-def _set_api_write(email: str, enabled: bool) -> None:
-    """Set api_write_enabled override for a user."""
-    val = "true" if enabled else "false"
-    sql = (
-        f"INSERT INTO user_limit_overrides (user_id, key, value, reason, set_by) "
-        f"VALUES ((SELECT id FROM users WHERE email = '{email}'), "
-        f"'api_write_enabled', '{{\"v\": {val}}}'::jsonb, 'e2e-test', 'e2e') "
-        f"ON CONFLICT (user_id, key) DO UPDATE "
-        f"SET value = EXCLUDED.value, set_at = NOW()"
-    )
-    result = subprocess.run(
-        [
-            "docker", "exec", "-i", CI_POSTGRES_CONTAINER,
-            "psql", "-U", "engram", "-d", "engram", "-c", sql,
-        ],
-        capture_output=True, text=True, timeout=10,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"_set_api_write failed: {result.stderr.strip()}")
-
-
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
@@ -478,94 +437,56 @@ async def test_consent_vault_ids_scopes_the_grant_to_those_vaults(clerk_client):
 
 
 @pytest.mark.asyncio
-async def test_free_tier_cap_blocks_second_mcp_consent(clerk_client):
-    """Free-tier user (mcp_connections_cap=1): first MCP consent succeeds,
-    second MCP consent returns 402 connection_cap_reached."""
-    clerk_user_id, jwt, email = _make_clerk_user(clerk_client)
-    # Set rps cap to allow API calls but keep api_write_enabled false and
-    # set mcp_connections_cap=1 (the Free default, verified explicitly)
-    _set_mcp_cap(email, 1)
-    # Lift rps so the consent endpoint itself isn't 429'd
-    subprocess.run(
-        [
-            "docker", "exec", "-i", CI_POSTGRES_CONTAINER,
-            "psql", "-U", "engram", "-d", "engram", "-c",
-            (
-                f"INSERT INTO user_limit_overrides (user_id, key, value, reason, set_by) "
-                f"VALUES ((SELECT id FROM users WHERE email = '{email}'), "
-                f"'api_rps_cap', '{{\"v\": 1000}}'::jsonb, 'e2e-test', 'e2e') "
-                f"ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, set_at = NOW()"
-            ),
-        ],
-        capture_output=True, text=True, timeout=10,
-    )
+async def test_free_tier_holds_multiple_mcp_connections_and_a_key(clerk_client):
+    """#1974: a Free user may hold any number of MCP connections (OAuth and
+    API keys alike). Two MCP consents both succeed, and a minted key works on
+    /api/mcp. MCP use is metered by ai_searches_per_day, not by a count."""
+    clerk_user_id, jwt, _email = _make_clerk_user(clerk_client)
+    # Do NOT call grant_test_plan: this asserts the Free defaults.
     try:
-        # First MCP connection succeeds
-        c1 = register_client(
-            software_id="anthropic-claude-desktop",
-            client_name="Claude Desktop",
-            kind="mcp",
-        )
-        resp1 = consent(jwt, c1["client_id"])
-        assert resp1.status_code == 200, (
-            f"first MCP consent should succeed, got {resp1.status_code}: {resp1.text}"
-        )
-        code1 = _extract_code(resp1.json()["redirect_uri"])
-        exchange_code(c1["client_id"], code1)
+        for software_id, name in [
+            ("anthropic-claude-desktop", "Claude Desktop"),
+            ("cursor.sh", "Cursor"),
+        ]:
+            client = register_client(software_id=software_id, client_name=name, kind="mcp")
+            resp = consent(jwt, client["client_id"])
+            assert resp.status_code == 200, (
+                f"MCP consent for {name} should succeed on Free, got "
+                f"{resp.status_code}: {resp.text}"
+            )
+            exchange_code(client["client_id"], _extract_code(resp.json()["redirect_uri"]))
 
-        # Second MCP consent (different client) → 402
-        c2 = register_client(
-            software_id="cursor.sh",
-            client_name="Cursor",
-            kind="mcp",
+        pat = mint_pat(jwt, "mcp-key")
+        assert pat.status_code == 201, f"Free PAT mint failed: {pat.status_code} {pat.text}"
+
+        mcp = requests.post(
+            f"{API_URL}/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+            headers={"Authorization": f"Bearer {pat.json()['key']}"},
+            timeout=10,
         )
-        resp2 = consent(jwt, c2["client_id"])
-        assert resp2.status_code == 402, (
-            f"second MCP consent should be 402, got {resp2.status_code}: {resp2.text}"
-        )
-        body = resp2.json()
-        # Standardized 402 LimitResponse shape (spec §4.5): error is the
-        # constant "limit_exceeded", reason carries the machine key, and
-        # limit_key names the LimitKeys entry that fired. The plug no
-        # longer leaks the legacy `kind` field.
-        assert body["error"] == "limit_exceeded"
-        assert body["reason"] == "mcp_connections_exceeded"
-        assert body["limit_key"] == "mcp_connections_cap"
-        assert body["current"] == 1
-        assert body["limit"] == 1
-        assert body["tier"] == "free"
-        # upgrade_url is config-driven (ENGRAM_UPGRADE_URL); SaaS default is
-        # the full https://app.engram.page/#settings/billing URL, self-host
-        # can override. Assert the path suffix only.
-        assert body["upgrade_url"] and body["upgrade_url"].endswith(
-            "/#settings/billing"
-        ), f"upgrade_url should end with /#settings/billing; got {body['upgrade_url']!r}"
+        assert mcp.status_code == 200, f"API key on /mcp failed: {mcp.status_code} {mcp.text}"
     finally:
         clerk_client.delete_user(clerk_user_id)
 
 
 @pytest.mark.asyncio
-async def test_free_tier_pat_minting_blocked(clerk_client):
-    """Free user POST /api/connections/pat → 402 pat_disabled_on_free.
-
-    api_write_enabled defaults to false on Free; this plug fires before
-    any PAT-name validation.
-    """
+async def test_free_tier_can_mint_pat(clerk_client):
+    """#1974: any plan can mint an API key (it works with MCP on every plan)."""
     clerk_user_id, jwt, _email = _make_clerk_user(clerk_client)
-    # Do NOT call grant_test_plan — keep api_write_enabled=false (Free default)
     try:
         resp = mint_pat(jwt, "ci-bot")
-        assert resp.status_code == 402, (
-            f"expected 402 for Free user PAT mint, got {resp.status_code}: {resp.text}"
+        assert resp.status_code == 201, (
+            f"expected 201 for Free user PAT mint, got {resp.status_code}: {resp.text}"
         )
-        body = resp.json()
-        assert body["error"] == "pat_disabled_on_free"
-        # upgrade_url is config-driven (ENGRAM_UPGRADE_URL); SaaS default is
-        # the full https://app.engram.page/#settings/billing URL, self-host
-        # can override. Assert the path suffix only.
-        assert body["upgrade_url"] and body["upgrade_url"].endswith(
-            "/#settings/billing"
-        ), f"upgrade_url should end with /#settings/billing; got {body['upgrade_url']!r}"
+        key = resp.json()["key"]
+        assert key.startswith("engram_")
+
+        # And it works on REST, not just MCP: no tier gate on any route.
+        me = requests.get(
+            f"{API_URL}/me", headers={"Authorization": f"Bearer {key}"}, timeout=10
+        )
+        assert me.status_code == 200, f"Free API key on /me failed: {me.status_code} {me.text}"
     finally:
         clerk_client.delete_user(clerk_user_id)
 

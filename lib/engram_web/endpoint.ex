@@ -171,13 +171,20 @@ defmodule EngramWeb.Endpoint do
       read_timeout: Application.get_env(:engram, :body_read_timeout, 15_000)
     ]
 
-  plug Plug.Parsers,
+  @parser_opts [
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
     body_reader: {EngramWeb.Plugs.CacheRawBody, :read_body, []},
     json_decoder: Phoenix.json_library(),
     length: @max_body_bytes,
     read_length: @body_read_length
+  ]
+
+  # POST /api/mcp only: same parser, but an unparseable body is answered in
+  # JSON-RPC rather than raised (#1974). The parser below then sees the body
+  # already parsed and only merges params.
+  plug EngramWeb.Plugs.McpBodyParser, @parser_opts
+  plug Plug.Parsers, @parser_opts
 
   # Sentry context: attaches conn metadata (request_id, method, route,
   # status) to any exception reported by PlugCapture above. Placed after

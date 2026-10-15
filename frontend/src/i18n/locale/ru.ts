@@ -252,7 +252,6 @@ export default {
 	"Unlimited vaults": "Неограниченное количество хранилищ",
 	"50 GB attachments": "50 ГБ вложений",
 	"Cross-vault search": "Поиск по всем хранилищам",
-	"API access": "Доступ к API",
 	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			one: "{count} из ваших заметок не подлежит поиску. Индексируются только ваши самые старые {indexed}, поэтому новые заметки не отображаются в результатах поиска.",
@@ -910,7 +909,7 @@ export default {
 	"{completed} of {total} done": "Выполнено {completed} из {total}",
 	"Setup guide": "Руководство по настройке",
 	"Dismiss {label}": "Закрыть {label}",
-	"You're on Free, 1 connection.": "У вас бесплатный тариф, 1 подключение.",
+	"You're on the Free plan.": "Вы используете бесплатный тариф.",
 	"Connect Claude Desktop": "Подключить Claude Desktop",
 	"Connect Cursor": "Подключить Cursor",
 	"Connect Devin": "Подключить Devin",
@@ -1116,8 +1115,6 @@ export default {
 	"Registered redirects:": "Зарегистрированные перенаправления:",
 	"API keys ({total})": "Ключи API ({total})",
 	"+ New Key": "+ Новый ключ",
-	"Upgrade to Pro to create API keys for scripting and external integrations.":
-		"Обновите до версии Pro, чтобы создавать ключи API для скриптов и внешних интеграций.",
 	"No matches.": "Нет совпадений.",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"Ключей API пока нет. Сгенерируйте один, чтобы подключить скрипты или внешние инструменты.",

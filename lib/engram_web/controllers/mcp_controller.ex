@@ -8,6 +8,7 @@ defmodule EngramWeb.McpController do
   use EngramWeb, :controller
 
   alias Engram.Abuse.OriginStats
+  alias Engram.Analytics.McpClient
   alias Engram.Crypto
   alias Engram.MCP.Handlers
   alias Engram.MCP.Prompts
@@ -98,6 +99,7 @@ defmodule EngramWeb.McpController do
   @meta_protocol_version "io.modelcontextprotocol/protocolVersion"
   @meta_client_capabilities "io.modelcontextprotocol/clientCapabilities"
   @meta_server_info "io.modelcontextprotocol/serverInfo"
+  @meta_client_info "io.modelcontextprotocol/clientInfo"
 
   # Removed by `2026-07-28`. They still work in the legacy era — `ping` is a
   # base-protocol MUST there (#1680) — so this is era-scoped, not a deletion.
@@ -175,6 +177,7 @@ defmodule EngramWeb.McpController do
   though it were supported, which would leave the client believing we agreed.
   """
   def handle(conn, params) do
+    emit_client_connected(conn, params)
     header = List.first(get_req_header(conn, "mcp-protocol-version"))
 
     if modern_request?(header, params) do
@@ -567,9 +570,8 @@ defmodule EngramWeb.McpController do
 
   # -- Method dispatch --
 
-  defp dispatch(conn, "initialize", params) do
+  defp dispatch(_conn, "initialize", params) do
     Logger.info("mcp_handshake", handshake_metadata(params))
-    emit_client_connected(conn.assigns[:current_user], params)
 
     {:ok,
      %{
@@ -956,42 +958,71 @@ defmodule EngramWeb.McpController do
     result
   end
 
-  # Client families we name in analytics, matched against the lowercased
-  # `clientInfo.name`. Order matters: "claude-code" before "claude". Anything
-  # else is "other", so an arbitrary client string can never become a PostHog
-  # property value (bounded cardinality, nothing attacker-chosen).
-  @client_families [
-    {"claude-code", "claude-code"},
-    {"claude", "claude"},
-    {"chatgpt", "chatgpt"},
-    {"openai", "chatgpt"},
-    {"cursor", "cursor"},
-    {"windsurf", "windsurf"},
-    {"vscode", "vscode"},
-    {"visual studio code", "vscode"},
-    {"cline", "cline"},
-    {"zed", "zed"},
-    {"goose", "goose"}
-  ]
+  # #1974: `mcp_client_connected` used to fire only from `initialize`. A
+  # modern-era (`2026-07-28`) client never sends one, and a legacy client that
+  # initialized before it was authenticated (the 401 that starts OAuth) never
+  # sends it again, so ChatGPT and Claude connections were never counted.
+  # It now fires on EVERY authenticated request, throttled per user and
+  # client family (1/h), which is "the first request per connection" in
+  # practice. An API key also reports `mcp_api_key_connected` once a day per
+  # key, so the key-on-MCP fallback is visible.
+  #
+  # The family is resolved once per request and kept in the request process,
+  # because the tool-analytics call sites are several frames below any conn.
+  @client_family_key :engram_mcp_client_family
 
-  defp emit_client_connected(user, params) do
-    family = client_family(params)
-    Engram.Analytics.track_activity(user, :mcp)
+  defp emit_client_connected(conn, envelope) do
+    family = request_client_family(conn, envelope)
+    Process.put(@client_family_key, family)
 
-    Engram.Analytics.track_throttled(user, "mcp_client_connected", family, :timer.hours(1), %{
-      client: family
-    })
+    case conn.assigns[:current_user] do
+      nil ->
+        :ok
+
+      user ->
+        Engram.Analytics.track_activity(user, :mcp)
+
+        Engram.Analytics.track_throttled(user, "mcp_client_connected", family, :timer.hours(1), %{
+          client: family
+        })
+
+        emit_api_key_connected(user, conn.assigns[:current_api_key], family)
+    end
   end
 
-  defp client_family(%{"clientInfo" => %{"name" => name}}) when is_binary(name) do
-    name = name |> String.slice(0, 64) |> String.downcase()
+  defp emit_api_key_connected(_user, nil, _family), do: :ok
 
-    Enum.find_value(@client_families, "other", fn {needle, family} ->
-      if String.contains?(name, needle), do: family
-    end)
+  defp emit_api_key_connected(user, %{id: key_id}, family) do
+    Engram.Analytics.track_throttled(
+      user,
+      "mcp_api_key_connected",
+      to_string(key_id),
+      :timer.hours(24),
+      %{client: family}
+    )
   end
 
-  defp client_family(_params), do: "other"
+  defp emit_api_key_connected(_user, _key, _family), do: :ok
+
+  # The client's own name wins (legacy `initialize` clientInfo, or the
+  # modern per-request `_meta`), then its user agent. Bucketed either way.
+  defp request_client_family(conn, envelope) do
+    inner = if is_non_struct_map(envelope), do: envelope["params"], else: nil
+
+    name =
+      case inner do
+        %{"clientInfo" => %{"name" => name}} when is_binary(name) -> name
+        %{"_meta" => %{@meta_client_info => %{"name" => name}}} when is_binary(name) -> name
+        _ -> nil
+      end
+
+    case McpClient.family(name) do
+      "other" -> conn |> get_req_header("user-agent") |> List.first() |> McpClient.family()
+      family -> family
+    end
+  end
+
+  defp current_client_family, do: Process.get(@client_family_key, "other")
 
   # Product analytics, not ops telemetry: who is using MCP and which tools. Every
   # label is bounded (`tool_atom` is `:unknown` off the allowlist; `status` is a
@@ -1008,7 +1039,8 @@ defmodule EngramWeb.McpController do
       60_000,
       %{
         tool: Atom.to_string(tool_atom),
-        status: Atom.to_string(status)
+        status: Atom.to_string(status),
+        client: current_client_family()
       }
     )
   end

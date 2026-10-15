@@ -92,6 +92,13 @@ defmodule Engram.OAuth.Client do
     field :jwks_uri, :string
     field :token_endpoint_auth_signing_alg, :string
 
+    # The last JWKS fetched from `jwks_uri` (`%{"keys" => [...]}`) and when.
+    # Written only by `Engram.OAuth.Cimd.JwksCache`, never cast from input.
+    # Lets a cold node verify without a fetch and keeps a vendor working on its
+    # last good keys while its endpoint fails (#1974).
+    field :jwks_cached, :map
+    field :jwks_fetched_at, :utc_datetime
+
     # The document's full PERMITTED set, where `token_endpoint_auth_method` above
     # is only its preferred one. A vendor may declare `private_key_jwt` and still
     # authenticate as a public client when it also lists `none` — ChatGPT does

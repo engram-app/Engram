@@ -44,12 +44,6 @@ const TABLE: Record<LimitReason, LimitCopy> = {
 			"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.",
 		),
 	},
-	mcp_connections_exceeded: {
-		title: msg("External connection limit reached"),
-		body: msg(
-			"Your Free plan allows 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.",
-		),
-	},
 	obsidian_connections_exceeded: {
 		title: msg("External connection limit reached"),
 		body: msg(
@@ -81,7 +75,6 @@ type LimitReason =
 	| "device_swap_cooldown"
 	| "ai_searches_per_day_exceeded"
 	| "attachment_must_be_text"
-	| "mcp_connections_exceeded"
 	| "obsidian_connections_exceeded"
 	| "account_suspended"
 	| "no_tier";

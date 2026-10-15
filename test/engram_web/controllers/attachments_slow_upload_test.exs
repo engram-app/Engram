@@ -18,7 +18,7 @@ defmodule EngramWeb.AttachmentsSlowUploadTest do
     insert(:subscription, user: user, tier: "pro", status: "active")
     insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
 
     Application.put_env(:engram, :body_read_timeout, @read_timeout)
     on_exit(fn -> Application.delete_env(:engram, :body_read_timeout) end)

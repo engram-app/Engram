@@ -245,7 +245,6 @@ export default {
 	"Unlimited vaults": "Peti nota tanpa had",
 	"50 GB attachments": "50 GB lampiran",
 	"Cross-vault search": "Carian merentasi peti nota",
-	"API access": "Akses API",
 	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			other:
@@ -828,7 +827,7 @@ export default {
 	"{completed} of {total} done": "{completed} daripada {total} selesai",
 	"Setup guide": "Panduan persediaan",
 	"Dismiss {label}": "Tutup {label}",
-	"You're on Free, 1 connection.": "Anda menggunakan pakej percuma, 1 sambungan.",
+	"You're on the Free plan.": "Anda menggunakan pelan percuma.",
 	"Connect Claude Desktop": "Sambungkan Claude Desktop",
 	"Connect Cursor": "Sambung Cursor",
 	"Connect Devin": "Sambung Devin",
@@ -1031,8 +1030,6 @@ export default {
 	"Registered redirects:": "Pengalihan yang didaftarkan:",
 	"API keys ({total})": "Kekunci API ({total})",
 	"+ New Key": "+ Kekunci Baru",
-	"Upgrade to Pro to create API keys for scripting and external integrations.":
-		"Tingkatkan ke Pro untuk mencipta kekunci API untuk skrip dan integrasi luaran.",
 	"No matches.": "Tiada sebarang padanan.",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"Tiada kekunci API lagi. Jana satu untuk menyambungkan skrip atau alat luaran.",

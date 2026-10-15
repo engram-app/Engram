@@ -381,7 +381,7 @@ function ChecklistBody({ visible, total, completed, pct, isFreeTier, onDismiss }
 			</ul>
 			{isFreeTier ? (
 				<p className="shrink-0 border-border border-t px-4 py-3 text-muted-foreground text-xs">
-					{t("You're on Free, 1 connection.")}{" "}
+					{t("You're on the Free plan.")}{" "}
 					<Link
 						to="/onboard/billing"
 						onClick={() => track("upgrade_link_clicked", { source: "checklist" })}

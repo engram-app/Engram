@@ -5,9 +5,10 @@ defmodule EngramWeb.Plugs.RequireApiRpsBudget do
   Looks up the user's `api_rps_cap` from `Engram.Billing` and rate-limits
   via `EngramWeb.RateLimiter` with a 1-second window. JWT-authed requests
   (web app) are exempt; the gate only fires for API-key-authed traffic,
-  mirroring the policy shape in `RequireApiWriteEnabled`.
+  JWT-authed traffic is bounded by `PreAuthRateLimit` instead.
 
-  Free defaults to `0` (no API access). Starter `10`, Pro `30`. When the
+  Every tier defaults to `30` (#1974: API keys work everywhere on every
+  tier); a per-user override of `0` refuses every API-key call. When the
   cap is exhausted within the window, responds 429 with
   `{"error": "api_rps_exceeded", "limit": N, "period_ms": 1000}`.
 

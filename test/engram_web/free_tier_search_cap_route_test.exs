@@ -19,7 +19,7 @@ defmodule EngramWeb.FreeTierSearchCapRouteTest do
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     {:ok, vault, _} = Engram.Vaults.register_vault(user, "V", Ecto.UUID.generate())
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "cap-test")
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
 
     # The budget is a Hammer bucket in ETS, which is process-global and NOT
     # reset by the DB sandbox. Each test mints a fresh user id, so keys never

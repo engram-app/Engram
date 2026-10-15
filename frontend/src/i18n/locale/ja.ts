@@ -242,7 +242,6 @@ export default {
 	"Unlimited vaults": "保管庫数無制限",
 	"50 GB attachments": "50 GBの添付ファイル",
 	"Cross-vault search": "保管庫間検索",
-	"API access": "APIアクセス",
 	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			other:
@@ -826,7 +825,7 @@ export default {
 	"{completed} of {total} done": "{completed} / {total} 完了",
 	"Setup guide": "セットアップガイド",
 	"Dismiss {label}": "{label} を閉じる",
-	"You're on Free, 1 connection.": "現在は無料プラン、接続数: 1",
+	"You're on the Free plan.": "無料プランをお使いです。",
 	"Connect Claude Desktop": "Claude Desktopに接続",
 	"Connect Cursor": "Cursorに接続",
 	"Connect Devin": "Devinに接続",
@@ -1028,8 +1027,6 @@ export default {
 	"Registered redirects:": "登録済みのリダイレクト先:",
 	"API keys ({total})": "APIキー ({total})",
 	"+ New Key": "新規キーの追加",
-	"Upgrade to Pro to create API keys for scripting and external integrations.":
-		"スクリプトや外部連携のためのAPIキーを作成するには、Pro版にアップグレードしてください。",
 	"No matches.": "一致するものがありません。",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"まだAPIキーがありません。スクリプトや外部ツールと連携するために、新しいキーを作成してください。",

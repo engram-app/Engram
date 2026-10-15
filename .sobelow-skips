@@ -1,4 +1,4 @@
-Config.CSP: Missing Content-Security-Policy,lib/engram_web/router.ex:205,1200FE4
+Config.CSP: Missing Content-Security-Policy,lib/engram_web/router.ex:204,6254D9B
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:9,68D560D
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:36,141C874
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:57,107CCB3

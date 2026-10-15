@@ -23,6 +23,7 @@ defmodule Engram.Connections do
   alias Engram.Accounts.{ApiKey, User}
   alias Engram.Auth.DeviceRefreshToken
   alias Engram.Connections.LogoAllowlist
+  alias Engram.OAuth
   alias Engram.OAuth.{Client, RefreshToken}
   alias Engram.Repo
   alias Engram.Vaults
@@ -112,8 +113,6 @@ defmodule Engram.Connections do
   @spec revoke_oauth_family(Ecto.UUID.t(), String.t(), Ecto.UUID.t() | nil) ::
           :ok | {:error, :not_found}
   def revoke_oauth_family(user_id, client_id, vault_id) do
-    now = DateTime.utc_now(:second)
-
     query =
       from(t in RefreshToken,
         where: t.user_id == ^user_id,
@@ -133,7 +132,9 @@ defmodule Engram.Connections do
         query
       end
 
-    case Repo.update_all(query, set: [revoked_at: now]) do
+    # Through OAuth.revoke_refresh_tokens/2: a plain UPDATE could miss a
+    # successor a concurrent rotation is committing, leaving it live.
+    case OAuth.revoke_refresh_tokens(query) do
       {0, _} -> if any_history?(user_id, client_id), do: :ok, else: {:error, :not_found}
       {_, _} -> :ok
     end
@@ -154,8 +155,6 @@ defmodule Engram.Connections do
   """
   @spec revoke_oauth_grant(Ecto.UUID.t(), Ecto.UUID.t()) :: :ok | {:error, :not_found}
   def revoke_oauth_grant(user_id, family_id) do
-    now = DateTime.utc_now(:second)
-
     query =
       from(t in RefreshToken,
         where: t.user_id == ^user_id,
@@ -163,7 +162,7 @@ defmodule Engram.Connections do
         where: is_nil(t.revoked_at)
       )
 
-    case Repo.update_all(query, set: [revoked_at: now]) do
+    case OAuth.revoke_refresh_tokens(query) do
       {0, _} -> if oauth_family_history?(user_id, family_id), do: :ok, else: {:error, :not_found}
       {_, _} -> :ok
     end
@@ -203,17 +202,16 @@ defmodule Engram.Connections do
     # Revoke outright when the deleted vault was the grant's ONLY one, and for
     # legacy scalar-only rows which have no array to narrow. Rows with both
     # columns NULL are "all vaults" and are deliberately left alone.
-    Repo.update_all(
-      from(t in RefreshToken,
-        where: t.user_id == ^user_id,
-        where: is_nil(t.revoked_at),
-        where:
-          (type(^vault_id, Ecto.UUID) in t.vault_ids and
-             fragment("array_length(?, 1) = 1", t.vault_ids)) or
-            (is_nil(t.vault_ids) and t.vault_id == ^vault_id)
-      ),
-      set: [revoked_at: now]
-    )
+    _ =
+      OAuth.revoke_refresh_tokens(
+        from(t in RefreshToken,
+          where: t.user_id == ^user_id,
+          where:
+            (type(^vault_id, Ecto.UUID) in t.vault_ids and
+               fragment("array_length(?, 1) = 1", t.vault_ids)) or
+              (is_nil(t.vault_ids) and t.vault_id == ^vault_id)
+        )
+      )
 
     Repo.update_all(
       from(rt in DeviceRefreshToken,

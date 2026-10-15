@@ -1,18 +1,17 @@
 defmodule EngramWeb.Plugs.EnforceConnectionCap do
   @moduledoc """
   Mounted on `POST /api/oauth/authorize/consent`. Before minting a new
-  refresh-token family, looks up the target `oauth_clients.kind`, counts
-  the user's active grants of that kind, and halts 402 if minting one
-  more would exceed the per-tier cap.
+  refresh-token family for an OBSIDIAN client, counts the user's active
+  Obsidian connections and halts 402 if one more would exceed
+  `:obsidian_connections_cap` (Free 2, paid unlimited).
 
-  The cap key is derived from kind: `:obsidian_connections_cap` or
-  `:mcp_connections_cap`. Free defaults to 1 of each; paid tiers default
-  to nil (unlimited).
+  MCP clients pass straight through: MCP connections are uncapped on every
+  tier (#1974), metered by `ai_searches_per_day` instead.
 
   Rejection body:
       {"error": "limit_exceeded",
-       "reason": "<obsidian|mcp>_connections_exceeded",
-       "limit_key": "<obsidian|mcp>_connections_cap",
+       "reason": "obsidian_connections_exceeded",
+       "limit_key": "obsidian_connections_cap",
        "tier": "free" | "starter" | "pro",
        "current": <integer>,
        "limit": <integer>,
@@ -86,17 +85,16 @@ defmodule EngramWeb.Plugs.EnforceConnectionCap do
   # literal map avoids String.to_existing_atom/1 failure when the atom hasn't
   # been touched yet in a given beam node (e.g. unit test isolation).
   defp kind_atom("obsidian"), do: :obsidian
-  defp kind_atom("mcp"), do: :mcp
 
   defp limit_key_for("obsidian"), do: :obsidian_connections_cap
-  defp limit_key_for("mcp"), do: :mcp_connections_cap
 
   # Resolve the billing cap for a user using literal LimitKey atoms so the
   # static lint can verify catalog membership at compile time. Unknown kinds
   # return nil (falls open) and log a warning for observability.
   defp cap_for_user(user, "obsidian"), do: Billing.cap(user, :obsidian_connections_cap)
 
-  defp cap_for_user(user, "mcp"), do: Billing.cap(user, :mcp_connections_cap)
+  # Uncapped by design (#1974), not by drift: no warning.
+  defp cap_for_user(_user, "mcp"), do: nil
 
   defp cap_for_user(_user, other) do
     require Logger

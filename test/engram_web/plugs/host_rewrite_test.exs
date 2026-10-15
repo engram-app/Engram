@@ -67,6 +67,24 @@ defmodule EngramWeb.Plugs.HostRewriteTest do
       end
     end
 
+    # #1974: discovery on this host advertises these at /oauth/*.
+    test "passes the advertised OAuth endpoints through, still rewrites /oauth/clients", %{
+      opts: opts
+    } do
+      for path <- ~w(/oauth/authorize /oauth/token /oauth/register /oauth/revoke) do
+        conn = conn(:get, path) |> Map.put(:host, "api.engram.page") |> HostRewrite.call(opts)
+        assert conn.request_path == path
+        refute conn.halted
+      end
+
+      conn =
+        conn(:get, "/oauth/clients/abc")
+        |> Map.put(:host, "api.engram.page")
+        |> HostRewrite.call(opts)
+
+      assert conn.request_path == "/api/oauth/clients/abc"
+    end
+
     test "rejects paths under SPA root with 404", %{opts: opts} do
       conn =
         conn(:get, "/login")

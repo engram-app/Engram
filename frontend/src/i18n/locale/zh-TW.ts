@@ -224,7 +224,6 @@ export default {
 	"Unlimited vaults": "無限制儲存庫",
 	"50 GB attachments": "50 GB 附件",
 	"Cross-vault search": "跨儲存庫搜尋",
-	"API access": "API 存取",
 	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			other:
@@ -788,7 +787,7 @@ export default {
 	"{completed} of {total} done": "已完成 {completed} 個，總共 {total} 個",
 	"Setup guide": "設定指南",
 	"Dismiss {label}": "關閉 {label}",
-	"You're on Free, 1 connection.": "您正在使用免費方案，1 個連線。",
+	"You're on the Free plan.": "您正在使用免費方案。",
 	"Connect Claude Desktop": "連接 Claude Desktop",
 	"Connect Cursor": "連接 Cursor",
 	"Connect Devin": "連接 Devin",
@@ -982,8 +981,6 @@ export default {
 	"Registered redirects:": "已註冊的重定向：",
 	"API keys ({total})": "API 金鑰 ({total})",
 	"+ New Key": "+ 新增金鑰",
-	"Upgrade to Pro to create API keys for scripting and external integrations.":
-		"升級至 Pro 版本，以建立 API 金鑰，用於腳本和外部整合。",
 	"No matches.": "找不到任何結果。",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"尚未有 API 金鑰。建立一個金鑰，以連接腳本或外部工具。",

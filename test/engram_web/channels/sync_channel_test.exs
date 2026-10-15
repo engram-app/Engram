@@ -20,7 +20,7 @@ defmodule EngramWeb.SyncChannelTest do
   describe "connect/3" do
     test "accepts valid API key" do
       user = insert(:user)
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
       {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test")
 
       assert {:ok, socket} =
@@ -95,7 +95,7 @@ defmodule EngramWeb.SyncChannelTest do
 
   describe "join/3 with restricted API key" do
     test "restricted key can join its authorized vault", %{user: user, vault: vault} do
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
       {:ok, _raw, api_key_record} = Engram.Accounts.create_api_key(user, "restricted-chan")
 
       Engram.Repo.insert_all("api_key_vaults", [
@@ -109,7 +109,7 @@ defmodule EngramWeb.SyncChannelTest do
     test "restricted key cannot join unauthorized vault", %{user: user, vault: vault} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
       {:ok, vault_b, _} = Engram.Vaults.register_vault(user, "Vault B", Ecto.UUID.generate())
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
       {:ok, _raw, api_key_record} = Engram.Accounts.create_api_key(user, "restricted-chan2")
 
       # Only grant access to vault_b — NOT the default vault
@@ -129,7 +129,7 @@ defmodule EngramWeb.SyncChannelTest do
     end
 
     test "restricted key on topic without vault_id gets invalid_topic", %{user: user} do
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
       {:ok, _raw, api_key_record} = Engram.Accounts.create_api_key(user, "restricted-compat")
       socket = user_socket(user, api_key_record)
 
@@ -141,7 +141,7 @@ defmodule EngramWeb.SyncChannelTest do
       user: user,
       vault: vault
     } do
-      grant_api_write!(user)
+      lift_api_rps_cap!(user)
       {:ok, _raw, api_key_record} = Engram.Accounts.create_api_key(user, "unrestricted-chan")
 
       socket = user_socket(user, api_key_record)

@@ -13,6 +13,7 @@ defmodule Engram.OAuth do
   """
   import Ecto.Query
   alias Engram.Accounts
+  alias Engram.Analytics.McpClient
   alias Engram.Logger.Metadata
   alias Engram.OAuth.{AuthorizationCode, Cimd, Client, RefreshToken}
   alias Engram.Repo
@@ -29,6 +30,7 @@ defmodule Engram.OAuth do
   # drift into three different strengths.
   @token_bytes 32
   @valid_scopes ~w(mcp)
+  @max_requested_scopes 16
 
   # ── Clients (Phase 2) ────────────────────────────────────────────
 
@@ -276,14 +278,20 @@ defmodule Engram.OAuth do
   a CIMD `client_id` is a URL supplied by an unauthenticated caller, so logging
   it whole is an unbounded value in a log field, and a DCR id is an opaque UUID
   with no triage value.
+
+  `extra` appends caller-specific fields. The token endpoint adds `error_code`,
+  `grant_type`, `user_agent` and a UUID-validated `client_id`. UUID-only keeps
+  it bounded, and on a grant refusal the client has already authenticated, so
+  the id names a row we can look up: the triage value an unverified id lacks.
   """
-  @spec log_refusal(String.t(), Client.t() | String.t() | nil, term()) :: :ok
-  def log_refusal(event, subject, reason) do
+  @spec log_refusal(String.t(), Client.t() | String.t() | nil, term(), keyword()) :: :ok
+  def log_refusal(event, subject, reason, extra \\ []) do
     Logger.warning(
       event,
-      Metadata.with_category(:warning, :lifecycle,
-        cimd_host: refusal_host(subject),
-        reason: refusal_reason(reason)
+      Metadata.with_category(
+        :warning,
+        :lifecycle,
+        [cimd_host: refusal_host(subject), reason: refusal_reason(reason)] ++ extra
       )
     )
   end
@@ -365,8 +373,9 @@ defmodule Engram.OAuth do
          {:ok, redirect_uri} <- match_redirect_uri(client, params["redirect_uri"]),
          :ok <- check_response_type(params, redirect_uri),
          :ok <- check_pkce(params, redirect_uri),
-         :ok <- check_state_length(params),
-         :ok <- check_scope(params, redirect_uri) do
+         :ok <- check_state_length(params) do
+      {granted, requested} = narrow_scope(params["scope"])
+
       {:ok,
        %{
          client: client,
@@ -375,7 +384,8 @@ defmodule Engram.OAuth do
          redirect_uri: redirect_uri,
          code_challenge: params["code_challenge"],
          code_challenge_method: params["code_challenge_method"] || "S256",
-         scope: params["scope"] || "mcp",
+         scope: granted,
+         scope_requested: requested,
          state: params["state"]
        }}
     end
@@ -490,6 +500,8 @@ defmodule Engram.OAuth do
   Exchanges an authorization code for an access + refresh token pair.
   Validates: code exists, unconsumed, unexpired, matching client_id,
   matching redirect_uri, PKCE verifier hashes to stored challenge.
+
+  A refusal is `{:error, {:invalid_grant, grant_reason()}}`.
   """
   def exchange_authorization_code(params, opts \\ []) do
     ip = Keyword.get(opts, :ip)
@@ -506,20 +518,33 @@ defmodule Engram.OAuth do
     end
   end
 
+  # How long after a refresh token is consumed a replay of it may still
+  # re-issue (see grace_reissue/2). Long enough for a client to time out and
+  # retry once; short enough that a stolen token is useless soon after.
+  @refresh_reuse_grace_seconds 60
+
+  # How many times one consumed token may be re-issued inside its window. The
+  # window is anchored at the token's first use (consumed_at, set once), so
+  # replays cannot slide it, and this caps how much a stolen copy can mint in
+  # it. Counted from the successor rows the re-issue already locks: no column.
+  # Hydra's cap has the same shape (persister_oauth2.go, used_times < N).
+  @max_grace_reissues 5
+
   @doc """
   Rotates a refresh token: marks the presented one consumed, mints + issues
   a successor in the same family. If the presented token is already
   consumed (replay) or revoked, this revokes the entire family per
-  RFC 6749 §10.4.
+  RFC 6749 §10.4. A refusal is `{:error, {:invalid_grant, grant_reason()}}`.
   """
   def rotate_refresh_token(raw_token, client_id, opts \\ []) do
     ip = Keyword.get(opts, :ip)
 
     case refresh_token_by_raw(raw_token) do
       nil ->
-        {:error, :invalid_grant}
+        grant_error(:refresh_token_unknown)
 
       %RefreshToken{} = rt ->
+        put_grant_user_id(rt.user_id)
         rotate_existing(rt, internal_client_id(client_id, rt.client_id), ip)
     end
   end
@@ -536,51 +561,97 @@ defmodule Engram.OAuth do
     Repo.one(from(rt in RefreshToken, where: rt.token_hash == ^hash), skip_tenant_check: true)
   end
 
+  # Every decision about a refresh token is made in ONE transaction, holding
+  # `FOR UPDATE` on the presented row (third review of #1974). That one lock is
+  # the whole concurrency story:
+  #
+  #   * two rotations of the same token serialize, so the second sees the first
+  #     one's result instead of racing it (no compare-and-set, no lost race);
+  #   * a revoke (`revoke_refresh_tokens/1`, used by every Disconnect path)
+  #     takes `FOR UPDATE` on the live rows it is about to revoke, the presented
+  #     row included, before it updates. Whichever commits first, the other sees
+  #     it: a rotation that wins has its successor revoked by the revoke's later
+  #     UPDATE, and a revoke that wins is seen by the rotation under its lock.
+  #
+  # A refusal that revokes (reuse) must commit, so the transaction returns the
+  # result instead of rolling back. Logging and analytics run after it.
   defp rotate_existing(%RefreshToken{client_id: actual}, requested, _ip) when actual != requested,
-    do: {:error, :invalid_grant}
+    do: grant_error(:client_mismatch)
 
-  defp rotate_existing(%RefreshToken{revoked_at: %DateTime{}} = rt, _client_id, _ip),
-    do: replay(rt)
+  defp rotate_existing(%RefreshToken{} = rt, _client_id, ip) do
+    {:ok, outcome} =
+      Repo.transaction(fn ->
+        case lock_row(rt) do
+          nil -> {:error, :refresh_token_unknown}
+          locked -> decide(locked, ip)
+        end
+      end)
 
-  defp rotate_existing(%RefreshToken{consumed_at: %DateTime{}} = rt, _client_id, _ip),
-    do: replay(rt)
+    report(outcome, rt)
+  end
 
-  defp rotate_existing(%RefreshToken{expires_at: exp} = rt, _client_id, ip) do
-    if DateTime.compare(DateTime.utc_now(), exp) == :gt do
-      {:error, :invalid_grant}
+  defp report({:ok, response}, _rt), do: {:ok, response}
+
+  defp report({:ok, response, {:grace, ip_matched}}, rt) do
+    log_reuse(rt, within_grace: true, ip_matched: ip_matched)
+    {:ok, response}
+  end
+
+  defp report({:error, :refresh_token_reuse}, rt) do
+    log_reuse(rt, within_grace: false)
+    grant_error(:refresh_token_reuse)
+  end
+
+  defp report({:error, reason}, _rt), do: grant_error(reason)
+
+  # Revoked: Disconnect, RFC 7009 or an earlier replay. Not a theft signal in
+  # itself, so it is reported as revoked and never logged as reuse.
+  defp decide(%RefreshToken{revoked_at: %DateTime{}} = rt, _ip) do
+    revoke_family(rt.family_id)
+    {:error, :refresh_token_revoked}
+  end
+
+  defp decide(%RefreshToken{consumed_at: %DateTime{} = at} = rt, ip) do
+    with true <- DateTime.diff(DateTime.utc_now(), at) <= @refresh_reuse_grace_seconds,
+         {:ok, response, ip_matched} <- grace_reissue(rt, ip) do
+      {:ok, response, {:grace, ip_matched}}
     else
-      do_rotate(rt, ip)
+      _not_eligible ->
+        revoke_family(rt.family_id)
+        {:error, :refresh_token_reuse}
     end
   end
 
-  defp do_rotate(rt, ip) do
-    now = DateTime.utc_now(:second)
+  defp decide(%RefreshToken{expires_at: exp} = rt, ip) do
+    if DateTime.compare(DateTime.utc_now(), exp) == :gt do
+      {:error, :refresh_token_expired}
+    else
+      Repo.update_all(
+        from(r in RefreshToken, where: r.id == ^rt.id),
+        [set: [consumed_at: DateTime.utc_now(:second)]],
+        skip_tenant_check: true
+      )
 
-    # Atomic compare-and-set: only one concurrent rotation may consume this
-    # token. This is a DIFFERENT detection from the two clauses in
-    # rotate_existing/3 — those read a value that was already set, which is a
-    # TOCTOU and cannot serialize concurrent rotations; only `WHERE consumed_at
-    # IS NULL` in the UPDATE can. A 0-row result means another request won that
-    # race, so the token we hold is a now-consumed one being replayed.
-    case from(r in RefreshToken, where: r.id == ^rt.id and is_nil(r.consumed_at))
-         |> Repo.update_all([set: [consumed_at: now]], skip_tenant_check: true) do
-      {0, _} -> replay(rt)
-      {1, _} -> mint_rotation_successor(rt, ip)
+      case mint_rotation_successor(rt, ip) do
+        {:ok, response} -> {:ok, response}
+        {:error, reason} -> Repo.rollback(reason)
+      end
     end
   end
 
+  defp lock_row(rt) do
+    Repo.one(from(r in RefreshToken, where: r.id == ^rt.id, lock: "FOR UPDATE"),
+      skip_tenant_check: true
+    )
+  end
+
+  # Inside rotate_existing/3's transaction, which undoes the insert when the
+  # user lookup fails (it should not: the user_id FK guarantees the row).
   defp mint_rotation_successor(rt, ip) do
     {:ok, refresh_raw, refresh_row} = insert_refresh_token(grant_attrs(rt, rt.family_id, ip))
 
-    case fetch_user(rt.user_id) do
-      {:ok, user} ->
-        {:ok, build_token_response(user, rt, refresh_raw, refresh_row)}
-
-      err ->
-        # Roll back the new refresh row if user lookup failed (shouldn't
-        # happen — user_id FK guarantees existence — but keep tidy).
-        Repo.delete!(refresh_row, skip_tenant_check: true)
-        err
+    with {:ok, user} <- fetch_user(rt.user_id) do
+      {:ok, build_token_response(user, rt, refresh_raw, refresh_row)}
     end
   end
 
@@ -593,28 +664,165 @@ defmodule Engram.OAuth do
     |> Repo.update_all([set: [revoked_at: now]], skip_tenant_check: true)
   end
 
-  # RFC 6749 §10.4: a replayed refresh token means the family may be
-  # compromised, so the whole family dies rather than just the token presented.
-  #
-  # THREE detections reach this — already-revoked, already-consumed, and the
-  # atomic UPDATE losing its race — and that split is deliberate and stays
-  # (see do_rotate/2). The RESPONSE to all three is identical, and is this.
-  defp replay(rt) do
-    revoke_family(rt.family_id)
-    {:error, :invalid_grant}
+  @doc """
+  Revokes the live refresh tokens `query` selects, safely against a rotation
+  in flight: it first locks them (`FOR UPDATE`), which waits for any rotation
+  holding one, then revokes with a fresh statement, whose snapshot includes a
+  successor that rotation just committed. Every Disconnect path goes through
+  this. `opts` are passed to both statements.
+  """
+  @spec revoke_refresh_tokens(Ecto.Queryable.t(), keyword()) :: {non_neg_integer(), nil}
+  def revoke_refresh_tokens(query, opts \\ []) do
+    live = from(t in query, where: is_nil(t.revoked_at))
+
+    {:ok, result} =
+      Repo.transaction(fn ->
+        Repo.all(from(t in live, select: t.id, lock: "FOR UPDATE"), opts)
+        Repo.update_all(live, [set: [revoked_at: DateTime.utc_now(:second)]], opts)
+      end)
+
+    result
   end
 
-  defp find_unconsumed_code(nil), do: {:error, :invalid_grant}
+  # #1974: a client whose rotation response was lost retries with the token it
+  # still holds. Revoking the family for that killed the connection every
+  # time a response went missing, and access tokens last 15 min.
+  #
+  # So inside the window, while nothing minted since has been USED (the client
+  # cannot have received it, or it would have used it), the replay re-issues:
+  # the live successor is revoked and a new one minted, so the family never
+  # has two live tokens. Every duplicate inside the window is handled the same
+  # way, so N racing retries all succeed instead of the third revoking the
+  # family. Runs under rotate_existing/3's lock on the old token; the
+  # successors are locked too, and the revoke must hit every live one it read.
+  #
+  # Not eligible (the caller revokes the family as reuse):
+  #   * it was already re-issued @max_grace_reissues times
+  #   * any successor was consumed: the client had it, so this is theft
+  #   * no successor is still live: it was revoked some other way (RFC 7009,
+  #     Disconnect), and a replay of its parent must not bring it back
+  #
+  # The raw successor cannot simply be returned again: only its hash is stored.
+  #
+  # The tradeoff (docs/context/mcp-oauth.md): inside the window whoever
+  # presents the old token gets a new one. The client check (rotate_existing/3)
+  # and client authentication (the token controller, before this runs) still
+  # apply, every re-issue logs whether the caller's IP matched the original
+  # rotation's, and a revoked successor turning up later revokes the family.
+  defp grace_reissue(rt, ip) do
+    successors =
+      Repo.all(
+        from(r in RefreshToken,
+          where:
+            r.family_id == ^rt.family_id and r.id != ^rt.id and r.inserted_at >= ^rt.consumed_at,
+          lock: "FOR UPDATE"
+        ),
+        skip_tenant_check: true
+      )
+
+    live = Enum.filter(successors, &is_nil(&1.revoked_at))
+    live_ids = Enum.map(live, & &1.id)
+
+    with true <- Enum.all?(successors, &is_nil(&1.consumed_at)),
+         true <- live != [],
+         # The first successor is the original rotation; the rest re-issues.
+         true <- length(successors) - 1 < @max_grace_reissues,
+         {n, _} when n == length(live) <- revoke_ids(live_ids),
+         {:ok, response} <- mint_rotation_successor(rt, ip) do
+      original = Enum.min_by(successors, & &1.inserted_at, DateTime)
+      {:ok, response, original.last_used_ip == ip}
+    else
+      _ -> :not_eligible
+    end
+  end
+
+  defp revoke_ids(ids) do
+    from(r in RefreshToken,
+      where: r.id in ^ids and is_nil(r.revoked_at) and is_nil(r.consumed_at)
+    )
+    |> Repo.update_all([set: [revoked_at: DateTime.utc_now(:second)]], skip_tenant_check: true)
+  end
+
+  defp log_reuse(rt, opts) do
+    within_grace = Keyword.fetch!(opts, :within_grace)
+
+    {family, _registration} =
+      Client |> Repo.get(rt.client_id, skip_tenant_check: true) |> McpClient.of_client()
+
+    Engram.Analytics.track(%Accounts.User{id: rt.user_id}, "mcp_oauth_refresh_reuse", %{
+      within_grace: within_grace,
+      client: family
+    })
+
+    # Strings: the text formatter drops `false` metadata entirely.
+    metadata =
+      [within_grace: to_string(within_grace), client_id: rt.client_id, family_id: rt.family_id] ++
+        if(within_grace, do: [ip_matched: to_string(Keyword.fetch!(opts, :ip_matched))], else: [])
+
+    Logger.warning(
+      if(within_grace, do: "oauth_refresh_grace_reissue", else: "oauth_refresh_reuse"),
+      Metadata.with_category(:warning, :lifecycle, metadata)
+    )
+  end
+
+  @typedoc """
+  Why a grant was refused. The wire response is always `invalid_grant` (RFC
+  6749 §5.2 says nothing about which part was bad); the reason is for our logs
+  and the `engram_prom_ex_oauth_token_total` `reason` label, so it is a closed
+  set. Add a value here before returning it.
+  """
+  @type grant_reason ::
+          :code_missing
+          | :code_unknown
+          | :code_consumed
+          | :code_expired
+          | :client_mismatch
+          | :redirect_uri_mismatch
+          | :pkce_verifier_missing
+          | :pkce_mismatch
+          | :user_not_found
+          | :refresh_token_unknown
+          | :refresh_token_revoked
+          | :refresh_token_reuse
+          | :refresh_token_expired
+
+  # Analytics attribution for a refused grant (#1974): the code or refresh
+  # token often resolved to a user before it was refused. Kept in the request
+  # process rather than widened into the error tuple, because only the token
+  # controller's analytics reads it; `take_grant_user_id/0` clears it.
+  @grant_user_key :engram_oauth_grant_user_id
+
+  defp put_grant_user_id(user_id), do: Process.put(@grant_user_key, user_id)
+
+  defp put_code_user_id({:ok, %AuthorizationCode{user_id: user_id}}),
+    do: put_grant_user_id(user_id)
+
+  defp put_code_user_id(_), do: :ok
+
+  @doc """
+  The user the last grant attempt in this process resolved to, if any, and
+  forgets it. For attributing `mcp_oauth_token_failed`.
+  """
+  @spec take_grant_user_id() :: String.t() | nil
+  def take_grant_user_id, do: Process.delete(@grant_user_key)
+
+  @spec grant_error(grant_reason()) :: {:error, {:invalid_grant, grant_reason()}}
+  defp grant_error(reason), do: {:error, {:invalid_grant, reason}}
+
+  defp find_unconsumed_code(nil), do: grant_error(:code_missing)
 
   defp find_unconsumed_code(raw_code) do
-    case get_authorization_code_by_raw(raw_code) do
+    case get_authorization_code_by_raw(raw_code) |> tap(&put_code_user_id/1) do
       {:ok, %AuthorizationCode{consumed_at: nil} = code} ->
         if DateTime.compare(DateTime.utc_now(), code.expires_at) == :gt,
-          do: {:error, :invalid_grant},
+          do: grant_error(:code_expired),
           else: {:ok, code}
 
+      {:ok, %AuthorizationCode{}} ->
+        grant_error(:code_consumed)
+
       _ ->
-        {:error, :invalid_grant}
+        grant_error(:code_unknown)
     end
   end
 
@@ -626,25 +834,27 @@ defmodule Engram.OAuth do
   # so the separate fast-path clause this used to have was a second copy of that
   # same check.
   defp check_code_client(%{client_id: actual}, requested) do
-    if actual == internal_client_id(requested, actual), do: :ok, else: {:error, :invalid_grant}
+    if actual == internal_client_id(requested, actual),
+      do: :ok,
+      else: grant_error(:client_mismatch)
   end
 
   defp check_code_redirect_uri(%{redirect_uri: actual}, requested) when actual == requested,
     do: :ok
 
-  defp check_code_redirect_uri(_, _), do: {:error, :invalid_grant}
+  defp check_code_redirect_uri(_, _), do: grant_error(:redirect_uri_mismatch)
 
-  defp check_pkce_verifier(_code, nil), do: {:error, :invalid_grant}
+  defp check_pkce_verifier(_code, nil), do: grant_error(:pkce_verifier_missing)
 
   defp check_pkce_verifier(%{code_challenge: challenge}, verifier) when is_binary(verifier) do
     derived = :crypto.hash(:sha256, verifier) |> Base.url_encode64(padding: false)
 
     if Plug.Crypto.secure_compare(derived, challenge),
       do: :ok,
-      else: {:error, :invalid_grant}
+      else: grant_error(:pkce_mismatch)
   end
 
-  defp check_pkce_verifier(_, _), do: {:error, :invalid_grant}
+  defp check_pkce_verifier(_, _), do: grant_error(:pkce_mismatch)
 
   # Single-use enforcement (OAuth 2.1 §4.1.3): the conditional UPDATE is the
   # sole guarantee against an authorization-code double-spend race. The
@@ -656,14 +866,14 @@ defmodule Engram.OAuth do
     |> Repo.update_all([set: [consumed_at: DateTime.utc_now(:second)]], skip_tenant_check: true)
     |> case do
       {1, _} -> :ok
-      {0, _} -> {:error, :invalid_grant}
+      {0, _} -> grant_error(:code_consumed)
     end
   end
 
   defp fetch_user(user_id) do
     case Accounts.get_user(user_id) do
       %Accounts.User{} = user -> {:ok, user}
-      _ -> {:error, :invalid_grant}
+      _ -> grant_error(:user_not_found)
     end
   end
 
@@ -761,9 +971,10 @@ defmodule Engram.OAuth do
 
     case row do
       %RefreshToken{client_id: ^owner, user_id: user_id} = rt ->
-        rt
-        |> Ecto.Changeset.change(%{revoked_at: DateTime.utc_now(:second)})
-        |> Repo.update!(skip_tenant_check: true)
+        _ =
+          revoke_refresh_tokens(from(r in RefreshToken, where: r.id == ^rt.id),
+            skip_tenant_check: true
+          )
 
         # The matching access JWT lives outside our DB (Joken-signed, stateless)
         # and remains technically valid until exp. Force-disconnect live sockets
@@ -860,9 +1071,23 @@ defmodule Engram.OAuth do
   # self-concealing — `:rate_limited` is deliberately never logged (see
   # `Engram.OAuth.Cimd`), so before this split a user in a retry loop produced a
   # stream of `invalid_client` pages and not one line of evidence.
+  #
+  # Explicit shapes, not `Cimd.transient_fetch_error?/1`: that predicate
+  # defaults unknown reasons to transient, and this function also sees
+  # document-validation refusals (a bad `client_id` binding), which are terminal.
+  # Every transient shape `Cimd.HttpFetcher` can return is listed (#1974 review).
   defp cimd_error(reason)
-       when reason in [:rate_limited, :fetch_failed, :store_conflict],
+       when reason in [
+              :rate_limited,
+              :fetch_failed,
+              :store_conflict,
+              :dns_failure,
+              :budget_exhausted
+            ],
        do: {:server_error, "temporarily_unavailable"}
+
+  defp cimd_error({:transport_error, _phase, _reason}),
+    do: {:server_error, "temporarily_unavailable"}
 
   defp cimd_error({:http_status, status}) when status >= 500 or status == 429,
     do: {:server_error, "temporarily_unavailable"}
@@ -938,20 +1163,28 @@ defmodule Engram.OAuth do
   defp check_pkce(params, redirect_uri),
     do: {:redirect_error, redirect_uri, "invalid_request", params["state"]}
 
-  defp check_scope(%{"scope" => nil}, _), do: :ok
-  defp check_scope(%{"scope" => ""}, _), do: :ok
+  # RFC 6749 §3.3: the server may issue a narrower scope than requested, and
+  # says so in the token response. Unknown scopes are dropped, never refused
+  # (#1974): connectors add `offline_access`, `openid` or `profile` by habit,
+  # and an `invalid_scope` redirect killed the connection with a message the
+  # user never saw. `offline_access` is meaningful but needs no grant scope:
+  # every grant gets a refresh token. Nothing requested that we know → `mcp`.
+  #
+  # Returns `{granted, requested}`; `requested` is only for analytics, capped so
+  # a hostile scope string stays bounded.
+  defp narrow_scope(scope) when is_binary(scope) do
+    requested = scope |> String.split(" ", trim: true) |> Enum.take(@max_requested_scopes)
 
-  defp check_scope(%{"scope" => scope} = params, redirect_uri) when is_binary(scope) do
-    requested = String.split(scope, " ", trim: true)
+    granted =
+      case Enum.filter(requested, &(&1 in @valid_scopes)) do
+        [] -> "mcp"
+        known -> known |> Enum.uniq() |> Enum.join(" ")
+      end
 
-    if Enum.all?(requested, &(&1 in @valid_scopes)) do
-      :ok
-    else
-      {:redirect_error, redirect_uri, "invalid_scope", params["state"]}
-    end
+    {granted, requested}
   end
 
-  defp check_scope(_params, _redirect_uri), do: :ok
+  defp narrow_scope(_scope), do: {"mcp", []}
 
   # Resolves a vault selection to the id list stored on the grant.
   #

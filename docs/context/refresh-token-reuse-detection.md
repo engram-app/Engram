@@ -4,8 +4,8 @@ _Last verified: 2026-10-03_
 
 Applies to the device-flow (`Engram.Auth.DeviceFlow`) and local-auth
 (`Engram.Accounts`) refresh paths, which share `Engram.Auth.RefreshLeeway`. MCP
-OAuth refresh (`Engram.OAuth`) has **no** leeway: any replay of a consumed token
-revokes the family (`update_all` set `revoked_at`). Policy per RFC 9700 §4.14.2:
+OAuth refresh (`Engram.OAuth`) has its own 60 s grace re-issue instead, with a
+different shape (see `mcp-oauth.md`, "Refresh grace window"). Policy per RFC 9700 §4.14.2:
 rotation plus reuse detection with family revocation, and a short leeway for
 benign retries.
 

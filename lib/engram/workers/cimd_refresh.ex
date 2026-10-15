@@ -1,6 +1,7 @@
 defmodule Engram.Workers.CimdRefresh do
   @moduledoc """
-  Daily refresh of every stored CIMD client document.
+  Daily refresh of every stored CIMD client document, and (`kind: "jwks"`,
+  every 5 min) of every CIMD client's JWKS. See `perform/1`.
 
   `Engram.OAuth.Cimd.ensure_client/1` is called from exactly one place,
   `Engram.OAuth.fetch_client/1`, which only the authorize path reaches. So
@@ -60,20 +61,54 @@ defmodule Engram.Workers.CimdRefresh do
 
   alias Engram.Logger.Metadata
   alias Engram.OAuth.Cimd
+  alias Engram.OAuth.Cimd.JwksCache
   alias Engram.OAuth.Client
+  alias Engram.OAuth.RefreshToken
   alias Engram.Repo
 
   require Logger
+
+  # The JWKS sweep: vendor fetches in flight at once, the per-fetch ceiling
+  # (the fetcher's own 3 s budget plus DNS and the persist), and how recently
+  # a client must have made a token request to be swept.
+  @jwks_concurrency 4
+  @jwks_fetch_timeout_ms 15_000
+  @jwks_active_days 30
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(10)
 
   @impl Oban.Worker
+  def perform(%Oban.Job{args: %{"kind" => "jwks"} = args}) do
+    jitter(args)
+    uris = jwks_uris()
+
+    # `_nolink` under the app's Task.Supervisor: one vendor's crash is a
+    # `{:exit, _}` tallied as failed, not the sweep's death (second review
+    # #10).
+    tally =
+      Engram.TaskSupervisor
+      |> Task.Supervisor.async_stream_nolink(uris, &refresh_jwks/1,
+        max_concurrency: @jwks_concurrency,
+        ordered: false,
+        timeout: @jwks_fetch_timeout_ms,
+        on_timeout: :kill_task
+      )
+      |> Enum.reduce(%{}, fn
+        {:ok, outcome}, acc -> Map.update(acc, outcome, 1, &(&1 + 1))
+        {:exit, _reason}, acc -> Map.update(acc, :failed, 1, &(&1 + 1))
+      end)
+
+    log_sweep("mcp_jwks_refresh_sweep", length(uris), tally)
+
+    {:ok, tally}
+  end
+
   def perform(%Oban.Job{}) do
     rows = cimd_rows()
     tally = Enum.reduce(rows, %{}, &tally_refresh/2)
 
-    log_sweep(length(rows), tally)
+    log_sweep("mcp_cimd_refresh_sweep", length(rows), tally)
 
     {:ok, tally}
   end
@@ -90,6 +125,66 @@ defmodule Engram.Workers.CimdRefresh do
       skip_tenant_check: true
     )
   end
+
+  # #1974: the JWKS sweep. Every 5 min, so the token path finds a fresh
+  # persisted key set instead of fetching. One fetch per distinct URI; the
+  # result lands on every row naming it (`JwksCache.refresh_background/1`). A
+  # failure leaves the last good keys in place.
+  #
+  # Only clients with a LIVE (unrevoked) grant used for a token request in the
+  # last 30 days, most recently used first, so a burst of registrations that
+  # never connect, or grants since disconnected, cost no vendor fetches. One
+  # that comes back fetches on demand in the token path.
+  #
+  # EXISTS plus a per-client max, both served by
+  # `oauth_refresh_tokens_client_id_last_used_at_index`, rather than a join
+  # that scanned every refresh token (second review #13). Clients sharing a
+  # jwks_uri collapse to one URI, ordered by its most recent use.
+  defp jwks_uris do
+    cutoff = DateTime.add(DateTime.utc_now(), -@jwks_active_days * 86_400, :second)
+
+    from(c in Client,
+      as: :client,
+      where:
+        not is_nil(c.cimd_url) and not is_nil(c.jwks_uri) and
+          exists(
+            from(rt in RefreshToken,
+              where:
+                rt.client_id == parent_as(:client).client_id and is_nil(rt.revoked_at) and
+                  rt.last_used_at > ^cutoff,
+              select: 1
+            )
+          ),
+      select:
+        {c.jwks_uri,
+         type(
+           fragment(
+             "(SELECT max(r.last_used_at) FROM oauth_refresh_tokens r WHERE r.client_id = ? AND r.revoked_at IS NULL)",
+             c.client_id
+           ),
+           :utc_datetime_usec
+         )}
+    )
+    |> Repo.all(skip_tenant_check: true)
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Enum.map(fn {uri, used_at} -> {uri, Enum.max(used_at, DateTime)} end)
+    |> Enum.sort_by(&elem(&1, 1), {:desc, DateTime})
+    |> Enum.map(&elem(&1, 0))
+  end
+
+  defp refresh_jwks(uri) do
+    case JwksCache.refresh_background(uri) do
+      {:ok, _keys} -> :refreshed
+      {:error, _reason} -> :failed
+    end
+  end
+
+  # Spreads the vendor-facing fetches off the exact cron minute. Cron args set
+  # it; a direct perform (tests) passes none and does not sleep.
+  defp jitter(%{"jitter_ms" => max}) when is_integer(max) and max > 0,
+    do: Process.sleep(:rand.uniform(max))
+
+  defp jitter(_args), do: :ok
 
   defp tally_refresh({url, before_at}, acc) do
     outcome =
@@ -112,9 +207,9 @@ defmodule Engram.Workers.CimdRefresh do
   # One line per sweep. Stays at `:info`: with failures folded into `unchanged`
   # this worker has nothing to escalate that its two existing signals do not
   # already carry, and a routine all-fresh sweep is not news.
-  defp log_sweep(total, tally) do
+  defp log_sweep(event, total, tally) do
     Logger.info(
-      "mcp_cimd_refresh_sweep total=#{total} #{format_tally(tally)}",
+      "#{event} total=#{total} #{format_tally(tally)}",
       Metadata.with_category(:info, :lifecycle)
     )
   end

@@ -45,15 +45,37 @@ defmodule EngramWeb.OAuthAuthorizeErrorPagesTest do
     # `{:server_error, _}` is only reachable through a CIMD fetch that fails on
     # OUR side (transport, vendor 5xx, our own fetch limiter) — see
     # Engram.OAuth.cimd_error/1. Nothing else in the authorize path produces it.
-    test "the server-error branch renders a 503 HTML page naming the code", %{conn: conn} do
-      expect(FetcherMock, :fetch, fn @cimd_url -> {:error, :fetch_failed} end)
+    # One test per transient shape `HttpFetcher` really returns (review #2:
+    # the old test mocked `:fetch_failed`, which the fetcher no longer emits,
+    # so every real transport error rendered a terminal invalid_client page).
+    for reason <- [
+          {:transport_error, :connect, :timeout},
+          {:transport_error, :connect, :econnrefused},
+          {:transport_error, :tls, :tls_alert},
+          {:transport_error, :recv, :timeout},
+          :dns_failure,
+          :budget_exhausted,
+          {:http_status, 503},
+          {:http_status, 429}
+        ] do
+      test "a #{inspect(reason)} fetch renders the 503 page", %{conn: conn} do
+        expect(FetcherMock, :fetch, fn @cimd_url -> {:error, unquote(Macro.escape(reason))} end)
+
+        conn = get(conn, "/oauth/authorize", authorize_params(@cimd_url))
+
+        assert conn.status == 503
+        assert ["text/html" <> _] = get_resp_header(conn, "content-type")
+        assert conn.resp_body =~ "temporarily_unavailable"
+        assert conn.resp_body =~ "Authorization temporarily unavailable"
+      end
+    end
+
+    test "a vendor 404 stays a terminal invalid_client", %{conn: conn} do
+      expect(FetcherMock, :fetch, fn @cimd_url -> {:error, {:http_status, 404}} end)
 
       conn = get(conn, "/oauth/authorize", authorize_params(@cimd_url))
-
-      assert conn.status == 503
-      assert ["text/html" <> _] = get_resp_header(conn, "content-type")
-      assert conn.resp_body =~ "temporarily_unavailable"
-      assert conn.resp_body =~ "Authorization temporarily unavailable"
+      assert conn.status == 400
+      assert conn.resp_body =~ "invalid_client"
     end
   end
 end

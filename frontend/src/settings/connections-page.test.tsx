@@ -31,14 +31,11 @@ vi.mock("../api/queries", async () => {
 			error: null,
 		}),
 		// Mirror the real payload: the page reads `caps`, not the tier string.
-		// API keys are Pro-only, so only Pro resolves api_write_enabled true.
 		useBillingStatus: () => ({
 			data: {
 				tier: mockTier,
 				caps: {
-					api_write_enabled: mockTier === "pro",
 					obsidian_connections: mockTier === "free" ? 2 : null,
-					mcp_connections: mockTier === "free" ? 1 : null,
 					vaults: mockTier === "free" ? 1 : null,
 				},
 			},
@@ -497,32 +494,15 @@ describe("ConnectionsPage", () => {
 		expect(screen.getByRole("button", { name: /\+ New Key/iu })).toBeInTheDocument();
 	});
 
-	it("shows upgrade CTA when tier is free", () => {
+	// #1974: API keys work on every route on every tier, so every tier can
+	// create one and no plan is told to upgrade for API access.
+	it.each(["free", "starter", "pro"])("lets %s create a key with no API upsell", (tier) => {
 		mockConnections.splice(0, mockConnections.length, basePat);
-		mockTier = "free";
+		mockTier = tier;
 		renderPage();
-		expect(screen.getByText(/Upgrade to Pro to create API keys/iu)).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /\+ New Key/iu })).not.toBeInTheDocument();
-	});
-
-	// API keys moved to Pro-only. Starter is a PAID tier that still must not
-	// see the create affordance — the old gate keyed on "not free" and would
-	// have offered Starter a button the server refuses with 402.
-	it("shows upgrade CTA when tier is starter", () => {
-		mockConnections.splice(0, mockConnections.length, basePat);
-		mockTier = "starter";
-		renderPage();
-		expect(screen.getByText(/Upgrade to Pro to create API keys/iu)).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /\+ New Key/iu })).not.toBeInTheDocument();
-	});
-
-	it("Upgrade CTA click actually navigates (not just a correct href)", () => {
-		mockConnections.splice(0, mockConnections.length, basePat);
-		mockTier = "free";
-		renderPage();
-		expect(screen.getByTestId("loc-hash")).toHaveTextContent("");
-		fireEvent.click(screen.getByRole("link", { name: /upgrade/iu }));
-		expect(screen.getByTestId("loc-hash")).toHaveTextContent("#settings/billing");
+		expect(screen.getByRole("button", { name: /\+ New Key/iu })).toBeInTheDocument();
+		expect(screen.queryByText(/REST API/iu)).not.toBeInTheDocument();
+		expect(screen.queryByText(/Upgrade to Pro/iu)).not.toBeInTheDocument();
 	});
 
 	it("shows unverified badge for MCP connection with verified=false", () => {

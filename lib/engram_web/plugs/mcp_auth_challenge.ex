@@ -42,12 +42,20 @@ defmodule EngramWeb.Plugs.McpAuthChallenge do
   end
 
   defp put_challenge(%Plug.Conn{status: 401} = conn) do
-    # Only when nothing upstream already set one — a more specific challenge
-    # (e.g. `error="invalid_token"` on an expired bearer) is strictly better
-    # information for the client and must not be flattened into this generic one.
-    case Plug.Conn.get_resp_header(conn, "www-authenticate") do
-      [] ->
-        url = OAuthMetadata.resource_metadata_url(conn)
+    url = OAuthMetadata.resource_metadata_url(conn)
+
+    # `Plugs.Auth` marks a presented-but-bad bearer (#1974); the client needs
+    # BOTH the error and the discovery pointer, so they are merged. Any other
+    # challenge set upstream is more specific than ours and is left alone.
+    case {conn.assigns[:bearer_error], Plug.Conn.get_resp_header(conn, "www-authenticate")} do
+      {error, _} when is_binary(error) ->
+        Plug.Conn.put_resp_header(
+          conn,
+          "www-authenticate",
+          ~s(Bearer resource_metadata="#{url}", error="#{error}")
+        )
+
+      {nil, []} ->
         Plug.Conn.put_resp_header(conn, "www-authenticate", ~s(Bearer resource_metadata="#{url}"))
 
       _ ->

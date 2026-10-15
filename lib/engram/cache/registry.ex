@@ -38,8 +38,10 @@ defmodule Engram.Cache.Registry do
     },
     # Per-vault avgdl (BM25 length normalizer); a soft value, TTL-only.
     %{name: :avgdl, ttl: 600_000, cache_nil: false, evict_match: :key, pg_channel: nil},
-    # CIMD client signing keys by jwks_uri; public keys, TTL-only.
-    %{name: :jwks, ttl: 3_600_000, cache_nil: false, evict_match: :key, pg_channel: nil},
+    # CIMD client signing keys by jwks_uri; public keys, TTL-only. The TTL is
+    # the 7-day STALE limit: freshness is judged by JwksCache from each entry's
+    # own fetched_at, so a failing vendor keeps verifying on its last keys.
+    %{name: :jwks, ttl: 7 * 86_400_000, cache_nil: false, evict_match: :key, pg_channel: nil},
     # RequireOnboarding PASS verdict per user (value is the expiry deadline).
     %{
       name: :onboarding_gate,

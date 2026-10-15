@@ -45,7 +45,21 @@ defmodule Engram.Http.SsrfGuard do
 
   @max_url_bytes 2048
 
-  @type target :: %{url: String.t(), host: String.t(), ip: :inet.ip_address()}
+  @type target :: %{
+          url: String.t(),
+          host: String.t(),
+          ip: :inet.ip_address(),
+          ips: [:inet.ip_address(), ...]
+        }
+
+  # One deadline for the whole lookup (both families run concurrently). A
+  # resolver that stalls must not eat the fetch budget: the 2026-10-13 ChatGPT
+  # timeout spent its full 5 s somewhere we could not see (#1974).
+  @dns_timeout_ms 1_000
+
+  @doc "The DNS deadline `resolve/2` enforces, in ms."
+  @spec dns_timeout_ms() :: unquote(@dns_timeout_ms)
+  def dns_timeout_ms, do: @dns_timeout_ms
   # Split by what it takes to decide them: the shape rules need only the URL,
   # the resolution rules need a lookup. `validate_url/1` can only ever return
   # the first set, so promising it might return `:dns_failure` is a lie —
@@ -59,6 +73,10 @@ defmodule Engram.Http.SsrfGuard do
           | :fragment_present
           | :unsupported_port
 
+  # `:dns_failure` is every lookup that produced no address, and is always
+  # transient: OTP's :inet.getaddrs reports `:nxdomain` for SERVFAIL, REFUSED,
+  # an unreachable resolver and timeouts too, so a missing name cannot be told
+  # apart from a broken resolver (third review of #1974).
   @type reason :: shape_reason() | :dns_failure | :private_address
 
   # Reserved IPv4 ranges (IANA special-purpose registry). 240.0.0.0/4 covers
@@ -125,21 +143,37 @@ defmodule Engram.Http.SsrfGuard do
   @doc """
   Validates `url` and resolves it to a single public address.
 
-  Returns `{:ok, %{url: pinned, host: original_host, ip: address}}` where
-  `pinned` has the host replaced by the address literal. Connect to `pinned` and
-  pass `host` as the TLS hostname, or certificate verification will fail against
-  an IP.
+  Returns `{:ok, %{url: pinned, host: original_host, ip: address, ips: all}}`
+  where `pinned` has the host replaced by the address literal. Connect to
+  `pinned` and pass `host` as the TLS hostname, or certificate verification will
+  fail against an IP.
+
+  `ips` is every validated address to try in order, for failover: the IPv4
+  answers, or the IPv6 ones only when there is no IPv4 answer (our VPC has no
+  IPv6 egress). Every answer of BOTH families must still be public, so a
+  failover can never reach an address the guard did not approve. `ip`/`url` are
+  the first candidate.
+
+  `opts[:getaddrs]` replaces `:inet.getaddrs/3` (tests only) and returns what it
+  does: `{:ok, addresses}` or `{:error, reason}`. The lookup is
+  bounded by a 1 s deadline either way.
   """
-  @spec resolve(term()) :: {:ok, target()} | {:error, reason()}
-  def resolve(url) when is_binary(url) do
+  @spec resolve(term(), keyword()) :: {:ok, target()} | {:error, reason()}
+  def resolve(url, opts \\ [])
+
+  def resolve(url, opts) when is_binary(url) do
     with :ok <- check_length(url),
          {:ok, uri} <- parse(url),
-         {:ok, ip} <- pin_address(uri.host) do
-      {:ok, %{url: pinned_url(uri, ip), host: uri.host, ip: ip}}
+         {:ok, [ip | _] = ips} <- pin_addresses(uri.host, opts) do
+      {:ok, %{url: pinned_url(uri, ip), host: uri.host, ip: ip, ips: ips}}
     end
   end
 
-  def resolve(_), do: {:error, :invalid_url}
+  def resolve(_, _opts), do: {:error, :invalid_url}
+
+  @doc "Rewrites `url`'s host to the address literal `ip` (the pinned form)."
+  @spec pin_url(String.t(), :inet.ip_address()) :: String.t()
+  def pin_url(url, ip), do: url |> URI.parse() |> pinned_url(ip)
 
   @doc """
   Applies every rule `resolve/1` does **except** DNS resolution.
@@ -190,17 +224,21 @@ defmodule Engram.Http.SsrfGuard do
 
   # An IP literal skips DNS entirely; a name is resolved and every answer
   # checked. Both end at the same address filter.
-  defp pin_address(host) do
+  defp pin_addresses(host, opts) do
     charlist = String.to_charlist(host)
 
     case :inet.parse_address(charlist) do
-      {:ok, ip} -> if public_address?(ip), do: {:ok, ip}, else: {:error, :private_address}
-      {:error, :einval} -> resolve_hostname(charlist)
+      {:ok, ip} -> if public_address?(ip), do: {:ok, [ip]}, else: {:error, :private_address}
+      {:error, :einval} -> resolve_hostname(charlist, Keyword.get(opts, :getaddrs, &getaddrs/2))
     end
   end
 
-  defp resolve_hostname(charlist) do
-    case getaddrs(charlist, :inet) ++ getaddrs(charlist, :inet6) do
+  defp resolve_hostname(charlist, getaddrs) do
+    answers = lookup_both(charlist, getaddrs)
+    v4 = addresses(answers.inet)
+    v6 = addresses(answers.inet6)
+
+    case v4 ++ v6 do
       [] ->
         {:error, :dns_failure}
 
@@ -208,18 +246,38 @@ defmodule Engram.Http.SsrfGuard do
         # Reject if ANY answer is non-public, not merely the one we would pin.
         # A resolver that returns both a public and an internal address for a
         # name is either split-horizon or hostile, and we cannot tell which.
-        if Enum.all?(addresses, &public_address?/1),
-          do: {:ok, hd(addresses)},
-          else: {:error, :private_address}
+        cond do
+          not Enum.all?(addresses, &public_address?/1) -> {:error, :private_address}
+          v4 != [] -> {:ok, v4}
+          true -> {:ok, v6}
+        end
     end
   end
 
-  defp getaddrs(charlist, family) do
-    case :inet.getaddrs(charlist, family) do
-      {:ok, addresses} -> addresses
-      {:error, _} -> []
-    end
+  # Both families at once, under one deadline. A family that misses the
+  # deadline counts as `{:error, :timeout}`; no address at all is a `:dns_failure`.
+  defp lookup_both(charlist, getaddrs) do
+    tasks =
+      Enum.map([:inet, :inet6], fn family -> Task.async(fn -> getaddrs.(charlist, family) end) end)
+
+    [v4, v6] =
+      tasks
+      |> Task.yield_many(@dns_timeout_ms)
+      |> Enum.map(fn {task, result} ->
+        case result || Task.shutdown(task, :brutal_kill) do
+          {:ok, {:ok, addresses}} when is_list(addresses) -> {:ok, addresses}
+          {:ok, {:error, reason}} -> {:error, reason}
+          _ -> {:error, :timeout}
+        end
+      end)
+
+    %{inet: v4, inet6: v6}
   end
+
+  defp addresses({:ok, addresses}), do: addresses
+  defp addresses({:error, _reason}), do: []
+
+  defp getaddrs(charlist, family), do: :inet.getaddrs(charlist, family, @dns_timeout_ms)
 
   # `URI.to_string/1` brackets a host containing ":" itself, so the literal goes
   # in bare. Adding brackets here yields `https://[[::1]]/`.

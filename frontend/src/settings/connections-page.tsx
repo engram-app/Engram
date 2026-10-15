@@ -1,6 +1,5 @@
 import { Plug, Search } from "lucide-react";
 import { useRef, useState } from "react";
-import { Link, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -33,7 +32,6 @@ import {
 import { useIsFreeTier } from "../billing/use-is-free-tier";
 import { TOOL_LABELS } from "../onboarding/onboarding-tools";
 import { ToolMark } from "../onboarding/tool-icon";
-import { settingsTo } from "./settings-hash";
 
 // ── Tier caps ─────────────────────────────────────────────────
 
@@ -49,13 +47,7 @@ function useTierCaps() {
 	return {
 		tier,
 		isFree,
-		// Fail CLOSED while caps are loading. This used to be `?? !isFree`,
-		// which granted the key UI to every paid tier — now that API keys are
-		// Pro-only, that fallback would offer Starter a button the server
-		// refuses.
-		apiWriteEnabled: caps?.api_write_enabled ?? false,
 		obsidianCap: caps ? caps.obsidian_connections : isFree ? 1 : null,
-		mcpCap: caps ? caps.mcp_connections : isFree ? 1 : null,
 	};
 }
 
@@ -288,7 +280,6 @@ function PatSection({
 	pats,
 	total,
 	filtering,
-	canCreate,
 	onRevoke,
 }: {
 	pats: Connection[];
@@ -296,35 +287,18 @@ function PatSection({
 	// rows a search left standing.
 	total: number;
 	filtering: boolean;
-	canCreate: boolean;
 	onRevoke: (pat: Connection) => void;
 }) {
 	const { t, renderedLocale } = useT();
 
 	const [showCreate, setShowCreate] = useState(false);
 	const [newKey, setNewKey] = useState<{ key: string; id: string; name: string } | null>(null);
-	const location = useLocation();
 
 	return (
 		<SettingsSectionCard
 			title={t("API keys ({total})", { total })}
-			headerAction={
-				canCreate ? (
-					<Button onClick={() => setShowCreate(true)}>{t("+ New Key")}</Button>
-				) : undefined
-			}
+			headerAction={<Button onClick={() => setShowCreate(true)}>{t("+ New Key")}</Button>}
 		>
-			{!canCreate && (
-				<aside className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/50 px-4 py-3">
-					<p className="text-muted-foreground text-sm">
-						{t("Upgrade to Pro to create API keys for scripting and external integrations.")}
-					</p>
-					<Button asChild className="shrink-0">
-						<Link to={settingsTo("billing", location.search)}>{t("Upgrade")}</Link>
-					</Button>
-				</aside>
-			)}
-
 			{pats.length === 0 ? (
 				<EmptyState
 					text={
@@ -708,7 +682,8 @@ export default function ConnectionsPage() {
 	const obsTotal = list.filter((c) => c.kind === "obsidian").length;
 	const mcpTotal = list.filter((c) => c.kind === "mcp").length;
 	const obsCount = caps.obsidianCap === null ? `${obsTotal}` : `${obsTotal} / ${caps.obsidianCap}`;
-	const mcpCount = caps.mcpCap === null ? `${mcpTotal}` : `${mcpTotal} / ${caps.mcpCap}`;
+	// Uncapped (#1974): a count, never "n / limit".
+	const mcpCount = `${mcpTotal}`;
 
 	return (
 		<article className="space-y-8">
@@ -855,7 +830,6 @@ export default function ConnectionsPage() {
 				pats={pats}
 				total={list.filter((c) => c.kind === "pat").length}
 				filtering={Boolean(needle)}
-				canCreate={caps.apiWriteEnabled}
 				onRevoke={(p) =>
 					setPendingRevoke({
 						name: p.name ?? t("this key"),

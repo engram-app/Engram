@@ -222,7 +222,6 @@ export default {
 	"Unlimited vaults": "无限仓库",
 	"50 GB attachments": "50 GB 附件",
 	"Cross-vault search": "跨仓库搜索",
-	"API access": "API 访问",
 	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			other:
@@ -787,7 +786,7 @@ export default {
 	"{completed} of {total} done": "已完成 {completed} 个，总共 {total} 个",
 	"Setup guide": "配置指南",
 	"Dismiss {label}": "关闭 {label}",
-	"You're on Free, 1 connection.": "您使用的是免费版，1 个连接。",
+	"You're on the Free plan.": "您使用的是免费版。",
 	"Connect Claude Desktop": "连接 Claude Desktop",
 	"Connect Cursor": "连接 Cursor",
 	"Connect Devin": "连接 Devin",
@@ -980,8 +979,6 @@ export default {
 	"Registered redirects:": "已注册的重定向：",
 	"API keys ({total})": "API 密钥 ({total})",
 	"+ New Key": "+ 新建密钥",
-	"Upgrade to Pro to create API keys for scripting and external integrations.":
-		"升级到 Pro 版本，创建 API 密钥，用于脚本和外部集成。",
 	"No matches.": "未找到匹配项。",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"尚未创建 API 密钥。生成一个密钥，以连接脚本或外部工具。",

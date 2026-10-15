@@ -124,7 +124,9 @@ defmodule EngramWeb.WellKnownController do
           "client_secret_post",
           "client_secret_basic"
         ],
-        scopes_supported: ["mcp"],
+        # `offline_access`: every grant gets a refresh token, and clients that
+        # ask for it by habit are narrowed, not refused (#1974).
+        scopes_supported: ["mcp", "offline_access"],
         # CIMD (IETF draft-ietf-oauth-client-id-metadata-document). Not cosmetic
         # capability signalling: Anthropic's docs say Claude picks CIMD only when
         # the metadata advertises BOTH `"none"` above and this key, so this line

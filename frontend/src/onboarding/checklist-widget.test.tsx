@@ -591,7 +591,9 @@ describe("ChecklistWidget, Free-tier reminder", () => {
 		billingStatusValue.data = { tier: "free", active: false } as Partial<BillingStatus>;
 		render(wrap(<ChecklistWidget />));
 
-		expect(screen.getByText(/free.*1 connection/iu)).toBeInTheDocument();
+		expect(screen.getByText(/You're on the Free plan/iu)).toBeInTheDocument();
+		// #1974: MCP connections are uncapped, so the reminder names no count.
+		expect(screen.queryByText(/1 connection/iu)).toBeNull();
 		const link = screen.getByRole("link", { name: /upgrade/iu });
 		expect(link).toHaveAttribute("href", "/onboard/billing");
 	});
@@ -601,7 +603,7 @@ describe("ChecklistWidget, Free-tier reminder", () => {
 		billingStatusValue.data = { tier: "pro", active: true } as Partial<BillingStatus>;
 		render(wrap(<ChecklistWidget />));
 
-		expect(screen.queryByText(/free.*1 connection/iu)).toBeNull();
+		expect(screen.queryByText(/You're on the Free plan/iu)).toBeNull();
 		expect(screen.queryByRole("link", { name: /upgrade/iu })).toBeNull();
 	});
 });

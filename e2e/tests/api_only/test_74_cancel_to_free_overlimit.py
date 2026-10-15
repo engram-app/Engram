@@ -180,8 +180,8 @@ def test_cancel_pro_to_free_over_limit():
     # grant_test_plan returns the user_id (does an email→id lookup) and
     # lifts §G Free defaults so the e2e harness can hit the API. The
     # caps we override don't affect notes_cap (which is what we're
-    # testing); they only unblock api_write_enabled / api_rps_cap so
-    # the test runner doesn't 429 itself. We DO set the Pro
+    # testing); they only lift api_rps_cap so the test runner doesn't
+    # 429 itself. We DO set the Pro
     # subscription afterwards so Billing.tier/1 returns :pro until the
     # cancel webhook fires.
     user_id = grant_test_plan(email)

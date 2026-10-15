@@ -15,6 +15,7 @@ export type EngramEvent =
 	| "mcp_connect_attempted"
 	| "mcp_connect_succeeded"
 	| "mcp_connect_failed"
+	| "mcp_connect_denied"
 	| "upgrade_link_clicked"
 	| "checklist_action"
 	| "vault_source_picked"
@@ -147,6 +148,7 @@ export const EVENT_SCHEMAS: Record<EngramEvent, Record<string, PropKind>> = {
 	mcp_connect_attempted: { client: "mcp_client" },
 	mcp_connect_succeeded: { client: "mcp_client" },
 	mcp_connect_failed: { client: "mcp_client", reason: "error_code" },
+	mcp_connect_denied: { client: "mcp_client" },
 	upgrade_link_clicked: { source: "upgrade_source" },
 	checklist_action: { item: "checklist_item", action: "checklist_action" },
 	vault_source_picked: { source: "vault_source" },

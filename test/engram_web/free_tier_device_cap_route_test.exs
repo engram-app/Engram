@@ -22,7 +22,7 @@ defmodule EngramWeb.FreeTierDeviceCapRouteTest do
     user = insert(:user) |> ensure_external_id()
     vault = insert(:vault, user: user, is_default: true)
     {:ok, token} = Engram.Auth.Providers.Local.issue_access_token(user.external_id, user.email)
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
     authed = put_req_header(conn, "authorization", "Bearer #{token}")
 
     %{conn: authed, user: user, vault: vault}

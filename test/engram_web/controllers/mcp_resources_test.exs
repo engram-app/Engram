@@ -18,7 +18,7 @@ defmodule EngramWeb.McpResourcesTest do
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
     {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test Vault", Ecto.UUID.generate())
     {:ok, api_key, key_row} = Engram.Accounts.create_api_key(user, "test-key")
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
 
     insert_note!(user, vault, path: "Projects/Engram.md", content: "# Engram\nSECRET-A")
     insert_note!(user, vault, path: "Daily/2026-10-09.md", content: "today")

@@ -251,7 +251,6 @@ export default {
 	"Unlimited vaults": "Coffres illimités",
 	"50 GB attachments": "50 Go de pièces jointes",
 	"Cross-vault search": "Recherche entre les coffres",
-	"API access": "Accès API",
 	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			one: "{count} de tes notes n'est pas consultable. Seules tes {indexed} notes les plus anciennes sont indexées, donc tes notes les plus récentes n'apparaîtront pas dans la recherche.",
@@ -866,7 +865,7 @@ export default {
 	"{completed} of {total} done": "{completed} sur {total} effectués",
 	"Setup guide": "Guide de configuration",
 	"Dismiss {label}": "Fermer {label}",
-	"You're on Free, 1 connection.": "Tu es sur le plan gratuit, 1 connexion.",
+	"You're on the Free plan.": "Tu utilises le plan gratuit.",
 	"Connect Claude Desktop": "Connecter Claude Desktop",
 	"Connect Cursor": "Connecte Cursor",
 	"Connect Devin": "Connecte Devin",
@@ -1070,8 +1069,6 @@ export default {
 	"Registered redirects:": "Redirections enregistrées :",
 	"API keys ({total})": "Clés API ({total})",
 	"+ New Key": "+ Nouvelle clé",
-	"Upgrade to Pro to create API keys for scripting and external integrations.":
-		"Passe à la version Pro pour créer des clés API pour les scripts et les intégrations externes.",
 	"No matches.": "Aucun résultat.",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"Aucune clé API pour le moment. En génère une pour connecter des scripts ou des outils externes.",

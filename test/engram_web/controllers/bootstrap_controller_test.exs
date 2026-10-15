@@ -17,9 +17,7 @@ defmodule EngramWeb.BootstrapControllerTest do
   defp authed_conn(conn) do
     user = insert(:user, onboarding_profile: %{})
     {:ok, raw_key, _api_key} = Accounts.create_api_key(user, "test")
-    # No grant_api_write! — /api/bootstrap is GET-only and RequireApiWriteEnabled
-    # never gates GET/HEAD, so granting the paid feature here would wrongly flip
-    # the asserted free-tier api_write_enabled default (false) to true.
+    # No lift_api_rps_cap!: the free-tier defaults are what is asserted.
     {put_req_header(conn, "authorization", "Bearer #{raw_key}"), user}
   end
 
@@ -62,7 +60,7 @@ defmodule EngramWeb.BootstrapControllerTest do
       # Capabilities slice — free-tier matrix.
       assert body["capabilities"]["tier"] == "free"
       assert body["capabilities"]["limits"]["notes_cap"] == 10_000
-      assert body["capabilities"]["limits"]["api_write_enabled"] == false
+      refute Map.has_key?(body["capabilities"]["limits"], "api_write_enabled")
 
       # Vaults slice — empty for a brand-new user.
       assert body["vaults"]["vaults"] == []

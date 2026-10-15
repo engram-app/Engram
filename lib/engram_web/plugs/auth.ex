@@ -21,8 +21,8 @@ defmodule EngramWeb.Plugs.Auth do
   def init(opts), do: opts
 
   # Every branch loads the subscription once (Billing.with_subscription/1) so
-  # the downstream billing gates (RequireOnboarding, RequireApiRpsBudget,
-  # RequireApiWriteEnabled) reuse it instead of each re-querying.
+  # the downstream billing gates (RequireOnboarding, RequireApiRpsBudget)
+  # reuse it instead of each re-querying.
   def call(conn, _opts) do
     case authenticate(conn) do
       {:ok, user} ->
@@ -54,8 +54,23 @@ defmodule EngramWeb.Plugs.Auth do
         # Alertable counter (the log is grep-only). Coarse bounded reason tag.
         _ = Engram.Auth.emit_rejected(reason, :http)
 
-        Halt.json(conn, 401, %{error: "unauthorized"})
+        conn
+        |> put_bearer_error(reason)
+        |> Halt.json(401, %{error: "unauthorized"})
     end
+  end
+
+  # RFC 6750 §3.1: a bearer that was presented but is expired, malformed or
+  # unknown is `error="invalid_token"`, which tells an OAuth client to refresh
+  # rather than re-authorize from scratch (#1974). No credential at all gets no
+  # error code. `:bearer_error` lets `McpAuthChallenge` merge this into its
+  # discovery challenge instead of choosing one or the other.
+  defp put_bearer_error(conn, :no_auth), do: conn
+
+  defp put_bearer_error(conn, _reason) do
+    conn
+    |> assign(:bearer_error, "invalid_token")
+    |> put_resp_header("www-authenticate", ~s(Bearer error="invalid_token"))
   end
 
   defp authenticate(conn) do

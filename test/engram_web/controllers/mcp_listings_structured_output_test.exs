@@ -19,7 +19,7 @@ defmodule EngramWeb.McpListingsStructuredOutputTest do
     user = insert(:user)
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test Vault", Ecto.UUID.generate())
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
     %{user: user, vault: vault}
   end
 

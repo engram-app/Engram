@@ -37,7 +37,7 @@ defmodule EngramWeb.ConnCase do
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
 
-  defdelegate grant_api_write!(user), to: Engram.ApiEntitlementHelpers
+  defdelegate lift_api_rps_cap!(user), to: Engram.ApiEntitlementHelpers
 
   @doc """
   Ensures the user has an `external_id`, which the Local auth provider needs as
@@ -57,7 +57,7 @@ defmodule EngramWeb.ConnCase do
 
   @doc """
   Test `setup` callback that builds an API-key-authenticated connection:
-  inserts a paid (api_write_enabled) user with a default vault, mints an API
+  inserts a user (api_rps_cap lifted) with a default vault, mints an API
   key, and sets the `Bearer` header. Returns `%{conn, user, vault, api_key}`
   to merge into the test context.
 
@@ -69,7 +69,7 @@ defmodule EngramWeb.ConnCase do
     user = Engram.Factory.insert(:user)
     vault = Engram.Factory.insert(:vault, user: user, is_default: true)
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
     authed = Plug.Conn.put_req_header(conn, "authorization", "Bearer #{api_key}")
     %{conn: authed, user: user, vault: vault, api_key: api_key}
   end

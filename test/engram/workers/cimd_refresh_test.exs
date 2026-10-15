@@ -16,6 +16,8 @@ defmodule Engram.Workers.CimdRefreshTest do
   alias Engram.Repo
   alias Engram.Workers.CimdRefresh
 
+  require Logger
+
   setup :verify_on_exit!
 
   setup do
@@ -43,6 +45,20 @@ defmodule Engram.Workers.CimdRefreshTest do
   defp reload(client), do: Repo.get!(Client, client.client_id, skip_tenant_check: true)
 
   defp aged(days), do: DateTime.add(DateTime.utc_now(), -days * 86_400, :second)
+
+  # The JWKS sweep only covers clients that made a token request recently: a
+  # refresh token's `last_used_at` is that evidence.
+  defp used(client, days_ago \\ 0, attrs \\ []) do
+    insert(
+      :oauth_refresh_token,
+      Keyword.merge(
+        [client_id: client.client_id, user_id: insert(:user).id, last_used_at: aged(days_ago)],
+        attrs
+      )
+    )
+
+    client
+  end
 
   describe "perform/1" do
     # The whole point: nobody authorized, and the document still got re-read.
@@ -128,6 +144,160 @@ defmodule Engram.Workers.CimdRefreshTest do
 
     test "is a no-op with no CIMD clients at all" do
       assert {:ok, %{}} = perform_job(CimdRefresh, %{})
+    end
+  end
+
+  # #1974: the token path must never block on the network once a key exists,
+  # so the JWKS of every CIMD client is refetched in the background.
+  describe "perform/1 with kind=jwks" do
+    @jwks_uri "https://claude.ai/.well-known/jwks.json"
+
+    test "refetches every distinct jwks_uri once and persists the result" do
+      a = [jwks_uri: @jwks_uri] |> cimd_client() |> used()
+
+      b =
+        :oauth_client
+        |> insert(kind: "mcp", cimd_url: "https://claude.ai/other", jwks_uri: @jwks_uri)
+        |> used()
+
+      [kind: "mcp", cimd_url: "https://claude.ai/third"]
+      |> then(&insert(:oauth_client, &1))
+      |> used()
+
+      keys = [%{"kty" => "RSA", "kid" => "k1", "n" => "abc", "e" => "AQAB"}]
+      expect(FetcherMock, :fetch, 1, fn @jwks_uri -> {:ok, %{"keys" => keys}} end)
+
+      assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{"kind" => "jwks"})
+
+      for client <- [a, b] do
+        assert reload(client).jwks_cached == %{"keys" => keys}
+      end
+    end
+
+    # The cron entry: its own worker, so the crontab stays {expr, worker}.
+    test "CimdJwksRefresh runs the same sweep" do
+      [jwks_uri: @jwks_uri] |> cimd_client() |> used()
+      expect(FetcherMock, :fetch, 1, fn @jwks_uri -> {:ok, %{"keys" => []}} end)
+
+      assert {:ok, %{refreshed: 1}} =
+               perform_job(Engram.Workers.CimdJwksRefresh, %{"jitter_ms" => 0})
+    end
+
+    test "a failing vendor keeps its last good keys" do
+      keys = [%{"kty" => "RSA", "kid" => "k1"}]
+
+      client =
+        cimd_client(
+          jwks_uri: @jwks_uri,
+          jwks_cached: %{"keys" => keys},
+          jwks_fetched_at: aged(1)
+        )
+        |> used()
+
+      expect(FetcherMock, :fetch, fn @jwks_uri -> {:error, {:http_status, 503}} end)
+
+      assert {:ok, %{failed: 1}} = perform_job(CimdRefresh, %{"kind" => "jwks"})
+      assert reload(client).jwks_cached == %{"keys" => keys}
+    end
+
+    # Review of #1974: a client nobody has used is not worth a vendor fetch
+    # every 5 min. The token path still fetches on demand if one comes back.
+    test "skips clients idle for 30 days and clients never used" do
+      [jwks_uri: "https://a.example/jwks.json"] |> cimd_client() |> used(1)
+
+      :oauth_client
+      |> insert(
+        kind: "mcp",
+        cimd_url: "https://b.example/c",
+        jwks_uri: "https://b.example/jwks.json"
+      )
+      |> used(31)
+
+      insert(:oauth_client,
+        kind: "mcp",
+        cimd_url: "https://c.example/c",
+        jwks_uri: "https://c.example/jwks.json"
+      )
+
+      expect(FetcherMock, :fetch, 1, fn "https://a.example/jwks.json" ->
+        {:ok, %{"keys" => []}}
+      end)
+
+      assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{"kind" => "jwks"})
+    end
+
+    # Second review #10: one vendor's crash is that vendor's failure, not the
+    # sweep's. The rest still refresh and the sweep line still logs.
+    test "a crash fetching one URI is tallied as failed and the sweep continues" do
+      for i <- 1..3 do
+        :oauth_client
+        |> insert(
+          kind: "mcp",
+          cimd_url: "https://c#{i}.example/c",
+          jwks_uri: "https://c#{i}.example/jwks.json"
+        )
+        |> used()
+      end
+
+      expect(FetcherMock, :fetch, 3, fn
+        "https://c2.example/jwks.json" -> raise "boom"
+        _uri -> {:ok, %{"keys" => []}}
+      end)
+
+      previous = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{refreshed: 2, failed: 1}} = perform_job(CimdRefresh, %{"kind" => "jwks"})
+        end)
+
+      assert log =~ "mcp_jwks_refresh_sweep"
+    end
+
+    # A disconnected grant is not a client anyone is using.
+    test "skips a client whose only recent token is revoked" do
+      [jwks_uri: "https://live.example/jwks.json"] |> cimd_client() |> used(1)
+
+      :oauth_client
+      |> insert(
+        kind: "mcp",
+        cimd_url: "https://gone.example/c",
+        jwks_uri: "https://gone.example/jwks.json"
+      )
+      |> used(1, revoked_at: DateTime.utc_now(:second))
+
+      expect(FetcherMock, :fetch, 1, fn "https://live.example/jwks.json" ->
+        {:ok, %{"keys" => []}}
+      end)
+
+      assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{"kind" => "jwks"})
+    end
+
+    test "runs at most 4 vendor fetches at once" do
+      for i <- 1..8 do
+        :oauth_client
+        |> insert(
+          kind: "mcp",
+          cimd_url: "https://v#{i}.example/c",
+          jwks_uri: "https://v#{i}.example/jwks.json"
+        )
+        |> used()
+      end
+
+      {:ok, gauge} = Agent.start_link(fn -> {0, 0} end)
+
+      expect(FetcherMock, :fetch, 8, fn _uri ->
+        Agent.update(gauge, fn {now, peak} -> {now + 1, max(peak, now + 1)} end)
+        Process.sleep(50)
+        Agent.update(gauge, fn {now, peak} -> {now - 1, peak} end)
+        {:ok, %{"keys" => []}}
+      end)
+
+      assert {:ok, %{refreshed: 8}} = perform_job(CimdRefresh, %{"kind" => "jwks"})
+      {_, peak} = Agent.get(gauge, & &1)
+      assert peak in 2..4
     end
   end
 end

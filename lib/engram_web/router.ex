@@ -65,7 +65,6 @@ defmodule EngramWeb.Router do
     # words: "data loss beats a stale row". Message precedence is worth less.
     plug EngramWeb.Plugs.RequirePluginVersion
     plug EngramWeb.Plugs.RequireApiRpsBudget
-    plug EngramWeb.Plugs.RequireApiWriteEnabled
   end
 
   # RequireSession that still admits API keys: rejects third-party OAuth grants
@@ -103,11 +102,11 @@ defmodule EngramWeb.Router do
   pipeline :oauth_api do
     plug :accepts, ["json"]
 
-    # `purpose: :oauth` is the only telemetry that can report a connector
-    # refused by the limiter rather than by a credential check — that 429 is
-    # deliberately unlogged (see `EngramWeb.Plugs.RateLimit`), so the metric tag
-    # is the whole signal (#1643).
-    plug EngramWeb.Plugs.RateLimit, limit: 10, period: 60_000, purpose: :oauth
+    # Keyed per client on token/revoke and per IP elsewhere (#1974): vendor
+    # backends share IPs, so a per-IP token limit refused every user of a
+    # connector at once. Tagged `purpose: :oauth`; the 429 is deliberately
+    # unlogged, so the metric tag is the whole signal (#1643).
+    plug EngramWeb.Plugs.OAuthRateLimit
 
     # Not all of this pipeline answers JSON. `GET /oauth/authorize` renders
     # HTML on the error paths (OAuthAuthorizeController.render_client_error/2
@@ -500,11 +499,10 @@ defmodule EngramWeb.Router do
   end
 
   # Onboarding scope — same as the user-scoped pipeline above, but WITHOUT
-  # `RequireApiRpsBudget`. Free tier defaults `api_rps_cap=0` (Pricing v2 §G),
-  # which would 429 the very first onboarding write for any Free user
-  # authenticating with an API key — they could never complete onboarding.
-  # Onboarding endpoints are bounded by the Auth-pipe rate limit; per-plan
-  # RPS gating only applies once the user is past onboarding.
+  # `RequireApiRpsBudget`. Every tier's `api_rps_cap` is 30/s (#1974), but an
+  # override of 0 is the per-user kill switch, and onboarding must still
+  # complete for a user so switched off. Onboarding endpoints are bounded by
+  # the Auth-pipe rate limit instead.
   scope "/api", EngramWeb do
     pipe_through [
       :api,

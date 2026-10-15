@@ -23,7 +23,7 @@ defmodule EngramWeb.BillingControllerTest do
   setup %{conn: conn} do
     user = insert(:user)
     {:ok, raw_key, _api_key} = Accounts.create_api_key(user, "test")
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
     conn = put_req_header(conn, "authorization", "Bearer #{raw_key}")
     {:ok, conn: conn, user: user}
   end
@@ -59,7 +59,8 @@ defmodule EngramWeb.BillingControllerTest do
       assert body["subscription"] == nil
       # Bundled connection counts let the cap UI on /link and /oauth/consent
       # decide atCap from a single fetch — a brand-new user has zero of each.
-      assert body["current_connections"] == %{"obsidian" => 0, "mcp" => 0}
+      # No MCP count: MCP connections are uncapped (#1974).
+      assert body["current_connections"] == %{"obsidian" => 0}
       # No prior device revoke → no swap cooldown in flight.
       assert body["device_swap_cooldown_remaining_hours"] == nil
     end
@@ -79,15 +80,16 @@ defmodule EngramWeb.BillingControllerTest do
     end
 
     test "caps reflect free-tier defaults for connection limits", %{conn: conn} do
-      # The shared setup grants api_write_enabled=true via grant_api_write!/1
-      # (PAT auth precondition), so only obsidian/mcp connection caps still
-      # reflect free-tier defaults here. Obsidian is 2 (it tracks
-      # concurrent_devices); MCP stays at 1.
+      # The shared setup lifts api_rps_cap via lift_api_rps_cap!/1; the
+      # connection caps still reflect free-tier defaults here. Obsidian is 2 (it tracks
+      # concurrent_devices). MCP connections are uncapped (#1974), so the
+      # payload carries no MCP cap at all.
       conn = get(conn, "/api/billing/status")
       body = json_response(conn, 200)
       assert body["caps"]["obsidian_connections"] == 2
-      assert body["caps"]["mcp_connections"] == 1
-      assert body["caps"]["api_write_enabled"] == true
+      refute Map.has_key?(body["caps"], "mcp_connections")
+      refute Map.has_key?(body["current_connections"], "mcp")
+      refute Map.has_key?(body["caps"], "api_write_enabled")
     end
 
     test "explicit UserLimitOverride unlocks unlimited connection caps", %{
@@ -102,12 +104,14 @@ defmodule EngramWeb.BillingControllerTest do
         value: %{"v" => -1}
       )
 
+      # A leftover row for the removed `mcp_connections_cap` key (#1974) must
+      # be inert: nothing reads it, nothing crashes on it.
       insert(:user_limit_override, user: user, key: "mcp_connections_cap", value: %{"v" => -1})
 
       conn = get(conn, "/api/billing/status")
       body = json_response(conn, 200)
       assert body["caps"]["obsidian_connections"] == nil
-      assert body["caps"]["mcp_connections"] == nil
+      refute Map.has_key?(body["caps"], "mcp_connections")
     end
   end
 

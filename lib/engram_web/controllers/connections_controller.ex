@@ -15,8 +15,6 @@ defmodule EngramWeb.ConnectionsController do
 
   action_fallback EngramWeb.FallbackController
 
-  plug EngramWeb.Plugs.EnforcePatCreation when action in [:create_pat]
-
   operation(:index,
     operation_id: "connections-list",
     summary: "List active connections",
@@ -89,7 +87,9 @@ defmodule EngramWeb.ConnectionsController do
     operation_id: "connections-create-pat",
     summary: "Create a personal access token",
     tags: ["Connections"],
-    description: "The raw `key` is returned once. Subject to the per-plan PAT creation limit.",
+    description:
+      "The raw `key` is returned once. Any plan can create a key, and it works on every route " <>
+        "(REST, MCP, sync sockets) on every plan, rate limited per user (`api_rps_cap`).",
     request_body: {"PAT name", "application/json", Schemas.CreatePatRequest, required: true},
     responses: [
       created: {"Created (raw key)", "application/json", Schemas.ApiKeyCreated},

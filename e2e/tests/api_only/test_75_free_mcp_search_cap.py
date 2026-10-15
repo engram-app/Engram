@@ -17,10 +17,9 @@ proves the routing against a real server:
   - a non-search MCP tool still works, i.e. we capped searches and not the
     whole server.
 
-Auth is the OAuth device flow (internal JWT), not an API key: Free defaults
-`api_rps_cap` to 0 and `api_write_enabled` to false, so an API-key-authed MCP
-call is rejected by RequireApiRpsBudget long before reaching the search cap.
-Device-flow tokens are the real Free MCP path anyway.
+Auth is the OAuth device flow (internal JWT), the most common Free MCP path.
+An API key would reach the same cap: the meter is charged at the search cost
+site whatever the credential (#1974).
 """
 
 from __future__ import annotations

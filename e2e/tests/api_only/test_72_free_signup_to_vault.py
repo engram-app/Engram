@@ -73,12 +73,9 @@ def test_free_signup_to_first_note():
     _clerk_user_id, clerk_auth, _api_key = provision_clerk_user(
         clerk, email, password, API_URL,
     )
-    # Use Clerk JWT (not the API key) — Free's §G defaults set
-    # api_rps_cap=0 / api_write_enabled=false, which by design blocks all
-    # API-key-authed writes. JWT-authed traffic (i.e. the SPA flow this
-    # test simulates) is exempt from those gates per the RequireApiRpsBudget
-    # plug. We can't call grant_test_plan() here either: this user must
-    # remain Free-tier so /billing/status returns "free" at the end.
+    # Use Clerk JWT (not the API key): this test simulates the SPA flow.
+    # We can't call grant_test_plan() here either: this user must remain
+    # Free-tier so /billing/status returns "free" at the end.
     api = ApiClient(API_URL, clerk_auth)
 
     # ── 2. Accept Free tier (Phase 2 endpoint) ───────────────────────────

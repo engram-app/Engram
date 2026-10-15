@@ -237,7 +237,6 @@ export default {
 	"Unlimited vaults": "보관함 수 제한 없음",
 	"50 GB attachments": "50GB 첨부 파일",
 	"Cross-vault search": "보관함 간 검색",
-	"API access": "API 접근",
 	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			other:
@@ -813,7 +812,7 @@ export default {
 	"{completed} of {total} done": "{completed} / {total} 완료",
 	"Setup guide": "설정 안내",
 	"Dismiss {label}": "{label} 닫기",
-	"You're on Free, 1 connection.": "무료 플랜, 1개의 연결 사용 중입니다.",
+	"You're on the Free plan.": "무료 플랜을 사용 중입니다.",
 	"Connect Claude Desktop": "Claude Desktop 연결",
 	"Connect Cursor": "Cursor 연결",
 	"Connect Devin": "Devin 연결",
@@ -1012,8 +1011,6 @@ export default {
 	"Registered redirects:": "등록된 리디렉션 주소:",
 	"API keys ({total})": "API 키 ({total})",
 	"+ New Key": "새 키 추가",
-	"Upgrade to Pro to create API keys for scripting and external integrations.":
-		"스크립트 및 외부 통합을 위한 API 키를 생성하려면 Pro 버전으로 업그레이드하세요.",
 	"No matches.": "일치하는 항목이 없습니다.",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"아직 API 키가 없습니다. 스크립트나 외부 도구를 연결하려면 하나를 생성하세요.",

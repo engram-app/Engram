@@ -25,8 +25,8 @@ defmodule EngramWeb.BillingController do
   either — this endpoint is the answer to that gap, not a convenience.
 
   Scope is deliberately the limits that ACCUMULATE. Per-request ceilings
-  (`max_file_bytes`) and connection caps (`obsidian_connections_cap`,
-  `mcp_connections_cap` — already served by `/billing/status`) have no "used"
+  (`max_file_bytes`) and the connection cap (`obsidian_connections_cap`,
+  already served by `/billing/status`) have no "used"
   to report and are not here.
 
   Most entries are `{used, limit}` with `limit: null` meaning uncapped,
@@ -130,16 +130,13 @@ defmodule EngramWeb.BillingController do
         end,
       caps: %{
         obsidian_connections: cap_json(Billing.cap(user, :obsidian_connections_cap)),
-        mcp_connections: cap_json(Billing.cap(user, :mcp_connections_cap)),
-        api_write_enabled: Billing.granted?(user, :api_write_enabled),
         vaults: cap_json(Billing.cap(user, :vaults_cap))
       },
       # Bundled into /billing/status so the proactive cap UI on /link and
       # /oauth/consent only needs ONE fetch to decide whether to render the
       # disconnect panel vs the normal flow.
       current_connections: %{
-        obsidian: Connections.count_active(user.id, :obsidian),
-        mcp: Connections.count_active(user.id, :mcp)
+        obsidian: Connections.count_active(user.id, :obsidian)
       },
       # Free-tier swap cooldown: hours remaining until the user is allowed
       # to revoke + add another obsidian device family. `nil` when no

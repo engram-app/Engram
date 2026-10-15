@@ -240,7 +240,6 @@ export default {
 	"Unlimited vaults": "Số lượng kho lưu trữ không giới hạn",
 	"50 GB attachments": "50 GB tệp đính kèm",
 	"Cross-vault search": "Tìm kiếm trên nhiều kho lưu trữ",
-	"API access": "Truy cập API",
 	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
 		{
 			other:
@@ -825,7 +824,7 @@ export default {
 	"{completed} of {total} done": "{completed} trong {total} đã hoàn thành",
 	"Setup guide": "Hướng dẫn thiết lập",
 	"Dismiss {label}": "Bỏ qua {label}",
-	"You're on Free, 1 connection.": "Bạn đang sử dụng gói Free, 1 kết nối.",
+	"You're on the Free plan.": "Bạn đang sử dụng gói miễn phí.",
 	"Connect Claude Desktop": "Kết nối với Claude Desktop",
 	"Connect Cursor": "Kết nối Cursor",
 	"Connect Devin": "Kết nối Devin",
@@ -1028,8 +1027,6 @@ export default {
 	"Registered redirects:": "Đường dẫn chuyển hướng đã đăng ký:",
 	"API keys ({total})": "Khóa API ({total})",
 	"+ New Key": "+ Tạo khóa mới",
-	"Upgrade to Pro to create API keys for scripting and external integrations.":
-		"Nâng cấp lên phiên bản Pro để tạo khóa API cho các script và tích hợp bên ngoài.",
 	"No matches.": "Không có kết quả nào.",
 	"No API keys yet. Generate one to connect scripts or external tools.":
 		"Chưa có khóa API nào. Tạo một khóa để kết nối các script hoặc công cụ bên ngoài.",

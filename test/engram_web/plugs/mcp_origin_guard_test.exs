@@ -37,7 +37,7 @@ defmodule EngramWeb.Plugs.McpOriginGuardTest do
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     {:ok, _vault, _} = Engram.Vaults.register_vault(user, "Test Vault", Ecto.UUID.generate())
     {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "test-key")
-    grant_api_write!(user)
+    lift_api_rps_cap!(user)
 
     %{api_key: api_key}
   end
