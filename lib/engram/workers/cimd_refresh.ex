@@ -83,9 +83,12 @@ defmodule Engram.Workers.CimdRefresh do
     jitter(args)
     uris = jwks_uris()
 
+    # `_nolink` under the app's Task.Supervisor: one vendor's crash is a
+    # `{:exit, _}` tallied as failed, not the sweep's death (second review
+    # #10).
     tally =
-      uris
-      |> Task.async_stream(&refresh_jwks/1,
+      Engram.TaskSupervisor
+      |> Task.Supervisor.async_stream_nolink(uris, &refresh_jwks/1,
         max_concurrency: @jwks_concurrency,
         ordered: false,
         timeout: @jwks_fetch_timeout_ms,

@@ -11,6 +11,8 @@ defmodule Engram.Workers.CimdRefreshTest do
   import Engram.Factory
   import Mox
 
+  require Logger
+
   alias Engram.OAuth.Cimd.FetcherMock
   alias Engram.OAuth.Client
   alias Engram.Repo
@@ -220,6 +222,36 @@ defmodule Engram.Workers.CimdRefreshTest do
       end)
 
       assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{"kind" => "jwks"})
+    end
+
+    # Second review #10: one vendor's crash is that vendor's failure, not the
+    # sweep's. The rest still refresh and the sweep line still logs.
+    test "a crash fetching one URI is tallied as failed and the sweep continues" do
+      for i <- 1..3 do
+        :oauth_client
+        |> insert(
+          kind: "mcp",
+          cimd_url: "https://c#{i}.example/c",
+          jwks_uri: "https://c#{i}.example/jwks.json"
+        )
+        |> used()
+      end
+
+      expect(FetcherMock, :fetch, 3, fn
+        "https://c2.example/jwks.json" -> raise "boom"
+        _uri -> {:ok, %{"keys" => []}}
+      end)
+
+      previous = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{refreshed: 2, failed: 1}} = perform_job(CimdRefresh, %{"kind" => "jwks"})
+        end)
+
+      assert log =~ "mcp_jwks_refresh_sweep"
     end
 
     test "runs at most 4 vendor fetches at once" do
