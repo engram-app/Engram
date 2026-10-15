@@ -62,6 +62,9 @@ defmodule Engram.Legal.Seeder do
     }
   }
 
+  @doc false
+  def version_meta, do: @version_meta
+
   @spec seed() :: :ok
   def seed do
     for {document, versions} <- Manifest.read(),
