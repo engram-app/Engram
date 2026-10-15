@@ -31,6 +31,13 @@ vi.mock("../api/queries", () => ({
 	useOnboardingStatus: () => ({ data: statusRef.current, isLoading: false }),
 }));
 
+// The legal texts load as lazy chunks; Continue enables once both have.
+async function clickContinue() {
+	const button = screen.getByRole("button", { name: /continue/iu });
+	await waitFor(() => expect(button).toBeEnabled());
+	fireEvent.click(button);
+}
+
 function renderPage() {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	return render(
@@ -43,19 +50,21 @@ function renderPage() {
 }
 
 describe("AgreementPage", () => {
-	it("disables Continue until the agreement checkbox is checked", () => {
+	it("disables Continue until the agreement checkbox is checked", async () => {
 		renderPage();
 		const button = screen.getByRole("button", { name: /continue/iu });
+		// Wait for the lazily loaded texts, so only the checkbox gates it.
+		await screen.findByRole("heading", { name: /Terms of Service/iu });
 		expect(button).toBeDisabled();
 
 		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
-		expect(button).not.toBeDisabled();
+		await waitFor(() => expect(button).not.toBeDisabled());
 	});
 
 	it("submits the new version+hash object shape on continue", async () => {
 		renderPage();
 		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
-		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
+		await clickContinue();
 
 		await waitFor(() =>
 			expect(mutate).toHaveBeenCalledWith(
@@ -72,9 +81,9 @@ describe("AgreementPage", () => {
 		// The vendored ToS markdown renders its own "# Terms of Service" heading
 		// inline; assert against that heading specifically (the prose body repeats
 		// the phrase in paragraphs, so an unscoped getByText would multi-match).
-		expect(screen.getByRole("heading", { name: /Terms of Service/iu })).toBeInTheDocument();
+		expect(await screen.findByRole("heading", { name: /Terms of Service/iu })).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
-		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
+		await clickContinue();
 		await waitFor(() =>
 			expect(mutate).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -91,7 +100,7 @@ describe("AgreementPage", () => {
 		mockTrack.mockClear();
 		renderPage();
 		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
-		fireEvent.click(screen.getByRole("button", { name: /continue/iu }));
+		await clickContinue();
 
 		await waitFor(() =>
 			expect(mockTrack).toHaveBeenCalledWith(
@@ -99,6 +108,19 @@ describe("AgreementPage", () => {
 				expect.objectContaining({ step: "agreement" }),
 			),
 		);
+	});
+
+	// The public privacy page is unversioned, so it can differ from the text
+	// whose hash is recorded. The page shows the exact version it accepts.
+	it("shows the privacy version being accepted in-app, not a link", async () => {
+		renderPage();
+		const toggle = screen.getByRole("button", { name: /privacy notice/iu });
+		expect(screen.queryByRole("heading", { name: /Privacy Policy/iu })).toBeNull();
+		fireEvent.click(toggle);
+		expect(await screen.findByRole("heading", { name: /Privacy Policy/iu })).toBeInTheDocument();
+		expect(screen.getByText(/June 20, 2026/u)).toBeInTheDocument();
+		expect(toggle).toHaveAttribute("aria-expanded", "true");
+		expect(screen.queryByRole("link", { name: /^privacy notice$/iu })).toBeNull();
 	});
 
 	it("shows an error and disables continue when the backend names an unbundled version", () => {
@@ -142,7 +164,7 @@ describe("AgreementPage: consent chrome is translated, the legal body is not", (
 				</QueryClientProvider>
 			</LocaleProvider>,
 		);
-		expect(await screen.findByRole("link", { name: "Datenschutzhinweis" })).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Datenschutzhinweis" })).toBeInTheDocument();
 		expect(screen.getByText(/Lies die vollständige Vereinbarung/u)).toBeInTheDocument();
 		expect(
 			screen.getByRole("checkbox", { name: /Ich habe die Nutzungsbedingungen/u }),

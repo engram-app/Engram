@@ -85,6 +85,8 @@ defmodule Engram.Workers.LegalNoticeDispatch do
       })
     )
     |> Enum.chunk_every(@insert_chunk)
-    |> Enum.each(&Oban.insert_all/1)
+    |> Enum.each(&oban().insert_all/1)
   end
+
+  defp oban, do: Application.get_env(:engram, :oban_facade, Oban)
 end

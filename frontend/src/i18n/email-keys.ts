@@ -15,6 +15,13 @@ const PATTERNS = [
 // Whole-line `#` comments, but not a heredoc line opening with `#{...}`.
 const COMMENT = /^\s*#(?!\{).*$/gmu;
 
+// A version with no effective date is silent: no email or notice ever shows
+// its changelog, so it is cut before scanning rather than translated.
+const SILENT_CHANGELOG = new RegExp(
+	String.raw`\beffective_date:\s*nil,\s*changelog:\s*${STRING}`,
+	"gu",
+);
+
 // Web-app glossary terms the emails use. The core passes a glossary term to the
 // model only when the catalog holds it, so without these "vault" came out as a
 // different word in every email. The translate script seeds them from the web
@@ -30,7 +37,7 @@ const EMAIL_SOURCES = [
 function emailEntries(sources: readonly string[]): Entry[] {
 	const keys = new Set<string>();
 	for (const source of sources) {
-		const code = source.replace(COMMENT, "");
+		const code = source.replace(COMMENT, "").replace(SILENT_CHANGELOG, "");
 		for (const re of PATTERNS) {
 			for (const match of code.matchAll(re)) {
 				const key: unknown = JSON.parse(`"${match.groups?.key ?? ""}"`);

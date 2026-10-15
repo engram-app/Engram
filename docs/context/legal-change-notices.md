@@ -11,7 +11,11 @@ version is the whole procedure; the app announces it everywhere.
    backend re-vendor; the cross-repo legal check pairs them).
 2. Add its entry to `@version_meta` in `lib/engram/legal/seeder.ex`:
    - `effective_date` in the future. That date is what triggers every notice.
-     `nil` means effective at once and silent: wording fixes only.
+     `nil` means effective at once and silent. Only for a non-material
+     change that adds no new processing (wording, new explanatory sections,
+     a dropped sub-processor). Anything users must be told about needs a
+     date. A silent version's changelog is never shown, so `email-keys.ts`
+     does not send it for translation.
    - `material: true` if users must accept it to keep using Engram. It then
      needs an `effective_date` at least 30 days after its version date (ToS
      §13). `Seeder.notice_violations/0` fails CI otherwise.
@@ -35,7 +39,16 @@ All of them read one list: `Engram.Onboarding.legal_notices/1` (on
 per document. A version counts once it is announced (has an effective date)
 and unaccepted. A notice-only one drops on its date; a material one stays
 listed after it, so the agreement page can show what changed. A later silent
-wording fix never hides an announced change behind it.
+version never hides an announced change behind it.
+
+Accepting (`POST /api/onboarding/accept-terms`) takes any version whose hash
+matches its `terms_versions` row and that is at or above the floor, not only
+the latest: a browser on a bundle built before a publish accepts the newest
+text it can render (`frontend/src/legal/use-accept-current.ts`), and the banner
+records the version it showed. `Legal.current_version/1` is capped at the
+newest version in the running build's manifest, so a rollback stops offering a
+version that build cannot render; the row stays because acceptances reference
+it.
 
 On the effective date a material change moves the floor
 (`VersionCache.required_floor/2` recomputes when the date changes, so no deploy

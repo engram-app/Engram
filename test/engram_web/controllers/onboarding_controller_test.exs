@@ -180,6 +180,60 @@ defmodule EngramWeb.OnboardingControllerTest do
       assert privacy.version == "2026-05-19"
     end
 
+    # A browser on an older bundle cannot render a version published after it
+    # was built. It accepts the newest one it can render, which is binding as
+    # long as it is not below the required floor.
+    test "accepts a known version older than the current one", %{conn: conn, user: user} do
+      LegalFixtures.insert_version(
+        document: "privacy_policy",
+        version: "2026-10-14",
+        content_hash: "p-new",
+        material: false,
+        effective_date: nil
+      )
+
+      VersionCache.invalidate_all()
+
+      conn =
+        post(conn, "/api/onboarding/accept-terms", %{
+          "tos_version" => "2026-05-19",
+          "tos_hash" => "canonical",
+          "privacy_version" => "2026-05-19",
+          "privacy_hash" => "p"
+        })
+
+      assert json_response(conn, 201)
+      privacy = Enum.find(agreements_for(user), &(&1.document == "privacy_policy"))
+      assert privacy.version == "2026-05-19"
+    end
+
+    test "returns 409 for a known version below the required floor", %{conn: conn, user: user} do
+      # Terms floor is 2026-05-19; 2026-05-15 is a real version with this hash.
+      conn =
+        post(conn, "/api/onboarding/accept-terms", %{
+          "tos_version" => "2026-05-15",
+          "tos_hash" => "canonical",
+          "privacy_version" => "2026-05-19",
+          "privacy_hash" => "p"
+        })
+
+      assert json_response(conn, 409)["error"] == "stale"
+      assert agreements_for(user) == []
+    end
+
+    test "returns 409 for an unknown version", %{conn: conn, user: user} do
+      conn =
+        post(conn, "/api/onboarding/accept-terms", %{
+          "tos_version" => "2026-05-19",
+          "tos_hash" => "canonical",
+          "privacy_version" => "2099-01-01",
+          "privacy_hash" => "p"
+        })
+
+      assert json_response(conn, 409)["error"] == "stale"
+      assert agreements_for(user) == []
+    end
+
     test "returns 422 when fields are missing", %{conn: conn} do
       conn = post(conn, "/api/onboarding/accept-terms", %{"tos_version" => "2026-05-19"})
       assert json_response(conn, 422)["error"] == "missing_fields"

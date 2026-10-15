@@ -10,6 +10,7 @@ defmodule Engram.Legal.Seeder do
   signup). Both run at boot (Application), then VersionCache is invalidated.
   """
   import Ecto.Query
+  alias Engram.Legal.Manifest
   alias Engram.Legal.TermsVersion
   alias Engram.Repo
 
@@ -23,8 +24,9 @@ defmodule Engram.Legal.Seeder do
   # Users are told automatically (`Engram.Workers.LegalNoticeDispatch`): a
   # version with a FUTURE effective_date emails everyone and shows the in-app
   # notice until that date. `effective_date: nil` means effective at once and
-  # silent, which is for wording fixes only. Changing an announced version's
-  # effective_date or material sends the notice again. A material change after a
+  # silent: only for a non-material change that adds no new processing
+  # (wording, new explanatory sections, a dropped sub-processor). Changing an
+  # announced version's effective_date or material sends the notice again. A material change after a
   # document's first version needs an effective_date 30+ days after its
   # version date (ToS §13); `notice_violations/0` enforces it in CI.
   @version_meta %{
@@ -46,13 +48,26 @@ defmodule Engram.Legal.Seeder do
         effective_date: ~D[2026-11-11],
         changelog:
           "App analytics now linked to your account (email, plan, usage counts). The content of your notes is never sent."
+      },
+      # Silent on purpose: no new processing, so no second notice days after
+      # 2026-10-12's. Adds the AI-connectors and government-requests sections
+      # and drops Grafana Cloud (self-hosted since 2026-09-26). The 11-11
+      # analytics date still comes from 2026-10-12 (PersonProperties pins it).
+      "2026-10-14" => %{
+        material: false,
+        effective_date: nil,
+        changelog:
+          "Added how AI assistants connected to Engram receive your notes, and how we handle government requests. Grafana Cloud is no longer a sub-processor."
       }
     }
   }
 
+  @doc false
+  def version_meta, do: @version_meta
+
   @spec seed() :: :ok
   def seed do
-    for {document, versions} <- manifest(),
+    for {document, versions} <- Manifest.read(),
         {version, hash} <- versions do
       meta = meta!(document, version)
 
@@ -124,7 +139,7 @@ defmodule Engram.Legal.Seeder do
 
   @spec verify() :: :ok
   def verify do
-    for {document, versions} <- manifest(), {version, hash} <- versions do
+    for {document, versions} <- Manifest.read(), {version, hash} <- versions do
       row =
         Repo.one(
           from(v in TermsVersion,
@@ -141,11 +156,6 @@ defmodule Engram.Legal.Seeder do
     end
 
     :ok
-  end
-
-  defp manifest do
-    path = Application.app_dir(:engram, "priv/legal/legal-manifest.json")
-    path |> File.read!() |> Jason.decode!()
   end
 
   defp meta!(document, version) do

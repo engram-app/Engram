@@ -43,8 +43,6 @@
 	"Read the full Privacy Policy": "Datenschutzrichtlinie vollständig lesen",
 	"Read the full Terms of Service": "Nutzungsbedingungen vollständig lesen",
 	"Your notes are your AI's memory.": "Deine Notizen sind das Gedächtnis deiner KI.",
-	"Initial version.": "Erste Version.",
-	"Accuracy fixes: scope clarified to cover the app (not just the marketing site); Grafana Cloud added to sub-processors.": "Genauigkeitskorrekturen: Umfang präzisiert, um die App (nicht nur die Marketingseite) abzudecken; Grafana Cloud zu den Unterverarbeitern hinzugefügt.",
 	"App analytics now linked to your account (email, plan, usage counts). The content of your notes is never sent.": "App-Analysen sind jetzt mit deinem Konto verknüpft (E-Mail, Abo, Nutzungszahlen). Der Inhalt deiner Notizen wird nie gesendet.",
 	"Vault": "Vault",
 	"Note": "Notiz",

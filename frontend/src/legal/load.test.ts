@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadVersion, sha256Hex } from "./load";
+import { loadVersion, renderableVersion, sha256Hex } from "./load";
 
 describe("sha256Hex", () => {
 	it("matches canonical lowercase-hex sha256 of UTF-8 bytes", async () => {
@@ -11,11 +11,27 @@ describe("sha256Hex", () => {
 });
 
 describe("loadVersion", () => {
-	it("returns the bundled terms markdown", () => {
-		expect(loadVersion("terms", "2026-05-19")).toMatch(/^# Terms of Service/u);
+	it("loads the bundled terms markdown", async () => {
+		await expect(loadVersion("terms", "2026-05-19")).resolves.toMatch(/^# Terms of Service/u);
 	});
 
-	it("throws for an unknown version", () => {
-		expect(() => loadVersion("terms", "9999-99-99")).toThrow(/missing bundled/u);
+	it("rejects an unknown version", async () => {
+		await expect(loadVersion("terms", "9999-99-99")).rejects.toThrow(/missing bundled/u);
+	});
+});
+
+// A bundle built before a publish cannot render the backend's newest version;
+// it falls back to the newest one it ships that is not newer.
+describe("renderableVersion", () => {
+	it("is the version itself when bundled", () => {
+		expect(renderableVersion("privacy", "2026-10-12")).toBe("2026-10-12");
+	});
+
+	it("is the newest bundled version not newer than the wanted one", () => {
+		expect(renderableVersion("privacy", "2026-10-13")).toBe("2026-10-12");
+	});
+
+	it("is undefined when nothing bundled is that old", () => {
+		expect(renderableVersion("privacy", "2000-01-01")).toBeUndefined();
 	});
 });

@@ -1,6 +1,7 @@
 defmodule Engram.Workers.LegalNoticeDispatchTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
+  import Ecto.Query
 
   alias Engram.Legal.TermsVersion
   alias Engram.LegalFixtures
@@ -40,25 +41,36 @@ defmodule Engram.Workers.LegalNoticeDispatchTest do
     assert length(all_enqueued(worker: LegalNoticeEmail)) == 1
   end
 
+  # Models the real deploy: the 2026-10-12 notice already went out, then the
+  # release carrying 2026-10-14 boots and seeds again. Nobody gets an email.
+  test "deploying the silent 2026-10-14 privacy version emails nobody" do
+    assert :ok = Engram.Legal.Seeder.seed()
+
+    from(v in TermsVersion, where: v.document == "privacy_policy" and v.version == "2026-10-12")
+    |> Repo.update_all([set: [notified_at: DateTime.utc_now()]], skip_tenant_check: true)
+
+    assert :ok = Engram.Legal.Seeder.seed()
+    assert :ok = perform_job(LegalNoticeDispatch, %{})
+    assert email_jobs() == []
+    assert Engram.Legal.required_floor("privacy_policy") == nil
+  end
+
   # The claim and the job inserts commit together. A failed insert must leave
-  # the version unclaimed, or the notice is never sent.
+  # the version unclaimed, or the notice is never sent. The failure is injected
+  # through `Engram.ObanFacade`: a trigger on the shared oban_jobs table took a
+  # table lock that deadlocked (40P01) with concurrently running tests.
   test "a failed job insert rolls back the claim; the next run sends", %{live: live} do
     row = version(version: "2026-10-12", material: false, effective_date: days(29))
 
-    # Transactional DDL: the sandbox rolls the trigger back with the test.
-    Repo.query!("""
-    CREATE FUNCTION pg_temp.refuse_jobs() RETURNS trigger AS $$
-    BEGIN RAISE EXCEPTION 'refused'; END $$ LANGUAGE plpgsql
-    """)
+    Application.put_env(:engram, :oban_facade, Engram.ObanFacadeMock)
+    on_exit(fn -> Application.delete_env(:engram, :oban_facade) end)
+    Mox.expect(Engram.ObanFacadeMock, :insert_all, fn _jobs -> raise "refused" end)
 
-    Repo.query!(
-      "CREATE TRIGGER refuse_jobs BEFORE INSERT ON oban_jobs FOR EACH ROW EXECUTE FUNCTION pg_temp.refuse_jobs()"
-    )
-
-    assert_raise Postgrex.Error, ~r/refused/, fn -> perform_job(LegalNoticeDispatch, %{}) end
+    assert_raise RuntimeError, "refused", fn -> perform_job(LegalNoticeDispatch, %{}) end
     assert reload(row).notified_at == nil
+    assert email_jobs() == []
 
-    Repo.query!("DROP TRIGGER refuse_jobs ON oban_jobs")
+    Application.delete_env(:engram, :oban_facade)
     assert :ok = perform_job(LegalNoticeDispatch, %{})
     assert email_jobs() == [{live.id, "notice", "2026-10-12"}]
   end

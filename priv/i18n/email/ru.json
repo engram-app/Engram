@@ -43,8 +43,6 @@
 	"Read the full Privacy Policy": "Ознакомьтесь с полной политикой конфиденциальности",
 	"Read the full Terms of Service": "Ознакомьтесь с полными условиями использования",
 	"Your notes are your AI's memory.": "Ваши заметки – это память вашего ИИ.",
-	"Initial version.": "Первая версия.",
-	"Accuracy fixes: scope clarified to cover the app (not just the marketing site); Grafana Cloud added to sub-processors.": "Исправления точности: область применения уточнена, охватывает приложение (а не только маркетинговый сайт); Grafana Cloud добавлен в список сторонних обработчиков.",
 	"App analytics now linked to your account (email, plan, usage counts). The content of your notes is never sent.": "Аналитика приложения теперь связана с вашим аккаунтом (электронная почта, тариф, статистика использования). Содержание ваших заметок никогда не передается.",
 	"Vault": "Хранилище",
 	"Note": "Заметка",

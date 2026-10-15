@@ -1,22 +1,31 @@
-import manifest from "./versions/legal-manifest.json" with { type: "json" };
+// Lazy: each historical policy is its own chunk, fetched only when shown.
+const mds = import.meta.glob<string>("./versions/*.md", { query: "?raw", import: "default" });
 
-const mds: Record<string, unknown> = import.meta.glob("./versions/*.md", {
-	query: "?raw",
-	import: "default",
-	eager: true,
-});
+export type LegalDocKind = "terms" | "privacy";
 
 export async function sha256Hex(text: string): Promise<string> {
 	const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
 	return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export function loadVersion(doc: "terms" | "privacy", version: string): string {
-	const text = mds[`./versions/${doc}-${version}.md`];
-	if (typeof text !== "string") {
-		throw new Error(`legal: missing bundled ${doc}-${version}.md — run "bun run sync-theme"`);
-	}
-	return text;
+// The newest version of `doc` this bundle ships that is not newer than
+// `wanted`. Versions are YYYY-MM-DD, so string order is date order.
+export function renderableVersion(doc: LegalDocKind, wanted: string): string | undefined {
+	const prefix = `./versions/${doc}-`;
+	return Object.keys(mds)
+		.filter((path) => path.startsWith(prefix))
+		.map((path) => path.slice(prefix.length, -".md".length))
+		.filter((version) => version <= wanted)
+		.sort()
+		.at(-1);
 }
 
-export { manifest };
+export function loadVersion(doc: LegalDocKind, version: string): Promise<string> {
+	const load = mds[`./versions/${doc}-${version}.md`];
+	if (!load) {
+		return Promise.reject(
+			new Error(`legal: missing bundled ${doc}-${version}.md — run "bun run sync-theme"`),
+		);
+	}
+	return load();
+}

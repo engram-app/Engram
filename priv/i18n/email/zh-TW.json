@@ -43,8 +43,6 @@
 	"Read the full Privacy Policy": "閱讀完整隱私權政策",
 	"Read the full Terms of Service": "閱讀完整服務條款",
 	"Your notes are your AI's memory.": "您的筆記是 AI 的記憶。",
-	"Initial version.": "初始版本。",
-	"Accuracy fixes: scope clarified to cover the app (not just the marketing site); Grafana Cloud added to sub-processors.": "修正準確性：範圍已明確，涵蓋應用程式 (而非僅限行銷網站)；已將 Grafana Cloud 添加到協力廠商。",
 	"App analytics now linked to your account (email, plan, usage counts). The content of your notes is never sent.": "應用程式分析現在與您的帳戶連結 (電子郵件、方案、使用量)。您的筆記內容絕不會被傳送。",
 	"Vault": "儲存庫",
 	"Note": "筆記",

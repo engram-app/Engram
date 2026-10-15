@@ -57,17 +57,12 @@ defmodule EngramWeb.OnboardingController do
         "privacy_version" => pv,
         "privacy_hash" => ph
       }) do
-    # Verify BOTH documents' version + content hash against the canonical
-    # terms_versions table (via the cache). Any mismatch means the app is
-    # showing different text than the backend expects (drift) — refuse with 409
-    # instead of recording bad consent.
-    ok =
-      th == VersionCache.hash_for("terms_of_service", tv) and th != nil and
-        ph == VersionCache.hash_for("privacy_policy", pv) and ph != nil and
-        tv == VersionCache.current_version("terms_of_service") and
-        pv == VersionCache.current_version("privacy_policy")
-
-    if ok do
+    # Each document's version must be a real one (its hash matches the
+    # terms_versions row the manifest seeded) at or above the required floor.
+    # Not necessarily the latest: a browser on a bundle built before a publish
+    # accepts the newest text it can render, which still binds. A mismatch is
+    # drift between the text shown and the backend, so 409 rather than record it.
+    if acceptable?("terms_of_service", tv, th) and acceptable?("privacy_policy", pv, ph) do
       meta = %{
         ip_address: RequestMeta.format_ip(conn.remote_ip),
         user_agent: RequestMeta.get_user_agent(conn)
@@ -98,6 +93,14 @@ defmodule EngramWeb.OnboardingController do
   def accept_terms(conn, _params) do
     conn |> put_status(422) |> json(%{error: "missing_fields"})
   end
+
+  defp acceptable?(document, version, hash) when is_binary(version) and is_binary(hash) do
+    floor = VersionCache.required_floor(document)
+
+    hash == VersionCache.hash_for(document, version) and (is_nil(floor) or version >= floor)
+  end
+
+  defp acceptable?(_document, _version, _hash), do: false
 
   # Free-tier acceptance: user clicked "Continue with Free" on /onboard/billing.
   # Stamps `free_tier_accepted_at` (idempotent — Onboarding.accept_free_tier/1

@@ -43,8 +43,6 @@
 	"Read the full Privacy Policy": "Đọc toàn bộ Chính sách Bảo mật",
 	"Read the full Terms of Service": "Đọc toàn bộ Điều khoản Dịch vụ",
 	"Your notes are your AI's memory.": "Ghi chú của bạn là trí nhớ của AI.",
-	"Initial version.": "Phiên bản đầu tiên.",
-	"Accuracy fixes: scope clarified to cover the app (not just the marketing site); Grafana Cloud added to sub-processors.": "Sửa lỗi độ chính xác: phạm vi được làm rõ để bao gồm ứng dụng (không chỉ trang web quảng cáo); Grafana Cloud được thêm vào danh sách các đối tác xử lý dữ liệu.",
 	"App analytics now linked to your account (email, plan, usage counts). The content of your notes is never sent.": "Thống kê sử dụng ứng dụng giờ đây liên kết với tài khoản của bạn (email, gói, số lần sử dụng). Nội dung ghi chú của bạn không bao giờ được gửi đi.",
 	"Vault": "Kho lưu trữ",
 	"Note": "Ghi chú",

@@ -20,7 +20,16 @@ defmodule Engram.Analytics.PersonProperties do
   alias Engram.Repo
   alias Engram.Vaults.Vault
 
+  # The privacy version that announced identified analytics. Its seeded
+  # effective_date (2026-11-11 in `Engram.Legal.Seeder`) is the "takes effect on
+  # November 11, 2026" date the policy text promises; change one, change both.
+  # Must stay a version with a future-at-publish effective_date giving 30 days'
+  # notice: a nil date would start linking analytics at once, unannounced.
+  # `test/engram/analytics/person_properties_test.exs` enforces it.
   @policy_version "2026-10-12"
+
+  @doc false
+  def policy_version, do: @policy_version
 
   # Identified analytics starts only once the policy announcing it is in
   # effect (its 30-day notice window has run).

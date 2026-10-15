@@ -64,10 +64,28 @@ describe("LegalNoticeBanner", () => {
 	it("a notice-only change is dismissed by recording the current versions", async () => {
 		status([privacyNotice]);
 		renderBanner();
-		fireEvent.click(screen.getByRole("button", { name: /got it/iu }));
+		const button = screen.getByRole("button", { name: /got it/iu });
+		await waitFor(() => expect(button).toBeEnabled());
+		fireEvent.click(button);
 		await waitFor(() =>
 			expect(mutate).toHaveBeenCalledWith(
 				expect.objectContaining({ tos_version: "2026-05-19", privacy_version: "2026-10-12" }),
+			),
+		);
+	});
+
+	// 2026-10-14 is current but silent; the banner shows 2026-10-12's change,
+	// so that is the version "Got it" accepts.
+	it("records acceptance of the version the banner showed, not the current one", async () => {
+		status([privacyNotice]);
+		statusRef.current.current_privacy_version = "2026-10-14";
+		renderBanner();
+		const button = screen.getByRole("button", { name: /got it/iu });
+		await waitFor(() => expect(button).toBeEnabled());
+		fireEvent.click(button);
+		await waitFor(() =>
+			expect(mutate).toHaveBeenCalledWith(
+				expect.objectContaining({ privacy_version: "2026-10-12" }),
 			),
 		);
 	});
