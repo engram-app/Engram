@@ -36,7 +36,7 @@ defmodule Engram.Onboarding do
   # lists a disabled `gemini` row to say so, and its absence here means that
   # slug can never reach a profile even if the UI is bypassed.
   @valid_tools ~w(
-    claude chatgpt grok mistral open_webui lobechat
+    claude chatgpt grok mistral open_webui lobechat muse
     claude_code cursor devin windsurf cline continue opencode github_copilot antigravity
     web_only other_mcp
   )

@@ -58,6 +58,7 @@ export const CHECKLIST_ITEMS = [
 	"mistral",
 	"open_webui",
 	"lobechat",
+	"muse",
 	"claude_code",
 	"cursor",
 	"devin",

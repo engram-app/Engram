@@ -45,7 +45,7 @@ defmodule Engram.Onboarding.ActionTest do
 
     test "accepts every slug shape used by the frontend catalog" do
       slugs =
-        ~w(claude cursor claude_code chatgpt grok mistral open_webui lobechat windsurf cline continue opencode github_copilot other_mcp install_obsidian_plugin)
+        ~w(claude cursor claude_code chatgpt grok mistral open_webui lobechat windsurf cline continue opencode github_copilot muse other_mcp install_obsidian_plugin)
 
       for slug <- slugs do
         cs =
