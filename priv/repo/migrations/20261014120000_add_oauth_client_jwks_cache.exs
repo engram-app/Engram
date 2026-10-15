@@ -2,6 +2,7 @@ defmodule Engram.Repo.Migrations.AddOauthClientJwksCache do
   use Ecto.Migration
 
   # Expand-only: two nullable columns, no backfill, no default (#1974).
+  # `:timestamptz`, not `:utc_datetime` (Squawk prefer-timestamp-tz).
   #
   # The last JWKS we fetched and verified for a CIMD client, and when. A new
   # node or a fresh deploy loads it instead of fetching on the token path, and
@@ -12,7 +13,7 @@ defmodule Engram.Repo.Migrations.AddOauthClientJwksCache do
   def change do
     alter table(:oauth_clients) do
       add :jwks_cached, :map
-      add :jwks_fetched_at, :utc_datetime
+      add :jwks_fetched_at, :timestamptz
     end
   end
 end
