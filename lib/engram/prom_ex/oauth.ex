@@ -24,9 +24,10 @@ defmodule Engram.PromEx.OAuth do
       label set.
 
     * `[:engram, :cimd, :assertion_audience]` →
-      `engram_prom_ex_cimd_assertion_audience_total`, tag `[:aud_form]`, one
-      per `private_key_jwt` assertion checked: `:token_endpoint | :issuer |
-      :trailing_slash | :other` (`Engram.OAuth.Cimd.Jwks.aud_form()`).
+      `engram_prom_ex_cimd_assertion_audience_total`, tags `[:aud_form, :client]`,
+      one per `private_key_jwt` assertion checked: `aud_form` is
+      `Engram.OAuth.Cimd.Jwks.aud_form()`, `client` the bounded
+      `Engram.Analytics.McpClient.family/1` of the CIMD host.
 
   Cardinality contract: never the client id, host or user agent. Those live on
   the `oauth_token_rejected` / `mcp_cimd_fetch_failed` log lines.
@@ -58,8 +59,9 @@ defmodule Engram.PromEx.OAuth do
         counter(
           cimd_prefix ++ [:assertion_audience, :total],
           event_name: [:engram, :cimd, :assertion_audience],
-          description: "private_key_jwt assertions by which of our audiences aud named.",
-          tags: [:aud_form]
+          description:
+            "private_key_jwt assertions by which of our audiences aud named, per client.",
+          tags: [:aud_form, :client]
         ),
         distribution(
           cimd_prefix ++ [:fetch, :duration, :milliseconds],

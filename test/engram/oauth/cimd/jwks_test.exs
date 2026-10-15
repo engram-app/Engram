@@ -131,11 +131,15 @@ defmodule Engram.OAuth.Cimd.JwksTest do
       ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :cimd, :assertion_audience]])
       audiences = [@audience, @issuer]
 
+      # Second review #8: which trailing slash, and for a list whether the
+      # issuer (what rfc7523bis will require) is in it.
       for {aud, form} <- [
             {@audience, :token_endpoint},
             {@issuer, :issuer},
-            {@issuer <> "/", :trailing_slash},
-            {["https://elsewhere", @issuer], :issuer}
+            {@issuer <> "/", :issuer_trailing_slash},
+            {@audience <> "/", :token_endpoint_trailing_slash},
+            {["https://elsewhere", @issuer], :list_with_issuer},
+            {["https://elsewhere", @audience], :list_without_issuer}
           ] do
         assert :ok =
                  Jwks.verify_assertion(
@@ -145,7 +149,7 @@ defmodule Engram.OAuth.Cimd.JwksTest do
                  )
 
         assert_received {[:engram, :cimd, :assertion_audience], ^ref, %{count: 1},
-                         %{aud_form: ^form}}
+                         %{aud_form: ^form, client: "chatgpt"}}
 
         refute_received {[:engram, :cimd, :assertion_audience], ^ref, _, _}
       end

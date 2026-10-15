@@ -65,6 +65,7 @@ defmodule Engram.OAuth.Cimd.Jwks do
   that matters.
   """
 
+  alias Engram.Analytics.McpClient
   alias Engram.Logger.Metadata
   alias Engram.OAuth.Cimd
   alias Engram.OAuth.Cimd.JwksCache
@@ -301,33 +302,49 @@ defmodule Engram.OAuth.Cimd.Jwks do
   defp normalize_aud(aud), do: String.trim_trailing(aud, "/")
 
   # rfc7523bis will require `aud` = our issuer, not the token endpoint. This
-  # counts which form each assertion sends, so we know who breaks when we
-  # tighten: `engram_prom_ex_cimd_assertion_audience_total{aud_form}`, a closed
-  # label set computed once per assertion. A log line only for `:other` (none
+  # counts which form each assertion sends, and from which vendor family, so
+  # we know who breaks when we tighten:
+  # `engram_prom_ex_cimd_assertion_audience_total{aud_form, client}`, closed
+  # label sets computed once per assertion. A log line only for `:other` (none
   # of ours, a refusal), which carries the vendor host and never the raw claim.
   defp log_audience_form(client, aud, audiences) do
     form = audience_form(aud, audiences)
-    :telemetry.execute([:engram, :cimd, :assertion_audience], %{count: 1}, %{aud_form: form})
+    host = Cimd.host_of(client.cimd_url || "")
+
+    :telemetry.execute([:engram, :cimd, :assertion_audience], %{count: 1}, %{
+      aud_form: form,
+      client: McpClient.family(host)
+    })
 
     if form == :other do
       Logger.info(
         "mcp_assertion_audience",
-        Metadata.with_category(:info, :lifecycle,
-          cimd_host: Cimd.host_of(client.cimd_url || ""),
-          aud_form: form
-        )
+        Metadata.with_category(:info, :lifecycle, cimd_host: host, aud_form: form)
       )
     end
   end
 
-  @typedoc "Which of our audience strings an assertion's `aud` named."
-  @type aud_form :: :token_endpoint | :issuer | :trailing_slash | :other
+  @typedoc """
+  Which of our audience strings an assertion's `aud` named. A list is split by
+  whether it carries the issuer, the form rfc7523bis will require.
+  """
+  @type aud_form ::
+          :token_endpoint
+          | :issuer
+          | :token_endpoint_trailing_slash
+          | :issuer_trailing_slash
+          | :list_with_issuer
+          | :list_without_issuer
+          | :other
 
-  # A list names us if any element does; the first such element decides.
-  defp audience_form(aud, audiences) when is_list(aud) do
-    aud
-    |> Enum.map(&audience_form(&1, audiences))
-    |> Enum.find(:other, &(&1 != :other))
+  defp audience_form(aud, [_token_endpoint | rest] = audiences) when is_list(aud) do
+    issuer = List.first(rest)
+
+    cond do
+      not audience_match?(aud, audiences) -> :other
+      issuer && audience_match?(aud, [issuer]) -> :list_with_issuer
+      true -> :list_without_issuer
+    end
   end
 
   defp audience_form(aud, [token_endpoint | rest]) when is_binary(aud) do
@@ -336,7 +353,8 @@ defmodule Engram.OAuth.Cimd.Jwks do
     cond do
       aud == token_endpoint -> :token_endpoint
       aud == issuer -> :issuer
-      audience_match?(aud, [token_endpoint | rest]) -> :trailing_slash
+      normalize_aud(aud) == normalize_aud(token_endpoint) -> :token_endpoint_trailing_slash
+      issuer && normalize_aud(aud) == normalize_aud(issuer) -> :issuer_trailing_slash
       true -> :other
     end
   end
