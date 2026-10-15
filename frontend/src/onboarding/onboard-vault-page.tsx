@@ -23,7 +23,6 @@ import {
 import { useConfig } from "../config-context";
 import LoadingScreen from "../layout/loading-screen";
 import { peekPendingAuthorization } from "../oauth/pending-authorization";
-import { ROUTES } from "../routes";
 import { onboardingDoneTarget } from "./onboarding-next";
 import { SyncStatusPill } from "./sync-status-pill";
 import { useVaultReadyEvents } from "./use-vault-ready-events";
@@ -67,13 +66,15 @@ function VaultStep({
 	);
 	const [mountedAt] = useState(() => Date.now());
 
-	// A plugin-first signup parked its device code on /link. The Obsidian panel
-	// below waits for the plugin's first sync, which cannot happen until that
-	// code is authorized back on /link — so waiting here would deadlock. Once
-	// uses_obsidian is saved the gate admits them; send them straight back.
+	// Someone was pulled in from a screen that is still waiting on them: /link
+	// (plugin-first: the plugin cannot sync until that code is authorized, so
+	// waiting here deadlocks) or /oauth/consent (MCP-first: the client they
+	// came to connect is waiting, and may never be followed by a plugin
+	// install). Once uses_obsidian is saved the gate admits them; send them
+	// straight back.
 	useEffect(() => {
 		const parked = peekPendingAuthorization()?.returnTo;
-		if (obsidianCommitted && parked?.startsWith(ROUTES.DEVICE_LINK)) {
+		if (obsidianCommitted && parked) {
 			navigate(parked, { replace: true });
 		}
 	}, [obsidianCommitted, navigate]);
