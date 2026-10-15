@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, Navigate, useNavigate } from "react-router";
+import { Navigate, useNavigate } from "react-router";
 import { HelpTip } from "@/components/help-tip";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -10,7 +10,6 @@ import AuthPanel from "@/layout/auth-panel";
 import { heading, selectableRow } from "@/lib/ui-classes";
 import { track } from "../analytics/track";
 import { useOnboardingStatus, useSetOnboardingProfile } from "../api/queries";
-import { useIsFreeTier } from "../billing/use-is-free-tier";
 import LoadingScreen from "../layout/loading-screen";
 import { onboardingDoneTarget } from "./onboarding-next";
 import { NO_AI_TOOL, TOOL_ASSISTANTS, TOOL_CODING, type ToolOption } from "./onboarding-tools";
@@ -20,32 +19,15 @@ interface ToolsFormProps {
 	initialTools: string[];
 	isPending: boolean;
 	hasError: boolean;
-	isFree: boolean;
 	onSubmit: (tools: string[]) => Promise<void>;
 }
 
-function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: ToolsFormProps) {
+function ToolsForm({ initialTools, isPending, hasError, onSubmit }: ToolsFormProps) {
 	const { t } = useT();
-	// Free tier is single-select, if the user arrives with multiple already
-	// saved, drop everything except the first so the UI invariant holds from
-	// the first render.
-	const [tools, setTools] = useState<Set<string>>(() => {
-		if (isFree && initialTools.length > 1) {
-			return new Set(initialTools.slice(0, 1));
-		}
-		return new Set(initialTools);
-	});
+	const [tools, setTools] = useState<Set<string>>(() => new Set(initialTools));
 
 	function toggleTool(slug: string) {
 		setTools((prev) => {
-			if (isFree) {
-				// Free tier: clicking a selected tool deselects it; clicking any
-				// other tool replaces the selection entirely.
-				if (prev.has(slug)) {
-					return new Set();
-				}
-				return new Set([slug]);
-			}
 			const next = new Set(prev);
 			if (next.has(slug)) {
 				next.delete(slug);
@@ -83,24 +65,6 @@ function ToolsForm({ initialTools, isPending, hasError, isFree, onSubmit }: Tool
 				</p>
 			</header>
 
-			{isFree ? (
-				<p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-muted-foreground text-sm">
-					<Trans
-						text="Free tier, pick 1 to start. {upgrade} anytime for unlimited connections."
-						slots={{
-							upgrade: (
-								<Link
-									to="/onboard/billing"
-									onClick={() => track("upgrade_link_clicked", { source: "tools_step" })}
-									className="font-medium text-foreground underline underline-offset-4"
-								>
-									{t("Upgrade")}
-								</Link>
-							),
-						}}
-					/>
-				</p>
-			) : null}
 
 			<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
 				<ToolColumn
@@ -220,7 +184,6 @@ export default function OnboardToolsPage() {
 	const navigate = useNavigate();
 	const { data: status, isLoading } = useOnboardingStatus();
 	const setProfile = useSetOnboardingProfile();
-	const isFree = useIsFreeTier();
 	const [mountedAt] = useState(() => Date.now());
 
 	if (isLoading || !status) {
@@ -244,7 +207,6 @@ export default function OnboardToolsPage() {
 			initialTools={status.profile?.tools ?? []}
 			isPending={setProfile.isPending}
 			hasError={setProfile.isError}
-			isFree={isFree}
 			onSubmit={async (tools) => {
 				await setProfile.mutateAsync({ tools });
 				track("onboarding_step_completed", {
