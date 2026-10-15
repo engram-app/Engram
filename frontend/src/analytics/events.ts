@@ -43,7 +43,7 @@ export const CHECKOUT_TIERS = ["starter", "pro"] as const;
 
 // Where an "Upgrade" link was clicked. The wizard's tools step and the
 // post-wizard checklist both send Free users to /onboard/billing.
-export const UPGRADE_SOURCES = ["tools_step", "checklist"] as const;
+export const UPGRADE_SOURCES = ["checklist"] as const;
 
 // Every row the checklist can render: vault, discord, the Obsidian plugin and
 // one per selectable tool slug (onboarding-tools.ts). Enumerated because a
