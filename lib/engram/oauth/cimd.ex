@@ -83,7 +83,7 @@ defmodule Engram.OAuth.Cimd do
   @permanent_fetch_errors ~w(not_json invalid_json body_too_large no_keys_array
                              private_address invalid_url url_too_long not_https
                              missing_host userinfo_present fragment_present
-                             unsupported_port dns_nxdomain)a
+                             unsupported_port)a
 
   # Reasons that are already a bounded atom and become their own metric label.
   @labelled_fetch_errors @permanent_fetch_errors ++

@@ -24,7 +24,7 @@ defmodule Engram.Http.SsrfGuardTest do
       url = "https://nonexistent.invalid/jwks.json"
 
       assert :ok = SsrfGuard.validate_url(url)
-      assert {:error, :dns_nxdomain} = SsrfGuard.resolve(url)
+      assert {:error, :dns_failure} = SsrfGuard.resolve(url)
     end
 
     test "accepts a well-formed https URL" do
@@ -147,11 +147,12 @@ defmodule Engram.Http.SsrfGuardTest do
       assert {:error, :private_address} = SsrfGuard.resolve("https://localhost/d.json")
     end
 
-    # Second review of #1974: NXDOMAIN is an answer (the name does not exist,
-    # retrying will not change that), so it is permanent; a resolver that timed
-    # out or failed is transient.
-    test "reports dns_nxdomain for a name that does not exist" do
-      assert {:error, :dns_nxdomain} =
+    # Every DNS failure is transient. OTP's :inet.getaddrs reports
+    # `{:error, :nxdomain}` for SERVFAIL, REFUSED, an unreachable resolver and
+    # timeouts too (third review of #1974), so "the name does not exist"
+    # cannot be told apart from "the resolver is broken".
+    test "reports a transient dns_failure for a name that does not resolve" do
+      assert {:error, :dns_failure} =
                SsrfGuard.resolve("https://this-host-does-not-exist.invalid/d.json")
     end
   end
@@ -180,14 +181,9 @@ defmodule Engram.Http.SsrfGuardTest do
       assert micros < 1_300_000
     end
 
-    test "NXDOMAIN on both families is permanent" do
-      assert {:error, :dns_nxdomain} =
-               SsrfGuard.resolve("https://gone.example/x", getaddrs: resolver(%{}))
-    end
-
-    for error <- [:timeout, :servfail, :econnrefused] do
+    for error <- [:nxdomain, :timeout, :einval] do
       test "a #{error} on a family with no other answer is transient" do
-        answers = %{inet: {:error, unquote(error)}}
+        answers = %{inet: {:error, unquote(error)}, inet6: {:error, unquote(error)}}
 
         assert {:error, :dns_failure} =
                  SsrfGuard.resolve("https://flaky.example/x", getaddrs: resolver(answers))
