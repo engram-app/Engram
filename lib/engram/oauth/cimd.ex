@@ -189,6 +189,7 @@ defmodule Engram.OAuth.Cimd do
     with :ok <- rate_limit(url, existing),
          {:ok, document} <- timed_fetch(url, existing),
          :ok <- validate_document(document, url),
+         :ok <- check_jwks_address(document),
          {:ok, negotiated} <- negotiate(document),
          {:ok, client} <- store(url, negotiated, existing) do
       {:ok, client}
@@ -196,6 +197,31 @@ defmodule Engram.OAuth.Cimd do
       {:error, reason} ->
         log_unless_rate_limited("mcp_cimd_rejected", url, reason)
         {:error, reason}
+    end
+  end
+
+  # The jwks_uri's ADDRESS, at creation and on every refresh, not only pinned
+  # at fetch time: keys named at a private, link-local, loopback or metadata
+  # address are refused here, legibly, instead of failing every later token
+  # exchange. Only a non-public answer refuses. A DNS failure does not: a
+  # resolver blip must not become a permanent verdict on the document, and the
+  # fetch-time pin still guards the request itself.
+  defp check_jwks_address(%{"jwks_uri" => uri} = document) when is_binary(uri) do
+    with true <- Client.document_permits_assertion?(document),
+         {:error, :private_address} <- jwks_resolver().(uri) do
+      {:error, :jwks_uri_unfetchable}
+    else
+      _ -> :ok
+    end
+  end
+
+  defp check_jwks_address(_document), do: :ok
+
+  # Swappable so tests stub DNS (`Engram.Test.StubResolver`).
+  defp jwks_resolver do
+    case Application.get_env(:engram, :cimd_jwks_resolver) do
+      {module, fun} -> &apply(module, fun, [&1])
+      nil -> &SsrfGuard.resolve/1
     end
   end
 
@@ -489,8 +515,9 @@ defmodule Engram.OAuth.Cimd do
       # this check does not fail loudly later: `SsrfGuard` refuses it at the
       # transport, `jwks.ex` maps that to `:jwks_unavailable`, and that reason
       # is TRANSIENT, so the connector retries a permanent misconfiguration
-      # forever. DNS stays out on purpose: a resolver blip must not become a
-      # permanent verdict on the document.
+      # forever. DNS stays out of THIS check on purpose (a resolver blip must
+      # not become a permanent verdict); the address itself is checked right
+      # after, in check_jwks_address/1, where only a non-public answer refuses.
       Client.document_permits_assertion?(document) and
           SsrfGuard.validate_url(document["jwks_uri"]) != :ok ->
         {:error, :jwks_uri_unfetchable}
