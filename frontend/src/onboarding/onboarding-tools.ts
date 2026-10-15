@@ -29,6 +29,7 @@ export const TOOL_ASSISTANTS: ToolOption[] = [
 	{ slug: "mistral", label: untranslated("Mistral") },
 	{ slug: "open_webui", label: untranslated("Open WebUI") },
 	{ slug: "lobechat", label: untranslated("LobeChat") },
+	{ slug: "muse", label: untranslated("Meta Muse") },
 	// Listed-but-disabled on purpose: people look for Gemini, and a silent
 	// absence reads as an Engram gap. The Gemini app has no custom-MCP-connector
 	// UI (that is Gemini Enterprise / Antigravity), so we say so and point at the

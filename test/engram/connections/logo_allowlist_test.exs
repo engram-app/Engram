@@ -315,6 +315,22 @@ defmodule Engram.Connections.LogoAllowlistTest do
              LogoAllowlist.resolve(nil, "http://localhost:1/cb", "LobeHub")
   end
 
+  # Observed in prod 2026-10-14: a DCR with normalized_name "muse" and redirect
+  # origin https://agent.meta.ai, logged by the unattributed-client tripwire.
+  test "resolve verifies Meta Muse by agent.meta.ai and carries the muse slug" do
+    assert %{verified: true, display_name: "Meta Muse", slug: "muse"} =
+             LogoAllowlist.resolve(nil, "https://agent.meta.ai/oauth/callback", "Muse")
+  end
+
+  # A self-asserted name must not buy the Meta mark: only the agent.meta.ai
+  # redirect (the code is delivered to Meta) attributes a client as Muse.
+  test "the Muse name alone never resolves to the muse slug" do
+    for name <- ["Muse", "Meta Muse"] do
+      assert %{verified: false, logo: nil, slug: nil} =
+               LogoAllowlist.resolve(nil, "http://localhost:1/cb", name)
+    end
+  end
+
   # Self-hosted LobeChat redirects to the operator's own domain, so it must stay
   # unverified — the cloud entry above must not leak the badge to every install.
   test "self-hosted LobeChat on an operator domain stays unverified" do

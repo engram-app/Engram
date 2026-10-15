@@ -142,12 +142,17 @@ defmodule Engram.Connections.LogoAllowlist do
     # the row already exists in onboarding and this host ticks it. The observed
     # `client_name` is "LobeHub", which is why the host map has to carry the
     # mapping — the name does not derive to `lobechat`.
-    "app.lobehub.com" => %{logo: nil, display_name: "LobeChat", slug: "lobechat"}
+    "app.lobehub.com" => %{logo: nil, display_name: "LobeChat", slug: "lobechat"},
+    # Meta Muse, observed in prod 2026-10-14 (DCR client_name "Muse", redirect
+    # origin https://agent.meta.ai). Brand mark comes from the frontend by slug.
+    "agent.meta.ai" => %{logo: nil, display_name: "Meta Muse", slug: "muse"}
   }
 
   # Slugs a client may self-report via `client_name`. `web_only` / `other_mcp`
-  # are questionnaire answers, not products. No client may claim them.
-  @derivable_slugs Engram.Onboarding.valid_tools() -- ~w(web_only other_mcp)
+  # are questionnaire answers, not products. No client may claim them. `muse` is
+  # a hosted-only product with one vendor redirect, so a name claiming it gets
+  # nothing: only the `agent.meta.ai` host attributes Muse.
+  @derivable_slugs Engram.Onboarding.valid_tools() -- ~w(web_only other_mcp muse)
 
   # Normalized names that don't match their catalog slug. Keys are the exact
   # string `normalize_name/1` produces, so a `mcp_dcr_unattributed_client` Loki

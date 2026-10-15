@@ -835,6 +835,7 @@ export default {
 	"Connect Mistral": "Kết nối Mistral",
 	"Connect Open WebUI": "Kết nối Open WebUI",
 	"Connect LobeChat": "Kết nối LobeChat",
+	"Connect Meta Muse": "Kết nối Meta Muse",
 	"Connect Devin Desktop (Windsurf)": "Kết nối Devin Desktop (Windsurf)",
 	"Connect Cline": "Kết nối Cline",
 	"Connect Continue": "Kết nối Continue",

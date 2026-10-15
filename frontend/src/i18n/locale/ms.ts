@@ -838,6 +838,7 @@ export default {
 	"Connect Mistral": "Sambung Mistral",
 	"Connect Open WebUI": "Sambung Open WebUI",
 	"Connect LobeChat": "Sambung LobeChat",
+	"Connect Meta Muse": "Sambung Meta Muse",
 	"Connect Devin Desktop (Windsurf)": "Sambung Devin Desktop (Windsurf)",
 	"Connect Cline": "Sambung Cline",
 	"Connect Continue": "Sambung Continue",

@@ -798,6 +798,7 @@ export default {
 	"Connect Mistral": "連接 Mistral",
 	"Connect Open WebUI": "連接 Open WebUI",
 	"Connect LobeChat": "連接 LobeChat",
+	"Connect Meta Muse": "連接 Meta Muse",
 	"Connect Devin Desktop (Windsurf)": "連接 Devin Desktop (Windsurf)",
 	"Connect Cline": "連接 Cline",
 	"Connect Continue": "連接 Continue",

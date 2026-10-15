@@ -626,7 +626,7 @@ defmodule Engram.OnboardingTest do
 
       tools =
         ~w(claude chatgpt grok mistral open_webui lobechat
-           claude_code cursor windsurf cline continue opencode github_copilot
+           claude_code cursor windsurf cline muse continue opencode github_copilot
            web_only other_mcp)
 
       assert {:ok, updated} = Onboarding.set_profile(user, %{uses_obsidian: false, tools: tools})

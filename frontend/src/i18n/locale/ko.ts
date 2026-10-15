@@ -823,6 +823,7 @@ export default {
 	"Connect Mistral": "Mistral 연결",
 	"Connect Open WebUI": "Open WebUI 연결",
 	"Connect LobeChat": "LobeChat 연결",
+	"Connect Meta Muse": "Meta Muse 연결",
 	"Connect Devin Desktop (Windsurf)": "Devin Desktop (Windsurf) 연결",
 	"Connect Cline": "Cline 연결",
 	"Connect Continue": "Continue 연결",

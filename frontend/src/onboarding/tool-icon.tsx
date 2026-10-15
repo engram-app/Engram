@@ -22,6 +22,7 @@ import grokText from "@lobehub/icons-static-svg/icons/grok-text.svg?raw";
 import lobeChatColor from "@lobehub/icons-static-svg/icons/lobehub-color.svg?raw";
 import lobeChatText from "@lobehub/icons-static-svg/icons/lobehub-text.svg?raw";
 import mcpMark from "@lobehub/icons-static-svg/icons/mcp.svg?raw";
+import metaAiColor from "@lobehub/icons-static-svg/icons/metaai-color.svg?raw";
 import mistralColor from "@lobehub/icons-static-svg/icons/mistral-color.svg?raw";
 import mistralText from "@lobehub/icons-static-svg/icons/mistral-text.svg?raw";
 import openaiMark from "@lobehub/icons-static-svg/icons/openai.svg?raw";
@@ -56,6 +57,9 @@ const BRANDS: Record<string, Brand> = {
 	mistral: { mark: mistralColor, wordmark: mistralText },
 	open_webui: { mark: openWebUIMark, wordmark: openWebUIText },
 	lobechat: { mark: lobeChatColor, wordmark: lobeChatText },
+	// Meta AI mark, no wordmark: the package ships no Muse asset, and the
+	// "Meta AI" wordmark would mislabel the row. Falls back to "Meta Muse".
+	muse: { mark: metaAiColor },
 	// Skipping claudecode-text deliberately: the lobehub wordmark is a pixel-
 	// block stylized "CODE" that visually clashes with the row's other clean
 	// wordmarks. Fall through to plain "Claude Code" in our typography.
