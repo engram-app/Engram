@@ -13,6 +13,7 @@ defmodule EngramWeb.OAuthTokenController do
   alias Engram.OAuth.Cimd.Jwks
   alias Engram.OAuth.Cimd.JwksCache
   alias EngramWeb.OAuthMetadata
+  alias EngramWeb.RemoteIp
   alias EngramWeb.RequestMeta
 
   # The JWKS source and the grant's user live in the request process (they are
@@ -24,7 +25,7 @@ defmodule EngramWeb.OAuthTokenController do
   def exchange(conn, %{"grant_type" => "authorization_code"} = params) do
     with {:ok, client_id, secret, assertion} <- client_credentials(conn, params),
          :ok <- OAuth.authenticate_client(client_id, secret, auth_opts(conn, assertion)) do
-      ip = RequestMeta.format_ip(conn.remote_ip)
+      ip = RequestMeta.format_ip(RemoteIp.resolve(conn))
 
       # Feed back the RESOLVED client_id: it may have arrived via HTTP Basic
       # rather than the body, and the grant check compares the code's client
@@ -42,7 +43,7 @@ defmodule EngramWeb.OAuthTokenController do
          :ok <- OAuth.authenticate_client(client_id, secret, auth_opts(conn, assertion)) do
       case params["refresh_token"] do
         raw when is_binary(raw) and raw != "" ->
-          ip = RequestMeta.format_ip(conn.remote_ip)
+          ip = RequestMeta.format_ip(RemoteIp.resolve(conn))
 
           OAuth.rotate_refresh_token(raw, client_id, ip: ip)
           |> grant_result(conn, :refresh_token, client_id)
