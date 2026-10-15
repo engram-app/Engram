@@ -65,7 +65,6 @@ function ToolsForm({ initialTools, isPending, hasError, onSubmit }: ToolsFormPro
 				</p>
 			</header>
 
-
 			<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
 				<ToolColumn
 					title={t("AI assistants")}
