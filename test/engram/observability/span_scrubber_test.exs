@@ -179,11 +179,11 @@ defmodule Engram.Observability.SpanScrubberTest do
         :"client.address" => "203.0.113.77"
       }
 
-      Tracer.with_span "GET", %{kind: :server, attributes: attrs} do
+      Tracer.with_span "span-scrubber-test", %{kind: :server, attributes: attrs} do
         :ok
       end
 
-      assert_receive {:span, record}, 2_000
+      assert_receive {:span, span(name: "span-scrubber-test") = record}, 2_000
       exported = record |> span(:attributes) |> :otel_attributes.map() |> inspect()
 
       for secret <- ["Canary", "Secret", "canary-token", "203.0.113.77"] do

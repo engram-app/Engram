@@ -34,7 +34,7 @@ defmodule Engram.Observability.ClientSpanTest do
                attributes: %{"engram.surface" => "web"}
              })
 
-    assert_receive {:span, span_record}, 2_000
+    assert_receive {:span, span(name: "browser.live_sync.render") = span_record}, 2_000
     s = span(span_record)
 
     # Same trace, parented to P.

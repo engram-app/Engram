@@ -33,9 +33,8 @@ defmodule Engram.Sync.BroadcastFanoutSpanTest do
 
     assert_receive %Phoenix.Socket.Broadcast{event: "note_changed"}
 
-    assert_receive {:span, span_record}, 2_000
+    assert_receive {:span, span(name: "sync.fanout") = span_record}, 2_000
     s = span(span_record)
-    assert s[:name] == "sync.fanout"
     assert :otel_attributes.map(s[:attributes])["engram.event_type"] == "note_changed"
   end
 
@@ -50,9 +49,8 @@ defmodule Engram.Sync.BroadcastFanoutSpanTest do
 
     assert_receive %Phoenix.Socket.Broadcast{event: "note_changed"}
 
-    assert_receive {:span, span_record}, 2_000
+    assert_receive {:span, span(name: "sync.fanout") = span_record}, 2_000
     s = span(span_record)
-    assert s[:name] == "sync.fanout"
   end
 
   test "emit_from/4 wraps the broadcast_from dispatch in a sync.fanout span" do
@@ -60,9 +58,8 @@ defmodule Engram.Sync.BroadcastFanoutSpanTest do
 
     Broadcast.emit_from(self(), topic, "note_changed", %{"id" => "n3"})
 
-    assert_receive {:span, span_record}, 2_000
+    assert_receive {:span, span(name: "sync.fanout") = span_record}, 2_000
     s = span(span_record)
-    assert s[:name] == "sync.fanout"
     assert :otel_attributes.map(s[:attributes])["engram.event_type"] == "note_changed"
   end
 end
