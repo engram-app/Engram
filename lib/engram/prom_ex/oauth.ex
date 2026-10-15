@@ -27,7 +27,7 @@ defmodule Engram.PromEx.OAuth do
       `engram_prom_ex_cimd_assertion_audience_total`, tags `[:aud_form, :client]`,
       one per `private_key_jwt` assertion checked: `aud_form` is
       `Engram.OAuth.Cimd.Jwks.aud_form()`, `client` the bounded
-      `Engram.Analytics.McpClient.family/1` of the CIMD host.
+      `Engram.Analytics.McpClient.host_family/1` of the CIMD host (exact match).
 
   Cardinality contract: never the client id, host or user agent. Those live on
   the `oauth_token_rejected` / `mcp_cimd_fetch_failed` log lines.

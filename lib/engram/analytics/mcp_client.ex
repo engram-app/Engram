@@ -38,6 +38,32 @@ defmodule Engram.Analytics.McpClient do
 
   def family(_text), do: "other"
 
+  # Vendor hosts that publish CIMD documents or JWKS, by exact host. A host is
+  # attacker-chosen (anyone can publish a client document anywhere), so a
+  # vendor label from a host needs an exact match: substring matching let
+  # `claude.ai.evil.example` count as Claude in our metrics (third review of
+  # #1974).
+  @vendor_hosts %{
+    "chatgpt.com" => "chatgpt",
+    "openai.com" => "chatgpt",
+    "claude.ai" => "claude",
+    "claude.com" => "claude",
+    "anthropic.com" => "claude",
+    "cursor.com" => "cursor",
+    "cursor.sh" => "cursor",
+    "windsurf.com" => "windsurf",
+    "codeium.com" => "windsurf",
+    "vscode.dev" => "vscode",
+    "zed.dev" => "zed"
+  }
+
+  @doc "The family of a known vendor HOST, matched exactly; else \"other\"."
+  @spec host_family(term()) :: String.t()
+  def host_family(host) when is_binary(host),
+    do: Map.get(@vendor_hosts, String.downcase(host), "other")
+
+  def host_family(_host), do: "other"
+
   @known_scopes ~w(mcp offline_access openid profile email)
 
   @doc """
@@ -66,7 +92,7 @@ defmodule Engram.Analytics.McpClient do
   """
   @spec of_client(Client.t() | nil) :: {String.t(), String.t() | nil}
   def of_client(%Client{cimd_url: url}) when is_binary(url),
-    do: {family(Cimd.host_of(url)), "cimd"}
+    do: {host_family(Cimd.host_of(url)), "cimd"}
 
   def of_client(%Client{client_name: name}), do: {family(name), "dcr"}
   def of_client(_client), do: {"other", nil}

@@ -326,7 +326,7 @@ defmodule Engram.OAuth.Cimd.JwksCache do
   # domain an unauthenticated caller registered (review #11).
   defp track_fetch_failed(jwks_uri, result, cause) do
     Engram.Analytics.track_anonymous("mcp_oauth_jwks_fetch_failed", %{
-      client: McpClient.family(Cimd.host_of(jwks_uri)),
+      client: McpClient.host_family(Cimd.host_of(jwks_uri)),
       reason: Atom.to_string(Cimd.fetch_reason_label(cause)),
       phase: phase_of(cause),
       result: Atom.to_string(result)

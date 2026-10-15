@@ -313,7 +313,7 @@ defmodule Engram.OAuth.Cimd.Jwks do
 
     :telemetry.execute([:engram, :cimd, :assertion_audience], %{count: 1}, %{
       aud_form: form,
-      client: McpClient.family(host)
+      client: McpClient.host_family(host)
     })
 
     if form == :other do
