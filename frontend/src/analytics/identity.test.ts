@@ -1,5 +1,5 @@
 import type { PostHog } from "posthog-js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setAnalyticsClient } from "./client";
 import { forgetUser, identifyUser, setPersonProperties, stopCapture } from "./identity";
 
@@ -23,6 +23,10 @@ beforeEach(() => {
 	forgetUser();
 	optedOut = false;
 	vi.clearAllMocks();
+});
+
+afterEach(() => {
+	vi.unstubAllGlobals();
 });
 
 describe("setPersonProperties", () => {
@@ -59,6 +63,5 @@ describe("setPersonProperties", () => {
 
 		identifyUser("id-1");
 		expect(posthog.setPersonProperties).not.toHaveBeenCalled();
-		vi.unstubAllGlobals();
 	});
 });

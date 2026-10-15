@@ -40,8 +40,11 @@ defmodule EngramWeb.UsersController do
     attrs = Map.take(params, ["display_name", "locale"])
 
     with {:ok, opt_out} <- cast_opt_out(params),
-         {:ok, updated} <- Accounts.update_profile(user, attrs),
-         {:ok, updated} <- apply_opt_out(updated, opt_out) do
+         {:ok, updated} <-
+           Engram.Repo.transact(fn ->
+             with {:ok, updated} <- Accounts.update_profile(user, attrs),
+                  do: apply_opt_out(updated, opt_out)
+           end) do
       json(conn, %{user: user_json(updated)})
     end
   end

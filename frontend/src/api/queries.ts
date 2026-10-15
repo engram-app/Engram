@@ -1128,6 +1128,10 @@ export function useUpdateProfile(options?: {
 			analytics_opt_out?: boolean;
 		}) => api.patch<{ user: User }>("/me", body),
 		retry: options?.retry ?? false,
+		// An opt-out save can commit and still fail on the wire: re-read what the
+		// server stored so capture follows it.
+		onError: (_err, body) =>
+			"analytics_opt_out" in body ? qc.invalidateQueries({ queryKey: ["me"] }) : undefined,
 		onSuccess: (data, body) => {
 			// Write back only the fields this call sent: a slower response must not
 			// undo a newer edit to a different field.

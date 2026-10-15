@@ -6,6 +6,8 @@ defmodule Engram.AnalyticsTest do
   alias Engram.Observability.PostHog
   alias Engram.Workers.PostHogErasure
 
+  import Ecto.Query, only: [where: 2]
+
   setup do
     prior_key = Application.get_env(:engram, :posthog_key)
     prior_host = Application.get_env(:engram, :posthog_host)
@@ -150,25 +152,58 @@ defmodule Engram.AnalyticsTest do
     end
   end
 
-  describe "cancel_reerase/1" do
-    # A user who opts back in within the re-erase window must not lose the
-    # data they produced after consenting again.
-    test "cancels the delayed re-erase, keeps the immediate erasure and other users' jobs" do
+  describe "cancel_pending_erasure/1" do
+    # A user who opts back in must not lose what they send after consenting
+    # again. Any erasure still pending (scheduled re-erase, queued, or retrying
+    # through a PostHog outage) would delete the whole person when it runs.
+    test "cancels every pending erasure of the user, in any waiting state" do
       enable_erasure()
       user = insert(:user, email: "back@example.com", external_id: nil)
       other = insert(:user, email: "other@example.com", external_id: nil)
       :ok = Analytics.forget(user)
       :ok = Analytics.forget(other)
+      mine = %{"distinct_ids" => [PostHog.analytics_id("back@example.com")]}
 
-      assert :ok = Analytics.cancel_reerase(user)
+      {:ok, retrying} = PostHogErasure.enqueue(mine["distinct_ids"])
+      Repo.update_all(where(Oban.Job, id: ^retrying.id), set: [state: "retryable"])
 
-      mine = [PostHog.analytics_id("back@example.com")]
-      jobs = all_enqueued(worker: PostHogErasure)
+      assert :ok = Analytics.cancel_pending_erasure(user)
 
-      assert [%{state: "available"}] =
-               Enum.filter(jobs, &(&1.args == %{"distinct_ids" => mine}))
+      states =
+        Oban.Job
+        |> where(worker: ^inspect(PostHogErasure))
+        |> Repo.all()
+        |> Enum.group_by(&(&1.args == mine), & &1.state)
 
-      assert 2 == Enum.count(jobs, &(&1.args != %{"distinct_ids" => mine}))
+      assert Enum.sort(states[true]) == ["cancelled", "cancelled", "cancelled"]
+      assert Enum.sort(states[false]) == ["available", "scheduled"]
+    end
+  end
+
+  describe "set_analytics_opt_out/1" do
+    # Erasure is the legal half of an opt-out: a repeat (user re-toggling, or an
+    # operator re-running a privacy@ request) must queue it again, not no-op.
+    test "a repeat opt-out queues erasure again and keeps the original time" do
+      enable_erasure()
+      user = insert(:user, email: "again@example.com", external_id: nil)
+      {:ok, first} = Engram.Accounts.set_analytics_opt_out(user)
+      {:ok, second} = Engram.Accounts.set_analytics_opt_out(first)
+
+      assert second.analytics_opt_out_at == first.analytics_opt_out_at
+      assert length(all_enqueued(worker: PostHogErasure)) == 4
+    end
+  end
+
+  describe "forget/1 misconfiguration" do
+    test "logs an error when capture is on but erasure is not configured" do
+      Application.delete_env(:engram, :posthog_erasure_api_key)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :ok = Analytics.forget(insert(:user, email: "m@example.com"))
+        end)
+
+      assert log =~ "erasure is not configured"
     end
   end
 end

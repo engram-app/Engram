@@ -175,6 +175,23 @@ describe("useUpdateProfile", () => {
 	});
 });
 
+describe("useUpdateProfile failure", () => {
+	// A save can commit and still fail on the wire. The toggle and the identify
+	// hook must show what the server stored, not what the tab assumed.
+	it("refetches ['me'] when an analytics opt-out save fails", async () => {
+		qc.setQueryData(["me"], { user: { analytics_opt_out: false } });
+		const invalidate = vi.spyOn(qc, "invalidateQueries");
+		patch.mockRejectedValue(new Error("502"));
+
+		const { result } = renderHook(() => useUpdateProfile(), { wrapper });
+		await act(async () => {
+			await result.current.mutateAsync({ analytics_opt_out: true }).catch(() => undefined);
+		});
+
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["me"] });
+	});
+});
+
 describe("inline billing mutations", () => {
 	it("useCancelSubscription POSTs and invalidates billing caches", async () => {
 		post.mockResolvedValue({ scheduled_change: { effective_at: "2026-07-01T00:00:00Z" } });
