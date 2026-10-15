@@ -116,7 +116,6 @@ describe("track property validation", () => {
 
 describe("track onboarding interaction events", () => {
 	it.each([
-		["upgrade_link_clicked", { source: "tools_step" }],
 		["upgrade_link_clicked", { source: "checklist" }],
 		["checklist_action", { item: "chatgpt", action: "guide_opened" }],
 		["checklist_action", { item: "join_discord", action: "dismissed" }],

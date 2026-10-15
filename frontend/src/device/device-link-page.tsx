@@ -515,8 +515,9 @@ function DeviceLinkPage() {
 						className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-foreground text-sm"
 					>
 						<Trans
-							text="Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected."
+							text="Heads up: you've reached your Free plan's device limit ({count}). Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected."
 							slots={{
+								count: capCheck.limit,
 								device: <strong>{describeObsidianDevice(existingObsidian, t, tn)}</strong>,
 								upgrade: (
 									<a

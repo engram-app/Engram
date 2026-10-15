@@ -1,6 +1,6 @@
 import { Link, useLocation } from "react-router";
 import { useT } from "@/i18n/locale-provider";
-import { Trans } from "@/i18n/trans";
+import { useBillingStatus } from "../api/queries";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
 import { settingsTo } from "../settings/settings-hash";
 import FilesPanel from "./files-panel";
@@ -12,6 +12,8 @@ export default function AppSidebarPanel() {
 	const { t } = useT();
 	const { view, sidebarOpen } = useRailView();
 	const showFreeFooter = useIsFreeTier();
+	// The served cap, never a guess: an absent or uncapped value names no number.
+	const deviceCap = useBillingStatus().data?.caps?.obsidian_connections;
 	const location = useLocation();
 
 	return (
@@ -23,19 +25,14 @@ export default function AppSidebarPanel() {
 			</div>
 			{showFreeFooter && (
 				<div className="border-border border-t px-3 py-2 text-muted-foreground text-xs">
-					<Trans
-						text="Free tier: 1 connection. {upgrade}"
-						slots={{
-							upgrade: (
-								<Link
-									to={settingsTo("billing", location.search)}
-									className="font-medium text-foreground underline underline-offset-4"
-								>
-									{t("Upgrade")}
-								</Link>
-							),
-						}}
-					/>
+					{typeof deviceCap === "number" &&
+						`${t("Free plan device limit: {count}.", { count: deviceCap })} `}
+					<Link
+						to={settingsTo("billing", location.search)}
+						className="font-medium text-foreground underline underline-offset-4"
+					>
+						{t("Upgrade")}
+					</Link>
 				</div>
 			)}
 		</div>

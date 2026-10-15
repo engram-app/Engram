@@ -123,16 +123,34 @@ describe("AppSidebar — Free-tier footer", () => {
 		billingEnabled = true;
 	});
 
-	it("renders the Free footer with an Upgrade link when tier=free", () => {
+	it("renders the Free footer with the real device cap and an Upgrade link", () => {
+		billingStatusValue = {
+			data: {
+				tier: "free",
+				active: false,
+				caps: { obsidian_connections: 2, vaults: 1 },
+			} as Partial<BillingStatus>,
+			isLoading: false,
+		};
+		renderSidebar();
+
+		expect(screen.getByText(/free plan device limit: 2\./iu)).toBeInTheDocument();
+		expect(screen.queryByText(/1 connection/iu)).toBeNull();
+		const link = screen.getByRole("link", { name: /upgrade/iu });
+		expect(link).toHaveAttribute("href", "/#settings/billing");
+	});
+
+	// A cap the response does not carry (or an uncapped override) must not be
+	// replaced by a guessed number: the Upgrade link alone is still true.
+	it("names no number when the device cap is absent", () => {
 		billingStatusValue = {
 			data: { tier: "free", active: false } as Partial<BillingStatus>,
 			isLoading: false,
 		};
 		renderSidebar();
 
-		expect(screen.getByText(/free tier.*1 connection/iu)).toBeInTheDocument();
-		const link = screen.getByRole("link", { name: /upgrade/iu });
-		expect(link).toHaveAttribute("href", "/#settings/billing");
+		expect(screen.queryByText(/device limit/iu)).toBeNull();
+		expect(screen.getByRole("link", { name: /upgrade/iu })).toBeInTheDocument();
 	});
 
 	it("does not render the footer when tier=pro", () => {
@@ -142,7 +160,7 @@ describe("AppSidebar — Free-tier footer", () => {
 		};
 		renderSidebar();
 
-		expect(screen.queryByText(/free tier.*1 connection/iu)).toBeNull();
+		expect(screen.queryByText(/device limit/iu)).toBeNull();
 		expect(screen.queryByRole("link", { name: /upgrade/iu })).toBeNull();
 	});
 
@@ -150,7 +168,7 @@ describe("AppSidebar — Free-tier footer", () => {
 		billingStatusValue = { data: undefined, isLoading: true };
 		renderSidebar();
 
-		expect(screen.queryByText(/free tier.*1 connection/iu)).toBeNull();
+		expect(screen.queryByText(/device limit/iu)).toBeNull();
 		expect(screen.queryByRole("link", { name: /upgrade/iu })).toBeNull();
 	});
 
@@ -162,7 +180,7 @@ describe("AppSidebar — Free-tier footer", () => {
 		};
 		renderSidebar();
 
-		expect(screen.queryByText(/free tier.*1 connection/iu)).toBeNull();
+		expect(screen.queryByText(/device limit/iu)).toBeNull();
 		expect(screen.queryByRole("link", { name: /upgrade/iu })).toBeNull();
 	});
 });

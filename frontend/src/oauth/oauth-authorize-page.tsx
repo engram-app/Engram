@@ -484,9 +484,10 @@ export default function OAuthAuthorizePage() {
 								className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-foreground text-sm"
 							>
 								<Trans
-									text="Heads up — your Free plan allows 1 active {kind}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected."
+									text="Heads up: your Free plan's device limit is {count}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected."
 									slots={{
-										kind: clientKind === "obsidian" ? t("device") : t("external connection"),
+										// Only Obsidian clients reach this (MCP is uncapped, #1974).
+										count: capCheck.limit,
 										name: <strong>{existingPeer.name ?? t("your existing connection")}</strong>,
 										upgrade: (
 											<a
@@ -636,9 +637,10 @@ export default function OAuthAuthorizePage() {
 							</DialogTitle>
 							<DialogDescription>
 								<Trans
-									text="Your Free plan allows 1 active {kind}. Connecting {client} will disconnect {name}, which will stop having access to your Engram."
+									text="Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram."
 									slots={{
-										kind: clientKind === "obsidian" ? t("device") : t("external connection"),
+										// Only Obsidian clients reach this (MCP is uncapped, #1974).
+										count: capCheck.limit,
 										client: <strong>{clientName}</strong>,
 										name: <strong>{existingPeer?.name ?? t("your existing connection")}</strong>,
 									}}

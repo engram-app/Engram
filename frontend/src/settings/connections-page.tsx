@@ -43,11 +43,11 @@ function useTierCaps() {
 	const { data } = useBillingStatus();
 	const tier = data?.tier ?? "free";
 	const isFree = useIsFreeTier();
-	const caps = data?.caps;
 	return {
 		tier,
 		isFree,
-		obsidianCap: caps ? caps.obsidian_connections : isFree ? 1 : null,
+		// No caps yet means no "n / limit", never a guessed number.
+		obsidianCap: data?.caps?.obsidian_connections ?? null,
 	};
 }
 

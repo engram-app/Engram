@@ -180,8 +180,8 @@ export default {
 	"File too large": "Tệp quá lớn",
 	"Upgrade to upload larger files.": "Nâng cấp để tải lên các tệp lớn hơn.",
 	"Device sync limit reached": "Giới hạn đồng bộ hóa thiết bị đã đạt",
-	"Your Free plan syncs files between 1 device at a time. Disconnect the device you're not using to switch, or upgrade to sync more devices.":
-		"Gói miễn phí của bạn đồng bộ hóa tệp giữa 1 thiết bị tại một thời điểm. Ngắt kết nối thiết bị bạn không sử dụng để chuyển đổi, hoặc nâng cấp để đồng bộ hóa nhiều thiết bị hơn.",
+	"You've reached the number of devices your Free plan syncs at a time. Disconnect a device you're not using to switch, or upgrade to sync more devices.":
+		"Bạn đã đạt giới hạn số lượng thiết bị được đồng bộ hóa cùng lúc của gói Free. Ngắt kết nối một thiết bị bạn không sử dụng để chuyển đổi, hoặc nâng cấp để đồng bộ hóa nhiều thiết bị hơn.",
 	"Device swap cooldown active": "Chế độ chờ chuyển đổi thiết bị đang hoạt động",
 	"Wait before swapping devices, or upgrade.": "Chờ trước khi chuyển đổi thiết bị, hoặc nâng cấp.",
 	"Daily AI search limit reached": "Giới hạn tìm kiếm AI hàng ngày đã đạt",
@@ -190,9 +190,9 @@ export default {
 	"Free plan: text attachments only": "Gói miễn phí: chỉ hỗ trợ tệp văn bản",
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"Gói miễn phí của bạn có thể đính kèm các tệp văn bản (.md, .txt, .csv, .html, code). Nâng cấp để đính kèm hình ảnh, âm thanh, video, PDF và tài liệu văn phòng.",
-	"External connection limit reached": "Đã đạt giới hạn kết nối ngoài",
-	"Your Free plan allows 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.":
-		"Gói miễn phí của bạn cho phép 1 kết nối ngoài đang hoạt động. Hủy kết nối đó để sử dụng kết nối này, hoặc nâng cấp để có kết nối không giới hạn.",
+	"Device limit reached": "Đã đạt giới hạn thiết bị",
+	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
+		"Bạn đã đạt giới hạn thiết bị trên gói Free. Hủy kết nối một thiết bị bạn không sử dụng để kết nối thiết bị này, hoặc nâng cấp để kết nối nhiều thiết bị hơn.",
 	"Account suspended": "Tài khoản đã bị đình chỉ",
 	"Contact support to restore access.": "Liên hệ bộ phận hỗ trợ để khôi phục quyền truy cập.",
 	"Account setup incomplete": "Thiết lập tài khoản chưa hoàn tất",
@@ -451,8 +451,8 @@ export default {
 		"Thiết lập tài khoản của bạn chưa hoàn tất. {setup}, sau đó nhấp vào Liên kết trong Obsidian lần nữa.",
 	"You recently swapped devices. Your Free plan allows 1 swap every 24 hours — you can swap again in {hours}h. {upgrade} to connect as many devices as you like.":
 		"Bạn vừa chuyển thiết bị. Gói miễn phí của bạn cho phép chuyển đổi 1 lần mỗi 24 giờ — bạn có thể chuyển đổi lại sau {hours} giờ. {upgrade} để kết nối bao nhiêu thiết bị tùy thích.",
-	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
-		"Lưu ý — gói miễn phí của bạn đồng bộ hóa tệp giữa 1 thiết bị tại một thời điểm. Kết nối thiết bị này sẽ ngắt kết nối {device}, thiết bị này sẽ ngừng nhận các thay đổi đồng bộ. {upgrade} để giữ cả hai thiết bị kết nối.",
+	"Heads up: you've reached your Free plan's device limit ({count}). Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
+		"Lưu ý: bạn đã đạt giới hạn thiết bị của gói Free ({count}). Kết nối thiết bị này sẽ ngắt kết nối {device}, thiết bị này sẽ ngừng nhận các thay đổi đồng bộ. {upgrade} để giữ cả hai thiết bị kết nối.",
 	"{count} minutes ago": { other: "Cách đây {count} phút" },
 	"{count} hours ago": { other: "{count} giờ trước" },
 	"{count} days ago": { other: "{count} ngày trước" },
@@ -604,7 +604,7 @@ export default {
 	"{count} days left in your trial.": {
 		other: "Còn {count} ngày trong thời gian dùng thử của bạn.",
 	},
-	"Free tier: 1 connection. {upgrade}": "Phiên bản miễn phí: 1 kết nối. {upgrade}",
+	"Free plan device limit: {count}.": "Giới hạn thiết bị của gói Free: {count}.",
 	"Collapse sidebar": "Thu gọn thanh bên",
 	"No vaults": "Không có kho lưu trữ",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -772,8 +772,6 @@ export default {
 	"This app is requesting access to your Engram.":
 		"Ứng dụng này đang yêu cầu quyền truy cập vào Engram của bạn.",
 	"Signed in as {email}.": "Đã đăng nhập với tư cách là {email}.",
-	device: "thiết bị",
-	"external connection": "kết nối ngoài",
 	"your existing connection": "kết nối hiện tại của bạn",
 	"Which vaults can {client} access?": "Kho lưu trữ nào mà {client} có thể truy cập?",
 	"All vaults selected": "Tất cả kho lưu trữ đã chọn",
@@ -789,11 +787,11 @@ export default {
 	"Taking you to setup so you can finish connecting {app}.":
 		"Đang đưa bạn đến trang thiết lập để bạn có thể hoàn tất kết nối {app}.",
 	"Authorize {client}": "Xác thực {client}",
-	"Heads up — your Free plan allows 1 active {kind}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
-		"Lưu ý: gói miễn phí của bạn cho phép 1 {kind} đang hoạt động. Phê duyệt sẽ ngắt kết nối {name}, điều này sẽ khiến {name} mất quyền truy cập. {upgrade} để giữ cả hai kết nối.",
+	"Heads up: your Free plan's device limit is {count}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
+		"Lưu ý: giới hạn thiết bị của gói Free của bạn là {count}. Xác nhận sẽ ngắt kết nối {name}, thiết bị này sẽ ngừng truy cập. {upgrade} để giữ cả hai thiết bị kết nối.",
 	"Name this connection {optional}": "Đặt tên cho kết nối này là {optional}",
-	"Your Free plan allows 1 active {kind}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
-		"Gói miễn phí của bạn cho phép 1 {kind} đang hoạt động. Kết nối {client} sẽ ngắt kết nối {name}, điều này sẽ khiến {name} mất quyền truy cập vào Engram của bạn.",
+	"Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
+		"Giới hạn thiết bị của gói Free của bạn là {count}. Kết nối {client} sẽ ngắt kết nối {name}, thiết bị này sẽ ngừng truy cập vào Engram.",
 	"What will you use Engram for?": "Bạn sẽ sử dụng Engram cho mục đích gì?",
 	"Review the Terms": "Xem lại Điều khoản",
 	"privacy notice": "Thông báo về quyền riêng tư",
@@ -865,8 +863,6 @@ export default {
 	"Coding tools": "Công cụ lập trình",
 	"Another MCP client": "Một ứng dụng MCP khác",
 	"Why {tool} can't be connected": "Tại sao {tool} không thể kết nối",
-	"Free tier, pick 1 to start. {upgrade} anytime for unlimited connections.":
-		"Phiên bản miễn phí, chọn 1 để bắt đầu. {upgrade} bất cứ lúc nào để có kết nối không giới hạn.",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Danh sách này chưa đầy đủ, chọn {client} nếu công cụ của bạn không có trong đây.",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":

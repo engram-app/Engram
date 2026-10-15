@@ -95,36 +95,41 @@ beforeEach(() => {
 	billingEnabled = true;
 });
 
+// #1981: MCP connections are uncapped on every tier, so Free no longer limits
+// the tools step to one pick or pitches an upgrade for "unlimited connections".
 describe("OnboardToolsPage: Free tier", () => {
-	it("shows the Free-tier banner with an Upgrade link to /onboard/billing", () => {
+	it("does not render a single-select banner or an Upgrade link", () => {
 		render(wrap(<OnboardToolsPage />));
 
-		expect(screen.getByText(/free tier.*pick 1 to start/iu)).toBeInTheDocument();
-		const link = screen.getByRole("link", { name: /upgrade/iu });
-		expect(link).toHaveAttribute("href", "/onboard/billing");
+		expect(screen.queryByText(/pick 1 to start/iu)).toBeNull();
+		expect(screen.queryByText(/unlimited connections/iu)).toBeNull();
+		expect(screen.queryByRole("link", { name: /upgrade/iu })).toBeNull();
 	});
 
-	it("reports which surface the Upgrade click came from", () => {
+	it("allows multi-select (no auto-deselect)", () => {
 		render(wrap(<OnboardToolsPage />));
 
-		fireEvent.click(screen.getByRole("link", { name: /upgrade/iu }));
-
-		expect(mockTrack).toHaveBeenCalledWith("upgrade_link_clicked", { source: "tools_step" });
-	});
-
-	it("single-select: picking a second tool deselects the first", () => {
-		render(wrap(<OnboardToolsPage />));
-
-		// Click Claude first.
 		const claude = screen.getByLabelText(/^Claude$/iu);
 		fireEvent.click(claude);
-		expect(claude).toHaveAttribute("data-state", "checked");
-
-		// Then click Cursor, Claude should deselect.
 		const cursor = screen.getByLabelText(/^Cursor$/iu);
 		fireEvent.click(cursor);
+
+		expect(claude).toHaveAttribute("data-state", "checked");
 		expect(cursor).toHaveAttribute("data-state", "checked");
-		expect(claude).toHaveAttribute("data-state", "unchecked");
+	});
+
+	it("keeps every saved tool instead of trimming to the first", () => {
+		onboardingStatus = {
+			...onboardingStatus,
+			data: {
+				...(onboardingStatus.data as OnboardingStatus),
+				profile: { uses_obsidian: false, tools: ["claude", "cursor"] },
+			},
+		};
+		render(wrap(<OnboardToolsPage />));
+
+		expect(screen.getByLabelText(/^Claude$/iu)).toHaveAttribute("data-state", "checked");
+		expect(screen.getByLabelText(/^Cursor$/iu)).toHaveAttribute("data-state", "checked");
 	});
 });
 
@@ -141,7 +146,7 @@ describe("OnboardToolsPage: Self-host (billing disabled)", () => {
 
 	it("does not render the Free-tier single-select banner", () => {
 		render(wrap(<OnboardToolsPage />));
-		expect(screen.queryByText(/free tier.*pick 1 to start/iu)).toBeNull();
+		expect(screen.queryByText(/pick 1 to start/iu)).toBeNull();
 	});
 
 	it("allows multi-select (no auto-deselect)", () => {
@@ -231,7 +236,7 @@ describe("OnboardToolsPage: Paid tier", () => {
 
 	it("does not render the Free banner", () => {
 		render(wrap(<OnboardToolsPage />));
-		expect(screen.queryByText(/free tier.*pick 1 to start/iu)).toBeNull();
+		expect(screen.queryByText(/pick 1 to start/iu)).toBeNull();
 	});
 
 	it("allows multi-select (no auto-deselect)", () => {

@@ -164,8 +164,8 @@ export default {
 	"File too large": "文件过大",
 	"Upgrade to upload larger files.": "升级以上传更大的文件。",
 	"Device sync limit reached": "设备同步限制已达",
-	"Your Free plan syncs files between 1 device at a time. Disconnect the device you're not using to switch, or upgrade to sync more devices.":
-		"免费版每次最多同步 1 个设备。断开不使用的设备以切换，或升级以同步更多设备。",
+	"You've reached the number of devices your Free plan syncs at a time. Disconnect a device you're not using to switch, or upgrade to sync more devices.":
+		"您已达到免费计划同时同步的设备数量。断开您不使用的设备以切换，或升级以同步更多设备。",
 	"Device swap cooldown active": "设备切换冷却中",
 	"Wait before swapping devices, or upgrade.": "等待后再切换设备，或升级。",
 	"Daily AI search limit reached": "每日 AI 搜索次数已达",
@@ -174,9 +174,9 @@ export default {
 	"Free plan: text attachments only": "免费版：仅支持文本附件",
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"免费版支持附加文本文件（.md, .txt, .csv, .html, 代码）。升级以附加图片、音频、视频、PDF 和 Office 文档。",
-	"External connection limit reached": "外部连接已达到上限",
-	"Your Free plan allows 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.":
-		"您的免费版允许 1 个活动外部连接。断开一个以使用此连接，或升级以获得无限连接。",
+	"Device limit reached": "已达到设备限制",
+	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
+		"您已达到免费计划的设备数量限制。断开您不使用的设备以连接此设备，或升级以连接更多设备。",
 	"Account suspended": "账号已暂停",
 	"Contact support to restore access.": "联系客服恢复访问权限。",
 	"Account setup incomplete": "账号设置未完成",
@@ -424,8 +424,8 @@ export default {
 		"你的账号设置尚未完成。{setup}，然后再次点击 Obsidian 中的链接。",
 	"You recently swapped devices. Your Free plan allows 1 swap every 24 hours — you can swap again in {hours}h. {upgrade} to connect as many devices as you like.":
 		"你最近更换了设备。你的免费版允许每 24 小时更换一次设备 — 你可以在 {hours} 小时后再次更换。{upgrade} 以连接任意数量的设备。",
-	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
-		"提示 — 你的免费版一次只同步一个设备的文件。连接此设备将断开 {device} 的连接，后者将停止接收同步更改。{upgrade} 以保持两者的连接。",
+	"Heads up: you've reached your Free plan's device limit ({count}). Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
+		"提示：您已达到免费计划的设备数量限制 ({count})。连接此设备将断开 {device}，后者将停止接收同步更改。{upgrade} 以保持两者连接。",
 	"{count} minutes ago": { other: "{count}分钟前" },
 	"{count} hours ago": { other: "{count} 小时前" },
 	"{count} days ago": { other: "{count}天前" },
@@ -569,7 +569,7 @@ export default {
 	Language: "语言",
 	"My Vault": "我的仓库",
 	"{count} days left in your trial.": { other: "试用期剩余{count}天。" },
-	"Free tier: 1 connection. {upgrade}": "免费版：1个连接。{upgrade}",
+	"Free plan device limit: {count}.": "免费计划的设备数量限制：{count}。",
 	"Collapse sidebar": "隐藏侧边栏",
 	"No vaults": "没有仓库",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -735,8 +735,6 @@ export default {
 		"已断开连接 '{name}'，但授权新连接失败。请重新从 {client} 发起请求 — 目前没有此类活动连接。",
 	"This app is requesting access to your Engram.": "此应用正在请求访问您的 Engram。",
 	"Signed in as {email}.": "已登录：{email}。",
-	device: "设备",
-	"external connection": "外部连接",
 	"your existing connection": "您的现有连接",
 	"Which vaults can {client} access?": "{client} 可以访问哪些仓库？",
 	"All vaults selected": "已选择所有仓库",
@@ -752,11 +750,11 @@ export default {
 	"Taking you to setup so you can finish connecting {app}.":
 		"将您带到设置页面，以便完成连接 {app}。",
 	"Authorize {client}": "授权 {client}",
-	"Heads up — your Free plan allows 1 active {kind}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
-		"提示：您的免费版允许 1 个活跃的 {kind}。批准会断开 {name}，它将失去访问权限。{upgrade} 以保持两者连接。",
+	"Heads up: your Free plan's device limit is {count}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
+		"提示：您的免费计划的设备数量限制为 {count}。批准将断开 {name}，后者将失去访问权限。{upgrade} 以保持两者连接。",
 	"Name this connection {optional}": "将此连接命名为 {optional}",
-	"Your Free plan allows 1 active {kind}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
-		"您的免费版允许 1 个活跃的 {kind}。连接 {client} 会断开 {name}，它将失去访问 Engram 的权限。",
+	"Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
+		"您的免费计划的设备数量限制为 {count}。连接 {client} 将断开 {name}，后者将失去访问您的 Engram 的权限。",
 	"What will you use Engram for?": "您将如何使用 Engram？",
 	"Review the Terms": "查看条款",
 	"privacy notice": "隐私声明",
@@ -826,8 +824,6 @@ export default {
 	"Coding tools": "编程工具",
 	"Another MCP client": "另一个 MCP 客户端",
 	"Why {tool} can't be connected": "为什么无法连接 {tool}",
-	"Free tier, pick 1 to start. {upgrade} anytime for unlimited connections.":
-		"免费版，选择 1 个开始。随时选择 {upgrade} 以获得无限连接。",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"并非完整列表，如果您的工具不在列表中，请选择 {client}。",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
