@@ -149,7 +149,8 @@ add wasm32-unknown-unknown`).
 zstd contexts are thread-local: once compression is on, each scheduler
 thread (normal and dirty) that ever sealed or opened a zstd row keeps one
 compression and one decompression context resident for the life of the node.
-They are reused, not leaked; `NativeLeak` warms them before it counts.
+They are reused, not leaked; `NativeLeak` tolerates that bounded one-time
+growth (see **Leak** below).
 
 Copies: seal and open allocate the output as a BEAM binary (`OwnedBinary`),
 copy the input into it ONCE and run AES-GCM in place. Raw format 1 returns the
@@ -565,12 +566,18 @@ following closes part of it:
   generated Snowball stemmers are quadratic in word length: a 200 KB "word"
   took 4 s). Guards that the Elixir code had (key length, `avgdl > 0`) stay
   in the wrapper: a NIF returns garbage where Elixir raised.
-- **Leak:** `Engram.NativeLeak.assert_no_leak(fun)`. A single warm-up call
-  is not enough: the regex crate keeps a match cache per scheduler thread,
-  allocated the first time a call lands on that thread, and a test process
-  migrates between threads. That read as a ~670 KB "leak" on runs that leaked
-  nothing. The helper warms every thread with concurrent calls, then asserts
-  300 more calls leave `live_bytes()` unchanged.
+- **Leak:** `Engram.NativeLeak.assert_no_leak(fun)`. The regex crate keeps a
+  match cache per pool stack (8, picked by thread id), and the envelope keeps
+  thread-local zstd contexts: both are allocated the first time a call lands
+  on a thread, and kept. No warm-up can reach every thread: a dirty NIF runs
+  on whichever dirty CPU thread is free, and `spawn_opt {:scheduler, id}`
+  pins only the normal scheduler. A pinned per-scheduler warm-up still
+  flaked in the full suite (+74,508 bytes, one regex cache, when a call first
+  reached an unwarmed dirty thread mid-measurement). So the helper runs
+  windows of 300 calls until one leaves `live_bytes()` unchanged (up to 10):
+  that cache growth is bounded and stops, a leak grows in every window. A
+  deliberate 16-byte leak fails all 10 (`[4800, ...]`). It cannot see a leak
+  rarer than once per 300 calls.
 - **Behaviour parity:** when porting, capture golden output from the Elixir
   code BEFORE deleting it, and keep its behaviour tests running against the
   NIF. The keyword port kept `tokenizer_test.exs` and `qdrant_sparse_test.exs`
