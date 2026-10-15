@@ -131,24 +131,45 @@ defmodule Engram.Workers.CimdRefresh do
   # result lands on every row naming it (`JwksCache.refresh_background/1`). A
   # failure leaves the last good keys in place.
   #
-  # Only clients that made a token request in the last 30 days (a refresh
-  # token's `last_used_at`), most recent first, so a burst of registrations
-  # that never connect costs no vendor fetches. One that comes back fetches on
-  # demand in the token path.
+  # Only clients with a LIVE (unrevoked) grant used for a token request in the
+  # last 30 days, most recently used first, so a burst of registrations that
+  # never connect, or grants since disconnected, cost no vendor fetches. One
+  # that comes back fetches on demand in the token path.
+  #
+  # EXISTS plus a per-client max, both served by
+  # `oauth_refresh_tokens_client_id_last_used_at_index`, rather than a join
+  # that scanned every refresh token (second review #13). Clients sharing a
+  # jwks_uri collapse to one URI, ordered by its most recent use.
   defp jwks_uris do
     cutoff = DateTime.add(DateTime.utc_now(), -@jwks_active_days * 86_400, :second)
 
-    Repo.all(
-      from(c in Client,
-        join: rt in RefreshToken,
-        on: rt.client_id == c.client_id,
-        where: not is_nil(c.cimd_url) and not is_nil(c.jwks_uri) and rt.last_used_at > ^cutoff,
-        group_by: c.jwks_uri,
-        order_by: [desc: max(rt.last_used_at)],
-        select: c.jwks_uri
-      ),
-      skip_tenant_check: true
+    from(c in Client,
+      as: :client,
+      where:
+        not is_nil(c.cimd_url) and not is_nil(c.jwks_uri) and
+          exists(
+            from(rt in RefreshToken,
+              where:
+                rt.client_id == parent_as(:client).client_id and is_nil(rt.revoked_at) and
+                  rt.last_used_at > ^cutoff,
+              select: 1
+            )
+          ),
+      select:
+        {c.jwks_uri,
+         type(
+           fragment(
+             "(SELECT max(r.last_used_at) FROM oauth_refresh_tokens r WHERE r.client_id = ? AND r.revoked_at IS NULL)",
+             c.client_id
+           ),
+           :utc_datetime_usec
+         )}
     )
+    |> Repo.all(skip_tenant_check: true)
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Enum.map(fn {uri, used_at} -> {uri, Enum.max(used_at, DateTime)} end)
+    |> Enum.sort_by(&elem(&1, 1), {:desc, DateTime})
+    |> Enum.map(&elem(&1, 0))
   end
 
   defp refresh_jwks(uri) do

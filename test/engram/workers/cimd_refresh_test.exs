@@ -11,12 +11,12 @@ defmodule Engram.Workers.CimdRefreshTest do
   import Engram.Factory
   import Mox
 
-  require Logger
-
   alias Engram.OAuth.Cimd.FetcherMock
   alias Engram.OAuth.Client
   alias Engram.Repo
   alias Engram.Workers.CimdRefresh
+
+  require Logger
 
   setup :verify_on_exit!
 
@@ -48,11 +48,13 @@ defmodule Engram.Workers.CimdRefreshTest do
 
   # The JWKS sweep only covers clients that made a token request recently: a
   # refresh token's `last_used_at` is that evidence.
-  defp used(client, days_ago \\ 0) do
-    insert(:oauth_refresh_token,
-      client_id: client.client_id,
-      user_id: insert(:user).id,
-      last_used_at: aged(days_ago)
+  defp used(client, days_ago \\ 0, attrs \\ []) do
+    insert(
+      :oauth_refresh_token,
+      Keyword.merge(
+        [client_id: client.client_id, user_id: insert(:user).id, last_used_at: aged(days_ago)],
+        attrs
+      )
     )
 
     client
@@ -252,6 +254,25 @@ defmodule Engram.Workers.CimdRefreshTest do
         end)
 
       assert log =~ "mcp_jwks_refresh_sweep"
+    end
+
+    # A disconnected grant is not a client anyone is using.
+    test "skips a client whose only recent token is revoked" do
+      [jwks_uri: "https://live.example/jwks.json"] |> cimd_client() |> used(1)
+
+      :oauth_client
+      |> insert(
+        kind: "mcp",
+        cimd_url: "https://gone.example/c",
+        jwks_uri: "https://gone.example/jwks.json"
+      )
+      |> used(1, revoked_at: DateTime.utc_now(:second))
+
+      expect(FetcherMock, :fetch, 1, fn "https://live.example/jwks.json" ->
+        {:ok, %{"keys" => []}}
+      end)
+
+      assert {:ok, %{refreshed: 1}} = perform_job(CimdRefresh, %{"kind" => "jwks"})
     end
 
     test "runs at most 4 vendor fetches at once" do
