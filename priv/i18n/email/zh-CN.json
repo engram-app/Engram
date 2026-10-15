@@ -46,6 +46,7 @@
 	"Initial version.": "初始版本。",
 	"Accuracy fixes: scope clarified to cover the app (not just the marketing site); Grafana Cloud added to sub-processors.": "修正：范围明确，涵盖应用本身（而非仅为营销网站）；Grafana Cloud 已添加到二级处理方。",
 	"App analytics now linked to your account (email, plan, usage counts). The content of your notes is never sent.": "应用分析已与您的账户关联（邮箱、套餐、使用量）。您的笔记内容绝不会被发送。",
+	"Added how AI assistants connected to Engram receive your notes, and how we handle government requests. Grafana Cloud is no longer a sub-processor.": "添加了关于连接到 Engram 的 AI 助手如何接收您的笔记，以及我们如何处理政府请求的信息。Grafana Cloud 已不再是二级处理者。",
 	"Vault": "仓库",
 	"Note": "笔记",
 	"Sync": "同步",

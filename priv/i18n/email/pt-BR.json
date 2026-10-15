@@ -46,6 +46,7 @@
 	"Initial version.": "Versão inicial.",
 	"Accuracy fixes: scope clarified to cover the app (not just the marketing site); Grafana Cloud added to sub-processors.": "Correções de precisão: o escopo foi esclarecido para abranger o aplicativo (e não apenas o site de marketing); Grafana Cloud adicionado aos subprocessadores.",
 	"App analytics now linked to your account (email, plan, usage counts). The content of your notes is never sent.": "As análises do aplicativo agora estão vinculadas à sua conta (e-mail, plano, contagem de uso). O conteúdo de suas notas nunca é enviado.",
+	"Added how AI assistants connected to Engram receive your notes, and how we handle government requests. Grafana Cloud is no longer a sub-processor.": "Adicionada informação sobre como os assistentes de IA conectados ao Engram recebem suas notas, e como lidamos com solicitações governamentais. O Grafana Cloud não é mais um subprocessador.",
 	"Vault": "Cofre",
 	"Note": "Nota",
 	"Sync": "Sincronizar",

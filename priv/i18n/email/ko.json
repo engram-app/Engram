@@ -46,6 +46,7 @@
 	"Initial version.": "초기 버전.",
 	"Accuracy fixes: scope clarified to cover the app (not just the marketing site); Grafana Cloud added to sub-processors.": "정확성 수정: 범위 명확화 (앱 전체 포함, 마케팅 사이트만 아님); Grafana Cloud를 하위 처리 업체에 추가.",
 	"App analytics now linked to your account (email, plan, usage counts). The content of your notes is never sent.": "앱 분석 정보가 계정(이메일, 요금제, 사용량)과 연결되었습니다. 노트 내용은 전송되지 않습니다.",
+	"Added how AI assistants connected to Engram receive your notes, and how we handle government requests. Grafana Cloud is no longer a sub-processor.": "Engram에 연결된 AI 어시스턴트가 노트를 어떻게 받는지, 그리고 저희가 정부 요청을 어떻게 처리하는지에 대한 정보가 추가되었습니다. Grafana Cloud는 더 이상 하위 처리 기관이 아닙니다.",
 	"Vault": "보관함",
 	"Note": "노트",
 	"Sync": "동기화",

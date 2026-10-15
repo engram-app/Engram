@@ -46,6 +46,7 @@
 	"Initial version.": "Phiên bản đầu tiên.",
 	"Accuracy fixes: scope clarified to cover the app (not just the marketing site); Grafana Cloud added to sub-processors.": "Sửa lỗi độ chính xác: phạm vi được làm rõ để bao gồm ứng dụng (không chỉ trang web quảng cáo); Grafana Cloud được thêm vào danh sách các đối tác xử lý dữ liệu.",
 	"App analytics now linked to your account (email, plan, usage counts). The content of your notes is never sent.": "Thống kê sử dụng ứng dụng giờ đây liên kết với tài khoản của bạn (email, gói, số lần sử dụng). Nội dung ghi chú của bạn không bao giờ được gửi đi.",
+	"Added how AI assistants connected to Engram receive your notes, and how we handle government requests. Grafana Cloud is no longer a sub-processor.": "Thêm thông tin về cách các trợ lý AI kết nối với Engram nhận ghi chú của bạn, và cách chúng tôi xử lý các yêu cầu từ chính phủ. Grafana Cloud không còn là đối tác xử lý dữ liệu phụ.",
 	"Vault": "Kho lưu trữ",
 	"Note": "Ghi chú",
 	"Sync": "Đồng bộ hóa",

@@ -46,6 +46,7 @@
 	"Initial version.": "Первая версия.",
 	"Accuracy fixes: scope clarified to cover the app (not just the marketing site); Grafana Cloud added to sub-processors.": "Исправления точности: область применения уточнена, охватывает приложение (а не только маркетинговый сайт); Grafana Cloud добавлен в список сторонних обработчиков.",
 	"App analytics now linked to your account (email, plan, usage counts). The content of your notes is never sent.": "Аналитика приложения теперь связана с вашим аккаунтом (электронная почта, тариф, статистика использования). Содержание ваших заметок никогда не передается.",
+	"Added how AI assistants connected to Engram receive your notes, and how we handle government requests. Grafana Cloud is no longer a sub-processor.": "Добавлено описание того, как подключенные к Engram AI-ассистенты получают ваши заметки, и как мы обрабатываем запросы государственных органов. Grafana Cloud больше не является субподрядчиком.",
 	"Vault": "Хранилище",
 	"Note": "Заметка",
 	"Sync": "Синхронизировать",
