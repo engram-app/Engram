@@ -38,9 +38,13 @@ describe("LanguageSelect: icon-only", () => {
 		);
 		await waitFor(() => expect(calls).toBe(1));
 		expect(screen.getByText("Hello")).toBeInTheDocument();
-		const trigger = screen.getByRole("combobox", { name: /language/iu });
-		fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
-		fireEvent.click(await screen.findByRole("option", { name: "日本語" }));
+		// Re-pick 日本語 with the trigger's typeahead (Radix selects the matching
+		// item without opening). Opening the popup instead mounted the portal,
+		// focus scope and all ten items, then unmounted them: about a third of
+		// this test's CPU, which a loaded CI box stretched past the 5 s timeout.
+		// The pick still goes through the same onValueChange.
+		fireEvent.keyDown(screen.getByLabelText("Language"), { key: "日" });
 		expect(await screen.findByText("こんにちは")).toBeInTheDocument();
+		expect(calls).toBe(2);
 	});
 });
