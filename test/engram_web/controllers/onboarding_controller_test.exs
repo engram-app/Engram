@@ -180,6 +180,26 @@ defmodule EngramWeb.OnboardingControllerTest do
       assert privacy.version == "2026-05-19"
     end
 
+    # Third review #10: the acceptance records the CLIENT's IP (CF-Connecting-IP
+    # behind the edge), not the load balancer's.
+    test "records the client IP from CF-Connecting-IP when trusted", %{conn: conn, user: user} do
+      previous = Application.get_env(:engram, :trust_cf_connecting_ip)
+      Application.put_env(:engram, :trust_cf_connecting_ip, true)
+      on_exit(fn -> Application.put_env(:engram, :trust_cf_connecting_ip, previous) end)
+
+      conn
+      |> put_req_header("cf-connecting-ip", "203.0.113.42")
+      |> post("/api/onboarding/accept-terms", %{
+        "tos_version" => "2026-05-19",
+        "tos_hash" => "canonical",
+        "privacy_version" => "2026-05-19",
+        "privacy_hash" => "p"
+      })
+      |> json_response(201)
+
+      assert Enum.all?(agreements_for(user), &(to_string(&1.ip_address) =~ "203.0.113.42"))
+    end
+
     # A browser on an older bundle cannot render a version published after it
     # was built. It accepts the newest one it can render, which is binding as
     # long as it is not below the required floor.

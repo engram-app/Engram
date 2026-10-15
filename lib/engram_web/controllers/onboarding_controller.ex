@@ -4,6 +4,7 @@ defmodule EngramWeb.OnboardingController do
   alias Engram.Legal.VersionCache
   alias Engram.Logger.Metadata
   alias Engram.Onboarding
+  alias EngramWeb.RemoteIp
   alias EngramWeb.RequestMeta
 
   require Logger
@@ -64,7 +65,7 @@ defmodule EngramWeb.OnboardingController do
     # drift between the text shown and the backend, so 409 rather than record it.
     if acceptable?("terms_of_service", tv, th) and acceptable?("privacy_policy", pv, ph) do
       meta = %{
-        ip_address: RequestMeta.format_ip(conn.remote_ip),
+        ip_address: RequestMeta.format_ip(RemoteIp.resolve(conn)),
         user_agent: RequestMeta.get_user_agent(conn)
       }
 

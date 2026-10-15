@@ -12,6 +12,7 @@ defmodule EngramWeb.OAuthRegisterController do
   alias Engram.Connections.LogoAllowlist
   alias Engram.Logger.Metadata
   alias Engram.OAuth
+  alias EngramWeb.RemoteIp
   alias EngramWeb.RequestMeta
 
   require Logger
@@ -22,7 +23,7 @@ defmodule EngramWeb.OAuthRegisterController do
     enriched =
       params
       |> Map.put("first_user_agent", RequestMeta.get_user_agent(conn))
-      |> Map.put("first_ip", RequestMeta.format_ip(conn.remote_ip))
+      |> Map.put("first_ip", RequestMeta.format_ip(RemoteIp.resolve(conn)))
 
     case OAuth.register_client(enriched) do
       {:ok, client} ->

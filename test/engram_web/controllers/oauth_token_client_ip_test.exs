@@ -93,4 +93,22 @@ defmodule EngramWeb.OAuthTokenClientIpTest do
     assert log =~ "oauth_refresh_grace_reissue"
     assert log =~ "ip_matched=false"
   end
+
+  test "DCR records the client IP as first_ip", _ctx do
+    %{"client_id" => client_id} =
+      "198.51.100.77"
+      |> conn_from()
+      |> post("/oauth/register", %{
+        "client_name" => "X",
+        "redirect_uris" => ["http://127.0.0.1:51234/cb"]
+      })
+      |> json_response(201)
+
+    client =
+      Repo.one!(from(c in Engram.OAuth.Client, where: c.client_id == ^client_id),
+        skip_tenant_check: true
+      )
+
+    assert client.first_ip == "198.51.100.77"
+  end
 end
