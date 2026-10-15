@@ -308,6 +308,69 @@ defmodule Engram.OAuth.Cimd.HttpFetcherTest do
     end
   end
 
+  describe "response handling (third review)" do
+    # A non-200 is decided by its status line: its body is never the document,
+    # so it is neither read nor capped. A 503 with a large error page is a
+    # transient 503, not body_too_large.
+    test "a non-200 with a large body reports the status", %{bypass: bypass, target: target} do
+      Bypass.expect(bypass, "GET", "/doc.json", fn conn ->
+        respond(conn, 503, :binary.copy("x", 256 * 1024), "text/html")
+      end)
+
+      assert {:error, {:http_status, 503}} = HttpFetcher.fetch_target(target)
+    end
+
+    # A 5xx or 429 is transient: like a transport error, it moves on to the
+    # next attempt (here the one retry of the same address).
+    test "a 503 then a 200 on the retry succeeds", %{bypass: bypass, target: target} do
+      {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+      Bypass.expect(bypass, "GET", "/doc.json", fn conn ->
+        case Agent.get_and_update(calls, &{&1, &1 + 1}) do
+          0 -> respond(conn, 503, "busy", "text/plain")
+          _ -> respond(conn, 200, ~s({"ok":true}), "application/json")
+        end
+      end)
+
+      assert {:ok, %{"ok" => true}} = HttpFetcher.fetch_target(target)
+    end
+
+    # Trailers arrive as a second headers frame. They must not replace the
+    # response headers, or the content-type is lost.
+    test "a chunked response with a trailer keeps its content-type" do
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen)
+      body = ~s({"keys":[]})
+
+      server =
+        spawn(fn ->
+          {:ok, socket} = :gen_tcp.accept(listen)
+          {:ok, _request} = :gen_tcp.recv(socket, 0)
+
+          :gen_tcp.send(
+            socket,
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n" <>
+              "transfer-encoding: chunked\r\ntrailer: x-checksum\r\n\r\n" <>
+              Integer.to_string(byte_size(body), 16) <>
+              "\r\n" <>
+              body <>
+              "\r\n" <>
+              "0\r\nx-checksum: abc\r\n\r\n"
+          )
+
+          Process.sleep(1_000)
+        end)
+
+      on_exit(fn ->
+        Process.exit(server, :kill)
+        :gen_tcp.close(listen)
+      end)
+
+      target = %{url: "http://127.0.0.1:#{port}/doc.json", host: "localhost"}
+      assert {:ok, %{"keys" => []}} = HttpFetcher.fetch_target(target)
+    end
+  end
+
   # fetch/1 is guard-then-fetch. Proving the guard is actually wired in matters
   # more than proving it works twice.
   describe "fetch/1 applies the SSRF guard" do

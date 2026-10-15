@@ -67,7 +67,7 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
 
   Tries each address in `target.ips` (or the pinned `url` alone) in order, then
   the first once more, stopping at the first answer that is not a transport
-  error. Every attempt shares one #{@budget_ms} ms deadline.
+  error, a 5xx or a 429. Every attempt shares one #{@budget_ms} ms deadline.
   """
   @spec fetch_target(target()) :: {:ok, map()} | {:error, term()}
   def fetch_target(target) do
@@ -98,8 +98,15 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
       last
     else
       case attempt(url, ip, host, remaining) do
-        {:error, {:transport_error, _, _}} = error -> try_attempts(rest, host, deadline, error)
-        result -> result
+        {:error, {:transport_error, _, _}} = error ->
+          try_attempts(rest, host, deadline, error)
+
+        # A 5xx or 429 is the vendor's transient trouble: try the next attempt.
+        {:error, {:http_status, s}} = error when s >= 500 or s == 429 ->
+          try_attempts(rest, host, deadline, error)
+
+        result ->
+          result
       end
     end
   end
@@ -176,7 +183,7 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
 
     case Mint.HTTP1.request(conn, "GET", target, headers, nil) do
       {:ok, conn, ref} ->
-        receive_response(conn, ref, deadline, %{status: nil, headers: [], body: ""})
+        receive_response(conn, ref, deadline, %{status: nil, headers: nil, body: ""})
 
       {:error, _conn, error} ->
         {:error, {:transport_error, :recv, reason_of(error)}}
@@ -201,11 +208,19 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
     end
   end
 
-  defp collect({:status, ref, status}, {:cont, acc}, ref),
-    do: {:cont, {:cont, %{acc | status: status}}}
+  # A non-200 is decided by its status line: its body is never the document,
+  # so reading (and capping) it would only turn a 503 into body_too_large.
+  defp collect({:status, ref, 200}, {:cont, acc}, ref), do: {:cont, {:cont, %{acc | status: 200}}}
 
-  defp collect({:headers, ref, headers}, {:cont, acc}, ref),
+  defp collect({:status, ref, status}, {:cont, _acc}, ref),
+    do: {:halt, {:error, {:http_status, status}}}
+
+  # The first headers frame is the response's; a later one is chunked
+  # trailers, which must not replace it (the content-type lives here).
+  defp collect({:headers, ref, headers}, {:cont, %{headers: nil} = acc}, ref),
     do: {:cont, {:cont, %{acc | headers: headers}}}
+
+  defp collect({:headers, ref, _trailers}, {:cont, acc}, ref), do: {:cont, {:cont, acc}}
 
   defp collect({:data, ref, data}, {:cont, acc}, ref) do
     body = acc.body <> data
@@ -219,7 +234,6 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
   defp collect(_other, state, _ref), do: {:cont, state}
 
   defp finish(%{status: 200} = response), do: decode(response)
-  defp finish(%{status: status}), do: {:error, {:http_status, status}}
 
   defp scheme(%URI{scheme: "http"}), do: :http
   defp scheme(_uri), do: :https
@@ -283,7 +297,7 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
   # `application/json` or any `+json` structured suffix (RFC 6839), which is
   # how a JWKS is properly served: `application/jwk-set+json`.
   defp json_content_type?(%{headers: headers}) do
-    headers
+    (headers || [])
     |> Enum.filter(fn {name, _} -> String.downcase(name) == "content-type" end)
     |> Enum.any?(fn {_name, value} ->
       mime = value |> String.split(";") |> hd() |> String.trim() |> String.downcase()
