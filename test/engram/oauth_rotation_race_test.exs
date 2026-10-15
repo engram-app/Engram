@@ -182,10 +182,50 @@ defmodule Engram.OAuthRotationRaceTest do
 
     {_tasks, await} = rotate_concurrently(ctx.raw, ctx.client_id, 1)
     await_lock_waiters(1)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        send(holder.pid, :commit)
+        Task.await(holder)
+
+        # Third review #4: a revoked token is reported as revoked, not as reuse
+        # (theft), and leaves no reuse line.
+        assert [{:error, {:invalid_grant, :refresh_token_revoked}}] = await.()
+      end)
+
+    refute log =~ "oauth_refresh_reuse"
+    assert live(ctx.user) == 0
+  end
+
+  # Third review #5: a Disconnect racing a rotation must not leave the
+  # successor the rotation minted live. The rotation is parked holding the
+  # token, the Disconnect queued behind it; whichever order they commit in,
+  # nothing in the grant is live afterwards.
+  test "a Disconnect racing a rotation leaves no live token", ctx do
+    holder = hold_row_lock(ctx.raw)
+    {_tasks, await_rotation} = rotate_concurrently(ctx.raw, ctx.client_id, 1)
+    await_lock_waiters(1)
+
+    disconnect =
+      Task.async(fn ->
+        real_checkout!()
+        Engram.Connections.revoke_oauth_family(ctx.user.id, row_client_id(ctx.raw), nil)
+      end)
+
+    await_lock_waiters(2)
     send(holder.pid, :commit)
     Task.await(holder)
 
-    assert [{:error, {:invalid_grant, _}}] = await.()
+    assert [{:ok, _}] = await_rotation.()
+    assert :ok = Task.await(disconnect)
     assert live(ctx.user) == 0
+  end
+
+  defp row_client_id(raw) do
+    hash = Engram.Crypto.sha256_hex(raw)
+
+    Repo.one!(from(r in RefreshToken, where: r.token_hash == ^hash, select: r.client_id),
+      skip_tenant_check: true
+    )
   end
 end
