@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.52.0](https://github.com/engram-app/Engram/compare/0.51.1...0.52.0) (2026-10-15)
+
+
+### Features
+
+* **connections:** verified-only brand marks, Meta Muse, safe Revoke dialog ([#1985](https://github.com/engram-app/Engram/issues/1985)) ([606fc73](https://github.com/engram-app/Engram/commit/606fc7310342469c4ea61a70985db021850a4df4))
+
+
+### Bug Fixes
+
+* **e2e:** raise pytest and requests floors ([#1976](https://github.com/engram-app/Engram/issues/1976)) ([ebab52e](https://github.com/engram-app/Engram/commit/ebab52e2b2fa117ebc7dc16381403870d64092a9))
+* harden MCP OAuth and open API keys to all tiers ([#1981](https://github.com/engram-app/Engram/issues/1981)) ([40c9b28](https://github.com/engram-app/Engram/commit/40c9b28e5ae70eb60cce336654e4c7987e36a2d9))
+* sync privacy policy 2026-10-14 (silent) ([#1984](https://github.com/engram-app/Engram/issues/1984)) ([e397f07](https://github.com/engram-app/Engram/commit/e397f07b88e0989d89ba8af8f35bcc2cf8c107f8))
+
 ## [0.51.1](https://github.com/engram-app/Engram/compare/0.51.0...0.51.1) (2026-10-14)
 
 
