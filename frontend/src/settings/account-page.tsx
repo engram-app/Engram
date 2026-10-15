@@ -6,6 +6,7 @@ import { DangerZoneSection } from "./account/danger-zone-section";
 import { EmailSection } from "./account/email-section";
 import { LanguageSection } from "./account/language-section";
 import { PasswordSection } from "./account/password-section";
+import { PrivacySection } from "./account/privacy-section";
 import { ProfileSection } from "./account/profile-section";
 import { SessionsSection } from "./account/sessions-section";
 
@@ -31,6 +32,7 @@ export default function AccountPage() {
 			<ConnectedAccountsSection providers={[...OAUTH_PROVIDERS]} />
 			<CommunitySection />
 			<SessionsSection />
+			<PrivacySection />
 			<DangerZoneSection />
 		</article>
 	);

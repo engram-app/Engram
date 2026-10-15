@@ -960,6 +960,11 @@ export default {
 	"Changing your password signs you out of all other sessions.":
 		"비밀번호를 변경하면 다른 모든 세션에서 로그아웃됩니다.",
 	"Update password": "비밀번호 변경",
+	"Could not save your analytics choice": "분석 데이터 저장에 실패했습니다",
+	Privacy: "개인 정보",
+	"Usage analytics help us see which features get used. The content of your notes is never sent.":
+		"사용량 분석은 어떤 기능이 사용되는지 파악하는 데 도움이 됩니다. 노트 내용은 전송되지 않습니다.",
+	"Share usage analytics": "사용량 분석 공유",
 	"Profile updated": "프로필 업데이트 완료",
 	"Could not update profile": "프로필 업데이트 실패",
 	Profile: "프로필",

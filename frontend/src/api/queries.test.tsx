@@ -37,6 +37,7 @@ import {
 	useSearch,
 	useTags,
 	useTypes,
+	useUpdateProfile,
 	useUploadAttachment,
 	useVaults,
 	type VaultTree,
@@ -67,9 +68,10 @@ vi.mock("./active-vault", async () => {
 	return { ...actual, useActiveVaultId: () => "42" };
 });
 
-const { get, post, del } = vi.hoisted(() => ({
+const { get, post, patch, del } = vi.hoisted(() => ({
 	get: vi.fn(),
 	post: vi.fn(),
+	patch: vi.fn(),
 	del: vi.fn(),
 }));
 
@@ -88,7 +90,7 @@ vi.mock("./client", async () => {
 	const actual = await vi.importActual<typeof import("./client")>("./client");
 	return {
 		...actual,
-		api: { get, post, patch: vi.fn(), del },
+		api: { get, post, patch, del },
 		setTokenGetter: vi.fn(),
 	};
 });
@@ -98,6 +100,7 @@ let qc: QueryClient;
 beforeEach(() => {
 	get.mockReset();
 	post.mockReset();
+	patch.mockReset();
 	del.mockReset();
 	crdtCreateNote.mockReset().mockImplementation((docId: string) => Promise.resolve(docId));
 	crdtDeleteNote
@@ -146,6 +149,46 @@ describe("useAcceptTerms", () => {
 		// If onSuccess fires-and-forgets, this would still be false when mutateAsync resolves
 		// and the user would be navigated with a stale cache (bug: double-accept).
 		expect(invalidateResolved).toBe(true);
+	});
+});
+
+describe("useUpdateProfile", () => {
+	// The identify hook stops or resumes PostHog capture off ["me"], so an
+	// opt-out must land there with its new analytics id, not wait for a refetch.
+	it("writes the analytics opt-out and id back into ['me']", async () => {
+		qc.setQueryData(["me"], {
+			user: { email: "a@b.c", analytics_id: "id-1", analytics_opt_out: false, locale: "ja" },
+		});
+		patch.mockResolvedValue({
+			user: { email: "a@b.c", analytics_id: null, analytics_opt_out: true, locale: "en" },
+		});
+
+		const { result } = renderHook(() => useUpdateProfile(), { wrapper });
+		await act(async () => {
+			await result.current.mutateAsync({ analytics_opt_out: true });
+		});
+
+		expect(patch).toHaveBeenCalledWith("/me", { analytics_opt_out: true });
+		expect(qc.getQueryData(["me"])).toEqual({
+			user: { email: "a@b.c", analytics_id: null, analytics_opt_out: true, locale: "ja" },
+		});
+	});
+});
+
+describe("useUpdateProfile failure", () => {
+	// A save can commit and still fail on the wire. The toggle and the identify
+	// hook must show what the server stored, not what the tab assumed.
+	it("refetches ['me'] when an analytics opt-out save fails", async () => {
+		qc.setQueryData(["me"], { user: { analytics_opt_out: false } });
+		const invalidate = vi.spyOn(qc, "invalidateQueries");
+		patch.mockRejectedValue(new Error("502"));
+
+		const { result } = renderHook(() => useUpdateProfile(), { wrapper });
+		await act(async () => {
+			await result.current.mutateAsync({ analytics_opt_out: true }).catch(() => undefined);
+		});
+
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["me"] });
 	});
 });
 

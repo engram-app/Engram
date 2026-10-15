@@ -263,19 +263,43 @@ defmodule Engram.Accounts do
   @doc """
   Record a user's objection to analytics (privacy policy 2026-10-12) and erase
   their PostHog person. Every emitter then skips them via
-  `Engram.Analytics`. Operator-run from a release shell today:
+  `Engram.Analytics`. Users flip it from Settings (`PATCH /api/me`); an
+  operator handling a privacy@ request runs it from a release shell:
   `{:ok, u} = find_by_normalized_email(EmailNormalizer.normalize(email))`, then
-  `set_analytics_opt_out(u)`.
+  `set_analytics_opt_out(u)`. A repeat keeps the original time and queues
+  erasure again. The stamp and the erasure jobs commit together or not at all.
   """
-  @spec set_analytics_opt_out(User.t()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
+  @spec set_analytics_opt_out(User.t()) :: {:ok, User.t()} | {:error, term()}
   def set_analytics_opt_out(%User{} = user) do
-    with {:ok, updated} <-
-           user
-           |> Ecto.Changeset.change(analytics_opt_out_at: DateTime.utc_now())
-           |> Repo.update(skip_tenant_check: true) do
-      :ok = Engram.Analytics.forget(user)
-      {:ok, updated}
-    end
+    Repo.transact(fn ->
+      with {:ok, updated} <-
+             user
+             |> Ecto.Changeset.change(
+               analytics_opt_out_at: user.analytics_opt_out_at || DateTime.utc_now()
+             )
+             |> Repo.update(skip_tenant_check: true),
+           :ok <- Engram.Analytics.erase(user) do
+        {:ok, updated}
+      end
+    end)
+  end
+
+  @doc """
+  Withdraw a user's objection to analytics. Capture resumes on their next
+  request. Pending erasures are cancelled in the same transaction, so none can
+  delete what they send after consenting again.
+  """
+  @spec clear_analytics_opt_out(User.t()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
+  def clear_analytics_opt_out(%User{} = user) do
+    Repo.transact(fn ->
+      with {:ok, updated} <-
+             user
+             |> Ecto.Changeset.change(analytics_opt_out_at: nil)
+             |> Repo.update(skip_tenant_check: true) do
+        :ok = Engram.Analytics.cancel_pending_erasure(updated)
+        {:ok, updated}
+      end
+    end)
   end
 
   @doc """

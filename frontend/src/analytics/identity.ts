@@ -4,6 +4,11 @@ import { analyticsClient } from "./client";
 // call is a no-op until init.ts has loaded posthog-js (see client.ts), which
 // on self-host or under GPC is never.
 
+// Properties set while capture was off. On re-opt-in the locale effect runs
+// before the identify hook lifts the opt-out and never re-runs, so they are
+// held here and sent after the next identify. Memory only; cleared on sign-out.
+let held: Record<string, string> | null = null;
+
 // A persisted opt-out belongs to whoever objected, not to this browser: lift it
 // for a user who has not objected. Never for a browser sending Do Not Track.
 function resumeCaptureIfAllowed(): void {
@@ -17,6 +22,11 @@ function resumeCaptureIfAllowed(): void {
 export function identifyUser(analyticsId: string): void {
 	resumeCaptureIfAllowed();
 	analyticsClient()?.identify(analyticsId);
+	if (held) {
+		const properties = held;
+		held = null;
+		setPersonProperties(properties);
+	}
 }
 
 /** The user objected to analytics: send nothing, anonymous included.
@@ -28,6 +38,7 @@ export function stopCapture(): void {
 
 /** Sign-out. `reset()` also clears posthog-js's persisted consent. */
 export function forgetUser(): void {
+	held = null;
 	analyticsClient()?.reset();
 }
 
@@ -35,7 +46,12 @@ export function forgetUser(): void {
  *  objected: on a fresh sign-in this can run before `stopCapture()` has. */
 export function setPersonProperties(properties: Record<string, string>): void {
 	const posthog = analyticsClient();
-	if (posthog && !posthog.has_opted_out_capturing()) {
+	if (!posthog) {
+		return;
+	}
+	if (posthog.has_opted_out_capturing()) {
+		held = { ...held, ...properties };
+	} else {
 		posthog.setPersonProperties(properties);
 	}
 }

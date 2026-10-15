@@ -979,6 +979,11 @@ export default {
 	"Changing your password signs you out of all other sessions.":
 		"Menukar kata laluan anda akan mengeluarkan anda dari semua sesi lain.",
 	"Update password": "Kemas kini kata laluan",
+	"Could not save your analytics choice": "Tidak dapat menyimpan pilihan analisis anda",
+	Privacy: "Privasi",
+	"Usage analytics help us see which features get used. The content of your notes is never sent.":
+		"Analisis penggunaan membantu kami melihat ciri yang digunakan. Kandungan nota anda tidak pernah dihantar.",
+	"Share usage analytics": "Kongsi analisis penggunaan",
 	"Profile updated": "Profil telah dikemas kini",
 	"Could not update profile": "Tidak dapat mengemas kini profil",
 	Profile: "Profil",

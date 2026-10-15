@@ -928,6 +928,11 @@ export default {
 	"Set or change your password.": "设置或更改您的密码。",
 	"Changing your password signs you out of all other sessions.": "更改密码将您从所有其他会话注销。",
 	"Update password": "修改密码",
+	"Could not save your analytics choice": "无法保存您的分析设置",
+	Privacy: "隐私",
+	"Usage analytics help us see which features get used. The content of your notes is never sent.":
+		"使用数据分析帮助我们了解哪些功能被使用。您的笔记内容绝不会被发送。",
+	"Share usage analytics": "共享使用数据分析",
 	"Profile updated": "资料已更新",
 	"Could not update profile": "无法更新资料",
 	Profile: "资料",

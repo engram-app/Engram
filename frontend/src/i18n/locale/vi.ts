@@ -976,6 +976,11 @@ export default {
 	"Changing your password signs you out of all other sessions.":
 		"Thay đổi mật khẩu sẽ đăng xuất bạn khỏi tất cả các phiên khác.",
 	"Update password": "Cập nhật mật khẩu",
+	"Could not save your analytics choice": "Không thể lưu tùy chọn phân tích của bạn",
+	Privacy: "Quyền riêng tư",
+	"Usage analytics help us see which features get used. The content of your notes is never sent.":
+		"Phân tích sử dụng giúp chúng tôi biết các tính năng nào được sử dụng. Nội dung ghi chú của bạn không bao giờ được gửi.",
+	"Share usage analytics": "Chia sẻ dữ liệu sử dụng",
 	"Profile updated": "Hồ sơ đã cập nhật",
 	"Could not update profile": "Không thể cập nhật hồ sơ",
 	Profile: "Hồ sơ",

@@ -976,6 +976,11 @@ export default {
 	"Changing your password signs you out of all other sessions.":
 		"パスワードの変更により、他のすべてのセッションからサインアウトされます。",
 	"Update password": "パスワードを更新",
+	"Could not save your analytics choice": "アナリティクス設定の保存に失敗しました",
+	Privacy: "プライバシー",
+	"Usage analytics help us see which features get used. The content of your notes is never sent.":
+		"利用状況の分析は、どの機能が利用されているかを知るのに役立ちます。ノートの内容は送信されません。",
+	"Share usage analytics": "利用状況の分析を共有する",
 	"Profile updated": "プロフィールを更新しました",
 	"Could not update profile": "プロフィールを更新できませんでした",
 	Profile: "プロフィール",

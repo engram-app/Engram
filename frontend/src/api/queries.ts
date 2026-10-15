@@ -1122,9 +1122,16 @@ export function useUpdateProfile(options?: {
 }) {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: (body: { display_name?: string | null; locale?: string }) =>
-			api.patch<{ user: User }>("/me", body),
+		mutationFn: (body: {
+			display_name?: string | null;
+			locale?: string;
+			analytics_opt_out?: boolean;
+		}) => api.patch<{ user: User }>("/me", body),
 		retry: options?.retry ?? false,
+		// An opt-out save can commit and still fail on the wire: re-read what the
+		// server stored so capture follows it.
+		onError: (_err, body) =>
+			"analytics_opt_out" in body ? qc.invalidateQueries({ queryKey: ["me"] }) : undefined,
 		onSuccess: (data, body) => {
 			// Write back only the fields this call sent: a slower response must not
 			// undo a newer edit to a different field.
@@ -1134,6 +1141,10 @@ export function useUpdateProfile(options?: {
 			}
 			if ("locale" in body) {
 				sent.locale = data.user.locale;
+			}
+			if ("analytics_opt_out" in body) {
+				sent.analytics_opt_out = data.user.analytics_opt_out;
+				sent.analytics_id = data.user.analytics_id;
 			}
 			qc.setQueryData<{ user: User }>(["me"], (old) =>
 				old ? { user: { ...old.user, ...sent } } : data,

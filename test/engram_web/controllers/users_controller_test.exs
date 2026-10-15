@@ -59,6 +59,44 @@ defmodule EngramWeb.UsersControllerTest do
       body = auth_conn(user) |> get("/api/me") |> json_response(200)
       assert body["user"]["analytics_opt_out"] == false
     end
+
+    test "PATCH analytics_opt_out true opts the user out", %{user: user} do
+      body = patch_me(user, %{analytics_opt_out: true}) |> json_response(200)
+      assert body["user"]["analytics_opt_out"] == true
+      assert body["user"]["analytics_id"] == nil
+      assert %DateTime{} = Accounts.get_user(user.id).analytics_opt_out_at
+    end
+
+    test "opting out again keeps the original objection time", %{user: user} do
+      {:ok, user} = Accounts.set_analytics_opt_out(user)
+
+      assert json_response(patch_me(user, %{analytics_opt_out: true}), 200)
+      assert Accounts.get_user(user.id).analytics_opt_out_at == user.analytics_opt_out_at
+    end
+
+    test "PATCH analytics_opt_out false opts the user back in", %{user: user} do
+      {:ok, user} = Accounts.set_analytics_opt_out(user)
+
+      body = patch_me(user, %{analytics_opt_out: false}) |> json_response(200)
+      assert body["user"]["analytics_opt_out"] == false
+      assert body["user"]["analytics_id"] == Engram.Observability.PostHog.analytics_id(user.email)
+      assert Accounts.get_user(user.id).analytics_opt_out_at == nil
+    end
+
+    test "422 on a non-boolean analytics_opt_out, and nothing changes", %{user: user} do
+      conn = patch_me(user, %{analytics_opt_out: "maybe", display_name: "Pat"})
+
+      assert %{"errors" => %{"analytics_opt_out" => [_ | _]}} = json_response(conn, 422)
+      fresh = Accounts.get_user(user.id)
+      assert fresh.analytics_opt_out_at == nil
+      assert fresh.display_name == nil
+    end
+  end
+
+  defp patch_me(user, body) do
+    auth_conn(user)
+    |> put_req_header("content-type", "application/json")
+    |> patch("/api/me", Jason.encode!(body))
   end
 
   describe "PATCH /api/me" do

@@ -1063,6 +1063,11 @@ export default {
 	"Changing your password signs you out of all other sessions.":
 		"Изменение пароля выводит вас из всех других сеансов.",
 	"Update password": "Обновить пароль",
+	"Could not save your analytics choice": "Не удалось сохранить ваши настройки аналитики",
+	Privacy: "Конфиденциальность",
+	"Usage analytics help us see which features get used. The content of your notes is never sent.":
+		"Аналитика использования помогает нам понять, какие функции наиболее востребованы. Содержание ваших заметок никогда не передаётся.",
+	"Share usage analytics": "Отправить данные об использовании",
 	"Profile updated": "Профиль обновлён",
 	"Could not update profile": "Не удалось обновить профиль",
 	Profile: "Профиль",

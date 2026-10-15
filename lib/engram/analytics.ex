@@ -19,10 +19,14 @@ defmodule Engram.Analytics do
   (privacy policy 2026-10-12).
   """
 
+  import Ecto.Query, only: [where: 2, where: 3]
+
   alias Engram.Accounts
   alias Engram.Accounts.User
   alias Engram.Observability.PostHog
   alias Engram.Workers.PostHogErasure
+
+  require Logger
 
   @surfaces [:obsidian_sync, :mcp, :web]
   @type surface :: :obsidian_sync | :mcp | :web
@@ -101,21 +105,48 @@ defmodule Engram.Analytics do
   the legacy Clerk-id person). Runs immediately and again after
   #{elem(@reerase_after, 0)} minutes, in case an in-flight batch re-creates the
   person. Pass the pre-change struct to erase an identity the user is leaving
-  (an old email).
+  (an old email). Best-effort: a failure is logged, never raised. Use
+  `erase/1` where the caller must know.
   """
   @spec forget(map()) :: :ok
   def forget(user) do
+    case erase(user) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "PostHog erasure could not be queued",
+          reason: Engram.Logger.Metadata.safe_reason(reason)
+        )
+
+        :ok
+    end
+  end
+
+  @doc """
+  Queue the erasure `forget/1` describes, returning any insert failure so a
+  caller can roll back with it. Joins the caller's transaction.
+  """
+  @spec erase(map()) :: :ok | {:error, term()}
+  def erase(user) do
     case {PostHog.erasure_enabled?(), known_ids(user)} do
       {false, _} ->
+        # Self-host and dev have no key on purpose. With capture on, erasure
+        # is owed: a missing key means opt-outs and deletions erase nothing.
+        if PostHog.enabled?(),
+          do: Logger.error("PostHog capture is on but erasure is not configured")
+
         :ok
 
       {_, []} ->
         :ok
 
       {true, ids} ->
-        _ = PostHogErasure.enqueue(ids)
-        _ = PostHogErasure.enqueue(ids, schedule_in: @reerase_after)
-        :ok
+        with {:ok, _} <- PostHogErasure.enqueue(ids),
+             {:ok, _} <- PostHogErasure.enqueue(ids, schedule_in: @reerase_after) do
+          :ok
+        end
     end
   end
 
@@ -132,6 +163,26 @@ defmodule Engram.Analytics do
   end
 
   def forget_previous_email(_old, _new), do: :ok
+
+  @doc """
+  Cancel every erasure of `user` still waiting to run (scheduled re-erase,
+  queued, or retrying through a PostHog outage), for a user who withdrew their
+  objection. Any of them would delete the whole person, including what the
+  user sends after consenting again. Joins the caller's transaction.
+  """
+  @spec cancel_pending_erasure(map()) :: :ok
+  def cancel_pending_erasure(user) do
+    ids = known_ids(user)
+
+    {:ok, _} =
+      Oban.Job
+      |> where(worker: ^inspect(PostHogErasure))
+      |> where([j], j.state in ["scheduled", "available", "retryable"])
+      |> where([j], fragment("? @> ?", j.args, ^%{"distinct_ids" => ids}))
+      |> Oban.cancel_all_jobs()
+
+    :ok
+  end
 
   @doc "The id the web client identifies with, or nil when it must send nothing."
   @spec client_id(map()) :: String.t() | nil
