@@ -176,8 +176,8 @@ export default {
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"您的免費方案可以附加文字檔案（.md、.txt、.csv、.html、程式碼）。升級以附加圖片、音訊、影片、PDF 和 Office 文件。",
 	"Device limit reached": "裝置數量已達上限",
-	"You've reached the number of Obsidian devices your Free plan allows. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
-		"您已達到免費方案允許的 Obsidian 個裝置數量。斷開您不使用的裝置以連接此裝置，或升級以連接更多裝置。",
+	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
+		"您已達到免費方案的裝置數量上限。斷開您不使用的裝置，以連接此裝置，或升級方案以連接更多裝置。",
 	"Account suspended": "帳戶已停用",
 	"Contact support to restore access.": "請聯絡客服以恢復存取權。",
 	"Account setup incomplete": "帳戶設定未完成",
@@ -426,9 +426,8 @@ export default {
 		"你的帳戶設定尚未完成。{setup}，然後再次點擊 Obsidian 中的「連結」。",
 	"You recently swapped devices. Your Free plan allows 1 swap every 24 hours — you can swap again in {hours}h. {upgrade} to connect as many devices as you like.":
 		"你最近更換了裝置。你的免費方案允許每 24 小時更換一次裝置 — 你可以在 {hours} 小時後再次更換。{upgrade} 以連接任意多個裝置。",
-	"Heads up: your Free plan syncs files between {devices} at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
-		"提醒：您的免費方案一次同步 {devices} 個檔案。連接此裝置將會斷開 {device} 的連線，導致其停止接收同步更新。{upgrade} 以保持兩者連線。",
-	"{count} devices": { other: "{count} 裝置" },
+	"Heads up: you've reached your Free plan's device limit ({count}). Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
+		"注意：您已達到免費方案的裝置數量上限 ({count})。連接此裝置將會斷開 {device} 的連線，導致其停止接收同步更新。點擊 {upgrade} 以保持兩者連線。",
 	"{count} minutes ago": { other: "{count} 分鐘前" },
 	"{count} hours ago": { other: "{count} 小時前" },
 	"{count} days ago": { other: "{count} 天前" },
@@ -572,9 +571,7 @@ export default {
 	Language: "語言",
 	"My Vault": "我的儲存庫",
 	"{count} days left in your trial.": { other: "試用期剩 {count} 天。" },
-	"Your Free plan includes {count} Obsidian devices.": {
-		other: "您的免費方案包含 {count} 個 Obsidian 裝置。",
-	},
+	"Free plan device limit: {count}.": "免費方案的裝置數量上限：{count}。",
 	"Collapse sidebar": "摺疊側邊欄",
 	"No vaults": "沒有儲存庫",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -754,12 +751,11 @@ export default {
 	"Upgrade instead": "選擇升級",
 	"Taking you to setup so you can finish connecting {app}.": "將您導向設定，以便完成連線 {app}。",
 	"Authorize {client}": "授權 {client}",
-	"Heads up: your Free plan allows {devices}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
-		"提醒：您的免費方案允許 {devices} 個。批准將會斷開 {name} 的連線，導致其失去存取權。{upgrade} 以保持兩者連線。",
+	"Heads up: your Free plan's device limit is {count}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
+		"注意：您的免費方案的裝置數量上限為 {count}。確認將會斷開 {name} 的連線，導致其失去存取權。點擊 {upgrade} 以保持兩者連線。",
 	"Name this connection {optional}": "將此連線命名為 {optional}",
-	"Your Free plan allows {devices}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
-		"您的免費方案允許 {devices} 個。連接 {client} 將會斷開 {name} 的連線，導致其失去存取您的 Engram。",
-	"{count} active devices": { other: "{count} 已啟用裝置" },
+	"Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
+		"您的免費方案的裝置數量上限為 {count}。連接 {client} 將會斷開 {name} 的連線，導致其失去對您的 Engram 的存取權。",
 	"What will you use Engram for?": "您將如何使用 Engram？",
 	"Review the Terms": "檢閱條款",
 	"privacy notice": "隱私權聲明",

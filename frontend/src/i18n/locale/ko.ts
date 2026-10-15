@@ -188,8 +188,8 @@ export default {
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"무료 플랜에서는 텍스트 파일(.md, .txt, .csv, .html, 코드)만 첨부할 수 있습니다. 이미지, 오디오, 비디오, PDF 및 오피스 문서를 첨부하려면 업그레이드하세요.",
 	"Device limit reached": "기기 수 제한에 도달했습니다",
-	"You've reached the number of Obsidian devices your Free plan allows. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
-		"무료 플랜으로 Obsidian개의 기기 연결이 가능합니다. 사용하지 않는 기기를 연결 해제하거나, 더 많은 기기를 연결하려면 유료 플랜으로 업그레이드하세요.",
+	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
+		"무료 플랜의 기기 연결 제한에 도달했습니다. 사용하지 않는 기기를 연결 해제하여 이 기기를 연결하거나, 더 많은 기기를 연결하려면 유료 플랜으로 업그레이드하세요.",
 	"Account suspended": "계정이 정지되었습니다",
 	"Contact support to restore access.": "접근 권한 복구를 위해 지원팀에 문의하세요.",
 	"Account setup incomplete": "계정 설정이 완료되지 않았습니다",
@@ -443,9 +443,8 @@ export default {
 		"계정 설정이 아직 완료되지 않았습니다. {setup}을 설치한 후, 다시 Obsidian에서 링크를 클릭하세요.",
 	"You recently swapped devices. Your Free plan allows 1 swap every 24 hours — you can swap again in {hours}h. {upgrade} to connect as many devices as you like.":
 		"최근에 기기를 변경하셨습니다. 무료 플랜은 24시간마다 1회 기기 변경을 허용합니다. {hours}시간 후에 다시 변경할 수 있습니다. 더 많은 기기를 연결하려면 {upgrade}을 이용하세요.",
-	"Heads up: your Free plan syncs files between {devices} at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
-		"참고: 무료 플랜은 한 번에 {devices}개의 기기 간에 파일을 동기화합니다. 이 기기를 연결하면 {device}이 연결 해제되어 동기화 변경 사항을 더 이상 받지 못합니다. {upgrade}를 사용하여 두 기기를 모두 연결 상태로 유지하세요.",
-	"{count} devices": { other: "{count} 기기" },
+	"Heads up: you've reached your Free plan's device limit ({count}). Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
+		"알림: 무료 플랜의 기기 연결 제한({count})에 도달했습니다. 이 기기를 연결하면 {device}이 연결 해제되어 동기화 변경 사항을 받지 못하게 됩니다. {upgrade}를 사용하여 두 기기를 모두 연결 상태로 유지하세요.",
 	"{count} minutes ago": { other: "{count}분 전" },
 	"{count} hours ago": { other: "{count}시간 전" },
 	"{count} days ago": { other: "{count}일 전" },
@@ -594,9 +593,7 @@ export default {
 	Language: "언어",
 	"My Vault": "내 보관함",
 	"{count} days left in your trial.": { other: "무료 체험은 {count}일 남았습니다." },
-	"Your Free plan includes {count} Obsidian devices.": {
-		other: "무료 플랜은 {count} Obsidian개의 기기를 포함합니다.",
-	},
+	"Free plan device limit: {count}.": "무료 플랜의 기기 연결 제한: {count}.",
 	"Collapse sidebar": "사이드바 접기",
 	"No vaults": "보관함 없음",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -779,12 +776,11 @@ export default {
 	"Taking you to setup so you can finish connecting {app}.":
 		"{app} 연결을 완료할 수 있도록 설정 화면으로 이동합니다.",
 	"Authorize {client}": "{client} 승인",
-	"Heads up: your Free plan allows {devices}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
-		"참고: 무료 플랜에서는 {devices}을 허용합니다. 승인하면 {name}이 연결 해제되어 접근 권한을 잃게 됩니다. {upgrade}를 사용하여 두 기기를 모두 연결 상태로 유지하세요.",
+	"Heads up: your Free plan's device limit is {count}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
+		"알림: 무료 플랜의 기기 연결 제한은 {count}입니다. 승인하면 {name}이 연결 해제되어 접근 권한을 잃게 됩니다. {upgrade}를 사용하여 두 기기를 모두 연결 상태로 유지하세요.",
 	"Name this connection {optional}": "이 연결을 {optional}이라고 명명하세요",
-	"Your Free plan allows {devices}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
-		"무료 플랜에서는 {devices}을 허용합니다. {client}을 연결하면 {name}가 연결 해제되어 Engram에 대한 접근 권한을 잃게 됩니다.",
-	"{count} active devices": { other: "{count} 활성 장치" },
+	"Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
+		"무료 플랜의 기기 연결 제한은 {count}입니다. {client}을 연결하면 {name}가 연결 해제되어 Engram에 대한 접근 권한을 잃게 됩니다.",
 	"What will you use Engram for?": "Engram을 어디에 사용하시겠습니까?",
 	"Review the Terms": "이용 약관 확인",
 	"privacy notice": "개인정보 처리방침",

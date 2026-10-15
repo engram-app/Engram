@@ -191,8 +191,8 @@ export default {
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"Gói miễn phí của bạn có thể đính kèm các tệp văn bản (.md, .txt, .csv, .html, code). Nâng cấp để đính kèm hình ảnh, âm thanh, video, PDF và tài liệu văn phòng.",
 	"Device limit reached": "Đã đạt giới hạn thiết bị",
-	"You've reached the number of Obsidian devices your Free plan allows. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
-		"Bạn đã đạt giới hạn Obsidian thiết bị mà gói Free cho phép. Ngắt kết nối một thiết bị bạn không sử dụng để kết nối thiết bị này, hoặc nâng cấp để kết nối nhiều thiết bị hơn.",
+	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
+		"Bạn đã đạt giới hạn thiết bị trên gói Free. Hủy kết nối một thiết bị bạn không sử dụng để kết nối thiết bị này, hoặc nâng cấp để kết nối nhiều thiết bị hơn.",
 	"Account suspended": "Tài khoản đã bị đình chỉ",
 	"Contact support to restore access.": "Liên hệ bộ phận hỗ trợ để khôi phục quyền truy cập.",
 	"Account setup incomplete": "Thiết lập tài khoản chưa hoàn tất",
@@ -451,9 +451,8 @@ export default {
 		"Thiết lập tài khoản của bạn chưa hoàn tất. {setup}, sau đó nhấp vào Liên kết trong Obsidian lần nữa.",
 	"You recently swapped devices. Your Free plan allows 1 swap every 24 hours — you can swap again in {hours}h. {upgrade} to connect as many devices as you like.":
 		"Bạn vừa chuyển thiết bị. Gói miễn phí của bạn cho phép chuyển đổi 1 lần mỗi 24 giờ — bạn có thể chuyển đổi lại sau {hours} giờ. {upgrade} để kết nối bao nhiêu thiết bị tùy thích.",
-	"Heads up: your Free plan syncs files between {devices} at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
-		"Lưu ý: gói Free của bạn đồng bộ hóa tệp giữa {devices} thiết bị cùng lúc. Kết nối thiết bị này sẽ ngắt kết nối {device}, thiết bị này sẽ ngừng nhận các thay đổi đồng bộ. {upgrade} để giữ cả hai thiết bị kết nối.",
-	"{count} devices": { other: "{count} thiết bị" },
+	"Heads up: you've reached your Free plan's device limit ({count}). Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
+		"Lưu ý: bạn đã đạt giới hạn thiết bị của gói Free ({count}). Kết nối thiết bị này sẽ ngắt kết nối {device}, thiết bị này sẽ ngừng nhận các thay đổi đồng bộ. {upgrade} để giữ cả hai thiết bị kết nối.",
 	"{count} minutes ago": { other: "Cách đây {count} phút" },
 	"{count} hours ago": { other: "{count} giờ trước" },
 	"{count} days ago": { other: "{count} ngày trước" },
@@ -605,9 +604,7 @@ export default {
 	"{count} days left in your trial.": {
 		other: "Còn {count} ngày trong thời gian dùng thử của bạn.",
 	},
-	"Your Free plan includes {count} Obsidian devices.": {
-		other: "Gói miễn phí của bạn bao gồm {count} Obsidian thiết bị.",
-	},
+	"Free plan device limit: {count}.": "Giới hạn thiết bị của gói Free: {count}.",
 	"Collapse sidebar": "Thu gọn thanh bên",
 	"No vaults": "Không có kho lưu trữ",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -790,12 +787,11 @@ export default {
 	"Taking you to setup so you can finish connecting {app}.":
 		"Đang đưa bạn đến trang thiết lập để bạn có thể hoàn tất kết nối {app}.",
 	"Authorize {client}": "Xác thực {client}",
-	"Heads up: your Free plan allows {devices}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
-		"Lưu ý: gói Free của bạn cho phép {devices}. Xác nhận sẽ ngắt kết nối {name}, thiết bị này sẽ ngừng truy cập. {upgrade} để giữ cả hai thiết bị kết nối.",
+	"Heads up: your Free plan's device limit is {count}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
+		"Lưu ý: giới hạn thiết bị của gói Free của bạn là {count}. Xác nhận sẽ ngắt kết nối {name}, thiết bị này sẽ ngừng truy cập. {upgrade} để giữ cả hai thiết bị kết nối.",
 	"Name this connection {optional}": "Đặt tên cho kết nối này là {optional}",
-	"Your Free plan allows {devices}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
-		"Gói Free của bạn cho phép {devices}. Kết nối {client} sẽ ngắt kết nối {name}, thiết bị này sẽ ngừng truy cập vào Engram của bạn.",
-	"{count} active devices": { other: "{count} thiết bị đang hoạt động" },
+	"Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
+		"Giới hạn thiết bị của gói Free của bạn là {count}. Kết nối {client} sẽ ngắt kết nối {name}, thiết bị này sẽ ngừng truy cập vào Engram.",
 	"What will you use Engram for?": "Bạn sẽ sử dụng Engram cho mục đích gì?",
 	"Review the Terms": "Xem lại Điều khoản",
 	"privacy notice": "Thông báo về quyền riêng tư",

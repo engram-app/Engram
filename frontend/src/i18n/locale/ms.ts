@@ -196,8 +196,8 @@ export default {
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"Pelan percuma anda boleh melampirkan fail teks (.md, .txt, .csv, .html, kod). Tingkatkan untuk melampirkan gambar, audio, video, PDF, dan dokumen pejabat.",
 	"Device limit reached": "Had peranti telah dicapai",
-	"You've reached the number of Obsidian devices your Free plan allows. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
-		"Anda telah mencapai had Obsidian peranti yang dibenarkan oleh pelan percuma anda. Cabut peranti yang tidak anda gunakan untuk menyambungkan yang ini, atau tingkatkan langganan untuk menyambungkan lebih banyak peranti.",
+	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
+		"Anda telah mencapai had peranti pada pelan percuma anda. Putuskan sambungan peranti yang tidak anda gunakan untuk menyambungkan yang ini, atau tingkatkan langganan anda untuk menyambungkan lebih banyak peranti.",
 	"Account suspended": "Akaun ditangguhkan",
 	"Contact support to restore access.": "Hubungi sokongan untuk memulihkan akses.",
 	"Account setup incomplete": "Persediaan akaun belum selesai",
@@ -456,9 +456,8 @@ export default {
 		"Persediaan akaun anda belum selesai. {setup}, kemudian klik Pautkan di Obsidian sekali lagi.",
 	"You recently swapped devices. Your Free plan allows 1 swap every 24 hours — you can swap again in {hours}h. {upgrade} to connect as many devices as you like.":
 		"Anda baru sahaja menukar peranti. Pelan percuma anda membenarkan 1 pertukaran setiap 24 jam — anda boleh menukar lagi dalam {hours}j. {upgrade} untuk menyambungkan sebanyak peranti yang anda suka.",
-	"Heads up: your Free plan syncs files between {devices} at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
-		"Perhatian: pelan percuma anda menyegerakkan fail antara {devices} pada satu masa. Menyambungkan peranti ini akan memutuskan sambungan {device}, yang akan berhenti menerima perubahan penyegerakan. {upgrade} untuk memastikan kedua-duanya tetap disambungkan.",
-	"{count} devices": { other: "{count} peranti" },
+	"Heads up: you've reached your Free plan's device limit ({count}). Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
+		"Perhatian: anda telah mencapai had peranti pelan percuma anda ({count}). Menyambungkan peranti ini akan memutuskan sambungan {device}, yang akan berhenti menerima perubahan penyegerakan. {upgrade} untuk memastikan kedua-duanya tetap disambungkan.",
 	"{count} minutes ago": { other: "{count} minit yang lalu" },
 	"{count} hours ago": { other: "{count} jam yang lalu" },
 	"{count} days ago": { other: "{count} hari lalu" },
@@ -608,9 +607,7 @@ export default {
 	Language: "Bahasa",
 	"My Vault": "Peti Nota Saya",
 	"{count} days left in your trial.": { other: "{count} hari lagi untuk tempoh percubaan anda." },
-	"Your Free plan includes {count} Obsidian devices.": {
-		other: "Rancangan percuma anda termasuk {count} Obsidian peranti.",
-	},
+	"Free plan device limit: {count}.": "Had peranti pelan percuma: {count}.",
 	"Collapse sidebar": "Lipat bar sisi",
 	"No vaults": "Tiada peti nota",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -793,12 +790,11 @@ export default {
 	"Taking you to setup so you can finish connecting {app}.":
 		"Mengarahkan anda ke tetapan supaya anda dapat menyelesaikan penyambungan {app}.",
 	"Authorize {client}": "Luluskan {client}",
-	"Heads up: your Free plan allows {devices}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
-		"Perhatian: pelan percuma anda membenarkan {devices}. Meluluskan akan memutuskan sambungan {name}, yang akan berhenti mempunyai akses. {upgrade} untuk memastikan kedua-duanya tetap disambungkan.",
+	"Heads up: your Free plan's device limit is {count}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
+		"Perhatian: had peranti pelan percuma anda ialah {count}. Mengesahkan akan memutuskan sambungan {name}, yang akan berhenti mengakses. {upgrade} untuk memastikan kedua-duanya tetap disambungkan.",
 	"Name this connection {optional}": "Namakan sambungan ini {optional}",
-	"Your Free plan allows {devices}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
-		"Pelan percuma anda membenarkan {devices}. Menyambungkan {client} akan memutuskan sambungan {name}, yang akan berhenti mempunyai akses kepada Engram anda.",
-	"{count} active devices": { other: "{count} peranti aktif" },
+	"Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
+		"Had peranti pelan percuma anda ialah {count}. Menyambungkan {client} akan memutuskan sambungan {name}, yang akan berhenti mengakses Engram anda.",
 	"What will you use Engram for?": "Apa yang akan anda gunakan Engram untuk?",
 	"Review the Terms": "Semak Terma",
 	"privacy notice": "Notis privasi",

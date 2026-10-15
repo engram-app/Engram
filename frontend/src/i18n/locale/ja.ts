@@ -193,8 +193,8 @@ export default {
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"無料プランでは、テキストファイル（.md、.txt、.csv、.html、コード）を添付できます。画像、音声、動画、PDF、Officeドキュメントを添付するには、アップグレードしてください。",
 	"Device limit reached": "デバイスの制限に達しました",
-	"You've reached the number of Obsidian devices your Free plan allows. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
-		"無料プランで利用できるデバイスはObsidian台までです。このデバイスを接続するには、使用していないデバイスを解除するか、より多くのデバイスを接続できるように有料プランにアップグレードしてください。",
+	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
+		"無料プランでは、デバイスの接続台数制限に達しました。使用していないデバイスを切断して、このデバイスを接続するか、より多くのデバイスを接続するためにプランをアップグレードしてください。",
 	"Account suspended": "アカウントが停止されました",
 	"Contact support to restore access.": "復旧のため、サポートにお問い合わせください。",
 	"Account setup incomplete": "アカウントの設定が完了していません",
@@ -453,9 +453,8 @@ export default {
 		"アカウントの設定が完了していません。{setup} を実行し、再度 Obsidian のリンクをクリックしてください。",
 	"You recently swapped devices. Your Free plan allows 1 swap every 24 hours — you can swap again in {hours}h. {upgrade} to connect as many devices as you like.":
 		"最近、デバイスを切り替えました。無料プランでは、24時間ごとに1回の切り替えが可能です。{hours} 時間後に再度切り替えられます。より多くのデバイスを接続するには、{upgrade} をご利用ください。",
-	"Heads up: your Free plan syncs files between {devices} at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
-		"ご注意：無料プランでは、{devices}のデバイスを同時に同期します。このデバイスを接続すると、{device}が切断され、同期の変更を受け取らなくなります。両方を接続するには、{upgrade}を選択してください。",
-	"{count} devices": { other: "{count} デバイス" },
+	"Heads up: you've reached your Free plan's device limit ({count}). Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
+		"ご注意: 無料プランのデバイス接続台数制限に達しました ({count})。このデバイスを接続すると、{device} が切断され、同期の変更を受け取らなくなります。両方を接続したままにするには、{upgrade} を行ってください。",
 	"{count} minutes ago": { other: "{count}分前" },
 	"{count} hours ago": { other: "{count}時間前" },
 	"{count} days ago": { other: "{count}日前" },
@@ -604,9 +603,7 @@ export default {
 	Language: "言語",
 	"My Vault": "私の保管庫",
 	"{count} days left in your trial.": { other: "トライアル期間は残り{count}日です。" },
-	"Your Free plan includes {count} Obsidian devices.": {
-		other: "無料プランには、{count} Obsidian デバイスが含まれます。",
-	},
+	"Free plan device limit: {count}.": "無料プランのデバイス接続台数制限: {count}.",
 	"Collapse sidebar": "サイドバーを折りたたみ",
 	"No vaults": "保管庫がありません",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -791,12 +788,11 @@ export default {
 	"Taking you to setup so you can finish connecting {app}.":
 		"{app}への接続を完了するために、設定画面に移動します。",
 	"Authorize {client}": "{client}を承認",
-	"Heads up: your Free plan allows {devices}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
-		"ご注意：無料プランでは、{devices}が許可されています。承認すると、{name}が切断され、アクセスできなくなります。両方を接続するには、{upgrade}を選択してください。",
+	"Heads up: your Free plan's device limit is {count}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
+		"ご注意: 無料プランのデバイス接続台数制限は {count} です。承認すると、{name} が切断され、アクセスできなくなります。両方を接続したままにするには、{upgrade} を行ってください。",
 	"Name this connection {optional}": "この接続を{optional}と名付けます",
-	"Your Free plan allows {devices}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
-		"無料プランでは、{devices}が許可されています。{client}を接続すると、{name}が切断され、Engramへのアクセスできなくなります。",
-	"{count} active devices": { other: "{count} アクティブなデバイス" },
+	"Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
+		"無料プランのデバイス接続台数制限は {count} です。{client} を接続すると、{name} が切断され、Engram へのアクセスできなくなります。",
 	"What will you use Engram for?": "Engramをどのように利用しますか？",
 	"Review the Terms": "利用規約を確認",
 	"privacy notice": "プライバシーポリシー",

@@ -202,8 +202,8 @@ export default {
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"Seu plano gratuito permite anexar arquivos de texto (.md, .txt, .csv, .html, código). Atualize para anexar imagens, áudio, vídeo, PDFs e documentos do Office.",
 	"Device limit reached": "Limite de dispositivos atingido",
-	"You've reached the number of Obsidian devices your Free plan allows. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
-		"Você atingiu o número de Obsidian dispositivos permitidos pelo seu plano Gratuito. Desconecte um dispositivo que você não está usando para conectar este, ou faça um upgrade para conectar mais dispositivos.",
+	"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
+		"Você atingiu o limite de dispositivos no seu plano Gratuito. Desconecte um dispositivo que você não está usando para conectar este, ou faça um upgrade para conectar mais dispositivos.",
 	"Account suspended": "Conta suspensa",
 	"Contact support to restore access.": "Entre em contato com o suporte para restaurar o acesso.",
 	"Account setup incomplete": "Configuração da conta incompleta",
@@ -463,13 +463,8 @@ export default {
 		'A configuração da sua conta não foi finalizada. {setup}, depois clique em "Link" novamente no Obsidian.',
 	"You recently swapped devices. Your Free plan allows 1 swap every 24 hours — you can swap again in {hours}h. {upgrade} to connect as many devices as you like.":
 		"Você trocou de dispositivo recentemente. Seu plano gratuito permite 1 troca a cada 24 horas — você pode trocar novamente em {hours}h. {upgrade} para conectar quantos dispositivos quiser.",
-	"Heads up: your Free plan syncs files between {devices} at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
-		"Atenção: seu plano Gratuito sincroniza arquivos entre {devices} ao mesmo tempo. Conectar este dispositivo desconectará {device}, que deixará de receber as alterações de sincronização. {upgrade} para manter ambos conectados.",
-	"{count} devices": {
-		one: "{count} dispositivo",
-		many: "{count} dispositivos",
-		other: "{count} dispositivos",
-	},
+	"Heads up: you've reached your Free plan's device limit ({count}). Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
+		"Atenção: você atingiu o limite de dispositivos do seu plano Gratuito ({count}). Conectar este dispositivo desconectará {device}, que deixará de receber as alterações de sincronização. {upgrade} para manter ambos conectados.",
 	"{count} minutes ago": {
 		one: "{count} minuto atrás",
 		many: "{count} minutos atrás",
@@ -643,11 +638,7 @@ export default {
 		many: "Restam {count} dias do seu período de teste.",
 		other: "Faltam {count} dias para o fim do seu período de teste.",
 	},
-	"Your Free plan includes {count} Obsidian devices.": {
-		one: "Seu plano gratuito inclui {count} Obsidian dispositivos.",
-		many: "Seu plano gratuito inclui {count} Obsidian dispositivos.",
-		other: "Seu plano gratuito inclui {count} Obsidian dispositivos.",
-	},
+	"Free plan device limit: {count}.": "Limite de dispositivos do plano Gratuito: {count}.",
 	"Collapse sidebar": "Colapsar barra lateral",
 	"No vaults": "Nenhum cofre",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -835,16 +826,11 @@ export default {
 	"Taking you to setup so you can finish connecting {app}.":
 		"Levando você para a configuração para que você possa finalizar a conexão com {app}.",
 	"Authorize {client}": "Autorizar {client}",
-	"Heads up: your Free plan allows {devices}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
-		"Atenção: seu plano Gratuito permite {devices}. Aprovar desconectará {name}, que perderá o acesso. {upgrade} para manter ambos conectados.",
+	"Heads up: your Free plan's device limit is {count}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
+		"Atenção: o limite de dispositivos do seu plano Gratuito é {count}. Aprovar desconectará {name}, que perderá o acesso. {upgrade} para manter ambos conectados.",
 	"Name this connection {optional}": "Dê um nome a esta conexão: {optional}",
-	"Your Free plan allows {devices}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
-		"Seu plano Gratuito permite {devices}. Conectar {client} desconectará {name}, que perderá o acesso ao seu Engram.",
-	"{count} active devices": {
-		one: "{count} dispositivo ativo",
-		many: "{count} dispositivos ativos",
-		other: "{count} dispositivos ativos",
-	},
+	"Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
+		"O limite de dispositivos do seu plano Gratuito é {count}. Conectar {client} desconectará {name}, que perderá o acesso ao seu Engram.",
 	"What will you use Engram for?": "Para que você usará o Engram?",
 	"Review the Terms": "Revise os Termos",
 	"privacy notice": "aviso de privacidade",
