@@ -149,4 +149,26 @@ defmodule Engram.AnalyticsTest do
              end)
     end
   end
+
+  describe "cancel_reerase/1" do
+    # A user who opts back in within the re-erase window must not lose the
+    # data they produced after consenting again.
+    test "cancels the delayed re-erase, keeps the immediate erasure and other users' jobs" do
+      enable_erasure()
+      user = insert(:user, email: "back@example.com", external_id: nil)
+      other = insert(:user, email: "other@example.com", external_id: nil)
+      :ok = Analytics.forget(user)
+      :ok = Analytics.forget(other)
+
+      assert :ok = Analytics.cancel_reerase(user)
+
+      mine = [PostHog.analytics_id("back@example.com")]
+      jobs = all_enqueued(worker: PostHogErasure)
+
+      assert [%{state: "available"}] =
+               Enum.filter(jobs, &(&1.args == %{"distinct_ids" => mine}))
+
+      assert 2 == Enum.count(jobs, &(&1.args != %{"distinct_ids" => mine}))
+    end
+  end
 end

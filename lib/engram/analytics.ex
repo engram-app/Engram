@@ -19,6 +19,8 @@ defmodule Engram.Analytics do
   (privacy policy 2026-10-12).
   """
 
+  import Ecto.Query, only: [where: 2, where: 3]
+
   alias Engram.Accounts
   alias Engram.Accounts.User
   alias Engram.Observability.PostHog
@@ -132,6 +134,25 @@ defmodule Engram.Analytics do
   end
 
   def forget_previous_email(_old, _new), do: :ok
+
+  @doc """
+  Cancel the delayed re-erase `forget/1` scheduled for `user`, for a user who
+  withdrew their objection. The immediate erasure still runs: it covers data
+  from before the opt-out, while the re-erase would also delete data they
+  produced after consenting again.
+  """
+  @spec cancel_reerase(map()) :: :ok
+  def cancel_reerase(user) do
+    ids = known_ids(user)
+
+    {:ok, _} =
+      Oban.Job
+      |> where(worker: ^inspect(PostHogErasure), state: "scheduled")
+      |> where([j], fragment("? @> ?", j.args, ^%{"distinct_ids" => ids}))
+      |> Oban.cancel_all_jobs()
+
+    :ok
+  end
 
   @doc "The id the web client identifies with, or nil when it must send nothing."
   @spec client_id(map()) :: String.t() | nil

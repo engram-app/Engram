@@ -283,13 +283,18 @@ defmodule Engram.Accounts do
 
   @doc """
   Withdraw a user's objection to analytics. Capture resumes on their next
-  request; PostHogPersonSync restores person properties on its next run.
+  request, and the opt-out's delayed re-erase is cancelled so it cannot delete
+  what they send after consenting again.
   """
   @spec clear_analytics_opt_out(User.t()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
   def clear_analytics_opt_out(%User{} = user) do
-    user
-    |> Ecto.Changeset.change(analytics_opt_out_at: nil)
-    |> Repo.update(skip_tenant_check: true)
+    with {:ok, updated} <-
+           user
+           |> Ecto.Changeset.change(analytics_opt_out_at: nil)
+           |> Repo.update(skip_tenant_check: true) do
+      :ok = Engram.Analytics.cancel_reerase(updated)
+      {:ok, updated}
+    end
   end
 
   @doc """
