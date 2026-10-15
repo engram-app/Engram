@@ -9,10 +9,11 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
   refused everyone's refresh: the connector dies and the user re-authorizes.
 
     * `/oauth/token`, `/oauth/revoke`: per CLIENT PER IP (`client_id` from
-      the body or HTTP Basic, with the caller's IP), #{120}/min, plus a coarse
-      per-IP bucket (#{1_200}/min) so a caller cannot dodge it by inventing
-      client ids. The coarse bucket is 10x the client bucket: a vendor egress
-      IP carries many clients, and the client bucket must trip first. Never per client alone: a CIMD `client_id` is a public URL
+      the body or HTTP Basic, with the caller's IP), #{300}/min (a CIMD
+      client_id is one vendor's whole user base from that IP), plus a coarse
+      per-IP bucket (#{3_000}/min) so a caller cannot dodge it by inventing
+      client ids. The coarse bucket is 10x the client bucket and only counts
+      requests the client bucket allowed, so the client bucket trips first. Never per client alone: a CIMD `client_id` is a public URL
       shared by every user of a vendor, so a client-only bucket let anyone
       exhaust ChatGPT for everybody (review of #1974).
     * `/oauth/register`: per IP, #{60}/min. Vendor backends register per
@@ -38,13 +39,13 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
 
   @period_ms 60_000
   @policy %{
-    "/oauth/token" => {:client, 120},
-    "/oauth/revoke" => {:client, 120},
+    "/oauth/token" => {:client, 300},
+    "/oauth/revoke" => {:client, 300},
     "/oauth/register" => {:ip, 60},
     "/oauth/authorize" => {:ip, 10}
   }
   @default_policy {:ip, 10}
-  @ip_coarse_limit 1_200
+  @ip_coarse_limit 3_000
 
   @is_test_build Application.compile_env(:engram, :env, :prod) == :test
 
@@ -57,8 +58,11 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
     {kind, limit} = Map.get(@policy, path, @default_policy)
     ip = conn |> EngramWeb.RemoteIp.resolve() |> :inet.ntoa() |> to_string()
 
-    with :ok <- coarse_ip(kind, path, ip),
-         :ok <- hit(primary_key(kind, conn, path, ip), primary_limit(limit)) do
+    # The client bucket first, the IP bucket only for what it allows: a
+    # request the client bucket refuses must not also drain the bucket every
+    # other client on that IP shares (third review of #1974).
+    with :ok <- hit(primary_key(kind, conn, path, ip), primary_limit(limit)),
+         :ok <- coarse_ip(kind, path, ip) do
       conn
     else
       {:deny, retry_after_ms} -> deny(conn, path, retry_after_ms)

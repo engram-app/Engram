@@ -33,8 +33,8 @@ CIMD clients (Claude, ChatGPT) skip step 3: they send an HTTPS URL as `client_id
 | `GET /oauth/authorize` | none, rate-limited 10/IP/min | Validates request, 302s to `/oauth/consent` (SPA mediation, Phase 7.A) |
 | `GET /api/oauth/clients/:client_id` | none, rate-limited 10/IP/min | Public client metadata — `{client_id, client_name}` only, for SPA consent UI |
 | `POST /api/oauth/authorize/consent` | Bearer JWT | SPA submits w/ `vault_choice`. Mints code. JSON `{redirect_uri: "..."}` for SPA `window.location` |
-| `POST /oauth/token` | client auth, rate-limited 120/min per {client_id, IP} plus 1,200/min per IP | RFC 6749 §3.2 — auth code → tokens, refresh → rotated tokens |
-| `POST /oauth/revoke` | client auth, rate-limited 120/min per {client_id, IP} plus 1,200/min per IP | RFC 7009 — 200 always |
+| `POST /oauth/token` | client auth, rate-limited 300/min per {client_id, IP} plus 3,000/min per IP | RFC 6749 §3.2 — auth code → tokens, refresh → rotated tokens |
+| `POST /oauth/revoke` | client auth, rate-limited 300/min per {client_id, IP} plus 3,000/min per IP | RFC 7009 — 200 always |
 
 ## Token model
 

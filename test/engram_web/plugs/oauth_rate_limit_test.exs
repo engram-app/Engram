@@ -15,8 +15,8 @@ defmodule EngramWeb.Plugs.OAuthRateLimitTest do
 
   alias EngramWeb.Plugs.OAuthRateLimit
 
-  @client_limit 120
-  @ip_limit 1_200
+  @client_limit 300
+  @ip_limit 3_000
 
   setup do
     for key <- [:rate_limit_override, :oauth_ip_rate_limit_override] do
@@ -78,6 +78,18 @@ defmodule EngramWeb.Plugs.OAuthRateLimitTest do
 
     assert %{"error" => "temporarily_unavailable", "error_description" => _} =
              Jason.decode!(conn.resp_body)
+  end
+
+  # Third review #8: requests the client bucket refuses must not also drain
+  # the shared IP bucket, or one flooding client 429s every other client on
+  # that IP (a vendor egress IP carries thousands).
+  test "a client flooding past its limit does not drain the IP bucket for others" do
+    flooder = Ecto.UUID.generate()
+    exhaust(flooder)
+    for _ <- 1..(@ip_limit - @client_limit), do: assert(limited?(token(flooder)))
+
+    other = Ecto.UUID.generate()
+    for _ <- 1..@client_limit, do: refute(limited?(token(other)))
   end
 
   test "the per-IP coarse bucket still bounds one IP across many client_ids" do
