@@ -663,7 +663,7 @@ defmodule Engram.OAuth do
   #
   # The raw successor cannot simply be returned again: only its hash is stored.
   #
-  # The tradeoff (docs/context/api-access-and-mcp-limits.md): inside the window
+  # The tradeoff (docs/context/mcp-oauth.md): inside the window
   # whoever presents the old token first gets the new one. The client check
   # (rotate_existing/3) and client authentication (the token controller, before
   # this runs) still apply, every re-issue logs whether the caller's IP matched
