@@ -43,12 +43,14 @@ CIMD clients (Claude, ChatGPT) skip step 3: they send an HTTPS URL as `client_id
 
 ### Refresh grace window (#1974) and its tradeoff
 
-A client whose rotation response is lost retries with the token it still holds. Before #1974 that revoked the family, so every lost response killed the connection. Now a replay of a consumed token **within 60 s**, while its successor has **never been used**, re-issues: the old token and the unused successor are revoked and one new successor is minted, so the family never has two live tokens. Two rotations racing on one token take the same path (the loser re-reads the row and goes through `rotate_existing/3`), so a duplicate retry does not revoke the family either.
+A client whose rotation response is lost retries with the token it still holds. Before #1974 that revoked the family, so every lost response killed the connection. Now a replay of a consumed token **within 60 s**, while its successor has **never been used**, re-issues: the unused successor is revoked and one new successor is minted, so the family never has two live tokens. Every duplicate inside the window is handled the same way, and rotations racing on one token take the same path (a loser of the consume compare-and-set re-reads the row and goes through `rotate_existing/3`), so N duplicate retries all succeed instead of the third revoking the family. Re-issues for one token are serialized on its row lock. `Engram.OAuthRotationRaceTest` proves this on separate committing connections.
 
 The cost: inside the window, whoever presents the consumed token first gets the new one. What bounds it:
 
 - The replay must come from the **same `client_id`** (`:client_mismatch` otherwise), and a `private_key_jwt` or secret client must pass client authentication first (the token controller authenticates before `rotate_refresh_token/3` runs).
-- The grace is spent once: the old token is revoked by the re-issue, so a second replay revokes the family.
+- Nothing minted since may have been **used**: a consumed successor means the client had it, so the replay is theft and the family is revoked.
+- The newest successor must still be live: one revoked any other way (RFC 7009, Disconnect) is never resurrected by replaying its parent.
+- The consume compare-and-set requires `revoked_at IS NULL`, so a Disconnect that commits between a rotation's read and its UPDATE stops it.
 - If the successor the grace revoked turns up later, two parties held the lineage: the `revoked_at` clause revokes the family.
 - Every re-issue logs `oauth_refresh_grace_reissue` with `client_id`, `family_id` and `ip_matched` (whether the replay came from the IP that received the successor). `ip_matched=false` is the line to read when looking for theft; it is not refused, because a vendor backend (ChatGPT, Claude) may retry from a different egress IP.
 

@@ -578,11 +578,15 @@ defmodule Engram.OAuth do
     now = DateTime.utc_now(:second)
 
     # Atomic compare-and-set: only one concurrent rotation may consume this
-    # token. This is a DIFFERENT detection from the two clauses in
-    # rotate_existing/3 — those read a value that was already set, which is a
-    # TOCTOU and cannot serialize concurrent rotations; only `WHERE consumed_at
-    # IS NULL` in the UPDATE can. A 0-row result means another request won that
-    # race.
+    # token, and never a revoked one. `revoked_at IS NULL` matters as much as
+    # `consumed_at IS NULL`: a Disconnect or family revoke that commits between
+    # our read and this UPDATE must stop the rotation, not be outrun by it.
+    #
+    # This is a DIFFERENT detection from the clauses in rotate_existing/3:
+    # those read a value that was already set, which is a TOCTOU and cannot
+    # serialize concurrent rotations; only the WHERE in the UPDATE can. A
+    # 0-row result means another request won, or a revoke landed; the re-read
+    # in rotate_lost_race/2 tells which.
     #
     # The consume and the mint commit together, so the loser's UPDATE waits on
     # the winner's row lock and, once it returns 0 rows, the winner's successor
@@ -590,7 +594,9 @@ defmodule Engram.OAuth do
     # rotate_existing/3: a racing duplicate is the lost-response case and gets
     # the grace path, not a family revoke (review of #1974).
     Repo.transaction(fn ->
-      case from(r in RefreshToken, where: r.id == ^rt.id and is_nil(r.consumed_at))
+      case from(r in RefreshToken,
+             where: r.id == ^rt.id and is_nil(r.consumed_at) and is_nil(r.revoked_at)
+           )
            |> Repo.update_all([set: [consumed_at: now]], skip_tenant_check: true) do
         {0, _} -> Repo.rollback(:lost_race)
         {1, _} -> rt |> mint_rotation_successor(ip) |> commit_or_rollback()
@@ -653,35 +659,40 @@ defmodule Engram.OAuth do
   # still holds. Revoking the family for that killed the connection every
   # time a response went missing, and access tokens last 15 min.
   #
-  # So inside the window, and only while the successor has NEVER been used
-  # (the client cannot have received it, or it would have used it), the replay
-  # re-issues instead: the old token and its unused successor are revoked and
-  # one new successor is minted. Both updates are compare-and-set inside one
-  # transaction, so two concurrent replays cannot both win and the family
-  # never has two live tokens. The old token is now revoked, so the grace is
-  # spent: any later replay of it revokes the family as before.
+  # So inside the window, while nothing minted since has been USED (the client
+  # cannot have received it, or it would have used it), the replay re-issues
+  # instead: the unused successor is revoked and a new one minted, so the
+  # family never has two live tokens. Every duplicate inside the window is
+  # handled the same way, so N racing retries (rotate_lost_race/2 sends the
+  # losers here) all succeed instead of the third revoking the family.
+  #
+  # Re-issues for one token are serialized on its row lock (`FOR UPDATE`), and
+  # the eligibility is decided under it:
+  #   * the old token is not revoked (a Disconnect or family revoke stops it)
+  #   * no successor was consumed (consumed = the client had it: theft)
+  #   * the NEWEST successor is still live: one revoked any other way (RFC 7009
+  #     revoke) must not be resurrected by a replay of its parent
   #
   # The raw successor cannot simply be returned again: only its hash is stored.
   #
-  # The tradeoff (docs/context/mcp-oauth.md): inside the window
-  # whoever presents the old token first gets the new one. The client check
-  # (rotate_existing/3) and client authentication (the token controller, before
-  # this runs) still apply, every re-issue logs whether the caller's IP matched
-  # the rotation's, and the revoked successor turning up later revokes the
-  # family through the `revoked_at` clause.
+  # The tradeoff (docs/context/mcp-oauth.md): inside the window whoever
+  # presents the old token gets a new one. The client check
+  # (rotate_existing/3) and client authentication (the token controller,
+  # before this runs) still apply, every re-issue logs whether the caller's IP
+  # matched the original rotation's, and a revoked successor turning up later
+  # revokes the family through the `revoked_at` clause.
   defp grace_reissue(rt, ip) do
     now = DateTime.utc_now(:second)
 
     Repo.transaction(fn ->
-      with {1, _} <- revoke_if_live(from(r in RefreshToken, where: r.id == ^rt.id), now),
-           [successor] <- successors(rt),
-           {1, _} <-
-             revoke_if_live(
-               from(r in RefreshToken, where: r.id == ^successor.id and is_nil(r.consumed_at)),
-               now
-             ),
-           {:ok, response} <- mint_rotation_successor(rt, ip) do
-        {response, successor.last_used_ip == ip}
+      with %RefreshToken{revoked_at: nil, consumed_at: %DateTime{}} = locked <- lock_row(rt),
+           [_ | _] = successors <- successors(locked),
+           true <- Enum.all?(successors, &is_nil(&1.consumed_at)),
+           %RefreshToken{revoked_at: nil} <- Enum.max_by(successors, & &1.inserted_at, DateTime),
+           {_, _} <- revoke_live(successors, now),
+           {:ok, response} <- mint_rotation_successor(locked, ip) do
+        original = Enum.min_by(successors, & &1.inserted_at, DateTime)
+        {response, original.last_used_ip == ip}
       else
         _ -> Repo.rollback(:not_eligible)
       end
@@ -696,9 +707,14 @@ defmodule Engram.OAuth do
     end
   end
 
-  # Everything minted in this family since `rt` was consumed. Exactly one,
-  # unused, is the lost-response case; a second means the successor was
-  # itself rotated, i.e. the client did receive it.
+  defp lock_row(rt) do
+    Repo.one(from(r in RefreshToken, where: r.id == ^rt.id, lock: "FOR UPDATE"),
+      skip_tenant_check: true
+    )
+  end
+
+  # Everything minted in this family since `rt` was consumed: the original
+  # successor plus one per earlier re-issue.
   defp successors(rt) do
     Repo.all(
       from(r in RefreshToken,
@@ -709,9 +725,12 @@ defmodule Engram.OAuth do
     )
   end
 
-  defp revoke_if_live(query, now) do
-    query
-    |> where([r], is_nil(r.revoked_at))
+  defp revoke_live(successors, now) do
+    ids = Enum.map(successors, & &1.id)
+
+    from(r in RefreshToken,
+      where: r.id in ^ids and is_nil(r.revoked_at) and is_nil(r.consumed_at)
+    )
     |> Repo.update_all([set: [revoked_at: now]], skip_tenant_check: true)
   end
 

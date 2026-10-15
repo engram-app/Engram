@@ -62,7 +62,7 @@ defmodule Engram.OAuthSingleUseTest do
   end
 
   describe "rotate_refresh_token/3 single-use guarantee" do
-    test "concurrent rotations of the same refresh token yield at most one success" do
+    test "concurrent rotations of the same refresh token leave one live token" do
       user = insert(:user)
       params = exchange_params(user)
       {:ok, %{refresh_token: refresh_raw}} = OAuth.exchange_authorization_code(params)
@@ -76,15 +76,12 @@ defmodule Engram.OAuthSingleUseTest do
         end)
         |> Task.await_many(30_000)
 
-      # A loser of the race revokes the family (RFC 6749 §10.4 replay
-      # response), which may race the winner's own mint. One loser that reads
-      # only after the winner committed may instead take the #1974 grace
-      # re-issue, which revokes the winner's successor. So: at most two
-      # successes, and — the property that matters — the family never ends
-      # with more than one live token.
-      successes = for {:ok, %{refresh_token: rt}} <- results, do: rt
-      assert length(successes) <= 2
-      assert Enum.count(results, &match?({:error, {:invalid_grant, _}}, &1)) >= 6
+      # On the one sandbox connection these run one after another, so the
+      # first rotates and the rest are re-issues inside the grace window
+      # (#1974): all succeed and exactly one token is live. The genuinely
+      # concurrent version, on separate connections, is
+      # Engram.OAuthRotationRaceTest.
+      assert Enum.all?(results, &match?({:ok, _}, &1))
 
       live =
         Engram.Repo.aggregate(
@@ -97,35 +94,6 @@ defmodule Engram.OAuthSingleUseTest do
 
       assert live <= 1
     end
-  end
-
-  # Review of #1974: two rotations of one token racing (a client retrying
-  # before the first response landed) are the lost-response case, not theft.
-  # The loser goes through the grace path instead of revoking the family.
-  test "two concurrent rotations both succeed and leave one live token" do
-    user = insert(:user)
-    params = exchange_params(user)
-    {:ok, %{refresh_token: refresh_raw}} = OAuth.exchange_authorization_code(params)
-
-    results =
-      1..2
-      |> Enum.map(fn _ ->
-        Task.async(fn -> OAuth.rotate_refresh_token(refresh_raw, params["client_id"]) end)
-      end)
-      |> Task.await_many(30_000)
-
-    assert [{:ok, _}, {:ok, _}] = results
-
-    live =
-      Engram.Repo.aggregate(
-        from(r in Engram.OAuth.RefreshToken,
-          where: r.user_id == ^user.id and is_nil(r.consumed_at) and is_nil(r.revoked_at)
-        ),
-        :count,
-        skip_tenant_check: true
-      )
-
-    assert live == 1
   end
 
   test "authorization code and refresh token both accept a vault_ids array" do

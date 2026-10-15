@@ -123,12 +123,27 @@ defmodule Engram.OAuthRefreshGraceTest do
     assert live_in_family(row(rt3).family_id) == 0
   end
 
-  test "the grace is spent once: a second replay revokes the family", ctx do
+  # Second review of #1974: three or more duplicates of one retry are still
+  # the lost-response case. Each re-issues; only one token is ever live.
+  test "every replay inside the window re-issues, leaving one live token", ctx do
     {:ok, _} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
-    {:ok, %{refresh_token: rt3}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+    {:ok, _} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+    {:ok, %{refresh_token: rt4}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
 
-    assert {:error, {:invalid_grant, _}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
-    assert live_in_family(row(rt3).family_id) == 0
+    assert live_in_family(row(rt4).family_id) == 1
+    refute row(rt4).revoked_at
+  end
+
+  # A successor revoked any other way (RFC 7009) must stay revoked: a replay
+  # of its parent is not a way back in.
+  test "a replay never resurrects a successor revoked by the client", ctx do
+    {:ok, %{refresh_token: rt2}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+    :ok = OAuth.revoke_token(rt2, ctx.client_id, nil)
+
+    assert {:error, {:invalid_grant, :refresh_token_reuse}} =
+             OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+
+    assert live_in_family(row(rt2).family_id) == 0
   end
 
   # Review of #1974: every re-issue is visible, with whether it came from the
