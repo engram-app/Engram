@@ -4,8 +4,9 @@ defmodule Engram.Legal do
 
   `required_floor/1` is the latest MATERIAL version whose effective_date has
   arrived (nil = effective immediately) — the version below which an acceptance
-  is no longer binding. `current_version/1` is the latest published version (what
-  the app renders / asks the user to accept), regardless of effective_date.
+  is no longer binding. `current_version/1` is the latest published version this build
+  ships (what the app renders / asks the user to accept), regardless of
+  effective_date.
 
   These read the DB directly; callers on the hot path go through
   `Engram.Legal.VersionCache`, which memoizes them in :persistent_term.
@@ -65,10 +66,17 @@ defmodule Engram.Legal do
     |> Repo.all(skip_tenant_check: true)
   end
 
+  # Capped at the newest version this build's manifest ships: after a rollback
+  # the DB keeps the newer row (acceptances reference it), but this build cannot
+  # render it, so asking users to accept it would pause signup. In prod the
+  # manifest is append-only and seeded into the DB, so the cap is the same as
+  # "the newest DB version the manifest knows".
   @spec current_version(document :: String.t()) :: String.t() | nil
   def current_version(document) do
+    ceiling = Engram.Legal.Manifest.newest(document)
+
     from(v in TermsVersion,
-      where: v.document == ^document,
+      where: v.document == ^document and v.version <= ^ceiling,
       order_by: [desc: v.version],
       limit: 1,
       select: v.version

@@ -10,6 +10,7 @@ defmodule Engram.Legal.Seeder do
   signup). Both run at boot (Application), then VersionCache is invalidated.
   """
   import Ecto.Query
+  alias Engram.Legal.Manifest
   alias Engram.Legal.TermsVersion
   alias Engram.Repo
 
@@ -62,7 +63,7 @@ defmodule Engram.Legal.Seeder do
 
   @spec seed() :: :ok
   def seed do
-    for {document, versions} <- manifest(),
+    for {document, versions} <- Manifest.read(),
         {version, hash} <- versions do
       meta = meta!(document, version)
 
@@ -134,7 +135,7 @@ defmodule Engram.Legal.Seeder do
 
   @spec verify() :: :ok
   def verify do
-    for {document, versions} <- manifest(), {version, hash} <- versions do
+    for {document, versions} <- Manifest.read(), {version, hash} <- versions do
       row =
         Repo.one(
           from(v in TermsVersion,
@@ -151,11 +152,6 @@ defmodule Engram.Legal.Seeder do
     end
 
     :ok
-  end
-
-  defp manifest do
-    path = Application.app_dir(:engram, "priv/legal/legal-manifest.json")
-    path |> File.read!() |> Jason.decode!()
   end
 
   defp meta!(document, version) do
