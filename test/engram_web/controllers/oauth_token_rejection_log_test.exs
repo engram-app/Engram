@@ -94,11 +94,14 @@ defmodule EngramWeb.OAuthTokenRejectionLogTest do
 
     me = self()
 
-    assert [event] =
-             Enum.filter(events, &(&1.msg == {:string, @message} and &1.meta[:pid] == me)),
+    matching = Enum.filter(events, &(&1.msg == {:string, @message} and &1.meta[:pid] == me))
+
+    # assert/2 with a message evaluates a pattern match as plain code, so a
+    # miss would raise a bare MatchError and hide this message.
+    assert length(matching) == 1,
            "expected exactly one #{@message} line, got: #{inspect(Enum.map(events, & &1.msg))}"
 
-    event.meta
+    hd(matching).meta
   end
 
   defp assert_rejected(meta, grant_type, error, reason) do

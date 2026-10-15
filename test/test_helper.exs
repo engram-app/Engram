@@ -6,6 +6,9 @@ Ecto.Adapters.SQL.Sandbox.mode(Engram.Repo, :manual)
 # See Engram.ServiceConfig.
 Engram.ServiceConfig.ensure_table()
 
+# One suite-wide structured-log capture handler; see Engram.Test.LogCapture.
+Engram.Test.LogCapture.install()
+
 # Capture log output during tests. Logger messages are buffered per-test and
 # only re-emitted to stdout when that test FAILS — green tests stay silent.
 # This hides intentional-error-path noise (e.g. `vault decrypt_failed`
