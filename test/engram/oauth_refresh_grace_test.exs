@@ -201,4 +201,34 @@ defmodule Engram.OAuthRefreshGraceTest do
 
     refute row(rt2).revoked_at
   end
+
+  # Reuse detection needs the used rows: a replay of a token whose row was
+  # pruned reads as unknown, not as reuse, and revokes nothing. The hourly
+  # cleanup must keep consumed and revoked rows well past the grace window
+  # (at least 30 min; it keeps revoked rows 7 days, consumed ones until expiry).
+  test "cleanup keeps used refresh tokens long enough for reuse detection", ctx do
+    {:ok, %{refresh_token: rt2}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+    age_consumed(ctx.rt1, 31 * 60)
+
+    {:ok, %{refresh_token: rt3}} = OAuth.rotate_refresh_token(rt2, ctx.client_id)
+    :ok = OAuth.revoke_token(rt3, ctx.client_id, nil)
+
+    rt3
+    |> row()
+    |> Ecto.Changeset.change(revoked_at: DateTime.add(DateTime.utc_now(:second), -31 * 60))
+    |> Repo.update!(skip_tenant_check: true)
+
+    OAuth.cleanup_expired()
+
+    assert row(ctx.rt1).consumed_at
+    assert row(rt3).revoked_at
+
+    log =
+      capture_log(fn ->
+        assert {:error, {:invalid_grant, :refresh_token_reuse}} =
+                 OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+      end)
+
+    assert log =~ "oauth_refresh_reuse"
+  end
 end
