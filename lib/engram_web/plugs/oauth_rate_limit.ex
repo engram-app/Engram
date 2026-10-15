@@ -9,9 +9,10 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
   refused everyone's refresh: the connector dies and the user re-authorizes.
 
     * `/oauth/token`, `/oauth/revoke`: per CLIENT PER IP (`client_id` from
-      the body or HTTP Basic, with the caller's IP), #{300}/min, plus a coarse
-      per-IP bucket (#{300}/min) so a caller cannot dodge it by inventing
-      client ids. Never per client alone: a CIMD `client_id` is a public URL
+      the body or HTTP Basic, with the caller's IP), #{120}/min, plus a coarse
+      per-IP bucket (#{1_200}/min) so a caller cannot dodge it by inventing
+      client ids. The coarse bucket is 10x the client bucket: a vendor egress
+      IP carries many clients, and the client bucket must trip first. Never per client alone: a CIMD `client_id` is a public URL
       shared by every user of a vendor, so a client-only bucket let anyone
       exhaust ChatGPT for everybody (review of #1974).
     * `/oauth/register`: per IP, #{60}/min. Vendor backends register per
@@ -37,13 +38,13 @@ defmodule EngramWeb.Plugs.OAuthRateLimit do
 
   @period_ms 60_000
   @policy %{
-    "/oauth/token" => {:client, 300},
-    "/oauth/revoke" => {:client, 300},
+    "/oauth/token" => {:client, 120},
+    "/oauth/revoke" => {:client, 120},
     "/oauth/register" => {:ip, 60},
     "/oauth/authorize" => {:ip, 10}
   }
   @default_policy {:ip, 10}
-  @ip_coarse_limit 300
+  @ip_coarse_limit 1_200
 
   @is_test_build Application.compile_env(:engram, :env, :prod) == :test
 
