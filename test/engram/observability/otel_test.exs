@@ -25,12 +25,6 @@ defmodule Engram.Observability.OtelTest do
     end
   end
 
-  describe "attach_handlers/0" do
-    test "installs Phoenix, Ecto, and Bandit instrumentation and returns :ok" do
-      assert Otel.attach_handlers() == :ok
-    end
-  end
-
   describe "current_traceparent/0" do
     test "returns a w3c traceparent inside a span, nil outside" do
       require OpenTelemetry.Tracer, as: Tracer

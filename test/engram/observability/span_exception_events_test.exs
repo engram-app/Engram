@@ -26,11 +26,11 @@ defmodule Engram.Observability.SpanExceptionEventsTest do
         e -> {e, __STACKTRACE__}
       end
 
-    Tracer.with_span "GET", %{kind: :server} do
+    Tracer.with_span "span-exception-events-test", %{kind: :server} do
       Tracer.record_exception(e, st)
     end
 
-    assert_receive {:span, record}, 2_000
+    assert_receive {:span, span(name: "span-exception-events-test") = record}, 2_000
     refute inspect(span(record, :events)) =~ "canary-5d2b"
   end
 end

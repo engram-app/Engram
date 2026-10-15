@@ -76,6 +76,26 @@ defmodule Engram.Observability.Otel do
     :ok
   end
 
+  # The handler ids the three `setup` calls above attach under.
+  @handler_ids [
+    {OpentelemetryBandit, :otel_bandit},
+    {OpentelemetryPhoenix, :endpoint_start},
+    {OpentelemetryPhoenix, :router_dispatch_start},
+    {OpentelemetryPhoenix, :live_view},
+    {OpentelemetryEcto, [:engram, :repo, :query]}
+  ]
+
+  @doc """
+  Detach every handler `attach_handlers/0` installs. Nothing calls this at
+  runtime; it exists so tests that attach the node-global handlers can remove
+  them (left attached, every later Ecto query and Bandit request opens a span).
+  """
+  @spec detach_handlers() :: :ok
+  def detach_handlers do
+    # detach/1 returns {:error, :not_found} for an id that is not attached.
+    Enum.each(@handler_ids, &:telemetry.detach/1)
+  end
+
   @doc """
   The active span's `{hex_trace_id, hex_span_id}`, or nil when no span
   is current. Used to stamp trace ids onto log metadata.
