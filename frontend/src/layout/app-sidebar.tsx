@@ -26,7 +26,13 @@ export default function AppSidebarPanel() {
 			{showFreeFooter && (
 				<div className="border-border border-t px-3 py-2 text-muted-foreground text-xs">
 					{typeof deviceCap === "number" &&
-						`${tn({ one: "Free: {count} Obsidian device.", other: "Free: {count} Obsidian devices." }, deviceCap)} `}
+						`${tn(
+							{
+								one: "Your Free plan includes {count} Obsidian device.",
+								other: "Your Free plan includes {count} Obsidian devices.",
+							},
+							deviceCap,
+						)} `}
 					<Link
 						to={settingsTo("billing", location.search)}
 						className="font-medium text-foreground underline underline-offset-4"

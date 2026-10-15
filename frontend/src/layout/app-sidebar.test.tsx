@@ -134,7 +134,7 @@ describe("AppSidebar — Free-tier footer", () => {
 		};
 		renderSidebar();
 
-		expect(screen.getByText(/free: 2 obsidian devices/iu)).toBeInTheDocument();
+		expect(screen.getByText(/your free plan includes 2 obsidian devices/iu)).toBeInTheDocument();
 		expect(screen.queryByText(/1 connection/iu)).toBeNull();
 		const link = screen.getByRole("link", { name: /upgrade/iu });
 		expect(link).toHaveAttribute("href", "/#settings/billing");
