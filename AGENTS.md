@@ -601,6 +601,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Web app 404s every vault-scoped call (folders/attachments/notes), or a client-only fixture id poisoned persisted `activeVaultId` → `docs/context/stale-active-vault-404s.md`
 - `window.__ENGRAM_CONFIG__` first-paint state injection pattern → `docs/context/spa-state-injection.md`
 - Login boot perf (PR #842) — chunk-size measurement, VLQ-decode under hidden sourcemaps → `docs/context/frontend-login-boot-perf.md`
+- Lighthouse CLS fails the release gate on some runs and scores 0.000 on others (empty-opened Y.Doc paints the editor, properties land above it; read LayoutShift rects from the trace before theorizing) → `docs/context/lighthouse-cls-empty-doc-open.md`
 - Folder-tree `rebuildTree()` triggers, optimistic move/delete/duplicate → `docs/context/folder-tree-optimistic-rebuild.md`
 - The sidebar tree flashes empty every few minutes, or you are writing query options a caller reads via `getQueryData`/`fetchQuery` (no observer → `gcTime` deletes the entry, and `invalidateQueries` won't refetch it) → `docs/context/folder-tree-optimistic-rebuild.md`
 - Adding a cache that holds note/folder data, or wondering why a sidebar view has no key of its own (one `['vault-tree']` query, everything else is a `select` view of it) → `docs/context/folder-tree-optimistic-rebuild.md`
