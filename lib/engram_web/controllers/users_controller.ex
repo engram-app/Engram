@@ -24,7 +24,7 @@ defmodule EngramWeb.UsersController do
     operation_id: "account-update",
     summary: "Update the current user's profile",
     description:
-      "Updates the authenticated user's mutable profile fields (`display_name`, `locale`) " <>
+      "Updates the authenticated user's mutable profile fields (`display_name`, `locale`, `analytics_opt_out`) " <>
         "and returns the updated user.",
     tags: ["Account"],
     request_body:
@@ -39,14 +39,27 @@ defmodule EngramWeb.UsersController do
     user = conn.assigns.current_user
     attrs = Map.take(params, ["display_name", "locale"])
 
-    case Accounts.update_profile(user, attrs) do
-      {:ok, updated} ->
-        json(conn, %{user: user_json(updated)})
-
-      {:error, %Ecto.Changeset{}} = error ->
-        error
+    with {:ok, opt_out} <- cast_opt_out(params),
+         {:ok, updated} <- Accounts.update_profile(user, attrs),
+         {:ok, updated} <- apply_opt_out(updated, opt_out) do
+      json(conn, %{user: user_json(updated)})
     end
   end
+
+  # Validated before anything is written, so a bad value changes nothing.
+  defp cast_opt_out(params) do
+    {%{}, %{analytics_opt_out: :boolean}}
+    |> Ecto.Changeset.cast(params, [:analytics_opt_out])
+    |> Ecto.Changeset.apply_action(:update)
+    |> case do
+      {:ok, changes} -> {:ok, Map.get(changes, :analytics_opt_out)}
+      error -> error
+    end
+  end
+
+  defp apply_opt_out(user, nil), do: {:ok, user}
+  defp apply_opt_out(user, true), do: Accounts.set_analytics_opt_out(user)
+  defp apply_opt_out(user, false), do: Accounts.clear_analytics_opt_out(user)
 
   operation(:delete,
     operation_id: "account-delete",

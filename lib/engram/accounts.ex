@@ -263,11 +263,14 @@ defmodule Engram.Accounts do
   @doc """
   Record a user's objection to analytics (privacy policy 2026-10-12) and erase
   their PostHog person. Every emitter then skips them via
-  `Engram.Analytics`. Operator-run from a release shell today:
+  `Engram.Analytics`. Users flip it from Settings (`PATCH /api/me`); an
+  operator handling a privacy@ request runs it from a release shell:
   `{:ok, u} = find_by_normalized_email(EmailNormalizer.normalize(email))`, then
-  `set_analytics_opt_out(u)`.
+  `set_analytics_opt_out(u)`. Already opted out keeps the original time.
   """
   @spec set_analytics_opt_out(User.t()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
+  def set_analytics_opt_out(%User{analytics_opt_out_at: %DateTime{}} = user), do: {:ok, user}
+
   def set_analytics_opt_out(%User{} = user) do
     with {:ok, updated} <-
            user
@@ -276,6 +279,17 @@ defmodule Engram.Accounts do
       :ok = Engram.Analytics.forget(user)
       {:ok, updated}
     end
+  end
+
+  @doc """
+  Withdraw a user's objection to analytics. Capture resumes on their next
+  request; PostHogPersonSync restores person properties on its next run.
+  """
+  @spec clear_analytics_opt_out(User.t()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
+  def clear_analytics_opt_out(%User{} = user) do
+    user
+    |> Ecto.Changeset.change(analytics_opt_out_at: nil)
+    |> Repo.update(skip_tenant_check: true)
   end
 
   @doc """

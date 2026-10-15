@@ -62,6 +62,11 @@ defmodule EngramWeb.Schemas.UpdateProfileRequest do
         pattern: "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$",
         maxLength: 35,
         example: "pt-BR"
+      },
+      analytics_opt_out: %Schema{
+        type: :boolean,
+        description:
+          "true objects to product analytics and erases the user's PostHog person; false withdraws the objection"
       }
     },
     example: %{"display_name" => "Ada Lovelace", "locale" => "en"}
