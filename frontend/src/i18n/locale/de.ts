@@ -999,6 +999,12 @@ export default {
 	"Changing your password signs you out of all other sessions.":
 		"Das Ändern deines Passworts meldet dich von allen anderen Sitzungen ab.",
 	"Update password": "Passwort ändern",
+	"Could not save your analytics choice":
+		"Deine Auswahl für die Analyse konnte nicht gespeichert werden",
+	Privacy: "Datenschutz",
+	"Usage analytics help us see which features get used. The content of your notes is never sent.":
+		"Nutzungsdaten helfen uns zu sehen, welche Funktionen verwendet werden. Der Inhalt deiner Notizen wird niemals gesendet.",
+	"Share usage analytics": "Nutzungsdaten teilen",
 	"Profile updated": "Profil aktualisiert",
 	"Could not update profile": "Profil konnte nicht aktualisiert werden",
 	Profile: "Profil",

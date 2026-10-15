@@ -930,6 +930,11 @@ export default {
 	"Changing your password signs you out of all other sessions.":
 		"變更密碼將登出您在其他所有會話中的狀態。",
 	"Update password": "更新密碼",
+	"Could not save your analytics choice": "儲存分析設定失敗",
+	Privacy: "隱私權",
+	"Usage analytics help us see which features get used. The content of your notes is never sent.":
+		"使用分析有助於我們了解哪些功能被使用。您的筆記內容絕不會被傳送。",
+	"Share usage analytics": "共享使用分析",
 	"Profile updated": "個人資料已更新",
 	"Could not update profile": "無法更新個人資料",
 	Profile: "個人資料",

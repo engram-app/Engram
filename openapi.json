@@ -133,6 +133,12 @@
           "locale": "en"
         },
         "properties": {
+          "analytics_opt_out": {
+            "description": "true objects to product analytics and erases the user's PostHog person; false withdraws the objection",
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
           "display_name": {
             "nullable": true,
             "type": "string",
@@ -4023,7 +4029,7 @@
       },
       "patch": {
         "callbacks": {},
-        "description": "Updates the authenticated user's mutable profile fields (`display_name`, `locale`) and returns the updated user.",
+        "description": "Updates the authenticated user's mutable profile fields (`display_name`, `locale`, `analytics_opt_out`) and returns the updated user.",
         "operationId": "account-update",
         "parameters": [],
         "requestBody": {

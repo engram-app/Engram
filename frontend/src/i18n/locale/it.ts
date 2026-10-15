@@ -1016,6 +1016,11 @@ export default {
 	"Changing your password signs you out of all other sessions.":
 		"Cambiare la password ti disconnette da tutte le altre sessioni.",
 	"Update password": "Aggiorna password",
+	"Could not save your analytics choice": "Impossibile salvare la tua scelta per l'analisi",
+	Privacy: "Privacy",
+	"Usage analytics help us see which features get used. The content of your notes is never sent.":
+		"L'analisi dell'utilizzo ci aiuta a capire quali funzionalità vengono utilizzate. Il contenuto delle tue note non viene mai inviato.",
+	"Share usage analytics": "Condividi l'analisi dell'utilizzo",
 	"Profile updated": "Profilo aggiornato",
 	"Could not update profile": "Impossibile aggiornare il profilo",
 	Profile: "Profilo",
