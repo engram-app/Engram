@@ -24,7 +24,7 @@ defmodule Engram.Http.SsrfGuardTest do
       url = "https://nonexistent.invalid/jwks.json"
 
       assert :ok = SsrfGuard.validate_url(url)
-      assert {:error, :dns_failure} = SsrfGuard.resolve(url)
+      assert {:error, :dns_nxdomain} = SsrfGuard.resolve(url)
     end
 
     test "accepts a well-formed https URL" do
@@ -147,21 +147,30 @@ defmodule Engram.Http.SsrfGuardTest do
       assert {:error, :private_address} = SsrfGuard.resolve("https://localhost/d.json")
     end
 
-    test "reports dns_failure for a name that does not resolve" do
-      assert {:error, :dns_failure} =
+    # Second review of #1974: NXDOMAIN is an answer (the name does not exist,
+    # retrying will not change that), so it is permanent; a resolver that timed
+    # out or failed is transient.
+    test "reports dns_nxdomain for a name that does not exist" do
+      assert {:error, :dns_nxdomain} =
                SsrfGuard.resolve("https://this-host-does-not-exist.invalid/d.json")
     end
   end
 
   describe "resolve/2 resolution deadline and candidates (#1974)" do
     defp resolver(answers) do
-      fn _host, family -> Map.get(answers, family, []) end
+      fn _host, family ->
+        case Map.get(answers, family, []) do
+          [] -> {:error, :nxdomain}
+          {:error, _} = error -> error
+          addresses -> {:ok, addresses}
+        end
+      end
     end
 
     test "a slow resolver gives up within 1 s" do
       slow = fn _host, _family ->
         Process.sleep(5_000)
-        [{93, 184, 216, 34}]
+        {:ok, [{93, 184, 216, 34}]}
       end
 
       {micros, result} =
@@ -169,6 +178,20 @@ defmodule Engram.Http.SsrfGuardTest do
 
       assert {:error, :dns_failure} = result
       assert micros < 1_300_000
+    end
+
+    test "NXDOMAIN on both families is permanent" do
+      assert {:error, :dns_nxdomain} =
+               SsrfGuard.resolve("https://gone.example/x", getaddrs: resolver(%{}))
+    end
+
+    for error <- [:timeout, :servfail, :econnrefused] do
+      test "a #{error} on a family with no other answer is transient" do
+        answers = %{inet: {:error, unquote(error)}}
+
+        assert {:error, :dns_failure} =
+                 SsrfGuard.resolve("https://flaky.example/x", getaddrs: resolver(answers))
+      end
     end
 
     test "returns every IPv4 answer as a failover candidate, IPv4 only" do

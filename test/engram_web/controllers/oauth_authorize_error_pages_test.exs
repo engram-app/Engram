@@ -70,6 +70,15 @@ defmodule EngramWeb.OAuthAuthorizeErrorPagesTest do
       end
     end
 
+    # A name that does not exist will not exist on retry either.
+    test "an NXDOMAIN document host is a terminal invalid_client", %{conn: conn} do
+      expect(FetcherMock, :fetch, fn @cimd_url -> {:error, :dns_nxdomain} end)
+
+      conn = get(conn, "/oauth/authorize", authorize_params(@cimd_url))
+      assert conn.status == 400
+      assert conn.resp_body =~ "invalid_client"
+    end
+
     test "a vendor 404 stays a terminal invalid_client", %{conn: conn} do
       expect(FetcherMock, :fetch, fn @cimd_url -> {:error, {:http_status, 404}} end)
 

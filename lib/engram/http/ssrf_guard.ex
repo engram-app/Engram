@@ -73,7 +73,9 @@ defmodule Engram.Http.SsrfGuard do
           | :fragment_present
           | :unsupported_port
 
-  @type reason :: shape_reason() | :dns_failure | :private_address
+  # `:dns_nxdomain`: the name does not exist (permanent). `:dns_failure`: the
+  # resolver timed out or failed (transient: a retry may succeed).
+  @type reason :: shape_reason() | :dns_nxdomain | :dns_failure | :private_address
 
   # Reserved IPv4 ranges (IANA special-purpose registry). 240.0.0.0/4 covers
   # 255.255.255.255, so broadcast needs no separate entry.
@@ -150,7 +152,8 @@ defmodule Engram.Http.SsrfGuard do
   failover can never reach an address the guard did not approve. `ip`/`url` are
   the first candidate.
 
-  `opts[:getaddrs]` replaces `:inet.getaddrs/2` (tests only). The lookup is
+  `opts[:getaddrs]` replaces `:inet.getaddrs/3` (tests only) and returns what it
+  does: `{:ok, addresses}` or `{:error, reason}`. The lookup is
   bounded by a 1 s deadline either way.
   """
   @spec resolve(term(), keyword()) :: {:ok, target()} | {:error, reason()}
@@ -229,11 +232,18 @@ defmodule Engram.Http.SsrfGuard do
   end
 
   defp resolve_hostname(charlist, getaddrs) do
-    {v4, v6} = lookup_both(charlist, getaddrs)
+    answers = lookup_both(charlist, getaddrs)
+    v4 = addresses(answers.inet)
+    v6 = addresses(answers.inet6)
 
     case v4 ++ v6 do
       [] ->
-        {:error, :dns_failure}
+        # NXDOMAIN on both families is an ANSWER: the name does not exist and a
+        # retry will not change that. Anything else (a timeout, SERVFAIL, a
+        # refused query) says nothing about the name.
+        if Enum.all?(Map.values(answers), &no_such_name?/1),
+          do: {:error, :dns_nxdomain},
+          else: {:error, :dns_failure}
 
       addresses ->
         # Reject if ANY answer is non-public, not merely the one we would pin.
@@ -248,7 +258,7 @@ defmodule Engram.Http.SsrfGuard do
   end
 
   # Both families at once, under one deadline. A family that misses the
-  # deadline counts as no answer; if both miss, that is a `:dns_failure`.
+  # deadline is a `{:error, :timeout}`: transient, never NXDOMAIN.
   defp lookup_both(charlist, getaddrs) do
     tasks =
       Enum.map([:inet, :inet6], fn family -> Task.async(fn -> getaddrs.(charlist, family) end) end)
@@ -258,20 +268,25 @@ defmodule Engram.Http.SsrfGuard do
       |> Task.yield_many(@dns_timeout_ms)
       |> Enum.map(fn {task, result} ->
         case result || Task.shutdown(task, :brutal_kill) do
-          {:ok, addresses} when is_list(addresses) -> addresses
-          _ -> []
+          {:ok, {:ok, addresses}} when is_list(addresses) -> {:ok, addresses}
+          {:ok, {:error, reason}} -> {:error, reason}
+          _ -> {:error, :timeout}
         end
       end)
 
-    {v4, v6}
+    %{inet: v4, inet6: v6}
   end
 
-  defp getaddrs(charlist, family) do
-    case :inet.getaddrs(charlist, family, @dns_timeout_ms) do
-      {:ok, addresses} -> addresses
-      {:error, _} -> []
-    end
-  end
+  defp addresses({:ok, addresses}), do: addresses
+  defp addresses({:error, _reason}), do: []
+
+  # An empty answer is NODATA: the name exists in some form but has no
+  # address of this family, which for our purpose is the same verdict.
+  defp no_such_name?({:error, :nxdomain}), do: true
+  defp no_such_name?({:ok, []}), do: true
+  defp no_such_name?(_answer), do: false
+
+  defp getaddrs(charlist, family), do: :inet.getaddrs(charlist, family, @dns_timeout_ms)
 
   # `URI.to_string/1` brackets a host containing ":" itself, so the literal goes
   # in bare. Adding brackets here yields `https://[[::1]]/`.
