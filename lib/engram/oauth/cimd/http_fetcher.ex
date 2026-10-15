@@ -1,10 +1,15 @@
 defmodule Engram.OAuth.Cimd.HttpFetcher do
   @moduledoc """
   Default `Engram.OAuth.Cimd.Fetcher`: applies the SSRF guard, then fetches the
-  document with Req over a connection pinned to the validated address.
+  document with Mint over a connection pinned to the validated address.
 
-  Every option in `request_options/1` is load-bearing. See `Engram.Http.SsrfGuard`
-  for why the URL is pinned to an address at all.
+  Mint directly, one connection per attempt, no pool. The vendor hostname is
+  attacker-chosen (any CIMD `client_id`, wildcard DNS), and TLS must verify
+  that NAME on a connection dialed to a pinned IP. Through Req/Finch the
+  hostname is a pool option, so every distinct host started a permanent Finch
+  instance under a new atom (second review of #1974). A fetch here is rare
+  (results are cached and persisted), so a pool buys nothing. See
+  `Engram.Http.SsrfGuard` for why the URL is pinned to an address at all.
   """
 
   @behaviour Engram.OAuth.Cimd.Fetcher
@@ -23,34 +28,6 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
   @connect_timeout_ms 1_500
 
   @user_agent "Engram-OAuth/1.0 (+https://engram.page)"
-
-  # Where an attempt has got to, reported by Finch's own telemetry from inside
-  # the attempt's process. Only the deadline needs it: Req's errors say nothing
-  # about the phase a `:timeout` happened in.
-  @phase_key {__MODULE__, :phase_to}
-  @phase_events [[:finch, :connect, :start], [:finch, :send, :start], [:finch, :recv, :start]]
-
-  @doc "Attaches the phase-tracking telemetry handler. Called once at boot."
-  @spec attach() :: :ok
-  def attach do
-    case :telemetry.attach_many(
-           "#{__MODULE__}.phase",
-           @phase_events,
-           &__MODULE__.handle_phase/4,
-           nil
-         ) do
-      :ok -> :ok
-      {:error, :already_exists} -> :ok
-    end
-  end
-
-  @doc false
-  def handle_phase([:finch, step, :start], _measurements, _metadata, _config) do
-    case Process.get(@phase_key) do
-      {parent, ref} -> send(parent, {ref, if(step == :connect, do: :connect, else: :recv)})
-      nil -> :ok
-    end
-  end
 
   @doc "The hard budget for one `fetch_target/1`, every attempt included, in ms."
   @spec budget_ms() :: unquote(@budget_ms)
@@ -127,35 +104,30 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
     end
   end
 
-  # The request runs in its own process so the deadline is HARD: Req's
-  # `receive_timeout` is per read, and a vendor dribbling a byte every few
-  # seconds would otherwise hold the token request open indefinitely.
+  # The request runs in its own process so the deadline is HARD: a vendor
+  # dribbling a byte every few seconds would otherwise hold the token request
+  # open indefinitely. The attempt reports its phase as it goes, so a kill at
+  # the deadline still says where it stalled.
   defp attempt(url, ip, host, remaining) do
     parent = self()
     ref = make_ref()
     started = now_ms()
+    phase = fn p -> send(parent, {ref, p}) end
 
-    # `async_nolink`: a crash inside Req must fail this attempt, not the
-    # token request that is waiting on it.
+    # `async_nolink`: a crash inside the transport must fail this attempt,
+    # not the token request that is waiting on it.
     task =
       Task.Supervisor.async_nolink(Engram.TaskSupervisor, fn ->
-        Process.put(@phase_key, {parent, ref})
-        Req.get(request_options(url, host))
+        request(URI.parse(url), ip, host, started + remaining, phase)
       end)
 
     result =
       case Task.yield(task, remaining) || Task.shutdown(task, :brutal_kill) do
-        {:ok, {:ok, %Req.Response{status: 200} = response}} ->
-          decode(response)
-
-        {:ok, {:ok, %Req.Response{status: status}}} ->
-          {:error, {:http_status, status}}
-
-        {:ok, {:error, exception}} ->
-          {:error, {:transport_error, phase_of(exception), reason_of(exception)}}
+        {:ok, result} ->
+          result
 
         {:exit, reason} ->
-          {:error, {:transport_error, :connect, reason_of(reason)}}
+          {:error, {:transport_error, last_phase(ref, :connect), reason_of(reason)}}
 
         nil ->
           {:error, {:transport_error, last_phase(ref, :connect), :timeout}}
@@ -166,45 +138,94 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
     result
   end
 
-  # Every pool option here is a constant. Req starts a Finch instance per
-  # distinct pool-option set and never stops it, so a value derived from the
-  # remaining budget made each retry a new, permanent pool. The deadline is
-  # enforced outside Req, by `Task.yield/2` in `attempt/4`.
-  defp request_options(url, host) do
-    [
-      # The pinned address, with the real hostname supplied separately.
-      url: url,
-      headers: [
-        {"host", host},
-        {"accept", "application/json, application/jwk-set+json"},
-        {"user-agent", @user_agent}
-      ],
-      # `hostname:` is what makes TLS verify the NAME rather than the address.
-      # Without it the handshake fails against every real vendor, because the
-      # certificate does not cover the IP we dialed.
-      # (Req's `connect_options:`, spelled as Finch pool options, because Req
-      # refuses `connect_options:` alongside `finch:`.) The Finch pool key
-      # includes the pinned address, so a long-lived idle pool per vendor IP is
-      # pure accumulation: `pool_max_idle_time` reaps it.
-      finch: [
-        conn_opts: [hostname: host, transport_opts: [timeout: @connect_timeout_ms]],
-        pool_max_idle_time: 30_000
-      ],
-      # Past the whole budget, so the deadline is what fires, not Req's per-read
-      # timer.
-      receive_timeout: @budget_ms + 100,
-      # A redirect is a NEW URL, and following it would bypass the guard that
-      # approved the first one. A vendor that redirects its metadata document
-      # therefore does not work, which is the correct outcome.
-      redirect: false,
-      retry: false,
-      decode_body: false,
-      into: &collect_capped/2
-    ]
+  defp request(uri, ip, host, deadline, phase) do
+    phase.(:connect)
+
+    case Mint.HTTP1.connect(scheme(uri), ip || uri.host, uri.port,
+           mode: :passive,
+           # `hostname:` is what makes TLS verify the NAME (and send it as SNI)
+           # rather than the address we dialed. Without it the handshake fails
+           # against every real vendor.
+           hostname: host,
+           transport_opts: [timeout: min(@connect_timeout_ms, max(deadline - now_ms(), 1))]
+         ) do
+      {:ok, conn} ->
+        phase.(:recv)
+
+        try do
+          get(conn, uri, host, deadline)
+        after
+          Mint.HTTP1.close(conn)
+        end
+
+      # The TLS handshake is part of connect: any failure here is the connect
+      # (or the TLS layer, when it says so), never a read.
+      {:error, error} ->
+        {:error, {:transport_error, connect_phase(error), reason_of(error)}}
+    end
   end
 
+  defp get(conn, uri, host, deadline) do
+    target = (uri.path || "/") <> if(uri.query, do: "?" <> uri.query, else: "")
+
+    headers = [
+      {"host", host},
+      {"accept", "application/json, application/jwk-set+json"},
+      {"user-agent", @user_agent}
+    ]
+
+    case Mint.HTTP1.request(conn, "GET", target, headers, nil) do
+      {:ok, conn, ref} ->
+        receive_response(conn, ref, deadline, %{status: nil, headers: [], body: ""})
+
+      {:error, _conn, error} ->
+        {:error, {:transport_error, :recv, reason_of(error)}}
+    end
+  end
+
+  # A redirect is a NEW URL, and following it would bypass the guard that
+  # approved the first one, so a 3xx is just a status. The body is capped while
+  # it streams: checking `byte_size` after the response completes would mean
+  # already holding a hostile vendor's whole body in memory.
+  defp receive_response(conn, ref, deadline, acc) do
+    case Mint.HTTP1.recv(conn, 0, max(deadline - now_ms(), 1)) do
+      {:ok, conn, responses} ->
+        case Enum.reduce_while(responses, {:cont, acc}, &collect(&1, &2, ref)) do
+          {:done, acc} -> finish(acc)
+          {:cont, acc} -> receive_response(conn, ref, deadline, acc)
+          {:error, _} = error -> error
+        end
+
+      {:error, _conn, error, _responses} ->
+        {:error, {:transport_error, :recv, reason_of(error)}}
+    end
+  end
+
+  defp collect({:status, ref, status}, {:cont, acc}, ref),
+    do: {:cont, {:cont, %{acc | status: status}}}
+
+  defp collect({:headers, ref, headers}, {:cont, acc}, ref),
+    do: {:cont, {:cont, %{acc | headers: headers}}}
+
+  defp collect({:data, ref, data}, {:cont, acc}, ref) do
+    body = acc.body <> data
+
+    if byte_size(body) > @max_body_bytes,
+      do: {:halt, {:error, :body_too_large}},
+      else: {:cont, {:cont, %{acc | body: body}}}
+  end
+
+  defp collect({:done, ref}, {:cont, acc}, ref), do: {:halt, {:done, acc}}
+  defp collect(_other, state, _ref), do: {:cont, state}
+
+  defp finish(%{status: 200} = response), do: decode(response)
+  defp finish(%{status: status}), do: {:error, {:http_status, status}}
+
+  defp scheme(%URI{scheme: "http"}), do: :http
+  defp scheme(_uri), do: :https
+
   # Drains the attempt's phase messages and returns the latest, or `default`
-  # when the attempt never reached a connect (a pool checkout, say).
+  # when the attempt never reported one.
   defp last_phase(ref, default) do
     receive do
       {^ref, phase} -> last_phase(ref, phase)
@@ -213,9 +234,8 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
     end
   end
 
-  defp phase_of(%{reason: {:tls_alert, _}}), do: :tls
-  defp phase_of(%{reason: :closed}), do: :recv
-  defp phase_of(_exception), do: :connect
+  defp connect_phase(%{reason: {:tls_alert, _}}), do: :tls
+  defp connect_phase(_error), do: :connect
 
   # Only the exception's REASON, which is an atom or a small tagged tuple from
   # the transport. Never `Exception.message/1`: it may echo the URL.
@@ -249,19 +269,7 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
 
   defp now_ms, do: System.monotonic_time(:millisecond)
 
-  # Halting mid-stream is the point. Checking `byte_size` after the response
-  # completes would mean already holding a hostile vendor's whole body in memory.
-  defp collect_capped({:data, data}, {request, response}) do
-    body = response.body <> data
-
-    if byte_size(body) > @max_body_bytes,
-      do: {:halt, {request, %{response | body: :too_large}}},
-      else: {:cont, {request, %{response | body: body}}}
-  end
-
-  defp decode(%Req.Response{body: :too_large}), do: {:error, :body_too_large}
-
-  defp decode(%Req.Response{body: body} = response) when is_binary(body) do
+  defp decode(%{body: body} = response) do
     if json_content_type?(response) do
       case Jason.decode(body) do
         {:ok, document} when is_map(document) -> {:ok, document}
@@ -272,14 +280,12 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
     end
   end
 
-  defp decode(_), do: {:error, :invalid_json}
-
   # `application/json` or any `+json` structured suffix (RFC 6839), which is
   # how a JWKS is properly served: `application/jwk-set+json`.
-  defp json_content_type?(response) do
-    response
-    |> Req.Response.get_header("content-type")
-    |> Enum.any?(fn value ->
+  defp json_content_type?(%{headers: headers}) do
+    headers
+    |> Enum.filter(fn {name, _} -> String.downcase(name) == "content-type" end)
+    |> Enum.any?(fn {_name, value} ->
       mime = value |> String.split(";") |> hd() |> String.trim() |> String.downcase()
       mime == "application/json" or String.ends_with?(mime, "+json")
     end)

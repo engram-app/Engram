@@ -207,7 +207,7 @@ defmodule Engram.OAuth.Cimd.HttpFetcherTest do
   # Review of #1974: Req starts one Finch instance per distinct pool-option
   # set, keyed by a hashed atom, and never stops it. A connect timeout derived
   # from the remaining budget made every retry a new, permanent pool.
-  describe "Finch pools and timeout phases" do
+  describe "per-host state and timeout phases" do
     # Accepts every connection and, after `hold_ms`, closes it without a byte.
     defp silent_server(hold_ms) do
       {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
@@ -238,15 +238,59 @@ defmodule Engram.OAuth.Cimd.HttpFetcherTest do
 
     defp finch_pools, do: DynamicSupervisor.count_children(Req.FinchSupervisor).active
 
-    test "a retry with less budget left reuses the first attempt's pool" do
-      port = silent_server(1_600)
-      target = %{url: "http://127.0.0.1:#{port}/doc.json", host: "pool-reuse.test"}
-      before = finch_pools()
+    # Second review #2: the vendor hostname is attacker-chosen (any CIMD
+    # client_id, wildcard DNS), so nothing per host may be permanent: no Finch
+    # instance, no atom.
+    test "fetching from many distinct hostnames starts no pools and mints no atoms", %{
+      bypass: bypass
+    } do
+      Bypass.expect(bypass, "GET", "/doc.json", fn conn ->
+        respond(conn, 200, ~s({"ok":true}), "application/json")
+      end)
 
-      {result, _log} = with_log(fn -> HttpFetcher.fetch_target(target) end)
+      run = System.unique_integer([:positive])
 
-      assert {:error, {:transport_error, _, _}} = result
-      assert finch_pools() - before <= 1
+      fetch = fn i ->
+        HttpFetcher.fetch_target(%{url: endpoint_url(bypass), host: "h#{i}-#{run}.example"})
+      end
+
+      # One warm-up, so first-call module loading is not counted.
+      assert {:ok, _} = fetch.(0)
+      pools = finch_pools()
+      atoms = :erlang.system_info(:atom_count)
+
+      for i <- 1..25, do: assert({:ok, %{"ok" => true}} = fetch.(i))
+
+      assert finch_pools() == pools
+      assert :erlang.system_info(:atom_count) - atoms < 25
+    end
+
+    # Second review #12: a server that closes during the TLS handshake failed in
+    # the connect, whatever the transport's error says.
+    test "a handshake closed by the server is not reported as recv" do
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen)
+
+      acceptor =
+        spawn(fn ->
+          Stream.repeatedly(fn -> :gen_tcp.accept(listen) end)
+          |> Enum.each(fn
+            {:ok, socket} -> :gen_tcp.close(socket)
+            {:error, _} -> exit(:normal)
+          end)
+        end)
+
+      on_exit(fn ->
+        Process.exit(acceptor, :kill)
+        :gen_tcp.close(listen)
+      end)
+
+      target = %{url: "https://127.0.0.1:#{port}/doc.json", host: "closer.test"}
+      {result, log} = with_log(fn -> HttpFetcher.fetch_target(target) end)
+
+      assert {:error, {:transport_error, phase, _}} = result
+      assert phase in [:connect, :tls]
+      refute log =~ "phase=recv"
     end
 
     # A TLS handshake to a server that never answers stalls inside connect. When

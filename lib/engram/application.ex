@@ -25,7 +25,6 @@ defmodule Engram.Application do
     attach_sentry_logger_handler()
     EngramWeb.RequestLogger.attach()
     EngramWeb.RequestExceptionLogger.attach()
-    Engram.OAuth.Cimd.HttpFetcher.attach()
     Engram.Telemetry.ObanDiscardHandler.attach()
     Engram.Telemetry.Heartbeat.log_boot_notice()
     Engram.Workers.EmbedNote.CrashGuard.init()
