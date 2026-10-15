@@ -877,9 +877,9 @@ export default {
 		"Konnte nicht fortgesetzt werden. Bitte versuche es erneut.",
 	"Step {step} of {total}": "Schritt {step} von {total}",
 	Onboarding: "Einrichtung",
-	"the app that sent you here": "die App, die dich hierher gebracht hat",
+	"your app": "deine App",
 	"Cancel connection": "Verbindung aufheben",
-	"Finish setting up to connect {app}.": "Einrichtung abschließen, um {app} zu verbinden.",
+	"Connecting {app}": "Verbindung zu {app} herstellen",
 	"Which AI tools do you use?": "Welche KI-Tools verwendest du?",
 	"We'll tailor your setup around the tools you already work with.":
 		"Wir passen deine Einrichtung an die Tools an, die du bereits verwendest.",

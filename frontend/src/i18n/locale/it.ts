@@ -897,9 +897,9 @@ export default {
 	"Could not continue. Please try again.": "Impossibile continuare. Riprova.",
 	"Step {step} of {total}": "Fase {step} di {total}",
 	Onboarding: "Guida introduttiva",
-	"the app that sent you here": "l'app che ti ha portato qui",
+	"your app": "la tua app",
 	"Cancel connection": "Annulla connessione",
-	"Finish setting up to connect {app}.": "Completa la configurazione per connettere {app}.",
+	"Connecting {app}": "Connessione a {app}",
 	"Which AI tools do you use?": "Quali strumenti di intelligenza artificiale usi?",
 	"We'll tailor your setup around the tools you already work with.":
 		"Adatteremo la configurazione in base agli strumenti che già utilizzi.",

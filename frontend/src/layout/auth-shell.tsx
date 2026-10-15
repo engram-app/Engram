@@ -6,9 +6,10 @@ import AuthBackdrop from "./auth-backdrop";
 interface AuthShellProps {
 	actions?: ReactNode;
 	navLabel?: string;
-	/** A status strip shown as a second row of the top bar. It lives in the
-	 *  header, not the scroll area, because step pages size themselves to
-	 *  `max-h-full` of that area and anything stacked above them overflows. */
+	/** A status item in the middle of the top bar. It lives in the header, not
+	 *  the scroll area, because step pages size themselves to `max-h-full` of
+	 *  that area and anything stacked above them overflows. One row only: keep
+	 *  it short, it truncates on narrow screens. */
 	notice?: ReactNode;
 	children: ReactNode;
 }
@@ -16,24 +17,32 @@ interface AuthShellProps {
 export default function AuthShell({ actions, navLabel, notice, children }: AuthShellProps) {
 	return (
 		<main className="flex h-dvh flex-col bg-background text-foreground">
-			<header className="flex flex-wrap items-center justify-between gap-y-2 border-border border-b bg-card px-4 py-2">
-				<span className="flex items-center gap-2 font-semibold text-foreground text-lg">
+			<header className="flex items-center justify-between gap-3 border-border border-b bg-card px-4 py-2">
+				<span className="flex shrink-0 items-center gap-2 font-semibold text-foreground text-lg">
 					<img src="/engram-mark.svg" alt="" className="size-6" />
-					Engram
+					{/* ponytail: on phones a notice needs the wordmark's width; the mark stays. */}
+					<span className={notice ? "sr-only sm:not-sr-only" : undefined}>Engram</span>
 				</span>
-				<nav className="flex items-center gap-3" aria-label={navLabel}>
-					{actions}
-					<LanguageSelect iconOnly />
-					<ThemeToggle />
-				</nav>
 				{notice ? (
 					<aside
 						role="status"
-						className="flex basis-full flex-wrap items-center justify-between gap-x-3 gap-y-1 border-border border-t pt-2 text-sm"
+						className="flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap text-muted-foreground text-sm"
 					>
 						{notice}
 					</aside>
 				) : null}
+				<nav
+					className={
+						notice
+							? "flex shrink-0 items-center gap-1 sm:gap-3"
+							: "flex shrink-0 items-center gap-3"
+					}
+					aria-label={navLabel}
+				>
+					{actions}
+					<LanguageSelect iconOnly />
+					<ThemeToggle />
+				</nav>
 			</header>
 			<section className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
 				<AuthBackdrop />

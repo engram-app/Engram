@@ -846,9 +846,9 @@ export default {
 	"Could not continue. Please try again.": "계속할 수 없습니다. 다시 시도해주세요.",
 	"Step {step} of {total}": "{step}단계 / {total}단계",
 	Onboarding: "시작하기",
-	"the app that sent you here": "이 앱을 통해 연결되셨습니다",
+	"your app": "앱",
 	"Cancel connection": "연결 해제",
-	"Finish setting up to connect {app}.": "{app} 연결 설정을 완료합니다.",
+	"Connecting {app}": "{app} 연결 중",
 	"Which AI tools do you use?": "어떤 AI 도구를 사용하시나요?",
 	"We'll tailor your setup around the tools you already work with.":
 		"사용하시는 도구에 맞춰 설정을 조정해 드립니다.",

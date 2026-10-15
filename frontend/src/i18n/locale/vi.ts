@@ -859,9 +859,9 @@ export default {
 	"Could not continue. Please try again.": "Không thể tiếp tục. Vui lòng thử lại.",
 	"Step {step} of {total}": "Bước {step} trong {total}",
 	Onboarding: "Hướng dẫn sử dụng",
-	"the app that sent you here": "ứng dụng đã đưa bạn đến đây",
+	"your app": "ứng dụng của bạn",
 	"Cancel connection": "Hủy kết nối",
-	"Finish setting up to connect {app}.": "Hoàn tất thiết lập để kết nối {app}.",
+	"Connecting {app}": "Kết nối {app}",
 	"Which AI tools do you use?": "Bạn sử dụng những công cụ AI nào?",
 	"We'll tailor your setup around the tools you already work with.":
 		"Chúng tôi sẽ tùy chỉnh thiết lập của bạn dựa trên các công cụ bạn đã sử dụng.",
