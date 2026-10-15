@@ -24,8 +24,9 @@ defmodule Engram.Legal.Seeder do
   # Users are told automatically (`Engram.Workers.LegalNoticeDispatch`): a
   # version with a FUTURE effective_date emails everyone and shows the in-app
   # notice until that date. `effective_date: nil` means effective at once and
-  # silent, which is for wording fixes only. Changing an announced version's
-  # effective_date or material sends the notice again. A material change after a
+  # silent: only for a non-material change that adds no new processing
+  # (wording, new explanatory sections, a dropped sub-processor). Changing an
+  # announced version's effective_date or material sends the notice again. A material change after a
   # document's first version needs an effective_date 30+ days after its
   # version date (ToS §13); `notice_violations/0` enforces it in CI.
   @version_meta %{

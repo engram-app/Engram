@@ -27,7 +27,8 @@ defmodule Engram.Legal.SeederTest do
     assert :ok = Seeder.seed()
     assert :ok = Seeder.seed()
     rows = Engram.Repo.all(Engram.Legal.TermsVersion, skip_tenant_check: true)
-    assert length(rows) == 4
+    manifest_entries = Engram.Legal.Manifest.read() |> Map.values() |> Enum.map(&map_size/1)
+    assert length(rows) == Enum.sum(manifest_entries)
   end
 
   # A date or materiality change after the email went out told users the
