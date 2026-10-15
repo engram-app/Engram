@@ -939,12 +939,13 @@ describe("DeviceLinkPage", () => {
 		// shows a banner explaining the swap (this device will replace the existing
 		// one), but the code input stays visible so they can still proceed.
 		billingState.current = {
-			caps: { obsidian_connections: 1 },
-			current_connections: { obsidian: 1 },
+			caps: { obsidian_connections: 2 },
+			current_connections: { obsidian: 2 },
 			device_swap_cooldown_remaining_hours: null,
 		};
 		renderPage();
 		expect(screen.getByRole("status")).toHaveTextContent(/heads up/iu);
+		expect(screen.getByRole("status")).toHaveTextContent(/between 2 devices at a time/iu);
 		expect(screen.getByRole("status")).toHaveTextContent(/will disconnect/iu);
 		expect(screen.getByPlaceholderText(/XXXX-XXXX/iu)).toBeInTheDocument();
 	});

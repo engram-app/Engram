@@ -420,8 +420,8 @@ describe("OAuthAuthorizePage", () => {
 		// picker + Approve, and Approve disconnects the existing connection
 		// BEFORE posting consent.
 		billingState.current = {
-			caps: { obsidian_connections: 1, vaults: null },
-			current_connections: { obsidian: 1 },
+			caps: { obsidian_connections: 2, vaults: null },
+			current_connections: { obsidian: 2 },
 			device_swap_cooldown_remaining_hours: null,
 		};
 		fetchOAuthClient.mockResolvedValue({
@@ -437,6 +437,8 @@ describe("OAuthAuthorizePage", () => {
 		// Banner names the existing connection + warns it'll be disconnected.
 		expect(await screen.findByText(/Approving will disconnect/iu)).toBeInTheDocument();
 		expect(screen.getByText(/Claude Desktop \(old\)/u)).toBeInTheDocument();
+		// The served cap, not a hardcoded 1.
+		expect(screen.getByRole("status")).toHaveTextContent(/allows 2 active devices/iu);
 		// Picker + Approve are still rendered (NOT replaced).
 		expect(screen.getByRole("checkbox", { name: /work/iu })).toBeInTheDocument();
 		const approve = screen.getByRole("button", { name: /approve/iu });
@@ -448,6 +450,7 @@ describe("OAuthAuthorizePage", () => {
 		const confirm = await screen.findByRole("button", {
 			name: /disconnect & connect Claude Desktop/iu,
 		});
+		expect(screen.getByRole("dialog")).toHaveTextContent(/allows 2 active devices/iu);
 		fireEvent.click(confirm);
 
 		// Disconnect runs first, then consent.
