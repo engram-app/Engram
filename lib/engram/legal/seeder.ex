@@ -46,6 +46,16 @@ defmodule Engram.Legal.Seeder do
         effective_date: ~D[2026-11-11],
         changelog:
           "App analytics now linked to your account (email, plan, usage counts). The content of your notes is never sent."
+      },
+      # Silent on purpose: no new processing, so no second notice days after
+      # 2026-10-12's. Adds the AI-connectors and government-requests sections
+      # and drops Grafana Cloud (self-hosted since 2026-09-26). The 11-11
+      # analytics date still comes from 2026-10-12 (PersonProperties pins it).
+      "2026-10-14" => %{
+        material: false,
+        effective_date: nil,
+        changelog:
+          "Added how AI assistants connected to Engram receive your notes, and how we handle government requests. Grafana Cloud is no longer a sub-processor."
       }
     }
   }

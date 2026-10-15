@@ -1,6 +1,7 @@
 defmodule Engram.Workers.LegalNoticeDispatchTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
+  import Ecto.Query
 
   alias Engram.Legal.TermsVersion
   alias Engram.LegalFixtures
@@ -38,6 +39,19 @@ defmodule Engram.Workers.LegalNoticeDispatchTest do
 
     assert :ok = perform_job(LegalNoticeDispatch, %{})
     assert length(all_enqueued(worker: LegalNoticeEmail)) == 1
+  end
+
+  # 2026-10-14 is a wording-only update published days after 2026-10-12 was
+  # announced: shipping it must not email anyone a second time.
+  test "the shipped 2026-10-14 privacy version sends no notice" do
+    assert :ok = Engram.Legal.Seeder.seed()
+
+    from(v in TermsVersion, where: v.document == "privacy_policy" and v.version == "2026-10-12")
+    |> Repo.update_all([set: [notified_at: DateTime.utc_now()]], skip_tenant_check: true)
+
+    assert :ok = perform_job(LegalNoticeDispatch, %{})
+    refute Enum.any?(email_jobs(), fn {_user, _kind, version} -> version == "2026-10-14" end)
+    assert Engram.Legal.required_floor("privacy_policy") == nil
   end
 
   # The claim and the job inserts commit together. A failed insert must leave
