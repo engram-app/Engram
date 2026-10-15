@@ -49,8 +49,7 @@ defmodule Engram.Sync.BroadcastFanoutSpanTest do
 
     assert_receive %Phoenix.Socket.Broadcast{event: "note_changed"}
 
-    assert_receive {:span, span(name: "sync.fanout") = span_record}, 2_000
-    s = span(span_record)
+    assert_receive {:span, span(name: "sync.fanout")}, 2_000
   end
 
   test "emit_from/4 wraps the broadcast_from dispatch in a sync.fanout span" do
