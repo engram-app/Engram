@@ -25,7 +25,7 @@ const TABLE: Record<LimitReason, LimitCopy> = {
 	concurrent_devices_exceeded: {
 		title: msg("Device sync limit reached"),
 		body: msg(
-			"Your Free plan syncs files between 1 device at a time. Disconnect the device you're not using to switch, or upgrade to sync more devices.",
+			"You've reached the number of devices your Free plan syncs at a time. Disconnect a device you're not using to switch, or upgrade to sync more devices.",
 		),
 	},
 	device_swap_cooldown: {
@@ -45,9 +45,9 @@ const TABLE: Record<LimitReason, LimitCopy> = {
 		),
 	},
 	obsidian_connections_exceeded: {
-		title: msg("External connection limit reached"),
+		title: msg("Device limit reached"),
 		body: msg(
-			"Your Free plan allows 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.",
+			"You've reached the number of Obsidian devices your Free plan allows. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.",
 		),
 	},
 	account_suspended: {
