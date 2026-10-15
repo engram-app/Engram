@@ -514,6 +514,54 @@ defmodule Engram.OAuth.Cimd.JwksTest do
       assert micros >= 250_000 and micros < 1_500_000
     end
 
+    # Second review #1: a rotation refetch that joins someone else's flight
+    # must not be answered with the keys it already knows lack the kid. If the
+    # flight did not fetch anything newer, that is a retryable 503, not a 401.
+    test "a kid-miss waiter whose flight fetched nothing new gets a transient error", %{
+      private: private,
+      public: public
+    } do
+      persisted_client(public, ago(60))
+      pid = hold_flight(System.monotonic_time(:millisecond) + 5_000)
+
+      Task.start(fn ->
+        Process.sleep(100)
+        send(pid, :release)
+      end)
+
+      rotated = sign(private, claims(), "RS256", %{"kid" => "rotated"})
+      assert {:error, :jwks_unavailable} = Jwks.verify_assertion(client(), rotated, [@audience])
+    end
+
+    test "a background waiter whose flight failed is not counted as refreshed", %{
+      public: public
+    } do
+      persisted_client(public, ago(2 * 24 * 3600))
+      pid = hold_flight(System.monotonic_time(:millisecond) + 5_000)
+
+      Task.start(fn ->
+        Process.sleep(100)
+        send(pid, :release)
+      end)
+
+      assert {:error, :jwks_unavailable} = JwksCache.refresh_background(@jwks_uri)
+    end
+
+    # Second review #6: the waiter's bound is its own, fixed when it joins, not
+    # whatever deadline the current owner recorded (an owner that recorded a
+    # long one, or a chain of owners, must not hold a token request ~10 s).
+    test "a waiter gives up at its own deadline even when the owner's is later", %{
+      private: private
+    } do
+      hold_flight(System.monotonic_time(:millisecond) + 60_000)
+
+      {micros, result} =
+        :timer.tc(fn -> Jwks.verify_assertion(client(), sign(private, claims()), [@audience]) end)
+
+      assert {:error, :jwks_unavailable} = result
+      assert micros < 6_000_000
+    end
+
     test "a waiter served by the flight reports source :fetched", %{
       private: private,
       public: public

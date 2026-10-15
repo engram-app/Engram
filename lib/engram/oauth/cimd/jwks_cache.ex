@@ -235,7 +235,7 @@ defmodule Engram.OAuth.Cimd.JwksCache do
   defp fetch(jwks_uri, bucket, mode, held) do
     waiter_fallback = if mode == :token, do: held
 
-    single_flight(jwks_uri, waiter_fallback, fn ->
+    single_flight(jwks_uri, mode, waiter_fallback, fn ->
       fetch_and_store(jwks_uri, bucket, mode, held)
     end)
   end
@@ -358,12 +358,18 @@ defmodule Engram.OAuth.Cimd.JwksCache do
 
   # ── Single-flight ───────────────────────────────────────────────────
 
-  # ponytail: waiters poll the registry rather than subscribing; a flight
-  # lasts at most its recorded deadline (~4.5 s), so a 20 ms poll costs nothing.
+  # ponytail: waiters poll the registry rather than subscribing; a wait lasts
+  # at most one flight's worth (~4.5 s), so a 20 ms poll costs nothing.
   #
-  # A waiter that already holds usable keys (`fallback`) does not wait at all:
-  # it serves them, exactly as it would if the flight failed (review #9).
-  defp single_flight(jwks_uri, fallback, fun) do
+  # A token waiter that already holds usable keys (`fallback`) does not wait
+  # at all: it serves them, exactly as it would if the flight failed (review
+  # #9).
+  #
+  # Every other waiter's bound is its OWN, fixed when it joins: one flight's
+  # worth of time, cut short if the current owner's recorded deadline passes
+  # first. It never follows a later or successive owner past it (second
+  # review #6).
+  defp single_flight(jwks_uri, mode, fallback, fun) do
     case Registry.register(@flights, jwks_uri, flight_deadline()) do
       {:ok, _} ->
         try do
@@ -377,7 +383,7 @@ defmodule Engram.OAuth.Cimd.JwksCache do
         {:ok, fallback}
 
       {:error, {:already_registered, _owner}} ->
-        await_flight(jwks_uri)
+        await_flight(jwks_uri, mode, wall_ms(), flight_deadline())
     end
   end
 
@@ -385,34 +391,51 @@ defmodule Engram.OAuth.Cimd.JwksCache do
     now_ms() + SsrfGuard.dns_timeout_ms() + HttpFetcher.budget_ms() + @flight_store_ms
   end
 
-  # Waits until the flight ends or reaches the deadline its owner recorded.
-  # Keys a finished flight left behind are reported as `:fetched` when fresh
-  # (the flight fetched them) and `:stale` otherwise (#1974 review #13).
-  defp await_flight(jwks_uri) do
+  defp await_flight(jwks_uri, mode, joined_at, own_deadline) do
     case Registry.lookup(@flights, jwks_uri) do
       [] ->
-        case classify(newest_entry(jwks_uri)) do
-          {:fresh, keys, _source} ->
-            put_source(:fetched)
-            {:ok, keys}
+        flight_result(mode, newest_entry(jwks_uri), joined_at)
 
-          {:stale, keys, _source} ->
-            put_source(:stale)
-            {:ok, keys}
-
-          :none ->
-            {:error, :jwks_unavailable}
-        end
-
-      [{_owner, deadline}] ->
-        if now_ms() > deadline do
+      [{_owner, owner_deadline}] ->
+        if now_ms() > min(own_deadline, owner_deadline) do
           {:error, :jwks_unavailable}
         else
           Process.sleep(@flight_poll_ms)
-          await_flight(jwks_uri)
+          await_flight(jwks_uri, mode, joined_at, own_deadline)
         end
     end
   end
+
+  # A token waiter takes whatever usable keys a finished flight left: fresh
+  # ones are reported as `:fetched` (the flight fetched them), older ones as
+  # `:stale` (#1974 review #13).
+  defp flight_result(:token, entry, _joined_at) do
+    case classify(entry) do
+      {:fresh, keys, _source} ->
+        put_source(:fetched)
+        {:ok, keys}
+
+      {:stale, keys, _source} ->
+        put_source(:stale)
+        {:ok, keys}
+
+      :none ->
+        {:error, :jwks_unavailable}
+    end
+  end
+
+  # A kid-miss or background waiter only counts keys the flight actually
+  # fetched after it joined. Anything older is the set the kid-miss caller
+  # already found wanting (it would turn a rotation into a 401), and for the
+  # sweep it would count a failed flight as refreshed (second review #1).
+  # `fetched_at` is stored at second precision, so the join time is floored.
+  defp flight_result(_mode, %{keys: keys, fetched_at: at}, joined_at)
+       when at >= div(joined_at, 1000) * 1000 do
+    put_source(:fetched)
+    {:ok, keys}
+  end
+
+  defp flight_result(_mode, _entry, _joined_at), do: {:error, :jwks_unavailable}
 
   defp now_ms, do: System.monotonic_time(:millisecond)
   defp wall_ms, do: System.system_time(:millisecond)
