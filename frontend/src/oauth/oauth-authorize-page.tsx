@@ -106,7 +106,7 @@ function buildCancelUrl(redirectUri: string, state: string): string {
 }
 
 export default function OAuthAuthorizePage() {
-	const { t, tn } = useT();
+	const { t } = useT();
 	const [searchParams] = useSearchParams();
 	const { values, resource, missing } = readParams(searchParams);
 
@@ -232,12 +232,6 @@ export default function OAuthAuthorizePage() {
 	// banner + the implicit disconnect on Approve).
 	const connections = useConnections({ enabled: capCheck.atCap });
 	const existingPeer = (connections.data ?? []).find((c): c is Connection => c.kind === clientKind);
-	// Only an Obsidian client can be at cap (MCP is uncapped, #1974), so the
-	// cap is always a device count. `null` never renders: atCap needs a number.
-	const capDevices =
-		capCheck.limit === null
-			? null
-			: tn({ one: "{count} active device", other: "{count} active devices" }, capCheck.limit);
 
 	// `null` = the explicit "All vaults" choice, which stays all-vaults as new
 	// ones are created. A Set = exactly those ids. These are different grants,
@@ -490,9 +484,10 @@ export default function OAuthAuthorizePage() {
 								className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-foreground text-sm"
 							>
 								<Trans
-									text="Heads up: your Free plan allows {devices}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected."
+									text="Heads up: your Free plan's device limit is {count}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected."
 									slots={{
-										devices: capDevices,
+										// Only Obsidian clients reach this (MCP is uncapped, #1974).
+										count: capCheck.limit,
 										name: <strong>{existingPeer.name ?? t("your existing connection")}</strong>,
 										upgrade: (
 											<a
@@ -642,9 +637,10 @@ export default function OAuthAuthorizePage() {
 							</DialogTitle>
 							<DialogDescription>
 								<Trans
-									text="Your Free plan allows {devices}. Connecting {client} will disconnect {name}, which will stop having access to your Engram."
+									text="Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram."
 									slots={{
-										devices: capDevices,
+										// Only Obsidian clients reach this (MCP is uncapped, #1974).
+										count: capCheck.limit,
 										client: <strong>{clientName}</strong>,
 										name: <strong>{existingPeer?.name ?? t("your existing connection")}</strong>,
 									}}

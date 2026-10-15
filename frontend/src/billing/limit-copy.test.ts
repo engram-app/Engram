@@ -18,6 +18,8 @@ describe("limit-copy", () => {
 		const c = copyFor("obsidian_connections_exceeded");
 		expect(c.title).toMatch(/device limit/iu);
 		expect(`${c.title} ${c.body}`).not.toMatch(/external connection|\b1\b|unlimited connections/iu);
+		// "Obsidian devices" reads to the translator as a count ("Obsidian台").
+		expect(c.body).not.toMatch(/obsidian devices/iu);
 	});
 
 	it("names no stale number for the concurrent-device limit", () => {

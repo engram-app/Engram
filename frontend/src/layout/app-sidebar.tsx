@@ -9,7 +9,7 @@ import Rail from "./rail";
 import { useRailView } from "./rail-view-context";
 
 export default function AppSidebarPanel() {
-	const { t, tn } = useT();
+	const { t } = useT();
 	const { view, sidebarOpen } = useRailView();
 	const showFreeFooter = useIsFreeTier();
 	// The served cap, never a guess: an absent or uncapped value names no number.
@@ -26,13 +26,7 @@ export default function AppSidebarPanel() {
 			{showFreeFooter && (
 				<div className="border-border border-t px-3 py-2 text-muted-foreground text-xs">
 					{typeof deviceCap === "number" &&
-						`${tn(
-							{
-								one: "Your Free plan includes {count} Obsidian device.",
-								other: "Your Free plan includes {count} Obsidian devices.",
-							},
-							deviceCap,
-						)} `}
+						`${t("Free plan device limit: {count}.", { count: deviceCap })} `}
 					<Link
 						to={settingsTo("billing", location.search)}
 						className="font-medium text-foreground underline underline-offset-4"

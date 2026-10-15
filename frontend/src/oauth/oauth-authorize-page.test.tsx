@@ -438,7 +438,7 @@ describe("OAuthAuthorizePage", () => {
 		expect(await screen.findByText(/Approving will disconnect/iu)).toBeInTheDocument();
 		expect(screen.getByText(/Claude Desktop \(old\)/u)).toBeInTheDocument();
 		// The served cap, not a hardcoded 1.
-		expect(screen.getByRole("status")).toHaveTextContent(/allows 2 active devices/iu);
+		expect(screen.getByRole("status")).toHaveTextContent(/device limit is 2\./iu);
 		// Picker + Approve are still rendered (NOT replaced).
 		expect(screen.getByRole("checkbox", { name: /work/iu })).toBeInTheDocument();
 		const approve = screen.getByRole("button", { name: /approve/iu });
@@ -450,7 +450,7 @@ describe("OAuthAuthorizePage", () => {
 		const confirm = await screen.findByRole("button", {
 			name: /disconnect & connect Claude Desktop/iu,
 		});
-		expect(screen.getByRole("dialog")).toHaveTextContent(/allows 2 active devices/iu);
+		expect(screen.getByRole("dialog")).toHaveTextContent(/device limit is 2\./iu);
 		fireEvent.click(confirm);
 
 		// Disconnect runs first, then consent.

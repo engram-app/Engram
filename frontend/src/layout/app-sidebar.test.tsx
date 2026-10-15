@@ -134,7 +134,7 @@ describe("AppSidebar — Free-tier footer", () => {
 		};
 		renderSidebar();
 
-		expect(screen.getByText(/your free plan includes 2 obsidian devices/iu)).toBeInTheDocument();
+		expect(screen.getByText(/free plan device limit: 2\./iu)).toBeInTheDocument();
 		expect(screen.queryByText(/1 connection/iu)).toBeNull();
 		const link = screen.getByRole("link", { name: /upgrade/iu });
 		expect(link).toHaveAttribute("href", "/#settings/billing");
@@ -149,7 +149,7 @@ describe("AppSidebar — Free-tier footer", () => {
 		};
 		renderSidebar();
 
-		expect(screen.queryByText(/obsidian device/iu)).toBeNull();
+		expect(screen.queryByText(/device limit/iu)).toBeNull();
 		expect(screen.getByRole("link", { name: /upgrade/iu })).toBeInTheDocument();
 	});
 
@@ -160,7 +160,7 @@ describe("AppSidebar — Free-tier footer", () => {
 		};
 		renderSidebar();
 
-		expect(screen.queryByText(/obsidian device/iu)).toBeNull();
+		expect(screen.queryByText(/device limit/iu)).toBeNull();
 		expect(screen.queryByRole("link", { name: /upgrade/iu })).toBeNull();
 	});
 
@@ -168,7 +168,7 @@ describe("AppSidebar — Free-tier footer", () => {
 		billingStatusValue = { data: undefined, isLoading: true };
 		renderSidebar();
 
-		expect(screen.queryByText(/obsidian device/iu)).toBeNull();
+		expect(screen.queryByText(/device limit/iu)).toBeNull();
 		expect(screen.queryByRole("link", { name: /upgrade/iu })).toBeNull();
 	});
 
@@ -180,7 +180,7 @@ describe("AppSidebar — Free-tier footer", () => {
 		};
 		renderSidebar();
 
-		expect(screen.queryByText(/obsidian device/iu)).toBeNull();
+		expect(screen.queryByText(/device limit/iu)).toBeNull();
 		expect(screen.queryByRole("link", { name: /upgrade/iu })).toBeNull();
 	});
 });

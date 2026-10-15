@@ -47,7 +47,7 @@ const TABLE: Record<LimitReason, LimitCopy> = {
 	obsidian_connections_exceeded: {
 		title: msg("Device limit reached"),
 		body: msg(
-			"You've reached the number of Obsidian devices your Free plan allows. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.",
+			"You've reached the device limit on your Free plan. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.",
 		),
 	},
 	account_suspended: {

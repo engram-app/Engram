@@ -945,7 +945,7 @@ describe("DeviceLinkPage", () => {
 		};
 		renderPage();
 		expect(screen.getByRole("status")).toHaveTextContent(/heads up/iu);
-		expect(screen.getByRole("status")).toHaveTextContent(/between 2 devices at a time/iu);
+		expect(screen.getByRole("status")).toHaveTextContent(/device limit \(2\)/iu);
 		expect(screen.getByRole("status")).toHaveTextContent(/will disconnect/iu);
 		expect(screen.getByPlaceholderText(/XXXX-XXXX/iu)).toBeInTheDocument();
 	});
