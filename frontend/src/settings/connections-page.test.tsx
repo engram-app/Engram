@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import ConnectionsPage from "./connections-page";
 
 // Records the router's current hash so a test can prove a click actually
@@ -17,6 +17,9 @@ function LocationProbe() {
 
 const mockConnections: import("../api/queries").Connection[] = [];
 let mockTier = "starter";
+// Drops `caps` from the billing payload, the shape of a response that has not
+// carried them (the page must not invent a limit to fill the gap).
+let mockOmitCaps = false;
 const mockRevokeDevice = vi.fn().mockResolvedValue(undefined);
 const mockRevokeOauth = vi.fn().mockResolvedValue(undefined);
 const mockRevokePat = vi.fn().mockResolvedValue(undefined);
@@ -34,10 +37,12 @@ vi.mock("../api/queries", async () => {
 		useBillingStatus: () => ({
 			data: {
 				tier: mockTier,
-				caps: {
-					obsidian_connections: mockTier === "free" ? 2 : null,
-					vaults: mockTier === "free" ? 1 : null,
-				},
+				caps: mockOmitCaps
+					? undefined
+					: {
+							obsidian_connections: mockTier === "free" ? 2 : null,
+							vaults: mockTier === "free" ? 1 : null,
+						},
 			},
 		}),
 		useRevokeOauthConnection: () => ({ mutate: vi.fn(), mutateAsync: mockRevokeOauth }),
@@ -152,6 +157,25 @@ function renderPage() {
 // ── Tests ─────────────────────────────────────────────────────
 
 describe("ConnectionsPage", () => {
+	beforeEach(() => {
+		mockOmitCaps = false;
+	});
+
+	it("shows the served Free device cap next to the Obsidian count", () => {
+		mockConnections.splice(0, mockConnections.length, baseObs);
+		mockTier = "free";
+		renderPage();
+		expect(screen.getByRole("heading", { name: "Obsidian plugins (1 / 2)" })).toBeInTheDocument();
+	});
+
+	it("shows a bare count, not a guessed limit, when caps are absent", () => {
+		mockConnections.splice(0, mockConnections.length, baseObs);
+		mockTier = "free";
+		mockOmitCaps = true;
+		renderPage();
+		expect(screen.getByRole("heading", { name: "Obsidian plugins (1)" })).toBeInTheDocument();
+	});
+
 	it("renders the three section headings", () => {
 		mockConnections.splice(0, mockConnections.length, baseObs, basePat);
 		mockTier = "starter";
