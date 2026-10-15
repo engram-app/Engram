@@ -191,8 +191,8 @@ export default {
 	"File too large": "Файл слишком большой",
 	"Upgrade to upload larger files.": "Обновите подписку, чтобы загружать файлы большего размера.",
 	"Device sync limit reached": "Достигнут лимит синхронизации устройств",
-	"Your Free plan syncs files between 1 device at a time. Disconnect the device you're not using to switch, or upgrade to sync more devices.":
-		"Ваш бесплатный тариф позволяет синхронизировать файлы между 1 устройством одновременно. Отключите устройство, которое не используете, чтобы переключиться, или обновите подписку для синхронизации большего количества устройств.",
+	"You've reached the number of devices your Free plan syncs at a time. Disconnect a device you're not using to switch, or upgrade to sync more devices.":
+		"Вы достигли лимита устройств, с которыми ваш бесплатный план синхронизирует одновременно. Отключите устройство, которым не пользуетесь, чтобы подключить другое, или обновите подписку, чтобы синхронизировать больше устройств.",
 	"Device swap cooldown active": "Активен период ожидания при смене устройств",
 	"Wait before swapping devices, or upgrade.":
 		"Подождите перед сменой устройств или обновите подписку.",
@@ -202,9 +202,9 @@ export default {
 	"Free plan: text attachments only": "Бесплатный тариф: только текстовые вложения",
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"Ваш бесплатный тариф позволяет добавлять текстовые файлы (.md, .txt, .csv, .html, код). Обновите подписку, чтобы добавлять изображения, аудио, видео, PDF-файлы и офисные документы.",
-	"External connection limit reached": "Достигнут лимит внешних подключений",
-	"Your Free plan allows 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.":
-		"Ваш бесплатный тариф позволяет использовать 1 активное внешнее подключение. Отключите его, чтобы использовать это, или оформите платную подписку для неограниченного количества подключений.",
+	"Device limit reached": "Достигнут лимит устройств",
+	"You've reached the number of Obsidian devices your Free plan allows. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
+		"Вы достигли лимита в Obsidian устройств, разрешенного вашим бесплатным планом. Отключите устройство, которым не пользуетесь, чтобы подключить это, или обновите подписку, чтобы подключить больше устройств.",
 	"Account suspended": "Учётная запись заблокирована",
 	"Contact support to restore access.": "Обратитесь в службу поддержки для восстановления доступа.",
 	"Account setup incomplete": "Настройка учётной записи не завершена",
@@ -480,8 +480,14 @@ export default {
 		'Настройка вашей учётной записи ещё не завершена. {setup}, затем нажмите "Link" в Obsidian ещё раз.',
 	"You recently swapped devices. Your Free plan allows 1 swap every 24 hours — you can swap again in {hours}h. {upgrade} to connect as many devices as you like.":
 		"Вы недавно сменили устройство. Ваш бесплатный тариф позволяет совершить 1 смену каждые 24 часа — вы можете сменить устройство снова через {hours} ч. {upgrade}, чтобы подключить столько устройств, сколько вам нужно.",
-	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
-		"Обратите внимание — ваш бесплатный тариф синхронизирует файлы только между 1 устройством одновременно. Подключение этого устройства отключит {device}, которое перестанет получать изменения синхронизации. {upgrade}, чтобы оставить оба устройства подключенными.",
+	"Heads up: your Free plan syncs files between {devices} at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
+		"Обратите внимание: ваш бесплатный план синхронизирует файлы между {devices} устройствами одновременно. Подключение этого устройства отключит {device}, которое перестанет получать изменения синхронизации. {upgrade}, чтобы оба устройства оставались подключенными.",
+	"{count} devices": {
+		one: "{count} устройство",
+		few: "{count} устройства",
+		many: "{count} устройств",
+		other: "{count} устройства",
+	},
 	"{count} minutes ago": {
 		one: "{count} минуту назад",
 		few: "{count} минуты назад",
@@ -663,7 +669,12 @@ export default {
 		many: "До конца пробного периода осталось {count} дней.",
 		other: "До конца пробного периода осталось {count} дня.",
 	},
-	"Free tier: 1 connection. {upgrade}": "Бесплатный тариф: 1 подключение. {upgrade}",
+	"Your Free plan includes {count} Obsidian devices.": {
+		one: "Ваш бесплатный план включает {count} Obsidian устройство.",
+		few: "Ваш бесплатный план включает {count} Obsidian устройства.",
+		many: "Ваш бесплатный план включает {count} Obsidian устройств.",
+		other: "Ваш бесплатный план включает {count} Obsidian устройств.",
+	},
 	"Collapse sidebar": "Свернуть боковую панель",
 	"No vaults": "Нет хранилищ",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -856,8 +867,6 @@ export default {
 	"This app is requesting access to your Engram.":
 		"Это приложение запрашивает доступ к вашему Engram.",
 	"Signed in as {email}.": "Вошли как {email}.",
-	device: "устройство",
-	"external connection": "внешнее подключение",
 	"your existing connection": "ваше текущее подключение",
 	"Which vaults can {client} access?": "К каким хранилищам {client} может получить доступ?",
 	"All vaults selected": "Все хранилища выбраны",
@@ -873,11 +882,17 @@ export default {
 	"Taking you to setup so you can finish connecting {app}.":
 		"Переход к настройке, чтобы вы могли завершить подключение {app}.",
 	"Authorize {client}": "Авторизовать {client}",
-	"Heads up — your Free plan allows 1 active {kind}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
-		"Обратите внимание: ваш бесплатный тариф позволяет использовать 1 активное {kind}. Подтверждение отключит {name}, у которого прекратится доступ. {upgrade}, чтобы оба оставались подключенными.",
+	"Heads up: your Free plan allows {devices}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
+		"Обратите внимание: ваш бесплатный план позволяет {devices}. Подтверждение отключит {name}, которое перестанет иметь доступ. {upgrade}, чтобы оба устройства оставались подключенными.",
 	"Name this connection {optional}": "Назовите это подключение {optional}",
-	"Your Free plan allows 1 active {kind}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
-		"Ваш бесплатный тариф позволяет использовать 1 активное {kind}. Подключение {client} отключит {name}, у которого прекратится доступ к Engram.",
+	"Your Free plan allows {devices}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
+		"Ваш бесплатный план позволяет {devices}. Подключение {client} отключит {name}, которое перестанет иметь доступ к вашим Engram.",
+	"{count} active devices": {
+		one: "{count} активное устройство",
+		few: "{count} активных устройства",
+		many: "{count} активных устройств",
+		other: "{count} активных устройств",
+	},
 	"What will you use Engram for?": "Для чего вы будете использовать Engram?",
 	"Review the Terms": "Ознакомьтесь с условиями",
 	"privacy notice": "Уведомление о конфиденциальности",
@@ -950,8 +965,6 @@ export default {
 	"Coding tools": "Инструменты для программирования",
 	"Another MCP client": "Другой клиент MCP",
 	"Why {tool} can't be connected": "Почему {tool} не может быть подключено",
-	"Free tier, pick 1 to start. {upgrade} anytime for unlimited connections.":
-		"Бесплатный тариф, выберите 1 для начала. {upgrade} в любое время для неограниченного количества подключений.",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Это не полный список, выберите {client}, если вашего инструмента здесь нет.",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":

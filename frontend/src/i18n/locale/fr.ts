@@ -190,8 +190,8 @@ export default {
 	"File too large": "Fichier trop volumineux",
 	"Upgrade to upload larger files.": "Mets à niveau pour télécharger des fichiers plus volumineux.",
 	"Device sync limit reached": "Limite de synchronisation des appareils atteinte",
-	"Your Free plan syncs files between 1 device at a time. Disconnect the device you're not using to switch, or upgrade to sync more devices.":
-		"Ton abonnement gratuit synchronise les fichiers entre 1 appareil à la fois. Déconnecte l'appareil que tu n'utilises pas pour changer, ou passe à un abonnement supérieur pour synchroniser plus d'appareils.",
+	"You've reached the number of devices your Free plan syncs at a time. Disconnect a device you're not using to switch, or upgrade to sync more devices.":
+		"Tu as atteint le nombre d'appareils que ton abonnement gratuit synchronise simultanément. Déconnecte un appareil que tu n'utilises pas pour en connecter un autre, ou passe à un abonnement supérieur pour synchroniser plus d'appareils.",
 	"Device swap cooldown active": "Période de refroidissement du changement d'appareil active",
 	"Wait before swapping devices, or upgrade.":
 		"Attends avant de changer d'appareil, ou mets à niveau.",
@@ -201,9 +201,9 @@ export default {
 	"Free plan: text attachments only": "Abonnement gratuit : uniquement les pièces jointes texte",
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"Ton abonnement gratuit permet de joindre des fichiers texte (.md, .txt, .csv, .html, code). Passe à un abonnement supérieur pour joindre des images, de l'audio, de la vidéo, des PDF et des documents bureautiques.",
-	"External connection limit reached": "Limite de connexions externes atteinte",
-	"Your Free plan allows 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.":
-		"Ton abonnement gratuit autorise 1 connexion externe active. Déconnecte-la pour utiliser celle-ci, ou passe à un abonnement supérieur pour des connexions illimitées.",
+	"Device limit reached": "Limite d'appareils atteinte",
+	"You've reached the number of Obsidian devices your Free plan allows. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
+		"Tu as atteint le nombre de Obsidian appareils autorisés par ton abonnement gratuit. Déconnecte un appareil que tu n'utilises pas pour connecter celui-ci, ou passe à un abonnement supérieur pour connecter plus d'appareils.",
 	"Account suspended": "Compte suspendu",
 	"Contact support to restore access.": "Contacte le support pour rétablir l'accès.",
 	"Account setup incomplete": "Configuration du compte incomplète",
@@ -464,8 +464,13 @@ export default {
 		'La configuration de ton compte n\'est pas terminée. {setup}, puis clique à nouveau sur "Lier" dans Obsidian.',
 	"You recently swapped devices. Your Free plan allows 1 swap every 24 hours — you can swap again in {hours}h. {upgrade} to connect as many devices as you like.":
 		"Tu as récemment changé d'appareil. Ton abonnement gratuit te permet de changer d'appareil une fois toutes les 24 heures. Tu peux changer à nouveau dans {hours}h. {upgrade} pour connecter autant d'appareils que tu le souhaites.",
-	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
-		"Attention : ton abonnement gratuit synchronise les fichiers entre 1 appareil à la fois. Lier cet appareil déconnectera {device}, qui ne recevra plus les modifications de synchronisation. {upgrade} pour garder les deux connectés.",
+	"Heads up: your Free plan syncs files between {devices} at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
+		"Attention : ton abonnement gratuit synchronise les fichiers entre {devices} appareils simultanément. Connecter cet appareil déconnectera {device}, qui ne recevra plus les modifications de synchronisation. {upgrade} pour maintenir les deux connectés.",
+	"{count} devices": {
+		one: "{count} appareil",
+		many: "{count} appareils",
+		other: "{count} appareils",
+	},
 	"{count} minutes ago": {
 		one: "Il y a {count} minute",
 		many: "Il y a {count} minute",
@@ -640,7 +645,11 @@ export default {
 		many: "Il te reste {count} jour pour essayer.",
 		other: "Il te reste {count} jours pour essayer.",
 	},
-	"Free tier: 1 connection. {upgrade}": "Version gratuite : 1 connexion. {upgrade}",
+	"Your Free plan includes {count} Obsidian devices.": {
+		one: "Ton plan gratuit inclut {count} Obsidian appareil.",
+		many: "Ton plan gratuit inclut {count} Obsidian appareils.",
+		other: "Ton plan gratuit inclut {count} Obsidian appareils.",
+	},
 	"Collapse sidebar": "Masquer la barre latérale",
 	"No vaults": "Aucun coffre",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -812,8 +821,6 @@ export default {
 	"This app is requesting access to your Engram.":
 		"Cette application demande l'accès à ton Engram.",
 	"Signed in as {email}.": "Connecté en tant que {email}.",
-	device: "appareil",
-	"external connection": "connexion externe",
 	"your existing connection": "ta connexion existante",
 	"Which vaults can {client} access?": "Quels coffres {client} peut-il consulter ?",
 	"All vaults selected": "Tous les coffres sélectionnés",
@@ -829,11 +836,16 @@ export default {
 	"Taking you to setup so you can finish connecting {app}.":
 		"Je te redirige vers la configuration pour que tu puisses terminer la connexion à {app}.",
 	"Authorize {client}": "Autoriser {client}",
-	"Heads up — your Free plan allows 1 active {kind}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
-		"Attention : ton abonnement gratuit autorise 1 {kind} actif. L'approbation déconnectera {name}, qui perdra l'accès. {upgrade} pour maintenir les deux connectés.",
+	"Heads up: your Free plan allows {devices}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
+		"Attention : ton abonnement gratuit autorise {devices}. L'approbation déconnectera {name}, qui ne pourra plus accéder. {upgrade} pour maintenir les deux connectés.",
 	"Name this connection {optional}": "Nomme cette connexion {optional}",
-	"Your Free plan allows 1 active {kind}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
-		"Ton abonnement gratuit autorise 1 {kind} actif. Connecter {client} déconnectera {name}, qui perdra l'accès à Engram.",
+	"Your Free plan allows {devices}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
+		"Ton abonnement gratuit autorise {devices}. Connecter {client} déconnectera {name}, qui ne pourra plus accéder à ton Engram.",
+	"{count} active devices": {
+		one: "{count} appareil actif",
+		many: "{count} appareils actifs",
+		other: "{count} appareils actifs",
+	},
 	"What will you use Engram for?": "À quoi vas-tu utiliser Engram ?",
 	"Review the Terms": "Consulte les conditions",
 	"privacy notice": "Avis de confidentialité",
@@ -907,8 +919,6 @@ export default {
 	"Coding tools": "Outils de développement",
 	"Another MCP client": "Un autre client MCP",
 	"Why {tool} can't be connected": "Pourquoi {tool} ne peut pas être connecté",
-	"Free tier, pick 1 to start. {upgrade} anytime for unlimited connections.":
-		"Version gratuite, choisis-en 1 pour commencer. {upgrade} à tout moment pour des connexions illimitées.",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Liste non exhaustive, choisis {client} si le tien n'est pas ici.",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":

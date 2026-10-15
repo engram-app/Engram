@@ -177,8 +177,8 @@ export default {
 	"File too large": "파일 크기가 너무 큽니다",
 	"Upgrade to upload larger files.": "더 큰 파일을 업로드하려면 업그레이드하세요.",
 	"Device sync limit reached": "기기 동기화 제한에 도달했습니다",
-	"Your Free plan syncs files between 1 device at a time. Disconnect the device you're not using to switch, or upgrade to sync more devices.":
-		"무료 플랜은 한 번에 1개의 기기에서만 파일을 동기화합니다. 사용하지 않는 기기를 연결 해제하거나, 더 많은 기기를 동기화하려면 업그레이드하세요.",
+	"You've reached the number of devices your Free plan syncs at a time. Disconnect a device you're not using to switch, or upgrade to sync more devices.":
+		"무료 플랜으로 동시에 동기화할 수 있는 기기 수에 도달했습니다. 사용하지 않는 기기를 연결 해제하거나, 더 많은 기기를 동기화하려면 유료 플랜으로 업그레이드하세요.",
 	"Device swap cooldown active": "기기 전환 대기 중입니다",
 	"Wait before swapping devices, or upgrade.": "기기 전환 전에 잠시 기다리거나, 업그레이드하세요.",
 	"Daily AI search limit reached": "일일 AI 검색 제한에 도달했습니다",
@@ -187,9 +187,9 @@ export default {
 	"Free plan: text attachments only": "무료 플랜: 텍스트 첨부 파일만 가능",
 	"Your Free plan can attach text files (.md, .txt, .csv, .html, code). Upgrade to attach images, audio, video, PDFs, and office documents.":
 		"무료 플랜에서는 텍스트 파일(.md, .txt, .csv, .html, 코드)만 첨부할 수 있습니다. 이미지, 오디오, 비디오, PDF 및 오피스 문서를 첨부하려면 업그레이드하세요.",
-	"External connection limit reached": "외부 연결 제한에 도달했습니다",
-	"Your Free plan allows 1 active external connection. Disconnect it to use this one instead, or upgrade for unlimited connections.":
-		"무료 플랜은 활성 외부 연결 1개를 허용합니다. 이 기능을 사용하려면 기존 연결을 해제하거나, 무제한 연결을 위해 업그레이드하세요.",
+	"Device limit reached": "기기 수 제한에 도달했습니다",
+	"You've reached the number of Obsidian devices your Free plan allows. Disconnect a device you're not using to connect this one, or upgrade to connect more devices.":
+		"무료 플랜으로 Obsidian개의 기기 연결이 가능합니다. 사용하지 않는 기기를 연결 해제하거나, 더 많은 기기를 연결하려면 유료 플랜으로 업그레이드하세요.",
 	"Account suspended": "계정이 정지되었습니다",
 	"Contact support to restore access.": "접근 권한 복구를 위해 지원팀에 문의하세요.",
 	"Account setup incomplete": "계정 설정이 완료되지 않았습니다",
@@ -443,8 +443,9 @@ export default {
 		"계정 설정이 아직 완료되지 않았습니다. {setup}을 설치한 후, 다시 Obsidian에서 링크를 클릭하세요.",
 	"You recently swapped devices. Your Free plan allows 1 swap every 24 hours — you can swap again in {hours}h. {upgrade} to connect as many devices as you like.":
 		"최근에 기기를 변경하셨습니다. 무료 플랜은 24시간마다 1회 기기 변경을 허용합니다. {hours}시간 후에 다시 변경할 수 있습니다. 더 많은 기기를 연결하려면 {upgrade}을 이용하세요.",
-	"Heads up — your Free plan syncs files between 1 device at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
-		"참고: 무료 플랜은 한 번에 1개의 기기에서만 파일을 동기화합니다. 이 기기를 연결하면 {device}이 연결 해제되어 동기화 변경 사항을 받지 못하게 됩니다. {upgrade}을 사용하여 두 기기를 모두 연결 상태로 유지하세요.",
+	"Heads up: your Free plan syncs files between {devices} at a time. Linking this device will disconnect {device}, which will stop receiving sync changes. {upgrade} to keep both connected.":
+		"참고: 무료 플랜은 한 번에 {devices}개의 기기 간에 파일을 동기화합니다. 이 기기를 연결하면 {device}이 연결 해제되어 동기화 변경 사항을 더 이상 받지 못합니다. {upgrade}를 사용하여 두 기기를 모두 연결 상태로 유지하세요.",
+	"{count} devices": { other: "{count} 기기" },
 	"{count} minutes ago": { other: "{count}분 전" },
 	"{count} hours ago": { other: "{count}시간 전" },
 	"{count} days ago": { other: "{count}일 전" },
@@ -593,7 +594,9 @@ export default {
 	Language: "언어",
 	"My Vault": "내 보관함",
 	"{count} days left in your trial.": { other: "무료 체험은 {count}일 남았습니다." },
-	"Free tier: 1 connection. {upgrade}": "무료 플랜: 1개의 연결. {upgrade}",
+	"Your Free plan includes {count} Obsidian devices.": {
+		other: "무료 플랜은 {count} Obsidian개의 기기를 포함합니다.",
+	},
 	"Collapse sidebar": "사이드바 접기",
 	"No vaults": "보관함 없음",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -761,8 +764,6 @@ export default {
 		"'{name}' 연결이 끊어졌지만, 새로운 연결을 설정하는 데 실패했습니다. {client}에서 요청을 다시 실행하세요. 현재 이 종류의 연결은 활성화되어 있지 않습니다.",
 	"This app is requesting access to your Engram.": "이 앱은 Engram에 대한 접근 권한을 요청합니다.",
 	"Signed in as {email}.": "{email}으로 로그인되었습니다.",
-	device: "기기",
-	"external connection": "외부 연결",
 	"your existing connection": "기존 연결",
 	"Which vaults can {client} access?": "{client}은 어떤 보관함에 접근할 수 있나요?",
 	"All vaults selected": "모든 보관함 선택됨",
@@ -778,11 +779,12 @@ export default {
 	"Taking you to setup so you can finish connecting {app}.":
 		"{app} 연결을 완료할 수 있도록 설정 화면으로 이동합니다.",
 	"Authorize {client}": "{client} 승인",
-	"Heads up — your Free plan allows 1 active {kind}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
-		"참고: 무료 플랜에서는 1개의 활성 {kind}만 사용할 수 있습니다. 승인하면 {name}이 연결 해제되어 접근 권한이 종료됩니다. {upgrade}를 사용하려면 둘 다 연결해야 합니다.",
+	"Heads up: your Free plan allows {devices}. Approving will disconnect {name}, which will stop having access. {upgrade} to keep both connected.":
+		"참고: 무료 플랜에서는 {devices}을 허용합니다. 승인하면 {name}이 연결 해제되어 접근 권한을 잃게 됩니다. {upgrade}를 사용하여 두 기기를 모두 연결 상태로 유지하세요.",
 	"Name this connection {optional}": "이 연결을 {optional}이라고 명명하세요",
-	"Your Free plan allows 1 active {kind}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
-		"무료 플랜에서는 1개의 활성 {kind}만 사용할 수 있습니다. {client}을 연결하면 {name}가 연결 해제되어 Engram 접근 권한이 종료됩니다.",
+	"Your Free plan allows {devices}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
+		"무료 플랜에서는 {devices}을 허용합니다. {client}을 연결하면 {name}가 연결 해제되어 Engram에 대한 접근 권한을 잃게 됩니다.",
+	"{count} active devices": { other: "{count} 활성 장치" },
 	"What will you use Engram for?": "Engram을 어디에 사용하시겠습니까?",
 	"Review the Terms": "이용 약관 확인",
 	"privacy notice": "개인정보 처리방침",
@@ -852,8 +854,6 @@ export default {
 	"Coding tools": "코딩 도구",
 	"Another MCP client": "다른 MCP 클라이언트",
 	"Why {tool} can't be connected": "{tool} 연결이 안 되는 이유",
-	"Free tier, pick 1 to start. {upgrade} anytime for unlimited connections.":
-		"무료 플랜, 1개를 선택하여 시작하세요. {upgrade}을(를) 언제든지 선택하여 연결 수를 늘릴 수 있습니다.",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"완전한 목록은 아니지만, 목록에 없으면 {client}을(를) 선택하세요.",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
