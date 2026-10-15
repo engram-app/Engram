@@ -134,6 +134,28 @@ defmodule Engram.OAuthRefreshGraceTest do
     refute row(rt4).revoked_at
   end
 
+  # Approved follow-up #1: the re-issues per presented token are capped, and
+  # the window is anchored at the token's first use (its consumed_at, set
+  # once), so a stream of replays can neither mint forever nor slide the
+  # window. Hydra caps the same way (persister_oauth2.go, used_times < N).
+  test "re-issues are capped at 5 per token; the 6th replay is reuse", ctx do
+    {:ok, _} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+    first_use = row(ctx.rt1).consumed_at
+
+    for _ <- 1..5, do: assert({:ok, _} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id))
+
+    assert row(ctx.rt1).consumed_at == first_use
+
+    log =
+      capture_log(fn ->
+        assert {:error, {:invalid_grant, :refresh_token_reuse}} =
+                 OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+      end)
+
+    assert log =~ "oauth_refresh_reuse"
+    assert live_in_family(row(ctx.rt1).family_id) == 0
+  end
+
   # A successor revoked any other way (RFC 7009) must stay revoked: a replay
   # of its parent is not a way back in.
   test "a replay never resurrects a successor revoked by the client", ctx do

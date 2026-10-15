@@ -523,6 +523,13 @@ defmodule Engram.OAuth do
   # retry once; short enough that a stolen token is useless soon after.
   @refresh_reuse_grace_seconds 60
 
+  # How many times one consumed token may be re-issued inside its window. The
+  # window is anchored at the token's first use (consumed_at, set once), so
+  # replays cannot slide it, and this caps how much a stolen copy can mint in
+  # it. Counted from the successor rows the re-issue already locks: no column.
+  # Hydra's cap has the same shape (persister_oauth2.go, used_times < N).
+  @max_grace_reissues 5
+
   @doc """
   Rotates a refresh token: marks the presented one consumed, mints + issues
   a successor in the same family. If the presented token is already
@@ -690,6 +697,7 @@ defmodule Engram.OAuth do
   # successors are locked too, and the revoke must hit every live one it read.
   #
   # Not eligible (the caller revokes the family as reuse):
+  #   * it was already re-issued @max_grace_reissues times
   #   * any successor was consumed: the client had it, so this is theft
   #   * no successor is still live: it was revoked some other way (RFC 7009,
   #     Disconnect), and a replay of its parent must not bring it back
@@ -717,6 +725,8 @@ defmodule Engram.OAuth do
 
     with true <- Enum.all?(successors, &is_nil(&1.consumed_at)),
          true <- live != [],
+         # The first successor is the original rotation; the rest re-issues.
+         true <- length(successors) - 1 < @max_grace_reissues,
          {n, _} when n == length(live) <- revoke_ids(live_ids),
          {:ok, response} <- mint_rotation_successor(rt, ip) do
       original = Enum.min_by(successors, & &1.inserted_at, DateTime)

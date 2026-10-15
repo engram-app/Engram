@@ -67,8 +67,9 @@ defmodule Engram.OAuthSingleUseTest do
       params = exchange_params(user)
       {:ok, %{refresh_token: refresh_raw}} = OAuth.exchange_authorization_code(params)
 
+      # One rotation plus the 5 re-issues the grace cap allows.
       results =
-        1..8
+        1..6
         |> Enum.map(fn _ ->
           Task.async(fn ->
             OAuth.rotate_refresh_token(refresh_raw, params["client_id"])
