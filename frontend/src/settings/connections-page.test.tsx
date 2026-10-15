@@ -164,19 +164,22 @@ describe("ConnectionsPage", () => {
 		expect(screen.getByRole("heading", { name: /API keys/iu })).toBeInTheDocument();
 	});
 
-	// A recognized local/self-hosted client is unverifiable by construction, so
-	// it must not carry the same "unverified" badge as an unknown client, that
-	// reads as a fixable fault and prompts "am I connected wrong?".
-	it("shows no warning chip for a recognized client, explaining provenance in the detail row", () => {
+	// A slug derived from the self-reported client_name is a claim, not a proof:
+	// anyone can register as "ChatGPT" from localhost. Only `verified` earns a
+	// vendor mark and drops the chip; provenance stays in the detail row.
+	it("shows no vendor mark and keeps the chip for an unverified client claiming a vendor name", () => {
 		mockConnections.splice(0, mockConnections.length, {
 			...baseMcp,
-			slug: "claude_code",
+			name: "ChatGPT",
+			slug: "chatgpt",
 			verified: false,
+			redirect_uri: "http://localhost:9999/cb",
 		});
 		mockTier = "starter";
 		renderPage();
 
-		expect(screen.queryByText(/^unverified$/iu)).toBeNull();
+		expect(screen.queryByTestId("tool-mark-chatgpt")).toBeNull();
+		expect(screen.getByText(/^unverified$/iu)).toBeInTheDocument();
 		expect(screen.getByText(/self-reported/iu)).toBeInTheDocument();
 	});
 
@@ -444,7 +447,12 @@ describe("ConnectionsPage", () => {
 	// Brand marks come from the slug, not a per-vendor asset the backend has to
 	// ship, Grok has no /assets/clients/grok.svg and still renders its mark.
 	it("renders the brand mark for a slugged connection with no logo asset", () => {
-		mockConnections.splice(0, mockConnections.length, { ...baseMcp, slug: "grok", logo: null });
+		mockConnections.splice(0, mockConnections.length, {
+			...baseMcp,
+			slug: "grok",
+			logo: null,
+			verified: true,
+		});
 		mockTier = "starter";
 		renderPage();
 		expect(screen.getByTestId("tool-mark-grok")).toBeInTheDocument();

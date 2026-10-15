@@ -231,7 +231,7 @@ export default function ConnectorQcPage() {
 
 			<Panel
 				title="Connections page"
-				note="Top five are verified by vendor host (no chip). Claude Code + Open WebUI are recognized but unprovable. No chip either, provenance in the expanded row. Only the unrecognized client is chipped. Expand a row to read the Identity line."
+				note="Top five are verified by vendor host (no chip). Claude Code + Open WebUI are recognized but unprovable, so they are chipped and show no brand mark, like the unrecognized client. Expand a row to read the Identity line."
 				connections={CONNECTIONS}
 			>
 				<ConnectionsPage />

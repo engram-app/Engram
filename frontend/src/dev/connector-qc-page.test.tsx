@@ -43,8 +43,10 @@ describe("ConnectorQcPage", () => {
 		expect(screen.queryByText(/\(engram\)/u)).toBeNull();
 		expect(screen.getAllByText(/some-random-agent/iu).length).toBeGreaterThan(0);
 
-		// Exactly one chip: the unrecognized client. Recognized ones are plain.
-		expect(screen.getAllByText(/^unverified$/iu)).toHaveLength(1);
+		// Every unverified client is chipped: the two recognized-but-unprovable
+		// ones (Claude Code, Open WebUI) and the unrecognized one. A slug derived
+		// from a self-reported name earns no vendor mark and no pass.
+		expect(screen.getAllByText(/^unverified$/iu)).toHaveLength(3);
 
 		// The greyed Gemini row from the FTUX picker, its explanation is behind
 		// the HelpTip trigger, so assert the affordance, not the copy.

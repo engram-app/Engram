@@ -109,11 +109,13 @@ function ConnectionCard({
 			<details className="min-w-0 flex-1 open:pb-3">
 				<summary className="flex cursor-pointer items-center gap-3 p-3 [&::-webkit-details-marker]:hidden">
 					{/* Brand mark by slug first, @lobehub/icons-static-svg covers every
-					    catalog connector, so this needs no per-vendor asset. Falls back
-					    to the backend-supplied logo (Obsidian plugin, VS Code), then a
-					    generic plug for anything unrecognized. */}
+					    catalog connector, so this needs no per-vendor asset. Only for a
+					    verified client: a slug derived from the self-reported name is a
+					    claim, and a vendor's mark on it is free impersonation. Falls back
+					    to the backend-supplied logo (Obsidian plugin), then a generic plug
+					    for anything unrecognized. */}
 					<ToolMark
-						slug={connection.slug}
+						slug={connection.verified ? connection.slug : null}
 						className="flex size-10 shrink-0 items-center justify-center [&_svg]:size-7"
 						fallback={
 							connection.logo ? (
@@ -140,19 +142,11 @@ function ConnectionCard({
 								(connection.slug ? TOOL_LABELS[connection.slug] : null) ??
 								connection.name ??
 								t("Unnamed")}
-							{/* A chip only where it carries information. A recognized
-							    client (slug resolved, official brand mark alongside) is
-							    presented plainly. Badging Claude Code as suspect is
-							    wrong, it just redirects to loopback and so cannot be
-							    proven either way. Provenance is spelled out in the
-							    expanded Identity row. Reserve the chip for clients we
-							    genuinely do not recognize, where it's actionable.
-
-							    CIMD shipped, so a client that published a metadata
-							    document is now properly `verified` and takes the first
-							    branch — including loopback ones like Claude Code, which
-							    the redirect could never prove either way. */}
-							{!(connection.verified || connection.slug) && (
+							{/* Anything not `verified` is a claim, including a slug derived
+							    from the client's own name (a localhost client may call itself
+							    "ChatGPT"). Provenance is spelled out in the expanded Identity
+							    row. */}
+							{!connection.verified && (
 								<span className="ms-2 rounded bg-muted px-1.5 py-0.5 align-middle font-normal text-muted-foreground text-xs">
 									{t("unverified")}
 								</span>
