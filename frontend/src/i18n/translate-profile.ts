@@ -99,6 +99,10 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
 	Reading: "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view.",
 	"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 	Idea: "Feedback category: suggest a feature.",
+	// The Revoke confirm dialog's destructive button. Its own key because the
+	// generic "Revoke" matched Cancel in ko, ms and ru (2026-10-14).
+	"Revoke access":
+		"Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 	// Email strings (priv/i18n/email). zh/ja greeted with a casual "嗨" while the
 	// body used the polite form.
 	"Hi,":

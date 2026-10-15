@@ -1076,6 +1076,7 @@ export default {
 		"Kopiervorgang fehlgeschlagen. Klicke auf das Feld und drücke Cmd/Ctrl+C, um es manuell zu kopieren.",
 	'Revoke "{name}"?': 'Abbrechen von "{name}"?',
 	"Revoking…": "Wird abgebrochen…",
+	"Revoke access": "Zugriff entziehen",
 	"Close dialog": "Dialog schließen",
 	"Failed to load: {message}": "Fehler beim Laden: {message}",
 	Connections: "Verbindungen",

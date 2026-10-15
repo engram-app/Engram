@@ -1037,6 +1037,7 @@ export default {
 		"복사에 실패했습니다. 필드를 클릭하고 Cmd/Ctrl+C를 눌러 수동으로 복사하세요.",
 	'Revoke "{name}"?': '"{name}" 권취소하시겠습니까?',
 	"Revoking…": "권취소 중…",
+	"Revoke access": "접근 권한 해제",
 	"Close dialog": "대화 상자 닫기",
 	"Failed to load: {message}": "불러오기 실패: {message}",
 	Connections: "연결",

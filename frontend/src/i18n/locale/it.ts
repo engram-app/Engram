@@ -1093,6 +1093,7 @@ export default {
 		"Copia fallita, clicca nel campo e premi Cmd/Ctrl+C per copiare manualmente.",
 	'Revoke "{name}"?': 'Revocare "{name}"?',
 	"Revoking…": "Revocando…",
+	"Revoke access": "Revoca accesso",
 	"Close dialog": "Chiudi finestra",
 	"Failed to load: {message}": "Errore nel caricamento: {message}",
 	Connections: "Connessioni",

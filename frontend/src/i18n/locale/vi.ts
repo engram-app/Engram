@@ -1053,6 +1053,7 @@ export default {
 		"Sao chép thất bại, hãy nhấp vào trường và nhấn Cmd/Ctrl+C để sao chép thủ công.",
 	'Revoke "{name}"?': 'Thu hồi "{name}"?',
 	"Revoking…": "Đang thu hồi…",
+	"Revoke access": "Hủy quyền truy cập",
 	"Close dialog": "Đóng hộp thoại",
 	"Failed to load: {message}": "Không thể tải: {message}",
 	Connections: "Kết nối",

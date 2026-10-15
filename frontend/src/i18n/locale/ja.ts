@@ -1053,6 +1053,7 @@ export default {
 		"コピーに失敗しました。フィールドをクリックして、Cmd/Ctrl+Cで手動でコピーしてください。",
 	'Revoke "{name}"?': '"{name}" を取り消しますか？',
 	"Revoking…": "取り消し中…",
+	"Revoke access": "アクセス取り消し",
 	"Close dialog": "ダイアログを閉じます",
 	"Failed to load: {message}": "読み込みに失敗しました: {message}",
 	Connections: "接続",

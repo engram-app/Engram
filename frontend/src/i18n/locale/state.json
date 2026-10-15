@@ -47,6 +47,7 @@
 		},
 		"descriptions": {
 			"Idea": "Feedback category: suggest a feature.",
+			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -99,6 +100,7 @@
 		},
 		"descriptions": {
 			"Idea": "Feedback category: suggest a feature.",
+			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -151,6 +153,7 @@
 		},
 		"descriptions": {
 			"Idea": "Feedback category: suggest a feature.",
+			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -203,6 +206,7 @@
 		},
 		"descriptions": {
 			"Idea": "Feedback category: suggest a feature.",
+			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -255,6 +259,7 @@
 		},
 		"descriptions": {
 			"Idea": "Feedback category: suggest a feature.",
+			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -307,6 +312,7 @@
 		},
 		"descriptions": {
 			"Idea": "Feedback category: suggest a feature.",
+			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -359,6 +365,7 @@
 		},
 		"descriptions": {
 			"Idea": "Feedback category: suggest a feature.",
+			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -411,6 +418,7 @@
 		},
 		"descriptions": {
 			"Idea": "Feedback category: suggest a feature.",
+			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -463,6 +471,7 @@
 		},
 		"descriptions": {
 			"Idea": "Feedback category: suggest a feature.",
+			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -515,6 +524,7 @@
 		},
 		"descriptions": {
 			"Idea": "Feedback category: suggest a feature.",
+			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -567,6 +577,7 @@
 		},
 		"descriptions": {
 			"Idea": "Feedback category: suggest a feature.",
+			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -619,6 +630,7 @@
 		},
 		"descriptions": {
 			"Idea": "Feedback category: suggest a feature.",
+			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}

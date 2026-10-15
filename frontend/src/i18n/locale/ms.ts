@@ -1056,6 +1056,7 @@ export default {
 		"Salinan gagal, klik medan dan tekan Cmd/Ctrl+C untuk menyalin secara manual.",
 	'Revoke "{name}"?': 'Nyahaktifkan "{name}"?',
 	"Revoking…": "Menyahaktifkan…",
+	"Revoke access": "Batalkan akses",
 	"Close dialog": "Tutup dialog",
 	"Failed to load: {message}": "Gagal memuat: {message}",
 	Connections: "Sambungan",

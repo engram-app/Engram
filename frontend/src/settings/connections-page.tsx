@@ -617,7 +617,7 @@ function ConfirmRevokeModal({
 						{t("Cancel")}
 					</Button>
 					<Button type="button" variant="destructive" onClick={handleConfirm} disabled={submitting}>
-						{submitting ? t("Revoking…") : t("Revoke")}
+						{submitting ? t("Revoking…") : t("Revoke access")}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

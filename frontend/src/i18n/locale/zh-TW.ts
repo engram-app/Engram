@@ -1007,6 +1007,7 @@ export default {
 		"複製失敗，點擊該欄位並按下 Cmd/Ctrl+C 手動複製。",
 	'Revoke "{name}"?': '撤銷 "{name}"？',
 	"Revoking…": "正在撤銷…",
+	"Revoke access": "取消存取權",
 	"Close dialog": "關閉對話框",
 	"Failed to load: {message}": "載入失敗：{message}",
 	Connections: "連線",

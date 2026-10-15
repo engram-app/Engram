@@ -1141,6 +1141,7 @@ export default {
 		"Копирование не удалось. Нажмите на поле и используйте Cmd/Ctrl+C для ручного копирования.",
 	'Revoke "{name}"?': 'Отменить "{name}"?',
 	"Revoking…": "Отмена…",
+	"Revoke access": "Отменить доступ",
 	"Close dialog": "Закрыть диалоговое окно",
 	"Failed to load: {message}": "Не удалось загрузить: {message}",
 	Connections: "Подключения",

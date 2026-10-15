@@ -1095,6 +1095,7 @@ export default {
 		"Copie échouée, clique dans le champ et appuie sur Cmd/Ctrl+C pour copier manuellement.",
 	'Revoke "{name}"?': 'Révoquer "{name}" ?',
 	"Revoking…": "Révoque…",
+	"Revoke access": "Révoquer l'accès",
 	"Close dialog": "Fermer la boîte de dialogue",
 	"Failed to load: {message}": "Impossible de charger : {message}",
 	Connections: "Connexions",

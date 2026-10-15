@@ -579,11 +579,9 @@ describe("ConnectionsPage", () => {
 		// Modal renders with the connection name in the title.
 		expect(screen.getByRole("dialog")).toBeInTheDocument();
 		expect(screen.getByText(/Revoke "Obsidian Vault Sync"\?/u)).toBeInTheDocument();
-		// Confirm button = the second one (first is the in-card trigger that
-		// opened this modal, now hidden behind the dialog).
-		const confirmButton = screen
-			.getAllByRole("button", { name: /^Revoke$/u })
-			.find((b) => b.closest('[role="dialog"]'))!;
+		const confirmButton = within(screen.getByRole("dialog")).getByRole("button", {
+			name: "Revoke access",
+		});
 		fireEvent.click(confirmButton);
 		await waitFor(() => expect(mockRevokeDevice).toHaveBeenCalledWith("family-1"));
 		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -604,9 +602,9 @@ describe("ConnectionsPage", () => {
 
 		const workCard = screen.getByText("work").closest("li")!;
 		fireEvent.click(within(workCard).getByRole("button", { name: /^Revoke$/u }));
-		const confirmButton = screen
-			.getAllByRole("button", { name: /^Revoke$/u })
-			.find((b) => b.closest('[role="dialog"]'))!;
+		const confirmButton = within(screen.getByRole("dialog")).getByRole("button", {
+			name: "Revoke access",
+		});
 		fireEvent.click(confirmButton);
 
 		await waitFor(() =>
@@ -624,9 +622,9 @@ describe("ConnectionsPage", () => {
 		mockTier = "starter";
 		renderPage();
 		fireEvent.click(screen.getAllByRole("button", { name: /^Revoke$/u })[0]!);
-		const confirmButton = screen
-			.getAllByRole("button", { name: /^Revoke$/u })
-			.find((b) => b.closest('[role="dialog"]'))!;
+		const confirmButton = within(screen.getByRole("dialog")).getByRole("button", {
+			name: "Revoke access",
+		});
 		fireEvent.click(confirmButton);
 		// The thrown text is not shown (server text is English in every locale).
 		await waitFor(() => expect(screen.getByText("Revoke failed")).toBeInTheDocument());

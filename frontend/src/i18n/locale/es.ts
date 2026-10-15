@@ -1094,6 +1094,7 @@ export default {
 		"Error al copiar, haz clic en el campo y presiona Cmd/Ctrl+C para copiar manualmente.",
 	'Revoke "{name}"?': '¿Revocar "{name}"?',
 	"Revoking…": "Revocando…",
+	"Revoke access": "Revocar acceso",
 	"Close dialog": "Cerrar diálogo",
 	"Failed to load: {message}": "No se pudo cargar: {message}",
 	Connections: "Conexiones",

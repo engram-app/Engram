@@ -39,3 +39,16 @@ describe("committed catalogs", () => {
 		expect(sourceProblems(entries)).toEqual([]);
 	});
 });
+
+// The Revoke confirm dialog puts Cancel next to the destructive button. ko, ms
+// and ru translated the generic "Revoke" as their word for Cancel, so the two
+// buttons read the same. The dialog's labels must never equal Cancel.
+describe("Revoke confirm dialog", () => {
+	it.each(catalogs)("%s: no dialog label reads as Cancel", (_code, catalog) => {
+		const cancel = catalog.Cancel;
+		for (const key of ["Revoke access", "Revoking…", 'Revoke "{name}"?']) {
+			expect(typeof catalog[key]).toBe("string");
+			expect(catalog[key]).not.toBe(cancel);
+		}
+	});
+});

@@ -1005,6 +1005,7 @@ export default {
 		"复制失败，点击该字段并按 Cmd/Ctrl+C 手动复制。",
 	'Revoke "{name}"?': '撤销 "{name}"？',
 	"Revoking…": "正在撤销…",
+	"Revoke access": "取消访问",
 	"Close dialog": "关闭对话框",
 	"Failed to load: {message}": "加载失败：{message}",
 	Connections: "连接",
