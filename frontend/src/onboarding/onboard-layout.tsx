@@ -96,6 +96,31 @@ export default function OnboardLayout() {
 	return (
 		<AuthShell
 			navLabel={t("Onboarding")}
+			notice={
+				pending ? (
+					<>
+						<p className="text-muted-foreground">
+							<Trans
+								text="Finish setting up to connect {app}."
+								slots={{
+									app: (
+										<span className="font-medium text-foreground">
+											{pending.clientName ?? t("the app that sent you here")}
+										</span>
+									),
+								}}
+							/>
+						</p>
+						{/* Rendered only when the refusal can actually be delivered.
+						    A button that silently no-ops reads as a broken app. */}
+						{cancelUrl ? (
+							<Button type="button" variant="outline" size="sm" onClick={cancelPending}>
+								{t("Cancel connection")}
+							</Button>
+						) : null}
+					</>
+				) : null
+			}
 			actions={
 				<>
 					{counter ? <p className="text-muted-foreground text-sm">{counter}</p> : null}
@@ -105,32 +130,6 @@ export default function OnboardLayout() {
 				</>
 			}
 		>
-			{pending ? (
-				<aside
-					role="status"
-					className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/40 p-3 text-sm"
-				>
-					<p className="text-muted-foreground">
-						<Trans
-							text="Finish setting up to connect {app}."
-							slots={{
-								app: (
-									<span className="font-medium text-foreground">
-										{pending.clientName ?? t("the app that sent you here")}
-									</span>
-								),
-							}}
-						/>
-					</p>
-					{/* Rendered only when the refusal can actually be delivered.
-					    A button that silently no-ops reads as a broken app. */}
-					{cancelUrl ? (
-						<Button type="button" variant="outline" size="sm" onClick={cancelPending}>
-							{t("Cancel connection")}
-						</Button>
-					) : null}
-				</aside>
-			) : null}
 			<Outlet />
 		</AuthShell>
 	);
