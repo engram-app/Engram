@@ -22,6 +22,10 @@ defmodule EngramWeb.OAuthTokenController do
   # response goes out, whatever the outcome (#1974 review #13).
   plug :clear_request_state
 
+  # RFC 6749 §5.1 / OAuth 2.1 §3.2.3: token responses MUST NOT be cached. Set on
+  # errors too, so no intermediary ever stores anything from this endpoint.
+  plug :no_store
+
   def exchange(conn, %{"grant_type" => "authorization_code"} = params) do
     with {:ok, client_id, secret, assertion} <- client_credentials(conn, params),
          :ok <- OAuth.authenticate_client(client_id, secret, auth_opts(conn, assertion)) do
@@ -117,6 +121,8 @@ defmodule EngramWeb.OAuthTokenController do
       reason: reason
     })
   end
+
+  defp no_store(conn, _opts), do: put_resp_header(conn, "cache-control", "no-store")
 
   defp clear_request_state(conn, _opts) do
     forget_request_state()
