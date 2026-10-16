@@ -2,12 +2,15 @@ import { expect, type Page, type TestInfo } from "@playwright/test";
 import de from "../../src/i18n/locale/de";
 import es from "../../src/i18n/locale/es";
 import fr from "../../src/i18n/locale/fr";
+import id from "../../src/i18n/locale/id";
 import it from "../../src/i18n/locale/it";
 import ja from "../../src/i18n/locale/ja";
 import ko from "../../src/i18n/locale/ko";
 import ms from "../../src/i18n/locale/ms";
+import pl from "../../src/i18n/locale/pl";
 import ptBR from "../../src/i18n/locale/pt-BR";
 import ru from "../../src/i18n/locale/ru";
+import tr from "../../src/i18n/locale/tr";
 import vi from "../../src/i18n/locale/vi";
 import zhCN from "../../src/i18n/locale/zh-CN";
 import zhTW from "../../src/i18n/locale/zh-TW";
@@ -40,12 +43,15 @@ const CATALOGS: Record<string, CatalogLike> = {
 	de,
 	es,
 	fr,
+	id,
 	it,
 	ja,
 	ko,
 	ms,
+	pl,
 	"pt-BR": ptBR,
 	ru,
+	tr,
 	vi,
 	"zh-CN": zhCN,
 	"zh-TW": zhTW,
@@ -56,12 +62,15 @@ const BROWSER_LOCALES = [
 	{ tag: "de-DE", code: "de" },
 	{ tag: "es-ES", code: "es" },
 	{ tag: "fr-FR", code: "fr" },
+	{ tag: "id-ID", code: "id" },
 	{ tag: "it-IT", code: "it" },
 	{ tag: "ja-JP", code: "ja" },
 	{ tag: "ko-KR", code: "ko" },
 	{ tag: "ms-MY", code: "ms" },
+	{ tag: "pl-PL", code: "pl" },
 	{ tag: "pt-BR", code: "pt-BR" },
 	{ tag: "ru-RU", code: "ru" },
+	{ tag: "tr-TR", code: "tr" },
 	{ tag: "vi-VN", code: "vi" },
 	{ tag: "zh-CN", code: "zh-CN" },
 	{ tag: "zh-TW", code: "zh-TW" },

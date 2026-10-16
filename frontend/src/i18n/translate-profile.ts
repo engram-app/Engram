@@ -26,7 +26,7 @@ const SPECS: Record<Target, Spec> = {
 	id: {
 		name: "Indonesian",
 		tone: "Address the user as Anda, never kamu.",
-		formal: /\bkamu\b/iu,
+		formal: /(?<![\p{L}])(?:kamu|kau|engkau|dikau)(?![\p{L}])/iu,
 	},
 	it: {
 		name: "Italian",
@@ -44,7 +44,9 @@ const SPECS: Record<Target, Spec> = {
 	pl: {
 		name: "Polish",
 		tone: "Address the user informally (ty, twój), never Pan or Pani.",
-		formal: /\b(?:Pan|Pani|Pana|Panu|Państwo)\b/u,
+		// \b is ASCII-only even with u, so letter lookarounds (as ru/tr) and every case form.
+		formal:
+			/(?<![\p{L}])(?:pan|pani|pana|panu|panem|panie|panią|państwo|państwa|państwu|państwem|pańsk\p{L}*)(?![\p{L}])/iu,
 	},
 	"pt-BR": { name: "Brazilian Portuguese", tone: "Address the user as você." },
 	ru: {
@@ -57,7 +59,7 @@ const SPECS: Record<Target, Spec> = {
 		name: "Turkish",
 		// Naming the pronouns made gemma paste "{siz}" in as a placeholder (2026-10-16).
 		tone: "Use polite, concise UI Turkish.",
-		formal: /(?<![\p{L}])(?:sen|senin|sana|seni)(?![\p{L}])/iu,
+		formal: /(?<![\p{L}])(?:sen|senin|sana|seni|sende|senden|seninle)(?![\p{L}])/iu,
 	},
 	vi: { name: "Vietnamese", tone: "Address the user as bạn." },
 	"zh-CN": {
