@@ -1338,18 +1338,20 @@ export interface LegalNotice {
 
 export type OnboardingStep = "agreement" | "billing" | "tools" | "about" | "vault";
 
-// Partial mid-flow: the `:tools` step POSTs `tools` first, the `:vault`
-// step POSTs `uses_obsidian` after. `completed_at` only stamps once both
-// have landed — until then, treat absent fields as "user hasn't answered
-// that screen yet."
+// Partial mid-flow; treat absent fields as "not answered yet". `completed_at`
+// stamps once the Obsidian question is answered (vault step, or /link) or a
+// connector pre-filled the profile.
 export interface OnboardingProfile {
 	uses_obsidian?: boolean;
 	tools?: string[];
 	// Set only when an OAuth client answered the tool question before the
-	// wizard began. Drops `tools` from the step chain for that account; an
-	// ordinary signup answering the question themselves must NOT set it, or
-	// their own step counter stops advancing.
+	// wizard began: marks a connector signup (vault provisioned, no vault
+	// step). An ordinary answer must NOT set it.
 	tools_prefilled?: boolean;
+	// "plugin" for a signup that started on /link. Absent for web signups.
+	signup_source?: "plugin";
+	heard_from?: string;
+	survey_done_at?: string;
 	completed_at?: string;
 }
 
@@ -1510,8 +1512,12 @@ export function useAcceptTerms() {
 export function useSetOnboardingProfile() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: (body: { uses_obsidian?: boolean; tools?: string[]; tools_prefilled?: boolean }) =>
-			api.patch<OnboardingProfile>("/onboarding/profile", body),
+		mutationFn: (body: {
+			uses_obsidian?: boolean;
+			tools?: string[];
+			tools_prefilled?: boolean;
+			signup_source?: "plugin";
+		}) => api.patch<OnboardingProfile>("/onboarding/profile", body),
 		// AWAIT the invalidation so mutateAsync resolves only after
 		// ['onboarding','status'] has refetched. Without the await,
 		// OnboardingGate reads the still-cached next_step (e.g. "tools")

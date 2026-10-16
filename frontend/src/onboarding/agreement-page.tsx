@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -8,10 +8,11 @@ import { Trans } from "@/i18n/trans";
 import AuthPanel from "@/layout/auth-panel";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { track } from "../analytics/track";
-import { useOnboardingStatus } from "../api/queries";
+import { useOnboardingStatus, useSubmitFeedback } from "../api/queries";
 import { LegalDoc } from "../legal/legal-doc";
 import { formatEffectiveDate, useDocumentName } from "../legal/legal-notice-banner";
 import { useAcceptAgreements } from "../legal/use-accept-current";
+import { HeardFromField } from "./about-you-fields";
 
 export default function AgreementPage() {
 	const { t, renderedLocale } = useT();
@@ -23,13 +24,37 @@ export default function AgreementPage() {
 	const [showPrivacy, setShowPrivacy] = useState(false);
 	const [mountedAt] = useState(() => Date.now());
 	const notices = data?.legal_notices ?? [];
-	// A connector signup skips the plan step: accepting starts it on Free
-	// (`Engram.Onboarding.after_connector_terms/1`), which it must see first.
-	const startsFree = Boolean(data?.profile?.tools_prefilled && !data.subscription_ok);
+	const submitFeedback = useSubmitFeedback();
+	const [heardFrom, setHeardFrom] = useState<string | null>(null);
+	const [heardFromDetail, setHeardFromDetail] = useState("");
+	const heardFromId = useId();
+	// Only a brand-new web signup is asked. Plugin and connector signups
+	// record where they started instead, and a returning account re-accepting
+	// changed terms already went through the wizard.
+	const profile = data?.profile;
+	const askHeardFrom = !(
+		profile?.tools_prefilled ||
+		profile?.signup_source ||
+		profile?.completed_at ||
+		profile?.survey_done_at ||
+		profile?.heard_from
+	);
 
 	async function submit() {
 		if (!(await accept())) {
 			return;
+		}
+		if (askHeardFrom && heardFrom) {
+			const detail = heardFrom === "other" ? heardFromDetail.trim() : "";
+			// The terms are already accepted; a lost answer must not strand the
+			// signup on this screen.
+			await submitFeedback
+				.mutateAsync({
+					kind: "onboarding",
+					heard_from: heardFrom,
+					...(detail ? { heard_from_detail: detail } : {}),
+				})
+				.catch((err: unknown) => console.warn("heard_from submit failed", err));
 		}
 		track("onboarding_step_completed", {
 			step: "agreement",
@@ -132,15 +157,26 @@ export default function AgreementPage() {
 							{t("I have read and agree to the agreement shown above and the privacy notice")}
 						</span>
 					</label>
-					{startsFree ? (
-						<p className="text-muted-foreground text-sm">
-							{t("You'll start on the Free plan. Upgrade anytime.")}
-						</p>
+					{askHeardFrom ? (
+						<section className="flex flex-col gap-3">
+							<h2 id={heardFromId} className="font-semibold text-base text-foreground">
+								{t("How did you hear about Engram?")}
+							</h2>
+							<HeardFromField
+								heardFrom={heardFrom}
+								detail={heardFromDetail}
+								onChange={(next, detail) => {
+									setHeardFrom(next);
+									setHeardFromDetail(detail);
+								}}
+								labelledBy={heardFromId}
+							/>
+						</section>
 					) : null}
 					<Button
 						type="button"
 						onClick={submit}
-						disabled={!agreed || isPending || !ready}
+						disabled={!agreed || isPending || !ready || (askHeardFrom && !heardFrom)}
 						className="w-full"
 					>
 						{isPending ? t("Saving…") : t("Continue")}

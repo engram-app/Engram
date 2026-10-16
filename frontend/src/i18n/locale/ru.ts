@@ -895,8 +895,7 @@ export default {
 		"Я прочитал и согласен с Условиями использования и Политикой конфиденциальности",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Я прочитал и согласен с представленным выше соглашением и Уведомлением о конфиденциальности",
-	"You'll start on the Free plan. Upgrade anytime.":
-		"Вы начнете с бесплатного плана. Вы можете обновиться в любое время.",
+	"How did you hear about Engram?": "Как вы узнали об Engram?",
 	"Saving…": "Сохранение…",
 	Continue: "Продолжить",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -935,7 +934,6 @@ export default {
 	"Connect another MCP client": "Подключить другой клиент MCP",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Хранилище содержит ваши заметки. Вы можете переименовать его или добавить ещё позже.",
-	"How did you hear about Engram?": "Как вы узнали об Engram?",
 	"Couldn't save your answers, please try again.":
 		"Не удалось сохранить ваши ответы, попробуйте ещё раз.",
 	"Choose your plan": "Выберите свой тарифный план",

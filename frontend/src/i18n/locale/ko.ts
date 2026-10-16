@@ -799,8 +799,7 @@ export default {
 		"이용 약관 및 개인정보 처리방침을 읽고 동의합니다",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"위 약관 및 개인정보 처리방침을 읽고 동의합니다",
-	"You'll start on the Free plan. Upgrade anytime.":
-		"무료 플랜으로 시작합니다. 언제든지 업그레이드할 수 있습니다.",
+	"How did you hear about Engram?": "Engram에 대해 어떻게 알게 되셨나요?",
 	"Saving…": "저장 중...",
 	Continue: "계속하기",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -838,7 +837,6 @@ export default {
 	"Connect another MCP client": "다른 MCP 클라이언트 연결",
 	"A vault holds your notes. You can rename it or add more later.":
 		"보관함은 노트를 저장하는 곳입니다. 나중에 이름을 변경하거나 추가할 수 있습니다.",
-	"How did you hear about Engram?": "Engram에 대해 어떻게 알게 되셨나요?",
 	"Couldn't save your answers, please try again.": "답변을 저장하지 못했습니다. 다시 시도해주세요.",
 	"Choose your plan": "요금제를 선택하세요",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":

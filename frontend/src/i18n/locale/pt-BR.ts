@@ -850,8 +850,7 @@ export default {
 		"Eu li e concordo com os Termos de Serviço e a Política de Privacidade",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Eu li e concordo com o contrato exibido acima e o aviso de privacidade",
-	"You'll start on the Free plan. Upgrade anytime.":
-		"Você começará no plano gratuito. Faça o upgrade a qualquer momento.",
+	"How did you hear about Engram?": "Como você conheceu o Engram?",
 	"Saving…": "Salvando…",
 	Continue: "Continuar",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -891,7 +890,6 @@ export default {
 	"Connect another MCP client": "Conectar outro cliente MCP",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Um cofre armazena suas notas. Você pode renomeá-lo ou adicionar mais depois.",
-	"How did you hear about Engram?": "Como você conheceu o Engram?",
 	"Couldn't save your answers, please try again.":
 		"Não foi possível salvar suas respostas, por favor, tente novamente.",
 	"Choose your plan": "Escolha seu plano",

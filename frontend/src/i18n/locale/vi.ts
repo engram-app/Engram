@@ -811,8 +811,7 @@ export default {
 		"Tôi đã đọc và đồng ý với Điều khoản dịch vụ và Chính sách quyền riêng tư",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Tôi đã đọc và đồng ý với bản hợp đồng hiển thị ở trên và thông báo về quyền riêng tư",
-	"You'll start on the Free plan. Upgrade anytime.":
-		"Bạn sẽ bắt đầu với gói miễn phí. Nâng cấp bất cứ lúc nào.",
+	"How did you hear about Engram?": "Bạn biết về Engram như thế nào?",
 	"Saving…": "Đang lưu…",
 	Continue: "Tiếp tục",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -850,7 +849,6 @@ export default {
 	"Connect another MCP client": "Kết nối một ứng dụng MCP khác",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Một kho lưu trữ chứa các ghi chú của bạn. Bạn có thể đổi tên hoặc thêm nhiều hơn sau.",
-	"How did you hear about Engram?": "Bạn biết về Engram như thế nào?",
 	"Couldn't save your answers, please try again.":
 		"Không thể lưu lại câu trả lời của bạn, vui lòng thử lại.",
 	"Choose your plan": "Chọn gói của bạn",

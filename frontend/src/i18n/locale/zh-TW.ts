@@ -774,7 +774,7 @@ export default {
 		"我已閱讀並同意服務條款和隱私權政策",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"我已閱讀並同意上方顯示的協議和隱私權聲明",
-	"You'll start on the Free plan. Upgrade anytime.": "您將從免費方案開始。隨時可以升級。",
+	"How did you hear about Engram?": "你是從哪裡得知 Engram 的？",
 	"Saving…": "儲存中…",
 	Continue: "繼續",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -812,7 +812,6 @@ export default {
 	"Connect another MCP client": "連接其他 MCP 客戶端",
 	"A vault holds your notes. You can rename it or add more later.":
 		"儲存庫包含你的筆記。你可以稍後重新命名或新增更多。",
-	"How did you hear about Engram?": "你是從哪裡得知 Engram 的？",
 	"Couldn't save your answers, please try again.": "儲存答案失敗，請重試。",
 	"Choose your plan": "選擇方案",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":

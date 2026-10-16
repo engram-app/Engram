@@ -34,26 +34,14 @@ function AboutYouFields({ value, onChange, headingId }: AboutYouFieldsProps) {
 
 	return (
 		<>
-			<fieldset aria-labelledby={headingId} className="flex flex-col gap-2">
-				<RadioGroup
-					value={value.heardFrom ?? ""}
-					onValueChange={(heardFrom) => onChange({ ...value, heardFrom })}
-					className="grid-cols-1 sm:grid-cols-2"
-				>
-					{HEARD_FROM.map((opt) => (
-						<label key={opt.slug} className={selectableRow(value.heardFrom === opt.slug, true)}>
-							<RadioGroupItem value={opt.slug} aria-label={t(opt.label)} />
-							<span className="text-sm">{t(opt.label)}</span>
-						</label>
-					))}
-				</RadioGroup>
-				{value.heardFrom === "other" ? (
-					<DetailInput
-						value={value.heardFromDetail}
-						onChange={(heardFromDetail) => onChange({ ...value, heardFromDetail })}
-					/>
-				) : null}
-			</fieldset>
+			<HeardFromField
+				heardFrom={value.heardFrom}
+				detail={value.heardFromDetail}
+				onChange={(heardFrom, heardFromDetail) =>
+					onChange({ ...value, heardFrom, heardFromDetail })
+				}
+				labelledBy={headingId}
+			/>
 
 			<fieldset className="flex flex-col gap-2">
 				<legend className={legend}>{t("What will you use Engram for?")}</legend>
@@ -81,6 +69,39 @@ function AboutYouFields({ value, onChange, headingId }: AboutYouFieldsProps) {
 }
 
 const legend = "mb-3 font-semibold text-base text-foreground";
+
+interface HeardFromFieldProps {
+	heardFrom: string | null;
+	detail: string;
+	onChange: (heardFrom: string | null, detail: string) => void;
+	// The id of the visible question, used as the group's accessible name.
+	labelledBy: string;
+}
+
+// "How did you hear about Engram?": on the terms screen for a web signup, and
+// in the about-you survey.
+function HeardFromField({ heardFrom, detail, onChange, labelledBy }: HeardFromFieldProps) {
+	const { t } = useT();
+	return (
+		<fieldset aria-labelledby={labelledBy} className="flex flex-col gap-2">
+			<RadioGroup
+				value={heardFrom ?? ""}
+				onValueChange={(next) => onChange(next, detail)}
+				className="grid-cols-1 sm:grid-cols-2"
+			>
+				{HEARD_FROM.map((opt) => (
+					<label key={opt.slug} className={selectableRow(heardFrom === opt.slug, true)}>
+						<RadioGroupItem value={opt.slug} aria-label={t(opt.label)} />
+						<span className="text-sm">{t(opt.label)}</span>
+					</label>
+				))}
+			</RadioGroup>
+			{heardFrom === "other" ? (
+				<DetailInput value={detail} onChange={(next) => onChange(heardFrom, next)} />
+			) : null}
+		</fieldset>
+	);
+}
 
 // The free-text follow-up shown under a question once its "Other" is picked.
 function DetailInput({ value, onChange }: { value: string; onChange: (next: string) => void }) {
@@ -118,4 +139,4 @@ function aboutYouBody(value: AboutYou) {
 }
 
 export type { AboutYou };
-export { AboutYouFields, aboutYouBody, EMPTY_ABOUT_YOU };
+export { AboutYouFields, aboutYouBody, EMPTY_ABOUT_YOU, HeardFromField };

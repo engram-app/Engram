@@ -20,14 +20,17 @@ vi.mock("../legal/load", async (importOriginal) => ({
 vi.mock("../analytics/track", () => ({ track: vi.fn() }));
 const mockTrack = vi.mocked(track);
 
-const { mutate, statusRef } = vi.hoisted(() => ({
+const { mutate, submitFeedback, statusRef } = vi.hoisted(() => ({
 	mutate: vi.fn().mockResolvedValue({ version: "2026-05-19", accepted_at: "now" }),
+	submitFeedback: vi.fn().mockResolvedValue({ status: "ok" }),
 	statusRef: {
 		current: {
 			enabled: true,
 			next_step: "agreement",
 			current_tos_version: "2026-05-19",
 			current_privacy_version: "2026-06-20",
+			// A returning account re-accepting: not asked how it heard about us.
+			profile: { completed_at: "2026-05-19T00:00:00Z" },
 		} as Record<string, unknown>,
 	},
 }));
@@ -40,6 +43,7 @@ afterEach(() => {
 vi.mock("../api/queries", () => ({
 	useAcceptTerms: () => ({ mutateAsync: mutate, isPending: false }),
 	useOnboardingStatus: () => ({ data: statusRef.current, isLoading: false }),
+	useSubmitFeedback: () => ({ mutateAsync: submitFeedback, isPending: false }),
 }));
 
 // The legal texts load as lazy chunks; Continue enables once both have.
@@ -205,32 +209,48 @@ describe("AgreementPage: consent chrome is translated, the legal body is not", (
 	});
 });
 
-// A connector signup skips the plan step: accepting starts them on Free, so
-// the page has to say so before they click.
-describe("AgreementPage: connector signup", () => {
-	it("says the account starts on Free", () => {
-		statusRef.current = {
-			...DEFAULT_STATUS,
-			subscription_ok: false,
-			profile: { tools: ["chatgpt"], tools_prefilled: true },
-		};
+// A web signup is asked how it heard about us on the terms screen: it is the
+// only step before the vault. Plugin and connector signups are not asked;
+// where they started is recorded instead.
+describe("AgreementPage: how did you hear about us", () => {
+	it("asks a new web signup and requires an answer", async () => {
+		statusRef.current = { ...DEFAULT_STATUS, profile: undefined };
 		renderPage();
-		expect(screen.getByText("You'll start on the Free plan. Upgrade anytime.")).toBeInTheDocument();
+		await screen.findByRole("heading", { name: /Terms of Service/iu });
+		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
+
+		const button = screen.getByRole("button", { name: /continue/iu });
+		expect(button).toBeDisabled();
+
+		fireEvent.click(screen.getByRole("radio", { name: "Reddit" }));
+		await waitFor(() => expect(button).toBeEnabled());
+		fireEvent.click(button);
+
+		await waitFor(() =>
+			expect(submitFeedback).toHaveBeenCalledWith({ kind: "onboarding", heard_from: "reddit" }),
+		);
 	});
 
-	it("says nothing about Free for an ordinary signup", () => {
-		statusRef.current = { ...DEFAULT_STATUS, subscription_ok: false, profile: {} };
-		renderPage();
-		expect(screen.queryByText(/start on the Free plan/u)).not.toBeInTheDocument();
-	});
-
-	it("says nothing about Free when a plan already passes", () => {
+	it("does not ask a connector signup", () => {
 		statusRef.current = {
 			...DEFAULT_STATUS,
-			subscription_ok: true,
-			profile: { tools: ["chatgpt"], tools_prefilled: true },
+			profile: { tools: ["chatgpt"], tools_prefilled: true, completed_at: "x" },
 		};
 		renderPage();
-		expect(screen.queryByText(/start on the Free plan/u)).not.toBeInTheDocument();
+		expect(screen.queryByText("How did you hear about Engram?")).not.toBeInTheDocument();
+	});
+
+	it("does not ask a plugin-first signup", () => {
+		statusRef.current = {
+			...DEFAULT_STATUS,
+			profile: { uses_obsidian: true, signup_source: "plugin", completed_at: "x" },
+		};
+		renderPage();
+		expect(screen.queryByText("How did you hear about Engram?")).not.toBeInTheDocument();
+	});
+
+	it("does not ask a returning account re-accepting the terms", () => {
+		renderPage();
+		expect(screen.queryByText("How did you hear about Engram?")).not.toBeInTheDocument();
 	});
 });

@@ -811,8 +811,7 @@ export default {
 		"利用規約とプライバシーポリシーを読み、同意します",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"上記の利用規約とプライバシーポリシーを読み、同意します",
-	"You'll start on the Free plan. Upgrade anytime.":
-		"無料プランから開始します。いつでもアップグレードできます。",
+	"How did you hear about Engram?": "Engram をどこで知りましたか？",
 	"Saving…": "保存中…",
 	Continue: "続ける",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -851,7 +850,6 @@ export default {
 	"Connect another MCP client": "他の MCP クライアントを接続",
 	"A vault holds your notes. You can rename it or add more later.":
 		"保管庫にはノートが保存されます。後で名前を変更したり、追加したりできます。",
-	"How did you hear about Engram?": "Engram をどこで知りましたか？",
 	"Couldn't save your answers, please try again.":
 		"回答を保存できませんでした。もう一度お試しください。",
 	"Choose your plan": "プランを選択してください",

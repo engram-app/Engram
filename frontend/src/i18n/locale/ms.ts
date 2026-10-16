@@ -813,8 +813,7 @@ export default {
 		"Saya telah membaca dan bersetuju dengan Terma Perkhidmatan dan Dasar Privasi",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Saya telah membaca dan bersetuju dengan perjanjian yang ditunjukkan di atas dan notis privasi",
-	"You'll start on the Free plan. Upgrade anytime.":
-		"Anda akan bermula dengan pelan percuma. Tingkatkan bila-bila masa.",
+	"How did you hear about Engram?": "Bagaimana anda mengetahui tentang Engram?",
 	"Saving…": "Menyimpan…",
 	Continue: "Teruskan",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -853,7 +852,6 @@ export default {
 	"Connect another MCP client": "Sambungkan klien MCP lain",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Peti nota menyimpan nota anda. Anda boleh menamakan semula atau menambah lagi kemudian.",
-	"How did you hear about Engram?": "Bagaimana anda mengetahui tentang Engram?",
 	"Couldn't save your answers, please try again.":
 		"Tidak dapat menyimpan jawapan anda, sila cuba lagi.",
 	"Choose your plan": "Pilih pelan anda",
