@@ -16,9 +16,18 @@ defmodule EngramWeb.OAuthIssuerHostTest do
 
   setup do
     EngramWeb.RateLimiter.reset_buckets!()
-    prior = Application.get_env(:engram, :cors_origin)
+    prior = Application.fetch_env(:engram, :cors_origin)
     Application.put_env(:engram, :cors_origin, [@origin])
-    on_exit(fn -> Application.put_env(:engram, :cors_origin, prior) end)
+
+    # Unset must be restored as unset: a `nil` value crashes every later
+    # `x in cors_origin` read.
+    on_exit(fn ->
+      case prior do
+        {:ok, value} -> Application.put_env(:engram, :cors_origin, value)
+        :error -> Application.delete_env(:engram, :cors_origin)
+      end
+    end)
+
     :ok
   end
 

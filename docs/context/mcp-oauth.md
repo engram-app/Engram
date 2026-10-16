@@ -1,6 +1,6 @@
 # MCP OAuth 2.1 + DCR + CIMD: How It Works
 
-_Last verified: 2026-10-03_
+_Last verified: 2026-10-16_
 
 End-to-end OAuth 2.1 + Dynamic Client Registration on Engram's MCP endpoint, so Claude Connectors / Cursor / ChatGPT custom GPTs / any other standards-compliant client can auto-auth against `mcp.engram.page/api/mcp` (saas) or `engram.ax/api/mcp` (selfhost) without per-client integration code.
 
@@ -31,15 +31,16 @@ CIMD clients (Claude, ChatGPT) skip step 3: they send an HTTPS URL as `client_id
 | `GET /.well-known/oauth-authorization-server` | none | RFC 8414 — server metadata (endpoints, grant types, PKCE S256, scopes) |
 | `POST /oauth/register` | none, rate-limited 60/IP/min | RFC 7591 DCR. Public (`none`) or confidential (`client_secret_post` / `client_secret_basic`, secret returned once); PKCE mandatory either way |
 | `GET /oauth/authorize` | none, rate-limited 10/IP/min | Validates request, 302s to `/oauth/consent` (SPA mediation, Phase 7.A) |
-| `GET /api/oauth/clients/:client_id` | none, rate-limited 10/IP/min | Public client metadata — `{client_id, client_name}` only, for SPA consent UI |
+| `GET /api/oauth/clients/:client_id` | none, rate-limited 10/IP/min | Public client metadata for the consent UI: `client_id`, `client_name`, `kind`, `slug`, plus `redirect_uri_registered` / `redirect_host` for the `redirect_uri` query param. The page refuses an unregistered redirect (no Cancel open redirect) and shows the host |
 | `POST /api/oauth/authorize/consent` | Bearer JWT | SPA submits w/ `vault_choice`. Mints code. JSON `{redirect_uri: "..."}` for SPA `window.location` |
 | `POST /oauth/token` | client auth, rate-limited 300/min per {client_id, IP} plus 3,000/min per IP | RFC 6749 §3.2 — auth code → tokens, refresh → rotated tokens |
-| `POST /oauth/revoke` | client auth, rate-limited 300/min per {client_id, IP} plus 3,000/min per IP | RFC 7009. Client auth is `EngramWeb.OAuthClientAuth`, shared with `/oauth/token` (body id, Basic, or assertion). Bad auth is 401 `invalid_client`, a missing `token` is 400; otherwise 200 whether or not the token existed |
+| `POST /oauth/revoke` | client auth, rate-limited 300/min per {client_id, IP} plus 3,000/min per IP | RFC 7009. Client auth is `EngramWeb.OAuthClientAuth`, shared with `/oauth/token` (body id, Basic, or assertion; an assertion's `aud` may be the revoke URL). Bad auth is 401 `invalid_client`, a missing `token` is 400 `invalid_request`, an access token is 400 `unsupported_token_type`; otherwise 200 whether or not the token existed |
 
 ## Token model
 
+- **Audience binding (RFC 8707, #1977)** — OAuth access tokens carry `aud: "engram:mcp"` (`Engram.Token.mcp_audience/0`) and resolve only on routes declaring `private: %{token_surface: :mcp}`: `POST /api/mcp` and `POST /api/attachments` (the `get_attachment_upload_target` tool tells clients to upload there with the same token). Everywhere else, REST and the sync socket, they get 401 `invalid_token` via `TokenResolver.resolve/2`, checked before any verifier because on self-host the Local provider would accept them as sessions. A `resource` naming another host is `invalid_target` at authorize and token. Device-flow tokens keep `aud: "engram"`. The `mcp` scope is required on MCP-audience tokens (403 `insufficient_scope`).
 - **Access token** — internal HS256 JWT minted by `Engram.Accounts.generate_jwt/2` with optional `scope` + `vault_id` claims. 15-min TTL. Stateless (no DB row, can't revoke mid-life — short TTL is the mitigation). `EngramWeb.Plugs.Auth` validates via `TokenResolver`'s third fallback path (already existed pre-OAuth for the device flow).
-- **Refresh token**: `engram_oauth_rt_<...>` opaque random, sha256-hashed at rest. 90-day TTL. Stored in `oauth_refresh_tokens` with a `family_id` per RFC 6749 §10.4. Rotation on use; replay of a consumed token revokes the entire family, except inside the 60 s grace window below. The device and local-auth paths have their own leeway (see `refresh-token-reuse-detection.md`).
+- **Refresh token**: `engram_oauth_rt_<...>` opaque random, sha256-hashed at rest. 90-day TTL. Stored in `oauth_refresh_tokens` with a `family_id` per RFC 6749 §10.4. Rotation on use; replay of a consumed token revokes the entire family, except inside the 60 s grace window below. The first family's id is the authorization code's id, so a replayed code (past the same 60 s, and only after its client and PKCE checks pass) revokes everything it issued (RFC 6749 §4.1.2). The device and local-auth paths have their own leeway (see `refresh-token-reuse-detection.md`).
 
 ### Refresh grace window (#1974) and its tradeoff
 
@@ -102,3 +103,18 @@ Always returns 200 per RFC 7009 §2.2. If `client_id` doesn't own the token, it'
 | `oauth_refresh_tokens` | No (looked up by hashed token) | 90-day rotation w/ `family_id` for reuse detection |
 
 All three skip RLS — they're keyed by client_id or token-hash and looked up before user identity is established. Cleanup runs hourly via `Engram.Workers.CleanupDeviceAuthWorker`.
+
+## Spec conformance notes (#1977)
+
+Audited against MCP 2025-11-25 authorization, OAuth 2.1, RFC 8414/9728/7591/7636/8707/9207/7009/6750/7523 and the CIMD draft. Deliberate deviations, each kept because tightening it breaks a named client:
+
+- ChatGPT declares `private_key_jwt` but exchanges as a public client; accepted because its document lists `none` as permitted.
+- Custom-scheme redirects (`cursor://`) are admitted; MCP wants https or localhost, Cursor desktop needs this.
+- The loopback any-port rule also covers the `localhost` hostname (RFC 8252 prefers IP literals); Claude Code registers `localhost`.
+- The root `/.well-known/oauth-protected-resource` on app/api/self-host hosts advertises `.../api/mcp` rather than the root; clients that fall back to it compare it to the URL they dialed.
+- No DPoP/mTLS sender-constrained tokens: no MCP client sends them.
+- `iss` (RFC 9207) is sent but `authorization_response_iss_parameter_supported` is not advertised yet: advertising makes clients require it, so it waits until the SPA that forwards `iss` is promoted everywhere.
+- A token request that omits `redirect_uri` is accepted when the code's redirect is the client's only one, even if authorize named it explicitly; PKCE still binds the code.
+
+Vendor flows: `test/support/oauth_flow.ex` + `test/engram_web/oauth_vendor_flow_test.exs` replay 14 real client shapes from prod `oauth_clients` rows end to end. Add a vendor there when one first connects; never guess a fixture.
+
