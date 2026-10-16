@@ -38,3 +38,10 @@ export function useReportLocale(): void {
 		}
 	}, [userId, optedOut, locale]);
 }
+
+// A component, not a bare hook call, so AuthGuard can mount it only once signed
+// in (hooks cannot run conditionally, and /me before sign-in is a 401).
+export function ReportLocale(): null {
+	useReportLocale();
+	return null;
+}
