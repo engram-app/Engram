@@ -705,6 +705,14 @@ defmodule Engram.Billing do
             broadcast_subscription_activated(user_id, sub)
             # A new plan can lift the index cap: the backfill starts now.
             _ = Engram.Workers.ReconcileEmbeddings.kick()
+            # A connector signup's vault waits for a passing plan, and a paid
+            # plan passes here rather than in the wizard. Created events only:
+            # renewals and cancellations must not recreate a deleted vault.
+            # Last, and it never raises, so the side effects above always run.
+            with %Engram.Accounts.User{} = user <- Engram.Accounts.get_user(user_id) do
+              :ok = Engram.Onboarding.maybe_provision_connector_vault(user)
+            end
+
             {:ok, sub}
 
           err ->
@@ -1055,12 +1063,6 @@ defmodule Engram.Billing do
     # Same flip changes the user's tier and therefore their entire resolved
     # limit matrix — drop the cached entitlement snapshot so it re-derives.
     :ok = EntitlementCache.evict(user_id)
-
-    # A connector signup's vault waits for a passing plan; a paid plan passes
-    # here, not through the wizard. No-op for everyone else.
-    with %Engram.Accounts.User{} = user <- Engram.Accounts.get_user(user_id) do
-      :ok = Engram.Onboarding.maybe_provision_connector_vault(user)
-    end
 
     # Carry the full plan snapshot so the plugin can re-gate attachments the
     # instant the subscription flips, without a follow-up fetch. `tier` stays

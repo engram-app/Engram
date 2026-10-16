@@ -103,6 +103,7 @@ defmodule Engram.Onboarding do
         # could land over a newer one a concurrent read just stored.
         :ok = Cache.evict(:terms, {user.id, @terms_document})
         :ok = Cache.evict(:terms, {user.id, @privacy_document})
+        :ok = maybe_provision_connector_vault(user)
         {:ok, tos_row}
 
       other ->
@@ -602,7 +603,8 @@ defmodule Engram.Onboarding do
 
   Called where those last two flip: `set_profile/2` (the pre-answer, for an
   account already past them, and self-host, which has neither),
-  `accept_free_tier/1`, and the subscription chokepoint in `Engram.Billing`.
+  `accept_terms/6` (terms re-accepted after the plan), `accept_free_tier/1`,
+  and `subscription.created` in `Engram.Billing`.
   Idempotent: keyed on a fixed client_id, and a no-op when not due.
 
   Best-effort: a failure only means `build_steps/3` keeps `:vault` in the
@@ -619,6 +621,19 @@ defmodule Engram.Onboarding do
         not status.has_vault and status.terms_ok and status.subscription_ok
 
     if due, do: provision_connector_vault(user), else: :ok
+  rescue
+    # Never raises: one caller is a Paddle webhook, where an escaping error is
+    # answered 200 anyway and never retried. The fallback is the vault step.
+    error ->
+      Logger.error(
+        "connector vault provisioning raised",
+        Metadata.with_category(:error, :lifecycle,
+          user_id: user.id,
+          reason: Metadata.safe_reason(error)
+        )
+      )
+
+      :ok
   end
 
   defp provision_connector_vault(user) do

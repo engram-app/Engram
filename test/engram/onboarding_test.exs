@@ -653,6 +653,46 @@ defmodule Engram.OnboardingTest do
       assert [%{name: "My Vault"}] = Engram.Vaults.list_vaults(user)
     end
 
+    # A returning user whose plan already passes but whose terms lapsed: the
+    # pre-answer cannot provision (terms not ok), and the plan step is already
+    # satisfied, so accepting the terms is the moment it becomes due.
+    test "accepting terms after the plan provisions My Vault" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_free_tier(user)
+      {:ok, _} = Onboarding.set_profile(user, %{tools: ["chatgpt"], tools_prefilled: true})
+      assert [] = Engram.Vaults.list_vaults(user)
+
+      {:ok, _} =
+        Onboarding.accept_terms(user, "2026-05-15", "canonical", "2026-05-15", "p", %{})
+
+      assert [%{name: "My Vault"}] = Engram.Vaults.list_vaults(user)
+    end
+
+    test "a later subscription event does not recreate a deleted vault" do
+      user = prefilled_past_terms()
+      {:ok, _} = Onboarding.accept_free_tier(Engram.Accounts.get_user!(user.id))
+      [vault] = Engram.Vaults.list_vaults(user)
+      {:ok, _} = Engram.Vaults.delete_vault(Engram.Accounts.get_user!(user.id), vault.id)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_renew_1", status: "active")
+
+      {:ok, _} =
+        Engram.Billing.upsert_from_paddle_event(%{
+          "event_type" => "subscription.updated",
+          "event_id" => "ntf_renew_1",
+          "data" => %{
+            "id" => "sub_renew_1",
+            "status" => "past_due",
+            "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}, "status" => "active"}],
+            "current_billing_period" => %{
+              "starts_at" => "2026-06-13T00:00:00Z",
+              "ends_at" => "2026-07-13T00:00:00Z"
+            }
+          }
+        })
+
+      assert [] = Engram.Vaults.list_vaults(user)
+    end
+
     test "provisioning is idempotent" do
       user = prefilled_past_terms()
       {:ok, _} = Onboarding.accept_free_tier(Engram.Accounts.get_user!(user.id))
