@@ -21,6 +21,7 @@ import base64
 import hashlib
 import os
 import secrets
+from datetime import datetime
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -48,9 +49,16 @@ class User:
     access token) for the session-only routes; `legacy_key` is the pre-levels
     `engram_` key provisioning minted."""
 
-    def __init__(self, auth_provider, ts: str, label: str):
+    def __init__(self, auth_provider, ts: str):
         self.provider = auth_provider
-        self.email = f"e2e-vacc-{label}-{secrets.token_hex(3)}-{ts}+clerk_test@example.com"
+        # Clerk caps an email's local part at 64 characters, and the session
+        # `ts` plus a per-user tag overran it. A fresh timestamp per user is
+        # unique on its own, and keeps the `{20 digits}r{run}j{job}w{n}` shape
+        # the run sweep matches and age-gates on.
+        run_scope = ts[ts.index("r") :]
+        now = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        self.email = f"e2e-{now}{run_scope}+clerk_test@example.com"
+        assert len(self.email.split("@")[0]) <= 64, self.email
         self.password = secrets.token_urlsafe(32)
         self.uid, self.legacy_key = auth_provider.provision_user(self.email, self.password)
         grant_test_plan(self.email)
@@ -85,14 +93,14 @@ class User:
 
 @pytest.fixture
 def user(auth_provider, ts):
-    u = User(auth_provider, ts, "u1")
+    u = User(auth_provider, ts)
     yield u
     auth_provider.cleanup_user(u.uid)
 
 
 @pytest.fixture
 def other_user(auth_provider, ts):
-    u = User(auth_provider, ts, "u2")
+    u = User(auth_provider, ts)
     yield u
     auth_provider.cleanup_user(u.uid)
 
