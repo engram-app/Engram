@@ -87,7 +87,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/legal/seeder.ex" => 2,
     "engram/links.ex" => 15,
     "engram/logs.ex" => 2,
-    "engram/oauth.ex" => 19,
+    "engram/oauth.ex" => 18,
     "engram/oauth/cimd.ex" => 3,
     "engram/oauth/cimd/jwks_cache.ex" => 2,
     "engram/onboarding.ex" => 2,

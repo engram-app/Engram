@@ -49,16 +49,26 @@ defmodule Engram.OAuth.Cimd.HttpFetcherTest do
       assert doc["a"] == 1
     end
 
-    test "no-store and no-cache read as zero", %{bypass: bypass, target: target} do
+    test "no-cache reads as zero", %{bypass: bypass, target: target} do
       serve_with(bypass, "no-cache")
       assert {:ok, doc} = HttpFetcher.fetch_target(target)
       assert doc[Fetcher.max_age_key()] == 0
+    end
+
+    test "no-store reads as zero, even beside a max-age" do
+      assert HttpFetcher.max_age(%{"cache-control" => ["no-store"]}) == 0
+      assert HttpFetcher.max_age(%{"cache-control" => ["max-age=600, no-store"]}) == 0
     end
 
     test "absent reads as no max-age" do
       assert HttpFetcher.max_age(%{}) == nil
       assert HttpFetcher.max_age(%{"content-type" => ["application/json"]}) == nil
       assert HttpFetcher.max_age(%{"cache-control" => ["public, max-age=junk"]}) == nil
+    end
+
+    # The stored column is int4: a millisecond mix-up must not raise on insert.
+    test "is capped at a day" do
+      assert HttpFetcher.max_age(%{"cache-control" => ["max-age=31536000000"]}) == 86_400
     end
   end
 

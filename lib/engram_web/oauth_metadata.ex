@@ -19,6 +19,7 @@ defmodule EngramWeb.OAuthMetadata do
   URI, on our scheme, on the canonical host or an allowlisted one, with no
   fragment (§2). Any path, since clients send the URL they dialed and the MCP
   host serves at its bare root as well as `/api/mcp`. A list must be all ours.
+  The host compares case-insensitively (RFC 3986 §6.2.2.1).
   """
   @spec mcp_resource?(term()) :: boolean()
   def mcp_resource?(list) when is_list(list) and list != [], do: Enum.all?(list, &mcp_resource?/1)
@@ -29,6 +30,8 @@ defmodule EngramWeb.OAuthMetadata do
     case URI.parse(resource) do
       %URI{scheme: scheme, host: host, userinfo: nil, fragment: nil}
       when scheme == canonical.scheme and is_binary(host) and host != "" ->
+        host = String.downcase(host)
+
         host == canonical.host or
           "#{scheme}://#{host}" in Application.get_env(:engram, :cors_origin, [])
 
@@ -65,6 +68,16 @@ defmodule EngramWeb.OAuthMetadata do
   end
 
   def issuer?(_), do: false
+
+  @doc """
+  Whether authorization responses carry the RFC 9207 `iss`, and discovery
+  advertises it. Off until the SPA that forwards `iss` is promoted: a client
+  SHOULD discard an `iss` the server does not advertise, and MUST reject a
+  response without one once it is advertised (§2.4), so emitting and
+  advertising switch on together, after the SPA can carry it.
+  """
+  @spec iss_enabled?() :: boolean()
+  def iss_enabled?, do: Application.get_env(:engram, :oauth_iss_response, false)
 
   @doc """
   Base URL for the host the client actually dialed, when that host is in the

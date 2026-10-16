@@ -25,8 +25,8 @@ defmodule EngramWeb.OAuthAuthorizeController do
   alias Engram.OAuth
   alias EngramWeb.OAuthMetadata
 
-  # Params we forward to the SPA consent route. RFC 8707 `resource` is
-  # pass-through (no validation today; deferred per Phase 7.A plan).
+  # Params we forward to the SPA consent route. RFC 8707 `resource` is checked
+  # in `OAuth.validate_authorization_request/1` before anything is forwarded.
   @forwarded_params ~w(client_id redirect_uri response_type code_challenge
                        code_challenge_method scope state resource)
 
@@ -53,7 +53,8 @@ defmodule EngramWeb.OAuthAuthorizeController do
     # RFC 9207. Fixed at /oauth/authorize on the host the client dialed and
     # carried through the SPA, because this call arrives on another host. Only
     # one of our own issuers is echoed: a forged value is the mix-up attack.
-    iss = if OAuthMetadata.issuer?(params["iss"]), do: params["iss"]
+    iss =
+      if OAuthMetadata.iss_enabled?() and OAuthMetadata.issuer?(params["iss"]), do: params["iss"]
 
     case OAuth.validate_authorization_request(params) do
       {:ok, validated} ->
@@ -122,8 +123,10 @@ defmodule EngramWeb.OAuthAuthorizeController do
       # §4.1.1), and the consent page needs it either way.
       |> Map.put("redirect_uri", validated.redirect_uri)
       |> Map.take(@forwarded_params)
-      |> Enum.reject(fn {_k, v} -> is_nil(v) or v == "" end)
-      |> Enum.concat([{"iss", OAuthMetadata.base_url(conn)}])
+      # Strings only: a repeated-key list (`resource[]=`) was validated
+      # already and cannot be query-encoded.
+      |> Enum.filter(fn {_k, v} -> is_binary(v) and v != "" end)
+      |> Enum.concat(iss_param(conn))
 
     query = URI.encode_query(forwarded)
 
@@ -163,8 +166,12 @@ defmodule EngramWeb.OAuthAuthorizeController do
     |> render(template, code: code)
   end
 
+  defp iss_param(conn) do
+    if OAuthMetadata.iss_enabled?(), do: [{"iss", OAuthMetadata.base_url(conn)}], else: []
+  end
+
   defp redirect_with_error(conn, redirect_uri, error, state) do
-    iss = OAuthMetadata.base_url(conn)
+    iss = if OAuthMetadata.iss_enabled?(), do: OAuthMetadata.base_url(conn)
     location = OAuth.build_redirect(redirect_uri, %{error: error, state: state, iss: iss})
     conn |> put_status(302) |> redirect(external: location)
   end

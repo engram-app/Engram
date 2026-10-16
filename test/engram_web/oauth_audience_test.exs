@@ -11,6 +11,11 @@ defmodule EngramWeb.OAuthAudienceTest do
 
   Device-flow tokens (the Obsidian plugin) and every token minted before this
   change carry the legacy `aud`, and keep working exactly as before.
+
+  Minting `engram:mcp` is off this release (`:oauth_mcp_audience_tokens`):
+  nodes still on the previous release refuse it, so this release only teaches
+  every node to verify it. These tests run with minting on, as the next
+  release ships it; the default is pinned in its own test.
   """
   use EngramWeb.ConnCase, async: false
 
@@ -28,6 +33,8 @@ defmodule EngramWeb.OAuthAudienceTest do
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     {:ok, vault, _} = Engram.Vaults.register_vault(user, "V", Ecto.UUID.generate())
     lift_api_rps_cap!(user)
+    Application.put_env(:engram, :oauth_mcp_audience_tokens, true)
+    on_exit(fn -> Application.delete_env(:engram, :oauth_mcp_audience_tokens) end)
     %{user: user, vault: vault}
   end
 
@@ -70,6 +77,12 @@ defmodule EngramWeb.OAuthAudienceTest do
     assert {:ok, %{"aud" => "engram:mcp"}} = Accounts.verify_jwt(oauth_access_token(user))
   end
 
+  # Expand before contract: a rolling deploy runs old and new nodes together.
+  test "this release still mints the legacy audience", %{user: user} do
+    Application.delete_env(:engram, :oauth_mcp_audience_tokens)
+    assert {:ok, %{"aud" => "engram"}} = Accounts.verify_jwt(oauth_access_token(user))
+  end
+
   test "it works on /api/mcp", %{user: user} do
     body =
       user
@@ -98,7 +111,7 @@ defmodule EngramWeb.OAuthAudienceTest do
       |> put_req_header("x-vault-id", vault.id)
       |> post("/api/attachments", %{"path" => "a.txt", "content_base64" => Base.encode64("hi")})
 
-    refute conn.status == 401
+    assert conn.status in 200..299, conn.resp_body
   end
 
   test "it is refused on the sync socket", %{user: user} do
@@ -122,7 +135,11 @@ defmodule EngramWeb.OAuthAudienceTest do
       for resource <- [
             EngramWeb.Endpoint.url() <> "/api/mcp",
             EngramWeb.Endpoint.url() <> "/api/mcp/",
-            EngramWeb.Endpoint.url()
+            EngramWeb.Endpoint.url(),
+            # RFC 3986 §6.2.2.1: the host is case-insensitive.
+            String.upcase(EngramWeb.Endpoint.url()) <> "/api/mcp",
+            # OAuth 2.1 §3.1: empty is absent.
+            ""
           ] do
         assert is_binary(oauth_access_token(user, %{"resource" => resource})), resource
       end
@@ -152,6 +169,41 @@ defmodule EngramWeb.OAuthAudienceTest do
       assert query["error"] == "invalid_target"
       assert query["state"] == "s"
     end
+  end
+
+  # Repeated `resource[]=` values, all ours: validated, not forwarded, no 500.
+  test "a list of our own resources at authorize reaches consent" do
+    {:ok, client} = OAuth.register_client(%{"redirect_uris" => [@redirect], "client_name" => "C"})
+    {_verifier, challenge} = Engram.OAuthHelpers.pkce_pair()
+    ours = EngramWeb.Endpoint.url() <> "/api/mcp"
+
+    conn =
+      get(build_conn(), "/oauth/authorize", %{
+        "client_id" => client.client_id,
+        "redirect_uri" => @redirect,
+        "response_type" => "code",
+        "code_challenge" => challenge,
+        "code_challenge_method" => "S256",
+        "resource" => [ours, ours]
+      })
+
+    assert [location] = get_resp_header(conn, "location")
+    assert location =~ "/oauth/consent?"
+  end
+
+  # Client authentication runs first, so a stranger cannot pin an
+  # invalid_target on a vendor's client_id.
+  test "a foreign resource with failed client auth is invalid_client" do
+    conn =
+      post(build_conn(), "/oauth/token", %{
+        "grant_type" => "authorization_code",
+        "code" => "x",
+        "client_id" => Ecto.UUID.generate(),
+        "code_verifier" => "v",
+        "resource" => "https://other-mcp.example/mcp"
+      })
+
+    assert json_response(conn, 401)["error"] == "invalid_client"
   end
 
   # RFC 8707 §2.2: the token request may name the resource too.
@@ -197,5 +249,7 @@ defmodule EngramWeb.OAuthAudienceTest do
     assert [challenge] = get_resp_header(conn, "www-authenticate")
     assert challenge =~ ~s(error="insufficient_scope")
     assert challenge =~ ~s(scope="mcp")
+    # MCP 2025-11-25: the same pointer the 401 carries.
+    assert challenge =~ ~s(resource_metadata=")
   end
 end

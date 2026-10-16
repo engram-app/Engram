@@ -324,7 +324,9 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
 
   defp parse_max_age("max-age=" <> value) do
     case Integer.parse(value) do
-      {seconds, ""} when seconds >= 0 -> seconds
+      # Capped at a day, the most `Cimd` honours, so it always fits the int4
+      # column: a millisecond mix-up (`max-age=31536000000`) must not raise.
+      {seconds, ""} when seconds >= 0 -> min(seconds, 24 * 3600)
       _ -> nil
     end
   end

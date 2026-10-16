@@ -87,6 +87,37 @@ defmodule EngramWeb.OAuthRevokeControllerTest do
       assert json_response(conn2, 400)["error"] == "invalid_grant"
     end
 
+    # RFC 7009 §2.1: the hint is advisory. A wrong one still revokes.
+    test "a wrong token_type_hint still revokes", %{conn: conn} do
+      {client, rt} = full_flow_refresh_token(conn)
+
+      assert post(build_conn(), "/oauth/revoke", %{
+               "token" => rt,
+               "token_type_hint" => "access_token",
+               "client_id" => client.client_id
+             }).status == 200
+
+      refresh =
+        post(build_conn(), "/oauth/token", %{
+          "grant_type" => "refresh_token",
+          "refresh_token" => rt,
+          "client_id" => client.client_id
+        })
+
+      assert json_response(refresh, 400)["error"] == "invalid_grant"
+    end
+
+    # RFC 7009 §5: the endpoint is rate limited like /oauth/token.
+    test "is rate limited per client", %{conn: conn} do
+      {client, rt} = full_flow_refresh_token(conn)
+      EngramWeb.RateLimiter.reset_buckets!()
+      Application.put_env(:engram, :rate_limit_override, 2)
+      body = %{"token" => rt, "client_id" => client.client_id}
+
+      statuses = for _ <- 1..3, do: post(build_conn(), "/oauth/revoke", body).status
+      assert statuses == [200, 200, 429]
+    end
+
     test "force-disconnects live sockets for the token's owner", %{conn: conn} do
       {client, rt} = full_flow_refresh_token(conn)
       hash = Engram.Crypto.sha256_hex(rt)
@@ -202,6 +233,15 @@ defmodule EngramWeb.OAuthRevokeControllerTest do
     test "a missing token is invalid_request", %{conn: conn} do
       {client, _rt} = full_flow_refresh_token(conn)
       conn = post(build_conn(), "/oauth/revoke", %{"client_id" => client.client_id})
+      assert json_response(conn, 400)["error"] == "invalid_request"
+    end
+
+    test "a non-string token is invalid_request, not a 500", %{conn: conn} do
+      {client, _rt} = full_flow_refresh_token(conn)
+
+      conn =
+        post(build_conn(), "/oauth/revoke", %{"client_id" => client.client_id, "token" => ["x"]})
+
       assert json_response(conn, 400)["error"] == "invalid_request"
     end
   end

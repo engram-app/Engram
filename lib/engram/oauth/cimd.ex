@@ -161,10 +161,13 @@ defmodule Engram.OAuth.Cimd do
   # Percent-encoded dots count: `%2e%2e` normalises to `..` on many servers.
   defp path_ok?(url) do
     case URI.parse(url).path do
+      # Decoded first, so `%2e%2e` and `..%2f` are dot segments too. A
+      # backslash is refused outright: some servers read it as `/`.
       path when is_binary(path) and path not in ["", "/"] ->
-        path
-        |> String.split("/")
-        |> Enum.all?(&(URI.decode(&1) not in [".", ".."]))
+        decoded = URI.decode(path)
+
+        not String.contains?(decoded, "\\") and
+          decoded |> String.split("/") |> Enum.all?(&(&1 not in [".", ".."]))
 
       _ ->
         false

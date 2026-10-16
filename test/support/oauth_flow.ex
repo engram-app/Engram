@@ -123,14 +123,24 @@ defmodule Engram.OAuthFlow do
     pairs = URI.query_decoder(query) |> Enum.to_list()
 
     # A client that reads the first `code` and one that reads the last must agree.
-    for key <- ~w(code state iss), do: assert(Enum.count(pairs, &(elem(&1, 0) == key)) == 1, key)
+    for key <- ~w(code state), do: assert(Enum.count(pairs, &(elem(&1, 0) == key)) == 1, key)
     refute List.keymember?(pairs, "error", 0)
 
     decoded = Map.new(pairs)
     assert decoded["state"] == state
-    # RFC 9207: byte-identical to the discovered issuer, or a strict client
-    # discards the response as a mix-up.
-    assert decoded["iss"] == discover()["issuer"]
+
+    # RFC 9207 §2.4: `iss` exactly when discovery advertises it. Advertised and
+    # absent, a strict client MUST reject; present but unadvertised, it SHOULD
+    # discard. Present, it is byte-identical to the discovered issuer.
+    server = discover()
+
+    if server["authorization_response_iss_parameter_supported"] do
+      assert Enum.count(pairs, &(elem(&1, 0) == "iss")) == 1
+      assert decoded["iss"] == server["issuer"]
+    else
+      refute List.keymember?(pairs, "iss", 0)
+    end
+
     {decoded["code"], verifier}
   end
 

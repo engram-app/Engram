@@ -414,9 +414,10 @@ defmodule Engram.OAuth do
   # RFC 8707 §2: a `resource` that is not this server is `invalid_target`. A
   # client asking us for a token to some other server would otherwise get one
   # that names us, which is the confusion audience binding exists to prevent.
-  # Absent is fine; the token is for the MCP server either way.
+  # Absent is fine; the token is for the MCP server either way. Empty is
+  # absent (OAuth 2.1 §3.1).
   defp check_resource(%{"resource" => resource} = params, redirect_uri)
-       when is_binary(resource) or is_list(resource) do
+       when (is_binary(resource) and resource != "") or is_list(resource) do
     if EngramWeb.OAuthMetadata.mcp_resource?(resource),
       do: :ok,
       else: {:redirect_error, redirect_uri, "invalid_target", params["state"]}
@@ -793,10 +794,10 @@ defmodule Engram.OAuth do
           :code_missing
           | :code_unknown
           | :code_consumed
+          | :code_replay_revoked
           | :code_expired
           | :client_mismatch
           | :redirect_uri_mismatch
-          | :redirect_uri_missing
           | :pkce_verifier_missing
           | :pkce_mismatch
           | :user_not_found
@@ -849,9 +850,14 @@ defmodule Engram.OAuth do
   # RFC 6749 §4.1.2: a code used twice is refused and SHOULD revoke what it
   # issued. Not inside the refresh grace window, though: a client that fires two
   # exchanges at once, or retries one still in flight, would otherwise lose the
-  # grant its first exchange just gave it.
+  # grant its first exchange just gave it. Nor once the code has expired: a
+  # callback page reloaded hours later is not an attack, and must not cut off
+  # the connection that page set up.
   defp check_unconsumed(%AuthorizationCode{consumed_at: consumed_at} = code) do
-    if DateTime.diff(DateTime.utc_now(), consumed_at) > @refresh_reuse_grace_seconds do
+    now = DateTime.utc_now()
+
+    if DateTime.diff(now, consumed_at) > @refresh_reuse_grace_seconds and
+         DateTime.compare(now, code.expires_at) != :gt do
       _ =
         revoke_refresh_tokens(from(r in RefreshToken, where: r.family_id == ^code.id),
           skip_tenant_check: true
@@ -864,9 +870,11 @@ defmodule Engram.OAuth do
           family_id: code.id
         )
       )
-    end
 
-    grant_error(:code_consumed)
+      grant_error(:code_replay_revoked)
+    else
+      grant_error(:code_consumed)
+    end
   end
 
   # A CIMD client presents its document URL here while the code row stores the
@@ -882,14 +890,10 @@ defmodule Engram.OAuth do
       else: grant_error(:client_mismatch)
   end
 
-  # OAuth 2.1 §4.1.3: may be omitted when the client has the one redirect the
-  # code was delivered to. With several registered it is required.
-  defp check_code_redirect_uri(code, absent) when absent in [nil, ""] do
-    case Repo.get(Client, code.client_id, skip_tenant_check: true) do
-      %Client{redirect_uris: [only]} when only == code.redirect_uri -> :ok
-      _ -> grant_error(:redirect_uri_missing)
-    end
-  end
+  # OAuth 2.1 dropped `redirect_uri` from the token request (§4.1.3, §10.2):
+  # PKCE binds the code to the client that started the flow. Absent is fine;
+  # present must match, for RFC 6749 clients that still send it.
+  defp check_code_redirect_uri(_code, absent) when absent in [nil, ""], do: :ok
 
   defp check_code_redirect_uri(%{redirect_uri: actual}, requested) when actual == requested,
     do: :ok
@@ -970,9 +974,20 @@ defmodule Engram.OAuth do
   defp grant_vault_ids(%{vault_id: id}) when is_binary(id), do: [id]
   defp grant_vault_ids(_), do: nil
 
+  # Mints the legacy `engram` audience until every node can verify
+  # `engram:mcp`: a node still on the previous release refuses it, and with
+  # two tasks behind the ALB through a rolling deploy (and after a rollback)
+  # half of a client's calls would 401. The verifier accepts both today; the
+  # next release turns minting on.
+  defp mint_audience do
+    if Application.get_env(:engram, :oauth_mcp_audience_tokens, false),
+      do: Engram.Token.mcp_audience(),
+      else: "engram"
+  end
+
   defp issue_access_token(user, scope, vault_ids) do
     extras =
-      %{"aud" => Engram.Token.mcp_audience()}
+      %{"aud" => mint_audience()}
       |> maybe_put("scope", scope)
       |> maybe_put("vault_ids", vault_ids)
       # Every restricted grant also emits the legacy scalar claim, carrying the

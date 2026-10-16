@@ -34,7 +34,7 @@ defmodule Engram.OAuth.Cimd.Fetcher do
   the returned map. An atom, so it can never collide with a decoded JSON key,
   and callers pop it before treating the map as the document.
   """
-  @spec max_age_key() :: atom()
+  @spec max_age_key() :: :__cache_max_age__
   def max_age_key, do: :__cache_max_age__
 
   @spec impl() :: module()

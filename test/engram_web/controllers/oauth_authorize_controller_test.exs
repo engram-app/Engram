@@ -167,6 +167,8 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       conn = get(conn, "/oauth/authorize", params)
 
       assert conn.status == 302
+      assert [location] = get_resp_header(conn, "location")
+      assert location =~ "/oauth/consent?"
     end
 
     test "accepts an added port when none was registered", %{conn: conn} do
@@ -177,6 +179,8 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       conn = get(conn, "/oauth/authorize", params)
 
       assert conn.status == 302
+      assert [location] = get_resp_header(conn, "location")
+      assert location =~ "/oauth/consent?"
     end
 
     test "still requires the path to match", %{conn: conn} do
@@ -765,6 +769,43 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
     end
   end
 
+  describe "POST /api/oauth/authorize/consent — code properties" do
+    defp consent_redirect(conn, params) do
+      user = insert(:user)
+      insert(:vault, user: user)
+
+      conn
+      |> jwt_authed(user)
+      |> post("/api/oauth/authorize/consent", params)
+      |> json_response(200)
+      |> Map.fetch!("redirect_uri")
+    end
+
+    # RFC 6749 §4.1.2: state comes back exactly when the request carried it.
+    test "no state in, no state out", %{conn: conn} do
+      client = register_client()
+      params = client.client_id |> valid_params(hd(client.redirect_uris)) |> Map.delete("state")
+
+      query = conn |> consent_redirect(params) |> URI.parse() |> Map.fetch!(:query)
+      assert query |> URI.decode_query() |> Map.has_key?("code")
+      refute query |> URI.decode_query() |> Map.has_key?("state")
+    end
+
+    # OAuth 2.1 §4.1.2: short-lived (10 min max), and stored only as a hash.
+    test "the code lives 10 minutes and is stored hashed", %{conn: conn} do
+      client = register_client()
+      redirect = consent_redirect(conn, valid_params(client.client_id, hd(client.redirect_uris)))
+      code = URI.decode_query(URI.parse(redirect).query)["code"]
+
+      [row] = Repo.all(Engram.OAuth.AuthorizationCode, skip_tenant_check: true)
+      assert row.code_hash == Engram.Crypto.sha256_hex(code)
+      refute row.code_hash == code
+
+      lifetime = DateTime.diff(row.expires_at, DateTime.utc_now())
+      assert lifetime in 595..600
+    end
+  end
+
   describe "POST /api/oauth/authorize/consent — invalid request" do
     test "invalid client_id returns 400 JSON (no redirect — code-leak prevention)", %{conn: conn} do
       user = insert(:user)
@@ -781,6 +822,21 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       # client_ids with this error code. The 400 code-leak-prevention guarantee
       # still holds — we never redirect an unknown client.
       assert json["error"] == "missing_or_invalid_client_id"
+    end
+
+    # The route can't reach this (EnforceConnectionCap refuses unknown clients
+    # first), so call the action: its own answer must be a 400, never a redirect.
+    test "the action itself answers an unknown client with 400, not a redirect", %{conn: conn} do
+      params = valid_params("00000000-0000-0000-0000-000000000000", "https://x/cb")
+
+      conn =
+        conn
+        |> Phoenix.Controller.put_format("json")
+        |> Plug.Conn.assign(:current_user, insert(:user))
+        |> EngramWeb.OAuthAuthorizeController.consent(params)
+
+      assert conn.status == 400
+      refute Map.has_key?(Jason.decode!(conn.resp_body), "redirect_uri")
     end
 
     test "missing code_challenge returns redirect_uri with error in JSON", %{conn: conn} do
@@ -823,24 +879,21 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
     end
   end
 
-  # RFC 9207: the authorization response names its issuer, so a client talking
-  # to several servers (every MCP client) can tell which one answered. The value
-  # is fixed at /oauth/authorize, on the host the client dialed, and carried
-  # through the SPA; the consent call itself arrives on a different host.
-  describe "iss in the authorization response (RFC 9207)" do
-    defp issuer, do: EngramWeb.Endpoint.url()
-
-    test "authorize forwards the dialed issuer to the consent page", %{conn: conn} do
+  # RFC 9207 ships dark this release (`OAuthMetadata.iss_enabled?/0`): an `iss`
+  # the server does not advertise SHOULD be discarded (§2.4). On, it is covered
+  # by `OAuthIssuerHostTest`; this module is async, so it sees the default.
+  describe "iss in the authorization response (RFC 9207), off by default" do
+    test "authorize forwards no iss to the consent page", %{conn: conn} do
       client = register_client()
 
       conn =
         get(conn, "/oauth/authorize", valid_params(client.client_id, hd(client.redirect_uris)))
 
       [location] = get_resp_header(conn, "location")
-      assert URI.decode_query(URI.parse(location).query)["iss"] == issuer()
+      refute Map.has_key?(URI.decode_query(URI.parse(location).query), "iss")
     end
 
-    test "an authorize error redirect carries iss", %{conn: conn} do
+    test "an authorize error redirect carries no iss", %{conn: conn} do
       client = register_client()
 
       params =
@@ -851,32 +904,10 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       [location] = conn |> get("/oauth/authorize", params) |> get_resp_header("location")
       query = URI.decode_query(URI.parse(location).query)
       assert query["error"] == "unsupported_response_type"
-      assert query["iss"] == issuer()
+      refute Map.has_key?(query, "iss")
     end
 
-    test "consent puts the forwarded issuer on the code redirect", %{conn: conn} do
-      user = insert(:user)
-      insert(:vault, user: user)
-      client = register_client()
-
-      params =
-        client.client_id |> valid_params(hd(client.redirect_uris)) |> Map.put("iss", issuer())
-
-      redirect =
-        conn
-        |> jwt_authed(user)
-        |> post("/api/oauth/authorize/consent", params)
-        |> json_response(200)
-        |> Map.fetch!("redirect_uri")
-
-      query = URI.decode_query(URI.parse(redirect).query)
-      assert is_binary(query["code"])
-      assert query["iss"] == issuer()
-    end
-
-    # A forged iss is the mix-up attack itself: it makes our response look like
-    # another server's, so the client sends the code to that server.
-    test "consent drops an issuer that is not ours", %{conn: conn} do
+    test "consent drops a forwarded iss", %{conn: conn} do
       user = insert(:user)
       insert(:vault, user: user)
       client = register_client()
@@ -884,7 +915,7 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       params =
         client.client_id
         |> valid_params(hd(client.redirect_uris))
-        |> Map.put("iss", "https://attacker.example")
+        |> Map.put("iss", EngramWeb.Endpoint.url())
 
       redirect =
         conn

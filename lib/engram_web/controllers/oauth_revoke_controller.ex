@@ -28,7 +28,7 @@ defmodule EngramWeb.OAuthRevokeController do
     case OAuthClientAuth.authenticate(conn, params, "/oauth/revoke") do
       {:ok, client_id} ->
         case blank_to_nil(params["token"]) do
-          nil ->
+          token when not is_binary(token) ->
             conn |> put_status(:bad_request) |> json(%{error: "invalid_request"})
 
           token ->

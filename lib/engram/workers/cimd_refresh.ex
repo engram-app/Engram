@@ -17,7 +17,7 @@ defmodule Engram.Workers.CimdRefresh do
   happened to re-authorize (#1642).
 
   This sweep makes the clock mean what it says. It calls the SAME
-  `ensure_client/1` the authorize path calls, so a row inside its 24h TTL is a
+  `ensure_client/1` the authorize path calls, so a row inside its TTL (the document's clamped `max-age`, 5 min to 24h) is a
   no-op and anything older is refetched, validated and stored through one code
   path. Deliberately no second fetch implementation: a private one here would
   be free to drift from the validation the authorize path applies, which is the

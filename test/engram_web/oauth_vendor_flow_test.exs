@@ -39,6 +39,19 @@ defmodule EngramWeb.OAuthVendorFlowTest do
     %{user_token: token, resource: OAuthFlow.discover()["resource"]}
   end
 
+  # Each vendor runs against this release as deployed, and again with the
+  # switches the next release turns on (audience-bound tokens, RFC 9207 `iss`).
+  setup ctx do
+    if ctx[:stage] == :next_release do
+      for flag <- [:oauth_mcp_audience_tokens, :oauth_iss_response] do
+        Application.put_env(:engram, flag, true)
+        on_exit(fn -> Application.delete_env(:engram, flag) end)
+      end
+    end
+
+    :ok
+  end
+
   @dcr_methods ~w(authorization_code refresh_token)
 
   defp dcr(name, redirect_uris, extra \\ %{}) do
@@ -176,44 +189,50 @@ defmodule EngramWeb.OAuthVendorFlowTest do
            |> Map.fetch!("error") == "invalid_grant"
   end
 
-  describe "public clients (none + PKCE)" do
-    test "every recorded vendor completes a session", ctx do
-      for {name, registration, redirect_uri, authorize} <- public_vendors() do
-        EngramWeb.RateLimiter.reset_buckets!()
+  for stage <- [:this_release, :next_release] do
+    describe "#{stage}: public clients (none + PKCE)" do
+      @describetag stage: stage
 
-        vendor = %{
-          name: name,
-          registration: registration,
-          redirect_uri: redirect_uri,
-          auth: :none,
-          authorize: authorize
-        }
+      test "every recorded vendor completes a session", ctx do
+        for {name, registration, redirect_uri, authorize} <- public_vendors() do
+          EngramWeb.RateLimiter.reset_buckets!()
 
-        try do
-          full_session(vendor, ctx)
-        rescue
-          e in ExUnit.AssertionError ->
-            reraise %{e | message: "#{name}: #{e.message}"}, __STACKTRACE__
+          vendor = %{
+            name: name,
+            registration: registration,
+            redirect_uri: redirect_uri,
+            auth: :none,
+            authorize: authorize
+          }
+
+          try do
+            full_session(vendor, ctx)
+          rescue
+            e in ExUnit.AssertionError ->
+              reraise %{e | message: "#{name}: #{e.message}"}, __STACKTRACE__
+          end
         end
       end
     end
-  end
 
-  describe "ChatGPT connector (CIMD)" do
-    test "private_key_jwt: exchange and refresh with signed assertions", ctx do
-      vendor = %{
-        registration: chatgpt_cimd(),
-        redirect_uri: @chatgpt_redirect,
-        auth: {:private_key_jwt, ctx.private, @kid}
-      }
+    describe "#{stage}: ChatGPT connector (CIMD)" do
+      @describetag stage: stage
 
-      full_session(vendor, ctx, ctx.jwks)
-    end
+      test "private_key_jwt: exchange and refresh with signed assertions", ctx do
+        vendor = %{
+          registration: chatgpt_cimd(),
+          redirect_uri: @chatgpt_redirect,
+          auth: {:private_key_jwt, ctx.private, @kid}
+        }
 
-    # ChatGPT declares private_key_jwt and then exchanges as a public client.
-    test "none fallback: the same document, exchanged without an assertion", ctx do
-      vendor = %{registration: chatgpt_cimd(), redirect_uri: @chatgpt_redirect, auth: :none}
-      full_session(vendor, ctx)
+        full_session(vendor, ctx, ctx.jwks)
+      end
+
+      # ChatGPT declares private_key_jwt and then exchanges as a public client.
+      test "none fallback: the same document, exchanged without an assertion", ctx do
+        vendor = %{registration: chatgpt_cimd(), redirect_uri: @chatgpt_redirect, auth: :none}
+        full_session(vendor, ctx)
+      end
     end
   end
 end

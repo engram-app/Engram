@@ -47,7 +47,10 @@ defmodule EngramWeb.Plugs.OAuthScopeEnforce do
       conn
       |> put_resp_header(
         "www-authenticate",
-        ~s(Bearer error="insufficient_scope", scope="mcp")
+        # MCP 2025-11-25 "Runtime Insufficient Scope Errors": the same
+        # `resource_metadata` the 401 carries.
+        ~s(Bearer resource_metadata="#{EngramWeb.OAuthMetadata.resource_metadata_url(conn)}", ) <>
+          ~s(error="insufficient_scope", scope="mcp")
       )
       |> EngramWeb.Plugs.Halt.json(403, %{error: "insufficient_scope"})
     end

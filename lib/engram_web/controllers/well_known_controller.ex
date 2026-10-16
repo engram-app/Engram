@@ -142,6 +142,11 @@ defmodule EngramWeb.WellKnownController do
         # working. Backing that out is a revert, not a config change.
         client_id_metadata_document_supported: true
       }
+      |> Map.merge(
+        if OAuthMetadata.iss_enabled?(),
+          do: %{authorization_response_iss_parameter_supported: true},
+          else: %{}
+      )
     )
   end
 

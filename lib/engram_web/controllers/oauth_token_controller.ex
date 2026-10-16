@@ -25,30 +25,12 @@ defmodule EngramWeb.OAuthTokenController do
   # errors too, so no intermediary ever stores anything from this endpoint.
   plug :no_store
 
-  # RFC 8707 §2.2: a token request naming a resource other than this server is
-  # refused before anything is spent, for either grant.
-  def exchange(conn, %{"grant_type" => grant, "resource" => resource} = params)
-      when grant in ["authorization_code", "refresh_token"] and
-             (is_binary(resource) or is_list(resource)) do
-    if OAuthMetadata.mcp_resource?(resource) do
-      exchange(conn, Map.delete(params, "resource"))
-    else
-      grant_type = String.to_existing_atom(grant)
-      reject(conn, grant_type, params["client_id"], "invalid_target", :resource_not_ours)
-    end
-  end
-
   def exchange(conn, %{"grant_type" => "authorization_code"} = params) do
     case OAuthClientAuth.authenticate(conn, params) do
       {:ok, client_id} ->
-        ip = RequestMeta.format_ip(RemoteIp.resolve(conn))
-
-        # Feed back the RESOLVED client_id: it may have arrived via HTTP Basic
-        # rather than the body, and the grant check compares the code's client
-        # against this param. Reading the body directly would fail every
-        # Basic-authenticated exchange that omits the redundant body field.
-        OAuth.exchange_authorization_code(Map.put(params, "client_id", client_id), ip: ip)
-        |> grant_result(conn, :authorization_code, client_id)
+        with :ok <- check_resource(conn, :authorization_code, client_id, params) do
+          exchange_code(conn, client_id, params)
+        end
 
       {:error, reason} ->
         auth_error(conn, :authorization_code, reason)
@@ -58,15 +40,8 @@ defmodule EngramWeb.OAuthTokenController do
   def exchange(conn, %{"grant_type" => "refresh_token"} = params) do
     case OAuthClientAuth.authenticate(conn, params) do
       {:ok, client_id} ->
-        case params["refresh_token"] do
-          raw when is_binary(raw) and raw != "" ->
-            ip = RequestMeta.format_ip(RemoteIp.resolve(conn))
-
-            OAuth.rotate_refresh_token(raw, client_id, ip: ip)
-            |> grant_result(conn, :refresh_token, client_id)
-
-          _ ->
-            reject(conn, :refresh_token, client_id, "invalid_request", :refresh_token_missing)
+        with :ok <- check_resource(conn, :refresh_token, client_id, params) do
+          rotate(conn, client_id, params)
         end
 
       {:error, reason} ->
@@ -81,6 +56,43 @@ defmodule EngramWeb.OAuthTokenController do
   def exchange(conn, params),
     do: reject(conn, :missing, params["client_id"], "invalid_request", :grant_type_missing)
 
+  # RFC 8707 §2.2: a token request naming a resource other than this server is
+  # `invalid_target`. Checked after client authentication, so a stranger cannot
+  # pin refusals on a vendor's client_id in our metrics. Empty is absent
+  # (OAuth 2.1 §3.1).
+  defp check_resource(conn, grant_type, client_id, %{"resource" => resource})
+       when (is_binary(resource) and resource != "") or is_list(resource) do
+    if OAuthMetadata.mcp_resource?(resource),
+      do: :ok,
+      else: reject(conn, grant_type, client_id, "invalid_target", :resource_not_ours)
+  end
+
+  defp check_resource(_conn, _grant_type, _client_id, _params), do: :ok
+
+  defp exchange_code(conn, client_id, params) do
+    ip = RequestMeta.format_ip(RemoteIp.resolve(conn))
+
+    # Feed back the RESOLVED client_id: it may have arrived via HTTP Basic
+    # rather than the body, and the grant check compares the code's client
+    # against this param. Reading the body directly would fail every
+    # Basic-authenticated exchange that omits the redundant body field.
+    OAuth.exchange_authorization_code(Map.put(params, "client_id", client_id), ip: ip)
+    |> grant_result(conn, :authorization_code, client_id)
+  end
+
+  defp rotate(conn, client_id, params) do
+    case params["refresh_token"] do
+      raw when is_binary(raw) and raw != "" ->
+        ip = RequestMeta.format_ip(RemoteIp.resolve(conn))
+
+        OAuth.rotate_refresh_token(raw, client_id, ip: ip)
+        |> grant_result(conn, :refresh_token, client_id)
+
+      _ ->
+        reject(conn, :refresh_token, client_id, "invalid_request", :refresh_token_missing)
+    end
+  end
+
   # RFC 6749 §5.2: a bad grant is 400 `invalid_grant`, and says nothing about
   # WHICH part of the grant was bad. The reason goes to our log and metric only.
   #
@@ -94,7 +106,7 @@ defmodule EngramWeb.OAuthTokenController do
 
   # OAuth 2.1 §3.2.4: a required parameter that is ABSENT is invalid_request;
   # invalid_grant is for one that is present and wrong.
-  @missing_params [:code_missing, :pkce_verifier_missing, :redirect_uri_missing]
+  @missing_params [:code_missing, :pkce_verifier_missing]
 
   defp grant_result({:error, {:invalid_grant, reason}}, conn, grant_type, client_id)
        when reason in @missing_params,

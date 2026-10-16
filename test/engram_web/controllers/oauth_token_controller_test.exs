@@ -870,7 +870,8 @@ defmodule EngramWeb.OAuthTokenControllerTest do
       assert json_response(conn, 200)["access_token"]
     end
 
-    test "invalid_request for a multi-redirect client", %{conn: conn} do
+    # OAuth 2.1 §4.1.3 / §10.2: a 2.1 client never sends it. PKCE binds the code.
+    test "accepted for a multi-redirect client", %{conn: conn} do
       {:ok, client} =
         OAuth.register_client(%{
           "redirect_uris" => ["https://a.example/cb", "https://b.example/cb"],
@@ -888,7 +889,7 @@ defmodule EngramWeb.OAuthTokenControllerTest do
           "code_verifier" => verifier
         })
 
-      assert json_response(conn, 400)["error"] == "invalid_request"
+      assert json_response(conn, 200)["access_token"]
     end
   end
 end

@@ -68,10 +68,22 @@ defmodule Engram.OAuth.CodeReplayTest do
   test "a replay past the grace window revokes the tokens the code issued", ctx do
     age_code(120)
 
-    assert {:error, {:invalid_grant, :code_consumed}} =
+    assert {:error, {:invalid_grant, :code_replay_revoked}} =
              OAuth.exchange_authorization_code(ctx.params)
 
     refute live?(ctx.rt)
+  end
+
+  # A callback page reloaded long after the connect is not an attack.
+  test "a replay of an expired code revokes nothing", ctx do
+    age_code(120)
+    past = DateTime.utc_now(:second) |> DateTime.add(-1, :second)
+    Repo.update_all(AuthorizationCode, [set: [expires_at: past]], skip_tenant_check: true)
+
+    assert {:error, {:invalid_grant, :code_consumed}} =
+             OAuth.exchange_authorization_code(ctx.params)
+
+    assert live?(ctx.rt)
   end
 
   test "a rotated successor is revoked too: the whole family goes", ctx do

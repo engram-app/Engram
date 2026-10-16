@@ -40,8 +40,28 @@ defmodule EngramWeb.OAuthClientsController do
         # redirect, for a redirect the client never registered. Its host is
         # shown on the page (MCP 2025-11-25: the user sees where the code goes).
         redirect_uri_registered: registered?,
-        redirect_host: if(registered?, do: URI.parse(redirect_uri).host)
+        redirect_host: if(registered?, do: redirect_label(redirect_uri)),
+        # MCP 2025-11-25 "Client ID Metadata Documents": the consent page shows
+        # the hostname of a document client_id, the one identity it proves.
+        client_host: document_host(client.cimd_url),
+        # MCP 2025-11-25 "Localhost Redirect URI Risks": any local process can
+        # bind a loopback port and claim a vendor's client_id, so the page warns.
+        redirect_loopback:
+          registered? and Engram.OAuth.Client.loopback_host?(URI.parse(redirect_uri).host)
       })
+    end
+  end
+
+  defp document_host("https://" <> _ = url), do: URI.parse(url).host
+  defp document_host(_url), do: nil
+
+  # The hostname of a web redirect. For an app's own scheme the scheme is what
+  # names the app (`cursor://...`), and some carry no host at all.
+  defp redirect_label(uri) do
+    case URI.parse(uri) do
+      %URI{scheme: scheme, host: host} when scheme in ["http", "https"] -> host
+      %URI{scheme: scheme, host: host} when host in [nil, ""] -> "#{scheme}:"
+      %URI{scheme: scheme, host: host} -> "#{scheme}://#{host}"
     end
   end
 

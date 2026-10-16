@@ -81,7 +81,11 @@ defmodule Engram.OAuth.CimdTest do
       for url <- [
             "https://claude.ai/a/../client.json",
             "https://claude.ai/./client.json",
-            "https://claude.ai/a/%2e%2e/client.json"
+            "https://claude.ai/a/%2e%2e/client.json",
+            "https://claude.ai/a/..%2fclient.json",
+            # Some servers read a backslash as `/`.
+            "https://claude.ai/a/..%5cclient.json",
+            "https://claude.ai/a\\..\\client.json"
           ] do
         assert {:error, :invalid_url} = Cimd.ensure_client(url), url
       end
