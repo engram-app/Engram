@@ -23,6 +23,7 @@ import {
 	useCancelSubscription,
 	useConfirmPlanChange,
 	useCreateNote,
+	useCreateVault,
 	useDeleteFolder,
 	useDeleteNote,
 	useDeleteVault,
@@ -149,6 +150,35 @@ describe("useAcceptTerms", () => {
 		// If onSuccess fires-and-forgets, this would still be false when mutateAsync resolves
 		// and the user would be navigated with a stale cache (bug: double-accept).
 		expect(invalidateResolved).toBe(true);
+	});
+});
+
+describe("useCreateVault", () => {
+	// The onboarding vault step navigates to a parked OAuth consent the moment
+	// mutateAsync resolves. If the status refetch is fire-and-forget, consent
+	// mounts on the cached `gate_ok: false`, bounces back to the wizard, and the
+	// user lands on `/` instead of the Approve button.
+	it("awaits onboarding/status refetch before mutateAsync resolves", async () => {
+		qc.setQueryData(["onboarding", "status"], { next_step: "vault", gate_ok: false });
+
+		let statusResolved = false;
+		const invalidateSpy = vi.spyOn(qc, "invalidateQueries").mockImplementation(async (filters) => {
+			if (filters?.queryKey?.[0] === "onboarding") {
+				await new Promise((r) => setTimeout(r, 20));
+				statusResolved = true;
+			}
+		});
+
+		post.mockResolvedValue({ id: "v1", name: "Notes" });
+
+		const { result } = renderHook(() => useCreateVault(), { wrapper });
+
+		await act(async () => {
+			await result.current.mutateAsync({ name: "Notes", client_id: "c1" });
+		});
+
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["onboarding", "status"] });
+		expect(statusResolved).toBe(true);
 	});
 });
 

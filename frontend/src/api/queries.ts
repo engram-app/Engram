@@ -1796,11 +1796,14 @@ export function useCreateVault() {
 		// flat (plus `status`), not wrapped in `{ vault }`.
 		mutationFn: (attrs: { name: string; client_id: string }) =>
 			api.post<Vault>("/vaults/register", attrs),
-		onSuccess: () => {
+		onSuccess: async () => {
 			qc.invalidateQueries({ queryKey: ["vaults"] });
-			// Backend records `first_vault_created` in Vaults.register_vault/4;
-			// refresh /status so the onboarding checklist ticks immediately.
-			qc.invalidateQueries({ queryKey: ["onboarding", "status"] });
+			// Backend records `first_vault_created` in Vaults.register_vault/4.
+			// AWAITED: the onboarding vault step navigates to a parked OAuth
+			// consent as soon as mutateAsync resolves, and consent reads
+			// `gate_ok` from this cache. A stale `false` bounces the user back
+			// into the wizard and they land on `/` instead of Approve.
+			await qc.invalidateQueries({ queryKey: ["onboarding", "status"] });
 		},
 	});
 }

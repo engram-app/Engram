@@ -1,8 +1,14 @@
+import { lazy, Suspense } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
-import { ReportLocale } from "../i18n/report-locale";
 import LoadingScreen from "../layout/loading-screen";
 import { signInRedirectTarget } from "./sign-in-redirect";
 import { useAuthAdapter } from "./use-auth-adapter";
+
+// Lazy: AuthGuard is in the eager sign-in bundle, and the reporter pulls in
+// react-query + the API client. The bundle budget gate fails on a static import.
+const ReportLocale = lazy(() =>
+	import("../i18n/report-locale").then((m) => ({ default: m.ReportLocale })),
+);
 
 export default function AuthGuard() {
 	const { isLoaded, isSignedIn } = useAuthAdapter();
@@ -21,7 +27,9 @@ export default function AuthGuard() {
 	// otherwise never have their locale recorded.
 	return (
 		<>
-			<ReportLocale />
+			<Suspense fallback={null}>
+				<ReportLocale />
+			</Suspense>
 			<Outlet />
 		</>
 	);
