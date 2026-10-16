@@ -843,11 +843,12 @@ export default {
 		"L'accordo attuale non è disponibile al momento.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"Non possiamo mostrare gli ultimi termini, quindi la registrazione è sospesa invece di chiederti di accettare qualcosa che non puoi leggere. Riprova tra poco.",
+	"How did you hear about Engram?": "Come hai scoperto Engram?",
+	"Pick one to continue.": "Scegli una opzione per continuare.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"Ho letto e accetto i Termini di servizio e l'informativa sulla privacy",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Ho letto e accetto l'accordo mostrato sopra e l'informativa sulla privacy",
-	"How did you hear about Engram?": "Come hai scoperto Engram?",
 	"Saving…": "Salvataggio...",
 	Continue: "Continua",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

@@ -807,11 +807,12 @@ export default {
 	"The current agreement isn’t available right now.": "現在の利用規約は利用できません。",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"最新の利用規約を表示できないため、サインアップを一時停止しています。しばらくしてから再度お試しください。",
+	"How did you hear about Engram?": "Engram をどこで知りましたか？",
+	"Pick one to continue.": "続けるには、いずれかを選択してください。",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"利用規約とプライバシーポリシーを読み、同意します",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"上記の利用規約とプライバシーポリシーを読み、同意します",
-	"How did you hear about Engram?": "Engram をどこで知りましたか？",
 	"Saving…": "保存中…",
 	Continue: "続ける",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

@@ -795,11 +795,12 @@ export default {
 	"The current agreement isn’t available right now.": "현재 약관은 이용 불가합니다.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"최신 약관을 표시할 수 없으므로, 읽을 수 없는 내용에 동의하도록 안내하는 대신 가입을 잠시 중단합니다. 잠시 후 다시 시도해주세요.",
+	"How did you hear about Engram?": "Engram에 대해 어떻게 알게 되셨나요?",
+	"Pick one to continue.": "계속하려면 하나를 선택하세요.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"이용 약관 및 개인정보 처리방침을 읽고 동의합니다",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"위 약관 및 개인정보 처리방침을 읽고 동의합니다",
-	"How did you hear about Engram?": "Engram에 대해 어떻게 알게 되셨나요?",
 	"Saving…": "저장 중...",
 	Continue: "계속하기",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

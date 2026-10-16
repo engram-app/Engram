@@ -1,5 +1,5 @@
 import { lazy, type ReactNode, Suspense } from "react";
-import { createBrowserRouter, Outlet } from "react-router";
+import { createBrowserRouter, Navigate, Outlet } from "react-router";
 import AuthGuard from "./auth/auth-guard";
 import CatchAllRoute from "./auth/catch-all-route";
 import SignInPage from "./auth/sign-in";
@@ -166,6 +166,9 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 										{ path: "agreement", element: suspended(<AgreementPage />) },
 										{ path: "billing", element: suspended(<OnboardBillingPage />) },
 										{ path: "vault", element: suspended(<OnboardVaultPage />) },
+										// Removed steps (tools, about) and anything else stale: back to
+										// the resolver, which sends the user to their real next step.
+										{ path: "*", element: <Navigate to="/onboard" replace /> },
 									],
 								},
 

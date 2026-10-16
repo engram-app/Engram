@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -10,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { useConfig } from "@/config-context";
 import { useT } from "@/i18n/locale-provider";
+import { isSettingsHash } from "@/settings/settings-hash";
 import {
 	type OnboardingProfile,
 	useConnections,
@@ -37,25 +39,26 @@ function surveyPending(profile: OnboardingProfile | undefined): boolean {
 function SurveyPrompt({ suppressed }: { suppressed: boolean }) {
 	const { billingEnabled } = useConfig();
 	const { data: status } = useOnboardingStatus();
-	const { data: vaults } = useVaults();
-	const { data: connections } = useConnections();
+	const { hash } = useLocation();
 	const { has } = useOnboardingActions();
 	const [closed, setClosed] = useState(false);
+	// Only an account that may still be asked pays for these reads.
+	const eligible =
+		billingEnabled && status?.next_step === "done" && surveyPending(status.profile) && !closed;
+	const { data: vaults } = useVaults();
+	const { data: connections } = useConnections({ enabled: eligible });
 
-	// First value: a live connection (an AI tool or the plugin), the plugin
-	// ever linked, or notes beyond the welcome note. Not the `ai_connected`
-	// action: nothing records it.
+	// First value: a live connection to an AI tool or the plugin, the plugin
+	// ever linked, or notes beyond the welcome note. Not an API key (creating
+	// one would open this over a key shown only once), and not the
+	// `ai_connected` action: nothing records it.
 	const gotValue =
-		(connections ?? []).length > 0 ||
+		(connections ?? []).some((c) => c.kind !== "pat") ||
 		has("plugin_connected") ||
 		(vaults ?? []).some((v) => v.populated);
-	const due =
-		billingEnabled &&
-		status?.next_step === "done" &&
-		surveyPending(status.profile) &&
-		gotValue &&
-		!suppressed &&
-		!closed;
+	// Held back while another surface owns the screen: the first-vault modal
+	// (`suppressed`) or the Settings overlay.
+	const due = eligible && gotValue && !suppressed && !isSettingsHash(hash);
 
 	if (!(due && status)) {
 		return null;

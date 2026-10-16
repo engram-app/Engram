@@ -807,11 +807,12 @@ export default {
 		"Bản hợp đồng hiện tại không khả dụng ngay bây giờ.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"Chúng tôi không thể hiển thị các điều khoản mới nhất vào lúc này, vì vậy việc đăng ký bị tạm dừng thay vì yêu cầu bạn đồng ý với điều gì đó mà bạn không thể đọc. Vui lòng thử lại sau.",
+	"How did you hear about Engram?": "Bạn biết về Engram như thế nào?",
+	"Pick one to continue.": "Chọn một tùy chọn để tiếp tục.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"Tôi đã đọc và đồng ý với Điều khoản dịch vụ và Chính sách quyền riêng tư",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Tôi đã đọc và đồng ý với bản hợp đồng hiển thị ở trên và thông báo về quyền riêng tư",
-	"How did you hear about Engram?": "Bạn biết về Engram như thế nào?",
 	"Saving…": "Đang lưu…",
 	Continue: "Tiếp tục",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OnboardingProfile } from "../api/queries";
 import { SurveyModal, SurveyPrompt, surveyPending } from "./survey-modal";
@@ -31,9 +32,13 @@ vi.mock("./use-onboarding-actions", () => ({
 	useOnboardingActions: () => ({ has: (a: string) => state.actions.has(a) }),
 }));
 
-function renderUi(ui: React.ReactElement) {
+function renderUi(ui: React.ReactElement, path = "/") {
 	const qc = new QueryClient();
-	return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+	return render(
+		<QueryClientProvider client={qc}>
+			<MemoryRouter initialEntries={[path]}>{ui}</MemoryRouter>
+		</QueryClientProvider>,
+	);
 }
 
 beforeEach(() => {
@@ -76,6 +81,21 @@ describe("SurveyPrompt", () => {
 		arrange();
 		renderUi(<SurveyPrompt suppressed={false} />);
 		expect(screen.getByText(title)).toBeInTheDocument();
+	});
+
+	// An API key is not a sign of value, and creating one invalidates the
+	// connections query: counting it would open the survey over a key that
+	// is shown only once.
+	it("does not count an API key as first value", () => {
+		state.connections.push({ kind: "pat" });
+		renderUi(<SurveyPrompt suppressed={false} />);
+		expect(screen.queryByText(title)).toBeNull();
+	});
+
+	it("stays out of the way while Settings is open", () => {
+		state.connections.push({ kind: "mcp" });
+		renderUi(<SurveyPrompt suppressed={false} />, "/#settings/connections");
+		expect(screen.queryByText(title)).toBeNull();
 	});
 
 	it("never shows on self-host, mid-wizard, or while suppressed", () => {

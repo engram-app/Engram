@@ -891,11 +891,12 @@ export default {
 		"Текущее соглашение недоступно в данный момент.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"Мы не можем отобразить последние условия в данный момент, поэтому регистрация приостановлена, чтобы вы не соглашались с тем, что не можете прочитать. Пожалуйста, попробуйте позже.",
+	"How did you hear about Engram?": "Как вы узнали об Engram?",
+	"Pick one to continue.": "Выберите один вариант для продолжения.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"Я прочитал и согласен с Условиями использования и Политикой конфиденциальности",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Я прочитал и согласен с представленным выше соглашением и Уведомлением о конфиденциальности",
-	"How did you hear about Engram?": "Как вы узнали об Engram?",
 	"Saving…": "Сохранение…",
 	Continue: "Продолжить",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

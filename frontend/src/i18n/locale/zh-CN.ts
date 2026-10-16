@@ -769,11 +769,12 @@ export default {
 	"The current agreement isn’t available right now.": "当前协议暂时不可用。",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"暂时无法显示最新条款，因此暂停注册，而不是要求您同意您无法阅读的内容。请稍后再试。",
+	"How did you hear about Engram?": "你是通过什么途径了解 Engram 的？",
+	"Pick one to continue.": "选择一个继续。",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"我已阅读并同意服务条款和隐私政策",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"我已阅读并同意上述协议和隐私声明",
-	"How did you hear about Engram?": "你是通过什么途径了解 Engram 的？",
 	"Saving…": "保存中…",
 	Continue: "继续",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

@@ -770,11 +770,12 @@ export default {
 	"The current agreement isn’t available right now.": "目前無法提供最新協議。",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"我們目前無法顯示最新條款，因此暫停註冊，避免您同意無法閱讀的內容。請稍後再試。",
+	"How did you hear about Engram?": "你是從哪裡得知 Engram 的？",
+	"Pick one to continue.": "選擇一個繼續。",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"我已閱讀並同意服務條款和隱私權政策",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"我已閱讀並同意上方顯示的協議和隱私權聲明",
-	"How did you hear about Engram?": "你是從哪裡得知 Engram 的？",
 	"Saving…": "儲存中…",
 	Continue: "繼續",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

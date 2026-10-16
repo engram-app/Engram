@@ -823,11 +823,12 @@ export default {
 		"Das aktuelle Dokument ist momentan nicht verfügbar.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"Wir können die aktuellen Bedingungen im Moment nicht anzeigen, daher ist die Anmeldung vorübergehend pausiert, anstatt dich zu bitten, etwas zu akzeptieren, das du nicht lesen kannst. Bitte versuche es später noch einmal.",
+	"How did you hear about Engram?": "Wie hast du von Engram erfahren?",
+	"Pick one to continue.": "Wähle eine Option, um fortzufahren.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"Ich habe die Nutzungsbedingungen und die Datenschutzerklärung gelesen und akzeptiere sie",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Ich habe das oben angezeigte Dokument und die Datenschutzerklärung gelesen und akzeptiere sie",
-	"How did you hear about Engram?": "Wie hast du von Engram erfahren?",
 	"Saving…": "Speichern…",
 	Continue: "Fortfahren",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

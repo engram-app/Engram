@@ -809,11 +809,12 @@ export default {
 	"The current agreement isn’t available right now.": "Perjanjian semasa tidak tersedia sekarang.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"Kami tidak dapat memaparkan terma terkini pada masa ini, jadi pendaftaran ditangguhkan daripada meminta anda bersetuju dengan sesuatu yang tidak dapat anda baca. Sila cuba lagi sebentar.",
+	"How did you hear about Engram?": "Bagaimana anda mengetahui tentang Engram?",
+	"Pick one to continue.": "Pilih satu untuk meneruskan.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"Saya telah membaca dan bersetuju dengan Terma Perkhidmatan dan Dasar Privasi",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Saya telah membaca dan bersetuju dengan perjanjian yang ditunjukkan di atas dan notis privasi",
-	"How did you hear about Engram?": "Bagaimana anda mengetahui tentang Engram?",
 	"Saving…": "Menyimpan…",
 	Continue: "Teruskan",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

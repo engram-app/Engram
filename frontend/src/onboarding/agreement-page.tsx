@@ -25,6 +25,9 @@ export default function AgreementPage() {
 	const [mountedAt] = useState(() => Date.now());
 	const notices = data?.legal_notices ?? [];
 	const submitFeedback = useSubmitFeedback();
+	// Covers both saves: accept's own isPending clears before the heard-from
+	// POST, which left Continue clickable for a second accept.
+	const [submitting, setSubmitting] = useState(false);
 	const [heardFrom, setHeardFrom] = useState<string | null>(null);
 	const [heardFromDetail, setHeardFromDetail] = useState("");
 	const heardFromId = useId();
@@ -41,6 +44,18 @@ export default function AgreementPage() {
 	);
 
 	async function submit() {
+		if (submitting) {
+			return;
+		}
+		setSubmitting(true);
+		try {
+			await submitSteps();
+		} finally {
+			setSubmitting(false);
+		}
+	}
+
+	async function submitSteps() {
 		if (!(await accept())) {
 			return;
 		}
@@ -152,6 +167,9 @@ export default function AgreementPage() {
 							<h2 id={heardFromId} className="font-semibold text-base text-foreground">
 								{t("How did you hear about Engram?")}
 							</h2>
+							{heardFrom ? null : (
+								<p className="text-muted-foreground text-sm">{t("Pick one to continue.")}</p>
+							)}
 							<HeardFromField
 								heardFrom={heardFrom}
 								detail={heardFromDetail}
@@ -176,10 +194,10 @@ export default function AgreementPage() {
 					<Button
 						type="button"
 						onClick={submit}
-						disabled={!agreed || isPending || !ready || (askHeardFrom && !heardFrom)}
+						disabled={!agreed || isPending || submitting || !ready || (askHeardFrom && !heardFrom)}
 						className="w-full"
 					>
-						{isPending ? t("Saving…") : t("Continue")}
+						{isPending || submitting ? t("Saving…") : t("Continue")}
 					</Button>
 				</>
 			)}

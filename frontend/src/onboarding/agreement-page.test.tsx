@@ -231,10 +231,11 @@ describe("AgreementPage: how did you hear about us", () => {
 		);
 	});
 
+	// No completed_at on these two: the origin alone must decide it.
 	it("does not ask a connector signup", () => {
 		statusRef.current = {
 			...DEFAULT_STATUS,
-			profile: { tools: ["chatgpt"], tools_prefilled: true, completed_at: "x" },
+			profile: { tools: ["chatgpt"], tools_prefilled: true },
 		};
 		renderPage();
 		expect(screen.queryByText("How did you hear about Engram?")).not.toBeInTheDocument();
@@ -243,10 +244,56 @@ describe("AgreementPage: how did you hear about us", () => {
 	it("does not ask a plugin-first signup", () => {
 		statusRef.current = {
 			...DEFAULT_STATUS,
-			profile: { uses_obsidian: true, signup_source: "plugin", completed_at: "x" },
+			profile: { signup_source: "plugin" },
 		};
 		renderPage();
 		expect(screen.queryByText("How did you hear about Engram?")).not.toBeInTheDocument();
+	});
+
+	it("says why Continue is disabled until it is answered", async () => {
+		statusRef.current = { ...DEFAULT_STATUS, profile: undefined };
+		renderPage();
+		expect(screen.getByText("Pick one to continue.")).toBeInTheDocument();
+
+		fireEvent.click(screen.getByRole("radio", { name: "Reddit" }));
+		await waitFor(() => expect(screen.queryByText("Pick one to continue.")).toBeNull());
+	});
+
+	// The terms are accepted by then: a lost answer must not strand the signup.
+	it("still continues when saving the answer fails", async () => {
+		statusRef.current = { ...DEFAULT_STATUS, profile: undefined };
+		submitFeedback.mockRejectedValueOnce(new Error("429"));
+		renderPage();
+		await screen.findByRole("heading", { name: /Terms of Service/iu });
+		fireEvent.click(screen.getByRole("radio", { name: "Reddit" }));
+		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
+		await clickContinue();
+
+		await waitFor(() =>
+			expect(mockTrack).toHaveBeenCalledWith("onboarding_step_completed", expect.anything()),
+		);
+	});
+
+	it("cannot be submitted twice while saving", async () => {
+		let release: (v: unknown) => void = () => undefined;
+		mutate.mockClear();
+		mutate.mockImplementationOnce(
+			() =>
+				new Promise((r) => {
+					release = r;
+				}),
+		);
+		renderPage();
+		await screen.findByRole("heading", { name: /Terms of Service/iu });
+		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
+		await clickContinue();
+		await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+
+		const button = screen.getByRole("button", { name: /continue|saving/iu });
+		expect(button).toBeDisabled();
+		fireEvent.click(button);
+		expect(mutate).toHaveBeenCalledTimes(1);
+		release({ version: "2026-05-19", accepted_at: "now" });
 	});
 
 	it("does not ask a returning account re-accepting the terms", () => {

@@ -17,6 +17,7 @@ let recordAsyncMock = vi.fn();
 let onboardingActionsValue: ReturnType<typeof useOnboardingActions> = {
 	isLoading: false,
 	vaultCount: 1,
+	pluginFirst: false,
 	has: (a: OnboardingAction) => actionsList.includes(a),
 	recordAsync: recordAsyncMock,
 };
@@ -138,6 +139,7 @@ beforeEach(() => {
 	onboardingActionsValue = {
 		isLoading: false,
 		vaultCount: 1,
+		pluginFirst: false,
 		has: (a: OnboardingAction) => actionsList.includes(a),
 		recordAsync: recordAsyncMock,
 	};

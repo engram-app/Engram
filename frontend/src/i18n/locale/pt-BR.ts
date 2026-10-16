@@ -846,11 +846,12 @@ export default {
 		"O contrato atual não está disponível no momento.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"Não podemos exibir os termos mais recentes neste momento, então o cadastro está pausado em vez de pedir que você concorde com algo que não pode ler. Tente novamente em breve.",
+	"How did you hear about Engram?": "Como você conheceu o Engram?",
+	"Pick one to continue.": "Escolha uma opção para continuar.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"Eu li e concordo com os Termos de Serviço e a Política de Privacidade",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Eu li e concordo com o contrato exibido acima e o aviso de privacidade",
-	"How did you hear about Engram?": "Como você conheceu o Engram?",
 	"Saving…": "Salvando…",
 	Continue: "Continuar",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

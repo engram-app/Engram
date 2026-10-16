@@ -844,11 +844,12 @@ export default {
 	"The current agreement isn’t available right now.": "El acuerdo actual no está disponible ahora.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"No podemos mostrar los términos más recientes en este momento, así que el registro está pausado en lugar de pedirte que aceptes algo que no puedes leer. Inténtalo de nuevo en breve.",
+	"How did you hear about Engram?": "¿Cómo te enteraste de Engram?",
+	"Pick one to continue.": "Elige una opción para continuar.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"He leído y acepto los Términos del Servicio y la Política de Privacidad",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"He leído y acepto el acuerdo que se muestra arriba y el aviso de privacidad",
-	"How did you hear about Engram?": "¿Cómo te enteraste de Engram?",
 	"Saving…": "Guardando…",
 	Continue: "Continuar",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
