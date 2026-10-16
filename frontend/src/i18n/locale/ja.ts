@@ -860,9 +860,9 @@ export default {
 	"Could not continue. Please try again.": "続行できませんでした。もう一度お試しください。",
 	"Step {step} of {total}": "{total} の {step} 段階",
 	Onboarding: "初期設定",
-	"the app that sent you here": "こちらに誘導したアプリ",
+	"your app": "あなたのアプリ",
 	"Cancel connection": "接続を解除",
-	"Finish setting up to connect {app}.": "{app}への接続設定を完了します。",
+	"Connecting {app}": "{app} に接続中",
 	"Which AI tools do you use?": "どのAIツールをご利用ですか？",
 	"We'll tailor your setup around the tools you already work with.":
 		"現在ご利用のツールに合わせて設定をカスタマイズします。",

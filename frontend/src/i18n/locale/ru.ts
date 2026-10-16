@@ -944,9 +944,9 @@ export default {
 	"Could not continue. Please try again.": "Не удалось продолжить. Пожалуйста, попробуйте ещё раз.",
 	"Step {step} of {total}": "Шаг {step} из {total}",
 	Onboarding: "Обучение",
-	"the app that sent you here": "приложение, которое привело вас сюда",
+	"your app": "ваше приложение",
 	"Cancel connection": "Отменить подключение",
-	"Finish setting up to connect {app}.": "Завершить настройку для подключения {app}.",
+	"Connecting {app}": "Подключение {app}",
 	"Which AI tools do you use?": "Какие инструменты искусственного интеллекта вы используете?",
 	"We'll tailor your setup around the tools you already work with.":
 		"Мы настроим приложение в соответствии с инструментами, которые вы уже используете.",

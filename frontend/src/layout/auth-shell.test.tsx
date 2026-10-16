@@ -46,4 +46,18 @@ describe("AuthShell", () => {
 		);
 		expect(screen.getByText(/step 1 of 2/iu)).toBeInTheDocument();
 	});
+
+	// A notice must sit in the fixed header, not the scroll area: step pages
+	// size themselves to `max-h-full` of that area, so anything stacked above
+	// them overflows it.
+	it("renders the notice slot inside the top bar, outside the scroll area", () => {
+		render(
+			<AuthShell notice={<p>Connecting ChatGPT</p>}>
+				<p>body</p>
+			</AuthShell>,
+		);
+		const notice = screen.getByText("Connecting ChatGPT");
+		expect(screen.getByRole("banner")).toContainElement(notice);
+		expect(screen.getByText("body").parentElement).not.toContainElement(notice);
+	});
 });

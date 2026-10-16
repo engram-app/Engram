@@ -901,9 +901,9 @@ export default {
 		"Não foi possível continuar. Por favor, tente novamente.",
 	"Step {step} of {total}": "Etapa {step} de {total}",
 	Onboarding: "Integração",
-	"the app that sent you here": "o aplicativo que te trouxe aqui",
+	"your app": "seu aplicativo",
 	"Cancel connection": "Cancelar conexão",
-	"Finish setting up to connect {app}.": "Finalize a configuração para conectar {app}.",
+	"Connecting {app}": "Conectando {app}",
 	"Which AI tools do you use?": "Quais ferramentas de IA você usa?",
 	"We'll tailor your setup around the tools you already work with.":
 		"Personalizaremos sua configuração com base nas ferramentas que você já usa.",

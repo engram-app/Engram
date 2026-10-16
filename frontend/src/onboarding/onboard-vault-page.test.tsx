@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { track } from "../analytics/track";
 import { LocaleProvider } from "../i18n/locale-provider";
-import { stashPendingDeviceLink } from "../oauth/pending-authorization";
+import { stashPendingAuthorization, stashPendingDeviceLink } from "../oauth/pending-authorization";
 import OnboardVaultPage from "./onboard-vault-page";
 
 vi.mock("../analytics/track", () => ({ track: vi.fn() }));
@@ -198,5 +198,30 @@ describe("OnboardVaultPage: with a device link parked", () => {
 
 		await waitFor(() => expect(setProfileMutateAsync).toHaveBeenCalled());
 		expect(screen.getByTestId("location")).toHaveTextContent("/onboard/vault");
+	});
+});
+
+// MCP-first signup (e.g. from the ChatGPT store), parked on /oauth/consent.
+// Saving uses_obsidian admits them through the gate, so the client they came
+// to connect must not wait behind a plugin sync they may never start.
+describe("OnboardVaultPage: with an OAuth consent parked", () => {
+	beforeEach(() => {
+		window.sessionStorage.clear();
+		setProfileMutateAsync.mockClear();
+		status.current = { next_step: "vault", profile_complete: false, profile: {} };
+	});
+
+	it("returns to the consent screen once Obsidian is picked", async () => {
+		stashPendingAuthorization("?client_id=chatgpt&state=s1", "chatgpt", "ChatGPT");
+		renderPage();
+
+		fireEvent.click(screen.getByText(/i already use obsidian/iu));
+
+		await waitFor(() =>
+			expect(screen.getByTestId("location")).toHaveTextContent(
+				"/oauth/consent?client_id=chatgpt&state=s1",
+			),
+		);
+		expect(setProfileMutateAsync).toHaveBeenCalledWith({ uses_obsidian: true });
 	});
 });

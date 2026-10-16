@@ -820,9 +820,9 @@ export default {
 	"Could not continue. Please try again.": "无法继续。请重试。",
 	"Step {step} of {total}": "第 {step} 步，共 {total} 步",
 	Onboarding: "入门引导",
-	"the app that sent you here": "将您引导至此的应用程序",
+	"your app": "你的应用",
 	"Cancel connection": "取消连接",
-	"Finish setting up to connect {app}.": "完成连接 {app} 的设置。",
+	"Connecting {app}": "连接 {app}",
 	"Which AI tools do you use?": "您使用哪些 AI 工具？",
 	"We'll tailor your setup around the tools you already work with.":
 		"我们会根据您已使用的工具来定制设置。",

@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BillingStatus } from "../api/queries";
 import { ThemeProvider } from "../theme/theme-provider";
 import AppSidebarPanel, { Rail } from "./app-sidebar";
@@ -61,6 +61,12 @@ function renderSidebar() {
 // SearchPanel is a lazy chunk. Load it once up front so the lazy() resolves in
 // a tick; a cold first import (it pulls in @base-ui) outlasts findBy's timeout.
 await import("./search-panel");
+
+// SearchPanel is a lazy chunk; its first import pays Vite's transform, which on
+// a busy CI runner outlasts findBy's 1s. Loaded once up front.
+beforeAll(async () => {
+	await import("./search-panel");
+});
 
 describe("AppSidebar", () => {
 	beforeEach(() => {

@@ -1,8 +1,10 @@
+import { LogOut, X } from "lucide-react";
 import { useEffect } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import { Trans } from "@/i18n/trans";
+import { cn } from "@/lib/utils";
 import { track } from "../analytics/track";
 import { type OnboardingStep, useOnboardingStatus } from "../api/queries";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
@@ -96,41 +98,59 @@ export default function OnboardLayout() {
 	return (
 		<AuthShell
 			navLabel={t("Onboarding")}
+			notice={
+				pending ? (
+					<>
+						<p className="truncate">
+							<Trans
+								text="Connecting {app}"
+								slots={{
+									app: (
+										<span className="font-medium text-foreground">
+											{pending.clientName ?? t("your app")}
+										</span>
+									),
+								}}
+							/>
+						</p>
+						{/* Rendered only when the refusal can actually be delivered.
+						    A button that silently no-ops reads as a broken app. */}
+						{cancelUrl ? (
+							<Button
+								type="button"
+								variant="ghost"
+								size="icon-sm"
+								className="shrink-0"
+								aria-label={t("Cancel connection")}
+								title={t("Cancel connection")}
+								onClick={cancelPending}
+							>
+								<X aria-hidden="true" />
+							</Button>
+						) : null}
+					</>
+				) : null
+			}
 			actions={
 				<>
-					{counter ? <p className="text-muted-foreground text-sm">{counter}</p> : null}
+					{counter ? (
+						// Hidden on phones while a connection is pending: the notice needs the room.
+						<p
+							className={cn(
+								"whitespace-nowrap text-muted-foreground text-sm",
+								pending && "hidden sm:block",
+							)}
+						>
+							{counter}
+						</p>
+					) : null}
 					<Button type="button" variant="ghost" size="sm" onClick={() => logout()}>
-						{t("Sign out")}
+						<LogOut aria-hidden="true" className="sm:hidden" />
+						<span className="sr-only sm:not-sr-only">{t("Sign out")}</span>
 					</Button>
 				</>
 			}
 		>
-			{pending ? (
-				<aside
-					role="status"
-					className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/40 p-3 text-sm"
-				>
-					<p className="text-muted-foreground">
-						<Trans
-							text="Finish setting up to connect {app}."
-							slots={{
-								app: (
-									<span className="font-medium text-foreground">
-										{pending.clientName ?? t("the app that sent you here")}
-									</span>
-								),
-							}}
-						/>
-					</p>
-					{/* Rendered only when the refusal can actually be delivered.
-					    A button that silently no-ops reads as a broken app. */}
-					{cancelUrl ? (
-						<Button type="button" variant="outline" size="sm" onClick={cancelPending}>
-							{t("Cancel connection")}
-						</Button>
-					) : null}
-				</aside>
-			) : null}
 			<Outlet />
 		</AuthShell>
 	);

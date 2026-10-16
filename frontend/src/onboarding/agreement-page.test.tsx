@@ -6,6 +6,17 @@ import { LocaleProvider } from "@/i18n/locale-provider";
 import { track } from "../analytics/track";
 import AgreementPage from "./agreement-page";
 
+// The behaviour under test is the page, not the legal texts: rendering the
+// full vendored markdown cost ~1s per test on an idle box and blew the 5s
+// limit on CI runners. Short stand-ins keep the headings and dates asserted.
+vi.mock("../legal/load", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../legal/load")>()),
+	loadVersion: async (doc: "terms" | "privacy") =>
+		doc === "terms"
+			? "# Terms of Service\n\nLast updated: May 19, 2026\n\nStand-in text."
+			: "# Privacy Policy\n\nLast updated: June 20, 2026\n\nStand-in text.",
+}));
+
 vi.mock("../analytics/track", () => ({ track: vi.fn() }));
 const mockTrack = vi.mocked(track);
 
