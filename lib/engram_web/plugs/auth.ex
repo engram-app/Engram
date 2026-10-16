@@ -65,7 +65,10 @@ defmodule EngramWeb.Plugs.Auth do
   # rather than re-authorize from scratch (#1974). No credential at all gets no
   # error code. `:bearer_error` lets `McpAuthChallenge` merge this into its
   # discovery challenge instead of choosing one or the other.
-  defp put_bearer_error(conn, :no_auth), do: conn
+  #
+  # RFC 6750 §3: a 401 always carries a challenge, so no credential gets a bare
+  # `Bearer`. `McpAuthChallenge` replaces that bare form with its discovery one.
+  defp put_bearer_error(conn, :no_auth), do: put_resp_header(conn, "www-authenticate", "Bearer")
 
   defp put_bearer_error(conn, _reason) do
     conn

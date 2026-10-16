@@ -186,6 +186,18 @@ defmodule EngramWeb.OAuthRevokeControllerTest do
       assert {:ok, _new_pair} = OAuth.rotate_refresh_token(rt, client.client_id)
     end
 
+    # RFC 7009 §2.2.1: access tokens are stateless JWTs we cannot revoke, and a
+    # 200 would tell the client it had. It expires in 15 minutes on its own.
+    test "an access token is unsupported_token_type", %{conn: conn} do
+      {client, _rt} = full_flow_refresh_token(conn)
+      access = Engram.Accounts.generate_jwt(insert(:user), %{"aud" => "engram:mcp"})
+
+      conn =
+        post(build_conn(), "/oauth/revoke", %{"token" => access, "client_id" => client.client_id})
+
+      assert json_response(conn, 400)["error"] == "unsupported_token_type"
+    end
+
     # RFC 7009 §2.2.1 / RFC 6749 §5.2: a missing required parameter.
     test "a missing token is invalid_request", %{conn: conn} do
       {client, _rt} = full_flow_refresh_token(conn)

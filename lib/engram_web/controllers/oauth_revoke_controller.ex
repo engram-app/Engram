@@ -10,9 +10,9 @@ defmodule EngramWeb.OAuthRevokeController do
 
   Once authenticated the answer is always 200 (§2.2), whether or not the token
   existed, so the endpoint never confirms which tokens are live. Only refresh
-  tokens are stored server-side, so revoking an access token is a no-op; it
-  expires within 15 minutes on its own. A token owned by another client is also
-  a 200 no-op.
+  tokens are stored server-side, so an access token is `unsupported_token_type`
+  (400); it expires within 15 minutes on its own. A token owned by another
+  client is a 200 no-op.
   """
   use EngramWeb, :controller
 
@@ -32,8 +32,12 @@ defmodule EngramWeb.OAuthRevokeController do
             conn |> put_status(:bad_request) |> json(%{error: "invalid_request"})
 
           token ->
-            _ = OAuth.revoke_token(token, client_id, params["token_type_hint"])
-            send_resp(conn, 200, "")
+            if access_token?(token) do
+              conn |> put_status(:bad_request) |> json(%{error: "unsupported_token_type"})
+            else
+              _ = OAuth.revoke_token(token, client_id, params["token_type_hint"])
+              send_resp(conn, 200, "")
+            end
         end
 
       {:error, :temporarily_unavailable} ->
@@ -46,4 +50,8 @@ defmodule EngramWeb.OAuthRevokeController do
         |> json(%{error: "invalid_client"})
     end
   end
+
+  # One of our own access JWTs. Only refresh tokens are stored, so these cannot
+  # be revoked; RFC 7009 §2.2.1 says so rather than a 200 that claims otherwise.
+  defp access_token?(token), do: match?({:ok, _}, Engram.Accounts.verify_jwt(token))
 end

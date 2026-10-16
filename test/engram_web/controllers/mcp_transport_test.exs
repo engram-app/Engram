@@ -157,7 +157,8 @@ defmodule EngramWeb.McpTransportTest do
       conn = get(conn, "/api/notes")
 
       assert conn.status == 401
-      assert get_resp_header(conn, "www-authenticate") == []
+      # RFC 6750 §3's bare challenge only: no MCP resource_metadata pointer.
+      assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
     end
   end
 

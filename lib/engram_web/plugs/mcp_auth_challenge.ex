@@ -55,7 +55,8 @@ defmodule EngramWeb.Plugs.McpAuthChallenge do
           ~s(Bearer resource_metadata="#{url}", scope="mcp", error="#{error}")
         )
 
-      {nil, []} ->
+      # Empty, or the bare `Bearer` `Plugs.Auth` sets for a missing credential.
+      {nil, challenge} when challenge in [[], ["Bearer"]] ->
         Plug.Conn.put_resp_header(
           conn,
           "www-authenticate",
