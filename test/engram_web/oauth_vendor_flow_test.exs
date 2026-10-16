@@ -166,6 +166,14 @@ defmodule EngramWeb.OAuthVendorFlowTest do
     # the grace window that must succeed, or the connector is dead until re-auth.
     replay = vendor |> OAuthFlow.refresh(client_id, tokens["refresh_token"]) |> json_response(200)
     :ok = OAuthFlow.mcp_session(replay["access_token"])
+
+    # Disconnect in the client. The chain is dead afterwards.
+    assert OAuthFlow.revoke(vendor, client_id, replay["refresh_token"]).status == 200
+
+    assert vendor
+           |> OAuthFlow.refresh(client_id, replay["refresh_token"])
+           |> json_response(400)
+           |> Map.fetch!("error") == "invalid_grant"
   end
 
   describe "public clients (none + PKCE)" do

@@ -149,6 +149,19 @@ defmodule Engram.OAuthFlow do
     })
   end
 
+  @doc """
+  Revokes `refresh_token`. A `private_key_jwt` client sends only its assertion,
+  no `client_id`: the identity must come from the verified assertion.
+  """
+  def revoke(vendor, client_id, refresh_token) do
+    creds = credentials(vendor, client_id)
+    creds = if vendor.auth == :none, do: creds, else: Map.delete(creds, "client_id")
+
+    build_conn()
+    |> put_req_header("content-type", "application/x-www-form-urlencoded")
+    |> post("/oauth/revoke", URI.encode_query(Map.put(creds, "token", refresh_token)))
+  end
+
   @doc "POSTs to the token endpoint, asserts a 200, returns the body."
   def token(vendor, client_id, params) do
     conn = token_conn(vendor, client_id, params)

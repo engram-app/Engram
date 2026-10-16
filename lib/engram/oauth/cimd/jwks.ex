@@ -79,6 +79,10 @@ defmodule Engram.OAuth.Cimd.Jwks do
   # let a fetched public key be used as an HMAC secret.
   @allowed_algs ~w(RS256 RS384 RS512 PS256 PS384 PS512 ES256 ES384 ES512)
 
+  @doc "Assertion signing algorithms we verify. Advertised in AS metadata."
+  @spec allowed_algs() :: [String.t()]
+  def allowed_algs, do: @allowed_algs
+
   # An assertion is minted for one request and presented immediately. RFC 7523
   # sets no maximum, so this bound is OURS — hence its own reason atom, because
   # a vendor minting a legitimate one-hour assertion is not a forgery and must

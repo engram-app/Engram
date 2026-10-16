@@ -22,13 +22,14 @@ defmodule EngramWeb.OAuthRevokeControllerTest do
     :ok
   end
 
-  defp full_flow_refresh_token(conn) do
+  defp full_flow_refresh_token(conn, auth_method \\ "none") do
     user = insert(:user)
 
     {:ok, client} =
       OAuth.register_client(%{
         "redirect_uris" => ["https://x/cb"],
-        "client_name" => "x"
+        "client_name" => "x",
+        "token_endpoint_auth_method" => auth_method
       })
 
     redirect_uri = hd(client.redirect_uris)
@@ -54,6 +55,7 @@ defmodule EngramWeb.OAuthRevokeControllerTest do
           "code" => code,
           "redirect_uri" => redirect_uri,
           "client_id" => client.client_id,
+          "client_secret" => client.client_secret,
           "code_verifier" => verifier
         }),
         200
@@ -107,13 +109,61 @@ defmodule EngramWeb.OAuthRevokeControllerTest do
     end
 
     test "returns 200 for an unknown token (RFC 7009 §2.2)", %{conn: conn} do
+      {client, _rt} = full_flow_refresh_token(conn)
+
       conn =
-        post(conn, "/oauth/revoke", %{
+        post(build_conn(), "/oauth/revoke", %{
           "token" => "engram_oauth_rt_doesnotexist",
-          "client_id" => "00000000-0000-0000-0000-000000000000"
+          "client_id" => client.client_id
         })
 
       assert conn.status == 200
+    end
+
+    # RFC 7009 §2.1: the endpoint authenticates the client as /oauth/token does,
+    # and §2.2.1 answers a failure with RFC 6749 §5.2's `invalid_client`.
+    test "401s an unknown client and leaves the token alone", %{conn: conn} do
+      {client, rt} = full_flow_refresh_token(conn)
+
+      conn =
+        post(build_conn(), "/oauth/revoke", %{
+          "token" => rt,
+          "client_id" => "00000000-0000-0000-0000-000000000000"
+        })
+
+      assert json_response(conn, 401)["error"] == "invalid_client"
+      assert {:ok, _} = OAuth.rotate_refresh_token(rt, client.client_id)
+    end
+
+    test "a confidential client revokes over HTTP Basic", %{conn: conn} do
+      {client, rt} = full_flow_refresh_token(conn, "client_secret_basic")
+
+      revoke =
+        build_conn()
+        |> put_req_header(
+          "authorization",
+          Plug.BasicAuth.encode_basic_auth(client.client_id, client.client_secret)
+        )
+        |> post("/oauth/revoke", %{"token" => rt})
+
+      assert revoke.status == 200
+      assert {:error, {:invalid_grant, _}} = OAuth.rotate_refresh_token(rt, client.client_id)
+    end
+
+    test "a wrong secret over HTTP Basic is 401 and revokes nothing", %{conn: conn} do
+      {client, rt} = full_flow_refresh_token(conn, "client_secret_basic")
+
+      revoke =
+        build_conn()
+        |> put_req_header(
+          "authorization",
+          Plug.BasicAuth.encode_basic_auth(client.client_id, "wrong")
+        )
+        |> post("/oauth/revoke", %{"token" => rt})
+
+      assert json_response(revoke, 401)["error"] == "invalid_client"
+      assert get_resp_header(revoke, "www-authenticate") == [~s(Basic realm="oauth")]
+      assert {:ok, _} = OAuth.rotate_refresh_token(rt, client.client_id)
     end
 
     test "does NOT revoke when client_id does not own the token (still 200)", %{conn: conn} do
@@ -136,9 +186,11 @@ defmodule EngramWeb.OAuthRevokeControllerTest do
       assert {:ok, _new_pair} = OAuth.rotate_refresh_token(rt, client.client_id)
     end
 
-    test "responds 200 with missing token", %{conn: conn} do
-      conn = post(conn, "/oauth/revoke", %{"client_id" => "x"})
-      assert conn.status == 200
+    # RFC 7009 §2.2.1 / RFC 6749 §5.2: a missing required parameter.
+    test "a missing token is invalid_request", %{conn: conn} do
+      {client, _rt} = full_flow_refresh_token(conn)
+      conn = post(build_conn(), "/oauth/revoke", %{"client_id" => client.client_id})
+      assert json_response(conn, 400)["error"] == "invalid_request"
     end
   end
 

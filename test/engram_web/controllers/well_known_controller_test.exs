@@ -23,6 +23,12 @@ defmodule EngramWeb.WellKnownControllerTest do
       assert "header" in body["bearer_methods_supported"]
     end
 
+    # RFC 9728 §2 RECOMMENDS it; the MCP spec has clients read it to pick scopes.
+    test "advertises the mcp scope", %{conn: conn} do
+      body = conn |> get("/.well-known/oauth-protected-resource") |> json_response(200)
+      assert body["scopes_supported"] == ["mcp"]
+    end
+
     test "responds with application/json content-type", %{conn: conn} do
       conn = get(conn, "/.well-known/oauth-protected-resource")
 
@@ -174,6 +180,27 @@ defmodule EngramWeb.WellKnownControllerTest do
                "client_secret_post",
                "client_secret_basic"
              ]
+    end
+
+    # RFC 8414 §2: listing `private_key_jwt` makes the signing-alg list
+    # REQUIRED, and the revocation endpoint authenticates the same way the
+    # token endpoint does, so it advertises the same methods.
+    test "advertises signing algs and revocation auth methods", %{conn: conn} do
+      body = conn |> get("/.well-known/oauth-authorization-server") |> json_response(200)
+
+      assert "RS256" in body["token_endpoint_auth_signing_alg_values_supported"]
+      refute "none" in body["token_endpoint_auth_signing_alg_values_supported"]
+
+      refute Enum.any?(
+               body["token_endpoint_auth_signing_alg_values_supported"],
+               &String.starts_with?(&1, "HS")
+             )
+
+      assert body["revocation_endpoint_auth_methods_supported"] ==
+               body["token_endpoint_auth_methods_supported"]
+
+      assert body["revocation_endpoint_auth_signing_alg_values_supported"] ==
+               body["token_endpoint_auth_signing_alg_values_supported"]
     end
 
     test "responds with application/json content-type", %{conn: conn} do
