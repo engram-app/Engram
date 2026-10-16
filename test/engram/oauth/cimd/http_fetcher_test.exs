@@ -13,6 +13,7 @@ defmodule Engram.OAuth.Cimd.HttpFetcherTest do
 
   import ExUnit.CaptureLog
 
+  alias Engram.OAuth.Cimd.Fetcher
   alias Engram.OAuth.Cimd.HttpFetcher
 
   setup do
@@ -28,6 +29,39 @@ defmodule Engram.OAuth.Cimd.HttpFetcherTest do
     |> Plug.Conn.resp(status, body)
   end
 
+  describe "Cache-Control max-age" do
+    defp serve_with(bypass, cache_control) do
+      Bypass.expect_once(bypass, "GET", "/doc.json", fn conn ->
+        conn
+        |> then(fn c ->
+          if cache_control,
+            do: Plug.Conn.put_resp_header(c, "cache-control", cache_control),
+            else: c
+        end)
+        |> respond(200, ~s({"a":1}), "application/json")
+      end)
+    end
+
+    test "is carried under the reserved key", %{bypass: bypass, target: target} do
+      serve_with(bypass, "public, max-age=600")
+      assert {:ok, doc} = HttpFetcher.fetch_target(target)
+      assert doc[Fetcher.max_age_key()] == 600
+      assert doc["a"] == 1
+    end
+
+    test "no-store and no-cache read as zero", %{bypass: bypass, target: target} do
+      serve_with(bypass, "no-cache")
+      assert {:ok, doc} = HttpFetcher.fetch_target(target)
+      assert doc[Fetcher.max_age_key()] == 0
+    end
+
+    test "absent reads as no max-age" do
+      assert HttpFetcher.max_age(%{}) == nil
+      assert HttpFetcher.max_age(%{"content-type" => ["application/json"]}) == nil
+      assert HttpFetcher.max_age(%{"cache-control" => ["public, max-age=junk"]}) == nil
+    end
+  end
+
   test "returns the decoded document on 200 application/json", %{bypass: bypass, target: target} do
     document = %{"client_id" => "https://claude.ai/c", "redirect_uris" => ["http://127.0.0.1/cb"]}
 
@@ -35,7 +69,9 @@ defmodule Engram.OAuth.Cimd.HttpFetcherTest do
       respond(conn, 200, Jason.encode!(document), "application/json")
     end)
 
-    assert {:ok, ^document} = HttpFetcher.fetch_target(target)
+    # Plug's default `cache-control: max-age=0` rides along as cache metadata.
+    assert {:ok, fetched} = HttpFetcher.fetch_target(target)
+    assert Map.delete(fetched, Fetcher.max_age_key()) == document
   end
 
   test "tolerates content-type parameters", %{bypass: bypass, target: target} do

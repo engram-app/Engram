@@ -90,6 +90,10 @@ defmodule Engram.OAuth.Cimd do
                            ~w(dns_failure budget_exhausted jwks_rate_limited rate_limited)a
 
   @ttl_seconds 24 * 3600
+  # A vendor's own `Cache-Control: max-age` wins inside these bounds (CIMD
+  # draft §5.2). The floor keeps a `no-cache` document from costing a fetch on
+  # every authorize; the ceiling is the old fixed TTL.
+  @min_ttl_seconds 5 * 60
 
   # Per minute. The global bucket is the one that matters: an attacker varying
   # the host walks straight past a per-host limit, and unmetered outbound fetches
@@ -168,8 +172,13 @@ defmodule Engram.OAuth.Cimd do
 
   defp fresh?(%Client{cimd_fetched_at: nil}), do: false
 
-  defp fresh?(%Client{cimd_fetched_at: fetched_at}),
-    do: DateTime.diff(DateTime.utc_now(), fetched_at, :second) < @ttl_seconds
+  defp fresh?(%Client{cimd_fetched_at: fetched_at} = client),
+    do: DateTime.diff(DateTime.utc_now(), fetched_at, :second) < ttl(client)
+
+  defp ttl(%Client{cimd_max_age: seconds}) when is_integer(seconds),
+    do: seconds |> max(@min_ttl_seconds) |> min(@ttl_seconds)
+
+  defp ttl(_client), do: @ttl_seconds
 
   # A stale row whose refresh fails keeps being served. Availability beats
   # freshness here: the alternative is that a vendor's five-minute outage locks
@@ -187,11 +196,12 @@ defmodule Engram.OAuth.Cimd do
 
   defp fetch_and_store(url, existing) do
     with :ok <- rate_limit(url, existing),
-         {:ok, document} <- timed_fetch(url, existing),
+         {:ok, fetched} <- timed_fetch(url, existing),
+         {max_age, document} = Map.pop(fetched, Fetcher.max_age_key()),
          :ok <- validate_document(document, url),
          :ok <- check_jwks_address(document),
          {:ok, negotiated} <- negotiate(document),
-         {:ok, client} <- store(url, negotiated, existing) do
+         {:ok, client} <- store(url, negotiated, existing, max_age) do
       {:ok, client}
     else
       {:error, reason} ->
@@ -556,8 +566,11 @@ defmodule Engram.OAuth.Cimd do
   defp valid_client_name?(name) when is_binary(name), do: String.trim(name) != ""
   defp valid_client_name?(_), do: false
 
-  defp store(url, document, existing) do
-    changeset = Client.cimd_changeset(existing || %Client{}, url, document)
+  defp store(url, document, existing, max_age) do
+    changeset =
+      (existing || %Client{})
+      |> Client.cimd_changeset(url, document)
+      |> Ecto.Changeset.put_change(:cimd_max_age, max_age)
 
     if existing do
       case Repo.update(changeset, skip_tenant_check: true) do

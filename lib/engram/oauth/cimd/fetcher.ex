@@ -28,6 +28,15 @@ defmodule Engram.OAuth.Cimd.Fetcher do
 
   @default_impl Engram.OAuth.Cimd.HttpFetcher
 
+  @doc """
+  The key under which an implementation MAY report the response's
+  `Cache-Control: max-age` (seconds; `no-store`/`no-cache` read as 0) inside
+  the returned map. An atom, so it can never collide with a decoded JSON key,
+  and callers pop it before treating the map as the document.
+  """
+  @spec max_age_key() :: atom()
+  def max_age_key, do: :__cache_max_age__
+
   @spec impl() :: module()
   def impl, do: Application.get_env(:engram, :cimd_fetcher, @default_impl)
 end
