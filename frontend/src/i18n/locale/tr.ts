@@ -865,9 +865,9 @@ export default {
 	"Could not continue. Please try again.": "Devam edilemedi. Lütfen tekrar deneyin.",
 	"Step {step} of {total}": "{step} adımı, {total} toplam",
 	Onboarding: "Tanıtım",
-	"the app that sent you here": "Sizi buraya yönlendiren uygulama",
+	"your app": "uygulamanız",
 	"Cancel connection": "Bağlantıyı iptal et",
-	"Finish setting up to connect {app}.": "{app} ile bağlantıyı kurma işlemini tamamlayın.",
+	"Connecting {app}": "{app} ile bağlantı kuruluyor",
 	"Which AI tools do you use?": "Hangi yapay zeka araçlarını kullanıyorsunuz?",
 	"We'll tailor your setup around the tools you already work with.":
 		"Ayarlarınızı, zaten kullandığınız araçlara göre kişiselleştireceğiz.",

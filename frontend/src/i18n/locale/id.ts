@@ -864,9 +864,9 @@ export default {
 	"Could not continue. Please try again.": "Tidak dapat melanjutkan. Silakan coba lagi.",
 	"Step {step} of {total}": "Langkah {step} dari {total}",
 	Onboarding: "Pengaturan awal",
-	"the app that sent you here": "aplikasi yang membawa Anda ke sini",
+	"your app": "aplikasi Anda",
 	"Cancel connection": "Batalkan koneksi",
-	"Finish setting up to connect {app}.": "Selesaikan pengaturan untuk terhubung ke {app}.",
+	"Connecting {app}": "Menghubungkan {app}",
 	"Which AI tools do you use?": "Alat AI apa yang Anda gunakan?",
 	"We'll tailor your setup around the tools you already work with.":
 		"Kami akan menyesuaikan pengaturan Anda berdasarkan alat yang sudah Anda gunakan.",
