@@ -2,8 +2,9 @@ import { expect, type Page, type TestInfo } from "@playwright/test";
 import { checkStep, type StepOptions, translationOf } from "./i18n-leaks";
 
 // The onboarding wizard in one locale, shared by the self-host and SaaS specs. It
-// follows whichever steps the backend serves (SaaS: agreement, billing, tools,
-// vault; self-host: tools, vault) and ends on the dashboard and Settings > Account,
+// follows whichever steps the backend serves (a web signup: SaaS agreement, vault;
+// self-host vault; older accounts can still be served billing or tools) and ends
+// on the dashboard and Settings > Account,
 // running the leak checks at every one. Locators go by role and position, never by
 // English text, so the walk keeps working as strings get translated.
 
@@ -26,6 +27,12 @@ async function agreementStep(
 	const agree = page.getByRole("checkbox");
 	await expect(agree).toBeVisible({ timeout: 20_000 });
 	await checkStep(page, testInfo, code, "agreement", options);
+	// A new web signup answers "How did you hear about Engram?" here; any
+	// option will do, picked by position.
+	const heardFrom = page.getByRole("radio");
+	if ((await heardFrom.count()) > 0) {
+		await heardFrom.first().click();
+	}
 	await agree.click();
 	await page.getByRole("button", { name: translationOf(code, "Continue"), exact: true }).click();
 }
