@@ -56,7 +56,10 @@ services:
       POSTGRES_PASSWORD: engram
       POSTGRES_DB: engram
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U engram"]
+      # Over TCP: the image's first-boot init runs a temporary server on the
+      # Unix socket only, then restarts. A socket check passes against that
+      # temporary server, and the app's migrate hits the restart gap.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U engram"]
       interval: 1s
       timeout: 2s
       retries: 30
