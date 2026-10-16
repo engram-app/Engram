@@ -770,6 +770,8 @@ export default {
 	"Unknown OAuth client": "Bilinmeyen OAuth istemcisi",
 	"The client requesting access is not registered with Engram.":
 		"Erişime istekte bulunan istemci, Engram ile kayıtlı değil.",
+	"This app did not register the address it asked to send you back to.":
+		"Bu uygulama, size geri göndermeye çalıştığı adresi kaydedemedi.",
 	"Finish setting up Engram": "Engram kurulumunu tamamlayın",
 	"this app": "bu uygulama",
 	"previous connection": "önceki bağlantı",
@@ -778,6 +780,10 @@ export default {
 	"This app is requesting access to your Engram.":
 		"Bu uygulama, Engram adresinize erişim talep ediyor.",
 	"Signed in as {email}.": "{email} olarak giriş yapıldı.",
+	"App details from {host}.": "{host} uygulamasının bilgileri.",
+	"You will return to {host}.": "{host} uygulamasına geri döneceksiniz.",
+	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
+		"Bu, bu bilgisayardaki bir uygulamaya yönlendirir. Sadece o uygulamadan yeni bağlantı kurduysanız onaylayın.",
 	"your existing connection": "mevcut bağlantınız",
 	"Which vaults can {client} access?": "{client}, hangi kasalara erişebilir?",
 	"All vaults selected": "Tüm kasalar seçildi",

@@ -769,6 +769,8 @@ export default {
 	"Unknown OAuth client": "Klien OAuth tidak dikenal",
 	"The client requesting access is not registered with Engram.":
 		"Klien yang meminta akses tidak terdaftar di Engram.",
+	"This app did not register the address it asked to send you back to.":
+		"Aplikasi ini tidak mengenali alamat yang digunakan untuk mengirim Anda kembali.",
 	"Finish setting up Engram": "Selesaikan pengaturan Engram",
 	"this app": "aplikasi ini",
 	"previous connection": "koneksi sebelumnya",
@@ -776,6 +778,10 @@ export default {
 		"Terputus dari '{name}' tetapi otorisasi koneksi baru gagal. Coba lagi permintaan dari {client} — tidak ada koneksi jenis ini yang aktif saat ini.",
 	"This app is requesting access to your Engram.": "Aplikasi ini meminta akses ke Engram Anda.",
 	"Signed in as {email}.": "Masuk sebagai {email}.",
+	"App details from {host}.": "Detail aplikasi dari {host}.",
+	"You will return to {host}.": "Anda akan kembali ke {host}.",
+	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
+		"Ini akan mengarahkan Anda ke aplikasi di komputer ini. Hanya setujui jika Anda baru saja memulai koneksi dari aplikasi tersebut.",
 	"your existing connection": "koneksi Anda yang ada",
 	"Which vaults can {client} access?": "Vault mana yang dapat diakses oleh {client}?",
 	"All vaults selected": "Semua vault dipilih",
