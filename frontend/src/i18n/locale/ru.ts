@@ -848,6 +848,8 @@ export default {
 	"Unknown OAuth client": "Неизвестный OAuth-клиент",
 	"The client requesting access is not registered with Engram.":
 		"Клиент, запрашивающий доступ, не зарегистрирован в Engram.",
+	"This app did not register the address it asked to send you back to.":
+		"Это приложение не смогло зарегистрировать адрес, на который пытается вас перенаправить.",
 	"Finish setting up Engram": "Завершите настройку Engram",
 	"this app": "это приложение",
 	"previous connection": "предыдущее подключение",
@@ -856,6 +858,7 @@ export default {
 	"This app is requesting access to your Engram.":
 		"Это приложение запрашивает доступ к вашему Engram.",
 	"Signed in as {email}.": "Вошли как {email}.",
+	"You will return to {host}.": "Вы вернетесь на страницу {host}.",
 	"your existing connection": "ваше текущее подключение",
 	"Which vaults can {client} access?": "К каким хранилищам {client} может получить доступ?",
 	"All vaults selected": "Все хранилища выбраны",

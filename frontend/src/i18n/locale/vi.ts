@@ -764,6 +764,8 @@ export default {
 	"Unknown OAuth client": "Ứng dụng OAuth không xác định",
 	"The client requesting access is not registered with Engram.":
 		"Ứng dụng đang yêu cầu quyền truy cập chưa được đăng ký với Engram.",
+	"This app did not register the address it asked to send you back to.":
+		"Ứng dụng này không đăng ký địa chỉ mà nó yêu cầu gửi bạn đến.",
 	"Finish setting up Engram": "Hoàn tất thiết lập Engram",
 	"this app": "ứng dụng này",
 	"previous connection": "kết nối trước đó",
@@ -772,6 +774,7 @@ export default {
 	"This app is requesting access to your Engram.":
 		"Ứng dụng này đang yêu cầu quyền truy cập vào Engram của bạn.",
 	"Signed in as {email}.": "Đã đăng nhập với tư cách là {email}.",
+	"You will return to {host}.": "Bạn sẽ quay lại {host}.",
 	"your existing connection": "kết nối hiện tại của bạn",
 	"Which vaults can {client} access?": "Kho lưu trữ nào mà {client} có thể truy cập?",
 	"All vaults selected": "Tất cả kho lưu trữ đã chọn",

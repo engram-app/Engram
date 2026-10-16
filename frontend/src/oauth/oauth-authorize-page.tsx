@@ -145,6 +145,11 @@ export default function OAuthAuthorizePage() {
 	// forever, since the wizard had nothing left to collect and the gate had
 	// nothing left to refuse.
 	const needsOnboarding = Boolean(onboarding && !onboarding.gate_ok);
+	// Cancel redirects to `redirect_uri` straight from this page's query string,
+	// and nothing upstream has to have validated it: anyone can link here. So a
+	// redirect the client never registered gets no consent card at all, and with
+	// it no Cancel, which would otherwise be an open redirect (RFC 9700 §4.11).
+	const redirectRefused = clientQuery.data?.redirect_uri_registered === false;
 	const bounced = useRef(false);
 
 	useEffect(() => {
@@ -157,7 +162,7 @@ export default function OAuthAuthorizePage() {
 		// it ever being reconsidered, so the tool question would be asked of
 		// every MCP-first user despite us knowing the answer. An errored lookup
 		// renders "Unknown OAuth client" and must not bounce at all.
-		if (clientQuery.isLoading || clientQuery.isError) {
+		if (clientQuery.isLoading || clientQuery.isError || redirectRefused) {
 			return;
 		}
 		bounced.current = true;
@@ -208,6 +213,7 @@ export default function OAuthAuthorizePage() {
 		clientQuery.data,
 		clientQuery.isLoading,
 		clientQuery.isError,
+		redirectRefused,
 		location.search,
 		navigate,
 		onboarding,
@@ -306,6 +312,21 @@ export default function OAuthAuthorizePage() {
 					<div role="alert" className={destructiveAlert}>
 						<p className="text-muted-foreground">
 							{t("The client requesting access is not registered with Engram.")}
+						</p>
+					</div>
+				</AuthPanel>
+			</AuthShell>
+		);
+	}
+
+	if (redirectRefused) {
+		return (
+			<AuthShell>
+				<AuthPanel className="flex flex-col gap-3">
+					<h1 className={heading}>{t("Invalid authorization request")}</h1>
+					<div role="alert" className={destructiveAlert}>
+						<p className="text-muted-foreground">
+							{t("This app did not register the address it asked to send you back to.")}
 						</p>
 					</div>
 				</AuthPanel>
@@ -472,6 +493,11 @@ export default function OAuthAuthorizePage() {
 						{t("This app is requesting access to your Engram.")}
 						{meQuery.data ? ` ${t("Signed in as {email}.", { email: meQuery.data.email })}` : ""}
 					</p>
+					{clientQuery.data?.redirect_host ? (
+						<p className="text-muted-foreground text-sm">
+							{t("You will return to {host}.", { host: clientQuery.data.redirect_host })}
+						</p>
+					) : null}
 				</header>
 
 				{isLoadingShell ? (

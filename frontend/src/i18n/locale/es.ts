@@ -803,6 +803,8 @@ export default {
 	"Unknown OAuth client": "Cliente OAuth desconocido",
 	"The client requesting access is not registered with Engram.":
 		"El cliente que solicita acceso no está registrado en Engram.",
+	"This app did not register the address it asked to send you back to.":
+		"Esta aplicación no registró la dirección a la que intentó enviarte.",
 	"Finish setting up Engram": "Finaliza la configuración de Engram",
 	"this app": "esta aplicación",
 	"previous connection": "conexión anterior",
@@ -810,6 +812,7 @@ export default {
 		"Desconectado '{name}' pero la autorización de la nueva conexión falló. Vuelve a intentar la solicitud desde {client} — no hay conexiones de este tipo activas actualmente.",
 	"This app is requesting access to your Engram.": "Esta aplicación solicita acceso a tu Engram.",
 	"Signed in as {email}.": "Iniciado sesión como {email}.",
+	"You will return to {host}.": "Regresarás a {host}.",
 	"your existing connection": "tu conexión existente",
 	"Which vaults can {client} access?": "¿A qué bóvedas puede acceder {client}?",
 	"All vaults selected": "Todas las bóvedas seleccionadas",

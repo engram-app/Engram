@@ -768,6 +768,8 @@ export default {
 	"Unknown OAuth client": "Klien OAuth tidak dikenali",
 	"The client requesting access is not registered with Engram.":
 		"Klien yang meminta akses tidak didaftarkan dengan Engram.",
+	"This app did not register the address it asked to send you back to.":
+		"Aplikasi ini tidak merekod alamat yang diminta untuk menghantar anda kembali.",
 	"Finish setting up Engram": "Selesaikan persediaan Engram",
 	"this app": "aplikasi ini",
 	"previous connection": "sambungan sebelumnya",
@@ -775,6 +777,7 @@ export default {
 		"Telah memutuskan sambungan '{name}' tetapi pengesahan sambungan baharu gagal. Jalankan semula permintaan daripada {client} — tiada sambungan seumpama ini yang aktif pada masa ini.",
 	"This app is requesting access to your Engram.": "Aplikasi ini meminta akses ke Engram anda.",
 	"Signed in as {email}.": "Log masuk sebagai {email}.",
+	"You will return to {host}.": "Anda akan kembali ke {host}.",
 	"your existing connection": "sambungan anda yang sedia ada",
 	"Which vaults can {client} access?": "Peti Nota mana yang boleh diakses oleh {client}?",
 	"All vaults selected": "Semua peti nota dipilih",

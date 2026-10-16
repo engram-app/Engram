@@ -730,6 +730,8 @@ export default {
 	"Unknown OAuth client": "未知的 OAuth 用戶端",
 	"The client requesting access is not registered with Engram.":
 		"請求存取的用戶端未在 Engram 中註冊。",
+	"This app did not register the address it asked to send you back to.":
+		"此應用程式未記錄您要返回的地址。",
 	"Finish setting up Engram": "完成 Engram 的設定",
 	"this app": "此應用程式",
 	"previous connection": "之前的連線",
@@ -737,6 +739,7 @@ export default {
 		"已斷開 '{name}'，但授權新的連線失敗。請重新從 {client} 執行請求 — 目前沒有任何此類連線。",
 	"This app is requesting access to your Engram.": "此應用程式正在請求存取您的 Engram。",
 	"Signed in as {email}.": "已登入 {email}。",
+	"You will return to {host}.": "您將返回至 {host}。",
 	"your existing connection": "您的現有連線",
 	"Which vaults can {client} access?": "{client} 可以存取哪些儲存庫？",
 	"All vaults selected": "已選取所有儲存庫",

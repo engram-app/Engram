@@ -754,6 +754,8 @@ export default {
 	"Unknown OAuth client": "알 수 없는 OAuth 클라이언트",
 	"The client requesting access is not registered with Engram.":
 		"접근을 요청하는 클라이언트는 Engram에 등록되지 않았습니다.",
+	"This app did not register the address it asked to send you back to.":
+		"이 앱은 사용자가 다시 연결되도록 요청한 주소를 등록하지 못했습니다.",
 	"Finish setting up Engram": "Engram 설정 완료",
 	"this app": "이 앱",
 	"previous connection": "이전 연결",
@@ -761,6 +763,7 @@ export default {
 		"'{name}' 연결이 끊어졌지만, 새로운 연결을 설정하는 데 실패했습니다. {client}에서 요청을 다시 실행하세요. 현재 이 종류의 연결은 활성화되어 있지 않습니다.",
 	"This app is requesting access to your Engram.": "이 앱은 Engram에 대한 접근 권한을 요청합니다.",
 	"Signed in as {email}.": "{email}으로 로그인되었습니다.",
+	"You will return to {host}.": "{host}으로 돌아갑니다.",
 	"your existing connection": "기존 연결",
 	"Which vaults can {client} access?": "{client}은 어떤 보관함에 접근할 수 있나요?",
 	"All vaults selected": "모든 보관함 선택됨",

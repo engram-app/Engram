@@ -6,8 +6,9 @@ defmodule EngramWeb.OAuthClientsController do
   *"Authorize **<client_name>** to access your Engram"* without
   exposing the human-readable name in the URL bar.
 
-  Surfaces only `client_id` + `client_name`. Never `client_secret`,
-  `redirect_uris`, or scope metadata. Public — `client_id` is itself
+  Surfaces `client_id`, `client_name`, `kind`, `slug`, and whether the
+  requested redirect is registered (with its host). Never `client_secret`,
+  the registered `redirect_uris`, or scope metadata. Public — `client_id` is itself
   public (returned by DCR), and `client_name` is non-secret. Rate
   limited at the router level to deter enumeration.
   """
@@ -20,6 +21,9 @@ defmodule EngramWeb.OAuthClientsController do
 
   def show(conn, %{"client_id" => client_id} = params) do
     with {:ok, client} <- OAuth.get_client(client_id) do
+      redirect_uri = params["redirect_uri"]
+      registered? = OAuth.redirect_uri_registered?(client, redirect_uri)
+
       # `kind` is "mcp" | "obsidian" — drives the proactive cap UI on
       # /oauth/consent (each kind has its own cap key). DCR rejects
       # "obsidian", but device-flow clients may carry that kind.
@@ -27,7 +31,12 @@ defmodule EngramWeb.OAuthClientsController do
         client_id: client.client_id,
         client_name: client.client_name,
         kind: client.kind,
-        slug: slug_for(client, params["redirect_uri"])
+        slug: slug_for(client, registered? && redirect_uri),
+        # The consent page refuses to render, and so never offers a Cancel
+        # redirect, for a redirect the client never registered. Its host is
+        # shown on the page (MCP 2025-11-25: the user sees where the code goes).
+        redirect_uri_registered: registered?,
+        redirect_host: if(registered?, do: URI.parse(redirect_uri).host)
       })
     end
   end
@@ -45,9 +54,7 @@ defmodule EngramWeb.OAuthClientsController do
   #
   # Nil is a normal answer (an unattributable client), not an error.
   defp slug_for(client, redirect_uri) do
-    registered = client.redirect_uris || []
-    uri = if redirect_uri in registered, do: redirect_uri
-
+    uri = if is_binary(redirect_uri), do: redirect_uri
     LogoAllowlist.resolve(client.software_id, uri, client.client_name, client.cimd_url).slug
   end
 end

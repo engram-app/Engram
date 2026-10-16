@@ -765,6 +765,8 @@ export default {
 	"Unknown OAuth client": "不明なOAuthクライアント",
 	"The client requesting access is not registered with Engram.":
 		"アクセスを要求しているクライアントは、Engramに登録されていません。",
+	"This app did not register the address it asked to send you back to.":
+		"このアプリは、戻る際に使用するアドレスを登録できませんでした。",
 	"Finish setting up Engram": "Engramの設定を完了する",
 	"this app": "このアプリ",
 	"previous connection": "前の接続",
@@ -773,6 +775,7 @@ export default {
 	"This app is requesting access to your Engram.":
 		"このアプリは、Engramへのアクセスを要求しています。",
 	"Signed in as {email}.": "{email} としてサインインしました。",
+	"You will return to {host}.": "{host} に戻ります。",
 	"your existing connection": "現在の接続",
 	"Which vaults can {client} access?": "{client} はどの保管庫にアクセスできますか？",
 	"All vaults selected": "すべての保管庫を選択",

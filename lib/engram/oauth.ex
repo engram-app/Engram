@@ -1096,6 +1096,13 @@ defmodule Engram.OAuth do
   # unbindable document. Those are genuinely terminal for this client_id.
   defp cimd_error(_reason), do: {:client_error, "invalid_client"}
 
+  @doc """
+  Whether `uri` is one of `client`'s redirects, by the same rule authorize
+  applies (exact, or a loopback redirect on any port).
+  """
+  @spec redirect_uri_registered?(Client.t(), String.t() | nil) :: boolean()
+  def redirect_uri_registered?(client, uri), do: match?({:ok, _}, match_redirect_uri(client, uri))
+
   defp match_redirect_uri(_client, nil), do: {:client_error, "invalid_redirect_uri"}
 
   defp match_redirect_uri(client, uri) do

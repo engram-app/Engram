@@ -327,6 +327,39 @@ describe("OAuthAuthorizePage", () => {
 		).not.toBeInTheDocument();
 	});
 
+	// A link straight to /oauth/consent with a real client_id and someone else's
+	// redirect_uri made Cancel an open redirect off our origin (RFC 9700 §4.11).
+	it("refuses a redirect the client never registered: no Approve, no Cancel", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude",
+			kind: "mcp",
+			slug: null,
+			redirect_uri_registered: false,
+			redirect_host: null,
+		});
+		renderAt(VALID_QS);
+		expect(
+			await screen.findByRole("heading", { name: /invalid authorization request/iu }),
+		).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /approve/iu })).toBeNull();
+		expect(screen.queryByRole("button", { name: /cancel/iu })).toBeNull();
+	});
+
+	// MCP 2025-11-25: the user sees where the authorization code is sent.
+	it("shows the host the user will be returned to", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude",
+			kind: "mcp",
+			slug: null,
+			redirect_uri_registered: true,
+			redirect_host: "app",
+		});
+		renderAt(VALID_QS);
+		expect(await screen.findByText(/you will return to app/iu)).toBeInTheDocument();
+	});
+
 	it("shows the unknown-client alert when the client lookup fails", async () => {
 		fetchOAuthClient.mockRejectedValue(new Error("oauth client lookup failed: 404"));
 		renderAt(VALID_QS);

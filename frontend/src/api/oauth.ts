@@ -14,6 +14,12 @@ export interface OAuthClientMetadata {
 	// the FTUX tool question isn't asked of someone who just answered it by
 	// connecting a tool.
 	slug: string | null;
+	// Whether the redirect THIS request uses is one the client registered, by
+	// the same rule authorize applies. Absent from older backends, so only an
+	// explicit `false` refuses the request.
+	redirect_uri_registered?: boolean;
+	// Host of that redirect when registered, shown to the user. Null otherwise.
+	redirect_host?: string | null;
 }
 
 export interface OAuthConsentParams {
