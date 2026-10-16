@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.53.1](https://github.com/engram-app/Engram/compare/0.53.0...0.53.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* **oauth:** turn on audience-bound tokens and RFC 9207 iss ([#1997](https://github.com/engram-app/Engram/issues/1997)) ([25570d1](https://github.com/engram-app/Engram/commit/25570d19bba3fa930a27844d4490415da42d557d)), closes [#1974](https://github.com/engram-app/Engram/issues/1974)
+* **onboarding:** connector signups return to consent; one-row notice ([#1991](https://github.com/engram-app/Engram/issues/1991)) ([998c051](https://github.com/engram-app/Engram/commit/998c051549c5c6057939a79715f35a9f8daf1a16))
+
 ## [0.53.0](https://github.com/engram-app/Engram/compare/0.52.0...0.53.0) (2026-10-16)
 
 
