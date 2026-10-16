@@ -3,8 +3,9 @@ defmodule EngramWeb.VaultAccessAttackTest do
   Attack regressions for per-vault access levels (#174 OAuth, #332 API keys),
   imported from a red-team pass. Each test asserts the DEFENDED behaviour, so
   a failure is a bypass. The MCP loops enumerate the real tool registry, so
-  a new tool is covered without editing this file; the REST loops walk a
-  hand-kept list of every vault-scoped route.
+  a new tool is covered without editing this file. The REST attacks read
+  every route behind `VaultPlug` from the router, and a new route fails until
+  it is classified as a read or added to the attacked writes.
 
   Vaults: W (write), R (read), N (none). Credentials come from the real
   consent -> /oauth/token chain or `Accounts.create_api_key/3`.
@@ -495,6 +496,131 @@ defmodule EngramWeb.VaultAccessAttackTest do
 
       _ ->
         %{"vault_id" => v}
+    end
+  end
+
+  # ── every vault route, read from the router ────────────────────────────────
+  #
+  # The loops above walk a hand-kept list. These read the router itself: every
+  # route behind `VaultPlug` is attacked, so a new route cannot skip the level
+  # check by being left out of a list. A new route fails `classifies every
+  # vault route` until it is named below, as a read or in `write_routes/2`.
+
+  # Routes that only read. Non-GET entries must also be exempt in
+  # `EngramWeb.ReadOnlyRoutes`.
+  @vault_reads [
+    {:get, "/api/notes/changes"},
+    {:get, "/api/notes/by-id/:id"},
+    {:get, "/api/notes/by-id/:id/backlinks"},
+    {:get, "/api/notes/*path"},
+    {:get, "/api/tags"},
+    {:get, "/api/types"},
+    {:get, "/api/folders/explicit"},
+    {:get, "/api/folders/list"},
+    {:get, "/api/folders/by-id/:id/notes"},
+    {:get, "/api/folders"},
+    {:get, "/api/vault/tree"},
+    {:post, "/api/search"},
+    {:get, "/api/sync/manifest"},
+    {:get, "/api/attachments"},
+    {:get, "/api/attachments/changes"},
+    {:get, "/api/attachments/*path"},
+    {:get, "/api/logs"},
+    {:get, "/api/embed-status"}
+  ]
+
+  defp vault_routes do
+    for r <- Phoenix.Router.routes(EngramWeb.Router),
+        r.verb != :*,
+        info = Phoenix.Router.route_info(EngramWeb.Router, verb(r), sample_path(r.path), ""),
+        is_map(info),
+        EngramWeb.Plugs.VaultPlug in Map.get(info, :pipe_through, []),
+        do: {r.verb, r.path}
+  end
+
+  defp verb(route), do: route.verb |> to_string() |> String.upcase()
+
+  # A concrete path for a route template: any value reaches VaultPlug, which
+  # judges the vault before the controller reads a param.
+  defp sample_path(template) do
+    template
+    |> String.replace(~r/\*\w+/, "Dir/a.md")
+    |> String.replace(~r/:\w+/, Ecto.UUID.generate())
+  end
+
+  # The route template a concrete attack path belongs to.
+  defp template_of({method, path, _body}) do
+    Enum.find(vault_routes(), fn {verb, template} ->
+      pattern =
+        template
+        |> String.replace(~r/\*\w+/, "\u0000")
+        |> String.replace(~r/:\w+/, "\u0001")
+        |> Regex.escape()
+        |> String.replace("\u0000", ".+")
+        |> String.replace("\u0001", "[^/]+")
+
+      verb == method and Regex.match?(~r/^#{pattern}$/, path)
+    end)
+  end
+
+  test "the router walk finds the vault routes", _ctx do
+    routes = vault_routes()
+    assert {:post, "/api/notes"} in routes
+    assert {:get, "/api/notes/*path"} in routes
+    refute Enum.any?(routes, fn {_, path} -> path == "/api/mcp" end)
+  end
+
+  test "classifies every vault route as a read or an attacked write", ctx do
+    attacked = ctx |> write_routes(ctx.r) |> Enum.map(&template_of/1)
+
+    unclassified = vault_routes() -- (@vault_reads ++ attacked)
+
+    assert unclassified == [],
+           "vault routes neither attacked in write_routes/2 nor listed in @vault_reads: " <>
+             inspect(unclassified)
+
+    stale = @vault_reads -- vault_routes()
+    assert stale == [], "@vault_reads names routes the router no longer has: #{inspect(stale)}"
+  end
+
+  test "every vault route outside @vault_reads is a write to ReadOnlyRoutes", _ctx do
+    for {verb, template} <- vault_routes(), {verb, template} not in @vault_reads do
+      conn = %Plug.Conn{
+        method: verb |> to_string() |> String.upcase(),
+        path_info: template |> sample_path() |> String.split("/", trim: true)
+      }
+
+      assert EngramWeb.ReadOnlyRoutes.writes?(conn),
+             "#{verb} #{template} is not a write to ReadOnlyRoutes, so a read vault could call it"
+    end
+  end
+
+  for kind <- [:api_key, :oauth] do
+    describe "#{kind}: every vault route from the router" do
+      @kind kind
+      test "is refused on a NONE vault, reads included", ctx do
+        token = credential(ctx, @kind, levels(ctx))
+
+        for {verb, template} <- vault_routes() do
+          conn = token |> in_vault(ctx.n) |> send_req(verb, sample_path(template), %{})
+
+          assert conn.status == 404,
+                 "#{verb} #{template} on NONE vault returned #{conn.status}: #{conn.resp_body}"
+        end
+      end
+
+      test "is refused on a READ vault unless it only reads", ctx do
+        token = credential(ctx, @kind, levels(ctx))
+
+        for {verb, template} <- vault_routes(), {verb, template} not in @vault_reads do
+          conn = token |> in_vault(ctx.r) |> send_req(verb, sample_path(template), %{})
+
+          assert conn.status == 403,
+                 "#{verb} #{template} on READ vault returned #{conn.status}: #{conn.resp_body}"
+        end
+
+        assert note_content(ctx, ctx.r, "Dir/a.md") =~ "secret in Readable"
+      end
     end
   end
 
