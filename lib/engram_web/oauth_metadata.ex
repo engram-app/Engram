@@ -70,16 +70,6 @@ defmodule EngramWeb.OAuthMetadata do
   def issuer?(_), do: false
 
   @doc """
-  Whether authorization responses carry the RFC 9207 `iss`, and discovery
-  advertises it. Off until the SPA that forwards `iss` is promoted: a client
-  SHOULD discard an `iss` the server does not advertise, and MUST reject a
-  response without one once it is advertised (§2.4), so emitting and
-  advertising switch on together, after the SPA can carry it.
-  """
-  @spec iss_enabled?() :: boolean()
-  def iss_enabled?, do: Application.get_env(:engram, :oauth_iss_response, false)
-
-  @doc """
   Base URL for the host the client actually dialed, when that host is in the
   `:cors_origin` allowlist (populated from `PHX_HOST`); otherwise the canonical
   endpoint URL.

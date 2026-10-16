@@ -879,21 +879,23 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
     end
   end
 
-  # RFC 9207 ships dark this release (`OAuthMetadata.iss_enabled?/0`): an `iss`
-  # the server does not advertise SHOULD be discarded (§2.4). On, it is covered
-  # by `OAuthIssuerHostTest`; this module is async, so it sees the default.
-  describe "iss in the authorization response (RFC 9207), off by default" do
-    test "authorize forwards no iss to the consent page", %{conn: conn} do
+  # RFC 9207: the authorization response names its issuer, so a client talking
+  # to several servers (every MCP client) can tell which one answered. The value
+  # is fixed at /oauth/authorize, on the host the client dialed, and carried
+  # through the SPA; the consent call itself arrives on a different host.
+  # Non-canonical hosts are `OAuthIssuerHostTest`.
+  describe "iss in the authorization response (RFC 9207)" do
+    test "authorize forwards the dialed issuer to the consent page", %{conn: conn} do
       client = register_client()
 
       conn =
         get(conn, "/oauth/authorize", valid_params(client.client_id, hd(client.redirect_uris)))
 
       [location] = get_resp_header(conn, "location")
-      refute Map.has_key?(URI.decode_query(URI.parse(location).query), "iss")
+      assert URI.decode_query(URI.parse(location).query)["iss"] == EngramWeb.Endpoint.url()
     end
 
-    test "an authorize error redirect carries no iss", %{conn: conn} do
+    test "an authorize error redirect carries iss", %{conn: conn} do
       client = register_client()
 
       params =
@@ -904,10 +906,10 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       [location] = conn |> get("/oauth/authorize", params) |> get_resp_header("location")
       query = URI.decode_query(URI.parse(location).query)
       assert query["error"] == "unsupported_response_type"
-      refute Map.has_key?(query, "iss")
+      assert query["iss"] == EngramWeb.Endpoint.url()
     end
 
-    test "consent drops a forwarded iss", %{conn: conn} do
+    test "consent puts the forwarded issuer on the code redirect", %{conn: conn} do
       user = insert(:user)
       insert(:vault, user: user)
       client = register_client()
@@ -926,7 +928,7 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
 
       query = URI.decode_query(URI.parse(redirect).query)
       assert is_binary(query["code"])
-      refute Map.has_key?(query, "iss")
+      assert query["iss"] == EngramWeb.Endpoint.url()
     end
   end
 
