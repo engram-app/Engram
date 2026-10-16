@@ -384,7 +384,7 @@ defmodule Engram.OAuth do
          client_name: client.client_name,
          redirect_uri: redirect_uri,
          code_challenge: params["code_challenge"],
-         code_challenge_method: params["code_challenge_method"] || "S256",
+         code_challenge_method: params["code_challenge_method"],
          scope: granted,
          scope_requested: requested,
          state: params["state"]
@@ -1206,8 +1206,11 @@ defmodule Engram.OAuth do
 
   defp check_pkce(%{"code_challenge" => challenge} = params, redirect_uri)
        when is_binary(challenge) and challenge != "" do
+    # OAuth 2.1 §4.1.1 / RFC 7636 §4.3: an absent method means `plain`, which we
+    # do not support, so it is refused like `plain` itself. Never read as S256:
+    # the consent page already refused such requests, so no client relied on it.
     case params["code_challenge_method"] do
-      m when m in [nil, "S256"] -> :ok
+      "S256" -> :ok
       _ -> {:redirect_error, redirect_uri, "invalid_request", params["state"]}
     end
   end

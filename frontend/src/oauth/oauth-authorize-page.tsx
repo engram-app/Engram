@@ -49,7 +49,6 @@ const REQUIRED_PARAMS = [
 	"response_type",
 	"code_challenge",
 	"code_challenge_method",
-	"state",
 ] as const;
 
 // `scope` is OPTIONAL in an authorization request (RFC 6749 §4.1.1) and the
@@ -62,12 +61,12 @@ const DEFAULT_SCOPE = "mcp";
 type RequiredParam = (typeof REQUIRED_PARAMS)[number];
 
 function readParams(search: URLSearchParams): {
-	values: Record<RequiredParam, string> & { scope: string };
+	values: Record<RequiredParam, string> & { scope: string; state: string };
 	resource: string | null;
 	iss: string | null;
 	missing: RequiredParam[];
 } {
-	const values: Record<RequiredParam, string> & { scope: string } = {
+	const values: Record<RequiredParam, string> & { scope: string; state: string } = {
 		client_id: "",
 		redirect_uri: "",
 		response_type: "",
@@ -87,6 +86,9 @@ function readParams(search: URLSearchParams): {
 		}
 	}
 	values.scope = search.get("scope") || DEFAULT_SCOPE;
+	// RECOMMENDED, not required (RFC 6749 §4.1.1): absent stays "" and is
+	// dropped from both the consent body and the Cancel redirect.
+	values.state = search.get("state") || "";
 
 	return { values, resource: search.get("resource"), iss: search.get("iss"), missing };
 }
@@ -103,7 +105,8 @@ function toMcpClient(slug: string | null | undefined): (typeof MCP_CLIENTS)[numb
 
 function buildCancelUrl(redirectUri: string, state: string): string {
 	const sep = redirectUri.includes("?") ? "&" : "?";
-	return `${redirectUri}${sep}error=access_denied&state=${encodeURIComponent(state)}`;
+	const stateParam = state ? `&state=${encodeURIComponent(state)}` : "";
+	return `${redirectUri}${sep}error=access_denied${stateParam}`;
 }
 
 export default function OAuthAuthorizePage() {
@@ -396,9 +399,11 @@ export default function OAuthAuthorizePage() {
 			response_type: values.response_type,
 			code_challenge: values.code_challenge,
 			code_challenge_method: values.code_challenge_method,
-			state: values.state,
 			scope: values.scope,
 		};
+		if (values.state) {
+			body.state = values.state;
+		}
 		if (resource) {
 			body.resource = resource;
 		}

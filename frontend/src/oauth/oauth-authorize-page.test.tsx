@@ -360,6 +360,20 @@ describe("OAuthAuthorizePage", () => {
 		expect(await screen.findByText(/you will return to app/iu)).toBeInTheDocument();
 	});
 
+	// RFC 6749 §4.1.1: `state` is RECOMMENDED, not required. A client that omits
+	// it must still reach consent, and Cancel must not invent an empty one.
+	it("renders consent and cancels cleanly when state is absent", async () => {
+		fetchOAuthClient.mockResolvedValue({ client_id: "cli", client_name: "Claude", kind: "mcp" });
+		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
+		const NO_STATE_QS =
+			"?client_id=cli&redirect_uri=https://app/cb&response_type=code" +
+			"&code_challenge=abc&code_challenge_method=S256";
+
+		renderAt(NO_STATE_QS);
+		fireEvent.click(await screen.findByRole("button", { name: /cancel/iu }));
+		expect(assign).toHaveBeenCalledWith("https://app/cb?error=access_denied");
+	});
+
 	it("shows the unknown-client alert when the client lookup fails", async () => {
 		fetchOAuthClient.mockRejectedValue(new Error("oauth client lookup failed: 404"));
 		renderAt(VALID_QS);

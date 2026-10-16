@@ -28,7 +28,8 @@ export interface OAuthConsentParams {
 	response_type: string;
 	code_challenge: string;
 	code_challenge_method: string;
-	state: string;
+	// Optional, as in the authorization request (RFC 6749 §4.1.1).
+	state?: string;
 	scope: string;
 	resource?: string;
 	// RFC 9207 issuer, as /oauth/authorize put it on this page's URL. Untrusted

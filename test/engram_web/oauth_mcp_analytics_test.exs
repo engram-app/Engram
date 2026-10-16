@@ -103,18 +103,6 @@ defmodule EngramWeb.OAuthMcpAnalyticsTest do
     assert e["properties"]["registration"] == "dcr"
     assert e["properties"]["scopes_requested"] == ["mcp", "offline_access", "openid"]
     assert e["properties"]["scopes_granted"] == ["mcp"]
-    assert e["properties"]["pkce_method_explicit"] == true
-  end
-
-  # The spec default for an absent `code_challenge_method` is `plain`, which we
-  # refuse; we read it as S256 instead. Counted before that leniency is removed.
-  test "authorize records a defaulted code_challenge_method", %{client: client} do
-    {_verifier, challenge} = pkce_pair()
-    params = client |> authorize_params(challenge) |> Map.delete("code_challenge_method")
-    get(build_conn(), "/oauth/authorize", params)
-
-    e = event(drain(), "mcp_oauth_authorize_started")
-    assert e["properties"]["pkce_method_explicit"] == false
   end
 
   test "consent emits mcp_oauth_granted with client and scopes", %{client: client, user: user} do

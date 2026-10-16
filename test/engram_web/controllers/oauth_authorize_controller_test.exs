@@ -250,6 +250,19 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       assert location =~ "error=invalid_request"
     end
 
+    # RFC 7636 §4.3: absent means `plain`, which is refused.
+    test "redirects with invalid_request when code_challenge_method is absent", %{conn: conn} do
+      client = register_client()
+
+      params =
+        client.client_id
+        |> valid_params(hd(client.redirect_uris))
+        |> Map.delete("code_challenge_method")
+
+      [location] = conn |> get("/oauth/authorize", params) |> get_resp_header("location")
+      assert URI.decode_query(URI.parse(location).query)["error"] == "invalid_request"
+    end
+
     test "redirects with invalid_request when code_challenge_method is plain", %{conn: conn} do
       client = register_client()
       redirect_uri = hd(client.redirect_uris)

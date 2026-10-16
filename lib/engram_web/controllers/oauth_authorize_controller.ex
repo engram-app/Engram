@@ -34,15 +34,7 @@ defmodule EngramWeb.OAuthAuthorizeController do
     case OAuth.validate_authorization_request(params) do
       {:ok, validated} ->
         # Anonymous: the browser carries no session on this navigation.
-        # `pkce_method_explicit`: an absent method defaults to `plain` in the
-        # spec, which we refuse; we read it as S256. Counted so the leniency can
-        # be removed once nobody relies on it (#1977).
-        props =
-          validated
-          |> funnel_props()
-          |> Map.put(:pkce_method_explicit, is_binary(params["code_challenge_method"]))
-
-        Engram.Analytics.track_anonymous("mcp_oauth_authorize_started", props)
+        Engram.Analytics.track_anonymous("mcp_oauth_authorize_started", funnel_props(validated))
         redirect_to_spa(conn, validated, params)
 
       {:client_error, code} ->
