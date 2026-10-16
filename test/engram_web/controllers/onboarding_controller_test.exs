@@ -90,7 +90,7 @@ defmodule EngramWeb.OnboardingControllerTest do
       assert body["enabled"] == true
       assert body["terms_ok"] == true
       assert body["subscription_ok"] == true
-      assert body["next_step"] == "tools"
+      assert body["next_step"] == "vault"
     end
   end
 

@@ -81,7 +81,7 @@ defmodule Engram.OnboardingTest do
       assert status.subscription_ok
     end
 
-    test "fresh user lands on :tools (agreement + billing skipped)" do
+    test "fresh user lands on :vault (agreement + billing skipped)" do
       user = insert(:user, onboarding_profile: %{})
 
       assert %{
@@ -90,7 +90,7 @@ defmodule Engram.OnboardingTest do
                subscription_ok: true,
                profile_complete: false,
                has_vault: false,
-               next_step: :tools
+               next_step: :vault
              } = Onboarding.status(user)
     end
 
@@ -146,32 +146,27 @@ defmodule Engram.OnboardingTest do
       assert %{subscription_ok: true, next_step: :done} = Onboarding.status(user)
     end
 
-    test "steps fresh user = [:tools, :vault]" do
+    test "steps fresh user = [:vault]" do
       user = insert(:user, onboarding_profile: %{})
-      assert %{steps: [:tools, :vault]} = Onboarding.status(user)
+      assert %{steps: [:vault]} = Onboarding.status(user)
     end
 
-    test "steps stays [:tools, :vault] regardless of profile.uses_obsidian" do
-      # Only `uses_obsidian` is set here, deliberately. This pins that the
-      # SOURCE pick does not reshape the chain; answering `tools` does, and
-      # has its own test below.
+    # The chain describes the intended journey: answering the vault step's
+    # question must not remove it.
+    test "steps stays [:vault] for a web signup regardless of uses_obsidian" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true})
-      assert %{steps: [:tools, :vault]} = Onboarding.status(user)
+      assert %{steps: [:vault]} = Onboarding.status(user)
 
       user2 = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.set_profile(user2, %{uses_obsidian: false})
-      assert %{steps: [:tools, :vault]} = Onboarding.status(user2)
+      assert %{steps: [:vault]} = Onboarding.status(user2)
     end
 
-    # Answering the question INSIDE the wizard must not remove it from the
-    # chain. Keying the drop on "the profile has tools" did exactly that, so an
-    # ordinary signup read "Step 1 of 2" and then "Step 1 of 1", never
-    # advancing. The chain describes the intended journey, not live progress.
-    test "steps keeps :tools when the user answers it themselves" do
+    test "a plugin-first signup has no steps and is done before its first sync" do
       user = insert(:user, onboarding_profile: %{})
-      {:ok, _} = Onboarding.set_profile(user, %{tools: ["claude"]})
-      assert %{steps: [:tools, :vault]} = Onboarding.status(user)
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, signup_source: "plugin"})
+      assert %{steps: [], next_step: :done, gate_ok: true} = Onboarding.status(user)
     end
 
     # A connector signup gets its vault provisioned, so nothing is left to ask.
@@ -227,17 +222,47 @@ defmodule Engram.OnboardingTest do
              } = Onboarding.status(user)
     end
 
-    test "steps fresh hosted user = [:agreement, :billing, :tools, :about, :vault]" do
+    test "steps fresh hosted user = [:agreement, :vault]" do
       user = insert(:user, onboarding_profile: %{})
-      assert %{steps: [:agreement, :billing, :tools, :about, :vault]} = Onboarding.status(user)
+      assert %{steps: [:agreement, :vault]} = Onboarding.status(user)
     end
 
-    test "steps stays [:agreement, :billing, :tools, :about, :vault] regardless of profile.uses_obsidian" do
+    test "steps stays [:agreement, :vault] for a web signup regardless of uses_obsidian" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "active")
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true})
-      assert %{steps: [:agreement, :billing, :tools, :about, :vault]} = Onboarding.status(user)
+      assert %{steps: [:agreement, :vault]} = Onboarding.status(user)
+    end
+
+    # Plugin-first: /link answers the Obsidian question and records the origin
+    # before the wizard. Terms are the only step, then the wizard hands back
+    # to /link so the plugin can sync and create the vault.
+    test "a plugin-first signup sees only the terms, then is done" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, signup_source: "plugin"})
+
+      assert %{steps: [:agreement], next_step: :agreement} = Onboarding.status(user)
+
+      {:ok, _} =
+        Onboarding.accept_terms(user, "2026-05-15", "canonical", "2026-05-15", "p", %{})
+
+      user = Engram.Accounts.get_user!(user.id)
+      assert %{steps: [:agreement], next_step: :done, gate_ok: true} = Onboarding.status(user)
+      assert [] = Engram.Vaults.list_vaults(user)
+    end
+
+    # A web signup: terms, then Obsidian or fresh. No plan step: accepting the
+    # terms starts the account on Free.
+    test "a web signup goes from the terms straight to the vault step on Free" do
+      user = insert(:user, onboarding_profile: %{})
+
+      {:ok, _} =
+        Onboarding.accept_terms(user, "2026-05-15", "canonical", "2026-05-15", "p", %{})
+
+      user = Engram.Accounts.get_user!(user.id)
+      assert %DateTime{} = user.free_tier_accepted_at
+      assert %{steps: [:agreement, :vault], next_step: :vault} = Onboarding.status(user)
     end
 
     # The MCP-first path answers `tools` from the OAuth client before the
@@ -274,14 +299,14 @@ defmodule Engram.OnboardingTest do
       assert [%{name: "My Vault"}] = Engram.Vaults.list_vaults(user)
     end
 
-    test "an ordinary signup accepting terms is not started on Free" do
+    test "accepting terms does not start a paying account on Free" do
       user = insert(:user, onboarding_profile: %{})
+      insert(:subscription, user: user, status: "active")
 
       {:ok, _} =
         Onboarding.accept_terms(user, "2026-05-15", "canonical", "2026-05-15", "p", %{})
 
       assert is_nil(Engram.Accounts.get_user!(user.id).free_tier_accepted_at)
-      assert %{next_step: :billing} = Onboarding.status(user)
     end
 
     # A connector signup that accepted the terms before the Free start
@@ -316,17 +341,6 @@ defmodule Engram.OnboardingTest do
       insert(:subscription, user: user, status: "active")
 
       assert %{steps: [:agreement, :vault], next_step: :vault} = Onboarding.status(user)
-    end
-
-    # The SaaS counterpart of the self-host case above: a user who answers the
-    # questionnaire in the wizard keeps their 5-step chain.
-    test "steps keeps :tools when the user answers it themselves" do
-      user = insert(:user, onboarding_profile: %{})
-      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-      insert(:subscription, user: user, status: "active")
-      {:ok, _} = Onboarding.set_profile(user, %{tools: ["antigravity"]})
-
-      assert %{steps: [:agreement, :billing, :tools, :about, :vault]} = Onboarding.status(user)
     end
 
     test "next_step=billing when terms accepted but no subscription" do
@@ -769,6 +783,20 @@ defmodule Engram.OnboardingTest do
       assert [] = Engram.Vaults.list_vaults(user)
     end
 
+    test "signup_source records a plugin-first signup" do
+      user = insert(:user, onboarding_profile: %{})
+
+      assert {:ok, updated} = Onboarding.set_profile(user, %{signup_source: "plugin"})
+      assert updated.onboarding_profile["signup_source"] == "plugin"
+    end
+
+    test "signup_source must be a known origin" do
+      user = insert(:user, onboarding_profile: %{})
+
+      assert {:error, :invalid_signup_source} =
+               Onboarding.set_profile(user, %{signup_source: "web"})
+    end
+
     test "tools_prefilled on its own is refused" do
       user = insert(:user, onboarding_profile: %{})
 
@@ -990,7 +1018,8 @@ defmodule Engram.OnboardingTest do
       :ok
     end
 
-    test "next_step :tools when terms + subscription ok but no tools yet" do
+    # Tools and the survey moved into the app: neither is a wizard step.
+    test "next_step :vault when terms + subscription ok, tools unanswered" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "active")
@@ -999,21 +1028,7 @@ defmodule Engram.OnboardingTest do
                terms_ok: true,
                subscription_ok: true,
                profile_complete: false,
-               next_step: :tools
-             } = Onboarding.status(user)
-    end
-
-    test "next_step :about once tools are POSTed, before the survey is answered" do
-      user = insert(:user, onboarding_profile: %{})
-      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-      insert(:subscription, user: user, status: "active")
-      {:ok, _} = Onboarding.set_profile(user, %{tools: ["claude"]})
-
-      assert %{
-               terms_ok: true,
-               subscription_ok: true,
-               profile_complete: false,
-               next_step: :about
+               next_step: :vault
              } = Onboarding.status(user)
     end
 

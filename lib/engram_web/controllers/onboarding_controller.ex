@@ -137,6 +137,7 @@ defmodule EngramWeb.OnboardingController do
       |> maybe_put_attr(params, "tools", :tools)
       |> maybe_put_attr(params, "tools_prefilled", :tools_prefilled)
       |> maybe_put_attr(params, "uses_obsidian", :uses_obsidian)
+      |> maybe_put_attr(params, "signup_source", :signup_source)
 
     if attrs == %{} do
       conn |> put_status(422) |> json(%{error: "missing_fields"})
@@ -152,6 +153,7 @@ defmodule EngramWeb.OnboardingController do
                :empty_tools,
                :invalid_tool,
                :invalid_tools_prefilled,
+               :invalid_signup_source,
                :nothing_to_set
              ] ->
           conn |> put_status(422) |> json(%{error: Atom.to_string(reason)})
