@@ -84,6 +84,19 @@ defmodule Engram.FeedbackTest do
       refute_receive {:posthog, _}, 200
     end
 
+    # The in-app survey always sends `use_cases` (empty on skip); the terms
+    # screen's heard-from answer never does. Only the survey stamps this, so
+    # the app can tell whether it was asked.
+    test "a submission carrying use_cases stamps use_cases_done_at", %{user: user} do
+      assert :ok = Feedback.submit(user, "onboarding", %{"use_cases" => []})
+      assert is_binary(profile(user)["use_cases_done_at"])
+    end
+
+    test "a heard-from answer alone does not stamp use_cases_done_at", %{user: user} do
+      assert :ok = Feedback.submit(user, "onboarding", %{"heard_from" => "friend"})
+      refute Map.has_key?(profile(user), "use_cases_done_at")
+    end
+
     test "rejects unknown slugs", %{user: user} do
       assert {:error, :invalid_heard_from} =
                Feedback.submit(user, "onboarding", %{"heard_from" => "tv"})

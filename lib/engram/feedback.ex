@@ -1,7 +1,7 @@
 defmodule Engram.Feedback do
   @moduledoc """
-  User-voice answers: how a signup heard about us and what they want Engram for
-  (asked on `/onboard/about`), why a subscriber cancels or deletes their account,
+  User-voice answers: how a signup heard about us (asked on the terms screen of
+  a web signup) and what they want Engram for (the in-app survey), why a subscriber cancels or deletes their account,
   and free-form feedback.
 
   Every answer goes to PostHog server-side (ad blockers cannot drop it), with
@@ -9,8 +9,8 @@ defmodule Engram.Feedback do
   by them. The onboarding answers are also merged into
   `users.onboarding_profile`, so they survive a PostHog outage and self-host.
   Answering is always optional. An empty onboarding submission (Continue with
-  nothing picked) is a skip: it stamps `survey_done_at` (as an answer does), which is the only
-  thing the wizard's `:about` step waits on.
+  nothing picked) is a skip: it stamps `survey_done_at` (as an answer does), and
+  `use_cases_done_at` when it came from the in-app survey.
   """
 
   import Ecto.Query
@@ -74,8 +74,16 @@ defmodule Engram.Feedback do
   @spec submit(User.t(), String.t(), map()) :: :ok | {:error, error()}
   def submit(user, "onboarding", params) do
     with {:ok, fields} <- onboarding_fields(params) do
+      now = DateTime.utc_now(:second) |> DateTime.to_iso8601()
+      stamped = Map.put(fields, "survey_done_at", now)
+
+      # The in-app survey always sends `use_cases` (empty on skip); the terms
+      # screen's heard-from answer never does. This stamp is how the app knows
+      # the survey itself was asked, since survey_done_at covers both.
       stamped =
-        Map.put(fields, "survey_done_at", DateTime.utc_now(:second) |> DateTime.to_iso8601())
+        if Map.has_key?(params, "use_cases"),
+          do: Map.put(stamped, "use_cases_done_at", now),
+          else: stamped
 
       from(u in User,
         where: u.id == ^user.id,
@@ -85,8 +93,8 @@ defmodule Engram.Feedback do
       # tenant-scoped table, and the write is keyed to the caller's own id.
       |> Repo.update_all([], skip_tenant_check: true)
 
-      # Onboarding.status/1 reads the cached user row; without this the wizard
-      # keeps answering `:about` after the stamp lands.
+      # Onboarding.status/1 reads the cached user row; without this the app
+      # keeps offering the survey after the stamp lands.
       Engram.Accounts.evict_user(user.id)
 
       if fields == %{} do
