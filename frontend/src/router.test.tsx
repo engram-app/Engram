@@ -123,6 +123,17 @@ function fullPaths(routes: RouteLike[], parent = ""): string[] {
 	});
 }
 
+// The tools and about steps were removed from the wizard. A stale bookmark
+// or an old open tab must land back in the wizard, not on the 404 page.
+describe("createAppRouter - removed onboarding steps", () => {
+	it.each(["/onboard/tools", "/onboard/about"])("routes %s back to /onboard", (path) => {
+		const matches = matchRoutes(createAppRouter(config).routes, path) ?? [];
+		const leaf = matches.at(-1)?.route;
+		expect(leaf?.path).toBe("*");
+		expect(matches.some((m) => m.route.path === "/onboard")).toBe(true);
+	});
+});
+
 describe("createAppRouter - vault routes are namespaced under /v", () => {
 	const paths = fullPaths(createAppRouter(config).routes as RouteLike[]);
 
