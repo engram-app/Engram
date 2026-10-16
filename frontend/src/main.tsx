@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Component, lazy, type ReactNode, StrictMode, Suspense, use, useMemo } from "react";
+import { Component, lazy, type ReactNode, StrictMode, Suspense, use } from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider } from "react-router";
 import { initAnalytics } from "./analytics/init";
@@ -10,7 +10,7 @@ import { ConfigProvider } from "./config-context";
 import ErrorFallback from "./error-fallback";
 import { LocaleProvider } from "./i18n/locale-provider";
 import LoadingScreen from "./layout/loading-screen";
-import { createAppRouter, installAppRouter } from "./router";
+import { appRouterFor } from "./router";
 import { captureError } from "./sentry";
 import { ThemeProvider } from "./theme/theme-provider";
 import "./main.css";
@@ -95,13 +95,9 @@ function AppShell({ config }: { config: EngramConfig }) {
 	}
 
 	const AuthProvider = config.authProvider === "clerk" ? ClerkAuthProvider : LocalAuthProvider;
-	// Memoize so StrictMode's double-render + any future ConfigProvider
-	// updates don't blow away the router instance + its history stack.
-	const router = useMemo(() => {
-		const r = createAppRouter(config);
-		installAppRouter(r);
-		return r;
-	}, [config]);
+	// Not useMemo: StrictMode runs the memo twice in dev and keeps one result,
+	// so installing inside it left Clerk navigating the discarded router.
+	const router = appRouterFor(config);
 
 	return (
 		<ConfigProvider config={config}>

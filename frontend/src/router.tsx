@@ -102,13 +102,23 @@ function RootLayout() {
 // Router is constructed inside `createAppRouter(config)` so the auth-provider
 // and billing-enabled branches can read runtime config. Module-level
 // consumers (e.g. clerk-auth-provider's `routerPush`) read `appRouter`,
-// which BootstrapGate populates BEFORE first render via `installAppRouter`.
+// which AppShell populates BEFORE first render via `appRouterFor`.
 type AppRouter = ReturnType<typeof createBrowserRouter>;
 
 let _appRouter: AppRouter | null = null;
 
-export function installAppRouter(r: AppRouter) {
-	_appRouter = r;
+let _routerConfig: EngramConfig | null = null;
+
+// The ONE router for a config: builds and installs it on the first call,
+// returns that same instance after. Render calls this, and StrictMode
+// double-invokes render work in dev; a second build would leave Clerk's
+// getAppRouter() driving a router the screen never shows.
+export function appRouterFor(config: EngramConfig): AppRouter {
+	if (!_appRouter || _routerConfig !== config) {
+		_appRouter = createAppRouter(config);
+		_routerConfig = config;
+	}
+	return _appRouter;
 }
 
 // Lazy getter used by code paths that need to imperatively navigate
@@ -116,7 +126,7 @@ export function installAppRouter(r: AppRouter) {
 // mounted — that would be a wiring regression worth surfacing loudly.
 export function getAppRouter(): AppRouter {
 	if (!_appRouter) {
-		throw new Error("Router accessed before installAppRouter() ran");
+		throw new Error("Router accessed before appRouterFor() ran");
 	}
 	return _appRouter;
 }
