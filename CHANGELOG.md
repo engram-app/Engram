@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.53.0](https://github.com/engram-app/Engram/compare/0.52.0...0.53.0) (2026-10-16)
+
+
+### Features
+
+* **account:** self-serve analytics opt-out in Settings ([#1989](https://github.com/engram-app/Engram/issues/1989)) ([6e881ea](https://github.com/engram-app/Engram/commit/6e881ea98113544f5885385f6bb0c8d41c30f94a))
+
+
+### Bug Fixes
+
+* drop stale Free-tier connection copy ([#1988](https://github.com/engram-app/Engram/issues/1988)) ([9cc07a2](https://github.com/engram-app/Engram/commit/9cc07a23919ae061c5c2b5316bc2df5cae72acea))
+* **i18n:** record locale before the app shell ([#1992](https://github.com/engram-app/Engram/issues/1992)) ([ad2514a](https://github.com/engram-app/Engram/commit/ad2514a0c08977f558d25c630e6af16a2d92023d))
+* **oauth:** spec conformance hardening + real-vendor flow tests ([#1994](https://github.com/engram-app/Engram/issues/1994)) ([05afbd4](https://github.com/engram-app/Engram/commit/05afbd411216b1c3be82c3d5f7205cc6a8e857bd)), closes [#1977](https://github.com/engram-app/Engram/issues/1977)
+
 ## [0.52.0](https://github.com/engram-app/Engram/compare/0.51.1...0.52.0) (2026-10-15)
 
 
