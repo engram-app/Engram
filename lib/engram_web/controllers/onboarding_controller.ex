@@ -125,7 +125,7 @@ defmodule EngramWeb.OnboardingController do
   end
 
   # FTUX questionnaire submit. Body shape (either or both):
-  #   { tools: [string] }              — submitted from /onboard/tools
+  #   { tools: [string] }              — an OAuth client's pre-answer (consent page)
   #   { uses_obsidian: bool }          — submitted from /onboard/vault
   #   { tools: [...], uses_obsidian }  — combined (e.g. mid-flow re-POST)
   # The Onboarding context owns validation (catalog membership + non-empty

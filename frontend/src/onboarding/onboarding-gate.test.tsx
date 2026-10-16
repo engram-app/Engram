@@ -21,7 +21,7 @@ function mountGate() {
 					</Route>
 					<Route path="/onboard/agreement" element={<div>agreement-step</div>} />
 					<Route path="/onboard/billing" element={<div>billing-step</div>} />
-					<Route path="/onboard/tools" element={<div>tools-step</div>} />
+					<Route path="/onboard/heard" element={<div>heard-step</div>} />
 					<Route path="/onboard/vault" element={<div>vault-step</div>} />
 				</Routes>
 			</MemoryRouter>
@@ -81,15 +81,15 @@ describe("OnboardingGate", () => {
 		expect(screen.getByText("billing-step")).toBeInTheDocument();
 	});
 
-	it("redirects to /onboard/tools when next_step=tools", () => {
+	it("redirects to /onboard/heard when next_step=heard", () => {
 		renderWith({
 			enabled: true,
-			next_step: "tools",
+			next_step: "heard",
 			terms_ok: true,
 			subscription_ok: true,
 			profile_complete: false,
 		});
-		expect(screen.getByText("tools-step")).toBeInTheDocument();
+		expect(screen.getByText("heard-step")).toBeInTheDocument();
 	});
 
 	// Regression: completing the wizard refetches ["onboarding","status"] but

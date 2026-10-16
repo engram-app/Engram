@@ -80,7 +80,7 @@ describe("OnboardLayout pending authorization", () => {
 	it("offers no Cancel when the redirect was never confirmed", () => {
 		stashPendingAuthorization(PARKED, null, "Google Antigravity");
 
-		renderAt("/onboard/tools", SAAS);
+		renderAt("/onboard/heard", SAAS);
 
 		expect(screen.getByText(/Google Antigravity/u)).toBeTruthy();
 		expect(screen.queryByRole("button", { name: /cancel/iu })).toBeNull();
