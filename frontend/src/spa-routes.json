@@ -12,6 +12,7 @@
 		"/onboard",
 		"/onboard/agreement",
 		"/onboard/billing",
+		"/onboard/heard",
 		"/onboard/vault",
 		"/settings",
 		"/settings/account",

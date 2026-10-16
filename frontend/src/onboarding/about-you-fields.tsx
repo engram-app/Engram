@@ -52,8 +52,8 @@ interface HeardFromFieldProps {
 	labelledBy: string;
 }
 
-// "How did you hear about Engram?": on the terms screen for a web signup, and
-// in the about-you survey.
+// "How did you hear about Engram?": a web signup's own wizard step
+// (heard-page.tsx).
 function HeardFromField({ heardFrom, detail, onChange, labelledBy }: HeardFromFieldProps) {
 	const { t } = useT();
 	return (

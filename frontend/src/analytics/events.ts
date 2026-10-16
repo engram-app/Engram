@@ -22,13 +22,12 @@ export type EngramEvent =
 	| "plugin_listing_opened";
 
 /** Mirrors Engram.Onboarding.gate/2's next_step. One state machine, not two. */
-export type OnboardingStep = "agreement" | "billing" | "tools" | "about" | "vault" | "done";
+export type OnboardingStep = "agreement" | "billing" | "heard" | "vault" | "done";
 
 export const ONBOARDING_STEPS: readonly OnboardingStep[] = [
 	"agreement",
 	"billing",
-	"tools",
-	"about",
+	"heard",
 	"vault",
 	"done",
 ] as const;

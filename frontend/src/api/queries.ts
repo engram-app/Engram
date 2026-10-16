@@ -1337,7 +1337,7 @@ export interface LegalNotice {
 	accept_url: string;
 }
 
-export type OnboardingStep = "agreement" | "billing" | "tools" | "about" | "vault";
+export type OnboardingStep = "agreement" | "billing" | "heard" | "vault";
 
 // Partial mid-flow; treat absent fields as "not answered yet". `completed_at`
 // stamps once the Obsidian question is answered (vault step, or /link) or a

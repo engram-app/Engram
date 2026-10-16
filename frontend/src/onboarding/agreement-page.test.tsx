@@ -46,10 +46,11 @@ vi.mock("../api/queries", () => ({
 	useSubmitFeedback: () => ({ mutateAsync: submitFeedback, isPending: false }),
 }));
 
-// The legal texts load as lazy chunks; Continue enables once both have.
+// The legal texts load as lazy chunks; Continue enables once both have. A
+// chunk import on a loaded CI runner takes longer than waitFor's 1s default.
 async function clickContinue() {
 	const button = screen.getByRole("button", { name: /continue/iu });
-	await waitFor(() => expect(button).toBeEnabled());
+	await waitFor(() => expect(button).toBeEnabled(), { timeout: 10_000 });
 	fireEvent.click(button);
 }
 
@@ -209,69 +210,15 @@ describe("AgreementPage: consent chrome is translated, the legal body is not", (
 	});
 });
 
-// A web signup is asked how it heard about us on the terms screen: it is the
-// only step before the vault. Plugin and connector signups are not asked;
-// where they started is recorded instead.
-describe("AgreementPage: how did you hear about us", () => {
-	it("asks a new web signup and requires an answer", async () => {
+// "How did you hear about Engram?" is its own step (heard-page.tsx), so the
+// terms screen never asks it, not even of a brand-new web signup.
+describe("AgreementPage: terms only", () => {
+	it("does not ask a new web signup how it heard about us", async () => {
 		statusRef.current = { ...DEFAULT_STATUS, profile: undefined };
 		renderPage();
 		await screen.findByRole("heading", { name: /Terms of Service/iu });
-		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
-
-		const button = screen.getByRole("button", { name: /continue/iu });
-		expect(button).toBeDisabled();
-
-		fireEvent.click(screen.getByRole("radio", { name: "Reddit" }));
-		await waitFor(() => expect(button).toBeEnabled());
-		fireEvent.click(button);
-
-		await waitFor(() =>
-			expect(submitFeedback).toHaveBeenCalledWith({ kind: "onboarding", heard_from: "reddit" }),
-		);
-	});
-
-	// No completed_at on these two: the origin alone must decide it.
-	it("does not ask a connector signup", () => {
-		statusRef.current = {
-			...DEFAULT_STATUS,
-			profile: { tools: ["chatgpt"], tools_prefilled: true },
-		};
-		renderPage();
 		expect(screen.queryByText("How did you hear about Engram?")).not.toBeInTheDocument();
-	});
-
-	it("does not ask a plugin-first signup", () => {
-		statusRef.current = {
-			...DEFAULT_STATUS,
-			profile: { signup_source: "plugin" },
-		};
-		renderPage();
-		expect(screen.queryByText("How did you hear about Engram?")).not.toBeInTheDocument();
-	});
-
-	it("says why Continue is disabled until it is answered", async () => {
-		statusRef.current = { ...DEFAULT_STATUS, profile: undefined };
-		renderPage();
-		expect(screen.getByText("Pick one to continue.")).toBeInTheDocument();
-
-		fireEvent.click(screen.getByRole("radio", { name: "Reddit" }));
-		await waitFor(() => expect(screen.queryByText("Pick one to continue.")).toBeNull());
-	});
-
-	// The terms are accepted by then: a lost answer must not strand the signup.
-	it("still continues when saving the answer fails", async () => {
-		statusRef.current = { ...DEFAULT_STATUS, profile: undefined };
-		submitFeedback.mockRejectedValueOnce(new Error("429"));
-		renderPage();
-		await screen.findByRole("heading", { name: /Terms of Service/iu });
-		fireEvent.click(screen.getByRole("radio", { name: "Reddit" }));
-		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
-		await clickContinue();
-
-		await waitFor(() =>
-			expect(mockTrack).toHaveBeenCalledWith("onboarding_step_completed", expect.anything()),
-		);
+		expect(screen.queryByRole("radio")).toBeNull();
 	});
 
 	it("cannot be submitted twice while saving", async () => {
@@ -294,10 +241,5 @@ describe("AgreementPage: how did you hear about us", () => {
 		fireEvent.click(button);
 		expect(mutate).toHaveBeenCalledTimes(1);
 		release({ version: "2026-05-19", accepted_at: "now" });
-	});
-
-	it("does not ask a returning account re-accepting the terms", () => {
-		renderPage();
-		expect(screen.queryByText("How did you hear about Engram?")).not.toBeInTheDocument();
 	});
 });

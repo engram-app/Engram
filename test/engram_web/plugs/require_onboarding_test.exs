@@ -126,7 +126,8 @@ defmodule EngramWeb.Plugs.RequireOnboardingTest do
     assert conn.status == 403
     body = Phoenix.ConnTest.json_response(conn, 403)
     assert body["missing"] == ["profile"]
-    assert body["next_step"] == "vault"
+    # A hosted web signup answers "how did you hear about us" before the vault.
+    assert body["next_step"] == "heard"
   end
 
   test "passes through when fresh-path profile is set AND a vault exists",

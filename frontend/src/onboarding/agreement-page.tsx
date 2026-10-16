@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -8,11 +8,10 @@ import { Trans } from "@/i18n/trans";
 import AuthPanel from "@/layout/auth-panel";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { track } from "../analytics/track";
-import { useOnboardingStatus, useSubmitFeedback } from "../api/queries";
+import { useOnboardingStatus } from "../api/queries";
 import { LegalDoc } from "../legal/legal-doc";
 import { formatEffectiveDate, useDocumentName } from "../legal/legal-notice-banner";
 import { useAcceptAgreements } from "../legal/use-accept-current";
-import { HeardFromField } from "./about-you-fields";
 
 export default function AgreementPage() {
 	const { t, renderedLocale } = useT();
@@ -24,24 +23,8 @@ export default function AgreementPage() {
 	const [showPrivacy, setShowPrivacy] = useState(false);
 	const [mountedAt] = useState(() => Date.now());
 	const notices = data?.legal_notices ?? [];
-	const submitFeedback = useSubmitFeedback();
-	// Covers both saves: accept's own isPending clears before the heard-from
-	// POST, which left Continue clickable for a second accept.
+	// Guards a second accept while the first is still in flight.
 	const [submitting, setSubmitting] = useState(false);
-	const [heardFrom, setHeardFrom] = useState<string | null>(null);
-	const [heardFromDetail, setHeardFromDetail] = useState("");
-	const heardFromId = useId();
-	// Only a brand-new web signup is asked. Plugin and connector signups
-	// record where they started instead, and a returning account re-accepting
-	// changed terms already went through the wizard.
-	const profile = data?.profile;
-	const askHeardFrom = !(
-		profile?.tools_prefilled ||
-		profile?.signup_source ||
-		profile?.completed_at ||
-		profile?.survey_done_at ||
-		profile?.heard_from
-	);
 
 	async function submit() {
 		if (submitting) {
@@ -58,18 +41,6 @@ export default function AgreementPage() {
 	async function submitSteps() {
 		if (!(await accept())) {
 			return;
-		}
-		if (askHeardFrom && heardFrom) {
-			const detail = heardFrom === "other" ? heardFromDetail.trim() : "";
-			// The terms are already accepted; a lost answer must not strand the
-			// signup on this screen.
-			await submitFeedback
-				.mutateAsync({
-					kind: "onboarding",
-					heard_from: heardFrom,
-					...(detail ? { heard_from_detail: detail } : {}),
-				})
-				.catch((err: unknown) => console.warn("heard_from submit failed", err));
 		}
 		track("onboarding_step_completed", {
 			step: "agreement",
@@ -162,25 +133,6 @@ export default function AgreementPage() {
 							</div>
 						</ScrollArea>
 					) : null}
-					{askHeardFrom ? (
-						<section className="flex flex-col gap-3">
-							<h2 id={heardFromId} className="font-semibold text-base text-foreground">
-								{t("How did you hear about Engram?")}
-							</h2>
-							{heardFrom ? null : (
-								<p className="text-muted-foreground text-sm">{t("Pick one to continue.")}</p>
-							)}
-							<HeardFromField
-								heardFrom={heardFrom}
-								detail={heardFromDetail}
-								onChange={(next, detail) => {
-									setHeardFrom(next);
-									setHeardFromDetail(detail);
-								}}
-								labelledBy={heardFromId}
-							/>
-						</section>
-					) : null}
 					<label className={selectableRow(agreed)}>
 						<Checkbox
 							checked={agreed}
@@ -194,7 +146,7 @@ export default function AgreementPage() {
 					<Button
 						type="button"
 						onClick={submit}
-						disabled={!agreed || isPending || submitting || !ready || (askHeardFrom && !heardFrom)}
+						disabled={!agreed || isPending || submitting || !ready}
 						className="w-full"
 					>
 						{isPending || submitting ? t("Saving…") : t("Continue")}

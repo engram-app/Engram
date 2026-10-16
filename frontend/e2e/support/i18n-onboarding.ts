@@ -2,7 +2,7 @@ import { expect, type Page, type TestInfo } from "@playwright/test";
 import { checkStep, type StepOptions, translationOf } from "./i18n-leaks";
 
 // The onboarding wizard in one locale, shared by the self-host and SaaS specs. It
-// follows whichever steps the backend serves (a web signup: SaaS agreement, vault;
+// follows whichever steps the backend serves (a web signup: SaaS agreement, heard, vault;
 // self-host vault; a lapsed payer re-accepting terms can still be served billing) and ends
 // on the dashboard and Settings > Account,
 // running the leak checks at every one. Locators go by role and position, never by
@@ -27,12 +27,6 @@ async function agreementStep(
 	const agree = page.getByRole("checkbox");
 	await expect(agree).toBeVisible({ timeout: 20_000 });
 	await checkStep(page, testInfo, code, "agreement", options);
-	// A new web signup answers "How did you hear about Engram?" here; any
-	// option will do, picked by position.
-	const heardFrom = page.getByRole("radio");
-	if ((await heardFrom.count()) > 0) {
-		await heardFrom.first().click();
-	}
 	await agree.click();
 	await page.getByRole("button", { name: translationOf(code, "Continue"), exact: true }).click();
 }
@@ -48,6 +42,22 @@ async function billingStep(
 	).toBeVisible();
 	await checkStep(page, testInfo, code, "billing", options);
 	await page.getByRole("button", { name: translationOf(code, "Continue with Free →") }).click();
+}
+
+// A web signup's "How did you hear about Engram?"; any option will do,
+// picked by position.
+async function heardStep(
+	page: Page,
+	testInfo: TestInfo,
+	code: string,
+	options: StepOptions,
+): Promise<void> {
+	await expect(
+		page.getByRole("heading", { name: translationOf(code, "How did you hear about Engram?") }),
+	).toBeVisible();
+	await checkStep(page, testInfo, code, "heard", options);
+	await page.getByRole("radio").first().click();
+	await page.getByRole("button", { name: translationOf(code, "Continue"), exact: true }).click();
 }
 
 async function vaultStep(
@@ -88,6 +98,8 @@ export async function walkOnboarding(
 			await agreementStep(page, testInfo, code, options);
 		} else if (step === "billing") {
 			await billingStep(page, testInfo, code, options);
+		} else if (step === "heard") {
+			await heardStep(page, testInfo, code, options);
 		} else if (step === "vault") {
 			await vaultStep(page, testInfo, code, options);
 		} else {

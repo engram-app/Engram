@@ -9,6 +9,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useConfig } from "@/config-context";
 import { useT } from "@/i18n/locale-provider";
 import { isSettingsHash } from "@/settings/settings-hash";
@@ -118,37 +119,45 @@ function SurveyModal({ initialTools, onDone }: SurveyModalProps) {
 				}
 			}}
 		>
-			<DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
+			<DialogContent className="flex max-h-[90dvh] flex-col sm:max-w-2xl">
 				<DialogHeader>
 					<DialogTitle>{t("Help us shape Engram")}</DialogTitle>
 					<DialogDescription>{t("Two quick questions. Both are optional.")}</DialogDescription>
 				</DialogHeader>
 
-				<section className="flex flex-col gap-3">
-					<h3 className="font-semibold text-base text-foreground">
-						{t("Which AI tools do you use?")}
-					</h3>
-					<ToolPicker selected={tools} onChange={setTools} />
-				</section>
+				{/* Only the questions scroll: the tool grid is tall enough to push
+				    the buttons below the fold, and the way out must stay in view. */}
+				<ScrollArea
+					// Flex all the way down: the dialog only has a max height, so a
+					// percentage height on the viewport would resolve to auto and
+					// never scroll. Shrinking as flex items does.
+					className="-mx-6 flex min-h-0 flex-1 flex-col"
+					viewportClassName="h-auto min-h-0 flex-1 px-6"
+				>
+					<section className="mb-4 flex flex-col gap-3">
+						<h3 className="font-semibold text-base text-foreground">
+							{t("Which AI tools do you use?")}
+						</h3>
+						<ToolPicker selected={tools} onChange={setTools} />
+					</section>
 
-				<UseCasesField
-					goals={goals}
-					detail={goalsDetail}
-					onChange={(next, detail) => {
-						setGoals(next);
-						setGoalsDetail(detail);
-					}}
-				/>
+					<UseCasesField
+						goals={goals}
+						detail={goalsDetail}
+						onChange={(next, detail) => {
+							setGoals(next);
+							setGoalsDetail(detail);
+						}}
+					/>
 
-				{failed ? (
-					<p role="alert" className="text-destructive text-sm">
-						{t("Couldn't save your answers, please try again.")}
-					</p>
-				) : null}
+					{failed ? (
+						<p role="alert" className="mt-4 text-destructive text-sm">
+							{t("Couldn't save your answers, please try again.")}
+						</p>
+					) : null}
+				</ScrollArea>
 
-				{/* Pinned: the tool grid is tall enough to push the buttons below
-				    the fold, and the way out must always be in view. */}
-				<DialogFooter className="sticky -bottom-6 -mx-6 -mb-6 border-border border-t bg-background p-6 pt-3">
+				<DialogFooter className="-mx-6 -mb-6 border-border border-t p-6 pt-3">
 					<Button type="button" variant="ghost" onClick={skip} disabled={pending}>
 						{t("Skip")}
 					</Button>

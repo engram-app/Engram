@@ -182,7 +182,7 @@ defmodule Engram.Onboarding do
     * `:current_tos_version` — latest published ToS version (from `terms_versions`)
     * `:current_privacy_version` — latest published Privacy version
     * `:legal_notices`: pending legal changes, see `legal_notices/1`
-    * `:next_step` — one of `:agreement | :billing | :vault | :done`
+    * `:next_step` — one of `:agreement | :billing | :heard | :vault | :done`
 
   The gate is computed from the `terms_versions` table via
   `Engram.Legal.VersionCache`: `terms_ok` compares the user's latest accepted
@@ -218,8 +218,10 @@ defmodule Engram.Onboarding do
     profile_complete = profile_complete?(profile)
     has_vault = Vaults.has_vault?(user)
 
+    heard_due = heard_due?(billing_active, profile, profile_complete)
+
     next =
-      next_step(terms_ok, subscription_ok, profile_complete, profile, has_vault)
+      next_step(terms_ok, subscription_ok, profile_complete, profile, has_vault, heard_due)
 
     steps =
       build_steps(billing_active, profile, %{
@@ -248,7 +250,7 @@ defmodule Engram.Onboarding do
     # reimplementing the rules.
     #
     # It is NOT `next_step == :done`. Wizard navigation and runtime permission
-    # are deliberately decoupled (see `next_step/5`): an obsidian-path user
+    # are deliberately decoupled (see `next_step/6`): an obsidian-path user
     # sits at `:vault` until the plugin first-syncs, while the gate already
     # admits them. Anything that re-derives the verdict from `next_step` gets
     # that case backwards — the consent page did, and bounced those users
@@ -313,7 +315,7 @@ defmodule Engram.Onboarding do
         # All enforced gates pass even though wizard navigation isn't `:done`
         # yet (e.g. obsidian user mid-flow whose plugin is about to first-sync).
         # Runtime traffic permission and wizard state are intentionally
-        # decoupled — see `next_step/5`.
+        # decoupled — see `next_step/6`.
         :pass
 
       # Deliberately NOT cached. The cache is shared with the channel joins,
@@ -386,16 +388,18 @@ defmodule Engram.Onboarding do
   end
 
   # Enumerates the step chain so the frontend can render "Step X of N"
-  # without re-deriving the gate rules: the terms, then the vault step for a
-  # web signup. Every account starts on Free when it accepts the terms
+  # without re-deriving the gate rules: the terms, then for a web signup the
+  # heard-from question and the vault step. Every account starts on Free when it accepts the terms
   # (`after_terms/1`), so the plan step is gone; tools and the survey moved
   # into the app.
   #
-  # A step must stay listed whenever `next_step/5` can still return it, or the
+  # A step must stay listed whenever `next_step/6` can still return it, or the
   # wizard is pointed at a step the chain does not list and loops:
   #
   #   * `:billing` when terms pass without a plan (accepted before the Free
   #     start existed, or the stamp failed).
+  #   * `:heard` while a hosted web signup has not answered it, and after,
+  #     unless its profile completed without it (`heard_due?/3`).
   #   * `:vault` unless the signup's origin already settled it: a plugin-first
   #     profile that completed, or a connector profile that completed and
   #     either has its vault or has not reached the plan yet. A connector
@@ -411,10 +415,34 @@ defmodule Engram.Onboarding do
 
     agreement = if billing_active, do: [:agreement], else: []
     billing = if billing_active and stuck_on_billing, do: [:billing], else: []
+
+    # Kept once answered, so the counter does not shrink under the user.
+    heard =
+      if heard_due?(billing_active, profile, state.profile_complete) or
+           (billing_active and web_signup?(profile) and heard_answered?(profile)),
+         do: [:heard],
+         else: []
+
     vault = if vault_settled, do: [], else: [:vault]
 
-    agreement ++ billing ++ vault
+    agreement ++ billing ++ heard ++ vault
   end
+
+  # "How did you hear about Engram?", its own step after the terms. Asked only
+  # of a hosted web signup: plugin and connector signups record where they
+  # started instead, and self-host has no analytics to send it to. Never of a
+  # completed profile, which finished the wizard before this step existed.
+  defp heard_due?(billing_active, profile, profile_complete) do
+    billing_active and web_signup?(profile) and not heard_answered?(profile) and
+      not profile_complete
+  end
+
+  defp web_signup?(profile) do
+    profile = profile || %{}
+    not tools_prefilled?(profile) and is_nil(profile["signup_source"])
+  end
+
+  defp heard_answered?(profile), do: is_binary((profile || %{})["heard_from"])
 
   # Where the signup started, as recorded on its profile. A connector signup
   # is marked by its OAuth client pre-answering `tools`; a plugin-first one by
@@ -839,14 +867,15 @@ defmodule Engram.Onboarding do
     version
   end
 
-  defp next_step(false, _, _, _, _), do: :agreement
-  defp next_step(true, false, _, _, _), do: :billing
+  defp next_step(false, _, _, _, _, _), do: :agreement
+  defp next_step(true, false, _, _, _, _), do: :billing
+  defp next_step(true, true, false, _profile, _has_vault, true), do: :heard
 
-  # The wizard asks one question beyond the terms: Obsidian or fresh, on the
-  # vault step. Tools and the user-voice survey are asked in the app after
-  # first value, never here. Plugin and connector signups answered the
+  # Beyond the terms the wizard asks a web signup how it heard about us
+  # (`heard_due?/3`), then Obsidian or fresh on the vault step. Tools and the
+  # user-voice survey are asked in the app after first value, never here. Plugin and connector signups answered the
   # question by where they started (`set_profile/2`).
-  defp next_step(true, true, false, _profile, _has_vault), do: :vault
+  defp next_step(true, true, false, _profile, _has_vault, false), do: :vault
 
   # Wizard navigation requires an actual vault row, except for a plugin-first
   # signup: its plugin creates the vault on first sync, which cannot happen
@@ -854,7 +883,7 @@ defmodule Engram.Onboarding do
   # /link instead of waiting. A web signup that picked Obsidian waits here for
   # that first sync. The gate admits both earlier (`gate_missing/1`), so the
   # plugin can push. See `EngramWeb.Plugs.RequireOnboarding`.
-  defp next_step(true, true, true, profile, has_vault) do
+  defp next_step(true, true, true, profile, has_vault, _heard_due) do
     if has_vault or plugin_source?(profile), do: :done, else: :vault
   end
 

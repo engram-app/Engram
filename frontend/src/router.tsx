@@ -63,6 +63,7 @@ const ConnectorQcPage = import.meta.env.DEV ? lazy(() => import("./dev/connector
 // the SPA for those paths, so old bookmarks boot and land here.
 const LegacySettingsRedirect = lazy(() => import("./settings/legacy-settings-redirect"));
 const AgreementPage = lazy(() => import("./onboarding/agreement-page"));
+const HeardPage = lazy(() => import("./onboarding/heard-page"));
 const OnboardBillingPage = lazy(() => import("./onboarding/onboard-billing-page"));
 const OnboardVaultPage = lazy(() => import("./onboarding/onboard-vault-page"));
 
@@ -175,6 +176,7 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 										{ index: true, element: suspended(<OnboardRedirect />) },
 										{ path: "agreement", element: suspended(<AgreementPage />) },
 										{ path: "billing", element: suspended(<OnboardBillingPage />) },
+										{ path: "heard", element: suspended(<HeardPage />) },
 										{ path: "vault", element: suspended(<OnboardVaultPage />) },
 										// Removed steps (tools, about) and anything else stale: back to
 										// the resolver, which sends the user to their real next step.

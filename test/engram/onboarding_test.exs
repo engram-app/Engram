@@ -222,17 +222,41 @@ defmodule Engram.OnboardingTest do
              } = Onboarding.status(user)
     end
 
-    test "steps fresh hosted user = [:agreement, :vault]" do
+    test "steps fresh hosted user = [:agreement, :heard, :vault]" do
       user = insert(:user, onboarding_profile: %{})
-      assert %{steps: [:agreement, :vault]} = Onboarding.status(user)
+      assert %{steps: [:agreement, :heard, :vault]} = Onboarding.status(user)
     end
 
-    test "steps stays [:agreement, :vault] for a web signup regardless of uses_obsidian" do
+    test "steps stays [:agreement, :heard, :vault] once a web signup answered both" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "active")
+      :ok = Engram.Feedback.submit(user, "onboarding", %{"heard_from" => "reddit"})
       {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true})
-      assert %{steps: [:agreement, :vault]} = Onboarding.status(user)
+      assert %{steps: [:agreement, :heard, :vault]} = Onboarding.status(user)
+    end
+
+    # Its own step, after the terms: asked only of a web signup, which has no
+    # other record of where it came from.
+    test "a web signup is asked how it heard about us after the terms" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", "canonical", "2026-05-15", "p", %{})
+      user = Engram.Accounts.get_user!(user.id)
+      assert %{next_step: :heard} = Onboarding.status(user)
+
+      :ok = Engram.Feedback.submit(user, "onboarding", %{"heard_from" => "youtube"})
+      assert %{next_step: :vault} = Onboarding.status(user)
+    end
+
+    # An account that finished the old wizard was never asked; re-accepting
+    # changed terms must not send it through a new question.
+    test "a completed profile without an answer is not asked" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: false})
+      insert(:vault, user: user)
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", "canonical", "2026-05-15", "p", %{})
+      user = Engram.Accounts.get_user!(user.id)
+      assert %{steps: [:agreement, :vault], next_step: :done} = Onboarding.status(user)
     end
 
     # Plugin-first: /link answers the Obsidian question and records the origin
@@ -254,7 +278,7 @@ defmodule Engram.OnboardingTest do
 
     # A web signup: terms, then Obsidian or fresh. No plan step: accepting the
     # terms starts the account on Free.
-    test "a web signup goes from the terms straight to the vault step on Free" do
+    test "a web signup goes from the terms to the heard step on Free" do
       user = insert(:user, onboarding_profile: %{})
 
       {:ok, _} =
@@ -262,7 +286,7 @@ defmodule Engram.OnboardingTest do
 
       user = Engram.Accounts.get_user!(user.id)
       assert %DateTime{} = user.free_tier_accepted_at
-      assert %{steps: [:agreement, :vault], next_step: :vault} = Onboarding.status(user)
+      assert %{steps: [:agreement, :heard, :vault], next_step: :heard} = Onboarding.status(user)
     end
 
     # The MCP-first path answers `tools` from the OAuth client before the
@@ -355,13 +379,16 @@ defmodule Engram.OnboardingTest do
           uses_obsidian <- [nil, true, false],
           terms <- [false, true],
           plan <- [false, true],
-          vault <- [false, true] do
+          vault <- [false, true],
+          heard <- [false, true] do
         Application.put_env(:engram, :billing_enabled, billing)
         Engram.Onboarding.GateCache.evict_all()
 
         user =
           insert(:user,
-            onboarding_profile: loop_profile(origin, uses_obsidian),
+            onboarding_profile:
+              loop_profile(origin, uses_obsidian)
+              |> then(&if(heard, do: Map.put(&1, "heard_from", "reddit"), else: &1)),
             free_tier_accepted_at: if(plan, do: DateTime.utc_now(:second))
           )
 
@@ -369,7 +396,7 @@ defmodule Engram.OnboardingTest do
         if terms, do: {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
 
         status = Onboarding.status(user)
-        label = inspect({billing, origin, uses_obsidian, terms, plan, vault})
+        label = inspect({billing, origin, uses_obsidian, terms, plan, vault, heard})
 
         assert status.next_step == :done or status.next_step in status.steps,
                "#{label}: next_step #{status.next_step} not in #{inspect(status.steps)}"
@@ -1099,7 +1126,7 @@ defmodule Engram.OnboardingTest do
     end
   end
 
-  describe "status/1 vault gate (next_step :tools / :vault come after :billing)" do
+  describe "status/1 vault gate (next_step :heard / :vault come after :billing)" do
     setup do
       prev_enabled = Application.get_env(:engram, :billing_enabled)
       Application.put_env(:engram, :billing_enabled, true)
@@ -1129,7 +1156,7 @@ defmodule Engram.OnboardingTest do
     end
 
     # Tools and the survey moved into the app: neither is a wizard step.
-    test "next_step :vault when terms + subscription ok, tools unanswered" do
+    test "next_step :heard when terms + subscription ok, nothing answered" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "active")
@@ -1138,7 +1165,7 @@ defmodule Engram.OnboardingTest do
                terms_ok: true,
                subscription_ok: true,
                profile_complete: false,
-               next_step: :vault
+               next_step: :heard
              } = Onboarding.status(user)
     end
 
@@ -1152,14 +1179,16 @@ defmodule Engram.OnboardingTest do
       assert %{profile_complete: false, next_step: :vault} = Onboarding.status(user)
     end
 
-    test "next_step :vault once the survey is skipped" do
+    # Only `heard_from` answers the heard step: the in-app survey also writes
+    # through `Feedback.submit/3` and never carries it.
+    test "next_step stays :heard after a survey answer with no heard_from" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "active")
       {:ok, _} = Onboarding.set_profile(user, %{tools: ["claude"]})
       :ok = Engram.Feedback.submit(user, "onboarding", %{})
 
-      assert %{profile_complete: false, next_step: :vault} = Onboarding.status(user)
+      assert %{profile_complete: false, next_step: :heard} = Onboarding.status(user)
     end
 
     test "next_step :vault for obsidian user with no vault yet (wizard waits for plugin first sync)" do

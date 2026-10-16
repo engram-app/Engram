@@ -51,10 +51,12 @@ defmodule EngramWeb.OnboardingJourneysTest do
 
   defp vaults(conn), do: conn |> get("/api/vaults") |> json_response(200) |> Map.fetch!("vaults")
 
-  test "web: terms with heard-from, then the vault step, on Free", %{conn: conn, user: user} do
-    assert %{"steps" => ["agreement", "vault"], "next_step" => "agreement"} = status(conn)
+  test "web: terms, then heard-from, then the vault step, on Free", %{conn: conn, user: user} do
+    assert %{"steps" => ["agreement", "heard", "vault"], "next_step" => "agreement"} =
+             status(conn)
 
     accept_terms(conn)
+    assert %{"next_step" => "heard"} = status(conn)
 
     assert conn
            |> post("/api/feedback", %{"kind" => "onboarding", "heard_from" => "reddit"})
@@ -110,7 +112,7 @@ defmodule EngramWeb.OnboardingJourneysTest do
 
     assert is_nil(Accounts.get_user!(user.id).free_tier_accepted_at)
 
-    assert %{"next_step" => "billing", "steps" => ["agreement", "billing", "vault"]} =
+    assert %{"next_step" => "billing", "steps" => ["agreement", "billing", "heard", "vault"]} =
              status(conn)
   end
 end
