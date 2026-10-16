@@ -92,6 +92,14 @@ defmodule EngramWeb.OAuthTokenController do
     json(conn, response)
   end
 
+  # OAuth 2.1 §3.2.4: a required parameter that is ABSENT is invalid_request;
+  # invalid_grant is for one that is present and wrong.
+  @missing_params [:code_missing, :pkce_verifier_missing, :redirect_uri_missing]
+
+  defp grant_result({:error, {:invalid_grant, reason}}, conn, grant_type, client_id)
+       when reason in @missing_params,
+       do: reject(conn, grant_type, client_id, "invalid_request", reason)
+
   defp grant_result({:error, {:invalid_grant, reason}}, conn, grant_type, client_id),
     do: reject(conn, grant_type, client_id, "invalid_grant", reason)
 

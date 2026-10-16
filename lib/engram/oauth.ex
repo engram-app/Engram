@@ -796,6 +796,7 @@ defmodule Engram.OAuth do
           | :code_expired
           | :client_mismatch
           | :redirect_uri_mismatch
+          | :redirect_uri_missing
           | :pkce_verifier_missing
           | :pkce_mismatch
           | :user_not_found
@@ -880,6 +881,8 @@ defmodule Engram.OAuth do
       do: :ok,
       else: grant_error(:client_mismatch)
   end
+
+  defp check_code_redirect_uri(_code, nil), do: grant_error(:redirect_uri_missing)
 
   defp check_code_redirect_uri(%{redirect_uri: actual}, requested) when actual == requested,
     do: :ok

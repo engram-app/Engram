@@ -822,4 +822,32 @@ defmodule EngramWeb.OAuthTokenControllerTest do
       assert body["error"] == "invalid_request"
     end
   end
+
+  # OAuth 2.1 §3.2.4 / RFC 6749 §5.2: a MISSING required parameter is
+  # invalid_request; invalid_grant is for one that is present but wrong.
+  describe "POST /oauth/token — missing grant parameters" do
+    setup do
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+      {verifier, challenge} = pkce_pair()
+      code = mint_code(insert(:user), client, redirect_uri, challenge)
+
+      base = %{
+        "grant_type" => "authorization_code",
+        "code" => code,
+        "redirect_uri" => redirect_uri,
+        "client_id" => client.client_id,
+        "code_verifier" => verifier
+      }
+
+      %{base: base}
+    end
+
+    for missing <- ~w(code code_verifier redirect_uri) do
+      test "a missing #{missing} is invalid_request", %{conn: conn, base: base} do
+        conn = post(conn, "/oauth/token", Map.delete(base, unquote(missing)))
+        assert json_response(conn, 400)["error"] == "invalid_request"
+      end
+    end
+  end
 end

@@ -147,8 +147,8 @@ defmodule EngramWeb.OAuthTokenRejectionLogTest do
 
     test "missing code" do
       params = Map.delete(code_params(register_client()), "code")
-      meta = reject(params, 400, "invalid_grant")
-      assert_rejected(meta, :authorization_code, "invalid_grant", :code_missing)
+      meta = reject(params, 400, "invalid_request")
+      assert_rejected(meta, :authorization_code, "invalid_request", :code_missing)
     end
 
     test "expired code" do
@@ -178,8 +178,8 @@ defmodule EngramWeb.OAuthTokenRejectionLogTest do
 
     test "PKCE verifier missing" do
       params = Map.delete(code_params(register_client()), "code_verifier")
-      meta = reject(params, 400, "invalid_grant")
-      assert_rejected(meta, :authorization_code, "invalid_grant", :pkce_verifier_missing)
+      meta = reject(params, 400, "invalid_request")
+      assert_rejected(meta, :authorization_code, "invalid_request", :pkce_verifier_missing)
     end
 
     test "redirect_uri mismatch" do
