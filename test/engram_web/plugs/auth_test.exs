@@ -170,12 +170,17 @@ defmodule EngramWeb.Plugs.AuthTest do
       signer = Joken.Signer.create("HS256", Application.get_env(:joken, :default_signer))
       {:ok, expired_token} = Joken.Signer.sign(claims, signer)
 
-      {_conn, events} =
+      {conn, events} =
         LogCapture.with_events(fn ->
           build_conn()
           |> put_req_header("authorization", "Bearer #{expired_token}")
           |> Auth.call([])
         end)
+
+      # RFC 6750 §3.1: an expired token is `invalid_token`, so the client refreshes.
+      assert conn.status == 401
+      assert [challenge] = get_resp_header(conn, "www-authenticate")
+      assert challenge =~ ~s(error="invalid_token")
 
       assert Enum.any?(events, fn e ->
                match?({:string, "auth rejected"}, e.msg) and

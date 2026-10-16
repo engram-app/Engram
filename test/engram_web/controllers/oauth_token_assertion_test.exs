@@ -192,6 +192,32 @@ defmodule EngramWeb.OAuthTokenAssertionTest do
     # The highest-probability real interop failure in this path: a vendor sends a
     # draft-era or whitespace-padded URN. Before this it 401'd forever and logged
     # nothing anywhere.
+    # RFC 7523 §3: `sub` MUST be the client_id. A key that signs for one client
+    # must not authenticate as another, even with the right `iss`.
+    test "refuses an assertion whose sub is another client", %{
+      conn: conn,
+      private: private,
+      public: public
+    } do
+      stub(FetcherMock, :fetch, fn @jwks_uri -> {:ok, %{"keys" => [public]}} end)
+
+      user = insert(:user)
+      cimd_client()
+      {verifier, challenge} = pkce_pair()
+      code = mint_code(user, challenge)
+
+      params =
+        exchange_params(code, verifier, %{
+          "client_id" => @client_url,
+          "client_assertion" =>
+            assertion(private, %{"sub" => "https://other.example/client.json"}),
+          "client_assertion_type" => Jwks.assertion_type()
+        })
+
+      body = conn |> post("/oauth/token", params) |> json_response(401)
+      assert body["error"] == "invalid_client"
+    end
+
     test "refuses an unrecognised client_assertion_type", %{conn: conn, private: private} do
       user = insert(:user)
       cimd_client()

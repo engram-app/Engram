@@ -373,6 +373,7 @@ defmodule Engram.OAuth do
          {:ok, redirect_uri} <- match_redirect_uri(client, params["redirect_uri"]),
          :ok <- check_response_type(params, redirect_uri),
          :ok <- check_pkce(params, redirect_uri),
+         :ok <- check_resource(params, redirect_uri),
          :ok <- check_state_length(params) do
       {granted, requested} = narrow_scope(params["scope"])
 
@@ -383,7 +384,7 @@ defmodule Engram.OAuth do
          client_name: client.client_name,
          redirect_uri: redirect_uri,
          code_challenge: params["code_challenge"],
-         code_challenge_method: params["code_challenge_method"] || "S256",
+         code_challenge_method: params["code_challenge_method"],
          scope: granted,
          scope_requested: requested,
          state: params["state"]
@@ -409,6 +410,20 @@ defmodule Engram.OAuth do
   end
 
   defp check_state_length(_), do: :ok
+
+  # RFC 8707 §2: a `resource` that is not this server is `invalid_target`. A
+  # client asking us for a token to some other server would otherwise get one
+  # that names us, which is the confusion audience binding exists to prevent.
+  # Absent is fine; the token is for the MCP server either way. Empty is
+  # absent (OAuth 2.1 §3.1).
+  defp check_resource(%{"resource" => resource} = params, redirect_uri)
+       when (is_binary(resource) and resource != "") or is_list(resource) do
+    if EngramWeb.OAuthMetadata.mcp_resource?(resource),
+      do: :ok,
+      else: {:redirect_error, redirect_uri, "invalid_target", params["state"]}
+  end
+
+  defp check_resource(_params, _redirect_uri), do: :ok
 
   @doc """
   Reads a vault selection off consent params.
@@ -468,7 +483,8 @@ defmodule Engram.OAuth do
            |> AuthorizationCode.changeset(attrs)
            |> Repo.insert(skip_tenant_check: true) do
         {:ok, _row} ->
-          {:ok, build_redirect(validated.redirect_uri, %{code: raw_code, state: validated.state})}
+          params = %{code: raw_code, state: validated.state, iss: Map.get(validated, :iss)}
+          {:ok, build_redirect(validated.redirect_uri, params)}
 
         {:error, changeset} ->
           {:error, changeset}
@@ -506,14 +522,17 @@ defmodule Engram.OAuth do
   def exchange_authorization_code(params, opts \\ []) do
     ip = Keyword.get(opts, :ip)
 
-    with {:ok, code_row} <- find_unconsumed_code(params["code"]),
+    with {:ok, code_row} <- find_code(params["code"]),
          :ok <- check_code_client(code_row, params["client_id"]),
          :ok <- check_code_redirect_uri(code_row, params["redirect_uri"]),
          :ok <- check_pkce_verifier(code_row, params["code_verifier"]),
+         :ok <- check_unconsumed(code_row),
          {:ok, user} <- fetch_user(code_row.user_id),
          :ok <- consume_code(code_row),
+         # The family is the code's own id, so a replay of the code can find
+         # and revoke exactly the tokens it minted (RFC 6749 §4.1.2).
          {:ok, refresh_raw, refresh_row} <-
-           insert_refresh_token(grant_attrs(code_row, Ecto.UUID.generate(), ip)) do
+           insert_refresh_token(grant_attrs(code_row, code_row.id, ip)) do
       {:ok, build_token_response(user, code_row, refresh_raw, refresh_row)}
     end
   end
@@ -775,6 +794,7 @@ defmodule Engram.OAuth do
           :code_missing
           | :code_unknown
           | :code_consumed
+          | :code_replay_revoked
           | :code_expired
           | :client_mismatch
           | :redirect_uri_mismatch
@@ -809,20 +829,51 @@ defmodule Engram.OAuth do
   @spec grant_error(grant_reason()) :: {:error, {:invalid_grant, grant_reason()}}
   defp grant_error(reason), do: {:error, {:invalid_grant, reason}}
 
-  defp find_unconsumed_code(nil), do: grant_error(:code_missing)
+  defp find_code(nil), do: grant_error(:code_missing)
 
-  defp find_unconsumed_code(raw_code) do
+  defp find_code(raw_code) do
     case get_authorization_code_by_raw(raw_code) |> tap(&put_code_user_id/1) do
-      {:ok, %AuthorizationCode{consumed_at: nil} = code} ->
-        if DateTime.compare(DateTime.utc_now(), code.expires_at) == :gt,
-          do: grant_error(:code_expired),
-          else: {:ok, code}
+      {:ok, %AuthorizationCode{} = code} -> {:ok, code}
+      _ -> grant_error(:code_unknown)
+    end
+  end
 
-      {:ok, %AuthorizationCode{}} ->
-        grant_error(:code_consumed)
+  # Runs AFTER the client, redirect and PKCE checks, so only the client that
+  # holds the verifier can reach the replay branch. A stolen code without it is
+  # refused earlier and revokes nothing, so it cannot be used to cut a user off.
+  defp check_unconsumed(%AuthorizationCode{consumed_at: nil} = code) do
+    if DateTime.compare(DateTime.utc_now(), code.expires_at) == :gt,
+      do: grant_error(:code_expired),
+      else: :ok
+  end
 
-      _ ->
-        grant_error(:code_unknown)
+  # RFC 6749 §4.1.2: a code used twice is refused and SHOULD revoke what it
+  # issued. Not inside the refresh grace window, though: a client that fires two
+  # exchanges at once, or retries one still in flight, would otherwise lose the
+  # grant its first exchange just gave it. Nor once the code has expired: a
+  # callback page reloaded hours later is not an attack, and must not cut off
+  # the connection that page set up.
+  defp check_unconsumed(%AuthorizationCode{consumed_at: consumed_at} = code) do
+    now = DateTime.utc_now()
+
+    if DateTime.diff(now, consumed_at) > @refresh_reuse_grace_seconds and
+         DateTime.compare(now, code.expires_at) != :gt do
+      _ =
+        revoke_refresh_tokens(from(r in RefreshToken, where: r.family_id == ^code.id),
+          skip_tenant_check: true
+        )
+
+      Logger.warning(
+        "oauth_code_replay_revoked",
+        Metadata.with_category(:warning, :lifecycle,
+          client_id: code.client_id,
+          family_id: code.id
+        )
+      )
+
+      grant_error(:code_replay_revoked)
+    else
+      grant_error(:code_consumed)
     end
   end
 
@@ -838,6 +889,11 @@ defmodule Engram.OAuth do
       do: :ok,
       else: grant_error(:client_mismatch)
   end
+
+  # OAuth 2.1 dropped `redirect_uri` from the token request (§4.1.3, §10.2):
+  # PKCE binds the code to the client that started the flow. Absent is fine;
+  # present must match, for RFC 6749 clients that still send it.
+  defp check_code_redirect_uri(_code, absent) when absent in [nil, ""], do: :ok
 
   defp check_code_redirect_uri(%{redirect_uri: actual}, requested) when actual == requested,
     do: :ok
@@ -918,9 +974,20 @@ defmodule Engram.OAuth do
   defp grant_vault_ids(%{vault_id: id}) when is_binary(id), do: [id]
   defp grant_vault_ids(_), do: nil
 
+  # Mints the legacy `engram` audience until every node can verify
+  # `engram:mcp`: a node still on the previous release refuses it, and with
+  # two tasks behind the ALB through a rolling deploy (and after a rollback)
+  # half of a client's calls would 401. The verifier accepts both today; the
+  # next release turns minting on.
+  defp mint_audience do
+    if Application.get_env(:engram, :oauth_mcp_audience_tokens, false),
+      do: Engram.Token.mcp_audience(),
+      else: "engram"
+  end
+
   defp issue_access_token(user, scope, vault_ids) do
     extras =
-      %{}
+      %{"aud" => mint_audience()}
       |> maybe_put("scope", scope)
       |> maybe_put("vault_ids", vault_ids)
       # Every restricted grant also emits the legacy scalar claim, carrying the
@@ -1096,13 +1163,39 @@ defmodule Engram.OAuth do
   # unbindable document. Those are genuinely terminal for this client_id.
   defp cimd_error(_reason), do: {:client_error, "invalid_client"}
 
-  defp match_redirect_uri(_client, nil), do: {:client_error, "invalid_redirect_uri"}
+  @doc """
+  Whether `uri` is one of `client`'s redirects, by the same rule authorize
+  applies (exact, or a loopback redirect on any port).
+  """
+  @spec redirect_uri_registered?(Client.t(), String.t() | nil) :: boolean()
+  def redirect_uri_registered?(client, uri), do: match?({:ok, _}, match_redirect_uri(client, uri))
+
+  # OAuth 2.1 §4.1.1: OPTIONAL when exactly one redirect is registered. Not for a
+  # loopback one, whose runtime port (RFC 8252 §7.3) the request must name.
+  defp match_redirect_uri(client, absent) when absent in [nil, ""] do
+    case client.redirect_uris do
+      [only] ->
+        if loopback_redirect?(only),
+          do: {:client_error, "invalid_redirect_uri"},
+          else: {:ok, only}
+
+      _ ->
+        {:client_error, "invalid_redirect_uri"}
+    end
+  end
 
   defp match_redirect_uri(client, uri) do
     if uri in client.redirect_uris or loopback_port_match?(client.redirect_uris, uri) do
       {:ok, uri}
     else
       {:client_error, "invalid_redirect_uri"}
+    end
+  end
+
+  defp loopback_redirect?(uri) do
+    case URI.parse(uri) do
+      %URI{scheme: "http", host: host} when is_binary(host) -> Client.loopback_host?(host)
+      _ -> false
     end
   end
 
@@ -1154,8 +1247,11 @@ defmodule Engram.OAuth do
 
   defp check_pkce(%{"code_challenge" => challenge} = params, redirect_uri)
        when is_binary(challenge) and challenge != "" do
+    # OAuth 2.1 §4.1.1 / RFC 7636 §4.3: an absent method means `plain`, which we
+    # do not support, so it is refused like `plain` itself. Never read as S256:
+    # the consent page already refused such requests, so no client relied on it.
     case params["code_challenge_method"] do
-      m when m in [nil, "S256"] -> :ok
+      "S256" -> :ok
       _ -> {:redirect_error, redirect_uri, "invalid_request", params["state"]}
     end
   end

@@ -14,6 +14,16 @@ export interface OAuthClientMetadata {
 	// the FTUX tool question isn't asked of someone who just answered it by
 	// connecting a tool.
 	slug: string | null;
+	// Whether the redirect THIS request uses is one the client registered, by
+	// the same rule authorize applies. Absent from older backends, so only an
+	// explicit `false` refuses the request.
+	redirect_uri_registered?: boolean;
+	// Host of that redirect when registered, shown to the user. Null otherwise.
+	redirect_host?: string | null;
+	// That redirect is on this computer (localhost), so the page warns.
+	redirect_loopback?: boolean;
+	// Host of a URL client_id (a client metadata document), shown to the user.
+	client_host?: string | null;
 }
 
 export interface OAuthConsentParams {
@@ -22,9 +32,13 @@ export interface OAuthConsentParams {
 	response_type: string;
 	code_challenge: string;
 	code_challenge_method: string;
-	state: string;
+	// Optional, as in the authorization request (RFC 6749 §4.1.1).
+	state?: string;
 	scope: string;
 	resource?: string;
+	// RFC 9207 issuer, as /oauth/authorize put it on this page's URL. Untrusted
+	// here; the backend echoes it only when it is one of its own issuers.
+	iss?: string;
 	// Absent = all vaults, including ones created later. A non-empty array =
 	// exactly those vaults. Never send an empty array — the backend rejects it
 	// rather than widening it to "all".

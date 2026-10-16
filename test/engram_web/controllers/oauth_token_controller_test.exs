@@ -822,4 +822,74 @@ defmodule EngramWeb.OAuthTokenControllerTest do
       assert body["error"] == "invalid_request"
     end
   end
+
+  # OAuth 2.1 §3.2.4 / RFC 6749 §5.2: a MISSING required parameter is
+  # invalid_request; invalid_grant is for one that is present but wrong.
+  describe "POST /oauth/token — missing grant parameters" do
+    setup do
+      client = register_client()
+      redirect_uri = hd(client.redirect_uris)
+      {verifier, challenge} = pkce_pair()
+      code = mint_code(insert(:user), client, redirect_uri, challenge)
+
+      base = %{
+        "grant_type" => "authorization_code",
+        "code" => code,
+        "redirect_uri" => redirect_uri,
+        "client_id" => client.client_id,
+        "code_verifier" => verifier
+      }
+
+      %{base: base}
+    end
+
+    for missing <- ~w(code code_verifier) do
+      test "a missing #{missing} is invalid_request", %{conn: conn, base: base} do
+        conn = post(conn, "/oauth/token", Map.delete(base, unquote(missing)))
+        assert json_response(conn, 400)["error"] == "invalid_request"
+      end
+    end
+  end
+
+  # OAuth 2.1 §4.1.3: redirect_uri at the token endpoint may be omitted for a
+  # client with a single registered redirect; required when it has several.
+  describe "POST /oauth/token — redirect_uri omitted" do
+    test "accepted for a single-redirect client", %{conn: conn} do
+      client = register_client()
+      {verifier, challenge} = pkce_pair()
+      code = mint_code(insert(:user), client, hd(client.redirect_uris), challenge)
+
+      conn =
+        post(conn, "/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "client_id" => client.client_id,
+          "code_verifier" => verifier
+        })
+
+      assert json_response(conn, 200)["access_token"]
+    end
+
+    # OAuth 2.1 §4.1.3 / §10.2: a 2.1 client never sends it. PKCE binds the code.
+    test "accepted for a multi-redirect client", %{conn: conn} do
+      {:ok, client} =
+        OAuth.register_client(%{
+          "redirect_uris" => ["https://a.example/cb", "https://b.example/cb"],
+          "client_name" => "Two"
+        })
+
+      {verifier, challenge} = pkce_pair()
+      code = mint_code(insert(:user), client, "https://a.example/cb", challenge)
+
+      conn =
+        post(conn, "/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "client_id" => client.client_id,
+          "code_verifier" => verifier
+        })
+
+      assert json_response(conn, 200)["access_token"]
+    end
+  end
 end

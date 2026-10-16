@@ -78,14 +78,14 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       params =
         client.client_id
         |> valid_params(redirect_uri)
-        |> Map.put("resource", "https://app.engram.page/api/mcp")
+        |> Map.put("resource", EngramWeb.Endpoint.url() <> "/api/mcp")
 
       conn = get(conn, "/oauth/authorize", params)
 
       assert conn.status == 302
       [location] = get_resp_header(conn, "location")
       query = location |> URI.parse() |> Map.get(:query) |> URI.decode_query()
-      assert query["resource"] == "https://app.engram.page/api/mcp"
+      assert query["resource"] == EngramWeb.Endpoint.url() <> "/api/mcp"
     end
 
     test "does NOT require Authorization: Bearer header", %{conn: conn} do
@@ -167,6 +167,8 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       conn = get(conn, "/oauth/authorize", params)
 
       assert conn.status == 302
+      assert [location] = get_resp_header(conn, "location")
+      assert location =~ "/oauth/consent?"
     end
 
     test "accepts an added port when none was registered", %{conn: conn} do
@@ -177,6 +179,8 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       conn = get(conn, "/oauth/authorize", params)
 
       assert conn.status == 302
+      assert [location] = get_resp_header(conn, "location")
+      assert location =~ "/oauth/consent?"
     end
 
     test "still requires the path to match", %{conn: conn} do
@@ -248,6 +252,19 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       assert conn.status == 302
       [location] = get_resp_header(conn, "location")
       assert location =~ "error=invalid_request"
+    end
+
+    # RFC 7636 §4.3: absent means `plain`, which is refused.
+    test "redirects with invalid_request when code_challenge_method is absent", %{conn: conn} do
+      client = register_client()
+
+      params =
+        client.client_id
+        |> valid_params(hd(client.redirect_uris))
+        |> Map.delete("code_challenge_method")
+
+      [location] = conn |> get("/oauth/authorize", params) |> get_resp_header("location")
+      assert URI.decode_query(URI.parse(location).query)["error"] == "invalid_request"
     end
 
     test "redirects with invalid_request when code_challenge_method is plain", %{conn: conn} do
@@ -752,6 +769,43 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
     end
   end
 
+  describe "POST /api/oauth/authorize/consent — code properties" do
+    defp consent_redirect(conn, params) do
+      user = insert(:user)
+      insert(:vault, user: user)
+
+      conn
+      |> jwt_authed(user)
+      |> post("/api/oauth/authorize/consent", params)
+      |> json_response(200)
+      |> Map.fetch!("redirect_uri")
+    end
+
+    # RFC 6749 §4.1.2: state comes back exactly when the request carried it.
+    test "no state in, no state out", %{conn: conn} do
+      client = register_client()
+      params = client.client_id |> valid_params(hd(client.redirect_uris)) |> Map.delete("state")
+
+      query = conn |> consent_redirect(params) |> URI.parse() |> Map.fetch!(:query)
+      assert query |> URI.decode_query() |> Map.has_key?("code")
+      refute query |> URI.decode_query() |> Map.has_key?("state")
+    end
+
+    # OAuth 2.1 §4.1.2: short-lived (10 min max), and stored only as a hash.
+    test "the code lives 10 minutes and is stored hashed", %{conn: conn} do
+      client = register_client()
+      redirect = consent_redirect(conn, valid_params(client.client_id, hd(client.redirect_uris)))
+      code = URI.decode_query(URI.parse(redirect).query)["code"]
+
+      [row] = Repo.all(Engram.OAuth.AuthorizationCode, skip_tenant_check: true)
+      assert row.code_hash == Engram.Crypto.sha256_hex(code)
+      refute row.code_hash == code
+
+      lifetime = DateTime.diff(row.expires_at, DateTime.utc_now())
+      assert lifetime in 595..600
+    end
+  end
+
   describe "POST /api/oauth/authorize/consent — invalid request" do
     test "invalid client_id returns 400 JSON (no redirect — code-leak prevention)", %{conn: conn} do
       user = insert(:user)
@@ -768,6 +822,21 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       # client_ids with this error code. The 400 code-leak-prevention guarantee
       # still holds — we never redirect an unknown client.
       assert json["error"] == "missing_or_invalid_client_id"
+    end
+
+    # The route can't reach this (EnforceConnectionCap refuses unknown clients
+    # first), so call the action: its own answer must be a 400, never a redirect.
+    test "the action itself answers an unknown client with 400, not a redirect", %{conn: conn} do
+      params = valid_params("00000000-0000-0000-0000-000000000000", "https://x/cb")
+
+      conn =
+        conn
+        |> Phoenix.Controller.put_format("json")
+        |> Plug.Conn.assign(:current_user, insert(:user))
+        |> EngramWeb.OAuthAuthorizeController.consent(params)
+
+      assert conn.status == 400
+      refute Map.has_key?(Jason.decode!(conn.resp_body), "redirect_uri")
     end
 
     test "missing code_challenge returns redirect_uri with error in JSON", %{conn: conn} do
@@ -807,6 +876,92 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
 
       conn = post(conn, "/oauth/authorize", params)
       assert conn.status == 404
+    end
+  end
+
+  # RFC 9207 ships dark this release (`OAuthMetadata.iss_enabled?/0`): an `iss`
+  # the server does not advertise SHOULD be discarded (§2.4). On, it is covered
+  # by `OAuthIssuerHostTest`; this module is async, so it sees the default.
+  describe "iss in the authorization response (RFC 9207), off by default" do
+    test "authorize forwards no iss to the consent page", %{conn: conn} do
+      client = register_client()
+
+      conn =
+        get(conn, "/oauth/authorize", valid_params(client.client_id, hd(client.redirect_uris)))
+
+      [location] = get_resp_header(conn, "location")
+      refute Map.has_key?(URI.decode_query(URI.parse(location).query), "iss")
+    end
+
+    test "an authorize error redirect carries no iss", %{conn: conn} do
+      client = register_client()
+
+      params =
+        client.client_id
+        |> valid_params(hd(client.redirect_uris))
+        |> Map.put("response_type", "token")
+
+      [location] = conn |> get("/oauth/authorize", params) |> get_resp_header("location")
+      query = URI.decode_query(URI.parse(location).query)
+      assert query["error"] == "unsupported_response_type"
+      refute Map.has_key?(query, "iss")
+    end
+
+    test "consent drops a forwarded iss", %{conn: conn} do
+      user = insert(:user)
+      insert(:vault, user: user)
+      client = register_client()
+
+      params =
+        client.client_id
+        |> valid_params(hd(client.redirect_uris))
+        |> Map.put("iss", EngramWeb.Endpoint.url())
+
+      redirect =
+        conn
+        |> jwt_authed(user)
+        |> post("/api/oauth/authorize/consent", params)
+        |> json_response(200)
+        |> Map.fetch!("redirect_uri")
+
+      query = URI.decode_query(URI.parse(redirect).query)
+      assert is_binary(query["code"])
+      refute Map.has_key?(query, "iss")
+    end
+  end
+
+  # OAuth 2.1 §4.1.1: redirect_uri is OPTIONAL when exactly one is registered.
+  describe "redirect_uri omitted (OAuth 2.1 §4.1.1)" do
+    test "authorize uses the single registered redirect and forwards it", %{conn: conn} do
+      client = register_client()
+
+      params =
+        client.client_id |> valid_params(hd(client.redirect_uris)) |> Map.delete("redirect_uri")
+
+      conn = get(conn, "/oauth/authorize", params)
+      assert conn.status == 302
+      [location] = get_resp_header(conn, "location")
+
+      assert URI.decode_query(URI.parse(location).query)["redirect_uri"] ==
+               hd(client.redirect_uris)
+    end
+
+    test "still required when several are registered", %{conn: conn} do
+      {:ok, client} =
+        OAuth.register_client(%{
+          "redirect_uris" => ["https://a.example/cb", "https://b.example/cb"],
+          "client_name" => "Two"
+        })
+
+      params = client.client_id |> valid_params("x") |> Map.delete("redirect_uri")
+      assert conn |> get("/oauth/authorize", params) |> html_response(400)
+    end
+
+    # A loopback registration has no port; the runtime one cannot be guessed.
+    test "still required for a portless loopback registration", %{conn: conn} do
+      client = register_client("http://127.0.0.1/callback")
+      params = client.client_id |> valid_params("x") |> Map.delete("redirect_uri")
+      assert conn |> get("/oauth/authorize", params) |> html_response(400)
     end
   end
 end

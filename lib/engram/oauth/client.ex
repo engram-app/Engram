@@ -85,6 +85,8 @@ defmodule Engram.OAuth.Client do
     # it.
     field :cimd_url, :string
     field :cimd_fetched_at, :utc_datetime_usec
+    # The document's `Cache-Control: max-age`, raw. NULL when it sent none.
+    field :cimd_max_age, :integer
 
     # Where a `private_key_jwt` client's signing keys live, copied off the
     # document so the token endpoint can verify an assertion without network I/O
@@ -541,6 +543,10 @@ defmodule Engram.OAuth.Client do
     case URI.new(uri) do
       {:ok, %URI{scheme: nil}} ->
         [redirect_uris: "missing scheme: #{uri}"]
+
+      # RFC 6749 §3.1.2: a redirection endpoint MUST NOT carry a fragment.
+      {:ok, %URI{fragment: fragment}} when is_binary(fragment) ->
+        [redirect_uris: "fragment not allowed: #{uri}"]
 
       {:ok, %URI{scheme: "https", host: host}} when is_binary(host) and host != "" ->
         []

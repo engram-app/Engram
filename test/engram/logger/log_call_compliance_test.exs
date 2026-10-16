@@ -208,6 +208,7 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/oauth/",
     "lib/engram/oauth/cimd/",
     "lib/engram/token.ex",
+    "lib/engram_web/oauth_client_auth.ex",
     "lib/engram_web/oauth_metadata.ex",
 
     # Billing and payments — Paddle, plans, meters.

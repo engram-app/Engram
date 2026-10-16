@@ -123,6 +123,14 @@ defmodule EngramWeb.McpTransportTest do
       assert challenge =~ ~s(error="invalid_token")
     end
 
+    # MCP 2025-11-25 scope selection: clients take the scope from the challenge
+    # first, before falling back to the metadata's scopes_supported.
+    test "names the scope to request", %{conn: conn} do
+      conn = post(conn, "/api/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
+      assert [challenge] = get_resp_header(conn, "www-authenticate")
+      assert challenge =~ ~s(scope="mcp")
+    end
+
     test "no credentials at all carries no error code (RFC 6750 §3.1)", %{conn: conn} do
       conn = post(conn, "/api/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
       assert [challenge] = get_resp_header(conn, "www-authenticate")
@@ -149,7 +157,8 @@ defmodule EngramWeb.McpTransportTest do
       conn = get(conn, "/api/notes")
 
       assert conn.status == 401
-      assert get_resp_header(conn, "www-authenticate") == []
+      # RFC 6750 §3's bare challenge only: no MCP resource_metadata pointer.
+      assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
     end
   end
 

@@ -15,6 +15,71 @@ defmodule EngramWeb.OAuthMetadata do
   @well_known "/.well-known/oauth-protected-resource"
 
   @doc """
+  Whether a `resource` indicator (RFC 8707) names this server: an absolute
+  URI, on our scheme, on the canonical host or an allowlisted one, with no
+  fragment (§2). Any path, since clients send the URL they dialed and the MCP
+  host serves at its bare root as well as `/api/mcp`. A list must be all ours.
+  The host compares case-insensitively (RFC 3986 §6.2.2.1).
+  """
+  @spec mcp_resource?(term()) :: boolean()
+  def mcp_resource?(list) when is_list(list) and list != [], do: Enum.all?(list, &mcp_resource?/1)
+
+  def mcp_resource?(resource) when is_binary(resource) do
+    canonical = URI.parse(EngramWeb.Endpoint.url())
+
+    case URI.parse(resource) do
+      %URI{scheme: scheme, host: host, userinfo: nil, fragment: nil}
+      when scheme == canonical.scheme and is_binary(host) and host != "" ->
+        host = String.downcase(host)
+
+        host == canonical.host or
+          "#{scheme}://#{host}" in Application.get_env(:engram, :cors_origin, [])
+
+      _ ->
+        false
+    end
+  end
+
+  def mcp_resource?(_), do: false
+
+  @doc """
+  Whether `iss` is an issuer `base_url/1` could have produced: the canonical
+  URL, or an allowlisted origin on our scheme, spelled as `base_url/1` would
+  (a non-default port only, as `with_port/2` adds). Gates the RFC 9207 `iss` the SPA carries back to consent.
+  """
+  @spec issuer?(term()) :: boolean()
+  def issuer?(iss) when is_binary(iss) do
+    canonical = EngramWeb.Endpoint.url()
+    scheme = URI.parse(canonical).scheme
+
+    iss == canonical or
+      case URI.parse(iss) do
+        %URI{scheme: ^scheme, host: host, port: port, path: nil, query: nil, userinfo: nil}
+        when is_binary(host) ->
+          origin = "#{scheme}://#{host}"
+          # The exact spelling `base_url/1` emits: never a default port.
+          spelled = if port == URI.default_port(scheme), do: origin, else: "#{origin}:#{port}"
+
+          iss == spelled and origin in Application.get_env(:engram, :cors_origin, [])
+
+        _ ->
+          false
+      end
+  end
+
+  def issuer?(_), do: false
+
+  @doc """
+  Whether authorization responses carry the RFC 9207 `iss`, and discovery
+  advertises it. Off until the SPA that forwards `iss` is promoted: a client
+  SHOULD discard an `iss` the server does not advertise, and MUST reject a
+  response without one once it is advertised (§2.4), so emitting and
+  advertising switch on together, after the SPA can carry it.
+  """
+  @spec iss_enabled?() :: boolean()
+  def iss_enabled?, do: Application.get_env(:engram, :oauth_iss_response, false)
+
+  @doc """
   Base URL for the host the client actually dialed, when that host is in the
   `:cors_origin` allowlist (populated from `PHX_HOST`); otherwise the canonical
   endpoint URL.

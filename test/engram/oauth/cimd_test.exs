@@ -8,6 +8,7 @@ defmodule Engram.OAuth.CimdTest do
 
   alias Engram.OAuth
   alias Engram.OAuth.Cimd
+  alias Engram.OAuth.Cimd.Fetcher
   alias Engram.OAuth.Cimd.FetcherMock
   alias Engram.OAuth.Client
   alias Engram.Repo
@@ -64,6 +65,30 @@ defmodule Engram.OAuth.CimdTest do
       assert {:error, :not_cimd} = Cimd.ensure_client("http://claude.ai/insecure")
       assert {:error, :not_cimd} = Cimd.ensure_client("garbage")
       assert {:error, :not_cimd} = Cimd.ensure_client(nil)
+    end
+  end
+
+  # CIMD draft §3: the client_id URL MUST have a path and MUST NOT contain
+  # single- or double-dot segments. Refused before any fetch.
+  describe "ensure_client/1 client_id URL shape" do
+    test "refuses a URL with no path, or only a root" do
+      for url <- ["https://claude.ai", "https://claude.ai/"] do
+        assert {:error, :invalid_url} = Cimd.ensure_client(url), url
+      end
+    end
+
+    test "refuses dot segments, encoded or not" do
+      for url <- [
+            "https://claude.ai/a/../client.json",
+            "https://claude.ai/./client.json",
+            "https://claude.ai/a/%2e%2e/client.json",
+            "https://claude.ai/a/..%2fclient.json",
+            # Some servers read a backslash as `/`.
+            "https://claude.ai/a/..%5cclient.json",
+            "https://claude.ai/a\\..\\client.json"
+          ] do
+        assert {:error, :invalid_url} = Cimd.ensure_client(url), url
+      end
     end
   end
 
@@ -696,6 +721,53 @@ defmodule Engram.OAuth.CimdTest do
 
       assert {:ok, client} = Cimd.ensure_client(@url)
       assert is_nil(client.software_id)
+    end
+  end
+
+  # CIMD draft §5.2: the document's HTTP cache headers govern how long we keep
+  # it, clamped to [5 min, 24 h]. A fixed 24 h made a vendor's fix look broken
+  # for a day (#1977).
+  describe "ensure_client/1 honours Cache-Control max-age" do
+    defp with_max_age(doc, seconds), do: Map.put(doc, Fetcher.max_age_key(), seconds)
+
+    defp age(client, seconds) do
+      client
+      |> Ecto.Changeset.change(%{
+        cimd_fetched_at: DateTime.add(DateTime.utc_now(), -seconds, :second)
+      })
+      |> Repo.update!(skip_tenant_check: true)
+    end
+
+    test "a document older than its max-age is refetched" do
+      expect(FetcherMock, :fetch, fn @url -> {:ok, with_max_age(document(), 600)} end)
+      assert {:ok, client} = Cimd.ensure_client(@url)
+      assert client.cimd_max_age == 600
+
+      age(client, 700)
+      expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
+      assert {:ok, _} = Cimd.ensure_client(@url)
+    end
+
+    test "a document inside its max-age is served from the row" do
+      expect(FetcherMock, :fetch, 1, fn @url -> {:ok, with_max_age(document(), 600)} end)
+      assert {:ok, client} = Cimd.ensure_client(@url)
+      age(client, 500)
+      assert {:ok, _} = Cimd.ensure_client(@url)
+    end
+
+    test "a tiny max-age is clamped up to five minutes" do
+      expect(FetcherMock, :fetch, 1, fn @url -> {:ok, with_max_age(document(), 0)} end)
+      assert {:ok, client} = Cimd.ensure_client(@url)
+      age(client, 200)
+      assert {:ok, _} = Cimd.ensure_client(@url)
+    end
+
+    test "a huge max-age is clamped down to a day" do
+      expect(FetcherMock, :fetch, fn @url -> {:ok, with_max_age(document(), 30 * 86_400)} end)
+      assert {:ok, client} = Cimd.ensure_client(@url)
+      age(client, 86_400 + 60)
+      expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)
+      assert {:ok, _} = Cimd.ensure_client(@url)
     end
   end
 

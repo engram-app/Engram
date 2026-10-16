@@ -15,6 +15,7 @@ defmodule EngramWeb.WellKnownController do
   """
   use EngramWeb, :controller
 
+  alias Engram.OAuth.Cimd.Jwks
   alias EngramWeb.OAuthMetadata
 
   # Edge-cacheable. Both documents are pure functions of (dialed host, deploy):
@@ -87,9 +88,12 @@ defmodule EngramWeb.WellKnownController do
       resource: OAuthMetadata.resource(conn),
       authorization_servers: [base],
       bearer_methods_supported: ["header"],
+      scopes_supported: ["mcp"],
       resource_documentation: @resource_documentation
     })
   end
+
+  @client_auth_methods ["none", "private_key_jwt", "client_secret_post", "client_secret_basic"]
 
   def authorization_server(conn, _params) do
     base = OAuthMetadata.base_url(conn)
@@ -118,12 +122,14 @@ defmodule EngramWeb.WellKnownController do
         # listed here because ChatGPT and other connectors read this list to
         # decide what to send, and omitting it is what left them with no usable
         # method at all (#1633).
-        token_endpoint_auth_methods_supported: [
-          "none",
-          "private_key_jwt",
-          "client_secret_post",
-          "client_secret_basic"
-        ],
+        token_endpoint_auth_methods_supported: @client_auth_methods,
+        # RFC 8414 §2: REQUIRED once `private_key_jwt` is listed. Without it a
+        # strict client has no advertised algorithm to sign its assertion with.
+        token_endpoint_auth_signing_alg_values_supported: Jwks.allowed_algs(),
+        # Revocation authenticates through the same code (`OAuthClientAuth`).
+        # Omitted, RFC 8414 defaults it to `client_secret_basic` alone.
+        revocation_endpoint_auth_methods_supported: @client_auth_methods,
+        revocation_endpoint_auth_signing_alg_values_supported: Jwks.allowed_algs(),
         # `offline_access`: every grant gets a refresh token, and clients that
         # ask for it by habit are narrowed, not refused (#1974).
         scopes_supported: ["mcp", "offline_access"],
@@ -136,6 +142,11 @@ defmodule EngramWeb.WellKnownController do
         # working. Backing that out is a revert, not a config change.
         client_id_metadata_document_supported: true
       }
+      |> Map.merge(
+        if OAuthMetadata.iss_enabled?(),
+          do: %{authorization_response_iss_parameter_supported: true},
+          else: %{}
+      )
     )
   end
 

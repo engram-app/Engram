@@ -15,6 +15,14 @@ defmodule Engram.Token do
 
   add_hook(Joken.Hooks.RequiredClaims, ["iss", "aud"])
 
+  # RFC 8707 / MCP 2025-11-25 "Token Handling": an OAuth access token names the
+  # MCP server as its audience, so it can be refused everywhere else (#1977).
+  # Device-flow and session tokens keep the legacy `engram`.
+  @mcp_audience "engram:mcp"
+
+  @doc "The `aud` of access tokens minted at `/oauth/token`."
+  def mcp_audience, do: @mcp_audience
+
   @doc "Access-token lifetime in seconds."
   def ttl_seconds, do: @ttl_seconds
 
@@ -26,6 +34,6 @@ defmodule Engram.Token do
     # duplicate key definitions would raise a runtime error.
     default_claims(default_exp: @ttl_seconds, skip: [:iss, :aud])
     |> add_claim("iss", fn -> "engram" end, &(&1 == "engram"))
-    |> add_claim("aud", fn -> "engram" end, &(&1 == "engram"))
+    |> add_claim("aud", fn -> "engram" end, &(&1 in ["engram", @mcp_audience]))
   end
 end

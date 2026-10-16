@@ -49,7 +49,6 @@ const REQUIRED_PARAMS = [
 	"response_type",
 	"code_challenge",
 	"code_challenge_method",
-	"state",
 ] as const;
 
 // `scope` is OPTIONAL in an authorization request (RFC 6749 §4.1.1) and the
@@ -62,11 +61,12 @@ const DEFAULT_SCOPE = "mcp";
 type RequiredParam = (typeof REQUIRED_PARAMS)[number];
 
 function readParams(search: URLSearchParams): {
-	values: Record<RequiredParam, string> & { scope: string };
+	values: Record<RequiredParam, string> & { scope: string; state: string };
 	resource: string | null;
+	iss: string | null;
 	missing: RequiredParam[];
 } {
-	const values: Record<RequiredParam, string> & { scope: string } = {
+	const values: Record<RequiredParam, string> & { scope: string; state: string } = {
 		client_id: "",
 		redirect_uri: "",
 		response_type: "",
@@ -86,8 +86,11 @@ function readParams(search: URLSearchParams): {
 		}
 	}
 	values.scope = search.get("scope") || DEFAULT_SCOPE;
+	// RECOMMENDED, not required (RFC 6749 §4.1.1): absent stays "" and is
+	// dropped from both the consent body and the Cancel redirect.
+	values.state = search.get("state") || "";
 
-	return { values, resource: search.get("resource"), missing };
+	return { values, resource: search.get("resource"), iss: search.get("iss"), missing };
 }
 
 // The client's catalog slug is already resolved server-side from the redirect
@@ -100,15 +103,22 @@ function toMcpClient(slug: string | null | undefined): (typeof MCP_CLIENTS)[numb
 	return isMember(MCP_CLIENTS, slug) ? slug : "other";
 }
 
-function buildCancelUrl(redirectUri: string, state: string): string {
-	const sep = redirectUri.includes("?") ? "&" : "?";
-	return `${redirectUri}${sep}error=access_denied&state=${encodeURIComponent(state)}`;
+// RFC 9207 §2: error responses carry `iss` too, when the server sent one.
+function buildCancelUrl(redirectUri: string, state: string, iss: string | null): string {
+	const answer = new URLSearchParams({ error: "access_denied" });
+	if (state) {
+		answer.set("state", state);
+	}
+	if (iss) {
+		answer.set("iss", iss);
+	}
+	return `${redirectUri}${redirectUri.includes("?") ? "&" : "?"}${answer.toString()}`;
 }
 
 export default function OAuthAuthorizePage() {
 	const { t } = useT();
 	const [searchParams] = useSearchParams();
-	const { values, resource, missing } = readParams(searchParams);
+	const { values, resource, iss, missing } = readParams(searchParams);
 
 	const clientQuery = useQuery({
 		// The redirect is part of the key: it is what the backend resolves the
@@ -145,6 +155,14 @@ export default function OAuthAuthorizePage() {
 	// forever, since the wizard had nothing left to collect and the gate had
 	// nothing left to refuse.
 	const needsOnboarding = Boolean(onboarding && !onboarding.gate_ok);
+	// Cancel redirects to `redirect_uri` straight from this page's query string,
+	// and nothing upstream has to have validated it: anyone can link here. So a
+	// redirect the client never registered gets no consent card at all, and with
+	// it no Cancel, which would otherwise be an open redirect (RFC 9700 §4.11).
+	const redirectRefused = clientQuery.data?.redirect_uri_registered === false;
+	// Cancel fails closed: only a redirect the backend confirmed gets one. A
+	// backend too old to answer still allows Approve, which it re-validates.
+	const redirectVerified = clientQuery.data?.redirect_uri_registered === true;
 	const bounced = useRef(false);
 
 	useEffect(() => {
@@ -157,7 +175,7 @@ export default function OAuthAuthorizePage() {
 		// it ever being reconsidered, so the tool question would be asked of
 		// every MCP-first user despite us knowing the answer. An errored lookup
 		// renders "Unknown OAuth client" and must not bounce at all.
-		if (clientQuery.isLoading || clientQuery.isError) {
+		if (clientQuery.isLoading || clientQuery.isError || redirectRefused) {
 			return;
 		}
 		bounced.current = true;
@@ -168,7 +186,12 @@ export default function OAuthAuthorizePage() {
 		// `onboardingDoneTarget()` already falls back to "/" when nothing was
 		// parked. Reading it into state here would also mean an effect that
 		// synchronously sets state, which the render-compiler lint rejects.
-		stashPendingAuthorization(location.search, slug, clientQuery.data?.client_name ?? null);
+		stashPendingAuthorization(
+			location.search,
+			slug,
+			clientQuery.data?.client_name ?? null,
+			redirectVerified,
+		);
 
 		// Connecting a tool IS the answer to "which tools do you use", so the
 		// questionnaire is pre-answered instead of asked. An unattributable
@@ -208,6 +231,8 @@ export default function OAuthAuthorizePage() {
 		clientQuery.data,
 		clientQuery.isLoading,
 		clientQuery.isError,
+		redirectRefused,
+		redirectVerified,
 		location.search,
 		navigate,
 		onboarding,
@@ -313,6 +338,21 @@ export default function OAuthAuthorizePage() {
 		);
 	}
 
+	if (redirectRefused) {
+		return (
+			<AuthShell>
+				<AuthPanel className="flex flex-col gap-3">
+					<h1 className={heading}>{t("Invalid authorization request")}</h1>
+					<div role="alert" className={destructiveAlert}>
+						<p className="text-muted-foreground">
+							{t("This app did not register the address it asked to send you back to.")}
+						</p>
+					</div>
+				</AuthPanel>
+			</AuthShell>
+		);
+	}
+
 	// Held while the effect above stashes the request and hands off to the
 	// wizard. Rendering the consent card here would offer an Approve button
 	// that mints a grant nothing can use.
@@ -374,11 +414,16 @@ export default function OAuthAuthorizePage() {
 			response_type: values.response_type,
 			code_challenge: values.code_challenge,
 			code_challenge_method: values.code_challenge_method,
-			state: values.state,
 			scope: values.scope,
 		};
+		if (values.state) {
+			body.state = values.state;
+		}
 		if (resource) {
 			body.resource = resource;
+		}
+		if (iss) {
+			body.iss = iss;
 		}
 		if (selected && selected.size > 0) {
 			body.vault_ids = [...selected];
@@ -448,7 +493,7 @@ export default function OAuthAuthorizePage() {
 
 	const handleCancel = () => {
 		track("mcp_connect_denied", { client: toMcpClient(clientQuery.data?.slug) });
-		window.location.assign(buildCancelUrl(values.redirect_uri, values.state));
+		window.location.assign(buildCancelUrl(values.redirect_uri, values.state, iss));
 	};
 
 	const clientName = clientQuery.data?.client_name ?? t("this app");
@@ -472,6 +517,23 @@ export default function OAuthAuthorizePage() {
 						{t("This app is requesting access to your Engram.")}
 						{meQuery.data ? ` ${t("Signed in as {email}.", { email: meQuery.data.email })}` : ""}
 					</p>
+					{clientQuery.data?.client_host ? (
+						<p className="text-muted-foreground text-sm">
+							{t("App details from {host}.", { host: clientQuery.data.client_host })}
+						</p>
+					) : null}
+					{clientQuery.data?.redirect_host ? (
+						<p className="text-muted-foreground text-sm">
+							{t("You will return to {host}.", { host: clientQuery.data.redirect_host })}
+						</p>
+					) : null}
+					{clientQuery.data?.redirect_loopback ? (
+						<p className="text-destructive text-sm">
+							{t(
+								"This sends you to an app on this computer. Only approve if you just started connecting from that app.",
+							)}
+						</p>
+					) : null}
 				</header>
 
 				{isLoadingShell ? (
@@ -606,15 +668,17 @@ export default function OAuthAuthorizePage() {
 						)}
 
 						<div className="flex gap-3">
-							<Button
-								type="button"
-								variant="outline"
-								onClick={handleCancel}
-								disabled={submitting}
-								className="flex-1"
-							>
-								{t("Cancel")}
-							</Button>
+							{redirectVerified ? (
+								<Button
+									type="button"
+									variant="outline"
+									onClick={handleCancel}
+									disabled={submitting}
+									className="flex-1"
+								>
+									{t("Cancel")}
+								</Button>
+							) : null}
 							<Button
 								type="button"
 								onClick={handleApprove}

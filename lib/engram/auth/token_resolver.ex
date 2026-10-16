@@ -12,11 +12,44 @@ defmodule Engram.Auth.TokenResolver do
 
   alias Engram.Accounts
 
+  @mcp_audience Engram.Token.mcp_audience()
+
   @spec resolve(any()) ::
           {:ok, Accounts.User.t()}
           | {:ok, Accounts.User.t(), Accounts.ApiKey.t()}
           | {:ok, Accounts.User.t(), :internal_jwt}
           | {:error, atom() | keyword()}
+
+  @doc """
+  As `resolve/1`, for a named surface. `:mcp` is the MCP endpoint and the
+  attachment upload its tools delegate to; `:rest` is everything else, the sync
+  socket included.
+
+  An OAuth access token (`aud` = `Engram.Token.mcp_audience/0`) resolves only
+  on `:mcp` (RFC 8707, MCP 2025-11-25). Checked before any verifier: on
+  self-host the Local provider verifies these same HS256 tokens as sessions.
+  The claim is read unverified, which is safe because it can only refuse: a
+  forged token still fails verification on the surface that admits it.
+  """
+  @spec resolve(any(), :rest | :mcp) ::
+          {:ok, Accounts.User.t()}
+          | {:ok, Accounts.User.t(), Accounts.ApiKey.t()}
+          | {:ok, Accounts.User.t(), :internal_jwt}
+          | {:error, atom() | keyword()}
+  def resolve(token, :mcp), do: resolve(token)
+
+  def resolve(token, :rest) do
+    if mcp_audience?(token), do: {:error, :wrong_audience}, else: resolve(token)
+  end
+
+  defp mcp_audience?(token) when is_binary(token) do
+    case Joken.peek_claims(token) do
+      {:ok, %{"aud" => @mcp_audience}} -> true
+      _ -> false
+    end
+  end
+
+  defp mcp_audience?(_), do: false
 
   def resolve("engram_" <> _ = raw_key) do
     case Accounts.validate_api_key(raw_key) do

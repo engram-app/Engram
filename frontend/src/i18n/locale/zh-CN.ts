@@ -728,6 +728,8 @@ export default {
 	"Unknown OAuth client": "未知的 OAuth 客户端",
 	"The client requesting access is not registered with Engram.":
 		"请求访问的客户端未在 Engram 中注册。",
+	"This app did not register the address it asked to send you back to.":
+		"此应用未注册您要返回的地址。",
 	"Finish setting up Engram": "完成 Engram 的设置",
 	"this app": "此应用",
 	"previous connection": "上次连接",
@@ -735,6 +737,10 @@ export default {
 		"已断开连接 '{name}'，但授权新连接失败。请重新从 {client} 发起请求 — 目前没有此类活动连接。",
 	"This app is requesting access to your Engram.": "此应用正在请求访问您的 Engram。",
 	"Signed in as {email}.": "已登录：{email}。",
+	"App details from {host}.": "来自 {host} 的应用详情。",
+	"You will return to {host}.": "您将返回至 {host}。",
+	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
+		"这会将你引导到电脑上的一个应用。仅在从该应用首次连接时才批准。",
 	"your existing connection": "您的现有连接",
 	"Which vaults can {client} access?": "{client} 可以访问哪些仓库？",
 	"All vaults selected": "已选择所有仓库",

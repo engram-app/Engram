@@ -24,7 +24,7 @@ defmodule EngramWeb.OAuthClientsControllerTest do
   end
 
   describe "GET /api/oauth/clients/:client_id" do
-    test "returns client_id + client_name only (no secret, no redirect_uris)", %{conn: conn} do
+    test "returns public fields only (no secret, no redirect_uris)", %{conn: conn} do
       client = register_client("My App")
 
       conn = get(conn, "/api/oauth/clients/#{client.client_id}")
@@ -37,7 +37,11 @@ defmodule EngramWeb.OAuthClientsControllerTest do
       # `kind` is "mcp" for DCR-minted clients (the public endpoint rejects
       # "obsidian"); the consent page reads it to pick the right cap key.
       assert json["kind"] == "mcp"
-      assert Map.keys(json) |> Enum.sort() == ["client_id", "client_name", "kind", "slug"]
+
+      assert Map.keys(json) |> Enum.sort() ==
+               ~w(client_host client_id client_name kind redirect_host redirect_loopback redirect_uri_registered slug)
+
+      refute json["redirect_uri_registered"]
     end
 
     test "does not require Authorization header (public endpoint)", %{conn: conn} do
@@ -61,6 +65,100 @@ defmodule EngramWeb.OAuthClientsControllerTest do
       conn = get(conn, "/api/oauth/clients/not-a-uuid")
 
       assert conn.status == 404
+    end
+  end
+
+  # The consent page builds its Cancel redirect from its own query string, so it
+  # must know whether that redirect belongs to the client. Without this, a link
+  # to /oauth/consent with a real client_id and an attacker's redirect_uri made
+  # Cancel an open redirect off app.engram.page (RFC 9700 §4.11).
+  # MCP 2025-11-25: a metadata-document client is shown by the host it lives on.
+  describe "GET /api/oauth/clients/:client_id — client_host" do
+    test "names the document host for a CIMD client", %{conn: conn} do
+      url = "https://claude.ai/oauth/claude-code-client-metadata"
+
+      Engram.Repo.insert!(
+        %Engram.OAuth.Client{
+          cimd_url: url,
+          cimd_fetched_at: DateTime.utc_now(),
+          client_name: "Claude Code",
+          redirect_uris: ["http://localhost/callback"],
+          grant_types: ["authorization_code", "refresh_token"],
+          response_types: ["code"],
+          token_endpoint_auth_method: "none",
+          kind: "mcp"
+        },
+        skip_tenant_check: true
+      )
+
+      body = conn |> get("/api/oauth/clients/#{URI.encode_www_form(url)}") |> json_response(200)
+      assert body["client_host"] == "claude.ai"
+    end
+
+    test "is null for a DCR client", %{conn: conn} do
+      client = register_client("My App")
+      body = conn |> get("/api/oauth/clients/#{client.client_id}") |> json_response(200)
+      assert body["client_host"] == nil
+    end
+  end
+
+  describe "GET /api/oauth/clients/:client_id — redirect check" do
+    test "a registered redirect is reported with its host", %{conn: conn} do
+      client = register_client_at("Some App", "https://example.com/cb")
+
+      body =
+        conn
+        |> get(
+          "/api/oauth/clients/#{client.client_id}?redirect_uri=#{URI.encode("https://example.com/cb")}"
+        )
+        |> json_response(200)
+
+      assert body["redirect_uri_registered"] == true
+      assert body["redirect_host"] == "example.com"
+      assert body["redirect_loopback"] == false
+    end
+
+    # An app's own scheme names the app; the host alone would hide it.
+    test "a custom-scheme redirect is labelled with its scheme", %{conn: conn} do
+      uri = "cursor://anysphere.cursor-retrieval/oauth/callback"
+      client = register_client_at("Cursor", uri)
+
+      body =
+        conn
+        |> get("/api/oauth/clients/#{client.client_id}?redirect_uri=#{URI.encode_www_form(uri)}")
+        |> json_response(200)
+
+      assert body["redirect_host"] == "cursor://anysphere.cursor-retrieval"
+    end
+
+    test "an unregistered redirect is reported as such", %{conn: conn} do
+      client = register_client_at("Some App", "https://example.com/cb")
+
+      body =
+        conn
+        |> get(
+          "/api/oauth/clients/#{client.client_id}?redirect_uri=#{URI.encode("https://evil.example/cb")}"
+        )
+        |> json_response(200)
+
+      assert body["redirect_uri_registered"] == false
+    end
+
+    # RFC 8252 §7.3: the same any-port rule authorize applies.
+    test "a loopback redirect on a runtime port counts as registered", %{conn: conn} do
+      client = register_client_at("Claude Code", "http://localhost/callback")
+
+      body =
+        conn
+        |> get(
+          "/api/oauth/clients/#{client.client_id}?redirect_uri=#{URI.encode("http://localhost:62279/callback")}"
+        )
+        |> json_response(200)
+
+      assert body["redirect_uri_registered"] == true
+      assert body["redirect_host"] == "localhost"
+      # MCP 2025-11-25 "Localhost Redirect URI Risks": the page warns.
+      assert body["redirect_loopback"] == true
     end
   end
 

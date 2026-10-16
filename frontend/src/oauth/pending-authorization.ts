@@ -76,6 +76,10 @@ export interface PendingAuthorization {
 	 *  is waiting instead of dropping the user into an unexplained signup —
 	 *  the "preserve context" half of interrupting an OAuth flow. */
 	clientName: string | null;
+	/** The backend confirmed `redirect_uri` is one the client registered.
+	 *  Without it there is no Cancel: the parked query string is anyone's to
+	 *  write, so its redirect is an open redirect until proven otherwise. */
+	redirectVerified?: boolean;
 }
 
 /** True when the request was actually parked. Callers MUST NOT promise a
@@ -84,8 +88,14 @@ export function stashPendingAuthorization(
 	search: string,
 	toolSlug: string | null,
 	clientName: string | null,
+	redirectVerified = false,
 ): boolean {
-	return stash({ returnTo: `${ROUTES.OAUTH_CONSENT}${search}`, toolSlug, clientName });
+	return stash({
+		returnTo: `${ROUTES.OAUTH_CONSENT}${search}`,
+		toolSlug,
+		clientName,
+		redirectVerified,
+	});
 }
 
 /** Parks a device-link code (possibly empty) so the wizard returns to /link
@@ -128,7 +138,9 @@ export function peekPendingAuthorization(): PendingAuthorization | null {
 		const clientName =
 			"clientName" in parsed && typeof parsed.clientName === "string" ? parsed.clientName : null;
 
-		return { returnTo: parsed.returnTo, toolSlug, clientName };
+		const redirectVerified = "redirectVerified" in parsed && parsed.redirectVerified === true;
+
+		return { returnTo: parsed.returnTo, toolSlug, clientName, redirectVerified };
 	} catch {
 		return null;
 	}
@@ -146,7 +158,7 @@ export function peekPendingAuthorization(): PendingAuthorization | null {
  */
 export function pendingCancelUrl(): string | null {
 	const pending = peekPendingAuthorization();
-	if (!pending) {
+	if (!pending?.redirectVerified) {
 		return null;
 	}
 
@@ -163,6 +175,11 @@ export function pendingCancelUrl(): string | null {
 	const state = query.get("state");
 	if (state) {
 		answer.set("state", state);
+	}
+	// RFC 9207 §2: error responses carry `iss` too, when the server sent one.
+	const iss = query.get("iss");
+	if (iss) {
+		answer.set("iss", iss);
 	}
 
 	return `${redirectUri}${redirectUri.includes("?") ? "&" : "?"}${answer.toString()}`;

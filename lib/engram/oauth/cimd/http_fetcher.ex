@@ -16,6 +16,7 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
 
   alias Engram.Http.SsrfGuard
   alias Engram.Logger.Metadata
+  alias Engram.OAuth.Cimd.Fetcher
 
   require Logger
 
@@ -286,13 +287,51 @@ defmodule Engram.OAuth.Cimd.HttpFetcher do
   defp decode(%{body: body} = response) do
     if json_content_type?(response) do
       case Jason.decode(body) do
-        {:ok, document} when is_map(document) -> {:ok, document}
+        {:ok, document} when is_map(document) -> {:ok, put_max_age(document, response)}
         _ -> {:error, :invalid_json}
       end
     else
       {:error, :not_json}
     end
   end
+
+  defp put_max_age(document, %{headers: headers}) do
+    case max_age(headers || %{}) do
+      nil -> document
+      seconds -> Map.put(document, Fetcher.max_age_key(), seconds)
+    end
+  end
+
+  @doc false
+  # Public for its test: Bypass always sends a `cache-control`, so "absent"
+  # cannot be produced end to end. `Expires` is ignored; it is legacy.
+  @spec max_age(map() | list()) :: non_neg_integer() | nil
+  def max_age(headers) do
+    directives =
+      headers
+      |> Enum.flat_map(fn {name, values} ->
+        if String.downcase(name) == "cache-control", do: List.wrap(values), else: []
+      end)
+      |> Enum.flat_map(&String.split(&1, ","))
+      |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
+
+    cond do
+      Enum.any?(directives, &(&1 in ["no-store", "no-cache"])) -> 0
+      seconds = Enum.find_value(directives, &parse_max_age/1) -> seconds
+      true -> nil
+    end
+  end
+
+  defp parse_max_age("max-age=" <> value) do
+    case Integer.parse(value) do
+      # Capped at a day, the most `Cimd` honours, so it always fits the int4
+      # column: a millisecond mix-up (`max-age=31536000000`) must not raise.
+      {seconds, ""} when seconds >= 0 -> min(seconds, 24 * 3600)
+      _ -> nil
+    end
+  end
+
+  defp parse_max_age(_), do: nil
 
   # `application/json` or any `+json` structured suffix (RFC 6839), which is
   # how a JWKS is properly served: `application/jwk-set+json`.

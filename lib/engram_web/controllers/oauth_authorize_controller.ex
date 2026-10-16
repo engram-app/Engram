@@ -23,9 +23,10 @@ defmodule EngramWeb.OAuthAuthorizeController do
 
   alias Engram.Analytics.McpClient
   alias Engram.OAuth
+  alias EngramWeb.OAuthMetadata
 
-  # Params we forward to the SPA consent route. RFC 8707 `resource` is
-  # pass-through (no validation today; deferred per Phase 7.A plan).
+  # Params we forward to the SPA consent route. RFC 8707 `resource` is checked
+  # in `OAuth.validate_authorization_request/1` before anything is forwarded.
   @forwarded_params ~w(client_id redirect_uri response_type code_challenge
                        code_challenge_method scope state resource)
 
@@ -49,12 +50,17 @@ defmodule EngramWeb.OAuthAuthorizeController do
 
   def consent(conn, params) do
     user = conn.assigns.current_user
+    # RFC 9207. Fixed at /oauth/authorize on the host the client dialed and
+    # carried through the SPA, because this call arrives on another host. Only
+    # one of our own issuers is echoed: a forged value is the mix-up attack.
+    iss =
+      if OAuthMetadata.iss_enabled?() and OAuthMetadata.issuer?(params["iss"]), do: params["iss"]
 
     case OAuth.validate_authorization_request(params) do
       {:ok, validated} ->
         case OAuth.mint_authorization_code(
                user,
-               validated,
+               Map.put(validated, :iss, iss),
                OAuth.parse_vault_selection(params),
                params["label"]
              ) do
@@ -65,7 +71,8 @@ defmodule EngramWeb.OAuthAuthorizeController do
 
           {:redirect_error, redirect_uri, error, state} ->
             json(conn, %{
-              redirect_uri: OAuth.build_redirect(redirect_uri, %{error: error, state: state})
+              redirect_uri:
+                OAuth.build_redirect(redirect_uri, %{error: error, state: state, iss: iss})
             })
 
           {:error, _changeset} ->
@@ -73,7 +80,8 @@ defmodule EngramWeb.OAuthAuthorizeController do
               redirect_uri:
                 OAuth.build_redirect(validated.redirect_uri, %{
                   error: "server_error",
-                  state: validated.state
+                  state: validated.state,
+                  iss: iss
                 })
             })
         end
@@ -90,7 +98,8 @@ defmodule EngramWeb.OAuthAuthorizeController do
 
       {:redirect_error, redirect_uri, error, state} ->
         json(conn, %{
-          redirect_uri: OAuth.build_redirect(redirect_uri, %{error: error, state: state})
+          redirect_uri:
+            OAuth.build_redirect(redirect_uri, %{error: error, state: state, iss: iss})
         })
     end
   end
@@ -107,11 +116,17 @@ defmodule EngramWeb.OAuthAuthorizeController do
     })
   end
 
-  defp redirect_to_spa(conn, _validated, raw_params) do
+  defp redirect_to_spa(conn, validated, raw_params) do
     forwarded =
       raw_params
+      # The resolved one: a single-redirect client may omit it (OAuth 2.1
+      # §4.1.1), and the consent page needs it either way.
+      |> Map.put("redirect_uri", validated.redirect_uri)
       |> Map.take(@forwarded_params)
-      |> Enum.reject(fn {_k, v} -> is_nil(v) or v == "" end)
+      # Strings only: a repeated-key list (`resource[]=`) was validated
+      # already and cannot be query-encoded.
+      |> Enum.filter(fn {_k, v} -> is_binary(v) and v != "" end)
+      |> Enum.concat(iss_param(conn))
 
     query = URI.encode_query(forwarded)
 
@@ -151,8 +166,13 @@ defmodule EngramWeb.OAuthAuthorizeController do
     |> render(template, code: code)
   end
 
+  defp iss_param(conn) do
+    if OAuthMetadata.iss_enabled?(), do: [{"iss", OAuthMetadata.base_url(conn)}], else: []
+  end
+
   defp redirect_with_error(conn, redirect_uri, error, state) do
-    location = OAuth.build_redirect(redirect_uri, %{error: error, state: state})
+    iss = if OAuthMetadata.iss_enabled?(), do: OAuthMetadata.base_url(conn)
+    location = OAuth.build_redirect(redirect_uri, %{error: error, state: state, iss: iss})
     conn |> put_status(302) |> redirect(external: location)
   end
 end

@@ -65,7 +65,10 @@ defmodule EngramWeb.Plugs.Auth do
   # rather than re-authorize from scratch (#1974). No credential at all gets no
   # error code. `:bearer_error` lets `McpAuthChallenge` merge this into its
   # discovery challenge instead of choosing one or the other.
-  defp put_bearer_error(conn, :no_auth), do: conn
+  #
+  # RFC 6750 §3: a 401 always carries a challenge, so no credential gets a bare
+  # `Bearer`. `McpAuthChallenge` replaces that bare form with its discovery one.
+  defp put_bearer_error(conn, :no_auth), do: put_resp_header(conn, "www-authenticate", "Bearer")
 
   defp put_bearer_error(conn, _reason) do
     conn
@@ -75,10 +78,17 @@ defmodule EngramWeb.Plugs.Auth do
 
   defp authenticate(conn) do
     case get_req_header(conn, "authorization") do
-      ["Bearer " <> token] -> Engram.Auth.TokenResolver.resolve(token)
+      ["Bearer " <> token] -> Engram.Auth.TokenResolver.resolve(token, surface(conn))
       _ -> {:error, :no_auth}
     end
   end
+
+  # The routes an MCP-audience OAuth token may reach (RFC 8707) declare
+  # `private: %{token_surface: :mcp}` in the router: the MCP endpoint, and the
+  # upload `get_attachment_upload_target` tells MCP clients to make with the
+  # same token. Route privates are set before pipelines run; the controller is not.
+  defp surface(%{private: %{token_surface: :mcp}}), do: :mcp
+  defp surface(_conn), do: :rest
 
   # Joken returns its claim-validation failures as a keyword list (e.g.
   # [message: "Invalid token", claim: "exp", claim_val: 1777359682]). Surface

@@ -21,6 +21,7 @@ describe("pending authorization stash", () => {
 			returnTo: `/oauth/consent${SEARCH}`,
 			toolSlug: "antigravity",
 			clientName: "Google Antigravity",
+			redirectVerified: false,
 		});
 	});
 
@@ -34,6 +35,7 @@ describe("pending authorization stash", () => {
 			returnTo: "/link?code=ENGR-7X4K",
 			toolSlug: null,
 			clientName: "Obsidian",
+			redirectVerified: false,
 		});
 	});
 
@@ -137,20 +139,42 @@ describe("pendingCancelUrl", () => {
 		expect(pendingCancelUrl()).toBeNull();
 	});
 
-	it("sends access_denied back to the client with the original state", () => {
+	// The parked query string is anyone's to write: no backend confirmation of
+	// the redirect, no Cancel, or it is an open redirect.
+	it("is null when the redirect was never confirmed as registered", () => {
 		stashPendingAuthorization(SEARCH, null, "Google Antigravity");
+
+		expect(pendingCancelUrl()).toBeNull();
+	});
+
+	it("sends access_denied back to the client with the original state", () => {
+		stashPendingAuthorization(SEARCH, null, "Google Antigravity", true);
 
 		expect(pendingCancelUrl()).toBe("https://app/cb?error=access_denied&state=xyz");
 	});
 
 	it("appends to a redirect that already has a query", () => {
-		stashPendingAuthorization("?redirect_uri=https://app/cb%3Fa%3D1&state=xyz", null, null);
+		stashPendingAuthorization("?redirect_uri=https://app/cb%3Fa%3D1&state=xyz", null, null, true);
 
 		expect(pendingCancelUrl()).toBe("https://app/cb?a=1&error=access_denied&state=xyz");
 	});
 
+	// RFC 9207 §2: an error response carries `iss` too.
+	it("carries iss when the server sent one", () => {
+		stashPendingAuthorization(
+			"?redirect_uri=https://app/cb&state=xyz&iss=https%3A%2F%2Fmcp.engram.page",
+			null,
+			null,
+			true,
+		);
+
+		expect(pendingCancelUrl()).toBe(
+			"https://app/cb?error=access_denied&state=xyz&iss=https%3A%2F%2Fmcp.engram.page",
+		);
+	});
+
 	it("omits state when the request carried none", () => {
-		stashPendingAuthorization("?redirect_uri=https://app/cb", null, null);
+		stashPendingAuthorization("?redirect_uri=https://app/cb", null, null, true);
 
 		expect(pendingCancelUrl()).toBe("https://app/cb?error=access_denied");
 	});
@@ -158,13 +182,13 @@ describe("pendingCancelUrl", () => {
 	// Without a redirect there is nowhere to report to, and inventing one is
 	// how an open redirect gets built by accident.
 	it("is null when the parked request has no redirect_uri", () => {
-		stashPendingAuthorization("?client_id=cli&state=xyz", null, null);
+		stashPendingAuthorization("?client_id=cli&state=xyz", null, null, true);
 
 		expect(pendingCancelUrl()).toBeNull();
 	});
 
 	it("refuses a non-http redirect", () => {
-		stashPendingAuthorization("?redirect_uri=javascript:alert(1)&state=xyz", null, null);
+		stashPendingAuthorization("?redirect_uri=javascript:alert(1)&state=xyz", null, null, true);
 
 		expect(pendingCancelUrl()).toBeNull();
 	});
