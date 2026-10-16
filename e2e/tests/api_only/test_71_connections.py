@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
 import os
 import secrets
@@ -354,6 +355,36 @@ async def test_revoke_oauth_removes_from_list(clerk_client):
         clerk_client.delete_user(clerk_user_id)
 
 
+def _mcp_call(headers: dict, name: str, arguments: dict) -> dict:
+    """One MCP tools/call with an OAuth access token. Returns the JSON-RPC body."""
+    resp = requests.post(
+        f"{API_URL}/mcp",
+        headers=headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        },
+        timeout=30,
+    )
+    assert resp.status_code == 200, f"MCP {name} -> {resp.status_code}: {resp.text}"
+    return resp.json()
+
+
+def _mcp_refused(body: dict) -> bool:
+    return "error" in body or bool(body.get("result", {}).get("isError"))
+
+
+def _mcp_result(headers: dict, name: str, arguments: dict) -> dict:
+    body = _mcp_call(headers, name, arguments)
+    assert not _mcp_refused(body), f"MCP {name} refused: {body}"
+    result = body["result"]
+    if result.get("structuredContent"):
+        return result["structuredContent"]
+    return json.loads(result["content"][0]["text"])
+
+
 @pytest.mark.asyncio
 async def test_consent_vault_ids_scopes_the_grant_to_those_vaults(clerk_client):
     """Multi-vault consent, end to end against a live stack.
@@ -402,35 +433,29 @@ async def test_consent_vault_ids_scopes_the_grant_to_those_vaults(clerk_client):
             f"grant should carry exactly the chosen vaults, got {row['vault_ids']}"
         )
 
-        # 2. The token itself is scoped, not just the listing: GET /api/vaults
-        #    through the grant filters to the two, never the third.
-        visible = requests.get(f"{API_URL}/vaults", headers=grant_headers, timeout=10)
-        visible.raise_for_status()
-        visible_ids = {v["id"] for v in visible.json()["vaults"]}
+        # 2. The token itself is scoped, not just the listing. An OAuth token is
+        #    bound to the MCP server (RFC 8707, #1977), so the scope is checked
+        #    where the token works: MCP list_vaults names the two, never the third.
+        vaults = _mcp_result(grant_headers, "list_vaults", {})
+        visible_ids = {v["id"] for v in vaults["vaults"]}
         assert visible_ids == {granted_a, granted_b}, (
             f"grant-scoped vault list should be the two granted, got {visible_ids}"
         )
 
-        # 3. And a vault-scoped read is allowed for a granted vault and refused
+        # 3. And a vault-scoped call is allowed for a granted vault and refused
         #    for the withheld one. This is the assertion that would catch a
-        #    grant that merely LOOKS scoped: the row and the /vaults filter both
-        #    read the same claim, VaultPlug enforces it.
-        allowed = requests.get(
-            f"{API_URL}/folders",
-            headers={**grant_headers, "X-Vault-ID": str(granted_a)},
-            timeout=10,
-        )
-        assert allowed.status_code == 200, (
-            f"granted vault should be readable, got {allowed.status_code}: {allowed.text}"
-        )
+        #    grant that merely LOOKS scoped: the row and list_vaults both read
+        #    the same claim, the MCP vault resolution enforces it.
+        allowed = _mcp_call(grant_headers, "list_folder", {"vault_id": granted_a, "folder": ""})
+        assert not _mcp_refused(allowed), f"granted vault should be readable, got {allowed}"
 
-        denied = requests.get(
-            f"{API_URL}/folders",
-            headers={**grant_headers, "X-Vault-ID": str(withheld)},
-            timeout=10,
-        )
-        assert denied.status_code == 403, (
-            f"withheld vault should be 403, got {denied.status_code}: {denied.text}"
+        denied = _mcp_call(grant_headers, "list_folder", {"vault_id": withheld, "folder": ""})
+        assert _mcp_refused(denied), f"withheld vault should be refused, got {denied}"
+
+        # 4. Audience binding: the same token is refused on REST.
+        rest = requests.get(f"{API_URL}/vaults", headers=grant_headers, timeout=10)
+        assert rest.status_code == 401, (
+            f"an MCP-bound token must not reach REST, got {rest.status_code}: {rest.text}"
         )
     finally:
         clerk_client.delete_user(clerk_user_id)
