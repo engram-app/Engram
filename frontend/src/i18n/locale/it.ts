@@ -887,7 +887,6 @@ export default {
 	"Connect another MCP client": "Connetti un altro client MCP",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Un vault contiene le tue note. Puoi rinominarlo o aggiungerne altri in seguito.",
-	"Couldn't save your answers, please try again.": "Impossibile salvare le tue risposte, riprova.",
 	"Choose your plan": "Scegli il tuo piano",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"Prova gratuita di 7 giorni sui piani a pagamento. È necessaria una carta, non verrà addebitato nulla fino alla scadenza.",
@@ -899,6 +898,7 @@ export default {
 	Onboarding: "Guida introduttiva",
 	"your app": "la tua app",
 	"Cancel connection": "Annulla connessione",
+	"Finish setting up to connect {app}.": "Completa la configurazione per connettere {app}.",
 	"Connecting {app}": "Connessione a {app}",
 	"Which AI tools do you use?": "Quali strumenti di intelligenza artificiale usi?",
 	"We'll tailor your setup around the tools you already work with.":
@@ -946,10 +946,22 @@ export default {
 		"Apri la scheda {tab} del plugin, clicca su {action} e autenticati con il tuo account Engram.",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"L'app Gemini non può aggiungere connettori MCP personalizzati. Antigravity, lo strumento di programmazione di Google basato su Gemini, può. Sceglilo tra gli strumenti di programmazione.",
+	"Another MCP client": "Un altro client MCP",
 	"I'm not connecting an AI tool yet":
 		"Non sto ancora collegando uno strumento di intelligenza artificiale",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Usa Engram nell'app web. Puoi collegare uno strumento in seguito dalle Impostazioni.",
+	"Help us shape Engram": "Aiutaci a migliorare Engram",
+	"Two quick questions. Both are optional.": "Due domande veloci. Entrambe sono facoltative.",
+	"Which AI tools do you use?": "Quali strumenti di intelligenza artificiale usi?",
+	"Couldn't save your answers, please try again.": "Impossibile salvare le tue risposte, riprova.",
+	Skip: "Salta",
+	Save: "Salva",
+	"AI assistants": "Assistenti AI",
+	"Coding tools": "Strumenti di programmazione",
+	"Why {tool} can't be connected": "Perché {tool} non può essere connesso",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"Non è una lista completa, scegli {client} se il tuo non è presente.",
 	Account: "Account",
 	"Manage your profile, password, and account.":
 		"Gestisci il tuo profilo, la password e l'account.",
@@ -1033,7 +1045,6 @@ export default {
 	"How your name appears in the app.": "Come appare il tuo nome nell'app.",
 	"Display name": "Nome visualizzato",
 	"Leave blank to use your email": "Lascia vuoto per usare la tua email",
-	Save: "Salva",
 	"Profile image updated": "Immagine del profilo aggiornata",
 	"Could not update image": "Impossibile aggiornare l'immagine",
 	"Profile photo": "Foto del profilo",

@@ -812,7 +812,6 @@ export default {
 	"Connect another MCP client": "連接其他 MCP 客戶端",
 	"A vault holds your notes. You can rename it or add more later.":
 		"儲存庫包含你的筆記。你可以稍後重新命名或新增更多。",
-	"Couldn't save your answers, please try again.": "儲存答案失敗，請重試。",
 	"Choose your plan": "選擇方案",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"付費方案提供 7 天免費試用。需綁定信用卡，試用期滿後才會扣款。",
@@ -823,6 +822,7 @@ export default {
 	Onboarding: "入門指南",
 	"your app": "你的應用程式",
 	"Cancel connection": "取消連線",
+	"Finish setting up to connect {app}.": "完成設定以連接 {app}。",
 	"Connecting {app}": "連線 {app}",
 	"Which AI tools do you use?": "您使用哪些 AI 工具？",
 	"We'll tailor your setup around the tools you already work with.":
@@ -868,9 +868,21 @@ export default {
 		"開啟插件的 {tab} 標籤，點擊 {action}，然後使用你的 Engram 帳號進行驗證。",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"Gemini 應用程式無法新增自訂 MCP 連接器。Antigravity，Google 的 Gemini 驅動程式碼工具，可以。請在「程式碼工具」中選擇它。",
+	"Another MCP client": "另一個 MCP 客戶端",
 	"I'm not connecting an AI tool yet": "我目前沒有連接任何 AI 工具",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"在網頁應用程式中使用 Engram。您稍後可以在「設定」中連接工具。",
+	"Help us shape Engram": "幫助我們完善 Engram",
+	"Two quick questions. Both are optional.": "兩個簡單問題，皆為選項。",
+	"Which AI tools do you use?": "您使用哪些 AI 工具？",
+	"Couldn't save your answers, please try again.": "儲存答案失敗，請重試。",
+	Skip: "跳過",
+	Save: "儲存",
+	"AI assistants": "AI 助理",
+	"Coding tools": "程式碼工具",
+	"Why {tool} can't be connected": "為什麼 {tool} 無法連接",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"並非完整清單，如果您的工具不在這裡，請選擇 {client}。",
 	Account: "帳戶",
 	"Manage your profile, password, and account.": "管理你的個人資料、密碼與帳號。",
 	"Manage your profile, security, and active sessions.": "管理您的個人資料、安全設定和活躍會話。",
@@ -947,7 +959,6 @@ export default {
 	"How your name appears in the app.": "你在應用程式中顯示的姓名。",
 	"Display name": "顯示名稱",
 	"Leave blank to use your email": "留空則使用你的電子郵件",
-	Save: "儲存",
 	"Profile image updated": "個人資料圖片已更新",
 	"Could not update image": "無法更新圖片",
 	"Profile photo": "個人資料照片",

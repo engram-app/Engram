@@ -47,6 +47,14 @@ vi.mock("./checklist-widget", () => ({
 	ChecklistWidget: () => <div data-testid="checklist-widget" />,
 }));
 
+// The survey decides for itself when it is due (survey-modal.test.tsx); here
+// only that the shell holds it back while the vault modal is up.
+vi.mock("./survey-modal", () => ({
+	SurveyPrompt: ({ suppressed }: { suppressed: boolean }) => (
+		<div data-testid="survey-prompt" data-suppressed={String(suppressed)} />
+	),
+}));
+
 describe("OnboardingShell", () => {
 	beforeEach(() => {
 		mockRecord.mockClear();
@@ -88,5 +96,15 @@ describe("OnboardingShell", () => {
 		);
 		expect(screen.getByText("dashboard")).toBeInTheDocument();
 		expect(screen.getByTestId("checklist-widget")).toBeInTheDocument();
+	});
+
+	it("holds the survey back while the vault modal is open", () => {
+		mockVaultCount = 0;
+		renderShell(
+			<OnboardingShell>
+				<p>dashboard</p>
+			</OnboardingShell>,
+		);
+		expect(screen.getByTestId("survey-prompt")).toHaveAttribute("data-suppressed", "true");
 	});
 });

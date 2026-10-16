@@ -849,8 +849,6 @@ export default {
 	"Connect another MCP client": "Kết nối một ứng dụng MCP khác",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Một kho lưu trữ chứa các ghi chú của bạn. Bạn có thể đổi tên hoặc thêm nhiều hơn sau.",
-	"Couldn't save your answers, please try again.":
-		"Không thể lưu lại câu trả lời của bạn, vui lòng thử lại.",
 	"Choose your plan": "Chọn gói của bạn",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"Thử nghiệm miễn phí 7 ngày cho các gói trả phí. Cần thẻ, không tính phí cho đến khi hết hạn.",
@@ -861,6 +859,7 @@ export default {
 	Onboarding: "Hướng dẫn sử dụng",
 	"your app": "ứng dụng của bạn",
 	"Cancel connection": "Hủy kết nối",
+	"Finish setting up to connect {app}.": "Hoàn tất thiết lập để kết nối {app}.",
 	"Connecting {app}": "Kết nối {app}",
 	"Which AI tools do you use?": "Bạn sử dụng những công cụ AI nào?",
 	"We'll tailor your setup around the tools you already work with.":
@@ -909,9 +908,22 @@ export default {
 		"Mở tab {tab} của plugin, nhấp vào {action} và xác thực bằng tài khoản Engram của bạn.",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"Ứng dụng Gemini không thể thêm các kết nối MCP tùy chỉnh. Antigravity, công cụ lập trình của Google sử dụng Gemini, có thể. Chọn nó trong phần Công cụ lập trình.",
+	"Another MCP client": "Một ứng dụng MCP khác",
 	"I'm not connecting an AI tool yet": "Tôi chưa kết nối bất kỳ công cụ AI nào",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Sử dụng Engram trên ứng dụng web. Bạn có thể kết nối một công cụ sau này trong phần Cài đặt.",
+	"Help us shape Engram": "Giúp chúng tôi phát triển Engram",
+	"Two quick questions. Both are optional.": "Hai câu hỏi nhanh. Cả hai đều tùy chọn.",
+	"Which AI tools do you use?": "Bạn sử dụng những công cụ AI nào?",
+	"Couldn't save your answers, please try again.":
+		"Không thể lưu lại câu trả lời của bạn, vui lòng thử lại.",
+	Skip: "Bỏ qua",
+	Save: "Lưu",
+	"AI assistants": "Trợ lý AI",
+	"Coding tools": "Công cụ lập trình",
+	"Why {tool} can't be connected": "Tại sao {tool} không thể kết nối",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"Danh sách này chưa đầy đủ, chọn {client} nếu công cụ của bạn không có trong đây.",
 	Account: "Tài khoản",
 	"Manage your profile, password, and account.": "Quản lý hồ sơ mật khẩu và tài khoản của bạn.",
 	"Manage your profile, security, and active sessions.":
@@ -993,7 +1005,6 @@ export default {
 	"How your name appears in the app.": "Tên của bạn hiển thị trong ứng dụng.",
 	"Display name": "Tên hiển thị",
 	"Leave blank to use your email": "Để trống để sử dụng địa chỉ email của bạn",
-	Save: "Lưu",
 	"Profile image updated": "Ảnh hồ sơ đã cập nhật",
 	"Could not update image": "Không thể cập nhật ảnh",
 	"Profile photo": "Ảnh hồ sơ",

@@ -890,8 +890,6 @@ export default {
 	"Connect another MCP client": "Conectar outro cliente MCP",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Um cofre armazena suas notas. Você pode renomeá-lo ou adicionar mais depois.",
-	"Couldn't save your answers, please try again.":
-		"Não foi possível salvar suas respostas, por favor, tente novamente.",
 	"Choose your plan": "Escolha seu plano",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"Teste gratuito de 7 dias nos planos pagos. Cartão necessário, sem cobrança até o término.",
@@ -903,6 +901,7 @@ export default {
 	Onboarding: "Integração",
 	"your app": "seu aplicativo",
 	"Cancel connection": "Cancelar conexão",
+	"Finish setting up to connect {app}.": "Finalize a configuração para conectar {app}.",
 	"Connecting {app}": "Conectando {app}",
 	"Which AI tools do you use?": "Quais ferramentas de IA você usa?",
 	"We'll tailor your setup around the tools you already work with.":
@@ -950,9 +949,22 @@ export default {
 		"Abra a aba {tab} do plugin, clique em {action} e autentique-se com sua conta Engram.",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"O aplicativo Gemini não pode adicionar conectores MCP personalizados. O Antigravity, ferramenta de programação com tecnologia Gemini do Google, pode. Escolha-o em Ferramentas de programação.",
+	"Another MCP client": "Outro cliente MCP",
 	"I'm not connecting an AI tool yet": "Ainda não estou conectando uma ferramenta de IA",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Use o Engram no aplicativo web. Você pode conectar uma ferramenta mais tarde nas Configurações.",
+	"Help us shape Engram": "Ajude-nos a moldar o Engram",
+	"Two quick questions. Both are optional.": "Duas perguntas rápidas. Ambas são opcionais.",
+	"Which AI tools do you use?": "Quais ferramentas de IA você usa?",
+	"Couldn't save your answers, please try again.":
+		"Não foi possível salvar suas respostas, por favor, tente novamente.",
+	Skip: "Pular",
+	Save: "Salvar",
+	"AI assistants": "Assistentes de IA",
+	"Coding tools": "Ferramentas de programação",
+	"Why {tool} can't be connected": "Por que {tool} não pode ser conectado",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"Lista não exaustiva, escolha {client} se a sua não estiver aqui.",
 	Account: "Conta",
 	"Manage your profile, password, and account.": "Gerencie seu perfil, sua senha e sua conta.",
 	"Manage your profile, security, and active sessions.":
@@ -1034,7 +1046,6 @@ export default {
 	"How your name appears in the app.": "Como seu nome aparece no aplicativo.",
 	"Display name": "Nome de exibição",
 	"Leave blank to use your email": "Deixe em branco para usar seu e-mail",
-	Save: "Salvar",
 	"Profile image updated": "Imagem do perfil atualizada",
 	"Could not update image": "Não foi possível atualizar a imagem",
 	"Profile photo": "Foto do perfil",

@@ -852,8 +852,6 @@ export default {
 	"Connect another MCP client": "Sambungkan klien MCP lain",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Peti nota menyimpan nota anda. Anda boleh menamakan semula atau menambah lagi kemudian.",
-	"Couldn't save your answers, please try again.":
-		"Tidak dapat menyimpan jawapan anda, sila cuba lagi.",
 	"Choose your plan": "Pilih pelan anda",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"Tempoh percubaan 7 hari untuk pelan berbayar. Kad diperlukan, tiada caj sehingga tamat.",
@@ -864,6 +862,7 @@ export default {
 	Onboarding: "Pengenalan",
 	"your app": "aplikasi anda",
 	"Cancel connection": "Batalkan sambungan",
+	"Finish setting up to connect {app}.": "Selesaikan persediaan untuk menyambung {app}.",
 	"Connecting {app}": "Menyambung {app}",
 	"Which AI tools do you use?": "Alat AI apa yang anda gunakan?",
 	"We'll tailor your setup around the tools you already work with.":
@@ -912,9 +911,22 @@ export default {
 		"Buka tab {tab} plugin, klik {action}, dan autentikasi dengan akaun Engram anda.",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"Aplikasi Gemini tidak boleh menambah sambungan MCP khusus. Antigravity, alat pengkodan berkuasa Gemini dari Google, boleh. Pilih ia di bawah Alat pengkodan.",
+	"Another MCP client": "Pelanggan MCP lain",
 	"I'm not connecting an AI tool yet": "Saya belum menyambungkan alat AI",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Gunakan Engram dalam aplikasi web. Anda boleh menyambungkan alat kemudian dari Tetapan.",
+	"Help us shape Engram": "Bantu kami membangunkan Engram",
+	"Two quick questions. Both are optional.": "Dua soalan ringkas. Kedua-duanya adalah pilihan.",
+	"Which AI tools do you use?": "Alat AI apa yang anda gunakan?",
+	"Couldn't save your answers, please try again.":
+		"Tidak dapat menyimpan jawapan anda, sila cuba lagi.",
+	Skip: "Lompati",
+	Save: "Simpan",
+	"AI assistants": "Pembantu AI",
+	"Coding tools": "Alat pengkodan",
+	"Why {tool} can't be connected": "Mengapa {tool} tidak dapat disambungkan",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"Senarai ini tidak lengkap, pilih {client} jika alat anda tidak ada di sini.",
 	Account: "Akaun",
 	"Manage your profile, password, and account.": "Urus profil, kata laluan dan akaun anda.",
 	"Manage your profile, security, and active sessions.":
@@ -996,7 +1008,6 @@ export default {
 	"How your name appears in the app.": "Cara nama anda dipaparkan dalam aplikasi.",
 	"Display name": "Nama paparan",
 	"Leave blank to use your email": "Biarkan kosong untuk menggunakan alamat e-mel anda",
-	Save: "Simpan",
 	"Profile image updated": "Imej profil telah dikemas kini",
 	"Could not update image": "Tidak dapat mengemas kini imej",
 	"Profile photo": "Foto profil",

@@ -2,6 +2,7 @@ import { type ReactNode, useState } from "react";
 import { track } from "../analytics/track";
 import { ChecklistWidget } from "./checklist-widget";
 import { CreateFirstVaultModal } from "./create-first-vault-modal";
+import { SurveyPrompt } from "./survey-modal";
 import { useOnboardingActions } from "./use-onboarding-actions";
 
 export function OnboardingShell({ children }: { children: ReactNode }) {
@@ -29,6 +30,7 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
 				/>
 			)}
 			<ChecklistWidget />
+			<SurveyPrompt suppressed={showVaultModal} />
 		</>
 	);
 }

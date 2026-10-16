@@ -1,0 +1,144 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OnboardingProfile } from "../api/queries";
+import { SurveyModal, SurveyPrompt, surveyPending } from "./survey-modal";
+
+const { setProfile, submitFeedback, state } = vi.hoisted(() => ({
+	setProfile: vi.fn().mockResolvedValue({}),
+	submitFeedback: vi.fn().mockResolvedValue({ status: "ok" }),
+	state: {
+		billingEnabled: true,
+		status: { next_step: "done", profile: {} } as {
+			next_step: string;
+			profile?: OnboardingProfile;
+		},
+		vaults: [] as { populated?: boolean }[],
+		actions: new Set<string>(),
+	},
+}));
+
+vi.mock("@/config-context", () => ({
+	useConfig: () => ({ billingEnabled: state.billingEnabled }),
+}));
+vi.mock("../api/queries", () => ({
+	useOnboardingStatus: () => ({ data: state.status }),
+	useVaults: () => ({ data: state.vaults }),
+	useSetOnboardingProfile: () => ({ mutateAsync: setProfile, isPending: false }),
+	useSubmitFeedback: () => ({ mutateAsync: submitFeedback, isPending: false }),
+}));
+vi.mock("./use-onboarding-actions", () => ({
+	useOnboardingActions: () => ({ has: (a: string) => state.actions.has(a) }),
+}));
+
+function renderUi(ui: React.ReactElement) {
+	const qc = new QueryClient();
+	return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+}
+
+beforeEach(() => {
+	setProfile.mockClear();
+	submitFeedback.mockClear();
+	state.billingEnabled = true;
+	state.status = { next_step: "done", profile: {} };
+	state.vaults = [];
+	state.actions = new Set();
+});
+
+describe("surveyPending", () => {
+	it("is pending for a new account", () => {
+		expect(surveyPending({})).toBe(true);
+		expect(surveyPending({ tools: ["chatgpt"], tools_prefilled: true })).toBe(true);
+		// The terms-screen heard-from answer stamps survey_done_at, not this.
+		expect(surveyPending({ heard_from: "reddit", survey_done_at: "x" })).toBe(true);
+	});
+
+	it("is done once asked, or when the old wizard asked it", () => {
+		expect(surveyPending({ use_cases_done_at: "x" })).toBe(false);
+		expect(surveyPending({ use_cases: ["search"] })).toBe(false);
+		expect(surveyPending({ tools: ["claude"] })).toBe(false);
+	});
+});
+
+describe("SurveyPrompt", () => {
+	const title = "Help us shape Engram";
+
+	it("waits for first value", () => {
+		renderUi(<SurveyPrompt suppressed={false} />);
+		expect(screen.queryByText(title)).toBeNull();
+	});
+
+	it.each([
+		["an AI tool connected", () => state.actions.add("ai_connected")],
+		["the plugin linked", () => state.actions.add("plugin_connected")],
+		["notes beyond the welcome note", () => state.vaults.push({ populated: true })],
+	])("shows after %s", (_label, arrange) => {
+		arrange();
+		renderUi(<SurveyPrompt suppressed={false} />);
+		expect(screen.getByText(title)).toBeInTheDocument();
+	});
+
+	it("never shows on self-host, mid-wizard, or while suppressed", () => {
+		state.actions.add("ai_connected");
+
+		state.billingEnabled = false;
+		const { unmount } = renderUi(<SurveyPrompt suppressed={false} />);
+		expect(screen.queryByText(title)).toBeNull();
+		unmount();
+
+		state.billingEnabled = true;
+		state.status = { next_step: "vault", profile: {} };
+		const second = renderUi(<SurveyPrompt suppressed={false} />);
+		expect(screen.queryByText(title)).toBeNull();
+		second.unmount();
+
+		state.status = { next_step: "done", profile: {} };
+		renderUi(<SurveyPrompt suppressed />);
+		expect(screen.queryByText(title)).toBeNull();
+	});
+});
+
+describe("SurveyModal", () => {
+	it("pre-selects the connector's tool and saves tools plus use cases", async () => {
+		const onDone = vi.fn();
+		renderUi(<SurveyModal initialTools={["chatgpt"]} onDone={onDone} />);
+
+		expect(screen.getByRole("checkbox", { name: "ChatGPT" })).toBeChecked();
+		fireEvent.click(screen.getByRole("checkbox", { name: "Claude" }));
+		fireEvent.click(screen.getByRole("checkbox", { name: "AI memory" }));
+		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+		await waitFor(() => expect(onDone).toHaveBeenCalled());
+		expect(setProfile).toHaveBeenCalledWith({ tools: ["chatgpt", "claude"] });
+		expect(submitFeedback).toHaveBeenCalledWith({ kind: "onboarding", use_cases: ["ai_memory"] });
+	});
+
+	it("does not resave unchanged tools", async () => {
+		const onDone = vi.fn();
+		renderUi(<SurveyModal initialTools={["chatgpt"]} onDone={onDone} />);
+		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+		await waitFor(() => expect(onDone).toHaveBeenCalled());
+		expect(setProfile).not.toHaveBeenCalled();
+		expect(submitFeedback).toHaveBeenCalledWith({ kind: "onboarding", use_cases: [] });
+	});
+
+	it("Skip stamps the survey as asked and closes", () => {
+		const onDone = vi.fn();
+		renderUi(<SurveyModal initialTools={[]} onDone={onDone} />);
+		fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+
+		expect(submitFeedback).toHaveBeenCalledWith({ kind: "onboarding", use_cases: [] });
+		expect(onDone).toHaveBeenCalled();
+	});
+
+	it("stays open with an error when saving fails", async () => {
+		submitFeedback.mockRejectedValueOnce(new Error("boom"));
+		const onDone = vi.fn();
+		renderUi(<SurveyModal initialTools={[]} onDone={onDone} />);
+		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+		expect(await screen.findByRole("alert")).toBeInTheDocument();
+		expect(onDone).not.toHaveBeenCalled();
+	});
+});

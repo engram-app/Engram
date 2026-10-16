@@ -18,7 +18,7 @@ import type { BillingStatus, Connection, OnboardingStatus } from "../api/queries
 import type { EngramConfig } from "../config";
 import { ConfigProvider } from "../config-context";
 import { ChecklistWidget } from "../onboarding/checklist-widget";
-import OnboardToolsPage from "../onboarding/onboard-tools-page";
+import { ToolPicker } from "../onboarding/tool-picker";
 import ConnectionsPage from "../settings/connections-page";
 
 function conn(over: Partial<Connection>): Connection {
@@ -246,11 +246,15 @@ export default function ConnectorQcPage() {
 			</Panel>
 
 			<Panel
-				title="FTUX tool picker"
+				title="Survey tool picker"
 				note="Gemini is listed, greyed, dashed and unselectable with its reason. Antigravity is selectable under Coding tools. Every option should show a brand mark."
-				onboarding={status({ next_step: "tools", gate_ok: false })}
 			>
-				<OnboardToolsPage />
+				<ToolPicker
+					selected={new Set()}
+					onChange={() => {
+						// Static gallery: rows render, selection is not exercised here.
+					}}
+				/>
 			</Panel>
 		</main>
 	);

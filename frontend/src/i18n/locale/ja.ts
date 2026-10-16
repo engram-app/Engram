@@ -850,8 +850,6 @@ export default {
 	"Connect another MCP client": "他の MCP クライアントを接続",
 	"A vault holds your notes. You can rename it or add more later.":
 		"保管庫にはノートが保存されます。後で名前を変更したり、追加したりできます。",
-	"Couldn't save your answers, please try again.":
-		"回答を保存できませんでした。もう一度お試しください。",
 	"Choose your plan": "プランを選択してください",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"有料プランでは、7日間の無料トライアルがあります。カード情報が必要ですが、終了するまでは料金は発生しません。",
@@ -862,6 +860,7 @@ export default {
 	Onboarding: "初期設定",
 	"your app": "あなたのアプリ",
 	"Cancel connection": "接続を解除",
+	"Finish setting up to connect {app}.": "{app}への接続設定を完了します。",
 	"Connecting {app}": "{app} に接続中",
 	"Which AI tools do you use?": "どのAIツールをご利用ですか？",
 	"We'll tailor your setup around the tools you already work with.":
@@ -908,9 +907,22 @@ export default {
 		"プラグインの {tab} タブを開き、{action} をクリックして、Engram アカウントで認証します。",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"Geminiアプリでは、カスタムMCPコネクタを追加できません。GoogleのGemini搭載コーディングツールであるAntigravityは可能です。コーディングツールから選択してください。",
+	"Another MCP client": "別のMCPクライアント",
 	"I'm not connecting an AI tool yet": "まだAIツールとの接続は行っていません",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Engramをウェブアプリで使用します。後で設定からツールを接続できます。",
+	"Help us shape Engram": "Engram の改善にご協力ください",
+	"Two quick questions. Both are optional.": "簡単な質問が2つあります。どちらも任意です。",
+	"Which AI tools do you use?": "どのAIツールをご利用ですか？",
+	"Couldn't save your answers, please try again.":
+		"回答を保存できませんでした。もう一度お試しください。",
+	Skip: "スキップ",
+	Save: "保存",
+	"AI assistants": "AIアシスタント",
+	"Coding tools": "コーディングツール",
+	"Why {tool} can't be connected": "なぜ{tool}に接続できないのか",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"完全なリストではありません。こちらにない場合は{client}を選択してください。",
 	Account: "アカウント",
 	"Manage your profile, password, and account.":
 		"プロフィール、パスワード、アカウントを管理します。",
@@ -993,7 +1005,6 @@ export default {
 	"How your name appears in the app.": "アプリに表示される名前です",
 	"Display name": "表示名",
 	"Leave blank to use your email": "空欄にすると、メールアドレスが表示されます",
-	Save: "保存",
 	"Profile image updated": "プロフィール画像を更新しました",
 	"Could not update image": "画像の更新に失敗しました",
 	"Profile photo": "プロフィール写真",

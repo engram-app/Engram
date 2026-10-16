@@ -1351,7 +1351,11 @@ export interface OnboardingProfile {
 	// "plugin" for a signup that started on /link. Absent for web signups.
 	signup_source?: "plugin";
 	heard_from?: string;
+	use_cases?: string[];
 	survey_done_at?: string;
+	// Stamped by the in-app survey (answer or skip); survey_done_at alone also
+	// covers a web signup's heard-from answer on the terms screen.
+	use_cases_done_at?: string;
 	completed_at?: string;
 }
 

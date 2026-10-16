@@ -934,8 +934,6 @@ export default {
 	"Connect another MCP client": "Подключить другой клиент MCP",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Хранилище содержит ваши заметки. Вы можете переименовать его или добавить ещё позже.",
-	"Couldn't save your answers, please try again.":
-		"Не удалось сохранить ваши ответы, попробуйте ещё раз.",
 	"Choose your plan": "Выберите свой тарифный план",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"7-дневный бесплатный пробный период для платных планов. Требуется карта, списание средств не произойдет до окончания пробного периода.",
@@ -946,6 +944,7 @@ export default {
 	Onboarding: "Обучение",
 	"your app": "ваше приложение",
 	"Cancel connection": "Отменить подключение",
+	"Finish setting up to connect {app}.": "Завершить настройку для подключения {app}.",
 	"Connecting {app}": "Подключение {app}",
 	"Which AI tools do you use?": "Какие инструменты искусственного интеллекта вы используете?",
 	"We'll tailor your setup around the tools you already work with.":
@@ -994,9 +993,22 @@ export default {
 		"Откройте вкладку {tab} плагина, нажмите {action} и авторизуйтесь с помощью вашей учетной записи Engram.",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		'Приложение Gemini не поддерживает добавление пользовательских коннекторов MCP. Antigravity, инструмент для программирования от Google на базе Gemini, поддерживает. Выберите его в разделе "Инструменты для программирования".',
+	"Another MCP client": "Другой клиент MCP",
 	"I'm not connecting an AI tool yet": "Я пока не подключаю инструмент ИИ",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		'Используйте Engram в веб-приложении. Вы можете подключить инструмент позже в разделе "Настройки".',
+	"Help us shape Engram": "Помогите нам улучшить Engram",
+	"Two quick questions. Both are optional.": "Два коротких вопроса. Оба необязательны.",
+	"Which AI tools do you use?": "Какие инструменты искусственного интеллекта вы используете?",
+	"Couldn't save your answers, please try again.":
+		"Не удалось сохранить ваши ответы, попробуйте ещё раз.",
+	Skip: "Пропустить",
+	Save: "Сохранить",
+	"AI assistants": "AI-ассистенты",
+	"Coding tools": "Инструменты для программирования",
+	"Why {tool} can't be connected": "Почему {tool} не может быть подключено",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"Это не полный список, выберите {client}, если вашего инструмента здесь нет.",
 	Account: "Учётная запись",
 	"Manage your profile, password, and account.": "Управляйте профилем, паролем и учётной записью.",
 	"Manage your profile, security, and active sessions.":
@@ -1081,7 +1093,6 @@ export default {
 	"Display name": "Отображаемое имя",
 	"Leave blank to use your email":
 		"Оставьте пустым, чтобы использовать ваш адрес электронной почты",
-	Save: "Сохранить",
 	"Profile image updated": "Изображение профиля обновлено",
 	"Could not update image": "Не удалось обновить изображение",
 	"Profile photo": "Фотография профиля",

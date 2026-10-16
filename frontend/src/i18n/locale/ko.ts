@@ -837,7 +837,6 @@ export default {
 	"Connect another MCP client": "다른 MCP 클라이언트 연결",
 	"A vault holds your notes. You can rename it or add more later.":
 		"보관함은 노트를 저장하는 곳입니다. 나중에 이름을 변경하거나 추가할 수 있습니다.",
-	"Couldn't save your answers, please try again.": "답변을 저장하지 못했습니다. 다시 시도해주세요.",
 	"Choose your plan": "요금제를 선택하세요",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"유료 요금제의 경우 7일 무료 체험 제공. 카드 정보 필요하며, 종료 시까지 요금이 부과되지 않습니다.",
@@ -848,6 +847,7 @@ export default {
 	Onboarding: "시작하기",
 	"your app": "앱",
 	"Cancel connection": "연결 해제",
+	"Finish setting up to connect {app}.": "{app} 연결 설정을 완료합니다.",
 	"Connecting {app}": "{app} 연결 중",
 	"Which AI tools do you use?": "어떤 AI 도구를 사용하시나요?",
 	"We'll tailor your setup around the tools you already work with.":
@@ -895,9 +895,21 @@ export default {
 		"플러그인의 {tab} 탭을 열고 {action}을 클릭한 다음 Engram 계정으로 인증하세요.",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"Gemini 앱은 사용자 정의 MCP 연결을 지원하지 않습니다. Google의 Gemini 기반 코딩 도구인 Antigravity는 지원합니다. 코딩 도구에서 선택하세요.",
+	"Another MCP client": "다른 MCP 클라이언트",
 	"I'm not connecting an AI tool yet": "아직 AI 도구를 연결하지 않았습니다",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"웹 앱에서 Engram을 사용하세요. 설정에서 나중에 도구를 연결할 수 있습니다.",
+	"Help us shape Engram": "Engram 개선에 참여해주세요",
+	"Two quick questions. Both are optional.": "간단한 질문 두 가지입니다. 선택 사항입니다.",
+	"Which AI tools do you use?": "어떤 AI 도구를 사용하시나요?",
+	"Couldn't save your answers, please try again.": "답변을 저장하지 못했습니다. 다시 시도해주세요.",
+	Skip: "건너뛰기",
+	Save: "저장",
+	"AI assistants": "AI 어시스턴트",
+	"Coding tools": "코딩 도구",
+	"Why {tool} can't be connected": "{tool} 연결이 안 되는 이유",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"완전한 목록은 아니지만, 목록에 없으면 {client}을(를) 선택하세요.",
 	Account: "계정",
 	"Manage your profile, password, and account.": "프로필, 비밀번호, 계정을 관리하세요.",
 	"Manage your profile, security, and active sessions.": "프로필, 보안 및 활성 세션을 관리하세요.",
@@ -977,7 +989,6 @@ export default {
 	"How your name appears in the app.": "앱에서 표시되는 이름입니다.",
 	"Display name": "표시 이름",
 	"Leave blank to use your email": "이메일 주소를 사용하려면 비워두세요",
-	Save: "저장",
 	"Profile image updated": "프로필 이미지 업데이트 완료",
 	"Could not update image": "이미지 업데이트 실패",
 	"Profile photo": "프로필 사진",

@@ -1,70 +1,43 @@
-import { useState } from "react";
-import { Navigate, useNavigate } from "react-router";
 import { HelpTip } from "@/components/help-tip";
-import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useT } from "@/i18n/locale-provider";
 import { Trans } from "@/i18n/trans";
 import type { UIText } from "@/i18n/ui-text";
-import AuthPanel from "@/layout/auth-panel";
-import { heading, selectableRow } from "@/lib/ui-classes";
-import { track } from "../analytics/track";
-import { useOnboardingStatus, useSetOnboardingProfile } from "../api/queries";
-import LoadingScreen from "../layout/loading-screen";
-import { onboardingDoneTarget } from "./onboarding-next";
+import { selectableRow } from "@/lib/ui-classes";
 import { NO_AI_TOOL, TOOL_ASSISTANTS, TOOL_CODING, type ToolOption } from "./onboarding-tools";
 import { ToolBadge } from "./tool-icon";
 
-interface ToolsFormProps {
-	initialTools: string[];
-	isPending: boolean;
-	hasError: boolean;
-	onSubmit: (tools: string[]) => Promise<void>;
+interface ToolPickerProps {
+	selected: Set<string>;
+	onChange: (next: Set<string>) => void;
 }
 
-function ToolsForm({ initialTools, isPending, hasError, onSubmit }: ToolsFormProps) {
+// "Which AI tools do you use?" as a controlled picker, asked in the in-app
+// survey (survey-modal.tsx). Slugs mirror the backend `@valid_tools`.
+function ToolPicker({ selected, onChange }: ToolPickerProps) {
 	const { t } = useT();
-	const [tools, setTools] = useState<Set<string>>(() => new Set(initialTools));
+	const tools = selected;
 
 	function toggleTool(slug: string) {
-		setTools((prev) => {
-			const next = new Set(prev);
-			if (next.has(slug)) {
-				next.delete(slug);
-			} else {
-				next.add(slug);
-			}
-			// Picking any client contradicts "I'm not connecting one".
-			next.delete(NO_AI_TOOL.slug);
-			return next;
-		});
+		const next = new Set(tools);
+		if (next.has(slug)) {
+			next.delete(slug);
+		} else {
+			next.add(slug);
+		}
+		// Picking any client contradicts "I'm not connecting one".
+		next.delete(NO_AI_TOOL.slug);
+		onChange(next);
 	}
 
 	// Mutually exclusive with every client: selecting it clears the grid, so the
-	// two answers can never both be true. Deselecting just empties the form,
-	// which leaves Continue disabled until something is chosen.
+	// two answers can never both be true.
 	function toggleNoAiTool() {
-		setTools((prev) => (prev.has(NO_AI_TOOL.slug) ? new Set() : new Set([NO_AI_TOOL.slug])));
+		onChange(tools.has(NO_AI_TOOL.slug) ? new Set() : new Set([NO_AI_TOOL.slug]));
 	}
-
-	async function submit() {
-		if (tools.size === 0 || isPending) {
-			return;
-		}
-		await onSubmit(Array.from(tools));
-	}
-
-	const canContinue = tools.size > 0 && !isPending;
 
 	return (
-		<AuthPanel className="flex flex-col gap-5">
-			<header className="flex flex-col gap-2">
-				<h1 className={heading}>{t("Which AI tools do you use?")}</h1>
-				<p className="text-base text-foreground">
-					{t("We'll tailor your setup around the tools you already work with.")}
-				</p>
-			</header>
-
+		<>
 			<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
 				<ToolColumn
 					title={t("AI assistants")}
@@ -81,8 +54,8 @@ function ToolsForm({ initialTools, isPending, hasError, onSubmit }: ToolsFormPro
 			</div>
 
 			{/* The opt-out sits apart from the grid on purpose: it is the answer
-			    "none", not another client, so it cannot sensibly coexist with a
-			    selection. Own row, own separator, and picking it clears the rest. */}
+		    "none", not another client, so it cannot sensibly coexist with a
+		    selection. Own row, own separator, and picking it clears the rest. */}
 			<label className="flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-muted/30 p-3">
 				<Checkbox
 					checked={tools.has(NO_AI_TOOL.slug)}
@@ -103,18 +76,7 @@ function ToolsForm({ initialTools, isPending, hasError, onSubmit }: ToolsFormPro
 					slots={{ client: <strong>{t("Another MCP client")}</strong> }}
 				/>
 			</p>
-
-			{hasError ? (
-				<p role="alert" className="text-destructive text-sm">
-					{t("Couldn't save your answers, please try again.")}
-				</p>
-			) : null}
-			<div className="flex items-center justify-end">
-				<Button type="button" onClick={submit} disabled={!canContinue}>
-					{isPending ? t("Saving…") : t("Continue")}
-				</Button>
-			</div>
-		</AuthPanel>
+		</>
 	);
 }
 
@@ -179,44 +141,4 @@ function ToolColumn({ title, options, selected, onToggle }: ToolColumnProps) {
 	);
 }
 
-export default function OnboardToolsPage() {
-	const navigate = useNavigate();
-	const { data: status, isLoading } = useOnboardingStatus();
-	const setProfile = useSetOnboardingProfile();
-	const [mountedAt] = useState(() => Date.now());
-
-	if (isLoading || !status) {
-		return <LoadingScreen />;
-	}
-
-	// Honor backend ordering. Agreement/billing must come first; :done means
-	// we shouldn't be in the wizard. :tools (own step) plus :about and :vault
-	// (re-edit allowed for users who already picked tools and want to revise)
-	// all render this page.
-	const later = ["tools", "about", "vault", "done"];
-	if (!later.includes(status.next_step)) {
-		return <Navigate to={`/onboard/${status.next_step}`} replace />;
-	}
-	if (status.next_step === "done") {
-		return <Navigate to={onboardingDoneTarget()} replace />;
-	}
-
-	return (
-		<ToolsForm
-			initialTools={status.profile?.tools ?? []}
-			isPending={setProfile.isPending}
-			hasError={setProfile.isError}
-			onSubmit={async (tools) => {
-				await setProfile.mutateAsync({ tools });
-				track("onboarding_step_completed", {
-					step: "tools",
-					duration_ms: Date.now() - mountedAt,
-				});
-				// Self-host has no :about step (no PostHog to read the answers).
-				navigate(status.steps.includes("about") ? "/onboard/about" : "/onboard/vault", {
-					replace: true,
-				});
-			}}
-		/>
-	);
-}
+export { ToolPicker };
