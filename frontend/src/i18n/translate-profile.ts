@@ -23,6 +23,11 @@ const SPECS: Record<Target, Spec> = {
 		tone: "Address the user informally (tu, ton), never vous.",
 		formal: /\b(?:vous|votre|vos)\b/iu,
 	},
+	id: {
+		name: "Indonesian",
+		tone: "Address the user as Anda, never kamu.",
+		formal: /\bkamu\b/iu,
+	},
 	it: {
 		name: "Italian",
 		tone: "Address the user informally (tu, tuo), never Lei.",
@@ -36,12 +41,22 @@ const SPECS: Record<Target, Spec> = {
 	},
 	ko: { name: "Korean", tone: "Use polite, concise UI Korean.", script: /\p{Script=Hangul}/u },
 	ms: { name: "Malay", tone: "Address the user as anda." },
+	pl: {
+		name: "Polish",
+		tone: "Address the user informally (ty, twój), never Pan or Pani.",
+		formal: /\b(?:Pan|Pani|Pana|Panu|Państwo)\b/u,
+	},
 	"pt-BR": { name: "Brazilian Portuguese", tone: "Address the user as você." },
 	ru: {
 		name: "Russian",
 		tone: "Address the user formally (вы, ваш), never ты.",
 		formal: /(?<![\p{L}])(?:ты|твой|твоя|твоё|твои|тебя|тебе)(?![\p{L}])/iu,
 		script: /\p{Script=Cyrillic}/u,
+	},
+	tr: {
+		name: "Turkish",
+		tone: "Address the user politely (siz, sizin), never sen.",
+		formal: /(?<![\p{L}])(?:sen|senin|sana|seni)(?![\p{L}])/iu,
 	},
 	vi: { name: "Vietnamese", tone: "Address the user as bạn." },
 	"zh-CN": {
@@ -82,9 +97,12 @@ const PINNED: Partial<Record<Target, readonly string[]>> = {
 	de: ["Reading view"],
 	it: ["Outline", "Strikethrough"],
 	ja: ["Dark", "Light", "Outline", "Reading", "Reading view"],
+	id: ["Dark", "Light", "Outline", "Reading", "Reading view", "Strikethrough", "Math"],
 	ms: ["Idea", "Outline", "Reading", "Reading view", "Strikethrough"],
+	pl: ["Dark", "Light", "Outline", "Reading", "Reading view", "Strikethrough", "Math"],
 	"pt-BR": ["Reading"],
 	ru: ["Outline"],
+	tr: ["Dark", "Light", "Outline", "Reading", "Reading view", "Strikethrough", "Math"],
 	vi: ["Light", "Outline", "Reading", "Reading view", "Strikethrough"],
 	"zh-CN": ["Dark", "Outline", "Reading"],
 	"zh-TW": ["Math", "Redo edit"],

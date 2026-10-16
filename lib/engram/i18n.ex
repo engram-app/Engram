@@ -13,7 +13,7 @@ defmodule Engram.I18n do
   """
 
   # Mirrors frontend/src/i18n/locales.ts (`LOCALES`, `matchLocale`).
-  @locales ~w(en de es fr it ja ko ms pt-BR ru vi zh-CN zh-TW)
+  @locales ~w(en de es fr id it ja ko ms pl pt-BR ru tr vi zh-CN zh-TW)
   @by_lower Map.new(@locales, &{String.downcase(&1), &1})
 
   @dir Path.expand("../../priv/i18n/email", __DIR__)

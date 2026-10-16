@@ -1,4 +1,4 @@
-// i18n-core 5cfb0b93
+// i18n-core 745e9e57
 // The translategemma pipeline shared by the web app, the Obsidian plugin and the
 // marketing site: prompts, the checks an answer must pass, and catalog state.
 // Canonical copy: engram-app/Engram frontend/src/i18n/core/. The other repos
@@ -189,6 +189,21 @@ const LOANWORDS: Record<string, readonly string[]> = {
 		"types",
 		"web",
 	],
+	id: [
+		"alias",
+		"bookmark",
+		"callout",
+		"editor",
+		"file",
+		"filter",
+		"folder",
+		"font",
+		"format",
+		"info",
+		"manual",
+		"plugin",
+		"vault",
+	],
 	it: [
 		"account",
 		"backend",
@@ -218,6 +233,7 @@ const LOANWORDS: Record<string, readonly string[]> = {
 	ja: ["linux pc", "markdown", "web", "windows pc"],
 	ko: ["linux pc", "url", "windows pc"],
 	ms: ["edit", "folder", "frontmatter", "idea", "label", "markdown", "popular", "status", "token"],
+	pl: ["alias", "folder", "format", "wikilink"],
 	pt: [
 		"backend",
 		"bug",

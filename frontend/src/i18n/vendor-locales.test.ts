@@ -39,6 +39,12 @@ describe("paddleLocale", () => {
 	it("falls back to English for locales Paddle checkout does not offer", () => {
 		expect(paddleLocale("vi")).toBe("en");
 		expect(paddleLocale("ms")).toBe("en");
+		expect(paddleLocale("id")).toBe("en");
+	});
+
+	it("passes Turkish and Polish through", () => {
+		expect(paddleLocale("tr")).toBe("tr");
+		expect(paddleLocale("pl")).toBe("pl");
 	});
 });
 

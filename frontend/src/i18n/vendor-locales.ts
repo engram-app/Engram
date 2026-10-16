@@ -7,8 +7,13 @@ type ClerkLocalizationLoaders = Partial<
 >;
 
 // Paddle.js `settings.locale` codes match ours except Simplified Chinese.
-// Paddle checkout has no Vietnamese or Malay, so those open in English.
-const PADDLE_CODES: Partial<Record<Locale, string>> = { "zh-CN": "zh-Hans", vi: "en", ms: "en" };
+// Paddle checkout has no Vietnamese, Malay or Indonesian, so those open in English.
+const PADDLE_CODES: Partial<Record<Locale, string>> = {
+	"zh-CN": "zh-Hans",
+	vi: "en",
+	ms: "en",
+	id: "en",
+};
 
 function paddleLocale(locale: Locale): string {
 	return PADDLE_CODES[locale] ?? locale;
@@ -28,12 +33,15 @@ const clerkLocalizationLoaders: ClerkLocalizationLoaders = {
 	de: localizationLoader(() => import("@clerk/localizations/de-DE"), "deDE"),
 	es: localizationLoader(() => import("@clerk/localizations/es-ES"), "esES"),
 	fr: localizationLoader(() => import("@clerk/localizations/fr-FR"), "frFR"),
+	id: localizationLoader(() => import("@clerk/localizations/id-ID"), "idID"),
 	it: localizationLoader(() => import("@clerk/localizations/it-IT"), "itIT"),
 	ja: localizationLoader(() => import("@clerk/localizations/ja-JP"), "jaJP"),
 	ko: localizationLoader(() => import("@clerk/localizations/ko-KR"), "koKR"),
 	ms: localizationLoader(() => import("@clerk/localizations/ms-MY"), "msMY"),
+	pl: localizationLoader(() => import("@clerk/localizations/pl-PL"), "plPL"),
 	"pt-BR": localizationLoader(() => import("@clerk/localizations/pt-BR"), "ptBR"),
 	ru: localizationLoader(() => import("@clerk/localizations/ru-RU"), "ruRU"),
+	tr: localizationLoader(() => import("@clerk/localizations/tr-TR"), "trTR"),
 	vi: localizationLoader(() => import("@clerk/localizations/vi-VN"), "viVN"),
 	"zh-CN": localizationLoader(() => import("@clerk/localizations/zh-CN"), "zhCN"),
 	"zh-TW": localizationLoader(() => import("@clerk/localizations/zh-TW"), "zhTW"),
