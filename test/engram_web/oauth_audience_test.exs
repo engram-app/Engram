@@ -182,4 +182,20 @@ defmodule EngramWeb.OAuthAudienceTest do
 
     assert json_response(conn, 400)["error"] == "invalid_target"
   end
+
+  # RFC 6750 §3.1 / OAuth 2.1 §5.2: a valid token without the scope the
+  # resource needs is 403 insufficient_scope, naming the scope.
+  test "an MCP-audience token without the mcp scope is insufficient_scope", %{user: user} do
+    token = Accounts.generate_jwt(user, %{"aud" => "engram:mcp", "scope" => "other"})
+
+    conn =
+      token
+      |> bearer()
+      |> post("/api/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
+
+    assert conn.status == 403
+    assert [challenge] = get_resp_header(conn, "www-authenticate")
+    assert challenge =~ ~s(error="insufficient_scope")
+    assert challenge =~ ~s(scope="mcp")
+  end
 end

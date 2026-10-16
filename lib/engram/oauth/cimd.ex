@@ -149,7 +149,26 @@ defmodule Engram.OAuth.Cimd do
   """
   @spec ensure_client(term()) :: {:ok, Client.t()} | {:error, reason()}
   def ensure_client(url) do
-    if url_shaped?(url), do: ensure(url), else: {:error, :not_cimd}
+    cond do
+      not url_shaped?(url) -> {:error, :not_cimd}
+      not path_ok?(url) -> {:error, :invalid_url}
+      true -> ensure(url)
+    end
+  end
+
+  # CIMD draft §3: a client_id URL MUST carry a path and MUST NOT contain dot
+  # segments, which a server or CDN could resolve to someone else's document.
+  # Percent-encoded dots count: `%2e%2e` normalises to `..` on many servers.
+  defp path_ok?(url) do
+    case URI.parse(url).path do
+      path when is_binary(path) and path not in ["", "/"] ->
+        path
+        |> String.split("/")
+        |> Enum.all?(&(URI.decode(&1) not in [".", ".."]))
+
+      _ ->
+        false
+    end
   end
 
   @doc "Looks up a CIMD client by its URL. No network I/O."

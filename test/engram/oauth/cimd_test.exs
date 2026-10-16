@@ -70,6 +70,26 @@ defmodule Engram.OAuth.CimdTest do
     end
   end
 
+  # CIMD draft §3: the client_id URL MUST have a path and MUST NOT contain
+  # single- or double-dot segments. Refused before any fetch.
+  describe "ensure_client/1 client_id URL shape" do
+    test "refuses a URL with no path, or only a root" do
+      for url <- ["https://claude.ai", "https://claude.ai/"] do
+        assert {:error, :invalid_url} = Cimd.ensure_client(url), url
+      end
+    end
+
+    test "refuses dot segments, encoded or not" do
+      for url <- [
+            "https://claude.ai/a/../client.json",
+            "https://claude.ai/./client.json",
+            "https://claude.ai/a/%2e%2e/client.json"
+          ] do
+        assert {:error, :invalid_url} = Cimd.ensure_client(url), url
+      end
+    end
+  end
+
   describe "ensure_client/1 first contact" do
     test "fetches the document and stores a client whose wire id is the URL" do
       expect(FetcherMock, :fetch, fn @url -> {:ok, document()} end)

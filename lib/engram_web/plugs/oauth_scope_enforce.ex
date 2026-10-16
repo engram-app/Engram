@@ -20,6 +20,8 @@ defmodule EngramWeb.Plugs.OAuthScopeEnforce do
   """
   import Plug.Conn
 
+  @mcp_audience Engram.Token.mcp_audience()
+
   def init(opts), do: opts
 
   def call(conn, _opts) do
@@ -29,8 +31,27 @@ defmodule EngramWeb.Plugs.OAuthScopeEnforce do
       |> assign(:oauth_scope_vault_ids, Engram.Permissions.scope_ids_from_claims(claims))
       |> assign(:oauth_scope, claims["scope"])
       |> assign(:device_token, claims["cred"] == "device")
+      |> require_mcp_scope(claims)
     else
       _ -> conn
     end
   end
+
+  # An MCP-audience token must also carry the `mcp` scope. Every grant does
+  # today (`OAuth.narrow_scope/1` always keeps it), so this is a guard, not a
+  # behaviour change: RFC 6750 §3.1's 403 if a token ever arrives without it.
+  defp require_mcp_scope(conn, %{"aud" => @mcp_audience} = claims) do
+    if "mcp" in String.split(claims["scope"] || "", " ", trim: true) do
+      conn
+    else
+      conn
+      |> put_resp_header(
+        "www-authenticate",
+        ~s(Bearer error="insufficient_scope", scope="mcp")
+      )
+      |> EngramWeb.Plugs.Halt.json(403, %{error: "insufficient_scope"})
+    end
+  end
+
+  defp require_mcp_scope(conn, _claims), do: conn
 end
