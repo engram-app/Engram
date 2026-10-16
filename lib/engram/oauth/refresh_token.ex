@@ -9,9 +9,13 @@ defmodule Engram.OAuth.RefreshToken do
     * consumed — `consumed_at` set when used to mint a successor; replay
       after consumption triggers family-wide revocation
     * revoked — `revoked_at` set; can never mint anything
+    * superseded — `revoked_at` and `superseded_at` set by a grace re-issue;
+      can never mint, but leaves its family live
   """
   use Engram.Schema
   import Ecto.Changeset
+
+  @type t :: %__MODULE__{}
 
   schema "oauth_refresh_tokens" do
     field :token_hash, :string
@@ -25,6 +29,11 @@ defmodule Engram.OAuth.RefreshToken do
     # rolled-back reader narrows to one vault rather than widening to all,
     # until a later release drops it.
     field :vault_ids, {:array, Ecto.UUID}
+    # Per-vault levels (#174): `%{vault_id => "none" | "read" | "write"}` and
+    # the level for every vault not listed. Both NULL = a pre-levels grant.
+    # Read through `Engram.OAuth.access_claims/1`, never directly.
+    field :vault_access, :map
+    field :default_access, :string
     # User-typed name for this grant, copied from the authorization code at
     # exchange and carried across every rotation. NULL falls back to the OAuth
     # client's own identity in the connections list.
@@ -33,6 +42,13 @@ defmodule Engram.OAuth.RefreshToken do
     field :expires_at, :utc_datetime
     field :revoked_at, :utc_datetime
     field :consumed_at, :utc_datetime
+    # Set with `revoked_at` when a grace re-issue replaced this unused
+    # successor (#1974). Such a row never mints, but does not revoke its
+    # family (`Engram.OAuth.family_unrevoked/1`). Written by update only.
+    field :superseded_at, :utc_datetime
+    # The row this one was minted from by rotation or grace re-issue. NULL on
+    # a family's first row and on rows from before the column.
+    field :parent_id, :binary_id
 
     # Read-only tracking fields populated at token-rotation time.
     field :last_used_at, :utc_datetime_usec
@@ -49,11 +65,17 @@ defmodule Engram.OAuth.RefreshToken do
     # column, which resolve as unverified. See #1204.
     field :redirect_uri, :string
 
+    # When the grant (this family) was created: set at code exchange and
+    # copied unchanged onto every rotation successor. NULL on rows minted
+    # before the column; `Engram.OAuth.granted_at/1` then falls back to the
+    # family's earliest `inserted_at`, and the next rotation stores it.
+    field :granted_at, :utc_datetime_usec
+
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 
-  @cast ~w(token_hash family_id client_id user_id vault_id vault_ids label
-           scope expires_at last_used_at last_used_ip redirect_uri)a
+  @cast ~w(token_hash family_id client_id user_id vault_id vault_ids vault_access default_access label
+           scope expires_at last_used_at last_used_ip redirect_uri granted_at parent_id)a
   @required ~w(token_hash family_id client_id user_id expires_at)a
 
   def changeset(token, attrs) do

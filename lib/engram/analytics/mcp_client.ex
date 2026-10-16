@@ -64,7 +64,7 @@ defmodule Engram.Analytics.McpClient do
 
   def host_family(_host), do: "other"
 
-  @known_scopes ~w(mcp offline_access openid profile email)
+  @known_scopes ~w(mcp mcp:read offline_access openid profile email)
 
   @doc """
   Scope names as analytics labels: the common ones by name, anything else as

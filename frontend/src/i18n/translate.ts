@@ -8,6 +8,20 @@ const PLACEHOLDER = /\{(?<name>\w+)\}/gu;
 // the key scanner reads as neither key.
 type IsUnion<T, U = T> = T extends unknown ? ([U] extends [T] ? false : true) : never;
 
+// Intl constructors cost far more than the select/format they set up, and a
+// counted string renders per row (every vault card), so one of each per locale.
+const pluralRules = new Map<string, Intl.PluralRules>();
+const numberFormats = new Map<string, Intl.NumberFormat>();
+
+function memo<T>(cache: Map<string, T>, key: string, make: () => T): T {
+	let hit = cache.get(key);
+	if (!hit) {
+		hit = make();
+		cache.set(key, hit);
+	}
+	return hit;
+}
+
 export type PluralForms = Partial<Record<Intl.LDMLPluralRule, string>>;
 export type Catalog = Record<string, string | PluralForms>;
 export type Vars = Record<string, string | number>;
@@ -40,10 +54,18 @@ export function translatePlural(
 	const hit = catalog[en.other];
 	const translated = typeof hit === "object";
 	const forms = translated ? hit : en;
-	const category = new Intl.PluralRules(translated ? locale : "en").select(count);
+	const rulesLocale = translated ? locale : "en";
+	const category = memo(pluralRules, rulesLocale, () => new Intl.PluralRules(rulesLocale)).select(
+		count,
+	);
 	// {count} is always the number that picked the form, formatted for the locale ("1.234").
 	// en-US for English, so an English UI reads "1,234" on any browser.
-	const shown = new Intl.NumberFormat(intlLocale(locale, "en-US")).format(count);
+	const numberLocale = intlLocale(locale, "en-US");
+	const shown = memo(
+		numberFormats,
+		numberLocale ?? "",
+		() => new Intl.NumberFormat(numberLocale),
+	).format(count);
 	return interpolate(forms[category] ?? forms.other ?? en.other, { ...vars, count: shown });
 }
 // A catalog key as a translator accepts it: a string literal the key scanner can

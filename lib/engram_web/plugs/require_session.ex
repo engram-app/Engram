@@ -15,11 +15,14 @@ defmodule EngramWeb.Plugs.RequireSession do
       grant is rejected too: it is still a third-party app.
 
   Assumes `EngramWeb.Plugs.Auth` and `EngramWeb.Plugs.OAuthScopeEnforce` have
-  already run. The OAuth grant is discriminated on `:oauth_scope` (the token's
-  `scope` claim) and NOT on "is this an internal JWT" — local/self-host session
-  tokens and device-flow tokens are internal JWTs too, and blocking those would
-  lock every self-host user out of their own settings page. Neither carries a
-  `scope` claim; only `Engram.OAuth.issue_access_token/3` sets one.
+  already run. The OAuth grant is discriminated on its claims (`:oauth_scope`,
+  the `scope` claim, or `:oauth_grant_id`, the `gid` claim) and NOT on "is this
+  an internal JWT" — local/self-host session tokens and device-flow tokens are
+  internal JWTs too, and blocking those would lock every self-host user out of
+  their own settings page. Neither carries `scope` or `gid`; only an OAuth
+  access token does. Both are checked because a grant row may hold a NULL
+  scope, and its token then carries `gid` alone: keyed on `scope` only, such a
+  token could PATCH its own grant to write everywhere.
 
   Device-flow (plugin) tokens are rejected too, for least privilege. The
   plugin only syncs notes, but its token sits on disk in the vault's plugin
@@ -50,7 +53,7 @@ defmodule EngramWeb.Plugs.RequireSession do
       conn.assigns[:current_api_key] && !Keyword.get(opts, :allow_api_key, false) ->
         reject(conn, "api_key_not_allowed")
 
-      conn.assigns[:oauth_scope] ->
+      conn.assigns[:oauth_scope] || conn.assigns[:oauth_grant_id] ->
         reject(conn, "oauth_grant_not_allowed")
 
       conn.assigns[:device_token] && !Keyword.get(opts, :allow_device_token, false) ->

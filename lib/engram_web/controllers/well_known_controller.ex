@@ -88,7 +88,9 @@ defmodule EngramWeb.WellKnownController do
       resource: OAuthMetadata.resource(conn),
       authorization_servers: [base],
       bearer_methods_supported: ["header"],
-      scopes_supported: ["mcp"],
+      # RFC 9728 §2. Safe to list `mcp:read` here even though MCP clients may
+      # request every listed scope: the union of the two is full access.
+      scopes_supported: Engram.OAuth.scopes_supported(),
       resource_documentation: @resource_documentation
     })
   end
@@ -131,8 +133,9 @@ defmodule EngramWeb.WellKnownController do
         revocation_endpoint_auth_methods_supported: @client_auth_methods,
         revocation_endpoint_auth_signing_alg_values_supported: Jwks.allowed_algs(),
         # `offline_access`: every grant gets a refresh token, and clients that
-        # ask for it by habit are narrowed, not refused (#1974).
-        scopes_supported: ["mcp", "offline_access"],
+        # ask for it by habit are narrowed, not refused (#1974). It is not a
+        # grant scope, so the protected resource does not list it.
+        scopes_supported: Engram.OAuth.scopes_supported() ++ ["offline_access"],
         # CIMD (IETF draft-ietf-oauth-client-id-metadata-document). Not cosmetic
         # capability signalling: Anthropic's docs say Claude picks CIMD only when
         # the metadata advertises BOTH `"none"` above and this key, so this line

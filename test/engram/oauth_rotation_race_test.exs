@@ -221,6 +221,205 @@ defmodule Engram.OAuthRotationRaceTest do
     assert live(ctx.user) == 0
   end
 
+  # Fifth review #3: rotation takes the grant lock, then the presented row,
+  # then the family's rows. A revoke that locked rows without the grant lock
+  # could hold one a rotation wants while waiting for one it holds: Postgres
+  # aborts a side and `{:ok, _} = Repo.transaction` raises. So a revoke takes
+  # the grant lock first and touches no row until it has it.
+  test "a revoke waits for the grant lock before locking any row", ctx do
+    test = self()
+
+    holder =
+      Task.async(fn ->
+        real_checkout!()
+
+        Repo.transaction(fn ->
+          OAuth.lock_grants!(ctx.user.id)
+          send(test, :locked)
+
+          receive do
+            :commit -> :ok
+          after
+            15_000 -> Repo.rollback(:test_timeout)
+          end
+        end)
+      end)
+
+    assert_receive :locked, 5_000
+
+    disconnect =
+      Task.async(fn ->
+        real_checkout!()
+        Engram.Connections.revoke_oauth_family(ctx.user.id, row_client_id(ctx.raw), nil)
+      end)
+
+    await_advisory_waiter()
+
+    # The waiting revoke holds no row lock.
+    hash = Engram.Crypto.sha256_hex(ctx.raw)
+
+    Repo.transaction(fn ->
+      Repo.query!(
+        "SELECT id FROM oauth_refresh_tokens WHERE token_hash = $1 FOR UPDATE NOWAIT",
+        [hash]
+      )
+    end)
+
+    send(holder.pid, :commit)
+    Task.await(holder)
+    assert :ok = Task.await(disconnect)
+    assert live(ctx.user) == 0
+  end
+
+  # Sixth review #7: cleanup_expired's DELETEs locked rows in heap order with
+  # no grant lock, so against a revoke (grant lock, then rows by id) the two
+  # could each hold a row the other wanted: a deadlock. Cleanup follows the
+  # revoke's order: grant locks first, no row touched until it has them.
+  test "cleanup waits for the grant lock before locking any row", ctx do
+    test = self()
+    hash = Engram.Crypto.sha256_hex(ctx.raw)
+    long_ago = DateTime.add(DateTime.utc_now(:second), -30 * 24 * 3600, :second)
+
+    Repo.query!("UPDATE oauth_refresh_tokens SET expires_at = $1 WHERE token_hash = $2", [
+      long_ago,
+      hash
+    ])
+
+    holder =
+      Task.async(fn ->
+        real_checkout!()
+
+        Repo.transaction(fn ->
+          OAuth.lock_grants!(ctx.user.id)
+          send(test, :locked)
+
+          receive do
+            :commit -> :ok
+          after
+            15_000 -> Repo.rollback(:test_timeout)
+          end
+        end)
+      end)
+
+    assert_receive :locked, 5_000
+
+    cleanup =
+      Task.async(fn ->
+        real_checkout!()
+        OAuth.cleanup_expired()
+      end)
+
+    await_advisory_waiter()
+
+    # The waiting cleanup holds no row lock.
+    Repo.transaction(fn ->
+      Repo.query!(
+        "SELECT id FROM oauth_refresh_tokens WHERE token_hash = $1 FOR UPDATE NOWAIT",
+        [hash]
+      )
+    end)
+
+    send(holder.pid, :commit)
+    Task.await(holder)
+    assert {n, nil} = Task.await(cleanup)
+    assert n >= 1
+
+    refute Repo.exists?(from(r in RefreshToken, where: r.token_hash == ^hash),
+             skip_tenant_check: true
+           )
+  end
+
+  # An edit from Settings and a refresh in flight at once: whichever takes the
+  # grant lock first, the grant ends with the edit's access. A rotation that
+  # copied the pre-edit row after the edit committed would restore it.
+  test "an access edit racing a rotation keeps the edit", ctx do
+    test = self()
+    vault = insert(:vault, user: ctx.user)
+    uid = Ecto.UUID.dump!(ctx.user.id)
+
+    on_exit(fn ->
+      real_checkout!()
+      Repo.query!("DELETE FROM vaults WHERE user_id = $1", [uid])
+    end)
+
+    hash = Engram.Crypto.sha256_hex(ctx.raw)
+
+    family_id =
+      Repo.one!(from(r in RefreshToken, where: r.token_hash == ^hash, select: r.family_id),
+        skip_tenant_check: true
+      )
+
+    holder =
+      Task.async(fn ->
+        real_checkout!()
+
+        Repo.transaction(fn ->
+          OAuth.lock_grants!(ctx.user.id)
+          send(test, :locked)
+
+          receive do
+            :commit -> :ok
+          after
+            15_000 -> Repo.rollback(:test_timeout)
+          end
+        end)
+      end)
+
+    assert_receive :locked, 5_000
+
+    edit =
+      Task.async(fn ->
+        real_checkout!()
+
+        Engram.Connections.update_oauth_grant_access(
+          ctx.user,
+          ctx.client_id,
+          family_id,
+          {%{vault.id => "read"}, "none"}
+        )
+      end)
+
+    await_advisory_waiter()
+    # The edit is blocked on the grant lock, not done.
+    assert Task.yield(edit, 50) == nil
+
+    rotation =
+      Task.async(fn ->
+        real_checkout!()
+        OAuth.rotate_refresh_token(ctx.raw, ctx.client_id)
+      end)
+
+    send(holder.pid, :commit)
+    Task.await(holder)
+    assert :ok = Task.await(edit)
+    assert {:ok, rotated} = Task.await(rotation)
+
+    {:ok, claims} = Engram.Accounts.grant_claims(rotated.access_token)
+    assert Engram.Permissions.level(Engram.Permissions.from_claims(claims), vault) == :read
+
+    {:ok, next} = OAuth.rotate_refresh_token(rotated.refresh_token, ctx.client_id)
+    {:ok, claims} = Engram.Accounts.grant_claims(next.access_token)
+    assert Engram.Permissions.level(Engram.Permissions.from_claims(claims), vault) == :read
+  end
+
+  defp await_advisory_waiter(deadline \\ System.monotonic_time(:millisecond) + 5_000) do
+    %{rows: [[n]]} =
+      Repo.query!(
+        "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event = 'advisory'"
+      )
+
+    cond do
+      n >= 1 ->
+        :ok
+
+      System.monotonic_time(:millisecond) > deadline ->
+        flunk("never waited on the grant lock")
+
+      true ->
+        Process.sleep(10) && await_advisory_waiter(deadline)
+    end
+  end
+
   defp row_client_id(raw) do
     hash = Engram.Crypto.sha256_hex(raw)
 

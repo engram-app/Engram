@@ -12,6 +12,17 @@ defmodule Engram.Auth do
   def supports_credentials?, do: provider().supports_credentials?()
 
   @doc """
+  Whether a token the configured provider accepted can be one of OUR OAuth
+  access tokens, i.e. carry a grant (`Engram.Accounts.grant_claims/1`). Only
+  under the `:local` provider (self-host): it verifies Engram-issued HS256
+  JWTs, so an OAuth access token resolves as a provider token there. A Clerk
+  token is RS256 and never ours; reading it as a grant (an HS256 verify)
+  could only fail, so it is not read.
+  """
+  @spec provider_tokens_carry_grants?() :: boolean()
+  def provider_tokens_carry_grants?, do: provider() == Engram.Auth.Providers.Local
+
+  @doc """
   Bounded, low-cardinality label for an auth-rejection reason — safe as a
   telemetry tag and a log value.
 

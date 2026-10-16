@@ -630,8 +630,9 @@ defmodule EngramWeb.VaultsControllerTest do
     } do
       conn = delete(bearer(scoped), ~p"/api/vaults/#{outside.id}")
 
-      assert %{"error" => "Not authorized for this vault"} = json_response(conn, 403)
-      # Still alive — a 403 that soft-deleted it anyway would be the real bug.
+      # 404, identical to a missing vault: a 403 told the grant it exists.
+      assert %{"error" => "not found"} = json_response(conn, 404)
+      # Still alive — a refusal that soft-deleted it anyway would be the real bug.
       assert is_nil(
                Engram.Repo.get!(Engram.Vaults.Vault, outside.id, skip_tenant_check: true).deleted_at
              )
@@ -700,7 +701,7 @@ defmodule EngramWeb.VaultsControllerTest do
     } do
       conn = post(bearer(scoped), ~p"/api/vaults/#{outside.id}/restore")
 
-      assert %{"error" => "Not authorized for this vault"} = json_response(conn, 403)
+      assert %{"error" => "not found"} = json_response(conn, 404)
     end
 
     test "a scoped grant cannot SHOW or UPDATE a vault outside its scope", %{
@@ -709,13 +710,13 @@ defmodule EngramWeb.VaultsControllerTest do
     } do
       # Same leak class Task 8 closed on the index — `show` returned the name
       # and counts, `update` renamed it.
-      assert %{"error" => "Not authorized for this vault"} =
-               bearer(scoped) |> get(~p"/api/vaults/#{outside.id}") |> json_response(403)
+      assert %{"error" => "not found"} =
+               bearer(scoped) |> get(~p"/api/vaults/#{outside.id}") |> json_response(404)
 
-      assert %{"error" => "Not authorized for this vault"} =
+      assert %{"error" => "not found"} =
                bearer(scoped)
                |> patch(~p"/api/vaults/#{outside.id}", %{name: "renamed"})
-               |> json_response(403)
+               |> json_response(404)
     end
 
     test "a scoped grant CAN delete a vault inside its scope", %{

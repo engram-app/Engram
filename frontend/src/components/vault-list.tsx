@@ -29,6 +29,9 @@ function SearchInput({ search, status }: { search: VaultSearch; status?: string 
 				value={search.filter}
 				onChange={(e) => search.setFilter(e.target.value)}
 				onBlur={() => search.filter === "" && search.setSearching(false)}
+				// Inside a form (the key dialog) Enter would submit it: here it
+				// only filters, which typing already did.
+				onKeyDown={(e) => e.key === "Enter" && e.preventDefault()}
 				placeholder={t("Search vaults")}
 				aria-label={t("Search vaults")}
 			/>
@@ -50,19 +53,47 @@ function countLabel(tn: Tn, notes?: number, files?: number): string {
 	return parts.join(" · ");
 }
 
+interface VaultCard {
+	name: string;
+	is_default?: boolean;
+	note_count?: number;
+	attachment_count?: number;
+}
+
 interface VaultOptionProps {
-	vault: { name: string; is_default?: boolean; note_count?: number; attachment_count?: number };
+	vault: VaultCard;
 	type: "radio" | "checkbox";
 	checked: boolean;
 	onChange: () => void;
 	name?: string;
 }
 
-// One vault card for every picker (/link is single-select, OAuth consent is
-// multi-select). The counts sit under the name, never beside it: side by side,
-// a long name on a narrow phone collides with them.
-export function VaultOption({ vault, type, checked, onChange, name }: VaultOptionProps) {
+// A vault's name, default badge and counts. The counts sit under the name,
+// never beside it: side by side, a long name on a narrow phone collides with
+// them. The badge never wraps: `wrap-anywhere` on the name otherwise lets a
+// narrow screen split it mid-word ("Stand / ard").
+export function VaultSummary({ vault }: { vault: VaultCard }) {
 	const { t, tn } = useT();
+	return (
+		<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+			<span className="wrap-anywhere font-medium text-foreground text-sm">
+				{vault.name}
+				{vault.is_default ? (
+					<span className="ms-2 whitespace-nowrap font-normal text-muted-foreground text-xs">
+						{t("default")}
+					</span>
+				) : null}
+			</span>
+			<span className="text-muted-foreground text-xs">
+				{countLabel(tn, vault.note_count, vault.attachment_count)}
+			</span>
+		</span>
+	);
+}
+
+// One vault card for every picker (/link is single-select, OAuth consent is
+// multi-select).
+export function VaultOption({ vault, type, checked, onChange, name }: VaultOptionProps) {
 	return (
 		<label className={selectableRow(checked)}>
 			<input
@@ -72,17 +103,7 @@ export function VaultOption({ vault, type, checked, onChange, name }: VaultOptio
 				onChange={onChange}
 				className="accent-primary"
 			/>
-			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-				<span className="wrap-anywhere font-medium text-foreground text-sm">
-					{vault.name}
-					{vault.is_default ? (
-						<span className="ms-2 font-normal text-muted-foreground text-xs">{t("default")}</span>
-					) : null}
-				</span>
-				<span className="text-muted-foreground text-xs">
-					{countLabel(tn, vault.note_count, vault.attachment_count)}
-				</span>
-			</span>
+			<VaultSummary vault={vault} />
 		</label>
 	);
 }

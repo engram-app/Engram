@@ -80,8 +80,13 @@ defmodule EngramWeb.SyncChannel do
         send(self(), {:after_join, params})
         {:ok, %{reconnect_jitter_max_ms: reconnect_jitter_max_ms()}, socket}
 
+      # Same reply as a vault that does not exist, so a join cannot probe
+      # which UUIDs are real (VaultPlug answers the REST side the same way).
       :forbidden ->
-        {:error, %{reason: "api_key_vault_forbidden"}}
+        {:error, %{reason: "vault_not_found"}}
+
+      :revoked ->
+        {:error, %{reason: "unauthorized"}}
     end
   end
 
@@ -176,7 +181,13 @@ defmodule EngramWeb.SyncChannel do
   # ---------------------------------------------------------------------------
 
   # API-key restriction AND OAuth grant, intersected in one place. Plugs do not
-  # run on a socket, so this is the only enforcement point the live sync path has.
-  defp check_vault_access(socket, vault),
-    do: Engram.Permissions.check(Engram.Permissions.vault_scope(socket.assigns), vault)
+  # run on a socket, so this is the only enforcement point the live sync path
+  # has. The grant is re-read now, not trusted from connect: a missed
+  # disconnect broadcast must not leave a revoked or narrowed grant joining.
+  defp check_vault_access(socket, vault) do
+    case ChannelGate.vault_scope(socket.assigns) do
+      :revoked -> :revoked
+      scope -> Engram.Permissions.check(scope, vault)
+    end
+  end
 end

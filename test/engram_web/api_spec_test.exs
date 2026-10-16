@@ -219,9 +219,11 @@ defmodule EngramWeb.ApiSpecTest do
       assert Map.has_key?(op.responses, 200) and Map.has_key?(op.responses, 404)
     end
 
-    test "POST /api/vaults/{id}/restore documents 200/402/404", %{spec: spec} do
+    # 403 joins with #174/#332: restore needs write on the vault, so a
+    # read-level or out-of-scope credential is refused.
+    test "POST /api/vaults/{id}/restore documents 200/402/403/404", %{spec: spec} do
       op = spec.paths["/api/vaults/{id}/restore"].post
-      assert Enum.sort(Map.keys(op.responses)) == [200, 402, 404]
+      assert Enum.sort(Map.keys(op.responses)) == [200, 402, 403, 404]
     end
 
     test "POST /api/vaults/{id}/purge documents 200/404", %{spec: spec} do

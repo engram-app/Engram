@@ -123,7 +123,15 @@ defmodule Engram.DataCase do
   and its measurement) and call this to put them in a stated state first.
   """
   def clear_request_caches do
-    for c <- [:user, :api_key, :subscription, :vaults, :onboarding_actions, :note_counts],
+    for c <- [
+          :user,
+          :api_key,
+          :oauth_grant,
+          :subscription,
+          :vaults,
+          :onboarding_actions,
+          :note_counts
+        ],
         do: Engram.Cache.clear_local(c)
 
     :ok

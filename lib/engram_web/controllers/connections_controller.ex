@@ -41,8 +41,12 @@ defmodule EngramWeb.ConnectionsController do
         "longer mint access tokens. Pass `family_id` to revoke ONE grant — a client the user " <>
         "authorized twice has two, and each is its own row in `GET /connections`. Omit it to " <>
         "disconnect the client entirely, which is what frees a connection-cap slot. `vault_id` " <>
-        "is the older, coarser narrowing and is ignored when `family_id` is given. " <>
-        "Session-auth only.",
+        "is the older, coarser narrowing and is ignored when `family_id` is given: it revokes, " <>
+        "whole, each of the client's grants that can reach that vault. A grant with per-vault " <>
+        "levels counts as reaching it at read or write, and through its new-vaults policy; a " <>
+        "grant that lists vaults without levels, when the vault is one of them; and an " <>
+        "all-vaults grant, which reaches every vault. A revoked grant's access tokens stop " <>
+        "working at once and its live sockets are disconnected. Session-auth only.",
     tags: ["Connections"],
     parameters: [
       client_id: [in: :path, type: :string, required: true, description: "OAuth client id"],
@@ -56,7 +60,8 @@ defmodule EngramWeb.ConnectionsController do
         in: :query,
         type: :string,
         required: false,
-        description: "Scope revoke to one vault"
+        description:
+          "Revoke only the grants that can reach this vault, all-vaults grants included"
       ]
     ],
     responses: [
@@ -106,14 +111,24 @@ defmodule EngramWeb.ConnectionsController do
       |> put_status(:unprocessable_entity)
       |> json(%{errors: %{name: ["can't be blank"]}})
     else
-      case Engram.Accounts.create_api_key(user, name) do
-        {:ok, raw_key, api_key} ->
-          conn
-          |> put_status(:created)
-          |> json(%{key: raw_key, id: api_key.id, name: api_key.name})
+      with {:ok, access} <- EngramWeb.KeyAccessParams.parse(conn, params) do
+        case Engram.Accounts.create_api_key(user, name, access) do
+          {:ok, raw_key, api_key} ->
+            conn
+            |> put_status(:created)
+            |> json(
+              Map.merge(
+                %{key: raw_key, id: api_key.id, name: api_key.name},
+                Engram.Permissions.key_params(api_key)
+              )
+            )
 
-        {:error, %Ecto.Changeset{}} = error ->
-          error
+          {:error, %Ecto.Changeset{}} = error ->
+            error
+
+          {:error, :invalid_access} ->
+            EngramWeb.KeyAccessParams.invalid(conn)
+        end
       end
     end
   end
@@ -170,6 +185,140 @@ defmodule EngramWeb.ConnectionsController do
     end
   end
 
+  operation(:update_oauth,
+    operation_id: "connections-update-oauth",
+    summary: "Change an OAuth connection's vault access",
+    description:
+      "Replaces the vault levels of ONE grant (`family_id`) of an OAuth client. Takes effect " <>
+        "at once: issued access tokens and every later refresh carry the new access, and the " <>
+        "user's live sockets reconnect. Widening is allowed. A grant the client asked to be " <>
+        "read only (`mcp:read`) cannot be given write: 422. Session-auth only.",
+    tags: ["Connections"],
+    parameters: [
+      client_id: [in: :path, type: :string, required: true, description: "OAuth client id"],
+      family_id: [in: :query, type: :string, required: true, description: "The grant to change"]
+    ],
+    request_body: {"New access", "application/json", Schemas.UpdateAccessRequest, required: true},
+    responses: [
+      ok: {"The updated connection", "application/json", Schemas.Connection},
+      bad_request: {"Missing family_id", "application/json", Schemas.MessageError},
+      not_found: {"No such connection", "application/json", Schemas.MessageError},
+      unprocessable_entity: {"Access the grant cannot have", "application/json", Schemas.Error}
+    ]
+  )
+
+  def update_oauth(conn, %{"client_id" => client_id} = params) do
+    user = conn.assigns.current_user
+
+    with {:family, family_id} when is_binary(family_id) <-
+           {:family, parse_uuid(params["family_id"])},
+         {:ok, selection} <- leveled_access(conn, params) do
+      case Connections.update_oauth_grant_access(user, client_id, family_id, selection) do
+        :ok ->
+          Engram.Analytics.track(user, "oauth_grant_access_changed", %{})
+          render_row(conn, &(&1.family_id == family_id and &1.kind != :pat))
+
+        {:error, :not_found} ->
+          not_found(conn)
+
+        {:error, :invalid_access} ->
+          EngramWeb.KeyAccessParams.invalid(conn)
+
+        {:error, :read_only_grant} ->
+          read_only_grant(conn)
+      end
+    else
+      {:family, nil} -> conn |> put_status(:bad_request) |> json(%{error: "family_id_required"})
+      %Plug.Conn{} = halted -> halted
+    end
+  end
+
+  operation(:update_pat,
+    operation_id: "connections-update-pat",
+    summary: "Change a personal access token's vault access",
+    description:
+      "Replaces the vault levels of a key created with levels (`engram_lk_`). The raw key is " <>
+        "unchanged, and the change takes effect at once. A key created before levels cannot be " <>
+        "changed (422); create a new key instead. 404 for an unknown or malformed id. " <>
+        "Session-auth only.",
+    tags: ["Connections"],
+    parameters: [
+      id: [in: :path, type: :string, required: true, description: "PAT (API key) UUID"]
+    ],
+    request_body: {"New access", "application/json", Schemas.UpdateAccessRequest, required: true},
+    responses: [
+      ok: {"The updated connection", "application/json", Schemas.Connection},
+      not_found: {"No such PAT", "application/json", Schemas.MessageError},
+      unprocessable_entity: {"Access the key cannot have", "application/json", Schemas.Error}
+    ]
+  )
+
+  def update_pat(conn, %{"id" => id_str} = params) do
+    user = conn.assigns.current_user
+
+    with {:ok, id} <- Ecto.UUID.cast(id_str),
+         {:ok, selection} <- leveled_access(conn, params) do
+      case Engram.Accounts.update_api_key_access(user, id, selection) do
+        {:ok, _key} ->
+          Engram.Analytics.track(user, "api_key_access_changed", %{})
+          render_row(conn, &(&1.kind == :pat and &1.key_id == id))
+
+        {:error, :not_found} ->
+          not_found(conn)
+
+        {:error, :invalid_access} ->
+          EngramWeb.KeyAccessParams.invalid(conn)
+
+        {:error, :legacy_key} ->
+          legacy_key(conn)
+      end
+    else
+      :error -> not_found(conn)
+      %Plug.Conn{} = halted -> halted
+    end
+  end
+
+  # An edit always says what the credential gets: no params is not "all vaults".
+  defp leveled_access(conn, params) do
+    case EngramWeb.KeyAccessParams.parse(conn, params) do
+      {:ok, nil} -> EngramWeb.KeyAccessParams.invalid(conn)
+      {:ok, selection} -> {:ok, selection}
+      halted -> halted
+    end
+  end
+
+  # The row as `GET /connections` serializes it, so the client can patch its cache.
+  defp render_row(conn, match?) do
+    scope = Engram.Permissions.vault_scope(conn)
+
+    case conn.assigns.current_user |> Connections.list_for_user(scope) |> Enum.find(match?) do
+      nil -> not_found(conn)
+      row -> json(conn, serialize(row))
+    end
+  end
+
+  defp not_found(conn), do: conn |> put_status(:not_found) |> json(%{error: "not_found"})
+
+  defp read_only_grant(conn) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> json(%{
+      errors: %{
+        vault_access: ["this connection asked for read-only access and cannot be given write"]
+      }
+    })
+  end
+
+  defp legacy_key(conn) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> json(%{
+      errors: %{
+        vault_access: ["this key was created before access levels; create a new key instead"]
+      }
+    })
+  end
+
   defp parse_uuid(nil), do: nil
   defp parse_uuid(""), do: nil
 
@@ -203,6 +352,8 @@ defmodule EngramWeb.ConnectionsController do
       vault_ids: row.vault_ids,
       vault_names: row.vault_names,
       scope: row.scope,
+      vault_levels: row.vault_levels,
+      new_vaults: row.new_vaults,
       last_used_at: row.last_used_at,
       connected_at: row.connected_at,
       first_user_agent: row.first_user_agent,

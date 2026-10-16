@@ -4,7 +4,12 @@ defmodule EngramWeb.Plugs.VaultPlug do
 
   - If X-Vault-ID is present: fetches that vault and verifies the current user owns it.
   - If absent: falls back to the user's default vault.
-  - Restrictions (API key, OAuth grant) are enforced via `Engram.Permissions`.
+  - Restrictions (API key, OAuth grant) are enforced via `Engram.Permissions`,
+    including per-vault levels: a write to a read-level vault is 403
+    `read_only_vault`.
+  - A vault the credential cannot reach at all answers exactly like a vault
+    that does not exist (404 "Vault not found"), so a credential cannot probe
+    which UUIDs are real.
 
   Sets `conn.assigns.current_vault` on success. Halts with 403/404 on failure.
 
@@ -23,12 +28,22 @@ defmodule EngramWeb.Plugs.VaultPlug do
 
     case resolve_vault(conn, user) do
       {:ok, vault} ->
-        case Engram.Permissions.check(Engram.Permissions.vault_scope(conn), vault) do
-          :ok ->
-            assign(conn, :current_vault, vault)
+        scope = Engram.Permissions.vault_scope(conn)
 
-          :forbidden ->
-            Halt.json(conn, 403, %{error: "Not authorized for this vault"})
+        cond do
+          # Same response as a UUID that resolves to nothing: a 403 here told
+          # a restricted credential the vault exists. The reason differs only
+          # in the request log.
+          not Engram.Permissions.allows?(scope, vault) ->
+            reject(conn, "vault_out_of_scope", "Vault not found")
+
+          # A read-level vault (#174, #332) refuses anything that can change it.
+          EngramWeb.ReadOnlyRoutes.writes?(conn) and
+              not Engram.Permissions.allows_write?(scope, vault) ->
+            Halt.json(conn, 403, %{error: "read_only_vault"})
+
+          true ->
+            assign(conn, :current_vault, vault)
         end
 
       # A non-UUID X-Vault-ID (e.g. a client sending a stale/placeholder id) is

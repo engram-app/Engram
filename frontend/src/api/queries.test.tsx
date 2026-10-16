@@ -6,9 +6,10 @@ import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "v
 import { noteName } from "../lib/note-name";
 import { syntheticFolderId } from "../viewer/tree/synthesize-folders";
 import { getActiveVaultId, setActiveVaultId } from "./active-vault";
-import { ApiError } from "./client";
+import { ApiError, api } from "./client";
 import { CrdtOpError } from "./crdt-ops";
 import {
+	type Connection,
 	type Folder,
 	type Note,
 	useAcceptTerms,
@@ -38,6 +39,7 @@ import {
 	useSearch,
 	useTags,
 	useTypes,
+	useUpdateConnectionAccess,
 	useUpdateProfile,
 	useUploadAttachment,
 	useVaults,
@@ -2540,5 +2542,51 @@ describe("tree fetches rebase pending bulk writes", () => {
 		await waitFor(() => expect(result.current.isError).toBe(true));
 		await act(() => refetchTree());
 		expect(paths()).toEqual(["1:a/x.md"]);
+	});
+});
+
+describe("useUpdateConnectionAccess", () => {
+	const row = (over: Partial<Connection>) =>
+		({ kind: "mcp", client_id: "c", family_id: "f1", key_id: null, ...over }) as Connection;
+
+	it("PATCHes the grant by family and swaps only that row into the list", async () => {
+		const other = row({ family_id: "f2" });
+		const key = row({ kind: "pat", client_id: null, family_id: null, key_id: "k1" });
+		qc.setQueryData(["connections"], [row({}), other, key]);
+		const updated = row({ new_vaults: "read" });
+		vi.mocked(api.patch).mockResolvedValueOnce(updated);
+		const { result } = renderHook(() => useUpdateConnectionAccess(), { wrapper });
+		await act(() =>
+			result.current.mutateAsync({ connection: row({}), body: { default_access: "read" } }),
+		);
+		expect(api.patch).toHaveBeenCalledWith("/connections/oauth/c?family_id=f1", {
+			default_access: "read",
+		});
+		expect(qc.getQueryData(["connections"])).toEqual([updated, other, key]);
+	});
+
+	// A failure after the server applied the change (a 404 rendering the row)
+	// must not leave the list showing the old access.
+	it("refetches the list when the save fails", async () => {
+		qc.setQueryData(["connections"], [row({})]);
+		const invalidate = vi.spyOn(qc, "invalidateQueries");
+		vi.mocked(api.patch).mockRejectedValueOnce(new Error("404"));
+		const { result } = renderHook(() => useUpdateConnectionAccess(), { wrapper });
+		await act(() =>
+			result.current
+				.mutateAsync({ connection: row({}), body: { default_access: "read" } })
+				.catch(() => {}),
+		);
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["connections"] });
+	});
+
+	it("PATCHes a key by id", async () => {
+		const key = row({ kind: "pat", client_id: null, family_id: null, key_id: "k1" });
+		vi.mocked(api.patch).mockResolvedValueOnce(key);
+		const { result } = renderHook(() => useUpdateConnectionAccess(), { wrapper });
+		await act(() =>
+			result.current.mutateAsync({ connection: key, body: { default_access: "none" } }),
+		);
+		expect(api.patch).toHaveBeenCalledWith("/connections/pat/k1", { default_access: "none" });
 	});
 });

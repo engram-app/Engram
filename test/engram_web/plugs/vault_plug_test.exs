@@ -175,7 +175,7 @@ defmodule EngramWeb.Plugs.VaultPlugTest do
       assert conn.assigns.current_vault.id == vault.id
     end
 
-    test "restricted API key without matching vault returns 403",
+    test "restricted API key without matching vault returns 404 like a missing one",
          %{user: user, vault: vault, other_vault: other_vault} do
       {:ok, _raw_key, api_key} = Accounts.create_api_key(user, "restricted-other")
 
@@ -192,7 +192,8 @@ defmodule EngramWeb.Plugs.VaultPlugTest do
         |> VaultPlug.call([])
 
       assert conn.halted
-      assert conn.status == 403
+      assert conn.status == 404
+      assert Jason.decode!(conn.resp_body) == %{"error" => "Vault not found"}
     end
   end
 end

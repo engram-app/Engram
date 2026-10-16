@@ -538,4 +538,181 @@ defmodule EngramWeb.ConnectionsControllerTest do
       assert conn.status in [401, 403]
     end
   end
+
+  describe "PATCH /api/connections/oauth/:client_id" do
+    defp oauth_grant(user, scope \\ "mcp") do
+      client = insert(:oauth_client, kind: "mcp")
+
+      rt =
+        insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id, scope: scope)
+
+      {client, rt}
+    end
+
+    test "replaces the grant's access and returns its connection row", %{conn: conn} do
+      user = insert(:user)
+      work = insert(:vault, user: user)
+      {client, rt} = oauth_grant(user)
+
+      body =
+        conn
+        |> jwt_authed(user)
+        |> patch("/api/connections/oauth/#{client.client_id}?family_id=#{rt.family_id}", %{
+          vault_access: %{work.id => "read"},
+          default_access: "none"
+        })
+        |> json_response(200)
+
+      assert body["family_id"] == rt.family_id
+      assert body["new_vaults"] == "none"
+      assert [%{"vault_id" => id, "level" => "read"}] = body["vault_levels"]
+      assert id == work.id
+    end
+
+    test "422 when an mcp:read grant is given write", %{conn: conn} do
+      user = insert(:user)
+      work = insert(:vault, user: user)
+      {client, rt} = oauth_grant(user, "mcp:read")
+
+      conn =
+        conn
+        |> jwt_authed(user)
+        |> patch("/api/connections/oauth/#{client.client_id}?family_id=#{rt.family_id}", %{
+          vault_access: %{work.id => "write"},
+          default_access: "none"
+        })
+
+      assert %{"errors" => %{"vault_access" => [_]}} = json_response(conn, 422)
+    end
+
+    test "422 for a selection that reaches nothing or no access params", %{conn: conn} do
+      user = insert(:user)
+      {client, rt} = oauth_grant(user)
+      path = "/api/connections/oauth/#{client.client_id}?family_id=#{rt.family_id}"
+
+      assert conn
+             |> jwt_authed(user)
+             |> patch(path, %{default_access: "none"})
+             |> json_response(422)
+
+      assert build_conn() |> jwt_authed(user) |> patch(path, %{}) |> json_response(422)
+    end
+
+    test "400 without a family_id", %{conn: conn} do
+      user = insert(:user)
+      {client, _rt} = oauth_grant(user)
+
+      conn =
+        conn
+        |> jwt_authed(user)
+        |> patch("/api/connections/oauth/#{client.client_id}", %{default_access: "read"})
+
+      assert json_response(conn, 400)
+    end
+
+    test "404 for another user's grant, which keeps its access", %{conn: conn} do
+      owner = insert(:user)
+      {client, rt} = oauth_grant(owner)
+
+      conn =
+        conn
+        |> jwt_authed(insert(:user))
+        |> patch("/api/connections/oauth/#{client.client_id}?family_id=#{rt.family_id}", %{
+          default_access: "read"
+        })
+
+      assert json_response(conn, 404)["error"] == "not_found"
+      assert Engram.Repo.reload!(rt, skip_tenant_check: true).default_access == nil
+    end
+  end
+
+  describe "PATCH /api/connections/pat/:id" do
+    test "replaces a leveled key's access and returns its connection row", %{conn: conn} do
+      user = insert(:user)
+      work = insert(:vault, user: user)
+
+      {:ok, _raw, key} =
+        Engram.Accounts.create_api_key(user, "k", {%{work.id => "write"}, "none"})
+
+      body =
+        conn
+        |> jwt_authed(user)
+        |> patch("/api/connections/pat/#{key.id}", %{default_access: "read"})
+        |> json_response(200)
+
+      assert body["key_id"] == key.id
+      assert body["new_vaults"] == "read"
+    end
+
+    test "422 for a pre-levels key", %{conn: conn} do
+      user = insert(:user)
+      {:ok, _raw, key} = Engram.Accounts.create_api_key(user, "old")
+
+      conn =
+        conn
+        |> jwt_authed(user)
+        |> patch("/api/connections/pat/#{key.id}", %{default_access: "read"})
+
+      assert %{"errors" => %{"vault_access" => [_]}} = json_response(conn, 422)
+    end
+
+    test "404 for another user's key or a malformed id", %{conn: conn} do
+      owner = insert(:user)
+      work = insert(:vault, user: owner)
+
+      {:ok, _raw, key} =
+        Engram.Accounts.create_api_key(owner, "k", {%{work.id => "write"}, "none"})
+
+      before = key_access_rows(key.id)
+
+      assert conn
+             |> jwt_authed(insert(:user))
+             |> patch("/api/connections/pat/#{key.id}", %{default_access: "read"})
+             |> json_response(404)
+
+      # The refused PATCH left the key exactly as it was.
+      assert key_access_rows(key.id) == before
+      assert {"none", [{_, "write"}]} = before
+
+      assert build_conn()
+             |> jwt_authed(owner)
+             |> patch("/api/connections/pat/nope", %{default_access: "read"})
+             |> json_response(404)
+    end
+
+    test "401/403 for API-key-authed requests", %{conn: conn} do
+      user = insert(:user)
+      lift_api_rps_cap!(user)
+      work = insert(:vault, user: user)
+      {:ok, raw, key} = Engram.Accounts.create_api_key(user, "k", {%{work.id => "write"}, "none"})
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{raw}")
+        |> patch("/api/connections/pat/#{key.id}", %{default_access: "write"})
+
+      assert conn.status in [401, 403]
+    end
+  end
+
+  defp key_access_rows(key_id) do
+    import Ecto.Query, only: [from: 2]
+
+    default =
+      Engram.Repo.one!(
+        from(k in Engram.Accounts.ApiKey, where: k.id == ^key_id, select: k.default_access),
+        skip_tenant_check: true
+      )
+
+    rows =
+      Engram.Repo.all(
+        from(v in "api_key_vaults",
+          where: v.api_key_id == type(^key_id, Ecto.UUID),
+          select: {type(v.vault_id, Ecto.UUID), v.level}
+        ),
+        skip_tenant_check: true
+      )
+
+    {default, rows}
+  end
 end

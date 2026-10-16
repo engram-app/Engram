@@ -24,9 +24,11 @@ defmodule EngramWeb.WellKnownControllerTest do
     end
 
     # RFC 9728 §2 RECOMMENDS it; the MCP spec has clients read it to pick scopes.
-    test "advertises the mcp scope", %{conn: conn} do
+    # `mcp:read` (#174) too: a client requesting every listed scope still gets
+    # full access, since scopes are a union.
+    test "advertises the mcp scopes", %{conn: conn} do
       body = conn |> get("/.well-known/oauth-protected-resource") |> json_response(200)
-      assert body["scopes_supported"] == ["mcp"]
+      assert body["scopes_supported"] == ["mcp", "mcp:read"]
     end
 
     test "responds with application/json content-type", %{conn: conn} do
@@ -147,6 +149,19 @@ defmodule EngramWeb.WellKnownControllerTest do
       assert "mcp" in body["scopes_supported"]
       # Refresh tokens are always issued, so say so (#1974).
       assert "offline_access" in body["scopes_supported"]
+    end
+
+    # Meta Muse's directory requires a Read Only option on OAuth connectors.
+    test "advertises the mcp:read scope", %{conn: conn} do
+      body = json_response(get(conn, "/.well-known/oauth-authorization-server"), 200)
+
+      assert "mcp:read" in body["scopes_supported"]
+    end
+
+    test "the protected resource advertises both scopes", %{conn: conn} do
+      body = json_response(get(conn, "/.well-known/oauth-protected-resource"), 200)
+
+      assert body["scopes_supported"] == ["mcp", "mcp:read"]
     end
 
     test "advertises every auth method some registration path accepts", %{

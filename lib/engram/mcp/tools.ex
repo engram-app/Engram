@@ -78,12 +78,29 @@ defmodule Engram.MCP.Tools do
     "delete_folder" => {"Delete Folder", false, true, true},
     "move_attachment" => {"Move Attachment", false, false, false},
     "delete_attachment" => {"Delete Attachment", false, true, true},
-    "get_attachment_upload_target" => {"Get Attachment Upload Target", true, false, true}
+    # Not read-only: it hands out where to UPLOAD with this credential (#174).
+    "get_attachment_upload_target" => {"Get Attachment Upload Target", false, false, true}
   }
 
   @doc "Whether `name` is a tool annotated `readOnlyHint`. Unknown names are not."
   @spec read_only?(term()) :: boolean()
   def read_only?(name), do: match?({_, true, _, _}, Map.get(@annotations, name))
+
+  # Not `readOnlyHint` (they send something, so a client should confirm), but
+  # they change no note, folder, attachment or vault: `send_feedback` reaches
+  # the Engram team. A separate list rather than a reading of the annotation,
+  # because the annotation answers "should the client ask first?" and the
+  # access gates ask "does this write vault data?".
+  @writes_no_vault_data ~w(send_feedback)
+
+  @doc """
+  Whether `name` writes vault data (notes, folders, attachments, or hands
+  out where to upload them). What every write gate asks: a read-only grant
+  or vault, and an API key whose plan lacks API write, may call only tools
+  for which this is false. Unknown names are writes (fail closed).
+  """
+  @spec writes_vault?(term()) :: boolean()
+  def writes_vault?(name), do: not read_only?(name) and name not in @writes_no_vault_data
 
   @spec list() :: [tool_def()]
   def list do

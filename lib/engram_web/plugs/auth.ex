@@ -24,11 +24,13 @@ defmodule EngramWeb.Plugs.Auth do
   # the downstream billing gates (RequireOnboarding, RequireApiRpsBudget)
   # reuse it instead of each re-querying.
   def call(conn, _opts) do
-    case authenticate(conn) do
-      {:ok, user} ->
-        assign(conn, :current_user, Engram.Billing.with_subscription(user))
+    case authenticate(conn) |> refuse_revoked_grant(conn) do
+      {:ok, user, {:grant, claims}} ->
+        conn
+        |> assign(:current_user, Engram.Billing.with_subscription(user))
+        |> assign_grant_claims(claims)
 
-      {:ok, user, :internal_jwt} ->
+      {:ok, user, :internal_jwt, {:grant, claims}} ->
         # Device-flow / OAuth / MCP access tokens. Downstream cap plugs use
         # `:current_auth_method` to count programmatic traffic without also
         # gating the web SPA (which authes with a Clerk JWT and gets no
@@ -36,6 +38,7 @@ defmodule EngramWeb.Plugs.Auth do
         conn
         |> assign(:current_user, Engram.Billing.with_subscription(user))
         |> assign(:current_auth_method, :internal_jwt)
+        |> assign_grant_claims(claims)
 
       {:ok, user, api_key} ->
         conn
@@ -89,6 +92,39 @@ defmodule EngramWeb.Plugs.Auth do
   # same token. Route privates are set before pipelines run; the controller is not.
   defp surface(%{private: %{token_surface: :mcp}}), do: :mcp
   defp surface(_conn), do: :rest
+
+  # An OAuth access token whose grant is revoked (or not its user's) is
+  # refused HERE, before any plug after Auth runs: those stamp activity,
+  # record a device fingerprint and charge the API rps budget, none of which
+  # a dead credential may do. Both token-JWT branches are read: under the
+  # `:local` provider (self-host) an OAuth token resolves as a provider JWT,
+  # not `:internal_jwt`. The read is `Accounts.grant_claims/1` (signature
+  # only, the resolver just validated the rest; the grant from the
+  # `:oauth_grant` cache), and its result is kept for `OAuthScopeEnforce` so
+  # the token is not read twice. A raw API key carries no grant, nor does a
+  # Clerk JWT (`Engram.Auth.provider_tokens_carry_grants?/0`): it is not read,
+  # and the request carries the same "no grant claims" an unreadable one does.
+  defp refuse_revoked_grant({:ok, user}, conn) do
+    if Engram.Auth.provider_tokens_carry_grants?(),
+      do: with_grant(conn, &{:ok, user, &1}),
+      else: {:ok, user, {:grant, :error}}
+  end
+
+  defp refuse_revoked_grant({:ok, user, :internal_jwt}, conn),
+    do: with_grant(conn, &{:ok, user, :internal_jwt, &1})
+
+  defp refuse_revoked_grant(other, _conn), do: other
+
+  defp with_grant(conn, ok) do
+    ["Bearer " <> token] = get_req_header(conn, "authorization")
+
+    case Engram.Accounts.grant_claims(token) do
+      :revoked -> {:error, :grant_revoked}
+      claims -> ok.({:grant, claims})
+    end
+  end
+
+  defp assign_grant_claims(conn, claims), do: assign(conn, :grant_claims, claims)
 
   # Joken returns its claim-validation failures as a keyword list (e.g.
   # [message: "Invalid token", claim: "exp", claim_val: 1777359682]). Surface

@@ -58,6 +58,12 @@ defmodule EngramWeb.Schemas.VaultsResponse do
     type: :object,
     properties: %{
       vaults: %Schema{type: :array, items: EngramWeb.Schemas.Vault},
+      access_levels: %Schema{
+        type: :boolean,
+        description:
+          "True when this server supports per-vault access levels and `mcp:read` on OAuth " <>
+            "grants and API keys. Absent on servers that predate them."
+      },
       suggested_vault_name: %Schema{
         type: :string,
         nullable: true,

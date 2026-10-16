@@ -198,10 +198,13 @@ defmodule EngramWeb.McpModernEraTest do
       end
     end
 
-    test "tools/list is public because the list is identical for every caller", %{conn: conn} do
+    # Was `public` while every credential got a byte-identical list. An
+    # `mcp:read` grant (#174) sees only read-only tools, so a shared cache must
+    # not serve one token's list to another.
+    test "tools/list is private because the list varies by OAuth scope", %{conn: conn} do
       result = json_response(post_modern(conn, "tools/list"), 200)["result"]
 
-      assert result["cacheScope"] == "public"
+      assert result["cacheScope"] == "private"
     end
 
     test "a tools/call result carries no cache hints", %{conn: conn} do

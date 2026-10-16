@@ -1,5 +1,12 @@
 import "fake-indexeddb/auto";
 import "@testing-library/jest-dom/vitest";
+import { configure } from "@testing-library/react";
+
+// findBy*/waitFor give up after 1s by default, below vitest's 5s test
+// timeout. A first lazy-chunk import or a WebCrypto digest can take longer
+// than 1s on a loaded machine, which failed tests that were correct. Wait as
+// long as the test itself may run.
+configure({ asyncUtilTimeout: 5000 });
 
 // happy-dom returns 0 for clientHeight / scrollHeight by default, which
 // breaks @tanstack/react-virtual (it computes 0 visible rows). Force
