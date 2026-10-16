@@ -898,4 +898,39 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       refute Map.has_key?(query, "iss")
     end
   end
+
+  # OAuth 2.1 §4.1.1: redirect_uri is OPTIONAL when exactly one is registered.
+  describe "redirect_uri omitted (OAuth 2.1 §4.1.1)" do
+    test "authorize uses the single registered redirect and forwards it", %{conn: conn} do
+      client = register_client()
+
+      params =
+        client.client_id |> valid_params(hd(client.redirect_uris)) |> Map.delete("redirect_uri")
+
+      conn = get(conn, "/oauth/authorize", params)
+      assert conn.status == 302
+      [location] = get_resp_header(conn, "location")
+
+      assert URI.decode_query(URI.parse(location).query)["redirect_uri"] ==
+               hd(client.redirect_uris)
+    end
+
+    test "still required when several are registered", %{conn: conn} do
+      {:ok, client} =
+        OAuth.register_client(%{
+          "redirect_uris" => ["https://a.example/cb", "https://b.example/cb"],
+          "client_name" => "Two"
+        })
+
+      params = client.client_id |> valid_params("x") |> Map.delete("redirect_uri")
+      assert conn |> get("/oauth/authorize", params) |> html_response(400)
+    end
+
+    # A loopback registration has no port; the runtime one cannot be guessed.
+    test "still required for a portless loopback registration", %{conn: conn} do
+      client = register_client("http://127.0.0.1/callback")
+      params = client.client_id |> valid_params("x") |> Map.delete("redirect_uri")
+      assert conn |> get("/oauth/authorize", params) |> html_response(400)
+    end
+  end
 end

@@ -882,7 +882,14 @@ defmodule Engram.OAuth do
       else: grant_error(:client_mismatch)
   end
 
-  defp check_code_redirect_uri(_code, nil), do: grant_error(:redirect_uri_missing)
+  # OAuth 2.1 §4.1.3: may be omitted when the client has the one redirect the
+  # code was delivered to. With several registered it is required.
+  defp check_code_redirect_uri(code, absent) when absent in [nil, ""] do
+    case Repo.get(Client, code.client_id, skip_tenant_check: true) do
+      %Client{redirect_uris: [only]} when only == code.redirect_uri -> :ok
+      _ -> grant_error(:redirect_uri_missing)
+    end
+  end
 
   defp check_code_redirect_uri(%{redirect_uri: actual}, requested) when actual == requested,
     do: :ok
@@ -1148,13 +1155,32 @@ defmodule Engram.OAuth do
   @spec redirect_uri_registered?(Client.t(), String.t() | nil) :: boolean()
   def redirect_uri_registered?(client, uri), do: match?({:ok, _}, match_redirect_uri(client, uri))
 
-  defp match_redirect_uri(_client, nil), do: {:client_error, "invalid_redirect_uri"}
+  # OAuth 2.1 §4.1.1: OPTIONAL when exactly one redirect is registered. Not for a
+  # loopback one, whose runtime port (RFC 8252 §7.3) the request must name.
+  defp match_redirect_uri(client, absent) when absent in [nil, ""] do
+    case client.redirect_uris do
+      [only] ->
+        if loopback_redirect?(only),
+          do: {:client_error, "invalid_redirect_uri"},
+          else: {:ok, only}
+
+      _ ->
+        {:client_error, "invalid_redirect_uri"}
+    end
+  end
 
   defp match_redirect_uri(client, uri) do
     if uri in client.redirect_uris or loopback_port_match?(client.redirect_uris, uri) do
       {:ok, uri}
     else
       {:client_error, "invalid_redirect_uri"}
+    end
+  end
+
+  defp loopback_redirect?(uri) do
+    case URI.parse(uri) do
+      %URI{scheme: "http", host: host} when is_binary(host) -> Client.loopback_host?(host)
+      _ -> false
     end
   end
 

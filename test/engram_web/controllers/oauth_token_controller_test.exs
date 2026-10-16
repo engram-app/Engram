@@ -843,11 +843,52 @@ defmodule EngramWeb.OAuthTokenControllerTest do
       %{base: base}
     end
 
-    for missing <- ~w(code code_verifier redirect_uri) do
+    for missing <- ~w(code code_verifier) do
       test "a missing #{missing} is invalid_request", %{conn: conn, base: base} do
         conn = post(conn, "/oauth/token", Map.delete(base, unquote(missing)))
         assert json_response(conn, 400)["error"] == "invalid_request"
       end
+    end
+  end
+
+  # OAuth 2.1 §4.1.3: redirect_uri at the token endpoint may be omitted for a
+  # client with a single registered redirect; required when it has several.
+  describe "POST /oauth/token — redirect_uri omitted" do
+    test "accepted for a single-redirect client", %{conn: conn} do
+      client = register_client()
+      {verifier, challenge} = pkce_pair()
+      code = mint_code(insert(:user), client, hd(client.redirect_uris), challenge)
+
+      conn =
+        post(conn, "/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "client_id" => client.client_id,
+          "code_verifier" => verifier
+        })
+
+      assert json_response(conn, 200)["access_token"]
+    end
+
+    test "invalid_request for a multi-redirect client", %{conn: conn} do
+      {:ok, client} =
+        OAuth.register_client(%{
+          "redirect_uris" => ["https://a.example/cb", "https://b.example/cb"],
+          "client_name" => "Two"
+        })
+
+      {verifier, challenge} = pkce_pair()
+      code = mint_code(insert(:user), client, "https://a.example/cb", challenge)
+
+      conn =
+        post(conn, "/oauth/token", %{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "client_id" => client.client_id,
+          "code_verifier" => verifier
+        })
+
+      assert json_response(conn, 400)["error"] == "invalid_request"
     end
   end
 end

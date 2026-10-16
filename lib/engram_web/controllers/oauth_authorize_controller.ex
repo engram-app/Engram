@@ -115,9 +115,12 @@ defmodule EngramWeb.OAuthAuthorizeController do
     })
   end
 
-  defp redirect_to_spa(conn, _validated, raw_params) do
+  defp redirect_to_spa(conn, validated, raw_params) do
     forwarded =
       raw_params
+      # The resolved one: a single-redirect client may omit it (OAuth 2.1
+      # §4.1.1), and the consent page needs it either way.
+      |> Map.put("redirect_uri", validated.redirect_uri)
       |> Map.take(@forwarded_params)
       |> Enum.reject(fn {_k, v} -> is_nil(v) or v == "" end)
       |> Enum.concat([{"iss", OAuthMetadata.base_url(conn)}])

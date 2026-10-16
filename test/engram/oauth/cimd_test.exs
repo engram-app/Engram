@@ -6,8 +6,6 @@ defmodule Engram.OAuth.CimdTest do
   import Engram.OAuthHelpers, only: [code_from_redirect: 1]
   import Mox
 
-  import Ecto.Query
-
   alias Engram.OAuth
   alias Engram.OAuth.Cimd
   alias Engram.OAuth.Cimd.Fetcher

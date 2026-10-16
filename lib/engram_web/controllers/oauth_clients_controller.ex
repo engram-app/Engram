@@ -22,7 +22,11 @@ defmodule EngramWeb.OAuthClientsController do
   def show(conn, %{"client_id" => client_id} = params) do
     with {:ok, client} <- OAuth.get_client(client_id) do
       redirect_uri = params["redirect_uri"]
-      registered? = OAuth.redirect_uri_registered?(client, redirect_uri)
+      # Only a redirect actually named: authorize's single-redirect default does
+      # not apply here, the consent page always forwards a resolved one.
+      registered? =
+        is_binary(redirect_uri) and redirect_uri != "" and
+          OAuth.redirect_uri_registered?(client, redirect_uri)
 
       # `kind` is "mcp" | "obsidian" — drives the proactive cap UI on
       # /oauth/consent (each kind has its own cap key). DCR rejects
