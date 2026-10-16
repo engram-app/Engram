@@ -610,6 +610,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Mobile keyboard toolbar — why it hides on some phones, the decoy Yjs UndoManager, caret-after-insert → `docs/context/mobile-editor-toolbar.md`
 - Writing a CM6 live-preview decoration (lezer reads `[!type]` as a Link; one highlight tag serves many nodes; `syntaxTree` is lazy) → `docs/context/codemirror-live-preview-extensions.md`
 - A route guard or view acts on state that mutations definitely updated (user bounced back to a completed onboarding/wizard step; loop only a full page reload escapes) → `docs/context/bootstrap-seed-cache-dual-authority.md`
+- A mutation's caller navigates to a page that reads `gate_ok` (MCP-first signup lands on `/` instead of consent Approve; `invalidateQueries(["onboarding","status"])` must be AWAITED) → `docs/context/onboarding-status-refetch-race.md`
 - Adding a shadcn/Base UI component (popup untappable inside a Radix sheet on mobile, field unnamed while the list is open, SPA-wide 504 `Outdated Optimize Dep` after a `bun remove`, `fireEvent.click` won't open a combobox) → `docs/context/shadcn-combobox-adoption.md`
 
 **Issue tracker**
