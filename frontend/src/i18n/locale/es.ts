@@ -899,11 +899,8 @@ export default {
 	Onboarding: "Incorporación",
 	"your app": "tu aplicación",
 	"Cancel connection": "Cancelar conexión",
-	"Finish setting up to connect {app}.": "Finaliza la configuración para conectar {app}.",
 	"Connecting {app}": "Conectando {app}",
 	"Which AI tools do you use?": "¿Qué herramientas de IA utilizas?",
-	"We'll tailor your setup around the tools you already work with.":
-		"Adaptaremos la configuración a las herramientas que ya usas.",
 	"AI assistants": "Asistentes de IA",
 	"Coding tools": "Herramientas de programación",
 	"Another MCP client": "Otro cliente de MCP",
@@ -948,22 +945,15 @@ export default {
 		"Abre la pestaña {tab} del plugin, haz clic en {action} y autentícate con tu cuenta de Engram.",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"La aplicación Gemini no puede añadir conectores MCP personalizados. Antigravity, la herramienta de programación de Google impulsada por Gemini, sí puede. Selecciónala en Herramientas de programación.",
-	"Another MCP client": "Otro cliente de MCP",
 	"I'm not connecting an AI tool yet": "Aún no estoy conectando una herramienta de IA",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Usa Engram en la aplicación web. Puedes conectar una herramienta más tarde desde Ajustes.",
 	"Help us shape Engram": "Ayúdanos a mejorar Engram",
 	"Two quick questions. Both are optional.": "Dos preguntas rápidas. Ambas son opcionales.",
-	"Which AI tools do you use?": "¿Qué herramientas de IA utilizas?",
 	"Couldn't save your answers, please try again.":
 		"No se pudieron guardar tus respuestas, por favor intenta de nuevo.",
 	Skip: "Omitir",
 	Save: "Guardar",
-	"AI assistants": "Asistentes de IA",
-	"Coding tools": "Herramientas de programación",
-	"Why {tool} can't be connected": "¿Por qué {tool} no se puede conectar?",
-	"Not a comprehensive list, pick {client} if yours isn't here.":
-		"No es una lista exhaustiva, elige {client} si la tuya no está aquí.",
 	Account: "Cuenta",
 	"Manage your profile, password, and account.": "Gestiona tu perfil, tu contraseña y tu cuenta.",
 	"Manage your profile, security, and active sessions.":

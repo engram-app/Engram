@@ -863,11 +863,8 @@ export default {
 	Onboarding: "Pengenalan",
 	"your app": "aplikasi anda",
 	"Cancel connection": "Batalkan sambungan",
-	"Finish setting up to connect {app}.": "Selesaikan persediaan untuk menyambung {app}.",
 	"Connecting {app}": "Menyambung {app}",
 	"Which AI tools do you use?": "Alat AI apa yang anda gunakan?",
-	"We'll tailor your setup around the tools you already work with.":
-		"Kami akan menyesuaikan persediaan anda berdasarkan alat yang sudah anda gunakan.",
 	"AI assistants": "Pembantu AI",
 	"Coding tools": "Alat pengkodan",
 	"Another MCP client": "Pelanggan MCP lain",
@@ -912,22 +909,15 @@ export default {
 		"Buka tab {tab} plugin, klik {action}, dan autentikasi dengan akaun Engram anda.",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"Aplikasi Gemini tidak boleh menambah sambungan MCP khusus. Antigravity, alat pengkodan berkuasa Gemini dari Google, boleh. Pilih ia di bawah Alat pengkodan.",
-	"Another MCP client": "Pelanggan MCP lain",
 	"I'm not connecting an AI tool yet": "Saya belum menyambungkan alat AI",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Gunakan Engram dalam aplikasi web. Anda boleh menyambungkan alat kemudian dari Tetapan.",
 	"Help us shape Engram": "Bantu kami membangunkan Engram",
 	"Two quick questions. Both are optional.": "Dua soalan ringkas. Kedua-duanya adalah pilihan.",
-	"Which AI tools do you use?": "Alat AI apa yang anda gunakan?",
 	"Couldn't save your answers, please try again.":
 		"Tidak dapat menyimpan jawapan anda, sila cuba lagi.",
 	Skip: "Lompati",
 	Save: "Simpan",
-	"AI assistants": "Pembantu AI",
-	"Coding tools": "Alat pengkodan",
-	"Why {tool} can't be connected": "Mengapa {tool} tidak dapat disambungkan",
-	"Not a comprehensive list, pick {client} if yours isn't here.":
-		"Senarai ini tidak lengkap, pilih {client} jika alat anda tidak ada di sini.",
 	Account: "Akaun",
 	"Manage your profile, password, and account.": "Urus profil, kata laluan dan akaun anda.",
 	"Manage your profile, security, and active sessions.":

@@ -878,11 +878,8 @@ export default {
 	Onboarding: "Einrichtung",
 	"your app": "deine App",
 	"Cancel connection": "Verbindung aufheben",
-	"Finish setting up to connect {app}.": "Einrichtung abschließen, um {app} zu verbinden.",
 	"Connecting {app}": "Verbindung zu {app} herstellen",
 	"Which AI tools do you use?": "Welche KI-Tools verwendest du?",
-	"We'll tailor your setup around the tools you already work with.":
-		"Wir passen deine Einrichtung an die Tools an, die du bereits verwendest.",
 	"AI assistants": "KI-Assistenten",
 	"Coding tools": "Programmier-Tools",
 	"Another MCP client": "Ein weiterer MCP-Client",
@@ -927,22 +924,15 @@ export default {
 		"Öffne den {tab}-Tab des Plugins, klicke auf {action} und authentifiziere dich mit deinem Engram-Konto.",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		'Die Gemini-App kann keine benutzerdefinierten MCP-Konnektoren hinzufügen. Antigravity, ein von Google\'s Gemini betriebenes Programmierwerkzeug, kann das. Wähle es unter "Programmierwerkzeuge" aus.',
-	"Another MCP client": "Ein weiterer MCP-Client",
 	"I'm not connecting an AI tool yet": "Ich verbinde noch kein KI-Tool",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Nutze Engram in der Web-App. Du kannst später ein Tool in den Einstellungen verbinden.",
 	"Help us shape Engram": "Hilf uns, Engram zu verbessern",
 	"Two quick questions. Both are optional.": "Zwei kurze Fragen. Beide sind optional.",
-	"Which AI tools do you use?": "Welche KI-Tools verwendest du?",
 	"Couldn't save your answers, please try again.":
 		"Deine Antworten konnten nicht gespeichert werden, bitte versuche es erneut.",
 	Skip: "Überspringen",
 	Save: "Speichern",
-	"AI assistants": "KI-Assistenten",
-	"Coding tools": "Programmier-Tools",
-	"Why {tool} can't be connected": "Warum {tool} nicht verbunden werden kann",
-	"Not a comprehensive list, pick {client} if yours isn't here.":
-		"Keine vollständige Liste, wähle {client}, wenn deins nicht dabei ist.",
 	Account: "Konto",
 	"Manage your profile, password, and account.":
 		"Verwalte dein Profil, dein Passwort und dein Konto.",

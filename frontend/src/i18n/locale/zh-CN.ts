@@ -822,11 +822,8 @@ export default {
 	Onboarding: "入门引导",
 	"your app": "你的应用",
 	"Cancel connection": "取消连接",
-	"Finish setting up to connect {app}.": "完成连接 {app} 的设置。",
 	"Connecting {app}": "连接 {app}",
 	"Which AI tools do you use?": "您使用哪些 AI 工具？",
-	"We'll tailor your setup around the tools you already work with.":
-		"我们会根据您已使用的工具来定制设置。",
 	"AI assistants": "AI 助手",
 	"Coding tools": "编程工具",
 	"Another MCP client": "另一个 MCP 客户端",
@@ -868,21 +865,14 @@ export default {
 		"打开插件的 {tab} 选项卡，点击 {action}，然后使用你的 Engram 账号进行身份验证。",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"Gemini应用无法添加自定义MCP连接器。Antigravity，谷歌的Gemini驱动的编码工具，可以。在“编码工具”中选择它。",
-	"Another MCP client": "另一个 MCP 客户端",
 	"I'm not connecting an AI tool yet": "我暂时不连接任何AI工具",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"在网页版Engram中使用。稍后可以在“设置”中连接工具。",
 	"Help us shape Engram": "帮助我们改进 Engram",
 	"Two quick questions. Both are optional.": "两个简单问题，均可选择。",
-	"Which AI tools do you use?": "您使用哪些 AI 工具？",
 	"Couldn't save your answers, please try again.": "无法保存你的答案，请重试。",
 	Skip: "跳过",
 	Save: "保存",
-	"AI assistants": "AI 助手",
-	"Coding tools": "编程工具",
-	"Why {tool} can't be connected": "为什么无法连接 {tool}",
-	"Not a comprehensive list, pick {client} if yours isn't here.":
-		"并非完整列表，如果您的工具不在列表中，请选择 {client}。",
 	Account: "账户",
 	"Manage your profile, password, and account.": "管理你的资料、密码和账号。",
 	"Manage your profile, security, and active sessions.": "管理你的资料、安全设置和活动会话。",
