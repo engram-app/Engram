@@ -4,6 +4,7 @@ import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { track } from "../analytics/track";
 import OAuthAuthorizePage from "./oauth-authorize-page";
+import { peekPendingAuthorization } from "./pending-authorization";
 
 vi.mock("../analytics/track", () => ({ track: vi.fn() }));
 const mockTrack = vi.mocked(track);
@@ -233,6 +234,26 @@ describe("OAuthAuthorizePage onboarding bounce", () => {
 		expect(window.sessionStorage.getItem("engram:pending-oauth")).toContain("state=xyz");
 	});
 
+	// The wizard's Cancel trusts the parked redirect only as far as the backend did.
+	it("parks whether the backend confirmed the redirect", async () => {
+		onboardingState.current = { next_step: "agreement", gate_ok: false };
+		fetchOAuthClient.mockResolvedValue({ ...ANTIGRAVITY, redirect_uri_registered: true });
+
+		renderWithProbeAt(VALID_QS);
+
+		await waitFor(() => expect(peekPendingAuthorization()?.redirectVerified).toBe(true));
+	});
+
+	it("parks an unconfirmed redirect as unverified", async () => {
+		onboardingState.current = { next_step: "agreement", gate_ok: false };
+		fetchOAuthClient.mockResolvedValue(ANTIGRAVITY);
+
+		renderWithProbeAt(VALID_QS);
+
+		await waitFor(() => expect(peekPendingAuthorization()).not.toBeNull());
+		expect(peekPendingAuthorization()?.redirectVerified).toBe(false);
+	});
+
 	it("pre-answers the tool question from the connecting client", async () => {
 		onboardingState.current = { next_step: "agreement", gate_ok: false };
 		fetchOAuthClient.mockResolvedValue(ANTIGRAVITY);
@@ -360,10 +381,87 @@ describe("OAuthAuthorizePage", () => {
 		expect(await screen.findByText(/you will return to app/iu)).toBeInTheDocument();
 	});
 
+	// Cancel fails closed: a backend that does not confirm the redirect (an
+	// older one, or a missing field) gets Approve, which it re-validates, but no
+	// Cancel, which would redirect on this page's word alone.
+	it("offers no Cancel when the redirect is not confirmed", async () => {
+		fetchOAuthClient.mockResolvedValue({ client_id: "cli", client_name: "Claude", kind: "mcp" });
+		renderAt(VALID_QS);
+		expect(await screen.findByRole("button", { name: /approve/iu })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /cancel/iu })).toBeNull();
+	});
+
+	// MCP 2025-11-25: a metadata-document client is shown by its host.
+	it("shows the host the client's metadata document lives on", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "https://claude.ai/oauth/claude-code-client-metadata",
+			client_name: "Claude Code",
+			kind: "mcp",
+			redirect_uri_registered: true,
+			client_host: "claude.ai",
+		});
+		renderAt(VALID_QS);
+		expect(await screen.findByText(/app details from claude\.ai/iu)).toBeInTheDocument();
+	});
+
+	// MCP 2025-11-25 "Localhost Redirect URI Risks": any local process can claim
+	// a vendor's client_id on a loopback port.
+	it("warns when the redirect is on this computer", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude Code",
+			kind: "mcp",
+			slug: null,
+			redirect_uri_registered: true,
+			redirect_host: "localhost",
+			redirect_loopback: true,
+		});
+		renderAt(VALID_QS);
+		expect(await screen.findByText(/an app on this computer/iu)).toBeInTheDocument();
+	});
+
+	it("does not warn for a web redirect", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude",
+			kind: "mcp",
+			slug: null,
+			redirect_uri_registered: true,
+			redirect_host: "app",
+			redirect_loopback: false,
+		});
+		renderAt(VALID_QS);
+		await screen.findByText(/you will return to app/iu);
+		expect(screen.queryByText(/an app on this computer/iu)).toBeNull();
+	});
+
+	// RFC 9207 §2: an error response carries `iss` too.
+	it("puts iss on the Cancel redirect when the server sent one", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude",
+			kind: "mcp",
+			redirect_uri_registered: true,
+		});
+		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
+		const iss = "https://mcp.engram.page";
+
+		renderAt(`${VALID_QS}&iss=${encodeURIComponent(iss)}`);
+		fireEvent.click(await screen.findByRole("button", { name: /cancel/iu }));
+		expect(assign).toHaveBeenCalledWith(
+			`https://app/cb?error=access_denied&state=xyz&iss=${encodeURIComponent(iss)}`,
+		);
+	});
+
 	// RFC 6749 §4.1.1: `state` is RECOMMENDED, not required. A client that omits
 	// it must still reach consent, and Cancel must not invent an empty one.
 	it("renders consent and cancels cleanly when state is absent", async () => {
-		fetchOAuthClient.mockResolvedValue({ client_id: "cli", client_name: "Claude", kind: "mcp" });
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude",
+			kind: "mcp",
+			redirect_uri_registered: true,
+		});
 		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
 		const NO_STATE_QS =
 			"?client_id=cli&redirect_uri=https://app/cb&response_type=code" +
@@ -586,6 +684,7 @@ describe("OAuthAuthorizePage", () => {
 			client_id: "cli",
 			client_name: "Claude Desktop",
 			kind: "mcp",
+			redirect_uri_registered: true,
 		});
 		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
 
@@ -602,6 +701,7 @@ describe("OAuthAuthorizePage", () => {
 			client_name: "Claude Desktop",
 			kind: "mcp",
 			slug: "claude",
+			redirect_uri_registered: true,
 		});
 		vi.spyOn(window.location, "assign").mockImplementation(() => {});
 

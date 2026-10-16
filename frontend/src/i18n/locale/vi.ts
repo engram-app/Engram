@@ -774,7 +774,10 @@ export default {
 	"This app is requesting access to your Engram.":
 		"Ứng dụng này đang yêu cầu quyền truy cập vào Engram của bạn.",
 	"Signed in as {email}.": "Đã đăng nhập với tư cách là {email}.",
+	"App details from {host}.": "Chi tiết ứng dụng từ {host}.",
 	"You will return to {host}.": "Bạn sẽ quay lại {host}.",
+	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
+		"Điều này sẽ đưa bạn đến một ứng dụng trên máy tính này. Chỉ chấp nhận nếu bạn vừa mới bắt đầu kết nối từ ứng dụng đó.",
 	"your existing connection": "kết nối hiện tại của bạn",
 	"Which vaults can {client} access?": "Kho lưu trữ nào mà {client} có thể truy cập?",
 	"All vaults selected": "Tất cả kho lưu trữ đã chọn",

@@ -775,7 +775,10 @@ export default {
 	"This app is requesting access to your Engram.":
 		"このアプリは、Engramへのアクセスを要求しています。",
 	"Signed in as {email}.": "{email} としてサインインしました。",
+	"App details from {host}.": "{host}からのアプリ詳細.",
 	"You will return to {host}.": "{host} に戻ります。",
+	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
+		"これにより、このコンピューター上のアプリに移動します。そのアプリから初めて接続する場合のみ承認してください。",
 	"your existing connection": "現在の接続",
 	"Which vaults can {client} access?": "{client} はどの保管庫にアクセスできますか？",
 	"All vaults selected": "すべての保管庫を選択",

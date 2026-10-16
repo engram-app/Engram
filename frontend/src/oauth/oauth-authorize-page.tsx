@@ -103,10 +103,16 @@ function toMcpClient(slug: string | null | undefined): (typeof MCP_CLIENTS)[numb
 	return isMember(MCP_CLIENTS, slug) ? slug : "other";
 }
 
-function buildCancelUrl(redirectUri: string, state: string): string {
-	const sep = redirectUri.includes("?") ? "&" : "?";
-	const stateParam = state ? `&state=${encodeURIComponent(state)}` : "";
-	return `${redirectUri}${sep}error=access_denied${stateParam}`;
+// RFC 9207 §2: error responses carry `iss` too, when the server sent one.
+function buildCancelUrl(redirectUri: string, state: string, iss: string | null): string {
+	const answer = new URLSearchParams({ error: "access_denied" });
+	if (state) {
+		answer.set("state", state);
+	}
+	if (iss) {
+		answer.set("iss", iss);
+	}
+	return `${redirectUri}${redirectUri.includes("?") ? "&" : "?"}${answer.toString()}`;
 }
 
 export default function OAuthAuthorizePage() {
@@ -154,6 +160,9 @@ export default function OAuthAuthorizePage() {
 	// redirect the client never registered gets no consent card at all, and with
 	// it no Cancel, which would otherwise be an open redirect (RFC 9700 §4.11).
 	const redirectRefused = clientQuery.data?.redirect_uri_registered === false;
+	// Cancel fails closed: only a redirect the backend confirmed gets one. A
+	// backend too old to answer still allows Approve, which it re-validates.
+	const redirectVerified = clientQuery.data?.redirect_uri_registered === true;
 	const bounced = useRef(false);
 
 	useEffect(() => {
@@ -177,7 +186,12 @@ export default function OAuthAuthorizePage() {
 		// `onboardingDoneTarget()` already falls back to "/" when nothing was
 		// parked. Reading it into state here would also mean an effect that
 		// synchronously sets state, which the render-compiler lint rejects.
-		stashPendingAuthorization(location.search, slug, clientQuery.data?.client_name ?? null);
+		stashPendingAuthorization(
+			location.search,
+			slug,
+			clientQuery.data?.client_name ?? null,
+			redirectVerified,
+		);
 
 		// Connecting a tool IS the answer to "which tools do you use", so the
 		// questionnaire is pre-answered instead of asked. An unattributable
@@ -218,6 +232,7 @@ export default function OAuthAuthorizePage() {
 		clientQuery.isLoading,
 		clientQuery.isError,
 		redirectRefused,
+		redirectVerified,
 		location.search,
 		navigate,
 		onboarding,
@@ -478,7 +493,7 @@ export default function OAuthAuthorizePage() {
 
 	const handleCancel = () => {
 		track("mcp_connect_denied", { client: toMcpClient(clientQuery.data?.slug) });
-		window.location.assign(buildCancelUrl(values.redirect_uri, values.state));
+		window.location.assign(buildCancelUrl(values.redirect_uri, values.state, iss));
 	};
 
 	const clientName = clientQuery.data?.client_name ?? t("this app");
@@ -502,9 +517,21 @@ export default function OAuthAuthorizePage() {
 						{t("This app is requesting access to your Engram.")}
 						{meQuery.data ? ` ${t("Signed in as {email}.", { email: meQuery.data.email })}` : ""}
 					</p>
+					{clientQuery.data?.client_host ? (
+						<p className="text-muted-foreground text-sm">
+							{t("App details from {host}.", { host: clientQuery.data.client_host })}
+						</p>
+					) : null}
 					{clientQuery.data?.redirect_host ? (
 						<p className="text-muted-foreground text-sm">
 							{t("You will return to {host}.", { host: clientQuery.data.redirect_host })}
+						</p>
+					) : null}
+					{clientQuery.data?.redirect_loopback ? (
+						<p className="text-destructive text-sm">
+							{t(
+								"This sends you to an app on this computer. Only approve if you just started connecting from that app.",
+							)}
 						</p>
 					) : null}
 				</header>
@@ -641,15 +668,17 @@ export default function OAuthAuthorizePage() {
 						)}
 
 						<div className="flex gap-3">
-							<Button
-								type="button"
-								variant="outline"
-								onClick={handleCancel}
-								disabled={submitting}
-								className="flex-1"
-							>
-								{t("Cancel")}
-							</Button>
+							{redirectVerified ? (
+								<Button
+									type="button"
+									variant="outline"
+									onClick={handleCancel}
+									disabled={submitting}
+									className="flex-1"
+								>
+									{t("Cancel")}
+								</Button>
+							) : null}
 							<Button
 								type="button"
 								onClick={handleApprove}

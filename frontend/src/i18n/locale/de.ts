@@ -790,7 +790,10 @@ export default {
 		"Trennung von '{name}', aber die Autorisierung der neuen Verbindung fehlgeschlagen. Versuche die Anfrage erneut von {client} – es sind derzeit keine Verbindungen dieser Art aktiv.",
 	"This app is requesting access to your Engram.": "Diese App möchte Zugriff auf dein Engram.",
 	"Signed in as {email}.": "Angemeldet als {email}.",
+	"App details from {host}.": "App-Details von {host}.",
 	"You will return to {host}.": "Du wirst zu {host} zurückkehren.",
+	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
+		"Dadurch wirst du zu einer App auf diesem Computer weitergeleitet. Bestätige nur, wenn du gerade von dieser App aus eine Verbindung herstellst.",
 	"your existing connection": "deine bestehende Verbindung",
 	"Which vaults can {client} access?": "Auf welche Vaults kann {client} zugreifen?",
 	"All vaults selected": "Alle Vaults ausgewählt",

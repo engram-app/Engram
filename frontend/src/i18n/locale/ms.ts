@@ -777,7 +777,10 @@ export default {
 		"Telah memutuskan sambungan '{name}' tetapi pengesahan sambungan baharu gagal. Jalankan semula permintaan daripada {client} — tiada sambungan seumpama ini yang aktif pada masa ini.",
 	"This app is requesting access to your Engram.": "Aplikasi ini meminta akses ke Engram anda.",
 	"Signed in as {email}.": "Log masuk sebagai {email}.",
+	"App details from {host}.": "Butiran aplikasi daripada {host}.",
 	"You will return to {host}.": "Anda akan kembali ke {host}.",
+	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
+		"Ini akan membawa anda ke aplikasi di komputer ini. Sahkan sahaja jika anda baru sahaja mula berhubung dari aplikasi tersebut.",
 	"your existing connection": "sambungan anda yang sedia ada",
 	"Which vaults can {client} access?": "Peti Nota mana yang boleh diakses oleh {client}?",
 	"All vaults selected": "Semua peti nota dipilih",

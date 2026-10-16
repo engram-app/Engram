@@ -812,7 +812,10 @@ export default {
 		"Desconectado '{name}' pero la autorización de la nueva conexión falló. Vuelve a intentar la solicitud desde {client} — no hay conexiones de este tipo activas actualmente.",
 	"This app is requesting access to your Engram.": "Esta aplicación solicita acceso a tu Engram.",
 	"Signed in as {email}.": "Iniciado sesión como {email}.",
+	"App details from {host}.": "Detalles de la aplicación de {host}.",
 	"You will return to {host}.": "Regresarás a {host}.",
+	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
+		"Esto te lleva a una aplicación en este ordenador. Acepta solo si acabas de empezar a conectarte desde esa aplicación.",
 	"your existing connection": "tu conexión existente",
 	"Which vaults can {client} access?": "¿A qué bóvedas puede acceder {client}?",
 	"All vaults selected": "Todas las bóvedas seleccionadas",

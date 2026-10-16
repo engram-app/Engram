@@ -739,7 +739,10 @@ export default {
 		"已斷開 '{name}'，但授權新的連線失敗。請重新從 {client} 執行請求 — 目前沒有任何此類連線。",
 	"This app is requesting access to your Engram.": "此應用程式正在請求存取您的 Engram。",
 	"Signed in as {email}.": "已登入 {email}。",
+	"App details from {host}.": "來自 {host} 的應用程式資訊。",
 	"You will return to {host}.": "您將返回至 {host}。",
+	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
+		"這會將您導向電腦上的應用程式。僅在您剛從該應用程式開始連接時才允許。",
 	"your existing connection": "您的現有連線",
 	"Which vaults can {client} access?": "{client} 可以存取哪些儲存庫？",
 	"All vaults selected": "已選取所有儲存庫",

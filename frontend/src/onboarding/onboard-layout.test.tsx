@@ -62,7 +62,7 @@ describe("OnboardLayout pending authorization", () => {
 	});
 
 	it("names the app that is waiting", () => {
-		stashPendingAuthorization(PARKED, null, "Google Antigravity");
+		stashPendingAuthorization(PARKED, null, "Google Antigravity", true);
 
 		renderAt("/onboard/tools", SAAS);
 
@@ -70,11 +70,20 @@ describe("OnboardLayout pending authorization", () => {
 	});
 
 	it("falls back to neutral wording for an unnamed client", () => {
-		stashPendingAuthorization(PARKED, null, null);
+		stashPendingAuthorization(PARKED, null, null, true);
 
 		renderAt("/onboard/tools", SAAS);
 
 		expect(screen.getByRole("button", { name: /cancel/iu })).toBeTruthy();
+	});
+
+	it("offers no Cancel when the redirect was never confirmed", () => {
+		stashPendingAuthorization(PARKED, null, "Google Antigravity");
+
+		renderAt("/onboard/tools", SAAS);
+
+		expect(screen.getByText(/Google Antigravity/u)).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /cancel/iu })).toBeNull();
 	});
 
 	it("says nothing at all when no authorization is pending", () => {
@@ -84,7 +93,7 @@ describe("OnboardLayout pending authorization", () => {
 	});
 
 	it("reports access_denied to the client on cancel", () => {
-		stashPendingAuthorization(PARKED, null, "Google Antigravity");
+		stashPendingAuthorization(PARKED, null, "Google Antigravity", true);
 		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
 
 		renderAt("/onboard/tools", SAAS);
@@ -94,7 +103,7 @@ describe("OnboardLayout pending authorization", () => {
 	});
 
 	it("drops the parked request on cancel so it cannot resurface", () => {
-		stashPendingAuthorization(PARKED, null, "Google Antigravity");
+		stashPendingAuthorization(PARKED, null, "Google Antigravity", true);
 		vi.spyOn(window.location, "assign").mockImplementation(() => {});
 
 		renderAt("/onboard/tools", SAAS);

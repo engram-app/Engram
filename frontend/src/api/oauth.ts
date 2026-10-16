@@ -20,6 +20,10 @@ export interface OAuthClientMetadata {
 	redirect_uri_registered?: boolean;
 	// Host of that redirect when registered, shown to the user. Null otherwise.
 	redirect_host?: string | null;
+	// That redirect is on this computer (localhost), so the page warns.
+	redirect_loopback?: boolean;
+	// Host of a URL client_id (a client metadata document), shown to the user.
+	client_host?: string | null;
 }
 
 export interface OAuthConsentParams {

@@ -763,7 +763,10 @@ export default {
 		"'{name}' 연결이 끊어졌지만, 새로운 연결을 설정하는 데 실패했습니다. {client}에서 요청을 다시 실행하세요. 현재 이 종류의 연결은 활성화되어 있지 않습니다.",
 	"This app is requesting access to your Engram.": "이 앱은 Engram에 대한 접근 권한을 요청합니다.",
 	"Signed in as {email}.": "{email}으로 로그인되었습니다.",
+	"App details from {host}.": "{host}에서 가져온 앱 정보.",
 	"You will return to {host}.": "{host}으로 돌아갑니다.",
+	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
+		"이 버튼은 해당 컴퓨터의 앱으로 연결합니다. 해당 앱에서 연결을 시작한 경우에만 승인하세요.",
 	"your existing connection": "기존 연결",
 	"Which vaults can {client} access?": "{client}은 어떤 보관함에 접근할 수 있나요?",
 	"All vaults selected": "모든 보관함 선택됨",

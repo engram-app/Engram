@@ -813,7 +813,10 @@ export default {
 	"This app is requesting access to your Engram.":
 		"Este aplicativo está solicitando acesso ao seu Engram.",
 	"Signed in as {email}.": "Logado como {email}.",
+	"App details from {host}.": "Detalhes do aplicativo de {host}.",
 	"You will return to {host}.": "Você retornará para {host}.",
+	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
+		"Isso te direciona para um aplicativo neste computador. Aprovе apenas se você acabou de começar a conexão a partir desse aplicativo.",
 	"your existing connection": "sua conexão existente",
 	"Which vaults can {client} access?": "Quais cofres {client} pode acessar?",
 	"All vaults selected": "Todos os cofres selecionados",
