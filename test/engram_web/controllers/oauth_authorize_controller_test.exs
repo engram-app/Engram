@@ -78,14 +78,14 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       params =
         client.client_id
         |> valid_params(redirect_uri)
-        |> Map.put("resource", "https://app.engram.page/api/mcp")
+        |> Map.put("resource", EngramWeb.Endpoint.url() <> "/api/mcp")
 
       conn = get(conn, "/oauth/authorize", params)
 
       assert conn.status == 302
       [location] = get_resp_header(conn, "location")
       query = location |> URI.parse() |> Map.get(:query) |> URI.decode_query()
-      assert query["resource"] == "https://app.engram.page/api/mcp"
+      assert query["resource"] == EngramWeb.Endpoint.url() <> "/api/mcp"
     end
 
     test "does NOT require Authorization: Bearer header", %{conn: conn} do

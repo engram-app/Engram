@@ -669,7 +669,9 @@ defmodule EngramWeb.Router do
     get "/sync/manifest", SyncController, :manifest
 
     # Attachments
-    post "/attachments", AttachmentsController, :upload
+    # `token_surface: :mcp`: an MCP OAuth token may upload here, as the
+    # `get_attachment_upload_target` tool instructs (see `Plugs.Auth`).
+    post "/attachments", AttachmentsController, :upload, private: %{token_surface: :mcp}
     get "/attachments", AttachmentsController, :index
     get "/attachments/changes", AttachmentsController, :changes
     # rename must come before *path wildcard so it is not swallowed
@@ -722,7 +724,7 @@ defmodule EngramWeb.Router do
       EngramWeb.Plugs.OAuthScopeEnforce
     ]
 
-    post "/mcp", McpController, :handle
+    post "/mcp", McpController, :handle, private: %{token_surface: :mcp}
   end
 
   # MCP transport is POST-only JSON-RPC (see the authed scope above).

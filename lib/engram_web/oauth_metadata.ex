@@ -15,6 +15,31 @@ defmodule EngramWeb.OAuthMetadata do
   @well_known "/.well-known/oauth-protected-resource"
 
   @doc """
+  Whether a `resource` indicator (RFC 8707) names this server: an absolute
+  URI, on our scheme, on the canonical host or an allowlisted one, with no
+  fragment (§2). Any path, since clients send the URL they dialed and the MCP
+  host serves at its bare root as well as `/api/mcp`. A list must be all ours.
+  """
+  @spec mcp_resource?(term()) :: boolean()
+  def mcp_resource?(list) when is_list(list) and list != [], do: Enum.all?(list, &mcp_resource?/1)
+
+  def mcp_resource?(resource) when is_binary(resource) do
+    canonical = URI.parse(EngramWeb.Endpoint.url())
+
+    case URI.parse(resource) do
+      %URI{scheme: scheme, host: host, userinfo: nil, fragment: nil}
+      when scheme == canonical.scheme and is_binary(host) and host != "" ->
+        host == canonical.host or
+          "#{scheme}://#{host}" in Application.get_env(:engram, :cors_origin, [])
+
+      _ ->
+        false
+    end
+  end
+
+  def mcp_resource?(_), do: false
+
+  @doc """
   Whether `iss` is an issuer `base_url/1` could have produced: the canonical
   URL, or an allowlisted origin on our scheme, spelled as `base_url/1` would
   (a non-default port only, as `with_port/2` adds). Gates the RFC 9207 `iss` the SPA carries back to consent.

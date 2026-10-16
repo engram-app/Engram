@@ -12,7 +12,8 @@ defmodule EngramWeb.UserSocket do
 
   @impl true
   def connect(%{"token" => token} = params, socket, _connect_info) do
-    case Engram.Auth.TokenResolver.resolve(token) do
+    # `:rest`: an MCP OAuth token has no business on the sync socket.
+    case Engram.Auth.TokenResolver.resolve(token, :rest) do
       {:ok, user} ->
         {:ok, accept(socket, user, nil, token, params)}
 

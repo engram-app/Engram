@@ -373,6 +373,7 @@ defmodule Engram.OAuth do
          {:ok, redirect_uri} <- match_redirect_uri(client, params["redirect_uri"]),
          :ok <- check_response_type(params, redirect_uri),
          :ok <- check_pkce(params, redirect_uri),
+         :ok <- check_resource(params, redirect_uri),
          :ok <- check_state_length(params) do
       {granted, requested} = narrow_scope(params["scope"])
 
@@ -409,6 +410,19 @@ defmodule Engram.OAuth do
   end
 
   defp check_state_length(_), do: :ok
+
+  # RFC 8707 §2: a `resource` that is not this server is `invalid_target`. A
+  # client asking us for a token to some other server would otherwise get one
+  # that names us, which is the confusion audience binding exists to prevent.
+  # Absent is fine; the token is for the MCP server either way.
+  defp check_resource(%{"resource" => resource} = params, redirect_uri)
+       when is_binary(resource) or is_list(resource) do
+    if EngramWeb.OAuthMetadata.mcp_resource?(resource),
+      do: :ok,
+      else: {:redirect_error, redirect_uri, "invalid_target", params["state"]}
+  end
+
+  defp check_resource(_params, _redirect_uri), do: :ok
 
   @doc """
   Reads a vault selection off consent params.
@@ -507,14 +521,17 @@ defmodule Engram.OAuth do
   def exchange_authorization_code(params, opts \\ []) do
     ip = Keyword.get(opts, :ip)
 
-    with {:ok, code_row} <- find_unconsumed_code(params["code"]),
+    with {:ok, code_row} <- find_code(params["code"]),
          :ok <- check_code_client(code_row, params["client_id"]),
          :ok <- check_code_redirect_uri(code_row, params["redirect_uri"]),
          :ok <- check_pkce_verifier(code_row, params["code_verifier"]),
+         :ok <- check_unconsumed(code_row),
          {:ok, user} <- fetch_user(code_row.user_id),
          :ok <- consume_code(code_row),
+         # The family is the code's own id, so a replay of the code can find
+         # and revoke exactly the tokens it minted (RFC 6749 §4.1.2).
          {:ok, refresh_raw, refresh_row} <-
-           insert_refresh_token(grant_attrs(code_row, Ecto.UUID.generate(), ip)) do
+           insert_refresh_token(grant_attrs(code_row, code_row.id, ip)) do
       {:ok, build_token_response(user, code_row, refresh_raw, refresh_row)}
     end
   end
@@ -810,21 +827,45 @@ defmodule Engram.OAuth do
   @spec grant_error(grant_reason()) :: {:error, {:invalid_grant, grant_reason()}}
   defp grant_error(reason), do: {:error, {:invalid_grant, reason}}
 
-  defp find_unconsumed_code(nil), do: grant_error(:code_missing)
+  defp find_code(nil), do: grant_error(:code_missing)
 
-  defp find_unconsumed_code(raw_code) do
+  defp find_code(raw_code) do
     case get_authorization_code_by_raw(raw_code) |> tap(&put_code_user_id/1) do
-      {:ok, %AuthorizationCode{consumed_at: nil} = code} ->
-        if DateTime.compare(DateTime.utc_now(), code.expires_at) == :gt,
-          do: grant_error(:code_expired),
-          else: {:ok, code}
-
-      {:ok, %AuthorizationCode{}} ->
-        grant_error(:code_consumed)
-
-      _ ->
-        grant_error(:code_unknown)
+      {:ok, %AuthorizationCode{} = code} -> {:ok, code}
+      _ -> grant_error(:code_unknown)
     end
+  end
+
+  # Runs AFTER the client, redirect and PKCE checks, so only the client that
+  # holds the verifier can reach the replay branch. A stolen code without it is
+  # refused earlier and revokes nothing, so it cannot be used to cut a user off.
+  defp check_unconsumed(%AuthorizationCode{consumed_at: nil} = code) do
+    if DateTime.compare(DateTime.utc_now(), code.expires_at) == :gt,
+      do: grant_error(:code_expired),
+      else: :ok
+  end
+
+  # RFC 6749 §4.1.2: a code used twice is refused and SHOULD revoke what it
+  # issued. Not inside the refresh grace window, though: a client that fires two
+  # exchanges at once, or retries one still in flight, would otherwise lose the
+  # grant its first exchange just gave it.
+  defp check_unconsumed(%AuthorizationCode{consumed_at: consumed_at} = code) do
+    if DateTime.diff(DateTime.utc_now(), consumed_at) > @refresh_reuse_grace_seconds do
+      _ =
+        revoke_refresh_tokens(from(r in RefreshToken, where: r.family_id == ^code.id),
+          skip_tenant_check: true
+        )
+
+      Logger.warning(
+        "oauth_code_replay_revoked",
+        Metadata.with_category(:warning, :lifecycle,
+          client_id: code.client_id,
+          family_id: code.id
+        )
+      )
+    end
+
+    grant_error(:code_consumed)
   end
 
   # A CIMD client presents its document URL here while the code row stores the
@@ -921,7 +962,7 @@ defmodule Engram.OAuth do
 
   defp issue_access_token(user, scope, vault_ids) do
     extras =
-      %{}
+      %{"aud" => Engram.Token.mcp_audience()}
       |> maybe_put("scope", scope)
       |> maybe_put("vault_ids", vault_ids)
       # Every restricted grant also emits the legacy scalar claim, carrying the

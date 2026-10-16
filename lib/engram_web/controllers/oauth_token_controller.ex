@@ -15,6 +15,7 @@ defmodule EngramWeb.OAuthTokenController do
   alias Engram.OAuth
   alias Engram.OAuth.Cimd.JwksCache
   alias EngramWeb.OAuthClientAuth
+  alias EngramWeb.OAuthMetadata
   alias EngramWeb.RemoteIp
   alias EngramWeb.RequestMeta
 
@@ -23,6 +24,19 @@ defmodule EngramWeb.OAuthTokenController do
   # RFC 6749 §5.1 / OAuth 2.1 §3.2.3: token responses MUST NOT be cached. Set on
   # errors too, so no intermediary ever stores anything from this endpoint.
   plug :no_store
+
+  # RFC 8707 §2.2: a token request naming a resource other than this server is
+  # refused before anything is spent, for either grant.
+  def exchange(conn, %{"grant_type" => grant, "resource" => resource} = params)
+      when grant in ["authorization_code", "refresh_token"] and
+             (is_binary(resource) or is_list(resource)) do
+    if OAuthMetadata.mcp_resource?(resource) do
+      exchange(conn, Map.delete(params, "resource"))
+    else
+      grant_type = String.to_existing_atom(grant)
+      reject(conn, grant_type, params["client_id"], "invalid_target", :resource_not_ours)
+    end
+  end
 
   def exchange(conn, %{"grant_type" => "authorization_code"} = params) do
     case OAuthClientAuth.authenticate(conn, params) do
