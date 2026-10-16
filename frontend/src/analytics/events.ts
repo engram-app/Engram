@@ -41,8 +41,8 @@ export type CheckoutMethod = (typeof CHECKOUT_METHODS)[number];
 // be the only cross-domain edge in this file.
 export const CHECKOUT_TIERS = ["starter", "pro"] as const;
 
-// Where an "Upgrade" link was clicked. The wizard's tools step and the
-// post-wizard checklist both send Free users to /onboard/billing.
+// Where an "Upgrade" link was clicked. The post-wizard checklist sends Free
+// users to Settings > Billing.
 export const UPGRADE_SOURCES = ["checklist"] as const;
 
 // Every row the checklist can render: vault, discord, the Obsidian plugin and

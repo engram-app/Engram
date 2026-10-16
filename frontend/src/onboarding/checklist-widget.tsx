@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Waypoints } from "lucide-react";
 import { useState } from "react";
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
@@ -19,6 +19,7 @@ import {
 } from "../components/ui/sheet";
 import { Shimmer } from "../components/ui/shimmer";
 import { DISCORD_INVITE_URL } from "../settings/account/community-section";
+import { settingsTo } from "../settings/settings-hash";
 import { useOnboardingActions } from "./use-onboarding-actions";
 
 interface Item {
@@ -313,6 +314,7 @@ interface BodyProps {
  */
 function ChecklistBody({ visible, total, completed, pct, isFreeTier, onDismiss }: BodyProps) {
 	const { t } = useT();
+	const location = useLocation();
 	return (
 		<>
 			{total > 0 && (
@@ -382,8 +384,10 @@ function ChecklistBody({ visible, total, completed, pct, isFreeTier, onDismiss }
 			{isFreeTier ? (
 				<p className="shrink-0 border-border border-t px-4 py-3 text-muted-foreground text-xs">
 					{t("You're on the Free plan.")}{" "}
+					{/* Settings > Billing, not /onboard/billing: there is no plan step
+					    in the wizard any more, so that route punts home. */}
 					<Link
-						to="/onboard/billing"
+						to={settingsTo("billing", location.search)}
 						onClick={() => track("upgrade_link_clicked", { source: "checklist" })}
 						className="font-medium text-foreground underline underline-offset-4"
 					>
