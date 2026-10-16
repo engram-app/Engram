@@ -1,4 +1,4 @@
-// i18n-core 745e9e57
+// i18n-core 8db2fb3a
 // The translategemma pipeline shared by the web app, the Obsidian plugin and the
 // marketing site: prompts, the checks an answer must pass, and catalog state.
 // Canonical copy: engram-app/Engram frontend/src/i18n/core/. The other repos
@@ -189,19 +189,34 @@ const LOANWORDS: Record<string, readonly string[]> = {
 		"types",
 		"web",
 	],
+	// "admin", "bug" and "subtotal" have no Obsidian or VS Code source (no VS Code
+	// Indonesian pack); kept on the owner's call, 2026-10-16.
 	id: [
+		"admin",
 		"alias",
 		"bookmark",
+		"bug",
 		"callout",
+		"edit",
 		"editor",
+		"email",
 		"file",
 		"filter",
 		"folder",
 		"font",
 		"format",
 		"info",
+		"label",
 		"manual",
+		"markdown",
+		"offline",
+		"per",
 		"plugin",
+		"root",
+		"status",
+		"subtotal",
+		"tag",
+		"total",
 		"vault",
 	],
 	it: [
@@ -233,7 +248,18 @@ const LOANWORDS: Record<string, readonly string[]> = {
 	ja: ["linux pc", "markdown", "web", "windows pc"],
 	ko: ["linux pc", "url", "windows pc"],
 	ms: ["edit", "folder", "frontmatter", "idea", "label", "markdown", "popular", "status", "token"],
-	pl: ["alias", "folder", "format", "wikilink"],
+	pl: [
+		"alias",
+		"folder",
+		"format",
+		"link",
+		"markdown",
+		"offline",
+		"status",
+		"system",
+		"tag",
+		"wikilink",
+	],
 	pt: [
 		"backend",
 		"bug",
@@ -258,6 +284,7 @@ const LOANWORDS: Record<string, readonly string[]> = {
 		"web",
 	],
 	ru: ["markdown"],
+	tr: ["markdown"],
 	vi: ["backend", "cloud", "email", "frontmatter", "markdown", "token"],
 	zh: ["bug", "markdown"],
 };

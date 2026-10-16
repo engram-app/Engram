@@ -178,5 +178,50 @@
 			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
 			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
 		}
+	},
+	"id": {
+		"translator": "7760b698",
+		"failed": {},
+		"one": {},
+		"glossary": {
+			"Note": "Catatan",
+			"Vault": "Vault",
+			"Sync": "Sinkronisasi",
+			"Settings": "Pengaturan"
+		},
+		"descriptions": {
+			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+		}
+	},
+	"pl": {
+		"translator": "f97a3efc",
+		"failed": {},
+		"one": {},
+		"glossary": {
+			"Note": "Notatka",
+			"Vault": "Sejf",
+			"Sync": "Synchronizacja",
+			"Settings": "Ustawienia"
+		},
+		"descriptions": {
+			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+		}
+	},
+	"tr": {
+		"translator": "db74d474",
+		"failed": {},
+		"one": {},
+		"glossary": {
+			"Note": "Not",
+			"Vault": "Kasa",
+			"Sync": "Senkronizasyon",
+			"Settings": "Ayarlar"
+		},
+		"descriptions": {
+			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+		}
 	}
 }
