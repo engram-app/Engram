@@ -39,9 +39,8 @@ export function useReportLocale(): void {
 	}, [userId, optedOut, locale]);
 }
 
-// Mounted once at the AuthGuard level (SettingsOverlayHost), not in AppLayout:
-// onboarding, /link and /oauth/consent sit outside the app shell, and users who
-// stop there would otherwise never have their locale recorded.
+// A component, not a bare hook call, so AuthGuard can mount it only once signed
+// in (hooks cannot run conditionally, and /me before sign-in is a 401).
 export function ReportLocale(): null {
 	useReportLocale();
 	return null;

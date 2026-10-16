@@ -1,6 +1,5 @@
 import { lazy, Suspense } from "react";
 import { Outlet, useLocation } from "react-router";
-import { ReportLocale } from "../i18n/report-locale";
 import { parseSettingsHash } from "./settings-hash";
 
 // Settings is a hash overlay, not a page: the route underneath stays mounted, so
@@ -15,7 +14,6 @@ export default function SettingsOverlayHost() {
 
 	return (
 		<>
-			<ReportLocale />
 			<Outlet />
 			{section !== null && (
 				<Suspense fallback={null}>

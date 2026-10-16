@@ -32,6 +32,11 @@ vi.mock("./oauth/oauth-authorize-page", () => ({
 vi.mock("./i18n/report-locale", () => ({
 	ReportLocale: () => <p data-testid="report-locale" />,
 }));
+// The onboarding layout needs react-query; a pass-through keeps /onboard renderable.
+vi.mock("./onboarding/onboard-entry", async () => {
+	const { Outlet } = await import("react-router");
+	return { OnboardLayout: () => <Outlet />, OnboardRedirect: () => null };
+});
 
 const config: EngramConfig = {
 	authProvider: "local",
@@ -89,7 +94,7 @@ describe("createAppRouter - locale reporter mount point", () => {
 	// Signups that stall in onboarding, or arrive via /oauth/consent or /link,
 	// never reach AppLayout. When the reporter lived there, 10 of 15 new users
 	// had no users.locale. It must mount on every authenticated route.
-	it.each(["/link", "/oauth/consent"])(
+	it.each(["/onboard", "/link", "/oauth/consent"])(
 		"reports the locale on %s (outside the app shell)",
 		async (entry) => {
 			renderAt(entry);
