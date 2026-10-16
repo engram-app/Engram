@@ -10,6 +10,9 @@ vi.mock("./settings-layout", () => ({
 	default: ({ section }: { section: string }) => <p data-testid="dialog">section:{section}</p>,
 }));
 
+// The reporter needs react-query and /me; router.test.tsx covers where it mounts.
+vi.mock("../i18n/report-locale", () => ({ ReportLocale: () => null }));
+
 function LocationProbe() {
 	const loc = useLocation();
 	return <output data-testid="loc">{`${loc.pathname}${loc.search}${loc.hash}`}</output>;

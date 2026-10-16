@@ -6,7 +6,6 @@ import { useMediaQuery } from "@/hooks/use-media-query";
 import { useT } from "@/i18n/locale-provider";
 import { useBillingStatus } from "../api/queries";
 import { useChannel } from "../api/use-channel";
-import { useReportLocale } from "../i18n/report-locale";
 import { LegalNoticeBanner } from "../legal/legal-notice-banner";
 import { AttachmentUploadProvider } from "../viewer/attachment-upload/provider";
 import { ActiveEditorProvider } from "../viewer/editor/active-editor-context";
@@ -151,7 +150,6 @@ function TrialBanner() {
 
 function AppLayoutInner() {
 	useChannel();
-	useReportLocale();
 	const isDesktop = useMediaQuery("(min-width: 768px)");
 	return isDesktop ? <DesktopLayout /> : <MobileLayout />;
 }

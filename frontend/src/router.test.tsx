@@ -28,6 +28,10 @@ vi.mock("./device/device-link-page", () => ({
 vi.mock("./oauth/oauth-authorize-page", () => ({
 	default: () => <p data-testid="oauth-consent">oauth consent page</p>,
 }));
+// The real reporter needs react-query and /me; a marker proves where it mounts.
+vi.mock("./i18n/report-locale", () => ({
+	ReportLocale: () => <p data-testid="report-locale" />,
+}));
 
 const config: EngramConfig = {
 	authProvider: "local",
@@ -79,6 +83,21 @@ describe("createAppRouter - settings overlay mount point", () => {
 			"section:billing",
 		);
 	});
+});
+
+describe("createAppRouter - locale reporter mount point", () => {
+	// Signups that stall in onboarding, or arrive via /oauth/consent or /link,
+	// never reach AppLayout. When the reporter lived there, 10 of 15 new users
+	// had no users.locale. It must mount on every authenticated route.
+	it.each(["/link", "/oauth/consent"])(
+		"reports the locale on %s (outside the app shell)",
+		async (entry) => {
+			renderAt(entry);
+			expect(
+				await screen.findByTestId("report-locale", undefined, { timeout: 15_000 }),
+			).toBeInTheDocument();
+		},
+	);
 });
 
 interface RouteLike {
