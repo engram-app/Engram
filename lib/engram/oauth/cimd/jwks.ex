@@ -11,11 +11,12 @@ defmodule Engram.OAuth.Cimd.Jwks do
   who we already decided the client is. No secret has to be minted, transmitted
   or stored.
 
-  That binding covers the *document*. It does not automatically cover the keys:
-  a document may name a `jwks_uri` on a different origin, which turns a host
-  binding into a delegation. `Engram.OAuth.Cimd` therefore refuses a cross-origin
-  `jwks_uri` at document-validation time, where the refusal is legible, rather
-  than letting it surface as a mystery 401 per token request.
+  That binding covers the *document*, and through it the keys: a document may
+  name a `jwks_uri` on another origin (a CDN, a key host), which is a delegation
+  the document's own host chose. It is accepted. Naming a foreign `jwks_uri`
+  already requires serving the document, so an attacker able to set it has
+  taken the vendor's host. `Engram.OAuth.Cimd` does refuse a `jwks_uri` that is
+  not https or resolves to a private address, at document-validation time.
 
   ## The algorithm allowlist is the load-bearing check
 

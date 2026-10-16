@@ -7,6 +7,8 @@ defmodule EngramWeb.OAuthTokenController do
   """
   use EngramWeb, :controller
 
+  import EngramWeb.OAuthClientAuth, only: [clear_request_state: 2, blank_to_nil: 1]
+
   alias Engram.Accounts.User
   alias Engram.Analytics.McpClient
   alias Engram.OAuth
@@ -15,8 +17,6 @@ defmodule EngramWeb.OAuthTokenController do
   alias EngramWeb.RemoteIp
   alias EngramWeb.RequestMeta
 
-  import EngramWeb.OAuthClientAuth, only: [clear_request_state: 2, blank_to_nil: 1]
-
   plug :clear_request_state
 
   # RFC 6749 §5.1 / OAuth 2.1 §3.2.3: token responses MUST NOT be cached. Set on
@@ -24,34 +24,38 @@ defmodule EngramWeb.OAuthTokenController do
   plug :no_store
 
   def exchange(conn, %{"grant_type" => "authorization_code"} = params) do
-    with {:ok, client_id} <- OAuthClientAuth.authenticate(conn, params) do
-      ip = RequestMeta.format_ip(RemoteIp.resolve(conn))
+    case OAuthClientAuth.authenticate(conn, params) do
+      {:ok, client_id} ->
+        ip = RequestMeta.format_ip(RemoteIp.resolve(conn))
 
-      # Feed back the RESOLVED client_id: it may have arrived via HTTP Basic
-      # rather than the body, and the grant check compares the code's client
-      # against this param. Reading the body directly would fail every
-      # Basic-authenticated exchange that omits the redundant body field.
-      OAuth.exchange_authorization_code(Map.put(params, "client_id", client_id), ip: ip)
-      |> grant_result(conn, :authorization_code, client_id)
-    else
-      {:error, reason} -> auth_error(conn, :authorization_code, reason)
+        # Feed back the RESOLVED client_id: it may have arrived via HTTP Basic
+        # rather than the body, and the grant check compares the code's client
+        # against this param. Reading the body directly would fail every
+        # Basic-authenticated exchange that omits the redundant body field.
+        OAuth.exchange_authorization_code(Map.put(params, "client_id", client_id), ip: ip)
+        |> grant_result(conn, :authorization_code, client_id)
+
+      {:error, reason} ->
+        auth_error(conn, :authorization_code, reason)
     end
   end
 
   def exchange(conn, %{"grant_type" => "refresh_token"} = params) do
-    with {:ok, client_id} <- OAuthClientAuth.authenticate(conn, params) do
-      case params["refresh_token"] do
-        raw when is_binary(raw) and raw != "" ->
-          ip = RequestMeta.format_ip(RemoteIp.resolve(conn))
+    case OAuthClientAuth.authenticate(conn, params) do
+      {:ok, client_id} ->
+        case params["refresh_token"] do
+          raw when is_binary(raw) and raw != "" ->
+            ip = RequestMeta.format_ip(RemoteIp.resolve(conn))
 
-          OAuth.rotate_refresh_token(raw, client_id, ip: ip)
-          |> grant_result(conn, :refresh_token, client_id)
+            OAuth.rotate_refresh_token(raw, client_id, ip: ip)
+            |> grant_result(conn, :refresh_token, client_id)
 
-        _ ->
-          reject(conn, :refresh_token, client_id, "invalid_request", :refresh_token_missing)
-      end
-    else
-      {:error, reason} -> auth_error(conn, :refresh_token, reason)
+          _ ->
+            reject(conn, :refresh_token, client_id, "invalid_request", :refresh_token_missing)
+        end
+
+      {:error, reason} ->
+        auth_error(conn, :refresh_token, reason)
     end
   end
 

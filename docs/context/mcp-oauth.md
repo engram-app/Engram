@@ -18,7 +18,7 @@ End-to-end OAuth 2.1 + Dynamic Client Registration on Engram's MCP endpoint, so 
 7. POST /oauth/token grant=authorization_code    → access_token + refresh_token
 8. POST /api/mcp Authorization: Bearer ...       → tool calls (vault-locked)
 9. POST /oauth/token grant=refresh_token         → rotated tokens (RFC 6749 §10.4 family)
-10. POST /oauth/revoke                           → 200 always (RFC 7009)
+10. POST /oauth/revoke                           → 200 once the client authenticates (RFC 7009)
 ```
 
 CIMD clients (Claude, ChatGPT) skip step 3: they send an HTTPS URL as `client_id`, and `/oauth/authorize` fetches that metadata document. See `cimd-vs-dcr-validation-policy.md`.
@@ -34,7 +34,7 @@ CIMD clients (Claude, ChatGPT) skip step 3: they send an HTTPS URL as `client_id
 | `GET /api/oauth/clients/:client_id` | none, rate-limited 10/IP/min | Public client metadata — `{client_id, client_name}` only, for SPA consent UI |
 | `POST /api/oauth/authorize/consent` | Bearer JWT | SPA submits w/ `vault_choice`. Mints code. JSON `{redirect_uri: "..."}` for SPA `window.location` |
 | `POST /oauth/token` | client auth, rate-limited 300/min per {client_id, IP} plus 3,000/min per IP | RFC 6749 §3.2 — auth code → tokens, refresh → rotated tokens |
-| `POST /oauth/revoke` | client auth, rate-limited 300/min per {client_id, IP} plus 3,000/min per IP | RFC 7009 — 200 always |
+| `POST /oauth/revoke` | client auth, rate-limited 300/min per {client_id, IP} plus 3,000/min per IP | RFC 7009. Client auth is `EngramWeb.OAuthClientAuth`, shared with `/oauth/token` (body id, Basic, or assertion). Bad auth is 401 `invalid_client`, a missing `token` is 400; otherwise 200 whether or not the token existed |
 
 ## Token model
 
