@@ -8,7 +8,7 @@ defmodule Engram.Repo.Migrations.AddOauthClientCimdMaxAge do
   # NULL means the vendor sent none, and the 24 h default applies.
   def change do
     alter table(:oauth_clients) do
-      add :cimd_max_age, :integer
+      add :cimd_max_age, :bigint
     end
   end
 end
