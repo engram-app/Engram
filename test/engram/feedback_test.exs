@@ -115,6 +115,10 @@ defmodule Engram.FeedbackTest do
                Feedback.submit(user, "onboarding", %{"tools" => ["telepathy"]})
 
       assert {:error, :invalid_tools} = Feedback.submit(user, "onboarding", %{"tools" => []})
+
+      # Atomic: a rejected survey save stamps nothing, so it is asked again.
+      refute Map.has_key?(profile(user), "use_cases_done_at")
+      assert profile(user)["tools"] == ["claude"]
     end
 
     test "rejects unknown slugs", %{user: user} do

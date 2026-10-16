@@ -343,6 +343,42 @@ defmodule Engram.OnboardingTest do
       assert %{steps: [:agreement, :vault], next_step: :vault} = Onboarding.status(user)
     end
 
+    # The whole guarantee against a wizard loop: the layout punts any step not
+    # in `steps` back to /onboard, which resolves `next_step` again. And the
+    # verdict the wire reports (`gate_ok`) must be the one `gate/2` enforces.
+    test "next_step is always listed and gate_ok always matches gate/2" do
+      prev = Application.get_env(:engram, :billing_enabled)
+      on_exit(fn -> Application.put_env(:engram, :billing_enabled, prev) end)
+
+      for billing <- [true, false],
+          origin <- [:web, :plugin, :connector, :legacy_connector],
+          uses_obsidian <- [nil, true, false],
+          terms <- [false, true],
+          plan <- [false, true],
+          vault <- [false, true] do
+        Application.put_env(:engram, :billing_enabled, billing)
+        Engram.Onboarding.GateCache.evict_all()
+
+        user =
+          insert(:user,
+            onboarding_profile: loop_profile(origin, uses_obsidian),
+            free_tier_accepted_at: if(plan, do: DateTime.utc_now(:second))
+          )
+
+        if vault, do: insert(:vault, user: user)
+        if terms, do: {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+
+        status = Onboarding.status(user)
+        label = inspect({billing, origin, uses_obsidian, terms, plan, vault})
+
+        assert status.next_step == :done or status.next_step in status.steps,
+               "#{label}: next_step #{status.next_step} not in #{inspect(status.steps)}"
+
+        assert match?(:ok, Onboarding.gate(user)) == status.gate_ok,
+               "#{label}: gate/2 disagrees with gate_ok #{status.gate_ok}"
+      end
+    end
+
     test "next_step=billing when terms accepted but no subscription" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
@@ -738,6 +774,67 @@ defmodule Engram.OnboardingTest do
       assert [] = Engram.Vaults.list_vaults(user)
     end
 
+    # A connector signup from before connector profiles completed at the
+    # pre-answer is still on the vault step. Provisioning for it would mint
+    # "My Vault", and the Free cap would then refuse the vault it creates.
+    test "a pre-filled profile without completed_at is never provisioned" do
+      user =
+        insert(:user, onboarding_profile: %{"tools" => ["chatgpt"], "tools_prefilled" => true})
+
+      {:ok, _} =
+        Onboarding.accept_terms(user, "2026-05-15", "canonical", "2026-05-15", "p", %{})
+
+      assert [] = Engram.Vaults.list_vaults(user)
+      assert %{next_step: :vault} = Onboarding.status(Engram.Accounts.get_user!(user.id))
+    end
+
+    test "a deleted My Vault is not recreated by re-accepting terms" do
+      user = prefilled_past_terms()
+      {:ok, _} = Onboarding.accept_free_tier(Engram.Accounts.get_user!(user.id))
+      [vault] = Engram.Vaults.list_vaults(user)
+      {:ok, _} = Engram.Vaults.delete_vault(Engram.Accounts.get_user!(user.id), vault.id)
+
+      {:ok, _} =
+        Onboarding.accept_terms(user, "2026-05-15", "canonical", "2026-05-15", "p", %{})
+
+      assert [] = Engram.Vaults.list_vaults(user)
+    end
+
+    test "a deleted My Vault is not recreated by subscribing again" do
+      user = prefilled_past_terms()
+      {:ok, _} = Onboarding.accept_free_tier(Engram.Accounts.get_user!(user.id))
+      [vault] = Engram.Vaults.list_vaults(user)
+      {:ok, _} = Engram.Vaults.delete_vault(Engram.Accounts.get_user!(user.id), vault.id)
+
+      {:ok, _} = Engram.Billing.upsert_from_paddle_event(created_event(user, "sub_again_1"))
+
+      assert [] = Engram.Vaults.list_vaults(user)
+    end
+
+    # A webhook must finish its side effects and return {:ok, sub} even when
+    # the vault cannot be made (here: the vault cap is 0).
+    test "subscription.created still succeeds when provisioning fails" do
+      user = prefilled_past_terms()
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 0})
+
+      assert {:ok, %Engram.Billing.Subscription{}} =
+               Engram.Billing.upsert_from_paddle_event(created_event(user, "sub_capped_1"))
+
+      assert [] = Engram.Vaults.list_vaults(user)
+    end
+
+    # Only the first acceptance starts an account on Free. Re-accepting
+    # changed terms is not a plan choice: a lapsed payer stays at the plan step.
+    test "re-accepting changed terms does not start an account on Free" do
+      user = insert(:user, onboarding_profile: %{"uses_obsidian" => false, "completed_at" => "x"})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-01-01", %{})
+
+      {:ok, _} =
+        Onboarding.accept_terms(user, "2026-05-15", "canonical", "2026-05-15", "p", %{})
+
+      assert is_nil(Engram.Accounts.get_user!(user.id).free_tier_accepted_at)
+    end
+
     test "provisioning is idempotent" do
       user = prefilled_past_terms()
       {:ok, _} = Onboarding.accept_free_tier(Engram.Accounts.get_user!(user.id))
@@ -788,6 +885,19 @@ defmodule Engram.OnboardingTest do
 
       assert {:ok, updated} = Onboarding.set_profile(user, %{signup_source: "plugin"})
       assert updated.onboarding_profile["signup_source"] == "plugin"
+    end
+
+    # The origin is where the signup STARTED: a plugin-first user who later
+    # connects ChatGPT through a consent screen is still a plugin signup.
+    test "a later connector pre-answer does not re-record the origin" do
+      capture_posthog()
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true, signup_source: "plugin"})
+      {:ok, _} = Onboarding.set_profile(user, %{tools: ["chatgpt"], tools_prefilled: true})
+
+      events = collect_posthog_events("signup_source_recorded")
+      assert [%{"properties" => %{"signup_source" => "plugin"} = props}] = events
+      assert props["$set_once"] == %{"signup_source" => "plugin", "signup_tool" => "obsidian"}
     end
 
     test "signup_source must be a known origin" do
@@ -1219,10 +1329,78 @@ defmodule Engram.OnboardingTest do
     end
   end
 
+  # Points PostHog at a local stub that forwards each capture to this process.
+  defp capture_posthog do
+    prior =
+      {Application.get_env(:engram, :posthog_key), Application.get_env(:engram, :posthog_host)}
+
+    on_exit(fn ->
+      Application.put_env(:engram, :posthog_key, elem(prior, 0))
+      Application.put_env(:engram, :posthog_host, elem(prior, 1))
+    end)
+
+    bypass = Bypass.open()
+    Application.put_env(:engram, :posthog_key, "phc_test_token")
+    Application.put_env(:engram, :posthog_host, "http://localhost:#{bypass.port}")
+    parent = self()
+
+    Bypass.stub(bypass, "POST", "/capture/", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      send(parent, {:posthog, Jason.decode!(body)})
+      Plug.Conn.resp(conn, 200, "1")
+    end)
+  end
+
+  # Every captured event named `event` that arrives within half a second.
+  defp collect_posthog_events(event, acc \\ []) do
+    receive do
+      {:posthog, %{"event" => ^event} = body} -> collect_posthog_events(event, [body | acc])
+      {:posthog, _other} -> collect_posthog_events(event, acc)
+    after
+      500 -> Enum.reverse(acc)
+    end
+  end
+
+  defp created_event(user, sub_id) do
+    %{
+      "event_type" => "subscription.created",
+      "event_id" => "ntf_" <> sub_id,
+      "data" => %{
+        "id" => sub_id,
+        "status" => "active",
+        "customer_id" => "ctm_" <> sub_id,
+        "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}, "status" => "active"}],
+        "current_billing_period" => %{
+          "starts_at" => "2026-05-13T00:00:00Z",
+          "ends_at" => "2026-06-13T00:00:00Z"
+        },
+        "custom_data" => %{"user_id" => user.id}
+      }
+    }
+  end
+
   defp prefilled_past_terms do
     user = insert(:user, onboarding_profile: %{})
     {:ok, _} = Onboarding.set_profile(user, %{tools: ["chatgpt"], tools_prefilled: true})
     {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
     user
+  end
+
+  # Profiles as each origin writes them (see `Onboarding.set_profile/2`).
+  defp loop_profile(origin, uses_obsidian) do
+    base =
+      case origin do
+        :web -> %{}
+        :plugin -> %{"signup_source" => "plugin"}
+        :connector -> %{"tools" => ["chatgpt"], "tools_prefilled" => true}
+        :legacy_connector -> %{"tools" => ["chatgpt"], "tools_prefilled" => true}
+      end
+
+    base = if is_nil(uses_obsidian), do: base, else: Map.put(base, "uses_obsidian", uses_obsidian)
+
+    complete =
+      origin == :connector or (origin != :legacy_connector and is_boolean(uses_obsidian))
+
+    if complete, do: Map.put(base, "completed_at", "2026-10-01T00:00:00Z"), else: base
   end
 end

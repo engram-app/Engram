@@ -26,6 +26,7 @@ defmodule Engram.Onboarding do
   @signup_sources ~w(plugin)
 
   @connector_vault_name "My Vault"
+  @connector_vault_action "connector_vault_provisioned"
   @connector_vault_client_id "connector-signup"
 
   @terms_document "terms_of_service"
@@ -63,6 +64,9 @@ defmodule Engram.Onboarding do
   """
   def accept_terms(user, tos_version, tos_hash, privacy_version, privacy_hash, meta)
       when is_binary(tos_version) and is_binary(privacy_version) do
+    # Read before the insert: only a first acceptance starts the account on
+    # Free (`after_terms/2`); re-accepting changed terms is not a plan choice.
+    first_acceptance = is_nil(accepted_version(user, @terms_document))
     accepted_at = DateTime.utc_now(:second)
     ip = Map.get(meta, :ip_address)
     ua = Map.get(meta, :user_agent)
@@ -106,7 +110,7 @@ defmodule Engram.Onboarding do
         # could land over a newer one a concurrent read just stored.
         :ok = Cache.evict(:terms, {user.id, @terms_document})
         :ok = Cache.evict(:terms, {user.id, @privacy_document})
-        :ok = after_terms(user)
+        :ok = after_terms(user, first_acceptance)
         {:ok, tos_row}
 
       other ->
@@ -415,7 +419,12 @@ defmodule Engram.Onboarding do
   # Where the signup started, as recorded on its profile. A connector signup
   # is marked by its OAuth client pre-answering `tools`; a plugin-first one by
   # /link (`signup_source: "plugin"`). Anything else started on the web.
-  defp plugin_source?(%{"signup_source" => "plugin"}), do: true
+  #
+  # A plugin-first signup skips the vault wait only while it still uses
+  # Obsidian: that is what lets `gate_missing/1` admit it without a vault. One
+  # that answered "fresh" needs a vault like anyone else, or `next_step` would
+  # say :done while the gate refuses (and `gate/2` caches the :done as a pass).
+  defp plugin_source?(%{"signup_source" => "plugin", "uses_obsidian" => true}), do: true
   defp plugin_source?(_), do: false
 
   defp tools_prefilled?(%{"tools_prefilled" => true}), do: true
@@ -562,7 +571,7 @@ defmodule Engram.Onboarding do
           :ok
       end)
       |> tap(fn
-        {:ok, saved} -> track_signup_source(saved, attrs)
+        {:ok, saved} -> track_signup_source(saved, attrs, existing)
         _ -> :ok
       end)
     end
@@ -628,9 +637,15 @@ defmodule Engram.Onboarding do
     status = status(user)
     profile = status.profile || %{}
 
+    # `profile_complete`: a connector row pre-filled before connector profiles
+    # completed at the pre-answer is still on the vault step, where a minted
+    # "My Vault" would make the Free cap refuse the vault the user creates.
+    # Provisioned once ever: a vault the user deleted stays deleted.
     due =
-      tools_prefilled?(profile) and not is_boolean(profile["uses_obsidian"]) and
-        not status.has_vault and status.terms_ok and status.subscription_ok
+      tools_prefilled?(profile) and status.profile_complete and
+        not is_boolean(profile["uses_obsidian"]) and not status.has_vault and
+        status.terms_ok and status.subscription_ok and
+        @connector_vault_action not in list_actions(user.id)
 
     if due, do: provision_connector_vault(user), else: :ok
   rescue
@@ -648,16 +663,18 @@ defmodule Engram.Onboarding do
       :ok
   end
 
-  # Every signup starts on Free when it accepts the terms, so there is no
-  # plan step: get people using it first, upgrade prompts later. Only when no
-  # plan passes yet; a paid account keeps its plan. Then a connector signup's
-  # vault, which is due once terms and plan both pass. A failed stamp leaves
-  # `:billing` in the chain (`build_steps/3`), the old flow.
-  defp after_terms(user) do
+  # Every signup starts on Free when it first accepts the terms, so there is
+  # no plan step: get people using it first, upgrade prompts later. Only at the
+  # first acceptance, and only when no plan passes yet: a paid account keeps
+  # its plan, and a lapsed one re-accepting changed terms stays at the plan
+  # step. Then a connector signup's vault, which is due once terms and plan
+  # both pass. A failed stamp leaves `:billing` in the chain
+  # (`build_steps/3`), the old flow.
+  defp after_terms(user, first_acceptance) do
     user = Accounts.get_user(user.id) || user
 
     starts_free =
-      Application.get_env(:engram, :billing_enabled, false) and
+      first_acceptance and Application.get_env(:engram, :billing_enabled, false) and
         is_nil(user.free_tier_accepted_at) and
         Engram.Billing.tier(user) not in [:starter, :pro]
 
@@ -695,6 +712,7 @@ defmodule Engram.Onboarding do
           end
 
         Vaults.WelcomeNote.seed(user, vault)
+        _ = record_action(user.id, @connector_vault_action)
 
       {:ok, _vault, :existing} ->
         :ok
@@ -713,21 +731,26 @@ defmodule Engram.Onboarding do
   end
 
   # Plugin and connector signups are not asked how they heard about us: where
-  # they started is the answer, recorded once as a person property so funnels
-  # can break down by it. Web signups answer on the terms screen.
-  defp track_signup_source(user, %{signup_source: "plugin"}),
+  # they started is the answer, recorded once so funnels can break down by it.
+  # Once: a plugin-first user who later connects ChatGPT through a consent
+  # screen still started on the plugin. Skipped when the profile already had an
+  # origin, and `$set_once` so PostHog keeps the first one regardless.
+  defp track_signup_source(_user, _attrs, %{"signup_source" => _}), do: :ok
+  defp track_signup_source(_user, _attrs, %{"tools_prefilled" => true}), do: :ok
+
+  defp track_signup_source(user, %{signup_source: "plugin"}, _existing),
     do: send_signup_source(user, "plugin", "obsidian")
 
-  defp track_signup_source(user, %{tools_prefilled: true, tools: [tool | _]}),
+  defp track_signup_source(user, %{tools_prefilled: true, tools: [tool | _]}, _existing),
     do: send_signup_source(user, "connector", tool)
 
-  defp track_signup_source(_user, _attrs), do: :ok
+  defp track_signup_source(_user, _attrs, _existing), do: :ok
 
   defp send_signup_source(user, source, tool) do
     Engram.Analytics.track(user, "signup_source_recorded", %{
       "signup_source" => source,
       "signup_tool" => tool,
-      "$set" => %{"signup_source" => source, "signup_tool" => tool}
+      "$set_once" => %{"signup_source" => source, "signup_tool" => tool}
     })
   end
 

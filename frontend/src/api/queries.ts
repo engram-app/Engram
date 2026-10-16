@@ -1284,6 +1284,7 @@ export type OnboardingAction =
 	| "first_vault_created"
 	| "plugin_connected"
 	| "ai_connected"
+	| "connector_vault_provisioned"
 	| `dismissed:${string}`;
 
 export interface OnboardingStatus {
