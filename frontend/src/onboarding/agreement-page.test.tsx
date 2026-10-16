@@ -1,10 +1,21 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/locale-provider";
 import { track } from "../analytics/track";
 import AgreementPage from "./agreement-page";
+
+// The behaviour under test is the page, not the legal texts: rendering the
+// full vendored markdown cost ~1s per test on an idle box and blew the 5s
+// limit on CI runners. Short stand-ins keep the headings and dates asserted.
+vi.mock("../legal/load", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../legal/load")>()),
+	loadVersion: async (doc: "terms" | "privacy") =>
+		doc === "terms"
+			? "# Terms of Service\n\nLast updated: May 19, 2026\n\nStand-in text."
+			: "# Privacy Policy\n\nLast updated: June 20, 2026\n\nStand-in text.",
+}));
 
 vi.mock("../analytics/track", () => ({ track: vi.fn() }));
 const mockTrack = vi.mocked(track);
@@ -48,20 +59,6 @@ function renderPage() {
 		</QueryClientProvider>,
 	);
 }
-
-// The legal texts and their renderer are lazy chunks. Their first import in a
-// file pays Vite's transform, which on a busy CI runner outlasts the 1s that
-// findBy/waitFor allow. Loaded once up front, the tests time behaviour only.
-beforeAll(async () => {
-	const { loadVersion, renderableVersion } = await import("../legal/load");
-	await Promise.all(
-		(["terms", "privacy"] as const).map((doc) => {
-			const version = renderableVersion(doc, "9999-12-31");
-			return version ? loadVersion(doc, version) : undefined;
-		}),
-	);
-	await import("../legal/legal-doc");
-});
 
 describe("AgreementPage", () => {
 	it("disables Continue until the agreement checkbox is checked", async () => {
