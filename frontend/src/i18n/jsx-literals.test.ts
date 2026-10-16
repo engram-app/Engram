@@ -154,5 +154,7 @@ describe("repo source", () => {
 			jsxLeaks(source, path).map((text) => `${path.slice(3)}: ${text}`),
 		);
 		expect(leaks).toEqual([]);
-	});
+		// Parses every shipped .tsx: ~2 s alone, past the 5 s default under a loaded
+		// full run (seen 6.1 s on 2026-10-16). The cost grows with the repo, not a hang.
+	}, 30_000);
 });
