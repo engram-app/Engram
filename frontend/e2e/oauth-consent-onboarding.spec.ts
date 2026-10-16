@@ -180,7 +180,7 @@ test.describe("MCP-first signup resumes consent after onboarding", () => {
 		// 1. Bounced into the wizard rather than shown an Approve button that
 		//    would mint an unusable grant.
 		await page.waitForURL(/\/onboard/u, { timeout: 20_000 });
-		await expect(page.getByRole("button", { name: /approve/iu })).toHaveCount(0);
+		await expect(page.getByRole("button", { name: /^(?:review|approve)$/iu })).toHaveCount(0);
 
 		// 2. The detour names the app that is waiting. Dumping someone into an
 		//    unexplained signup is the phishing-shaped UX the OAuth guidance
@@ -213,7 +213,9 @@ test.describe("MCP-first signup resumes consent after onboarding", () => {
 		// carries `redirect_uri=...%2Foauth-callback-test`, so a loose regex
 		// matches before any navigation happens and the assertions below then
 		// read the consent URL's params instead of the callback's.
-		await page.getByRole("button", { name: /approve/iu }).click();
+		// Consent is two steps: Review the picked access, then Approve.
+		await page.getByRole("button", { name: /^review$/iu }).click();
+		await page.getByRole("button", { name: /^approve$/iu }).click();
 		await page.waitForURL((url) => new URL(url).pathname === CALLBACK_PATH, {
 			timeout: 25_000,
 		});
