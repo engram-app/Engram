@@ -140,13 +140,11 @@ defmodule EngramWeb.WellKnownController do
         # so if `Engram.OAuth.Cimd` is broken, new Claude Code connections fail
         # rather than degrade. Existing DCR grants are separate rows and keep
         # working. Backing that out is a revert, not a config change.
-        client_id_metadata_document_supported: true
+        client_id_metadata_document_supported: true,
+        # RFC 9207: every authorization response, errors and both Cancel
+        # paths included, carries `iss`.
+        authorization_response_iss_parameter_supported: true
       }
-      |> Map.merge(
-        if OAuthMetadata.iss_enabled?(),
-          do: %{authorization_response_iss_parameter_supported: true},
-          else: %{}
-      )
     )
   end
 

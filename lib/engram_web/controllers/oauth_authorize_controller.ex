@@ -53,8 +53,7 @@ defmodule EngramWeb.OAuthAuthorizeController do
     # RFC 9207. Fixed at /oauth/authorize on the host the client dialed and
     # carried through the SPA, because this call arrives on another host. Only
     # one of our own issuers is echoed: a forged value is the mix-up attack.
-    iss =
-      if OAuthMetadata.iss_enabled?() and OAuthMetadata.issuer?(params["iss"]), do: params["iss"]
+    iss = if OAuthMetadata.issuer?(params["iss"]), do: params["iss"]
 
     case OAuth.validate_authorization_request(params) do
       {:ok, validated} ->
@@ -126,7 +125,7 @@ defmodule EngramWeb.OAuthAuthorizeController do
       # Strings only: a repeated-key list (`resource[]=`) was validated
       # already and cannot be query-encoded.
       |> Enum.filter(fn {_k, v} -> is_binary(v) and v != "" end)
-      |> Enum.concat(iss_param(conn))
+      |> Enum.concat([{"iss", OAuthMetadata.base_url(conn)}])
 
     query = URI.encode_query(forwarded)
 
@@ -166,12 +165,8 @@ defmodule EngramWeb.OAuthAuthorizeController do
     |> render(template, code: code)
   end
 
-  defp iss_param(conn) do
-    if OAuthMetadata.iss_enabled?(), do: [{"iss", OAuthMetadata.base_url(conn)}], else: []
-  end
-
   defp redirect_with_error(conn, redirect_uri, error, state) do
-    iss = if OAuthMetadata.iss_enabled?(), do: OAuthMetadata.base_url(conn)
+    iss = OAuthMetadata.base_url(conn)
     location = OAuth.build_redirect(redirect_uri, %{error: error, state: state, iss: iss})
     conn |> put_status(302) |> redirect(external: location)
   end

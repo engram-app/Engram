@@ -974,20 +974,9 @@ defmodule Engram.OAuth do
   defp grant_vault_ids(%{vault_id: id}) when is_binary(id), do: [id]
   defp grant_vault_ids(_), do: nil
 
-  # Mints the legacy `engram` audience until every node can verify
-  # `engram:mcp`: a node still on the previous release refuses it, and with
-  # two tasks behind the ALB through a rolling deploy (and after a rollback)
-  # half of a client's calls would 401. The verifier accepts both today; the
-  # next release turns minting on.
-  defp mint_audience do
-    if Application.get_env(:engram, :oauth_mcp_audience_tokens, false),
-      do: Engram.Token.mcp_audience(),
-      else: "engram"
-  end
-
   defp issue_access_token(user, scope, vault_ids) do
     extras =
-      %{"aud" => mint_audience()}
+      %{"aud" => Engram.Token.mcp_audience()}
       |> maybe_put("scope", scope)
       |> maybe_put("vault_ids", vault_ids)
       # Every restricted grant also emits the legacy scalar claim, carrying the

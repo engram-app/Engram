@@ -5,7 +5,7 @@ defmodule EngramWeb.OAuthIssuerHostTest do
   the `:cors_origin` branch of `OAuthMetadata.issuer?/1` is the one that runs
   there. Every other test dials the canonical host and short-circuits past it.
   """
-  # async: false: sets the global `:cors_origin` and the `iss` switch.
+  # async: false: sets the global `:cors_origin`.
   use EngramWeb.ConnCase, async: false
 
   alias Engram.Auth.Providers.Local
@@ -19,9 +19,6 @@ defmodule EngramWeb.OAuthIssuerHostTest do
     EngramWeb.RateLimiter.reset_buckets!()
     prior = Application.fetch_env(:engram, :cors_origin)
     Application.put_env(:engram, :cors_origin, [@origin])
-    # On as the next release ships it; off is `OAuthAuthorizeControllerTest`.
-    Application.put_env(:engram, :oauth_iss_response, true)
-    on_exit(fn -> Application.delete_env(:engram, :oauth_iss_response) end)
 
     # Unset must be restored as unset: a `nil` value crashes every later
     # `x in cors_origin` read.
@@ -82,7 +79,7 @@ defmodule EngramWeb.OAuthIssuerHostTest do
     assert URI.decode_query(URI.parse(redirect).query)["iss"] == issuer
   end
 
-  test "discovery advertises iss support once it is on", %{conn: conn} do
+  test "discovery advertises iss support", %{conn: conn} do
     assert conn
            |> get("/.well-known/oauth-authorization-server")
            |> json_response(200)

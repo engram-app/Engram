@@ -51,10 +51,10 @@ defmodule EngramWeb.OAuthSpecRowsTest do
     assert %URI{query: nil, fragment: nil} = URI.parse(issuer)
   end
 
-  # RFC 9207 §3: advertised only once `iss` is emitted (the switch is off here).
-  test "RFC 9207 §3: iss support is not advertised while iss is off", %{conn: conn} do
+  # RFC 9207 §3: advertised, since every authorization response carries it.
+  test "RFC 9207 §3: iss support is advertised", %{conn: conn} do
     metadata = conn |> get("/.well-known/oauth-authorization-server") |> json_response(200)
-    refute Map.has_key?(metadata, "authorization_response_iss_parameter_supported")
+    assert metadata["authorization_response_iss_parameter_supported"] == true
   end
 
   # RFC 6749 §3.2: the token endpoint is POST only.

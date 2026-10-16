@@ -12,10 +12,6 @@ defmodule EngramWeb.OAuthAudienceTest do
   Device-flow tokens (the Obsidian plugin) and every token minted before this
   change carry the legacy `aud`, and keep working exactly as before.
 
-  Minting `engram:mcp` is off this release (`:oauth_mcp_audience_tokens`):
-  nodes still on the previous release refuse it, so this release only teaches
-  every node to verify it. These tests run with minting on, as the next
-  release ships it; the default is pinned in its own test.
   """
   use EngramWeb.ConnCase, async: false
 
@@ -33,8 +29,6 @@ defmodule EngramWeb.OAuthAudienceTest do
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     {:ok, vault, _} = Engram.Vaults.register_vault(user, "V", Ecto.UUID.generate())
     lift_api_rps_cap!(user)
-    Application.put_env(:engram, :oauth_mcp_audience_tokens, true)
-    on_exit(fn -> Application.delete_env(:engram, :oauth_mcp_audience_tokens) end)
     %{user: user, vault: vault}
   end
 
@@ -75,12 +69,6 @@ defmodule EngramWeb.OAuthAudienceTest do
 
   test "an OAuth access token names the MCP audience", %{user: user} do
     assert {:ok, %{"aud" => "engram:mcp"}} = Accounts.verify_jwt(oauth_access_token(user))
-  end
-
-  # Expand before contract: a rolling deploy runs old and new nodes together.
-  test "this release still mints the legacy audience", %{user: user} do
-    Application.delete_env(:engram, :oauth_mcp_audience_tokens)
-    assert {:ok, %{"aud" => "engram"}} = Accounts.verify_jwt(oauth_access_token(user))
   end
 
   test "it works on /api/mcp", %{user: user} do
