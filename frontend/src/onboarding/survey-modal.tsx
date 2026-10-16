@@ -141,7 +141,9 @@ function SurveyModal({ initialTools, onDone }: SurveyModalProps) {
 					</p>
 				) : null}
 
-				<DialogFooter>
+				{/* Pinned: the tool grid is tall enough to push the buttons below
+				    the fold, and the way out must always be in view. */}
+				<DialogFooter className="sticky -bottom-6 -mx-6 -mb-6 border-border border-t bg-background p-6 pt-3">
 					<Button type="button" variant="ghost" onClick={skip} disabled={pending}>
 						{t("Skip")}
 					</Button>

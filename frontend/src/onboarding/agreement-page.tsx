@@ -147,16 +147,6 @@ export default function AgreementPage() {
 							</div>
 						</ScrollArea>
 					) : null}
-					<label className={selectableRow(agreed)}>
-						<Checkbox
-							checked={agreed}
-							onCheckedChange={(v) => setAgreed(v === true)}
-							aria-label={t("I have read and agree to the Terms of Service and Privacy Policy")}
-						/>
-						<span className="font-medium text-foreground text-sm">
-							{t("I have read and agree to the agreement shown above and the privacy notice")}
-						</span>
-					</label>
 					{askHeardFrom ? (
 						<section className="flex flex-col gap-3">
 							<h2 id={heardFromId} className="font-semibold text-base text-foreground">
@@ -173,6 +163,16 @@ export default function AgreementPage() {
 							/>
 						</section>
 					) : null}
+					<label className={selectableRow(agreed)}>
+						<Checkbox
+							checked={agreed}
+							onCheckedChange={(v) => setAgreed(v === true)}
+							aria-label={t("I have read and agree to the Terms of Service and Privacy Policy")}
+						/>
+						<span className="font-medium text-foreground text-sm">
+							{t("I have read and agree to the agreement shown above and the privacy notice")}
+						</span>
+					</label>
 					<Button
 						type="button"
 						onClick={submit}
