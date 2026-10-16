@@ -261,6 +261,21 @@ defmodule Engram.OnboardingTest do
     # A row pre-filled before vaults were provisioned (or whose provisioning
     # failed) has no vault: the chain keeps the vault step rather than pointing
     # the wizard at a step it does not list. The survey stays skipped.
+    # A row pre-filled before `completed_at` was stamped for connector
+    # signups, holding a vault from elsewhere (e.g. the plugin's device link).
+    # `next_step` still answers :vault, so the chain must list it.
+    test "a pre-filled profile with a vault but no completed_at keeps the vault step" do
+      user =
+        insert(:user, onboarding_profile: %{"tools" => ["chatgpt"], "tools_prefilled" => true})
+
+      insert(:vault, user: user)
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+      insert(:subscription, user: user, status: "active")
+
+      assert %{steps: [:agreement, :billing, :vault], next_step: :vault} =
+               Onboarding.status(user)
+    end
+
     test "a pre-filled profile without a vault keeps the vault step, never the survey" do
       user =
         insert(:user, onboarding_profile: %{"tools" => ["chatgpt"], "tools_prefilled" => true})
@@ -592,11 +607,21 @@ defmodule Engram.OnboardingTest do
     # A qualifier on `tools`, never a standalone fact. Accepted alone, a stray
     # POST could mark an ordinary signup's own answer as pre-filled, dropping
     # their tools step out of the chain and freezing "Step X of N".
-    test "tools_prefilled provisions a default vault with the welcome note" do
+    # Nothing is written for the user before they accept the terms: the
+    # pre-answer runs on the consent screen, ahead of the agreement step.
+    test "tools_prefilled provisions nothing before terms and plan" do
       user = insert(:user, onboarding_profile: %{})
 
       assert {:ok, _} =
                Onboarding.set_profile(user, %{tools: ["chatgpt"], tools_prefilled: true})
+
+      assert [] = Engram.Vaults.list_vaults(user)
+    end
+
+    test "accepting the Free plan provisions My Vault with the welcome note" do
+      user = prefilled_past_terms()
+
+      {:ok, _} = Onboarding.accept_free_tier(Engram.Accounts.get_user!(user.id))
 
       assert [vault] = Engram.Vaults.list_vaults(user)
       assert vault.name == "My Vault"
@@ -605,29 +630,69 @@ defmodule Engram.OnboardingTest do
                Engram.Vaults.content_counts(Engram.Accounts.get_user(user.id), vault.id)
     end
 
-    test "tools_prefilled provisioning is idempotent" do
-      user = insert(:user, onboarding_profile: %{})
-      attrs = %{tools: ["chatgpt"], tools_prefilled: true}
+    test "a paid subscription provisions My Vault" do
+      user = prefilled_past_terms()
 
-      assert {:ok, _} = Onboarding.set_profile(user, attrs)
-      assert {:ok, _} = Onboarding.set_profile(user, attrs)
+      {:ok, _} =
+        Engram.Billing.upsert_from_paddle_event(%{
+          "event_type" => "subscription.created",
+          "event_id" => "ntf_connector_1",
+          "data" => %{
+            "id" => "sub_connector_1",
+            "status" => "active",
+            "customer_id" => "ctm_connector_1",
+            "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}, "status" => "active"}],
+            "current_billing_period" => %{
+              "starts_at" => "2026-05-13T00:00:00Z",
+              "ends_at" => "2026-06-13T00:00:00Z"
+            },
+            "custom_data" => %{"user_id" => user.id}
+          }
+        })
 
+      assert [%{name: "My Vault"}] = Engram.Vaults.list_vaults(user)
+    end
+
+    test "provisioning is idempotent" do
+      user = prefilled_past_terms()
+      {:ok, _} = Onboarding.accept_free_tier(Engram.Accounts.get_user!(user.id))
+
+      assert :ok = Onboarding.maybe_provision_connector_vault(user)
       assert [_one] = Engram.Vaults.list_vaults(user)
     end
 
-    test "tools_prefilled does not add a vault for a user who already has one" do
+    test "provisioning skips a user who already has a vault" do
+      # Inserted first: the factory bypasses the vault-list cache eviction that
+      # `register_vault/5` performs, so a later insert would read as no vault.
       user = insert(:user, onboarding_profile: %{})
       existing = insert(:vault, user: user)
+      {:ok, _} = Onboarding.set_profile(user, %{tools: ["chatgpt"], tools_prefilled: true})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
 
-      assert {:ok, _} =
-               Onboarding.set_profile(user, %{tools: ["chatgpt"], tools_prefilled: true})
+      {:ok, _} = Onboarding.accept_free_tier(Engram.Accounts.get_user!(user.id))
 
       assert [%{id: id}] = Engram.Vaults.list_vaults(user)
       assert id == existing.id
     end
 
+    # The vault page POSTs `uses_obsidian` on a profile that still carries
+    # `tools_prefilled`. Only the pre-answer may provision: otherwise picking
+    # Obsidian mints a "My Vault" the plugin's own vault then hits the Free
+    # cap over.
+    test "a later uses_obsidian save provisions nothing" do
+      user = prefilled_past_terms()
+      {:ok, _} = Onboarding.accept_free_tier(Engram.Accounts.get_user!(user.id))
+      [vault] = Engram.Vaults.list_vaults(user)
+      {:ok, _} = Engram.Vaults.delete_vault(Engram.Accounts.get_user!(user.id), vault.id)
+
+      assert {:ok, _} = Onboarding.set_profile(user, %{uses_obsidian: true})
+      assert [] = Engram.Vaults.list_vaults(user)
+    end
+
     test "an ordinary tools answer provisions no vault" do
       user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+      {:ok, _} = Onboarding.accept_free_tier(Engram.Accounts.get_user!(user.id))
 
       assert {:ok, _} = Onboarding.set_profile(user, %{tools: ["chatgpt"]})
       assert [] = Engram.Vaults.list_vaults(user)
@@ -1066,5 +1131,12 @@ defmodule Engram.OnboardingTest do
       :telemetry.detach(handler_id)
       Agent.stop(counter)
     end
+  end
+
+  defp prefilled_past_terms do
+    user = insert(:user, onboarding_profile: %{})
+    {:ok, _} = Onboarding.set_profile(user, %{tools: ["chatgpt"], tools_prefilled: true})
+    {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+    user
   end
 end

@@ -213,7 +213,12 @@ defmodule Engram.Onboarding do
     next =
       next_step(terms_ok, subscription_ok, profile_complete, profile, has_vault, billing_active)
 
-    steps = build_steps(billing_active, profile, has_vault)
+    steps =
+      build_steps(billing_active, profile, %{
+        profile_complete: profile_complete,
+        has_vault: has_vault,
+        plan_ok: terms_ok and subscription_ok
+      })
 
     base = %{
       enabled: true,
@@ -391,18 +396,26 @@ defmodule Engram.Onboarding do
   #
   # A connector signup (`tools_prefilled`) is mid-way through authorizing an
   # app that is waiting on them, so the chain is cut to what the gate needs:
-  # terms and plan. The survey is skipped and the vault was provisioned when
-  # the client pre-answered (`provision_connector_vault/1`). If provisioning
-  # failed there is no vault, and `:vault` comes back rather than pointing the
-  # wizard at a step the chain does not list.
-  defp build_steps(billing_active, profile, has_vault) do
+  # terms and plan. The survey is skipped and the vault is provisioned once
+  # terms and plan pass (`maybe_provision_connector_vault/1`).
+  #
+  # `:vault` must stay whenever `next_step/6` can still return it, or the
+  # wizard is pointed at a step the chain does not list and loops. That is a
+  # profile without `completed_at` (rows pre-filled before this rule), or
+  # terms and plan done with no vault (provisioning failed, or the vault was
+  # deleted later).
+  defp build_steps(billing_active, profile, %{} = state) do
     connector = tools_prefilled?(profile)
+
+    vault_settled =
+      state.profile_complete and (state.has_vault or not state.plan_ok)
+
     hosted = if billing_active, do: [:agreement, :billing], else: []
     tools = if connector, do: [], else: [:tools]
     # The user-voice survey is hosted-only: a self-hoster's answers have no
     # PostHog to land in, so the step would be friction with no reader.
     about = if billing_active and not connector, do: [:about], else: []
-    vault = if connector and has_vault, do: [], else: [:vault]
+    vault = if connector and vault_settled, do: [], else: [:vault]
 
     hosted ++ tools ++ about ++ vault
   end
@@ -568,49 +581,73 @@ defmodule Engram.Onboarding do
             :ok
         end)
         |> tap(fn
-          {:ok, saved} -> if tools_prefilled?(merged), do: provision_connector_vault(saved)
-          _ -> :ok
+          # Only the pre-answer itself, never a later save of the merged
+          # profile: the vault page's `uses_obsidian` POST would otherwise mint
+          # a vault for someone who chose Obsidian, or one the Free cap then
+          # refuses the page's own create over.
+          {:ok, saved} ->
+            if attrs[:tools_prefilled] == true, do: maybe_provision_connector_vault(saved)
+
+          _ ->
+            :ok
         end)
     end
   end
 
-  # The vault a connector signup's client will read and write, so the consent
-  # screen has something to grant and the wizard has no vault step to show.
-  # Keyed on a fixed client_id, so a repeat pre-answer resolves to the same
-  # vault. Skipped when the user already has one.
-  #
-  # Best-effort on purpose: the profile save above already committed, and a
-  # failure here only means `build_steps/3` keeps `:vault` in the chain, which
-  # is the ordinary signup flow. Logged so that fallback is visible.
+  @doc """
+  Creates the default vault for a connector signup (see `build_steps/3`) once
+  it is due: the profile was pre-filled by an OAuth client, the Obsidian
+  question was never answered, there is no vault yet, and terms and plan both
+  pass. Nothing is created before the user has accepted the terms.
+
+  Called where those last two flip: `set_profile/2` (the pre-answer, for an
+  account already past them, and self-host, which has neither),
+  `accept_free_tier/1`, and the subscription chokepoint in `Engram.Billing`.
+  Idempotent: keyed on a fixed client_id, and a no-op when not due.
+
+  Best-effort: a failure only means `build_steps/3` keeps `:vault` in the
+  chain, which is the ordinary signup flow. Logged so that fallback is visible.
+  """
+  @spec maybe_provision_connector_vault(Engram.Accounts.User.t()) :: :ok
+  def maybe_provision_connector_vault(user) do
+    user = Accounts.get_user(user.id) || user
+    status = status(user)
+    profile = status.profile || %{}
+
+    due =
+      tools_prefilled?(profile) and not is_boolean(profile["uses_obsidian"]) and
+        not status.has_vault and status.terms_ok and status.subscription_ok
+
+    if due, do: provision_connector_vault(user), else: :ok
+  end
+
   defp provision_connector_vault(user) do
-    if Vaults.has_vault?(user) do
-      :ok
-    else
-      case Vaults.register_vault(user, @connector_vault_name, @connector_vault_client_id) do
-        {:ok, vault, :created} ->
-          # The DEK is minted inside register_vault, after `user` was read; the
-          # seed needs it on the struct (same as `VaultsController.register`).
-          user =
-            case Engram.Crypto.ensure_user_dek(user) do
-              {:ok, user} -> user
-              _ -> user
-            end
+    case Vaults.register_vault(user, @connector_vault_name, @connector_vault_client_id) do
+      {:ok, vault, :created} ->
+        # The DEK is minted inside register_vault, after `user` was read; the
+        # seed needs it on the struct (same as `VaultsController.register`).
+        user =
+          case Engram.Crypto.ensure_user_dek(user) do
+            {:ok, user} -> user
+            _ -> user
+          end
 
-          Vaults.WelcomeNote.seed(user, vault)
+        Vaults.WelcomeNote.seed(user, vault)
 
-        {:ok, _vault, :existing} ->
-          :ok
+      {:ok, _vault, :existing} ->
+        :ok
 
-        {:error, reason} ->
-          Logger.warning(
-            "connector vault provisioning failed",
-            Metadata.with_category(:warning, :lifecycle,
-              user_id: user.id,
-              reason: Metadata.safe_reason(reason)
-            )
+      {:error, reason} ->
+        Logger.warning(
+          "connector vault provisioning failed",
+          Metadata.with_category(:warning, :lifecycle,
+            user_id: user.id,
+            reason: Metadata.safe_reason(reason)
           )
-      end
+        )
     end
+
+    :ok
   end
 
   defp maybe_put_field(profile, attrs, key, json_key) do
@@ -748,8 +785,12 @@ defmodule Engram.Onboarding do
     |> Ecto.Changeset.change(free_tier_accepted_at: DateTime.utc_now())
     |> Repo.update()
     |> tap(fn
-      {:ok, _} -> evict_user(user.id)
-      _ -> :ok
+      {:ok, saved} ->
+        evict_user(user.id)
+        maybe_provision_connector_vault(saved)
+
+      _ ->
+        :ok
     end)
   end
 

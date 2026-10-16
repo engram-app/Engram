@@ -1056,6 +1056,12 @@ defmodule Engram.Billing do
     # limit matrix — drop the cached entitlement snapshot so it re-derives.
     :ok = EntitlementCache.evict(user_id)
 
+    # A connector signup's vault waits for a passing plan; a paid plan passes
+    # here, not through the wizard. No-op for everyone else.
+    with %Engram.Accounts.User{} = user <- Engram.Accounts.get_user(user_id) do
+      :ok = Engram.Onboarding.maybe_provision_connector_vault(user)
+    end
+
     # Carry the full plan snapshot so the plugin can re-gate attachments the
     # instant the subscription flips, without a follow-up fetch. `tier` stays
     # the string form (`sub.tier`, e.g. "pro") that the web frontend type and
