@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/locale-provider";
 import { track } from "../analytics/track";
 import AgreementPage from "./agreement-page";
@@ -48,6 +48,20 @@ function renderPage() {
 		</QueryClientProvider>,
 	);
 }
+
+// The legal texts and their renderer are lazy chunks. Their first import in a
+// file pays Vite's transform, which on a busy CI runner outlasts the 1s that
+// findBy/waitFor allow. Loaded once up front, the tests time behaviour only.
+beforeAll(async () => {
+	const { loadVersion, renderableVersion } = await import("../legal/load");
+	await Promise.all(
+		(["terms", "privacy"] as const).map((doc) => {
+			const version = renderableVersion(doc, "9999-12-31");
+			return version ? loadVersion(doc, version) : undefined;
+		}),
+	);
+	await import("../legal/legal-doc");
+});
 
 describe("AgreementPage", () => {
 	it("disables Continue until the agreement checkbox is checked", async () => {
