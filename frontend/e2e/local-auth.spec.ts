@@ -64,9 +64,9 @@ test.describe("Local auth provider", () => {
 		await page.getByLabel("Confirm password").fill(TEST_PASSWORD);
 		await page.getByRole("button", { name: "Create account" }).click();
 
-		// OnboardingGate sends fresh accounts through the wizard; tools is the
-		// first universal step in self-host mode (billing/agreement auto-pass).
-		await expect(page).toHaveURL(/\/onboard\/tools/u, { timeout: 10_000 });
+		// OnboardingGate sends fresh accounts through the wizard; vault is the
+		// only step in self-host mode (billing/agreement auto-pass).
+		await expect(page).toHaveURL(/\/onboard\/vault/u, { timeout: 10_000 });
 	});
 
 	test("sign out → redirects to sign-in", async ({ page, baseURL }) => {
@@ -118,7 +118,7 @@ test.describe("Local auth provider", () => {
 		await page.getByLabel("Confirm password").fill(TEST_PASSWORD);
 		await page.getByRole("button", { name: "Create account" }).click();
 
-		await expect(page).toHaveURL(/\/onboard\/tools/u, { timeout: 10_000 });
+		await expect(page).toHaveURL(/\/onboard\/vault/u, { timeout: 10_000 });
 	});
 
 	// Regression for the stale-bootstrap redirect loop (PR #1299): the wizard
@@ -133,21 +133,17 @@ test.describe("Local auth provider", () => {
 		await page.getByLabel("Confirm password").fill(TEST_PASSWORD);
 		await page.getByRole("button", { name: "Create account" }).click();
 
-		// Self-host chain: tools → vault (agreement/billing auto-pass).
-		await expect(page).toHaveURL(/\/onboard\/tools/u, { timeout: 10_000 });
+		// Self-host chain: vault only (agreement/billing auto-pass).
+		await expect(page).toHaveURL(/\/onboard\/vault/u, { timeout: 10_000 });
 
 		// Prime the trigger: a full page load on "/" mid-wizard caches the
-		// bootstrap payload (staleTime Infinity) with next_step="tools" in the
+		// bootstrap payload (staleTime Infinity) with next_step="vault" in the
 		// SPA session that will finish the wizard — same shape as the real
 		// incident's post-auth landing on "/". The gate bounces us straight
 		// back to the wizard; the poisoned cache stays behind.
 		await page.goto("/");
-		await expect(page).toHaveURL(/\/onboard\/tools/u, { timeout: 10_000 });
-
-		await page.getByLabel("I'm not connecting an AI tool yet").check();
-		await page.getByRole("button", { name: "Continue" }).click();
-
 		await expect(page).toHaveURL(/\/onboard\/vault/u, { timeout: 10_000 });
+
 		await page.getByRole("button", { name: /starting fresh/iu }).click();
 		await page.getByLabel("Vault name").fill("Wizard Vault");
 		await page.getByRole("button", { name: /create vault & continue/iu }).click();
@@ -156,8 +152,8 @@ test.describe("Local auth provider", () => {
 		// through "/" (which a URL wait can false-pass on) but the gate never
 		// renders its Outlet, so no dashboard chrome ever mounts.
 		//
-		// The rail, not the checklist widget. This user picked "not connecting an
-		// AI tool yet" + "starting fresh", so once the vault exists every checklist
+		// The rail, not the checklist widget. This user answered no tool
+		// question and picked "starting fresh", so once the vault exists every checklist
 		// row is absent or done and the widget unmounts itself — it only survived
 		// here because the removed tour row was permanently un-done. The rail is
 		// unconditional in AppLayout and its label is unique in the app, so it

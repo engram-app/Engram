@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { track } from "../analytics/track";
@@ -269,6 +269,40 @@ describe("OAuthAuthorizePage onboarding bounce", () => {
 				tools_prefilled: true,
 			}),
 		);
+	});
+
+	// Self-host: the pre-answer alone provisions the connector vault, so the
+	// status refetched inside the mutation already says gate_ok while this
+	// page is still mounted. Clearing then sent the user home, not back here.
+	it("keeps the park when the pre-answer itself satisfies the gate", async () => {
+		onboardingState.current = { next_step: "vault", gate_ok: false };
+		fetchOAuthClient.mockResolvedValue(ANTIGRAVITY);
+		let rerender: () => void = () => {};
+		setProfileMock.mockImplementation(async () => {
+			onboardingState.current = {
+				next_step: "done",
+				gate_ok: true,
+				profile: { tools: ["antigravity"] },
+			};
+			// The refetch lands before mutateAsync resolves (onSuccess awaits it).
+			await act(async () => rerender());
+		});
+
+		const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const tree = () => (
+			<QueryClientProvider client={qc}>
+				<MemoryRouter initialEntries={[`/oauth/consent${VALID_QS}`]}>
+					<LocationProbe />
+					<OAuthAuthorizePage />
+				</MemoryRouter>
+			</QueryClientProvider>
+		);
+		const view = render(tree());
+		rerender = () => view.rerender(tree());
+
+		await waitFor(() => expect(setProfileMock).toHaveBeenCalled());
+		await waitFor(() => expect(probeText()).toContain("/onboard"));
+		expect(window.sessionStorage.getItem("engram:pending-oauth")).toContain("state=xyz");
 	});
 
 	it("invents no answer for a client it cannot attribute", async () => {

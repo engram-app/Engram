@@ -89,7 +89,7 @@ def test_free_signup_to_first_note():
     )
     body = resp.json()
     # The endpoint returns the same shape as GET /api/onboarding/status —
-    # next_step is a string ("tools" / "vault" / "done") so the SPA can
+    # next_step is a string ("vault" / "done") so the SPA can
     # navigate without a second fetch.
     assert "next_step" in body, f"accept_free_tier payload missing next_step: {body}"
     assert isinstance(body["next_step"], str), (

@@ -3,7 +3,7 @@ import { checkStep, type StepOptions, translationOf } from "./i18n-leaks";
 
 // The onboarding wizard in one locale, shared by the self-host and SaaS specs. It
 // follows whichever steps the backend serves (a web signup: SaaS agreement, vault;
-// self-host vault; older accounts can still be served billing or tools) and ends
+// self-host vault; a lapsed payer re-accepting terms can still be served billing) and ends
 // on the dashboard and Settings > Account,
 // running the leak checks at every one. Locators go by role and position, never by
 // English text, so the walk keeps working as strings get translated.
@@ -50,23 +50,6 @@ async function billingStep(
 	await page.getByRole("button", { name: translationOf(code, "Continue with Free →") }).click();
 }
 
-async function toolsStep(
-	page: Page,
-	testInfo: TestInfo,
-	code: string,
-	options: StepOptions,
-): Promise<void> {
-	await expect(
-		page.getByRole("heading", { name: translationOf(code, "Which AI tools do you use?") }),
-	).toBeVisible();
-	await checkStep(page, testInfo, code, "tools", options);
-
-	// The opt-out is the last checkbox, after both tool columns.
-	await page.getByRole("checkbox").last().check();
-	await checkStep(page, testInfo, code, "tools-none-selected", options);
-	await page.getByRole("button", { name: translationOf(code, "Continue"), exact: true }).click();
-}
-
 async function vaultStep(
 	page: Page,
 	testInfo: TestInfo,
@@ -105,8 +88,6 @@ export async function walkOnboarding(
 			await agreementStep(page, testInfo, code, options);
 		} else if (step === "billing") {
 			await billingStep(page, testInfo, code, options);
-		} else if (step === "tools") {
-			await toolsStep(page, testInfo, code, options);
 		} else if (step === "vault") {
 			await vaultStep(page, testInfo, code, options);
 		} else {

@@ -182,16 +182,16 @@ defmodule Engram.Onboarding do
     * `:current_tos_version` — latest published ToS version (from `terms_versions`)
     * `:current_privacy_version` — latest published Privacy version
     * `:legal_notices`: pending legal changes, see `legal_notices/1`
-    * `:next_step` — one of `:agreement | :billing | :tools | :about | :vault | :done`
+    * `:next_step` — one of `:agreement | :billing | :vault | :done`
 
   The gate is computed from the `terms_versions` table via
   `Engram.Legal.VersionCache`: `terms_ok` compares the user's latest accepted
   version against the required floor (latest MATERIAL version effective now).
 
   When `billing_enabled` is false (self-host), agreement + billing steps
-  short-circuit to ok and the chain falls through to tools → vault. The
-  `:tools` step collects the questionnaire's tool checkboxes; `:vault`
-  owns the obsidian/fresh source pick + first-vault creation.
+  short-circuit to ok and the chain falls through to vault, which owns the
+  obsidian/fresh source pick + first-vault creation. Tools and use cases are
+  collected after first value by the in-app survey, not by the wizard.
   `:enabled` is always true — every account onboards.
   """
   def status(user) do
