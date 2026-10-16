@@ -1,4 +1,4 @@
-// i18n-core f603eb04
+// i18n-core 6a9ff750
 // The translategemma pipeline shared by the web app, the Obsidian plugin and the
 // marketing site: prompts, the checks an answer must pass, and catalog state.
 // Canonical copy: engram-app/Engram frontend/src/i18n/core/. The other repos
@@ -453,6 +453,10 @@ function translator<T extends string>(profile: Profile<T>) {
 			out = out.replace(/<\/?\d+\s*\/?>/gu, "").trim();
 			// "<Claude>", "<보유한>": brackets around a word in copy that has no tags.
 			out = out.replace(/<(?<word>[^<>/\s][^<>]{0,40})>/gu, "$<word>");
+		}
+		// "*Backend* Engram": emphasis the source never asked for shows as literal stars.
+		if (!src.includes("*")) {
+			out = out.replace(/\*(?<word>[^*\s](?:[^*]*[^*\s])?)\*/gu, "$<word>");
 		}
 		if (!/[.!?…:。]\s*$/u.test(src)) {
 			out = out.replace(/[.。．]$/u, "");

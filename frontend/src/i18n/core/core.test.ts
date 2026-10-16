@@ -210,6 +210,15 @@ describe("problems", () => {
 		expect(tr.cleanOutput("Read <b>this</b>", "Lies <b>das</b>", "de")).toBe("Lies <b>das</b>");
 	});
 
+	it("unwraps markdown emphasis the source lacks", () => {
+		// Live in the plugin's id catalog: "*Backend* Engram telah berubah".
+		expect(tr.cleanOutput("Engram backend changed", "*Backend* von Engram geändert", "de")).toBe(
+			"Backend von Engram geändert",
+		);
+		expect(tr.cleanOutput("Use *bold* here", "Nutze *fett* hier", "de")).toBe("Nutze *fett* hier");
+		expect(tr.cleanOutput("2 * 3", "2 * 3", "de")).toBe("2 * 3");
+	});
+
 	it("strips wrapping guillemets the source lacks", () => {
 		expect(tr.cleanOutput("Save", "«Enregistrer»", "fr")).toBe("Enregistrer");
 	});
