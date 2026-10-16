@@ -855,6 +855,7 @@ export default {
 	"A vault holds your notes. You can rename it or add more later.":
 		"Bir kasa notlarınızı saklar. İlerleyen zamanda adını değiştirebilir veya daha fazla kasa ekleyebilirsiniz.",
 	"How did you hear about Engram?": "Engram hakkında nereden duydunuz?",
+	"Pick one to continue.": "Devam etmek için birini seçin.",
 	"Couldn't save your answers, please try again.":
 		"Cevaplarınızı kaydedemedik, lütfen tekrar deneyin.",
 	"Choose your plan": "Planınızı seçin",
@@ -868,15 +869,6 @@ export default {
 	"your app": "uygulamanız",
 	"Cancel connection": "Bağlantıyı iptal et",
 	"Connecting {app}": "{app} ile bağlantı kuruluyor",
-	"Which AI tools do you use?": "Hangi yapay zeka araçlarını kullanıyorsunuz?",
-	"We'll tailor your setup around the tools you already work with.":
-		"Ayarlarınızı, zaten kullandığınız araçlara göre kişiselleştireceğiz.",
-	"AI assistants": "Yapay zeka asistanları",
-	"Coding tools": "Kodlama araçları",
-	"Another MCP client": "Başka bir MCP istemcisi",
-	"Why {tool} can't be connected": "{tool}'nin neden bağlanamadığı",
-	"Not a comprehensive list, pick {client} if yours isn't here.":
-		"Kapsamlı bir liste değil, listenizde yoksa {client} seçin.",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Seçiminizi kaydedemedik. Lütfen tekrar tıklayın; sorun devam ederse sayfayı yenileyin.",
 	"Let's get your notes in.": "Notlarınızı ekleyelim.",
@@ -914,9 +906,20 @@ export default {
 		"Eklentinin {tab} sekmesini açın, {action} düğmesine tıklayın ve Engram hesabınızla kimlik doğrulaması yapın.",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		'Gemini uygulaması özel MCP entegreleri ekleyemez. Google\'ın Gemini destekli kodlama aracı Antigravity ekleyebilir. "Kodlama araçları" altında seçin.',
+	"Another MCP client": "Başka bir MCP istemcisi",
 	"I'm not connecting an AI tool yet": "Henüz bir yapay zeka aracına bağlanmıyorum",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Engram uygulamasını web uygulamasında kullanın. Bir aracı daha sonra Ayarlar'dan bağlayabilirsiniz.",
+	"Help us shape Engram": "Engram geliştirmemize yardımcı olun",
+	"Two quick questions. Both are optional.": "İki kısa soru. İkisi de isteğe bağlı.",
+	"Which AI tools do you use?": "Hangi yapay zeka araçlarını kullanıyorsunuz?",
+	Skip: "Atla",
+	Save: "Kaydet",
+	"AI assistants": "Yapay zeka asistanları",
+	"Coding tools": "Kodlama araçları",
+	"Why {tool} can't be connected": "{tool}'nin neden bağlanamadığı",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"Kapsamlı bir liste değil, listenizde yoksa {client} seçin.",
 	Account: "Hesap",
 	"Manage your profile, password, and account.": "Profilinizi, şifrenizi ve hesabınızı yönetin.",
 	"Manage your profile, security, and active sessions.":
@@ -998,7 +1001,6 @@ export default {
 	"How your name appears in the app.": "Uygulamada adınızın nasıl görüneceği.",
 	"Display name": "Görüntü adı",
 	"Leave blank to use your email": "E-postanızı kullanmak için boş bırakın",
-	Save: "Kaydet",
 	"Profile image updated": "Profil resmi güncellendi",
 	"Could not update image": "Görüntüyü güncelleyemedi",
 	"Profile photo": "Profil fotoğrafı",

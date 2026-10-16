@@ -920,6 +920,7 @@ export default {
 	"A vault holds your notes. You can rename it or add more later.":
 		"Sejf przechowuje twoje notatki. Możesz później zmienić jego nazwę lub dodać więcej.",
 	"How did you hear about Engram?": "Skąd dowiedziałeś się o Engram?",
+	"Pick one to continue.": "Wybierz jedną opcję, aby kontynuować.",
 	"Couldn't save your answers, please try again.":
 		"Nie udało się zapisać odpowiedzi, spróbuj ponownie.",
 	"Choose your plan": "Wybierz swój plan",
@@ -933,15 +934,6 @@ export default {
 	"your app": "twoja aplikacja",
 	"Cancel connection": "Anuluj połączenie",
 	"Connecting {app}": "Połączenie z {app}",
-	"Which AI tools do you use?": "Jakich narzędzi AI używasz?",
-	"We'll tailor your setup around the tools you already work with.":
-		"Dostosujemy konfigurację do narzędzi, z których już korzystasz.",
-	"AI assistants": "Asystenci AI",
-	"Coding tools": "Narzędzia programistyczne",
-	"Another MCP client": "Inny klient MCP",
-	"Why {tool} can't be connected": "Dlaczego {tool} nie może być połączone",
-	"Not a comprehensive list, pick {client} if yours isn't here.":
-		"Nie jest to pełna lista, wybierz {client}, jeśli twoje narzędzie nie znajduje się tutaj.",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Nie udało się zapisać Twojego wyboru. Spróbuj kliknąć ponownie — jeśli problem nadal występuje, odśwież stronę.",
 	"Let's get your notes in.": "Przenieśmy Twoje notatki.",
@@ -980,9 +972,20 @@ export default {
 		"Otwórz zakładkę {tab} wtyczki, kliknij {action} i zaloguj się za pomocą swojego konta Engram.",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"Aplikacja Gemini nie może dodawać niestandardowych połączeń MCP. Antigravity, narzędzie do programowania zasilane przez Google Gemini, może. Wybierz je w sekcji Narzędzia programistyczne.",
+	"Another MCP client": "Inny klient MCP",
 	"I'm not connecting an AI tool yet": "Jeszcze nie łączę się z żadnym narzędziem AI",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Użyj Engram w aplikacji internetowej. Możesz połączyć narzędzie później w Ustawieniach.",
+	"Help us shape Engram": "Pomóż nam rozwijać Engram",
+	"Two quick questions. Both are optional.": "Dwa szybkie pytania. Oba są opcjonalne.",
+	"Which AI tools do you use?": "Jakich narzędzi AI używasz?",
+	Skip: "Pomiń",
+	Save: "Zapisz",
+	"AI assistants": "Asystenci AI",
+	"Coding tools": "Narzędzia programistyczne",
+	"Why {tool} can't be connected": "Dlaczego {tool} nie może być połączone",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"Nie jest to pełna lista, wybierz {client}, jeśli twoje narzędzie nie znajduje się tutaj.",
 	Account: "Konto",
 	"Manage your profile, password, and account.": "Zarządzaj swoim profilem, hasłem i kontem.",
 	"Manage your profile, security, and active sessions.":
@@ -1065,7 +1068,6 @@ export default {
 	"How your name appears in the app.": "Jak twoje imię i nazwisko są wyświetlane w aplikacji.",
 	"Display name": "Nazwa wyświetlana",
 	"Leave blank to use your email": "Pozostaw puste, aby użyć twojego adresu e-mail",
-	Save: "Zapisz",
 	"Profile image updated": "Zdjęcie profilowe zaktualizowane",
 	"Could not update image": "Nie można zaktualizować obrazu",
 	"Profile photo": "Zdjęcie profilowe",

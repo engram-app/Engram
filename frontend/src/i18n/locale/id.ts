@@ -854,6 +854,7 @@ export default {
 	"A vault holds your notes. You can rename it or add more later.":
 		"Sebuah vault berisi catatan Anda. Anda dapat mengganti namanya atau menambahkan lebih banyak nanti.",
 	"How did you hear about Engram?": "Bagaimana Anda mengetahui tentang Engram?",
+	"Pick one to continue.": "Pilih salah satu untuk melanjutkan.",
 	"Couldn't save your answers, please try again.":
 		"Tidak dapat menyimpan jawaban Anda, silakan coba lagi.",
 	"Choose your plan": "Pilih paket Anda",
@@ -867,15 +868,6 @@ export default {
 	"your app": "aplikasi Anda",
 	"Cancel connection": "Batalkan koneksi",
 	"Connecting {app}": "Menghubungkan {app}",
-	"Which AI tools do you use?": "Alat AI apa yang Anda gunakan?",
-	"We'll tailor your setup around the tools you already work with.":
-		"Kami akan menyesuaikan pengaturan Anda berdasarkan alat yang sudah Anda gunakan.",
-	"AI assistants": "Asisten AI",
-	"Coding tools": "Alat pemrograman",
-	"Another MCP client": "Klien MCP lainnya",
-	"Why {tool} can't be connected": "Mengapa {tool} tidak dapat terhubung",
-	"Not a comprehensive list, pick {client} if yours isn't here.":
-		"Daftar ini tidak lengkap, pilih {client} jika milik Anda tidak ada di sini.",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Tidak dapat menyimpan pilihan Anda. Coba klik lagi — jika terus gagal, muat ulang halaman.",
 	"Let's get your notes in.": "Mari kita masukkan catatan Anda.",
@@ -914,9 +906,20 @@ export default {
 		"Buka tab {tab} plugin, klik {action}, dan autentikasi dengan akun Engram Anda.",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"Aplikasi Gemini tidak dapat menambahkan konektor MCP khusus. Antigravity, alat pengkodean yang didukung oleh Gemini dari Google, dapat. Pilih di bawah Alat pengkodean.",
+	"Another MCP client": "Klien MCP lainnya",
 	"I'm not connecting an AI tool yet": "Saya belum menghubungkan alat AI",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Gunakan Engram di aplikasi web. Anda dapat menghubungkan alat nanti dari Pengaturan.",
+	"Help us shape Engram": "Bantu kami mengembangkan Engram",
+	"Two quick questions. Both are optional.": "Dua pertanyaan singkat. Keduanya opsional.",
+	"Which AI tools do you use?": "Alat AI apa yang Anda gunakan?",
+	Skip: "Lewati",
+	Save: "Simpan",
+	"AI assistants": "Asisten AI",
+	"Coding tools": "Alat pemrograman",
+	"Why {tool} can't be connected": "Mengapa {tool} tidak dapat terhubung",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"Daftar ini tidak lengkap, pilih {client} jika milik Anda tidak ada di sini.",
 	Account: "Akun",
 	"Manage your profile, password, and account.": "Kelola profil kata sandi dan akun Anda.",
 	"Manage your profile, security, and active sessions.":
@@ -998,7 +1001,6 @@ export default {
 	"How your name appears in the app.": "Tampilan nama Anda di aplikasi.",
 	"Display name": "Nama tampilan",
 	"Leave blank to use your email": "Biarkan kosong untuk menggunakan alamat email Anda",
-	Save: "Simpan",
 	"Profile image updated": "Gambar profil berhasil diperbarui",
 	"Could not update image": "Tidak dapat memperbarui gambar",
 	"Profile photo": "Foto profil",
