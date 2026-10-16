@@ -1,7 +1,7 @@
 {
 	"Welcome to Engram.": "Engram uygulamasına hoş geldiniz.",
 	"Welcome to Engram, {name}.": "Engram, {name} uygulamasına hoş geldiniz.",
-	"Your account is ready. Engram keeps your Obsidian vault synced across every device, and turns those notes into searchable, structured memory you can hand to any AI tool you use.": "Hesabınız hazır. Engram, Obsidian kasanızı tüm cihazlarınızda senkronize eder ve bu notları, kullandığınız herhangi bir yapay zeka aracına verebileceğiniz aranabilir, yapılandırılmış bir hafızaya dönüştürür.",
+	"Your account is ready. Engram keeps your Obsidian vault synced across every device, and turns those notes into searchable, structured memory you can hand to any AI tool you use.": "Hesabınız hazır. Engram, Obsidian kasanızı tüm cihazlarınızda senkronize eder ve bu notları, kullandığınız herhangi bir yapay zeka aracına aktarabileceğiniz, aranabilir ve yapılandırılmış bir hafızaya dönüştürür.",
 	"To get started, install the Engram plugin in Obsidian and connect it to your account. Your notes start syncing immediately.": "Başlamak için, Engram eklentisini Obsidian içinde yükleyin ve hesabınızla bağlayın. Notlarınız hemen senkronize olmaya başlayacaktır.",
 	"Install the Engram plugin": "Engram eklentisini yükleyin",
 	"The Engram team": "Engram ekibi",
@@ -17,7 +17,7 @@
 	"Engram: your vault was auto-deleted": "Engram: Kasanız otomatik olarak silindi",
 	"Your Engram vault has been auto-deleted after 90 days of inactivity. Your Clerk login is still active, you can sign back in and start fresh whenever you want.": "Engram kasanız, 90 gün boyunca kullanılmadığı için otomatik olarak silindi. Clerk hesabınız hala aktif, istediğiniz zaman tekrar giriş yapıp yeni başlayabilirsiniz.",
 	"Your Engram account has been deleted": "Engram hesabınız silindi",
-	"You requested account deletion. Your data is being removed.": "Hesap silme talebinde bulundunuz. Verileriniz siliniyor.",
+	"You requested account deletion. Your data is being removed.": "Hesap silme işlemi talep ettiniz. Verileriniz siliniyor.",
 	"Your account was deleted via your authentication provider. Your data is being removed.": "Hesabınız, kimlik doğrulama sağlayıcınız aracılığıyla silindi. Verileriniz siliniyor.",
 	"Your Engram vault \"{vault}\" has been deleted.": "Engram kasanız \"{vault}\" silindi.",
 	"It will be permanently removed on {date}.": "Kalıcı olarak {date} tarihinde silinecektir.",
