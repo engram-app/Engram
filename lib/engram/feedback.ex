@@ -46,6 +46,7 @@ defmodule Engram.Feedback do
           :invalid_kind
           | :invalid_heard_from
           | :invalid_use_cases
+          | :invalid_tools
           | :invalid_reason
           | :empty_message
           | :invalid_category
@@ -106,8 +107,14 @@ defmodule Engram.Feedback do
           # The slugs ride on the event as well as in $set: PostHog applies
           # $set to the person and drops it from the stored event.
           fields
-          |> Map.take(["heard_from", "use_cases", "use_cases_detail", "heard_from_detail"])
-          |> Map.put("$set", Map.take(fields, ["heard_from", "use_cases"]))
+          |> Map.take([
+            "heard_from",
+            "use_cases",
+            "use_cases_detail",
+            "heard_from_detail",
+            "tools"
+          ])
+          |> Map.put("$set", Map.take(fields, ["heard_from", "use_cases", "tools"]))
         )
       end
     end
@@ -189,8 +196,15 @@ defmodule Engram.Feedback do
   defp onboarding_fields(params) do
     heard_from = params["heard_from"]
     use_cases = params["use_cases"]
+    tools = params["tools"]
 
     cond do
+      # Same vocabulary as the profile's `tools` (`Onboarding.valid_tools/0`).
+      not (is_nil(tools) or
+               (is_list(tools) and tools != [] and
+                  Enum.all?(tools, &(&1 in Engram.Onboarding.valid_tools())))) ->
+        {:error, :invalid_tools}
+
       not (is_nil(heard_from) or heard_from in @heard_from) ->
         {:error, :invalid_heard_from}
 
@@ -203,7 +217,8 @@ defmodule Engram.Feedback do
             "heard_from" => heard_from,
             "use_cases" => if(use_cases in [nil, []], do: nil, else: Enum.uniq(use_cases)),
             "use_cases_detail" => text(params["use_cases_detail"]),
-            "heard_from_detail" => text(params["heard_from_detail"])
+            "heard_from_detail" => text(params["heard_from_detail"]),
+            "tools" => if(is_nil(tools), do: nil, else: Enum.uniq(tools))
           }
           |> Map.reject(fn {_k, v} -> is_nil(v) end)
 

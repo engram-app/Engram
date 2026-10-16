@@ -12,8 +12,8 @@ import { useConfig } from "@/config-context";
 import { useT } from "@/i18n/locale-provider";
 import {
 	type OnboardingProfile,
+	useConnections,
 	useOnboardingStatus,
-	useSetOnboardingProfile,
 	useSubmitFeedback,
 	useVaults,
 } from "../api/queries";
@@ -38,11 +38,17 @@ function SurveyPrompt({ suppressed }: { suppressed: boolean }) {
 	const { billingEnabled } = useConfig();
 	const { data: status } = useOnboardingStatus();
 	const { data: vaults } = useVaults();
+	const { data: connections } = useConnections();
 	const { has } = useOnboardingActions();
 	const [closed, setClosed] = useState(false);
 
+	// First value: a live connection (an AI tool or the plugin), the plugin
+	// ever linked, or notes beyond the welcome note. Not the `ai_connected`
+	// action: nothing records it.
 	const gotValue =
-		has("ai_connected") || has("plugin_connected") || (vaults ?? []).some((v) => v.populated);
+		(connections ?? []).length > 0 ||
+		has("plugin_connected") ||
+		(vaults ?? []).some((v) => v.populated);
 	const due =
 		billingEnabled &&
 		status?.next_step === "done" &&
@@ -64,29 +70,25 @@ interface SurveyModalProps {
 
 function SurveyModal({ initialTools, onDone }: SurveyModalProps) {
 	const { t } = useT();
-	const setProfile = useSetOnboardingProfile();
 	const submitFeedback = useSubmitFeedback();
 	const [tools, setTools] = useState<Set<string>>(() => new Set(initialTools));
 	const [goals, setGoals] = useState<string[]>([]);
 	const [goalsDetail, setGoalsDetail] = useState("");
 	const [failed, setFailed] = useState(false);
-	const pending = setProfile.isPending || submitFeedback.isPending;
+	const pending = submitFeedback.isPending;
 
 	async function save() {
 		const detail = goals.includes("other") ? goalsDetail.trim() : "";
-		const toolsChanged =
-			tools.size > 0 &&
-			(tools.size !== initialTools.length || initialTools.some((slug) => !tools.has(slug)));
+		// ONE request: two would let the first flip the survey to answered and
+		// unmount this modal before the second could report a failure. Always
+		// carries `use_cases` (empty when none picked), which stamps the survey
+		// as asked (`use_cases_done_at`).
 		try {
-			if (toolsChanged) {
-				await setProfile.mutateAsync({ tools: Array.from(tools) });
-			}
-			// Always carries `use_cases` (empty when none picked): that is what
-			// stamps the survey as asked (`use_cases_done_at`).
 			await submitFeedback.mutateAsync({
 				kind: "onboarding",
 				use_cases: goals,
 				...(detail ? { use_cases_detail: detail } : {}),
+				...(tools.size > 0 ? { tools: Array.from(tools) } : {}),
 			});
 		} catch {
 			setFailed(true);

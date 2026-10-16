@@ -4,8 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OnboardingProfile } from "../api/queries";
 import { SurveyModal, SurveyPrompt, surveyPending } from "./survey-modal";
 
-const { setProfile, submitFeedback, state } = vi.hoisted(() => ({
-	setProfile: vi.fn().mockResolvedValue({}),
+const { submitFeedback, state } = vi.hoisted(() => ({
 	submitFeedback: vi.fn().mockResolvedValue({ status: "ok" }),
 	state: {
 		billingEnabled: true,
@@ -14,6 +13,7 @@ const { setProfile, submitFeedback, state } = vi.hoisted(() => ({
 			profile?: OnboardingProfile;
 		},
 		vaults: [] as { populated?: boolean }[],
+		connections: [] as { kind: string }[],
 		actions: new Set<string>(),
 	},
 }));
@@ -24,7 +24,7 @@ vi.mock("@/config-context", () => ({
 vi.mock("../api/queries", () => ({
 	useOnboardingStatus: () => ({ data: state.status }),
 	useVaults: () => ({ data: state.vaults }),
-	useSetOnboardingProfile: () => ({ mutateAsync: setProfile, isPending: false }),
+	useConnections: () => ({ data: state.connections }),
 	useSubmitFeedback: () => ({ mutateAsync: submitFeedback, isPending: false }),
 }));
 vi.mock("./use-onboarding-actions", () => ({
@@ -37,11 +37,11 @@ function renderUi(ui: React.ReactElement) {
 }
 
 beforeEach(() => {
-	setProfile.mockClear();
 	submitFeedback.mockClear();
 	state.billingEnabled = true;
 	state.status = { next_step: "done", profile: {} };
 	state.vaults = [];
+	state.connections = [];
 	state.actions = new Set();
 });
 
@@ -69,7 +69,7 @@ describe("SurveyPrompt", () => {
 	});
 
 	it.each([
-		["an AI tool connected", () => state.actions.add("ai_connected")],
+		["an AI tool connected", () => state.connections.push({ kind: "mcp" })],
 		["the plugin linked", () => state.actions.add("plugin_connected")],
 		["notes beyond the welcome note", () => state.vaults.push({ populated: true })],
 	])("shows after %s", (_label, arrange) => {
@@ -79,7 +79,7 @@ describe("SurveyPrompt", () => {
 	});
 
 	it("never shows on self-host, mid-wizard, or while suppressed", () => {
-		state.actions.add("ai_connected");
+		state.connections.push({ kind: "mcp" });
 
 		state.billingEnabled = false;
 		const { unmount } = renderUi(<SurveyPrompt suppressed={false} />);
@@ -109,17 +109,21 @@ describe("SurveyModal", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
 		await waitFor(() => expect(onDone).toHaveBeenCalled());
-		expect(setProfile).toHaveBeenCalledWith({ tools: ["chatgpt", "claude"] });
-		expect(submitFeedback).toHaveBeenCalledWith({ kind: "onboarding", use_cases: ["ai_memory"] });
+		// One request carries both answers.
+		expect(submitFeedback).toHaveBeenCalledTimes(1);
+		expect(submitFeedback).toHaveBeenCalledWith({
+			kind: "onboarding",
+			use_cases: ["ai_memory"],
+			tools: ["chatgpt", "claude"],
+		});
 	});
 
-	it("does not resave unchanged tools", async () => {
+	it("sends no tools when none are picked", async () => {
 		const onDone = vi.fn();
-		renderUi(<SurveyModal initialTools={["chatgpt"]} onDone={onDone} />);
+		renderUi(<SurveyModal initialTools={[]} onDone={onDone} />);
 		fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
 		await waitFor(() => expect(onDone).toHaveBeenCalled());
-		expect(setProfile).not.toHaveBeenCalled();
 		expect(submitFeedback).toHaveBeenCalledWith({ kind: "onboarding", use_cases: [] });
 	});
 

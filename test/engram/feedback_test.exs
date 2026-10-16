@@ -97,6 +97,26 @@ defmodule Engram.FeedbackTest do
       refute Map.has_key?(profile(user), "use_cases_done_at")
     end
 
+    # The in-app survey saves tools and use cases in ONE request: two requests
+    # let the first flip the survey to answered (and unmount it) before the
+    # second could report a failure.
+    test "saves tools onto the profile alongside use cases", %{user: user} do
+      assert :ok =
+               Feedback.submit(user, "onboarding", %{
+                 "use_cases" => ["search"],
+                 "tools" => ["chatgpt", "cursor"]
+               })
+
+      assert %{"tools" => ["chatgpt", "cursor"], "use_cases" => ["search"]} = profile(user)
+    end
+
+    test "rejects unknown or empty tools", %{user: user} do
+      assert {:error, :invalid_tools} =
+               Feedback.submit(user, "onboarding", %{"tools" => ["telepathy"]})
+
+      assert {:error, :invalid_tools} = Feedback.submit(user, "onboarding", %{"tools" => []})
+    end
+
     test "rejects unknown slugs", %{user: user} do
       assert {:error, :invalid_heard_from} =
                Feedback.submit(user, "onboarding", %{"heard_from" => "tv"})

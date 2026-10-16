@@ -1539,6 +1539,8 @@ export type FeedbackBody =
 			use_cases?: string[];
 			use_cases_detail?: string;
 			heard_from_detail?: string;
+			// The in-app survey saves the profile's tools in the same request.
+			tools?: string[];
 	  }
 	| { kind: "cancel"; reason: string; detail?: string }
 	| { kind: "delete_account"; reason?: string; detail?: string }
