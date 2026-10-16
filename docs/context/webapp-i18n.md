@@ -4,7 +4,7 @@ _Last verified: 2026-10-11_
 
 ## Status
 
-Foundation and all twelve translated catalogs shipped (`vi` and `ms` added 2026-10-11 for signups from Vietnam and Malaysia), and the language switcher is always visible (the temporary `import.meta.env.DEV` gate is gone).
+Foundation and all fifteen translated catalogs shipped (`vi` and `ms` added 2026-10-11 for signups from Vietnam and Malaysia; `tr`, `pl` and `id` added 2026-10-16 for signups from Turkey, Poland and Indonesia), and the language switcher is always visible (the temporary `import.meta.env.DEV` gate is gone).
 
 **Translations are machine-generated (translategemma since 2026-10-11, see Automated translation) and have not been reviewed by native speakers.** Glossary references (UI nouns such as "vault", "note", "sync") were taken from the Obsidian plugin's locale files and the marketing site's locale files, so terminology matches those surfaces. Expect tone and terminology slips, especially in `ja`, `ko`, `zh-*`, `ru`; do not market a language as supported without review.
 
@@ -12,10 +12,10 @@ Foundation and all twelve translated catalogs shipped (`vi` and `ms` added 2026-
 
 All under `frontend/src/i18n/`:
 
-- `locales.ts`: `LOCALES` (13 codes, `en` plus twelve translated), `LOCALE_NAMES` (each in its own language), `matchLocale`/`resolveLocale` (browser tags to a supported locale; `zh-TW/HK/MO/Hant` map to `zh-TW`, other `zh` to `zh-CN`, `pt` to `pt-BR`).
+- `locales.ts`: `LOCALES` (16 codes, `en` plus fifteen translated), `LOCALE_NAMES` (each in its own language), `matchLocale`/`resolveLocale` (browser tags to a supported locale; `zh-TW/HK/MO/Hant` map to `zh-TW`, other `zh` to `zh-CN`, `pt` to `pt-BR`).
 - `locale-provider.tsx`: `LocaleProvider` and `useT()` returning `{ locale, setLocale, t, tn }`. Mounted in `main.tsx` as the outermost element, above `RootErrorBoundary` and the top-level `Suspense`, so `ErrorFallback` and `LoadingScreen` translate too (`main.locale-wiring.test.ts` guards it). Sets `<html lang>` to `renderedLocale` (the locale of the catalog actually on screen). The LAST SUCCESSFULLY LOADED catalog stays rendered until a newly selected language's chunk resolves, then swaps atomically, so a switch never drops to English in between; a failed, `undefined` or empty load keeps the previous catalog and is reported to Sentry (the picker then shows the selected `locale` over the old `renderedLocale`). Selecting `en` (no loader) switches at once. Chunks load lazily via `import.meta.glob`.
 - `translate.ts`, `trans.tsx` (`<Trans text slots>` for sentences around React children), `storage.ts` (`engram:locale` in localStorage).
-- `locale/<code>.ts`: twelve catalogs (no `en`).
+- `locale/<code>.ts`: fifteen catalogs (no `en`).
 - `keys.test.ts`: the drift guard.
 
 Proof surface: the Language `<select>` in its own card, Settings > Account > Language (`language-section.tsx`, rendered after Appearance; a shadcn `Select`; always visible), and the 404 page (`not-found.tsx`).
