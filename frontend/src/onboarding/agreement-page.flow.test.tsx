@@ -55,8 +55,11 @@ const STATUS_BEFORE = {
 };
 const STATUS_AFTER = {
 	...STATUS_BEFORE,
-	next_step: "billing",
+	// No plan step: accepting the terms starts the account on Free, and a web
+	// signup is asked how it heard about us next.
+	next_step: "heard",
 	terms_ok: true,
+	subscription_ok: true,
 };
 
 describe("AgreementPage accept-then-redirect flow", () => {
@@ -66,7 +69,7 @@ describe("AgreementPage accept-then-redirect flow", () => {
 		agreementMounts = 0;
 	});
 
-	it("lands on /onboard/billing after one accept (no double-accept loop)", async () => {
+	it("lands on /onboard/heard after one accept (no double-accept loop)", async () => {
 		let accepted = false;
 		let statusGetCalls = 0;
 		get.mockImplementation(async (url: string) => {
@@ -100,7 +103,7 @@ describe("AgreementPage accept-then-redirect flow", () => {
 					<Routes>
 						<Route path="/onboard/agreement" element={<CountingAgreementPage />} />
 						<Route path="/onboard" element={<OnboardRedirect />} />
-						<Route path="/onboard/billing" element={<div data-testid="billing-landed" />} />
+						<Route path="/onboard/heard" element={<div data-testid="heard-landed" />} />
 					</Routes>
 				</MemoryRouter>
 			</QueryClientProvider>,
@@ -115,15 +118,15 @@ describe("AgreementPage accept-then-redirect flow", () => {
 		fireEvent.click(cont);
 
 		// With the fix, the mutation only resolves after the cache is refreshed,
-		// so OnboardRedirect reads STATUS_AFTER and routes to /onboard/billing.
+		// so OnboardRedirect reads STATUS_AFTER and routes to /onboard/heard.
 		// Without the fix, OnboardRedirect reads STATUS_BEFORE (stale) and routes
 		// back to /onboard/agreement, re-mounting CountingAgreementPage.
-		await waitFor(() => expect(screen.getByTestId("billing-landed")).toBeInTheDocument(), {
+		await waitFor(() => expect(screen.getByTestId("heard-landed")).toBeInTheDocument(), {
 			timeout: 10_000,
 		});
 
-		expect(screen.getByTestId("path").textContent).toBe("/onboard/billing");
+		expect(screen.getByTestId("path").textContent).toBe("/onboard/heard");
 		expect(agreementMounts).toBe(1);
-		expect(post).toHaveBeenCalledTimes(1);
+		expect(post.mock.calls.filter(([url]) => url === "/onboarding/accept-terms")).toHaveLength(1);
 	});
 });

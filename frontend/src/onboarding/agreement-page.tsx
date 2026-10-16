@@ -13,6 +13,11 @@ import { LegalDoc } from "../legal/legal-doc";
 import { formatEffectiveDate, useDocumentName } from "../legal/legal-notice-banner";
 import { useAcceptAgreements } from "../legal/use-accept-current";
 
+// The legal texts take whatever height the card has left, so the agreement
+// and Continue stay on screen without the page scrolling (AuthPanel).
+const fillRest = "flex min-h-32 flex-1 flex-col rounded-lg border border-border bg-background";
+const fillRestViewport = "h-auto min-h-0 flex-1";
+
 export default function AgreementPage() {
 	const { t, renderedLocale } = useT();
 	const name = useDocumentName();
@@ -23,8 +28,22 @@ export default function AgreementPage() {
 	const [showPrivacy, setShowPrivacy] = useState(false);
 	const [mountedAt] = useState(() => Date.now());
 	const notices = data?.legal_notices ?? [];
+	// Guards a second accept while the first is still in flight.
+	const [submitting, setSubmitting] = useState(false);
 
 	async function submit() {
+		if (submitting) {
+			return;
+		}
+		setSubmitting(true);
+		try {
+			await submitSteps();
+		} finally {
+			setSubmitting(false);
+		}
+	}
+
+	async function submitSteps() {
 		if (!(await accept())) {
 			return;
 		}
@@ -36,7 +55,7 @@ export default function AgreementPage() {
 	}
 
 	return (
-		<AuthPanel className="flex flex-col gap-4">
+		<AuthPanel scroll={false} className="gap-4">
 			<h1 className={heading}>{t("Review the Terms")}</h1>
 			<p className="text-muted-foreground text-sm">
 				<Trans
@@ -58,16 +77,6 @@ export default function AgreementPage() {
 					}}
 				/>
 			</p>
-			{showPrivacy && privacyText ? (
-				<ScrollArea
-					id="privacy-notice"
-					className="h-[44dvh] rounded-lg border border-border bg-background sm:h-80"
-				>
-					<div className="p-4">
-						<LegalDoc source={privacyText} />
-					</div>
-				</ScrollArea>
-			) : null}
 			{notices.length > 0 ? (
 				<section
 					aria-labelledby="what-changed"
@@ -113,10 +122,17 @@ export default function AgreementPage() {
 			) : (
 				<>
 					{tosText ? (
-						<ScrollArea className="h-[44dvh] rounded-lg border border-border bg-background sm:h-80 lg:h-[60vh]">
-							<div className="p-4">
+						// One box for both texts: two boxes each needing a minimum height
+						// pushed Continue off a short screen.
+						<ScrollArea className={fillRest} viewportClassName={fillRestViewport}>
+							{showPrivacy && privacyText ? (
+								<article id="privacy-notice" className="border-border border-b p-4">
+									<LegalDoc source={privacyText} />
+								</article>
+							) : null}
+							<article className="p-4">
 								<LegalDoc source={tosText} />
-							</div>
+							</article>
 						</ScrollArea>
 					) : null}
 					<label className={selectableRow(agreed)}>
@@ -132,10 +148,10 @@ export default function AgreementPage() {
 					<Button
 						type="button"
 						onClick={submit}
-						disabled={!agreed || isPending || !ready}
+						disabled={!agreed || isPending || submitting || !ready}
 						className="w-full"
 					>
-						{isPending ? t("Saving…") : t("Continue")}
+						{isPending || submitting ? t("Saving…") : t("Continue")}
 					</Button>
 				</>
 			)}

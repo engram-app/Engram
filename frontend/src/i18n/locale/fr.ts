@@ -848,6 +848,8 @@ export default {
 		"L'accord actuel n'est pas disponible pour le moment.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"Nous ne pouvons pas afficher les dernières conditions pour le moment, donc l'inscription est temporairement suspendue pour éviter que tu acceptes quelque chose que tu ne peux pas lire. Merci de réessayer dans quelques instants.",
+	"How did you hear about Engram?": "Comment as-tu découvert Engram ?",
+	"Pick one to continue.": "Choisis-en un pour continuer.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"J'ai lu et j'accepte les conditions d'utilisation et la politique de confidentialité",
 	"I have read and agree to the agreement shown above and the privacy notice":
@@ -890,9 +892,6 @@ export default {
 	"Connect another MCP client": "Connecte un autre client MCP",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Un coffre contient tes notes. Tu peux le renommer ou en ajouter d'autres plus tard.",
-	"How did you hear about Engram?": "Comment as-tu découvert Engram ?",
-	"Couldn't save your answers, please try again.":
-		"Impossible de sauvegarder tes réponses, essaie à nouveau.",
 	"Choose your plan": "Choisis ton abonnement",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"Essai gratuit de 7 jours sur les abonnements payants. Carte requise, aucun prélèvement tant que l'essai n'est pas terminé.",
@@ -906,8 +905,6 @@ export default {
 	"Cancel connection": "Annuler la connexion",
 	"Connecting {app}": "Connexion à {app}",
 	"Which AI tools do you use?": "Quels outils d'IA utilises-tu ?",
-	"We'll tailor your setup around the tools you already work with.":
-		"Nous adapterons ta configuration en fonction des outils que tu utilises déjà.",
 	"AI assistants": "Assistants IA",
 	"Coding tools": "Outils de développement",
 	"Another MCP client": "Un autre client MCP",
@@ -954,6 +951,12 @@ export default {
 	"I'm not connecting an AI tool yet": "Je ne connecte pas encore d'outil d'IA",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Utilise Engram dans l'application web. Tu peux connecter un outil plus tard dans les paramètres.",
+	"Help us shape Engram": "Aide-nous à améliorer Engram",
+	"Two quick questions. Both are optional.": "Deux questions rapides. Les deux sont facultatives.",
+	"Couldn't save your answers, please try again.":
+		"Impossible de sauvegarder tes réponses, essaie à nouveau.",
+	Skip: "Ignorer",
+	Save: "Enregistrer",
 	Account: "Compte",
 	"Manage your profile, password, and account.": "Gère ton profil, ton mot de passe et ton compte.",
 	"Manage your profile, security, and active sessions.":
@@ -1036,7 +1039,6 @@ export default {
 	"How your name appears in the app.": "Comment ton nom apparaît dans l'application.",
 	"Display name": "Nom d'affichage",
 	"Leave blank to use your email": "Laisse vide pour utiliser ton adresse e-mail",
-	Save: "Enregistrer",
 	"Profile image updated": "Image du profil mise à jour",
 	"Could not update image": "Impossible de mettre à jour l'image",
 	"Profile photo": "Photo de profil",

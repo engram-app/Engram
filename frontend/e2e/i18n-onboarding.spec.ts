@@ -4,12 +4,12 @@ import { BROWSER_LOCALES, checkStep } from "./support/i18n-leaks";
 import { walkOnboarding } from "./support/i18n-onboarding";
 
 // Self-host first run in each locale: sign-up, then the wizard (support/i18n-onboarding.ts:
-// tools, vault with both source cards, then "starting fresh"), the dashboard it lands
+// vault with both source cards, then "starting fresh"), the dashboard it lands
 // on, and Settings > Account. Every step
 // asserts `<html lang>`, fails on untranslated wrapped strings, reports suspected
 // unwrapped English (non-Latin locales) and attaches a full-page screenshot.
 //
-// Self-host chain: tools -> vault (agreement and billing auto-pass), see
+// Self-host chain: vault only (agreement and billing auto-pass), see
 // local-auth.spec.ts. Registers one user per locale, deleted afterwards through
 // DELETE /api/me. Do NOT point this at a persistent shared database.
 
@@ -40,9 +40,8 @@ for (const { tag, code } of BROWSER_LOCALES) {
 			await page.locator('input[type="password"]').last().fill(PASS);
 			await page.locator("form button[type='submit']").click();
 
-			await expect(page).toHaveURL(/\/onboard\/tools/u, { timeout: 15_000 });
-			// Self-host chain starts at tools (agreement and billing auto-pass).
-			await expect(page).toHaveURL(/\/onboard\/tools/u, { timeout: 15_000 });
+			// Self-host chain starts at vault (agreement and billing auto-pass).
+			await expect(page).toHaveURL(/\/onboard\/vault/u, { timeout: 15_000 });
 			await walkOnboarding(page, testInfo, code);
 		});
 	});

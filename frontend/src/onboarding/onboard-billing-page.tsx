@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useStableT, useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { notify } from "@/lib/notify";
@@ -55,7 +56,8 @@ export default function OnboardBillingPage() {
 	// Cached/fetched status already past billing (e.g. user advanced in another
 	// tab, or returned to /onboard/billing after subscribing) — bounce forward
 	// to their actual next step instead of re-showing the plan picker. Keys off
-	// `next_step`, not `steps` (billing stays in `steps` even once satisfied).
+	// `next_step`. Only an account past the terms with no plan is still served
+	// this step; every new signup starts on Free (`Engram.Onboarding.after_terms/1`).
 	// Only a live subscription bounces — the same `active` signal BillingPage
 	// uses to choose plan picker vs plan panel. Free users are exempt: the tools
 	// step and the checklist link them here to upgrade, and bouncing them made
@@ -77,7 +79,11 @@ export default function OnboardBillingPage() {
 	}
 
 	return (
-		<section className="m-auto max-h-full w-full max-w-2xl overflow-y-auto px-4 pt-5 pb-8 sm:pt-8">
+		<ScrollArea
+			// Scrolls inside itself, never the page: see AuthPanel.
+			className="m-auto flex max-h-full min-h-0 w-full max-w-2xl flex-col"
+			viewportClassName="h-auto min-h-0 flex-1 px-4 pt-5 pb-8 sm:pt-8"
+		>
 			<div
 				className={cn(
 					"rounded-2xl border p-4 sm:p-8",
@@ -129,6 +135,6 @@ export default function OnboardBillingPage() {
 					</section>
 				)}
 			</div>
-		</section>
+		</ScrollArea>
 	);
 }

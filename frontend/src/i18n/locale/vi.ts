@@ -807,6 +807,8 @@ export default {
 		"Bản hợp đồng hiện tại không khả dụng ngay bây giờ.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"Chúng tôi không thể hiển thị các điều khoản mới nhất vào lúc này, vì vậy việc đăng ký bị tạm dừng thay vì yêu cầu bạn đồng ý với điều gì đó mà bạn không thể đọc. Vui lòng thử lại sau.",
+	"How did you hear about Engram?": "Bạn biết về Engram như thế nào?",
+	"Pick one to continue.": "Chọn một tùy chọn để tiếp tục.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"Tôi đã đọc và đồng ý với Điều khoản dịch vụ và Chính sách quyền riêng tư",
 	"I have read and agree to the agreement shown above and the privacy notice":
@@ -848,9 +850,6 @@ export default {
 	"Connect another MCP client": "Kết nối một ứng dụng MCP khác",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Một kho lưu trữ chứa các ghi chú của bạn. Bạn có thể đổi tên hoặc thêm nhiều hơn sau.",
-	"How did you hear about Engram?": "Bạn biết về Engram như thế nào?",
-	"Couldn't save your answers, please try again.":
-		"Không thể lưu lại câu trả lời của bạn, vui lòng thử lại.",
 	"Choose your plan": "Chọn gói của bạn",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"Thử nghiệm miễn phí 7 ngày cho các gói trả phí. Cần thẻ, không tính phí cho đến khi hết hạn.",
@@ -863,8 +862,6 @@ export default {
 	"Cancel connection": "Hủy kết nối",
 	"Connecting {app}": "Kết nối {app}",
 	"Which AI tools do you use?": "Bạn sử dụng những công cụ AI nào?",
-	"We'll tailor your setup around the tools you already work with.":
-		"Chúng tôi sẽ tùy chỉnh thiết lập của bạn dựa trên các công cụ bạn đã sử dụng.",
 	"AI assistants": "Trợ lý AI",
 	"Coding tools": "Công cụ lập trình",
 	"Another MCP client": "Một ứng dụng MCP khác",
@@ -912,6 +909,12 @@ export default {
 	"I'm not connecting an AI tool yet": "Tôi chưa kết nối bất kỳ công cụ AI nào",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Sử dụng Engram trên ứng dụng web. Bạn có thể kết nối một công cụ sau này trong phần Cài đặt.",
+	"Help us shape Engram": "Giúp chúng tôi phát triển Engram",
+	"Two quick questions. Both are optional.": "Hai câu hỏi nhanh. Cả hai đều tùy chọn.",
+	"Couldn't save your answers, please try again.":
+		"Không thể lưu lại câu trả lời của bạn, vui lòng thử lại.",
+	Skip: "Bỏ qua",
+	Save: "Lưu",
 	Account: "Tài khoản",
 	"Manage your profile, password, and account.": "Quản lý hồ sơ mật khẩu và tài khoản của bạn.",
 	"Manage your profile, security, and active sessions.":
@@ -993,7 +996,6 @@ export default {
 	"How your name appears in the app.": "Tên của bạn hiển thị trong ứng dụng.",
 	"Display name": "Tên hiển thị",
 	"Leave blank to use your email": "Để trống để sử dụng địa chỉ email của bạn",
-	Save: "Lưu",
 	"Profile image updated": "Ảnh hồ sơ đã cập nhật",
 	"Could not update image": "Không thể cập nhật ảnh",
 	"Profile photo": "Ảnh hồ sơ",

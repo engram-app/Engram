@@ -844,6 +844,8 @@ export default {
 	"The current agreement isn’t available right now.": "El acuerdo actual no está disponible ahora.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"No podemos mostrar los términos más recientes en este momento, así que el registro está pausado en lugar de pedirte que aceptes algo que no puedes leer. Inténtalo de nuevo en breve.",
+	"How did you hear about Engram?": "¿Cómo te enteraste de Engram?",
+	"Pick one to continue.": "Elige una opción para continuar.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"He leído y acepto los Términos del Servicio y la Política de Privacidad",
 	"I have read and agree to the agreement shown above and the privacy notice":
@@ -887,9 +889,6 @@ export default {
 	"Connect another MCP client": "Conectar otro cliente MCP",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Una bóveda contiene tus notas. Puedes renombrarla o añadir más después.",
-	"How did you hear about Engram?": "¿Cómo te enteraste de Engram?",
-	"Couldn't save your answers, please try again.":
-		"No se pudieron guardar tus respuestas, por favor intenta de nuevo.",
 	"Choose your plan": "Elige tu plan",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"Prueba gratuita de 7 días en los planes de pago. Se requiere tarjeta, no se te cobrará hasta que finalice.",
@@ -902,8 +901,6 @@ export default {
 	"Cancel connection": "Cancelar conexión",
 	"Connecting {app}": "Conectando {app}",
 	"Which AI tools do you use?": "¿Qué herramientas de IA utilizas?",
-	"We'll tailor your setup around the tools you already work with.":
-		"Adaptaremos la configuración a las herramientas que ya usas.",
 	"AI assistants": "Asistentes de IA",
 	"Coding tools": "Herramientas de programación",
 	"Another MCP client": "Otro cliente de MCP",
@@ -951,6 +948,12 @@ export default {
 	"I'm not connecting an AI tool yet": "Aún no estoy conectando una herramienta de IA",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Usa Engram en la aplicación web. Puedes conectar una herramienta más tarde desde Ajustes.",
+	"Help us shape Engram": "Ayúdanos a mejorar Engram",
+	"Two quick questions. Both are optional.": "Dos preguntas rápidas. Ambas son opcionales.",
+	"Couldn't save your answers, please try again.":
+		"No se pudieron guardar tus respuestas, por favor intenta de nuevo.",
+	Skip: "Omitir",
+	Save: "Guardar",
 	Account: "Cuenta",
 	"Manage your profile, password, and account.": "Gestiona tu perfil, tu contraseña y tu cuenta.",
 	"Manage your profile, security, and active sessions.":
@@ -1034,7 +1037,6 @@ export default {
 	"How your name appears in the app.": "Cómo aparece tu nombre en la app.",
 	"Display name": "Nombre de visualización",
 	"Leave blank to use your email": "Déjalo en blanco para usar tu correo electrónico",
-	Save: "Guardar",
 	"Profile image updated": "Imagen de perfil actualizada",
 	"Could not update image": "No se pudo actualizar la imagen",
 	"Profile photo": "Foto de perfil",

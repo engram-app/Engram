@@ -84,6 +84,43 @@ defmodule Engram.FeedbackTest do
       refute_receive {:posthog, _}, 200
     end
 
+    # The in-app survey always sends `use_cases` (empty on skip); the terms
+    # screen's heard-from answer never does. Only the survey stamps this, so
+    # the app can tell whether it was asked.
+    test "a submission carrying use_cases stamps use_cases_done_at", %{user: user} do
+      assert :ok = Feedback.submit(user, "onboarding", %{"use_cases" => []})
+      assert is_binary(profile(user)["use_cases_done_at"])
+    end
+
+    test "a heard-from answer alone does not stamp use_cases_done_at", %{user: user} do
+      assert :ok = Feedback.submit(user, "onboarding", %{"heard_from" => "friend"})
+      refute Map.has_key?(profile(user), "use_cases_done_at")
+    end
+
+    # The in-app survey saves tools and use cases in ONE request: two requests
+    # let the first flip the survey to answered (and unmount it) before the
+    # second could report a failure.
+    test "saves tools onto the profile alongside use cases", %{user: user} do
+      assert :ok =
+               Feedback.submit(user, "onboarding", %{
+                 "use_cases" => ["search"],
+                 "tools" => ["chatgpt", "cursor"]
+               })
+
+      assert %{"tools" => ["chatgpt", "cursor"], "use_cases" => ["search"]} = profile(user)
+    end
+
+    test "rejects unknown or empty tools", %{user: user} do
+      assert {:error, :invalid_tools} =
+               Feedback.submit(user, "onboarding", %{"tools" => ["telepathy"]})
+
+      assert {:error, :invalid_tools} = Feedback.submit(user, "onboarding", %{"tools" => []})
+
+      # Atomic: a rejected survey save stamps nothing, so it is asked again.
+      refute Map.has_key?(profile(user), "use_cases_done_at")
+      assert profile(user)["tools"] == ["claude"]
+    end
+
     test "rejects unknown slugs", %{user: user} do
       assert {:error, :invalid_heard_from} =
                Feedback.submit(user, "onboarding", %{"heard_from" => "tv"})

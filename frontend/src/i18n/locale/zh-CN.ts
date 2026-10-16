@@ -769,6 +769,8 @@ export default {
 	"The current agreement isn’t available right now.": "当前协议暂时不可用。",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"暂时无法显示最新条款，因此暂停注册，而不是要求您同意您无法阅读的内容。请稍后再试。",
+	"How did you hear about Engram?": "你是通过什么途径了解 Engram 的？",
+	"Pick one to continue.": "选择一个继续。",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"我已阅读并同意服务条款和隐私政策",
 	"I have read and agree to the agreement shown above and the privacy notice":
@@ -810,8 +812,6 @@ export default {
 	"Connect another MCP client": "连接其他 MCP 客户端",
 	"A vault holds your notes. You can rename it or add more later.":
 		"一个仓库包含你的笔记。你可以稍后重命名或添加更多。",
-	"How did you hear about Engram?": "你是通过什么途径了解 Engram 的？",
-	"Couldn't save your answers, please try again.": "无法保存你的答案，请重试。",
 	"Choose your plan": "选择你的方案",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"付费方案提供 7 天免费试用。需要信用卡，到期才收费。",
@@ -824,8 +824,6 @@ export default {
 	"Cancel connection": "取消连接",
 	"Connecting {app}": "连接 {app}",
 	"Which AI tools do you use?": "您使用哪些 AI 工具？",
-	"We'll tailor your setup around the tools you already work with.":
-		"我们会根据您已使用的工具来定制设置。",
 	"AI assistants": "AI 助手",
 	"Coding tools": "编程工具",
 	"Another MCP client": "另一个 MCP 客户端",
@@ -870,6 +868,11 @@ export default {
 	"I'm not connecting an AI tool yet": "我暂时不连接任何AI工具",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"在网页版Engram中使用。稍后可以在“设置”中连接工具。",
+	"Help us shape Engram": "帮助我们改进 Engram",
+	"Two quick questions. Both are optional.": "两个简单问题，均可选择。",
+	"Couldn't save your answers, please try again.": "无法保存你的答案，请重试。",
+	Skip: "跳过",
+	Save: "保存",
 	Account: "账户",
 	"Manage your profile, password, and account.": "管理你的资料、密码和账号。",
 	"Manage your profile, security, and active sessions.": "管理你的资料、安全设置和活动会话。",
@@ -945,7 +948,6 @@ export default {
 	"How your name appears in the app.": "你在应用中显示的名称。",
 	"Display name": "显示名称",
 	"Leave blank to use your email": "留空则使用你的邮箱",
-	Save: "保存",
 	"Profile image updated": "头像已更新",
 	"Could not update image": "无法更新图片",
 	"Profile photo": "个人照片",

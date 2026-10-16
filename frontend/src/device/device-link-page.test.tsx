@@ -179,7 +179,7 @@ describe("DeviceLinkPage", () => {
 			renderPage("/link?code=ENGR-7X4K");
 
 			await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/onboard"));
-			expect(setProfile).toHaveBeenCalledWith({ uses_obsidian: true });
+			expect(setProfile).toHaveBeenCalledWith({ uses_obsidian: true, signup_source: "plugin" });
 		});
 
 		// A returning user whose gate closed for another reason (new ToS, lapsed

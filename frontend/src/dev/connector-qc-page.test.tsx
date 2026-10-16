@@ -30,7 +30,7 @@ describe("ConnectorQcPage", () => {
 		expect(screen.getByRole("heading", { name: /connector qc/iu })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: /^connections page$/iu })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: /finish-setup checklist/iu })).toBeInTheDocument();
-		expect(screen.getByRole("heading", { name: /ftux tool picker/iu })).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: /survey tool picker/iu })).toBeInTheDocument();
 	});
 
 	it("renders the connector states the gallery exists to show", () => {

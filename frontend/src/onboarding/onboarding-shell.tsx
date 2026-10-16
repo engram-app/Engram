@@ -2,6 +2,7 @@ import { type ReactNode, useState } from "react";
 import { track } from "../analytics/track";
 import { ChecklistWidget } from "./checklist-widget";
 import { CreateFirstVaultModal } from "./create-first-vault-modal";
+import { SurveyPrompt } from "./survey-modal";
 import { useOnboardingActions } from "./use-onboarding-actions";
 
 export function OnboardingShell({ children }: { children: ReactNode }) {
@@ -12,7 +13,10 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
 		return <>{children}</>;
 	}
 
-	const showVaultModal = !vaultModalHandled && ob.vaultCount === 0;
+	// Not for a plugin-first signup: its plugin's first sync creates the vault,
+	// and one made here would be refused by the Free cap when the plugin
+	// registers its own.
+	const showVaultModal = !(vaultModalHandled || ob.pluginFirst) && ob.vaultCount === 0;
 
 	return (
 		<>
@@ -29,6 +33,7 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
 				/>
 			)}
 			<ChecklistWidget />
+			<SurveyPrompt suppressed={showVaultModal} />
 		</>
 	);
 }

@@ -30,11 +30,15 @@ function renderShell(ui: ReactElement) {
 
 const mockRecord = vi.fn(() => Promise.resolve());
 let mockVaultCount = 0;
+let mockPluginFirst = false;
 vi.mock("./use-onboarding-actions", () => ({
 	useOnboardingActions: () => ({
 		isLoading: false,
 		get vaultCount() {
 			return mockVaultCount;
+		},
+		get pluginFirst() {
+			return mockPluginFirst;
 		},
 		has: () => false,
 		recordAsync: mockRecord,
@@ -47,10 +51,19 @@ vi.mock("./checklist-widget", () => ({
 	ChecklistWidget: () => <div data-testid="checklist-widget" />,
 }));
 
+// The survey decides for itself when it is due (survey-modal.test.tsx); here
+// only that the shell holds it back while the vault modal is up.
+vi.mock("./survey-modal", () => ({
+	SurveyPrompt: ({ suppressed }: { suppressed: boolean }) => (
+		<div data-testid="survey-prompt" data-suppressed={String(suppressed)} />
+	),
+}));
+
 describe("OnboardingShell", () => {
 	beforeEach(() => {
 		mockRecord.mockClear();
 		mockVaultCount = 0;
+		mockPluginFirst = false;
 		mockTrack.mockClear();
 	});
 
@@ -88,5 +101,30 @@ describe("OnboardingShell", () => {
 		);
 		expect(screen.getByText("dashboard")).toBeInTheDocument();
 		expect(screen.getByTestId("checklist-widget")).toBeInTheDocument();
+	});
+
+	it("holds the survey back while the vault modal is open", () => {
+		mockVaultCount = 0;
+		renderShell(
+			<OnboardingShell>
+				<p>dashboard</p>
+			</OnboardingShell>,
+		);
+		expect(screen.getByTestId("survey-prompt")).toHaveAttribute("data-suppressed", "true");
+	});
+
+	// A plugin-first signup's vault is created by the plugin's first sync once
+	// the parked /link code is approved. A blocking "create your first vault"
+	// modal would make them a second vault the Free cap then refuses.
+	it("does not ask a plugin-first signup to create a vault", () => {
+		mockVaultCount = 0;
+		mockPluginFirst = true;
+		renderShell(
+			<OnboardingShell>
+				<p>dashboard</p>
+			</OnboardingShell>,
+		);
+		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(screen.getByTestId("survey-prompt")).toHaveAttribute("data-suppressed", "false");
 	});
 });

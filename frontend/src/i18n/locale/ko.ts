@@ -795,6 +795,8 @@ export default {
 	"The current agreement isn’t available right now.": "현재 약관은 이용 불가합니다.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"최신 약관을 표시할 수 없으므로, 읽을 수 없는 내용에 동의하도록 안내하는 대신 가입을 잠시 중단합니다. 잠시 후 다시 시도해주세요.",
+	"How did you hear about Engram?": "Engram에 대해 어떻게 알게 되셨나요?",
+	"Pick one to continue.": "계속하려면 하나를 선택하세요.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"이용 약관 및 개인정보 처리방침을 읽고 동의합니다",
 	"I have read and agree to the agreement shown above and the privacy notice":
@@ -836,8 +838,6 @@ export default {
 	"Connect another MCP client": "다른 MCP 클라이언트 연결",
 	"A vault holds your notes. You can rename it or add more later.":
 		"보관함은 노트를 저장하는 곳입니다. 나중에 이름을 변경하거나 추가할 수 있습니다.",
-	"How did you hear about Engram?": "Engram에 대해 어떻게 알게 되셨나요?",
-	"Couldn't save your answers, please try again.": "답변을 저장하지 못했습니다. 다시 시도해주세요.",
 	"Choose your plan": "요금제를 선택하세요",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"유료 요금제의 경우 7일 무료 체험 제공. 카드 정보 필요하며, 종료 시까지 요금이 부과되지 않습니다.",
@@ -850,8 +850,6 @@ export default {
 	"Cancel connection": "연결 해제",
 	"Connecting {app}": "{app} 연결 중",
 	"Which AI tools do you use?": "어떤 AI 도구를 사용하시나요?",
-	"We'll tailor your setup around the tools you already work with.":
-		"사용하시는 도구에 맞춰 설정을 조정해 드립니다.",
 	"AI assistants": "AI 어시스턴트",
 	"Coding tools": "코딩 도구",
 	"Another MCP client": "다른 MCP 클라이언트",
@@ -898,6 +896,11 @@ export default {
 	"I'm not connecting an AI tool yet": "아직 AI 도구를 연결하지 않았습니다",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"웹 앱에서 Engram을 사용하세요. 설정에서 나중에 도구를 연결할 수 있습니다.",
+	"Help us shape Engram": "Engram 개선에 참여해주세요",
+	"Two quick questions. Both are optional.": "간단한 질문 두 가지입니다. 선택 사항입니다.",
+	"Couldn't save your answers, please try again.": "답변을 저장하지 못했습니다. 다시 시도해주세요.",
+	Skip: "건너뛰기",
+	Save: "저장",
 	Account: "계정",
 	"Manage your profile, password, and account.": "프로필, 비밀번호, 계정을 관리하세요.",
 	"Manage your profile, security, and active sessions.": "프로필, 보안 및 활성 세션을 관리하세요.",
@@ -977,7 +980,6 @@ export default {
 	"How your name appears in the app.": "앱에서 표시되는 이름입니다.",
 	"Display name": "표시 이름",
 	"Leave blank to use your email": "이메일 주소를 사용하려면 비워두세요",
-	Save: "저장",
 	"Profile image updated": "프로필 이미지 업데이트 완료",
 	"Could not update image": "이미지 업데이트 실패",
 	"Profile photo": "프로필 사진",

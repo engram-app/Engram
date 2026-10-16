@@ -17,6 +17,7 @@ let recordAsyncMock = vi.fn();
 let onboardingActionsValue: ReturnType<typeof useOnboardingActions> = {
 	isLoading: false,
 	vaultCount: 1,
+	pluginFirst: false,
 	has: (a: OnboardingAction) => actionsList.includes(a),
 	recordAsync: recordAsyncMock,
 };
@@ -138,6 +139,7 @@ beforeEach(() => {
 	onboardingActionsValue = {
 		isLoading: false,
 		vaultCount: 1,
+		pluginFirst: false,
 		has: (a: OnboardingAction) => actionsList.includes(a),
 		recordAsync: recordAsyncMock,
 	};
@@ -586,7 +588,9 @@ describe("ChecklistWidget, desktop panel height", () => {
 });
 
 describe("ChecklistWidget, Free-tier reminder", () => {
-	it("renders Free reminder with Upgrade link to /onboard/billing when tier=free", () => {
+	// There is no plan step any more (every signup starts on Free), so
+	// /onboard/billing punts home; the link must open Settings > Billing.
+	it("renders Free reminder with Upgrade link to Settings > Billing when tier=free", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude"] };
 		billingStatusValue.data = { tier: "free", active: false } as Partial<BillingStatus>;
 		render(wrap(<ChecklistWidget />));
@@ -595,7 +599,7 @@ describe("ChecklistWidget, Free-tier reminder", () => {
 		// #1974: MCP connections are uncapped, so the reminder names no count.
 		expect(screen.queryByText(/1 connection/iu)).toBeNull();
 		const link = screen.getByRole("link", { name: /upgrade/iu });
-		expect(link).toHaveAttribute("href", "/onboard/billing");
+		expect(link.getAttribute("href")).toMatch(/#settings\/billing$/u);
 	});
 
 	it("does not render the reminder when tier=pro", () => {

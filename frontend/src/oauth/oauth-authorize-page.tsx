@@ -241,8 +241,12 @@ export default function OAuthAuthorizePage() {
 
 	// Nothing left to resume once they are through. A stash that outlives its
 	// flow would divert a later, unrelated trip through the wizard.
+	//
+	// Not on the visit that parked it: on self-host the connector pre-answer
+	// alone satisfies the gate, so the refetch says gate_ok before the handoff
+	// to /onboard, and clearing then strands the user on the dashboard.
 	useEffect(() => {
-		if (onboarding?.gate_ok) {
+		if (onboarding?.gate_ok && !bounced.current) {
 			clearPendingAuthorization();
 		}
 	}, [onboarding]);

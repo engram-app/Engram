@@ -20,14 +20,17 @@ vi.mock("../legal/load", async (importOriginal) => ({
 vi.mock("../analytics/track", () => ({ track: vi.fn() }));
 const mockTrack = vi.mocked(track);
 
-const { mutate, statusRef } = vi.hoisted(() => ({
+const { mutate, submitFeedback, statusRef } = vi.hoisted(() => ({
 	mutate: vi.fn().mockResolvedValue({ version: "2026-05-19", accepted_at: "now" }),
+	submitFeedback: vi.fn().mockResolvedValue({ status: "ok" }),
 	statusRef: {
 		current: {
 			enabled: true,
 			next_step: "agreement",
 			current_tos_version: "2026-05-19",
 			current_privacy_version: "2026-06-20",
+			// A returning account re-accepting: not asked how it heard about us.
+			profile: { completed_at: "2026-05-19T00:00:00Z" },
 		} as Record<string, unknown>,
 	},
 }));
@@ -40,12 +43,14 @@ afterEach(() => {
 vi.mock("../api/queries", () => ({
 	useAcceptTerms: () => ({ mutateAsync: mutate, isPending: false }),
 	useOnboardingStatus: () => ({ data: statusRef.current, isLoading: false }),
+	useSubmitFeedback: () => ({ mutateAsync: submitFeedback, isPending: false }),
 }));
 
-// The legal texts load as lazy chunks; Continue enables once both have.
+// The legal texts load as lazy chunks; Continue enables once both have. A
+// chunk import on a loaded CI runner takes longer than waitFor's 1s default.
 async function clickContinue() {
 	const button = screen.getByRole("button", { name: /continue/iu });
-	await waitFor(() => expect(button).toBeEnabled());
+	await waitFor(() => expect(button).toBeEnabled(), { timeout: 10_000 });
 	fireEvent.click(button);
 }
 
@@ -202,5 +207,39 @@ describe("AgreementPage: consent chrome is translated, the legal body is not", (
 		expect(screen.getByRole("heading", { name: /what changed/iu })).toBeInTheDocument();
 		expect(screen.getByText(/Privacy Policy, effective November 11, 2026:/u)).toBeInTheDocument();
 		expect(screen.getByText(/App analytics now linked to your account/u)).toBeInTheDocument();
+	});
+});
+
+// "How did you hear about Engram?" is its own step (heard-page.tsx), so the
+// terms screen never asks it, not even of a brand-new web signup.
+describe("AgreementPage: terms only", () => {
+	it("does not ask a new web signup how it heard about us", async () => {
+		statusRef.current = { ...DEFAULT_STATUS, profile: undefined };
+		renderPage();
+		await screen.findByRole("heading", { name: /Terms of Service/iu });
+		expect(screen.queryByText("How did you hear about Engram?")).not.toBeInTheDocument();
+		expect(screen.queryByRole("radio")).toBeNull();
+	});
+
+	it("cannot be submitted twice while saving", async () => {
+		let release: (v: unknown) => void = () => undefined;
+		mutate.mockClear();
+		mutate.mockImplementationOnce(
+			() =>
+				new Promise((r) => {
+					release = r;
+				}),
+		);
+		renderPage();
+		await screen.findByRole("heading", { name: /Terms of Service/iu });
+		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
+		await clickContinue();
+		await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+
+		const button = screen.getByRole("button", { name: /continue|saving/iu });
+		expect(button).toBeDisabled();
+		fireEvent.click(button);
+		expect(mutate).toHaveBeenCalledTimes(1);
+		release({ version: "2026-05-19", accepted_at: "now" });
 	});
 });

@@ -807,6 +807,8 @@ export default {
 	"The current agreement isn’t available right now.": "現在の利用規約は利用できません。",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"最新の利用規約を表示できないため、サインアップを一時停止しています。しばらくしてから再度お試しください。",
+	"How did you hear about Engram?": "Engram をどこで知りましたか？",
+	"Pick one to continue.": "続けるには、いずれかを選択してください。",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"利用規約とプライバシーポリシーを読み、同意します",
 	"I have read and agree to the agreement shown above and the privacy notice":
@@ -849,9 +851,6 @@ export default {
 	"Connect another MCP client": "他の MCP クライアントを接続",
 	"A vault holds your notes. You can rename it or add more later.":
 		"保管庫にはノートが保存されます。後で名前を変更したり、追加したりできます。",
-	"How did you hear about Engram?": "Engram をどこで知りましたか？",
-	"Couldn't save your answers, please try again.":
-		"回答を保存できませんでした。もう一度お試しください。",
 	"Choose your plan": "プランを選択してください",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"有料プランでは、7日間の無料トライアルがあります。カード情報が必要ですが、終了するまでは料金は発生しません。",
@@ -864,8 +863,6 @@ export default {
 	"Cancel connection": "接続を解除",
 	"Connecting {app}": "{app} に接続中",
 	"Which AI tools do you use?": "どのAIツールをご利用ですか？",
-	"We'll tailor your setup around the tools you already work with.":
-		"現在ご利用のツールに合わせて設定をカスタマイズします。",
 	"AI assistants": "AIアシスタント",
 	"Coding tools": "コーディングツール",
 	"Another MCP client": "別のMCPクライアント",
@@ -911,6 +908,12 @@ export default {
 	"I'm not connecting an AI tool yet": "まだAIツールとの接続は行っていません",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Engramをウェブアプリで使用します。後で設定からツールを接続できます。",
+	"Help us shape Engram": "Engram の改善にご協力ください",
+	"Two quick questions. Both are optional.": "簡単な質問が2つあります。どちらも任意です。",
+	"Couldn't save your answers, please try again.":
+		"回答を保存できませんでした。もう一度お試しください。",
+	Skip: "スキップ",
+	Save: "保存",
 	Account: "アカウント",
 	"Manage your profile, password, and account.":
 		"プロフィール、パスワード、アカウントを管理します。",
@@ -993,7 +996,6 @@ export default {
 	"How your name appears in the app.": "アプリに表示される名前です",
 	"Display name": "表示名",
 	"Leave blank to use your email": "空欄にすると、メールアドレスが表示されます",
-	Save: "保存",
 	"Profile image updated": "プロフィール画像を更新しました",
 	"Could not update image": "画像の更新に失敗しました",
 	"Profile photo": "プロフィール写真",

@@ -823,6 +823,8 @@ export default {
 		"Das aktuelle Dokument ist momentan nicht verfügbar.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"Wir können die aktuellen Bedingungen im Moment nicht anzeigen, daher ist die Anmeldung vorübergehend pausiert, anstatt dich zu bitten, etwas zu akzeptieren, das du nicht lesen kannst. Bitte versuche es später noch einmal.",
+	"How did you hear about Engram?": "Wie hast du von Engram erfahren?",
+	"Pick one to continue.": "Wähle eine Option, um fortzufahren.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"Ich habe die Nutzungsbedingungen und die Datenschutzerklärung gelesen und akzeptiere sie",
 	"I have read and agree to the agreement shown above and the privacy notice":
@@ -865,9 +867,6 @@ export default {
 	"Connect another MCP client": "Einen anderen MCP-Client verbinden",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Ein Vault enthält deine Notizen. Du kannst ihn umbenennen oder später weitere hinzufügen.",
-	"How did you hear about Engram?": "Wie hast du von Engram erfahren?",
-	"Couldn't save your answers, please try again.":
-		"Deine Antworten konnten nicht gespeichert werden, bitte versuche es erneut.",
 	"Choose your plan": "Wähle deinen Plan",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"7-tägige kostenlose Testphase für kostenpflichtige Pläne. Kreditkarte erforderlich, keine Gebühr bis zum Ende.",
@@ -881,8 +880,6 @@ export default {
 	"Cancel connection": "Verbindung aufheben",
 	"Connecting {app}": "Verbindung zu {app} herstellen",
 	"Which AI tools do you use?": "Welche KI-Tools verwendest du?",
-	"We'll tailor your setup around the tools you already work with.":
-		"Wir passen deine Einrichtung an die Tools an, die du bereits verwendest.",
 	"AI assistants": "KI-Assistenten",
 	"Coding tools": "Programmier-Tools",
 	"Another MCP client": "Ein weiterer MCP-Client",
@@ -930,6 +927,12 @@ export default {
 	"I'm not connecting an AI tool yet": "Ich verbinde noch kein KI-Tool",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Nutze Engram in der Web-App. Du kannst später ein Tool in den Einstellungen verbinden.",
+	"Help us shape Engram": "Hilf uns, Engram zu verbessern",
+	"Two quick questions. Both are optional.": "Zwei kurze Fragen. Beide sind optional.",
+	"Couldn't save your answers, please try again.":
+		"Deine Antworten konnten nicht gespeichert werden, bitte versuche es erneut.",
+	Skip: "Überspringen",
+	Save: "Speichern",
 	Account: "Konto",
 	"Manage your profile, password, and account.":
 		"Verwalte dein Profil, dein Passwort und dein Konto.",
@@ -1017,7 +1020,6 @@ export default {
 	"How your name appears in the app.": "Wie dein Name in der App angezeigt wird.",
 	"Display name": "Anzeigename",
 	"Leave blank to use your email": "Leer lassen, um deine E-Mail-Adresse zu verwenden",
-	Save: "Speichern",
 	"Profile image updated": "Profilbild aktualisiert",
 	"Could not update image": "Bild konnte nicht aktualisiert werden",
 	"Profile photo": "Profilfoto",

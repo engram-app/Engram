@@ -189,41 +189,25 @@ test.describe("MCP-first signup resumes consent after onboarding", () => {
 			timeout: 10_000,
 		});
 
-		// 3. The step chain depends on `:billing_enabled`. SaaS runs
-		//    agreement → billing → tools → vault; with billing off, `terms_ok`
-		//    and `subscription_ok` auto-pass and `build_steps/2` yields only
-		//    tools → vault. Handle whichever this environment serves instead of
-		//    assuming, so the spec does not encode one deployment's config.
-		//
-		// The tool question must never render: the connecting client already
-		// answered it. Asserted before walking the wizard so a failed
-		// pre-answer reports as itself rather than as a later timeout.
-		expect(new URL(page.url()).pathname).not.toBe("/onboard/tools");
-
+		// 3. A connector signup's only step is the terms (SaaS). Accepting
+		//    them starts the account on Free and provisions its vault, so
+		//    there is no plan, tools, survey or vault step. With billing off
+		//    there is no terms step either and the wizard returns at once.
+		//    It is not asked how it heard about us: the client is the answer.
 		if (new URL(page.url()).pathname === "/onboard/agreement") {
+			await expect(page.getByRole("radio")).toHaveCount(0);
 			await page.getByLabel(/I have read and agree/iu).click();
 			await page.getByRole("button", { name: /^continue$/iu }).click();
-			await page.waitForURL(/\/onboard\/(?:billing|vault)/u, { timeout: 20_000 });
 		}
 
-		if (new URL(page.url()).pathname === "/onboard/billing") {
-			await page.getByRole("button", { name: /continue with free/iu }).click();
-		}
-
-		// 4. The vault step, reached without ever showing tools.
-		await page.waitForURL(/\/onboard\/vault/u, { timeout: 20_000 });
-		await page.getByRole("button", { name: /starting fresh/iu }).click();
-		await page.getByLabel(/vault name/iu).fill("E2E Consent Vault");
-		await page.getByRole("button", { name: /create vault & continue/iu }).click();
-
-		// 5. Returned to the authorization, with the request intact. `state` is
+		// 4. Returned to the authorization, with the request intact. `state` is
 		//    the whole point: an OAuth client rejects a callback whose state
 		//    does not match what it sent.
 		await page.waitForURL(/\/oauth\/consent/u, { timeout: 25_000 });
 		expect(new URL(page.url()).searchParams.get("state")).toBe(STATE);
 		expect(new URL(page.url()).searchParams.get("client_id")).toBe(clientId);
 
-		// 6. Approving now yields a code, which is what was impossible before.
+		// 5. Approving now yields a code, which is what was impossible before.
 		//
 		// Matched on PATHNAME, not a substring. The consent page's own URL
 		// carries `redirect_uri=...%2Foauth-callback-test`, so a loose regex

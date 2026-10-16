@@ -809,6 +809,8 @@ export default {
 	"The current agreement isn’t available right now.": "Perjanjian semasa tidak tersedia sekarang.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"Kami tidak dapat memaparkan terma terkini pada masa ini, jadi pendaftaran ditangguhkan daripada meminta anda bersetuju dengan sesuatu yang tidak dapat anda baca. Sila cuba lagi sebentar.",
+	"How did you hear about Engram?": "Bagaimana anda mengetahui tentang Engram?",
+	"Pick one to continue.": "Pilih satu untuk meneruskan.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"Saya telah membaca dan bersetuju dengan Terma Perkhidmatan dan Dasar Privasi",
 	"I have read and agree to the agreement shown above and the privacy notice":
@@ -851,9 +853,6 @@ export default {
 	"Connect another MCP client": "Sambungkan klien MCP lain",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Peti nota menyimpan nota anda. Anda boleh menamakan semula atau menambah lagi kemudian.",
-	"How did you hear about Engram?": "Bagaimana anda mengetahui tentang Engram?",
-	"Couldn't save your answers, please try again.":
-		"Tidak dapat menyimpan jawapan anda, sila cuba lagi.",
 	"Choose your plan": "Pilih pelan anda",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"Tempoh percubaan 7 hari untuk pelan berbayar. Kad diperlukan, tiada caj sehingga tamat.",
@@ -866,8 +865,6 @@ export default {
 	"Cancel connection": "Batalkan sambungan",
 	"Connecting {app}": "Menyambung {app}",
 	"Which AI tools do you use?": "Alat AI apa yang anda gunakan?",
-	"We'll tailor your setup around the tools you already work with.":
-		"Kami akan menyesuaikan persediaan anda berdasarkan alat yang sudah anda gunakan.",
 	"AI assistants": "Pembantu AI",
 	"Coding tools": "Alat pengkodan",
 	"Another MCP client": "Pelanggan MCP lain",
@@ -915,6 +912,12 @@ export default {
 	"I'm not connecting an AI tool yet": "Saya belum menyambungkan alat AI",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Gunakan Engram dalam aplikasi web. Anda boleh menyambungkan alat kemudian dari Tetapan.",
+	"Help us shape Engram": "Bantu kami membangunkan Engram",
+	"Two quick questions. Both are optional.": "Dua soalan ringkas. Kedua-duanya adalah pilihan.",
+	"Couldn't save your answers, please try again.":
+		"Tidak dapat menyimpan jawapan anda, sila cuba lagi.",
+	Skip: "Lompati",
+	Save: "Simpan",
 	Account: "Akaun",
 	"Manage your profile, password, and account.": "Urus profil, kata laluan dan akaun anda.",
 	"Manage your profile, security, and active sessions.":
@@ -996,7 +999,6 @@ export default {
 	"How your name appears in the app.": "Cara nama anda dipaparkan dalam aplikasi.",
 	"Display name": "Nama paparan",
 	"Leave blank to use your email": "Biarkan kosong untuk menggunakan alamat e-mel anda",
-	Save: "Simpan",
 	"Profile image updated": "Imej profil telah dikemas kini",
 	"Could not update image": "Tidak dapat mengemas kini imej",
 	"Profile photo": "Foto profil",

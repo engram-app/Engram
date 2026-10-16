@@ -770,6 +770,8 @@ export default {
 	"The current agreement isn’t available right now.": "目前無法提供最新協議。",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"我們目前無法顯示最新條款，因此暫停註冊，避免您同意無法閱讀的內容。請稍後再試。",
+	"How did you hear about Engram?": "你是從哪裡得知 Engram 的？",
+	"Pick one to continue.": "選擇一個繼續。",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"我已閱讀並同意服務條款和隱私權政策",
 	"I have read and agree to the agreement shown above and the privacy notice":
@@ -811,8 +813,6 @@ export default {
 	"Connect another MCP client": "連接其他 MCP 客戶端",
 	"A vault holds your notes. You can rename it or add more later.":
 		"儲存庫包含你的筆記。你可以稍後重新命名或新增更多。",
-	"How did you hear about Engram?": "你是從哪裡得知 Engram 的？",
-	"Couldn't save your answers, please try again.": "儲存答案失敗，請重試。",
 	"Choose your plan": "選擇方案",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"付費方案提供 7 天免費試用。需綁定信用卡，試用期滿後才會扣款。",
@@ -825,8 +825,6 @@ export default {
 	"Cancel connection": "取消連線",
 	"Connecting {app}": "連線 {app}",
 	"Which AI tools do you use?": "您使用哪些 AI 工具？",
-	"We'll tailor your setup around the tools you already work with.":
-		"我們會根據您已使用的工具來調整您的設定。",
 	"AI assistants": "AI 助理",
 	"Coding tools": "程式碼工具",
 	"Another MCP client": "另一個 MCP 客戶端",
@@ -871,6 +869,11 @@ export default {
 	"I'm not connecting an AI tool yet": "我目前沒有連接任何 AI 工具",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"在網頁應用程式中使用 Engram。您稍後可以在「設定」中連接工具。",
+	"Help us shape Engram": "幫助我們完善 Engram",
+	"Two quick questions. Both are optional.": "兩個簡單問題，皆為選項。",
+	"Couldn't save your answers, please try again.": "儲存答案失敗，請重試。",
+	Skip: "跳過",
+	Save: "儲存",
 	Account: "帳戶",
 	"Manage your profile, password, and account.": "管理你的個人資料、密碼與帳號。",
 	"Manage your profile, security, and active sessions.": "管理您的個人資料、安全設定和活躍會話。",
@@ -947,7 +950,6 @@ export default {
 	"How your name appears in the app.": "你在應用程式中顯示的姓名。",
 	"Display name": "顯示名稱",
 	"Leave blank to use your email": "留空則使用你的電子郵件",
-	Save: "儲存",
 	"Profile image updated": "個人資料圖片已更新",
 	"Could not update image": "無法更新圖片",
 	"Profile photo": "個人資料照片",

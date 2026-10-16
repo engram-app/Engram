@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { matchRoutes, RouterProvider } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import type { EngramConfig } from "./config";
-import { createAppRouter } from "./router";
+import { appRouterFor, createAppRouter, getAppRouter } from "./router";
 import { VAULT_PREFIX } from "./routes";
 import spaRoutes from "./spa-routes.json" with { type: "json" };
 
@@ -55,6 +55,17 @@ function renderAt(entry: string) {
 	window.history.pushState({}, "", entry);
 	return render(<RouterProvider router={createAppRouter(config)} />);
 }
+
+// Clerk navigates through getAppRouter(). If render builds a second router
+// (StrictMode double-invokes useMemo), Clerk drives one the screen never
+// shows and sign-up freezes on a blank shell until a reload.
+describe("appRouterFor - one router per config", () => {
+	it("returns the installed instance on every call", () => {
+		const first = appRouterFor(config);
+		expect(appRouterFor(config)).toBe(first);
+		expect(getAppRouter()).toBe(first);
+	});
+});
 
 describe("createAppRouter - settings overlay mount point", () => {
 	// The overlay must sit ABOVE AuthGuard's other children, not inside
@@ -122,6 +133,17 @@ function fullPaths(routes: RouteLike[], parent = ""): string[] {
 		return [...here, ...fullPaths(r.children ?? [], self)];
 	});
 }
+
+// The tools and about steps were removed from the wizard. A stale bookmark
+// or an old open tab must land back in the wizard, not on the 404 page.
+describe("createAppRouter - removed onboarding steps", () => {
+	it.each(["/onboard/tools", "/onboard/about"])("routes %s back to /onboard", (path) => {
+		const matches = matchRoutes(createAppRouter(config).routes, path) ?? [];
+		const leaf = matches.at(-1)?.route;
+		expect(leaf?.path).toBe("*");
+		expect(matches.some((m) => m.route.path === "/onboard")).toBe(true);
+	});
+});
 
 describe("createAppRouter - vault routes are namespaced under /v", () => {
 	const paths = fullPaths(createAppRouter(config).routes as RouteLike[]);

@@ -398,9 +398,9 @@ export default function BillingPage({
 	// onboarding status already past 'billing' AND has a paid subscription,
 	// fire onActivated synchronously instead of waiting on a push event
 	// (paid in another tab, browser-back, refresh). Only meaningful in
-	// onboarding mode. Skipped for Free users who deliberately re-visit
-	// /onboard/billing to upgrade — bouncing them back to the next step
-	// defeats the upgrade affordance.
+	// onboarding mode, which only an account stuck at the plan step (terms
+	// accepted before every signup started on Free) still reaches. Skipped
+	// for Free users, who are not bounced forward.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: mount-only synchronous cache check; qc identity is stable and onActivated is read via ref, and billing?.active is intentionally sampled on first paint only (the page renders Loading first anyway).
 	useEffect(() => {
 		if (!onActivatedRef.current) {

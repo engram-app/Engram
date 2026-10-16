@@ -265,7 +265,8 @@ function DeviceLinkPage() {
 			return;
 		}
 		// Arriving from the plugin answers the vault step's "do you already use
-		// Obsidian?", so answer it here. Once saved, the vault step sends them
+		// Obsidian?", so answer it here, and records where the signup started
+		// (it is not asked how it heard about us). Once saved, the vault step sends them
 		// straight back to /link instead of asking. Never overwrite an answer a
 		// returning user already gave (their gate can close for other reasons).
 		// A failed write only means the question gets asked, so it must never
@@ -273,7 +274,7 @@ function DeviceLinkPage() {
 		const preAnswer = answeredObsidian
 			? Promise.resolve()
 			: setProfile
-					.mutateAsync({ uses_obsidian: true })
+					.mutateAsync({ uses_obsidian: true, signup_source: "plugin" })
 					.catch((err: unknown) => console.warn("onboarding uses_obsidian pre-answer failed", err));
 		preAnswer.finally(() => navigate("/onboard", { replace: true }));
 	}, [gateOk, urlCode, answeredObsidian, navigate, setProfile]);
