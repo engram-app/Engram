@@ -63,7 +63,11 @@ defmodule EngramWeb.OnboardingControllerTest do
       assert body["next_step"] == "done"
     end
 
-    test "status forwards legal_notices", %{conn: conn} do
+    test "status forwards legal_notices", %{conn: conn, user: user} do
+      # A change is only news to an account that accepted an earlier version.
+      {:ok, _} =
+        Engram.Onboarding.accept_terms(user, "2026-05-15", "canonical", "2026-05-15", "p", %{})
+
       LegalFixtures.insert_version(
         document: "terms_of_service",
         version: "2026-06-01",

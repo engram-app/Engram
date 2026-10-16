@@ -512,8 +512,10 @@ defmodule Engram.Onboarding do
       open ->
         accepted = accepted_version(user, document)
 
+        # Never accepted (a signup): nothing has changed for them. They agree
+        # to the current text and meet the pending change in the app after.
         open
-        |> Enum.filter(&(is_nil(accepted) or &1.version > accepted))
+        |> Enum.filter(&(not is_nil(accepted) and &1.version > accepted))
         |> Enum.sort_by(&{not &1.material, Date.to_iso8601(&1.effective_date)})
         |> Enum.take(1)
         |> Enum.map(&notice_map/1)

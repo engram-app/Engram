@@ -51,6 +51,24 @@ defmodule Engram.Legal.LegalNoticesTest do
     assert Onboarding.status(user).legal_notices == [notice]
   end
 
+  # Nothing has changed for an account that never accepted a version: a
+  # signup agrees to the current text, then sees the pending change as a
+  # banner in the app.
+  test "a signup that never accepted anything gets no notice" do
+    publish(
+      document: "privacy_policy",
+      version: "2026-10-12",
+      material: false,
+      effective_date: ~D[2099-01-01]
+    )
+
+    publish(version: "2026-10-12", material: true, effective_date: ~D[2099-01-01])
+
+    signup = insert(:user, onboarding_profile: %{})
+    assert Onboarding.legal_notices(signup) == []
+    assert Onboarding.status(signup).legal_notices == []
+  end
+
   test "terms come before privacy when both are pending", %{user: user} do
     publish(
       document: "privacy_policy",

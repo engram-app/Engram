@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useStableT, useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import { notify } from "@/lib/notify";
@@ -78,7 +79,11 @@ export default function OnboardBillingPage() {
 	}
 
 	return (
-		<section className="m-auto max-h-full w-full max-w-2xl overflow-y-auto px-4 pt-5 pb-8 sm:pt-8">
+		<ScrollArea
+			// Scrolls inside itself, never the page: see AuthPanel.
+			className="m-auto flex max-h-full min-h-0 w-full max-w-2xl flex-col"
+			viewportClassName="h-auto min-h-0 flex-1 px-4 pt-5 pb-8 sm:pt-8"
+		>
 			<div
 				className={cn(
 					"rounded-2xl border p-4 sm:p-8",
@@ -130,6 +135,6 @@ export default function OnboardBillingPage() {
 					</section>
 				)}
 			</div>
-		</section>
+		</ScrollArea>
 	);
 }
