@@ -279,16 +279,16 @@ export default {
 	"Cancel the free trial below — you won't be charged. You can subscribe to the plan you want at any time.":
 		"Anuluj bezpłatny okres próbny poniżej – nie zostaniesz obciążony. Możesz wykupić wybrany plan w dowolnym momencie.",
 	"Cancel free trial": "Anuluj okres próbny",
-	"No charge today; next bill {total} on {renewal}":
-		"Brak opłaty dzisiaj; następna faktura {total} w dniu {renewal}",
-	"Charged {amount} today; next bill {total} on {renewal}":
-		"Opłacono {amount} dzisiaj; następna faktura {total} w dniu {renewal}",
-	"Credited {amount} today; next bill {total} on {renewal}":
-		"Dodano kredyt {amount} dzisiaj; następna faktura {total} w dniu {renewal}",
+	"No charge today. Next bill: {total} on {renewal}":
+		"Brak opłat dzisiaj. Kolejna faktura: {total} w dniu {renewal}",
+	"Charged {amount} today. Next bill: {total} on {renewal}":
+		"Pobrano {amount} dzisiaj. Kolejna faktura: {total} w dniu {renewal}",
+	"Credited {amount} today. Next bill: {total} on {renewal}":
+		"Dodano {amount} dzisiaj. Kolejna faktura: {total} w dniu {renewal}",
 	"Your free trial is already scheduled to cancel on {date}. You won't be charged. You can subscribe to the plan you want once your trial ends.":
 		"Twój bezpłatny okres próbny zostanie automatycznie zakończony {date}. Nie zostaniesz obciążony. Możesz wykupić plan, który chcesz, po zakończeniu okresu próbnego.",
 	"Use {action} right below the Current Plan section to reverse the cancellation.":
-		'Użyj {action} znajdującego się pod sekcją "Aktualny plan", aby anulować automatyczne wyłączenie.',
+		'Użyj {action} znajdującego się pod sekcją "Aktualny plan", aby odwrócić anulowanie.',
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Korzystasz z bezpłatnego okresu próbnego. Paddle, nasz procesor płatności, nie pozwala na zmiany planu podczas okresu próbnego – Twój okres próbny kończy się {date}.",
 	Upgrade: "Zaktualizuj",
@@ -448,13 +448,13 @@ export default {
 	'No vaults match "{filter}".': 'Brak sejfów pasujących do "{filter}".',
 	"Or create a new vault": "Lub utwórz nowy sejf",
 	"Create your first vault": "Utwórz swój pierwszy sejf",
-	"the device syncing your '{vault}' vault on {os} (last active {since})":
-		"urząd synchronizujący twój sejf '{vault}' na {os} (ostatnia aktywność: {since})",
-	"the device syncing your '{vault}' vault on {os}":
-		"urząd synchronizujące twój sejf '{vault}' na {os}",
-	"the device syncing your '{vault}' vault (last active {since})":
-		"urząd synchronizujące twój sejf '{vault}' (ostatnia aktywność: {since})",
-	"the device syncing your '{vault}' vault": "urząd synchronizujące twój sejf '{vault}'",
+	"the device on {os} that syncs your '{vault}' vault (last active {since})":
+		"urządzenie na {os}, które synchronizuje twój sejf '{vault}' (ostatnio aktywne {since})",
+	"the device on {os} that syncs your '{vault}' vault":
+		"urządzenie na {os}, które synchronizuje twój sejf '{vault}'",
+	"the device that syncs your '{vault}' vault (last active {since})":
+		"urządzenie synchronizujące twój sejf '{vault}' (ostatnio aktywny {since})",
+	"the device that syncs your '{vault}' vault": "urządzenie synchronizujące twój sejf '{vault}'",
 	"on {os} (last active {since})": "na {os} (ostatnia aktywność: {since})",
 	"on {os}": "na {os}",
 	"(last active {since})": "(ostatnia aktywność: {since})",
@@ -726,8 +726,8 @@ export default {
 	Created: "Utworzono",
 	"We index each note's {type} separately, so adding one to your notes can improve your searches. Filter to a type here to look only at notes of that kind.":
 		"Indeksujemy każdą {type} oddzielnie, więc dodanie jej do twoich notatek może poprawić wyszukiwanie. Filtruj według typu, aby wyświetlać tylko notatki danego rodzaju.",
-	"It is also the one field required by the {okf}, the open standard Engram follows — so filling it in keeps your notes portable to anything else that reads OKF.":
-		"Jest to również jedno pole wymagane przez {okf}, otwarty standard Engram go wymaga — więc wypełnienie go sprawia, że twoje notatki są przenośne do innych programów, które obsługują OKF.",
+	"It is also the one field required by the {okf}, an open standard that Engram follows. Filling it in keeps your notes portable to any other app that reads OKF.":
+		"To również jedno pole wymagane przez {okf}, otwarty standard, którego przestrzega Engram. Wypełnienie go sprawia, że Twoje notatki są przenośne do dowolnej innej aplikacji, która odczytuje OKF.",
 	"{count} results": {
 		one: "{count} wynik",
 		few: "{count} wyniki",
@@ -887,7 +887,7 @@ export default {
 	"Finish setup": "Zakończ konfigurację",
 	"Open setup checklist, {remaining} remaining":
 		"Otwórz listę kontrolną konfiguracji, pozostało {remaining}",
-	"Steps left to finish setting up Engram": "Pozostało Engram kroków do zakończenia konfiguracji",
+	"Steps left to finish setup": "Pozostałe kroki do zakończenia konfiguracji",
 	"Onboarding checklist": "Lista kontrolna wprowadzania",
 	"Dismiss checklist": "Zamknij listę kontrolną",
 	"{completed} of {total} done": "{completed} z {total} zrobione",
@@ -912,7 +912,7 @@ export default {
 	"Connect Antigravity": "Połącz z Antigravity",
 	"Connect another MCP client": "Połącz z innym klientem MCP",
 	"A vault holds your notes. You can rename it or add more later.":
-		"Sejf przechowuje twoje notatki. Możesz go później zmienić nazwę lub dodać więcej.",
+		"Sejf przechowuje twoje notatki. Możesz później zmienić jego nazwę lub dodać więcej.",
 	"How did you hear about Engram?": "Skąd dowiedziałeś się o Engram?",
 	"Couldn't save your answers, please try again.":
 		"Nie udało się zapisać odpowiedzi, spróbuj ponownie.",
@@ -946,7 +946,7 @@ export default {
 		"Zainstaluj nasz wtyczek, a Twoje istniejące notatki zostaną zsynchronizowane przy pierwszym połączeniu.",
 	"I'm starting fresh": "Zaczynam od nowa",
 	"We'll create your first vault right now. You can rename it or add more later from settings.":
-		"Utworzymy Twój pierwszy sejf teraz. Możesz go później zmienić nazwę lub dodać więcej z ustawień.",
+		"Utworzymy twój pierwszy sejf teraz. Możesz później zmienić jego nazwę lub dodać więcej w ustawieniach.",
 	"Install the Engram Vault Sync plugin": "Zainstaluj wtyczkę Engram Vault Sync",
 	"Settings → Community plugins → Browse": "Ustawienia → Wtyczki społecznościowe → Przeglądaj",
 	"plugin listing": "Lista wtyczek",
@@ -955,7 +955,7 @@ export default {
 		"Użyj tego samego adresu URL, którego użyłeś, aby przejść do tej strony.",
 	"☁️ Cloud": "☁️ Chmura",
 	"Pick a vault to sync. The plugin creates a matching Engram vault and pushes your existing files.":
-		"Wybierz sejf do synchronizacji. Wtyczka utworzy odpowiadający sejf Engram i przesłanie twoich istniejących plików.",
+		"Wybierz sejf do synchronizacji. Wtyczka tworzy odpowiadający Engram sejf i przesyła twoje istniejące pliki.",
 	"Waiting for the plugin to sign in…": "Czekam na zalogowanie wtyczki…",
 	"Vault detected. Waiting for your first sync…":
 		"Sejf wykryty. Czekam na pierwszą synchronizację…",
@@ -1004,8 +1004,8 @@ export default {
 		"Akcje nieodwracalne. Usunięcie konta wyloguje cię i zablokuje przyszłe logowania dla tego użytkownika.",
 	"Delete account": "Usuń konto",
 	"Delete your account?": "Czy chcesz usunąć swoje konto?",
-	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"To usuwa Twoje konto. Nie będziesz mógł ponownie się zalogować. Administrator może później usunąć dane z Twojego sejfu.",
+	"This deletes your account, and you won't be able to sign back in. Your vault data stays until an admin removes it.":
+		"To usunie Twoje konto i nie będziesz mógł się ponownie zalogować. Dane Twojego sejfu pozostaną do czasu usunięcia przez administratora.",
 	"I understand this is irreversible": "Rozumiem, że to działanie jest nieodwracalne",
 	Delete: "Usuń",
 	"Could not delete account": "Nie udało się usunąć konta",
@@ -1337,10 +1337,10 @@ export default {
 	"Add property": "Dodaj właściwość",
 	"Properties are the note's {frontmatter}: a block at the very top of the file, fenced by {fence}. Obsidian shows the same block as Properties, so a note edited in either place reads the same in both.":
 		"Atrybuty to {frontmatter} notatki: blok na samym początku pliku, otoczony {fence}. Obsidian wyświetla ten sam blok, co Atrybuty, więc edycja notatki w dowolnym miejscu powoduje, że jest ona taka sama w obu miejscach.",
-	"Any property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
-		"Każda dodana właściwość jest przechowywana i synchronizowana. Są to właściwości, które Engram również {reads} – są one indeksowane w oddzielnych kolumnach, a wyszukiwanie ich używa, więc ich wypełnienie robi więcej niż tylko zapisuje notatkę o notatce:",
-	"These field names come from the {okf}, the open standard Engram follows — so using them keeps your notes portable to anything else that reads OKF. Any other name is yours to invent; it syncs like everything else.":
-		"Te nazwy pól pochodzą z {okf}, otwartego standardu Engram – ich używanie zapewnia, że Twoje notatki są przenośne do innych systemów, które obsługują OKF. Możesz wymyślić własne nazwy; synchronizują się one tak jak wszystko inne.",
+	"Every property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
+		"Każda właściwość, którą dodasz, jest przechowywana i synchronizowana. Są to właściwości, które Engram również {reads} – są one indeksowane w oddzielnych kolumnach, a wyszukiwanie ich używa, więc ich wypełnienie robi więcej niż tylko zapisuje notatkę o notatce:",
+	"These field names come from the {okf}, an open standard that Engram follows. Using them keeps your notes portable to any other app that reads OKF. Any other name is yours to invent; it syncs like everything else.":
+		"Te nazwy pól pochodzą z {okf}, otwartego standardu, którego przestrzega Engram. Używanie ich sprawia, że Twoje notatki są przenośne do dowolnej innej aplikacji, która odczytuje OKF. Dowolną inną nazwę możesz wymyślić sam; synchronizuje się ona tak jak wszystko inne.",
 	"{label} value": "Wartość {label}",
 	"Remove {item}": "Usuń {item}",
 	"Add item...": "Dodaj element...",
@@ -1398,7 +1398,7 @@ export default {
 	"Claim.": "Zgoda.",
 	"Source.": "Źródło.",
 	"Shipped on time.": "Dostarczone na czas.",
-	"For a generous value of on time.": "Za hojną cenę, czyli na czas.",
+	"Well, almost.": "No, prawie.",
 	"the runbook": "instrukcja",
 	"Engram docs": "Engram dokumenty",
 	"text if it can't load": "tekst, jeśli nie można załadować",
@@ -1440,7 +1440,8 @@ export default {
 	"Escape a mark": "Escaping znaku",
 	"A backslash makes the next punctuation mark literal, so it shows up instead of formatting. Works on any of them: \\* \\_ \\# \\` \\[ \\] and the rest.":
 		"Odwrotny ukośnik traktuje następujący znak interpunkcyjny jako dosłowny, więc jest wyświetlany zamiast formatowania. Działa to dla każdego z nich: \\* \\_ \\# \\` \\[ \\] i innych.",
-	"Which characters can be escaped": 'Jakie znaki można "escapować"',
+	"Characters that need a backslash to show as plain text":
+		"Znaki, które wymagają znaku ukośnika, aby wyświetlić się jako zwykły tekst",
 	Headings: "Nagłówki",
 	Structure: "Struktura",
 	"Task list": "Lista zadań",

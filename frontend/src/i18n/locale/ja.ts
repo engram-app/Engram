@@ -214,7 +214,7 @@ export default {
 	"Your plan changes on {date}": "料金プランは{date}に変わります",
 	"Your plan cancels on {date}": "料金プランは{date}に解約されます",
 	"Your plan pauses on {date}": "料金プランは{date}に一時停止されます",
-	"Your plan resumes on {date}": "料金プランは{date}に再開されます",
+	"Your plan resumes on {date}": "プランは{date}に再開されます",
 	"{price}/mo": "{price}/月",
 	"{price}/yr": "{price}/年",
 	"Billing cadence": "支払いサイクル",
@@ -271,12 +271,12 @@ export default {
 	"Cancel the free trial below — you won't be charged. You can subscribe to the plan you want at any time.":
 		"下記から無料トライアルをキャンセルします。料金は発生しません。いつでもお好きなプランに登録できます。",
 	"Cancel free trial": "無料トライアルをキャンセル",
-	"No charge today; next bill {total} on {renewal}":
-		"本日は無料。次回の請求は {total} の {renewal} に",
-	"Charged {amount} today; next bill {total} on {renewal}":
-		"本日は {amount} 請求済み。次回の請求は {total} の {renewal} に",
-	"Credited {amount} today; next bill {total} on {renewal}":
-		"本日は {amount} 払い戻し済み。次回の請求は {total} の {renewal} に",
+	"No charge today. Next bill: {total} on {renewal}":
+		"本日は無料です。次回の請求: {total} の {renewal}",
+	"Charged {amount} today. Next bill: {total} on {renewal}":
+		"本日、{amount} 請求しました。次回の請求: {total} の {renewal}",
+	"Credited {amount} today. Next bill: {total} on {renewal}":
+		"本日、{amount} クレジットしました。次回の請求: {total} の {renewal}",
 	"Your free trial is already scheduled to cancel on {date}. You won't be charged. You can subscribe to the plan you want once your trial ends.":
 		"無料トライアルは {date} に自動的にキャンセルされます。料金は発生しません。トライアル終了後、お好きなプランに登録できます。",
 	"Use {action} right below the Current Plan section to reverse the cancellation.":
@@ -458,13 +458,13 @@ export default {
 	"(choose from {count} vaults)": "( {count} 個の保管庫から選択)",
 	"Or create a new vault": "または、新しい保管庫を作成します",
 	"Create your first vault": "最初の保管庫を作成します",
-	"the device syncing your '{vault}' vault on {os} (last active {since})":
-		"{os}で'{vault}'の保管庫を同期しているデバイス (最終アクティブ: {since})",
-	"the device syncing your '{vault}' vault on {os}":
-		"{os}で'{vault}'の保管庫を同期しているデバイス",
-	"the device syncing your '{vault}' vault (last active {since})":
-		"'{vault}'の保管庫を同期しているデバイス (最終アクティブ: {since})",
-	"the device syncing your '{vault}' vault": "'{vault}'の保管庫を同期しているデバイス",
+	"the device on {os} that syncs your '{vault}' vault (last active {since})":
+		"{os}に同期している'{vault}'という保管庫のデバイス (最終アクティブ: {since})",
+	"the device on {os} that syncs your '{vault}' vault":
+		"{os}で同期している'{vault}'という保管庫を持つデバイス",
+	"the device that syncs your '{vault}' vault (last active {since})":
+		"{vault} 保管庫との同期デバイス (最終アクティブ: {since})",
+	"the device that syncs your '{vault}' vault": "'{vault}' 保管庫と同期しているデバイス",
 	"on {os} (last active {since})": "{os} (最終アクティブ: {since})",
 	"on {os}": "{os}",
 	"(last active {since})": "(最終アクティブ: {since})",
@@ -706,8 +706,8 @@ export default {
 	Created: "作成",
 	"We index each note's {type} separately, so adding one to your notes can improve your searches. Filter to a type here to look only at notes of that kind.":
 		"各ノートの {type} を個別にインデックス化するため、ノートを追加すると検索が向上します。ここで種類を絞り込むと、その種類のノートのみが表示されます。",
-	"It is also the one field required by the {okf}, the open standard Engram follows — so filling it in keeps your notes portable to anything else that reads OKF.":
-		"これは、Engramが準拠するオープンスタンダードである {okf} で必須の項目でもあります。入力することで、ノートを他のOKF対応のシステムでも利用できるようになります。",
+	"It is also the one field required by the {okf}, an open standard that Engram follows. Filling it in keeps your notes portable to any other app that reads OKF.":
+		"これは、{okf}（オープンスタンダード）で必須の項目であり、Engram が準拠しています。入力することで、ノートを他の OKF 対応アプリでも利用できるようになります。",
 	"{count} results": { other: "{count}件の結果" },
 	"Sidebar views": "サイドバー表示",
 	"User menu": "ユーザーメニュー",
@@ -848,7 +848,7 @@ export default {
 	"Finish setup": "セットアップ完了",
 	"Open setup checklist, {remaining} remaining":
 		"セットアップチェックリストを開く、{remaining} 残り",
-	"Steps left to finish setting up Engram": "Engramの設定を完了するためのステップ",
+	"Steps left to finish setup": "セットアップ完了までのステップ",
 	"Onboarding checklist": "オンボーディングチェックリスト",
 	"Dismiss checklist": "チェックリストを閉じる",
 	"{completed} of {total} done": "{completed} / {total} 完了",
@@ -964,8 +964,8 @@ export default {
 		"永続的な操作です。アカウントを削除すると、サインアウトされ、このユーザーによる今後のサインインがブロックされます。",
 	"Delete account": "アカウントを削除",
 	"Delete your account?": "アカウントを削除しますか？",
-	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"この操作により、ユーザーアカウントが削除されます。再ログインできなくなります。管理者が後で保管庫のデータを完全に削除する場合があります。",
+	"This deletes your account, and you won't be able to sign back in. Your vault data stays until an admin removes it.":
+		"この操作でアカウントを削除します。再ログインはできません。保管庫のデータは、管理者が削除するまで保持されます。",
 	"I understand this is irreversible": "これは取り消しできないことを理解しています",
 	Delete: "削除",
 	"Could not delete account": "アカウントの削除に失敗しました",
@@ -1290,10 +1290,10 @@ export default {
 	"Add property": "プロパティを追加",
 	"Properties are the note's {frontmatter}: a block at the very top of the file, fenced by {fence}. Obsidian shows the same block as Properties, so a note edited in either place reads the same in both.":
 		"プロパティはノートの {frontmatter} です。ファイルの一番上にあり、{fence} で囲まれています。Obsidian も同じブロックをプロパティとして表示するため、どちらで編集してもノートの内容は同じになります。",
-	"Any property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
-		"追加するプロパティは保存され、同期されます。Engram もこれらのプロパティを {reads} – 独自の列にインデックス化し、検索にも使用されます。そのため、プロパティに入力すると、単にノートに関する情報を記録するだけでなく、より多くのことが実現できます。",
-	"These field names come from the {okf}, the open standard Engram follows — so using them keeps your notes portable to anything else that reads OKF. Any other name is yours to invent; it syncs like everything else.":
-		"これらのフィールド名は、Engram が準拠するオープンスタンダードである {okf} から取られています。そのため、これらの名前を使用すると、ノートを他の OKF 互換のシステムでも利用できるようになります。他の名前を使用することも可能で、その場合も他のデータと同様に同期されます。",
+	"Every property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
+		"追加するすべてのプロパティは保存され、同期されます。これらは Engram でも {reads} として扱われます。Engram はこれらを独自の列としてインデックス化し、検索もこれを利用します。そのため、入力することで、単にノートに関する情報を記録するだけでなく、より多くの情報を提供できます。",
+	"These field names come from the {okf}, an open standard that Engram follows. Using them keeps your notes portable to any other app that reads OKF. Any other name is yours to invent; it syncs like everything else.":
+		"これらのフィールド名は、{okf}（オープンスタンダード）に由来し、Engram が準拠しています。これを使用することで、ノートを他の OKF 対応アプリでも利用できるようになります。他の名前を使用することも可能で、それも同期されます。",
 	"{label} value": "{label} の値",
 	"Remove {item}": "{item} を削除",
 	"Add item...": "アイテムを追加...",
@@ -1351,7 +1351,7 @@ export default {
 	"Claim.": "確認。",
 	"Source.": "参照元。",
 	"Shipped on time.": "予定通り発送。",
-	"For a generous value of on time.": "「予定通り」という寛大な解釈で。",
+	"Well, almost.": "まあ、ほぼ。",
 	"the runbook": "運用マニュアル",
 	"Engram docs": "Engram ドキュメント",
 	"text if it can't load": "読み込めない場合のメッセージ",
@@ -1393,7 +1393,8 @@ export default {
 	"Escape a mark": "特殊文字のエスケープ",
 	"A backslash makes the next punctuation mark literal, so it shows up instead of formatting. Works on any of them: \\* \\_ \\# \\` \\[ \\] and the rest.":
 		"バックスラッシュを使うと、次の記号がそのまま表示されます。記号としてではなく、文字として扱われます。これは、\\* \\_ \\# \\` \\[ \\] など、すべての記号に適用されます。",
-	"Which characters can be escaped": "エスケープできる文字",
+	"Characters that need a backslash to show as plain text":
+		"通常テキストとして表示するためにバックスラッシュが必要な文字",
 	Headings: "見出し",
 	Structure: "構造",
 	"Task list": "タスクリスト",

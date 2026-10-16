@@ -299,16 +299,16 @@ function formatProration(
 	// tier) come back as 0 — "Credited $0.00 today" reads as a billing
 	// mistake. Make the no-op explicit.
 	if (data.immediate_charge_or_credit === 0) {
-		return t("No charge today; next bill {total} on {renewal}", { total: newTotal, renewal });
+		return t("No charge today. Next bill: {total} on {renewal}", { total: newTotal, renewal });
 	}
 	const amount = formatCents(Math.abs(data.immediate_charge_or_credit));
 	return data.immediate_charge_or_credit > 0
-		? t("Charged {amount} today; next bill {total} on {renewal}", {
+		? t("Charged {amount} today. Next bill: {total} on {renewal}", {
 				amount,
 				total: newTotal,
 				renewal,
 			})
-		: t("Credited {amount} today; next bill {total} on {renewal}", {
+		: t("Credited {amount} today. Next bill: {total} on {renewal}", {
 				amount,
 				total: newTotal,
 				renewal,

@@ -153,6 +153,18 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
 		"Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 	"Edit access for {name}":
 		"Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
+	// Meaning check, 2026-10-16: "device" came back as an office (pl) and the label
+	// as a full sentence (ja). Other misread sources were reworded instead.
+	"Your plan resumes on {date}":
+		"Billing banner: a subscription that was set to cancel becomes active again on this date.",
+	"the device on {os} that syncs your '{vault}' vault (last active {since})":
+		"Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
+	"the device on {os} that syncs your '{vault}' vault":
+		"Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
+	"the device that syncs your '{vault}' vault (last active {since})":
+		"Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
+	"the device that syncs your '{vault}' vault":
+		"Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 	// Email strings (priv/i18n/email). zh/ja greeted with a casual "嗨" while the
 	// body used the polite form.
 	"Hi,":

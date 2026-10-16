@@ -374,7 +374,7 @@ function SearchPanel({
 									<br />
 									<br />
 									<Trans
-										text="It is also the one field required by the {okf}, the open standard Engram follows — so filling it in keeps your notes portable to anything else that reads OKF."
+										text="It is also the one field required by the {okf}, an open standard that Engram follows. Filling it in keeps your notes portable to any other app that reads OKF."
 										slots={{
 											okf: (
 												<a

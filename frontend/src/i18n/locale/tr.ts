@@ -218,7 +218,7 @@ export default {
 	"Your plan changes on {date}": "Planınız {date} tarihinde değişecek",
 	"Your plan cancels on {date}": "Planınız {date} tarihinde iptal edilecek",
 	"Your plan pauses on {date}": "Planınız {date} tarihinde durdurulacak",
-	"Your plan resumes on {date}": "Aboneliğiniz {date} tarihinde başlıyor",
+	"Your plan resumes on {date}": "Planınız {date} tarihinde yeniden başlıyor",
 	"{price}/mo": "{price} /ay",
 	"{price}/yr": "{price} /yıl",
 	"Billing cadence": "Ödeme sıklığı",
@@ -275,12 +275,12 @@ export default {
 	"Cancel the free trial below — you won't be charged. You can subscribe to the plan you want at any time.":
 		"Aşağıdaki ücretsiz denemeyi iptal edin — ücretlendirilmeyeceksiniz. İstediğiniz zaman herhangi bir plana abone olabilirsiniz.",
 	"Cancel free trial": "Ücretsiz denemeyi iptal et",
-	"No charge today; next bill {total} on {renewal}":
-		"Bugün herhangi bir ücret yok; sonraki fatura {total} tarihinde {renewal} olacak",
-	"Charged {amount} today; next bill {total} on {renewal}":
-		"Bugün {amount} ücretlendirildiniz; sonraki fatura {total} tarihinde {renewal} olacak",
-	"Credited {amount} today; next bill {total} on {renewal}":
-		"Bugün {amount} tutuldu; sonraki fatura {total} tarihinde {renewal}",
+	"No charge today. Next bill: {total} on {renewal}":
+		"Bugün herhangi bir ücret yok. Bir sonraki fatura: {total}, {renewal} tarihinde",
+	"Charged {amount} today. Next bill: {total} on {renewal}":
+		"Bugün {amount} ücretlendirildi. Bir sonraki fatura: {total}, {renewal} tarihinde",
+	"Credited {amount} today. Next bill: {total} on {renewal}":
+		"Bugün {amount} iade edildi. Bir sonraki fatura: {total}, {renewal} tarihinde",
 	"Your free trial is already scheduled to cancel on {date}. You won't be charged. You can subscribe to the plan you want once your trial ends.":
 		"Ücretsiz denemeniz {date} tarihinde otomatik olarak iptal olacak. Ücretlendirilmeyeceksiniz. Denemeniz bittikten sonra istediğiniz plana abone olabilirsiniz.",
 	"Use {action} right below the Current Plan section to reverse the cancellation.":
@@ -434,13 +434,13 @@ export default {
 	'No vaults match "{filter}".': '"{filter}" ile eşleşen kasa bulunamadı.',
 	"Or create a new vault": "Veya yeni bir kasa oluşturun",
 	"Create your first vault": "İlk kasanızı oluşturun",
-	"the device syncing your '{vault}' vault on {os} (last active {since})":
-		"{os} üzerindeki '{vault}' kasanızı senkronize eden cihaz (son aktif: {since})",
-	"the device syncing your '{vault}' vault on {os}":
-		"{os} üzerindeki '{vault}' kasanızı senkronize eden cihaz",
-	"the device syncing your '{vault}' vault (last active {since})":
-		"'{vault}' kasanızı senkronize eden cihaz (son aktif: {since})",
-	"the device syncing your '{vault}' vault": "'{vault}' kasanızı senkronize eden cihaz",
+	"the device on {os} that syncs your '{vault}' vault (last active {since})":
+		"{os} ile senkronize edilen '{vault}' kasası (son kullanım {since})",
+	"the device on {os} that syncs your '{vault}' vault":
+		"{os} ile senkronize edilen '{vault}' kasası olan cihaz",
+	"the device that syncs your '{vault}' vault (last active {since})":
+		"'{vault}' kasanızı senkronize eden cihaz (son aktif {since})",
+	"the device that syncs your '{vault}' vault": "'{vault}' kasanızı senkronize eden cihaz",
 	"on {os} (last active {since})": "{os} üzerinde (son aktif: {since})",
 	"on {os}": "{os} üzerinde",
 	"(last active {since})": "(son aktif: {since})",
@@ -525,7 +525,7 @@ export default {
 	admin: "yönetici",
 	member: "üye",
 	suspended: "askıya alındı",
-	"Delete {email} + their vault data?": "{email} ve kasasını sil?",
+	"Delete {email} + their vault data?": "{email} ve kasa verilerini sil?",
 	"Confirm delete": "Silmeyi onaylayın",
 	"Cannot change your own role": "Kendi rolünüzü değiştiremezsiniz",
 	"Demote to member": "Üyeye düşür",
@@ -551,7 +551,7 @@ export default {
 	"Exactly what is sent": "Tam olarak ne gönderiliyor",
 	"Disabled by this instance's environment ({env}). Nothing is sent.":
 		"Bu uygulamanın ortamı tarafından devre dışı ({env}). Hiçbir şey gönderilmiyor.",
-	"This reset link is missing its token.": "Bu sıfırlama bağlantısı tokenini eksik.",
+	"This reset link is missing its token.": "Bu sıfırlama bağlantısı token'ını eksik.",
 	"This reset link is invalid or expired.": "Bu sıfırlama bağlantısı geçersiz veya süresi dolmuş.",
 	"Could not reset password": "Şifreyi sıfırlanamadı",
 	"Could not reach the server": "Sunucuya ulaşılamadı",
@@ -685,8 +685,8 @@ export default {
 	Created: "Oluşturuldu",
 	"We index each note's {type} separately, so adding one to your notes can improve your searches. Filter to a type here to look only at notes of that kind.":
 		"Her {type} notunu ayrı ayrı indeksliyoruz, bu nedenle birini notlarınıza eklemek, aramalarınızı iyileştirebilir. Sadece belirli türdeki notları görmek için burada bir tür seçin.",
-	"It is also the one field required by the {okf}, the open standard Engram follows — so filling it in keeps your notes portable to anything else that reads OKF.":
-		"Bu alan aynı zamanda {okf} tarafından zorunlu tutulan, açık standart olan Engram tarafından da gereklidir; bu nedenle doldurmak, notlarınızı OKF'yi okuyabilen diğer uygulamalarda da kullanılabilir hale getirir.",
+	"It is also the one field required by the {okf}, an open standard that Engram follows. Filling it in keeps your notes portable to any other app that reads OKF.":
+		"Bu, {okf} tarafından zorunlu tutulan alandır; Engram bu açık standardı takip eder. Bu alanı doldurmak, notlarınızı OKF okuyan herhangi bir uygulamaya aktarmanızı sağlar.",
 	"{count} results": { one: "{count} sonuç", other: "{count} sonuç" },
 	"Sidebar views": "Yan panel görünümleri",
 	"User menu": "Kullanıcı menüsü",
@@ -728,7 +728,7 @@ export default {
 	"Charge prorated amount now": "Tutarı şimdi tahsil et",
 	"Charge full amount now": "Tam tutarı şimdi tahsil et",
 	"Prorated at next billing": "Bir sonraki faturada oransal olarak",
-	"Full charge at next billing": "Bir sonraki faturada tam olarak",
+	"Full charge at next billing": "Sonraki fatura döneminde tam ücret",
 	"{count} days": { one: "{count} gün", other: "{count} gün" },
 	"{count} weeks": { one: "{count} hafta", other: "{count} hafta" },
 	"{count} months": { one: "{count} ay", other: "{count} ay" },
@@ -822,7 +822,7 @@ export default {
 	"Finish setup": "Kurulumu tamamlayın",
 	"Open setup checklist, {remaining} remaining":
 		"Kurulum kontrol listesini açın, {remaining} adım kaldı",
-	"Steps left to finish setting up Engram": "Kurulumu tamamlamak için kalan Engram adım",
+	"Steps left to finish setup": "Kurulumu tamamlamak için kalan adımlar",
 	"Onboarding checklist": "Tanıtım kontrol listesi",
 	"Dismiss checklist": "Kontrol listesini kapatın",
 	"{completed} of {total} done": "{completed} / {total} tamamlandı",
@@ -937,8 +937,8 @@ export default {
 		"Kalıcı işlemler. Hesabınızı silmek, sizi çıkış yapmaya zorlar ve bu kullanıcı için gelecekteki girişleri engeller.",
 	"Delete account": "Hesap sil",
 	"Delete your account?": "Hesabınızı silmek ister misiniz?",
-	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"Bu işlem kullanıcı hesabınızı siler. Tekrar giriş yapamazsınız. Bir yönetici daha sonra kasadaki verilerinizi silebilir.",
+	"This deletes your account, and you won't be able to sign back in. Your vault data stays until an admin removes it.":
+		"Bu, hesabınızı siler ve tekrar giriş yapamazsınız. Kasa verileriniz, bir yönetici tarafından silinene kadar saklanır.",
 	"I understand this is irreversible": "Bu işlemin geri alınamaz olduğunu anlıyorum",
 	Delete: "Sil",
 	"Could not delete account": "Hesap silinemedi",
@@ -1253,10 +1253,10 @@ export default {
 	"Add property": "Özellik ekle",
 	"Properties are the note's {frontmatter}: a block at the very top of the file, fenced by {fence}. Obsidian shows the same block as Properties, so a note edited in either place reads the same in both.":
 		"Özellikler, notun {frontmatter} kısmıdır: dosyanın en üstündeki, {fence} ile çevrili blok. Obsidian, Özellikler bloğunu gösterir, bu nedenle bir notun her iki yerde düzenlenmesi, her iki yerde de aynı şekilde görünmesini sağlar.",
-	"Any property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
-		"Eklemediğiniz her özellik kaydedilir ve senkronize edilir. Bunlar, Engram tarafından da {reads} olarak kabul edilir - bunlar kendi sütunlarına indekslenir ve arama bunları kullanır, bu nedenle bunları doldurmak, sadece not hakkında bir not kaydetmekten daha fazlasını yapar:",
-	"These field names come from the {okf}, the open standard Engram follows — so using them keeps your notes portable to anything else that reads OKF. Any other name is yours to invent; it syncs like everything else.":
-		"Bu alan adları, {okf}'dan gelir; açık standart olan Engram tarafından kullanılır - bu nedenle bunları kullanmak, notlarınızı OKF'yi okuyan diğer sistemlerle uyumlu hale getirir. Başka bir ad kullanabilirsiniz; bu da her şey gibi senkronize olur.",
+	"Every property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
+		"Eklemiş olduğunuz her özellik kaydedilir ve senkronize edilir. Bunlar, Engram tarafından da {reads} — bunlar kendi sütunlarına indekslenir ve arama bunları kullanır, bu nedenle bunları doldurmak, sadece bir not hakkında bilgi kaydetmekten daha fazlasını yapar:",
+	"These field names come from the {okf}, an open standard that Engram follows. Using them keeps your notes portable to any other app that reads OKF. Any other name is yours to invent; it syncs like everything else.":
+		"Bu alan adları, {okf} tarafından belirlenen, Engram tarafından takip edilen açık bir standarttan gelir. Bunları kullanmak, notlarınızı OKF okuyan herhangi bir uygulamaya aktarmanızı sağlar. Başka bir ad kullanabilirsiniz; bu da diğer her şey gibi senkronize olur.",
 	"{label} value": "{label} değeri",
 	"Remove {item}": "{item} kaldır",
 	"Add item...": "Öğeyi ekle...",
@@ -1279,7 +1279,7 @@ export default {
 	"Search markdown syntax": "Markdown sözdizimini ara",
 	"Search syntax…": "Sözdizimini ara…",
 	"About markdown": "Markdown hakkında",
-	"Open a note to insert snippets.": "Kısa notları eklemek için bir not açın.",
+	"Open a note to insert snippets.": "Parçacıkları eklemek için bir not açın.",
 	"No syntax matches “{query}”.": '"{query}" ile eşleşen sözdizimi bulunamadı.',
 	"A Markdown-formatted document should be publishable as-is, as plain text, without looking like it's been marked up with tags or formatting instructions.":
 		"Markdown formatındaki bir belge, etiketler veya biçimlendirme talimatları içerdiği görünmeden, olduğu gibi, düz metin olarak yayınlanabilir olmalıdır.",
@@ -1314,7 +1314,7 @@ export default {
 	"Claim.": "İddia.",
 	"Source.": "Kaynak.",
 	"Shipped on time.": "Zamanında gönderildi.",
-	"For a generous value of on time.": "Zamanında teslimatın cömert değeri.",
+	"Well, almost.": "Neredeyse.",
 	"the runbook": "çalışma kılavuzu",
 	"Engram docs": "Engram dokümanları",
 	"text if it can't load": "yüklenemezse görünen metin",
@@ -1356,7 +1356,8 @@ export default {
 	"Escape a mark": "Bir işareti iptal et",
 	"A backslash makes the next punctuation mark literal, so it shows up instead of formatting. Works on any of them: \\* \\_ \\# \\` \\[ \\] and the rest.":
 		"Ters eğik çizgi, sonraki noktalama işaretini olduğu gibi gösterir, böylece biçimlendirme yerine görünür. Bunların herhangi biri için çalışır: \\* \\_ \\# \\` \\[ \\] ve diğerleri.",
-	"Which characters can be escaped": "Hangi karakterler iptal edilebilir",
+	"Characters that need a backslash to show as plain text":
+		"Metin olarak görünmesi için ters eğik çizgi (\\) gerektiren karakterler",
 	Headings: "Başlıklar",
 	Structure: "Yapı",
 	"Task list": "Görev listesi",
@@ -1396,7 +1397,8 @@ export default {
 	"Must be the very first thing in the note. Shows up as note properties.":
 		"Notun en başındaki öğe olmalıdır. Not özellikleri olarak görünür.",
 	Tag: "Etiket",
-	"Also settable via the tags frontmatter key.": "Etiketlerin öneki anahtarından da ayarlanabilir.",
+	"Also settable via the tags frontmatter key.":
+		"Ayrıca etiketler frontmatter anahtarı aracılığıyla ayarlanabilir.",
 	"Select more": "Daha fazla seçin",
 	Rename: "Yeniden adlandır",
 	"Move to…": "Şuna taşı:",

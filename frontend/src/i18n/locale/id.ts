@@ -216,7 +216,7 @@ export default {
 	"Your plan changes on {date}": "Paket Anda berubah pada {date}",
 	"Your plan cancels on {date}": "Paket Anda dibatalkan pada {date}",
 	"Your plan pauses on {date}": "Paket Anda ditunda pada {date}",
-	"Your plan resumes on {date}": "Langganan Anda aktif kembali pada {date}",
+	"Your plan resumes on {date}": "Paket Anda aktif kembali pada {date}",
 	"{price}/mo": "{price}/bulan",
 	"{price}/yr": "{price}/tahun",
 	"Billing cadence": "Jangka waktu pembayaran",
@@ -273,12 +273,12 @@ export default {
 	"Cancel the free trial below — you won't be charged. You can subscribe to the plan you want at any time.":
 		"Batalkan uji coba gratis di bawah ini — Anda tidak akan dikenakan biaya. Anda dapat berlangganan paket yang Anda inginkan kapan saja.",
 	"Cancel free trial": "Batalkan uji coba gratis",
-	"No charge today; next bill {total} on {renewal}":
-		"Tidak ada biaya hari ini; tagihan berikutnya {total} pada {renewal}",
-	"Charged {amount} today; next bill {total} on {renewal}":
-		"Sudah dikenakan biaya {amount} hari ini; tagihan berikutnya {total} pada {renewal}",
-	"Credited {amount} today; next bill {total} on {renewal}":
-		"Ditagih {amount} hari ini; tagihan berikutnya {total} pada {renewal}",
+	"No charge today. Next bill: {total} on {renewal}":
+		"Tidak ada biaya hari ini. Tagihan berikutnya: {total} pada {renewal}",
+	"Charged {amount} today. Next bill: {total} on {renewal}":
+		"Biaya hari ini: {amount}. Tagihan berikutnya: {total} pada {renewal}",
+	"Credited {amount} today. Next bill: {total} on {renewal}":
+		"Kredit hari ini: {amount}. Tagihan berikutnya: {total} pada {renewal}",
 	"Your free trial is already scheduled to cancel on {date}. You won't be charged. You can subscribe to the plan you want once your trial ends.":
 		"Uji coba gratis Anda akan otomatis berhenti pada {date}. Anda tidak akan dikenakan biaya. Anda dapat berlangganan paket yang Anda inginkan setelah uji coba Anda berakhir.",
 	"Use {action} right below the Current Plan section to reverse the cancellation.":
@@ -435,13 +435,13 @@ export default {
 	'No vaults match "{filter}".': 'Tidak ada vault yang cocok dengan "{filter}".',
 	"Or create a new vault": "Atau buat vault baru",
 	"Create your first vault": "Buat vault pertama Anda",
-	"the device syncing your '{vault}' vault on {os} (last active {since})":
-		"perangkat yang menyinkronkan Vault '{vault}' Anda di {os} (terakhir aktif {since})",
-	"the device syncing your '{vault}' vault on {os}":
-		"perangkat yang menyinkronkan Vault '{vault}' Anda di {os}",
-	"the device syncing your '{vault}' vault (last active {since})":
-		"perangkat yang menyinkronkan Vault '{vault}' Anda (terakhir aktif {since})",
-	"the device syncing your '{vault}' vault": "perangkat yang menyinkronkan Vault '{vault}' Anda",
+	"the device on {os} that syncs your '{vault}' vault (last active {since})":
+		"perangkat di {os} yang menyinkronkan Vault '{vault}' Anda (terakhir aktif {since})",
+	"the device on {os} that syncs your '{vault}' vault":
+		"perangkat di {os} yang menyinkronkan vault '{vault}' Anda",
+	"the device that syncs your '{vault}' vault (last active {since})":
+		"perangkat yang menyinkronkan vault '{vault}' Anda (terakhir aktif {since})",
+	"the device that syncs your '{vault}' vault": "perangkat yang menyinkronkan vault '{vault}' Anda",
 	"on {os} (last active {since})": "di {os} (terakhir aktif {since})",
 	"on {os}": "di {os}",
 	"(last active {since})": "(terakhir aktif {since})",
@@ -685,8 +685,8 @@ export default {
 	Created: "Dibuat",
 	"We index each note's {type} separately, so adding one to your notes can improve your searches. Filter to a type here to look only at notes of that kind.":
 		"Kami mengindeks setiap {type} secara terpisah, sehingga menambahkan satu ke catatan Anda dapat meningkatkan pencarian Anda. Filter ke jenis tertentu di sini untuk hanya melihat catatan jenis itu.",
-	"It is also the one field required by the {okf}, the open standard Engram follows — so filling it in keeps your notes portable to anything else that reads OKF.":
-		"Ini juga merupakan satu bidang yang diperlukan oleh {okf}, standar terbuka Engram yang dipatuhi — jadi mengisinya menjaga catatan Anda tetap kompatibel dengan aplikasi lain yang mendukung OKF.",
+	"It is also the one field required by the {okf}, an open standard that Engram follows. Filling it in keeps your notes portable to any other app that reads OKF.":
+		"Ini juga merupakan bidang yang diperlukan oleh {okf}, sebuah standar terbuka yang Engram ikuti. Mengisinya menjaga catatan Anda tetap portabel ke aplikasi lain yang membaca OKF.",
 	"{count} results": { other: "{count} hasil" },
 	"Sidebar views": "Tampilan bilah sisi",
 	"User menu": "Menu pengguna",
@@ -821,8 +821,7 @@ export default {
 	"Finish setup": "Selesaikan pengaturan",
 	"Open setup checklist, {remaining} remaining":
 		"Buka daftar periksa pengaturan, {remaining} langkah tersisa",
-	"Steps left to finish setting up Engram":
-		"Langkah yang tersisa untuk menyelesaikan pengaturan Engram",
+	"Steps left to finish setup": "Langkah yang tersisa untuk menyelesaikan pengaturan",
 	"Onboarding checklist": "Daftar periksa pengenalan",
 	"Dismiss checklist": "Tutup daftar periksa",
 	"{completed} of {total} done": "{completed} dari {total} selesai",
@@ -847,7 +846,7 @@ export default {
 	"Connect Antigravity": "Hubungkan Antigravity",
 	"Connect another MCP client": "Hubungkan klien MCP lainnya",
 	"A vault holds your notes. You can rename it or add more later.":
-		"Sebuah vault berisi catatan Anda. Anda dapat menggantinya namanya atau menambahkan lebih banyak nanti.",
+		"Sebuah vault berisi catatan Anda. Anda dapat mengganti namanya atau menambahkan lebih banyak nanti.",
 	"How did you hear about Engram?": "Bagaimana Anda mengetahui tentang Engram?",
 	"Couldn't save your answers, please try again.":
 		"Tidak dapat menyimpan jawaban Anda, silakan coba lagi.",
@@ -938,8 +937,8 @@ export default {
 		"Tindakan permanen. Menghapus akun Anda akan mengeluarkan Anda dan memblokir login di masa mendatang untuk pengguna ini.",
 	"Delete account": "Hapus akun",
 	"Delete your account?": "Hapus akun Anda?",
-	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"Ini akan menghapus akun Anda. Anda tidak akan dapat masuk kembali. Administrator dapat menghapus data vault Anda nanti.",
+	"This deletes your account, and you won't be able to sign back in. Your vault data stays until an admin removes it.":
+		"Ini akan menghapus akun Anda, dan Anda tidak akan dapat masuk kembali. Data vault Anda akan tetap ada sampai seorang administrator menghapusnya.",
 	"I understand this is irreversible": "Saya mengerti ini tidak dapat dibatalkan",
 	Delete: "Hapus",
 	"Could not delete account": "Tidak dapat menghapus akun",
@@ -1094,7 +1093,7 @@ export default {
 	"Delete {name}": "Hapus {name}",
 	"Vaults ({used} / {cap})": "Vault ({used} / {cap})",
 	"Rename, set a default, or delete your vaults.":
-		"Ganti nama atur sebagai standar atau hapus vault Anda.",
+		"Ganti nama atur sebagai default atau hapus vault Anda.",
 	Attachments: "Lampiran",
 	Actions: "Tindakan",
 	"No vaults yet.": "Belum ada vault.",
@@ -1248,10 +1247,10 @@ export default {
 	"Add property": "Tambah properti",
 	"Properties are the note's {frontmatter}: a block at the very top of the file, fenced by {fence}. Obsidian shows the same block as Properties, so a note edited in either place reads the same in both.":
 		"Properti adalah bagian dari {frontmatter}: sebuah blok di bagian paling atas file, yang dibatasi oleh {fence}. Obsidian menampilkan blok yang sama seperti Properti, sehingga catatan yang diedit di salah satu tempat akan terlihat sama di kedua tempat.",
-	"Any property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
-		"Setiap properti yang Anda tambahkan disimpan dan disinkronkan. Ini adalah properti Engram juga {reads} — properti ini diindeks dalam kolom terpisah dan digunakan dalam pencarian, sehingga mengisinya memberikan informasi lebih dari sekadar catatan tentang catatan tersebut.",
-	"These field names come from the {okf}, the open standard Engram follows — so using them keeps your notes portable to anything else that reads OKF. Any other name is yours to invent; it syncs like everything else.":
-		"Nama bidang ini berasal dari {okf}, standar terbuka Engram yang digunakan — sehingga menggunakannya menjaga catatan Anda tetap kompatibel dengan aplikasi lain yang mendukung OKF. Nama lain adalah milik Anda untuk dibuat; properti tersebut akan disinkronkan seperti yang lainnya.",
+	"Every property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
+		"Setiap properti yang Anda tambahkan disimpan dan disinkronkan. Ini adalah properti yang juga Engram {reads} — properti ini diindeks ke dalam kolomnya sendiri, dan pencarian menggunakannya, sehingga mengisinya melakukan lebih dari sekadar mencatat tentang catatan tersebut:",
+	"These field names come from the {okf}, an open standard that Engram follows. Using them keeps your notes portable to any other app that reads OKF. Any other name is yours to invent; it syncs like everything else.":
+		"Nama bidang ini berasal dari {okf}, sebuah standar terbuka yang Engram ikuti. Menggunakannya menjaga catatan Anda tetap portabel ke aplikasi lain yang membaca OKF. Nama lain adalah milik Anda untuk diciptakan; itu disinkronkan seperti yang lainnya.",
 	"{label} value": "Nilai {label}",
 	"Remove {item}": "Hapus {item}",
 	"Add item...": "Tambah item...",
@@ -1309,7 +1308,7 @@ export default {
 	"Claim.": "Klaim.",
 	"Source.": "Sumber.",
 	"Shipped on time.": "Dikirim tepat waktu.",
-	"For a generous value of on time.": "Dengan nilai yang sangat baik, yaitu tepat waktu.",
+	"Well, almost.": "Hampir.",
 	"the runbook": "buku panduan",
 	"Engram docs": "Engram dokumentasi",
 	"text if it can't load": "teks jika tidak dapat memuat",
@@ -1351,7 +1350,8 @@ export default {
 	"Escape a mark": "Hindari karakter khusus",
 	"A backslash makes the next punctuation mark literal, so it shows up instead of formatting. Works on any of them: \\* \\_ \\# \\` \\[ \\] and the rest.":
 		"Tanda backslash membuat tanda baca berikutnya menjadi literal, sehingga ditampilkan sebagai teks biasa. Berlaku untuk semua tanda: \\* \\_ \\# \\` \\[ \\] dan lainnya.",
-	"Which characters can be escaped": "Karakter apa yang bisa dihindari",
+	"Characters that need a backslash to show as plain text":
+		"Karakter yang memerlukan garis miring terbalik untuk ditampilkan sebagai teks biasa",
 	Headings: "Judul",
 	Structure: "Struktur",
 	"Task list": "Daftar tugas",

@@ -156,7 +156,7 @@ function PropertiesHelp() {
 			</p>
 			<p className="mt-2">
 				<Trans
-					text="Any property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:"
+					text="Every property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:"
 					slots={{ reads: <strong>{t("reads")}</strong> }}
 				/>
 			</p>
@@ -182,7 +182,7 @@ function PropertiesHelp() {
 			</dl>
 			<p className="mt-2">
 				<Trans
-					text="These field names come from the {okf}, the open standard Engram follows — so using them keeps your notes portable to anything else that reads OKF. Any other name is yours to invent; it syncs like everything else."
+					text="These field names come from the {okf}, an open standard that Engram follows. Using them keeps your notes portable to any other app that reads OKF. Any other name is yours to invent; it syncs like everything else."
 					slots={{
 						okf: (
 							<a

@@ -212,7 +212,7 @@ export default {
 	"Your plan changes on {date}": "Gói của bạn thay đổi vào ngày {date}",
 	"Your plan cancels on {date}": "Gói của bạn bị hủy vào ngày {date}",
 	"Your plan pauses on {date}": "Gói của bạn tạm dừng vào ngày {date}",
-	"Your plan resumes on {date}": "Gói của bạn được tiếp tục vào ngày {date}",
+	"Your plan resumes on {date}": "Gói của bạn được kích hoạt lại vào ngày {date}",
 	"{price}/mo": "{price}/tháng",
 	"{price}/yr": "{price}/năm",
 	"Billing cadence": "Chu kỳ thanh toán",
@@ -269,12 +269,12 @@ export default {
 	"Cancel the free trial below — you won't be charged. You can subscribe to the plan you want at any time.":
 		"Hủy bản dùng thử miễn phí bên dưới — bạn sẽ không bị tính phí. Bạn có thể đăng ký gói bạn muốn bất cứ lúc nào.",
 	"Cancel free trial": "Hủy bản dùng thử",
-	"No charge today; next bill {total} on {renewal}":
-		"Chưa tính phí hôm nay; hóa đơn tiếp theo vào ngày {renewal} lúc {total}",
-	"Charged {amount} today; next bill {total} on {renewal}":
-		"Đã tính phí {amount} hôm nay; hóa đơn tiếp theo vào ngày {renewal} lúc {total}",
-	"Credited {amount} today; next bill {total} on {renewal}":
-		"Đã hoàn {amount} hôm nay; hóa đơn tiếp theo vào ngày {renewal} lúc {total}",
+	"No charge today. Next bill: {total} on {renewal}":
+		"Không tính phí hôm nay. Lần thanh toán tiếp theo: {total} vào ngày {renewal}",
+	"Charged {amount} today. Next bill: {total} on {renewal}":
+		"Đã tính phí {amount} hôm nay. Lần thanh toán tiếp theo: {total} vào ngày {renewal}",
+	"Credited {amount} today. Next bill: {total} on {renewal}":
+		"Đã hoàn trả {amount} hôm nay. Lần thanh toán tiếp theo: {total} vào ngày {renewal}",
 	"Your free trial is already scheduled to cancel on {date}. You won't be charged. You can subscribe to the plan you want once your trial ends.":
 		"Bản dùng thử miễn phí của bạn đã được lên lịch hủy vào ngày {date}. Bạn sẽ không bị tính phí. Bạn có thể đăng ký gói bạn muốn sau khi bản dùng thử kết thúc.",
 	"Use {action} right below the Current Plan section to reverse the cancellation.":
@@ -456,14 +456,14 @@ export default {
 	"(choose from {count} vaults)": "(chọn từ {count} kho lưu trữ)",
 	"Or create a new vault": "Hoặc tạo một kho lưu trữ mới",
 	"Create your first vault": "Tạo kho lưu trữ đầu tiên của bạn",
-	"the device syncing your '{vault}' vault on {os} (last active {since})":
-		"thiết bị đang đồng bộ hóa kho lưu trữ '{vault}' của bạn trên {os} (lần hoạt động cuối {since})",
-	"the device syncing your '{vault}' vault on {os}":
-		"thiết bị đang đồng bộ hóa kho lưu trữ '{vault}' của bạn trên {os}",
-	"the device syncing your '{vault}' vault (last active {since})":
-		"thiết bị đang đồng bộ hóa kho lưu trữ '{vault}' của bạn (lần hoạt động cuối {since})",
-	"the device syncing your '{vault}' vault":
-		"thiết bị đang đồng bộ hóa kho lưu trữ '{vault}' của bạn",
+	"the device on {os} that syncs your '{vault}' vault (last active {since})":
+		"thiết bị trên {os} đồng bộ hóa kho lưu trữ '{vault}' của bạn (lần hoạt động gần nhất {since})",
+	"the device on {os} that syncs your '{vault}' vault":
+		"thiết bị trên {os} đồng bộ hóa kho lưu trữ '{vault}' của bạn",
+	"the device that syncs your '{vault}' vault (last active {since})":
+		"thiết bị đồng bộ hóa kho lưu trữ '{vault}' của bạn (lần hoạt động gần nhất {since})",
+	"the device that syncs your '{vault}' vault":
+		"thiết bị đồng bộ hóa kho lưu trữ '{vault}' của bạn",
 	"on {os} (last active {since})": "trên {os} (lần hoạt động cuối {since})",
 	"on {os}": "trên {os}",
 	"(last active {since})": "(lần hoạt động cuối {since})",
@@ -707,8 +707,8 @@ export default {
 	Created: "Đã tạo",
 	"We index each note's {type} separately, so adding one to your notes can improve your searches. Filter to a type here to look only at notes of that kind.":
 		"Chúng tôi lập chỉ mục cho từng {type} một, vì vậy việc thêm một {type} vào ghi chú của bạn có thể cải thiện kết quả tìm kiếm. Lọc theo loại ở đây để chỉ xem các ghi chú thuộc loại đó.",
-	"It is also the one field required by the {okf}, the open standard Engram follows — so filling it in keeps your notes portable to anything else that reads OKF.":
-		"Đây cũng là trường bắt buộc theo tiêu chuẩn mở {okf} mà Engram tuân theo, vì vậy việc điền vào nó giúp ghi chú của bạn có thể sử dụng được trên các ứng dụng khác hỗ trợ OKF.",
+	"It is also the one field required by the {okf}, an open standard that Engram follows. Filling it in keeps your notes portable to any other app that reads OKF.":
+		"Đây cũng là trường bắt buộc theo tiêu chuẩn mở {okf}, mà Engram tuân theo. Điền vào nó giúp ghi chú của bạn có thể sử dụng được trên bất kỳ ứng dụng nào khác hỗ trợ OKF.",
 	"{count} results": { other: "{count} kết quả" },
 	"Sidebar views": "Chế độ hiển thị thanh bên",
 	"User menu": "Menu người dùng",
@@ -847,7 +847,7 @@ export default {
 	"Open setup checklist": "Mở danh sách kiểm tra thiết lập",
 	"Finish setup": "Hoàn tất thiết lập",
 	"Open setup checklist, {remaining} remaining": "Mở danh sách kiểm tra, còn {remaining} bước",
-	"Steps left to finish setting up Engram": "Các bước còn lại để hoàn tất thiết lập Engram",
+	"Steps left to finish setup": "Các bước còn lại để hoàn tất thiết lập",
 	"Onboarding checklist": "Danh sách kiểm tra hướng dẫn",
 	"Dismiss checklist": "Bỏ qua danh sách kiểm tra",
 	"{completed} of {total} done": "{completed} trong {total} đã hoàn thành",
@@ -964,8 +964,8 @@ export default {
 		"Các hành động không thể hoàn tác. Xóa tài khoản của bạn sẽ đăng xuất và chặn các lần đăng nhập trong tương lai cho người dùng này.",
 	"Delete account": "Xóa tài khoản",
 	"Delete your account?": "Xóa tài khoản của bạn?",
-	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"Hành động này sẽ xóa tài khoản của bạn. Bạn sẽ không thể đăng nhập lại. Một quản trị viên có thể xóa dữ liệu kho lưu trữ của bạn sau này.",
+	"This deletes your account, and you won't be able to sign back in. Your vault data stays until an admin removes it.":
+		"Điều này sẽ xóa tài khoản của bạn và bạn sẽ không thể đăng nhập lại. Dữ liệu kho lưu trữ của bạn sẽ được giữ lại cho đến khi một quản trị viên xóa nó.",
 	"I understand this is irreversible": "Tôi hiểu rằng việc này là không thể hoàn tác",
 	Delete: "Xóa",
 	"Could not delete account": "Không thể xóa tài khoản",
@@ -1284,10 +1284,10 @@ export default {
 	"Add property": "Thêm thuộc tính",
 	"Properties are the note's {frontmatter}: a block at the very top of the file, fenced by {fence}. Obsidian shows the same block as Properties, so a note edited in either place reads the same in both.":
 		"Thuộc tính là {frontmatter} của ghi chú: một khối ở đầu file, được bao quanh bởi {fence}. Obsidian hiển thị khối đó như thuộc tính, vì vậy một ghi chú được chỉnh sửa ở bất kỳ đâu sẽ hiển thị giống nhau.",
-	"Any property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
-		"Bất kỳ thuộc tính nào bạn thêm đều được lưu và đồng bộ hóa. Đây là những thuộc tính mà Engram cũng {reads} — nó lập chỉ mục chúng vào các cột riêng và tìm kiếm sử dụng chúng, vì vậy việc điền vào chúng không chỉ ghi lại thông tin về ghi chú:",
-	"These field names come from the {okf}, the open standard Engram follows — so using them keeps your notes portable to anything else that reads OKF. Any other name is yours to invent; it syncs like everything else.":
-		"Các tên trường này lấy từ {okf}, tiêu chuẩn mở mà Engram tuân theo — vì vậy việc sử dụng chúng giúp ghi chú của bạn có thể di chuyển sang bất kỳ ứng dụng nào khác hỗ trợ OKF. Bạn có thể tự tạo tên khác; nó sẽ đồng bộ hóa như mọi thứ khác.",
+	"Every property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
+		"Mỗi thuộc tính bạn thêm sẽ được lưu trữ và đồng bộ hóa. Đây là những thuộc tính mà Engram cũng {reads} — nó lập chỉ mục chúng vào các cột riêng và tìm kiếm sử dụng chúng, vì vậy việc điền vào chúng không chỉ ghi lại thông tin về ghi chú:",
+	"These field names come from the {okf}, an open standard that Engram follows. Using them keeps your notes portable to any other app that reads OKF. Any other name is yours to invent; it syncs like everything else.":
+		"Các tên trường này lấy từ {okf}, một tiêu chuẩn mở mà Engram tuân theo. Sử dụng chúng giúp ghi chú của bạn có thể sử dụng được trên bất kỳ ứng dụng nào khác hỗ trợ OKF. Bất kỳ tên nào khác là do bạn tự đặt; nó sẽ đồng bộ như mọi thứ khác.",
 	"{label} value": "Giá trị {label}",
 	"Remove {item}": "Xóa {item}",
 	"Add item...": "Thêm mục...",
@@ -1345,7 +1345,7 @@ export default {
 	"Claim.": "Yêu cầu.",
 	"Source.": "Nguồn.",
 	"Shipped on time.": "Giao hàng đúng hẹn.",
-	"For a generous value of on time.": "Với giá trị ưu đãi khi giao hàng đúng hẹn.",
+	"Well, almost.": "Gần như vậy.",
 	"the runbook": "Sổ hướng dẫn",
 	"Engram docs": "Tài liệu Engram",
 	"text if it can't load": "Văn bản nếu không thể tải",
@@ -1387,7 +1387,8 @@ export default {
 	"Escape a mark": "Thoát một ký tự",
 	"A backslash makes the next punctuation mark literal, so it shows up instead of formatting. Works on any of them: \\* \\_ \\# \\` \\[ \\] and the rest.":
 		"Dấu gạch chéo làm cho dấu câu tiếp theo hiển thị trực tiếp, thay vì áp dụng định dạng. Hoạt động với bất kỳ ký tự nào: \\* \\_ \\# \\` \\[ \\] và các ký tự khác.",
-	"Which characters can be escaped": "Những ký tự nào có thể được thoát",
+	"Characters that need a backslash to show as plain text":
+		"Các ký tự cần dấu gạch chéo để hiển thị dưới dạng văn bản thuần",
 	Headings: "Tiêu đề",
 	Structure: "Cấu trúc",
 	"Task list": "Danh sách công việc",

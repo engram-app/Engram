@@ -278,12 +278,12 @@ export default {
 	"Cancel the free trial below — you won't be charged. You can subscribe to the plan you want at any time.":
 		"Annulla la prova gratuita qui sotto: non ti verrà addebitato nulla. Puoi abbonarti al piano che desideri in qualsiasi momento.",
 	"Cancel free trial": "Annulla prova gratuita",
-	"No charge today; next bill {total} on {renewal}":
-		"Nessun addebito oggi; prossima fattura il {total} del {renewal}",
-	"Charged {amount} today; next bill {total} on {renewal}":
-		"Addebitato {amount} oggi; prossima fattura il {total} del {renewal}",
-	"Credited {amount} today; next bill {total} on {renewal}":
-		"Accreditato {amount} oggi; prossima fattura il {total} del {renewal}",
+	"No charge today. Next bill: {total} on {renewal}":
+		"Nessun addebito oggi. Prossima fattura: {total} il {renewal}",
+	"Charged {amount} today. Next bill: {total} on {renewal}":
+		"Addebitato {amount} oggi. Prossima fattura: {total} il {renewal}",
+	"Credited {amount} today. Next bill: {total} on {renewal}":
+		"Accreditato {amount} oggi. Prossima fattura: {total} il {renewal}",
 	"Your free trial is already scheduled to cancel on {date}. You won't be charged. You can subscribe to the plan you want once your trial ends.":
 		"La tua prova gratuita è già impostata per essere annullata il {date}. Non ti verrà addebitato nulla. Puoi abbonarti al piano che desideri una volta terminata la prova.",
 	"Use {action} right below the Current Plan section to reverse the cancellation.":
@@ -466,14 +466,14 @@ export default {
 	"(choose from {count} vaults)": "(scegli tra {count} vault)",
 	"Or create a new vault": "Oppure crea una nuova vault",
 	"Create your first vault": "Crea la tua prima vault",
-	"the device syncing your '{vault}' vault on {os} (last active {since})":
-		"il dispositivo che sincronizza la tua vault '{vault}' su {os} (ultima attività {since})",
-	"the device syncing your '{vault}' vault on {os}":
-		"il dispositivo che sincronizza la tua vault '{vault}' su {os}",
-	"the device syncing your '{vault}' vault (last active {since})":
-		"il dispositivo che sincronizza la tua vault '{vault}' (ultima attività {since})",
-	"the device syncing your '{vault}' vault":
-		"il dispositivo che sincronizza la tua vault '{vault}'",
+	"the device on {os} that syncs your '{vault}' vault (last active {since})":
+		"il dispositivo su {os} che sincronizza il tuo vault '{vault}' (ultima attività {since})",
+	"the device on {os} that syncs your '{vault}' vault":
+		"il dispositivo su {os} che sincronizza il tuo vault '{vault}'",
+	"the device that syncs your '{vault}' vault (last active {since})":
+		"il dispositivo che sincronizza il tuo vault '{vault}' (ultima attività: {since})",
+	"the device that syncs your '{vault}' vault":
+		"il dispositivo che sincronizza il tuo vault '{vault}'",
 	"on {os} (last active {since})": "su {os} (ultima attività {since})",
 	"on {os}": "su {os}",
 	"(last active {since})": "(ultima attività {since})",
@@ -735,8 +735,8 @@ export default {
 	Created: "Creato",
 	"We index each note's {type} separately, so adding one to your notes can improve your searches. Filter to a type here to look only at notes of that kind.":
 		"Indicizziamo ogni {type} della nota separatamente, quindi aggiungerne uno alle tue note può migliorare le tue ricerche. Filtra per tipo qui per visualizzare solo le note di quel tipo.",
-	"It is also the one field required by the {okf}, the open standard Engram follows — so filling it in keeps your notes portable to anything else that reads OKF.":
-		"È anche il campo richiesto da {okf}, lo standard aperto seguito da Engram, quindi compilarlo rende le tue note compatibili con qualsiasi altro sistema che supporti OKF.",
+	"It is also the one field required by the {okf}, an open standard that Engram follows. Filling it in keeps your notes portable to any other app that reads OKF.":
+		"È anche il campo richiesto da {okf}, uno standard aperto che Engram segue. Compilarlo rende le tue note compatibili con qualsiasi altra app che legge OKF.",
 	"{count} results": {
 		one: "{count} risultato",
 		many: "{count} risultati",
@@ -885,8 +885,7 @@ export default {
 	"Finish setup": "Completa la configurazione",
 	"Open setup checklist, {remaining} remaining":
 		"Apri la checklist di configurazione, ne mancano {remaining}",
-	"Steps left to finish setting up Engram":
-		"Passaggi rimanenti per completare la configurazione di Engram",
+	"Steps left to finish setup": "Passaggi rimanenti per completare la configurazione",
 	"Onboarding checklist": "Checklist di introduzione",
 	"Dismiss checklist": "Chiudi la checklist",
 	"{completed} of {total} done": "{completed} su {total} completati",
@@ -1004,8 +1003,8 @@ export default {
 		"Azioni permanenti. Eliminare il tuo account ti disconnette e impedisce futuri accessi con questo utente.",
 	"Delete account": "Elimina account",
 	"Delete your account?": "Vuoi eliminare il tuo account?",
-	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"Questo elimina temporaneamente il tuo account. Non potrai più accedere. Un amministratore potrà cancellare definitivamente i dati della tua vault in seguito.",
+	"This deletes your account, and you won't be able to sign back in. Your vault data stays until an admin removes it.":
+		"Questo elimina il tuo account e non potrai più accedere. I tuoi dati del vault rimangono fino a quando un amministratore li rimuove.",
 	"I understand this is irreversible": "Capisco che questa operazione è irreversibile",
 	Delete: "Elimina",
 	"Could not delete account": "Impossibile eliminare l'account",
@@ -1344,10 +1343,10 @@ export default {
 	"Add property": "Aggiungi proprietà",
 	"Properties are the note's {frontmatter}: a block at the very top of the file, fenced by {fence}. Obsidian shows the same block as Properties, so a note edited in either place reads the same in both.":
 		"Le {frontmatter} sono le proprietà della nota: un blocco nella parte superiore del file, delimitato da {fence}. Obsidian mostra lo stesso blocco come proprietà, quindi una nota modificata in un punto o nell'altro viene visualizzata in modo identico.",
-	"Any property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
-		"Ogni proprietà che aggiungi viene salvata e sincronizzata. Queste sono anche quelle che Engram {reads} — le indicizza in colonne separate e la ricerca le utilizza, quindi compilarle fa più che semplicemente registrare informazioni sulla nota:",
-	"These field names come from the {okf}, the open standard Engram follows — so using them keeps your notes portable to anything else that reads OKF. Any other name is yours to invent; it syncs like everything else.":
-		"Questi nomi di campo provengono da {okf}, lo standard aperto che Engram segue, quindi usarli mantiene le tue note compatibili con qualsiasi altro sistema che supporti OKF. Puoi inventare qualsiasi altro nome; si sincronizza come tutto il resto.",
+	"Every property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
+		"Ogni proprietà che aggiungi viene salvata e sincronizzata. Queste sono anche quelle che Engram {reads} — vengono indicizzate in colonne separate e la ricerca le utilizza, quindi compilarle fa più che semplicemente registrare una nota sulla nota:",
+	"These field names come from the {okf}, an open standard that Engram follows. Using them keeps your notes portable to any other app that reads OKF. Any other name is yours to invent; it syncs like everything else.":
+		"Questi nomi di campo provengono da {okf}, uno standard aperto che Engram segue. Utilizzarli rende le tue note compatibili con qualsiasi altra app che legge OKF. Qualsiasi altro nome è a tua disposizione; si sincronizza come tutto il resto.",
 	"{label} value": "Valore di {label}",
 	"Remove {item}": "Rimuovi {item}",
 	"Add item...": "Aggiungi elemento...",
@@ -1405,7 +1404,7 @@ export default {
 	"Claim.": "Richiedi.",
 	"Source.": "Fonte.",
 	"Shipped on time.": "Consegnato in tempo.",
-	"For a generous value of on time.": 'Per un valore generoso di "in tempo".',
+	"Well, almost.": "Beh, quasi.",
 	"the runbook": "il manuale operativo",
 	"Engram docs": "Documentazione di Engram",
 	"text if it can't load": "testo se non riesce a caricare",
@@ -1447,7 +1446,8 @@ export default {
 	"Escape a mark": "Esci un carattere speciale",
 	"A backslash makes the next punctuation mark literal, so it shows up instead of formatting. Works on any of them: \\* \\_ \\# \\` \\[ \\] and the rest.":
 		"Una barra obliqua rende il successivo carattere di punteggiatura letterale, quindi viene visualizzato invece della formattazione. Funziona con tutti: \\* \\_ \\# \\` \\[ \\] e gli altri.",
-	"Which characters can be escaped": "Quali caratteri possono essere esplicitati",
+	"Characters that need a backslash to show as plain text":
+		"Caratteri che richiedono una barra rovesciata per essere visualizzati come testo semplice",
 	Headings: "Titoli",
 	Structure: "Struttura",
 	"Task list": "Lista di attività",
