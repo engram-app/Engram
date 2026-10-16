@@ -1,4 +1,4 @@
-// i18n-core 8db2fb3a
+// i18n-core f603eb04
 // The translategemma pipeline shared by the web app, the Obsidian plugin and the
 // marketing site: prompts, the checks an answer must pass, and catalog state.
 // Canonical copy: engram-app/Engram frontend/src/i18n/core/. The other repos
@@ -127,8 +127,9 @@ function numbers(s: string, source = false): string[] {
 // Lowercase, letters only, brands already removed ("💬 Feedback" is "feedback").
 const LOANWORDS: Record<string, readonly string[]> = {
 	// Names every language keeps, for profiles that do not list them as brands.
+	// "cloud" is what "Engram Cloud", a product name, leaves once "Engram" is removed.
 	"*": [
-		...["chatgpt web", "docker compose", "docker compose up", "mcp", "obsidian sync"],
+		...["chatgpt web", "cloud", "docker compose", "docker compose up", "mcp", "obsidian sync"],
 		...["reddit", "relay", "sponsors", "youtube"],
 	],
 	de: [
@@ -217,6 +218,7 @@ const LOANWORDS: Record<string, readonly string[]> = {
 		"subtotal",
 		"tag",
 		"total",
+		"url",
 		"vault",
 	],
 	it: [
