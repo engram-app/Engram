@@ -241,26 +241,59 @@ defmodule Engram.OnboardingTest do
     end
 
     # The MCP-first path answers `tools` from the OAuth client before the
-    # wizard starts, and provisions the vault, so a connector signup only sees
-    # terms and plan before returning to the consent screen.
-    test "steps is [:agreement, :billing] when an OAuth client pre-answered it" do
+    # wizard starts. Accepting the terms starts the account on Free and
+    # provisions the vault, so a connector signup sees one step before
+    # returning to the consent screen.
+    test "steps is [:agreement] when an OAuth client pre-answered it" do
       user = insert(:user, onboarding_profile: %{})
 
       {:ok, _} =
         Onboarding.set_profile(user, %{tools: ["antigravity"], tools_prefilled: true})
 
-      assert %{steps: [:agreement, :billing], next_step: :agreement} = Onboarding.status(user)
+      assert %{steps: [:agreement], next_step: :agreement} = Onboarding.status(user)
 
-      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-      {:ok, user} = Onboarding.accept_free_tier(Engram.Accounts.get_user!(user.id))
+      {:ok, _} =
+        Onboarding.accept_terms(user, "2026-05-15", "canonical", "2026-05-15", "p", %{})
 
-      assert %{steps: [:agreement, :billing], next_step: :done, gate_ok: true} =
-               Onboarding.status(user)
+      user = Engram.Accounts.get_user!(user.id)
+      assert %DateTime{} = user.free_tier_accepted_at
+      assert [%{name: "My Vault"}] = Engram.Vaults.list_vaults(user)
+
+      assert %{steps: [:agreement], next_step: :done, gate_ok: true} = Onboarding.status(user)
     end
 
-    # A row pre-filled before vaults were provisioned (or whose provisioning
-    # failed) has no vault: the chain keeps the vault step rather than pointing
-    # the wizard at a step it does not list. The survey stays skipped.
+    test "accepting terms does not start a paying connector signup on Free" do
+      user = insert(:user, onboarding_profile: %{})
+      insert(:subscription, user: user, status: "active")
+      {:ok, _} = Onboarding.set_profile(user, %{tools: ["chatgpt"], tools_prefilled: true})
+
+      {:ok, _} =
+        Onboarding.accept_terms(user, "2026-05-15", "canonical", "2026-05-15", "p", %{})
+
+      assert is_nil(Engram.Accounts.get_user!(user.id).free_tier_accepted_at)
+      assert [%{name: "My Vault"}] = Engram.Vaults.list_vaults(user)
+    end
+
+    test "an ordinary signup accepting terms is not started on Free" do
+      user = insert(:user, onboarding_profile: %{})
+
+      {:ok, _} =
+        Onboarding.accept_terms(user, "2026-05-15", "canonical", "2026-05-15", "p", %{})
+
+      assert is_nil(Engram.Accounts.get_user!(user.id).free_tier_accepted_at)
+      assert %{next_step: :billing} = Onboarding.status(user)
+    end
+
+    # A connector signup that accepted the terms before the Free start
+    # existed sits at :billing. The chain must keep listing it.
+    test "a pre-filled profile past terms with no plan keeps the billing step" do
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.set_profile(user, %{tools: ["chatgpt"], tools_prefilled: true})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+
+      assert %{steps: [:agreement, :billing], next_step: :billing} = Onboarding.status(user)
+    end
+
     # A row pre-filled before `completed_at` was stamped for connector
     # signups, holding a vault from elsewhere (e.g. the plugin's device link).
     # `next_step` still answers :vault, so the chain must list it.
@@ -272,8 +305,7 @@ defmodule Engram.OnboardingTest do
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "active")
 
-      assert %{steps: [:agreement, :billing, :vault], next_step: :vault} =
-               Onboarding.status(user)
+      assert %{steps: [:agreement, :vault], next_step: :vault} = Onboarding.status(user)
     end
 
     test "a pre-filled profile without a vault keeps the vault step, never the survey" do
@@ -283,8 +315,7 @@ defmodule Engram.OnboardingTest do
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
       insert(:subscription, user: user, status: "active")
 
-      assert %{steps: [:agreement, :billing, :vault], next_step: :vault} =
-               Onboarding.status(user)
+      assert %{steps: [:agreement, :vault], next_step: :vault} = Onboarding.status(user)
     end
 
     # The SaaS counterpart of the self-host case above: a user who answers the

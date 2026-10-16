@@ -895,6 +895,8 @@ export default {
 		"Я прочитал и согласен с Условиями использования и Политикой конфиденциальности",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Я прочитал и согласен с представленным выше соглашением и Уведомлением о конфиденциальности",
+	"You'll start on the Free plan. Upgrade anytime.":
+		"Вы начнете с бесплатного плана. Вы можете обновиться в любое время.",
 	"Saving…": "Сохранение…",
 	Continue: "Продолжить",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

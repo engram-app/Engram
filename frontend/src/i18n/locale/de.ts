@@ -827,6 +827,8 @@ export default {
 		"Ich habe die Nutzungsbedingungen und die Datenschutzerklärung gelesen und akzeptiere sie",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Ich habe das oben angezeigte Dokument und die Datenschutzerklärung gelesen und akzeptiere sie",
+	"You'll start on the Free plan. Upgrade anytime.":
+		"Du beginnst mit dem kostenlosen Plan. Du kannst jederzeit upgraden.",
 	"Saving…": "Speichern…",
 	Continue: "Fortfahren",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

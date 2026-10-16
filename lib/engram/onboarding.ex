@@ -103,7 +103,7 @@ defmodule Engram.Onboarding do
         # could land over a newer one a concurrent read just stored.
         :ok = Cache.evict(:terms, {user.id, @terms_document})
         :ok = Cache.evict(:terms, {user.id, @privacy_document})
-        :ok = maybe_provision_connector_vault(user)
+        :ok = after_connector_terms(user)
         {:ok, tos_row}
 
       other ->
@@ -218,7 +218,8 @@ defmodule Engram.Onboarding do
       build_steps(billing_active, profile, %{
         profile_complete: profile_complete,
         has_vault: has_vault,
-        plan_ok: terms_ok and subscription_ok
+        terms_ok: terms_ok,
+        subscription_ok: subscription_ok
       })
 
     base = %{
@@ -396,22 +397,25 @@ defmodule Engram.Onboarding do
   # `uses_obsidian` is collected, so it renders even with a vault row.
   #
   # A connector signup (`tools_prefilled`) is mid-way through authorizing an
-  # app that is waiting on them, so the chain is cut to what the gate needs:
-  # terms and plan. The survey is skipped and the vault is provisioned once
-  # terms and plan pass (`maybe_provision_connector_vault/1`).
+  # app that is waiting on them, so the chain is cut to the terms. Accepting
+  # them starts the account on Free and provisions the vault
+  # (`after_connector_terms/1`); the survey is skipped.
   #
-  # `:vault` must stay whenever `next_step/6` can still return it, or the
-  # wizard is pointed at a step the chain does not list and loops. That is a
-  # profile without `completed_at` (rows pre-filled before this rule), or
-  # terms and plan done with no vault (provisioning failed, or the vault was
-  # deleted later).
+  # A dropped step must come back whenever `next_step/6` can still return it,
+  # or the wizard is pointed at a step the chain does not list and loops:
+  # `:billing` when terms pass without a plan (accepted before the Free start
+  # existed, or the stamp failed), `:vault` for a profile without
+  # `completed_at` (pre-filled before that rule) or with terms and plan done
+  # and no vault (provisioning failed, or the vault was deleted later).
   defp build_steps(billing_active, profile, %{} = state) do
     connector = tools_prefilled?(profile)
+    plan_ok = state.terms_ok and state.subscription_ok
 
-    vault_settled =
-      state.profile_complete and (state.has_vault or not state.plan_ok)
+    vault_settled = state.profile_complete and (state.has_vault or not plan_ok)
+    billing_settled = not (state.terms_ok and not state.subscription_ok)
 
-    hosted = if billing_active, do: [:agreement, :billing], else: []
+    billing = if connector and billing_settled, do: [], else: [:billing]
+    hosted = if billing_active, do: [:agreement | billing], else: []
     tools = if connector, do: [], else: [:tools]
     # The user-voice survey is hosted-only: a self-hoster's answers have no
     # PostHog to land in, so the step would be friction with no reader.
@@ -634,6 +638,42 @@ defmodule Engram.Onboarding do
       )
 
       :ok
+  end
+
+  # A connector signup is started on Free when it accepts the terms, so the
+  # plan step never shows: capture first, upgrade prompts later. Only when no
+  # plan passes yet; a paid account keeps its plan. Then the vault, which is
+  # due once terms and plan both pass. A failed stamp leaves `:billing` in the
+  # chain (`build_steps/3`), the ordinary flow.
+  defp after_connector_terms(user) do
+    user = Accounts.get_user(user.id) || user
+
+    starts_free =
+      Application.get_env(:engram, :billing_enabled, false) and
+        tools_prefilled?(user.onboarding_profile || %{}) and
+        is_nil(user.free_tier_accepted_at) and
+        Engram.Billing.tier(user) not in [:starter, :pro]
+
+    if starts_free do
+      case accept_free_tier(user) do
+        # accept_free_tier/1 provisions the vault itself.
+        {:ok, _} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "connector free start failed",
+            Metadata.with_category(:warning, :lifecycle,
+              user_id: user.id,
+              reason: Metadata.safe_reason(reason)
+            )
+          )
+
+          :ok
+      end
+    else
+      maybe_provision_connector_vault(user)
+    end
   end
 
   defp provision_connector_vault(user) do

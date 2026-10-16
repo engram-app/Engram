@@ -852,6 +852,8 @@ export default {
 		"J'ai lu et j'accepte les conditions d'utilisation et la politique de confidentialité",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"J'ai lu et j'accepte l'accord ci-dessus et l'avis de confidentialité",
+	"You'll start on the Free plan. Upgrade anytime.":
+		"Tu commences avec le plan gratuit. Tu peux passer à un autre plan à tout moment.",
 	"Saving…": "Enregistrement…",
 	Continue: "Continuer",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

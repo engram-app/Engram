@@ -23,6 +23,9 @@ export default function AgreementPage() {
 	const [showPrivacy, setShowPrivacy] = useState(false);
 	const [mountedAt] = useState(() => Date.now());
 	const notices = data?.legal_notices ?? [];
+	// A connector signup skips the plan step: accepting starts it on Free
+	// (`Engram.Onboarding.after_connector_terms/1`), which it must see first.
+	const startsFree = Boolean(data?.profile?.tools_prefilled && !data.subscription_ok);
 
 	async function submit() {
 		if (!(await accept())) {
@@ -129,6 +132,11 @@ export default function AgreementPage() {
 							{t("I have read and agree to the agreement shown above and the privacy notice")}
 						</span>
 					</label>
+					{startsFree ? (
+						<p className="text-muted-foreground text-sm">
+							{t("You'll start on the Free plan. Upgrade anytime.")}
+						</p>
+					) : null}
 					<Button
 						type="button"
 						onClick={submit}

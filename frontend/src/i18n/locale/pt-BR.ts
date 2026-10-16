@@ -850,6 +850,8 @@ export default {
 		"Eu li e concordo com os Termos de Serviço e a Política de Privacidade",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Eu li e concordo com o contrato exibido acima e o aviso de privacidade",
+	"You'll start on the Free plan. Upgrade anytime.":
+		"Você começará no plano gratuito. Faça o upgrade a qualquer momento.",
 	"Saving…": "Salvando…",
 	Continue: "Continuar",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

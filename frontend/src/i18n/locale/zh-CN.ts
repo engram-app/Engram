@@ -773,6 +773,7 @@ export default {
 		"我已阅读并同意服务条款和隐私政策",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"我已阅读并同意上述协议和隐私声明",
+	"You'll start on the Free plan. Upgrade anytime.": "你将从免费版开始。随时升级。",
 	"Saving…": "保存中…",
 	Continue: "继续",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

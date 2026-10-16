@@ -848,6 +848,8 @@ export default {
 		"He leído y acepto los Términos del Servicio y la Política de Privacidad",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"He leído y acepto el acuerdo que se muestra arriba y el aviso de privacidad",
+	"You'll start on the Free plan. Upgrade anytime.":
+		"Comienzas con el plan gratuito. Puedes actualizar cuando quieras.",
 	"Saving…": "Guardando…",
 	Continue: "Continuar",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

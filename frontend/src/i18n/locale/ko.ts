@@ -799,6 +799,8 @@ export default {
 		"이용 약관 및 개인정보 처리방침을 읽고 동의합니다",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"위 약관 및 개인정보 처리방침을 읽고 동의합니다",
+	"You'll start on the Free plan. Upgrade anytime.":
+		"무료 플랜으로 시작합니다. 언제든지 업그레이드할 수 있습니다.",
 	"Saving…": "저장 중...",
 	Continue: "계속하기",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

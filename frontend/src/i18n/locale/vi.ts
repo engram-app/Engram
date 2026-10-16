@@ -811,6 +811,8 @@ export default {
 		"Tôi đã đọc và đồng ý với Điều khoản dịch vụ và Chính sách quyền riêng tư",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Tôi đã đọc và đồng ý với bản hợp đồng hiển thị ở trên và thông báo về quyền riêng tư",
+	"You'll start on the Free plan. Upgrade anytime.":
+		"Bạn sẽ bắt đầu với gói miễn phí. Nâng cấp bất cứ lúc nào.",
 	"Saving…": "Đang lưu…",
 	Continue: "Tiếp tục",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

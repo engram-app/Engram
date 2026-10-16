@@ -204,3 +204,33 @@ describe("AgreementPage: consent chrome is translated, the legal body is not", (
 		expect(screen.getByText(/App analytics now linked to your account/u)).toBeInTheDocument();
 	});
 });
+
+// A connector signup skips the plan step: accepting starts them on Free, so
+// the page has to say so before they click.
+describe("AgreementPage: connector signup", () => {
+	it("says the account starts on Free", () => {
+		statusRef.current = {
+			...DEFAULT_STATUS,
+			subscription_ok: false,
+			profile: { tools: ["chatgpt"], tools_prefilled: true },
+		};
+		renderPage();
+		expect(screen.getByText("You'll start on the Free plan. Upgrade anytime.")).toBeInTheDocument();
+	});
+
+	it("says nothing about Free for an ordinary signup", () => {
+		statusRef.current = { ...DEFAULT_STATUS, subscription_ok: false, profile: {} };
+		renderPage();
+		expect(screen.queryByText(/start on the Free plan/u)).not.toBeInTheDocument();
+	});
+
+	it("says nothing about Free when a plan already passes", () => {
+		statusRef.current = {
+			...DEFAULT_STATUS,
+			subscription_ok: true,
+			profile: { tools: ["chatgpt"], tools_prefilled: true },
+		};
+		renderPage();
+		expect(screen.queryByText(/start on the Free plan/u)).not.toBeInTheDocument();
+	});
+});
