@@ -3,7 +3,8 @@ defmodule EngramWeb.OAuthRevokeController do
   RFC 7009 token revocation.
 
   The client authenticates exactly as at `/oauth/token` (§2.1): body
-  `client_id`, HTTP Basic, or a `private_key_jwt` assertion. A failure is
+  `client_id` (public), `client_secret_post`, HTTP Basic, or a
+  `private_key_jwt` assertion. A failure is
   RFC 6749 §5.2 `invalid_client` (401), a missing `token` is
   `invalid_request` (400).
 
@@ -15,7 +16,8 @@ defmodule EngramWeb.OAuthRevokeController do
   """
   use EngramWeb, :controller
 
-  import EngramWeb.OAuthClientAuth, only: [clear_request_state: 2, blank_to_nil: 1]
+  import EngramWeb.OAuthClientAuth,
+    only: [clear_request_state: 2, blank_to_nil: 1, maybe_challenge: 1]
 
   alias Engram.OAuth
   alias EngramWeb.OAuthClientAuth
@@ -23,7 +25,7 @@ defmodule EngramWeb.OAuthRevokeController do
   plug :clear_request_state
 
   def revoke(conn, params) do
-    case OAuthClientAuth.authenticate(conn, params) do
+    case OAuthClientAuth.authenticate(conn, params, "/oauth/revoke") do
       {:ok, client_id} ->
         case blank_to_nil(params["token"]) do
           nil ->
@@ -42,13 +44,6 @@ defmodule EngramWeb.OAuthRevokeController do
         |> maybe_challenge()
         |> put_status(:unauthorized)
         |> json(%{error: "invalid_client"})
-    end
-  end
-
-  defp maybe_challenge(conn) do
-    case get_req_header(conn, "authorization") do
-      ["Basic " <> _ | _] -> put_resp_header(conn, "www-authenticate", ~s(Basic realm="oauth"))
-      _ -> conn
     end
   end
 end

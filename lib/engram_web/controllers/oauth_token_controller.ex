@@ -7,7 +7,8 @@ defmodule EngramWeb.OAuthTokenController do
   """
   use EngramWeb, :controller
 
-  import EngramWeb.OAuthClientAuth, only: [clear_request_state: 2, blank_to_nil: 1]
+  import EngramWeb.OAuthClientAuth,
+    only: [clear_request_state: 2, blank_to_nil: 1, maybe_challenge: 1]
 
   alias Engram.Accounts.User
   alias Engram.Analytics.McpClient
@@ -227,13 +228,6 @@ defmodule EngramWeb.OAuthTokenController do
     |> maybe_challenge()
     |> put_status(:unauthorized)
     |> json(%{error: "invalid_client"})
-  end
-
-  defp maybe_challenge(conn) do
-    case get_req_header(conn, "authorization") do
-      ["Basic " <> _ | _] -> put_resp_header(conn, "www-authenticate", ~s(Basic realm="oauth"))
-      _ -> conn
-    end
   end
 
   # RFC 6749 §5.2 makes `invalid_client` TERMINAL — the connector stops retrying

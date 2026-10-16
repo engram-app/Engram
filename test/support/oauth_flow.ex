@@ -157,7 +157,8 @@ defmodule Engram.OAuthFlow do
   no `client_id`: the identity must come from the verified assertion.
   """
   def revoke(vendor, client_id, refresh_token) do
-    creds = credentials(vendor, client_id)
+    # Many libraries (Authlib among them) sign `aud` as the URL being called.
+    creds = credentials(vendor, client_id, "/oauth/revoke")
     creds = if vendor.auth == :none, do: creds, else: Map.delete(creds, "client_id")
 
     build_conn()
@@ -187,15 +188,17 @@ defmodule Engram.OAuthFlow do
     conn
   end
 
-  defp credentials(%{auth: :none}, client_id), do: %{"client_id" => client_id}
+  defp credentials(vendor, client_id, endpoint \\ "/oauth/token")
 
-  defp credentials(%{auth: {:private_key_jwt, private, kid}}, client_id) do
+  defp credentials(%{auth: :none}, client_id, _endpoint), do: %{"client_id" => client_id}
+
+  defp credentials(%{auth: {:private_key_jwt, private, kid}}, client_id, endpoint) do
     now = System.os_time(:second)
 
     claims = %{
       "iss" => client_id,
       "sub" => client_id,
-      "aud" => EngramWeb.Endpoint.url() <> "/oauth/token",
+      "aud" => EngramWeb.Endpoint.url() <> endpoint,
       "jti" => Ecto.UUID.generate(),
       "exp" => now + 300,
       "iat" => now

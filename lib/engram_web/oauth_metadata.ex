@@ -16,8 +16,8 @@ defmodule EngramWeb.OAuthMetadata do
 
   @doc """
   Whether `iss` is an issuer `base_url/1` could have produced: the canonical
-  URL, or an allowlisted origin on our scheme (any port, as `with_port/2` may
-  add one). Gates the RFC 9207 `iss` the SPA carries back to consent.
+  URL, or an allowlisted origin on our scheme, spelled as `base_url/1` would
+  (a non-default port only, as `with_port/2` adds). Gates the RFC 9207 `iss` the SPA carries back to consent.
   """
   @spec issuer?(term()) :: boolean()
   def issuer?(iss) when is_binary(iss) do
@@ -26,9 +26,13 @@ defmodule EngramWeb.OAuthMetadata do
 
     iss == canonical or
       case URI.parse(iss) do
-        %URI{scheme: ^scheme, host: host, path: nil, query: nil, userinfo: nil, fragment: nil}
+        %URI{scheme: ^scheme, host: host, port: port, path: nil, query: nil, userinfo: nil}
         when is_binary(host) ->
-          "#{scheme}://#{host}" in Application.get_env(:engram, :cors_origin, [])
+          origin = "#{scheme}://#{host}"
+          # The exact spelling `base_url/1` emits: never a default port.
+          spelled = if port == URI.default_port(scheme), do: origin, else: "#{origin}:#{port}"
+
+          iss == spelled and origin in Application.get_env(:engram, :cors_origin, [])
 
         _ ->
           false

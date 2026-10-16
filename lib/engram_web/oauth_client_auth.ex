@@ -14,12 +14,19 @@ defmodule EngramWeb.OAuthClientAuth do
   alias Engram.OAuth.Cimd.JwksCache
   alias EngramWeb.OAuthMetadata
 
-  @doc "Resolves and verifies the calling client. Returns its wire `client_id`."
-  @spec authenticate(Plug.Conn.t(), map()) ::
+  @doc """
+  Resolves and verifies the calling client. Returns its wire `client_id`.
+
+  `endpoint` is the path being called. An assertion may name it as `aud`, as
+  libraries that sign the request URL do (Authlib), besides the token endpoint
+  and the issuer.
+  """
+  @spec authenticate(Plug.Conn.t(), map(), String.t()) ::
           {:ok, String.t() | nil} | {:error, :invalid_client | :temporarily_unavailable}
-  def authenticate(conn, params) do
+  def authenticate(conn, params, endpoint \\ "/oauth/token") do
     with {:ok, client_id, secret, assertion} <- client_credentials(conn, params),
-         :ok <- OAuth.authenticate_client(client_id, secret, auth_opts(conn, assertion)) do
+         :ok <-
+           OAuth.authenticate_client(client_id, secret, auth_opts(conn, assertion, endpoint)) do
       {:ok, client_id}
     end
   end
@@ -49,11 +56,24 @@ defmodule EngramWeb.OAuthClientAuth do
   # in `aud`. Both are derived from the host the client actually dialed, so a
   # backend fronting several canonical domains never demands an audience the
   # client had no way to name.
-  defp auth_opts(_conn, nil), do: []
+  defp auth_opts(_conn, nil, _endpoint), do: []
 
-  defp auth_opts(conn, assertion) do
+  defp auth_opts(conn, assertion, endpoint) do
     base = OAuthMetadata.base_url(conn)
-    [assertion: assertion, audiences: [base <> "/oauth/token", base]]
+    audiences = Enum.uniq([base <> "/oauth/token", base <> endpoint, base])
+    [assertion: assertion, audiences: audiences]
+  end
+
+  @doc """
+  RFC 6749 §5.2: a failed client authentication over the Authorization header
+  gets a WWW-Authenticate challenge back.
+  """
+  @spec maybe_challenge(Plug.Conn.t()) :: Plug.Conn.t()
+  def maybe_challenge(conn) do
+    case get_req_header(conn, "authorization") do
+      ["Basic " <> _ | _] -> put_resp_header(conn, "www-authenticate", ~s(Basic realm="oauth"))
+      _ -> conn
+    end
   end
 
   # RFC 6749 §2.3.1: the Basic header is the preferred channel, the body is the
