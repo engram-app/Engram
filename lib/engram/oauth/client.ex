@@ -542,6 +542,10 @@ defmodule Engram.OAuth.Client do
       {:ok, %URI{scheme: nil}} ->
         [redirect_uris: "missing scheme: #{uri}"]
 
+      # RFC 6749 §3.1.2: a redirection endpoint MUST NOT carry a fragment.
+      {:ok, %URI{fragment: fragment}} when is_binary(fragment) ->
+        [redirect_uris: "fragment not allowed: #{uri}"]
+
       {:ok, %URI{scheme: "https", host: host}} when is_binary(host) and host != "" ->
         []
 

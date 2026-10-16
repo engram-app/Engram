@@ -222,6 +222,12 @@ defmodule EngramWeb.OAuthRegisterControllerTest do
       end
     end
 
+    # RFC 6749 §3.1.2: the redirection endpoint URI MUST NOT include a fragment.
+    test "rejects a redirect_uri with a fragment", %{conn: conn} do
+      conn = post(conn, "/oauth/register", %{"redirect_uris" => ["https://example.com/cb#x"]})
+      assert json_response(conn, 400)["error"] == "invalid_redirect_uri"
+    end
+
     test "rejects javascript: redirect_uri", %{conn: conn} do
       conn =
         post(conn, "/oauth/register", %{

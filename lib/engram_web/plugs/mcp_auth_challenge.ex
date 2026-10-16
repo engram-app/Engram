@@ -52,11 +52,15 @@ defmodule EngramWeb.Plugs.McpAuthChallenge do
         Plug.Conn.put_resp_header(
           conn,
           "www-authenticate",
-          ~s(Bearer resource_metadata="#{url}", error="#{error}")
+          ~s(Bearer resource_metadata="#{url}", scope="mcp", error="#{error}")
         )
 
       {nil, []} ->
-        Plug.Conn.put_resp_header(conn, "www-authenticate", ~s(Bearer resource_metadata="#{url}"))
+        Plug.Conn.put_resp_header(
+          conn,
+          "www-authenticate",
+          ~s(Bearer resource_metadata="#{url}", scope="mcp")
+        )
 
       _ ->
         conn
