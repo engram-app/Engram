@@ -9,11 +9,19 @@ defmodule EngramWeb.VaultAccessAttackTest do
 
   Vaults: W (write), R (read), N (none). Credentials come from the real
   consent -> /oauth/token chain or `Accounts.create_api_key/3`.
+
+  An OAuth access token is bound to the MCP server (#1997): it reaches
+  `POST /api/mcp` and `POST /api/attachments` (the upload its tools hand out)
+  and gets 401 everywhere else. So the REST attacks run with API keys, the
+  OAuth ones run on MCP and the upload, and one test walks every vault route
+  to pin the 401 itself. Where a guard behind Auth still matters for a token
+  minted before #1997 (legacy `aud`, alive for 15 minutes),
+  `Engram.OAuthHelpers.legacy_audience/2` stands in for one.
   """
   use EngramWeb.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
-  import Engram.OAuthHelpers, only: [code_from_redirect: 1, pkce_pair: 0]
+  import Engram.OAuthHelpers, only: [code_from_redirect: 1, legacy_audience: 2, pkce_pair: 0]
 
   alias Engram.{Accounts, OAuth, Repo, Vaults}
   alias Engram.Auth.Providers.Local
@@ -125,6 +133,16 @@ defmodule EngramWeb.VaultAccessAttackTest do
   defp tool(token, name, args),
     do: mcp(token, "tools/call", %{"name" => name, "arguments" => args})
 
+  # The one REST route an OAuth token reaches (#1997). `nil` vault: no
+  # X-Vault-ID, so the default vault.
+  defp upload(token, vault, path \\ "f.txt") do
+    conn = if vault, do: in_vault(token, vault), else: as(token)
+    post(conn, "/api/attachments", %{"path" => path, "content_base64" => "aGk="})
+  end
+
+  defp attachment?(ctx, vault, path \\ "f.txt"),
+    do: match?({:ok, %{}}, Engram.Attachments.get_attachment(ctx.user, vault, path))
+
   defp refused_tool?(body),
     do: body["error"] != nil or get_in(body, ["result", "isError"]) == true
 
@@ -169,181 +187,186 @@ defmodule EngramWeb.VaultAccessAttackTest do
   defp send_req(conn, :delete, path, body), do: delete(conn, path, body)
   defp send_req(conn, :get, path, _), do: get(conn, path)
 
+  # An OAuth token gets 401 on all of these ("oauth: outside /api/mcp"
+  # below); its one REST write, the upload, is attacked there.
+  describe "api_key: REST writes on a READ vault" do
+    @kind :api_key
+    test "every vault-scoped write route is refused 403 and changes nothing", ctx do
+      token = credential(ctx, @kind, levels(ctx))
+
+      for {method, path, body} <- write_routes(ctx, ctx.r) do
+        conn = token |> in_vault(ctx.r) |> send_req(method, path, body)
+
+        assert conn.status == 403,
+               "#{method} #{path} on READ vault returned #{conn.status}: #{conn.resp_body}"
+      end
+
+      assert note_content(ctx, ctx.r, "Dir/a.md") =~ "secret in Readable"
+    end
+
+    test "REST baseline: no write route is 403 on the WRITE vault", ctx do
+      token = credential(ctx, @kind, levels(ctx))
+
+      for {method, path, body} <- write_routes(ctx, ctx.w) do
+        conn = token |> in_vault(ctx.w) |> send_req(method, path, body)
+
+        refute conn.status in [401, 403],
+               "#{method} #{path} on W -> #{conn.status} #{conn.resp_body}"
+      end
+    end
+
+    test "every vault-scoped write route is refused on a NONE vault", ctx do
+      token = credential(ctx, @kind, levels(ctx))
+
+      for {method, path, body} <- write_routes(ctx, ctx.n) do
+        conn = token |> in_vault(ctx.n) |> send_req(method, path, body)
+        assert conn.status == 404, "#{method} #{path} on NONE vault returned #{conn.status}"
+      end
+    end
+
+    test "default-vault fallback (no X-Vault-ID) honours the level", ctx do
+      # Make R the default vault, then write with no header.
+      {:ok, _} = Vaults.update_vault(ctx.user, ctx.r.id, %{"is_default" => true})
+      token = credential(ctx, @kind, levels(ctx))
+
+      conn =
+        token |> as() |> post("/api/notes", %{"path" => "y.md", "content" => "x", "mtime" => 1})
+
+      assert conn.status == 403
+    end
+
+    test "a NONE default vault is not readable through the fallback", ctx do
+      {:ok, _} = Vaults.update_vault(ctx.user, ctx.n.id, %{"is_default" => true})
+      token = credential(ctx, @kind, levels(ctx))
+      conn = token |> as() |> get("/api/notes/Dir/a.md")
+      assert conn.status == 404
+      refute conn.resp_body =~ "secret"
+    end
+
+    test "reads on a NONE vault are refused on every GET route", ctx do
+      token = credential(ctx, @kind, levels(ctx))
+      note = ctx.notes[ctx.n.id]
+
+      for path <- [
+            "/api/notes/Dir/a.md",
+            "/api/notes/by-id/#{note.id}",
+            "/api/notes/by-id/#{note.id}/backlinks",
+            "/api/tags",
+            "/api/types",
+            "/api/folders",
+            "/api/folders/list",
+            "/api/folders/explicit",
+            "/api/vault/tree",
+            "/api/sync/manifest",
+            "/api/attachments",
+            "/api/attachments/changes",
+            "/api/logs",
+            "/api/embed-status"
+          ] do
+        conn = token |> in_vault(ctx.n) |> get(path)
+        assert conn.status == 404, "GET #{path} on NONE vault returned #{conn.status}"
+      end
+
+      conn = token |> in_vault(ctx.n) |> post("/api/search", %{"query" => "secret"})
+      assert conn.status == 404
+    end
+
+    test "a NONE vault's note id is not reachable through a writable vault header", ctx do
+      token = credential(ctx, @kind, levels(ctx))
+      n_note = ctx.notes[ctx.n.id]
+      r_note = ctx.notes[ctx.r.id]
+
+      assert (token |> in_vault(ctx.w) |> get("/api/notes/by-id/#{n_note.id}")).status == 404
+
+      assert (token |> in_vault(ctx.w) |> get("/api/notes/by-id/#{n_note.id}/backlinks")).status ==
+               404
+
+      # Destructive by-id ops under a WRITE header against R/N note ids.
+      for id <- [n_note.id, r_note.id] do
+        conn = token |> in_vault(ctx.w) |> delete("/api/notes/by-id/#{id}")
+        assert conn.status == 404, "delete_by_id cross-vault returned #{conn.status}"
+
+        conn =
+          token
+          |> in_vault(ctx.w)
+          |> send_req(:post, "/api/notes/batch-delete", %{"ids" => [id]})
+
+        assert conn.status in [404, 409], "batch-delete cross-vault returned #{conn.status}"
+
+        conn =
+          token
+          |> in_vault(ctx.w)
+          |> send_req(:post, "/api/notes/batch-move", %{"ids" => [id], "target_folder" => "M"})
+
+        assert conn.status in [404, 409], "batch-move cross-vault returned #{conn.status}"
+      end
+
+      assert note_content(ctx, ctx.n, "Dir/a.md") =~ "secret in Hidden"
+      assert note_content(ctx, ctx.r, "Dir/a.md") =~ "secret in Readable"
+    end
+
+    test "vault management: rename/delete/default of a READ vault refused", ctx do
+      token = credential(ctx, @kind, levels(ctx))
+
+      assert (token |> as() |> patch("/api/vaults/#{ctx.r.id}", %{"name" => "pwn"})).status ==
+               403
+
+      assert (token |> as() |> patch("/api/vaults/#{ctx.r.id}", %{"is_default" => true})).status ==
+               403
+
+      assert (token |> as() |> delete("/api/vaults/#{ctx.r.id}")).status == 403
+      assert (token |> as() |> get("/api/vaults/#{ctx.n.id}")).status == 404
+      {:ok, still} = Vaults.get_vault(ctx.user, ctx.r.id)
+      assert still.name == "Readable"
+    end
+
+    test "GET /api/vaults and /api/bootstrap never list the NONE vault", ctx do
+      token = credential(ctx, @kind, levels(ctx))
+      ids = token |> as() |> get("/api/vaults") |> json_response(200) |> Map.fetch!("vaults")
+      refute Enum.any?(ids, &(&1["id"] == ctx.n.id))
+      boot = token |> as() |> get("/api/bootstrap")
+
+      assert boot.status == 200
+      refute boot.resp_body =~ ctx.n.id
+      refute boot.resp_body =~ "Hidden"
+    end
+
+    test "register with a READ vault's client_id does not hand back write", ctx do
+      token = credential(ctx, @kind, levels(ctx, "write"))
+
+      conn =
+        token
+        |> as()
+        |> post("/api/vaults/register", %{"name" => "x", "client_id" => ctx.r.client_id})
+
+      # Existing: allowed to read the vault row. Must not be a write path.
+      assert conn.status in [200, 403]
+      {:ok, still} = Vaults.get_vault(ctx.user, ctx.r.id)
+      assert still.name == "Readable"
+    end
+
+    test "register with a NONE vault's client_id does not reveal it", ctx do
+      token = credential(ctx, @kind, levels(ctx, "write"))
+
+      conn =
+        token
+        |> as()
+        |> post("/api/vaults/register", %{"name" => "x", "client_id" => ctx.n.client_id})
+
+      assert conn.status == 403
+      refute conn.resp_body =~ "Hidden"
+    end
+
+    test "a READ-level grant cannot restore a deleted READ vault", ctx do
+      token = credential(ctx, @kind, levels(ctx, "write"))
+      {:ok, _} = Vaults.delete_vault(ctx.user, ctx.r.id)
+      assert (token |> as() |> post("/api/vaults/#{ctx.r.id}/restore")).status == 403
+    end
+  end
+
   for kind <- [:api_key, :oauth] do
-    describe "#{kind}: REST writes on a READ vault" do
+    describe "#{kind}: MCP on the READ and NONE vaults" do
       @kind kind
-      test "every vault-scoped write route is refused 403 and changes nothing", ctx do
-        token = credential(ctx, @kind, levels(ctx))
-
-        for {method, path, body} <- write_routes(ctx, ctx.r) do
-          conn = token |> in_vault(ctx.r) |> send_req(method, path, body)
-
-          assert conn.status == 403,
-                 "#{method} #{path} on READ vault returned #{conn.status}: #{conn.resp_body}"
-        end
-
-        assert note_content(ctx, ctx.r, "Dir/a.md") =~ "secret in Readable"
-      end
-
-      test "REST baseline: no write route is 403 on the WRITE vault", ctx do
-        token = credential(ctx, @kind, levels(ctx))
-
-        for {method, path, body} <- write_routes(ctx, ctx.w) do
-          conn = token |> in_vault(ctx.w) |> send_req(method, path, body)
-
-          refute conn.status in [401, 403],
-                 "#{method} #{path} on W -> #{conn.status} #{conn.resp_body}"
-        end
-      end
-
-      test "every vault-scoped write route is refused on a NONE vault", ctx do
-        token = credential(ctx, @kind, levels(ctx))
-
-        for {method, path, body} <- write_routes(ctx, ctx.n) do
-          conn = token |> in_vault(ctx.n) |> send_req(method, path, body)
-          assert conn.status == 404, "#{method} #{path} on NONE vault returned #{conn.status}"
-        end
-      end
-
-      test "default-vault fallback (no X-Vault-ID) honours the level", ctx do
-        # Make R the default vault, then write with no header.
-        {:ok, _} = Vaults.update_vault(ctx.user, ctx.r.id, %{"is_default" => true})
-        token = credential(ctx, @kind, levels(ctx))
-
-        conn =
-          token |> as() |> post("/api/notes", %{"path" => "y.md", "content" => "x", "mtime" => 1})
-
-        assert conn.status == 403
-      end
-
-      test "a NONE default vault is not readable through the fallback", ctx do
-        {:ok, _} = Vaults.update_vault(ctx.user, ctx.n.id, %{"is_default" => true})
-        token = credential(ctx, @kind, levels(ctx))
-        conn = token |> as() |> get("/api/notes/Dir/a.md")
-        assert conn.status == 404
-        refute conn.resp_body =~ "secret"
-      end
-
-      test "reads on a NONE vault are refused on every GET route", ctx do
-        token = credential(ctx, @kind, levels(ctx))
-        note = ctx.notes[ctx.n.id]
-
-        for path <- [
-              "/api/notes/Dir/a.md",
-              "/api/notes/by-id/#{note.id}",
-              "/api/notes/by-id/#{note.id}/backlinks",
-              "/api/tags",
-              "/api/types",
-              "/api/folders",
-              "/api/folders/list",
-              "/api/folders/explicit",
-              "/api/vault/tree",
-              "/api/sync/manifest",
-              "/api/attachments",
-              "/api/attachments/changes",
-              "/api/logs",
-              "/api/embed-status"
-            ] do
-          conn = token |> in_vault(ctx.n) |> get(path)
-          assert conn.status == 404, "GET #{path} on NONE vault returned #{conn.status}"
-        end
-
-        conn = token |> in_vault(ctx.n) |> post("/api/search", %{"query" => "secret"})
-        assert conn.status == 404
-      end
-
-      test "a NONE vault's note id is not reachable through a writable vault header", ctx do
-        token = credential(ctx, @kind, levels(ctx))
-        n_note = ctx.notes[ctx.n.id]
-        r_note = ctx.notes[ctx.r.id]
-
-        assert (token |> in_vault(ctx.w) |> get("/api/notes/by-id/#{n_note.id}")).status == 404
-
-        assert (token |> in_vault(ctx.w) |> get("/api/notes/by-id/#{n_note.id}/backlinks")).status ==
-                 404
-
-        # Destructive by-id ops under a WRITE header against R/N note ids.
-        for id <- [n_note.id, r_note.id] do
-          conn = token |> in_vault(ctx.w) |> delete("/api/notes/by-id/#{id}")
-          assert conn.status == 404, "delete_by_id cross-vault returned #{conn.status}"
-
-          conn =
-            token
-            |> in_vault(ctx.w)
-            |> send_req(:post, "/api/notes/batch-delete", %{"ids" => [id]})
-
-          assert conn.status in [404, 409], "batch-delete cross-vault returned #{conn.status}"
-
-          conn =
-            token
-            |> in_vault(ctx.w)
-            |> send_req(:post, "/api/notes/batch-move", %{"ids" => [id], "target_folder" => "M"})
-
-          assert conn.status in [404, 409], "batch-move cross-vault returned #{conn.status}"
-        end
-
-        assert note_content(ctx, ctx.n, "Dir/a.md") =~ "secret in Hidden"
-        assert note_content(ctx, ctx.r, "Dir/a.md") =~ "secret in Readable"
-      end
-
-      test "vault management: rename/delete/default of a READ vault refused", ctx do
-        token = credential(ctx, @kind, levels(ctx))
-
-        assert (token |> as() |> patch("/api/vaults/#{ctx.r.id}", %{"name" => "pwn"})).status ==
-                 403
-
-        assert (token |> as() |> patch("/api/vaults/#{ctx.r.id}", %{"is_default" => true})).status ==
-                 403
-
-        assert (token |> as() |> delete("/api/vaults/#{ctx.r.id}")).status == 403
-        assert (token |> as() |> get("/api/vaults/#{ctx.n.id}")).status == 404
-        {:ok, still} = Vaults.get_vault(ctx.user, ctx.r.id)
-        assert still.name == "Readable"
-      end
-
-      test "GET /api/vaults and /api/bootstrap never list the NONE vault", ctx do
-        token = credential(ctx, @kind, levels(ctx))
-        ids = token |> as() |> get("/api/vaults") |> json_response(200) |> Map.fetch!("vaults")
-        refute Enum.any?(ids, &(&1["id"] == ctx.n.id))
-        boot = token |> as() |> get("/api/bootstrap")
-
-        assert boot.status == 200
-        refute boot.resp_body =~ ctx.n.id
-        refute boot.resp_body =~ "Hidden"
-      end
-
-      test "register with a READ vault's client_id does not hand back write", ctx do
-        token = credential(ctx, @kind, levels(ctx, "write"))
-
-        conn =
-          token
-          |> as()
-          |> post("/api/vaults/register", %{"name" => "x", "client_id" => ctx.r.client_id})
-
-        # Existing: allowed to read the vault row. Must not be a write path.
-        assert conn.status in [200, 403]
-        {:ok, still} = Vaults.get_vault(ctx.user, ctx.r.id)
-        assert still.name == "Readable"
-      end
-
-      test "register with a NONE vault's client_id does not reveal it", ctx do
-        token = credential(ctx, @kind, levels(ctx, "write"))
-
-        conn =
-          token
-          |> as()
-          |> post("/api/vaults/register", %{"name" => "x", "client_id" => ctx.n.client_id})
-
-        assert conn.status == 403
-        refute conn.resp_body =~ "Hidden"
-      end
-
-      test "a READ-level grant cannot restore a deleted READ vault", ctx do
-        token = credential(ctx, @kind, levels(ctx, "write"))
-        {:ok, _} = Vaults.delete_vault(ctx.user, ctx.r.id)
-        assert (token |> as() |> post("/api/vaults/#{ctx.r.id}/restore")).status == 403
-      end
-
       test "MCP: every write tool is refused on R and N; reads of N refused", ctx do
         token = credential(ctx, @kind, levels(ctx))
 
@@ -595,37 +618,132 @@ defmodule EngramWeb.VaultAccessAttackTest do
     end
   end
 
-  for kind <- [:api_key, :oauth] do
-    describe "#{kind}: every vault route from the router" do
-      @kind kind
-      test "is refused on a NONE vault, reads included", ctx do
-        token = credential(ctx, @kind, levels(ctx))
+  describe "api_key: every vault route from the router" do
+    @kind :api_key
+    test "is refused on a NONE vault, reads included", ctx do
+      token = credential(ctx, @kind, levels(ctx))
 
-        for {verb, template} <- vault_routes() do
-          conn = token |> in_vault(ctx.n) |> send_req(verb, sample_path(template), %{})
+      for {verb, template} <- vault_routes() do
+        conn = token |> in_vault(ctx.n) |> send_req(verb, sample_path(template), %{})
 
-          assert conn.status == 404,
-                 "#{verb} #{template} on NONE vault returned #{conn.status}: #{conn.resp_body}"
-        end
+        assert conn.status == 404,
+               "#{verb} #{template} on NONE vault returned #{conn.status}: #{conn.resp_body}"
+      end
+    end
+
+    test "is refused on a READ vault unless it only reads", ctx do
+      token = credential(ctx, @kind, levels(ctx))
+
+      for {verb, template} <- vault_routes(), {verb, template} not in @vault_reads do
+        conn = token |> in_vault(ctx.r) |> send_req(verb, sample_path(template), %{})
+
+        assert conn.status == 403,
+               "#{verb} #{template} on READ vault returned #{conn.status}: #{conn.resp_body}"
       end
 
-      test "is refused on a READ vault unless it only reads", ctx do
-        token = credential(ctx, @kind, levels(ctx))
-
-        for {verb, template} <- vault_routes(), {verb, template} not in @vault_reads do
-          conn = token |> in_vault(ctx.r) |> send_req(verb, sample_path(template), %{})
-
-          assert conn.status == 403,
-                 "#{verb} #{template} on READ vault returned #{conn.status}: #{conn.resp_body}"
-        end
-
-        assert note_content(ctx, ctx.r, "Dir/a.md") =~ "secret in Readable"
-      end
+      assert note_content(ctx, ctx.r, "Dir/a.md") =~ "secret in Readable"
     end
   end
 
+  # REST routes outside VaultPlug that act on a vault or list them.
+  defp vault_management_routes(ctx) do
+    [
+      {:get, "/api/vaults", nil},
+      {:get, "/api/vaults?deleted=true", nil},
+      {:get, "/api/bootstrap", nil},
+      {:get, "/api/vaults/#{ctx.w.id}", nil},
+      {:patch, "/api/vaults/#{ctx.w.id}", %{"name" => "pwn"}},
+      {:delete, "/api/vaults/#{ctx.w.id}", nil},
+      {:post, "/api/vaults/#{ctx.w.id}/restore", nil},
+      {:post, "/api/vaults/register", %{"name" => "pwn", "client_id" => Ecto.UUID.generate()}}
+    ]
+  end
+
+  describe "oauth: outside /api/mcp" do
+    # The audience boundary itself: a live token, on the vault its grant
+    # writes, refused on every route but the upload.
+    for scope <- ["mcp", "mcp:read"] do
+      @scope scope
+      test "a live #{scope} token gets 401 on every REST route but the upload", ctx do
+        token = oauth_grant(ctx, levels(ctx), @scope)["access_token"]
+
+        routes =
+          for(
+            {verb, template} <- vault_routes(),
+            {verb, template} != {:post, "/api/attachments"},
+            do: {verb, sample_path(template), %{}}
+          ) ++ vault_management_routes(ctx)
+
+        for {verb, path, body} <- routes do
+          conn = token |> in_vault(ctx.w) |> mgmt(verb, path, body)
+          msg = "#{verb} #{path} -> #{conn.status} #{conn.resp_body}"
+          assert conn.status == 401, msg
+
+          assert get_resp_header(conn, "www-authenticate") == [~s(Bearer error="invalid_token")],
+                 msg
+        end
+
+        assert {:ok, %{name: "Writable", deleted_at: nil}} = Vaults.get_vault(ctx.user, ctx.w.id)
+        assert note_content(ctx, ctx.w, "Dir/a.md") =~ "secret in Writable"
+
+        # Live: the same token works where it is meant to.
+        assert ctx.w.id in (tool(token, "list_vaults", %{})
+                            |> get_in(["result", "structuredContent", "vaults"])
+                            |> Enum.map(& &1["id"]))
+
+        refute upload(token, ctx.w).status == 401
+      end
+    end
+
+    test "upload honours the levels: W stores, R is 403, N is 404 like a random vault", ctx do
+      token = credential(ctx, :oauth, levels(ctx))
+
+      assert upload(token, ctx.w).status in 200..201
+      assert attachment?(ctx, ctx.w)
+
+      assert json_response(upload(token, ctx.r), 403) == %{"error" => "read_only_vault"}
+      refute attachment?(ctx, ctx.r)
+
+      real = upload(token, ctx.n)
+      fake = upload(token, %{id: Ecto.UUID.generate()})
+      assert real.status == 404
+      assert {real.status, real.resp_body} == {fake.status, fake.resp_body}
+      refute attachment?(ctx, ctx.n)
+    end
+
+    test "upload without X-Vault-ID honours the default vault's level", ctx do
+      token = credential(ctx, :oauth, levels(ctx))
+
+      {:ok, _} = Vaults.update_vault(ctx.user, ctx.n.id, %{"is_default" => true})
+      assert upload(token, nil).status == 404
+      refute attachment?(ctx, ctx.n)
+
+      {:ok, _} = Vaults.update_vault(ctx.user, ctx.r.id, %{"is_default" => true})
+      assert json_response(upload(token, nil), 403) == %{"error" => "read_only_vault"}
+      refute attachment?(ctx, ctx.r)
+    end
+
+    # The scope gate answers before any vault is resolved, so every vault
+    # (N and one that does not exist included) gets the same refusal: no
+    # write, and no oracle.
+    test "an mcp:read token's upload is refused on every vault, alike", ctx do
+      token = oauth_grant(ctx, levels(ctx), "mcp:read")["access_token"]
+      fake = upload(token, %{id: Ecto.UUID.generate()})
+      assert json_response(fake, 403) == %{"error" => "read_only_grant"}
+
+      for vault <- [ctx.w, ctx.r, ctx.n, nil] do
+        conn = upload(token, vault)
+        assert {conn.status, conn.resp_body} == {fake.status, fake.resp_body}
+      end
+
+      for vault <- [ctx.w, ctx.r, ctx.n], do: refute(attachment?(ctx, vault))
+    end
+  end
+
+  # REST oracles, so API keys: an OAuth token gets 401 on every one of these
+  # routes. Its oracles are the MCP one above and the upload's.
   describe "existence oracle" do
-    for kind <- [:api_key, :oauth] do
+    for kind <- [:api_key] do
       @kind kind
       test "#{kind}: X-Vault-ID of a NONE vault answers like a random uuid", ctx do
         token = credential(ctx, @kind, levels(ctx))
@@ -748,12 +866,19 @@ defmodule EngramWeb.VaultAccessAttackTest do
 
       Engram.Cache.evict(:oauth_grant, family)
 
-      conn =
-        grant["access_token"]
-        |> in_vault(ctx.r)
-        |> post("/api/notes", %{"path" => "q.md", "content" => "x", "mtime" => 1})
+      assert json_response(upload(grant["access_token"], ctx.r), 403) == %{
+               "error" => "read_only_grant"
+             }
 
-      assert conn.status == 403
+      refute attachment?(ctx, ctx.r)
+
+      assert refused_tool?(
+               tool(grant["access_token"], "write_note", %{
+                 "vault_id" => ctx.r.id,
+                 "path" => "q.md",
+                 "content" => "x"
+               })
+             )
     end
 
     test "PATCH with another user's vault id is refused", ctx do
@@ -806,11 +931,16 @@ defmodule EngramWeb.VaultAccessAttackTest do
 
       body = %{"vault_access" => %{}, "default_access" => "write"}
 
-      for t <- [raw, oauth] do
-        assert (t |> as() |> patch("/api/connections/pat/#{key.id}", body)).status == 403
-        assert (t |> as() |> post("/api/api-keys", %{"name" => "x"})).status == 403
-        assert (t |> as() |> post("/api/connections/pat", %{"name" => "x"})).status == 403
+      # The key reaches RequireSession (403); the OAuth token is refused at
+      # Auth for its audience (401). RequireSession's guard for grant tokens
+      # is pinned with legacy-audience ones below.
+      for {t, status} <- [{raw, 403}, {oauth, 401}] do
+        assert (t |> as() |> patch("/api/connections/pat/#{key.id}", body)).status == status
+        assert (t |> as() |> post("/api/api-keys", %{"name" => "x"})).status == status
+        assert (t |> as() |> post("/api/connections/pat", %{"name" => "x"})).status == status
       end
+
+      assert (raw |> in_vault(ctx.r) |> post("/api/notes", %{"path" => "q.md"})).status == 403
     end
 
     test "legacy engram_ key cannot be PATCHed into levels", ctx do
@@ -879,12 +1009,7 @@ defmodule EngramWeb.VaultAccessAttackTest do
       grant = oauth_grant(ctx, levels(ctx), "mcp")
       token = grant["access_token"]
 
-      assert (token
-              |> in_vault(ctx.w)
-              |> post("/api/notes", %{"path" => "w1.md", "content" => "x", "mtime" => 1})).status in [
-               200,
-               201
-             ]
+      assert upload(token, ctx.w, "w1.txt").status in [200, 201]
 
       family = family_of(grant["refresh_token"])
 
@@ -898,10 +1023,8 @@ defmodule EngramWeb.VaultAccessAttackTest do
 
       assert conn.status == 200
 
-      assert (token
-              |> in_vault(ctx.w)
-              |> post("/api/notes", %{"path" => "w2.md", "content" => "x", "mtime" => 1})).status ==
-               403
+      assert upload(token, ctx.w, "w2.txt").status == 403
+      refute attachment?(ctx, ctx.w, "w2.txt")
 
       refreshed =
         build_conn()
@@ -912,13 +1035,24 @@ defmodule EngramWeb.VaultAccessAttackTest do
         })
         |> json_response(200)
 
-      assert (refreshed["access_token"]
-              |> in_vault(ctx.w)
-              |> post("/api/notes", %{"path" => "w3.md", "content" => "x", "mtime" => 1})).status ==
-               403
+      fresh = refreshed["access_token"]
+      assert upload(fresh, ctx.w, "w3.txt").status == 403
+      refute attachment?(ctx, ctx.w, "w3.txt")
 
-      assert (refreshed["access_token"] |> in_vault(ctx.r) |> get("/api/notes/Dir/a.md")).status ==
-               404
+      assert refused_tool?(
+               tool(fresh, "write_note", %{
+                 "vault_id" => ctx.w.id,
+                 "path" => "w3.md",
+                 "content" => "x"
+               })
+             )
+
+      # R went from read to none (default none): unreadable. The grant now
+      # writes nowhere, so any upload is refused before a vault is resolved.
+      read_r = tool(fresh, "get_notes", %{"vault_id" => ctx.r.id, "paths" => ["Dir/a.md"]})
+      assert refused_tool?(read_r)
+      refute inspect(read_r) =~ "secret in Readable"
+      assert json_response(upload(fresh, ctx.r), 403) == %{"error" => "read_only_grant"}
     end
 
     test "refresh with a wider scope param does not widen mcp:read", ctx do
@@ -942,11 +1076,8 @@ defmodule EngramWeb.VaultAccessAttackTest do
           tool(t, "write_note", %{"vault_id" => ctx.r.id, "path" => "q.md", "content" => "x"})
 
         assert refused_tool?(body)
-
-        assert (t
-                |> in_vault(ctx.r)
-                |> post("/api/notes", %{"path" => "q.md", "content" => "x", "mtime" => 1})).status ==
-                 403
+        assert upload(t, ctx.r).status == 403
+        refute attachment?(ctx, ctx.r)
       end
     end
 
@@ -969,14 +1100,20 @@ defmodule EngramWeb.VaultAccessAttackTest do
 
       assert conn.status in [404, 422]
 
-      assert (ogrant["access_token"]
-              |> in_vault(ov)
-              |> post("/api/notes", %{"path" => "q.md", "content" => "x", "mtime" => 1})).status ==
-               403
+      # Still read-only: the edit never landed. With no writable vault the
+      # account-level gate answers, before any vault is resolved.
+      assert json_response(upload(ogrant["access_token"], ov), 403) == %{
+               "error" => "read_only_grant"
+             }
     end
 
+    # MCP has no vault-creating tool, so REST is the only way in: a key is
+    # refused by its level (403), an OAuth token by its audience (401).
     test "a read-default credential cannot create a vault (MCP or REST) and then write it", ctx do
-      for kind <- [:api_key, :oauth] do
+      vault_ids = fn -> ctx.user |> Vaults.list_vaults() |> Enum.map(& &1.id) |> Enum.sort() end
+      before = vault_ids.()
+
+      for {kind, status} <- [{:api_key, 403}, {:oauth, 401}] do
         token = credential(ctx, kind, levels(ctx, "read"))
 
         conn =
@@ -987,13 +1124,19 @@ defmodule EngramWeb.VaultAccessAttackTest do
             "client_id" => Ecto.UUID.generate()
           })
 
-        assert conn.status == 403
+        assert conn.status == status
       end
+
+      assert vault_ids.() == before
     end
   end
 
   # ── credential management is session-only ─────────────────────────────────
 
+  # An OAuth token as minted is refused at Auth for its audience (#1997)
+  # before RequireSession runs; the same grant under the legacy `aud` (a
+  # token minted before #1997) reaches RequireSession, which must refuse it
+  # too. Both are pinned, so either guard alone holds the line.
   describe "RequireSession refuses every OAuth grant token" do
     # A grant row may hold a NULL scope (the column is nullable; rows from
     # before scopes existed). Its access token then carries no `scope` claim,
@@ -1024,10 +1167,14 @@ defmodule EngramWeb.VaultAccessAttackTest do
       refute Map.has_key?(claims, "scope")
       assert claims["gid"] == family
 
-      assert_session_only(ctx, token, family)
+      assert_session_only(ctx, token, family, {401, ["unauthorized"]})
+      legacy = legacy_audience(ctx.user, token)
+      assert_session_only(ctx, legacy, family)
 
       # The grant is still at its original reach: nothing widened it.
-      assert (token |> in_vault(ctx.r) |> post("/api/notes", %{"path" => "q.md"})).status == 403
+      assert (legacy |> in_vault(ctx.r) |> post("/api/notes", %{"path" => "q.md"})).status == 403
+      assert upload(token, ctx.r).status == 403
+      refute attachment?(ctx, ctx.r)
     end
 
     for scope <- ["mcp", "mcp:read"] do
@@ -1047,19 +1194,20 @@ defmodule EngramWeb.VaultAccessAttackTest do
             do: ["oauth_grant_not_allowed", "read_only_grant"],
             else: ["oauth_grant_not_allowed"]
 
-        assert_session_only(
-          ctx,
-          grant["access_token"],
-          family_of(grant["refresh_token"]),
-          refusals
-        )
+        token = grant["access_token"]
+        family = family_of(grant["refresh_token"])
+
+        assert_session_only(ctx, token, family, {401, ["unauthorized"]})
+        assert_session_only(ctx, legacy_audience(ctx.user, token), family, {403, refusals})
       end
     end
   end
 
-  # Every credential-management route answers 403 oauth_grant_not_allowed and
-  # changes nothing: the grant's own family, a key, the user's connections.
-  defp assert_session_only(ctx, token, family, refusals \\ ["oauth_grant_not_allowed"]) do
+  # Every credential-management route answers `status` with an error in
+  # `refusals`, and changes nothing: the grant's own family, a key, the
+  # user's connections.
+  defp assert_session_only(ctx, token, family, expect \\ {403, ["oauth_grant_not_allowed"]}) do
+    {status, refusals} = expect
     {:ok, _raw, key} = Accounts.create_api_key(ctx.user, "victim", levels(ctx))
     widen = %{"vault_access" => %{}, "default_access" => "write"}
     oauth_path = "/api/connections/oauth/#{ctx.client.client_id}"
@@ -1078,12 +1226,16 @@ defmodule EngramWeb.VaultAccessAttackTest do
         ] do
       conn = token |> as() |> mgmt(method, path, body)
       msg = "#{method} #{path} -> #{conn.status} #{conn.resp_body}"
-      assert conn.status == 403, msg
+      assert conn.status == status, msg
       assert Jason.decode!(conn.resp_body)["error"] in refusals, msg
     end
 
     keys = Repo.all(from(k in Engram.Accounts.ApiKey, select: k.name), skip_tenant_check: true)
     assert keys == ["victim"]
+
+    Repo.delete_all(from(k in Engram.Accounts.ApiKey, where: k.id == ^key.id),
+      skip_tenant_check: true
+    )
 
     assert Repo.one(
              from(t in Engram.OAuth.RefreshToken,

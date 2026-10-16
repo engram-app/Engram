@@ -224,28 +224,50 @@ defmodule EngramWeb.McpReadScopeTest do
     end
   end
 
-  # The same access token authenticates the REST API (get_attachment_upload_target
-  # tells the model to POST there with it), so read-only must hold there too.
-  describe "REST enforcement" do
-    test "a write under mcp:read is refused", %{user: u, vault: v, client: c} do
+  # An OAuth access token is bound to the MCP server (#1997): beside
+  # `/api/mcp` it reaches only the attachment upload, which
+  # get_attachment_upload_target tells clients to call with the same token.
+  # Read-only must hold there; every other REST route refuses the token.
+  describe "outside /api/mcp" do
+    test "an upload under mcp:read is refused and stores nothing", %{
+      user: u,
+      vault: v,
+      client: c
+    } do
       conn =
         build_conn()
         |> bearer(grant(u, c, "mcp:read"))
         |> put_req_header("x-vault-id", v.id)
-        |> post("/api/notes", %{"path" => "rest.md", "content" => "x", "mtime" => 1.0})
+        |> post("/api/attachments", %{"path" => "f.txt", "content_base64" => "aGk="})
 
       assert json_response(conn, 403)["error"] == "read_only_grant"
-      assert {:error, :not_found} = Engram.Notes.get_note(u, v, "rest.md")
+      assert {:ok, nil} = Engram.Attachments.get_attachment(u, v, "f.txt")
+
+      # The same upload under mcp stores it: the body is valid, so the
+      # refusal above is the scope.
+      conn =
+        build_conn()
+        |> bearer(grant(u, c, "mcp"))
+        |> put_req_header("x-vault-id", v.id)
+        |> post("/api/attachments", %{"path" => "f.txt", "content_base64" => "aGk="})
+
+      assert conn.status in 200..201, conn.resp_body
+      assert {:ok, %{}} = Engram.Attachments.get_attachment(u, v, "f.txt")
     end
 
-    test "a read under mcp:read is allowed", %{user: u, vault: v, client: c} do
+    test "a REST read under mcp:read is 401: the token is not for REST", %{
+      user: u,
+      vault: v,
+      client: c
+    } do
       conn =
         build_conn()
         |> bearer(grant(u, c, "mcp:read"))
         |> put_req_header("x-vault-id", v.id)
         |> get("/api/tags")
 
-      assert conn.status == 200
+      assert conn.status == 401
+      assert get_resp_header(conn, "www-authenticate") == [~s(Bearer error="invalid_token")]
     end
   end
 

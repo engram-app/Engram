@@ -86,12 +86,37 @@ defmodule Engram.OAuthGrantStateTest do
       Repo.update_all(from(t in RefreshToken, where: t.token_hash == ^hash), set: changes)
   end
 
-  # A vault-scoped read every live grant in this file may make.
-  defp folders(token, vault) do
+  # A vault-scoped read every live grant in this file may make, through MCP:
+  # an OAuth access token is bound to the MCP server (#1997) and gets 401 on
+  # REST whatever its grant says, so only here does a status prove anything
+  # about the grant. `:ok` read, `:refused` a tool refusal for that vault (the
+  # MCP form of a REST 404), or the HTTP status when the request is refused.
+  defp read(token, vault) do
+    conn = read_conn(token, vault)
+
+    case conn.status do
+      200 ->
+        body = json_response(conn, 200)
+        refute body["error"], "protocol error: #{inspect(body)}"
+        if body["result"]["isError"], do: :refused, else: :ok
+
+      status ->
+        status
+    end
+  end
+
+  defp read_conn(token, vault) do
     build_conn()
     |> put_req_header("authorization", "Bearer #{token}")
-    |> put_req_header("x-vault-id", vault.id)
-    |> get("/api/folders")
+    |> post("/api/mcp", %{
+      "jsonrpc" => "2.0",
+      "id" => 1,
+      "method" => "tools/call",
+      "params" => %{
+        "name" => "list_folder",
+        "arguments" => %{"vault_id" => vault.id, "folder" => ""}
+      }
+    })
   end
 
   defp evict(family), do: Engram.Cache.evict_local(:oauth_grant, family)
@@ -105,13 +130,15 @@ defmodule Engram.OAuthGrantStateTest do
       other = ensure_external_id(insert(:user))
       theirs = grant(ctx, :all, other)
 
-      # Signed with our key, but `gid` names the other user's family.
+      # Signed with our key, but `gid` names the other user's family. It
+      # carries the legacy `aud` (as tokens minted before #1997 do), so this
+      # is the gid pairing refusing it, not the audience.
       forged = Accounts.generate_jwt(ctx.user, %{"scope" => "mcp", "gid" => gid(theirs)})
 
       assert Accounts.grant_claims(forged) == :revoked
       assert OAuth.granted_at(Map.put(claims(theirs), "user_id", ctx.user.id)) == :revoked
 
-      assert folders(forged, ctx.a).status == 401
+      assert read(forged, ctx.a) == 401
 
       # The owner's own token still works: the check is the pairing.
       assert {:ok, _} = Accounts.grant_claims(theirs.access_token)
@@ -134,11 +161,11 @@ defmodule Engram.OAuthGrantStateTest do
 
     test "a token revoked through it answers 401 at once", ctx do
       tokens = grant(ctx, :all)
-      assert folders(tokens.access_token, ctx.a).status == 200
+      assert read(tokens.access_token, ctx.a) == :ok
 
       :ok = OAuth.revoke_token(tokens.refresh_token, ctx.client.client_id, nil)
 
-      assert folders(tokens.access_token, ctx.a).status == 401
+      assert read(tokens.access_token, ctx.a) == 401
     end
   end
 
@@ -150,7 +177,7 @@ defmodule Engram.OAuthGrantStateTest do
       :ok = Connections.revoke_oauth_grant(ctx.user.id, gid(tokens))
       assert is_nil(Engram.UsageMeters.last_active_at(ctx.user.id))
 
-      conn = folders(tokens.access_token, ctx.a)
+      conn = read_conn(tokens.access_token, ctx.a)
 
       assert conn.status == 401
       # BumpActivity (and DeviceFingerprint, WebActivity, the rps budget) run
@@ -161,7 +188,7 @@ defmodule Engram.OAuthGrantStateTest do
 
     test "a live grant's token still passes and is stamped", ctx do
       tokens = grant(ctx, :all)
-      assert folders(tokens.access_token, ctx.a).status == 200
+      assert read(tokens.access_token, ctx.a) == :ok
       assert %DateTime{} = Engram.UsageMeters.last_active_at(ctx.user.id)
     end
   end
@@ -219,7 +246,7 @@ defmodule Engram.OAuthGrantStateTest do
       evict(gid(first))
 
       assert Accounts.grant_claims(second.access_token) == :revoked
-      assert folders(second.access_token, ctx.a).status == 401
+      assert read(second.access_token, ctx.a) == 401
     end
 
     # What a rotation that read its row just before a family revoke leaves
@@ -256,7 +283,7 @@ defmodule Engram.OAuthGrantStateTest do
       %{reissued: reissued} = legacy_reissue(ctx)
 
       assert {:ok, _} = Accounts.grant_claims(reissued.access_token)
-      assert folders(reissued.access_token, ctx.a).status == 200
+      assert read(reissued.access_token, ctx.a) == :ok
       assert {:ok, _} = OAuth.rotate_refresh_token(reissued.refresh_token, ctx.client.client_id)
     end
 
@@ -392,8 +419,8 @@ defmodule Engram.OAuthGrantStateTest do
       assert expanded["vault_ids"] == [ctx.a.id]
       assert expanded["vault_id"] == ctx.a.id
 
-      assert folders(tokens.access_token, ctx.b).status == 404
-      assert folders(tokens.access_token, ctx.a).status == 200
+      assert read(tokens.access_token, ctx.b) == :refused
+      assert read(tokens.access_token, ctx.a) == :ok
     end
 
     # Narrowing skips revoked rows, so a superseded successor keeps the old,
@@ -412,7 +439,7 @@ defmodule Engram.OAuthGrantStateTest do
 
       {:ok, expanded} = Accounts.grant_claims(reissued.access_token)
       assert expanded["vault_ids"] == [ctx.a.id]
-      assert folders(reissued.access_token, ctx.b).status == 404
+      assert read(reissued.access_token, ctx.b) == :refused
     end
 
     test "a family with every row revoked still answers revoked", ctx do
@@ -453,7 +480,7 @@ defmodule Engram.OAuthGrantStateTest do
 
     defp live!(tokens, vault) do
       assert {:ok, _} = Accounts.grant_claims(tokens.access_token)
-      assert folders(tokens.access_token, vault).status == 200
+      assert read(tokens.access_token, vault) == :ok
     end
 
     test "a leveled grant writing two vaults survives purge of one", ctx do

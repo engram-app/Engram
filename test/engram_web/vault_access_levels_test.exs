@@ -6,13 +6,18 @@ defmodule EngramWeb.VaultAccessLevelsTest do
   vault the credential does not list, resolved at REQUEST time so a vault
   created after the credential needs no backfill.
 
-  Every case runs for both kinds. OAuth credentials come out of the real
-  consent -> /oauth/token chain; API keys out of `Accounts.create_api_key/3`.
+  Every rule runs for both kinds, on the surfaces each reaches. OAuth
+  credentials come out of the real consent -> /oauth/token chain; API keys
+  out of `Accounts.create_api_key/3`. An OAuth access token is bound to the
+  MCP server (#1997): beside `/api/mcp` it reaches only the attachment
+  upload, and every other REST route answers it 401 (pinned in
+  vault_access_attack_test.exs). So REST reads and vault lifecycle run for
+  API keys, and the OAuth form of the same rule runs on MCP and the upload.
   """
   use EngramWeb.ConnCase, async: true
 
   import Ecto.Query, only: [from: 2]
-  import Engram.OAuthHelpers, only: [code_from_redirect: 1, pkce_pair: 0]
+  import Engram.OAuthHelpers, only: [code_from_redirect: 1, legacy_audience: 2, pkce_pair: 0]
 
   alias Engram.{Accounts, OAuth, Vaults}
   alias Engram.Auth.Providers.Local
@@ -150,6 +155,51 @@ defmodule EngramWeb.VaultAccessLevelsTest do
 
   defp rest_read(token, vault),
     do: token |> as() |> put_req_header("x-vault-id", vault.id) |> get("/api/notes/a.md")
+
+  defp upload(token, vault) do
+    token
+    |> as()
+    |> put_req_header("x-vault-id", vault.id)
+    |> post("/api/attachments", %{"path" => "f.txt", "content_base64" => "aGk="})
+  end
+
+  # Reading a vault's a.md the way each kind can: an API key over REST, an
+  # OAuth token over MCP. `:ok`, or `:refused` for a vault out of reach
+  # (REST 404, or the tool refusal that names the subset; a missing note or
+  # any other refusal fails here, so `:refused` is never vacuous).
+  defp reads(:api_key, token, vault) do
+    case rest_read(token, vault) do
+      %{status: 200} ->
+        :ok
+
+      %{status: 404} = conn ->
+        refute conn.resp_body =~ "in #{vault.name}"
+        :refused
+    end
+  end
+
+  defp reads(:oauth, token, vault) do
+    body = tool(token, "get_notes", %{"vault_id" => vault.id, "paths" => ["a.md"]})
+    refute body["error"], inspect(body)
+    text = body["result"]["content"] |> Enum.map_join(" ", & &1["text"])
+
+    cond do
+      body["result"]["isError"] != true ->
+        :ok
+
+      text =~ "restricted to a subset" ->
+        refute text =~ "in #{vault.name}"
+        :refused
+
+      true ->
+        flunk("unexpected refusal: #{text}")
+    end
+  end
+
+  # The HTTP write each kind reaches beside MCP: an API key the REST API, an
+  # OAuth token the attachment upload.
+  defp http_write(:api_key, token, vault), do: rest_write(token, vault)
+  defp http_write(:oauth, token, vault), do: upload(token, vault)
 
   # Stands in for Qdrant and records every query body, so a test can assert on
   # the vault filter that actually left the server (an empty result proves
@@ -295,101 +345,14 @@ defmodule EngramWeb.VaultAccessLevelsTest do
       end
     end
 
-    describe "#{kind}: REST" do
-      test "a write to a read-level vault is 403 read_only_vault", ctx do
-        conn = ctx |> credential(unquote(kind), levels(ctx, "none")) |> rest_write(ctx.r)
-
-        assert json_response(conn, 403)["error"] == "read_only_vault"
-        refute note_exists?(ctx, ctx.r, "rest.md")
-      end
-
-      test "a write to a write-level vault succeeds", ctx do
-        conn = ctx |> credential(unquote(kind), levels(ctx, "none")) |> rest_write(ctx.w)
-
-        assert conn.status in 200..201
-        assert note_exists?(ctx, ctx.w, "rest.md")
-      end
-
-      test "reads follow reachability: read ok, none refused", ctx do
-        token = credential(ctx, unquote(kind), levels(ctx, "none"))
-
-        assert rest_read(token, ctx.r).status == 200
-        assert rest_read(token, ctx.n).status == 404
-      end
-
-      test "search (a read over POST) is allowed on a read-level vault", ctx do
-        conn =
-          ctx
-          |> credential(unquote(kind), levels(ctx, "none"))
-          |> as()
-          |> put_req_header("x-vault-id", ctx.r.id)
-          # An empty body fails validation INSIDE the controller, so any
-          # status other than 403 proves the read-only guard let it through.
-          |> post("/api/search", %{})
-
-        refute conn.status == 403
-      end
-    end
-
-    describe "#{kind}: vault lifecycle" do
-      test "rename, delete and restore need write on that vault", ctx do
-        token = credential(ctx, unquote(kind), levels(ctx, "none"))
-
-        assert token
-               |> as()
-               |> patch("/api/vaults/#{ctx.r.id}", %{"name" => "x"})
-               |> json_response(403)
-
-        assert token |> as() |> delete("/api/vaults/#{ctx.r.id}") |> json_response(403)
-        assert token |> as() |> post("/api/vaults/#{ctx.r.id}/restore") |> json_response(403)
-        assert {:ok, _} = Vaults.get_vault(ctx.user, ctx.r.id)
-
-        assert token
-               |> as()
-               |> patch("/api/vaults/#{ctx.w.id}", %{"name" => "Renamed"})
-               |> json_response(200)
-      end
-
-      test "out-of-scope answers like a missing vault; read-only is a visible 403", ctx do
-        token = credential(ctx, unquote(kind), levels(ctx, "none"))
-        read_only = token |> as() |> delete("/api/vaults/#{ctx.r.id}") |> json_response(403)
-        hidden = token |> as() |> delete("/api/vaults/#{ctx.n.id}") |> json_response(404)
-        missing = token |> as() |> delete("/api/vaults/#{Ecto.UUID.generate()}")
-
-        assert read_only == %{"error" => "Not authorized for this vault"}
-        assert hidden == json_response(missing, 404)
-      end
-
-      test "index and show work at any level", ctx do
-        token = credential(ctx, unquote(kind), levels(ctx, "none"))
-
-        assert token |> as() |> get("/api/vaults/#{ctx.r.id}") |> json_response(200)
-        assert token |> as() |> get("/api/vaults") |> json_response(200)
-      end
-
-      for {policy, allowed?} <- [{"none", false}, {"read", false}, {"write", true}] do
-        test "creating a vault needs a write new-vaults policy (#{policy})", ctx do
-          conn =
-            ctx
-            |> credential(unquote(kind), levels(ctx, unquote(policy)))
-            |> as()
-            |> post("/api/vaults/register", %{
-              "name" => "Brand New",
-              "client_id" => Ecto.UUID.generate()
-            })
-
-          if unquote(allowed?), do: assert(conn.status == 201), else: assert(conn.status == 403)
-        end
-      end
-    end
-
     describe "#{kind}: vaults created after the credential" do
       test "policy none: invisible everywhere", ctx do
         token = credential(ctx, unquote(kind), levels(ctx, "none"))
         later = later_vault(ctx)
 
         refute to_string(later.id) in listed_vault_ids(token)
-        assert rest_read(token, later).status == 404
+        assert reads(unquote(kind), token, later) == :refused
+        assert http_write(unquote(kind), token, later).status == 404
 
         assert tool(token, "get_notes", %{"vault_id" => later.id, "paths" => ["a.md"]})["result"][
                  "isError"
@@ -406,7 +369,9 @@ defmodule EngramWeb.VaultAccessLevelsTest do
         refute to_string(ctx.n.id) in searched
       end
 
-      test "cross-vault REST search filters to what the levels reach", ctx do
+      # Cross-vault search: REST `cross_vault` for a key, a bare MCP
+      # search_notes (every reachable vault) for an OAuth token.
+      test "cross-vault search filters to what the levels reach", ctx do
         insert(:user_limit_override,
           user: ctx.user,
           key: "cross_vault_search",
@@ -417,13 +382,18 @@ defmodule EngramWeb.VaultAccessLevelsTest do
         later = later_vault(ctx)
         capture_qdrant()
 
-        conn =
-          token
-          |> as()
-          |> put_req_header("x-vault-id", ctx.w.id)
-          |> post("/api/search", %{"query" => "x", "cross_vault" => true})
+        if unquote(kind) == :api_key do
+          conn =
+            token
+            |> as()
+            |> put_req_header("x-vault-id", ctx.w.id)
+            |> post("/api/search", %{"query" => "x", "cross_vault" => true})
 
-        assert conn.status == 200
+          assert conn.status == 200
+        else
+          refute tool(token, "search_notes", %{"query" => "x"})["error"]
+        end
+
         searched = qdrant_vault_ids()
 
         for v <- [ctx.w, ctx.r, later], do: assert(to_string(v.id) in searched, v.name)
@@ -435,10 +405,17 @@ defmodule EngramWeb.VaultAccessLevelsTest do
         later = later_vault(ctx)
 
         assert to_string(later.id) in listed_vault_ids(token)
-        assert rest_read(token, later).status == 200
+        assert reads(unquote(kind), token, later) == :ok
         assert refusal(write_note(token, later)) =~ "read-only"
-        assert json_response(rest_write(token, later), 403)["error"] == "read_only_vault"
-        assert token |> as() |> delete("/api/vaults/#{later.id}") |> json_response(403)
+
+        assert json_response(http_write(unquote(kind), token, later), 403)["error"] ==
+                 "read_only_vault"
+
+        # Vault lifecycle is REST: refused by level for a key, by audience
+        # (401) for an OAuth token.
+        delete = token |> as() |> delete("/api/vaults/#{later.id}")
+        assert delete.status == if(unquote(kind) == :api_key, do: 403, else: 401)
+        assert {:ok, _} = Vaults.get_vault(ctx.user, later.id)
       end
 
       test "policy write: writable", ctx do
@@ -447,7 +424,98 @@ defmodule EngramWeb.VaultAccessLevelsTest do
 
         assert written?(write_note(token, later))
         assert note_exists?(ctx, later, "new.md")
-        assert rest_write(token, later).status in 200..201
+        assert http_write(unquote(kind), token, later).status in 200..201
+      end
+    end
+  end
+
+  # REST and vault lifecycle are API-key surfaces: an OAuth token gets 401 on
+  # every one of these routes (vault_access_attack_test.exs), so its levels
+  # are pinned on MCP above and on the upload ("vaults created after").
+  describe "api_key: REST" do
+    test "a write to a read-level vault is 403 read_only_vault", ctx do
+      conn = ctx |> credential(:api_key, levels(ctx, "none")) |> rest_write(ctx.r)
+
+      assert json_response(conn, 403)["error"] == "read_only_vault"
+      refute note_exists?(ctx, ctx.r, "rest.md")
+    end
+
+    test "a write to a write-level vault succeeds", ctx do
+      conn = ctx |> credential(:api_key, levels(ctx, "none")) |> rest_write(ctx.w)
+
+      assert conn.status in 200..201
+      assert note_exists?(ctx, ctx.w, "rest.md")
+    end
+
+    test "reads follow reachability: read ok, none refused", ctx do
+      token = credential(ctx, :api_key, levels(ctx, "none"))
+
+      assert rest_read(token, ctx.r).status == 200
+      assert rest_read(token, ctx.n).status == 404
+    end
+
+    test "search (a read over POST) is allowed on a read-level vault", ctx do
+      conn =
+        ctx
+        |> credential(:api_key, levels(ctx, "none"))
+        |> as()
+        |> put_req_header("x-vault-id", ctx.r.id)
+        # An empty body fails validation INSIDE the controller, so any
+        # status other than 403 proves the read-only guard let it through.
+        |> post("/api/search", %{})
+
+      refute conn.status == 403
+    end
+  end
+
+  describe "api_key: vault lifecycle" do
+    test "rename, delete and restore need write on that vault", ctx do
+      token = credential(ctx, :api_key, levels(ctx, "none"))
+
+      assert token
+             |> as()
+             |> patch("/api/vaults/#{ctx.r.id}", %{"name" => "x"})
+             |> json_response(403)
+
+      assert token |> as() |> delete("/api/vaults/#{ctx.r.id}") |> json_response(403)
+      assert token |> as() |> post("/api/vaults/#{ctx.r.id}/restore") |> json_response(403)
+      assert {:ok, _} = Vaults.get_vault(ctx.user, ctx.r.id)
+
+      assert token
+             |> as()
+             |> patch("/api/vaults/#{ctx.w.id}", %{"name" => "Renamed"})
+             |> json_response(200)
+    end
+
+    test "out-of-scope answers like a missing vault; read-only is a visible 403", ctx do
+      token = credential(ctx, :api_key, levels(ctx, "none"))
+      read_only = token |> as() |> delete("/api/vaults/#{ctx.r.id}") |> json_response(403)
+      hidden = token |> as() |> delete("/api/vaults/#{ctx.n.id}") |> json_response(404)
+      missing = token |> as() |> delete("/api/vaults/#{Ecto.UUID.generate()}")
+
+      assert read_only == %{"error" => "Not authorized for this vault"}
+      assert hidden == json_response(missing, 404)
+    end
+
+    test "index and show work at any level", ctx do
+      token = credential(ctx, :api_key, levels(ctx, "none"))
+
+      assert token |> as() |> get("/api/vaults/#{ctx.r.id}") |> json_response(200)
+      assert token |> as() |> get("/api/vaults") |> json_response(200)
+    end
+
+    for {policy, allowed?} <- [{"none", false}, {"read", false}, {"write", true}] do
+      test "creating a vault needs a write new-vaults policy (#{policy})", ctx do
+        conn =
+          ctx
+          |> credential(:api_key, levels(ctx, unquote(policy)))
+          |> as()
+          |> post("/api/vaults/register", %{
+            "name" => "Brand New",
+            "client_id" => Ecto.UUID.generate()
+          })
+
+        if unquote(allowed?), do: assert(conn.status == 201), else: assert(conn.status == 403)
       end
     end
   end
@@ -468,11 +536,16 @@ defmodule EngramWeb.VaultAccessLevelsTest do
   # grant is minted only while nothing is in the trash (a trashed vault makes
   # the pick leveled, below), so this is a vault deleted after consent whose
   # `deleted_at` predates the grant: a skewed clock, or a row written by hand.
+  #
+  # Restore and the trash listing are REST, which a token minted now cannot
+  # reach (401, asserted). The comparison runs for the grant's tokens minted
+  # before #1997 (legacy `aud`, 15-minute life), so it is pinned with one.
   describe "oauth: an all-vaults grant and the trash" do
     test "cannot restore a vault deleted before it, can restore one deleted after", ctx do
       # Every vault at write, policy write, nothing in the trash: NULL grant.
       token = credential(ctx, :oauth, levels_all(ctx, "write"))
       assert Engram.Permissions.vault_scope(%{oauth_access: claims_scope(token)}) == :all
+      legacy = legacy_audience(ctx.user, token)
 
       {:ok, _} = Vaults.delete_vault(ctx.user, ctx.n.id)
 
@@ -486,13 +559,15 @@ defmodule EngramWeb.VaultAccessLevelsTest do
         skip_tenant_check: true
       )
 
-      assert restore(token, ctx.n).status == 403
-      refute to_string(ctx.n.id) in deleted_ids(token)
+      assert restore(token, ctx.n).status == 401
+      assert restore(legacy, ctx.n).status == 403
+      refute to_string(ctx.n.id) in deleted_ids(legacy)
 
       # Deleted after the grant: still its to restore.
-      assert token |> as() |> delete("/api/vaults/#{ctx.w.id}") |> json_response(200)
-      assert to_string(ctx.w.id) in deleted_ids(token)
-      assert restore(token, ctx.w).status == 200
+      assert legacy |> as() |> delete("/api/vaults/#{ctx.w.id}") |> json_response(200)
+      assert to_string(ctx.w.id) in deleted_ids(legacy)
+      assert restore(token, ctx.w).status == 401
+      assert restore(legacy, ctx.w).status == 200
     end
 
     test "every live vault at write while one is in the trash is a leveled grant", ctx do
@@ -506,9 +581,9 @@ defmodule EngramWeb.VaultAccessLevelsTest do
         )
 
       refute Engram.Permissions.vault_scope(%{oauth_access: claims_scope(token)}) == :all
-      assert restore(token, ctx.n).status == 404
+      assert restore(legacy_audience(ctx.user, token), ctx.n).status == 404
       {:ok, _} = Vaults.restore_vault(ctx.user, ctx.n.id)
-      assert rest_read(token, ctx.n).status == 404
+      assert reads(:oauth, token, ctx.n) == :refused
     end
   end
 
@@ -551,27 +626,35 @@ defmodule EngramWeb.VaultAccessLevelsTest do
         {:ok, _} = Vaults.delete_vault(ctx.user, ctx.n.id)
         token = credential(ctx, unquote(kind), {%{to_string(ctx.w.id) => "write"}, "write"})
 
-        refute to_string(ctx.n.id) in deleted_ids(token)
-        assert restore(token, ctx.n).status == 404
+        # The trash listing and restore are REST: an API key's surface.
+        if unquote(kind) == :api_key do
+          refute to_string(ctx.n.id) in deleted_ids(token)
+          assert restore(token, ctx.n).status == 404
+        end
+
         assert {:ok, _} = Vaults.restore_vault(ctx.user, ctx.n.id)
-        assert rest_read(token, ctx.n).status == 404
+        assert reads(unquote(kind), token, ctx.n) == :refused
       end
+    end
+  end
 
-      test "one reached only through the policy cannot be restored by it", ctx do
-        token = credential(ctx, unquote(kind), levels(ctx, "write"))
-        later = later_vault(ctx)
-        {:ok, _} = Vaults.delete_vault(ctx.user, later.id)
+  # Restoring is REST, so an API key's (an OAuth token's 401 is pinned in
+  # vault_access_attack_test.exs).
+  describe "api_key: restoring soft-deleted vaults" do
+    test "one reached only through the policy cannot be restored by it", ctx do
+      token = credential(ctx, :api_key, levels(ctx, "write"))
+      later = later_vault(ctx)
+      {:ok, _} = Vaults.delete_vault(ctx.user, later.id)
 
-        assert restore(token, later).status == 403
-      end
+      assert restore(token, later).status == 403
+    end
 
-      test "one listed at write can be deleted and restored by it", ctx do
-        token = credential(ctx, unquote(kind), levels(ctx, "none"))
+    test "one listed at write can be deleted and restored by it", ctx do
+      token = credential(ctx, :api_key, levels(ctx, "none"))
 
-        assert token |> as() |> delete("/api/vaults/#{ctx.w.id}") |> json_response(200)
-        assert to_string(ctx.w.id) in deleted_ids(token)
-        assert restore(token, ctx.w).status == 200
-      end
+      assert token |> as() |> delete("/api/vaults/#{ctx.w.id}") |> json_response(200)
+      assert to_string(ctx.w.id) in deleted_ids(token)
+      assert restore(token, ctx.w).status == 200
     end
   end
 
@@ -614,18 +697,27 @@ defmodule EngramWeb.VaultAccessLevelsTest do
         |> json_response(200)
         |> Map.fetch!("access_token")
 
-      assert ro
-             |> as()
-             |> post("/api/vaults/register", %{"name" => "N", "client_id" => Ecto.UUID.generate()})
-             |> json_response(403)
+      # As minted the token is MCP-bound: every vault route is 401. Under the
+      # legacy `aud` (a token minted before #1997) it reaches the vaults
+      # controller, where the read-only scope refuses it.
+      legacy = legacy_audience(ctx.user, ro)
 
-      assert ro
-             |> as()
-             |> patch("/api/vaults/#{ctx.w.id}", %{"name" => "x"})
-             |> json_response(403)
+      for {t, status} <- [{ro, 401}, {legacy, 403}] do
+        assert t
+               |> as()
+               |> post("/api/vaults/register", %{
+                 "name" => "N",
+                 "client_id" => Ecto.UUID.generate()
+               })
+               |> Map.fetch!(:status) == status
 
-      assert ro |> as() |> delete("/api/vaults/#{ctx.w.id}") |> json_response(403)
-      assert ro |> as() |> post("/api/vaults/#{ctx.w.id}/restore") |> json_response(403)
+        assert (t |> as() |> patch("/api/vaults/#{ctx.w.id}", %{"name" => "x"})).status == status
+        assert (t |> as() |> delete("/api/vaults/#{ctx.w.id}")).status == status
+        assert (t |> as() |> post("/api/vaults/#{ctx.w.id}/restore")).status == status
+      end
+
+      assert {:ok, %{name: "Writable", deleted_at: nil}} = Vaults.get_vault(ctx.user, ctx.w.id)
+      assert length(Vaults.list_vaults(ctx.user)) == 3
     end
   end
 
@@ -884,7 +976,7 @@ defmodule EngramWeb.VaultAccessLevelsTest do
       # Resolved server-side: a listed vault writes, an unlisted one reads.
       assert written?(write_note(token, hd(vaults)))
       assert refusal(write_note(token, ctx.r)) =~ "read-only"
-      assert rest_read(token, ctx.r).status == 200
+      assert reads(:oauth, token, ctx.r) == :ok
     end
 
     test "500 vaults at none with a write policy: under 2 KB, no none entries", ctx do
@@ -894,25 +986,30 @@ defmodule EngramWeb.VaultAccessLevelsTest do
       token = credential(ctx, :oauth, {access, "write"})
 
       assert byte_size(token) < 2_048
-      assert rest_read(token, hd(vaults)).status == 404
-      assert rest_read(token, ctx.r).status == 200
+      assert reads(:oauth, token, hd(vaults)) == :refused
+      assert reads(:oauth, token, ctx.r) == :ok
     end
 
     test "a revoked grant's access token stops working at once", ctx do
       token = credential(ctx, :oauth, levels(ctx, "none"))
-      assert rest_read(token, ctx.r).status == 200
+      assert reads(:oauth, token, ctx.r) == :ok
 
       family = token_claims(token)["gid"]
       assert :ok = Engram.Connections.revoke_oauth_grant(ctx.user.id, family)
-
-      assert rest_read(token, ctx.r).status == 401
 
       assert token
              |> as()
              |> post("/api/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
              |> Map.get(:status) == 401
 
-      assert :error = EngramWeb.UserSocket.connect(%{"token" => token}, %Phoenix.Socket{}, %{})
+      assert upload(token, ctx.w).status == 401
+
+      # REST and the socket refuse this token for its audience anyway; the
+      # revoke reaching them is pinned with a legacy-audience token here and in
+      # grant_revocation_socket_test.exs.
+      legacy = legacy_audience(ctx.user, token)
+      assert rest_read(legacy, ctx.r).status == 401
+      assert :error = EngramWeb.UserSocket.connect(%{"token" => legacy}, %Phoenix.Socket{}, %{})
     end
   end
 end

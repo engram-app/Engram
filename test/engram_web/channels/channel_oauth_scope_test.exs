@@ -10,6 +10,12 @@ defmodule EngramWeb.ChannelOAuthScopeTest do
   Every socket here comes through the real `UserSocket.connect/3` with a real
   minted token: the scope must be derived from the VERIFIED token, so a test
   that hand-assigns it would prove nothing.
+
+  Since audience binding (#1997) an access token from `/oauth/token` carries
+  `aud: "engram:mcp"` and the socket refuses it at connect (pinned below).
+  The tokens here carry the legacy `aud`, as every OAuth token minted before
+  that change does: those still verify for their 15-minute life, so the
+  channel gates below are what bounds them on the socket.
   """
   use EngramWeb.ChannelCase, async: false
 
@@ -169,8 +175,9 @@ defmodule EngramWeb.ChannelOAuthScopeTest do
 
   # The hand-made tokens above carry `vault_access` in their claims; a real
   # access token carries only `gid`, and its levels come from the grant row.
-  # These use the real consent -> /oauth/token chain, so the levels a join is
-  # judged on are the row's, read at join (`ChannelGate.vault_scope/1`).
+  # These use the real consent -> /oauth/token chain (re-minted under the
+  # legacy `aud`, see the moduledoc), so the levels a join is judged on are
+  # the row's, read at join (`ChannelGate.vault_scope/1`).
   describe "per-vault access levels with a real grant token" do
     setup %{user: user} do
       {:ok, none_vault, _} = Vaults.register_vault(user, "none", Ecto.UUID.generate())
@@ -210,7 +217,11 @@ defmodule EngramWeb.ChannelOAuthScopeTest do
       {:ok, claims} = Engram.Token.verify(tokens.access_token)
       # The premise: levels are NOT in the token.
       refute Map.has_key?(claims, "vault_access")
-      {:ok, socket} = connect(EngramWeb.UserSocket, %{"token" => tokens.access_token})
+      # As minted the token is MCP-bound and never opens a socket; the same
+      # claims under the legacy `aud` are a token minted before #1997.
+      assert :error = connect(EngramWeb.UserSocket, %{"token" => tokens.access_token})
+      legacy = Engram.OAuthHelpers.legacy_audience(ctx.user, tokens.access_token)
+      {:ok, socket} = connect(EngramWeb.UserSocket, %{"token" => legacy})
       {socket, claims["gid"]}
     end
 

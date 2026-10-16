@@ -8,11 +8,16 @@ defmodule EngramWeb.GrantRevocationSocketTest do
   grant's token is refused at `crdt:` join, which re-reads the grant.
 
   Sockets come through the real `UserSocket.connect/3` with an access token
-  from the real consent -> exchange chain.
+  from the real consent -> exchange chain, re-minted under the legacy `aud`
+  (`Engram.OAuthHelpers.legacy_audience/2`). A token minted now carries
+  `engram:mcp` and the socket refuses it at connect (#1997, pinned below), so
+  the only grant tokens a socket can still hold are those minted before that
+  change, within their 15-minute life. These tests pin the guards for them;
+  the disconnect broadcasts fire whatever token the socket holds.
   """
   use EngramWeb.ChannelCase, async: false
 
-  import Engram.OAuthHelpers, only: [code_from_redirect: 1, pkce_pair: 0]
+  import Engram.OAuthHelpers, only: [code_from_redirect: 1, legacy_audience: 2, pkce_pair: 0]
 
   alias Engram.{Accounts, Connections, OAuth, Vaults}
 
@@ -65,10 +70,12 @@ defmodule EngramWeb.GrantRevocationSocketTest do
     claims["gid"]
   end
 
-  defp connect_with(tokens) do
-    {:ok, socket} = connect(EngramWeb.UserSocket, %{"token" => tokens.access_token})
+  defp connect_with(ctx, tokens) do
+    {:ok, socket} = connect(EngramWeb.UserSocket, %{"token" => legacy(ctx, tokens)})
     socket
   end
+
+  defp legacy(ctx, tokens), do: legacy_audience(ctx.user, tokens.access_token)
 
   defp join_crdt(socket, ctx, vault) do
     subscribe_and_join(socket, EngramWeb.CrdtChannel, "crdt:#{ctx.user.id}:#{vault.id}", %{
@@ -92,7 +99,7 @@ defmodule EngramWeb.GrantRevocationSocketTest do
   describe "the connections page" do
     test "revoking one grant disconnects its socket and refuses crdt: join", ctx do
       tokens = grant(ctx, :all)
-      socket = connect_with(tokens)
+      socket = connect_with(ctx, tokens)
       assert {:ok, _, _} = join_crdt(socket, ctx, ctx.a)
 
       :ok = Connections.revoke_oauth_grant(ctx.user.id, gid(tokens))
@@ -102,7 +109,7 @@ defmodule EngramWeb.GrantRevocationSocketTest do
       # The socket connected before the revoke: its join re-reads the grant.
       assert {:error, %{reason: "unauthorized"}} = join_crdt(socket, ctx, ctx.b)
       # And it cannot come back.
-      assert :error = connect(EngramWeb.UserSocket, %{"token" => tokens.access_token})
+      assert :error = connect(EngramWeb.UserSocket, %{"token" => legacy(ctx, tokens)})
     end
 
     test "revoking an already-revoked grant changes nothing and disconnects nobody", ctx do
@@ -123,7 +130,7 @@ defmodule EngramWeb.GrantRevocationSocketTest do
 
     test "a client-wide revoke scoped to a vault takes a leveled grant reaching it", ctx do
       tokens = grant(ctx, {%{ctx.a.id => "read"}, "none"})
-      socket = connect_with(tokens)
+      socket = connect_with(ctx, tokens)
 
       :ok = Connections.revoke_oauth_family(ctx.user.id, ctx.client.client_id, ctx.a.id)
 
@@ -136,7 +143,7 @@ defmodule EngramWeb.GrantRevocationSocketTest do
   describe "editing access" do
     test "narrowing a grant disconnects its sockets", ctx do
       tokens = grant(ctx, {%{ctx.a.id => "write", ctx.b.id => "write"}, "none"})
-      _socket = connect_with(tokens)
+      _socket = connect_with(ctx, tokens)
 
       :ok =
         Connections.update_oauth_grant_access(
@@ -179,7 +186,7 @@ defmodule EngramWeb.GrantRevocationSocketTest do
   describe "joins after a missed disconnect broadcast" do
     test "sync: join is refused on a vault narrowed to none", ctx do
       tokens = grant(ctx, {%{ctx.a.id => "write", ctx.b.id => "write"}, "none"})
-      socket = connect_with(tokens)
+      socket = connect_with(ctx, tokens)
       assert {:ok, _, _} = join_sync(socket, ctx.user, ctx.a)
 
       :ok =
@@ -196,7 +203,7 @@ defmodule EngramWeb.GrantRevocationSocketTest do
 
     test "sync: join is refused once the grant is revoked", ctx do
       tokens = grant(ctx, :all)
-      socket = connect_with(tokens)
+      socket = connect_with(ctx, tokens)
       :ok = Connections.revoke_oauth_grant(ctx.user.id, gid(tokens))
 
       assert {:error, %{reason: "unauthorized"}} = join_sync(socket, ctx.user, ctx.a)
@@ -204,7 +211,7 @@ defmodule EngramWeb.GrantRevocationSocketTest do
 
     test "user: join is refused once the grant is revoked", ctx do
       tokens = grant(ctx, :all)
-      socket = connect_with(tokens)
+      socket = connect_with(ctx, tokens)
       :ok = Connections.revoke_oauth_grant(ctx.user.id, gid(tokens))
 
       assert {:error, %{reason: "unauthorized"}} = join_user(socket, ctx)
@@ -212,7 +219,7 @@ defmodule EngramWeb.GrantRevocationSocketTest do
 
     test "user: a vault narrowed to none after join gets no vault events", ctx do
       tokens = grant(ctx, {%{ctx.a.id => "write", ctx.b.id => "write"}, "none"})
-      socket = connect_with(tokens)
+      socket = connect_with(ctx, tokens)
       {:ok, _, _} = join_user(socket, ctx)
 
       :ok =
@@ -237,7 +244,7 @@ defmodule EngramWeb.GrantRevocationSocketTest do
   describe "vault deletion" do
     test "soft delete revokes a leveled grant that reached only that vault", ctx do
       tokens = grant(ctx, {%{ctx.a.id => "write"}, "none"})
-      socket = connect_with(tokens)
+      socket = connect_with(ctx, tokens)
 
       {:ok, _} = Vaults.delete_vault(ctx.user, ctx.a.id)
 
@@ -250,7 +257,7 @@ defmodule EngramWeb.GrantRevocationSocketTest do
     test "soft delete narrows a pre-levels grant; its socket cannot join the vault after restore",
          ctx do
       tokens = grant(ctx, [ctx.a.id, ctx.b.id])
-      socket = connect_with(tokens)
+      socket = connect_with(ctx, tokens)
 
       {:ok, _} = Vaults.delete_vault(ctx.user, ctx.b.id)
       assert_disconnected(ctx)
@@ -270,14 +277,9 @@ defmodule EngramWeb.GrantRevocationSocketTest do
     end
   end
 
-  describe "connecting with a revoked grant's token" do
-    # Refused like any other failed auth: one log line and one
-    # `[:engram, :auth, :rejected]` event, as `Plugs.Auth` emits for HTTP.
-    test "is refused with a grant_revoked rejection event and log line", ctx do
-      tokens = grant(ctx, :all)
-      :ok = Connections.revoke_oauth_grant(ctx.user.id, gid(tokens))
-
-      ref = "socket-grant-revoked-#{System.unique_integer()}"
+  describe "connecting with a grant token" do
+    defp capture_rejection(fun) do
+      ref = "socket-rejected-#{System.unique_integer()}"
       test_pid = self()
 
       :telemetry.attach(
@@ -288,14 +290,39 @@ defmodule EngramWeb.GrantRevocationSocketTest do
       )
 
       on_exit(fn -> :telemetry.detach(ref) end)
+      ExUnit.CaptureLog.capture_log(fun)
+    end
+
+    # Refused like any other failed auth: one log line and one
+    # `[:engram, :auth, :rejected]` event, as `Plugs.Auth` emits for HTTP.
+    test "a revoked grant's is refused with a grant_revoked rejection event and log line", ctx do
+      tokens = grant(ctx, :all)
+      :ok = Connections.revoke_oauth_grant(ctx.user.id, gid(tokens))
 
       log =
-        ExUnit.CaptureLog.capture_log(fn ->
-          assert :error = connect(EngramWeb.UserSocket, %{"token" => tokens.access_token})
+        capture_rejection(fn ->
+          assert :error = connect(EngramWeb.UserSocket, %{"token" => legacy(ctx, tokens)})
         end)
 
       assert_receive {:rejected, %{reason: "grant_revoked", source: :socket}}
       assert log =~ "auth rejected"
+    end
+
+    # The token as minted now, on a live grant: bound to the MCP server, so
+    # the socket refuses it before reading the grant at all.
+    test "a live grant's token as minted is refused for its audience", ctx do
+      tokens = grant(ctx, :all)
+      assert {:ok, _} = Accounts.grant_claims(tokens.access_token)
+
+      log =
+        capture_rejection(fn ->
+          assert :error = connect(EngramWeb.UserSocket, %{"token" => tokens.access_token})
+        end)
+
+      assert_receive {:rejected, %{reason: "wrong_audience", source: :socket}}
+      assert log =~ "auth rejected"
+      # The same grant's legacy-audience token connects: the refusal above is the audience.
+      assert {:ok, _} = connect(EngramWeb.UserSocket, %{"token" => legacy(ctx, tokens)})
     end
   end
 

@@ -11,6 +11,11 @@ local-auth step). Each test provisions its own user and vaults, so nothing is
 counted across the session-scoped shared vault
 (docs/context/e2e-session-vault-scoping-trap.md).
 
+An OAuth access token is bound to the MCP server (#1997): it reaches
+`POST /api/mcp` and the attachment upload `get_attachment_upload_target` hands
+out, and gets 401 on every other REST route. So OAuth levels are checked
+through MCP tools and the upload; API keys keep the REST checks.
+
 A `none` vault and an unknown vault are refused the same way so the response
 is not an existence oracle; that status is moving (403 -> 404), so a none
 vault is asserted as "refused (403/404), no note content", never one code.
@@ -140,6 +145,34 @@ def assert_read_only(resp, label: str):
     assert resp.json().get("error") == "read_only_vault", f"{label}: {resp.text}"
 
 
+def upload(token: str, vault_id: str, path: str = "up.txt"):
+    """The one REST route an OAuth token reaches (#1997)."""
+    return requests.post(
+        f"{API_URL}/attachments",
+        json={"path": path, "content_base64": base64.b64encode(b"hi").decode()},
+        headers={**_bearer(token), "X-Vault-ID": vault_id},
+        timeout=10,
+    )
+
+
+def assert_uploaded(token: str, vault_id: str, path: str, label: str):
+    resp = upload(token, vault_id, path)
+    assert resp.status_code in (200, 201), f"{label}: upload {resp.status_code} {resp.text}"
+
+
+def assert_upload_refused(user: User, token: str, vault_id: str, label: str, path: str = "no.txt"):
+    """Upload refused (403/404) and nothing stored. Returns the response."""
+    resp = upload(token, vault_id, path)
+    assert resp.status_code in REFUSED, f"{label}: expected refusal, got {resp.status_code} {resp.text}"
+    stored = requests.get(
+        f"{API_URL}/attachments/{path}",
+        headers={**_bearer(user.legacy_key), "X-Vault-ID": vault_id},
+        timeout=10,
+    )
+    assert stored.status_code == 404, f"{label}: refused upload landed: {stored.status_code}"
+    return resp
+
+
 def mcp_call(token: str, name: str, args: dict) -> dict:
     resp = requests.post(
         f"{API_URL}/mcp",
@@ -175,6 +208,18 @@ def write_refusal_text(body: dict) -> str:
         return body["error"].get("message", "")
     assert body["result"]["isError"] is True, f"write was NOT refused: {body}"
     return tool_text(body)
+
+
+def assert_mcp_reads(token: str, vault_id: str, name: str):
+    got = mcp_call(token, "get_notes", {"vault_id": vault_id, "paths": ["a.md"]})
+    assert "error" not in got and not got["result"].get("isError"), got
+    assert f"content of {name}" in tool_text(got), got
+
+
+def assert_mcp_refused(token: str, vault_id: str, label: str):
+    body = mcp_call(token, "get_notes", {"vault_id": vault_id, "paths": ["a.md"]})
+    assert "error" in body or body["result"].get("isError"), f"{label}: not refused: {body}"
+    assert "content of" not in str(body), f"{label}: refusal leaked note content: {body}"
 
 
 def listed_vaults(token: str) -> set[str]:
@@ -290,26 +335,27 @@ def patch_pat(user: User, key_id: str, vault_access: dict, default: str):
 
 
 def test_oauth_grant_enforces_write_read_none_per_vault(user):
-    """A=write, B=read, C=none: REST and MCP both honor each level."""
+    """A=write, B=read, C=none: MCP and the upload honor each level; REST is 401."""
     a, b, c = user.vault("A"), user.vault("B"), user.vault("C")
     _, tokens = grant(user, {a: "write", b: "read", c: "none"}, "none")
     tok = tokens["access_token"]
 
-    # REST
-    assert rest_write(tok, a).status_code in (200, 201), "write vault must accept a write"
-    assert_read_only(rest_write(tok, b), "REST write on read vault")
-    read_b = rest_read(tok, b)
-    assert read_b.status_code == 200 and "content of B" in read_b.text, read_b.text
-    assert_rest_refused(tok, c, "REST read on none vault")
-    # The refused write left nothing behind.
-    assert rest_read(user.legacy_key, b, "rest.md").status_code == 404
+    # Upload, the one REST route the token reaches.
+    assert_uploaded(tok, a, "up.txt", "upload to write vault")
+    assert_read_only(assert_upload_refused(user, tok, b, "upload to read vault"), "upload to read vault")
+    assert_upload_refused(user, tok, c, "upload to none vault")
+
+    # Audience binding: every other REST route refuses the token, even a read
+    # its grant allows.
+    rest = rest_read(tok, b)
+    assert rest.status_code == 401, f"MCP-bound token on REST: {rest.status_code} {rest.text}"
 
     # MCP
     refusal = tool_refusal(mcp_call(tok, "write_note", {"vault_id": b, "path": "m.md", "content": "x"}))
     assert "read-only" in refusal, refusal
     assert rest_read(user.legacy_key, b, "m.md").status_code == 404, "refused MCP write landed"
-    got = mcp_call(tok, "get_notes", {"vault_id": b, "paths": ["a.md"]})
-    assert "error" not in got and "content of B" in tool_text(got), got
+    assert_mcp_reads(tok, b, "B")
+    assert_mcp_refused(tok, c, "MCP read on none vault")
     assert not (mcp_call(tok, "write_note", {"vault_id": a, "path": "m.md", "content": "x"})
                 ["result"]["isError"]), "MCP write on write vault refused"
 
@@ -323,14 +369,14 @@ def test_vault_created_after_grant_follows_default_access(user):
     later = user.vault("Later")
 
     tok = none_default["access_token"]
-    assert_rest_refused(tok, later, "default none, later vault")
     assert later not in listed_vaults(tok)
-    assert mcp_call(tok, "get_notes", {"vault_id": later, "paths": ["a.md"]})["result"]["isError"]
+    assert_mcp_refused(tok, later, "default none, later vault")
+    assert_upload_refused(user, tok, later, "default none, upload to later vault")
 
     tok = write_default["access_token"]
     assert later in listed_vaults(tok)
-    assert rest_write(tok, later).status_code in (200, 201), "default write must reach a later vault"
-    assert rest_read(tok, later).status_code == 200
+    assert_mcp_reads(tok, later, "Later")
+    assert_uploaded(tok, later, "later.txt", "default write, upload to later vault")
 
 
 def test_mcp_read_grant_never_writes(user):
@@ -339,12 +385,12 @@ def test_mcp_read_grant_never_writes(user):
     assert tokens["scope"] == "mcp:read", tokens
     tok = tokens["access_token"]
 
-    assert rest_write(tok, a).status_code == 403, "REST write under mcp:read"
+    up = assert_upload_refused(user, tok, a, "upload under mcp:read")
+    assert up.status_code == 403 and up.json().get("error") == "read_only_grant", up.text
     text = write_refusal_text(mcp_call(tok, "write_note", {"vault_id": a, "path": "m.md", "content": "x"}))
     assert "read-only" in text, text
-    for path in ("rest.md", "m.md"):
-        assert rest_read(user.legacy_key, a, path).status_code == 404, f"{path} was written"
-    assert rest_read(tok, a).status_code == 200, "mcp:read must still read"
+    assert rest_read(user.legacy_key, a, "m.md").status_code == 404, "m.md was written"
+    assert_mcp_reads(tok, a, "A")
 
     resp = patch_oauth(user, client_id, {a: "write"}, "write")
     assert resp.status_code == 422, f"widening mcp:read to write: {resp.status_code} {resp.text}"
@@ -393,8 +439,8 @@ def test_narrowing_oauth_grant_hits_issued_token_and_survives_refresh(user):
     a, b, c = user.vault("A"), user.vault("B"), user.vault("C")
     client_id, tokens = grant(user, {a: "write", b: "write", c: "read"}, "none")
     tok = tokens["access_token"]
-    assert rest_write(tok, a).status_code in (200, 201)
-    assert rest_read(tok, c).status_code == 200
+    assert_uploaded(tok, a, "before.txt", "upload to A before narrowing")
+    assert_mcp_reads(tok, c, "C")
 
     patched = patch_oauth(user, client_id, {a: "read", b: "write", c: "none"}, "none")
     assert patched.status_code == 200, f"PATCH grant: {patched.status_code} {patched.text}"
@@ -403,10 +449,13 @@ def test_narrowing_oauth_grant_hits_issued_token_and_survives_refresh(user):
     for label, t in (("issued", tok), ("refreshed", None)):
         if t is None:
             t = refresh(client_id, tokens["refresh_token"])["access_token"]
-        assert_read_only(rest_write(t, a, "after.md"), f"{label} token, A write->read")
-        assert rest_read(t, a).status_code == 200
-        assert rest_write(t, b, f"{label}.md").status_code in (200, 201), f"{label} token, B"
-        assert_rest_refused(t, c, f"{label} token, C read->none")
+        refused = assert_upload_refused(user, t, a, f"{label} token, A write->read", f"{label}-a.txt")
+        assert_read_only(refused, f"{label} token, A write->read")
+        refusal = tool_refusal(mcp_call(t, "write_note", {"vault_id": a, "path": f"{label}.md", "content": "x"}))
+        assert "read-only" in refusal, refusal
+        assert_mcp_reads(t, a, "A")
+        assert_uploaded(t, b, f"{label}-b.txt", f"{label} token, B")
+        assert_mcp_refused(t, c, f"{label} token, C read->none")
         assert listed_vaults(t) == {a, b}, f"{label} token list_vaults"
 
 
@@ -421,7 +470,8 @@ def test_another_users_vault_cannot_be_granted(user, other_user):
     client_id, tokens = grant(user, {a: "write"}, "none")
     resp = patch_oauth(user, client_id, {a: "write", foreign: "read"}, "none")
     assert resp.status_code == 422, f"PATCH with foreign vault: {resp.status_code} {resp.text}"
-    assert_rest_refused(tokens["access_token"], foreign, "grant token on foreign vault")
+    assert_mcp_refused(tokens["access_token"], foreign, "grant token on foreign vault")
+    assert_upload_refused(other_user, tokens["access_token"], foreign, "grant token upload to foreign vault")
 
     key_resp = requests.post(
         f"{API_URL}/connections/pat",
