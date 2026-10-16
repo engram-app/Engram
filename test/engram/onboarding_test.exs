@@ -174,10 +174,11 @@ defmodule Engram.OnboardingTest do
       assert %{steps: [:tools, :vault]} = Onboarding.status(user)
     end
 
-    test "steps drops :tools when an OAuth client pre-answered it" do
+    # A connector signup gets its vault provisioned, so nothing is left to ask.
+    test "steps is empty when an OAuth client pre-answered it" do
       user = insert(:user, onboarding_profile: %{})
       {:ok, _} = Onboarding.set_profile(user, %{tools: ["claude"], tools_prefilled: true})
-      assert %{steps: [:vault]} = Onboarding.status(user)
+      assert %{steps: [], next_step: :done, gate_ok: true} = Onboarding.status(user)
     end
   end
 
@@ -240,17 +241,35 @@ defmodule Engram.OnboardingTest do
     end
 
     # The MCP-first path answers `tools` from the OAuth client before the
-    # wizard starts, so the step never renders. Leaving it in the chain made
-    # the header count 2-of-4 and then jump straight to 4-of-4.
-    test "steps drops :tools when an OAuth client pre-answered it" do
+    # wizard starts, and provisions the vault, so a connector signup only sees
+    # terms and plan before returning to the consent screen.
+    test "steps is [:agreement, :billing] when an OAuth client pre-answered it" do
       user = insert(:user, onboarding_profile: %{})
-      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
-      insert(:subscription, user: user, status: "active")
 
       {:ok, _} =
         Onboarding.set_profile(user, %{tools: ["antigravity"], tools_prefilled: true})
 
-      assert %{steps: [:agreement, :billing, :about, :vault]} = Onboarding.status(user)
+      assert %{steps: [:agreement, :billing], next_step: :agreement} = Onboarding.status(user)
+
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+      {:ok, user} = Onboarding.accept_free_tier(Engram.Accounts.get_user!(user.id))
+
+      assert %{steps: [:agreement, :billing], next_step: :done, gate_ok: true} =
+               Onboarding.status(user)
+    end
+
+    # A row pre-filled before vaults were provisioned (or whose provisioning
+    # failed) has no vault: the chain keeps the vault step rather than pointing
+    # the wizard at a step it does not list. The survey stays skipped.
+    test "a pre-filled profile without a vault keeps the vault step, never the survey" do
+      user =
+        insert(:user, onboarding_profile: %{"tools" => ["chatgpt"], "tools_prefilled" => true})
+
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-15", %{})
+      insert(:subscription, user: user, status: "active")
+
+      assert %{steps: [:agreement, :billing, :vault], next_step: :vault} =
+               Onboarding.status(user)
     end
 
     # The SaaS counterpart of the self-host case above: a user who answers the
@@ -573,6 +592,47 @@ defmodule Engram.OnboardingTest do
     # A qualifier on `tools`, never a standalone fact. Accepted alone, a stray
     # POST could mark an ordinary signup's own answer as pre-filled, dropping
     # their tools step out of the chain and freezing "Step X of N".
+    test "tools_prefilled provisions a default vault with the welcome note" do
+      user = insert(:user, onboarding_profile: %{})
+
+      assert {:ok, _} =
+               Onboarding.set_profile(user, %{tools: ["chatgpt"], tools_prefilled: true})
+
+      assert [vault] = Engram.Vaults.list_vaults(user)
+      assert vault.name == "My Vault"
+
+      assert %{notes: 1} =
+               Engram.Vaults.content_counts(Engram.Accounts.get_user(user.id), vault.id)
+    end
+
+    test "tools_prefilled provisioning is idempotent" do
+      user = insert(:user, onboarding_profile: %{})
+      attrs = %{tools: ["chatgpt"], tools_prefilled: true}
+
+      assert {:ok, _} = Onboarding.set_profile(user, attrs)
+      assert {:ok, _} = Onboarding.set_profile(user, attrs)
+
+      assert [_one] = Engram.Vaults.list_vaults(user)
+    end
+
+    test "tools_prefilled does not add a vault for a user who already has one" do
+      user = insert(:user, onboarding_profile: %{})
+      existing = insert(:vault, user: user)
+
+      assert {:ok, _} =
+               Onboarding.set_profile(user, %{tools: ["chatgpt"], tools_prefilled: true})
+
+      assert [%{id: id}] = Engram.Vaults.list_vaults(user)
+      assert id == existing.id
+    end
+
+    test "an ordinary tools answer provisions no vault" do
+      user = insert(:user, onboarding_profile: %{})
+
+      assert {:ok, _} = Onboarding.set_profile(user, %{tools: ["chatgpt"]})
+      assert [] = Engram.Vaults.list_vaults(user)
+    end
+
     test "tools_prefilled on its own is refused" do
       user = insert(:user, onboarding_profile: %{})
 

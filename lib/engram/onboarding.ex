@@ -22,6 +22,9 @@ defmodule Engram.Onboarding do
 
   require Logger
 
+  @connector_vault_name "My Vault"
+  @connector_vault_client_id "connector-signup"
+
   @terms_document "terms_of_service"
   @privacy_document "privacy_policy"
 
@@ -210,7 +213,7 @@ defmodule Engram.Onboarding do
     next =
       next_step(terms_ok, subscription_ok, profile_complete, profile, has_vault, billing_active)
 
-    steps = build_steps(billing_active, profile)
+    steps = build_steps(billing_active, profile, has_vault)
 
     base = %{
       enabled: true,
@@ -383,16 +386,25 @@ defmodule Engram.Onboarding do
   # must describe the account's intended journey, not its live progress
   # through it.
   #
-  # `:vault` never drops: `OnboardVaultPage` is also where `uses_obsidian` is
-  # collected, so it renders even for a user who already has a vault row.
-  defp build_steps(billing_active, profile) do
+  # `:vault` stays for an ordinary signup: `OnboardVaultPage` is also where
+  # `uses_obsidian` is collected, so it renders even with a vault row.
+  #
+  # A connector signup (`tools_prefilled`) is mid-way through authorizing an
+  # app that is waiting on them, so the chain is cut to what the gate needs:
+  # terms and plan. The survey is skipped and the vault was provisioned when
+  # the client pre-answered (`provision_connector_vault/1`). If provisioning
+  # failed there is no vault, and `:vault` comes back rather than pointing the
+  # wizard at a step the chain does not list.
+  defp build_steps(billing_active, profile, has_vault) do
+    connector = tools_prefilled?(profile)
     hosted = if billing_active, do: [:agreement, :billing], else: []
-    tools = if tools_prefilled?(profile), do: [], else: [:tools]
+    tools = if connector, do: [], else: [:tools]
     # The user-voice survey is hosted-only: a self-hoster's answers have no
     # PostHog to land in, so the step would be friction with no reader.
-    about = if billing_active, do: [:about], else: []
+    about = if billing_active and not connector, do: [:about], else: []
+    vault = if connector and has_vault, do: [], else: [:vault]
 
-    hosted ++ tools ++ about ++ [:vault]
+    hosted ++ tools ++ about ++ vault
   end
 
   defp tools_prefilled?(%{"tools_prefilled" => true}), do: true
@@ -555,6 +567,49 @@ defmodule Engram.Onboarding do
           _ ->
             :ok
         end)
+        |> tap(fn
+          {:ok, saved} -> if tools_prefilled?(merged), do: provision_connector_vault(saved)
+          _ -> :ok
+        end)
+    end
+  end
+
+  # The vault a connector signup's client will read and write, so the consent
+  # screen has something to grant and the wizard has no vault step to show.
+  # Keyed on a fixed client_id, so a repeat pre-answer resolves to the same
+  # vault. Skipped when the user already has one.
+  #
+  # Best-effort on purpose: the profile save above already committed, and a
+  # failure here only means `build_steps/3` keeps `:vault` in the chain, which
+  # is the ordinary signup flow. Logged so that fallback is visible.
+  defp provision_connector_vault(user) do
+    if Vaults.has_vault?(user) do
+      :ok
+    else
+      case Vaults.register_vault(user, @connector_vault_name, @connector_vault_client_id) do
+        {:ok, vault, :created} ->
+          # The DEK is minted inside register_vault, after `user` was read; the
+          # seed needs it on the struct (same as `VaultsController.register`).
+          user =
+            case Engram.Crypto.ensure_user_dek(user) do
+              {:ok, user} -> user
+              _ -> user
+            end
+
+          Vaults.WelcomeNote.seed(user, vault)
+
+        {:ok, _vault, :existing} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "connector vault provisioning failed",
+            Metadata.with_category(:warning, :lifecycle,
+              user_id: user.id,
+              reason: Metadata.safe_reason(reason)
+            )
+          )
+      end
     end
   end
 
@@ -570,7 +625,9 @@ defmodule Engram.Onboarding do
   # timestamp, so `profile_complete?` reads as a monotonic latch.
   defp maybe_stamp_completed_at(profile) do
     has_tools = match?([_ | _], Map.get(profile, "tools"))
-    has_source = is_boolean(Map.get(profile, "uses_obsidian"))
+    # A connector signup is never asked the Obsidian question: the client it
+    # came from is its answer, and the plugin answers it later if they link.
+    has_source = is_boolean(Map.get(profile, "uses_obsidian")) or tools_prefilled?(profile)
     has_stamp = is_binary(Map.get(profile, "completed_at"))
 
     if has_tools and has_source and not has_stamp do
@@ -656,7 +713,7 @@ defmodule Engram.Onboarding do
   defp next_step(true, true, false, profile, _, ask_survey) do
     cond do
       not profile_has_tools?(profile) -> :tools
-      ask_survey and not survey_done?(profile) -> :about
+      ask_survey and not tools_prefilled?(profile) and not survey_done?(profile) -> :about
       true -> :vault
     end
   end
