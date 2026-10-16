@@ -809,4 +809,80 @@ defmodule EngramWeb.OAuthAuthorizeControllerTest do
       assert conn.status == 404
     end
   end
+
+  # RFC 9207: the authorization response names its issuer, so a client talking
+  # to several servers (every MCP client) can tell which one answered. The value
+  # is fixed at /oauth/authorize, on the host the client dialed, and carried
+  # through the SPA; the consent call itself arrives on a different host.
+  describe "iss in the authorization response (RFC 9207)" do
+    defp issuer, do: EngramWeb.Endpoint.url()
+
+    test "authorize forwards the dialed issuer to the consent page", %{conn: conn} do
+      client = register_client()
+
+      conn =
+        get(conn, "/oauth/authorize", valid_params(client.client_id, hd(client.redirect_uris)))
+
+      [location] = get_resp_header(conn, "location")
+      assert URI.decode_query(URI.parse(location).query)["iss"] == issuer()
+    end
+
+    test "an authorize error redirect carries iss", %{conn: conn} do
+      client = register_client()
+
+      params =
+        client.client_id
+        |> valid_params(hd(client.redirect_uris))
+        |> Map.put("response_type", "token")
+
+      [location] = conn |> get("/oauth/authorize", params) |> get_resp_header("location")
+      query = URI.decode_query(URI.parse(location).query)
+      assert query["error"] == "unsupported_response_type"
+      assert query["iss"] == issuer()
+    end
+
+    test "consent puts the forwarded issuer on the code redirect", %{conn: conn} do
+      user = insert(:user)
+      insert(:vault, user: user)
+      client = register_client()
+
+      params =
+        client.client_id |> valid_params(hd(client.redirect_uris)) |> Map.put("iss", issuer())
+
+      redirect =
+        conn
+        |> jwt_authed(user)
+        |> post("/api/oauth/authorize/consent", params)
+        |> json_response(200)
+        |> Map.fetch!("redirect_uri")
+
+      query = URI.decode_query(URI.parse(redirect).query)
+      assert is_binary(query["code"])
+      assert query["iss"] == issuer()
+    end
+
+    # A forged iss is the mix-up attack itself: it makes our response look like
+    # another server's, so the client sends the code to that server.
+    test "consent drops an issuer that is not ours", %{conn: conn} do
+      user = insert(:user)
+      insert(:vault, user: user)
+      client = register_client()
+
+      params =
+        client.client_id
+        |> valid_params(hd(client.redirect_uris))
+        |> Map.put("iss", "https://attacker.example")
+
+      redirect =
+        conn
+        |> jwt_authed(user)
+        |> post("/api/oauth/authorize/consent", params)
+        |> json_response(200)
+        |> Map.fetch!("redirect_uri")
+
+      query = URI.decode_query(URI.parse(redirect).query)
+      assert is_binary(query["code"])
+      refute Map.has_key?(query, "iss")
+    end
+  end
 end

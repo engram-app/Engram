@@ -31,6 +31,9 @@ export interface OAuthConsentParams {
 	state: string;
 	scope: string;
 	resource?: string;
+	// RFC 9207 issuer, as /oauth/authorize put it on this page's URL. Untrusted
+	// here; the backend echoes it only when it is one of its own issuers.
+	iss?: string;
 	// Absent = all vaults, including ones created later. A non-empty array =
 	// exactly those vaults. Never send an empty array — the backend rejects it
 	// rather than widening it to "all".

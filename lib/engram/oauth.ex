@@ -468,7 +468,8 @@ defmodule Engram.OAuth do
            |> AuthorizationCode.changeset(attrs)
            |> Repo.insert(skip_tenant_check: true) do
         {:ok, _row} ->
-          {:ok, build_redirect(validated.redirect_uri, %{code: raw_code, state: validated.state})}
+          params = %{code: raw_code, state: validated.state, iss: Map.get(validated, :iss)}
+          {:ok, build_redirect(validated.redirect_uri, params)}
 
         {:error, changeset} ->
           {:error, changeset}

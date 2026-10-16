@@ -123,11 +123,14 @@ defmodule Engram.OAuthFlow do
     pairs = URI.query_decoder(query) |> Enum.to_list()
 
     # A client that reads the first `code` and one that reads the last must agree.
-    for key <- ~w(code state), do: assert(Enum.count(pairs, &(elem(&1, 0) == key)) == 1, key)
+    for key <- ~w(code state iss), do: assert(Enum.count(pairs, &(elem(&1, 0) == key)) == 1, key)
     refute List.keymember?(pairs, "error", 0)
 
     decoded = Map.new(pairs)
     assert decoded["state"] == state
+    # RFC 9207: byte-identical to the discovered issuer, or a strict client
+    # discards the response as a mix-up.
+    assert decoded["iss"] == discover()["issuer"]
     {decoded["code"], verifier}
   end
 

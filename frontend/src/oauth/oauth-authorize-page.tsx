@@ -64,6 +64,7 @@ type RequiredParam = (typeof REQUIRED_PARAMS)[number];
 function readParams(search: URLSearchParams): {
 	values: Record<RequiredParam, string> & { scope: string };
 	resource: string | null;
+	iss: string | null;
 	missing: RequiredParam[];
 } {
 	const values: Record<RequiredParam, string> & { scope: string } = {
@@ -87,7 +88,7 @@ function readParams(search: URLSearchParams): {
 	}
 	values.scope = search.get("scope") || DEFAULT_SCOPE;
 
-	return { values, resource: search.get("resource"), missing };
+	return { values, resource: search.get("resource"), iss: search.get("iss"), missing };
 }
 
 // The client's catalog slug is already resolved server-side from the redirect
@@ -108,7 +109,7 @@ function buildCancelUrl(redirectUri: string, state: string): string {
 export default function OAuthAuthorizePage() {
 	const { t } = useT();
 	const [searchParams] = useSearchParams();
-	const { values, resource, missing } = readParams(searchParams);
+	const { values, resource, iss, missing } = readParams(searchParams);
 
 	const clientQuery = useQuery({
 		// The redirect is part of the key: it is what the backend resolves the
@@ -400,6 +401,9 @@ export default function OAuthAuthorizePage() {
 		};
 		if (resource) {
 			body.resource = resource;
+		}
+		if (iss) {
+			body.iss = iss;
 		}
 		if (selected && selected.size > 0) {
 			body.vault_ids = [...selected];

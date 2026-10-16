@@ -15,6 +15,29 @@ defmodule EngramWeb.OAuthMetadata do
   @well_known "/.well-known/oauth-protected-resource"
 
   @doc """
+  Whether `iss` is an issuer `base_url/1` could have produced: the canonical
+  URL, or an allowlisted origin on our scheme (any port, as `with_port/2` may
+  add one). Gates the RFC 9207 `iss` the SPA carries back to consent.
+  """
+  @spec issuer?(term()) :: boolean()
+  def issuer?(iss) when is_binary(iss) do
+    canonical = EngramWeb.Endpoint.url()
+    scheme = URI.parse(canonical).scheme
+
+    iss == canonical or
+      case URI.parse(iss) do
+        %URI{scheme: ^scheme, host: host, path: nil, query: nil, userinfo: nil, fragment: nil}
+        when is_binary(host) ->
+          "#{scheme}://#{host}" in Application.get_env(:engram, :cors_origin, [])
+
+        _ ->
+          false
+      end
+  end
+
+  def issuer?(_), do: false
+
+  @doc """
   Base URL for the host the client actually dialed, when that host is in the
   `:cors_origin` allowlist (populated from `PHX_HOST`); otherwise the canonical
   endpoint URL.

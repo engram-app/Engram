@@ -550,6 +550,23 @@ describe("OAuthAuthorizePage", () => {
 		).not.toBeInTheDocument();
 	});
 
+	// RFC 9207: /oauth/authorize fixes the issuer on the host the client dialed;
+	// the page carries it to consent, which echoes it only if it is ours.
+	it("forwards iss from the authorize redirect to consent", async () => {
+		fetchOAuthClient.mockResolvedValue({ client_id: "cli", client_name: "Claude", kind: "mcp" });
+		postOAuthConsent.mockResolvedValue({ redirect_uri: "https://app/cb?code=ok" });
+		vi.spyOn(window.location, "assign").mockImplementation(() => {});
+
+		renderAt(`${VALID_QS}&iss=${encodeURIComponent("https://mcp.engram.page")}`);
+		fireEvent.click(await screen.findByRole("button", { name: /approve/iu }));
+
+		await waitFor(() =>
+			expect(postOAuthConsent).toHaveBeenCalledWith(
+				expect.objectContaining({ iss: "https://mcp.engram.page" }),
+			),
+		);
+	});
+
 	it("cancels by redirecting back with access_denied", async () => {
 		fetchOAuthClient.mockResolvedValue({
 			client_id: "cli",
