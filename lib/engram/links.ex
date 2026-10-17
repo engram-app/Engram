@@ -77,50 +77,25 @@ defmodule Engram.Links do
   """
   @spec replace_links(map(), map(), binary(), [map()]) :: :ok
   def replace_links(user, vault, source_note_id, parsed) do
+    _ = replace_links_dangling(user, vault, source_note_id, parsed)
+    :ok
+  end
+
+  @doc """
+  `replace_links/4`, returning the distinct `target_basename_hmac` of the
+  edges left dangling: what a read of the just-written rows would answer,
+  without the read.
+
+  When the resolved edges equal the stored ones (the common case: an edit that
+  touched no link), the rows are left as they are instead of being deleted
+  and re-inserted.
+  """
+  @spec replace_links_dangling(map(), map(), binary(), [map()]) :: [binary()]
+  def replace_links_dangling(user, vault, source_note_id, parsed) do
     {:ok, dek} = Crypto.get_dek(user)
     {:ok, filter_key} = Crypto.dek_filter_key(user)
-    now = DateTime.utc_now()
 
-    # Resolve every edge against ONE prefetch per table instead of a query per
-    # edge. `resolve_target/4` is a per-edge query (two, when the preferred
-    # table comes back dangling), and this runs on every note write: a
-    # 2026-08-20 prod profile of a 1.7k-note upload measured 65k `notes`
-    # SELECTs and 13k `attachments` SELECTs — ~37 per note, one per wikilink.
     with_hmacs = Enum.map(parsed, &{&1, Crypto.hmac_field(filter_key, basename_key(&1.target))})
-    candidates = prefetch_candidates(user, vault, Enum.map(with_hmacs, &elem(&1, 1)), dek)
-
-    rows =
-      Enum.map(with_hmacs, fn {p, hmac} ->
-        id = Engram.Notes.mint_id()
-
-        {tct, tnonce} =
-          Envelope.encrypt(p.target, dek, Crypto.aad_for_row(:note_links, :target_text, id))
-
-        {target_note_id, target_attachment_id} =
-          case resolve_prefetched(candidates, hmac, p.target) do
-            {:note, nid} -> {nid, nil}
-            {:attachment, aid} -> {nil, aid}
-            :dangling -> {nil, nil}
-          end
-
-        %{
-          id: id,
-          user_id: user.id,
-          vault_id: vault.id,
-          source_note_id: source_note_id,
-          target_note_id: target_note_id,
-          target_attachment_id: target_attachment_id,
-          target_text_ciphertext: tct,
-          target_text_nonce: tnonce,
-          target_basename_hmac: hmac,
-          link_type: p.link_type,
-          position: p.position,
-          dek_version: Crypto.row_version_aad_bound(),
-          inserted_at: now
-        }
-        |> put_optional_envelope(:alias, p.alias, dek, id)
-        |> put_optional_envelope(:anchor, p.anchor, dek, id)
-      end)
 
     # `with_tenant` rather than a bare transaction: `note_links` carries FORCE
     # ROW LEVEL SECURITY, and the `skip_tenant_check: true` below silences only
@@ -137,8 +112,11 @@ defmodule Engram.Links do
     # everything shares one outer transaction and the setting leaks forward.
     #
     # Re-entrant for the same tenant, so `RewriteNoteLinks` (which already
-    # holds `with_tenant(user_id, ...)`) pays nothing.
-    Repo.with_tenant(user.id, fn ->
+    # holds `with_tenant(user_id, ...)`) pays nothing. The candidate prefetch
+    # and the stored-edge read ride the same transaction (they used to open
+    # their own), under the lock, so the resolution and the compare see one
+    # state.
+    Repo.with_tenant!(user.id, fn ->
       # Serialize concurrent extraction for one source note. Two writers
       # (overlapping ExtractNoteLinks runs, a Rewriter repair, or duplicate
       # bulk jobs) interleaving this delete+insert under READ
@@ -148,29 +126,103 @@ defmodule Engram.Links do
       # converges. Single lock per txn, taken first — no deadlock ordering.
       lock_source_note!(source_note_id)
 
-      Repo.delete_all(
+      # Resolve every edge against ONE prefetch per table instead of a query
+      # per edge. `resolve_target/4` is a per-edge query (two, when the
+      # preferred table comes back dangling), and this runs on every note
+      # write: a 2026-08-20 prod profile of a 1.7k-note upload measured 65k
+      # `notes` SELECTs and 13k `attachments` SELECTs — ~37 per note, one per
+      # wikilink.
+      candidates = prefetch_candidates(user, vault, Enum.map(with_hmacs, &elem(&1, 1)), dek)
+
+      edges =
+        Enum.map(with_hmacs, fn {p, hmac} ->
+          {target_note_id, target_attachment_id} =
+            case resolve_prefetched(candidates, hmac, p.target) do
+              {:note, nid} -> {nid, nil}
+              {:attachment, aid} -> {nil, aid}
+              :dangling -> {nil, nil}
+            end
+
+          {p.position, p.link_type, hmac, target_note_id, target_attachment_id, p.target, p.alias,
+           p.anchor, Crypto.row_version_aad_bound()}
+        end)
+
+      links_query =
         from(l in NoteLink,
           where:
             l.source_note_id == ^source_note_id and l.user_id == ^user.id and
               l.vault_id == ^vault.id
-        ),
-        skip_tenant_check: true
-      )
+        )
 
-      # Chunked, not one statement: the wire protocol caps a query at 65535 bind
-      # parameters, and a NoteLink row binds up to 17 of them (13 base + the
-      # optional alias/anchor envelopes). One MOC-style note with a few thousand
-      # wikilinks therefore overflows the limit, and Postgrex answers that by
-      # KILLING the connection ("can not handle N parameters"), not by returning
-      # a query error — so a single oversized note costs a pooled connection and
-      # takes the whole extraction down with it. Observed on a real vault at
-      # 145792 params (8576 links). @insert_chunk keeps the worst case at 34k.
-      rows
-      |> Enum.chunk_every(@insert_chunk)
-      |> Enum.each(&Repo.insert_all(NoteLink, &1, skip_tenant_check: true))
+      if stored_edges(links_query, dek) != Enum.sort(edges) do
+        Repo.delete_all(links_query, skip_tenant_check: true)
+
+        # Chunked, not one statement: the wire protocol caps a query at 65535
+        # bind parameters, and a NoteLink row binds up to 17 of them (13 base +
+        # the optional alias/anchor envelopes). One MOC-style note with a few
+        # thousand wikilinks therefore overflows the limit, and Postgrex
+        # answers that by KILLING the connection ("can not handle N
+        # parameters"), not by returning a query error — so a single oversized
+        # note costs a pooled connection and takes the whole extraction down
+        # with it. Observed on a real vault at 145792 params (8576 links).
+        # @insert_chunk keeps the worst case at 34k.
+        now = DateTime.utc_now()
+
+        edges
+        |> Enum.map(&link_row(&1, user, vault, source_note_id, dek, now))
+        |> Enum.chunk_every(@insert_chunk)
+        |> Enum.each(&Repo.insert_all(NoteLink, &1, skip_tenant_check: true))
+      end
+
+      for {_pos, _type, hmac, nil, nil, _t, _a, _n, _v} <- edges, uniq: true, do: hmac
     end)
+  end
 
-    :ok
+  # The stored edges in `replace_links_dangling/4`'s edge shape, sorted by
+  # position (unique per source note). A field that fails to decrypt reads
+  # nil, which can only make the compare unequal and force the rewrite.
+  defp stored_edges(links_query, dek) do
+    links_query
+    |> Repo.all()
+    |> Enum.map(fn l ->
+      decrypt = fn ct, nonce, column ->
+        decrypt_field(ct, nonce, dek, l.dek_version, :note_links, column, l.id)
+      end
+
+      {l.position, l.link_type, l.target_basename_hmac, l.target_note_id, l.target_attachment_id,
+       decrypt.(l.target_text_ciphertext, l.target_text_nonce, :target_text),
+       decrypt.(l.alias_ciphertext, l.alias_nonce, :alias),
+       decrypt.(l.anchor_ciphertext, l.anchor_nonce, :anchor), l.dek_version}
+    end)
+    |> Enum.sort()
+  end
+
+  defp link_row(edge, user, vault, source_note_id, dek, now) do
+    {position, link_type, hmac, target_note_id, target_attachment_id, target, alias_text,
+     anchor_text, dek_version} = edge
+
+    id = Engram.Notes.mint_id()
+
+    {tct, tnonce} =
+      Envelope.encrypt(target, dek, Crypto.aad_for_row(:note_links, :target_text, id))
+
+    %{
+      id: id,
+      user_id: user.id,
+      vault_id: vault.id,
+      source_note_id: source_note_id,
+      target_note_id: target_note_id,
+      target_attachment_id: target_attachment_id,
+      target_text_ciphertext: tct,
+      target_text_nonce: tnonce,
+      target_basename_hmac: hmac,
+      link_type: link_type,
+      position: position,
+      dek_version: dek_version,
+      inserted_at: now
+    }
+    |> put_optional_envelope(:alias, alias_text, dek, id)
+    |> put_optional_envelope(:anchor, anchor_text, dek, id)
   end
 
   defp lock_source_note!(source_note_id), do: Repo.advisory_lock!(to_string(source_note_id))
@@ -180,34 +232,20 @@ defmodule Engram.Links do
   # second table's *query*, only its filter), which trades at worst one extra
   # query per note against one saved per link.
   #
-  # Scoped HERE and not at the callers, for the same reason `replace_links/4`
-  # is: this prefetch runs BEFORE that function opens its own `with_tenant`
-  # (it feeds the rows that block inserts), and three caller paths reach it
-  # with no tenant in force — `ExtractNoteLinks` (whose block covers only the
-  # vault fetch), `Rewriter.finish/4`, and `Rewriter.rewrite_legacy/5` (reached from
-  # `attempt/6`'s `{:legacy, _}` branch, after `load_doc/2`'s block has
-  # closed). Filtered, both reads return no candidates and every edge is
-  # written DANGLING — silently, because the `insert_all` downstream IS scoped
-  # and succeeds. Re-entrant for the same tenant, so `RewriteNoteLinks`
-  # (already inside `with_tenant`) pays nothing.
+  # Runs inside `replace_links_dangling/4`'s tenant transaction, its only
+  # caller.
   #
-  # The `[]` clause is load-bearing, not a micro-optimisation.
-  # `replace_links/4` runs on EVERY note write and a note with no wikilinks is
-  # the common case; `fetch_candidates_by_hmac/5` already short-circuits `[]`
-  # with zero queries. Wrapping unconditionally therefore opened a whole
-  # transaction to run nothing — about four extra round trips on the hot path,
-  # which is the exact cost this prefetch exists to avoid.
+  # The `[]` clause skips both queries for a note with no wikilinks, the
+  # common case.
   defp prefetch_candidates(_user, _vault, [], _dek), do: %{notes: %{}, attachments: %{}}
 
   defp prefetch_candidates(user, vault, hmacs, dek) do
     uniq = Enum.uniq(hmacs)
 
-    Repo.with_tenant!(user.id, fn ->
-      %{
-        notes: fetch_candidates_by_hmac(user, vault, uniq, :notes, dek),
-        attachments: fetch_candidates_by_hmac(user, vault, uniq, :attachments, dek)
-      }
-    end)
+    %{
+      notes: fetch_candidates_by_hmac(user, vault, uniq, :notes, dek),
+      attachments: fetch_candidates_by_hmac(user, vault, uniq, :attachments, dek)
+    }
   end
 
   # Same extension-preference + cross-table-fallback rule as `resolve_target/4`,
