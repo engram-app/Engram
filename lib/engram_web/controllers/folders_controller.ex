@@ -161,14 +161,15 @@ defmodule EngramWeb.FoldersController do
     summary: "Create many folders",
     description:
       "Creates explicit folder markers for up to 500 folders in one transaction and returns 201 " <>
-        "with the resulting folders. Idempotent per folder like `POST /folders`. Paths are " <>
-        "sanitized (traversal segments and illegal characters stripped); entries that sanitize " <>
-        "to the root are dropped. More than 500 entries is rejected with 422.",
+        "with one entry per distinct input: the `input` as sent and the `name` it was stored " <>
+        "under. Idempotent per folder like `POST /folders`. Paths are sanitized (traversal " <>
+        "segments and illegal characters stripped); inputs that sanitize to the root are listed " <>
+        "in `rejected` and create nothing. More than 500 entries is rejected with 422.",
     tags: ["Folders"],
     request_body:
       {"Folder paths", "application/json", Schemas.BatchCreateFoldersRequest, required: true},
     responses: [
-      created: {"Created", "application/json", Schemas.FoldersResponse},
+      created: {"Created", "application/json", Schemas.BatchCreateFoldersResponse},
       unprocessable_entity:
         {"Invalid input or too many folders", "application/json", Schemas.Error}
     ]
@@ -179,18 +180,25 @@ defmodule EngramWeb.FoldersController do
     vault = conn.assigns.current_vault
 
     with true <- Enum.all?(folders, &is_binary/1),
-         {:ok, markers} <- Notes.create_folder_markers(user, vault, folders) do
-      names = Enum.map(markers, & &1.folder)
+         {:ok, %{folders: entries, rejected: rejected}} <-
+           Notes.create_folder_markers(user, vault, folders) do
+      # One event for the batch, not N, naming only folders this call created
+      # or undeleted: an all-existing batch (a reconnect re-seed) changes
+      # nothing, so it must not make every peer re-poll /folders/explicit.
+      created = for %{created: true, name: name} <- entries, uniq: true, do: name
 
-      # One event for the batch, not N. Peers re-poll /folders/explicit on any
-      # folders.batch, so the payload is informational.
-      if names != [] do
-        BatchOps.broadcast_batch(user, vault, "folders.batch", %{op: "create", folders: names})
+      if created != [] do
+        BatchOps.broadcast_batch(user, vault, "folders.batch", %{op: "create", folders: created})
       end
 
+      # `input` echoes what the client sent and `name` is what was stored, so a
+      # client can map a folder the sanitizer rewrote to its server name.
       conn
       |> put_status(:created)
-      |> json(%{folders: Enum.map(names, &%{name: &1, count: 0})})
+      |> json(%{
+        folders: Enum.map(entries, &%{input: &1.input, name: &1.name, count: 0}),
+        rejected: rejected
+      })
     else
       false ->
         conn |> put_status(422) |> json(%{error: "folders must be strings"})

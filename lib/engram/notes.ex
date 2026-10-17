@@ -269,51 +269,82 @@ defmodule Engram.Notes do
   @max_batch_folders 500
 
   @doc """
-  Batch `create_folder_marker/3`: one tenant transaction and one shared
-  `seq` for the whole batch. Each folder goes through
-  `PathSanitizer.sanitize/1`; entries that sanitize to "" (root, `..`) and
-  duplicates are dropped. Idempotent per folder like the single create.
+  Batch `create_folder_marker/3`: one tenant transaction and at most one
+  shared `seq` for the whole batch. Each folder goes through
+  `PathSanitizer.sanitize/1`; duplicate inputs collapse. Idempotent per
+  folder like the single create.
 
-  Returns the live markers, `{:error, :batch_too_large}` above
+  Returns `{:ok, %{folders: entries, rejected: inputs}}`: one entry per
+  distinct input that names a folder, `%{input, name, created}` where `name`
+  is the stored (sanitized) folder and `created` is true only when this call
+  inserted or undeleted the marker; `rejected` lists the inputs that sanitize
+  to the root (`..`, `""`). `{:error, :batch_too_large}` above
   #{@max_batch_folders} entries, or the first per-folder error (the whole
   batch rolls back).
   """
   @spec create_folder_markers(map(), map(), [String.t()]) ::
-          {:ok, [Note.t()]} | {:error, term()}
+          {:ok, %{folders: [map()], rejected: [String.t()]}} | {:error, term()}
   def create_folder_markers(_user, _vault, folders)
       when is_list(folders) and length(folders) > @max_batch_folders,
       do: {:error, :batch_too_large}
 
-  def create_folder_markers(user, vault, folders) when is_list(folders) do
-    folders =
-      folders
-      |> Enum.map(&PathSanitizer.sanitize/1)
-      |> Enum.reject(&(&1 == ""))
+  def create_folder_markers(user, vault, inputs) when is_list(inputs) do
+    {rejected, kept} =
+      inputs
       |> Enum.uniq()
+      |> Enum.map(&{&1, PathSanitizer.sanitize(&1)})
+      |> Enum.split_with(fn {_input, name} -> name == "" end)
 
-    with [_ | _] <- folders,
-         {:ok, user} <- Crypto.ensure_user_dek(user),
-         {:ok, filter_key} <- Crypto.dek_filter_key(user),
-         {:ok, dek} <- Crypto.get_dek(user),
-         {:ok, markers} <-
-           Repo.with_tenant(user.id, fn ->
-             # One seq for the batch: the seq feed keys on (seq, id), so ties
-             # are safe, and the vault row is locked once instead of N times.
-             seq = Engram.Vaults.next_seq!(vault.id)
-             upsert_folder_markers(user, vault, dek, filter_key, folders, seq)
-           end) do
-      {:ok, markers}
-    else
-      [] -> {:ok, []}
-      {:error, _} = err -> err
+    with {:ok, created} <-
+           upsert_folder_batch(user, vault, kept |> Enum.map(&elem(&1, 1)) |> Enum.uniq()) do
+      folders =
+        Enum.map(kept, fn {input, name} ->
+          %{input: input, name: name, created: MapSet.member?(created, name)}
+        end)
+
+      {:ok, %{folders: folders, rejected: Enum.map(rejected, &elem(&1, 0))}}
     end
   end
 
-  defp upsert_folder_markers(user, vault, dek, filter_key, folders, seq) do
+  defp upsert_folder_batch(_user, _vault, []), do: {:ok, MapSet.new()}
+
+  defp upsert_folder_batch(user, vault, names) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, filter_key} <- Crypto.dek_filter_key(user),
+         {:ok, dek} <- Crypto.get_dek(user) do
+      Repo.with_tenant(user.id, fn ->
+        # One seq for the batch, taken lazily: the seq feed keys on (seq, id),
+        # so ties are safe, and the vault row is locked at most once. It is
+        # taken by the first write's seq_fun, right BEFORE that write, never
+        # after one: every note writer locks the vault row before a note row,
+        # and reversing that deadlocks (40P01). An all-existing batch takes
+        # no lock at all.
+        seq_key = {__MODULE__, :folder_batch_seq, make_ref()}
+
+        seq_fun = fn ->
+          Process.get(seq_key) ||
+            tap(Engram.Vaults.next_seq!(vault.id), &Process.put(seq_key, &1))
+        end
+
+        try do
+          markers = upsert_folder_markers(user, vault, dek, filter_key, names, seq_fun)
+          seq = Process.get(seq_key)
+
+          # A marker carrying this call's seq is one this call wrote; a live
+          # marker found as-is (or a raced insert's winner) carries an older one.
+          for m <- markers, seq != nil and m.seq == seq, into: MapSet.new(), do: m.folder
+        after
+          Process.delete(seq_key)
+        end
+      end)
+    end
+  end
+
+  defp upsert_folder_markers(user, vault, dek, filter_key, folders, seq_fun) do
     Enum.map(folders, fn folder ->
       folder_hmac = Crypto.hmac_field(filter_key, folder)
 
-      case upsert_folder_marker(user, vault, dek, folder, folder_hmac, fn -> seq end) do
+      case upsert_folder_marker(user, vault, dek, folder, folder_hmac, seq_fun) do
         {:ok, marker} -> marker
         {:error, reason} -> Repo.rollback(reason)
       end

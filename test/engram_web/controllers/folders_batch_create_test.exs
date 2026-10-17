@@ -106,5 +106,92 @@ defmodule EngramWeb.FoldersBatchCreateTest do
       assert explicit(user, vault) == ["Mine", "Shared"]
       assert explicit(other, other_vault) == ["Shared"]
     end
+
+    # The plugin records the SERVER name per input so a folder the server
+    # rewrote is not trashed or re-sent on its next reconcile.
+    test "returns each input with the name it was stored under", %{conn: conn} do
+      body =
+        conn
+        |> post(~p"/api/folders/batch", %{folders: ["a/../b", "x%252Fy", "Plain", "Plain"]})
+        |> json_response(201)
+
+      pairs = body["folders"] |> Enum.map(&{&1["input"], &1["name"]}) |> Enum.sort()
+      assert pairs == [{"Plain", "Plain"}, {"a/../b", "a/b"}, {"x%252Fy", "x/y"}]
+    end
+
+    test "inputs that sanitize to the root come back as rejected", %{conn: conn} do
+      body =
+        conn
+        |> post(~p"/api/folders/batch", %{folders: ["..", "", "/", "ok"]})
+        |> json_response(201)
+
+      assert Enum.sort(body["rejected"]) == ["", "..", "/"]
+      assert Enum.map(body["folders"], & &1["input"]) == ["ok"]
+    end
+
+    test "broadcasts only folders it created or undeleted", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} = Engram.Notes.create_folder_marker(user, vault, "Old")
+      {:ok, _} = Engram.Notes.create_folder_marker(user, vault, "Gone")
+
+      {:ok, :deleted} =
+        Engram.Notes.delete_folder_marker(Engram.Repo.reload!(user), vault, "Gone")
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      post(conn, ~p"/api/folders/batch", %{folders: ["Old", "Gone", "New"]})
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "folders.batch",
+        payload: %{op: "create", folders: folders}
+      }
+
+      assert Enum.sort(folders) == ["Gone", "New"]
+    end
+
+    test "an all-existing batch broadcasts nothing and takes no seq", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} = Engram.Notes.create_folder_marker(user, vault, "Old")
+      before = Engram.Vaults.current_seq(user.id, vault.id)
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      body = conn |> post(~p"/api/folders/batch", %{folders: ["Old"]}) |> json_response(201)
+
+      assert [%{"input" => "Old", "name" => "Old"}] = body["folders"]
+      refute_receive %Phoenix.Socket.Broadcast{event: "folders.batch"}, 100
+      assert Engram.Vaults.current_seq(user.id, vault.id) == before
+    end
+  end
+
+  # Lock order: every note writer takes the vault row lock BEFORE its first
+  # note row write. The batch takes it lazily, but never after a write.
+  describe "create_folder_markers/3 lock order" do
+    test "takes the vault lock after the reads, before the first write", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} = Engram.Notes.create_folder_marker(user, vault, "Old")
+      user = Engram.Repo.reload!(user)
+
+      queries =
+        Engram.TenantQueryCounter.count_matching_queries(
+          fn -> {:ok, _} = Engram.Notes.create_folder_markers(user, vault, ["Old", "New"]) end,
+          fn _ -> true end
+        )
+
+      first_read = Enum.find_index(queries, &(&1 =~ ~s(FROM "notes")))
+      seq_at = Enum.find_index(queries, &(&1 =~ "change_seq = change_seq + 1"))
+      insert_at = Enum.find_index(queries, &(&1 =~ ~s(INSERT INTO "notes")))
+
+      assert first_read && seq_at && insert_at, Enum.join(queries, "\n")
+      assert first_read < seq_at, Enum.join(queries, "\n")
+      assert seq_at < insert_at, Enum.join(queries, "\n")
+    end
   end
 end

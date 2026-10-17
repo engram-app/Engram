@@ -1804,6 +1804,62 @@
         "x-struct": "Elixir.EngramWeb.Schemas.OkFlag",
         "x-validate": null
       },
+      "BatchCreateFoldersResponse": {
+        "properties": {
+          "folders": {
+            "items": {
+              "properties": {
+                "count": {
+                  "type": "integer",
+                  "x-struct": null,
+                  "x-validate": null
+                },
+                "input": {
+                  "description": "The folder as sent",
+                  "type": "string",
+                  "x-struct": null,
+                  "x-validate": null
+                },
+                "name": {
+                  "description": "The folder as stored (sanitized)",
+                  "type": "string",
+                  "x-struct": null,
+                  "x-validate": null
+                }
+              },
+              "required": [
+                "input",
+                "name"
+              ],
+              "type": "object",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "rejected": {
+            "description": "Inputs that sanitize to the vault root; nothing was created for them",
+            "items": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "folders",
+          "rejected"
+        ],
+        "title": "BatchCreateFoldersResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.BatchCreateFoldersResponse",
+        "x-validate": null
+      },
       "BatchCreateFoldersRequest": {
         "example": {
           "folders": [
@@ -3325,7 +3381,7 @@
     "/api/folders/batch": {
       "post": {
         "callbacks": {},
-        "description": "Creates explicit folder markers for up to 500 folders in one transaction and returns 201 with the resulting folders. Idempotent per folder like `POST /folders`. Paths are sanitized (traversal segments and illegal characters stripped); entries that sanitize to the root are dropped. More than 500 entries is rejected with 422.",
+        "description": "Creates explicit folder markers for up to 500 folders in one transaction and returns 201 with one entry per distinct input: the `input` as sent and the `name` it was stored under. Idempotent per folder like `POST /folders`. Paths are sanitized (traversal segments and illegal characters stripped); inputs that sanitize to the root are listed in `rejected` and create nothing. More than 500 entries is rejected with 422.",
         "operationId": "folders-batch-create",
         "parameters": [],
         "requestBody": {
@@ -3344,7 +3400,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FoldersResponse"
+                  "$ref": "#/components/schemas/BatchCreateFoldersResponse"
                 }
               }
             },
