@@ -731,6 +731,44 @@ defmodule Engram.ConnectionsTest do
       assert Connections.count_active(user.id, :obsidian) == 1
     end
 
+    # A revoked device token must not keep its live socket: the owner is
+    # kicked once, after commit, like every other revoke.
+    test "revoking a device token kicks the owner's sockets once" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      insert(:device_refresh_token, user: user, vault: vault, family_id: Ecto.UUID.generate())
+
+      Phoenix.PubSub.subscribe(Engram.PubSub, "user_socket:#{user.id}")
+      assert :ok = Connections.revoke_by_vault(user.id, vault.id)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+      refute_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 200
+    end
+
+    test "a vault soft-delete kicks the owner of a device token on it" do
+      user = insert_user()
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "Gone", Ecto.UUID.generate())
+      {:ok, _keep, _} = Engram.Vaults.register_vault(user, "Kept", Ecto.UUID.generate())
+      insert(:device_refresh_token, user: user, vault: vault, family_id: Ecto.UUID.generate())
+
+      Phoenix.PubSub.subscribe(Engram.PubSub, "user_socket:#{user.id}")
+      assert {:ok, _} = Engram.Vaults.delete_vault(user, vault.id)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+    end
+
+    test "revoking nothing kicks nobody" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+
+      Phoenix.PubSub.subscribe(Engram.PubSub, "user_socket:#{user.id}")
+      assert :ok = Connections.revoke_by_vault(user.id, vault.id)
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 200
+    end
+
     test "does not touch tokens belonging to a different user" do
       user = insert_user()
       other = insert_user()

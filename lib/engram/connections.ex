@@ -181,7 +181,7 @@ defmodule Engram.Connections do
 
     for t <- rows,
         scope = Permissions.from_claims(Engram.OAuth.access_claims(t)),
-        Permissions.allows?(scope, %{id: vault_id}),
+        Permissions.decide(scope, %{id: vault_id}, :read) == :ok,
         keep?.(scope),
         uniq: true,
         do: t.family_id
@@ -320,21 +320,22 @@ defmodule Engram.Connections do
   `vault_id` for `user_id`.
 
   Called at vault soft-delete time so the connections page clears immediately.
-  Idempotent — safe to call twice.
+  Idempotent — safe to call twice. The owner's sockets are kicked once after
+  commit if any token went (`drop_vault_from_grants/3` decides it).
   """
   @spec revoke_by_vault(Ecto.UUID.t(), Ecto.UUID.t()) :: :ok
   def revoke_by_vault(user_id, vault_id) do
-    _ = drop_vault_from_grants(user_id, vault_id)
+    {devices, _} =
+      Repo.update_all(
+        from(rt in DeviceRefreshToken,
+          where: rt.user_id == ^user_id,
+          where: rt.vault_id == ^vault_id,
+          where: is_nil(rt.revoked_at)
+        ),
+        set: [revoked_at: DateTime.utc_now(:second)]
+      )
 
-    Repo.update_all(
-      from(rt in DeviceRefreshToken,
-        where: rt.user_id == ^user_id,
-        where: rt.vault_id == ^vault_id,
-        where: is_nil(rt.revoked_at)
-      ),
-      set: [revoked_at: DateTime.utc_now(:second)]
-    )
-
+    _ = drop_vault_from_grants(user_id, vault_id, kick_owner: devices > 0)
     :ok
   end
 
@@ -371,7 +372,8 @@ defmodule Engram.Connections do
   The owner's sockets are kicked once after commit when a grant changed.
   `kick_owner: true` asks for that kick even when none did, for a caller
   that revoked other credentials in the same transaction (`CleanupVault`'s
-  keys): one kick either way, decided here.
+  keys, `revoke_by_vault/2`'s device tokens): one kick either way, decided
+  here.
   """
   @spec drop_vault_from_grants(Ecto.UUID.t(), Ecto.UUID.t(), keyword()) :: non_neg_integer()
   def drop_vault_from_grants(user_id, vault_id, opts \\ []) do
@@ -568,7 +570,7 @@ defmodule Engram.Connections do
   defp leveled_vault_ids(%{leveled: true, access: access} = row, visible),
     do: %{
       Map.delete(row, :leveled)
-      | vault_ids: for(v <- visible, Permissions.allows?(access, v), do: v.id)
+      | vault_ids: for(v <- visible, Permissions.decide(access, v, :read) == :ok, do: v.id)
     }
 
   defp leveled_vault_ids(row, _visible), do: Map.delete(row, :leveled)
