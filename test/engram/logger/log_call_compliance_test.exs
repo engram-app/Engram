@@ -227,6 +227,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram_web/controllers/admin/",
     "lib/engram_web/csp.ex",
     "lib/engram_web/endpoint.ex",
+    # Compares If-None-Match against an opaque hash. Reads one request header,
+    # no Logger call, never sees content, path, title or a query.
+    "lib/engram_web/etag.ex",
     "lib/engram_web/gettext.ex",
     "lib/engram_web/key_access_params.ex",
     "lib/engram_web/limit_response.ex",
