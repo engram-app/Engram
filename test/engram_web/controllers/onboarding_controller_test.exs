@@ -473,6 +473,23 @@ defmodule EngramWeb.OnboardingControllerTest do
              |> post(~p"/api/onboarding/accept_free_tier")
              |> response(401)
     end
+
+    # The user row went away between auth and the stamp (a purge racing the
+    # click): nothing took the stamp. Driven through the controller directly,
+    # since the auth plug would 401 a missing user before reaching it.
+    test "404 when the user row is gone" do
+      ghost = build(:user, id: Ecto.UUID.generate(), free_tier_accepted_at: nil)
+
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Plug.Conn.assign(:current_user, ghost)
+        |> Phoenix.Controller.put_format("json")
+        |> EngramWeb.OnboardingController.call(
+          EngramWeb.OnboardingController.init(:accept_free_tier)
+        )
+
+      assert %{"error" => "not_found"} = json_response(conn, 404)
+    end
   end
 
   # The wizard's progress is otherwise invisible in prod: success responses are

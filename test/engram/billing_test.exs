@@ -158,6 +158,24 @@ defmodule Engram.BillingTest do
     end
   end
 
+  # The one paid-plan rule: onboarding's plan gate and its Free start both
+  # ask this instead of matching tiers themselves.
+  describe "paid?/1" do
+    test "true for an entitled paid subscription" do
+      user = build(:user) |> with_subscription(tier: "pro", status: "active")
+      assert Billing.paid?(user)
+    end
+
+    test "false with no subscription, on Free, or canceled" do
+      refute Billing.paid?(build(:user, free_tier_accepted_at: nil))
+      refute Billing.paid?(build(:user, free_tier_accepted_at: DateTime.utc_now()))
+
+      refute build(:user, free_tier_accepted_at: DateTime.utc_now())
+             |> with_subscription(tier: "pro", status: "canceled")
+             |> Billing.paid?()
+    end
+  end
+
   describe "tier/1" do
     test "returns :starter when user has active starter subscription" do
       user = build(:user) |> with_subscription(tier: "starter", status: "active")

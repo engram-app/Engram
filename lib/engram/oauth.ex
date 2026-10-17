@@ -654,8 +654,24 @@ defmodule Engram.OAuth do
            |> grant_attrs(code_row.id, ip)
            |> Map.put(:granted_at, DateTime.utc_now())
            |> insert_refresh_token() do
+      broadcast_connection_created(refresh_row)
       {:ok, build_token_response(user, code_row, refresh_raw, refresh_row)}
     end
+  end
+
+  # The one place a grant becomes live: a code's first refresh token. A
+  # rotation (`rotate_refresh_token/3`) continues the same connection and says
+  # nothing. Not in a transaction, so the row is committed by now. Names no
+  # vault, so `UserChannel` does not intercept it.
+  # Best-effort: a dropped notification must not fail a token exchange that
+  # already succeeded.
+  defp broadcast_connection_created(%RefreshToken{user_id: user_id, client_id: client_id}) do
+    _ =
+      EngramWeb.Endpoint.broadcast("user:#{user_id}", "connection_created", %{
+        client_id: client_id
+      })
+
+    :ok
   end
 
   # How long after a refresh token is consumed a replay of it may still

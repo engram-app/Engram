@@ -1,13 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
 	clearPendingAuthorization,
-	connecting,
-	connectingUrl,
 	peekPendingAuthorization,
 	pendingCancelUrl,
 	stashPendingAuthorization,
 	stashPendingDeviceLink,
-	takeConnectingMarker,
 } from "./pending-authorization";
 
 const SEARCH = "?client_id=cli&redirect_uri=https://app/cb&state=xyz";
@@ -194,43 +191,5 @@ describe("pendingCancelUrl", () => {
 		stashPendingAuthorization("?redirect_uri=javascript:alert(1)&state=xyz", null, null, true);
 
 		expect(pendingCancelUrl()).toBeNull();
-	});
-});
-
-// The vault tab learns it was opened by consent from its own URL, not from a
-// sessionStorage copy whose timing the browser does not promise.
-describe("takeConnectingMarker", () => {
-	beforeEach(() => {
-		window.sessionStorage.clear();
-	});
-
-	it("keeps the marker and strips it from the URL", () => {
-		window.history.replaceState(null, "", "/?connecting=1792000000000&client=chatgpt");
-		takeConnectingMarker();
-		expect(connecting()).toEqual({ since: 1_792_000_000_000, client: "chatgpt" });
-		expect(window.location.search).toBe("");
-	});
-
-	// window.open copies the consent tab's sessionStorage into the new tab. Its
-	// auto-open mark would skip the welcome note; its consent return is not ours.
-	it("drops state copied from the consent tab", () => {
-		window.sessionStorage.setItem("engram:auto-opened:my-vault", "1");
-		window.sessionStorage.setItem("engram:consent-return", "/oauth/consent?x=1");
-		window.history.replaceState(null, "", "/?connecting=1792000000000&client=chatgpt");
-		takeConnectingMarker();
-		expect(window.sessionStorage.getItem("engram:auto-opened:my-vault")).toBeNull();
-		expect(window.sessionStorage.getItem("engram:consent-return")).toBeNull();
-	});
-
-	it("leaves a tab without the marker alone", () => {
-		window.history.replaceState(null, "", "/?folder=Notes");
-		takeConnectingMarker();
-		expect(connecting()).toBeNull();
-		expect(window.location.search).toBe("?folder=Notes");
-	});
-
-	it("builds the marked URL", () => {
-		expect(connectingUrl("/", "chatgpt", 5)).toBe("/?connecting=5&client=chatgpt");
-		expect(connectingUrl("/", null, 5)).toBe("/?connecting=5");
 	});
 });

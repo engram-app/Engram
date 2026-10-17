@@ -59,11 +59,16 @@ defmodule Engram.Onboarding do
   `privacy_hash`). Both rows share the same `accepted_at`/ip/ua audit metadata.
   `meta` may carry `:ip_address` (string) and `:user_agent` (string).
 
-  A first acceptance by an account with no plan also stamps the Free start,
-  in the same transaction (see `starts_free?/1`).
+  A first acceptance by an account with no plan also stamps the Free start
+  (`free_tier_accepted_at`, see `starts_free?/1`) in the same transaction.
+  The agreement rows and the stamp commit together or not at all: there is no
+  later retry (`status/1` never writes), so a failure leaves nothing recorded
+  and the user accepts again. The connector vault (see
+  `maybe_provision_connector_vault/1`) is provisioned after commit,
+  idempotently.
 
   Returns `{:ok, %Agreement{}}` (the ToS row) when every write succeeds, or
-  `{:error, reason}` for the first that fails, with nothing recorded.
+  `{:error, reason}` for the first that fails.
   """
   def accept_terms(user, tos_version, tos_hash, privacy_version, privacy_hash, meta)
       when is_binary(tos_version) and is_binary(privacy_version) do
@@ -221,7 +226,7 @@ defmodule Engram.Onboarding do
     # steps but SaaS subscription gating in the same response.
     subscription_ok =
       not billing_active or
-        Engram.Billing.tier(user) in [:starter, :pro] or
+        Engram.Billing.paid?(user) or
         not is_nil(user.free_tier_accepted_at)
 
     # The cached users row, not a fresh read: set_profile/2 evicts the :user
@@ -409,8 +414,8 @@ defmodule Engram.Onboarding do
   # A step must stay listed whenever `next_step/6` can still return it, or the
   # wizard is pointed at a step the chain does not list and loops:
   #
-  #   * `:billing` when terms pass without a plan (accepted before the Free
-  #     start existed, or the stamp failed).
+  #   * `:billing` when terms pass without a plan: accepted before the Free
+  #     start existed, or by a paid account whose plan has since lapsed.
   #   * `:heard` while a hosted web signup has not answered it, and after,
   #     unless its profile completed without it (`heard_due?/3`).
   #   * `:vault` unless the signup's origin already settled it: a plugin-first
@@ -681,7 +686,8 @@ defmodule Engram.Onboarding do
 
   Called where those last two flip: `set_profile/2` (the pre-answer, for an
   account already past them, and self-host, which has neither),
-  `accept_terms/6` (terms re-accepted after the plan), `accept_free_tier/1`,
+  `accept_terms/6` (after commit, for a first acceptance that started Free
+  and for terms re-accepted after the plan), `accept_free_tier/1`,
   and `subscription.created` in `Engram.Billing`.
   Idempotent: keyed on a fixed client_id, and a no-op when not due.
 
@@ -738,7 +744,7 @@ defmodule Engram.Onboarding do
 
     Application.get_env(:engram, :billing_enabled, false) and
       is_nil(user.free_tier_accepted_at) and
-      Engram.Billing.tier(user) not in [:starter, :pro]
+      not Engram.Billing.paid?(user)
   end
 
   defp provision_connector_vault(user) do
@@ -929,11 +935,16 @@ defmodule Engram.Onboarding do
     end
   end
 
-  # The conditional update both Free starts share. Of concurrent callers
-  # holding the same unstamped struct exactly one matches the row (`:won`,
-  # and only it provisions); the others read the winner's row (`:lost`).
-  # `:not_found` when nothing took the stamp (the user is gone).
-  defp stamp_free_tier(user) do
+  @doc """
+  Stamps `free_tier_accepted_at`: the one write of it. A conditional update, so
+  of concurrent callers exactly one matches the row (`:won`, and only it
+  provisions); the others read the winner's row (`:lost`). `{:error, :not_found}`
+  when nothing took the stamp (the user is gone). Joins the caller's
+  transaction when there is one.
+  """
+  @spec stamp_free_tier(Engram.Accounts.User.t()) ::
+          {:ok, Engram.Accounts.User.t(), :won | :lost} | {:error, :not_found}
+  def stamp_free_tier(user) do
     import Ecto.Query
 
     query =
@@ -950,15 +961,11 @@ defmodule Engram.Onboarding do
         {:ok, saved, :won}
 
       {0, _} ->
-        case fresh_user(user.id) do
+        case Accounts.get_user_uncached(user.id) do
           %{free_tier_accepted_at: %DateTime{}} = saved -> {:ok, saved, :lost}
           _ -> {:error, :not_found}
         end
     end
-  end
-
-  defp fresh_user(user_id) do
-    Repo.get(Engram.Accounts.User, user_id, skip_tenant_check: true)
   end
 
   # The wizard's very next request (or socket rejoin) reads the cached user and

@@ -10,7 +10,6 @@ import { ConfigProvider } from "./config-context";
 import ErrorFallback from "./error-fallback";
 import { LocaleProvider } from "./i18n/locale-provider";
 import LoadingScreen from "./layout/loading-screen";
-import { takeConnectingMarker } from "./oauth/pending-authorization";
 import { appRouterFor } from "./router";
 import { captureError } from "./sentry";
 import { ThemeProvider } from "./theme/theme-provider";
@@ -48,8 +47,6 @@ window.addEventListener("vite:preloadError", (event) => {
 // so nothing on the critical path needs it synchronously. Everything else
 // reaches PostHog through analytics/client.ts, never a static import.
 initAnalytics(import.meta.env.VITE_POSTHOG_KEY ?? "");
-// Before the router reads the URL: the vault tab consent opened carries a marker.
-takeConnectingMarker();
 
 // Both auth providers are declared lazy at module scope; only one is
 // instantiated per page load based on resolved config (BootstrapGate).

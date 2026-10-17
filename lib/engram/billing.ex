@@ -289,6 +289,10 @@ defmodule Engram.Billing do
   @spec entitled_statuses() :: [String.t()]
   def entitled_statuses, do: @entitled_statuses
 
+  @doc "True on an entitled paid plan. The one paid-plan rule; callers ask this."
+  @spec paid?(Engram.Accounts.User.t()) :: boolean()
+  def paid?(%Engram.Accounts.User{} = user), do: tier(user) in [:starter, :pro]
+
   @doc """
   Returns the user's effective tier as an atom in `[:free, :starter, :pro]`.
 
@@ -752,11 +756,11 @@ defmodule Engram.Billing do
               |> Subscription.changeset(update_attrs)
               |> Repo.update!()
 
-            if user && is_nil(user.free_tier_accepted_at) do
-              user
-              |> Ecto.Changeset.change(free_tier_accepted_at: DateTime.utc_now())
-              |> Repo.update!()
-            end
+            # Raises (rolling both writes back) if the user row is gone.
+            _ =
+              if user && is_nil(user.free_tier_accepted_at) do
+                {:ok, _user, _} = Engram.Onboarding.stamp_free_tier(user)
+              end
 
             updated_sub
           end)
