@@ -200,6 +200,93 @@ defmodule Engram.LogsReemitTest do
     refute metas["c2"]
   end
 
+  # Prod 2026-10-17: 2,571 POSTs carried ~16.6k lines during one bulk first
+  # sync, ~15.9k of them four messages repeated with a different note id each.
+  # The DB keeps every row; only the Logger re-emit collapses.
+  test "a batch of identical-template warns re-emits ONE line with repeat_count" do
+    user = insert(:user)
+    parent = self()
+    ref = make_ref()
+    handler_id = :logs_reemit_collapse_handler
+
+    :logger.add_handler(handler_id, __MODULE__, %{config: %{parent: parent, ref: ref}})
+    on_exit(fn -> :logger.remove_handler(handler_id) end)
+
+    entries =
+      for i <- 1..500 do
+        %{
+          "level" => "warn",
+          "category" => "crdt",
+          "message" =>
+            "create_failed note=#{Ecto.UUID.generate()} ref=n#{i} reason=notes_cap_reached",
+          "conn_id" => "c1"
+        }
+      end
+
+    assert {:ok, 500} = Logs.insert_logs(user, entries)
+
+    assert_receive {^ref, :warning, meta}, 1000
+    assert meta[:repeat_count] == 500
+    assert length(meta[:repeat_samples]) == 3
+    refute_receive {^ref, _, _}, 200
+
+    stored =
+      Engram.Repo.aggregate(
+        from(l in Engram.Logs.ClientLog, where: l.user_id == ^user.id),
+        :count,
+        skip_tenant_check: true
+      )
+
+    assert stored == 500
+  end
+
+  test "distinct messages in one batch stay distinct lines" do
+    user = insert(:user)
+    parent = self()
+    ref = make_ref()
+    handler_id = :logs_reemit_distinct_handler
+
+    :logger.add_handler(handler_id, __MODULE__, %{config: %{parent: parent, ref: ref}})
+    on_exit(fn -> :logger.remove_handler(handler_id) end)
+
+    entries =
+      for msg <- ["ws closed", "ws opened", "push failed status=500", "ws closed"] do
+        %{"level" => "warn", "category" => "sync", "message" => msg, "conn_id" => "c1"}
+      end
+
+    {:ok, 4} = Logs.insert_logs(user, entries)
+
+    lines =
+      for _ <- 1..3 do
+        assert_receive {^ref, _level, meta}, 1000
+        meta[:repeat_count]
+      end
+
+    refute_receive {^ref, _, _}, 200
+    # The one repeated message carries 2; singletons carry no repeat_count.
+    assert Enum.frequencies(lines) == %{2 => 1, nil => 2}
+  end
+
+  test "same template at different levels or categories is not collapsed" do
+    user = insert(:user)
+    parent = self()
+    ref = make_ref()
+    handler_id = :logs_reemit_levels_handler
+
+    :logger.add_handler(handler_id, __MODULE__, %{config: %{parent: parent, ref: ref}})
+    on_exit(fn -> :logger.remove_handler(handler_id) end)
+
+    {:ok, 3} =
+      Logs.insert_logs(user, [
+        %{"level" => "warn", "category" => "sync", "message" => "boom", "conn_id" => "c1"},
+        %{"level" => "error", "category" => "sync", "message" => "boom", "conn_id" => "c1"},
+        %{"level" => "warn", "category" => "push", "message" => "boom", "conn_id" => "c1"}
+      ])
+
+    for _ <- 1..3, do: assert_receive({^ref, _level, _meta}, 1000)
+    refute_receive {^ref, _, _}, 200
+  end
+
   # :logger handler callback
   def log(%{level: level, meta: meta}, %{config: %{parent: parent, ref: ref}}) do
     if meta[:category] == :client and meta[:conn_id] in ["c1", "c2"] do

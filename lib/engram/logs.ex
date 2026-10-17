@@ -225,6 +225,7 @@ defmodule Engram.Logs do
   # so an oversized message is not shipped downstream at full size.
   defp reemit_to_logger(user, entries) do
     hashed_user = HMAC.hash_user_id(to_string(user.id))
+    entries = collapse_repeats(entries)
     {ship_ok, over} = diagnostic_budget(entries)
 
     if over > 0 do
@@ -269,6 +270,7 @@ defmodule Engram.Logs do
         # STRING, and setting the boolean alone made this override a silent
         # no-op (engram-app/engram-infra#1095).
         meta = if ship?, do: Metadata.ship_to_loki(meta), else: meta
+        meta = with_repeats(meta, entry)
 
         Logger.log(level, msg, meta)
       rescue
@@ -280,6 +282,55 @@ defmodule Engram.Logs do
       end
     end)
   end
+
+  # Prod 2026-10-17: one bulk first sync pushed ~16.6k client lines in 30 min,
+  # ~15.9k of them four messages repeated with a different note id in each.
+  # Within ONE batch, entries sharing (level, category, message template,
+  # diagnostic, forced) re-emit as ONE line: the first entry's message and
+  # metadata plus `repeat_count` and up to @max_repeat_samples of the varying
+  # tokens. The template masks only per-note ids, so messages that differ in
+  # anything else (a status code, a reason) stay separate lines. The DB rows
+  # are untouched; only the Logger copy collapses. Messages are already
+  # scrubbed by bound_entry/2, so the samples carry nothing the line did not.
+  @max_repeat_samples 3
+  # `note=<uuid>` and bare UUIDs, and plugin noteRefs (`n123`).
+  @per_note_token ~r/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|\bn\d+\b/i
+
+  defp collapse_repeats(entries) do
+    entries
+    |> Enum.reduce({%{}, []}, fn entry, {groups, order} ->
+      tokens = @per_note_token |> Regex.scan(entry.message) |> List.flatten()
+      template = Regex.replace(@per_note_token, entry.message, "<id>")
+      key = {entry.level, entry.category, template, entry.diagnostic, entry.forced}
+
+      case groups do
+        %{^key => {first, count, samples}} ->
+          {Map.put(groups, key, {first, count + 1, add_samples(samples, tokens)}), order}
+
+        _ ->
+          {Map.put(groups, key, {entry, 1, add_samples([], tokens)}), [key | order]}
+      end
+    end)
+    |> then(fn {groups, order} ->
+      order
+      |> Enum.reverse()
+      |> Enum.map(fn key ->
+        {first, count, samples} = Map.fetch!(groups, key)
+        if count == 1, do: first, else: Map.merge(first, %{repeat_count: count, samples: samples})
+      end)
+    end)
+  end
+
+  defp add_samples(samples, tokens) do
+    Enum.reduce(tokens, samples, fn token, acc ->
+      if length(acc) < @max_repeat_samples and token not in acc, do: acc ++ [token], else: acc
+    end)
+  end
+
+  defp with_repeats(meta, %{repeat_count: count, samples: samples}),
+    do: Keyword.merge(meta, repeat_count: count, repeat_samples: samples)
+
+  defp with_repeats(meta, _entry), do: meta
 
   # How many diagnostic entries this batch may ship, and how many it loses.
   defp diagnostic_budget(entries) do
