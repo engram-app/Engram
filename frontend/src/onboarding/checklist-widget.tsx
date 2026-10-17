@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Waypoints } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link, useLocation } from "react-router";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useT } from "@/i18n/locale-provider";
@@ -97,14 +97,31 @@ function ChecklistWidget() {
 	const connections = useConnections();
 	const qc = useQueryClient();
 	const me = useMe();
+	const tools = (profile?.tools ?? []).filter((slug) => slug !== "web_only");
+	// A tool row auto-completes once a live MCP connection resolves to its slug
+	// (backend LogoAllowlist matches claude.ai by redirect host).
+	const connectedSlugs = new Set(
+		(connections.data ?? [])
+			.filter((c) => c.kind === "mcp")
+			.map((c) => c.slug)
+			.filter((s): s is string => Boolean(s)),
+	);
+	// `other_mcp` is the one row with no slug of its own, no client ever
+	// resolves to it, so slug-matching left it permanently unstickable. It's
+	// satisfied by any live MCP grant not already claimed by another row the
+	// user picked (an unrecognized client has slug null and always counts).
+	const otherSelected = new Set(tools.filter((slug) => slug !== "other_mcp"));
+	const hasUnclaimedMcp = (connections.data ?? []).some(
+		(c) => c.kind === "mcp" && !(c.slug && otherSelected.has(c.slug)),
+	);
+	const toolConnected = (slug: string) =>
+		slug === "other_mcp" ? hasUnclaimedMcp : connectedSlugs.has(slug);
 	// A client finishes connecting after its user lands here (the token
 	// exchange follows consent). The server announces the new grant, so the
-	// row ticks without a reload. Only while a picked tool still waits. A
-	// grant made before this tab joined is never announced to it, so the list
-	// is also re-read on mount and on every (re)join.
-	const waitingOnTool =
-		(profile?.tools ?? []).some((slug) => slug !== "web_only") &&
-		!(connections.data ?? []).some((c) => c.kind === "mcp");
+	// row ticks without a reload, while any picked tool still waits. A grant
+	// made before this tab joined is never announced to it, so the list is
+	// also re-read on every join (a late subscriber is told at once).
+	const waitingOnTool = tools.some((slug) => !toolConnected(slug));
 	const refetchConnections = () => qc.invalidateQueries({ queryKey: ["connections"] });
 	useUserChannelEvent({
 		userId: me.data?.id,
@@ -113,11 +130,6 @@ function ChecklistWidget() {
 		onJoined: refetchConnections,
 		enabled: waitingOnTool,
 	});
-	useEffect(() => {
-		if (waitingOnTool) {
-			qc.invalidateQueries({ queryKey: ["connections"] });
-		}
-	}, [waitingOnTool, qc]);
 	const isFreeTier = useIsFreeTier();
 
 	if (ob.isLoading) {
@@ -155,25 +167,8 @@ function ChecklistWidget() {
 		});
 	}
 
-	const tools = (profile?.tools ?? []).filter((slug) => slug !== "web_only");
 	const isDismissed = (key: string) => dismissed.has(key);
 	const hasObsidianConnection = (connections.data ?? []).some((c) => c.kind === "obsidian");
-	// A tool row auto-completes once a live MCP connection resolves to its slug
-	// (backend LogoAllowlist matches claude.ai by redirect host).
-	const connectedSlugs = new Set(
-		(connections.data ?? [])
-			.filter((c) => c.kind === "mcp")
-			.map((c) => c.slug)
-			.filter((s): s is string => Boolean(s)),
-	);
-	// `other_mcp` is the one row with no slug of its own, no client ever
-	// resolves to it, so slug-matching left it permanently unstickable. It's
-	// satisfied by any live MCP grant not already claimed by another row the
-	// user picked (an unrecognized client has slug null and always counts).
-	const otherSelected = new Set(tools.filter((slug) => slug !== "other_mcp"));
-	const hasUnclaimedMcp = (connections.data ?? []).some(
-		(c) => c.kind === "mcp" && !(c.slug && otherSelected.has(c.slug)),
-	);
 
 	function toolLabel(slug: string): string {
 		const known = TOOL_LABELS[slug];
@@ -211,7 +206,7 @@ function ChecklistWidget() {
 			(slug): Item => ({
 				key: slug,
 				label: toolLabel(slug),
-				done: slug === "other_mcp" ? hasUnclaimedMcp : connectedSlugs.has(slug),
+				done: toolConnected(slug),
 				dismissed: isDismissed(slug),
 				docUrl: DOC_URLS[slug] ?? DOC_FALLBACK,
 				dismissible: true,

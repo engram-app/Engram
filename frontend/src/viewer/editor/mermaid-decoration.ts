@@ -7,6 +7,7 @@ import {
 	keymap,
 	WidgetType,
 } from "@codemirror/view";
+import { fillChromeText } from "@/i18n/trans";
 import type { Translate } from "@/i18n/translate";
 import { drawMermaid, rememberedMermaidHeight } from "../mermaid-render";
 import { selectionTouches } from "./decoration-utils";
@@ -81,22 +82,7 @@ class MermaidWidget extends WidgetType {
 		detail.lang = "en";
 		detail.textContent = err instanceof Error ? err.message : String(err);
 		const { t } = this;
-		const [before = "", after = ""] = t("Mermaid error: {error}", { error: "{error}" }).split(
-			"{error}",
-		);
-		// Only our translated words are UI chrome inside the note body (see the
-		// i18n leak scan); the message is not ours to translate.
-		const chrome = (text: string) => {
-			const span = document.createElement("span");
-			span.dataset.uiChrome = "";
-			span.textContent = text;
-			return span;
-		};
-		el.replaceChildren(
-			...(before ? [chrome(before)] : []),
-			detail,
-			...(after ? [chrome(after)] : []),
-		);
+		fillChromeText(el, t("Mermaid error: {error}", { error: "{error}" }), { error: detail });
 	}
 
 	// The widget is inert content, not a control; let clicks through so the caret

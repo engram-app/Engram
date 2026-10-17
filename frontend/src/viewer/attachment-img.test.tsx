@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeAll, expect, it, vi } from "vitest";
+import { chromeText } from "@/i18n/ui-chrome.testing";
 import { ApiError, api } from "../api/client";
 import AttachmentImg from "./attachment-img";
 
@@ -32,11 +33,11 @@ it('does NOT claim "missing" on a transient 5xx — says temporarily unavailable
 });
 
 // UI text inside the note body: the i18n leak scan reads only marked chrome there.
-it("marks its fallbacks as UI chrome", async () => {
+// The path is the user's own text, so only our words around it are marked.
+it("marks its fallbacks as UI chrome, not the path", async () => {
 	vi.spyOn(api, "getBlob").mockRejectedValueOnce(new ApiError(404, "not found"));
-	render(<AttachmentImg path="img/a.png" />);
-	expect(screen.getByText(/loading img\/a\.png/iu)).toHaveAttribute("data-ui-chrome");
-	await waitFor(() =>
-		expect(screen.getByText(/missing attachment/iu)).toHaveAttribute("data-ui-chrome"),
-	);
+	const { container } = render(<AttachmentImg path="img/a.png" />);
+	expect(chromeText(container)).toBe("Loading …");
+	await waitFor(() => expect(chromeText(container)).toBe("Missing attachment: "));
+	expect(container.textContent).toBe("Missing attachment: img/a.png");
 });

@@ -227,6 +227,9 @@ function flushBatch(batch: PendingBatch): void {
 	}
 }
 
+// The tab's one Phoenix socket. Both the sync channels and the user channel
+// ride it, so this is the only `new Socket` in the app. Only `ensureSocket`
+// calls it.
 function openSocket(token: string | null, getToken: ConnectOptions["getToken"]): Socket {
 	latestToken = token ?? "";
 	latestGetToken = getToken;
@@ -248,13 +251,53 @@ function openSocket(token: string | null, getToken: ConnectOptions["getToken"]):
 	return s;
 }
 
+// The socket a pending `ensureSocket` will produce, so concurrent callers
+// share one open instead of each minting a socket.
+let socketPending: Promise<Socket | null> | null = null;
+// A vault's sync channels want the socket (connectChannel until the next
+// disconnectChannel), so the user channel leaving must not close it.
+let syncWanted = false;
+
+/**
+ * The single owner of "the tab has a socket". Concurrent callers await the
+ * same open. Resolves null when a disconnectChannel superseded it, or when
+ * `requireToken` and there is no token (signed out).
+ */
+function ensureSocket(
+	getToken: ConnectOptions["getToken"],
+	requireToken: boolean,
+): Promise<Socket | null> {
+	if (socket) {
+		return Promise.resolve(socket);
+	}
+	if (socketPending) {
+		return socketPending;
+	}
+	const gen = connectGeneration;
+	const opening = (async () => {
+		const token = await getToken();
+		if (gen !== connectGeneration || (requireToken && !token)) {
+			return null;
+		}
+		socket ??= openSocket(token, getToken);
+		return socket;
+	})();
+	socketPending = opening;
+	const clear = () => {
+		if (socketPending === opening) {
+			socketPending = null;
+		}
+	};
+	opening.then(clear, clear);
+	return opening;
+}
+
 // ── User channel (`user:{id}`) ─────────────────────────────────────────────
 //
 // Server events about the account rather than a vault (vault_created,
 // subscription_activated, connection_created; lib/engram_web/channels/
 // user_channel.ex). One channel per tab, shared by every subscriber, on the
-// sync socket when a vault is open or on a socket of its own before there is
-// one (first run). `connectChannel` moves it onto the new sync socket.
+// tab's one socket, whether or not a vault is open.
 
 // Phoenix's own callback type: its payload is untyped, so each subscriber
 // annotates the shape its event carries, as the `ch.on` calls above do.
@@ -262,37 +305,45 @@ type UserHandler = Parameters<Channel["on"]>[1];
 const userHandlers = new Map<string, Set<UserHandler>>();
 const userJoinedHandlers = new Set<() => void>();
 let userChannel: Channel | null = null;
+let userChannelJoined = false;
 // Events `userChannel` already listens to (one listener each, fanned out).
 let userChannelEvents = new Set<string>();
 let userChannelUserId: string | null = null;
-// The current socket exists only for the user channel (no vault open yet).
-let userOnlySocket = false;
+let userGetToken: ConnectOptions["getToken"] | null = null;
 
 function userSubscribed(): boolean {
 	return userHandlers.size > 0 || userJoinedHandlers.size > 0;
 }
 
-function joinUserChannel(userId: string): void {
-	userChannelUserId = userId;
-	if (!(socket && userSubscribed())) {
+// Idempotent: already on this socket for this user, it only adds listeners.
+function joinUserChannel(): void {
+	if (!(socket && userChannelUserId && userSubscribed())) {
 		return;
 	}
-	userChannel?.leave();
-	const ch = socket.channel(`user:${userId}`);
-	userChannel = ch;
-	userChannelEvents = new Set();
+	const topic = `user:${userChannelUserId}`;
+	if (userChannel?.topic !== topic) {
+		userChannel?.leave();
+		userChannel = socket.channel(topic);
+		userChannelJoined = false;
+		userChannelEvents = new Set();
+		const ch = userChannel;
+		ch.join()
+			.receive("ok", () => {
+				if (userChannel !== ch) {
+					return;
+				}
+				userChannelJoined = true;
+				for (const onJoined of userJoinedHandlers) {
+					onJoined();
+				}
+			})
+			.receive("error", (resp) => {
+				console.error("user channel join failed", resp);
+			});
+	}
 	for (const event of userHandlers.keys()) {
 		listenUserEvent(event);
 	}
-	ch.join()
-		.receive("ok", () => {
-			for (const onJoined of userJoinedHandlers) {
-				onJoined();
-			}
-		})
-		.receive("error", (resp) => {
-			console.error("user channel join failed", resp);
-		});
 }
 
 function listenUserEvent(event: string): void {
@@ -307,14 +358,27 @@ function listenUserEvent(event: string): void {
 	});
 }
 
+// Socket first (shared with any connect in flight), then the channel.
+async function ensureUserChannel(): Promise<void> {
+	if (!(userGetToken && userSubscribed())) {
+		return;
+	}
+	await ensureSocket(userGetToken, true);
+	if (userSubscribed()) {
+		joinUserChannel();
+	} else {
+		leaveUserChannel();
+	}
+}
+
 function leaveUserChannel(): void {
 	userChannel?.leave();
 	userChannel = null;
+	userChannelJoined = false;
 	userChannelEvents = new Set();
-	if (userOnlySocket && socket) {
+	if (!syncWanted && socket) {
 		socket.disconnect();
 		socket = null;
-		userOnlySocket = false;
 	}
 }
 
@@ -584,32 +648,32 @@ export async function connectChannel({
 	t,
 }: ConnectOptions) {
 	disconnectChannel();
+	syncWanted = true;
 	const gen = connectGeneration;
 
-	const token = await getToken();
+	// Shared with a user-channel subscriber that is opening it right now.
+	const opened = await ensureSocket(getToken, false);
 
 	// Superseded during the token fetch (a later connectChannel or a teardown
 	// ran disconnectChannel, bumping the generation). Abort before touching the
 	// singletons so we don't bind them to this now-stale connect.
-	if (gen !== connectGeneration) {
+	if (gen !== connectGeneration || !opened) {
 		return;
 	}
-
-	socket = openSocket(token, getToken);
-	userOnlySocket = false;
-	joinUserChannel(userId);
+	userChannelUserId ??= userId;
+	joinUserChannel();
 
 	// Fires on initial connect AND every reconnect. The socket drops events while
 	// disconnected (no replay), so a reconnect re-arms CRDT handshakes (open docs
 	// re-sync) and reconciles the structural views a gap could have staled —
 	// snapshot-diff, like the plugin.
-	socket.onOpen(() => {
+	opened.onOpen(() => {
 		resyncOpenDocs("reconnect");
 		backfillStructural(queryClient, vaultId);
 	});
 
 	const topic = `sync:${userId}:${vaultId}`;
-	channel = socket.channel(topic);
+	channel = opened.channel(topic);
 
 	channel.on("note_changed", (payload: NoteChangedPayload) => {
 		handleNoteChanged(payload, queryClient, vaultId);
@@ -676,7 +740,7 @@ export async function connectChannel({
 	// client_type gates server-side rename link-rewrites (engram#648 Phase 2):
 	// "web" means the server rewrites [[wikilinks]] on our renames; Obsidian
 	// tags "obsidian" and rewrites its own.
-	crdtChannel = socket.channel(crdtTopic, { crdt_proto: 2, client_type: "web" });
+	crdtChannel = opened.channel(crdtTopic, { crdt_proto: 2, client_type: "web" });
 
 	// Durable outbound queue (#1030): create/delete ops route through here so a
 	// send issued while the topic isn't joined is HELD and delivered on join,
@@ -981,8 +1045,6 @@ export function installSocketHealthTriggers(
 	};
 }
 
-// The tab's one Phoenix socket. Both the sync channels and the user channel
-// ride it, so this is the only `new Socket` in the app.
 /**
  * Runs `handler` for every `event` on the signed-in user's channel, and
  * `onJoined` after each (re)join: a broadcast sent before this tab joined is
@@ -995,6 +1057,8 @@ export async function subscribeUserChannel<P>(
 	handler: (payload: P) => void,
 	onJoined?: () => void,
 ): Promise<() => void> {
+	userChannelUserId = userId;
+	userGetToken = getToken;
 	let set = userHandlers.get(event);
 	if (!set) {
 		set = new Set();
@@ -1017,31 +1081,23 @@ export async function subscribeUserChannel<P>(
 		}
 	};
 
-	if (!socket) {
-		const gen = connectGeneration;
-		let token: string | null;
-		try {
-			token = await getToken();
-		} catch (err) {
-			unsubscribe();
-			throw err;
-		}
-		// A sync connect (or another subscriber) opened the socket meanwhile.
-		if (!socket && gen === connectGeneration && token && userSubscribed()) {
-			socket = openSocket(token, getToken);
-			userOnlySocket = true;
-		}
+	try {
+		await ensureUserChannel();
+	} catch (err) {
+		unsubscribe();
+		throw err;
 	}
-	if (!userChannel || userChannelUserId !== userId) {
-		joinUserChannel(userId);
-	} else {
-		listenUserEvent(event);
+	// Joined before this subscriber arrived: its re-read is due now.
+	if (onJoined && userChannelJoined) {
+		onJoined();
 	}
 	return unsubscribe;
 }
 
 export function disconnectChannel() {
 	connectGeneration++;
+	syncWanted = false;
+	socketPending = null;
 	latestGetToken = null;
 	// A getToken() hung across this teardown must not block refreshes for the
 	// NEXT connection forever (review 2026-07-15) — the generation guard
@@ -1065,12 +1121,13 @@ export function disconnectChannel() {
 		channel.leave();
 		channel = null;
 	}
-	// Leaves with its socket; subscriptions stay, and the next socket
-	// (`connectChannel` or the next subscriber) rejoins them.
+	// Leaves with its socket; subscriptions stay and rejoin on a fresh one
+	// (shared with the connectChannel that usually follows).
 	userChannel = null;
-	userOnlySocket = false;
+	userChannelJoined = false;
 	if (socket) {
 		socket.disconnect();
 		socket = null;
 	}
+	ensureUserChannel().catch((err: unknown) => console.error("user channel rejoin failed", err));
 }

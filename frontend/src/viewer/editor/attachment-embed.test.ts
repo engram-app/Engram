@@ -2,6 +2,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { chromeText } from "@/i18n/ui-chrome.testing";
 import { attachmentEmbeds } from "./attachment-embed";
 
 let view: EditorView;
@@ -46,7 +47,8 @@ describe("attachmentEmbeds", () => {
 			expect(el).not.toBeNull();
 			return el as HTMLElement;
 		});
-		expect(err.dataset.uiChrome).toBe("");
+		expect(chromeText(err)).toBe("Couldn't load ");
+		expect(err.textContent).toBe("Couldn't load img/pic.png");
 	});
 
 	test("reveals the raw source while the caret is on the embed", () => {

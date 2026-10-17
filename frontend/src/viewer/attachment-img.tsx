@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useT } from "@/i18n/locale-provider";
+import { Trans } from "@/i18n/trans";
 import { encodePathSegments } from "@/lib/path";
 import { ApiError, api, isNotFound } from "../api/client";
 
@@ -8,7 +8,6 @@ import { ApiError, api, isNotFound } from "../api/client";
 type LoadError = "missing" | "failed";
 
 export default function AttachmentImg({ path, alt }: { path: string; alt?: string }) {
-	const { t } = useT();
 	const [src, setSrc] = useState<string | null>(null);
 	const [error, setError] = useState<LoadError | null>(null);
 
@@ -46,21 +45,19 @@ export default function AttachmentImg({ path, alt }: { path: string; alt?: strin
 
 	if (error) {
 		return (
-			// data-ui-chrome: UI text inside a note body (see the i18n leak scan).
-			<span
-				data-ui-chrome
-				className="inline-flex items-center gap-1 rounded bg-destructive/10 px-1.5 py-0.5 text-destructive text-xs"
-			>
-				{error === "missing"
-					? t("Missing attachment: {path}", { path })
-					: t("Couldn't load {path} (temporarily unavailable)", { path })}
+			<span className="inline-flex items-center gap-1 rounded bg-destructive/10 px-1.5 py-0.5 text-destructive text-xs">
+				{error === "missing" ? (
+					<Trans chrome text="Missing attachment: {path}" slots={{ path }} />
+				) : (
+					<Trans chrome text="Couldn't load {path} (temporarily unavailable)" slots={{ path }} />
+				)}
 			</span>
 		);
 	}
 	if (!src) {
 		return (
-			<span data-ui-chrome className="text-muted-foreground text-xs">
-				{t("Loading {path}…", { path })}
+			<span className="text-muted-foreground text-xs">
+				<Trans chrome text="Loading {path}…" slots={{ path }} />
 			</span>
 		);
 	}

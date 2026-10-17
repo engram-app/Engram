@@ -1398,6 +1398,33 @@ defmodule Engram.OnboardingTest do
 
       assert %{free_tier_accepted_at: %DateTime{}} = Engram.Accounts.get_user(user.id)
     end
+
+    # Another request reads the still-committed (unstamped) row and caches it
+    # after the stamp but before the outer transaction commits. Evicting at
+    # the stamp would leave that stale entry; the eviction must run on commit.
+    test "evicts after commit, so a read between stamp and commit is not kept" do
+      user = insert(:user, free_tier_accepted_at: nil)
+
+      {:ok, _} =
+        Engram.Repo.transaction_after_commit(fn ->
+          {:ok, _saved, :won} = Onboarding.stamp_free_tier(user)
+          :ok = Engram.Cache.put(:user, user.id, user)
+        end)
+
+      assert %{free_tier_accepted_at: %DateTime{}} = Engram.Accounts.get_user(user.id)
+    end
+
+    test "evicts after commit inside a tenant transaction too" do
+      user = insert(:user, free_tier_accepted_at: nil)
+
+      {:ok, _} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          {:ok, _saved, :won} = Onboarding.stamp_free_tier(user)
+          :ok = Engram.Cache.put(:user, user.id, user)
+        end)
+
+      assert %{free_tier_accepted_at: %DateTime{}} = Engram.Accounts.get_user(user.id)
+    end
   end
 
   describe "accept_free_tier/1" do

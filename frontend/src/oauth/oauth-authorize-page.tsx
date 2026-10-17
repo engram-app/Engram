@@ -434,11 +434,9 @@ export default function OAuthAuthorizePage() {
 	const runSubmit = async (isSwap: boolean) => {
 		setSubmitting(true);
 		setSubmitError(null);
-		// Before any await: a popup blocker refuses a tab opened outside the click.
-		// MCP clients only: an Obsidian device has its own surface.
 		// Every approval opens the vault, so the user lands in it while the
-		// client finishes connecting. Opened now, not after the request: a popup
-		// blocker refuses a tab opened after an await.
+		// client finishes connecting. Before any await: a popup blocker refuses
+		// a tab opened outside the click.
 		const vaultTab = window.open(VAULT_URL, "_blank");
 
 		// Obsidian's device-code flow is a different surface (device-link-page.tsx,

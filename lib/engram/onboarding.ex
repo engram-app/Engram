@@ -534,7 +534,12 @@ defmodule Engram.Onboarding do
         # the app after. Keyed on the ToS row, not this document's: a legacy
         # account that accepted only the ToS has no privacy row and still
         # gets the privacy notice.
-        signup = is_nil(accepted) and is_nil(accepted_version(user, @terms_document))
+        tos_accepted =
+          if document == @terms_document,
+            do: accepted,
+            else: accepted_version(user, @terms_document)
+
+        signup = is_nil(accepted) and is_nil(tos_accepted)
 
         open
         |> Enum.filter(&(not signup and (is_nil(accepted) or &1.version > accepted)))

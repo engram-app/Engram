@@ -1,6 +1,7 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { chromeText } from "@/i18n/ui-chrome.testing";
 import { rememberMermaidHeight } from "../mermaid-render";
 import { enterMermaidDown, enterMermaidUp, mermaidDecoration } from "./mermaid-decoration";
 
@@ -55,12 +56,8 @@ describe("mermaidDecoration", () => {
 		);
 		// Only the translated prefix is ours; Mermaid's message is third-party
 		// English the leak scan must not read as untranslated chrome.
-		expect(err.closest("[data-ui-chrome]")).toBeNull();
-		const chrome = [...err.querySelectorAll<HTMLElement>("[data-ui-chrome]")];
-		expect(chrome.map((c) => c.textContent).join("")).toBe("Mermaid error: ");
-		const detail = err.querySelector<HTMLElement>('[lang="en"]');
-		expect(detail?.textContent).not.toBe("");
-		expect(detail?.closest("[data-ui-chrome]")).toBeNull();
+		expect(chromeText(err)).toBe("Mermaid error: ");
+		expect(err.querySelector('[lang="en"]')?.textContent).not.toBe("");
 	});
 
 	test("reserves the height the diagram last drew at, before it draws", () => {

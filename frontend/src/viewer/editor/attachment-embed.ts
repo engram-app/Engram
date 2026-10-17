@@ -2,6 +2,7 @@ import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { type EditorState, type Range, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
 import type { SyntaxNode, Tree } from "@lezer/common";
+import { fillChromeText } from "@/i18n/trans";
 import type { Translate } from "@/i18n/translate";
 import { selectionTouches } from "./decoration-utils";
 import { translator } from "./translator";
@@ -57,10 +58,8 @@ class EmbedWidget extends WidgetType {
 			})
 			.catch(() => {
 				wrap.classList.add("cm-attachment-embed-error");
-				// UI text inside the note body (see the i18n leak scan).
-				wrap.dataset.uiChrome = "";
 				const { t } = this;
-				wrap.textContent = t("Couldn't load {path}", { path: this.path });
+				fillChromeText(wrap, t("Couldn't load {path}", { path: "{path}" }), { path: this.path });
 				view.requestMeasure();
 			});
 		return wrap;

@@ -711,21 +711,27 @@ describe("ChecklistWidget, a tool that is still connecting", () => {
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["connections"] });
 	});
 
-	it("refetches connections on mount while a picked tool is still connecting", () => {
-		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
-		// wrap() makes a fresh client, so spy before it exists.
-		const invalidate = vi.spyOn(QueryClient.prototype, "invalidateQueries");
-		render(wrap(<ChecklistWidget />));
-		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["connections"] });
-		invalidate.mockRestore();
-	});
-
 	it("refetches connections when the server announces one", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
 		render(wrap(<ChecklistWidget />));
 		const invalidate = vi.spyOn(activeQc as QueryClient, "invalidateQueries");
 		channel.handler({ client_id: "cli" });
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["connections"] });
+	});
+
+	// One connected tool says nothing about the others the user picked.
+	it("keeps listening while another picked tool has no connection", () => {
+		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt", "claude"] };
+		connectionsValue = { data: [{ kind: "mcp", slug: "chatgpt" } as Connection], isLoading: false };
+		render(wrap(<ChecklistWidget />));
+		expect(channel.enabled).toBe(true);
+	});
+
+	it("keeps listening for other_mcp while every grant is claimed by a picked row", () => {
+		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt", "other_mcp"] };
+		connectionsValue = { data: [{ kind: "mcp", slug: "chatgpt" } as Connection], isLoading: false };
+		render(wrap(<ChecklistWidget />));
+		expect(channel.enabled).toBe(true);
 	});
 
 	it("does not listen once an MCP connection exists", () => {

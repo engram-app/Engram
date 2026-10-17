@@ -150,6 +150,56 @@ describe("user channel", () => {
 		expect(userChannels(sockets[0]!)[0]!.on).not.toHaveBeenCalledWith("a", expect.any(Function));
 	});
 
+	// One owner of "ensure the socket": a subscriber that arrives while
+	// connectChannel waits on its token shares that socket, never opens a second.
+	it("shares the socket connectChannel is still opening", async () => {
+		let release: (t: string) => void = () => {};
+		const slow = () =>
+			new Promise<string>((r) => {
+				release = r;
+			});
+		const connecting = connectChannel({
+			userId: "u1",
+			vaultId: "v1",
+			getToken: slow,
+			queryClient,
+			t: englishT,
+		});
+		const subscribing = subscribeUserChannel({ userId: "u1", getToken }, "a", vi.fn());
+		release("tok");
+		await connecting;
+		const off = await subscribing;
+		expect(sockets).toHaveLength(1);
+		expect(live()).toHaveLength(1);
+		expect(userChannels(sockets[0]!)).toHaveLength(1);
+		off();
+	});
+
+	// Leaving a vault must not deafen the account channel.
+	it("rejoins on its own after disconnectChannel", async () => {
+		await connectChannel({ userId: "u1", vaultId: "v1", getToken, queryClient, t: englishT });
+		const handler = vi.fn();
+		const off = await subscribeUserChannel({ userId: "u1", getToken }, "vault_created", handler);
+		disconnectChannel();
+		await vi.waitFor(() => expect(live()).toHaveLength(1));
+		const [ch] = userChannels(live()[0]!);
+		ch!.handlers.vault_created?.({ vault_id: "v2" });
+		expect(handler).toHaveBeenCalledWith({ vault_id: "v2" });
+		off();
+		expect(live()).toHaveLength(0);
+	});
+
+	// A subscriber arriving after the join still gets its one re-read.
+	it("tells a late subscriber the channel is already joined", async () => {
+		const offA = await subscribeUserChannel({ userId: "u1", getToken }, "a", vi.fn());
+		userChannels(live()[0]!)[0]!.joinOk();
+		const onJoined = vi.fn();
+		const offB = await subscribeUserChannel({ userId: "u1", getToken }, "b", vi.fn(), onJoined);
+		expect(onJoined).toHaveBeenCalledTimes(1);
+		offA();
+		offB();
+	});
+
 	it("closes its own socket when the last subscriber leaves", async () => {
 		const off = await subscribeUserChannel({ userId: "u1", getToken }, "a", vi.fn());
 		off();
