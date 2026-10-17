@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { englishT } from "@/i18n/translate";
-import { connectChannel, disconnectChannel } from "./channel";
+import { backfillOnWake, connectChannel, disconnectChannel } from "./channel";
 
 // Minimal phoenix mock: capture the onOpen callback and the channel handlers.
 // Uses vi.hoisted + a constructor function (not arrow) so `new Socket(...)` works.
@@ -9,20 +9,30 @@ const {
 	channelOn: _channelOn,
 	join: _join,
 	socketCtor,
+	channelState,
 } = vi.hoisted(() => {
 	const onOpen = vi.fn();
 	const channelOn = vi.fn();
 	const join = vi.fn(() => ({ receive: () => ({ receive: () => {} }) }));
+	// phoenix's Channel#state, shared by every channel the mock hands out.
+	const channelState = { value: "joined" };
 	const socketCtor = vi.fn(function MockSocket(this: object) {
 		Object.assign(this, {
 			connect: vi.fn(),
 			disconnect: vi.fn(),
 			onError: vi.fn(),
 			onOpen,
-			channel: vi.fn(() => ({ on: channelOn, join, leave: vi.fn() })),
+			channel: vi.fn(() => ({
+				on: channelOn,
+				join,
+				leave: vi.fn(),
+				get state() {
+					return channelState.value;
+				},
+			})),
 		});
 	});
-	return { onOpen, channelOn, join, socketCtor };
+	return { onOpen, channelOn, join, socketCtor, channelState };
 });
 
 vi.mock("phoenix", () => ({
@@ -65,5 +75,46 @@ describe("connectChannel onOpen — structural backfill", () => {
 		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["folderNotes", "v1"] });
 		// No `['syncManifest']` line: the `[[` autocomplete inventory is a view of
 		// the tree too, so it converges with it.
+	});
+});
+
+// A wake (focus/visible/online) on a live socket used to re-download the whole
+// vault even though the sync channel never left, so it had missed nothing.
+// Closing the OS file picker fires `focus`, which is part of why one upload
+// cost more than one tree fetch in prod.
+describe("backfillOnWake", () => {
+	async function connected() {
+		const invalidateQueries = vi.fn();
+		await connectChannel({
+			userId: "u1",
+			vaultId: "v1",
+			getToken: async () => "t",
+			queryClient: { invalidateQueries } as never,
+			t: englishT,
+		});
+		const treeFetches = () =>
+			invalidateQueries.mock.calls.filter(([f]) => f.queryKey[0] === "vault-tree").length;
+		return { qc: { invalidateQueries } as never, treeFetches };
+	}
+
+	it("skips the re-fetch while the sync channel has stayed joined", async () => {
+		channelState.value = "joined";
+		const { qc, treeFetches } = await connected();
+		backfillOnWake(qc, "v1");
+		expect(treeFetches()).toBe(0);
+	});
+
+	// Errored or still (re)joining: broadcasts in that window were dropped.
+	it.each(["errored", "joining", "closed"])("re-fetches when the channel is %s", async (state) => {
+		channelState.value = state;
+		const { qc, treeFetches } = await connected();
+		backfillOnWake(qc, "v1");
+		expect(treeFetches()).toBe(1);
+	});
+
+	it("re-fetches when there is no channel at all", () => {
+		const invalidateQueries = vi.fn();
+		backfillOnWake({ invalidateQueries } as never, "v1");
+		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["vault-tree", "v1"] });
 	});
 });

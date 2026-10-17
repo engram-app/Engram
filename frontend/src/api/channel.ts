@@ -245,13 +245,30 @@ export const RECONNECT_JITTER_MAX_MS = 60_000;
  * The socket drops events while disconnected (no replay) and the web keeps no
  * local mirror, so "backfill" = invalidate the folder/note-list/attachment
  * caches and let react-query refetch current state. Called on every socket
- * (re)connect and on wake (focus/visible/online). Replaces the deleted
+ * (re)connect, and on wake only when the channel isn't joined (see
+ * `backfillOnWake`). Replaces the deleted
  * /sync/changes cursor feed (backend #1036).
  */
 export function backfillStructural(queryClient: QueryClient, vaultId: string): void {
 	// One key covers the sidebar entirely — see flushBatch.
 	invalidateVaultTree(queryClient, vaultId);
 	queryClient.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
+}
+
+/**
+ * The wake-trigger backfill (focus / visible / online on a socket that reads
+ * connected). Skipped while the sync channel has stayed joined: broadcasts
+ * reached it, so there is nothing to reconcile, and re-downloading the vault on
+ * every focus (closing the OS file picker is one) was a steady share of prod's
+ * tree fetches. A socket that actually dropped reconnects, and `onOpen` runs
+ * the full backfill. A half-open socket that still reads joined is caught by
+ * phoenix's heartbeat, which closes it and so reaches `onOpen` the same way;
+ * react-query's own focus refetch still covers a tree past its staleTime.
+ */
+export function backfillOnWake(queryClient: QueryClient, vaultId: string): void {
+	if (channel?.state !== "joined") {
+		backfillStructural(queryClient, vaultId);
+	}
 }
 
 export function clampReconnectJitter(raw: unknown): number | null {
