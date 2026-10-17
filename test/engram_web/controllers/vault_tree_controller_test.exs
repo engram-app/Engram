@@ -224,6 +224,91 @@ defmodule EngramWeb.VaultTreeControllerTest do
       assert log =~ "Skipping undecryptable attachment"
     end
 
+    test "skips an attachment whose path ciphertext is bound to ANOTHER row's id", %{
+      conn: conn,
+      user: user
+    } do
+      # A valid ciphertext moved onto a different row must still fail: the
+      # AAD binds it to the id it was written under. Random bytes (above)
+      # fail AEAD for any AAD, so only this proves the batch decrypt passes
+      # each row's own id, not a shared or empty AAD.
+      %{"attachment" => %{"id" => good_id}} =
+        json_response(
+          post(conn, "/api/attachments", %{
+            path: "good.png",
+            content_base64: Base.encode64("X"),
+            mtime: 1_000.0
+          }),
+          200
+        )
+
+      %{"attachment" => %{"id" => bad_id}} =
+        json_response(
+          post(conn, "/api/attachments", %{
+            path: "bad.png",
+            content_base64: Base.encode64("Y"),
+            mtime: 1_000.0
+          }),
+          200
+        )
+
+      Engram.Repo.with_tenant(user.id, fn ->
+        good = Engram.Repo.one!(from(a in Attachment, where: a.id == ^good_id))
+
+        from(a in Attachment, where: a.id == ^bad_id)
+        |> Engram.Repo.update_all(
+          set: [path_ciphertext: good.path_ciphertext, path_nonce: good.path_nonce]
+        )
+      end)
+
+      log =
+        capture_log(fn ->
+          body = conn |> get("/api/vault/tree") |> json_response(200)
+          assert Enum.map(body["attachments"], & &1["path"]) == ["good.png"]
+        end)
+
+      assert log =~ "Skipping undecryptable attachment"
+    end
+
+    test "decrypts legacy (empty-AAD) and bound attachment rows in one tree", %{
+      conn: conn,
+      user: user
+    } do
+      for name <- ["b.png", "a.png", "c.png"] do
+        post(conn, "/api/attachments", %{
+          path: name,
+          content_base64: Base.encode64(name),
+          mtime: 1_000.0
+        })
+      end
+
+      %{"attachment" => %{"id" => legacy_id}} =
+        json_response(
+          post(conn, "/api/attachments", %{
+            path: "tmp.png",
+            content_base64: Base.encode64("L"),
+            mtime: 1_000.0
+          }),
+          200
+        )
+
+      # Rewrite one row as a pre-T3.6 legacy row: version 1, path sealed
+      # with an EMPTY AAD. The batch must pick the AAD per row's version.
+      user = Engram.Repo.reload!(user, skip_tenant_check: true)
+      {:ok, dek} = Engram.Crypto.get_dek(user)
+      {ct, nonce} = Engram.Crypto.Envelope.encrypt("legacy.png", dek, <<>>)
+
+      Engram.Repo.with_tenant(user.id, fn ->
+        from(a in Attachment, where: a.id == ^legacy_id)
+        |> Engram.Repo.update_all(set: [path_ciphertext: ct, path_nonce: nonce, dek_version: 1])
+      end)
+
+      body = conn |> get("/api/vault/tree") |> json_response(200)
+
+      assert Enum.map(body["attachments"], & &1["path"]) ==
+               ["a.png", "b.png", "c.png", "legacy.png"]
+    end
+
     test "a non-:no_dek DEK failure 500s instead of raising an unhandled CaseClauseError", %{
       conn: conn,
       user: user
