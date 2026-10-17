@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
+import { grantWithin, isReadOnlyScope } from "@/components/access-level-select";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -11,17 +12,12 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import {
-	useVaultSearch,
-	VaultOption,
-	VaultRows,
-	VaultSearchField,
-	VaultSearchToggle,
-} from "@/components/vault-list";
+import { useVaultAccess } from "@/components/vault-access-fields";
+import { VaultAccessFlow } from "@/components/vault-access-flow";
 import { useT } from "@/i18n/locale-provider";
 import { Trans } from "@/i18n/trans";
 import { serverErrorMessage } from "@/lib/server-error";
-import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
+import { destructiveAlert, heading } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { MCP_CLIENTS } from "../analytics/events";
 import { track } from "../analytics/track";
@@ -29,6 +25,7 @@ import { api } from "../api/client";
 import { fetchOAuthClient, type OAuthConsentParams, postOAuthConsent } from "../api/oauth";
 import {
 	type Connection,
+	useAccessLevelsSupported,
 	useConnections,
 	useMe,
 	useOnboardingStatus,
@@ -58,6 +55,7 @@ const REQUIRED_PARAMS = [
 // dead-end "Invalid authorization request" page. Mirror the backend default.
 const DEFAULT_SCOPE = "mcp";
 
+// Mirrors Engram.OAuth.read_only_scope?/1: `mcp:read` without `mcp`.
 type RequiredParam = (typeof REQUIRED_PARAMS)[number];
 
 function readParams(search: URLSearchParams): {
@@ -132,6 +130,7 @@ export default function OAuthAuthorizePage() {
 
 	const meQuery = useMe();
 	const vaultsQuery = useVaults();
+	const levelsSupported = useAccessLevelsSupported();
 	const navigate = useNavigate();
 	const location = useLocation();
 	const qc = useQueryClient();
@@ -256,48 +255,39 @@ export default function OAuthAuthorizePage() {
 	// client query resolves; this only matters for the loading transition,
 	// since the cap panel is gated on `!isLoadingShell` too.
 	const clientKind: "mcp" | "obsidian" = clientQuery.data?.kind ?? "mcp";
+	// Read only and per-vault levels (#174): MCP clients only (an Obsidian
+	// device must write), and only when the backend advertises them. One that
+	// predates them would ignore the fields and mint full access.
+	const leveled = clientKind === "mcp" && levelsSupported;
 	const capCheck = useConnectionCap(clientKind);
 	// Only need the existing-connection details when at cap (for the heads-up
 	// banner + the implicit disconnect on Approve).
 	const connections = useConnections({ enabled: capCheck.atCap });
 	const existingPeer = (connections.data ?? []).find((c): c is Connection => c.kind === clientKind);
 
-	// `null` = the explicit "All vaults" choice, which stays all-vaults as new
-	// ones are created. A Set = exactly those ids. These are different grants,
-	// so ticking every box by hand does NOT collapse to `null` — only the
-	// "All vaults" control sets it. The two do render alike (see `active`
-	// below); it is the state, not the checkmarks, that differs.
-	const [picked, setPicked] = useState<Set<string> | null>(null);
-
-	// Ids that no longer exist in the fetched list are dropped. That is a
-	// function of the current list, so it is computed here rather than written
-	// back into state from an effect one paint later.
+	// "All vaults" (`selected === null`) stays all-vaults as new ones are
+	// created. Choosing per vault is exactly the vaults not at No access, even
+	// when that is every one of them: these are different grants. Vaults that
+	// left the fetched list drop out because the set is built from it.
+	const access = useVaultAccess();
 	const live = vaultsQuery.data;
-	const selected =
-		picked && live
-			? new Set([...picked].filter((id) => live.some((v) => String(v.id) === id)))
-			: picked;
-
-	// Every box reads as checked under "All vaults", so the first click on one
-	// has to mean "all except this" — seeding from an empty Set would instead
-	// narrow to the single vault the user was trying to remove.
-	const toggle = (id: string) => {
-		setPicked((prev) => {
-			const next = new Set(prev ?? (live ?? []).map((v) => String(v.id)));
-			if (next.has(id)) {
-				next.delete(id);
-			} else {
-				next.add(id);
-			}
-			return next;
-		});
-	};
-	const search = useVaultSearch(live ?? []);
-	const { showFilter, needle, shown } = search;
+	const selected = access.perVault
+		? new Set((live ?? []).map((v) => String(v.id)).filter((id) => access.levelOf(id) !== "none"))
+		: null;
+	// The backend refuses a grant that reaches no vault, so it is never offered.
+	const reachesNothing = !access.reaches((live ?? []).map((v) => String(v.id)));
 
 	// Prefilled via `placeholder`, never `value`: an untouched default is not a
 	// choice, and only a non-empty typed value is sent.
 	const [label, setLabel] = useState("");
+	// A client that asked for read-only keeps it: the table offers no Write.
+	// A pick with no Write anywhere asks for `mcp:read` too, so the AI is
+	// offered no write tools.
+	const clientAskedReadOnly = isReadOnlyScope(values.scope);
+	const readOnly = clientAskedReadOnly || !access.writes((live ?? []).map((v) => String(v.id)));
+	const maxLevel = readOnly ? "read" : "write";
+	// Back from the review step lands on the title.
+	const titleRef = useRef<HTMLHeadingElement>(null);
 	const [submitError, setSubmitError] = useState<string | null>(null);
 	const [submitting, setSubmitting] = useState(false);
 	// At-cap users get a confirm modal before the implicit swap so they see
@@ -436,6 +426,20 @@ export default function OAuthAuthorizePage() {
 		if (trimmed) {
 			body.label = trimmed;
 		}
+		if (leveled && readOnly) {
+			body.read_only = true;
+		}
+		if (leveled) {
+			// Every "none" entry rides in the access token, so the request spells
+			// one out only where the policy would otherwise reach that vault.
+			Object.assign(
+				body,
+				access.request(
+					(live ?? []).map((v) => String(v.id)),
+					maxLevel,
+				),
+			);
+		}
 
 		// If swapping, disconnect the existing connection of the same kind
 		// first so the consent call doesn't 402. Mirrors the /link page swap
@@ -456,7 +460,33 @@ export default function OAuthAuthorizePage() {
 				}
 			}
 
-			const { redirect_uri } = await postOAuthConsent(body);
+			const { redirect_uri, granted } = await postOAuthConsent(body);
+			// The backend echoes what it stored. A code with no echo, or one
+			// wider than the pick, is not the grant the user approved: it never
+			// reaches the client. (A refusal redirect carries no code.)
+			const grantsCode = new URL(redirect_uri).searchParams.has("code");
+			const asked = body.vault_access || body.default_access;
+			if (
+				asked &&
+				grantsCode &&
+				!(
+					grantWithin(
+						granted,
+						body,
+						(live ?? []).map((v) => String(v.id)),
+					) &&
+					(!body.read_only || isReadOnlyScope(granted?.scope ?? ""))
+				)
+			) {
+				setSubmitError(
+					t(
+						"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.",
+					),
+				);
+				track("mcp_connect_failed", { client: mcpClient, reason: "unknown" });
+				setSubmitting(false);
+				return;
+			}
 			if (isMcp) {
 				track("mcp_connect_succeeded", { client: mcpClient });
 			}
@@ -509,9 +539,9 @@ export default function OAuthAuthorizePage() {
 
 	return (
 		<AuthShell>
-			<AuthPanel className="flex flex-col gap-4">
+			<AuthPanel scroll={false} className="gap-4 overflow-y-auto">
 				<header className="flex flex-col gap-1">
-					<h1 className={heading}>
+					<h1 ref={titleRef} tabIndex={-1} className={cn(heading, "outline-none")}>
 						<Trans
 							text="Authorize {client}"
 							slots={{ client: <span className="text-primary-ink">{clientName}</span> }}
@@ -571,127 +601,54 @@ export default function OAuthAuthorizePage() {
 								/>
 							</div>
 						) : null}
-						<label className="flex flex-col gap-1.5">
-							<span className="font-medium text-foreground text-sm">
-								<Trans
-									text="Name this connection {optional}"
-									slots={{
-										optional: (
-											<span className="font-normal text-muted-foreground">{t("(optional)")}</span>
-										),
-									}}
-								/>
-							</span>
-							<Input
-								type="text"
-								maxLength={120}
-								value={label}
-								onChange={(e) => setLabel(e.target.value)}
-								placeholder={clientName}
-							/>
-						</label>
-
-						<fieldset className="flex flex-col gap-2">
-							{/* The search field is the second text input on a screen whose
-							    actual question is a list of checkboxes, so it stays behind
-							    this toggle rather than sitting open. Long lists are the
-							    minority case even among users who have enough vaults to
-							    reach the threshold. */}
-							<div className="mb-1 flex items-center justify-between gap-2">
-								<legend className="font-medium text-foreground text-sm">
-									{t("Which vaults can {client} access?", { client: clientName })}
-								</legend>
-								<VaultSearchToggle search={search} />
-							</div>
-							<VaultSearchField
-								search={search}
-								status={
-									selected === null
-										? t("All vaults selected")
-										: t("{count} of {total} selected", {
-												count: selected.size,
-												total: live?.length ?? 0,
-											})
-								}
-							/>
-							{/* Caps at roughly three rows, then scrolls. "All vaults" is
-							    deliberately outside this box: it is the choice the list is
-							    an alternative to, and it must stay reachable without
-							    scrolling past every vault. `pe-3` keeps the row borders clear
-							    of the overlaid scrollbar. */}
-							{/* Radix's viewport is `size-full`, so the Root needs a DEFINITE
-							    height — `max-h` collapses it and the rows spill over the card.
-							    A fixed height would leave a short list sitting in a mostly
-							    empty box, so the wrapper only appears once the list is long
-							    enough to scroll. Same condition as the search box: one
-							    threshold decides "this list needs handling". "All vaults"
-							    stays outside either way — it is the choice the list is an
-							    alternative to, and must not need scrolling to reach. */}
-							<VaultRows scroll={showFilter}>
-								{shown.map((v) => {
-									const id = String(v.id);
-									const active = selected === null || selected.has(id);
-									return (
-										<VaultOption
-											key={id}
-											vault={v}
-											type="checkbox"
-											checked={active}
-											onChange={() => toggle(id)}
+						{/* Pick, then a plain-language summary to approve. Same route,
+						    so the OAuth params are untouched. */}
+						<VaultAccessFlow
+							access={access}
+							vaults={live ?? []}
+							legend={t("Which vaults can {client} access?", { client: clientName })}
+							name={label.trim() || clientName}
+							leveled={leveled}
+							lockReadOnly={clientAskedReadOnly}
+							backFocus={titleRef}
+							fields={
+								<label className="flex flex-col gap-1.5">
+									<span className="font-medium text-foreground text-sm">
+										<Trans
+											text="Name this connection {optional}"
+											slots={{
+												optional: (
+													<span className="font-normal text-muted-foreground">
+														{t("(optional)")}
+													</span>
+												),
+											}}
 										/>
-									);
-								})}
-								{showFilter && needle && shown.length === 0 && (
-									<p className="p-3 text-muted-foreground text-sm">
-										{t("No vaults match \u0022{filter}\u0022.", { filter: search.filter })}
-									</p>
-								)}
-							</VaultRows>
-							<hr className="my-2 border-border" />
-							<label className={selectableRow(selected === null)}>
-								<input
-									type="radio"
-									name="all_vaults"
-									checked={selected === null}
-									onChange={() => setPicked(null)}
-									className="accent-primary"
-								/>
-								<span className="font-medium text-foreground text-sm">
-									{t("All vaults")}
-									<span className="ml-2 font-normal text-muted-foreground text-xs">
-										{t("including any you create later")}
 									</span>
-								</span>
-							</label>
-						</fieldset>
-
-						{Boolean(submitError) && (
-							<p role="alert" className={cn(destructiveAlert, "p-3 text-foreground")}>
-								{submitError}
-							</p>
-						)}
-
-						<div className="flex gap-3">
-							{redirectVerified ? (
-								<Button
-									type="button"
-									variant="outline"
-									onClick={handleCancel}
-									disabled={submitting}
-									className="flex-1"
-								>
-									{t("Cancel")}
-								</Button>
-							) : null}
-							<Button
-								type="button"
-								onClick={handleApprove}
-								disabled={submitting || (selected !== null && selected.size === 0)}
-								className="flex-1"
-							>
-								{submitting ? t("Approving…") : t("Approve")}
-							</Button>
-						</div>
+									<Input
+										type="text"
+										maxLength={120}
+										value={label}
+										onChange={(e) => setLabel(e.target.value)}
+										placeholder={clientName}
+									/>
+								</label>
+							}
+							confirmLabel={t("Approve")}
+							pendingLabel={t("Approving…")}
+							pending={submitting}
+							onConfirm={handleApprove}
+							// Cancel redirects from the query string: only a redirect the
+							// backend confirmed gets one (an open redirect otherwise).
+							onCancel={redirectVerified ? handleCancel : undefined}
+							error={
+								submitError ? (
+									<p role="alert" className={cn(destructiveAlert, "p-3 text-foreground")}>
+										{submitError}
+									</p>
+								) : null
+							}
+						/>
 					</>
 				)}
 
@@ -727,7 +684,7 @@ export default function OAuthAuthorizePage() {
 								// the checkboxes behind it), but this is a second submit path
 								// to the same endpoint and its safety must not depend on
 								// modal-blocking behaviour staying true forever.
-								disabled={submitting || (selected !== null && selected.size === 0)}
+								disabled={submitting || reachesNothing}
 								className="w-full"
 							>
 								{submitting

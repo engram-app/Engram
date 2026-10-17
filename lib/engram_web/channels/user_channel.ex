@@ -47,8 +47,13 @@ defmodule EngramWeb.UserChannel do
       # way out, and the FTUX vault screen blocks on `vault_created` /
       # `vault_populated` before onboarding is complete. Deletion has no such
       # exemption on the HTTP side and gets none here. (#1435)
-      case ChannelGate.check_not_deleted(user) do
-        :ok -> {:ok, %{plan: Engram.Billing.plan_state(user), features: @features}, socket}
+      # A revoked grant is refused even if its disconnect broadcast never
+      # reached this socket (`ChannelGate.vault_scope/1`).
+      with :ok <- ChannelGate.check_not_deleted(user),
+           scope when scope != :revoked <- ChannelGate.vault_scope(socket.assigns) do
+        {:ok, %{plan: Engram.Billing.plan_state(user), features: @features}, socket}
+      else
+        :revoked -> {:error, %{reason: "unauthorized"}}
         {:error, payload} -> {:error, payload}
       end
     else
@@ -72,8 +77,11 @@ defmodule EngramWeb.UserChannel do
   # deciding its scope rule fails loudly rather than fanning out unfiltered.
   @impl true
   def handle_out(event, %{vault_id: vault_id} = payload, socket) do
-    if Permissions.allows?(Permissions.vault_scope(socket.assigns), %{id: vault_id}) do
-      push(socket, event, payload)
+    # The grant as it stands now: a vault narrowed away after join stops
+    # receiving events at once, and a revoked grant receives none.
+    case ChannelGate.vault_scope(socket.assigns) do
+      :revoked -> :ok
+      scope -> if Permissions.allows?(scope, %{id: vault_id}), do: push(socket, event, payload)
     end
 
     {:noreply, socket}

@@ -21,7 +21,13 @@ defmodule Engram.QueryRecorder do
     # unrelated process and would make counts flap by one.
     unless meta.query =~ ~r/FROM "public"."oban_jobs".*GROUP BY/s do
       {:current_stacktrace, st} = Process.info(self(), :current_stacktrace)
-      send(pid, {:recorded_query, %{source: meta[:source], sql: meta.query, caller: caller(st)}})
+      # `pid`: the process that ran the query, so an async test can keep only
+      # its own (the handler sees every process's queries).
+      send(
+        pid,
+        {:recorded_query,
+         %{source: meta[:source], sql: meta.query, caller: caller(st), pid: self()}}
+      )
     end
   end
 

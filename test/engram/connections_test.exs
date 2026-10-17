@@ -66,6 +66,31 @@ defmodule Engram.ConnectionsTest do
       assert Connections.count_active(user.id, :mcp) == 0
     end
 
+    # Liveness is family-wide (`OAuth.expand_claims/1`): one revoked row
+    # kills the grant, so an unrevoked successor that raced the revoke (or a
+    # release that revoked a single row left behind) is not an active one.
+    test "a revoked family with an unrevoked successor row is not counted" do
+      user = insert_user()
+      client = insert(:oauth_client, kind: "mcp")
+      family = Ecto.UUID.generate()
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        family_id: family,
+        consumed_at: DateTime.utc_now(:second),
+        revoked_at: DateTime.utc_now(:second)
+      )
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        family_id: family
+      )
+
+      assert Connections.count_active(user.id, :mcp) == 0
+    end
+
     test "count_active(:obsidian) counts device_refresh_token families" do
       user = insert_user()
       vault = insert(:vault, user: user)
@@ -317,6 +342,28 @@ defmodule Engram.ConnectionsTest do
         user_id: user.id,
         client_id: client.client_id,
         revoked_at: now
+      )
+
+      assert Connections.list_for_user(user) == []
+    end
+
+    test "excludes a revoked family even when a successor row is unrevoked" do
+      user = insert_user()
+      client = insert(:oauth_client, kind: "mcp")
+      family = Ecto.UUID.generate()
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        family_id: family,
+        consumed_at: DateTime.utc_now(:second),
+        revoked_at: DateTime.utc_now(:second)
+      )
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        family_id: family
       )
 
       assert Connections.list_for_user(user) == []
@@ -705,6 +752,67 @@ defmodule Engram.ConnectionsTest do
       assert Connections.count_active(other.id, :obsidian) == 1
     end
 
+    # #174: a leveled grant is judged on everything it reaches (its listed
+    # levels AND its new-vaults policy), not on `vault_ids`, which lists only
+    # its write vaults (or a sentinel).
+    defp leveled_grant!(user, access, default) do
+      client = insert(:oauth_client, kind: "mcp")
+      write_ids = for {id, "write"} <- access, do: id
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_ids:
+          if(write_ids == [], do: ["00000000-0000-0000-0000-000000000000"], else: write_ids),
+        vault_access: access,
+        default_access: default
+      )
+    end
+
+    defp revoked?(token),
+      do:
+        Engram.Repo.get(Engram.OAuth.RefreshToken, token.id, skip_tenant_check: true).revoked_at !=
+          nil
+
+    test "a leveled grant whose only reachable vault goes is revoked" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      grant = leveled_grant!(user, %{vault.id => "read"}, "none")
+
+      assert :ok = Connections.revoke_by_vault(user.id, vault.id)
+      assert revoked?(grant)
+    end
+
+    test "a leveled grant that still reads another vault survives" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      other = insert(:vault, user: user)
+      # vault_ids is just [vault]: the legacy rule would revoke this outright.
+      grant = leveled_grant!(user, %{vault.id => "write", other.id => "read"}, "none")
+
+      assert :ok = Connections.revoke_by_vault(user.id, vault.id)
+      refute revoked?(grant)
+    end
+
+    test "a leveled grant with a non-none policy survives losing every listed vault" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      grant = leveled_grant!(user, %{vault.id => "write"}, "read")
+
+      assert :ok = Connections.revoke_by_vault(user.id, vault.id)
+      refute revoked?(grant)
+    end
+
+    test "a leveled grant that never reached the vault is untouched" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      other = insert(:vault, user: user)
+      grant = leveled_grant!(user, %{other.id => "read"}, "none")
+
+      assert :ok = Connections.revoke_by_vault(user.id, vault.id)
+      refute revoked?(grant)
+    end
+
     test "is idempotent, second call on already-revoked vault returns :ok" do
       user = insert_user()
       vault = insert(:vault, user: user)
@@ -863,6 +971,39 @@ defmodule Engram.ConnectionsTest do
       refute is_nil(token.revoked_at)
     end
 
+    # An unrestricted grant reaches every vault, so a revoke of "the grants
+    # that can reach this vault" that left it standing would return :ok while
+    # the client could still read and write the vault.
+    test "revokes the client's unrestricted (all-vaults) grant" do
+      user = insert_user()
+      vault = insert(:vault, user: user)
+      client = insert(:oauth_client, kind: "mcp")
+
+      all =
+        insert(:oauth_refresh_token,
+          user_id: user.id,
+          client_id: client.client_id,
+          vault_id: nil,
+          vault_ids: nil
+        )
+
+      other_client = insert(:oauth_client, kind: "mcp")
+
+      untouched =
+        insert(:oauth_refresh_token,
+          user_id: user.id,
+          client_id: other_client.client_id,
+          vault_id: nil,
+          vault_ids: nil
+        )
+
+      assert :ok = Connections.revoke_oauth_family(user.id, client.client_id, vault.id)
+
+      reload = &Engram.Repo.get!(Engram.OAuth.RefreshToken, &1.id, skip_tenant_check: true)
+      refute is_nil(reload.(all).revoked_at)
+      assert is_nil(reload.(untouched).revoked_at)
+    end
+
     test "does not touch a grant that excludes the vault" do
       %{user: user, client: client, token: token} = multi_vault_grant()
       other = insert(:vault, user: user)
@@ -889,7 +1030,7 @@ defmodule Engram.ConnectionsTest do
       # unfiltered Vaults.list_vaults/1 lookup and read every name off it.
       %{user: user, a: a, b: b} = named_multi_vault_grant()
 
-      scope = MapSet.new([a.id])
+      scope = Engram.Permissions.from_levels(%{a.id => :write}, :none)
       assert [row] = Connections.list_for_user(user, scope)
 
       names = row.vault_names
@@ -1063,5 +1204,314 @@ defmodule Engram.ConnectionsTest do
       )
 
     %{user: user, client: client, a: a, b: b, token: token}
+  end
+
+  # #174 / #332: each connection reports the level it holds on every vault it
+  # can reach, and its policy for vaults created later.
+  describe "list_for_user/2 access levels" do
+    setup do
+      user = insert_user()
+      insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
+      {:ok, w, _} = Engram.Vaults.register_vault(user, "W", Ecto.UUID.generate())
+      {:ok, r, _} = Engram.Vaults.register_vault(user, "R", Ecto.UUID.generate())
+      {:ok, n, _} = Engram.Vaults.register_vault(user, "N", Ecto.UUID.generate())
+      %{user: user, w: w, r: r, n: n}
+    end
+
+    defp levels_of(row), do: Map.new(row.vault_levels, &{&1.vault_id, &1.level})
+
+    test "an OAuth grant with levels", %{user: user, w: w, r: r, n: n} do
+      client = insert(:oauth_client, kind: "mcp")
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_ids: [w.id, r.id],
+        vault_access: %{w.id => "write", r.id => "read", n.id => "none"},
+        default_access: "read"
+      )
+
+      [row] = Connections.list_for_user(user)
+      assert levels_of(row) == %{w.id => "write", r.id => "read", n.id => "none"}
+      assert row.new_vaults == "read"
+      # The rollback encoding never surfaces as a vault.
+      assert Enum.sort(row.vault_ids) == Enum.sort([w.id, r.id])
+    end
+
+    test "a leveled grant with no write vault lists no sentinel", %{user: user, r: r} do
+      client = insert(:oauth_client, kind: "mcp")
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_ids: ["00000000-0000-0000-0000-000000000000"],
+        vault_access: %{r.id => "read"},
+        default_access: "none"
+      )
+
+      [row] = Connections.list_for_user(user)
+      assert row.vault_ids == [r.id]
+      assert row.vault_names == ["R"]
+    end
+
+    test "a legacy OAuth grant: listed vaults write, new vaults none", %{
+      user: user,
+      w: w,
+      r: r,
+      n: n
+    } do
+      client = insert(:oauth_client, kind: "mcp")
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_ids: [w.id]
+      )
+
+      [row] = Connections.list_for_user(user)
+      assert levels_of(row) == %{w.id => "write", r.id => "none", n.id => "none"}
+      assert row.new_vaults == "none"
+    end
+
+    test "an mcp:read grant reads as read everywhere", %{user: user, w: w, r: r, n: n} do
+      client = insert(:oauth_client, kind: "mcp")
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        scope: "mcp:read"
+      )
+
+      [row] = Connections.list_for_user(user)
+      assert levels_of(row) == %{w.id => "read", r.id => "read", n.id => "read"}
+      assert row.new_vaults == "read"
+    end
+
+    test "an API key with levels", %{user: user, w: w, r: r, n: n} do
+      {:ok, _, _} =
+        Engram.Accounts.create_api_key(user, "k", {%{w.id => "write", r.id => "read"}, "none"})
+
+      [row] = Connections.list_for_user(user)
+      # Every vault the caller sees is reported, none included, so the UI can
+      # never call a partial key "All vaults".
+      assert levels_of(row) == %{w.id => "write", r.id => "read", n.id => "none"}
+      assert row.new_vaults == "none"
+    end
+
+    # `vault_ids` must be truthful for a leveled credential: never a `none`
+    # row, and a new-vaults policy reaches vaults it does not list.
+    test "a key with policy write and {W: none} lists every vault but W", %{
+      user: user,
+      w: w,
+      r: r,
+      n: n
+    } do
+      {:ok, _, _} = Engram.Accounts.create_api_key(user, "k", {%{w.id => "none"}, "write"})
+
+      [row] = Connections.list_for_user(user)
+      assert Enum.sort(row.vault_ids) == Enum.sort([r.id, n.id])
+      assert Enum.sort(row.vault_names) == ["N", "R"]
+      assert row.new_vaults == "write"
+    end
+
+    test "a key's none rows never appear in vault_ids", %{user: user, w: w, r: r, n: n} do
+      {:ok, _, _} =
+        Engram.Accounts.create_api_key(
+          user,
+          "k",
+          {%{w.id => "write", r.id => "read", n.id => "none"}, "read"}
+        )
+
+      [row] = Connections.list_for_user(user)
+      assert Enum.sort(row.vault_ids) == Enum.sort([w.id, r.id, n.id] -- [n.id])
+      refute n.id in row.vault_ids
+    end
+
+    test "a policy-only key is unrestricted at write: nil", %{user: user} do
+      {:ok, _, _} = Engram.Accounts.create_api_key(user, "k", {%{}, "write"})
+
+      [row] = Connections.list_for_user(user)
+      assert row.vault_ids == nil
+    end
+
+    # A release that predates levels rewrites a leveled grant on rotation and
+    # drops its levels, leaving only the rollback sentinel. It reaches
+    # nothing, and the sentinel is not a vault to name.
+    test "an old-node-rewritten grant shows no sentinel", %{user: user} do
+      client = insert(:oauth_client, kind: "mcp")
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_ids: ["00000000-0000-0000-0000-000000000000"]
+      )
+
+      [row] = Connections.list_for_user(user)
+      assert row.vault_ids == []
+      assert row.vault_names == []
+      assert Enum.all?(row.vault_levels, &(&1.level == "none"))
+    end
+
+    test "a legacy unrestricted API key writes everywhere", %{user: user, w: w, r: r, n: n} do
+      {:ok, _, _} = Engram.Accounts.create_api_key(user, "k")
+
+      [row] = Connections.list_for_user(user)
+      assert levels_of(row) == %{w.id => "write", r.id => "write", n.id => "write"}
+      assert row.new_vaults == "write"
+    end
+  end
+
+  # Second security review. `vault_id` on the client-wide revoke, the vault
+  # deletion pass and the account-level gate judge a leveled grant on its
+  # levels and on LIVE vaults only; a revoke never returns :ok while leaving a
+  # grant that still reaches the vault.
+  describe "revoke_oauth_family/3 with vault_id on leveled grants" do
+    defp grant_for!(user, client, access, default, extra \\ []) do
+      write_ids = for {id, "write"} <- access, do: id
+
+      insert(
+        :oauth_refresh_token,
+        [
+          user_id: user.id,
+          client_id: client.client_id,
+          vault_ids:
+            if(write_ids == [], do: ["00000000-0000-0000-0000-000000000000"], else: write_ids),
+          vault_access: access,
+          default_access: default
+        ] ++ extra
+      )
+    end
+
+    setup do
+      user = insert_user()
+      %{user: user, a: insert(:vault, user: user), client: insert(:oauth_client, kind: "mcp")}
+    end
+
+    test "{A: read}, policy none: revoked", %{user: user, a: a, client: client} do
+      grant = grant_for!(user, client, %{a.id => "read"}, "none")
+
+      assert :ok = Connections.revoke_oauth_family(user.id, client.client_id, a.id)
+      assert revoked?(grant)
+    end
+
+    test "policy-only read (no listed vaults): revoked", %{user: user, a: a, client: client} do
+      grant = grant_for!(user, client, %{}, "read")
+
+      assert :ok = Connections.revoke_oauth_family(user.id, client.client_id, a.id)
+      assert revoked?(grant)
+    end
+
+    test "{A: none}, policy write: cannot reach A, untouched", %{user: user, a: a, client: client} do
+      grant = grant_for!(user, client, %{a.id => "none"}, "write")
+
+      assert :ok = Connections.revoke_oauth_family(user.id, client.client_id, a.id)
+      refute revoked?(grant)
+    end
+
+    test "the whole family goes, consumed predecessors included", %{
+      user: user,
+      a: a,
+      client: client
+    } do
+      family = Ecto.UUID.generate()
+
+      old =
+        grant_for!(user, client, %{a.id => "read"}, "none",
+          family_id: family,
+          consumed_at: DateTime.utc_now(:second)
+        )
+
+      current = grant_for!(user, client, %{a.id => "read"}, "none", family_id: family)
+
+      assert :ok = Connections.revoke_oauth_family(user.id, client.client_id, a.id)
+      assert revoked?(old)
+      assert revoked?(current)
+    end
+  end
+
+  describe "vault deletion counts live vaults only" do
+    setup do
+      user = insert_user()
+      %{user: user, a: insert(:vault, user: user)}
+    end
+
+    test "a grant whose other listed vault was deleted earlier is revoked", %{user: user, a: a} do
+      gone = insert(:vault, user: user, deleted_at: DateTime.utc_now(:second))
+      grant = leveled_grant!(user, %{a.id => "read", gone.id => "read"}, "none")
+
+      assert :ok = Connections.revoke_by_vault(user.id, a.id)
+      assert revoked?(grant)
+    end
+
+    test "a grant that still reads a LIVE vault survives", %{user: user, a: a} do
+      live = insert(:vault, user: user)
+      grant = leveled_grant!(user, %{a.id => "read", live.id => "read"}, "none")
+
+      assert :ok = Connections.revoke_by_vault(user.id, a.id)
+      refute revoked?(grant)
+    end
+
+    test "reads only the current row of each family and revokes by family", %{user: user, a: a} do
+      family = Ecto.UUID.generate()
+
+      consumed =
+        for _ <- 1..30 do
+          insert(:oauth_refresh_token,
+            user_id: user.id,
+            client_id: insert(:oauth_client, kind: "mcp").client_id,
+            family_id: family,
+            vault_ids: ["00000000-0000-0000-0000-000000000000"],
+            vault_access: %{a.id => "read"},
+            default_access: "none",
+            consumed_at: DateTime.utc_now(:second)
+          )
+        end
+
+      current = leveled_grant!(user, %{a.id => "read"}, "none")
+
+      Engram.Repo.update_all(from(t in Engram.OAuth.RefreshToken, where: t.id == ^current.id),
+        set: [family_id: family]
+      )
+
+      rows_read =
+        count_refresh_token_rows_read(fn -> Connections.revoke_by_vault(user.id, a.id) end)
+
+      # One unconsumed row read, not 31; and every row of the family revoked.
+      assert rows_read == 1
+      assert Enum.all?([current | consumed], &revoked?/1)
+    end
+  end
+
+  # Rows returned by SELECTs on oauth_refresh_tokens that read `vault_access`
+  # (the leveled-grant passes) while `fun` runs.
+  defp count_refresh_token_rows_read(fun) do
+    test_pid = self()
+    ref = make_ref()
+    handler = "rt-rows-#{inspect(ref)}"
+
+    :telemetry.attach(
+      handler,
+      [:engram, :repo, :query],
+      fn _event, _measurements, meta, _ ->
+        with true <- self() == test_pid,
+             %{query: "SELECT" <> _ = sql, result: {:ok, %{num_rows: n}}} <- meta,
+             true <- sql =~ ~s(FROM "oauth_refresh_tokens") and sql =~ "vault_access" do
+          send(test_pid, {ref, n})
+        end
+      end,
+      nil
+    )
+
+    fun.()
+    :telemetry.detach(handler)
+    collect_rows(ref, 0)
+  end
+
+  defp collect_rows(ref, acc) do
+    receive do
+      {^ref, n} -> collect_rows(ref, acc + n)
+    after
+      0 -> acc
+    end
   end
 end

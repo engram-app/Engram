@@ -864,6 +864,9 @@ defmodule Engram.Vaults do
   """
   def accessible_vault_ids(nil), do: :all
 
+  # `:all | [vault_id]` for a pre-#332 key; a leveled key (one with a
+  # new-vaults policy) returns its `Engram.Permissions` scope.
+  #
   # Read from the key's own `:api_key` cache entry (`Accounts.cached_api_key/1`),
   # so scope and key are one entry. A key that no longer exists reaches NO
   # vault: `[]`, never the `:all` its now-empty mapping would read as.
@@ -872,6 +875,59 @@ defmodule Engram.Vaults do
       {_key, scope} -> scope
       nil -> []
     end
+  end
+
+  @doc """
+  Verifies every id in `ids` is one of `user`'s ACTIVE vaults, in one query.
+
+  `{:ok, %{callers_spelling => canonical_id}}`, or `:error` when any id is
+  malformed, unowned, soft-deleted or unknown: a credential is never minted
+  over part of what the user picked. The one ownership check both OAuth
+  consent and API-key creation run.
+  """
+  @spec owned_active_ids(map(), [String.t()]) :: {:ok, %{String.t() => Ecto.UUID.t()}} | :error
+  def owned_active_ids(_user, []), do: {:ok, %{}}
+
+  def owned_active_ids(user, ids) when is_list(ids) do
+    cast = Map.new(ids, &{&1, Ecto.UUID.cast(&1)})
+
+    if Enum.any?(cast, fn {_, c} -> c == :error end) do
+      :error
+    else
+      canonical = Map.new(cast, fn {raw, {:ok, id}} -> {raw, id} end)
+      wanted = canonical |> Map.values() |> Enum.uniq()
+
+      found =
+        Repo.with_tenant!(user.id, fn ->
+          Repo.all(from(v in active(scoped(user)), where: v.id in ^wanted, select: v.id))
+        end)
+
+      if length(found) == length(wanted), do: {:ok, canonical}, else: :error
+    end
+  end
+
+  @doc "Ids of the user's active vaults (no decrypt, ids only)."
+  @spec active_vault_ids(Ecto.UUID.t()) :: [Ecto.UUID.t()]
+  def active_vault_ids(user_id) do
+    Repo.with_tenant!(user_id, fn ->
+      Repo.all(from(v in active(scoped(user_id)), select: v.id))
+    end)
+  end
+
+  @doc "When `user`'s vault `vault_id` was soft-deleted, or nil when it is not (or not theirs)."
+  @spec deleted_at(map(), Ecto.UUID.t()) :: DateTime.t() | nil
+  def deleted_at(user, vault_id) do
+    Repo.with_tenant!(user.id, fn ->
+      Repo.one(from(v in deleted(scoped(user)), where: v.id == ^vault_id, select: v.deleted_at))
+    end)
+  end
+
+  @doc "Ids of `user`'s soft-deleted vaults (no decrypt, ids only)."
+  @spec deleted_vault_ids(map()) :: [Ecto.UUID.t()]
+  def deleted_vault_ids(user) do
+    Repo.with_tenant!(user.id, fn ->
+      Repo.all(from(v in deleted(scoped(user)), select: v.id))
+    end)
   end
 
   # ── Private helpers ─────────────────────────────────────────────────────────

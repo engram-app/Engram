@@ -46,17 +46,32 @@ defmodule EngramWeb.AuthController do
     ]
   )
 
-  def create_api_key(conn, %{"name" => name}) do
+  def create_api_key(conn, %{"name" => name} = params) do
     user = conn.assigns.current_user
 
-    case Accounts.create_api_key(user, name) do
+    with {:ok, access} <- EngramWeb.KeyAccessParams.parse(conn, params) do
+      do_create_api_key(conn, user, name, access)
+    end
+  end
+
+  defp do_create_api_key(conn, user, name, access) do
+    case Accounts.create_api_key(user, name, access) do
       {:ok, raw_key, api_key} ->
         Engram.Analytics.track(user, "api_key_created", %{})
 
-        json(conn, %{key: raw_key, name: api_key.name, id: api_key.id})
+        json(
+          conn,
+          Map.merge(
+            %{key: raw_key, name: api_key.name, id: api_key.id},
+            Engram.Permissions.key_params(api_key)
+          )
+        )
 
       {:error, %Ecto.Changeset{}} = error ->
         error
+
+      {:error, :invalid_access} ->
+        EngramWeb.KeyAccessParams.invalid(conn)
     end
   end
 

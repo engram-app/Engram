@@ -103,6 +103,17 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
 	// generic "Revoke" matched Cancel in ko, ms and ru (2026-10-14).
 	"Revoke access":
 		"Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+	// Permission column headers in the vault access table. Without a note ja,
+	// zh and ru rendered "Write" as the verb "compose" (書く, 撰写, Написать).
+	Read: "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
+	Write:
+		"Permission column header in a vault access table: the connection may change notes. A noun, not a verb (like 'write access').",
+	// A button on each connection. Without a note de and ja read it as a noun,
+	// "access for editing" (Bearbeitungszugriff, 編集権限).
+	"Edit access":
+		"Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
+	"Edit access for {name}":
+		"Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 	// Email strings (priv/i18n/email). zh/ja greeted with a casual "嗨" while the
 	// body used the polite form.
 	"Hi,":

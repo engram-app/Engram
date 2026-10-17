@@ -41,7 +41,6 @@ const RAW_BUTTON_ALLOWLIST: Record<string, string> = {
 	"/src/viewer/property-fields.tsx": "list-value chip remove",
 	"/src/viewer/inline-title.tsx": "undecorated click-to-rename title text",
 	"/src/viewer/note-page.tsx": "undecorated click-to-rename header name",
-	"/src/settings/connections-page.tsx": "modal backdrop overlay",
 };
 
 // Walk from the "<" at `start` to the ">" that closes the opening tag,

@@ -24,6 +24,11 @@ defmodule Engram.OAuth.AuthorizationCode do
     # rolled-back reader narrows to one vault rather than widening to all,
     # until a later release drops it.
     field :vault_ids, {:array, Ecto.UUID}
+    # Per-vault levels (#174): `%{vault_id => "none" | "read" | "write"}` and
+    # the level for every vault not listed. Both NULL = a pre-levels grant.
+    # Read through `Engram.OAuth.access_claims/1`, never directly.
+    field :vault_access, :map
+    field :default_access, :string
     # User-typed name for this grant, shown back to them in the connections
     # list. NULL falls back to the OAuth client's own identity.
     field :label, :string
@@ -35,7 +40,7 @@ defmodule Engram.OAuth.AuthorizationCode do
   end
 
   @cast_fields ~w(code_hash client_id user_id redirect_uri code_challenge
-                  code_challenge_method scope vault_id vault_ids label state
+                  code_challenge_method scope vault_id vault_ids vault_access default_access label state
                   expires_at)a
   @required ~w(code_hash client_id user_id redirect_uri code_challenge
                code_challenge_method expires_at)a

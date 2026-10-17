@@ -1,4 +1,5 @@
 import { LanguagesIcon } from "lucide-react";
+import { memo } from "react";
 import { buttonVariants } from "@/components/ui/button";
 import {
 	Select,
@@ -19,7 +20,7 @@ interface LanguageSelectProps {
 	iconOnly?: boolean;
 }
 
-export function LanguageSelect({ className, iconOnly = false }: LanguageSelectProps) {
+function LanguageSelectInner({ className, iconOnly = false }: LanguageSelectProps) {
 	const { t, renderedLocale, setLocale } = useT();
 	return (
 		<Select
@@ -58,3 +59,7 @@ export function LanguageSelect({ className, iconOnly = false }: LanguageSelectPr
 		</Select>
 	);
 }
+
+// Memoized: Radix renders every item even while closed, and the chrome that
+// hosts this re-renders with its page on each keystroke or checkbox.
+export const LanguageSelect = memo(LanguageSelectInner);

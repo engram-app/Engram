@@ -12,48 +12,75 @@ defmodule EngramWeb.UserSocket do
 
   @impl true
   def connect(%{"token" => token} = params, socket, _connect_info) do
-    # `:rest`: an MCP OAuth token has no business on the sync socket.
+    resolve_and_accept(token, params, socket)
+  end
+
+  def connect(_params, _socket, _connect_info), do: :error
+
+  # `:rest`: an MCP OAuth token has no business on the sync socket.
+  defp resolve_and_accept(token, params, socket) do
     case Engram.Auth.TokenResolver.resolve(token, :rest) do
       {:ok, user} ->
-        {:ok, accept(socket, user, nil, token, params)}
+        # See `read_claims/1` for why this branch reads grant claims too
+        # (self-host only: a Clerk JWT never carries a grant).
+        case provider_claims(token) do
+          {:ok, claims} -> {:ok, accept(socket, user, nil, claims, params)}
+          :error -> {:ok, accept(socket, user, nil, nil, params)}
+          :revoked -> reject(:grant_revoked, token)
+        end
 
       {:ok, user, :internal_jwt} ->
         # Device-flow / OAuth / MCP access tokens. Mirror the Auth plug's
         # branch — current_api_key stays nil so downstream code that
         # branches on its presence (e.g. SyncChannel api-key vault
         # restriction) doesn't misclassify this as a PAT auth and try to
-        # treat the atom `:internal_jwt` as a struct.
-        {:ok, accept(socket, user, nil, token, params)}
+        # treat the atom `:internal_jwt` as a struct. One of OUR tokens whose
+        # claims cannot be read is refused: an unreadable grant is never
+        # "no restriction".
+        case read_claims(token) do
+          {:ok, claims} -> {:ok, accept(socket, user, nil, claims, params)}
+          :revoked -> reject(:grant_revoked, token)
+          :error -> :error
+        end
 
       {:ok, user, api_key} ->
-        {:ok, accept(socket, user, api_key, token, params)}
+        # A raw API key is not a JWT: it carries no grant claims.
+        {:ok, accept(socket, user, api_key, nil, params)}
 
       {:error, reason} ->
         # Previously silent — during a Clerk break every SPA reconnect storms
         # this path with no log and no metric. Mirror the HTTP plug.
-        label = Engram.Auth.emit_rejected(reason, :socket)
-
-        Logger.warning(
-          "auth rejected",
-          Metadata.with_category(
-            :warning,
-            :auth,
-            [reason: label] ++ Engram.Auth.TokenDebug.metadata(token)
-          )
-        )
-
-        :error
+        reject(reason, token)
     end
   end
 
-  def connect(_params, _socket, _connect_info), do: :error
+  # One log line and one `[:engram, :auth, :rejected]` event per refused
+  # connect, as `Plugs.Auth` does for HTTP, a revoked grant included.
+  defp reject(reason, token) do
+    label = Engram.Auth.emit_rejected(reason, :socket)
+
+    Logger.warning(
+      "auth rejected",
+      Metadata.with_category(
+        :warning,
+        :auth,
+        [reason: label] ++ Engram.Auth.TokenDebug.metadata(token)
+      )
+    )
+
+    :error
+  end
+
+  defp provider_claims(token) do
+    if Engram.Auth.provider_tokens_carry_grants?(), do: read_claims(token), else: :error
+  end
 
   # Stamps connection-correlation ids into assigns and logs the connect. The
   # ids are client-supplied (URL query params); conn_id is unique per physical
   # socket, device_id is stable per install. Both are echoed on every channel
   # lifecycle log so a plugin log line and a backend log line for the same
   # socket share a key.
-  defp accept(socket, user, api_key, token, params) do
+  defp accept(socket, user, api_key, claims, params) do
     conn_id = params["conn_id"]
     device_id = params["device_id"]
     vault_id = params["vault_id"]
@@ -96,7 +123,11 @@ defmodule EngramWeb.UserSocket do
     assign(socket, %{
       current_user: user,
       current_api_key: api_key,
-      oauth_scope_vault_ids: oauth_scope_vault_ids(token),
+      oauth_scope_vault_ids: claims && Engram.Permissions.scope_ids_from_claims(claims),
+      oauth_access: claims && Engram.Permissions.from_claims(claims),
+      # Kept so a `crdt:` join can re-resolve the grant (`gid`): a grant
+      # revoked or narrowed after connect must not keep joining.
+      oauth_claims: claims,
       conn_id: conn_id,
       device_id: device_id,
       vault_id_param: vault_id,
@@ -104,34 +135,31 @@ defmodule EngramWeb.UserSocket do
     })
   end
 
-  # Same claims OAuthScopeEnforce surfaces for HTTP. Plugs do not run for a
-  # socket connect, so without this the channels have no OAuth scope to enforce
-  # and a vault-scoped token joins any vault's topic.
+  # The grant claims OAuthScopeEnforce surfaces for HTTP, read ONCE per
+  # connect. Plugs do not run for a socket connect, so without this the
+  # channels have no OAuth scope to enforce and a vault-scoped token joins any
+  # vault's topic.
   #
-  # Re-parsed rather than threaded out of TokenResolver: `resolve/1` is shared
+  # Re-read rather than threaded out of TokenResolver: `resolve/1` is shared
   # with the HTTP Auth plug, and widening its return shape for one caller is a
-  # bigger blast radius than a local re-parse. This is a second HS256 verify per
-  # CONNECTION, not per message — the same trade OAuthScopeEnforce already makes
-  # per request.
+  # bigger blast radius than a local re-read. `grant_claims/1` checks the
+  # signature but not `exp` (the resolver just validated it in full), so a
+  # token in its final second cannot pass resolve/1 and then read here as
+  # claim-less, i.e. unrestricted for the socket's lifetime.
   #
-  # Deliberately not restricted to the resolver's `:internal_jwt` branch: under
-  # the `:local` provider (self-host) an OAuth access token verifies as an
-  # ordinary provider JWT and resolves through `{:ok, user}`, so branching on the
-  # tag would leave self-host unenforced. `verify_jwt/1` fails for API keys and
-  # Clerk RS256 tokens, and any token with no grant claims yields nil, which
-  # `Permissions` reads as unrestricted.
-  #
-  # ponytail: re-verify can disagree with resolve/1 across an exp boundary;
-  # fail-open by microseconds. Thread claims out of resolve/1 if that ever
-  # matters. (A token in its final second can pass resolve/1 and then fail
-  # here, yielding nil -> :all, so a vault-scoped socket would connect
-  # unrestricted for its lifetime.)
-  defp oauth_scope_vault_ids(token) do
-    case Engram.Accounts.verify_jwt(token) do
-      {:ok, claims} -> Engram.Permissions.scope_ids_from_claims(claims)
-      _ -> nil
-    end
-  end
+  # Also read on the resolver's plain `{:ok, user}` branch: under the `:local`
+  # provider (self-host) an OAuth access token verifies as an ordinary
+  # provider JWT and resolves there, so reading only on `:internal_jwt` would
+  # leave self-host unenforced. A token with no grant claims (a session JWT)
+  # yields nil, which `Permissions` reads as unrestricted.
+  @doc false
+  @spec read_claims(String.t()) :: {:ok, map()} | :error | :revoked
+  def read_claims(token), do: Engram.Accounts.grant_claims(token)
+
+  # Every socket write rides the crdt: channel, which refuses a read-level
+  # vault at join (#174, #332), so a read-only credential may still connect:
+  # sync: and user: accept no inbound writes and are how it hears about
+  # changes.
 
   # DROP an over-long value; do not truncate it. Two bugs live in the obvious
   # `String.slice(v, 0, 32)`:

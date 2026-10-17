@@ -118,10 +118,154 @@ defmodule Engram.PermissionsTest do
     assert Permissions.scope_ids_from_claims(%{"vault_ids" => []}) == []
 
     # End to end: the empty claim must actually deny, not just parse to [].
-    assert Permissions.vault_scope(%{oauth_scope_vault_ids: []}) == MapSet.new([])
+    assert Permissions.vault_scope(%{oauth_scope_vault_ids: []}) != :all
     refute Permissions.allows?(Permissions.vault_scope(%{oauth_scope_vault_ids: []}), %{id: "a"})
     # Legacy scalar keeps pre-release refresh tokens bound.
     assert Permissions.scope_ids_from_claims(%{"vault_id" => "a"}) == ["a"]
     assert Permissions.scope_ids_from_claims(%{"scope" => "mcp"}) == nil
+  end
+
+  # Per-vault access levels (#174, #332). One representation for OAuth grants
+  # and API keys: a level per listed vault, and a "new vaults" level for every
+  # vault the credential does not list, resolved at request time.
+  describe "access levels" do
+    test "from_claims/1: no level claims keeps the pre-#174 meaning" do
+      assert Permissions.from_claims(%{"scope" => "mcp"}) == :all
+      scope = Permissions.from_claims(%{"vault_ids" => ["a"]})
+      assert Permissions.level(scope, %{id: "a"}) == :write
+      assert Permissions.level(scope, %{id: "new"}) == :none
+    end
+
+    test "from_claims/1: per-vault levels and the new-vaults policy" do
+      scope =
+        Permissions.from_claims(%{
+          "vault_ids" => ["a", "b"],
+          "vault_access" => %{"a" => "write", "b" => "read", "c" => "none"},
+          "default_access" => "read"
+        })
+
+      assert Permissions.level(scope, %{id: "a"}) == :write
+      assert Permissions.level(scope, %{id: "b"}) == :read
+      assert Permissions.level(scope, %{id: "c"}) == :none
+      assert Permissions.level(scope, %{id: "created-later"}) == :read
+    end
+
+    test "from_claims/1: an absent new-vaults policy means none" do
+      scope = Permissions.from_claims(%{"vault_access" => %{"a" => "write"}})
+      assert Permissions.level(scope, %{id: "created-later"}) == :none
+    end
+
+    test "from_claims/1: all vaults at one level" do
+      assert Permissions.from_claims(%{"default_access" => "write"}) == :all
+      read = Permissions.from_claims(%{"default_access" => "read"})
+      assert Permissions.level(read, %{id: "any"}) == :read
+    end
+
+    test "from_claims/1: mcp:read caps every level at read" do
+      scope =
+        Permissions.from_claims(%{
+          "scope" => "mcp:read",
+          "vault_access" => %{"a" => "write"},
+          "default_access" => "write"
+        })
+
+      assert Permissions.level(scope, %{id: "a"}) == :read
+      assert Permissions.level(scope, %{id: "other"}) == :read
+
+      assert Permissions.level(Permissions.from_claims(%{"scope" => "mcp:read"}), %{id: "x"}) ==
+               :read
+    end
+
+    test "from_claims/1: malformed level claims deny rather than widen" do
+      for claims <- [
+            %{"vault_access" => "write"},
+            %{"vault_access" => %{"a" => "admin"}},
+            %{"default_access" => "admin"}
+          ] do
+        scope = Permissions.from_claims(claims)
+        assert Permissions.level(scope, %{id: "a"}) == :none, inspect(claims)
+      end
+    end
+
+    test "allows?/2 and allows_write?/2 follow the level" do
+      scope = Permissions.from_levels(%{"a" => :write, "b" => :read}, :none)
+
+      assert Permissions.allows?(scope, %{id: "a"}) and
+               Permissions.allows_write?(scope, %{id: "a"})
+
+      assert Permissions.allows?(scope, %{id: "b"})
+      refute Permissions.allows_write?(scope, %{id: "b"})
+      refute Permissions.allows?(scope, %{id: "c"})
+
+      assert Permissions.filter(scope, [%{id: "a"}, %{id: "b"}, %{id: "c"}]) == [
+               %{id: "a"},
+               %{id: "b"}
+             ]
+    end
+
+    test "an API key and an OAuth grant intersect to the LOWER level" do
+      user = insert(:user)
+      a = insert(:vault, user: user)
+      b = insert(:vault, user: user)
+
+      {:ok, _raw, key} =
+        Engram.Accounts.create_api_key(user, "k", {%{to_string(a.id) => "read"}, "write"})
+
+      oauth =
+        Permissions.from_levels(%{to_string(a.id) => :write, to_string(b.id) => :read}, :write)
+
+      scope = Permissions.vault_scope(%{oauth_access: oauth, current_api_key: key})
+
+      assert Permissions.level(scope, a) == :read
+      assert Permissions.level(scope, b) == :read
+      assert Permissions.level(scope, %{id: "created-later"}) == :write
+    end
+
+    test "writable_anywhere?/2, reaches_anything?/2 and new_vault_level/1" do
+      assert Permissions.writable_anywhere?(:all, [])
+
+      assert Permissions.writable_anywhere?(Permissions.from_levels(%{"a" => :write}, :none), [
+               "a"
+             ])
+
+      refute Permissions.writable_anywhere?(Permissions.from_levels(%{"a" => :read}, :read), ["a"])
+
+      # Only LIVE listed vaults count; the new-vaults policy always does.
+      refute Permissions.writable_anywhere?(Permissions.from_levels(%{"a" => :write}, :none), [
+               "b"
+             ])
+
+      assert Permissions.writable_anywhere?(Permissions.from_levels(%{"a" => :none}, :write), [])
+      refute Permissions.reaches_anything?(Permissions.from_levels(%{"a" => :read}, :none), ["b"])
+      assert Permissions.reaches_anything?(Permissions.from_levels(%{"a" => :read}, :none), ["a"])
+      assert Permissions.reaches_anything?(Permissions.from_levels(%{}, :read), [])
+      assert Permissions.new_vault_level(:all) == :write
+      assert Permissions.new_vault_level(Permissions.from_levels(%{}, :read)) == :read
+    end
+
+    test "parse_access_params/1" do
+      assert Permissions.parse_access_params(%{}) == {:ok, nil}
+
+      assert Permissions.parse_access_params(%{
+               "vault_access" => %{"a" => "read"},
+               "default_access" => "none"
+             }) == {:ok, {%{"a" => "read"}, "none"}}
+
+      # Absent policy defaults to none: picking vaults never grants future ones.
+      assert Permissions.parse_access_params(%{"vault_access" => %{"a" => "write"}}) ==
+               {:ok, {%{"a" => "write"}, "none"}}
+
+      assert Permissions.parse_access_params(%{"default_access" => "read"}) ==
+               {:ok, {%{}, "read"}}
+
+      assert Permissions.parse_access_params(%{"vault_access" => %{"a" => "admin"}}) == :error
+      assert Permissions.parse_access_params(%{"vault_access" => ["a"]}) == :error
+      assert Permissions.parse_access_params(%{"default_access" => "admin"}) == :error
+      # A grant that reaches nothing, now or later, is refused rather than minted.
+      assert Permissions.parse_access_params(%{"vault_access" => %{"a" => "none"}}) == :error
+
+      assert Permissions.parse_access_params(%{"vault_access" => %{}, "default_access" => "none"}) ==
+               :error
+    end
   end
 end

@@ -123,6 +123,41 @@ defmodule Engram.OAuthRefreshGraceTest do
     assert live_in_family(row(rt3).family_id) == 0
   end
 
+  # Fifth review #4: successors are found by lineage, not by `inserted_at >=
+  # consumed_at`. `inserted_at` is the minting node's clock, so a re-issue
+  # minted on a lagging node used to be invisible to the next replay, and the
+  # client's later use of it went unseen: theft re-issued instead of revoking.
+  test "a used re-issue minted on a lagging clock still makes a replay reuse", ctx do
+    {:ok, _} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+    {:ok, %{refresh_token: rt3}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+
+    rt3
+    |> row()
+    |> Ecto.Changeset.change(inserted_at: DateTime.add(DateTime.utc_now(), -300, :second))
+    |> Repo.update!(skip_tenant_check: true)
+
+    {:ok, %{refresh_token: rt4}} = OAuth.rotate_refresh_token(rt3, ctx.client_id)
+
+    assert {:error, {:invalid_grant, :refresh_token_reuse}} =
+             OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+
+    assert live_in_family(row(rt4).family_id) == 0
+  end
+
+  test "a re-issue minted on a lagging clock is still superseded by the next replay", ctx do
+    {:ok, _} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+    {:ok, %{refresh_token: rt3}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+
+    rt3
+    |> row()
+    |> Ecto.Changeset.change(inserted_at: DateTime.add(DateTime.utc_now(), -300, :second))
+    |> Repo.update!(skip_tenant_check: true)
+
+    assert {:ok, %{refresh_token: rt5}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+    assert row(rt3).superseded_at
+    assert live_in_family(row(rt5).family_id) == 1
+  end
+
   # Second review of #1974: three or more duplicates of one retry are still
   # the lost-response case. Each re-issues; only one token is ever live.
   test "every replay inside the window re-issues, leaving one live token", ctx do

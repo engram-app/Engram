@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
 import { useNavigate } from "react-router";
+import type { AccessLevel } from "@/components/access-level-select";
 import { useT } from "@/i18n/locale-provider";
 import type { Translate } from "@/i18n/translate";
 import { collideBump } from "@/lib/collide-bump";
@@ -405,6 +406,31 @@ function restoreTree(
 // for legacy path-keyed consumers. `id` + `parent_id` were added by
 // backend commit 935b7bbf so headless-tree can key nodes by id and
 // discover tree shape via parent_id without parsing path strings.
+// `GET /vaults`. `access_levels` is the backend's capability flag for
+// per-vault access levels and `mcp:read` (#174, #332): absent on a backend
+// that predates them.
+interface VaultsPayload {
+	vaults: Vault[];
+	access_levels?: boolean;
+}
+
+const vaultsQuery = {
+	queryKey: ["vaults"],
+	queryFn: async () => {
+		const data = await api.get<VaultsPayload>("/vaults");
+		// Second reconcile point, and the one that covers in-session death of
+		// the active vault: deleting/purging a vault only invalidates this key,
+		// so without this the store would keep pointing at the vault the user
+		// just deleted (404ing every request) until a full reload.
+		reconcileActiveVault(data.vaults);
+		return data;
+	},
+	// Seeded fresh by useAppBootstrap on first load; vault mutations invalidate
+	// this key explicitly, so a short staleTime just suppresses the redundant
+	// refetch-on-mount of the seeded list.
+	staleTime: 60_000,
+};
+
 export interface Folder {
 	id: string;
 	parent_id: string | null;
@@ -1418,7 +1444,7 @@ export interface BootstrapPayload {
 	onboarding: OnboardingStatus;
 	capabilities: Capabilities;
 	index_status: IndexStatus;
-	vaults: { vaults: Vault[] };
+	vaults: VaultsPayload;
 	// Present only when billing is enabled (SaaS); absent on self-host.
 	billing?: BillingStatus;
 }
@@ -1605,6 +1631,11 @@ export interface Connection {
 	/** Positional against `vault_ids`. An entry is null when the vault is gone
 	 *  or outside the caller's own grant scope. */
 	vault_names: (string | null)[] | null;
+	/** #174 / #332: the level on each of the caller's vaults ("none"
+	 *  included) and the level vaults created later get.
+	 *  Absent from a backend that predates levels. */
+	vault_levels?: { vault_id: string; vault_name: string | null; level: AccessLevel }[];
+	new_vaults?: AccessLevel;
 	scope: string | null;
 	last_used_at: string | null;
 	connected_at: string | null;
@@ -1640,11 +1671,26 @@ export function useConnections(opts?: { enabled?: boolean }) {
 	});
 }
 
+/** `POST /connections/pat`. `vault_access`/`default_access` echo what the
+ *  backend stored; absent from a backend that predates levels. */
+export interface CreatedPat {
+	key: string;
+	id: string;
+	name: string;
+	vault_access?: Record<string, AccessLevel>;
+	default_access?: AccessLevel;
+}
+
 export function useCreatePat() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: (name: string) =>
-			api.post<{ key: string; id: string; name: string }>("/connections/pat", { name }),
+		// No `vault_access`/`default_access` = a key on every vault with write
+		// access, exactly as before #332.
+		mutationFn: (params: {
+			name: string;
+			vault_access?: Record<string, AccessLevel>;
+			default_access?: AccessLevel;
+		}) => api.post<CreatedPat>("/connections/pat", params),
 		onSuccess: () => {
 			qc.invalidateQueries({ queryKey: ["connections"] });
 		},
@@ -1666,6 +1712,41 @@ export function useRevokeOauthConnection() {
 					: `/connections/oauth/${clientId}`,
 			),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["connections"] }),
+	});
+}
+
+/** `PATCH /connections/oauth/:client_id?family_id=` (a grant) or
+ *  `PATCH /connections/pat/:id` (a key with levels). The body always says
+ *  what the credential gets; the response is the updated row, swapped into
+ *  the list in place. */
+export function useUpdateConnectionAccess() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			connection,
+			body,
+		}: {
+			connection: Connection;
+			body: { vault_access?: Record<string, AccessLevel>; default_access: AccessLevel };
+		}) =>
+			api.patch<Connection>(
+				connection.kind === "pat"
+					? `/connections/pat/${connection.key_id}`
+					: `/connections/oauth/${connection.client_id}?family_id=${encodeURIComponent(connection.family_id ?? "")}`,
+				body,
+			),
+		onSuccess: (row) =>
+			qc.setQueryData<Connection[]>(["connections"], (list) =>
+				list?.map((c) =>
+					c.kind === row.kind &&
+					(row.kind === "pat" ? c.key_id === row.key_id : c.family_id === row.family_id)
+						? row
+						: c,
+				),
+			),
+		// The change may have landed before the failure (a 404 rendering the
+		// row): reload rather than keep showing the old access.
+		onError: () => qc.invalidateQueries({ queryKey: ["connections"] }),
 	});
 }
 
@@ -1706,23 +1787,17 @@ export interface Vault {
 // Vault hooks
 
 export function useVaults() {
-	return useQuery({
-		queryKey: ["vaults"],
-		queryFn: async () => {
-			const data = await api.get<{ vaults: Vault[] }>("/vaults");
-			// Second reconcile point, and the one that covers in-session death of
-			// the active vault: deleting/purging a vault only invalidates this key,
-			// so without this the store would keep pointing at the vault the user
-			// just deleted (404ing every request) until a full reload.
-			reconcileActiveVault(data.vaults);
-			return data;
-		},
-		select: (data) => data.vaults,
-		// Seeded fresh by useAppBootstrap on first load; vault mutations invalidate
-		// this key explicitly, so a short staleTime just suppresses the redundant
-		// refetch-on-mount of the seeded list.
-		staleTime: 60_000,
-	});
+	return useQuery({ ...vaultsQuery, select: (data: VaultsPayload) => data.vaults });
+}
+
+/** Whether the backend stores per-vault access levels and `mcp:read`. A
+ *  backend that predates them silently ignores those fields and grants full
+ *  access, so no screen may offer them unless this is true. */
+export function useAccessLevelsSupported(): boolean {
+	return (
+		useQuery({ ...vaultsQuery, select: (data: VaultsPayload) => data.access_levels === true })
+			.data === true
+	);
 }
 
 export function useEncryptVault() {

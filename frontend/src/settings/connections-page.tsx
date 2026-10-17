@@ -1,5 +1,11 @@
-import { Plug, Search } from "lucide-react";
-import { useRef, useState } from "react";
+import { Eye, KeyRound, Pencil, Plug, Search } from "lucide-react";
+import { useId, useRef, useState } from "react";
+import {
+	type AccessLevel,
+	type AccessRequest,
+	grantWithin,
+	isReadOnlyScope,
+} from "@/components/access-level-select";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -10,24 +16,30 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { accessStateOf, useVaultAccess } from "@/components/vault-access-fields";
+import { VaultAccessFlow } from "@/components/vault-access-flow";
 import { useAutofocus } from "@/hooks/use-autofocus";
 import { useT } from "@/i18n/locale-provider";
 import type { Translate } from "@/i18n/translate";
 import type { UIText } from "@/i18n/ui-text";
 import { copyToClipboard } from "@/lib/clipboard";
-import { formatDate } from "@/lib/format-date";
 import { intlLocale } from "@/lib/intl-locale";
+import { notify } from "@/lib/notify";
 import { serverErrorMessage } from "@/lib/server-error";
+import { cn } from "@/lib/utils";
 import { SettingsSectionCard } from "@/settings/account/section-card";
 import {
 	type Connection,
 	type CreatedApiKey,
+	useAccessLevelsSupported,
 	useBillingStatus,
 	useConnections,
 	useCreatePat,
 	useRevokeDeviceConnection,
 	useRevokeOauthConnection,
 	useRevokePat,
+	useUpdateConnectionAccess,
+	useVaults,
 } from "../api/queries";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
 import { TOOL_LABELS } from "../onboarding/onboarding-tools";
@@ -65,9 +77,19 @@ const SEARCH_THRESHOLD = 8;
 
 // ── ConnectionCard ────────────────────────────────────────────
 
-// `null` means every vault, NOT none — shared with the API-key table so the
-// two cannot describe the same restriction differently.
-function vaultLabel(connection: Connection, t: Translate): string {
+// The vault names a card shows, for search. `null` means every vault, NOT
+// none, which the legacy label spells out as "All vaults".
+function vaultSearchText(connection: Connection, t: Translate): string {
+	return connection.vault_levels
+		? connection.vault_levels
+				.filter((l) => l.level !== "none")
+				.map((l) => l.vault_name ?? "")
+				.join(" ")
+		: legacyVaultLabel(connection, t);
+}
+
+// A backend that predates levels sends only `vault_ids`.
+function legacyVaultLabel(connection: Connection, t: Translate): string {
 	return connection.vault_ids === null
 		? t("All vaults")
 		: connection.vault_ids
@@ -83,109 +105,210 @@ function vaultLabel(connection: Connection, t: Translate): string {
 				.join(", ");
 }
 
+// Prefer the catalog spelling once a slug is resolved. The backend passes the
+// client's self-reported name through, and Claude Code registers as
+// "Claude Code (<server>)" with a user-chosen suffix, so the raw string leaks a
+// local config detail into a list of vendors. Same reasoning as the brand mark,
+// already keyed on slug.
+function displayName(connection: Connection, t: Translate): string {
+	return (
+		connection.label ??
+		(connection.slug ? TOOL_LABELS[connection.slug] : null) ??
+		connection.name ??
+		t("Unnamed")
+	);
+}
+
+// Access levels can be changed on a grant or a key created with them; a key
+// from before levels (no `vault_levels`) cannot, and a device is not leveled.
+function editable(connection: Connection): boolean {
+	return (
+		connection.kind !== "obsidian" && Boolean(connection.vault_levels && connection.new_vaults)
+	);
+}
+
+// The visible words stay the start of the accessible name (voice control
+// matches them); the hidden name says which row.
+function EditAccessButton({ name, onClick }: { name: string; onClick: () => void }) {
+	const { t } = useT();
+	return (
+		<Button type="button" variant="outline" onClick={onClick}>
+			{t("Edit access")}
+			<span className="sr-only"> {name}</span>
+		</Button>
+	);
+}
+
+// Names shown on a card before the rest fold into "+N more".
+const CARD_NAMES = 3;
+
+function names(list: string[], t: Translate): string {
+	const rest = list.length - CARD_NAMES;
+	const shown = list.slice(0, CARD_NAMES).join(", ");
+	return rest > 0 ? `${shown} ${t("+{count} more", { count: rest })}` : shown;
+}
+
+// What a credential can do, one short line per level, in the review screen's
+// words and icons. Every vault at one level (now and later) is one line.
+function AccessLines({ connection, className }: { connection: Connection; className: string }) {
+	const { t } = useT();
+	const levels = connection.vault_levels;
+	const later = connection.new_vaults;
+	if (!(levels && later)) {
+		return <p className={className}>{legacyVaultLabel(connection, t)}</p>;
+	}
+	const at = (level: AccessLevel) =>
+		levels.filter((l) => l.level === level).map((l) => l.vault_name ?? t("(deleted vault)"));
+	const everything = later !== "none" && levels.every((l) => l.level === later);
+	const lines = (
+		[
+			["write", Pencil, t("Can read and change notes")],
+			["read", Eye, t("Can read notes")],
+		] as const
+	)
+		.map(([level, Icon, title]) => {
+			const list = everything
+				? level === later
+					? [t("All vaults, including ones you create later")]
+					: []
+				: [...at(level), ...(later === level ? [t("Vaults you create later")] : [])];
+			return { level, Icon, title, list };
+		})
+		.filter((line) => line.list.length > 0);
+	if (lines.length === 0) {
+		return <p className={className}>{t("No access")}</p>;
+	}
+	return (
+		<ul className={cn("space-y-1", className)}>
+			{lines.map(({ level, Icon, title, list }) => (
+				<li key={level} className="flex items-start gap-2">
+					<Icon aria-hidden className="mt-0.5 size-4 shrink-0" />
+					<span className="min-w-0">
+						<span className="sr-only">{title} </span>
+						{names(list, t)}
+					</span>
+				</li>
+			))}
+		</ul>
+	);
+}
+
 function ConnectionCard({
 	connection,
 	onRevoke,
+	onEdit,
 }: {
 	connection: Connection;
 	onRevoke: () => void;
+	onEdit?: () => void;
 }) {
 	const { t, renderedLocale } = useT();
+	const name = displayName(connection, t);
+	const [open, setOpen] = useState(false);
+	const detailsId = useId();
+	const toggleText = open ? t("Hide details") : t("View details");
 
+	// Phone: icon + name, access, then the buttons as a full-width bottom row.
+	// sm and up: the buttons move to the name's row, on the right.
 	return (
-		<article className="group flex items-start rounded-lg border border-border bg-card">
-			{/* <details> wraps the summary + expanded dl. The Revoke button is a
-          sibling, not a descendant of <summary>, interactive descendants of
-          <summary> aren't allowed by the HTML spec, and Firefox/Safari skip
-          Tab focus on them. */}
-			<details className="min-w-0 flex-1 open:pb-3">
-				<summary className="flex cursor-pointer items-center gap-3 p-3 [&::-webkit-details-marker]:hidden">
-					{/* Brand mark by slug first, @lobehub/icons-static-svg covers every
-					    catalog connector, so this needs no per-vendor asset. Only for a
-					    verified client: a slug derived from the self-reported name is a
-					    claim, and a vendor's mark on it is free impersonation. Falls back
-					    to the backend-supplied logo (Obsidian plugin), then a generic plug
-					    for anything unrecognized. */}
-					<ToolMark
-						slug={connection.verified ? connection.slug : null}
-						className="flex size-10 shrink-0 items-center justify-center [&_svg]:size-7"
-						fallback={
-							connection.logo ? (
-								<img src={connection.logo} alt="" className="size-10 shrink-0 rounded" />
-							) : (
-								<div
-									className="flex size-10 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground"
-									aria-hidden
-								>
-									<Plug className="size-5" />
-								</div>
-							)
-						}
-					/>
-					<div className="min-w-0 flex-1">
-						<div className="truncate font-medium">
-							{/* Prefer the catalog spelling once a slug is resolved. The backend
-							    passes the client's self-reported name through, and Claude Code
-							    registers as "Claude Code (<server>)" with a user-chosen suffix,
-							    so the raw string leaks a local config detail into a list of
-							    vendors. Same reasoning as the brand mark above, already keyed
-							    on slug. */}
-							{connection.label ??
-								(connection.slug ? TOOL_LABELS[connection.slug] : null) ??
-								connection.name ??
-								t("Unnamed")}
-							{/* Anything not `verified` is a claim, including a slug derived
-							    from the client's own name (a localhost client may call itself
-							    "ChatGPT"). Provenance is spelled out in the expanded Identity
-							    row. */}
-							{!connection.verified && (
-								<span className="ms-2 rounded bg-muted px-1.5 py-0.5 align-middle font-normal text-muted-foreground text-xs">
-									{t("unverified")}
-								</span>
-							)}
-						</div>
-						<div className="truncate text-muted-foreground text-xs">
-							<strong className="font-semibold">
-								{connection.kind === "obsidian" ? t("Vault:") : t("Vaults:")}
-							</strong>{" "}
-							{vaultLabel(connection, t)}
-						</div>
-					</div>
-				</summary>
-				<dl className="mt-1 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 px-3 text-muted-foreground text-xs [&_dt]:font-semibold">
-					{Boolean(connection.software_version) && (
-						<>
-							<dt>{t("Version:")}</dt>
-							<dd>{connection.software_version}</dd>
-						</>
-					)}
-					{connection.connected_at ? (
-						<>
-							<dt>{t("Connected:")}</dt>
-							<dd>
-								{new Date(connection.connected_at).toLocaleString(intlLocale(renderedLocale))}
-							</dd>
-						</>
-					) : null}
-					{connection.last_used_at ? (
-						<>
-							<dt>{t("Last active:")}</dt>
-							<dd>
-								{new Date(connection.last_used_at).toLocaleString(intlLocale(renderedLocale))}
-							</dd>
-						</>
-					) : null}
-					{Boolean(connection.scope) && (
-						<>
-							<dt>{t("Scopes:")}</dt>
-							<dd>{connection.scope}</dd>
-						</>
-					)}
-					{connection.kind === "mcp" && (
-						<>
-							<dt>{t("Identity:")}</dt>
-							<dd>
-								{/* Two different proofs, and the copy must not conflate them.
+		<article className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-lg border border-border bg-card p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:p-5">
+			{connection.kind === "pat" ? (
+				<span
+					aria-hidden
+					className="flex size-10 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground"
+				>
+					<KeyRound className="size-5" />
+				</span>
+			) : (
+				<ToolMark
+					slug={connection.verified ? connection.slug : null}
+					className="flex size-10 shrink-0 items-center justify-center [&_svg]:size-7"
+					fallback={
+						connection.logo ? (
+							<img src={connection.logo} alt="" className="size-10 shrink-0 rounded" />
+						) : (
+							<div
+								className="flex size-10 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground"
+								aria-hidden
+							>
+								<Plug className="size-5" />
+							</div>
+						)
+					}
+				/>
+			)}
+			<h3 className="flex min-w-0 flex-wrap items-center gap-2 font-medium text-base text-foreground">
+				<span className="min-w-0 break-words">{name}</span>
+				{/* Anything not `verified` is a claim, including a slug derived
+				    from the client's own name (a localhost client may call itself
+				    "ChatGPT"). Provenance is spelled out under the details. */}
+				{connection.kind === "mcp" && !connection.verified ? (
+					<span className="rounded bg-muted px-1.5 py-0.5 font-normal text-muted-foreground text-xs">
+						{t("unverified")}
+					</span>
+				) : null}
+			</h3>
+			<AccessLines
+				connection={connection}
+				className="col-span-2 text-muted-foreground text-sm sm:col-span-1 sm:col-start-2"
+			/>
+			<span className="col-span-2 flex flex-wrap gap-2 *:flex-1 sm:col-span-1 sm:col-start-3 sm:row-start-1 sm:*:flex-none">
+				<Button
+					type="button"
+					variant="outline"
+					aria-expanded={open}
+					aria-controls={detailsId}
+					onClick={() => setOpen((o) => !o)}
+					// Visible text first, then the card's name: every card has these
+					// buttons, and a screen reader's button list must tell them apart.
+					aria-label={`${toggleText} ${name}`}
+				>
+					{toggleText}
+				</Button>
+				{onEdit && editable(connection) ? <EditAccessButton name={name} onClick={onEdit} /> : null}
+				<Button
+					type="button"
+					variant="destructive"
+					onClick={onRevoke}
+					aria-label={`${t("Revoke")} ${name}`}
+				>
+					{t("Revoke")}
+				</Button>
+			</span>
+			<dl
+				id={detailsId}
+				hidden={!open}
+				className="col-span-full grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 border-border border-t pt-3 text-muted-foreground text-xs [&_dt]:font-semibold"
+			>
+				{Boolean(connection.software_version) && (
+					<>
+						<dt>{t("Version:")}</dt>
+						<dd>{connection.software_version}</dd>
+					</>
+				)}
+				{connection.connected_at ? (
+					<>
+						<dt>{t("Connected:")}</dt>
+						<dd>{new Date(connection.connected_at).toLocaleString(intlLocale(renderedLocale))}</dd>
+					</>
+				) : null}
+				{connection.last_used_at ? (
+					<>
+						<dt>{t("Last active:")}</dt>
+						<dd>{new Date(connection.last_used_at).toLocaleString(intlLocale(renderedLocale))}</dd>
+					</>
+				) : null}
+				{Boolean(connection.scope) && (
+					<>
+						<dt>{t("Scopes:")}</dt>
+						<dd>{connection.scope}</dd>
+					</>
+				)}
+				{connection.kind === "mcp" && (
+					<>
+						<dt>{t("Identity:")}</dt>
+						<dd>
+							{/* Two different proofs, and the copy must not conflate them.
 								    A redirect-verified client proved itself by where the
 								    sign-in code is delivered; a CIMD client proved itself by
 								    publishing a document at a domain it owns, which is how a
@@ -200,66 +323,57 @@ function ConnectionCard({
 								    loosening SsrfGuard or lookup_by_cimd could make this claim
 								    verification the backend never granted. The server stays
 								    the only thing that decides `verified`. */}
-								{connection.verified && connection.cimd_url
-									? t("Verified. The app publishes its identity at a domain it owns.")
-									: connection.verified
-										? t("Verified. Sign-in redirects to a domain the vendor owns.")
-										: connection.slug
-											? t(
-													"Self-reported. Local and self-hosted apps have no domain to check, so this is normal.",
-												)
-											: t(
-													"Unrecognized client. Revoke it if you don't recognize the redirect below.",
-												)}
-							</dd>
-						</>
-					)}
-					<dt>{t("Identifier:")}</dt>
-					{/* For a CIMD client the URL *is* the public identifier, and unlike an
+							{connection.verified && connection.cimd_url
+								? t("Verified. The app publishes its identity at a domain it owns.")
+								: connection.verified
+									? t("Verified. Sign-in redirects to a domain the vendor owns.")
+									: connection.slug
+										? t(
+												"Self-reported. Local and self-hosted apps have no domain to check, so this is normal.",
+											)
+										: t(
+												"Unrecognized client. Revoke it if you don't recognize the redirect below.",
+											)}
+						</dd>
+					</>
+				)}
+				<dt>{t("Identifier:")}</dt>
+				{/* For a CIMD client the URL *is* the public identifier, and unlike an
 					    opaque UUID the user can check it by visiting it. The internal
 					    client_id stays what the revoke button keys on. */}
-					<dd className="break-all font-mono">
-						{connection.cimd_url ?? connection.client_id ?? connection.key_id}
-					</dd>
-					{Boolean(connection.first_ip) && (
-						<>
-							<dt>{t("First IP:")}</dt>
-							<dd>{connection.first_ip}</dd>
-						</>
-					)}
-					{Boolean(connection.first_user_agent) && (
-						<>
-							<dt>{t("User agent:")}</dt>
-							<dd className="break-all">{connection.first_user_agent}</dd>
-						</>
-					)}
-					{/* Two different things, deliberately labelled apart. "Delivered to"
+				<dd className="break-all font-mono">
+					{connection.cimd_url ?? connection.client_id ?? connection.key_id}
+				</dd>
+				{Boolean(connection.first_ip) && (
+					<>
+						<dt>{t("First IP:")}</dt>
+						<dd>{connection.first_ip}</dd>
+					</>
+				)}
+				{Boolean(connection.first_user_agent) && (
+					<>
+						<dt>{t("User agent:")}</dt>
+						<dd className="break-all">{connection.first_user_agent}</dd>
+					</>
+				)}
+				{/* Two different things, deliberately labelled apart. "Delivered to"
 					    is where this grant's code actually went and is what the verified
 					    badge is computed from; the registered list is only what the
 					    client declared it might use. Merging them is what made a rogue
 					    grant look like Claude (#1204). */}
-					{Boolean(connection.redirect_uri) && (
-						<>
-							<dt>{t("Delivered to:")}</dt>
-							<dd className="break-all font-mono">{connection.redirect_uri}</dd>
-						</>
-					)}
-					{connection.redirect_uris.length > 0 && (
-						<>
-							<dt>{t("Registered redirects:")}</dt>
-							<dd className="break-all">{connection.redirect_uris.join(", ")}</dd>
-						</>
-					)}
-				</dl>
-			</details>
-			<Button
-				type="button"
-				variant="destructive"
-				onClick={onRevoke}
-				className="mr-3 shrink-0 self-center"
-			>
-				{t("Revoke")}
-			</Button>
+				{Boolean(connection.redirect_uri) && (
+					<>
+						<dt>{t("Delivered to:")}</dt>
+						<dd className="break-all font-mono">{connection.redirect_uri}</dd>
+					</>
+				)}
+				{connection.redirect_uris.length > 0 && (
+					<>
+						<dt>{t("Registered redirects:")}</dt>
+						<dd className="break-all">{connection.redirect_uris.join(", ")}</dd>
+					</>
+				)}
+			</dl>
 		</article>
 	);
 }
@@ -281,6 +395,7 @@ function PatSection({
 	total,
 	filtering,
 	onRevoke,
+	onEdit,
 }: {
 	pats: Connection[];
 	// The unfiltered count. The heading reports what the user HAS, not how many
@@ -288,8 +403,9 @@ function PatSection({
 	total: number;
 	filtering: boolean;
 	onRevoke: (pat: Connection) => void;
+	onEdit: (pat: Connection) => void;
 }) {
-	const { t, renderedLocale } = useT();
+	const { t } = useT();
 
 	const [showCreate, setShowCreate] = useState(false);
 	const [newKey, setNewKey] = useState<{ key: string; id: string; name: string } | null>(null);
@@ -308,50 +424,17 @@ function PatSection({
 					}
 				/>
 			) : (
-				<section className="overflow-hidden rounded-lg border border-border bg-card">
-					<div className="overflow-x-auto">
-						<table className="w-full min-w-[640px] text-sm">
-							<thead className="bg-muted text-left text-muted-foreground text-xs uppercase tracking-wide">
-								<tr>
-									<th className="px-4 py-3 font-medium">{t("Name")}</th>
-									<th className="px-4 py-3 font-medium">{t("Vaults")}</th>
-									<th className="px-4 py-3 font-medium">{t("Key")}</th>
-									<th className="px-4 py-3 font-medium">{t("Created")}</th>
-									<th className="px-4 py-3 font-medium">{t("Last used")}</th>
-									<th className="px-4 py-3" />
-								</tr>
-							</thead>
-							<tbody className="divide-y divide-border">
-								{pats.map((p) => (
-									<tr key={p.key_id}>
-										<td className="px-4 py-3 font-medium text-foreground">
-											{p.name || t("(unnamed)")}
-										</td>
-										<td className="px-4 py-3 text-muted-foreground">{vaultLabel(p, t)}</td>
-										<td className="px-4 py-3 font-mono text-muted-foreground text-xs">
-											engram_••••••
-										</td>
-										<td className="px-4 py-3 text-muted-foreground">
-											{p.connected_at
-												? formatDate(p.connected_at, intlLocale(renderedLocale))
-												: "—"}
-										</td>
-										<td className="px-4 py-3 text-muted-foreground">
-											{p.last_used_at
-												? formatDate(p.last_used_at, intlLocale(renderedLocale))
-												: "—"}
-										</td>
-										<td className="px-4 py-3 text-right">
-											<Button type="button" variant="destructive" onClick={() => onRevoke(p)}>
-												{t("Revoke")}
-											</Button>
-										</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
-					</div>
-				</section>
+				<ul className="space-y-3">
+					{pats.map((p) => (
+						<li key={p.key_id}>
+							<ConnectionCard
+								connection={p}
+								onEdit={() => onEdit(p)}
+								onRevoke={() => onRevoke(p)}
+							/>
+						</li>
+					))}
+				</ul>
 			)}
 
 			{Boolean(showCreate) && (
@@ -381,15 +464,42 @@ function CreatePatModal({
 	const { t } = useT();
 	const [name, setName] = useState("");
 	const create = useCreatePat();
+	const revoke = useRevokePat();
 	const nameRef = useAutofocus<HTMLInputElement>();
+	const access = useKeyAccess();
+	// A key the backend stored wider than asked: "deleted" once revoked, or
+	// "kept" when the revoke itself failed and the user must remove it.
+	const [widened, setWidened] = useState<"deleted" | "kept" | null>(null);
 
-	async function submit(e: React.FormEvent) {
-		e.preventDefault();
+	async function submit() {
 		if (name.trim().length === 0) {
 			return;
 		}
+		setWidened(null);
+		const requested = access.params();
 		try {
-			const created = await create.mutateAsync(name.trim());
+			const created = await create.mutateAsync({ name: name.trim(), ...requested });
+			// The backend echoes what it stored. When levels were asked for, a
+			// missing or wider echo is a key the user did not choose: delete it
+			// before it is ever shown. (Asking for nothing is a key on every
+			// vault, which no echo can exceed.)
+			const asked = requested.vault_access || requested.default_access;
+			if (
+				asked &&
+				!grantWithin(
+					created,
+					requested,
+					access.vaults.map((v) => String(v.id)),
+				)
+			) {
+				try {
+					await revoke.mutateAsync(created.id);
+					setWidened("deleted");
+				} catch {
+					setWidened("kept");
+				}
+				return;
+			}
 			onCreated(created);
 		} catch {
 			/* error surfaced via create.error */
@@ -397,38 +507,194 @@ function CreatePatModal({
 	}
 
 	return (
-		<ModalShell onClose={onClose} title={t("New API Key")}>
-			<form onSubmit={submit} className="space-y-4">
-				<label className="block">
-					<span className="font-medium text-foreground text-sm">{t("Name")}</span>
-					<Input
-						ref={nameRef}
-						value={name}
-						onChange={(e) => setName(e.target.value)}
-						placeholder={t("e.g. ci-bot")}
-						maxLength={64}
-						className="mt-1 block"
+		<ModalShell onClose={onClose} title={t("New API Key")} wide>
+			{/* A flex column whose vault list gives way first, so the dialog fits
+			    the viewport; it scrolls inside only as a last resort. */}
+			<div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
+				<VaultAccessFlow
+					access={access.access}
+					vaults={access.vaults}
+					legend={t("Vault access")}
+					name={name.trim()}
+					leveled={access.supported}
+					picker={access.supported}
+					ready={name.trim().length > 0}
+					backFocus={nameRef}
+					fields={
+						<label className="block">
+							<span className="font-medium text-foreground text-sm">{t("Name")}</span>
+							<Input
+								ref={nameRef}
+								value={name}
+								onChange={(e) => setName(e.target.value)}
+								placeholder={t("e.g. ci-bot")}
+								maxLength={64}
+								className="mt-1 block"
+							/>
+							<span className="mt-1 block text-muted-foreground text-xs">
+								{t("Helps you identify the key later, pick something memorable.")}
+							</span>
+						</label>
+					}
+					confirmLabel={t("Generate Key")}
+					pendingLabel={t("Generating…")}
+					pending={create.isPending}
+					onConfirm={submit}
+					onCancel={onClose}
+					error={
+						<>
+							{Boolean(create.error) && (
+								<p className="text-destructive text-sm" role="alert">
+									{serverErrorMessage(create.error, t("Could not create key. Try again."), t)}
+								</p>
+							)}
+							{widened ? (
+								<p className="text-destructive text-sm" role="alert">
+									{widened === "deleted"
+										? t(
+												"The server created a key with more access than you chose, so it was deleted. Try again, or contact support if this keeps happening.",
+											)
+										: t(
+												"The server created a key with more access than you chose, and deleting it failed. Delete the key \u0022{name}\u0022 from your API keys.",
+												{ name: name.trim() },
+											)}
+								</p>
+							) : null}
+						</>
+					}
+				/>
+			</div>
+		</ModalShell>
+	);
+}
+
+// ── Key access (#332) ─────────────────────────────────────────
+
+// One level on every vault (the default, Read and write = a key exactly as
+// before levels), or a level per vault plus a policy for vaults created later.
+// A key has no scope: it stores levels only.
+function useKeyAccess() {
+	const vaults = useVaults().data ?? [];
+	// A backend that predates levels would ignore them and mint a full key, so
+	// without its flag the form offers none and sends none.
+	const supported = useAccessLevelsSupported();
+	const access = useVaultAccess();
+
+	return {
+		access,
+		vaults,
+		supported,
+		params: (): AccessRequest => {
+			if (!supported) {
+				return {};
+			}
+			const request = access.request(vaults.map((v) => String(v.id)));
+			// All vaults at write is sent as no levels at all: a key exactly as
+			// before levels.
+			return !access.perVault && request.default_access === "write" ? {} : request;
+		},
+	};
+}
+
+// ── EditAccessModal ───────────────────────────────────────────
+
+// The New API Key flow, pre-filled with what the credential has now. Saving
+// replaces its access at once; the row in the list is swapped for the reply.
+function EditAccessModal({
+	connection,
+	name,
+	onClose,
+}: {
+	connection: Connection;
+	name: string;
+	onClose: () => void;
+}) {
+	const { t } = useT();
+	const vaultsQuery = useVaults();
+	const vaults = vaultsQuery.data ?? [];
+	const update = useUpdateConnectionAccess();
+	const titleRef = useRef<HTMLHeadingElement>(null);
+	const access = useVaultAccess(
+		accessStateOf(connection.vault_levels ?? [], connection.new_vaults ?? "none"),
+	);
+	const readOnly = isReadOnlyScope(connection.scope ?? "");
+	const [error, setError] = useState<string | null>(null);
+
+	async function save() {
+		setError(null);
+		try {
+			await update.mutateAsync({
+				connection,
+				body: access.request(
+					vaults.map((v) => String(v.id)),
+					readOnly ? "read" : "write",
+				),
+			});
+			notify.success(t("Access updated"));
+			onClose();
+		} catch (e) {
+			setError(serverErrorMessage(e, t("Could not save these changes. Try again."), t));
+		}
+	}
+
+	return (
+		<ModalShell
+			onClose={onClose}
+			title={t("Edit access for {name}", { name })}
+			titleRef={titleRef}
+			wide
+		>
+			<div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
+				{/* Only a loaded list: an empty one would save no levels at all
+				    and replace every level the user never saw on Review. */}
+				{vaultsQuery.isSuccess ? (
+					<VaultAccessFlow
+						access={access}
+						vaults={vaults}
+						legend={t("Vault access")}
+						name={name}
+						fields={
+							readOnly ? (
+								<p className="text-muted-foreground text-sm">
+									{t("This connection was approved as read only. Reconnect it to allow changes.")}
+								</p>
+							) : null
+						}
+						lockReadOnly={readOnly}
+						settingsHint={false}
+						backFocus={titleRef}
+						confirmLabel={t("Save")}
+						pendingLabel={t("Saving…")}
+						pending={update.isPending}
+						onConfirm={save}
+						onCancel={onClose}
+						error={
+							error ? (
+								<p className="text-destructive text-sm" role="alert">
+									{error}
+								</p>
+							) : null
+						}
 					/>
-					<span className="mt-1 block text-muted-foreground text-xs">
-						{t("Helps you identify the key later, pick something memorable.")}
-					</span>
-				</label>
-
-				{Boolean(create.error) && (
-					<p className="text-destructive text-sm" role="alert">
-						{serverErrorMessage(create.error, t("Could not create key. Try again."), t)}
-					</p>
+				) : (
+					<>
+						{vaultsQuery.isError ? (
+							<p className="text-destructive text-sm" role="alert">
+								{serverErrorMessage(
+									vaultsQuery.error,
+									t("Could not load your vaults. Try again."),
+									t,
+								)}
+							</p>
+						) : (
+							<p className="text-muted-foreground text-sm">{t("Loading…")}</p>
+						)}
+						<Button type="button" variant="outline" onClick={onClose}>
+							{t("Cancel")}
+						</Button>
+					</>
 				)}
-
-				<footer className="flex justify-end gap-2 pt-2">
-					<Button type="button" variant="outline" onClick={onClose}>
-						{t("Cancel")}
-					</Button>
-					<Button type="submit" disabled={create.isPending || name.trim().length === 0}>
-						{create.isPending ? t("Generating…") : t("Generate Key")}
-					</Button>
-				</footer>
-			</form>
+			</div>
 		</ModalShell>
 	);
 }
@@ -603,34 +869,56 @@ function ModalShell({
 	title,
 	onClose,
 	children,
+	wide = false,
+	titleRef,
 }: {
 	title: UIText;
 	onClose: () => void;
 	children: React.ReactNode;
+	// The vault access dialogs: room for the name, both boxes and the scrollbar.
+	wide?: boolean;
+	// Focus lands on the title when the dialog opens (and wherever the caller
+	// sends it later), instead of on the first control.
+	titleRef?: React.RefObject<HTMLHeadingElement | null>;
 }) {
-	const { t } = useT();
 	return (
-		<div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-			<button
-				type="button"
-				aria-label={t("Close dialog")}
-				onClick={onClose}
-				className="fixed inset-0 bg-black/50"
-			/>
-			<section
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby="modal-title"
-				className="relative w-full max-w-md rounded-lg bg-card p-6 shadow-xl"
+		<Dialog open onOpenChange={(open) => !open && onClose()}>
+			<DialogContent
+				showCloseButton={false}
+				aria-describedby={undefined}
+				onOpenAutoFocus={
+					titleRef
+						? (e) => {
+								e.preventDefault();
+								titleRef.current?.focus();
+							}
+						: undefined
+				}
+				// Escape in a search box with text clears the search (its own
+				// handler) before it closes the dialog.
+				onEscapeKeyDown={(e) => {
+					const el = e.target;
+					if (el instanceof HTMLInputElement && el.type === "search" && el.value) {
+						e.preventDefault();
+					}
+				}}
+				className={cn(
+					"flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] flex-col gap-0 bg-card p-4 text-base sm:p-6",
+					wide ? "max-w-xl" : "max-w-md",
+				)}
 			>
-				<header className="mb-4">
-					<h2 id="modal-title" className="font-semibold text-foreground text-lg">
+				<DialogHeader className="mb-4 shrink-0">
+					<DialogTitle
+						ref={titleRef}
+						tabIndex={titleRef ? -1 : undefined}
+						className="font-semibold text-lg outline-none"
+					>
 						{title}
-					</h2>
-				</header>
+					</DialogTitle>
+				</DialogHeader>
 				{children}
-			</section>
-		</div>
+			</DialogContent>
+		</Dialog>
 	);
 }
 
@@ -642,6 +930,7 @@ export default function ConnectionsPage() {
 	const revokeDevice = useRevokeDeviceConnection();
 	const revokePat = useRevokePat();
 	const [pendingRevoke, setPendingRevoke] = useState<PendingRevoke | null>(null);
+	const [editing, setEditing] = useState<{ connection: Connection; name: string } | null>(null);
 	// Same rule as the OAuth consent picker: a search field is clutter until
 	// there is enough to search, and even then it stays behind a toggle rather
 	// than sitting open above the thing it filters.
@@ -666,10 +955,10 @@ export default function ConnectionsPage() {
 	const showSearch = list.length > SEARCH_THRESHOLD;
 	const needle = showSearch ? filter.trim().toLowerCase() : "";
 	// Name and vaults are what a row is recognized by, so they are what it is
-	// found by. `vaultLabel` covers the "All vaults" case too.
+	// found by.
 	const matches = (c: Connection) =>
 		!needle ||
-		`${c.label ?? ""} ${c.name ?? ""} ${vaultLabel(c, t)}`.toLowerCase().includes(needle);
+		`${c.label ?? ""} ${c.name ?? ""} ${vaultSearchText(c, t)}`.toLowerCase().includes(needle);
 
 	const shown = list.filter(matches);
 	const obs = shown.filter((c) => c.kind === "obsidian");
@@ -806,6 +1095,7 @@ export default function ConnectionsPage() {
 							<li key={`${c.kind}-${c.family_id ?? c.client_id}`}>
 								<ConnectionCard
 									connection={c}
+									onEdit={() => setEditing({ connection: c, name: displayName(c, t) })}
 									onRevoke={() =>
 										setPendingRevoke({
 											name: c.name ?? t("this connection"),
@@ -830,6 +1120,7 @@ export default function ConnectionsPage() {
 				pats={pats}
 				total={list.filter((c) => c.kind === "pat").length}
 				filtering={Boolean(needle)}
+				onEdit={(p) => setEditing({ connection: p, name: displayName(p, t) })}
 				onRevoke={(p) =>
 					setPendingRevoke({
 						name: p.name ?? t("this key"),
@@ -838,6 +1129,14 @@ export default function ConnectionsPage() {
 					})
 				}
 			/>
+
+			{editing ? (
+				<EditAccessModal
+					connection={editing.connection}
+					name={editing.name}
+					onClose={() => setEditing(null)}
+				/>
+			) : null}
 
 			{pendingRevoke ? (
 				<ConfirmRevokeModal

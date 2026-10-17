@@ -178,4 +178,80 @@ defmodule Engram.Workers.CleanupVaultRlsTest do
       assert key_exists?(key)
     end
   end
+
+  # #332: a key that carries its own new-vaults policy cannot widen when a
+  # mapping row goes, because unlisted vaults resolve through that policy, not
+  # through "no rows means every vault". Revoking it would throw away access
+  # the user granted to their OTHER vaults.
+  describe "API keys with a new-vaults policy" do
+    # The vault is already soft-deleted, which `create_api_key/3` refuses to
+    # name, so the levels are written the way the schema stores them.
+    defp leveled_key!(user, vault, level, default) do
+      {:ok, _raw, key} = Accounts.create_api_key(user, "leveled")
+
+      Repo.update_all(from(k in ApiKey, where: k.id == ^key.id), [set: [default_access: default]],
+        skip_tenant_check: true
+      )
+
+      Repo.insert_all("api_key_vaults", [
+        %{api_key_id: Ecto.UUID.dump!(key.id), vault_id: Ecto.UUID.dump!(vault.id), level: level}
+      ])
+
+      key
+    end
+
+    test "a policy-read key keeps working after its only listed vault goes", %{
+      user: user,
+      vault: vault
+    } do
+      stub_qdrant!()
+      key = leveled_key!(user, vault, "none", "read")
+
+      as_prod_role_committing(fn -> CleanupVault.perform_cleanup(vault.id, user.id) end)
+
+      assert Repo.get(ApiKey, key.id, skip_tenant_check: true)
+    end
+
+    test "a policy-none key whose only reachable vault goes is revoked", %{
+      user: user,
+      vault: vault
+    } do
+      stub_qdrant!()
+      key = leveled_key!(user, vault, "read", "none")
+
+      as_prod_role_committing(fn -> CleanupVault.perform_cleanup(vault.id, user.id) end)
+
+      refute Repo.get(ApiKey, key.id, skip_tenant_check: true)
+    end
+
+    test "a policy-none key that still reaches another vault survives", %{
+      user: user,
+      vault: vault
+    } do
+      stub_qdrant!()
+      other = insert(:vault, user: user)
+      key = leveled_key!(user, vault, "read", "none")
+
+      Repo.insert_all("api_key_vaults", [
+        %{api_key_id: Ecto.UUID.dump!(key.id), vault_id: Ecto.UUID.dump!(other.id), level: "read"}
+      ])
+
+      as_prod_role_committing(fn -> CleanupVault.perform_cleanup(vault.id, user.id) end)
+
+      assert Repo.get(ApiKey, key.id, skip_tenant_check: true)
+    end
+
+    test "a policy-none key does not widen when its only vault goes", %{user: user, vault: vault} do
+      stub_qdrant!()
+      other = insert(:vault, user: user)
+      key = leveled_key!(user, vault, "write", "none")
+
+      as_prod_role_committing(fn -> CleanupVault.perform_cleanup(vault.id, user.id) end)
+
+      refute Engram.Permissions.allows?(
+               Engram.Permissions.vault_scope(%{current_api_key: key}),
+               other
+             )
+    end
+  end
 end

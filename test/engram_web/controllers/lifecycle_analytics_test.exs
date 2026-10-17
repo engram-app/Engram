@@ -86,6 +86,21 @@ defmodule EngramWeb.LifecycleAnalyticsTest do
     refute inspect(all) =~ resp["key"]
   end
 
+  test "changing a key's access emits api_key_access_changed, no vault ids", %{conn: conn} do
+    user = insert(:user)
+    vault = insert(:vault, user: user)
+    {:ok, _raw, key} = Engram.Accounts.create_api_key(user, "k", {%{vault.id => "write"}, "none"})
+
+    conn
+    |> session_conn(user)
+    |> patch("/api/connections/pat/#{key.id}", %{"vault_access" => %{vault.id => "read"}})
+    |> json_response(200)
+
+    all = events()
+    assert Enum.find(all, &(&1["event"] == "api_key_access_changed"))
+    refute inspect(all) =~ vault.id
+  end
+
   test "approving MCP consent emits mcp_oauth_granted", %{conn: conn} do
     user = insert(:user)
     vault = insert(:vault, user: user)
