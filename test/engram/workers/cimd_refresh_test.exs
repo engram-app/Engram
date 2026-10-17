@@ -179,15 +179,17 @@ defmodule Engram.Workers.CimdRefreshTest do
       stub(FetcherMock, :fetch, fn @jwks_uri -> {:ok, %{"keys" => []}} end)
 
       # The spread lives in scheduled_at (CimdJwksSchedule), so Oban's exec
-      # time is the fetch work alone. Three runs: a random in-job sleep would
-      # pass one by luck.
-      {us, results} =
+      # time is the fetch work alone. Five runs under 5 s: a 0-30 s in-job
+      # sleep passes that by luck ~0.01% of the time, while a loaded CI runner
+      # (one run measured 26-420 ms locally) has ample headroom.
+      {us, [first | rest]} =
         :timer.tc(fn ->
-          for _ <- 1..3, do: perform_job(Engram.Workers.CimdJwksRefresh, %{})
+          for _ <- 1..5, do: perform_job(Engram.Workers.CimdJwksRefresh, %{})
         end)
 
-      assert [{:ok, %{refreshed: 1}}, {:ok, _}, {:ok, _}] = results
-      assert us < 1_000_000
+      assert {:ok, %{refreshed: 1}} = first
+      assert Enum.all?(rest, &match?({:ok, _}, &1))
+      assert us < 5_000_000
     end
 
     # The cron entry: schedules the sweep 1-30 s out instead of sleeping, so
