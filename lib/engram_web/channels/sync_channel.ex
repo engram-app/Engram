@@ -177,6 +177,30 @@ defmodule EngramWeb.SyncChannel do
     do: {:reply, {:error, %{"reason" => "gone", "use" => "crdt channel"}}, socket}
 
   # ---------------------------------------------------------------------------
+  # Outbound
+  # ---------------------------------------------------------------------------
+
+  # Every event that carries vault data to this topic, intercepted so each push
+  # re-checks access (`ChannelGate.vault_scope/1`, cached: no DB read on a
+  # hit). A vault narrowed to none, or a revoked grant, stops the channel even
+  # if the disconnect broadcast never arrived. A new vault-data event on
+  # `sync:` must be added here; `sync_channel_intercepts_test.exs` fails until
+  # it is.
+  intercept ["note_changed", "note_yjs_update", "notes.batch", "folders.batch"]
+
+  @impl true
+  def handle_out(event, payload, socket) do
+    case check_vault_access(socket, socket.assigns.vault) do
+      :ok ->
+        push(socket, event, payload)
+        {:noreply, socket}
+
+      _refused ->
+        ChannelGate.access_lost(socket)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
 

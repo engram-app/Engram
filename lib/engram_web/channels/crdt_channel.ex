@@ -241,8 +241,9 @@ defmodule EngramWeb.CrdtChannel do
   # their caches (ETS; a DB read only on a miss after an edit evicted them),
   # and a session socket resolves to `:all` without reading anything.
   #
-  # A refused frame stops the channel: the client rejoins and gets the join's
-  # own refusal, exactly as after the disconnect broadcast.
+  # A refused frame is answered with the join's refusal and stops the channel
+  # (`ChannelGate.access_lost/1`). Outbound pushes re-check the same way
+  # (`push_if_allowed/3`, `handle_out/3`).
   @impl true
   def handle_in(event, payload, socket) do
     case crdt_access(socket, socket.assigns.vault) do
@@ -250,8 +251,29 @@ defmodule EngramWeb.CrdtChannel do
         handle_frame(event, payload, socket)
 
       refused ->
-        {:stop, {:shutdown, :access_changed}, {:error, %{reason: refusal_reason(refused)}},
-         socket}
+        {:stop, reason, socket} = ChannelGate.access_lost(socket)
+        {:stop, reason, {:error, %{reason: refusal_reason(refused)}}, socket}
+    end
+  end
+
+  # `crdt_doc_ready` announces a note id on the vault topic; intercepted so a
+  # channel whose credential lost the vault stops hearing it.
+  intercept ["crdt_doc_ready"]
+
+  @impl true
+  def handle_out(event, payload, socket), do: push_if_allowed(socket, event, payload)
+
+  # Every push of vault data from this channel re-checks access first, as
+  # every inbound frame does: a narrowed or revoked credential stops here
+  # even if the disconnect broadcast never arrived.
+  defp push_if_allowed(socket, event, payload) do
+    case crdt_access(socket, socket.assigns.vault) do
+      :ok ->
+        push(socket, event, payload)
+        {:noreply, socket}
+
+      _refused ->
+        ChannelGate.access_lost(socket)
     end
   end
 
@@ -1548,12 +1570,13 @@ defmodule EngramWeb.CrdtChannel do
       # Index frames come back on their own event (no doc_id) — checked FIRST so
       # an index room can never be mistaken for a note room whose pid was reused.
       room == socket.assigns[:index_room] ->
-        push(socket, "crdt_index_msg", %{"b64" => Engram.Native.encode64(frame)})
-        {:noreply, socket}
+        push_if_allowed(socket, "crdt_index_msg", %{"b64" => Engram.Native.encode64(frame)})
 
       doc_id = Map.get(socket.assigns.room_doc, room) ->
-        push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Engram.Native.encode64(frame)})
-        {:noreply, socket}
+        push_if_allowed(socket, "crdt_msg", %{
+          "doc_id" => doc_id,
+          "b64" => Engram.Native.encode64(frame)
+        })
 
       true ->
         {:noreply, socket}

@@ -137,6 +137,68 @@ defmodule EngramWeb.VaultAccessSocketAttackTest do
     assert {:error, :not_found} = Engram.Notes.get_note(ctx.user, ctx.w, "pwn.md")
   end
 
+  # Outbound: a vault narrowed to none must stop reaching an already-joined
+  # channel even when the disconnect broadcast is late or missed. The channel
+  # stops and kicks the socket, so the client rejoins into the join refusal.
+  defp narrow_to_none(ctx, key, vault) do
+    EngramWeb.Endpoint.subscribe("user_socket:#{ctx.user.id}")
+
+    {:ok, _} =
+      Accounts.update_api_key_access(ctx.user, key.id, {%{to_string(vault.id) => "none"}, "none"})
+
+    # The PATCH's own disconnect: drained so the channel's can be told apart.
+    assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 1_000
+  end
+
+  test "narrowed R->none: an already-joined sync channel stops receiving", ctx do
+    {:ok, raw, key} = Accounts.create_api_key(ctx.user, "k", ctx.access)
+    {:ok, _, chan} = sync_join(key_socket(raw), ctx.user, ctx.r)
+    topic = "sync:#{ctx.user.id}:#{ctx.r.id}"
+
+    # Control: while R is readable the broadcast is pushed.
+    EngramWeb.Endpoint.broadcast!(topic, "note_changed", %{"path" => "a.md"})
+    assert_push "note_changed", %{"path" => "a.md"}
+
+    narrow_to_none(ctx, key, ctx.r)
+    Process.unlink(chan.channel_pid)
+    mon = Process.monitor(chan.channel_pid)
+
+    for event <- ~w(note_changed note_yjs_update notes.batch folders.batch) do
+      EngramWeb.Endpoint.broadcast!(topic, event, %{"path" => "secret.md"})
+    end
+
+    assert_receive {:DOWN, ^mon, :process, _, {:shutdown, :access_changed}}
+    refute_push _, %{"path" => "secret.md"}
+    assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+  end
+
+  test "narrowed W->none: an already-joined crdt channel stops receiving", ctx do
+    {:ok, raw, key} = Accounts.create_api_key(ctx.user, "k", ctx.access)
+    {:ok, _, chan} = crdt_join(key_socket(raw), ctx.user, ctx.w)
+    topic = "crdt:#{ctx.user.id}:#{ctx.w.id}"
+
+    EngramWeb.Endpoint.broadcast!(topic, "crdt_doc_ready", %{"doc_id" => "ok"})
+    assert_push "crdt_doc_ready", %{"doc_id" => "ok"}
+
+    # A room this channel observes, so its frames would be pushed.
+    room = spawn(fn -> Process.sleep(:infinity) end)
+    :sys.replace_state(chan.channel_pid, &put_in(&1.assigns.room_doc, %{room => "doc"}))
+    send(chan.channel_pid, {:yjs, "frame", room})
+    assert_push "crdt_msg", %{"doc_id" => "doc"}
+
+    narrow_to_none(ctx, key, ctx.w)
+    Process.unlink(chan.channel_pid)
+    mon = Process.monitor(chan.channel_pid)
+
+    send(chan.channel_pid, {:yjs, "secret", room})
+    EngramWeb.Endpoint.broadcast!(topic, "crdt_doc_ready", %{"doc_id" => "secret"})
+
+    assert_receive {:DOWN, ^mon, :process, _, {:shutdown, :access_changed}}
+    refute_push "crdt_msg", _
+    refute_push "crdt_doc_ready", %{"doc_id" => "secret"}
+    assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+  end
+
   test "legacy key restricted to W: crdt join on R/N refused", ctx do
     {:ok, raw, key} = Accounts.create_api_key(ctx.user, "legacy", nil)
 
