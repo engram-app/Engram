@@ -43,16 +43,20 @@ defmodule Engram.ObanQueueConfigTest do
   ]
 
   # Cron workers with a queue of their own, and why. Each needs a reason a
-  # 2-slot shared lane is wrong for it.
-  #
+  # 2-slot shared lane is wrong for it. None today: the JWKS sweep's cron entry
+  # is CimdJwksSchedule, a millisecond insert that belongs on `maintenance`.
+  @own_queue_crons %{}
+
+  test "the cron workers with their own queue run there" do
+    for {mod, queue} <- @own_queue_crons, do: assert(worker_queue(mod) == queue)
+  end
+
   # CimdJwksRefresh: every 5 min, up to 4 vendor fetches in flight (#1974
   # review). On `maintenance` it would hold a slot most of every hour and push
   # the daily backstops behind it; on its own 1-slot queue a slow vendor delays
   # only the next JWKS sweep.
-  @own_queue_crons %{Engram.Workers.CimdJwksRefresh => :cimd_refresh}
-
-  test "the cron workers with their own queue run there" do
-    for {mod, queue} <- @own_queue_crons, do: assert(worker_queue(mod) == queue)
+  test "the JWKS sweep runs on its own queue" do
+    assert worker_queue(Engram.Workers.CimdJwksRefresh) == :cimd_refresh
   end
 
   test "maintenance runs exactly the cron workers" do

@@ -71,6 +71,45 @@ describe("token refresh on socket error", () => {
 		expect(sockets[0]!.opts.params()).toEqual({ token: "tok-B" });
 	});
 
+	// A browser clock a few seconds behind the server makes Clerk's cache hand
+	// back a token the server already rejects as expired (prod 2026-10-17: one
+	// tab replayed the same exp-past token 14 times in 70 s). The retry path
+	// must bypass that cache.
+	it("bypasses the token cache on the error path", async () => {
+		const getToken = vi.fn(async (_opts?: { skipCache?: boolean }) => "tok-A");
+		await connectChannel({ userId: "u1", vaultId: "v1", getToken, queryClient, t: englishT });
+
+		const errorCb = sockets[0]!.onError.mock.calls[0]![0] as () => void;
+		errorCb();
+		await flush();
+
+		expect(getToken).toHaveBeenLastCalledWith({ skipCache: true });
+	});
+
+	// During a backend outage every retry errors. A forced mint per retry would
+	// hit Clerk from every open tab every ~5 s; the cache absorbs the rest.
+	it("forces a fresh mint at most once per 30 s", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			const getToken = vi.fn(async (_opts?: { skipCache?: boolean }) => "tok-A");
+			await connectChannel({ userId: "u1", vaultId: "v1", getToken, queryClient, t: englishT });
+			const errorCb = sockets[0]!.onError.mock.calls[0]![0] as () => void;
+
+			errorCb();
+			await flush();
+			errorCb();
+			await flush();
+			expect(getToken).toHaveBeenLastCalledWith({ skipCache: false });
+
+			vi.setSystemTime(Date.now() + 30_000);
+			errorCb();
+			await flush();
+			expect(getToken).toHaveBeenLastCalledWith({ skipCache: true });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("keeps the previous token when the refresh itself fails", async () => {
 		let fail = false;
 		await connectChannel({

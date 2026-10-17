@@ -5,7 +5,9 @@ export interface AuthAdapter {
 	isSignedIn: boolean;
 	user: { email: string; imageUrl?: string } | null;
 
-	getToken(): Promise<string | null>;
+	// `skipCache`: mint past the provider's cache, for a token the server just
+	// refused. Providers without a cache ignore it.
+	getToken(opts?: { skipCache?: boolean }): Promise<string | null>;
 
 	login?(email: string, password: string): Promise<void>;
 	register?(email: string, password: string, invite?: string): Promise<void>;

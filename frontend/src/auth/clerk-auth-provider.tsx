@@ -45,7 +45,10 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 	const { isLoaded, isSignedIn, getToken } = useAuth();
 	const clerk = useClerk();
 
-	const tokenGetter = useCallback(() => getToken(), [getToken]);
+	const tokenGetter = useCallback(
+		(opts?: { skipCache?: boolean }) => getToken({ skipCache: opts?.skipCache }),
+		[getToken],
+	);
 
 	useEffect(() => {
 		setTokenGetter(tokenGetter);

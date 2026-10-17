@@ -243,8 +243,8 @@ config :engram, Oban,
         # CIMD document refresh (#1642): documents carry a 24 h TTL.
         {"40 5 * * *", Engram.Workers.CimdRefresh},
         # CIMD JWKS refresh (#1974): keeps the persisted key set fresh so the
-        # token path never fetches. Jittered inside the job.
-        {"1-59/5 * * * *", Engram.Workers.CimdJwksRefresh},
+        # token path never fetches. Schedules the sweep 1-30 s out.
+        {"1-59/5 * * * *", Engram.Workers.CimdJwksSchedule},
         # Account facts onto PostHog persons; no-op unless PostHog is configured.
         {"25 6 * * *", Engram.Workers.PostHogPersonSync}
       ]

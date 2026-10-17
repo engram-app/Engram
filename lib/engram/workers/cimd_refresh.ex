@@ -79,8 +79,7 @@ defmodule Engram.Workers.CimdRefresh do
   def timeout(_job), do: :timer.minutes(10)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"kind" => "jwks"} = args}) do
-    jitter(args)
+  def perform(%Oban.Job{args: %{"kind" => "jwks"}}) do
     uris = jwks_uris()
 
     # `_nolink` under the app's Task.Supervisor: one vendor's crash is a
@@ -178,13 +177,6 @@ defmodule Engram.Workers.CimdRefresh do
       {:error, _reason} -> :failed
     end
   end
-
-  # Spreads the vendor-facing fetches off the exact cron minute. Cron args set
-  # it; a direct perform (tests) passes none and does not sleep.
-  defp jitter(%{"jitter_ms" => max}) when is_integer(max) and max > 0,
-    do: Process.sleep(:rand.uniform(max))
-
-  defp jitter(_args), do: :ok
 
   defp tally_refresh({url, before_at}, acc) do
     outcome =
