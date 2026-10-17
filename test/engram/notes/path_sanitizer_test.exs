@@ -1,5 +1,6 @@
 defmodule Engram.Notes.PathSanitizerTest do
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   alias Engram.Notes.PathSanitizer
 
@@ -207,6 +208,60 @@ defmodule Engram.Notes.PathSanitizerTest do
     test "otherwise returns the sanitized path" do
       assert PathSanitizer.sanitize_target("../evil") == {:ok, "evil"}
       assert PathSanitizer.sanitize_target("a/../../b") == {:ok, "a/b"}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Idempotence: callers re-sanitize (sanitize_target, then the per-item mover),
+  # so one decode let `%252e%252e` pass the first pass as `%2e%2e` and turn into
+  # `..` on the second, moving files to root or splitting notes vs attachments.
+  # ---------------------------------------------------------------------------
+
+  describe "idempotence" do
+    test "double-encoded traversal is stripped on the first pass" do
+      assert PathSanitizer.sanitize("%252e%252e") == ""
+      assert PathSanitizer.sanitize("B/%252e%252e") == "B"
+      assert PathSanitizer.sanitize("%25252e%25252e/x.md") == "x.md"
+      assert PathSanitizer.sanitize_target("%252e%252e") == {:error, :invalid_path}
+      assert PathSanitizer.sanitize_target("B/%252e%252e") == {:ok, "B"}
+    end
+
+    test "a double-encoded slash decodes to a separator on the first pass" do
+      assert PathSanitizer.sanitize("a%252Fb") == "a/b"
+    end
+
+    test "a deeply nested encoding still terminates on a fixed point" do
+      deep = Enum.reduce(1..64, "%2e%2e", fn _, acc -> String.replace(acc, "%", "%25") end)
+      deep = deep <> "/x.md"
+      out = PathSanitizer.sanitize(deep)
+      assert PathSanitizer.sanitize(out) == out
+      refute out =~ ".."
+    end
+
+    property "sanitize(sanitize(x)) == sanitize(x)" do
+      piece =
+        one_of([
+          constant("%25"),
+          constant("%2e"),
+          constant("%2E"),
+          constant("%2F"),
+          constant("%2f"),
+          constant("%"),
+          constant(".."),
+          constant("."),
+          constant("/"),
+          constant(" "),
+          constant("  "),
+          constant("\x00"),
+          constant(":"),
+          string(:alphanumeric, max_length: 3),
+          string(:printable, max_length: 3)
+        ])
+
+      check all(parts <- list_of(piece, max_length: 12), max_runs: 500) do
+        once = PathSanitizer.sanitize(Enum.join(parts))
+        assert PathSanitizer.sanitize(once) == once
+      end
     end
   end
 end

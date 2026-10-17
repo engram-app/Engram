@@ -76,6 +76,40 @@ defmodule Engram.FoldersTest do
     assert att_paths(user, vault) == ["Archive/a.png"]
   end
 
+  # Notes and attachments each re-sanitize the target; a single-decode
+  # sanitizer let them disagree and split one folder across two paths.
+  describe "rename/4 with a double-encoded target" do
+    setup %{user: user, vault: vault} do
+      {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"}, actor: "api")
+
+      put_att(user, vault, "Docs/a.png")
+      %{user: user}
+    end
+
+    test "%252e%252e is refused, nothing moves", %{user: user, vault: vault} do
+      assert {:error, :invalid_path} = Folders.rename(user, vault, "Docs", "%252e%252e")
+      assert att_paths(user, vault) == ["Docs/a.png"]
+      assert {:ok, _} = Notes.get_note(user, vault, "Docs/n.md")
+    end
+
+    test "B/%252e%252e keeps notes and attachments together in B", %{user: user, vault: vault} do
+      assert {:ok, %{notes: 1, attachments: 1}} =
+               Folders.rename(user, vault, "Docs", "B/%252e%252e")
+
+      assert att_paths(user, vault) == ["B/a.png"]
+      assert {:ok, _} = Notes.get_note(user, vault, "B/n.md")
+    end
+
+    test "a%252Fb keeps notes and attachments together in a/b", %{user: user, vault: vault} do
+      assert {:ok, %{notes: 1, attachments: 1}} = Folders.rename(user, vault, "Docs", "a%252Fb")
+      assert att_paths(user, vault) == ["a/b/a.png"]
+      assert {:ok, _} = Notes.get_note(user, vault, "a/b/n.md")
+    end
+  end
+
   test "batch_delete/3 soft-deletes the folder's attachments", %{user: user, vault: vault} do
     {:ok, marker} = Notes.create_folder_marker(user, vault, "Docs")
     put_att(user, vault, "Docs/a.png")
