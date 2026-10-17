@@ -961,10 +961,9 @@ defmodule Engram.Onboarding do
         select: u
       )
 
-    # Same as set_profile/2: `users` is the tenant root, keyed to the caller.
-    case Repo.update_all(query, [set: [free_tier_accepted_at: DateTime.utc_now()]],
-           skip_tenant_check: true
-         ) do
+    # `users` is the tenant root, not a tenant table (Repo.tenant_tables/0), so
+    # the guard does not apply and no skip is needed.
+    case Repo.update_all(query, set: [free_tier_accepted_at: DateTime.utc_now()]) do
       {1, [saved]} ->
         :ok = Accounts.evict_user(user.id)
         {:ok, saved, :won}
