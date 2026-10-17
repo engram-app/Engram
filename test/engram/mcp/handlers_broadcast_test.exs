@@ -179,4 +179,53 @@ defmodule Engram.MCP.HandlersBroadcastTest do
     {:ok, %{changes: after_changes}} = Notes.list_changes_by_seq(user, vault, 0)
     assert Enum.any?(after_changes, &(&1.path == "mcp/feed.md"))
   end
+
+  # Folder writes are invisible to note_changed (an empty folder is a marker
+  # row), so peers learn of them only from folders.batch, the event the REST
+  # twins in FoldersController emit. Without it a web tab or plugin never sees
+  # an MCP-created or MCP-deleted empty folder until its next full pull.
+  test "create_folder broadcasts folders.batch like POST /folders", %{user: user, vault: vault} do
+    assert {:ok, _, _} = Handlers.handle("create_folder", user, vault, %{"folder" => "mcp/new"})
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      event: "folders.batch",
+      payload: %{op: "create", folder: "mcp/new"}
+    }
+  end
+
+  test "delete_folder of an empty folder broadcasts folders.batch", %{user: user, vault: vault} do
+    {:ok, _, _} = Handlers.handle("create_folder", user, vault, %{"folder" => "mcp/empty"})
+    assert_receive %Phoenix.Socket.Broadcast{event: "folders.batch", payload: %{op: "create"}}
+
+    assert {:ok, _, _} = Handlers.handle("delete_folder", user, vault, %{"folder" => "mcp/empty"})
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      event: "folders.batch",
+      payload: %{op: "delete", folder: "mcp/empty"}
+    }
+  end
+
+  test "recursive delete_folder broadcasts folders.batch", %{user: user, vault: vault} do
+    {:ok, _, _} =
+      Handlers.handle("write_note", user, vault, %{"path" => "mcp/full/a.md", "content" => "# A"})
+
+    assert {:ok, _, _} =
+             Handlers.handle("delete_folder", user, vault, %{
+               "folder" => "mcp/full",
+               "recursive" => true
+             })
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      event: "folders.batch",
+      payload: %{op: "delete", folder: "mcp/full"}
+    }
+  end
+
+  test "a refused delete_folder broadcasts nothing", %{user: user, vault: vault} do
+    {:ok, _, _} =
+      Handlers.handle("write_note", user, vault, %{"path" => "mcp/kept/a.md", "content" => "# A"})
+
+    assert {:error, _} = Handlers.handle("delete_folder", user, vault, %{"folder" => "mcp/kept"})
+    refute_receive %Phoenix.Socket.Broadcast{event: "folders.batch"}, 100
+  end
 end
