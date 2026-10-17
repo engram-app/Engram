@@ -365,26 +365,28 @@ defmodule Engram.Connections do
   Run at soft delete (`revoke_by_vault/2`) and again at purge (`CleanupVault`),
   which catches a grant a soft delete missed before its rows can go.
 
-  `live` is the user's active vault ids without this one; a caller that
-  already read them (`CleanupVault`, for its keys) passes them so both
-  judgements use the same set.
+  Live vaults are read under the grant lock, so a vault created or restored
+  meanwhile is judged as it is now.
+
+  The owner's sockets are kicked once after commit when a grant changed.
+  `kick_owner: true` asks for that kick even when none did, for a caller
+  that revoked other credentials in the same transaction (`CleanupVault`'s
+  keys): one kick either way, decided here.
   """
-  @spec drop_vault_from_grants(Ecto.UUID.t(), Ecto.UUID.t(), [Ecto.UUID.t()] | nil) ::
-          non_neg_integer()
-  def drop_vault_from_grants(user_id, vault_id, live \\ nil) do
+  @spec drop_vault_from_grants(Ecto.UUID.t(), Ecto.UUID.t(), keyword()) :: non_neg_integer()
+  def drop_vault_from_grants(user_id, vault_id, opts \\ []) do
     {:ok, revoked} =
       Repo.transaction_after_commit(fn ->
         # Rotation copies a family's state under the same lock, so a
         # successor minted concurrently cannot undo the narrowing below.
         Engram.OAuth.lock_grants!(user_id)
-        live = live || List.delete(Vaults.active_vault_ids(user_id), vault_id)
-        do_drop_vault_from_grants(user_id, vault_id, live)
+        do_drop_vault_from_grants(user_id, vault_id, Keyword.get(opts, :kick_owner, false))
       end)
 
     revoked
   end
 
-  defp do_drop_vault_from_grants(user_id, vault_id, live) do
+  defp do_drop_vault_from_grants(user_id, vault_id, kick_owner) do
     {_, narrowed} =
       Repo.update_all(
         from(t in RefreshToken,
@@ -423,13 +425,22 @@ defmodule Engram.Connections do
             (no_vault_ids(t) and t.vault_id == ^vault_id)
       )
 
+    live = List.delete(Vaults.active_vault_ids(user_id), vault_id)
+
     revoked =
       revoke_rows(only_vault) ++
         (from(t in RefreshToken, where: t.user_id == ^user_id, where: is_nil(t.revoked_at))
          |> leveled_reaching(vault_id, &(not Permissions.reaches_anything?(&1, live)))
          |> revoke_families())
 
-    Engram.OAuth.grants_changed(narrowed ++ revoked)
+    case narrowed ++ revoked do
+      [] when kick_owner ->
+        Repo.after_commit(fn -> Engram.Auth.SessionInvalidator.disconnect_user(user_id) end)
+
+      changed ->
+        Engram.OAuth.grants_changed(changed)
+    end
+
     revoked |> Enum.uniq_by(&elem(&1, 0)) |> length()
   end
 
