@@ -656,6 +656,7 @@ defmodule EngramWeb.Router do
     get "/folders/list", FoldersController, :list
     get "/folders/by-id/:id/notes", FoldersController, :list_notes
     post "/folders/rename", FoldersController, :rename
+    post "/folders/batch", FoldersController, :batch_create
     post "/folders", FoldersController, :create
     get "/folders", FoldersController, :index
     delete "/folders/*path", FoldersController, :delete

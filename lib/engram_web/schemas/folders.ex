@@ -90,6 +90,20 @@ defmodule EngramWeb.Schemas.CreateFolderRequest do
   })
 end
 
+defmodule EngramWeb.Schemas.BatchCreateFoldersRequest do
+  @moduledoc false
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "BatchCreateFoldersRequest",
+    type: :object,
+    properties: %{folders: %Schema{type: :array, items: %Schema{type: :string}, maxItems: 500}},
+    required: [:folders],
+    example: %{"folders" => ["Projects/Engram", "Archive"]}
+  })
+end
+
 defmodule EngramWeb.Schemas.FolderResponse do
   @moduledoc false
   require OpenApiSpex

@@ -256,27 +256,90 @@ defmodule Engram.Notes do
       # Repo.with_tenant wraps the fn return in {:ok, _} (transaction).
       # Unwrap once so the public contract is {:ok, note} | {:error, _}.
       case Repo.with_tenant(user.id, fn ->
-             case find_folder_marker(user, vault, folder_hmac) do
-               {:ok, %Note{deleted_at: nil} = existing} ->
-                 {:ok, hydrate_folder_marker(existing, dek)}
-
-               {:ok, %Note{} = soft_deleted} ->
-                 soft_deleted
-                 |> Ecto.Changeset.change(deleted_at: nil, updated_at: DateTime.utc_now())
-                 |> Ecto.Changeset.put_change(:seq, Engram.Vaults.next_seq!(vault.id))
-                 |> Repo.update()
-                 |> case do
-                   {:ok, undeleted} -> {:ok, hydrate_folder_marker(undeleted, dek)}
-                   {:error, _} = err -> err
-                 end
-
-               :not_found ->
-                 insert_folder_marker(user, vault, dek, folder, folder_hmac)
-             end
+             upsert_folder_marker(user, vault, dek, folder, folder_hmac, fn ->
+               Engram.Vaults.next_seq!(vault.id)
+             end)
            end) do
         {:ok, inner} -> inner
         {:error, _} = err -> err
       end
+    end
+  end
+
+  @max_batch_folders 500
+
+  @doc """
+  Batch `create_folder_marker/3`: one tenant transaction and one shared
+  `seq` for the whole batch. Each folder goes through
+  `PathSanitizer.sanitize/1`; entries that sanitize to "" (root, `..`) and
+  duplicates are dropped. Idempotent per folder like the single create.
+
+  Returns the live markers, `{:error, :batch_too_large}` above
+  #{@max_batch_folders} entries, or the first per-folder error (the whole
+  batch rolls back).
+  """
+  @spec create_folder_markers(map(), map(), [String.t()]) ::
+          {:ok, [Note.t()]} | {:error, term()}
+  def create_folder_markers(_user, _vault, folders)
+      when is_list(folders) and length(folders) > @max_batch_folders,
+      do: {:error, :batch_too_large}
+
+  def create_folder_markers(user, vault, folders) when is_list(folders) do
+    folders =
+      folders
+      |> Enum.map(&PathSanitizer.sanitize/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+
+    with [_ | _] <- folders,
+         {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, filter_key} <- Crypto.dek_filter_key(user),
+         {:ok, dek} <- Crypto.get_dek(user),
+         {:ok, markers} <-
+           Repo.with_tenant(user.id, fn ->
+             # One seq for the batch: the seq feed keys on (seq, id), so ties
+             # are safe, and the vault row is locked once instead of N times.
+             seq = Engram.Vaults.next_seq!(vault.id)
+             upsert_folder_markers(user, vault, dek, filter_key, folders, seq)
+           end) do
+      {:ok, markers}
+    else
+      [] -> {:ok, []}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp upsert_folder_markers(user, vault, dek, filter_key, folders, seq) do
+    Enum.map(folders, fn folder ->
+      folder_hmac = Crypto.hmac_field(filter_key, folder)
+
+      case upsert_folder_marker(user, vault, dek, folder, folder_hmac, fn -> seq end) do
+        {:ok, marker} -> marker
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  # Shared by the single and batch creates. `seq_fun` is only called when a
+  # row is written, so an idempotent single create on a live marker never
+  # takes the vault row lock.
+  defp upsert_folder_marker(user, vault, dek, folder, folder_hmac, seq_fun) do
+    case find_folder_marker(user, vault, folder_hmac) do
+      {:ok, %Note{deleted_at: nil} = existing} ->
+        {:ok, hydrate_folder_marker(existing, dek)}
+
+      {:ok, %Note{} = soft_deleted} ->
+        soft_deleted
+        |> Ecto.Changeset.change(deleted_at: nil, updated_at: DateTime.utc_now())
+        |> Ecto.Changeset.put_change(:seq, seq_fun.())
+        |> Repo.update()
+        |> case do
+          {:ok, undeleted} -> {:ok, hydrate_folder_marker(undeleted, dek)}
+          {:error, _} = err -> err
+        end
+
+      :not_found ->
+        insert_folder_marker(user, vault, dek, folder, folder_hmac, seq_fun)
     end
   end
 
@@ -303,7 +366,7 @@ defmodule Engram.Notes do
     if row, do: {:ok, row}, else: :not_found
   end
 
-  defp insert_folder_marker(user, vault, dek, folder, folder_hmac) do
+  defp insert_folder_marker(user, vault, dek, folder, folder_hmac, seq_fun) do
     marker_id = mint_id()
     now = DateTime.utc_now()
     folder_aad = Crypto.aad_for_row(:notes, :folder, marker_id)
@@ -324,7 +387,7 @@ defmodule Engram.Notes do
     changeset =
       %Note{id: marker_id}
       |> Note.changeset(attrs)
-      |> Ecto.Changeset.put_change(:seq, Engram.Vaults.next_seq!(vault.id))
+      |> Ecto.Changeset.put_change(:seq, seq_fun.())
 
     # INSERT ... ON CONFLICT DO NOTHING on the folder-marker partial unique
     # index. A concurrent create of the same folder races us: find_folder_marker

@@ -156,6 +156,57 @@ defmodule EngramWeb.FoldersController do
     conn |> put_status(422) |> json(%{error: "folder parameter is required"})
   end
 
+  operation(:batch_create,
+    operation_id: "folders-batch-create",
+    summary: "Create many folders",
+    description:
+      "Creates explicit folder markers for up to 500 folders in one transaction and returns 201 " <>
+        "with the resulting folders. Idempotent per folder like `POST /folders`. Paths are " <>
+        "sanitized (traversal segments and illegal characters stripped); entries that sanitize " <>
+        "to the root are dropped. More than 500 entries is rejected with 422.",
+    tags: ["Folders"],
+    request_body:
+      {"Folder paths", "application/json", Schemas.BatchCreateFoldersRequest, required: true},
+    responses: [
+      created: {"Created", "application/json", Schemas.FoldersResponse},
+      unprocessable_entity:
+        {"Invalid input or too many folders", "application/json", Schemas.Error}
+    ]
+  )
+
+  def batch_create(conn, %{"folders" => folders}) when is_list(folders) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    with true <- Enum.all?(folders, &is_binary/1),
+         {:ok, markers} <- Notes.create_folder_markers(user, vault, folders) do
+      names = Enum.map(markers, & &1.folder)
+
+      # One event for the batch, not N. Peers re-poll /folders/explicit on any
+      # folders.batch, so the payload is informational.
+      if names != [] do
+        BatchOps.broadcast_batch(user, vault, "folders.batch", %{op: "create", folders: names})
+      end
+
+      conn
+      |> put_status(:created)
+      |> json(%{folders: Enum.map(names, &%{name: &1, count: 0})})
+    else
+      false ->
+        conn |> put_status(422) |> json(%{error: "folders must be strings"})
+
+      {:error, :batch_too_large} ->
+        conn |> put_status(422) |> json(%{error: "batch_too_large", max: 500})
+
+      {:error, reason} ->
+        conn |> put_status(500) |> json(%{error: format_error(reason)})
+    end
+  end
+
+  def batch_create(conn, _params) do
+    conn |> put_status(422) |> json(%{error: "folders parameter must be a list"})
+  end
+
   operation(:delete,
     operation_id: "folders-delete",
     summary: "Delete a folder by path",
