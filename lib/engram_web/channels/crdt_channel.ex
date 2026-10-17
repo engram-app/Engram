@@ -505,7 +505,7 @@ defmodule EngramWeb.CrdtChannel do
              note_id,
              nil
            ) do
-      {:reply, {:ok, %{doc_id: note_id, b64: Base.encode64(update), head: head}}, socket}
+      {:reply, {:ok, %{doc_id: note_id, b64: Engram.Native.encode64(update), head: head}}, socket}
     else
       {:error, :rate_limited} ->
         {:reply, {:error, %{reason: "rate_limited"}}, socket}
@@ -575,7 +575,7 @@ defmodule EngramWeb.CrdtChannel do
   # message type. Handshakes belong on `crdt_msg`.
   #
   # `is_binary(b64)` is a GUARD, not a validation step: `decode_frame/1` reaches
-  # `Base.decode64/1`, which raises FunctionClauseError on a non-binary, and a
+  # `Engram.Native.decode64/1`, which raises FunctionClauseError on a non-binary, and a
   # raise in `handle_in` costs the whole channel — every room it owns, every
   # monitor — for one malformed frame. A non-binary falls to the catch-all
   # `handle_in/3` and gets a `bad_frame` reply instead.
@@ -1543,11 +1543,11 @@ defmodule EngramWeb.CrdtChannel do
       # Index frames come back on their own event (no doc_id) — checked FIRST so
       # an index room can never be mistaken for a note room whose pid was reused.
       room == socket.assigns[:index_room] ->
-        push(socket, "crdt_index_msg", %{"b64" => Base.encode64(frame)})
+        push(socket, "crdt_index_msg", %{"b64" => Engram.Native.encode64(frame)})
         {:noreply, socket}
 
       doc_id = Map.get(socket.assigns.room_doc, room) ->
-        push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Base.encode64(frame)})
+        push(socket, "crdt_msg", %{"doc_id" => doc_id, "b64" => Engram.Native.encode64(frame)})
         {:noreply, socket}
 
       true ->
@@ -2046,7 +2046,7 @@ defmodule EngramWeb.CrdtChannel do
   defp decode_frame(b64) when byte_size(b64) > @max_b64_bytes, do: {:error, :frame_too_large}
 
   defp decode_frame(b64) do
-    case Base.decode64(b64) do
+    case Engram.Native.decode64(b64) do
       {:ok, frame} when byte_size(frame) > @max_frame_bytes -> {:error, :frame_too_large}
       {:ok, frame} -> {:ok, frame}
       :error -> {:error, :bad_base64}
