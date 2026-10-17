@@ -231,6 +231,59 @@ defmodule Engram.PromEx.StorageTest do
     end
   end
 
+  # Series budget for one event of each trimmed kind, under label values no
+  # other test uses so every series is new. Before the 2026-10 cardinality
+  # cut the same events rendered 103 series (measured on the parent commit);
+  # now 8.
+  test "one event per trimmed metric family adds only its budgeted series" do
+    ecto = fn source ->
+      :telemetry.execute(
+        [:prom_ex, :plugin, :ecto, :query],
+        %{total_time: 1_000, queue_time: 1_000},
+        %{repo: Engram.Repo, source: source, result: {:ok, %Postgrex.Result{command: :select}}}
+      )
+    end
+
+    # Warms the per-repo series so only the per-source ones are new below.
+    ecto.("zz_budget_warm")
+    before = series_count(scrape())
+    ecto.("zz_budget")
+
+    :telemetry.execute(
+      [:engram, :nif, :call, :stop],
+      %{duration: 1_000, native_peak_bytes: 1, input_bytes: 1},
+      %{nif: :zz_budget, dirty: false}
+    )
+
+    :telemetry.execute(
+      [:engram, :search, :request, :stop],
+      %{duration: 1_000, result_count: 1},
+      %{status: :zz_budget, cross_vault: false, rerank: :off}
+    )
+
+    :telemetry.execute([:engram, :mcp, :section_parse, :stop], %{duration: 1, bytes: 1}, %{
+      outcome: :zz_budget
+    })
+
+    :telemetry.execute([:engram, :cimd, :fetch], %{duration_ms: 1}, %{
+      kind: :zz_budget,
+      result: :ok,
+      reason: nil
+    })
+
+    :telemetry.execute([:engram, :crypto, :decrypt_batch], %{duration_us: 1, count: 1}, %{
+      kind: :zz_budget
+    })
+
+    # Ecto: source queries + source time + source queue (total_time histogram
+    # and decode/idle are per repo/command, already present). NIF: count + sum.
+    # Search, section_parse, cimd: one counter each. decrypt_batch: none.
+    assert series_count(scrape()) - before == 8
+  end
+
+  defp series_count(body),
+    do: body |> String.split("\n") |> Enum.count(&(&1 != "" and not String.starts_with?(&1, "#")))
+
   defp running_metrics do
     Engram.PromEx.__metrics_collector_name__()
     |> Peep.Persistent.fetch()
