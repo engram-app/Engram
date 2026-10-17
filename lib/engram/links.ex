@@ -181,13 +181,20 @@ defmodule Engram.Links do
 
   # The stored edges in `replace_links_dangling/4`'s edge shape, sorted by
   # position (unique per source note). A field that fails to decrypt reads
-  # nil, which can only make the compare unequal and force the rewrite.
+  # :undecryptable, never nil: nil is an ABSENT alias/anchor, so a corrupt
+  # envelope would compare equal to a link without one and survive every
+  # re-extraction. The sentinel can only make the compare unequal.
   defp stored_edges(links_query, dek) do
     links_query
     |> Repo.all()
     |> Enum.map(fn l ->
-      decrypt = fn ct, nonce, column ->
-        decrypt_field(ct, nonce, dek, l.dek_version, :note_links, column, l.id)
+      decrypt = fn
+        nil, _nonce, _column ->
+          nil
+
+        ct, nonce, column ->
+          decrypt_field(ct, nonce, dek, l.dek_version, :note_links, column, l.id) ||
+            :undecryptable
       end
 
       {l.position, l.link_type, l.target_basename_hmac, l.target_note_id, l.target_attachment_id,

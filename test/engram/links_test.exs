@@ -284,6 +284,32 @@ defmodule Engram.LinksTest do
       assert l1.target_note_id == new.id
     end
 
+    # replace_links skips the rewrite when the stored edges equal the new
+    # ones. A field that fails to decrypt must never compare equal to an
+    # ABSENT field (nil), or a corrupt envelope survives every re-extraction.
+    test "a corrupt alias is rewritten even when the new edge has no alias", %{
+      user: user,
+      vault: vault
+    } do
+      source = Engram.Fixtures.insert_note!(user, vault, %{path: "Src.md"})
+      edge = %{target: "T", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
+
+      :ok = Links.replace_links(user, vault, source.id, [%{edge | alias: "A"}])
+      {:ok, [old]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
+
+      Repo.update_all(
+        from(l in NoteLink, where: l.id == ^old.id),
+        [set: [alias_ciphertext: <<0::128>>]],
+        skip_tenant_check: true
+      )
+
+      capture_log(fn -> :ok = Links.replace_links(user, vault, source.id, [edge]) end)
+
+      {:ok, [new]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
+      assert new.id != old.id
+      assert is_nil(new.alias_ciphertext)
+    end
+
     test "a corrupt edge is skipped and logged; other edges still process", %{
       user: user,
       vault: vault
