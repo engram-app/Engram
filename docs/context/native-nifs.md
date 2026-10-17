@@ -572,7 +572,9 @@ following closes part of it:
    threads: **ours must not** (no rayon).
 3. **One telemetry shape for every NIF.** `Engram.Native.call/4` emits
    `[:engram, :nif, :call, :stop]` with `duration`, `native_peak_bytes`,
-   `input_bytes`, metadata `%{nif: atom}`. `Engram.PromEx.Native` exports it.
+   `input_bytes`, metadata `%{nif: atom}`. `Engram.PromEx.Native` exports a
+   call count and summed duration (integer microseconds); the peak and input
+   bytes stay in the event for tests and ad hoc handlers, not `/metrics`.
    One exception: inline format-0 envelope calls emit nothing and are counted
    in the NIF instead (above, "Envelope telemetry"); the event cost 7x the
    crypto on a 40-byte field.
