@@ -462,7 +462,7 @@ describe("OAuthAuthorizePage vault tab after a signup detour", () => {
 	it("closes the tab when the consent fails", async () => {
 		parkThisRequest();
 		fetchOAuthClient.mockResolvedValue(CLIENT);
-		postOAuthConsent.mockRejectedValue(new Error("boom"));
+		postOAuthConsent.mockRejectedValueOnce(new Error("boom"));
 		const close = vi.fn();
 		vi.spyOn(window, "open").mockReturnValue({ close } as unknown as Window);
 
@@ -746,7 +746,7 @@ describe("OAuthAuthorizePage", () => {
 			kind: "mcp",
 			slug: "claude",
 		});
-		postOAuthConsent.mockRejectedValue(new Error("boom"));
+		postOAuthConsent.mockRejectedValueOnce(new Error("boom"));
 
 		renderAt(VALID_QS);
 		await screen.findByRole("button", { name: /^review$/iu });

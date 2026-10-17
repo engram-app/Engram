@@ -36,6 +36,8 @@ let onboardingStatusValue: { data: OnboardingStatus | undefined; isLoading: bool
 };
 
 let connectionsValue: { data: Connection[]; isLoading: boolean } = { data: [], isLoading: false };
+type PollFn = (query: { state: { data?: Connection[] } }) => number | false;
+let connectionsOpts: { refetchInterval?: PollFn } | undefined;
 
 let billingStatusValue: { data: Partial<BillingStatus> | undefined; isLoading: boolean } = {
 	data: { tier: "free", active: false } as Partial<BillingStatus>,
@@ -66,7 +68,10 @@ vi.mock("../api/queries", async () => {
 			);
 			return { data, isLoading: onboardingStatusValue.isLoading };
 		},
-		useConnections: () => connectionsValue,
+		useConnections: (opts?: { refetchInterval?: PollFn }) => {
+			connectionsOpts = opts;
+			return connectionsValue;
+		},
 		useBillingStatus: () => billingStatusValue,
 	};
 });
@@ -663,5 +668,45 @@ describe("ChecklistWidget, interaction tracking", () => {
 			(k) => !(CHECKLIST_ITEMS as readonly string[]).includes(k),
 		);
 		expect(missing).toEqual([]);
+	});
+});
+
+// Approving a connector sends the user to their vault before the client has
+// exchanged its code, so the connection does not exist yet when this loads.
+describe("ChecklistWidget, re-checks a tool that is still connecting", () => {
+	const mcp = { kind: "mcp", slug: "chatgpt" } as Connection;
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	function poll(data: Connection[]): number | false {
+		return connectionsOpts?.refetchInterval?.({ state: { data } }) ?? false;
+	}
+
+	it("polls while a picked tool has no connection", () => {
+		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
+		render(wrap(<ChecklistWidget />));
+		expect(poll([])).toBe(5000);
+	});
+
+	it("stops once an MCP connection exists", () => {
+		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
+		render(wrap(<ChecklistWidget />));
+		expect(poll([mcp])).toBe(false);
+	});
+
+	it("does not poll when no tool was picked", () => {
+		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: [] };
+		render(wrap(<ChecklistWidget />));
+		expect(poll([])).toBe(false);
+	});
+
+	it("gives up after two minutes", () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
+		render(wrap(<ChecklistWidget />));
+		vi.setSystemTime(Date.now() + 121_000);
+		expect(poll([])).toBe(false);
 	});
 });

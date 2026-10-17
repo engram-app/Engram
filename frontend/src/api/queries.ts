@@ -1631,11 +1631,15 @@ export interface CapErrorBody {
 	upgrade_url: string;
 }
 
-export function useConnections(opts?: { enabled?: boolean }) {
+export function useConnections(opts?: {
+	enabled?: boolean;
+	refetchInterval?: (query: { state: { data?: Connection[] } }) => number | false;
+}) {
 	return useQuery({
 		queryKey: ["connections"],
 		queryFn: () => api.get<Connection[]>("/connections"),
 		enabled: opts?.enabled ?? true,
+		refetchInterval: opts?.refetchInterval,
 	});
 }
 

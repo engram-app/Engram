@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { Link, Navigate, useSearchParams } from "react-router";
 import { useT } from "@/i18n/locale-provider";
 import { formatDate } from "@/lib/format-date";
@@ -112,6 +112,14 @@ export default function Dashboard() {
 	// once, which is harmless.
 	const autoOpenKey = slug ? `engram:auto-opened:${slug}` : null;
 	const alreadyOpened = autoOpenKey !== null && sessionStorage.getItem(autoOpenKey) === "1";
+	const autoOpen = !folder && onlyNote !== null && slug !== null && !alreadyOpened;
+	// Marked on commit, not during render: StrictMode renders twice, and a mark
+	// written by the first pass made the second skip the redirect.
+	useEffect(() => {
+		if (autoOpen && autoOpenKey) {
+			sessionStorage.setItem(autoOpenKey, "1");
+		}
+	}, [autoOpen, autoOpenKey]);
 
 	// No note open still looks like an open (empty) document: mount the same
 	// right-panel content an open note gets, so the panel chrome is present.
@@ -135,10 +143,7 @@ export default function Dashboard() {
 		if (manifestPending && !manifest) {
 			return <LoadingPane />;
 		}
-		if (onlyNote && slug && !alreadyOpened) {
-			if (autoOpenKey) {
-				sessionStorage.setItem(autoOpenKey, "1");
-			}
+		if (autoOpen && onlyNote && slug) {
 			return <Navigate to={noteHref(slug, onlyNote.id)} replace />;
 		}
 	}

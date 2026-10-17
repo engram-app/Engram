@@ -82,6 +82,9 @@ const TOOL_LABELS: Record<string, MsgKey> = {
 	other_mcp: msg("Connect another MCP client"),
 };
 
+const CONNECT_POLL_MS = 5000;
+const CONNECT_POLL_WINDOW_MS = 120_000;
+
 function ChecklistWidget() {
 	const { t } = useT();
 	// Same query app-layout and note-menu use, so this flips at exactly the
@@ -93,7 +96,19 @@ function ChecklistWidget() {
 	const ob = useOnboardingActions();
 	const status = useOnboardingStatus();
 	const profile = status.data?.profile;
-	const connections = useConnections();
+	// Approving a connector lands the user here before the client exchanges its
+	// code, so the grant does not exist yet. Re-check briefly rather than tell
+	// them to connect a tool they just connected.
+	const [shownAt] = useState(Date.now);
+	const pickedTool = (profile?.tools ?? []).some((slug) => slug !== "web_only");
+	const connections = useConnections({
+		refetchInterval: (query) =>
+			pickedTool &&
+			Date.now() - shownAt < CONNECT_POLL_WINDOW_MS &&
+			!(query.state.data ?? []).some((c) => c.kind === "mcp")
+				? CONNECT_POLL_MS
+				: false,
+	});
 	const isFreeTier = useIsFreeTier();
 	const qc = useQueryClient();
 
