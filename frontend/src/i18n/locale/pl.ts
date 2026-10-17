@@ -234,9 +234,9 @@ export default {
 	"You're on this plan": "Jesteś na tym planie",
 	"Start free trial": "Rozpocznij darmowy okres próbny",
 	Popular: "Popularny",
-	"2,000 notes searchable · 1 vault · 1 GB attachments":
-		"2000 notatek do wyszukiwania · 1 sejf · 1 GB załączników",
-	"2,000 notes searchable": "2000 notatek do wyszukiwania",
+	"3,000 notes · 20 AI searches a day · 1 vault": "3000 notatek · 20 zapytań AI dziennie · 1 sejf",
+	"3,000 notes, all searchable": "3000 notatek, wszystkie przeszukiwalne",
+	"20 AI searches a day": "20 zapytań AI dziennie",
 	"1 vault": "1 sejf",
 	"1 GB attachments": "1 GB załączników",
 	"2 devices": "2 urządzenia",
@@ -247,14 +247,6 @@ export default {
 	"Unlimited vaults": "Nieograniczona liczba sejfów",
 	"50 GB attachments": "50 GB załączników",
 	"Cross-vault search": "Wyszukiwanie między sejfami",
-	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
-		{
-			one: "{count} z twoich notatek nie jest przeszukiwalna. Indeksowane są tylko twoje najstarsze {indexed}, więc najnowsze notatki nie pojawią się w wynikach wyszukiwania.",
-			few: "{count} z twoich notatek nie są przeszukiwalne. Indeksowane są tylko twoje najstarsze {indexed}, więc najnowsze notatki nie pojawią się w wynikach wyszukiwania.",
-			many: "{count} twoich notatek nie można wyszukać. Indeksowane są tylko twoje najstarsze {indexed}, więc najnowsze notatki nie pojawią się w wynikach wyszukiwania.",
-			other:
-				"{count} twoich notatek nie jest przeszukiwalnych. Indeksowane są tylko twoje najstarsze {indexed}, więc najnowsze notatki nie będą widoczne w wynikach wyszukiwania.",
-		},
 	"Loading plan options…": "Ładowanie opcji planu…",
 	"Plan change confirmed.": "Zmiana planu potwierdzona.",
 	"Could not change plan. Please try again.": "Nie udało się zmienić planu. Spróbuj ponownie.",
@@ -741,7 +733,6 @@ export default {
 	"Searching…": "Wyszukiwanie…",
 	"Search failed: {message}": "Wyszukiwanie nie powiodło się: {message}",
 	'No results for "{term}"': 'Brak wyników dla "{term}"',
-	"Upgrade to search everything": "Zaktualizuj, aby wyszukiwać wszystko",
 	Recent: "Ostatnie",
 	"Any time": "W dowolnym momencie",
 	"7 days": "7 dni",

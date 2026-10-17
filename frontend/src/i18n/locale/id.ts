@@ -231,9 +231,10 @@ export default {
 	"You're on this plan": "Anda menggunakan paket ini",
 	"Start free trial": "Mulai uji coba gratis",
 	Popular: "Populer",
-	"2,000 notes searchable · 1 vault · 1 GB attachments":
-		"2.000 catatan dapat dicari · 1 vault · 1 GB lampiran",
-	"2,000 notes searchable": "2.000 catatan dapat dicari",
+	"3,000 notes · 20 AI searches a day · 1 vault":
+		"3.000 catatan · 20 pencarian AI per hari · 1 vault",
+	"3,000 notes, all searchable": "3.000 catatan, semuanya dapat dicari",
+	"20 AI searches a day": "20 pencarian AI per hari",
 	"1 vault": "1 vault",
 	"1 GB attachments": "1 GB lampiran",
 	"2 devices": "2 perangkat",
@@ -244,11 +245,6 @@ export default {
 	"Unlimited vaults": "Vault tanpa batas",
 	"50 GB attachments": "50 GB lampiran",
 	"Cross-vault search": "Pencarian lintas vault",
-	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
-		{
-			other:
-				"Sebagian {count} catatan Anda tidak dapat dicari. Hanya {indexed} catatan terlama yang diindeks, sehingga catatan terbaru Anda tidak akan muncul dalam pencarian.",
-		},
 	"Loading plan options…": "Memuat opsi paket…",
 	"Plan change confirmed.": "Perubahan paket berhasil.",
 	"Could not change plan. Please try again.": "Tidak dapat mengubah paket. Silakan coba lagi.",
@@ -699,7 +695,6 @@ export default {
 	"Searching…": "Mencari…",
 	"Search failed: {message}": "Pencarian gagal: {message}",
 	'No results for "{term}"': 'Tidak ada hasil untuk "{term}"',
-	"Upgrade to search everything": "Tingkatkan untuk mencari semuanya",
 	Recent: "Terbaru",
 	"Any time": "Kapan saja",
 	"7 days": "7 hari",

@@ -347,7 +347,7 @@ export default {
 	Clear: "清除",
 	"Search vaults": "搜尋儲存庫",
 	Read: "讀取",
-	Write: "修改權限",
+	Write: "編輯權限",
 	"Read and write": "讀取與寫入",
 	"All vaults": "所有儲存庫",
 	"Choose vaults": "選擇儲存庫",

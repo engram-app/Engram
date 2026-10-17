@@ -45,9 +45,9 @@
 			"Manage your profile, password, and account.": "Verwalte dein Profil, dein Passwort und dein Konto."
 		},
 		"descriptions": {
-			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
-			"Write": "Permission column header in a vault access table: the connection may change notes. A noun, not a verb (like 'write access').",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
+			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device on {os} that syncs your '{vault}' vault": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -106,9 +106,9 @@
 			"Manage your profile, password, and account.": "Gestiona tu perfil, tu contraseña y tu cuenta."
 		},
 		"descriptions": {
-			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
-			"Write": "Permission column header in a vault access table: the connection may change notes. A noun, not a verb (like 'write access').",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
+			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device on {os} that syncs your '{vault}' vault": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -167,9 +167,9 @@
 			"Manage your profile, password, and account.": "Gère ton profil, ton mot de passe et ton compte."
 		},
 		"descriptions": {
-			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
-			"Write": "Permission column header in a vault access table: the connection may change notes. A noun, not a verb (like 'write access').",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
+			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device on {os} that syncs your '{vault}' vault": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -228,9 +228,9 @@
 			"Manage your profile, password, and account.": "Gestisci il tuo profilo, la password e l'account."
 		},
 		"descriptions": {
-			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
-			"Write": "Permission column header in a vault access table: the connection may change notes. A noun, not a verb (like 'write access').",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
+			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device on {os} that syncs your '{vault}' vault": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -291,9 +291,9 @@
 			"Manage your profile, password, and account.": "プロフィール、パスワード、アカウントを管理します。"
 		},
 		"descriptions": {
-			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
-			"Write": "Permission column header in a vault access table: the connection may change notes. A noun, not a verb (like 'write access').",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
+			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device on {os} that syncs your '{vault}' vault": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -352,9 +352,9 @@
 			"Manage your profile, password, and account.": "프로필, 비밀번호, 계정을 관리하세요."
 		},
 		"descriptions": {
-			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
-			"Write": "Permission column header in a vault access table: the connection may change notes. A noun, not a verb (like 'write access').",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
+			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device on {os} that syncs your '{vault}' vault": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -413,9 +413,9 @@
 			"Manage your profile, password, and account.": "Urus profil, kata laluan dan akaun anda."
 		},
 		"descriptions": {
-			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
-			"Write": "Permission column header in a vault access table: the connection may change notes. A noun, not a verb (like 'write access').",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
+			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device on {os} that syncs your '{vault}' vault": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -474,9 +474,9 @@
 			"Manage your profile, password, and account.": "Gerencie seu perfil, sua senha e sua conta."
 		},
 		"descriptions": {
-			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
-			"Write": "Permission column header in a vault access table: the connection may change notes. A noun, not a verb (like 'write access').",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
+			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device on {os} that syncs your '{vault}' vault": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -535,9 +535,9 @@
 			"Manage your profile, password, and account.": "Управляйте профилем, паролем и учётной записью."
 		},
 		"descriptions": {
-			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
-			"Write": "Permission column header in a vault access table: the connection may change notes. A noun, not a verb (like 'write access').",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
+			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device on {os} that syncs your '{vault}' vault": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -596,9 +596,9 @@
 			"Manage your profile, password, and account.": "Quản lý hồ sơ mật khẩu và tài khoản của bạn."
 		},
 		"descriptions": {
-			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
-			"Write": "Permission column header in a vault access table: the connection may change notes. A noun, not a verb (like 'write access').",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
+			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device on {os} that syncs your '{vault}' vault": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -657,9 +657,9 @@
 			"Manage your profile, password, and account.": "管理你的资料、密码和账号。"
 		},
 		"descriptions": {
-			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
-			"Write": "Permission column header in a vault access table: the connection may change notes. A noun, not a verb (like 'write access').",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
+			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device on {os} that syncs your '{vault}' vault": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -718,9 +718,9 @@
 			"Manage your profile, password, and account.": "管理你的個人資料、密碼與帳號。"
 		},
 		"descriptions": {
-			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
-			"Write": "Permission column header in a vault access table: the connection may change notes. A noun, not a verb (like 'write access').",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
+			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device on {os} that syncs your '{vault}' vault": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -738,7 +738,6 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
-			"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.": "{count} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -782,7 +781,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
-			"Write": "Permission column header in a vault access table: the connection may change notes. A noun, not a verb (like 'write access').",
+			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device on {os} that syncs your '{vault}' vault": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -800,7 +799,6 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
-			"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.": "{count} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -862,7 +860,6 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
-			"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.": "{count} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -906,7 +903,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
-			"Write": "Permission column header in a vault access table: the connection may change notes. A noun, not a verb (like 'write access').",
+			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device on {os} that syncs your '{vault}' vault": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 			"the device that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",

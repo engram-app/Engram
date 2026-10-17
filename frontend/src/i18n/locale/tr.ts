@@ -233,8 +233,10 @@ export default {
 	"You're on this plan": "Şu paketi kullanıyorsunuz",
 	"Start free trial": "Ücretsiz denemeye başlayın",
 	Popular: "Popüler",
-	"2,000 notes searchable · 1 vault · 1 GB attachments": "2000 not aranabilir · 1 kasa · 1 GB ek",
-	"2,000 notes searchable": "2000 not aranabilir",
+	"3,000 notes · 20 AI searches a day · 1 vault":
+		"3.000 not · Günde 20 yapay zeka sorgusu · 1 kasa",
+	"3,000 notes, all searchable": "3.000 not, hepsi aranabilir",
+	"20 AI searches a day": "Günde 20 yapay zeka sorgusu",
 	"1 vault": "1 kasa",
 	"1 GB attachments": "1 GB ek",
 	"2 devices": "2 cihaz",
@@ -245,12 +247,6 @@ export default {
 	"Unlimited vaults": "Sınırsız kasa",
 	"50 GB attachments": "50 GB ek",
 	"Cross-vault search": "Kasalar arası arama",
-	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
-		{
-			one: "Notlarınızdan biri aranabilir değil. Sadece en eski {indexed} notlarınız indeksleniyor, bu yüzden en yeni notlarınız arama sonuçlarında görünmeyebilir.",
-			other:
-				"Notlarınızdan {count} tanesi aranamıyor. Sadece en eski {indexed} notlarınız indeksleniyor, bu yüzden en yeni notlarınız arama sonuçlarında görünmüyor.",
-		},
 	"Loading plan options…": "Plan seçenekleri yükleniyor…",
 	"Plan change confirmed.": "Plan değişikliği onaylandı.",
 	"Could not change plan. Please try again.": "Planı değiştiremedik. Lütfen tekrar deneyin.",
@@ -699,7 +695,6 @@ export default {
 	"Searching…": "Aranıyor…",
 	"Search failed: {message}": "Arama başarısız: {message}",
 	'No results for "{term}"': '"{term}" için sonuç bulunamadı',
-	"Upgrade to search everything": "Her şeyi aramak için yükseltin",
 	Recent: "Yakın zamanda",
 	"Any time": "Her zaman",
 	"7 days": "7 gün",
