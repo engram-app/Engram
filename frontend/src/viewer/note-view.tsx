@@ -111,8 +111,7 @@ function NoteView({ content, tags, links, manifestNotes, onCreateWikiTarget }: N
 	const body = useMemo(() => escapeNonMathDollars(stripComments(noteBody(content))), [content]);
 
 	return (
-		// data-note-content: the user's own text, which the i18n e2e leak scan skips.
-		<article className="w-full" data-note-content>
+		<article className="w-full">
 			<header className="mb-6 empty:hidden">
 				{tags.length > 0 && (
 					<ul className="flex flex-wrap gap-1.5">
@@ -127,7 +126,9 @@ function NoteView({ content, tags, links, manifestNotes, onCreateWikiTarget }: N
 					</ul>
 				)}
 			</header>
-			<section className="prose prose-neutral dark:prose-invert max-w-none">
+			{/* data-note-content: the rendered markdown, which the i18n e2e leak scan
+			    skips except for elements marked data-ui-chrome. */}
+			<section className="prose prose-neutral dark:prose-invert max-w-none" data-note-content>
 				<ReactMarkdown
 					remarkPlugins={remarkPlugins}
 					rehypePlugins={rehypePlugins}

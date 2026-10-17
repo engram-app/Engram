@@ -123,16 +123,12 @@ export async function collectVisibleText(
 		const skipped = (el: Element): boolean =>
 			SKIPPED_TAGS.has(el.tagName) || (exclude !== "" && el.closest(exclude) !== null);
 		// A note's own text (the seeded welcome note is English in every locale) is
-		// user content, never a UI string. Only the text itself is skipped: chrome
-		// rendered inside a note (editor widgets, buttons, anything with a role) and
-		// every attribute are still scanned.
-		const NOTE_TEXT = ".cm-line, [data-note-content]";
-		const CHROME = '[contenteditable="false"], button, [role]';
-		const noteText = (el: Element): boolean => {
-			const root = el.closest(NOTE_TEXT);
-			const chrome = el.closest(CHROME);
-			return root !== null && !(chrome !== null && chrome !== root && root.contains(chrome));
-		};
+		// user content, never a UI string, and so is what widgets render from it
+		// (wikilinks, callouts, embeds, diagrams). Inside a note body only elements
+		// marked `data-ui-chrome` are read; every attribute is still scanned.
+		const NOTE_BODY = ".cm-content, [data-note-content]";
+		const noteText = (el: Element): boolean =>
+			el.closest(NOTE_BODY) !== null && el.closest("[data-ui-chrome]") === null;
 
 		const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
 		for (let node = walker.nextNode(); node; node = walker.nextNode()) {

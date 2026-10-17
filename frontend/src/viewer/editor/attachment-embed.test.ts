@@ -36,6 +36,19 @@ describe("attachmentEmbeds", () => {
 		expect(img.getAttribute("src")).toBe("blob:pic");
 	});
 
+	// The error is UI text inside the note body: the i18n leak scan skips note
+	// text and only reads elements marked as chrome.
+	test("marks a load failure as UI chrome", async () => {
+		load.mockRejectedValueOnce(new Error("gone"));
+		mount("![[pic.png]]\n\ntail");
+		const err = await vi.waitFor(() => {
+			const el = view.dom.querySelector<HTMLElement>(".cm-attachment-embed-error");
+			expect(el).not.toBeNull();
+			return el as HTMLElement;
+		});
+		expect(err.dataset.uiChrome).toBe("");
+	});
+
 	test("reveals the raw source while the caret is on the embed", () => {
 		mount("![[pic.png]]\n\ntail", 3);
 		expect(view.dom.querySelector(".cm-attachment-embed")).toBeNull();

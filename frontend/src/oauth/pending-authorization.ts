@@ -28,6 +28,8 @@ const KEY = "engram:pending-oauth";
 const CONNECTING_KEY = "engram:connecting";
 // A consent request back from the signup detour, until Approve or Cancel ends it.
 const CONSENT_RETURN_KEY = "engram:consent-return";
+// The dashboard's once-per-tab single-note auto-open mark (viewer/dashboard.tsx).
+const AUTO_OPENED_PREFIX = "engram:auto-opened:";
 
 // A cancel navigates via `window.location.assign`, so the boundary that matters
 // is not http-vs-custom-scheme. Native OAuth clients legitimately register
@@ -226,6 +228,14 @@ export function takeConnectingMarker(): void {
 	url.searchParams.delete("client");
 	window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
 	try {
+		// window.open copied the consent tab's sessionStorage into this one. Its
+		// single-note auto-open mark would skip the welcome note, and its consent
+		// return belongs to that tab.
+		for (const key of Object.keys(window.sessionStorage)) {
+			if (key.startsWith(AUTO_OPENED_PREFIX) || key === CONSENT_RETURN_KEY) {
+				window.sessionStorage.removeItem(key);
+			}
+		}
 		window.sessionStorage.setItem(CONNECTING_KEY, JSON.stringify({ since, client }));
 	} catch {
 		// Storage off: the tab just won't re-check for the connection.

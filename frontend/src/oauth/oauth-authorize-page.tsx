@@ -459,7 +459,7 @@ export default function OAuthAuthorizePage() {
 		setSubmitError(null);
 		// Before any await: a popup blocker refuses a tab opened outside the click.
 		// MCP clients only: an Obsidian device has its own surface.
-		const opensVault = returnedFromSignup && clientQuery.data?.kind === "mcp";
+		const opensVault = returnedFromSignup && clientKind === "mcp";
 		const vaultUrl = connectingUrl(ROUTES.HOME, clientQuery.data?.slug ?? null);
 		const vaultTab = opensVault ? window.open(vaultUrl, "_blank") : null;
 

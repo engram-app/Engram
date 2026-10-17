@@ -75,6 +75,8 @@ class MermaidWidget extends WidgetType {
 	// normal state while typing.
 	private showError(el: HTMLElement, err: unknown) {
 		el.classList.add("cm-mermaid-error");
+		// UI text inside the note body (see the i18n leak scan).
+		el.dataset.uiChrome = "";
 		// Mermaid's own message is third-party English: keep it verbatim, but tag
 		// its language so the translated prefix and it are not read as one.
 		const detail = document.createElement("span");

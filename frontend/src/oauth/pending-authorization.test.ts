@@ -211,6 +211,17 @@ describe("takeConnectingMarker", () => {
 		expect(window.location.search).toBe("");
 	});
 
+	// window.open copies the consent tab's sessionStorage into the new tab. Its
+	// auto-open mark would skip the welcome note; its consent return is not ours.
+	it("drops state copied from the consent tab", () => {
+		window.sessionStorage.setItem("engram:auto-opened:my-vault", "1");
+		window.sessionStorage.setItem("engram:consent-return", "/oauth/consent?x=1");
+		window.history.replaceState(null, "", "/?connecting=1792000000000&client=chatgpt");
+		takeConnectingMarker();
+		expect(window.sessionStorage.getItem("engram:auto-opened:my-vault")).toBeNull();
+		expect(window.sessionStorage.getItem("engram:consent-return")).toBeNull();
+	});
+
 	it("leaves a tab without the marker alone", () => {
 		window.history.replaceState(null, "", "/?folder=Notes");
 		takeConnectingMarker();

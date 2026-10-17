@@ -57,6 +57,8 @@ class EmbedWidget extends WidgetType {
 			})
 			.catch(() => {
 				wrap.classList.add("cm-attachment-embed-error");
+				// UI text inside the note body (see the i18n leak scan).
+				wrap.dataset.uiChrome = "";
 				const { t } = this;
 				wrap.textContent = t("Couldn't load {path}", { path: this.path });
 				view.requestMeasure();
