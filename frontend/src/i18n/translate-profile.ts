@@ -148,7 +148,7 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
 	// zh and ru rendered "Write" as the verb "compose" (書く, 撰写, Написать).
 	Read: "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 	Write:
-		"Permission column header in a vault access table: the connection may change notes. A noun, not a verb (like 'write access').",
+		"Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 	// A button on each connection. Without a note de and ja read it as a noun,
 	// "access for editing" (Bearbeitungszugriff, 編集権限).
 	"Edit access":
