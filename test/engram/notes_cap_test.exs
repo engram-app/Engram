@@ -79,6 +79,56 @@ defmodule Engram.NotesCapTest do
     assert UsageMeters.notes_count(user.id) == 2
   end
 
+  test "resurrecting a tombstone at the cap is refused", %{user: user, vault: vault} do
+    insert(:user_limit_override, user: user, key: "notes_cap", value: %{"v" => 2})
+
+    {:ok, a} = upsert(user, vault, "A.md")
+    {:ok, _} = upsert(user, vault, "B.md")
+    :ok = Notes.delete_note(user, vault, "A.md")
+    {:ok, _} = upsert(user, vault, "C.md")
+    assert UsageMeters.notes_count(user.id) == 2
+
+    # Id-keyed restore of A's tombstone at a new path: it makes a third live
+    # note, so it must hit the cap like any create.
+    assert {:error, {:notes_cap_reached, 2, 2}} =
+             Notes.upsert_note(
+               user,
+               vault,
+               %{"path" => "A2.md", "content" => "# Note\nbody", "id" => a.id},
+               actor: "api"
+             )
+
+    assert UsageMeters.notes_count(user.id) == 2
+    assert UsageMeters.recount_notes!(user.id) == 2
+  end
+
+  test "an id-keyed rename at the cap still succeeds (the delete freed the slot)",
+       %{user: user, vault: vault} do
+    insert(:user_limit_override, user: user, key: "notes_cap", value: %{"v" => 2})
+
+    {:ok, a} = upsert(user, vault, "A.md")
+    {:ok, _} = upsert(user, vault, "B.md")
+    :ok = Notes.delete_note(user, vault, "A.md")
+
+    assert {:ok, moved} =
+             Notes.upsert_note(
+               user,
+               vault,
+               %{"path" => "A2.md", "content" => "# Note\nbody", "id" => a.id},
+               actor: "api"
+             )
+
+    assert moved.id == a.id
+    assert UsageMeters.notes_count(user.id) == 2
+  end
+
+  test "an unlimited plan is never capped", %{user: user, vault: vault} do
+    insert(:user_limit_override, user: user, key: "notes_cap", value: %{"v" => -1})
+
+    for i <- 1..3, do: {:ok, _} = upsert(user, vault, "N#{i}.md")
+    assert UsageMeters.notes_count(user.id) == 3
+  end
+
   test "folder markers do not count toward the note quota",
        %{user: user, vault: vault} do
     insert(:user_limit_override, user: user, key: "notes_cap", value: %{"v" => 1})

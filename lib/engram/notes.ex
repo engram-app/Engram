@@ -648,14 +648,15 @@ defmodule Engram.Notes do
     # COUNT(*); we increment it inside this tenant transaction so it stays
     # atomic with the INSERT.
     #
-    # The check itself is best-effort, not a hard guarantee: read-then-insert
-    # is non-atomic, so concurrent inserts can land slightly over the cap. This
-    # matches the COUNT(*) approach it replaced (same TOCTOU window) and is fine
-    # for a soft abuse-deterrent cap. A hard cap would need a conditional
-    # UPDATE ... WHERE notes_count < limit gating the insert.
+    # This read is only the cheap early refusal. The exact gate is the
+    # conditional slot claim in do_bare_insert (claim_note_slot/1), taken in
+    # this same transaction, so concurrent creates cannot land over the cap.
     # Resolved BEFORE the cond, exactly as the inlined version was: the COUNT
     # must not move behind `recently_deleted_twin?/4`.
     cap_check = check_notes_cap(user)
+    # Test-only seam (`Engram.CheckpointInterleave`): parks between the cap
+    # read and the insert so a competing create can commit in the gap.
+    interleave_hook(:after_notes_cap_check)
 
     cond do
       recently_deleted_twin?(user, base_attrs.vault_id, sanitized_path, base_attrs.content_hash) ->
@@ -782,39 +783,67 @@ defmodule Engram.Notes do
 
       changeset = Note.changeset(%Note{id: note_id}, phase_b)
 
-      seq = Engram.Vaults.next_seq!(base_attrs.vault_id)
-      changeset = Ecto.Changeset.put_change(changeset, :seq, seq)
+      # The slot is taken BEFORE the insert, in this transaction, so the cap is
+      # exact (see claim_note_slot/2). Every outcome below that leaves no new
+      # row of ours gives it back. An invalid changeset never reaches SQL, so
+      # it is refused before claiming; an INSERT that errors in SQL aborts the
+      # transaction, and the rollback returns the slot.
+      with :ok <- valid_or_error(changeset),
+           :ok <- claim_note_slot(user) do
+        seq = Engram.Vaults.next_seq!(base_attrs.vault_id)
+        changeset = Ecto.Changeset.put_change(changeset, :seq, seq)
 
-      case Repo.insert(changeset, on_conflict: :nothing) do
-        {:ok, _} ->
-          case Repo.one(lookup_query) do
-            %Note{id: ^note_id} = inserted ->
-              :ok = UsageMeters.inc_notes_count(user.id, 1)
-              {:inserted, inserted, crdt}
+        case Repo.insert(changeset, on_conflict: :nothing) do
+          {:ok, _} ->
+            case Repo.one(lookup_query) do
+              %Note{id: ^note_id} = inserted ->
+                {:inserted, inserted, crdt}
 
-            %Note{} = existing ->
-              {:raced, existing}
+              %Note{} = existing ->
+                :ok = release_note_slot(user)
+                {:raced, existing}
 
-            nil when remint? ->
-              remint_own_id(
-                base_attrs,
-                user,
-                sanitized_path,
-                folder,
-                note_id,
-                lookup_query,
-                changeset
-              )
+              nil when remint? ->
+                :ok = release_note_slot(user)
 
-            nil ->
-              {:error, Ecto.Changeset.add_error(changeset, :path, "insert raced and vanished")}
-          end
+                remint_own_id(
+                  base_attrs,
+                  user,
+                  sanitized_path,
+                  folder,
+                  note_id,
+                  lookup_query,
+                  changeset
+                )
 
-        {:error, changeset} ->
-          {:error, changeset}
+              nil ->
+                :ok = release_note_slot(user)
+                {:error, Ecto.Changeset.add_error(changeset, :path, "insert raced and vanished")}
+            end
+
+          {:error, changeset} ->
+            {:error, changeset}
+        end
       end
     end
   end
+
+  defp valid_or_error(%Ecto.Changeset{valid?: true}), do: :ok
+  defp valid_or_error(changeset), do: {:error, changeset}
+
+  # Exact notes_cap gate: takes the slot in the caller's write transaction, so
+  # two creates that both passed check_notes_cap/2 at `cap - 1` cannot both
+  # land (prod 2026-10-17: a 10,000 cap ended at 10,046). check_notes_cap/2
+  # stays as the cheap early refusal that skips the merge/encrypt work.
+  defp claim_note_slot(user) do
+    cap = Billing.cap(user, :notes_cap)
+
+    if UsageMeters.claim_note_slot(user.id, cap),
+      do: :ok,
+      else: {:error, {:notes_cap_reached, cap, UsageMeters.notes_count(user.id)}}
+  end
+
+  defp release_note_slot(user), do: UsageMeters.dec_notes_count(user.id, 1)
 
   # Reached only when the INSERT no-op'd AND no live row owns the path, i.e. the
   # conflict was on the id. Whose id decides what happens, and RLS answers that
@@ -1282,10 +1311,10 @@ defmodule Engram.Notes do
   # a genuine no-op (mtime included for the same reason: don't regress it to
   # nil on resurrect).
   #
-  # No notes_cap gate here (round-2 review, reverting round-1 FIX 4): REST's
-  # resurrect path (upsert_pathless -> move_note) has no cap check either —
-  # resurrecting your OWN tombstone is self-recovery, not new creation. Only
-  # the genuinely-new-row leg (genesis_insert_bare) caps.
+  # The notes_cap gate lives in move_note: a resurrect makes a note live again
+  # and takes a slot like a create (prod 2026-10-17, the cap overshot). A
+  # rename (delete, then re-push the id) freed its slot on the delete, so it
+  # still lands at the cap.
   #
   # Uses the non-raising Crypto.maybe_decrypt_note_fields/2 (not
   # decrypt_or_raise!/2): a DEK/KMS decrypt failure on the tombstone's
@@ -1856,35 +1885,45 @@ defmodule Engram.Notes do
         #
         # `put_change(:deleted_at, nil)` means this can also resurrect a
         # tombstone, so the fence carries the whole pre-image, not just the id.
-        case fenced_update(snapshot_fenced(changeset, prior)) do
-          {:ok, updated} ->
-            _ =
-              if was_tombstoned do
-                :ok = UsageMeters.inc_notes_count(user.id, 1)
-              end
-
-            # #1710. AFTER the fenced write, same transaction: a lost fence
-            # returns :stale_snapshot below and must record nothing. `prior` is
-            # the PRE-write row. The hash check keeps a pure rename out of history.
-            _ =
-              if prior.content_hash != crdt.content_hash,
-                do: Revisions.record_write(prior, actor, recording)
-
-            # Tagged `:moved` (not the plain 4-tuple do_rewrite_note returns) so
-            # the caller broadcasts unconditionally: a rename keeps the same
-            # content_hash but persisted a new path/seq/version, and the plain
-            # `prev_hash != content_hash` broadcast guard would skip it — leaving
-            # peers with the old-path delete but no new-path upsert (the note
-            # vanishes on them until their next pull).
-            {:ok, {:moved, prior.content_hash, updated, crdt.merged_text, crdt.content_hash}}
-
-          {:error, changeset} ->
-            {:error, changeset}
-
-          :stale_snapshot ->
-            :stale_snapshot
+        # A resurrect makes a note live again, so it takes a slot exactly like
+        # a create (see claim_note_slot/1). A live relocate takes none.
+        with :ok <- claim_resurrect_slot(was_tombstoned, changeset, user) do
+          fenced_move(changeset, prior, crdt, user, actor, recording, was_tombstoned)
         end
       end
+    end
+  end
+
+  defp claim_resurrect_slot(true, %Ecto.Changeset{valid?: true}, user), do: claim_note_slot(user)
+  defp claim_resurrect_slot(_was_tombstoned, _changeset, _user), do: :ok
+
+  defp fenced_move(changeset, prior, crdt, user, actor, recording, was_tombstoned) do
+    case fenced_update(snapshot_fenced(changeset, prior)) do
+      {:ok, updated} ->
+        # #1710. AFTER the fenced write, same transaction: a lost fence
+        # returns :stale_snapshot below and must record nothing. `prior` is
+        # the PRE-write row. The hash check keeps a pure rename out of history.
+        _ =
+          if prior.content_hash != crdt.content_hash,
+            do: Revisions.record_write(prior, actor, recording)
+
+        # Tagged `:moved` (not the plain 4-tuple do_rewrite_note returns) so
+        # the caller broadcasts unconditionally: a rename keeps the same
+        # content_hash but persisted a new path/seq/version, and the plain
+        # `prev_hash != content_hash` broadcast guard would skip it, leaving
+        # peers with the old-path delete but no new-path upsert (the note
+        # vanishes on them until their next pull).
+        {:ok, {:moved, prior.content_hash, updated, crdt.merged_text, crdt.content_hash}}
+
+      # A SQL error aborted the transaction; its rollback returns the slot.
+      {:error, changeset} ->
+        {:error, changeset}
+
+      # The fence lost cleanly (0 rows, transaction healthy): give the slot
+      # back, the retry claims again.
+      :stale_snapshot ->
+        _ = if was_tombstoned, do: :ok = release_note_slot(user)
+        :stale_snapshot
     end
   end
 
@@ -4072,9 +4111,8 @@ defmodule Engram.Notes do
   # rather than the reverse — otherwise every Starter/Pro create pays a
   # `usage_meters` aggregate and discards it (#1502).
   #
-  # Best-effort, not a hard guarantee: read-then-insert is non-atomic, so
-  # concurrent creates can land slightly over. A hard cap needs a conditional
-  # `UPDATE ... WHERE notes_count < limit` gating the insert.
+  # Only the early refusal (skips the merge/encrypt work at the cap). It is
+  # non-atomic; the exact gate is claim_note_slot/1 inside the write.
   defp check_notes_cap(user, extra \\ 0) do
     if Billing.limit_enforced?(user, :notes_cap) do
       current = UsageMeters.notes_count(user.id)

@@ -181,6 +181,48 @@ defmodule Engram.UsageMeters do
   end
 
   @doc """
+  Takes one live-note slot, only if the count stays within `cap`. Returns
+  `true` when taken, `false` at the cap. A `nil` cap (unlimited plan) always
+  takes the slot.
+
+  One conditional upsert, so it is EXACT under concurrency: the row lock makes
+  a second writer wait, and READ COMMITTED re-checks the WHERE against the
+  committed count, so two creates that both read `cap - 1` cannot both land.
+  Call it inside the transaction that makes the note live, and give the slot
+  back with `dec_notes_count/2` if that write then does not happen.
+  """
+  @spec claim_note_slot(Ecto.UUID.t(), non_neg_integer() | nil) :: boolean()
+  def claim_note_slot(user_id, nil) when is_binary(user_id) do
+    :ok = inc_notes_count(user_id, 1)
+    true
+  end
+
+  def claim_note_slot(user_id, cap) when is_binary(user_id) and is_integer(cap) do
+    if cap < 1 do
+      false
+    else
+      now = DateTime.utc_now()
+
+      {n, _} =
+        Repo.insert_all(
+          Meter,
+          [%{user_id: user_id, notes_count: 1, updated_at: now}],
+          on_conflict:
+            from(m in Meter,
+              where: m.notes_count < ^cap,
+              update: [inc: [notes_count: 1], set: [updated_at: ^now]]
+            ),
+          # No `skip_tenant_check`: this only ever runs inside the note
+          # write's `Repo.with_tenant/2`, whose tenant satisfies the guard.
+          conflict_target: :user_id
+        )
+
+      if n == 1, do: evict_note_counts(user_id)
+      n == 1
+    end
+  end
+
+  @doc """
   Subtracts `delta` from the user's live-note count, clamped at zero so drift
   or a missing row can never produce a negative. Use when notes leave the live
   set (soft-delete, bulk hard-delete). No-op when no meter row exists.

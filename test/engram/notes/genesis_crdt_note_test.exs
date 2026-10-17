@@ -162,16 +162,15 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     assert at_new.id == note.id
   end
 
-  test "a rename resurrect over the notes_cap still succeeds (matches REST self-recovery)", %{
+  test "a resurrect that would push the live count over the notes_cap is refused", %{
     user: user,
     vault: vault
   } do
-    # H1 (round-2 review, reverting round-1 FIX 4) — REST's resurrect path
-    # (upsert_pathless -> move_note) has no notes_cap gate: un-deleting your OWN
-    # note is self-recovery, not new creation. cap = 1: create A (fills cap),
-    # delete A, create B (fills cap again), then resurrect A's id at a
-    # DIFFERENT path (rename, so delete-wins doesn't trip) — this must SUCCEED
-    # even though live count goes to 2 > 1.
+    # Reverses H1 (round-2 review): resurrecting a tombstone makes a note live
+    # again, and leaving it ungated let the cap overshoot (prod 2026-10-17, a
+    # 10,000 cap ended at 10,046). cap = 1: create A (fills cap), delete A,
+    # create B (fills cap again), then resurrect A's id at a DIFFERENT path.
+    # Live count would go to 2 > 1, so it is refused like any create.
     insert(:user_limit_override, user: user, key: "notes_cap", value: %{"v" => 1})
 
     {:ok, a} = Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "a"}, actor: "api")
@@ -179,6 +178,24 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
 
     {:ok, _b} =
       Notes.upsert_note(user, vault, %{"path" => "B.md", "content" => "b"}, actor: "api")
+
+    assert {:error, {:notes_cap_reached, 1, 1}} =
+             Notes.genesis_crdt_note(user, vault, a.id, "A-renamed.md")
+
+    refute Notes.note_in_vault?(user, vault.id, a.id)
+    assert Engram.UsageMeters.notes_count(user.id) == 1
+  end
+
+  test "a rename resurrect at the notes_cap succeeds when its delete freed the slot", %{
+    user: user,
+    vault: vault
+  } do
+    # The rename shape (delete, then re-create the id elsewhere) self-recovers
+    # at the cap: the delete gave the slot back, the resurrect takes it again.
+    insert(:user_limit_override, user: user, key: "notes_cap", value: %{"v" => 1})
+
+    {:ok, a} = Notes.upsert_note(user, vault, %{"path" => "A.md", "content" => "a"}, actor: "api")
+    :ok = Notes.delete_note_by_id(user, vault, a.id)
 
     assert {:ok, note} = Notes.genesis_crdt_note(user, vault, a.id, "A-renamed.md")
     assert note.id == a.id
