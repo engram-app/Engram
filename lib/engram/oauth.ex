@@ -790,7 +790,7 @@ defmodule Engram.OAuth do
       {:ok, response, {:grace, ip_matched}}
     else
       _not_eligible ->
-        revoke_family(rt.family_id)
+        _ = revoke_family(rt.family_id)
         {:error, :refresh_token_reuse}
     end
   end
@@ -1490,7 +1490,7 @@ defmodule Engram.OAuth do
       # whole family goes. `grants_changed/1` evicts the cached grant (its
       # access tokens answer 401 at once) and disconnects its sockets.
       %RefreshToken{client_id: ^owner} = rt ->
-        revoke_family(rt.family_id)
+        _ = revoke_family(rt.family_id)
         :ok
 
       _ ->
