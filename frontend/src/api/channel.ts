@@ -87,6 +87,14 @@ let latestToken: string | null = null;
 let latestGetToken: ConnectOptions["getToken"] | null = null;
 let tokenRefreshInFlight = false;
 
+// A just-refused token can come back from Clerk's cache when the browser clock
+// runs behind the server (prod 2026-10-17: one tab replayed an expired token
+// 14x in 70 s), so the retry path mints past the cache. At most once per
+// FORCED_MINT_INTERVAL_MS: in a backend outage every retry errors, and a forced
+// mint per retry would hit Clerk from every open tab every ~5 s.
+const FORCED_MINT_INTERVAL_MS = 30_000;
+let lastForcedMintAt = Number.NEGATIVE_INFINITY;
+
 // The crdt room is reliably usable only once its join succeeded (sync status
 // "synced"). A non-null-but-connecting/errored channel would accept a push that
 // silently times out ~10s later; gating on status returns null instead, which
@@ -103,7 +111,11 @@ async function refreshTokenForRetry(): Promise<void> {
 	tokenRefreshInFlight = true;
 	const gen = connectGeneration;
 	try {
-		const token = await latestGetToken({ skipCache: true });
+		const skipCache = Date.now() - lastForcedMintAt >= FORCED_MINT_INTERVAL_MS;
+		if (skipCache) {
+			lastForcedMintAt = Date.now();
+		}
+		const token = await latestGetToken({ skipCache });
 		// A teardown/vault switch landed mid-fetch, or Clerk returned nothing —
 		// keep the previous token; the next onError attempts another refresh.
 		if (gen === connectGeneration && token) {
@@ -494,6 +506,7 @@ export async function connectChannel({
 
 	latestToken = token ?? "";
 	latestGetToken = getToken;
+	lastForcedMintAt = Number.NEGATIVE_INFINITY;
 	socket = new Socket(joinWsUrl(getWsBase(), "/socket"), {
 		params: () => ({ token: latestToken ?? "" }),
 		reconnectAfterMs: (tries: number) => computeReconnectMs(tries, serverJitterMs),
