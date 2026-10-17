@@ -1298,6 +1298,15 @@ defmodule Engram.OAuth do
     end
   end
 
+  # No `gid`. For an OAuth access token that means nothing names its grant,
+  # so a revoke, narrowing or vault-delete narrowing does not reach it: it
+  # keeps the claims it was minted with until `exp`. The window is bounded
+  # by the access-token TTL (`Engram.Token.ttl_seconds/0`, 15 min): only
+  # releases before 0.54.0 (#1996) minted OAuth tokens without `gid`, so
+  # none is valid 15 min after that rollout (or after a rollback to such a
+  # release ends). No lookup can close it: the token carries no family id,
+  # and its `jti` is random and stored nowhere. Its refresh token, once
+  # revoked or narrowed, mints nothing wider.
   def expand_claims(claims), do: {:ok, claims}
 
   # The grant behind `gid`, or nil when it is revoked, gone, or not the
