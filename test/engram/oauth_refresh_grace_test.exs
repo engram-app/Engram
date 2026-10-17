@@ -205,19 +205,28 @@ defmodule Engram.OAuthRefreshGraceTest do
   end
 
   # Disconnect revokes every row of the family, the consumed ones too. A
-  # client that later presents its old (consumed) token is a client that was
-  # disconnected, not a thief: no reuse alert, reported as revoked.
-  test "a consumed token presented after Disconnect is revoked, not reuse", ctx do
+  # consumed token presented afterwards is answered as revoked (the family is
+  # dead, whoever holds it), but a used token turning up again is still the
+  # theft signal, so it is logged as reuse, marked as a dead family.
+  test "a consumed token presented after Disconnect is answered revoked, logged as reuse", ctx do
     {:ok, %{refresh_token: rt2}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
     old = row(ctx.rt1)
     :ok = Engram.Connections.revoke_oauth_grant(old.user_id, old.family_id)
 
     log =
       capture_log(fn ->
-        for raw <- [ctx.rt1, rt2] do
-          assert {:error, {:invalid_grant, :refresh_token_revoked}} =
-                   OAuth.rotate_refresh_token(raw, ctx.client_id)
-        end
+        assert {:error, {:invalid_grant, :refresh_token_revoked}} =
+                 OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+      end)
+
+    assert log =~ "oauth_refresh_reuse"
+    assert log =~ "reason=family_revoked"
+
+    # The unused successor was never handed out twice: revoked, not reuse.
+    log =
+      capture_log(fn ->
+        assert {:error, {:invalid_grant, :refresh_token_revoked}} =
+                 OAuth.rotate_refresh_token(rt2, ctx.client_id)
       end)
 
     refute log =~ "oauth_refresh_reuse"

@@ -762,13 +762,18 @@ defmodule Engram.OAuth do
     grant_error(:refresh_token_reuse)
   end
 
+  defp report({:error, :revoked_after_use}, rt) do
+    log_reuse(rt, within_grace: false, family_revoked: true)
+    grant_error(:refresh_token_revoked)
+  end
+
   defp report({:error, reason}, _rt), do: grant_error(reason)
 
   # Revoked first, even when also consumed: Disconnect, RFC 7009 or an
   # earlier replay. Each revokes every row of the family, consumed ones
   # included, so a disconnected client presenting its old token lands here.
-  # Not a theft signal in itself, so it is reported as revoked and never
-  # logged as reuse. Liveness is family-wide (`family_unrevoked/1`), so a
+  # Answered as revoked; a consumed row is still logged as reuse
+  # (`refuse_revoked/1`), an unconsumed one is not. Liveness is family-wide (`family_unrevoked/1`), so a
   # family with any revoked row mints nothing, whichever of its rows was
   # marked: one read just before a family revoke, or one a release that
   # revoked a single row left unmarked.
@@ -810,9 +815,12 @@ defmodule Engram.OAuth do
     end
   end
 
+  # A used token in a dead family is still answered as revoked, but reported
+  # (`report/2`) as reuse: a token that was already exchanged turning up
+  # again is the theft signal, whatever killed the family.
   defp refuse_revoked(rt) do
     revoke_family(rt.family_id)
-    {:error, :refresh_token_revoked}
+    if rt.consumed_at, do: {:error, :revoked_after_use}, else: {:error, :refresh_token_revoked}
   end
 
   # The presented row, locked, and whether its family is live.
@@ -980,7 +988,8 @@ defmodule Engram.OAuth do
     # Strings: the text formatter drops `false` metadata entirely.
     metadata =
       [within_grace: to_string(within_grace), client_id: rt.client_id, family_id: rt.family_id] ++
-        if(within_grace, do: [ip_matched: to_string(Keyword.fetch!(opts, :ip_matched))], else: [])
+        if(within_grace, do: [ip_matched: to_string(Keyword.fetch!(opts, :ip_matched))], else: []) ++
+        if(opts[:family_revoked], do: [reason: "family_revoked"], else: [])
 
     Logger.warning(
       if(within_grace, do: "oauth_refresh_grace_reissue", else: "oauth_refresh_reuse"),
