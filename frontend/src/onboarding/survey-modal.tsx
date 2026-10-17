@@ -46,7 +46,7 @@ function SurveyPrompt({ suppressed }: { suppressed: boolean }) {
 	// Only an account that may still be asked pays for these reads.
 	const eligible =
 		billingEnabled && status?.next_step === "done" && surveyPending(status.profile) && !closed;
-	const { data: vaults } = useVaults();
+	const { data: vaults } = useVaults({ enabled: eligible });
 	const { data: connections } = useConnections({ enabled: eligible });
 
 	// First value: a live connection to an AI tool or the plugin, the plugin
@@ -114,7 +114,8 @@ function SurveyModal({ initialTools, onDone }: SurveyModalProps) {
 		<Dialog
 			open
 			onOpenChange={(open) => {
-				if (!open) {
+				// Mid-save, a skip would race the answers with an empty one.
+				if (!(open || pending)) {
 					skip();
 				}
 			}}

@@ -2,6 +2,7 @@ import {
 	keepPreviousData,
 	type QueryClient,
 	type QueryFunctionContext,
+	type UseQueryOptions,
 	useMutation,
 	useQuery,
 	useQueryClient,
@@ -1318,6 +1319,9 @@ export type OnboardingAction =
 	| "plugin_connected"
 	| "ai_connected"
 	| "connector_vault_provisioned"
+	// Recorded with the first Terms accept; marks a Free start still owed
+	// while the account has no Free stamp.
+	| "free_start_due"
 	| `dismissed:${string}`;
 
 export interface OnboardingStatus {
@@ -1388,7 +1392,7 @@ export interface OnboardingProfile {
 	use_cases?: string[];
 	survey_done_at?: string;
 	// Stamped by the in-app survey (answer or skip); survey_done_at alone also
-	// covers a web signup's heard-from answer on the terms screen.
+	// covers a web signup's answer on the "How did you hear" step.
 	use_cases_done_at?: string;
 	completed_at?: string;
 }
@@ -1633,7 +1637,7 @@ export interface CapErrorBody {
 
 export function useConnections(opts?: {
 	enabled?: boolean;
-	refetchInterval?: (query: { state: { data?: Connection[] } }) => number | false;
+	refetchInterval?: UseQueryOptions<Connection[]>["refetchInterval"];
 }) {
 	return useQuery({
 		queryKey: ["connections"],
@@ -1758,8 +1762,12 @@ export interface Vault {
 
 // Vault hooks
 
-export function useVaults() {
-	return useQuery({ ...vaultsQuery, select: (data: VaultsPayload) => data.vaults });
+export function useVaults(opts?: { enabled?: boolean }) {
+	return useQuery({
+		...vaultsQuery,
+		select: (data: VaultsPayload) => data.vaults,
+		enabled: opts?.enabled ?? true,
+	});
 }
 
 /** Whether the backend stores per-vault access levels and `mcp:read`. A

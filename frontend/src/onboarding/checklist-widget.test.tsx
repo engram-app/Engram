@@ -1,4 +1,9 @@
-import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
+import {
+	QueryClient,
+	QueryClientProvider,
+	type UseQueryOptions,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { useSyncExternalStore } from "react";
@@ -36,7 +41,7 @@ let onboardingStatusValue: { data: OnboardingStatus | undefined; isLoading: bool
 };
 
 let connectionsValue: { data: Connection[]; isLoading: boolean } = { data: [], isLoading: false };
-type PollFn = (query: { state: { data?: Connection[] } }) => number | false;
+type PollFn = UseQueryOptions<Connection[]>["refetchInterval"];
 let connectionsOpts: { refetchInterval?: PollFn } | undefined;
 
 let billingStatusValue: { data: Partial<BillingStatus> | undefined; isLoading: boolean } = {
@@ -675,27 +680,38 @@ describe("ChecklistWidget, interaction tracking", () => {
 // exchanged its code, so the connection does not exist yet when this loads.
 // Only the tab consent opened is marked, so nobody else polls.
 describe("ChecklistWidget, re-checks a tool that is still connecting", () => {
-	const mcp = { kind: "mcp", slug: "chatgpt" } as Connection;
+	const mcp = (slug: string | null) => ({ kind: "mcp", slug }) as Connection;
+	const mark = (client: string | null) =>
+		sessionStorage.setItem("engram:connecting", JSON.stringify({ since: Date.now(), client }));
 
 	afterEach(() => {
 		vi.useRealTimers();
 		sessionStorage.clear();
 	});
 
-	function poll(data: Connection[]): number | false {
-		return connectionsOpts?.refetchInterval?.({ state: { data } }) ?? false;
+	function poll(data: Connection[]): number | false | undefined {
+		const fn = connectionsOpts?.refetchInterval;
+		return typeof fn === "function" ? fn({ state: { data } } as never) : fn;
 	}
 
 	it("polls in the tab consent opened", () => {
-		sessionStorage.setItem("engram:connecting-since", String(Date.now()));
+		mark("chatgpt");
 		render(wrap(<ChecklistWidget />));
 		expect(poll([])).toBe(5000);
 	});
 
-	it("stops once an MCP connection exists", () => {
-		sessionStorage.setItem("engram:connecting-since", String(Date.now()));
+	// Another tool's grant is not the one this tab is waiting on.
+	it("keeps polling until the parked client's own connection appears", () => {
+		mark("chatgpt");
 		render(wrap(<ChecklistWidget />));
-		expect(poll([mcp])).toBe(false);
+		expect(poll([mcp("claude")])).toBe(5000);
+		expect(poll([mcp("chatgpt")])).toBe(false);
+	});
+
+	it("stops on any MCP connection when the client has no slug", () => {
+		mark(null);
+		render(wrap(<ChecklistWidget />));
+		expect(poll([mcp(null)])).toBe(false);
 	});
 
 	it("does not poll in any other tab", () => {
@@ -706,7 +722,7 @@ describe("ChecklistWidget, re-checks a tool that is still connecting", () => {
 
 	it("gives up two minutes after consent", () => {
 		vi.useFakeTimers({ toFake: ["Date"] });
-		sessionStorage.setItem("engram:connecting-since", String(Date.now()));
+		mark("chatgpt");
 		render(wrap(<ChecklistWidget />));
 		vi.setSystemTime(Date.now() + 121_000);
 		expect(poll([])).toBe(false);

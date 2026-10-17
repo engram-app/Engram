@@ -23,9 +23,11 @@ import { ROUTES } from "../routes";
 
 const KEY = "engram:pending-oauth";
 
-// Set on the consent tab for the instant `window.open` runs: the new tab gets a
-// copy of sessionStorage, so only it re-checks for the client's connection.
-const CONNECTING_KEY = "engram:connecting-since";
+// The vault tab consent opens, waiting on `client` to finish connecting. Kept in
+// that tab's own sessionStorage, taken from its URL at boot.
+const CONNECTING_KEY = "engram:connecting";
+// A consent request back from the signup detour, until Approve or Cancel ends it.
+const CONSENT_RETURN_KEY = "engram:consent-return";
 
 // A cancel navigates via `window.location.assign`, so the boundary that matters
 // is not http-vs-custom-scheme. Native OAuth clients legitimately register
@@ -200,28 +202,79 @@ export function clearPendingAuthorization(): void {
 	}
 }
 
-/** Opens `url` in a new tab marked as waiting on a client to connect. */
-export function openConnectingTab(url: string): Window | null {
-	try {
-		window.sessionStorage.setItem(CONNECTING_KEY, String(Date.now()));
-	} catch {
-		// Storage off: the tab still opens, it just won't re-check.
+/** `url` marked as the tab consent opened for `client` (a catalog slug). */
+export function connectingUrl(url: string, client: string | null, now = Date.now()): string {
+	const params = new URLSearchParams({ connecting: String(now) });
+	if (client) {
+		params.set("client", client);
 	}
-	const tab = window.open(url, "_blank");
-	try {
-		window.sessionStorage.removeItem(CONNECTING_KEY);
-	} catch {
-		// Nothing was stored.
-	}
-	return tab;
+	return `${url}?${params.toString()}`;
 }
 
-/** When this tab was opened by consent, or null for any other tab. */
-export function connectingSince(): number | null {
+/** At boot: keeps this tab's connecting marker and strips it from the URL. */
+export function takeConnectingMarker(): void {
+	if (typeof window === "undefined") {
+		return;
+	}
+	const url = new URL(window.location.href);
+	const since = Number(url.searchParams.get("connecting"));
+	if (!since) {
+		return;
+	}
+	const client = url.searchParams.get("client");
+	url.searchParams.delete("connecting");
+	url.searchParams.delete("client");
+	window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+	try {
+		window.sessionStorage.setItem(CONNECTING_KEY, JSON.stringify({ since, client }));
+	} catch {
+		// Storage off: the tab just won't re-check for the connection.
+	}
+}
+
+/** When this tab was opened by consent and for which client, or null. */
+export function connecting(): { since: number; client: string | null } | null {
 	try {
 		const raw = window.sessionStorage.getItem(CONNECTING_KEY);
-		return raw ? Number(raw) : null;
+		if (!raw) {
+			return null;
+		}
+		const parsed: unknown = JSON.parse(raw);
+		if (
+			typeof parsed === "object" &&
+			parsed !== null &&
+			"since" in parsed &&
+			typeof parsed.since === "number"
+		) {
+			const client = "client" in parsed && typeof parsed.client === "string" ? parsed.client : null;
+			return { since: parsed.since, client };
+		}
+		return null;
 	} catch {
 		return null;
+	}
+}
+
+export function markConsentReturn(returnTo: string): void {
+	try {
+		window.sessionStorage.setItem(CONSENT_RETURN_KEY, returnTo);
+	} catch {
+		// Storage off: a reload of this page just won't open the vault tab.
+	}
+}
+
+export function consentReturnMarked(returnTo: string): boolean {
+	try {
+		return window.sessionStorage.getItem(CONSENT_RETURN_KEY) === returnTo;
+	} catch {
+		return false;
+	}
+}
+
+export function clearConsentReturn(): void {
+	try {
+		window.sessionStorage.removeItem(CONSENT_RETURN_KEY);
+	} catch {
+		// Nothing was stored.
 	}
 }

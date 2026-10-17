@@ -5,8 +5,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OnboardingProfile } from "../api/queries";
 import { SurveyModal, SurveyPrompt, surveyPending } from "./survey-modal";
 
-const { submitFeedback, state } = vi.hoisted(() => ({
+const { submitFeedback, useVaultsSpy, state } = vi.hoisted(() => ({
 	submitFeedback: vi.fn().mockResolvedValue({ status: "ok" }),
+	useVaultsSpy: vi.fn(),
 	state: {
 		billingEnabled: true,
 		status: { next_step: "done", profile: {} } as {
@@ -16,6 +17,7 @@ const { submitFeedback, state } = vi.hoisted(() => ({
 		vaults: [] as { populated?: boolean }[],
 		connections: [] as { kind: string }[],
 		actions: new Set<string>(),
+		pending: false,
 	},
 }));
 
@@ -24,9 +26,12 @@ vi.mock("@/config-context", () => ({
 }));
 vi.mock("../api/queries", () => ({
 	useOnboardingStatus: () => ({ data: state.status }),
-	useVaults: () => ({ data: state.vaults }),
+	useVaults: (opts?: { enabled?: boolean }) => {
+		useVaultsSpy(opts);
+		return { data: state.vaults };
+	},
 	useConnections: () => ({ data: state.connections }),
-	useSubmitFeedback: () => ({ mutateAsync: submitFeedback, isPending: false }),
+	useSubmitFeedback: () => ({ mutateAsync: submitFeedback, isPending: state.pending }),
 }));
 vi.mock("./use-onboarding-actions", () => ({
 	useOnboardingActions: () => ({ has: (a: string) => state.actions.has(a) }),
@@ -43,6 +48,8 @@ function renderUi(ui: React.ReactElement, path = "/") {
 
 beforeEach(() => {
 	submitFeedback.mockClear();
+	useVaultsSpy.mockClear();
+	state.pending = false;
 	state.billingEnabled = true;
 	state.status = { next_step: "done", profile: {} };
 	state.vaults = [];
@@ -96,6 +103,13 @@ describe("SurveyPrompt", () => {
 		state.connections.push({ kind: "mcp" });
 		renderUi(<SurveyPrompt suppressed={false} />, "/#settings/connections");
 		expect(screen.queryByText(title)).toBeNull();
+	});
+
+	// The vault list is only needed to decide whether to ask.
+	it("does not read vaults for an account it will never ask", () => {
+		state.status = { next_step: "done", profile: { use_cases_done_at: "2026-10-01" } };
+		renderUi(<SurveyPrompt suppressed={false} />);
+		expect(useVaultsSpy).toHaveBeenCalledWith({ enabled: false });
 	});
 
 	it("never shows on self-host, mid-wizard, or while suppressed", () => {
@@ -154,6 +168,17 @@ describe("SurveyModal", () => {
 
 		expect(submitFeedback).toHaveBeenCalledWith({ kind: "onboarding", use_cases: [] });
 		expect(onDone).toHaveBeenCalled();
+	});
+
+	// Escape while Save is in flight would send a skip with no answers.
+	it("ignores a close while saving", () => {
+		state.pending = true;
+		const onDone = vi.fn();
+		renderUi(<SurveyModal initialTools={[]} onDone={onDone} />);
+		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+
+		expect(submitFeedback).not.toHaveBeenCalled();
+		expect(onDone).not.toHaveBeenCalled();
 	});
 
 	it("stays open with an error when saving fails", async () => {

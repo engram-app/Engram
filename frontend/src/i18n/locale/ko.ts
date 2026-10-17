@@ -773,10 +773,15 @@ export default {
 	"Unknown OAuth client": "알 수 없는 OAuth 클라이언트",
 	"The client requesting access is not registered with Engram.":
 		"접근을 요청하는 클라이언트는 Engram에 등록되지 않았습니다.",
+	"this app": "이 앱",
+	"You're connected": "연결되었습니다",
+	"Your browser blocked the new tab. Open your vault, then go back to {client}.":
+		"브라우저에서 새 탭을 차단했습니다. 보관함을 열고 {client}으로 돌아가세요.",
+	"Open your vault": "보관함을 엽니다",
+	"Back to {client}": "{client}으로 돌아가기",
 	"This app did not register the address it asked to send you back to.":
 		"이 앱은 사용자가 다시 연결되도록 요청한 주소를 등록하지 못했습니다.",
 	"Finish setting up Engram": "Engram 설정 완료",
-	"this app": "이 앱",
 	"previous connection": "이전 연결",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"서버가 귀하가 선택한 것보다 더 많은 접근 권한을 부여하여 연결되지 않았습니다. 다시 시도하거나, 문제가 계속 발생하면 지원팀에 문의하세요.",

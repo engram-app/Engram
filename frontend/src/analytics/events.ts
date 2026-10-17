@@ -14,6 +14,7 @@ export type EngramEvent =
 	| "checkout_abandoned"
 	| "mcp_connect_attempted"
 	| "mcp_connect_succeeded"
+	| "vault_tab_blocked"
 	| "mcp_connect_failed"
 	| "mcp_connect_denied"
 	| "upgrade_link_clicked"
@@ -146,6 +147,8 @@ export const EVENT_SCHEMAS: Record<EngramEvent, Record<string, PropKind>> = {
 	checkout_abandoned: { method: "checkout_method", reason: "error_code" },
 	mcp_connect_attempted: { client: "mcp_client" },
 	mcp_connect_succeeded: { client: "mcp_client" },
+	// Approve could not open the new signup's vault tab (popup blocked).
+	vault_tab_blocked: { client: "mcp_client" },
 	mcp_connect_failed: { client: "mcp_client", reason: "error_code" },
 	mcp_connect_denied: { client: "mcp_client" },
 	upgrade_link_clicked: { source: "upgrade_source" },

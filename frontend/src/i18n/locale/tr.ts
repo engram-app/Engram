@@ -789,10 +789,15 @@ export default {
 	"Unknown OAuth client": "Bilinmeyen OAuth istemcisi",
 	"The client requesting access is not registered with Engram.":
 		"Erişime istekte bulunan istemci, Engram ile kayıtlı değil.",
+	"this app": "bu uygulama",
+	"You're connected": "Bağlı durumdasınız",
+	"Your browser blocked the new tab. Open your vault, then go back to {client}.":
+		"Tarayıcınız yeni bir sekme açmayı engelledi. Kasanızı açın, ardından {client} sayfasına geri dönün.",
+	"Open your vault": "Kasanızı açın",
+	"Back to {client}": "{client} sayfasına geri dön",
 	"This app did not register the address it asked to send you back to.":
 		"Bu uygulama, size geri göndermeye çalıştığı adresi kaydedemedi.",
 	"Finish setting up Engram": "Engram kurulumunu tamamlayın",
-	"this app": "bu uygulama",
 	"previous connection": "önceki bağlantı",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Sunucu, seçtiğinizden daha fazla erişim sağladı, bu yüzden hiçbir şey bağlanmadı. Tekrar deneyin veya sorun devam ederse destek ile iletişime geçin.",

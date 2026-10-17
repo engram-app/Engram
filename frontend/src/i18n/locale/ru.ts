@@ -865,10 +865,15 @@ export default {
 	"Unknown OAuth client": "Неизвестный OAuth-клиент",
 	"The client requesting access is not registered with Engram.":
 		"Клиент, запрашивающий доступ, не зарегистрирован в Engram.",
+	"this app": "это приложение",
+	"You're connected": "Вы подключены",
+	"Your browser blocked the new tab. Open your vault, then go back to {client}.":
+		"Ваш браузер заблокировал новую вкладку. Откройте ваше хранилище, затем вернитесь к {client}.",
+	"Open your vault": "Открыть ваше хранилище",
+	"Back to {client}": "Вернуться к {client}",
 	"This app did not register the address it asked to send you back to.":
 		"Это приложение не смогло зарегистрировать адрес, на который пытается вас перенаправить.",
 	"Finish setting up Engram": "Завершите настройку Engram",
-	"this app": "это приложение",
 	"previous connection": "предыдущее подключение",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Сервер предоставил больше доступа, чем вы выбрали, поэтому ничего не было подключено. Попробуйте ещё раз или обратитесь в службу поддержки, если это повторяется.",

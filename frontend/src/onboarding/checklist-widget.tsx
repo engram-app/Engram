@@ -18,7 +18,7 @@ import {
 	SheetTitle,
 } from "../components/ui/sheet";
 import { Shimmer } from "../components/ui/shimmer";
-import { connectingSince } from "../oauth/pending-authorization";
+import { connecting } from "../oauth/pending-authorization";
 import { DISCORD_INVITE_URL } from "../settings/account/community-section";
 import { settingsTo } from "../settings/settings-hash";
 import { useOnboardingActions } from "./use-onboarding-actions";
@@ -100,12 +100,15 @@ function ChecklistWidget() {
 	// The tab consent opened lands here before the client exchanges its code,
 	// so the grant does not exist yet. Re-check briefly rather than tell them
 	// to connect a tool they just connected. Every other tab skips this.
-	const [since] = useState(connectingSince);
+	const [marker] = useState(connecting);
 	const connections = useConnections({
 		refetchInterval: (query) =>
-			since !== null &&
-			Date.now() - since < CONNECT_POLL_WINDOW_MS &&
-			!(query.state.data ?? []).some((c) => c.kind === "mcp")
+			marker !== null &&
+			Date.now() - marker.since < CONNECT_POLL_WINDOW_MS &&
+			// The parked client's own grant; any MCP grant when it had no slug.
+			!(query.state.data ?? []).some(
+				(c) => c.kind === "mcp" && (marker.client === null || c.slug === marker.client),
+			)
 				? CONNECT_POLL_MS
 				: false,
 	});

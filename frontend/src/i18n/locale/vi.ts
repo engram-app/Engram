@@ -784,10 +784,15 @@ export default {
 	"Unknown OAuth client": "Ứng dụng OAuth không xác định",
 	"The client requesting access is not registered with Engram.":
 		"Ứng dụng đang yêu cầu quyền truy cập chưa được đăng ký với Engram.",
+	"this app": "ứng dụng này",
+	"You're connected": "Bạn đã kết nối",
+	"Your browser blocked the new tab. Open your vault, then go back to {client}.":
+		"Trình duyệt của bạn đã chặn tab mới. Mở kho lưu trữ của bạn, sau đó quay lại {client}.",
+	"Open your vault": "Mở kho lưu trữ của bạn",
+	"Back to {client}": "Quay lại {client}",
 	"This app did not register the address it asked to send you back to.":
 		"Ứng dụng này không đăng ký địa chỉ mà nó yêu cầu gửi bạn đến.",
 	"Finish setting up Engram": "Hoàn tất thiết lập Engram",
-	"this app": "ứng dụng này",
 	"previous connection": "kết nối trước đó",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Máy chủ đã cấp quyền truy cập lớn hơn mức bạn chọn, vì vậy không có gì được kết nối. Thử lại, hoặc liên hệ bộ phận hỗ trợ nếu sự cố này tiếp diễn.",

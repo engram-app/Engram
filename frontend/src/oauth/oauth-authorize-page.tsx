@@ -40,8 +40,11 @@ import { isMember } from "../lib/is-member";
 import { ROUTES } from "../routes";
 import { settingsHash, settingsTo } from "../settings/settings-hash";
 import {
+	clearConsentReturn,
 	clearPendingAuthorization,
-	openConnectingTab,
+	connectingUrl,
+	consentReturnMarked,
+	markConsentReturn,
 	peekPendingAuthorization,
 	stashPendingAuthorization,
 } from "./pending-authorization";
@@ -169,12 +172,30 @@ export default function OAuthAuthorizePage() {
 	// backend too old to answer still allows Approve, which it re-validates.
 	const redirectVerified = clientQuery.data?.redirect_uri_registered === true;
 	const bounced = useRef(false);
-	// Back from the signup detour this request parked. Read once, before the
-	// effect below clears the park. Such a user has never seen their vault,
-	// and Approve sends this tab back to the client.
+	// Back from the signup detour this request parked. Such a user has never
+	// seen their vault, and Approve sends this tab back to the client. The park
+	// is cleared on the first commit, so the return is marked separately and
+	// kept until Approve or Cancel ends it (a reload or remount still knows).
+	const consentUrl = `${ROUTES.OAUTH_CONSENT}${location.search}`;
 	const [returnedFromSignup] = useState(
-		() => peekPendingAuthorization()?.returnTo === `${ROUTES.OAUTH_CONSENT}${location.search}`,
+		() => peekPendingAuthorization()?.returnTo === consentUrl || consentReturnMarked(consentUrl),
 	);
+	// Declared before the clear effect below, so it runs first.
+	useEffect(() => {
+		if (returnedFromSignup) {
+			markConsentReturn(consentUrl);
+		}
+	}, [returnedFromSignup, consentUrl]);
+	// The popup was blocked: offer the vault from a real click, then hand back.
+	const [blockedRedirect, setBlockedRedirect] = useState<string | null>(null);
+	useEffect(() => {
+		if (!blockedRedirect) {
+			return;
+		}
+		// The code is good for 10 minutes; do not hold the client up for long.
+		const timer = setTimeout(() => window.location.assign(blockedRedirect), 20_000);
+		return () => clearTimeout(timer);
+	}, [blockedRedirect]);
 
 	useEffect(() => {
 		if (!needsOnboarding || bounced.current || missing.length > 0) {
@@ -344,6 +365,37 @@ export default function OAuthAuthorizePage() {
 		);
 	}
 
+	if (blockedRedirect) {
+		const client = clientQuery.data?.client_name ?? t("this app");
+		return (
+			<AuthShell>
+				<AuthPanel className="flex flex-col gap-3">
+					<h1 className={heading}>{t("You're connected")}</h1>
+					<p className="text-muted-foreground">
+						{t("Your browser blocked the new tab. Open your vault, then go back to {client}.", {
+							client,
+						})}
+					</p>
+					<Button
+						type="button"
+						onClick={() =>
+							window.open(connectingUrl(ROUTES.HOME, clientQuery.data?.slug ?? null), "_blank")
+						}
+					>
+						{t("Open your vault")}
+					</Button>
+					<Button
+						type="button"
+						variant="outline"
+						onClick={() => window.location.assign(blockedRedirect)}
+					>
+						{t("Back to {client}", { client })}
+					</Button>
+				</AuthPanel>
+			</AuthShell>
+		);
+	}
+
 	if (redirectRefused) {
 		return (
 			<AuthShell>
@@ -406,7 +458,10 @@ export default function OAuthAuthorizePage() {
 		setSubmitting(true);
 		setSubmitError(null);
 		// Before any await: a popup blocker refuses a tab opened outside the click.
-		const vaultTab = returnedFromSignup ? openConnectingTab(ROUTES.HOME) : null;
+		// MCP clients only: an Obsidian device has its own surface.
+		const opensVault = returnedFromSignup && clientQuery.data?.kind === "mcp";
+		const vaultUrl = connectingUrl(ROUTES.HOME, clientQuery.data?.slug ?? null);
+		const vaultTab = opensVault ? window.open(vaultUrl, "_blank") : null;
 
 		// Obsidian's device-code flow is a different surface (device-link-page.tsx,
 		// plugin_connect_*) — this event name says "mcp" and must mean it.
@@ -505,9 +560,14 @@ export default function OAuthAuthorizePage() {
 			if (isMcp) {
 				track("mcp_connect_succeeded", { client: mcpClient });
 			}
+			clearConsentReturn();
 			// A 200 can still carry a refusal (`?error=`): nothing will connect.
 			if (!grantsCode) {
 				vaultTab?.close();
+			} else if (opensVault && vaultTab === null) {
+				track("vault_tab_blocked", { client: mcpClient });
+				setBlockedRedirect(redirect_uri);
+				return;
 			}
 			window.location.assign(redirect_uri);
 		} catch (e: unknown) {
@@ -546,6 +606,7 @@ export default function OAuthAuthorizePage() {
 	};
 
 	const handleCancel = () => {
+		clearConsentReturn();
 		track("mcp_connect_denied", { client: toMcpClient(clientQuery.data?.slug) });
 		window.location.assign(buildCancelUrl(values.redirect_uri, values.state, iss));
 	};

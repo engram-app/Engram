@@ -746,10 +746,15 @@ export default {
 	"Unknown OAuth client": "未知的 OAuth 客户端",
 	"The client requesting access is not registered with Engram.":
 		"请求访问的客户端未在 Engram 中注册。",
+	"this app": "此应用",
+	"You're connected": "已连接",
+	"Your browser blocked the new tab. Open your vault, then go back to {client}.":
+		"您的浏览器阻止了新标签页。打开您的仓库，然后返回到 {client}。",
+	"Open your vault": "打开您的仓库",
+	"Back to {client}": "返回到 {client}",
 	"This app did not register the address it asked to send you back to.":
 		"此应用未注册您要返回的地址。",
 	"Finish setting up Engram": "完成 Engram 的设置",
-	"this app": "此应用",
 	"previous connection": "上次连接",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"服务器授予了比你选择的更多权限，因此没有建立连接。请重试，或如果问题持续出现，请联系支持。",

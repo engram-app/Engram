@@ -122,11 +122,28 @@ export async function collectVisibleText(
 		};
 		const skipped = (el: Element): boolean =>
 			SKIPPED_TAGS.has(el.tagName) || (exclude !== "" && el.closest(exclude) !== null);
+		// A note's own text (the seeded welcome note is English in every locale) is
+		// user content, never a UI string. Only the text itself is skipped: chrome
+		// rendered inside a note (editor widgets, buttons, anything with a role) and
+		// every attribute are still scanned.
+		const NOTE_TEXT = ".cm-line, [data-note-content]";
+		const CHROME = '[contenteditable="false"], button, [role]';
+		const noteText = (el: Element): boolean => {
+			const root = el.closest(NOTE_TEXT);
+			const chrome = el.closest(CHROME);
+			return root !== null && !(chrome !== null && chrome !== root && root.contains(chrome));
+		};
 
 		const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
 		for (let node = walker.nextNode(); node; node = walker.nextNode()) {
 			const parent = node.parentElement;
-			if (parent && !skipped(parent) && !parent.closest("script,style,noscript") && shown(parent)) {
+			if (
+				parent &&
+				!skipped(parent) &&
+				!noteText(parent) &&
+				!parent.closest("script,style,noscript") &&
+				shown(parent)
+			) {
 				out.push(node.textContent ?? "");
 			}
 		}
@@ -180,12 +197,7 @@ export async function checkStep(
 	options: StepOptions = {},
 ): Promise<void> {
 	await expect(page.locator("html")).toHaveAttribute("lang", locale);
-	// A note's body is the user's text (the seeded welcome note is English in every
-	// locale), never a UI string, so it is not scanned.
-	const noteBody = ".cm-content, [data-note-content]";
-	const scope = {
-		excludeSelector: options.skipClerk ? `${CLERK_ROOT}, ${noteBody}` : noteBody,
-	};
+	const scope = options.skipClerk ? { excludeSelector: CLERK_ROOT } : {};
 	const leaks = await findLeaks(page, locale, scope);
 	const suspects = await findSuspectEnglish(page, locale, scope);
 	const name = `${locale}-${step}`;
