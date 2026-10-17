@@ -249,7 +249,7 @@ defmodule Engram.Workers.CleanupVault do
         # names this vault. BEFORE the vault row goes: a grant's scalar
         # `vault_id` cascades on delete, so a grant still naming this vault
         # there would vanish uncounted instead of being narrowed or revoked.
-        revoked_grants = Engram.Connections.drop_vault_from_grants(vault.user_id, vault_id)
+        revoked_grants = Engram.Connections.drop_vault_from_grants(vault.user_id, vault_id, live)
 
         # `api_key_vaults` carries no RLS policy, so the guard never fires for it
         # and the option here is inert either way. Left as-is to keep this diff
@@ -262,8 +262,9 @@ defmodule Engram.Workers.CleanupVault do
       end)
 
     # Same as `Accounts.revoke_api_key/2`: an open socket authenticated with a
-    # revoked key must not outlive it.
-    if revoked_keys + revoked_grants > 0, do: SessionInvalidator.disconnect_user(vault.user_id)
+    # revoked key must not outlive it. Grants need nothing here:
+    # `drop_vault_from_grants/3` kicks the owner itself once anything changed.
+    if revoked_keys > 0, do: SessionInvalidator.disconnect_user(vault.user_id)
 
     # Post-commit: delete storage blobs (best-effort)
     # If this fails, we have orphan blobs but no ghost rows — safe to retry

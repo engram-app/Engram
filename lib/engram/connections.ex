@@ -364,21 +364,27 @@ defmodule Engram.Connections do
 
   Run at soft delete (`revoke_by_vault/2`) and again at purge (`CleanupVault`),
   which catches a grant a soft delete missed before its rows can go.
+
+  `live` is the user's active vault ids without this one; a caller that
+  already read them (`CleanupVault`, for its keys) passes them so both
+  judgements use the same set.
   """
-  @spec drop_vault_from_grants(Ecto.UUID.t(), Ecto.UUID.t()) :: non_neg_integer()
-  def drop_vault_from_grants(user_id, vault_id) do
+  @spec drop_vault_from_grants(Ecto.UUID.t(), Ecto.UUID.t(), [Ecto.UUID.t()] | nil) ::
+          non_neg_integer()
+  def drop_vault_from_grants(user_id, vault_id, live \\ nil) do
     {:ok, revoked} =
       Repo.transaction_after_commit(fn ->
         # Rotation copies a family's state under the same lock, so a
         # successor minted concurrently cannot undo the narrowing below.
         Engram.OAuth.lock_grants!(user_id)
-        do_drop_vault_from_grants(user_id, vault_id)
+        live = live || List.delete(Vaults.active_vault_ids(user_id), vault_id)
+        do_drop_vault_from_grants(user_id, vault_id, live)
       end)
 
     revoked
   end
 
-  defp do_drop_vault_from_grants(user_id, vault_id) do
+  defp do_drop_vault_from_grants(user_id, vault_id, live) do
     {_, narrowed} =
       Repo.update_all(
         from(t in RefreshToken,
@@ -416,8 +422,6 @@ defmodule Engram.Connections do
              fragment("array_length(?, 1) = 1", t.vault_ids)) or
             (no_vault_ids(t) and t.vault_id == ^vault_id)
       )
-
-    live = List.delete(Vaults.active_vault_ids(user_id), vault_id)
 
     revoked =
       revoke_rows(only_vault) ++
