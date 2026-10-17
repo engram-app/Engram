@@ -6,6 +6,8 @@ defmodule EngramWeb.VaultAccessSocketAttackTest do
   """
   use EngramWeb.ChannelCase, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Engram.{Accounts, Crypto, Vaults}
 
   setup do
@@ -94,7 +96,9 @@ defmodule EngramWeb.VaultAccessSocketAttackTest do
   test "PATCH narrowing W->read: a fresh crdt join is refused at once", ctx do
     {:ok, raw, key} = Accounts.create_api_key(ctx.user, "k", ctx.access)
     s = key_socket(raw)
-    assert {:ok, _, _} = crdt_join(s, ctx.user, ctx.w)
+    assert {:ok, _, joined} = crdt_join(s, ctx.user, ctx.w)
+    # The joined channel stops on the narrowing (`ChannelAccess`); not this test's subject.
+    Process.unlink(joined.channel_pid)
 
     EngramWeb.Endpoint.subscribe("user_socket:#{ctx.user.id}")
 
@@ -111,92 +115,142 @@ defmodule EngramWeb.VaultAccessSocketAttackTest do
     assert {:error, %{reason: "read_only_vault"}} = crdt_join(s, ctx.user, ctx.w)
   end
 
-  # The disconnect broadcast above is best-effort: a channel that missed it
-  # (here: a test socket, which never acts on it) must still not write.
-  test "PATCH narrowing W->read: an already-joined crdt channel stops writing", ctx do
-    {:ok, raw, key} = Accounts.create_api_key(ctx.user, "k", ctx.access)
-    {:ok, _, chan} = crdt_join(key_socket(raw), ctx.user, ctx.w)
+  # An open channel holds its access (`EngramWeb.ChannelAccess`) and is
+  # re-judged on the owner's disconnect broadcast, which every narrowing
+  # sends, and on a periodic re-check for when that broadcast is lost. Either
+  # way a channel that lost its vault stops: no frame in, no broadcast out.
+  # A test socket never acts on the disconnect itself, so what stops here is
+  # the channel's own judgement.
+
+  # `join`, not `subscribe_and_join`: this test process must hear the topic
+  # only through the channel's own fastlane, which goes when the channel does.
+  defp sync_join_only(socket, user, vault),
+    do: join(socket, EngramWeb.SyncChannel, "sync:#{user.id}:#{vault.id}")
+
+  # A dead channel's PubSub registration is removed asynchronously after its
+  # DOWN; wait for that before asserting nothing more is delivered.
+  defp await_unsubscribed(topic, pid, tries \\ 50) do
+    if Enum.any?(Registry.lookup(Engram.PubSub, topic), fn {p, _} -> p == pid end) and tries > 0 do
+      Process.sleep(10)
+      await_unsubscribed(topic, pid, tries - 1)
+    end
+  end
+
+  defp watch(chan) do
     Ecto.Adapters.SQL.Sandbox.allow(Engram.Repo, self(), chan.channel_pid)
-    # Control: the same frame writes while the key is still write.
-    ref0 = push(chan, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "ok.md"})
-    assert_reply ref0, :ok, _, 10_000
-
-    {:ok, _} =
-      Accounts.update_api_key_access(
-        ctx.user,
-        key.id,
-        {%{to_string(ctx.w.id) => "read"}, "none"}
-      )
-
-    # The refusal stops the channel (the client rejoins and is refused there).
     Process.unlink(chan.channel_pid)
-    mon = Process.monitor(chan.channel_pid)
-    ref = push(chan, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "pwn.md"})
-    assert_reply ref, :error, %{reason: "read_only_vault"}, 10_000
-    assert_receive {:DOWN, ^mon, :process, _, {:shutdown, :access_changed}}
-    assert {:error, :not_found} = Engram.Notes.get_note(ctx.user, ctx.w, "pwn.md")
+    Process.monitor(chan.channel_pid)
   end
 
-  # Outbound: a vault narrowed to none must stop reaching an already-joined
-  # channel even when the disconnect broadcast is late or missed. The channel
-  # stops and kicks the socket, so the client rejoins into the join refusal.
-  defp narrow_to_none(ctx, key, vault) do
-    EngramWeb.Endpoint.subscribe("user_socket:#{ctx.user.id}")
+  defp patch_access(ctx, key, vault, level),
+    do:
+      {:ok, _} =
+        Accounts.update_api_key_access(
+          ctx.user,
+          key.id,
+          {%{to_string(vault.id) => level}, "none"}
+        )
 
-    {:ok, _} =
-      Accounts.update_api_key_access(ctx.user, key.id, {%{to_string(vault.id) => "none"}, "none"})
+  # The same narrowing with NO broadcast: only the periodic re-check can see it.
+  defp narrow_silently(key, vault, level) do
+    Engram.Repo.update_all(
+      from(v in "api_key_vaults",
+        where:
+          v.api_key_id == type(^key.id, Ecto.UUID) and v.vault_id == type(^vault.id, Ecto.UUID)
+      ),
+      [set: [level: level]],
+      skip_tenant_check: true
+    )
 
-    # The PATCH's own disconnect: drained so the channel's can be told apart.
-    assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 1_000
+    Engram.Cache.evict_local(:api_key, key.key_hash)
   end
 
-  test "narrowed R->none: an already-joined sync channel stops receiving", ctx do
-    {:ok, raw, key} = Accounts.create_api_key(ctx.user, "k", ctx.access)
-    {:ok, _, chan} = sync_join(key_socket(raw), ctx.user, ctx.r)
-    topic = "sync:#{ctx.user.id}:#{ctx.r.id}"
+  defp fast_recheck(_ctx) do
+    Application.put_env(:engram, :channel_access_recheck_ms, 50)
+    on_exit(fn -> Application.delete_env(:engram, :channel_access_recheck_ms) end)
+  end
 
-    # Control: while R is readable the broadcast is pushed.
-    EngramWeb.Endpoint.broadcast!(topic, "note_changed", %{"path" => "a.md"})
-    assert_push "note_changed", %{"path" => "a.md"}
+  describe "within the broadcast" do
+    test "PATCH W->read stops a joined crdt channel; a later frame writes nothing", ctx do
+      {:ok, raw, key} = Accounts.create_api_key(ctx.user, "k", ctx.access)
+      {:ok, _, chan} = crdt_join(key_socket(raw), ctx.user, ctx.w)
+      mon = watch(chan)
 
-    narrow_to_none(ctx, key, ctx.r)
-    Process.unlink(chan.channel_pid)
-    mon = Process.monitor(chan.channel_pid)
+      # Control: the channel writes while the key is write.
+      ref = push(chan, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "ok.md"})
+      assert_reply ref, :ok, _, 10_000
 
-    for event <- ~w(note_changed note_yjs_update notes.batch folders.batch) do
-      EngramWeb.Endpoint.broadcast!(topic, event, %{"path" => "secret.md"})
+      patch_access(ctx, key, ctx.w, "read")
+      assert_receive {:DOWN, ^mon, :process, _, {:shutdown, :access_changed}}, 2_000
+
+      push(chan, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "pwn.md"})
+      assert {:error, :not_found} = Engram.Notes.get_note(ctx.user, ctx.w, "pwn.md")
     end
 
-    assert_receive {:DOWN, ^mon, :process, _, {:shutdown, :access_changed}}
-    refute_push _, %{"path" => "secret.md"}
-    assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+    test "PATCH R->none stops a joined sync channel; broadcasts stop reaching it", ctx do
+      {:ok, raw, key} = Accounts.create_api_key(ctx.user, "k", ctx.access)
+      {:ok, _, chan} = sync_join_only(key_socket(raw), ctx.user, ctx.r)
+      topic = "sync:#{ctx.user.id}:#{ctx.r.id}"
+      mon = watch(chan)
+
+      EngramWeb.Endpoint.broadcast!(topic, "note_changed", %{"path" => "a.md"})
+      assert_push "note_changed", %{"path" => "a.md"}
+
+      patch_access(ctx, key, ctx.r, "none")
+      assert_receive {:DOWN, ^mon, :process, _, {:shutdown, :access_changed}}, 2_000
+      await_unsubscribed(topic, chan.channel_pid)
+
+      EngramWeb.Endpoint.broadcast!(topic, "note_changed", %{"path" => "secret.md"})
+      refute_push "note_changed", %{"path" => "secret.md"}
+    end
+
+    test "a disconnect that changes nothing leaves the channel open", ctx do
+      {:ok, raw, _key} = Accounts.create_api_key(ctx.user, "k", ctx.access)
+      {:ok, _, chan} = sync_join_only(key_socket(raw), ctx.user, ctx.r)
+      mon = watch(chan)
+
+      Engram.Auth.SessionInvalidator.disconnect_user(to_string(ctx.user.id))
+      refute_receive {:DOWN, ^mon, _, _, _}, 200
+    end
   end
 
-  test "narrowed W->none: an already-joined crdt channel stops receiving", ctx do
-    {:ok, raw, key} = Accounts.create_api_key(ctx.user, "k", ctx.access)
-    {:ok, _, chan} = crdt_join(key_socket(raw), ctx.user, ctx.w)
-    topic = "crdt:#{ctx.user.id}:#{ctx.w.id}"
+  describe "with the broadcast lost" do
+    setup :fast_recheck
 
-    EngramWeb.Endpoint.broadcast!(topic, "crdt_doc_ready", %{"doc_id" => "ok"})
-    assert_push "crdt_doc_ready", %{"doc_id" => "ok"}
+    test "the periodic re-check stops a sync channel and closes its socket", ctx do
+      {:ok, raw, key} = Accounts.create_api_key(ctx.user, "k", ctx.access)
+      {:ok, _, chan} = sync_join_only(key_socket(raw), ctx.user, ctx.r)
+      topic = "sync:#{ctx.user.id}:#{ctx.r.id}"
+      mon = watch(chan)
 
-    # A room this channel observes, so its frames would be pushed.
-    room = spawn(fn -> Process.sleep(:infinity) end)
-    :sys.replace_state(chan.channel_pid, &put_in(&1.assigns.room_doc, %{room => "doc"}))
-    send(chan.channel_pid, {:yjs, "frame", room})
-    assert_push "crdt_msg", %{"doc_id" => "doc"}
+      narrow_silently(key, ctx.r, "none")
+      assert_receive {:DOWN, ^mon, :process, _, {:shutdown, :access_changed}}, 2_000
+      # Its own socket (this test process is the transport) is told to close.
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+      await_unsubscribed(topic, chan.channel_pid)
 
-    narrow_to_none(ctx, key, ctx.w)
-    Process.unlink(chan.channel_pid)
-    mon = Process.monitor(chan.channel_pid)
+      EngramWeb.Endpoint.broadcast!(topic, "note_changed", %{"path" => "secret.md"})
+      refute_push "note_changed", %{"path" => "secret.md"}
+    end
 
-    send(chan.channel_pid, {:yjs, "secret", room})
-    EngramWeb.Endpoint.broadcast!(topic, "crdt_doc_ready", %{"doc_id" => "secret"})
+    test "the periodic re-check stops a crdt channel narrowed to read", ctx do
+      {:ok, raw, key} = Accounts.create_api_key(ctx.user, "k", ctx.access)
+      {:ok, _, chan} = crdt_join(key_socket(raw), ctx.user, ctx.w)
+      mon = watch(chan)
 
-    assert_receive {:DOWN, ^mon, :process, _, {:shutdown, :access_changed}}
-    refute_push "crdt_msg", _
-    refute_push "crdt_doc_ready", %{"doc_id" => "secret"}
-    assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+      narrow_silently(key, ctx.w, "read")
+      assert_receive {:DOWN, ^mon, :process, _, {:shutdown, :access_changed}}, 2_000
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+    end
+
+    test "a re-check that finds access unchanged keeps the channel open", ctx do
+      {:ok, raw, _key} = Accounts.create_api_key(ctx.user, "k", ctx.access)
+      {:ok, _, chan} = crdt_join(key_socket(raw), ctx.user, ctx.w)
+      mon = watch(chan)
+
+      refute_receive {:DOWN, ^mon, _, _, _}, 300
+      refute_received %Phoenix.Socket.Broadcast{event: "disconnect"}
+    end
   end
 
   test "legacy key restricted to W: crdt join on R/N refused", ctx do

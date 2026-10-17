@@ -930,7 +930,8 @@ defmodule Engram.Accounts do
             where: m.version == ^@levels_migration,
             select: m.inserted_at
           )
-          |> Repo.one(skip_tenant_check: true)
+          # Not a tenant table: no tenant, and no tenancy bypass needed.
+          |> Repo.one()
           |> DateTime.from_naive!("Etc/UTC")
 
         :persistent_term.put({__MODULE__, :levels_cutover}, at)

@@ -14,9 +14,12 @@ defmodule EngramWeb.SyncChannel do
 
   use Phoenix.Channel
 
+  import EngramWeb.ChannelAccess, only: [is_access_message: 1]
+
   alias Engram.Crypto.HMAC
   alias Engram.Logger.Metadata
   alias Engram.Vaults
+  alias EngramWeb.ChannelAccess
   alias EngramWeb.ChannelGate
   alias EngramWeb.Presence
 
@@ -74,19 +77,16 @@ defmodule EngramWeb.SyncChannel do
   end
 
   defp attach_vault_to_socket(vault, params, socket) do
-    case check_vault_access(socket, vault) do
+    case ChannelAccess.check(socket, vault, :read) do
       :ok ->
-        socket = assign(socket, :vault, vault)
+        socket = socket |> ChannelAccess.track(vault, :read) |> assign(:vault, vault)
         send(self(), {:after_join, params})
         {:ok, %{reconnect_jitter_max_ms: reconnect_jitter_max_ms()}, socket}
 
-      # Same reply as a vault that does not exist, so a join cannot probe
-      # which UUIDs are real (VaultPlug answers the REST side the same way).
-      :forbidden ->
-        {:error, %{reason: "vault_not_found"}}
-
-      :revoked ->
-        {:error, %{reason: "unauthorized"}}
+      # A vault out of reach answers like one that does not exist, so a join
+      # cannot probe which UUIDs are real (VaultPlug does the same on REST).
+      refused ->
+        {:error, %{reason: ChannelAccess.refusal_reason(refused)}}
     end
   end
 
@@ -94,7 +94,11 @@ defmodule EngramWeb.SyncChannel do
     Application.get_env(:engram, :reconnect_jitter_max_ms, 5_000)
   end
 
+  # Joined: re-judged on a credential change and periodically, and stopped
+  # once the vault is out of reach (`ChannelAccess`).
   @impl true
+  def handle_info(msg, socket) when is_access_message(msg), do: ChannelAccess.refresh(msg, socket)
+
   def handle_info({:after_join, params}, socket) do
     device_id = socket.assigns[:device_id] || Map.get(params, "device_id", "unknown")
     conn_id = socket.assigns[:conn_id]
@@ -175,43 +179,4 @@ defmodule EngramWeb.SyncChannel do
   @impl true
   def handle_in(_event, _params, socket),
     do: {:reply, {:error, %{"reason" => "gone", "use" => "crdt channel"}}, socket}
-
-  # ---------------------------------------------------------------------------
-  # Outbound
-  # ---------------------------------------------------------------------------
-
-  # Every event that carries vault data to this topic, intercepted so each push
-  # re-checks access (`ChannelGate.vault_scope/1`, cached: no DB read on a
-  # hit). A vault narrowed to none, or a revoked grant, stops the channel even
-  # if the disconnect broadcast never arrived. A new vault-data event on
-  # `sync:` must be added here; `sync_channel_intercepts_test.exs` fails until
-  # it is.
-  intercept ["note_changed", "note_yjs_update", "notes.batch", "folders.batch"]
-
-  @impl true
-  def handle_out(event, payload, socket) do
-    case check_vault_access(socket, socket.assigns.vault) do
-      :ok ->
-        push(socket, event, payload)
-        {:noreply, socket}
-
-      _refused ->
-        ChannelGate.access_lost(socket)
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Private helpers
-  # ---------------------------------------------------------------------------
-
-  # API-key restriction AND OAuth grant, intersected in one place. Plugs do not
-  # run on a socket, so this is the only enforcement point the live sync path
-  # has. The grant is re-read now, not trusted from connect: a missed
-  # disconnect broadcast must not leave a revoked or narrowed grant joining.
-  defp check_vault_access(socket, vault) do
-    case ChannelGate.vault_scope(socket.assigns) do
-      :revoked -> :revoked
-      scope -> Engram.Permissions.check(scope, vault)
-    end
-  end
 end

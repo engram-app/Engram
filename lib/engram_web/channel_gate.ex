@@ -270,22 +270,6 @@ defmodule EngramWeb.ChannelGate do
 
   def vault_scope(assigns), do: Engram.Permissions.vault_scope(assigns)
 
-  @doc """
-  What a joined `sync:` or `crdt:` channel does when its credential no longer
-  reaches the vault (`vault_scope/1`, re-read on every inbound frame and
-  outbound push). The access change already broadcast a disconnect, but that
-  is best-effort; the channel that noticed sends it again, so the socket
-  closes, the client reconnects and its rejoin gets the join's own refusal.
-  Stopping only the channel is not enough: the plugin has no per-topic
-  rejoin and would keep talking to a dead topic. Returns the channel's stop.
-  """
-  @spec access_lost(Phoenix.Socket.t()) ::
-          {:stop, {:shutdown, :access_changed}, Phoenix.Socket.t()}
-  def access_lost(%Phoenix.Socket{assigns: %{current_user: %{id: user_id}}} = socket) do
-    :ok = Engram.Auth.SessionInvalidator.disconnect_user(to_string(user_id))
-    {:stop, {:shutdown, :access_changed}, socket}
-  end
-
   # Each of these matches STRICTLY on the field it gates rather than falling
   # through a `_user` catch-all, so a renamed or retyped column CRASHES here
   # instead of silently passing every account. Same argument

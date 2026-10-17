@@ -247,7 +247,10 @@ defmodule EngramWeb.ChannelOAuthScopeTest do
     test "narrowing write -> read on a connected socket refuses the next crdt: join", ctx do
       %{user: u, granted: w} = ctx
       {socket, family} = real_grant(ctx, {%{w.id => "write"}, "none"})
-      assert {:ok, _, _} = join_crdt_topic(socket, u, w)
+      assert {:ok, _, joined} = join_crdt_topic(socket, u, w)
+      # The joined channel stops on the change (`ChannelAccess`); unlinked so it
+      # does not take this test with it.
+      Process.unlink(joined.channel_pid)
 
       narrow(ctx, family, {%{w.id => "read"}, "none"})
 
@@ -257,7 +260,10 @@ defmodule EngramWeb.ChannelOAuthScopeTest do
     test "narrowing write -> none on a connected socket refuses the next crdt: join", ctx do
       %{user: u, granted: w, ungranted: r} = ctx
       {socket, family} = real_grant(ctx, {%{w.id => "write", r.id => "write"}, "none"})
-      assert {:ok, _, _} = join_crdt_topic(socket, u, w)
+      assert {:ok, _, joined} = join_crdt_topic(socket, u, w)
+      # The joined channel stops on the change (`ChannelAccess`); unlinked so it
+      # does not take this test with it.
+      Process.unlink(joined.channel_pid)
 
       narrow(ctx, family, {%{w.id => "none", r.id => "write"}, "none"})
 
