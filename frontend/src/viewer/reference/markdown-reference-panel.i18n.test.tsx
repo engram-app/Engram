@@ -15,7 +15,7 @@ const GERMAN = {
 	"Claim.": "Behauptung.",
 	"Source.": "Quelle.",
 	"Shipped on time.": "Pünktlich geliefert.",
-	"For a generous value of on time.": "Bei großzügiger Auslegung von pünktlich.",
+	"Well, almost.": "Na, fast.",
 	"Worth knowing, but not urgent.": "Gut zu wissen, aber nicht dringend.",
 };
 const loaders = { de: async () => ({ default: GERMAN }) };
@@ -83,7 +83,7 @@ describe("MarkdownReferencePanel with a German catalog", () => {
 		await waitFor(() =>
 			expect(footnoteRow().querySelector("figure")?.textContent).toContain("Pünktlich geliefert"),
 		);
-		expect(footnoteRow().querySelector("figure")?.textContent).toContain("Bei großzügiger");
+		expect(footnoteRow().querySelector("figure")?.textContent).toContain("Na, fast");
 
 		fireEvent.click(within(footnoteRow()).getByRole("button", { name: /^Insert / }));
 		expect(view?.state.doc.toString()).toContain("Behauptung.[^1]\n\n[^1]: Quelle.");

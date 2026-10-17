@@ -87,7 +87,7 @@ export function DangerZoneSectionLocal() {
 						<DialogTitle>{t("Delete your account?")}</DialogTitle>
 						<DialogDescription>
 							{t(
-								"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.",
+								"This deletes your account, and you won't be able to sign back in. Your vault data stays until an admin removes it.",
 							)}
 						</DialogDescription>
 					</DialogHeader>

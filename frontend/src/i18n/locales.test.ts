@@ -20,6 +20,12 @@ describe("matchLocale", () => {
 		["vi", "vi"],
 		["ms-MY", "ms"],
 		["ms", "ms"],
+		["tr-TR", "tr"],
+		["TR", "tr"],
+		["pl-PL", "pl"],
+		["pl", "pl"],
+		["id-ID", "id"],
+		["id", "id"],
 	])("%s -> %s", (tag, expected) => {
 		expect(matchLocale(tag)).toBe(expected);
 	});

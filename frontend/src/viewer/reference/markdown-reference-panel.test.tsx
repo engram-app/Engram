@@ -196,7 +196,7 @@ describe("MarkdownReferencePanel — demo teaches, template inserts", () => {
 		openSection("Structure");
 		const footnote = row("Footnote");
 
-		expect(footnote.querySelector("figure")?.textContent).toContain("generous value of on time");
+		expect(footnote.querySelector("figure")?.textContent).toContain("Well, almost");
 		expect(footnote.querySelector("pre")?.textContent).toBe("Claim.[^1]\n\n[^1]: Source.");
 
 		fireEvent.click(within(footnote).getByRole("button", { name: "Insert Footnote" }));

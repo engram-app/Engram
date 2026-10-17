@@ -217,7 +217,7 @@ export default {
 	"Your plan changes on {date}": "Pelan anda berubah pada {date}",
 	"Your plan cancels on {date}": "Pelan anda dibatalkan pada {date}",
 	"Your plan pauses on {date}": "Pelan anda ditangguhkan pada {date}",
-	"Your plan resumes on {date}": "Pelan anda disambung semula pada {date}",
+	"Your plan resumes on {date}": "Pelan anda aktif semula pada {date}",
 	"{price}/mo": "{price}/bulan",
 	"{price}/yr": "{price}/tahun",
 	"Billing cadence": "Tempoh pembayaran",
@@ -274,12 +274,12 @@ export default {
 	"Cancel the free trial below — you won't be charged. You can subscribe to the plan you want at any time.":
 		"Batalkan tempoh percuma di bawah — anda tidak akan dicaj. Anda boleh melanggan pelan yang anda inginkan pada bila-bila masa.",
 	"Cancel free trial": "Batalkan tempoh percuma",
-	"No charge today; next bill {total} on {renewal}":
-		"Tiada caj hari ini; bil seterusnya {total} pada {renewal}",
-	"Charged {amount} today; next bill {total} on {renewal}":
-		"Dicaj {amount} hari ini; bil seterusnya {total} pada {renewal}",
-	"Credited {amount} today; next bill {total} on {renewal}":
-		"Dikreditkan {amount} hari ini; bil seterusnya {total} pada {renewal}",
+	"No charge today. Next bill: {total} on {renewal}":
+		"Tiada caj hari ini. Bil seterusnya: {total} pada {renewal}",
+	"Charged {amount} today. Next bill: {total} on {renewal}":
+		"Dicaj {amount} hari ini. Bil seterusnya: {total} pada {renewal}",
+	"Credited {amount} today. Next bill: {total} on {renewal}":
+		"Dikreditkan {amount} hari ini. Bil seterusnya: {total} pada {renewal}",
 	"Your free trial is already scheduled to cancel on {date}. You won't be charged. You can subscribe to the plan you want once your trial ends.":
 		"Tempoh percuma anda sudah dijadualkan untuk dibatalkan pada {date}. Anda tidak akan dicaj. Anda boleh melanggan pelan yang anda inginkan selepas tempoh percubaan anda tamat.",
 	"Use {action} right below the Current Plan section to reverse the cancellation.":
@@ -462,13 +462,14 @@ export default {
 	"(choose from {count} vaults)": "(pilih daripada {count} peti nota)",
 	"Or create a new vault": "Atau, cipta peti nota baharu",
 	"Create your first vault": "Cipta peti nota pertama anda",
-	"the device syncing your '{vault}' vault on {os} (last active {since})":
-		"peranti yang menyinkronkan peti nota '{vault}' anda pada {os} (terakhir aktif {since})",
-	"the device syncing your '{vault}' vault on {os}":
-		"peranti yang menyinkronkan peti nota '{vault}' anda pada {os}",
-	"the device syncing your '{vault}' vault (last active {since})":
-		"peranti yang menyinkronkan peti nota '{vault}' anda (terakhir aktif {since})",
-	"the device syncing your '{vault}' vault": "peranti yang menyinkronkan peti nota '{vault}' anda",
+	"the device on {os} that syncs your '{vault}' vault (last active {since})":
+		"peranti pada {os} yang menyegerakkan peti nota anda '{vault}' (terakhir aktif {since})",
+	"the device on {os} that syncs your '{vault}' vault":
+		"peranti pada {os} yang menyegerakkan peti nota '{vault}' anda",
+	"the device that syncs your '{vault}' vault (last active {since})":
+		"peranti yang menyegerakkan peti nota '{vault}' anda (terakhir aktif {since})",
+	"the device that syncs your '{vault}' vault":
+		"peranti yang menyegerakkan peti nota '{vault}' anda",
 	"on {os} (last active {since})": "pada {os} (terakhir aktif {since})",
 	"on {os}": "pada {os}",
 	"(last active {since})": "(terakhir aktif {since})",
@@ -710,8 +711,8 @@ export default {
 	Created: "Dicipta",
 	"We index each note's {type} separately, so adding one to your notes can improve your searches. Filter to a type here to look only at notes of that kind.":
 		"Kami mengindeks setiap {type} nota secara berasingan, jadi menambahkan satu ke dalam nota anda boleh meningkatkan carian anda. Tapis mengikut jenis di sini untuk melihat hanya nota jenis itu.",
-	"It is also the one field required by the {okf}, the open standard Engram follows — so filling it in keeps your notes portable to anything else that reads OKF.":
-		"Ia juga merupakan satu medan yang diperlukan oleh {okf}, standard terbuka yang diikuti oleh Engram — jadi mengisinya memastikan nota anda boleh digunakan dengan aplikasi lain yang menyokong OKF.",
+	"It is also the one field required by the {okf}, an open standard that Engram follows. Filling it in keeps your notes portable to any other app that reads OKF.":
+		"Ia juga merupakan medan yang diperlukan oleh {okf}, sebuah standard terbuka yang Engram ikut. Mengisinya memastikan nota anda boleh dibawa ke aplikasi lain yang membaca OKF.",
 	"{count} results": { other: "{count} hasil" },
 	"Sidebar views": "Tampilan sisi",
 	"User menu": "Menu pengguna",
@@ -849,8 +850,7 @@ export default {
 	"Open setup checklist": "Buka senarai semak persediaan",
 	"Finish setup": "Selesaikan persediaan",
 	"Open setup checklist, {remaining} remaining": "Buka senarai semak persediaan, {remaining} lagi",
-	"Steps left to finish setting up Engram":
-		"Langkah yang tinggal untuk menyelesaikan persediaan Engram",
+	"Steps left to finish setup": "Langkah yang tinggal untuk menyelesaikan persediaan",
 	"Onboarding checklist": "Senarai semak permulaan",
 	"Dismiss checklist": "Tutup senarai semak",
 	"{completed} of {total} done": "{completed} daripada {total} selesai",
@@ -967,8 +967,8 @@ export default {
 		"Tindakan kekal. Memadam akaun anda akan mengeluarkan anda dan menghalang log masuk di masa depan untuk pengguna ini.",
 	"Delete account": "Padam akaun",
 	"Delete your account?": "Padam akaun anda?",
-	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"Ini akan memadamkan akaun anda. Anda tidak akan dapat log masuk semula. Seorang pentadbir boleh memadam data peti nota anda kemudian.",
+	"This deletes your account, and you won't be able to sign back in. Your vault data stays until an admin removes it.":
+		"Ini akan menghapuskan akaun anda, dan anda tidak dapat log masuk semula. Data peti nota anda akan kekal sehingga seorang pentadbir menghapusnya.",
 	"I understand this is irreversible": "Saya faham ini tidak dapat dipulihkan",
 	Delete: "Padam",
 	"Could not delete account": "Tidak dapat padam akaun",
@@ -1290,10 +1290,10 @@ export default {
 	"Add property": "Tambah sifat",
 	"Properties are the note's {frontmatter}: a block at the very top of the file, fenced by {fence}. Obsidian shows the same block as Properties, so a note edited in either place reads the same in both.":
 		"Sifat ialah {frontmatter} nota: satu blok di bahagian atas fail, dibatasi oleh {fence}. Obsidian menunjukkan blok yang sama sebagai Sifat, jadi nota yang diedit di mana-mana tempat akan kelihatan sama di kedua-dua tempat.",
-	"Any property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
-		"Sebarang sifat yang anda tambah akan disimpan dan disinkronkan. Ini ialah sifat yang Engram juga {reads} — ia mengindeksnya ke dalam kolomnya sendiri dan carian menggunakannya, jadi mengisinya melakukan lebih daripada sekadar merekod nota tentang nota itu:",
-	"These field names come from the {okf}, the open standard Engram follows — so using them keeps your notes portable to anything else that reads OKF. Any other name is yours to invent; it syncs like everything else.":
-		"Nama medan ini berasal daripada {okf}, standard terbuka yang diikuti oleh Engram — jadi menggunakannya memastikan nota anda boleh dipindahkan ke mana-mana aplikasi lain yang membaca OKF. Nama lain adalah milik anda untuk dicipta; ia disinkronkan seperti yang lain.",
+	"Every property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
+		"Setiap sifat yang anda tambah disimpan dan disegerakkan. Ini adalah sifat yang Engram juga {reads} — ia mengindeksnya ke dalam lajur sendiri dan carian menggunakannya, jadi mengisinya melakukan lebih daripada sekadar merekod nota tentang nota:",
+	"These field names come from the {okf}, an open standard that Engram follows. Using them keeps your notes portable to any other app that reads OKF. Any other name is yours to invent; it syncs like everything else.":
+		"Nama medan ini berasal daripada {okf}, sebuah standard terbuka yang Engram ikut. Menggunakannya memastikan nota anda boleh dibawa ke aplikasi lain yang membaca OKF. Nama lain adalah milik anda untuk dicipta; ia disegerakkan seperti yang lain.",
 	"{label} value": "Nilai {label}",
 	"Remove {item}": "Buang {item}",
 	"Add item...": "Tambah item...",
@@ -1351,7 +1351,7 @@ export default {
 	"Claim.": "Tuntut.",
 	"Source.": "Sumber.",
 	"Shipped on time.": "Dikirim tepat waktu.",
-	"For a generous value of on time.": "Untuk nilai yang sangat baik, iaitu tepat waktu.",
+	"Well, almost.": "Hampir.",
 	"the runbook": "buku panduan",
 	"Engram docs": "Dokumen Engram",
 	"text if it can't load": "teks jika ia tidak dapat dimuatkan",
@@ -1393,7 +1393,8 @@ export default {
 	"Escape a mark": "Elakkan tanda",
 	"A backslash makes the next punctuation mark literal, so it shows up instead of formatting. Works on any of them: \\* \\_ \\# \\` \\[ \\] and the rest.":
 		"Tanda backslash menjadikan tanda baca seterusnya sebagai literal, jadi ia akan dipaparkan, bukan sebagai pemformatan. Berfungsi pada semua tanda: \\* \\_ \\# \\` \\[ \\] dan yang lain.",
-	"Which characters can be escaped": "Aksara yang boleh dielakkan",
+	"Characters that need a backslash to show as plain text":
+		"Aksara yang memerlukan tanda terbalik untuk dipaparkan sebagai teks biasa",
 	Headings: "Tajuk",
 	Structure: "Struktur",
 	"Task list": "Senarai tugas",

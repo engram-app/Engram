@@ -23,6 +23,11 @@ const SPECS: Record<Target, Spec> = {
 		tone: "Address the user informally (tu, ton), never vous.",
 		formal: /\b(?:vous|votre|vos)\b/iu,
 	},
+	id: {
+		name: "Indonesian",
+		tone: "Address the user as Anda, never kamu.",
+		formal: /(?<![\p{L}])(?:kamu|kau|engkau|dikau)(?![\p{L}])/iu,
+	},
 	it: {
 		name: "Italian",
 		tone: "Address the user informally (tu, tuo), never Lei.",
@@ -36,12 +41,25 @@ const SPECS: Record<Target, Spec> = {
 	},
 	ko: { name: "Korean", tone: "Use polite, concise UI Korean.", script: /\p{Script=Hangul}/u },
 	ms: { name: "Malay", tone: "Address the user as anda." },
+	pl: {
+		name: "Polish",
+		tone: "Address the user informally (ty, twój), never Pan or Pani.",
+		// \b is ASCII-only even with u, so letter lookarounds (as ru/tr) and every case form.
+		formal:
+			/(?<![\p{L}])(?:pan|pani|pana|panu|panem|panie|panią|państwo|państwa|państwu|państwem|pańsk\p{L}*)(?![\p{L}])/iu,
+	},
 	"pt-BR": { name: "Brazilian Portuguese", tone: "Address the user as você." },
 	ru: {
 		name: "Russian",
 		tone: "Address the user formally (вы, ваш), never ты.",
 		formal: /(?<![\p{L}])(?:ты|твой|твоя|твоё|твои|тебя|тебе)(?![\p{L}])/iu,
 		script: /\p{Script=Cyrillic}/u,
+	},
+	tr: {
+		name: "Turkish",
+		// Naming the pronouns made gemma paste "{siz}" in as a placeholder (2026-10-16).
+		tone: "Use polite, concise UI Turkish.",
+		formal: /(?<![\p{L}])(?:sen|senin|sana|seni|sende|senden|seninle)(?![\p{L}])/iu,
 	},
 	vi: { name: "Vietnamese", tone: "Address the user as bạn." },
 	"zh-CN": {
@@ -82,9 +100,32 @@ const PINNED: Partial<Record<Target, readonly string[]>> = {
 	de: ["Reading view"],
 	it: ["Outline", "Strikethrough"],
 	ja: ["Dark", "Light", "Outline", "Reading", "Reading view"],
+	id: [
+		"Dark",
+		"Light",
+		"Outline",
+		"Reading",
+		"Reading view",
+		"Strikethrough",
+		"Math",
+		"Frontmatter",
+		"frontmatter",
+	],
 	ms: ["Idea", "Outline", "Reading", "Reading view", "Strikethrough"],
+	pl: [
+		"Dark",
+		"Light",
+		"Outline",
+		"Reading",
+		"Reading view",
+		"Strikethrough",
+		"Math",
+		"Frontmatter",
+		"frontmatter",
+	],
 	"pt-BR": ["Reading"],
 	ru: ["Outline"],
+	tr: ["Dark", "Light", "Outline", "Reading", "Reading view", "Strikethrough", "Math"],
 	vi: ["Light", "Outline", "Reading", "Reading view", "Strikethrough"],
 	"zh-CN": ["Dark", "Outline", "Reading"],
 	"zh-TW": ["Math", "Redo edit"],
@@ -107,13 +148,25 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
 	// zh and ru rendered "Write" as the verb "compose" (書く, 撰写, Написать).
 	Read: "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 	Write:
-		"Permission column header in a vault access table: the connection may change notes. A noun, not a verb (like 'write access').",
+		"Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 	// A button on each connection. Without a note de and ja read it as a noun,
 	// "access for editing" (Bearbeitungszugriff, 編集権限).
 	"Edit access":
 		"Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 	"Edit access for {name}":
 		"Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
+	// Meaning check, 2026-10-16: "device" came back as an office (pl) and the label
+	// as a full sentence (ja). Other misread sources were reworded instead.
+	"Your plan resumes on {date}":
+		"Billing banner: a subscription that was set to cancel becomes active again on this date.",
+	"the device on {os} that syncs your '{vault}' vault (last active {since})":
+		"Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
+	"the device on {os} that syncs your '{vault}' vault":
+		"Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
+	"the device that syncs your '{vault}' vault (last active {since})":
+		"Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
+	"the device that syncs your '{vault}' vault":
+		"Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
 	// Email strings (priv/i18n/email). zh/ja greeted with a casual "嗨" while the
 	// body used the polite form.
 	"Hi,":

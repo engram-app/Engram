@@ -64,7 +64,7 @@
 	},
 	"footnote": {
 		"syntax": "Claim.[^1]\n\n[^1]: Source.",
-		"demo": "Shipped on time.[^1]\n\n[^1]: For a generous value of on time."
+		"demo": "Shipped on time.[^1]\n\n[^1]: Well, almost."
 	},
 	"wikilink": {
 		"syntax": "[[Deployment Runbook]]"

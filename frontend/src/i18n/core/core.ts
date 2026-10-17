@@ -1,4 +1,4 @@
-// i18n-core 5cfb0b93
+// i18n-core 6a9ff750
 // The translategemma pipeline shared by the web app, the Obsidian plugin and the
 // marketing site: prompts, the checks an answer must pass, and catalog state.
 // Canonical copy: engram-app/Engram frontend/src/i18n/core/. The other repos
@@ -127,8 +127,9 @@ function numbers(s: string, source = false): string[] {
 // Lowercase, letters only, brands already removed ("💬 Feedback" is "feedback").
 const LOANWORDS: Record<string, readonly string[]> = {
 	// Names every language keeps, for profiles that do not list them as brands.
+	// "cloud" is what "Engram Cloud", a product name, leaves once "Engram" is removed.
 	"*": [
-		...["chatgpt web", "docker compose", "docker compose up", "mcp", "obsidian sync"],
+		...["chatgpt web", "cloud", "docker compose", "docker compose up", "mcp", "obsidian sync"],
 		...["reddit", "relay", "sponsors", "youtube"],
 	],
 	de: [
@@ -189,6 +190,37 @@ const LOANWORDS: Record<string, readonly string[]> = {
 		"types",
 		"web",
 	],
+	// "admin", "bug" and "subtotal" have no Obsidian or VS Code source (no VS Code
+	// Indonesian pack); kept on the owner's call, 2026-10-16.
+	id: [
+		"admin",
+		"alias",
+		"bookmark",
+		"bug",
+		"callout",
+		"edit",
+		"editor",
+		"email",
+		"file",
+		"filter",
+		"folder",
+		"font",
+		"format",
+		"info",
+		"label",
+		"manual",
+		"markdown",
+		"offline",
+		"per",
+		"plugin",
+		"root",
+		"status",
+		"subtotal",
+		"tag",
+		"total",
+		"url",
+		"vault",
+	],
 	it: [
 		"account",
 		"backend",
@@ -218,6 +250,18 @@ const LOANWORDS: Record<string, readonly string[]> = {
 	ja: ["linux pc", "markdown", "web", "windows pc"],
 	ko: ["linux pc", "url", "windows pc"],
 	ms: ["edit", "folder", "frontmatter", "idea", "label", "markdown", "popular", "status", "token"],
+	pl: [
+		"alias",
+		"folder",
+		"format",
+		"link",
+		"markdown",
+		"offline",
+		"status",
+		"system",
+		"tag",
+		"wikilink",
+	],
 	pt: [
 		"backend",
 		"bug",
@@ -242,6 +286,7 @@ const LOANWORDS: Record<string, readonly string[]> = {
 		"web",
 	],
 	ru: ["markdown"],
+	tr: ["markdown"],
 	vi: ["backend", "cloud", "email", "frontmatter", "markdown", "token"],
 	zh: ["bug", "markdown"],
 };
@@ -408,6 +453,10 @@ function translator<T extends string>(profile: Profile<T>) {
 			out = out.replace(/<\/?\d+\s*\/?>/gu, "").trim();
 			// "<Claude>", "<보유한>": brackets around a word in copy that has no tags.
 			out = out.replace(/<(?<word>[^<>/\s][^<>]{0,40})>/gu, "$<word>");
+		}
+		// "*Backend* Engram": emphasis the source never asked for shows as literal stars.
+		if (!src.includes("*")) {
+			out = out.replace(/\*(?<word>[^*\s](?:[^*]*[^*\s])?)\*/gu, "$<word>");
 		}
 		if (!/[.!?…:。]\s*$/u.test(src)) {
 			out = out.replace(/[.。．]$/u, "");

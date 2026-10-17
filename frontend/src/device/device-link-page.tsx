@@ -893,7 +893,7 @@ function VaultPickerFieldset({
 // Build a user-facing identifier for the Obsidian device that's about to be
 // disconnected. We layer signals from the Connection record so the banner
 // reads as specifically as the data allows:
-//   "the device syncing your 'Notes' vault on macOS (last active 2 days ago)"
+//   "the device on macOS that syncs your 'Notes' vault (last active 2 days ago)"
 // Falls back to "your previous device" when nothing useful is available
 // (e.g., a freshly seeded test row with no UA / no vault name).
 function describeObsidianDevice(c: Connection, t: Translate, tn: Tn): string {
@@ -905,20 +905,20 @@ function describeObsidianDevice(c: Connection, t: Translate, tn: Tn): string {
 	// One whole sentence fragment per combination, so a language can order the
 	// parts its own way instead of inheriting English's gluing.
 	if (vault && os && since) {
-		return t("the device syncing your '{vault}' vault on {os} (last active {since})", {
+		return t("the device on {os} that syncs your '{vault}' vault (last active {since})", {
 			vault,
 			os,
 			since,
 		});
 	}
 	if (vault && os) {
-		return t("the device syncing your '{vault}' vault on {os}", { vault, os });
+		return t("the device on {os} that syncs your '{vault}' vault", { vault, os });
 	}
 	if (vault && since) {
-		return t("the device syncing your '{vault}' vault (last active {since})", { vault, since });
+		return t("the device that syncs your '{vault}' vault (last active {since})", { vault, since });
 	}
 	if (vault) {
-		return t("the device syncing your '{vault}' vault", { vault });
+		return t("the device that syncs your '{vault}' vault", { vault });
 	}
 	if (os && since) {
 		return t("on {os} (last active {since})", { os, since });

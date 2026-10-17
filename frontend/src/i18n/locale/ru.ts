@@ -224,7 +224,7 @@ export default {
 	"Your plan changes on {date}": "Изменения в вашем плане {date}",
 	"Your plan cancels on {date}": "Отмена вашего плана {date}",
 	"Your plan pauses on {date}": "Приостановка вашего плана {date}",
-	"Your plan resumes on {date}": "Возобновление вашего плана {date}",
+	"Your plan resumes on {date}": "Ваш план возобновляется {date}",
 	"{price}/mo": "{price}/месяц",
 	"{price}/yr": "{price}/год",
 	"Billing cadence": "Периодичность оплаты",
@@ -285,12 +285,12 @@ export default {
 	"Cancel the free trial below — you won't be charged. You can subscribe to the plan you want at any time.":
 		"Отмените бесплатный пробный период ниже — вам не будет выставлен счет. Вы можете подписаться на нужный вам тарифный план в любое время.",
 	"Cancel free trial": "Отменить пробный период",
-	"No charge today; next bill {total} on {renewal}":
-		"Сегодня оплата не взимается; следующий счет {total} на {renewal}",
-	"Charged {amount} today; next bill {total} on {renewal}":
-		"Сегодня списано {amount}; следующий счет {total} на {renewal}",
-	"Credited {amount} today; next bill {total} on {renewal}":
-		"Возвращено {amount} сегодня; следующий счет {total} на {renewal}",
+	"No charge today. Next bill: {total} on {renewal}":
+		"Сегодня оплата не требуется. Следующий платёж: {total} {renewal}",
+	"Charged {amount} today. Next bill: {total} on {renewal}":
+		"Сегодня списано {amount}. Следующий платёж: {total} {renewal}",
+	"Credited {amount} today. Next bill: {total} on {renewal}":
+		"Сегодня зачислено {amount}. Следующий платёж: {total} {renewal}",
 	"Your free trial is already scheduled to cancel on {date}. You won't be charged. You can subscribe to the plan you want once your trial ends.":
 		"Ваш бесплатный пробный период автоматически отменится {date}. Вам не будет выставлен счет. Вы можете подписаться на нужный вам тарифный план после окончания пробного периода.",
 	"Use {action} right below the Current Plan section to reverse the cancellation.":
@@ -483,14 +483,14 @@ export default {
 	"(choose from {count} vaults)": "(выберите из {count} хранилищ)",
 	"Or create a new vault": "Или создайте новое хранилище",
 	"Create your first vault": "Создайте ваше первое хранилище",
-	"the device syncing your '{vault}' vault on {os} (last active {since})":
-		"устройство, синхронизирующее ваше хранилище '{vault}' на {os} (последняя активность {since})",
-	"the device syncing your '{vault}' vault on {os}":
-		"устройство, синхронизирующее ваше хранилище '{vault}' на {os}",
-	"the device syncing your '{vault}' vault (last active {since})":
+	"the device on {os} that syncs your '{vault}' vault (last active {since})":
+		"устройство, подключенное к {os}, которое синхронизирует ваше хранилище '{vault}' (последняя активность {since})",
+	"the device on {os} that syncs your '{vault}' vault":
+		"устройство, подключенное к {os}, которое синхронизирует ваше хранилище '{vault}'",
+	"the device that syncs your '{vault}' vault (last active {since})":
 		"устройство, синхронизирующее ваше хранилище '{vault}' (последняя активность {since})",
-	"the device syncing your '{vault}' vault":
-		"устройство, синхронизирующее ваше хранилище '{vault}'",
+	"the device that syncs your '{vault}' vault":
+		"устройство, которое синхронизирует ваше хранилище '{vault}'",
 	"on {os} (last active {since})": "на {os} (последняя активность {since})",
 	"on {os}": "на {os}",
 	"(last active {since})": "(последняя активность {since})",
@@ -766,8 +766,8 @@ export default {
 	Created: "Создано",
 	"We index each note's {type} separately, so adding one to your notes can improve your searches. Filter to a type here to look only at notes of that kind.":
 		"Мы индексируем {type} каждой заметки отдельно, поэтому добавление одного из них в ваши заметки может улучшить поиск. Используйте фильтр для отображения только заметок определенного типа.",
-	"It is also the one field required by the {okf}, the open standard Engram follows — so filling it in keeps your notes portable to anything else that reads OKF.":
-		"Это также единственное поле, требуемое {okf}, открытым стандартом, которому следует Engram, поэтому заполнение этого поля делает ваши заметки совместимыми с любыми другими приложениями, поддерживающими OKF.",
+	"It is also the one field required by the {okf}, an open standard that Engram follows. Filling it in keeps your notes portable to any other app that reads OKF.":
+		"Это также обязательное поле, требуемое стандартом {okf}, открытым стандартом, которому следует Engram. Заполнение этого поля делает ваши заметки переносимыми в любое другое приложение, которое поддерживает OKF.",
 	"{count} results": {
 		one: "{count} результат",
 		few: "{count} результата",
@@ -932,7 +932,7 @@ export default {
 	"Finish setup": "Завершить настройку",
 	"Open setup checklist, {remaining} remaining":
 		"Открыть контрольный список настройки, осталось {remaining} шагов",
-	"Steps left to finish setting up Engram": "Шаги, необходимые для завершения настройки Engram",
+	"Steps left to finish setup": "Осталось шагов для завершения настройки",
 	"Onboarding checklist": "Контрольный список адаптации",
 	"Dismiss checklist": "Закрыть контрольный список",
 	"{completed} of {total} done": "Выполнено {completed} из {total}",
@@ -1050,8 +1050,8 @@ export default {
 		"Необратимые действия. Удаление вашей учётной записи выводит вас из системы и блокирует будущие входы для этого пользователя.",
 	"Delete account": "Удалить учётную запись",
 	"Delete your account?": "Удалить вашу учётную запись?",
-	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"Это временно удалит вашу учётную запись. Вы не сможете войти снова. Администратор может позже удалить данные вашего хранилища.",
+	"This deletes your account, and you won't be able to sign back in. Your vault data stays until an admin removes it.":
+		"Это удалит вашу учётную запись, и вы не сможете войти снова. Ваши данные хранилища останутся до тех пор, пока администратор их не удалит.",
 	"I understand this is irreversible": "Я понимаю, что это необратимо",
 	Delete: "Удалить",
 	"Could not delete account": "Не удалось удалить учётную запись",
@@ -1399,10 +1399,10 @@ export default {
 	"Add property": "Добавить свойство",
 	"Properties are the note's {frontmatter}: a block at the very top of the file, fenced by {fence}. Obsidian shows the same block as Properties, so a note edited in either place reads the same in both.":
 		"Свойства – это {frontmatter}: блок в самом верху файла, заключенный в {fence}. Obsidian отображает тот же блок как Свойства, поэтому заметка, отредактированная в любом месте, выглядит одинаково.",
-	"Any property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
-		"Любое свойство, которое вы добавляете, сохраняется и синхронизируется. Это те свойства, которые Engram также {reads} – он индексирует их в отдельные столбцы, и поиск использует их, поэтому заполнение свойств делает больше, чем просто записывает информацию о заметке.",
-	"These field names come from the {okf}, the open standard Engram follows — so using them keeps your notes portable to anything else that reads OKF. Any other name is yours to invent; it syncs like everything else.":
-		"Эти названия полей взяты из {okf}, открытого стандарта, которому следует Engram, поэтому их использование обеспечивает переносимость ваших заметок на любые другие системы, поддерживающие OKF. Любое другое название можете придумать сами; оно синхронизируется, как и всё остальное.",
+	"Every property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
+		"Каждое свойство, которое вы добавляете, сохраняется и синхронизируется. Это те свойства, которые Engram также {reads} — они индексируются в отдельные столбцы, и поиск использует их, поэтому заполнение этих свойств делает больше, чем просто записывает информацию о заметке:",
+	"These field names come from the {okf}, an open standard that Engram follows. Using them keeps your notes portable to any other app that reads OKF. Any other name is yours to invent; it syncs like everything else.":
+		"Эти названия полей взяты из {okf}, открытого стандарта, которому следует Engram. Использование этих названий делает ваши заметки переносимыми в любое другое приложение, которое поддерживает OKF. Любое другое название можете придумать сами; оно синхронизируется, как и всё остальное.",
 	"{label} value": "Значение {label}",
 	"Remove {item}": "Удалить {item}",
 	"Add item...": "Добавить элемент...",
@@ -1460,7 +1460,7 @@ export default {
 	"Claim.": "Запрос.",
 	"Source.": "Источник.",
 	"Shipped on time.": "Отправлено вовремя.",
-	"For a generous value of on time.": 'Для щедрого определения "вовремя".',
+	"Well, almost.": "Ну, почти.",
 	"the runbook": "Руководство пользователя",
 	"Engram docs": "Документация Engram",
 	"text if it can't load": "Текст, если не удалось загрузить",
@@ -1502,7 +1502,8 @@ export default {
 	"Escape a mark": "Экранирование символа",
 	"A backslash makes the next punctuation mark literal, so it shows up instead of formatting. Works on any of them: \\* \\_ \\# \\` \\[ \\] and the rest.":
 		"Обратный слеш делает следующий символ пунктуации буквальным, поэтому он отображается вместо форматирования. Работает со всеми: \\* \\_ \\# \\` \\[ \\] и другими.",
-	"Which characters can be escaped": "Какие символы можно экранировать",
+	"Characters that need a backslash to show as plain text":
+		"Символы, для отображения которых требуется обратный слеш",
 	Headings: "Заголовки",
 	Structure: "Структура",
 	"Task list": "Список задач",

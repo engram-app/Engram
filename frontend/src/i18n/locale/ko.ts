@@ -209,7 +209,7 @@ export default {
 	"Your plan changes on {date}": "구독 플랜이 {date}에 변경됩니다",
 	"Your plan cancels on {date}": "구독 플랜이 {date}에 해지됩니다",
 	"Your plan pauses on {date}": "구독 플랜이 {date}에 일시 중지됩니다",
-	"Your plan resumes on {date}": "구독 플랜이 {date}에 재개됩니다",
+	"Your plan resumes on {date}": "구독이 {date}부터 다시 시작됩니다",
 	"{price}/mo": "{price}/월",
 	"{price}/yr": "{price}/년",
 	"Billing cadence": "결제 주기",
@@ -266,12 +266,12 @@ export default {
 	"Cancel the free trial below — you won't be charged. You can subscribe to the plan you want at any time.":
 		"아래에서 무료 체험을 취소하시면 요금이 부과되지 않습니다. 언제든지 원하시는 요금제로 구독하실 수 있습니다.",
 	"Cancel free trial": "무료 체험 취소",
-	"No charge today; next bill {total} on {renewal}":
-		"오늘 요금 없음; 다음 요금은 {renewal}월 {total}일에 청구됩니다",
-	"Charged {amount} today; next bill {total} on {renewal}":
-		"오늘 {amount}원 요금 청구됨; 다음 요금은 {renewal}월 {total}일에 청구됩니다",
-	"Credited {amount} today; next bill {total} on {renewal}":
-		"오늘 {amount}원 환불됨; 다음 요금은 {renewal}월 {total}일에 청구됩니다",
+	"No charge today. Next bill: {total} on {renewal}":
+		"오늘 요금은 없습니다. 다음 결제 예정일: {total} (날짜: {renewal})",
+	"Charged {amount} today. Next bill: {total} on {renewal}":
+		"오늘 {amount} 요금이 부과되었습니다. 다음 결제 예정일: {total} (날짜: {renewal})",
+	"Credited {amount} today. Next bill: {total} on {renewal}":
+		"오늘 {amount} 환불되었습니다. 다음 결제 예정일: {total} (날짜: {renewal})",
 	"Your free trial is already scheduled to cancel on {date}. You won't be charged. You can subscribe to the plan you want once your trial ends.":
 		"무료 체험은 이미 {date}일에 자동 종료될 예정입니다. 요금이 부과되지 않습니다. 체험 기간이 끝나면 원하시는 요금제로 구독하실 수 있습니다.",
 	"Use {action} right below the Current Plan section to reverse the cancellation.":
@@ -449,12 +449,12 @@ export default {
 	"(choose from {count} vaults)": "(다음 중 선택: {count} 보관함)",
 	"Or create a new vault": "또는 새 보관함을 만듭니다",
 	"Create your first vault": "첫 번째 보관함을 만듭니다",
-	"the device syncing your '{vault}' vault on {os} (last active {since})":
-		"{os}에서 '{vault}' 보관함을 동기화하는 기기 (최근 활동: {since})",
-	"the device syncing your '{vault}' vault on {os}": "{os}에서 '{vault}' 보관함을 동기화하는 기기",
-	"the device syncing your '{vault}' vault (last active {since})":
-		"'{vault}' 보관함을 동기화하는 기기 (최근 활동: {since})",
-	"the device syncing your '{vault}' vault": "'{vault}' 보관함을 동기화하는 기기",
+	"the device on {os} that syncs your '{vault}' vault (last active {since})":
+		"{os}에 동기화되는 '{vault}' 보관함이 연결된 장치 (최근 사용 {since})",
+	"the device on {os} that syncs your '{vault}' vault": "'{vault}' 보관함과 동기화되는 {os}의 장치",
+	"the device that syncs your '{vault}' vault (last active {since})":
+		"'{vault}' 보관함과 동기화되는 기기 (최근 사용 {since})",
+	"the device that syncs your '{vault}' vault": "'{vault}' 보관함과 동기화되는 기기",
 	"on {os} (last active {since})": "{os} (최근 활동: {since})",
 	"on {os}": "{os}",
 	"(last active {since})": "(최근 활동: {since})",
@@ -695,8 +695,8 @@ export default {
 	Created: "생성됨",
 	"We index each note's {type} separately, so adding one to your notes can improve your searches. Filter to a type here to look only at notes of that kind.":
 		"각 노트의 {type}을 개별적으로 인덱싱하므로, 노트를 추가하면 검색 성능이 향상될 수 있습니다. 특정 유형으로 필터링하여 해당 유형의 노트만 볼 수 있습니다.",
-	"It is also the one field required by the {okf}, the open standard Engram follows — so filling it in keeps your notes portable to anything else that reads OKF.":
-		"{okf}에서 요구하는 필수 필드이며, Engram이 따르는 개방형 표준이므로, 이 필드를 채우면 노트를 다른 OKF 호환 프로그램에서도 사용할 수 있습니다.",
+	"It is also the one field required by the {okf}, an open standard that Engram follows. Filling it in keeps your notes portable to any other app that reads OKF.":
+		"이 필드는 {okf}에서 요구하는 필수 필드이며, Engram도 이를 따릅니다. 이 필드를 채우면 노트를 다른 OKF를 지원하는 앱에서도 사용할 수 있습니다.",
 	"{count} results": { other: "{count}개의 결과" },
 	"Sidebar views": "사이드바 보기",
 	"User menu": "사용자 메뉴",
@@ -834,7 +834,7 @@ export default {
 	"Open setup checklist": "설정 확인 목록 열기",
 	"Finish setup": "설정 완료",
 	"Open setup checklist, {remaining} remaining": "설정 확인 목록 열기, {remaining} 항목 남음",
-	"Steps left to finish setting up Engram": "Engram 설정 완료를 위한 단계",
+	"Steps left to finish setup": "설정 완료까지 남은 단계",
 	"Onboarding checklist": "시작 가이드",
 	"Dismiss checklist": "확인 목록 닫기",
 	"{completed} of {total} done": "{completed} / {total} 완료",
@@ -948,8 +948,8 @@ export default {
 		"영구적인 작업입니다. 계정을 삭제하면 로그아웃되며, 해당 사용자 계정으로 다시 로그인할 수 없습니다.",
 	"Delete account": "계정 삭제",
 	"Delete your account?": "계정을 삭제하시겠습니까?",
-	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"사용자 계정을 삭제합니다. 다시 로그인할 수 없습니다. 관리자가 나중에 보관함 데이터를 삭제할 수 있습니다.",
+	"This deletes your account, and you won't be able to sign back in. Your vault data stays until an admin removes it.":
+		"이 작업은 계정을 삭제하며, 다시 로그인할 수 없습니다. 보관함 데이터는 관리자가 삭제할 때까지 유지됩니다.",
 	"I understand this is irreversible": "이 작업이 되돌릴 수 없다는 것을 이해합니다",
 	Delete: "삭제",
 	"Could not delete account": "계소 삭제에 실패했습니다",
@@ -1269,10 +1269,10 @@ export default {
 	"Add property": "속성 추가",
 	"Properties are the note's {frontmatter}: a block at the very top of the file, fenced by {fence}. Obsidian shows the same block as Properties, so a note edited in either place reads the same in both.":
 		"속성은 노트의 {frontmatter}입니다. 파일의 최상단에 위치하며, {fence}로 둘러싸여 있습니다. Obsidian에서도 동일한 블록을 속성으로 표시하므로, 어느 곳에서든 편집한 노트는 동일하게 표시됩니다.",
-	"Any property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
-		"추가하는 모든 속성은 저장되고 동기화됩니다. Engram에서도 이러한 속성을 {reads}합니다. Engram은 이를 자체 컬럼으로 인덱싱하며, 검색 기능에서도 사용되므로, 속성 입력은 단순히 노트에 대한 정보를 기록하는 것 이상의 의미를 갖습니다.",
-	"These field names come from the {okf}, the open standard Engram follows — so using them keeps your notes portable to anything else that reads OKF. Any other name is yours to invent; it syncs like everything else.":
-		"이러한 필드 이름은 {okf}에서 가져온 것입니다. Engram은 이 개방형 표준을 따르므로, 이러한 이름을 사용하면 노트를 다른 OKF 호환 시스템에서도 사용할 수 있습니다. 다른 이름을 사용해도 괜찮습니다. 이 경우에도 다른 항목과 마찬가지로 동기화됩니다.",
+	"Every property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
+		"추가하는 모든 속성은 저장되고 동기화됩니다. Engram도 이 속성을 사용합니다. {reads}은 이를 자체 열로 인덱싱하며, 검색 기능도 이를 활용합니다. 따라서 속성을 채우는 것은 단순히 노트에 대한 정보를 기록하는 것 이상의 의미를 가집니다.",
+	"These field names come from the {okf}, an open standard that Engram follows. Using them keeps your notes portable to any other app that reads OKF. Any other name is yours to invent; it syncs like everything else.":
+		"이 필드 이름은 {okf}에서 정의한 것으로, Engram도 이를 따릅니다. 이 이름을 사용하면 노트를 다른 OKF를 지원하는 앱에서도 사용할 수 있습니다. 다른 이름을 사용해도 괜찮습니다. 이 경우에도 다른 항목들과 마찬가지로 동기화됩니다.",
 	"{label} value": "{label} 값",
 	"Remove {item}": "{item} 삭제",
 	"Add item...": "항목 추가...",
@@ -1330,7 +1330,7 @@ export default {
 	"Claim.": "주장.",
 	"Source.": "출처.",
 	"Shipped on time.": "정시에 배송됨.",
-	"For a generous value of on time.": '"정시"라는 높은 가치를 기준으로 합니다.',
+	"Well, almost.": "거의 그렇습니다.",
 	"the runbook": "운영 매뉴얼",
 	"Engram docs": "Engram 설명서",
 	"text if it can't load": "로드할 수 없는 경우 표시되는 텍스트",
@@ -1372,7 +1372,8 @@ export default {
 	"Escape a mark": "기호를 이스케이프합니다",
 	"A backslash makes the next punctuation mark literal, so it shows up instead of formatting. Works on any of them: \\* \\_ \\# \\` \\[ \\] and the rest.":
 		"백슬래시(\\)는 다음 문자를 실제 문자로 표시합니다. 서식이 아닌 그대로 표시됩니다. 모든 기호에 적용됩니다: \\* \\_ \\# \\` \\[ \\] 등.",
-	"Which characters can be escaped": "이스케이프할 수 있는 문자",
+	"Characters that need a backslash to show as plain text":
+		"백슬래시(\\)를 사용하여 일반 텍스트로 표시해야 하는 문자",
 	Headings: "제목",
 	Structure: "구조",
 	"Task list": "작업 목록",

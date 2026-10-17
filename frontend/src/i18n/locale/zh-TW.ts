@@ -196,7 +196,7 @@ export default {
 	"Your plan changes on {date}": "您的方案將於 {date} 變更",
 	"Your plan cancels on {date}": "您的方案將於 {date} 取消",
 	"Your plan pauses on {date}": "您的方案將於 {date} 暫停",
-	"Your plan resumes on {date}": "您的方案將於 {date} 恢復",
+	"Your plan resumes on {date}": "您的方案於 {date} 重新啟用",
 	"{price}/mo": "{price}/月",
 	"{price}/yr": "{price}/年",
 	"Billing cadence": "帳單週期",
@@ -253,11 +253,12 @@ export default {
 	"Cancel the free trial below — you won't be charged. You can subscribe to the plan you want at any time.":
 		"點擊下方取消免費試用 — 您不會被收取費用。您可以隨時訂閱您想要的方案。",
 	"Cancel free trial": "取消免費試用",
-	"No charge today; next bill {total} on {renewal}": "今天不收費；下期帳單 {total} 於 {renewal}",
-	"Charged {amount} today; next bill {total} on {renewal}":
-		"今天已收取 {amount}；下期帳單 {total} 於 {renewal}",
-	"Credited {amount} today; next bill {total} on {renewal}":
-		"今天已退款 {amount}；下期帳單 {total} 於 {renewal}",
+	"No charge today. Next bill: {total} on {renewal}":
+		"今天無需付費。下期帳單：{total}，日期：{renewal}",
+	"Charged {amount} today. Next bill: {total} on {renewal}":
+		"今天已收取 {amount}。下期帳單：{total}，日期：{renewal}",
+	"Credited {amount} today. Next bill: {total} on {renewal}":
+		"今天已退款 {amount}。下期帳單：{total}，日期：{renewal}",
 	"Your free trial is already scheduled to cancel on {date}. You won't be charged. You can subscribe to the plan you want once your trial ends.":
 		"您的免費試用已預定於 {date} 結束。您不會被收取費用。試用期結束後，您可以訂閱您想要的方案。",
 	"Use {action} right below the Current Plan section to reverse the cancellation.":
@@ -432,12 +433,12 @@ export default {
 	"(choose from {count} vaults)": "(從 {count} 個儲存庫中選擇)",
 	"Or create a new vault": "或建立新的儲存庫",
 	"Create your first vault": "建立您的第一個儲存庫",
-	"the device syncing your '{vault}' vault on {os} (last active {since})":
-		'用於同步您 "{vault}" 儲存庫的裝置，位於 {os} (上次活動 {since})',
-	"the device syncing your '{vault}' vault on {os}": '用於同步您 "{vault}" 儲存庫的裝置，位於 {os}',
-	"the device syncing your '{vault}' vault (last active {since})":
-		'用於同步您 "{vault}" 儲存庫的裝置 (上次活動 {since})',
-	"the device syncing your '{vault}' vault": '用於同步您 "{vault}" 儲存庫的裝置',
+	"the device on {os} that syncs your '{vault}' vault (last active {since})":
+		"與您的 '{vault}' 儲存庫同步的裝置 ({os}) (上次活動：{since})",
+	"the device on {os} that syncs your '{vault}' vault": "與您的 '{vault}' 儲存庫同步的 {os} 裝置",
+	"the device that syncs your '{vault}' vault (last active {since})":
+		"同步你的 '{vault}' 儲存庫的裝置 (上次活動 {since})",
+	"the device that syncs your '{vault}' vault": "同步你的 '{vault}' 儲存庫的裝置",
 	"on {os} (last active {since})": "在 {os} (上次活動 {since})",
 	"on {os}": "在 {os}",
 	"(last active {since})": "(上次活動 {since})",
@@ -673,8 +674,8 @@ export default {
 	Created: "已建立",
 	"We index each note's {type} separately, so adding one to your notes can improve your searches. Filter to a type here to look only at notes of that kind.":
 		"我們會分別索引每個筆記的 {type}，因此將其新增到您的筆記中可以改善您的搜尋。在此處篩選類型，以便僅查看該類型的筆記。",
-	"It is also the one field required by the {okf}, the open standard Engram follows — so filling it in keeps your notes portable to anything else that reads OKF.":
-		"這是 {okf} 所要求的唯一欄位，{okf} 是 Engram 遵循的開放標準，因此填寫此欄位可以確保您的筆記與其他支援 OKF 的應用程式相容。",
+	"It is also the one field required by the {okf}, an open standard that Engram follows. Filling it in keeps your notes portable to any other app that reads OKF.":
+		"這是 {okf} 要求的欄位，{okf} 是一個開放標準，Engram 遵循此標準。填寫此欄位可確保您的筆記在任何其他支援 OKF 的應用程式中都能使用。",
 	"{count} results": { other: "{count} 筆結果" },
 	"Sidebar views": "側邊欄視圖",
 	"User menu": "使用者選單",
@@ -809,7 +810,7 @@ export default {
 	"Open setup checklist": "開啟設定檢查清單",
 	"Finish setup": "完成設定",
 	"Open setup checklist, {remaining} remaining": "開啟設定檢查清單，剩 {remaining} 步",
-	"Steps left to finish setting up Engram": "完成 Engram 設定的步驟",
+	"Steps left to finish setup": "完成設定的步驟",
 	"Onboarding checklist": "入門檢查清單",
 	"Dismiss checklist": "關閉檢查清單",
 	"{completed} of {total} done": "已完成 {completed} 個，總共 {total} 個",
@@ -921,8 +922,8 @@ export default {
 		"永久性操作。刪除您的帳號會登出您，並阻止您未來再次登入此帳戶。",
 	"Delete account": "刪除帳號",
 	"Delete your account?": "刪除您的帳號？",
-	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"這是軟刪除操作，您將無法重新登入。管理員稍後可以清除您的儲存庫資料。",
+	"This deletes your account, and you won't be able to sign back in. Your vault data stays until an admin removes it.":
+		"這樣會刪除您的帳戶，您將無法重新登入。您的儲存庫資料會保留，直到管理員刪除。",
 	"I understand this is irreversible": "我了解這不可逆轉",
 	Delete: "刪除",
 	"Could not delete account": "刪除帳號失敗",
@@ -1230,10 +1231,10 @@ export default {
 	"Add property": "增加屬性",
 	"Properties are the note's {frontmatter}: a block at the very top of the file, fenced by {fence}. Obsidian shows the same block as Properties, so a note edited in either place reads the same in both.":
 		"屬性是筆記的 {frontmatter}：位於檔案最頂端的區塊，由 {fence} 圍繞。Obsidian 會將相同的區塊顯示為屬性，因此無論在哪裡編輯筆記，顯示結果都相同。",
-	"Any property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
-		"任何您新增的屬性都會儲存和同步。以下是 Engram 也 {reads} 的屬性 — 它將它們索引到自己的欄位中，搜尋功能會使用它們，因此填寫它們不僅僅是記錄有關筆記的資訊：",
-	"These field names come from the {okf}, the open standard Engram follows — so using them keeps your notes portable to anything else that reads OKF. Any other name is yours to invent; it syncs like everything else.":
-		"這些欄位名稱來自 {okf}，這是 Engram 遵循的開放標準 — 因此使用它們可以確保您的筆記在其他支援 OKF 的應用程式中也能正常讀取。您可以自行定義其他名稱；它們會像其他內容一樣同步。",
+	"Every property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
+		"您新增的每個屬性都會儲存和同步。這些是 Engram 也 {reads} 的屬性——它將它們索引到自己的欄位中，搜尋功能會使用它們，因此填寫它們不僅僅是記錄有關筆記的資訊：",
+	"These field names come from the {okf}, an open standard that Engram follows. Using them keeps your notes portable to any other app that reads OKF. Any other name is yours to invent; it syncs like everything else.":
+		"這些欄位名稱來自 {okf}，{okf} 是一個開放標準，Engram 遵循此標準。使用它們可確保您的筆記在任何其他支援 OKF 的應用程式中都能使用。任何其他名稱都可以自行定義；它會像其他內容一樣同步。",
 	"{label} value": "{label} 值",
 	"Remove {item}": "移除 {item}",
 	"Add item...": "新增項目...",
@@ -1291,7 +1292,7 @@ export default {
 	"Claim.": "申報。",
 	"Source.": "來源。",
 	"Shipped on time.": "準時送達。",
-	"For a generous value of on time.": "為了「準時」這個優點。",
+	"Well, almost.": "差不多。",
 	"the runbook": "執行手冊",
 	"Engram docs": "Engram 文件",
 	"text if it can't load": "無法載入時的提示",
@@ -1333,7 +1334,7 @@ export default {
 	"Escape a mark": "轉義符號",
 	"A backslash makes the next punctuation mark literal, so it shows up instead of formatting. Works on any of them: \\* \\_ \\# \\` \\[ \\] and the rest.":
 		"反斜線使下一個標點符號顯示為文字，而不是格式。適用於所有符號：\\* \\_ \\# \\` \\[ \\] 等。",
-	"Which characters can be escaped": "哪些字元可以轉義",
+	"Characters that need a backslash to show as plain text": "需要使用反斜線才能顯示為純文字的字元",
 	Headings: "標題",
 	Structure: "結構",
 	"Task list": "任務清單",

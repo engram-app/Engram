@@ -194,7 +194,7 @@ export default {
 	"Your plan changes on {date}": "您的套餐将于 {date} 更改",
 	"Your plan cancels on {date}": "您的套餐将于 {date} 取消",
 	"Your plan pauses on {date}": "您的套餐将于 {date} 暂停",
-	"Your plan resumes on {date}": "您的套餐将于 {date} 恢复",
+	"Your plan resumes on {date}": "您的计划于 {date} 恢复",
 	"{price}/mo": "{price}/月",
 	"{price}/yr": "{price}/年",
 	"Billing cadence": "账单周期",
@@ -251,12 +251,12 @@ export default {
 	"Cancel the free trial below — you won't be charged. You can subscribe to the plan you want at any time.":
 		"点击下方取消免费试用，您不会被收费。您可以随时订阅您想要的计划。",
 	"Cancel free trial": "取消免费试用",
-	"No charge today; next bill {total} on {renewal}":
-		"今天不收费；下期账单将在 {renewal} 的 {total} 到期",
-	"Charged {amount} today; next bill {total} on {renewal}":
-		"今天已收费 {amount}；下期账单将在 {renewal} 的 {total} 到期",
-	"Credited {amount} today; next bill {total} on {renewal}":
-		"已退款 {amount}；下期账单将在 {renewal} 的 {total} 到期",
+	"No charge today. Next bill: {total} on {renewal}":
+		"今天无需付费。下一次账单：{total}，日期：{renewal}",
+	"Charged {amount} today. Next bill: {total} on {renewal}":
+		"今天已扣款 {amount}。下一次账单：{total}，日期：{renewal}",
+	"Credited {amount} today. Next bill: {total} on {renewal}":
+		"今天已返还 {amount}。下一次账单：{total}，日期：{renewal}",
 	"Your free trial is already scheduled to cancel on {date}. You won't be charged. You can subscribe to the plan you want once your trial ends.":
 		"您的免费试用已计划在 {date} 自动取消。您不会被收费。试用结束后，您可以订阅您想要的计划。",
 	"Use {action} right below the Current Plan section to reverse the cancellation.":
@@ -430,12 +430,12 @@ export default {
 	"(choose from {count} vaults)": "(从 {count} 个仓库中选择)",
 	"Or create a new vault": "或创建新仓库",
 	"Create your first vault": "创建你的第一个仓库",
-	"the device syncing your '{vault}' vault on {os} (last active {since})":
-		"设备正在同步你的 '{vault}' 仓库，位于 {os} (上次活动 {since})",
-	"the device syncing your '{vault}' vault on {os}": "设备正在同步你的 '{vault}' 仓库，位于 {os}",
-	"the device syncing your '{vault}' vault (last active {since})":
-		"设备正在同步你的 '{vault}' 仓库 (上次活动 {since})",
-	"the device syncing your '{vault}' vault": "设备正在同步你的 '{vault}' 仓库",
+	"the device on {os} that syncs your '{vault}' vault (last active {since})":
+		"与 '{vault}' 仓库同步的设备 ({os}) (上次活动 {since})",
+	"the device on {os} that syncs your '{vault}' vault": "与 '{vault}' 仓库同步的 {os} 设备",
+	"the device that syncs your '{vault}' vault (last active {since})":
+		"同步你的 '{vault}' 仓库的设备 (上次活动 {since})",
+	"the device that syncs your '{vault}' vault": "同步你的 '{vault}' 仓库的设备",
 	"on {os} (last active {since})": "在 {os} (上次活动 {since})",
 	"on {os}": "在 {os}",
 	"(last active {since})": "(上次活动 {since})",
@@ -671,8 +671,8 @@ export default {
 	Created: "已创建",
 	"We index each note's {type} separately, so adding one to your notes can improve your searches. Filter to a type here to look only at notes of that kind.":
 		"我们分别索引每个笔记的 {type}，因此将一个添加到你的笔记中可以改善你的搜索。在这里筛选一种类型，只查看该类型的笔记。",
-	"It is also the one field required by the {okf}, the open standard Engram follows — so filling it in keeps your notes portable to anything else that reads OKF.":
-		"也是 {okf} 要求的字段，{okf} 是 Engram 遵循的开放标准，因此填写它可以使你的笔记在其他支持 OKF 的应用中也能使用。",
+	"It is also the one field required by the {okf}, an open standard that Engram follows. Filling it in keeps your notes portable to any other app that reads OKF.":
+		"这是一个 {okf} 要求的字段，{okf} 是一个开放标准，Engram 遵循该标准。填写此字段可以使您的笔记在任何其他支持 OKF 的应用中都能使用。",
 	"{count} results": { other: "{count} 个结果" },
 	"Sidebar views": "侧边栏视图",
 	"User menu": "用户菜单",
@@ -808,7 +808,7 @@ export default {
 	"Open setup checklist": "打开配置向导",
 	"Finish setup": "完成配置",
 	"Open setup checklist, {remaining} remaining": "打开配置向导，剩余 {remaining} 步",
-	"Steps left to finish setting up Engram": "完成 Engram 配置的步骤",
+	"Steps left to finish setup": "完成设置的步骤",
 	"Onboarding checklist": "引导清单",
 	"Dismiss checklist": "关闭清单",
 	"{completed} of {total} done": "已完成 {completed} 个，总共 {total} 个",
@@ -920,8 +920,8 @@ export default {
 		"永久性操作。删除你的账号会让你注销，并阻止将来再次登录。",
 	"Delete account": "删除账号",
 	"Delete your account?": "删除你的账号？",
-	"This soft-deletes your user. You won't be able to sign back in. An admin can purge your vault data later.":
-		"这会软删除你的用户。你将无法再次登录。管理员稍后可以清理你的仓库数据。",
+	"This deletes your account, and you won't be able to sign back in. Your vault data stays until an admin removes it.":
+		"这将删除您的账号，您将无法再次登录。您的仓库数据将保留，直到管理员删除。",
 	"I understand this is irreversible": "我理解这是一个不可逆的操作",
 	Delete: "删除",
 	"Could not delete account": "无法删除账号",
@@ -1228,10 +1228,10 @@ export default {
 	"Add property": "添加属性",
 	"Properties are the note's {frontmatter}: a block at the very top of the file, fenced by {fence}. Obsidian shows the same block as Properties, so a note edited in either place reads the same in both.":
 		"属性是笔记的 {frontmatter}：文件顶部的区块，用 {fence} 围起来。Obsidian 显示相同的区块作为属性，因此在任何地方编辑的笔记在两个地方都显示相同。",
-	"Any property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
-		"你添加的任何属性都会被存储和同步。这些是 Engram 也 {reads} 的属性——它将它们索引到自己的列中，搜索会用到它们，所以填写它们的作用不仅仅是记录关于笔记的信息：",
-	"These field names come from the {okf}, the open standard Engram follows — so using them keeps your notes portable to anything else that reads OKF. Any other name is yours to invent; it syncs like everything else.":
-		"这些字段名称来自 {okf}，这是 Engram 遵循的开放标准，因此使用它们可以使你的笔记更易于迁移到其他支持 OKF 的应用。任何其他名称都是你自定义的，它会像其他内容一样同步。",
+	"Every property you add is stored and synced. These are the ones Engram also {reads} — it indexes them into their own columns and search uses them, so filling them in does more than record a note about the note:":
+		"您添加的每个属性都会被存储和同步。这些属性 Engram 也 {reads} — 它将它们索引到自己的列中，搜索会用到它们，因此填写这些属性的作用不仅仅是记录关于笔记的信息：",
+	"These field names come from the {okf}, an open standard that Engram follows. Using them keeps your notes portable to any other app that reads OKF. Any other name is yours to invent; it syncs like everything else.":
+		"这些字段名称来自 {okf}，{okf} 是一个开放标准，Engram 遵循该标准。使用它们可以使您的笔记在任何其他支持 OKF 的应用中都能使用。您可以自定义其他字段名称，它们会像其他内容一样同步。",
 	"{label} value": "{label} 值",
 	"Remove {item}": "移除 {item}",
 	"Add item...": "添加项目...",
@@ -1289,7 +1289,7 @@ export default {
 	"Claim.": "领取。",
 	"Source.": "来源。",
 	"Shipped on time.": "准时发货。",
-	"For a generous value of on time.": "考虑到准时送达的价值。",
+	"Well, almost.": "差不多。",
 	"the runbook": "操作手册",
 	"Engram docs": "Engram 文档",
 	"text if it can't load": "无法加载时的提示",
@@ -1331,7 +1331,7 @@ export default {
 	"Escape a mark": "转义特殊字符",
 	"A backslash makes the next punctuation mark literal, so it shows up instead of formatting. Works on any of them: \\* \\_ \\# \\` \\[ \\] and the rest.":
 		"反斜杠使下一个标点符号显示为字面值，而不是格式。适用于所有：\\* \\_ \\# \\` \\[ \\] 等。",
-	"Which characters can be escaped": "可以转义哪些字符",
+	"Characters that need a backslash to show as plain text": "需要使用反斜杠才能显示为纯文本的字符",
 	Headings: "标题",
 	Structure: "结构",
 	"Task list": "任务列表",

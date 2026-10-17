@@ -263,7 +263,7 @@ function ChecklistWidget() {
 					<SheetHeader className="border-border border-b">
 						<SheetTitle className="text-base">{t("Finish setup")}</SheetTitle>
 						<SheetDescription className="sr-only">
-							{t("Steps left to finish setting up Engram")}
+							{t("Steps left to finish setup")}
 						</SheetDescription>
 					</SheetHeader>
 					{body}

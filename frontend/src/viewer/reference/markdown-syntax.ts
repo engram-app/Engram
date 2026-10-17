@@ -307,7 +307,7 @@ const ENTRY_DEFS: readonly EntryDef[] = [
 		templateLed: true,
 		link: {
 			href: "https://daringfireball.net/projects/markdown/syntax#backslash",
-			label: msg("Which characters can be escaped"),
+			label: msg("Characters that need a backslash to show as plain text"),
 		},
 	},
 
@@ -478,7 +478,7 @@ const ENTRY_DEFS: readonly EntryDef[] = [
 		category: msg("Structure"),
 		label: msg("Footnote"),
 		syntax: (t) => `${t("Claim.")}[^1]\n\n[^1]: ${t("Source.")}`,
-		demo: (t) => `${t("Shipped on time.")}[^1]\n\n[^1]: ${t("For a generous value of on time.")}`,
+		demo: (t) => `${t("Shipped on time.")}[^1]\n\n[^1]: ${t("Well, almost.")}`,
 		// Reading view renders this via remark-gfm. The EDITOR does not:
 		// @atomic-editor/editor has no footnote support at all — no entry in its
 		// inline class map, no hide rule — so `[^1]` stays literal in Edit and Raw.
