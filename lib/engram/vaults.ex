@@ -86,30 +86,6 @@ defmodule Engram.Vaults do
   end
 
   @doc """
-  `next_seq!/2` and the write that stamps it onto `note_id`, in one round
-  trip: allocates the vault's next seq and sets it as that note's `seq`.
-  Returns the seq.
-
-  For a create that inserts its row first (with a placeholder seq) so the
-  vault row lock is taken as late as possible. Same contract as `next_seq!/2`:
-  MUST run inside the caller's `Repo.with_tenant/2` transaction, the one that
-  inserted the row. Without a tenant both tables read as empty under FORCE
-  RLS, so the match below raises instead of stamping nothing.
-  """
-  @spec stamp_note_seq!(Ecto.UUID.t(), Ecto.UUID.t()) :: integer()
-  def stamp_note_seq!(vault_id, note_id) do
-    %{rows: [[seq]]} =
-      Repo.query!(
-        "WITH s AS (UPDATE vaults SET change_seq = change_seq + 1 WHERE id = $1 " <>
-          "RETURNING change_seq) " <>
-          "UPDATE notes SET seq = s.change_seq FROM s WHERE notes.id = $2 RETURNING notes.seq",
-        [Ecto.UUID.dump!(vault_id), Ecto.UUID.dump!(note_id)]
-      )
-
-    seq
-  end
-
-  @doc """
   Reads the vault's current `change_seq` watermark (read-only).
 
   Unlike `next_seq!/1` — which the docstring requires callers run inside

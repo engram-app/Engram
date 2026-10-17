@@ -775,8 +775,8 @@ defmodule Engram.Notes do
 
   # Shared create leg for a brand-new note row at a brand-new path, used by both
   # insert_new_note/7 (REST/MCP/web) and genesis_insert_bare/6 (crdt_create).
-  # crdt merge → encrypt → phase_b/okf/parse_status → INSERT ON CONFLICT
-  # DO NOTHING → re-fetch → seq. The two callers differ ONLY in what they map the
+  # crdt merge → encrypt → phase_b/okf/parse_status → seq → INSERT ON CONFLICT
+  # DO NOTHING → re-fetch. The two callers differ ONLY in what they map the
   # neutral result to (REST returns a raw 4-tuple + {:conflict, _}; genesis
   # decrypts inline + tags :announce / :version_conflict), so this returns a
   # caller-agnostic result and each maps it to its own contract:
@@ -854,27 +854,21 @@ defmodule Engram.Notes do
         |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
         |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
 
-      # `seq` is NOT NULL, so the row lands with a placeholder that no other
-      # transaction can ever see, and the real seq is stamped once the re-fetch
-      # proves our row won. Allocating it LAST is the point: `next_seq!` takes
-      # the vault row lock, which serializes every write in the vault until
-      # commit, so the INSERT and re-fetch no longer run under it, and an INSERT
-      # that no-ops (raced path, taken PK) no longer burns a seq. Ordering is
-      # unchanged: seq order equals commit order because the lock is held to
-      # commit, wherever in the transaction it is taken. Same reasoning for the
-      # per-user meter row, bumped after the seq.
-      changeset =
-        %Note{id: note_id}
-        |> Note.changeset(phase_b)
-        |> Ecto.Changeset.put_change(:seq, 0)
+      changeset = Note.changeset(%Note{id: note_id}, phase_b)
+
+      # Lock order: the vault seq lock BEFORE any note row write. Every other
+      # writer (append, move, rename, get_note_for_update/3) takes the vault row
+      # first, so inserting first and locking after deadlocks against them
+      # (Postgres 40P01). Pinned by crdt_create_query_budget_test.exs.
+      seq = Engram.Vaults.next_seq!(base_attrs.vault_id)
+      changeset = Ecto.Changeset.put_change(changeset, :seq, seq)
 
       case Repo.insert(changeset, on_conflict: :nothing) do
         {:ok, _} ->
           case Repo.one(lookup_query) do
             %Note{id: ^note_id} = inserted ->
-              seq = Engram.Vaults.stamp_note_seq!(base_attrs.vault_id, note_id)
               :ok = UsageMeters.inc_notes_count(user.id, 1)
-              {:inserted, %{inserted | seq: seq}, crdt}
+              {:inserted, inserted, crdt}
 
             %Note{} = existing ->
               {:raced, existing}
