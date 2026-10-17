@@ -230,9 +230,6 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # Compares If-None-Match against an opaque hash. Reads one request header,
     # no Logger call, never sees content, path, title or a query.
     "lib/engram_web/etag.ex",
-    # Judges a joined channel's vault access from the credential's scope and
-    # the vault id; no Logger call, never reads content, a path or a title.
-    "lib/engram_web/channel_access.ex",
     "lib/engram_web/gettext.ex",
     "lib/engram_web/key_access_params.ex",
     "lib/engram_web/limit_response.ex",

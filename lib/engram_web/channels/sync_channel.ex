@@ -14,12 +14,9 @@ defmodule EngramWeb.SyncChannel do
 
   use Phoenix.Channel
 
-  import EngramWeb.ChannelAccess, only: [is_access_message: 1]
-
   alias Engram.Crypto.HMAC
   alias Engram.Logger.Metadata
   alias Engram.Vaults
-  alias EngramWeb.ChannelAccess
   alias EngramWeb.ChannelGate
   alias EngramWeb.Presence
 
@@ -77,16 +74,14 @@ defmodule EngramWeb.SyncChannel do
   end
 
   defp attach_vault_to_socket(vault, params, socket) do
-    case ChannelAccess.check(socket, vault, :read) do
+    case ChannelGate.vault_access(socket, vault, :read) do
       :ok ->
-        socket = socket |> ChannelAccess.track(vault, :read) |> assign(:vault, vault)
+        socket = assign(socket, :vault, vault)
         send(self(), {:after_join, params})
         {:ok, %{reconnect_jitter_max_ms: reconnect_jitter_max_ms()}, socket}
 
-      # A vault out of reach answers like one that does not exist, so a join
-      # cannot probe which UUIDs are real (VaultPlug does the same on REST).
       refused ->
-        {:error, %{reason: ChannelAccess.refusal_reason(refused)}}
+        refused
     end
   end
 
@@ -94,11 +89,7 @@ defmodule EngramWeb.SyncChannel do
     Application.get_env(:engram, :reconnect_jitter_max_ms, 5_000)
   end
 
-  # Joined: re-checked periodically and stopped once the vault is out of
-  # reach (`ChannelAccess`).
   @impl true
-  def handle_info(msg, socket) when is_access_message(msg), do: ChannelAccess.refresh(msg, socket)
-
   def handle_info({:after_join, params}, socket) do
     device_id = socket.assigns[:device_id] || Map.get(params, "device_id", "unknown")
     conn_id = socket.assigns[:conn_id]

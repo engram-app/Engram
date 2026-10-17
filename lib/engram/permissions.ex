@@ -311,7 +311,7 @@ defmodule Engram.Permissions do
 
   @doc """
   The one access decision: may a credential with `scope` act on `vault` at
-  `need`? REST (`VaultPlug`), MCP and the sockets (`EngramWeb.ChannelAccess`)
+  `need`? REST (`VaultPlug`), MCP and the sockets (`EngramWeb.ChannelGate`)
   all ask here. `:revoked` is a socket's grant that is gone
   (`EngramWeb.ChannelGate.vault_scope/1`).
   """

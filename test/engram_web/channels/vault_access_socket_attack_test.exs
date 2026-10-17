@@ -6,8 +6,6 @@ defmodule EngramWeb.VaultAccessSocketAttackTest do
   """
   use EngramWeb.ChannelCase, async: false
 
-  import Ecto.Query, only: [from: 2]
-
   alias Engram.{Accounts, Crypto, Vaults}
 
   setup do
@@ -111,90 +109,6 @@ defmodule EngramWeb.VaultAccessSocketAttackTest do
     assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 1_000
     # ...and the same (cached) socket assigns cannot re-join for write.
     assert {:error, %{reason: "read_only_vault"}} = crdt_join(s, ctx.user, ctx.w)
-  end
-
-  # The disconnect broadcast every narrowing sends closes the socket (the
-  # test above). An open channel holds its access (`EngramWeb.ChannelAccess`)
-  # and re-checks it periodically for when that broadcast is lost: a channel
-  # that lost its vault then stops and closes its socket. A test socket never
-  # acts on a disconnect broadcast, so what stops here is the re-check.
-
-  # `join`, not `subscribe_and_join`: this test process must hear the topic
-  # only through the channel's own fastlane, which goes when the channel does.
-  defp sync_join_only(socket, user, vault),
-    do: join(socket, EngramWeb.SyncChannel, "sync:#{user.id}:#{vault.id}")
-
-  # A dead channel's PubSub registration is removed asynchronously after its
-  # DOWN; wait for that before asserting nothing more is delivered.
-  defp await_unsubscribed(topic, pid, tries \\ 50) do
-    if Enum.any?(Registry.lookup(Engram.PubSub, topic), fn {p, _} -> p == pid end) and tries > 0 do
-      Process.sleep(10)
-      await_unsubscribed(topic, pid, tries - 1)
-    end
-  end
-
-  defp watch(chan) do
-    Ecto.Adapters.SQL.Sandbox.allow(Engram.Repo, self(), chan.channel_pid)
-    Process.unlink(chan.channel_pid)
-    Process.monitor(chan.channel_pid)
-  end
-
-  # The same narrowing with NO broadcast: only the periodic re-check can see it.
-  defp narrow_silently(key, vault, level) do
-    Engram.Repo.update_all(
-      from(v in "api_key_vaults",
-        where:
-          v.api_key_id == type(^key.id, Ecto.UUID) and v.vault_id == type(^vault.id, Ecto.UUID)
-      ),
-      [set: [level: level]],
-      skip_tenant_check: true
-    )
-
-    Engram.Cache.evict_local(:api_key, key.key_hash)
-  end
-
-  defp fast_recheck(_ctx) do
-    Application.put_env(:engram, :channel_access_recheck_ms, 50)
-    on_exit(fn -> Application.delete_env(:engram, :channel_access_recheck_ms) end)
-  end
-
-  describe "with the broadcast lost" do
-    setup :fast_recheck
-
-    test "the periodic re-check stops a sync channel and closes its socket", ctx do
-      {:ok, raw, key} = Accounts.create_api_key(ctx.user, "k", ctx.access)
-      {:ok, _, chan} = sync_join_only(key_socket(raw), ctx.user, ctx.r)
-      topic = "sync:#{ctx.user.id}:#{ctx.r.id}"
-      mon = watch(chan)
-
-      narrow_silently(key, ctx.r, "none")
-      assert_receive {:DOWN, ^mon, :process, _, {:shutdown, :access_changed}}, 2_000
-      # Its own socket (this test process is the transport) is told to close.
-      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
-      await_unsubscribed(topic, chan.channel_pid)
-
-      EngramWeb.Endpoint.broadcast!(topic, "note_changed", %{"path" => "secret.md"})
-      refute_push "note_changed", %{"path" => "secret.md"}
-    end
-
-    test "the periodic re-check stops a crdt channel narrowed to read", ctx do
-      {:ok, raw, key} = Accounts.create_api_key(ctx.user, "k", ctx.access)
-      {:ok, _, chan} = crdt_join(key_socket(raw), ctx.user, ctx.w)
-      mon = watch(chan)
-
-      narrow_silently(key, ctx.w, "read")
-      assert_receive {:DOWN, ^mon, :process, _, {:shutdown, :access_changed}}, 2_000
-      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
-    end
-
-    test "a re-check that finds access unchanged keeps the channel open", ctx do
-      {:ok, raw, _key} = Accounts.create_api_key(ctx.user, "k", ctx.access)
-      {:ok, _, chan} = crdt_join(key_socket(raw), ctx.user, ctx.w)
-      mon = watch(chan)
-
-      refute_receive {:DOWN, ^mon, _, _, _}, 300
-      refute_received %Phoenix.Socket.Broadcast{event: "disconnect"}
-    end
   end
 
   test "legacy key restricted to W: crdt join on R/N refused", ctx do

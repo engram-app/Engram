@@ -18,8 +18,6 @@ defmodule EngramWeb.CrdtChannel do
 
   use Phoenix.Channel
 
-  import EngramWeb.ChannelAccess, only: [is_access_message: 1]
-
   alias Engram.Crypto.HMAC
   alias Engram.Logger.Metadata
   alias Engram.{Notes, Repo, Vaults}
@@ -30,7 +28,6 @@ defmodule EngramWeb.CrdtChannel do
   alias Engram.Notes.CrdtPersistence
   alias Engram.Notes.CrdtRegistry
   alias Engram.Notes.CrdtTransport
-  alias EngramWeb.ChannelAccess
   alias EngramWeb.ChannelGate
   alias Yex.Sync.SharedDoc
 
@@ -172,7 +169,9 @@ defmodule EngramWeb.CrdtChannel do
           {:ok, vault_id} ->
             case Vaults.get_vault(user, vault_id) do
               {:ok, vault} ->
-                case ChannelAccess.check(socket, vault, :write) do
+                # Every crdt: frame can change a note, so this needs write: a
+                # read-level vault is read through REST, MCP or sync:.
+                case ChannelGate.vault_access(socket, vault, :write) do
                   :ok ->
                     Logger.info(
                       "crdt join",
@@ -210,9 +209,7 @@ defmodule EngramWeb.CrdtChannel do
                       Phoenix.PubSub.subscribe(Engram.PubSub, CrdtRegistry.drain_topic(vault.id))
 
                     {:ok,
-                     socket
-                     |> ChannelAccess.track(vault, :write)
-                     |> assign(
+                     assign(socket,
                        vault: vault,
                        rooms: %{},
                        room_doc: %{},
@@ -223,7 +220,7 @@ defmodule EngramWeb.CrdtChannel do
                      )}
 
                   refused ->
-                    {:error, %{reason: ChannelAccess.refusal_reason(refused)}}
+                    refused
                 end
 
               _ ->
@@ -1535,12 +1532,7 @@ defmodule EngramWeb.CrdtChannel do
     :ok
   end
 
-  # Every crdt: frame can change a note, so a read-level vault is refused at
-  # join (reads go through REST, MCP or sync:), and a channel whose vault
-  # drops below write while open is stopped (`ChannelAccess`).
   @impl true
-  def handle_info(msg, socket) when is_access_message(msg), do: ChannelAccess.refresh(msg, socket)
-
   def handle_info({:yjs, frame, room}, socket) do
     cond do
       # Index frames come back on their own event (no doc_id) — checked FIRST so
