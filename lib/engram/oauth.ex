@@ -741,7 +741,7 @@ defmodule Engram.OAuth do
   @doc """
   Serializes, for one user, rotation (`rotate_refresh_token/3`) with every
   writer that narrows or revokes that user's grants: vault deletion
-  (`Engram.Connections.drop_vault_from_grants/2`) and every revoke
+  (`Engram.Connections.drop_vault_from_grants/3`) and every revoke
   (`revoke_refresh_tokens/2`), and the token deletes in `cleanup_expired/0`.
   A transaction-scoped
   advisory lock: the caller must be inside a transaction, and must take it
@@ -1300,13 +1300,12 @@ defmodule Engram.OAuth do
 
   # No `gid`. For an OAuth access token that means nothing names its grant,
   # so a revoke, narrowing or vault-delete narrowing does not reach it: it
-  # keeps the claims it was minted with until `exp`. The window is bounded
-  # by the access-token TTL (`Engram.Token.ttl_seconds/0`, 15 min): only
-  # releases before 0.54.0 (#1996) minted OAuth tokens without `gid`, so
-  # none is valid 15 min after that rollout (or after a rollback to such a
-  # release ends). No lookup can close it: the token carries no family id,
-  # and its `jti` is random and stored nowhere. Its refresh token, once
-  # revoked or narrowed, mints nothing wider.
+  # keeps the claims it was minted with until `exp`. Only tokens minted
+  # before the `gid` claim existed lack it, so the window is bounded by the
+  # 15-minute access-token TTL (`Engram.Token.ttl_seconds/0`). No lookup can
+  # close it: the token carries no family id, and its `jti` is random and
+  # stored nowhere. Its refresh token, once revoked or narrowed, mints
+  # nothing wider.
   def expand_claims(claims), do: {:ok, claims}
 
   # The grant behind `gid`, or nil when it is revoked, gone, or not the
@@ -1450,7 +1449,7 @@ defmodule Engram.OAuth do
   # here widens nothing for them. The JWT's scalar claim has no such
   # constraint and carries the first id or the sentinel. A pre-levels list
   # keeps its first id; vault deletion repoints it
-  # (`Connections.drop_vault_from_grants/2`).
+  # (`Connections.drop_vault_from_grants/3`).
   defp scalar_vault_id_column(%{vault_access: nil, vault_ids: ids}), do: scalar_vault_id(ids)
   defp scalar_vault_id_column(_leveled), do: nil
 

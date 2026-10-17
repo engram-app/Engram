@@ -608,9 +608,9 @@ defmodule EngramWeb.CrdtChannel do
   #
   # `is_binary(b64)` is a GUARD, not a validation step: `decode_frame/1` reaches
   # `Engram.Native.decode64/1`, which raises FunctionClauseError on a non-binary, and a
-  # raise in `handle_in` costs the whole channel — every room it owns, every
+  # raise in `handle_frame` costs the whole channel — every room it owns, every
   # monitor — for one malformed frame. A non-binary falls to the catch-all
-  # `handle_in/3` and gets a `bad_frame` reply instead.
+  # `handle_frame/3` clause and gets a `bad_frame` reply instead.
   defp handle_frame("crdt_doc_update", %{"doc_id" => doc_id, "b64" => b64}, socket)
        when is_binary(b64) do
     with :ok <- check_rate(socket, state_frame_class(b64)),
@@ -1340,7 +1340,7 @@ defmodule EngramWeb.CrdtChannel do
   # window is milliseconds old, bound to a note that did not exist moments ago,
   # and holds an empty doc. Terminating it loses nothing and costs one
   # re-handshake, which this protocol already treats as routine — see the
-  # `room_unavailable` reply arm in handle_in("crdt_msg", ...), which exists
+  # `room_unavailable` reply arm in handle_frame("crdt_msg", ...), which exists
   # precisely so clients retry into a fresh room. That fresh room's bind/3 reads
   # our committed row.
   #
@@ -1664,7 +1664,7 @@ defmodule EngramWeb.CrdtChannel do
   # raw pid with a plain `make_ref()` and reads it back with `receive ... after
   # 0`, because a timed-out call leaves the room to run the fun and send the
   # reply afterwards. Both live senders run inline ON this channel process:
-  # `Identity.via_room/2` (reached from `handle_in("crdt_create")` via
+  # `Identity.via_room/2` (reached from `handle_frame("crdt_create")` via
   # `genesis_crdt_note` -> `claim_crdt_relocate` -> `Identity.claim`), and
   # `CrdtDeliver`, whose own comment already names "this (possibly long-lived
   # channel) process's mailbox".
