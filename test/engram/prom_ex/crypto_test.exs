@@ -32,21 +32,13 @@ defmodule Engram.PromEx.CryptoTest do
              end)
     end
 
-    test "declares kind-tagged duration + batch-size distributions on decrypt_batch" do
+    # The event stays (LiveDashboard summaries and tests read it); the two
+    # histograms had no dashboard or alert.
+    test "exports nothing from decrypt_batch" do
       metrics =
         CryptoPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
-      target = [:engram, :crypto, :decrypt_batch]
-
-      assert Enum.any?(metrics, fn m ->
-               match?(%Telemetry.Metrics.Distribution{}, m) and m.event_name == target and
-                 m.measurement == :duration_us and :kind in m.tags
-             end)
-
-      assert Enum.any?(metrics, fn m ->
-               match?(%Telemetry.Metrics.Distribution{}, m) and m.event_name == target and
-                 m.measurement == :count and :kind in m.tags
-             end)
+      refute Enum.any?(metrics, &(&1.event_name == [:engram, :crypto, :decrypt_batch]))
     end
 
     # A blocked gate turns compression off fleet-wide with one log line; the

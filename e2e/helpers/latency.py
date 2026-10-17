@@ -59,7 +59,7 @@ DELIVERY_TIMEOUT = float(os.environ.get("E2E_DELIVERY_TIMEOUT", "120"))
 # BELOW it, so it was unreachable in the tests that use it.
 #
 # This is a true-breakage bound, NOT a performance budget — real search latency
-# is watched by `engram_prom_ex_search_request_duration_*`.
+# is watched via the search spans in Tempo.
 SEARCH_TIMEOUT = float(os.environ.get("E2E_SEARCH_TIMEOUT", "60"))
 
 # Non-search MCP tools (get_note, write_note, list_folders, …) are cheap

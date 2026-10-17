@@ -16,8 +16,7 @@ defmodule Engram.PromEx.OAuth do
       `:client_auth_failed`, `:client_auth_unavailable`.
 
     * `[:engram, :cimd, :fetch]` → `engram_prom_ex_cimd_fetch_total`, tags
-      `[:kind, :result, :reason]`, and
-      `engram_prom_ex_cimd_fetch_duration_milliseconds`, tags `[:kind, :result]`.
+      `[:kind, :result, :reason]`.
       `kind` is `:jwks | :doc`; `result` is `:ok | :stale | :error` (stale =
       the fetch failed and held keys were served: warn; error = nothing
       usable: page); `reason` is `Engram.OAuth.Cimd.emit_fetch/4`'s closed
@@ -62,14 +61,6 @@ defmodule Engram.PromEx.OAuth do
           description:
             "private_key_jwt assertions by which of our audiences aud named, per client.",
           tags: [:aud_form, :client]
-        ),
-        distribution(
-          cimd_prefix ++ [:fetch, :duration, :milliseconds],
-          event_name: [:engram, :cimd, :fetch],
-          measurement: :duration_ms,
-          description: "CIMD document and JWKS fetch duration.",
-          tags: [:kind, :result],
-          reporter_options: [buckets: [50, 100, 250, 500, 1_000, 1_500, 2_000, 3_000, 5_000]]
         )
       ]
     )
