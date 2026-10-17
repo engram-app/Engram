@@ -372,8 +372,9 @@ defmodule EngramWeb.FoldersController do
     ]
   )
 
-  # Re-parent under a folder PATH — works for a derived parent (no marker). The
-  # target path is sanitized downstream by rename_folder, so traversal is safe.
+  # Re-parent under a folder PATH — works for a derived parent (no marker).
+  # Notes.batch_move_folders/4 sanitizes the target (PathSanitizer.sanitize_target/1);
+  # one that cleans to nothing is a 422 via the fallback.
   def batch_move(conn, %{"ids" => ids, "target_parent" => folder})
       when is_list(ids) and is_binary(folder) do
     user = conn.assigns.current_user

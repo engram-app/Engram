@@ -575,8 +575,9 @@ defmodule EngramWeb.NotesController do
     ]
   )
 
-  # Move by folder PATH — works for derived folders (no marker). The target
-  # path is sanitized downstream by rename_note, so traversal is not a concern.
+  # Move by folder PATH — works for derived folders (no marker).
+  # Notes.batch_move_notes/4 sanitizes the target (PathSanitizer.sanitize_target/1);
+  # one that cleans to nothing is a 422 via the fallback.
   def batch_move(conn, %{"ids" => ids, "target_folder" => folder})
       when is_list(ids) and is_binary(folder) do
     user = conn.assigns.current_user

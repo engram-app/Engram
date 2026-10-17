@@ -3896,7 +3896,8 @@ defmodule Engram.Notes do
   # exists purely as a path on its notes. `folder == ""` means the vault root.
   def batch_move_notes(user, vault, ids, {:path, folder})
       when is_list(ids) and is_binary(folder) do
-    with {:ok, user} <- Crypto.ensure_user_dek(user) do
+    with {:ok, folder} <- PathSanitizer.sanitize_target(folder),
+         {:ok, user} <- Crypto.ensure_user_dek(user) do
       move_notes_claimed(user, vault, ids, folder)
     end
   end
@@ -6193,7 +6194,8 @@ defmodule Engram.Notes do
   # target — a "derived" parent exists purely as a path. `folder == ""` is root.
   def batch_move_folders(user, vault, marker_ids, {:path, folder})
       when is_list(marker_ids) and is_binary(folder) do
-    with {:ok, user} <- Crypto.ensure_user_dek(user),
+    with {:ok, folder} <- PathSanitizer.sanitize_target(folder),
+         {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, dek} <- Crypto.get_dek(user) do
       reduce_move_folders(user, vault, marker_ids, folder, dek)
     end

@@ -35,6 +35,20 @@ defmodule Engram.Notes.PathSanitizer do
     |> Enum.join("/")
   end
 
+  @doc """
+  Sanitizes a rename/move TARGET folder. The vault root (`""` or `"/"`)
+  passes through as `""`; a non-empty target that cleans to `""` (`..`,
+  `%2e%2e`) is `{:error, :invalid_path}` rather than a silent move to root.
+  """
+  @spec sanitize_target(String.t()) :: {:ok, String.t()} | {:error, :invalid_path}
+  def sanitize_target(path) do
+    case {sanitize(path), String.trim(path)} do
+      {"", root} when root in ["", "/"] -> {:ok, ""}
+      {"", _} -> {:error, :invalid_path}
+      {clean, _} -> {:ok, clean}
+    end
+  end
+
   defp clean_segment(segment) do
     segment
     |> String.trim()

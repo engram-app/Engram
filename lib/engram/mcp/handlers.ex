@@ -541,6 +541,9 @@ defmodule Engram.MCP.Handlers do
       {:error, :conflict} ->
         {:error, "Folder rename conflict: #{new_folder} already exists"}
 
+      {:error, :invalid_path} ->
+        {:error, "new_folder must be a non-empty path"}
+
       # Catch-all (Bug 2): Folders.rename can surface a non-:conflict
       # {:error, reason} (e.g. a crypto failure in the attachment leg). Without
       # this clause it CaseClauseError'd → 500.

@@ -191,4 +191,22 @@ defmodule Engram.Notes.PathSanitizerTest do
       assert byte_size(result) > 0
     end
   end
+
+  describe "sanitize_target/1" do
+    test "root passes through as empty" do
+      assert PathSanitizer.sanitize_target("") == {:ok, ""}
+      assert PathSanitizer.sanitize_target("/") == {:ok, ""}
+    end
+
+    test "a non-empty target that cleans to nothing is an error" do
+      for bad <- ["..", "%2e%2e", "./..", "\0"] do
+        assert PathSanitizer.sanitize_target(bad) == {:error, :invalid_path}
+      end
+    end
+
+    test "otherwise returns the sanitized path" do
+      assert PathSanitizer.sanitize_target("../evil") == {:ok, "evil"}
+      assert PathSanitizer.sanitize_target("a/../../b") == {:ok, "a/b"}
+    end
+  end
 end
