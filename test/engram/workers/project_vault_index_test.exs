@@ -186,6 +186,36 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
   # path. If the note moved away and ANOTHER note took its old path in between,
   # a rename by path would move the wrong note. Simulated by moving A and
   # creating C at A's old path right after the snapshot read lands.
+  # Peep records 1 for a measurement KEY the event omits (it assumes a
+  # counter), so every early-exit emit must carry every key a PromEx metric
+  # reads off this event, as 0, or a no-op run reports one released claim.
+  describe "telemetry measurements" do
+    test "an early-exit run carries every measurement the metrics read", ctx do
+      required =
+        for %{event_name: [:engram, :crdt, :index_projection], measurement: m} = metric <-
+              Engram.PromEx.__metrics_collector_name__()
+              |> Peep.Persistent.fetch()
+              |> Peep.Persistent.ids_to_metrics()
+              |> Map.values(),
+            # A counter counts events and reads no measurement.
+            not is_struct(metric, Telemetry.Metrics.Counter),
+            is_atom(m),
+            uniq: true,
+            do: m
+
+      assert :released in required
+
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :crdt, :index_projection]])
+      assert :ok = run(ctx)
+
+      assert_receive {[:engram, :crdt, :index_projection], ^ref, measurements,
+                      %{phase: :no_snapshot}}
+
+      assert required -- Map.keys(measurements) == []
+      assert measurements.released == 0
+    end
+  end
+
   describe "a snapshot-stale path" do
     test "never moves a different note that took the old path", ctx do
       a = note(ctx, "P/a.md")

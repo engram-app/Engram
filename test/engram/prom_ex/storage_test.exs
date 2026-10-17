@@ -101,4 +101,34 @@ defmodule Engram.PromEx.StorageTest do
 
     assert value(after_body, @bloat <> "_count") == value(before, @bloat <> "_count")
   end
+
+  # PromEx turns a distribution's `buckets:` into a Peep bucket module only for
+  # EVENT metrics (PromEx.MetricTypes.Event.build/2). A polling distribution
+  # keeps whatever Peep defaults to, an exponential series with nothing in
+  # common with the configured boundaries, and dashboards selecting on `le`
+  # silently read nothing. Checked against the metrics the RUNNING collector
+  # holds, so a new histogram of either kind is covered without listing it.
+  test "every histogram, event and polling, carries its configured buckets" do
+    distributions =
+      for %Telemetry.Metrics.Distribution{} = d <- running_metrics(), do: d
+
+    assert Enum.any?(
+             distributions,
+             &(&1.name == [:engram, :prom_ex, :websocket, :channel_memory, :bytes])
+           )
+
+    for %{reporter_options: opts} = d <- distributions, buckets = opts[:buckets] do
+      {module, config} = Peep.Buckets.config(d)
+
+      assert module.number_of_buckets(config) == length(:lists.usort(buckets)),
+             "#{Enum.join(d.name, "_")}: #{inspect(module)} does not use its configured buckets"
+    end
+  end
+
+  defp running_metrics do
+    Engram.PromEx.__metrics_collector_name__()
+    |> Peep.Persistent.fetch()
+    |> Peep.Persistent.ids_to_metrics()
+    |> Map.values()
+  end
 end

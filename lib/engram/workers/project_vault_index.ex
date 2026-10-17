@@ -534,8 +534,16 @@ defmodule Engram.Workers.ProjectVaultIndex do
     :ok
   end
 
+  # Every measurement a PromEx metric reads off @event, as 0: Peep records 1
+  # for an ABSENT key, so a missing `released` reported one released claim per
+  # no-op run.
   defp emit(phase) do
-    :telemetry.execute(@event, %{applied: 0, unresolved: 0, passes: 0}, %{phase: phase})
+    :telemetry.execute(
+      @event,
+      %{applied: 0, unresolved: 0, released: 0, passes: 0},
+      %{phase: phase}
+    )
+
     :ok
   end
 end
