@@ -85,8 +85,14 @@ defmodule Engram.Onboarding do
 
     # Atomic: a ToS row without its paired Privacy row is an incomplete audit
     # record, so roll back the first insert if the second fails.
+    #
+    # `transaction_after_commit`, not a plain transaction: each insert's
+    # `with_tenant` would otherwise run its after-commit work (the
+    # `:onboarding_actions` eviction `record_action/2` queues) at ITS end,
+    # before this commits, and a concurrent `list_actions/1` could re-cache
+    # the list without `@free_start_action`, so the retry never fires.
     result =
-      Repo.transaction(fn ->
+      Repo.transaction_after_commit(fn ->
         with {:ok, tos_row} <-
                insert_agreement(
                  Map.merge(base, %{
@@ -212,15 +218,10 @@ defmodule Engram.Onboarding do
     # from above — this used to re-read the config key with the OPPOSITE
     # default (true vs false), so an unset key produced self-host wizard
     # steps but SaaS subscription gating in the same response.
-    #
-    # Last, the retry of a Free start that failed after its acceptance
-    # committed (`after_terms/1`). Only reached by an account past the terms
-    # with no plan, so the ordinary read never pays for it.
     subscription_ok =
       not billing_active or
         Engram.Billing.tier(user) in [:starter, :pro] or
-        not is_nil(user.free_tier_accepted_at) or
-        (terms_ok and repair_free_start(user))
+        not is_nil(user.free_tier_accepted_at)
 
     # The cached users row, not a fresh read: set_profile/2 evicts the :user
     # cache after commit, so this sees the saved profile even when the caller
@@ -735,15 +736,22 @@ defmodule Engram.Onboarding do
   #
   # Runs after the acceptance commits, so it never fails it: the acceptance
   # is recorded either way. A failed stamp is retried, because the acceptance
-  # recorded `@free_start_action` with it: the next accept lands here again,
-  # and the next `status/1` read repairs it (`repair_free_start/1`).
+  # recorded `@free_start_action` with it: the next accept lands here again.
+  # Until then the account sits on the billing step, whose "Continue with
+  # Free" stamps it. Never from `status/1`, which is on the gate path and
+  # must not write.
   defp after_terms(user) do
     user = Accounts.get_user(user.id) || user
 
-    # accept_free_tier/1 provisions the vault itself.
-    if free_start_due?(user),
-      do: start_free(user),
-      else: maybe_provision_connector_vault(user)
+    if free_start_due?(user) do
+      # accept_free_tier/1 provisions the vault itself.
+      case accept_free_tier(user) do
+        {:ok, _} -> :ok
+        {:error, reason} -> log_free_start_failure(user, reason)
+      end
+    else
+      maybe_provision_connector_vault(user)
+    end
   rescue
     error ->
       log_free_start_failure(user, error)
@@ -766,31 +774,6 @@ defmodule Engram.Onboarding do
       is_nil(user.free_tier_accepted_at) and
       is_nil(Engram.Billing.get_subscription(user)) and
       @free_start_action in list_actions(user.id)
-  end
-
-  defp start_free(user) do
-    case accept_free_tier(user) do
-      {:ok, _} ->
-        :ok
-
-      {:error, reason} ->
-        log_free_start_failure(user, reason)
-        :ok
-    end
-  end
-
-  # `status/1`'s half of the retry: true once the account is on Free.
-  defp repair_free_start(user) do
-    user = Accounts.get_user(user.id) || user
-    free_start_due?(user) and start_free(user) == :ok and free_tier_stamped?(user.id)
-  rescue
-    error ->
-      log_free_start_failure(user, error)
-      false
-  end
-
-  defp free_tier_stamped?(user_id) do
-    match?(%{free_tier_accepted_at: %DateTime{}}, Accounts.get_user(user_id))
   end
 
   defp log_free_start_failure(user, reason) do
@@ -965,23 +948,46 @@ defmodule Engram.Onboarding do
   @doc """
   Mark the user as having chosen the Free tier during onboarding. Idempotent:
   if `free_tier_accepted_at` is already set, returns the user unchanged.
+
+  Serialized on the row: the stamp is a conditional update (`WHERE
+  free_tier_accepted_at IS NULL`), so of concurrent callers holding the same
+  unstamped struct exactly one stamps and provisions the connector vault; the
+  others return the winner's row. `{:error, :not_found}` when no row took the
+  stamp (the user is gone).
   """
   @spec accept_free_tier(Engram.Accounts.User.t()) ::
-          {:ok, Engram.Accounts.User.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, Engram.Accounts.User.t()} | {:error, :not_found}
   def accept_free_tier(%{free_tier_accepted_at: %DateTime{}} = user), do: {:ok, user}
 
   def accept_free_tier(%Engram.Accounts.User{} = user) do
-    user
-    |> Ecto.Changeset.change(free_tier_accepted_at: DateTime.utc_now())
-    |> Repo.update()
-    |> tap(fn
-      {:ok, saved} ->
+    import Ecto.Query
+
+    query =
+      from(u in Engram.Accounts.User,
+        where: u.id == ^user.id and is_nil(u.free_tier_accepted_at),
+        select: u
+      )
+
+    # Same as set_profile/2: `users` is the tenant root, keyed to the caller.
+    case Repo.update_all(query, [set: [free_tier_accepted_at: DateTime.utc_now()]],
+           skip_tenant_check: true
+         ) do
+      {1, [saved]} ->
         evict_user(user.id)
         maybe_provision_connector_vault(saved)
+        {:ok, saved}
 
-      _ ->
-        :ok
-    end)
+      {0, _} ->
+        # Lost the race: the winner stamped (and provisioned). Read the row.
+        case fresh_user(user.id) do
+          %{free_tier_accepted_at: %DateTime{}} = saved -> {:ok, saved}
+          _ -> {:error, :not_found}
+        end
+    end
+  end
+
+  defp fresh_user(user_id) do
+    Repo.get(Engram.Accounts.User, user_id, skip_tenant_check: true)
   end
 
   # The wizard's very next request (or socket rejoin) reads the cached user and

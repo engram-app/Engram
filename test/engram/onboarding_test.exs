@@ -597,8 +597,10 @@ defmodule Engram.OnboardingTest do
 
     # The Free stamp runs after the acceptance commits. A failure there must
     # not 500 an acceptance that is already recorded, and must not cost the
-    # user the Free start: the next status read (or accept) re-attempts it.
-    test "a failed Free start does not fail the acceptance; the next status read repairs it" do
+    # user the Free start: the next accept re-attempts it. The status read
+    # sits on the gate path, so it never writes: the billing step's
+    # "Continue with Free" is the fallback.
+    test "a failed Free start does not fail the acceptance; status leaves the billing step" do
       LegalFixtures.insert_version(version: "2026-05-19", effective_date: nil)
       LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
       LegalFixtures.reset_version_cache()
@@ -613,8 +615,11 @@ defmodule Engram.OnboardingTest do
 
       unblock_free_stamp!()
 
-      assert %{subscription_ok: true} = Onboarding.status(user)
-      assert %DateTime{} = Engram.Accounts.get_user!(user.id).free_tier_accepted_at
+      assert %{subscription_ok: false, next_step: :billing} = Onboarding.status(user)
+      assert is_nil(Engram.Accounts.get_user!(user.id).free_tier_accepted_at)
+
+      assert {:ok, %{free_tier_accepted_at: %DateTime{}}} =
+               Onboarding.accept_free_tier(Engram.Accounts.get_user!(user.id))
     end
 
     test "a retried acceptance re-attempts a failed Free start" do
@@ -1391,6 +1396,23 @@ defmodule Engram.OnboardingTest do
       {:ok, second} = Onboarding.accept_free_tier(first)
       assert DateTime.compare(first.free_tier_accepted_at, second.free_tier_accepted_at) == :eq
     end
+
+    # Concurrent callers holding the same unstamped struct (double click, a
+    # retry racing the original): one stamp wins and every caller sees it,
+    # and the connector vault is provisioned once.
+    test "concurrent calls stamp once and provision one connector vault" do
+      user = prefilled_past_terms()
+      stale = Engram.Accounts.get_user!(user.id)
+
+      stamps =
+        1..5
+        |> Task.async_stream(fn _ -> Onboarding.accept_free_tier(stale) end, max_concurrency: 5)
+        |> Enum.map(fn {:ok, {:ok, saved}} -> saved.free_tier_accepted_at end)
+
+      final = Engram.Accounts.get_user!(user.id).free_tier_accepted_at
+      assert Enum.all?(stamps, &(DateTime.compare(&1, final) == :eq))
+      assert [%{name: "My Vault"}] = Engram.Vaults.list_vaults(user)
+    end
   end
 
   describe "next_step — Free tier" do
@@ -1501,10 +1523,20 @@ defmodule Engram.OnboardingTest do
   end
 
   # Every captured event named `event` that arrives within half a second.
-  defp collect_posthog_events(event, acc \\ []) do
+  # Waits for the first `event` (the capture is async and slow under load),
+  # then keeps collecting for a short quiet window so a duplicate still shows.
+  defp collect_posthog_events(event) do
     receive do
-      {:posthog, %{"event" => ^event} = body} -> collect_posthog_events(event, [body | acc])
-      {:posthog, _other} -> collect_posthog_events(event, acc)
+      {:posthog, %{"event" => ^event} = body} -> collect_more_posthog_events(event, [body])
+    after
+      5_000 -> []
+    end
+  end
+
+  defp collect_more_posthog_events(event, acc) do
+    receive do
+      {:posthog, %{"event" => ^event} = body} -> collect_more_posthog_events(event, [body | acc])
+      {:posthog, _other} -> collect_more_posthog_events(event, acc)
     after
       500 -> Enum.reverse(acc)
     end
