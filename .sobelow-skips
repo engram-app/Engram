@@ -3,16 +3,16 @@ Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:9,68D560D
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:36,141C874
 Config.CSWH: Cross-Site Websocket Hijacking,lib/engram_web/endpoint.ex:57,107CCB3
 Config.HTTPS: HTTPS Not Enabled,config/prod.exs:0,2B5C077
-Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/crypto.ex:615,29E4953
+Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/crypto.ex:625,64EFB2
 Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/crypto/user_dek_rotation.ex:1409,3992A82
-Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:4705,702004
-Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:5094,2D055C0
-SQL.Query: SQL injection,lib/engram/attachments.ex:1100,5F5BB29
-SQL.Query: SQL injection,lib/engram/notes.ex:6853,6905A79
+Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:4900,58205B7
+Misc.BinToTerm: Unsafe `binary_to_term`,lib/engram/notes.ex:5289,427A42C
+SQL.Query: SQL injection,lib/engram/attachments.ex:1109,3166202
+SQL.Query: SQL injection,lib/engram/notes.ex:7055,7138D06
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/legal/manifest.ex:13,7ECB6B1
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/release/preflight.ex:117,4094D02
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram_web/controllers/spa_controller.ex:44,6BED2D7
 Traversal.FileModule: Directory Traversal in `File.read`,lib/engram/spa_integrity.ex:43,5D1BE94
-XSS.ContentType: XSS in `put_resp_content_type`,lib/engram_web/controllers/attachments_controller.ex:571,2B3119B
-XSS.SendResp: XSS in `send_resp`,lib/engram_web/controllers/attachments_controller.ex:575,3149D0C
+XSS.ContentType: XSS in `put_resp_content_type`,lib/engram_web/controllers/attachments_controller.ex:572,2F43C52
+XSS.SendResp: XSS in `send_resp`,lib/engram_web/controllers/attachments_controller.ex:576,38A7764
 XSS.SendResp: XSS in `send_resp`,lib/engram_web/controllers/spa_controller.ex:7,589845D
