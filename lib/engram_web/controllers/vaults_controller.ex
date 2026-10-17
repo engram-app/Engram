@@ -44,7 +44,7 @@ defmodule EngramWeb.VaultsController do
     # A deleted vault is listed only where the credential holds it
     # explicitly: the new-vaults policy covers vaults created after the
     # credential, never one that was deleted (#174, #332).
-    # Nor one deleted before the credential (OAuth grant or API key) itself
+    # Nor one deleted before the credential (OAuth grant or leveled key) itself
     # existed: it is not restorable by it either (`with_restorable_vault/3`).
     scope = Engram.Permissions.vault_scope(conn)
     granted = credential_created_at(conn)
@@ -471,12 +471,12 @@ defmodule EngramWeb.VaultsController do
   # policy: that policy is for vaults created after the credential, and a
   # restored vault is not one. (A vault deleted before the credential existed
   # is recorded as none at creation, `Permissions.resolve_access/2`.)
-  # An explicitly listed write, and for an OAuth grant or API key a vault
-  # deleted AFTER the credential was created: a vault already in the trash
-  # at consent or key creation was never offered to it. This is what keeps
-  # an unrestricted credential (a NULL grant, a key created without levels:
-  # no levels to record the trash in) from restoring one; a leveled one
-  # records such vaults as `none` anyway.
+  # An explicitly listed write, and for an OAuth grant or leveled API key a
+  # vault deleted AFTER the credential was created: a vault already in the
+  # trash at consent or key creation was never offered to it. This is what
+  # keeps an unrestricted grant (NULL: no levels to record the trash in) from
+  # restoring one; a leveled credential records such vaults as `none` anyway.
+  # A pre-levels API key keeps its old reach (`credential_created_at/1`).
   defp with_restorable_vault(conn, id, fun) do
     with_vault_level(
       conn,
@@ -497,8 +497,12 @@ defmodule EngramWeb.VaultsController do
     end
   end
 
-  # An API key's `created_at`, an OAuth grant's `granted_at`, or nil (a
-  # session, or a grant token minted before `gid`): no bound.
+  # A leveled API key's `created_at`, an OAuth grant's `granted_at`, or nil:
+  # no bound. nil for a session, a grant token minted before `gid`, and a
+  # pre-levels key (NULL `default_access`), which restored and listed every
+  # deleted vault it reaches before levels existed and keeps doing so.
+  defp credential_created_at(%{assigns: %{current_api_key: %{default_access: nil}}}), do: nil
+
   defp credential_created_at(%{assigns: %{current_api_key: %{created_at: created}}}),
     do: created
 

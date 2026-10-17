@@ -587,30 +587,9 @@ defmodule EngramWeb.VaultAccessLevelsTest do
     end
   end
 
-  # Parity with the all-vaults OAuth grant above: a key created without
-  # levels has none to record the trash in either, so restore compares the
-  # vault's deletion with the key's creation.
-  describe "api_key: an unrestricted key and the trash" do
-    test "cannot restore or list a vault deleted before it, can one deleted after", ctx do
-      {:ok, _} = Vaults.delete_vault(ctx.user, ctx.n.id)
-      n_id = ctx.n.id
-
-      Engram.Repo.update_all(
-        from(v in Engram.Vaults.Vault, where: v.id == ^n_id),
-        [set: [deleted_at: DateTime.add(DateTime.utc_now(:second), -3600, :second)]],
-        skip_tenant_check: true
-      )
-
-      {:ok, raw, _} = Accounts.create_api_key(ctx.user, "legacy")
-
-      refute to_string(ctx.n.id) in deleted_ids(raw)
-      assert restore(raw, ctx.n).status == 403
-
-      assert raw |> as() |> delete("/api/vaults/#{ctx.w.id}") |> json_response(200)
-      assert to_string(ctx.w.id) in deleted_ids(raw)
-      assert restore(raw, ctx.w).status == 200
-    end
-  end
+  # A key created without levels is NOT bound like the grant above: it keeps
+  # its pre-levels reach over the trash (vault_access_compat_test.exs, "a
+  # pre-levels key and the trash").
 
   defp levels_all(ctx, default),
     do: {Map.new([ctx.w, ctx.r, ctx.n], &{to_string(&1.id), "write"}), default}
