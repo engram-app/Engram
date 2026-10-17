@@ -174,13 +174,35 @@ defmodule Engram.Workers.CimdRefreshTest do
       end
     end
 
-    # The cron entry: its own worker, so the crontab stays {expr, worker}.
-    test "CimdJwksRefresh runs the same sweep" do
+    test "CimdJwksRefresh runs the same sweep, with no sleep inside the job" do
       [jwks_uri: @jwks_uri] |> cimd_client() |> used()
-      expect(FetcherMock, :fetch, 1, fn @jwks_uri -> {:ok, %{"keys" => []}} end)
+      stub(FetcherMock, :fetch, fn @jwks_uri -> {:ok, %{"keys" => []}} end)
 
-      assert {:ok, %{refreshed: 1}} =
-               perform_job(Engram.Workers.CimdJwksRefresh, %{"jitter_ms" => 0})
+      # The spread lives in scheduled_at (CimdJwksSchedule), so Oban's exec
+      # time is the fetch work alone. Three runs: a random in-job sleep would
+      # pass one by luck.
+      {us, results} =
+        :timer.tc(fn ->
+          for _ <- 1..3, do: perform_job(Engram.Workers.CimdJwksRefresh, %{})
+        end)
+
+      assert [{:ok, %{refreshed: 1}}, {:ok, _}, {:ok, _}] = results
+      assert us < 1_000_000
+    end
+
+    # The cron entry: schedules the sweep 1-30 s out instead of sleeping, so
+    # the spread is neither exec nor queue time on the dashboard.
+    test "CimdJwksSchedule enqueues the sweep with a 1-30 s spread" do
+      now = DateTime.utc_now()
+
+      for _ <- 1..20, do: assert(:ok = perform_job(Engram.Workers.CimdJwksSchedule, %{}))
+
+      jobs = all_enqueued(worker: Engram.Workers.CimdJwksRefresh, queue: :cimd_refresh)
+      assert length(jobs) == 20
+
+      delays = Enum.map(jobs, &DateTime.diff(&1.scheduled_at, now, :second))
+      assert Enum.all?(delays, &(&1 in 0..31))
+      assert length(Enum.uniq(delays)) > 1, "no spread: every sweep lands on the cron tick"
     end
 
     test "a failing vendor keeps its last good keys" do
