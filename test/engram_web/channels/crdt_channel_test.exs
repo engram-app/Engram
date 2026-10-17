@@ -3328,7 +3328,7 @@ defmodule EngramWeb.CrdtChannelTest do
 
       {:ok, _, joined} =
         user_socket(user)
-        |> Phoenix.Socket.assign(:plugin_version, "1.28.0")
+        |> Phoenix.Socket.assign(:plugin_version, "1.36.0")
         |> subscribe_and_join(EngramWeb.CrdtChannel, "crdt:#{user.id}:#{vault.id}", %{
           "crdt_proto" => 2,
           "client_type" => "obsidian"
@@ -3342,7 +3342,7 @@ defmodule EngramWeb.CrdtChannelTest do
 
       Process.sleep(400)
       [body] = Enum.filter(drain_posthog([]), &(&1["event"] == "surface_active"))
-      assert body["properties"]["plugin_version"] == "1.28.0"
+      assert body["properties"]["plugin_version"] == "1.36.0"
       assert body["properties"]["client_type"] == "obsidian"
     end
 

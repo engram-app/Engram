@@ -95,12 +95,12 @@ defmodule Engram.PluginVersion do
 
   # Raise this in the same PR as the change that makes old clients wrong.
   #
-  # A deliberate no-op today. Plugin 1.28.0 was ALREADY RELEASED when the
-  # reporting change was written and does not send the header — that lands in
-  # the next release — so nothing in the wild reports a version and everything
-  # unreported is allowed. Do not read this value as "1.28.0 is supported and
-  # 1.27 is not"; no client has been assessed at all yet.
-  @minimum "1.28.0"
+  # 1.36.0 (2026-10-17): Free drops to a 3,000-note cap in the same release.
+  # Plugins below 1.36.0 retry every create the cap refuses, one by one, for as
+  # long as Obsidian is open, and can trash notes uploaded while a catch-up's
+  # manifest is in flight (Engram-obsidian#591). 1.36.0 is the release
+  # release-please published with both fixes.
+  @minimum "1.36.0"
 
   # Obsidian's own plugin pane, which offers the Update button. A web URL
   # would send a mobile user to a page they can't install from.
