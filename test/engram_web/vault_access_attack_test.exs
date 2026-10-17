@@ -177,8 +177,7 @@ defmodule EngramWeb.VaultAccessAttackTest do
       {:post, "/api/attachments/rename", %{"old_path" => "f.png", "new_path" => "g.png"}},
       {:delete, "/api/attachments/f.png", %{}},
       {:post, "/api/attachments/batch-move", %{"paths" => ["f.png"], "target_folder" => "X"}},
-      {:post, "/api/attachments/batch-delete", %{"paths" => ["f.png"]}},
-      {:post, "/api/logs", %{"logs" => [%{"level" => "info", "message" => "m"}]}}
+      {:post, "/api/attachments/batch-delete", %{"paths" => ["f.png"]}}
     ]
   end
 
@@ -530,8 +529,10 @@ defmodule EngramWeb.VaultAccessAttackTest do
   # check by being left out of a list. A new route fails `classifies every
   # vault route` until it is named below, as a read or in `write_routes/2`.
 
-  # Routes that only read. Non-GET entries must also be exempt in
-  # `EngramWeb.ReadOnlyRoutes`.
+  # Routes that only read, or write no vault data (`POST /api/logs`, the
+  # client's own log lines; the MCP `send_feedback` rule). Non-GET entries
+  # must also be exempt in `EngramWeb.ReadOnlyRoutes`. A NONE vault still
+  # refuses every one of them ("is refused on a NONE vault, reads included").
   @vault_reads [
     {:get, "/api/notes/changes"},
     {:get, "/api/notes/by-id/:id"},
@@ -550,6 +551,7 @@ defmodule EngramWeb.VaultAccessAttackTest do
     {:get, "/api/attachments/changes"},
     {:get, "/api/attachments/*path"},
     {:get, "/api/logs"},
+    {:post, "/api/logs"},
     {:get, "/api/embed-status"}
   ]
 

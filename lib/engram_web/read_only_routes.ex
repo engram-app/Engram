@@ -14,13 +14,25 @@ defmodule EngramWeb.ReadOnlyRoutes do
     * `/api/search`: a query, sent as a body.
     * `/api/billing/plan-change/preview`: prices a hypothetical plan swap,
       changes and mints nothing (see the router).
+
+  These POSTs write, but no vault data (no note, folder, attachment or
+  vault), so a read-only credential may make them, exactly as it may call
+  the MCP `send_feedback` tool (`Engram.MCP.Tools.writes_vault?/1`):
+
+    * `/api/feedback`: a message to the Engram team.
+    * `/api/logs`: the client's own diagnostic log lines.
+    * `/api/telemetry/spans`: the client's trace spans.
   """
 
   @safe_methods ~w(GET HEAD OPTIONS)
   @read_only_posts [
     ["api", "mcp"],
     ["api", "search"],
-    ["api", "billing", "plan-change", "preview"]
+    ["api", "billing", "plan-change", "preview"],
+    # Write no vault data (above).
+    ["api", "feedback"],
+    ["api", "logs"],
+    ["api", "telemetry", "spans"]
   ]
 
   @spec writes?(Plug.Conn.t()) :: boolean()
