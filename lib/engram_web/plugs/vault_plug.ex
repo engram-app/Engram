@@ -43,6 +43,10 @@ defmodule EngramWeb.Plugs.VaultPlug do
           # in the request log.
           :forbidden ->
             reject(conn, "vault_out_of_scope", "Vault not found")
+
+          # A grant gone since `Plugs.Auth` read it: refused like Auth would.
+          :revoked ->
+            Halt.json(conn, 401, %{error: "unauthorized"})
         end
 
       # A non-UUID X-Vault-ID (e.g. a client sending a stale/placeholder id) is

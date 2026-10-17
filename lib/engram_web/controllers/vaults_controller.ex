@@ -372,7 +372,7 @@ defmodule EngramWeb.VaultsController do
           )
 
         {:ok, vault, :existing} ->
-          if Engram.Permissions.allows?(scope, vault) do
+          if Engram.Permissions.decide(scope, vault, :read) == :ok do
             json(
               conn,
               vault_json(vault, Vaults.content_counts(user, vault.id))
@@ -458,15 +458,13 @@ defmodule EngramWeb.VaultsController do
   # vaults (restore/purge operate on them). A vault the credential cannot
   # reach is a 404 identical to a missing one, so the answer reveals nothing
   # about which UUIDs exist.
-  defp with_scoped_vault(conn, id, fun),
-    do: with_vault_level(conn, id, &Engram.Permissions.allows?/2, fun)
+  defp with_scoped_vault(conn, id, fun), do: with_vault_level(conn, id, :read, fun)
 
   # Rename and delete change the vault, so they need WRITE on
   # it (#174, #332): a read-level vault, listed or reached through the
   # new-vaults policy, is refused 403. That 403 only goes to a vault the
   # credential can already see; see `with_vault_level/4`.
-  defp with_writable_vault(conn, id, fun),
-    do: with_vault_level(conn, id, &Engram.Permissions.allows_write?/2, fun)
+  defp with_writable_vault(conn, id, fun), do: with_vault_level(conn, id, :write, fun)
 
   # Restore needs write LISTED on the vault, not write through the new-vaults
   # policy: that policy is for vaults created after the credential, and a
@@ -483,9 +481,10 @@ defmodule EngramWeb.VaultsController do
     with_vault_level(
       conn,
       id,
+      :write,
+      fun,
       &(Engram.Permissions.explicit_level(&1, &2) == :write and
-          not deleted_before_credential?(conn, &2.id)),
-      fun
+          not deleted_before_credential?(conn, &2.id))
     )
   end
 
@@ -527,15 +526,17 @@ defmodule EngramWeb.VaultsController do
   # oracle. A visible vault the action still refuses (write on a read vault)
   # is 403, but a read or write new-vaults policy also "sees" every random
   # UUID, so the 403 is only given once the vault is known to exist.
-  defp with_vault_level(conn, id, permitted?, fun) do
+  # `need` is judged by `Permissions.decide/3`; `also?` is an action's extra
+  # rule on top of it (restore's listed-write and trash bound).
+  defp with_vault_level(conn, id, need, fun, also? \\ fn _scope, _vault -> true end) do
     scope = Engram.Permissions.vault_scope(conn)
 
     with {:ok, vault_id} <- parse_id(id),
-         true <- Engram.Permissions.allows?(scope, %{id: vault_id}) || :hidden,
-         true <- permitted?.(scope, %{id: vault_id}) || :refused do
+         :ok <- Engram.Permissions.decide(scope, %{id: vault_id}, need),
+         true <- also?.(scope, %{id: vault_id}) || :read_only do
       fun.(vault_id)
     else
-      :refused ->
+      :read_only ->
         if vault_exists?(conn.assigns.current_user, id),
           do: forbidden(conn),
           else: not_found(conn)
