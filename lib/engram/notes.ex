@@ -3301,6 +3301,10 @@ defmodule Engram.Notes do
   @doc """
   Renames a note to a new path. Sanitizes the new path, updates folder and title.
   Returns {:ok, updated_note} or {:error, :not_found}.
+
+  `note_id:` renames only if THAT note is at `old_path`, `{:error, :not_found}`
+  otherwise. For a caller holding a path from an earlier read: the note may
+  have moved and another note taken its old path since.
   """
   @spec rename_note(map(), map(), String.t(), String.t(), keyword()) ::
           {:ok, Note.t()} | {:error, :not_found | :conflict | term()}
@@ -3311,7 +3315,7 @@ defmodule Engram.Notes do
 
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, claimed?} <- claim_rename(user, vault, old_path, new_path, opts) do
-      case do_rename_note(user, vault, old_path, new_path, new_folder, now) do
+      case do_rename_note(user, vault, old_path, new_path, new_folder, now, opts[:note_id]) do
         {:ok, _} = ok -> ok
         {:error, reason} = err -> report_orphan_claim(user, vault, claimed?, reason, err)
       end
@@ -3430,8 +3434,12 @@ defmodule Engram.Notes do
     :ok
   end
 
-  defp do_rename_note(user, vault, old_path, new_path, new_folder, now) do
+  defp do_rename_note(user, vault, old_path, new_path, new_folder, now, note_id) do
     {:ok, lookup_query} = note_by_path_query(user, vault, old_path)
+
+    lookup_query =
+      if note_id, do: from(n in lookup_query, where: n.id == ^note_id), else: lookup_query
+
     {:ok, target_query} = note_by_path_query(user, vault, new_path)
 
     result =

@@ -182,6 +182,42 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
     end
   end
 
+  # A pass reads every entry's note once, then renames from that snapshot's
+  # path. If the note moved away and ANOTHER note took its old path in between,
+  # a rename by path would move the wrong note. Simulated by moving A and
+  # creating C at A's old path right after the snapshot read lands.
+  describe "a snapshot-stale path" do
+    test "never moves a different note that took the old path", ctx do
+      a = note(ctx, "P/a.md")
+      seed_index(ctx, [{"R/a.md", a.id}])
+      test_pid = self()
+      handler_id = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        handler_id,
+        [:engram, :repo, :query],
+        fn _event, _measurements, %{query: q}, _config ->
+          if self() == test_pid and q =~ ~s("kind" = 'note') and q =~ "ANY(" and
+               Process.put(:stale_snapshot_injected, true) == nil do
+            {:ok, _} = Notes.rename_note(ctx.user, ctx.vault, "P/a.md", "Q/a.md", index: :skip)
+            send(test_pid, {:intruder, note(ctx, "P/a.md")})
+          end
+        end,
+        nil
+      )
+
+      try do
+        ExUnit.CaptureLog.capture_log(fn -> assert :ok = run(ctx) end)
+      after
+        :telemetry.detach(handler_id)
+      end
+
+      assert_received {:intruder, c}
+      assert path_of(ctx, c.id) == "P/a.md"
+      assert path_of(ctx, a.id) == "Q/a.md"
+    end
+  end
+
   describe "never acts on absence" do
     # THE safety property. In prod today the index is empty for every vault,
     # because no client writes it yet. A projection that reconciled by absence

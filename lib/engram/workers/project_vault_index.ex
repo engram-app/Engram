@@ -465,7 +465,10 @@ defmodule Engram.Workers.ProjectVaultIndex do
   end
 
   defp rename(user, vault, note, path, vault_id) do
-    case Notes.rename_note(user, vault, note.path, path, index: :skip) do
+    # `note_id:`: `note.path` is from this pass's snapshot. If the note moved
+    # and another note took that path since, renaming by path alone would move
+    # the other note. Pinned to the id, that race is a :not_found instead.
+    case Notes.rename_note(user, vault, note.path, path, index: :skip, note_id: note.id) do
       {:ok, _note} ->
         :applied
 
