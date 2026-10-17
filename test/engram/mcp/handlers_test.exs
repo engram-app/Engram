@@ -319,6 +319,28 @@ defmodule Engram.MCP.HandlersTest do
       do: assert({:ok, %{name: "get_notes"}} = Tools.get("get_notes"))
   end
 
+  describe "create_folder handler: path sanitizing" do
+    for {input, expected} <- [
+          {"../x", "x"},
+          {"/abs", "abs"},
+          {"a/../../b", "a/b"},
+          {"nul\0byte", "nulbyte"},
+          {"%2e%2e/enc", "enc"}
+        ] do
+      test "stores #{inspect(input)} as #{expected}", %{user: user, vault: vault} do
+        assert {:ok, _msg, %{"folder" => unquote(expected)}} =
+                 Handlers.handle("create_folder", user, vault, %{"folder" => unquote(input)})
+
+        {:ok, names} = Notes.list_explicit_folders(Engram.Repo.reload!(user), vault)
+        assert names == [unquote(expected)]
+      end
+    end
+
+    test "a folder that sanitizes to the root is refused", %{user: user, vault: vault} do
+      assert {:error, _} = Handlers.handle("create_folder", user, vault, %{"folder" => ".."})
+    end
+  end
+
   describe "delete_folder handler" do
     test "deletes an empty folder", %{user: user, vault: vault} do
       {:ok, _} = Notes.create_folder_marker(user, vault, "Empty")

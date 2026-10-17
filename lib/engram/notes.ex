@@ -223,6 +223,10 @@ defmodule Engram.Notes do
   @doc """
   Creates an explicit empty-folder marker row (kind="folder").
 
+  The folder goes through `PathSanitizer.sanitize/1` first (traversal,
+  absolute, null-byte, encoded-dot segments rewritten, as for note paths);
+  one that sanitizes to "" is rejected as root.
+
   Idempotent: if a marker for this folder_hmac already exists, it is
   returned. A soft-deleted marker is undeleted in place (preserves id /
   the AAD-bound envelope). Rejects root folder ("") — root is implicit
@@ -234,9 +238,16 @@ defmodule Engram.Notes do
   """
   @spec create_folder_marker(map(), map(), String.t()) ::
           {:ok, Note.t()} | {:error, term()}
-  def create_folder_marker(_user, _vault, ""), do: {:error, :root_folder_not_marker}
-
   def create_folder_marker(user, vault, folder) when is_binary(folder) do
+    # Every marker write (REST, MCP, batch, materialization) lands here, so
+    # this is the one guard: same rewrite notes get, never stored as given.
+    case PathSanitizer.sanitize(folder) do
+      "" -> {:error, :root_folder_not_marker}
+      folder -> do_create_folder_marker(user, vault, folder)
+    end
+  end
+
+  defp do_create_folder_marker(user, vault, folder) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user),
          {:ok, dek} <- Crypto.get_dek(user) do

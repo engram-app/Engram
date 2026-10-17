@@ -59,6 +59,30 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
       assert body["error"] =~ "folder"
     end
 
+    # Same PathSanitizer rules notes get: traversal, absolute, null-byte and
+    # percent-encoded dot segments are rewritten, never stored as given.
+    for {input, expected} <- [
+          {"../x", "x"},
+          {"/abs", "abs"},
+          {"a/../../b", "a/b"},
+          {"nul\0byte", "nulbyte"},
+          {"%2e%2e/enc", "enc"}
+        ] do
+      test "sanitizes #{inspect(input)} to #{expected}", %{conn: conn, user: user, vault: vault} do
+        body = conn |> post("/api/folders", %{"folder" => unquote(input)}) |> json_response(201)
+        assert body["folder"]["name"] == unquote(expected)
+
+        {:ok, names} = Engram.Notes.list_explicit_folders(Engram.Repo.reload!(user), vault)
+        assert names == [unquote(expected)]
+      end
+    end
+
+    test "a folder that sanitizes to the root is rejected with 422", %{conn: conn} do
+      for bad <- ["..", "/", "%2e%2e", "./.."] do
+        assert conn |> post("/api/folders", %{"folder" => bad}) |> json_response(422)
+      end
+    end
+
     test "requires authentication" do
       conn = build_conn() |> post("/api/folders", %{"folder" => "X"})
       assert response(conn, 401)
