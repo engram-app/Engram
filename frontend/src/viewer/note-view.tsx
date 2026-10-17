@@ -126,9 +126,7 @@ function NoteView({ content, tags, links, manifestNotes, onCreateWikiTarget }: N
 					</ul>
 				)}
 			</header>
-			{/* data-note-content: the rendered markdown, which the i18n e2e leak scan
-			    skips except for elements marked data-ui-chrome. */}
-			<section className="prose prose-neutral dark:prose-invert max-w-none" data-note-content>
+			<section className="prose prose-neutral dark:prose-invert max-w-none">
 				<ReactMarkdown
 					remarkPlugins={remarkPlugins}
 					rehypePlugins={rehypePlugins}

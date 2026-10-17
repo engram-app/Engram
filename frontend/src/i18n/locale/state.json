@@ -245,7 +245,9 @@
 	},
 	"ja": {
 		"translator": "202d8f78",
-		"failed": {},
+		"failed": {
+			"3,000 notes · 20 AI searches a day · 1 vault": "2026-10-17"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"{count} notes": "{count} note",

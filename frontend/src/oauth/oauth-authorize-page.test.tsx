@@ -509,28 +509,23 @@ describe("OAuthAuthorizePage vault tab on Approve", () => {
 		expect(close).toHaveBeenCalled();
 	});
 
-	// A blocked popup must not strand them: the vault is offered in-page, from
-	// a real click, before handing back to the client.
-	it("offers the vault in-page when the popup is blocked", async () => {
+	// Blocked (every in-app/auth webview): the client comes first, so hand
+	// straight back to it with no interstitial.
+	it("redirects at once when the popup is blocked", async () => {
 		fetchOAuthClient.mockResolvedValue(CLIENT);
 		consentRedirectsTo("https://app/cb?code=ok");
 		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
-		const open = vi.spyOn(window, "open").mockReturnValue(null);
+		vi.spyOn(window, "open").mockReturnValue(null);
 
 		renderAt(VALID_QS);
 		await screen.findByRole("button", { name: /^review$/iu });
 		approve();
 
-		const openVault = await screen.findByRole("button", { name: /open your vault/iu });
-		expect(assign).not.toHaveBeenCalled();
+		await waitFor(() => expect(assign).toHaveBeenCalledWith("https://app/cb?code=ok"));
 		expect(mockTrack).toHaveBeenCalledWith("vault_tab_blocked", {
 			client_kind: "mcp",
 			client: "chatgpt",
 		});
-		fireEvent.click(openVault);
-		expect(open).toHaveBeenLastCalledWith("/", "_blank");
-		fireEvent.click(screen.getByRole("button", { name: /back to chatgpt/iu }));
-		expect(assign).toHaveBeenCalledWith("https://app/cb?code=ok");
 	});
 
 	// An Obsidian device is not an MCP client: recording it as one ("other")
@@ -542,14 +537,14 @@ describe("OAuthAuthorizePage vault tab on Approve", () => {
 			kind: "obsidian",
 		});
 		consentRedirectsTo("https://app/cb?code=ok");
-		vi.spyOn(window.location, "assign").mockImplementation(() => {});
+		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
 		vi.spyOn(window, "open").mockReturnValue(null);
 
 		renderAt(VALID_QS);
 		await screen.findByRole("button", { name: /^review$/iu });
 		approve();
 
-		await screen.findByRole("button", { name: /open your vault/iu });
+		await waitFor(() => expect(assign).toHaveBeenCalledWith("https://app/cb?code=ok"));
 		expect(mockTrack).toHaveBeenCalledWith("vault_tab_blocked", { client_kind: "obsidian" });
 	});
 });

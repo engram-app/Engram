@@ -7,11 +7,6 @@ defmodule EngramWeb.UserChannel do
   user is mid-plugin-install. Server broadcasts via
   `EngramWeb.Endpoint.broadcast("user:{id}", "vault_created", payload)`.
 
-  Also `connection_created` (`%{client_id: uuid}`, the OAuth client's internal
-  id), sent once when an authorization code is exchanged for a live grant
-  (`Engram.OAuth.exchange_authorization_code/2`), never on refresh rotation.
-  Names no vault, so it is not intercepted.
-
   Auth: socket.assigns.current_user.id must match the topic's user_id.
   """
 

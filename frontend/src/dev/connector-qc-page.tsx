@@ -15,7 +15,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { BillingStatus, Connection, OnboardingStatus } from "../api/queries";
-import { type AuthAdapter, AuthContext } from "../auth/auth-context";
 import type { EngramConfig } from "../config";
 import { ConfigProvider } from "../config-context";
 import { ChecklistWidget } from "../onboarding/checklist-widget";
@@ -172,17 +171,6 @@ const CONFIG: EngramConfig = {
 	tracingEnabled: false,
 };
 
-// Fixtures only: signed out, so anything that would open a socket (the user
-// channel the checklist listens on) stays offline.
-const OFFLINE_AUTH: AuthAdapter = {
-	isLoaded: true,
-	isSignedIn: false,
-	user: null,
-	getToken: () => Promise.resolve(null),
-	logout: () => Promise.resolve(),
-	hasBuiltInUI: false,
-};
-
 function status(over: Partial<OnboardingStatus> = {}): OnboardingStatus {
 	return {
 		enabled: true,
@@ -224,9 +212,7 @@ function Panel({
 				<p className="text-muted-foreground text-sm">{note}</p>
 			</header>
 			<ConfigProvider config={CONFIG}>
-				<AuthContext.Provider value={OFFLINE_AUTH}>
-					<QueryClientProvider client={qc}>{children}</QueryClientProvider>
-				</AuthContext.Provider>
+				<QueryClientProvider client={qc}>{children}</QueryClientProvider>
 			</ConfigProvider>
 		</section>
 	);

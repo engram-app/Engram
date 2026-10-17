@@ -788,15 +788,10 @@ export default {
 	"Unknown OAuth client": "Klien OAuth tidak dikenali",
 	"The client requesting access is not registered with Engram.":
 		"Klien yang meminta akses tidak didaftarkan dengan Engram.",
-	"this app": "aplikasi ini",
-	"You're connected": "Anda telah disambungkan",
-	"Your browser blocked the new tab. Open your vault, then go back to {client}.":
-		"Penyemak imbas anda menyekat tab baharu. Buka peti nota anda, kemudian kembali ke {client}.",
-	"Open your vault": "Buka peti nota anda",
-	"Back to {client}": "Kembali ke {client}",
 	"This app did not register the address it asked to send you back to.":
 		"Aplikasi ini tidak merekod alamat yang diminta untuk menghantar anda kembali.",
 	"Finish setting up Engram": "Selesaikan persediaan Engram",
+	"this app": "aplikasi ini",
 	"previous connection": "sambungan sebelumnya",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Pelayan memberikan akses lebih daripada yang anda pilih, jadi tiada apa yang disambungkan. Cuba lagi, atau hubungi sokongan jika ini berterusan.",

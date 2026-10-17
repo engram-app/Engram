@@ -40,18 +40,13 @@ const { channelHandlers, socketCtor } = vi.hoisted(() => {
 		on: (event: string, cb: (payload: unknown) => void) => {
 			channelHandlers[event] = cb;
 		},
-		join: () => {
-			const push = { receive: () => push };
-			return push;
-		},
-		leave: vi.fn(),
+		join: () => ({ receive: () => ({}) }),
 	};
 	const socketCtor = vi.fn(function MockSocket(this: object, ..._args: unknown[]) {
 		Object.assign(this, {
 			connect: vi.fn(),
 			channel: vi.fn(() => channelMock),
 			disconnect: vi.fn(),
-			onError: vi.fn(),
 		});
 	});
 	return { channelHandlers, socketCtor };

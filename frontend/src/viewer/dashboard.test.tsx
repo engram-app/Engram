@@ -1,5 +1,4 @@
 import { render, screen } from "@testing-library/react";
-import { StrictMode } from "react";
 import { MemoryRouter, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RightToolsProvider, useRightTools } from "../layout/right-tools-context";
@@ -94,12 +93,7 @@ describe("Dashboard single-note auto-open", () => {
 
 	function LocationProbe() {
 		const loc = useLocation();
-		return (
-			<span data-testid="loc">
-				{loc.pathname}
-				{loc.hash}
-			</span>
-		);
+		return <span data-testid="loc">{loc.pathname}</span>;
 	}
 
 	function renderAt(url: string) {
@@ -120,49 +114,6 @@ describe("Dashboard single-note auto-open", () => {
 		});
 		renderAt("/");
 		expect(screen.getByTestId("loc").textContent).toBe("/v/work/welcome-id");
-	});
-
-	// Dev renders twice. Marking the vault opened during render made the second
-	// pass see the mark and skip the redirect, so dev never auto-opened at all.
-	it("opens the note under StrictMode", () => {
-		useSyncManifestSpy.mockReturnValue({
-			data: { notes: [{ id: "welcome-id", path: "Welcome to Engram.md" }] },
-			isPending: false,
-		});
-		render(
-			<StrictMode>
-				<MemoryRouter initialEntries={["/"]}>
-					<RightToolsProvider>
-						<Dashboard />
-						<LocationProbe />
-					</RightToolsProvider>
-				</MemoryRouter>
-			</StrictMode>,
-		);
-		expect(screen.getByTestId("loc").textContent).toBe("/v/work/welcome-id");
-	});
-
-	// The mark means "redirected once": a render that does not redirect (no
-	// vault list to land in) must not spend it.
-	it("marks the vault opened only when it redirects", () => {
-		useVaultsSpy.mockReturnValueOnce({ data: [] });
-		useSyncManifestSpy.mockReturnValue({
-			data: { notes: [{ id: "welcome-id", path: "Welcome to Engram.md" }] },
-			isPending: false,
-		});
-		renderAt("/");
-		expect(sessionStorage.getItem("engram:auto-opened:work")).toBeNull();
-	});
-
-	// Settings is a hash overlay on any page: "/#settings/account" into a new
-	// vault must still open Settings over the note it lands on.
-	it("keeps the hash when it opens the note", () => {
-		useSyncManifestSpy.mockReturnValue({
-			data: { notes: [{ id: "welcome-id", path: "Welcome to Engram.md" }] },
-			isPending: false,
-		});
-		renderAt("/#settings/account");
-		expect(screen.getByTestId("loc").textContent).toBe("/v/work/welcome-id#settings/account");
 	});
 
 	it("stays on the empty pane once a second note exists", () => {

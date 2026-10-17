@@ -34,11 +34,7 @@ export default function MermaidBlock({ code }: { code: string }) {
 			{error ? (
 				<pre className="rounded border border-red-300 bg-red-50 p-3 text-red-700 text-xs dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
 					{/* Mermaid's parse error is third-party English: verbatim, tagged as such. */}
-					<Trans
-						chrome
-						text="Mermaid error: {error}"
-						slots={{ error: <span lang="en">{error}</span> }}
-					/>
+					<Trans text="Mermaid error: {error}" slots={{ error: <span lang="en">{error}</span> }} />
 					{`\n\n${code}`}
 				</pre>
 			) : null}

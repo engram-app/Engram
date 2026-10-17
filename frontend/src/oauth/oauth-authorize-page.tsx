@@ -41,8 +41,8 @@ import { ROUTES } from "../routes";
 import { settingsHash, settingsTo } from "../settings/settings-hash";
 import { clearPendingAuthorization, stashPendingAuthorization } from "./pending-authorization";
 
-// Where an approval sends the user while the client finishes connecting: the
-// app root, which lands on their active vault.
+// The tab an approval opens while the client finishes connecting: the app
+// root, which lands on the active vault.
 const VAULT_URL = ROUTES.HOME;
 
 const REQUIRED_PARAMS = [
@@ -168,16 +168,6 @@ export default function OAuthAuthorizePage() {
 	// backend too old to answer still allows Approve, which it re-validates.
 	const redirectVerified = clientQuery.data?.redirect_uri_registered === true;
 	const bounced = useRef(false);
-	// The popup was blocked: offer the vault from a real click, then hand back.
-	const [blockedRedirect, setBlockedRedirect] = useState<string | null>(null);
-	useEffect(() => {
-		if (!blockedRedirect) {
-			return;
-		}
-		// The code is good for 10 minutes; do not hold the client up for long.
-		const timer = setTimeout(() => window.location.assign(blockedRedirect), 20_000);
-		return () => clearTimeout(timer);
-	}, [blockedRedirect]);
 
 	useEffect(() => {
 		if (!needsOnboarding || bounced.current || missing.length > 0) {
@@ -342,32 +332,6 @@ export default function OAuthAuthorizePage() {
 							{t("The client requesting access is not registered with Engram.")}
 						</p>
 					</div>
-				</AuthPanel>
-			</AuthShell>
-		);
-	}
-
-	if (blockedRedirect) {
-		const client = clientQuery.data?.client_name ?? t("this app");
-		return (
-			<AuthShell>
-				<AuthPanel className="flex flex-col gap-3">
-					<h1 className={heading}>{t("You're connected")}</h1>
-					<p className="text-muted-foreground">
-						{t("Your browser blocked the new tab. Open your vault, then go back to {client}.", {
-							client,
-						})}
-					</p>
-					<Button type="button" onClick={() => window.open(VAULT_URL, "_blank")}>
-						{t("Open your vault")}
-					</Button>
-					<Button
-						type="button"
-						variant="outline"
-						onClick={() => window.location.assign(blockedRedirect)}
-					>
-						{t("Back to {client}", { client })}
-					</Button>
 				</AuthPanel>
 			</AuthShell>
 		);
@@ -540,12 +504,11 @@ export default function OAuthAuthorizePage() {
 			if (!grantsCode) {
 				vaultTab?.close();
 			} else if (vaultTab === null) {
+				// Blocked (every in-app/auth webview does): the client comes first.
 				track(
 					"vault_tab_blocked",
 					isMcp ? { client_kind: "mcp", client: mcpClient } : { client_kind: "obsidian" },
 				);
-				setBlockedRedirect(redirect_uri);
-				return;
 			}
 			window.location.assign(redirect_uri);
 		} catch (e: unknown) {

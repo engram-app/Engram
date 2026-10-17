@@ -229,7 +229,6 @@ export default {
 	"You're on this plan": "このプランを利用中",
 	"Start free trial": "無料トライアル開始",
 	Popular: "人気",
-	"3,000 notes · 20 AI searches a day · 1 vault": "3,000件のノート · 1日20回のAI検索 · 1つの保管庫",
 	"3,000 notes, all searchable": "3000ノート、すべて検索可能",
 	"20 AI searches a day": "1日20回AI検索",
 	"1 vault": "1つの保管庫",
@@ -784,15 +783,10 @@ export default {
 	"Unknown OAuth client": "不明なOAuthクライアント",
 	"The client requesting access is not registered with Engram.":
 		"アクセスを要求しているクライアントは、Engramに登録されていません。",
-	"this app": "このアプリ",
-	"You're connected": "接続されています",
-	"Your browser blocked the new tab. Open your vault, then go back to {client}.":
-		"ブラウザが新しいタブをブロックしました。保管庫を開き、{client}に戻ってください。",
-	"Open your vault": "保管庫を開く",
-	"Back to {client}": "{client}に戻る",
 	"This app did not register the address it asked to send you back to.":
 		"このアプリは、戻る際に使用するアドレスを登録できませんでした。",
 	"Finish setting up Engram": "Engramの設定を完了する",
+	"this app": "このアプリ",
 	"previous connection": "前の接続",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"サーバーが許可したアクセス権が、お客様が選択したものよりも大きいため、何も接続されませんでした。もう一度お試しください。それでも問題が解決しない場合は、サポートまでお問い合わせください。",

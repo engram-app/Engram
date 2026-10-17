@@ -31,11 +31,7 @@ const { channelHandlers, socketChannel, socketConnect, socketDisconnect, socketC
 			on: (event: string, cb: (payload: unknown) => void) => {
 				channelHandlers[event] = cb;
 			},
-			join: () => {
-				const push = { receive: () => push };
-				return push;
-			},
-			leave: vi.fn(),
+			join: () => ({ receive: () => ({}) }),
 		};
 		const socketChannel = vi.fn(() => channelMock);
 		const socketConnect = vi.fn();
@@ -45,7 +41,6 @@ const { channelHandlers, socketChannel, socketConnect, socketDisconnect, socketC
 				connect: socketConnect,
 				channel: socketChannel,
 				disconnect: socketDisconnect,
-				onError: vi.fn(),
 			});
 		});
 		return { channelHandlers, socketChannel, socketConnect, socketDisconnect, socketCtor };

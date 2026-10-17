@@ -749,15 +749,10 @@ export default {
 	"Unknown OAuth client": "未知的 OAuth 用戶端",
 	"The client requesting access is not registered with Engram.":
 		"請求存取的用戶端未在 Engram 中註冊。",
-	"this app": "此應用程式",
-	"You're connected": "已連線",
-	"Your browser blocked the new tab. Open your vault, then go back to {client}.":
-		"您的瀏覽器阻止了新分頁。請開啟您的儲存庫，然後返回 {client}。",
-	"Open your vault": "開啟您的儲存庫",
-	"Back to {client}": "返回 {client}",
 	"This app did not register the address it asked to send you back to.":
 		"此應用程式未記錄您要返回的地址。",
 	"Finish setting up Engram": "完成 Engram 的設定",
+	"this app": "此應用程式",
 	"previous connection": "之前的連線",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"伺服器授予了比您選擇的更多權限，因此沒有任何內容連接。請重試，或如果此問題持續發生，請聯絡支援。",

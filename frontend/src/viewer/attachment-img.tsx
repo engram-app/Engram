@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Trans } from "@/i18n/trans";
+import { useT } from "@/i18n/locale-provider";
 import { encodePathSegments } from "@/lib/path";
 import { ApiError, api, isNotFound } from "../api/client";
 
@@ -8,6 +8,7 @@ import { ApiError, api, isNotFound } from "../api/client";
 type LoadError = "missing" | "failed";
 
 export default function AttachmentImg({ path, alt }: { path: string; alt?: string }) {
+	const { t } = useT();
 	const [src, setSrc] = useState<string | null>(null);
 	const [error, setError] = useState<LoadError | null>(null);
 
@@ -46,20 +47,14 @@ export default function AttachmentImg({ path, alt }: { path: string; alt?: strin
 	if (error) {
 		return (
 			<span className="inline-flex items-center gap-1 rounded bg-destructive/10 px-1.5 py-0.5 text-destructive text-xs">
-				{error === "missing" ? (
-					<Trans chrome text="Missing attachment: {path}" slots={{ path }} />
-				) : (
-					<Trans chrome text="Couldn't load {path} (temporarily unavailable)" slots={{ path }} />
-				)}
+				{error === "missing"
+					? t("Missing attachment: {path}", { path })
+					: t("Couldn't load {path} (temporarily unavailable)", { path })}
 			</span>
 		);
 	}
 	if (!src) {
-		return (
-			<span className="text-muted-foreground text-xs">
-				<Trans chrome text="Loading {path}…" slots={{ path }} />
-			</span>
-		);
+		return <span className="text-muted-foreground text-xs">{t("Loading {path}…", { path })}</span>;
 	}
 	return <img src={src} alt={alt ?? path} className="my-2 max-w-full rounded" />;
 }

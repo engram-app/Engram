@@ -8,28 +8,58 @@ import { useVaultReadyEvents } from "./use-vault-ready-events";
 vi.mock("../analytics/track", () => ({ track: vi.fn() }));
 const mockTrack = vi.mocked(track);
 
-const { subscribed, subscribeUserChannel } = vi.hoisted(() => {
-	// Live subscriptions by event; unsubscribe removes the entry.
-	const subscribed: Record<string, (payload: unknown) => void> = {};
-	const subscribeUserChannel = vi.fn(
-		async (_opts: { userId: string }, event: string, handler: (payload: unknown) => void) => {
-			subscribed[event] = handler;
-			return () => {
-				delete subscribed[event];
-			};
-		},
-	);
-	return { subscribed, subscribeUserChannel };
+const {
+	channelHandlers,
+	channelOn,
+	socketChannelMock,
+	socketConnectMock,
+	socketDisconnectMock,
+	socketCtor,
+} = vi.hoisted(() => {
+	const channelHandlers: Record<string, (payload: unknown) => void> = {};
+	const channelOn = vi.fn((event: string, cb: (payload: unknown) => void) => {
+		channelHandlers[event] = cb;
+	});
+	const channelMock = {
+		on: channelOn,
+		join: () => ({ receive: () => ({}) }),
+	};
+	const socketChannelMock = vi.fn(() => channelMock);
+	const socketConnectMock = vi.fn();
+	const socketDisconnectMock = vi.fn();
+	// Phoenix's Socket is invoked with `new` — use a constructor function (not a
+	// vi.fn() arrow returning an object, which Mock's `new` semantics reject).
+	const socketCtor = vi.fn(function MockSocket(this: object, ..._args: unknown[]) {
+		Object.assign(this, {
+			connect: socketConnectMock,
+			channel: socketChannelMock,
+			disconnect: socketDisconnectMock,
+		});
+	});
+	return {
+		channelHandlers,
+		channelOn,
+		socketChannelMock,
+		socketConnectMock,
+		socketDisconnectMock,
+		socketCtor,
+	};
 });
 
-vi.mock("../api/channel", () => ({ subscribeUserChannel }));
+vi.mock("phoenix", () => ({ Socket: socketCtor }));
 
-// Stable adapter, so the hook's effect (keyed on getToken) doesn't re-run.
+// getToken is the lynchpin: the hook's fire-and-forget connect() awaits it.
+// A getToken that rejects (or isn't a function) used to crash the vitest run
+// with an unhandled rejection — see #531 / #652. `tokenImpl` is swappable per
+// test, but the adapter object itself is STABLE so the hook's effect (keyed on
+// getToken) doesn't spuriously re-run on every re-render.
+let tokenImpl: () => Promise<string | null> = async () => "tok-test";
+
 const authAdapter: AuthAdapter = {
 	isLoaded: true,
 	isSignedIn: true,
 	user: { email: "u@example.com" },
-	getToken: async () => "tok-test",
+	getToken: () => tokenImpl(),
 	logout: async () => {},
 	hasBuiltInUI: false,
 };
@@ -40,10 +70,15 @@ function wrap({ children }: { children: React.ReactNode }) {
 
 describe("useVaultReadyEvents", () => {
 	beforeEach(() => {
-		subscribeUserChannel.mockClear();
+		tokenImpl = async () => "tok-test";
+		socketCtor.mockClear();
+		socketChannelMock.mockClear();
+		socketConnectMock.mockClear();
+		socketDisconnectMock.mockClear();
+		channelOn.mockClear();
 		mockTrack.mockClear();
-		for (const k of Object.keys(subscribed)) {
-			delete subscribed[k];
+		for (const k of Object.keys(channelHandlers)) {
+			delete channelHandlers[k];
 		}
 	});
 
@@ -53,14 +88,10 @@ describe("useVaultReadyEvents", () => {
 			await Promise.resolve();
 			await Promise.resolve();
 		});
-		expect(subscribeUserChannel).toHaveBeenCalledWith(
-			expect.objectContaining({ userId: "42" }),
-			expect.any(String),
-			expect.any(Function),
-			expect.any(Function),
-		);
-		expect(subscribed.vault_created).toBeDefined();
-		expect(subscribed.vault_populated).toBeDefined();
+		expect(socketCtor).toHaveBeenCalledWith("/socket", { params: { token: "tok-test" } });
+		expect(socketChannelMock).toHaveBeenCalledWith("user:42");
+		expect(channelHandlers.vault_created).toBeDefined();
+		expect(channelHandlers.vault_populated).toBeDefined();
 	});
 
 	it("flips vaultCreated + records vaultId when vault_created fires", async () => {
@@ -73,7 +104,7 @@ describe("useVaultReadyEvents", () => {
 		});
 
 		act(() => {
-			subscribed.vault_created!({ vault_id: "v_1" });
+			channelHandlers.vault_created!({ vault_id: "v_1" });
 		});
 
 		expect(result.current.vaultCreated).toBe(true);
@@ -91,7 +122,7 @@ describe("useVaultReadyEvents", () => {
 		});
 
 		act(() => {
-			subscribed.vault_populated!({ vault_id: "v_2" });
+			channelHandlers.vault_populated!({ vault_id: "v_2" });
 		});
 
 		expect(result.current.vaultCreated).toBe(true);
@@ -110,7 +141,7 @@ describe("useVaultReadyEvents", () => {
 		});
 
 		act(() => {
-			subscribed.vault_populated!({ vault_id: "v_2" });
+			channelHandlers.vault_populated!({ vault_id: "v_2" });
 		});
 
 		expect(mockTrack).toHaveBeenCalledWith(
@@ -127,7 +158,7 @@ describe("useVaultReadyEvents", () => {
 		});
 
 		act(() => {
-			subscribed.vault_created!({ vault_id: "v_1" });
+			channelHandlers.vault_created!({ vault_id: "v_1" });
 		});
 
 		expect(mockTrack).not.toHaveBeenCalled();
@@ -138,7 +169,7 @@ describe("useVaultReadyEvents", () => {
 		await act(async () => {
 			await Promise.resolve();
 		});
-		expect(subscribeUserChannel).not.toHaveBeenCalled();
+		expect(socketCtor).not.toHaveBeenCalled();
 	});
 
 	it("does not connect when userId is null", async () => {
@@ -146,10 +177,10 @@ describe("useVaultReadyEvents", () => {
 		await act(async () => {
 			await Promise.resolve();
 		});
-		expect(subscribeUserChannel).not.toHaveBeenCalled();
+		expect(socketCtor).not.toHaveBeenCalled();
 	});
 
-	it("unsubscribes on unmount", async () => {
+	it("disconnects the socket on unmount", async () => {
 		const { unmount } = renderHook(() => useVaultReadyEvents({ userId: "42", enabled: true }), {
 			wrapper: wrap,
 		});
@@ -157,16 +188,16 @@ describe("useVaultReadyEvents", () => {
 			await Promise.resolve();
 			await Promise.resolve();
 		});
-		expect(Object.keys(subscribed)).not.toHaveLength(0);
 		unmount();
-		expect(subscribed).toEqual({});
+		expect(socketDisconnectMock).toHaveBeenCalledOnce();
 	});
 
-	// Regression for #531: a rejecting subscribe (getToken failed) must NOT
-	// leak an unhandled rejection out of the fire-and-forget effect.
-	it("logs a rejecting subscribe without an unhandled rejection", async () => {
+	// Regression for #531: a rejecting getToken must NOT leak an unhandled
+	// rejection out of the fire-and-forget connect(). The hook catches + logs
+	// it instead, and never reaches socket construction.
+	it("swallows a rejecting getToken without an unhandled rejection", async () => {
 		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-		subscribeUserChannel.mockRejectedValueOnce(new Error("auth not ready"));
+		tokenImpl = () => Promise.reject(new Error("auth not ready"));
 
 		renderHook(() => useVaultReadyEvents({ userId: "42", enabled: true }), { wrapper: wrap });
 		await act(async () => {
@@ -174,10 +205,8 @@ describe("useVaultReadyEvents", () => {
 			await Promise.resolve();
 		});
 
-		expect(consoleError).toHaveBeenCalledWith(
-			"user channel subscribe failed (vault_created)",
-			expect.any(Error),
-		);
+		expect(socketCtor).not.toHaveBeenCalled();
+		expect(consoleError).toHaveBeenCalledWith("user channel connect failed", expect.any(Error));
 		consoleError.mockRestore();
 	});
 });

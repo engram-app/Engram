@@ -7,7 +7,6 @@ import {
 	keymap,
 	WidgetType,
 } from "@codemirror/view";
-import { fillChromeText } from "@/i18n/trans";
 import type { Translate } from "@/i18n/translate";
 import { drawMermaid, rememberedMermaidHeight } from "../mermaid-render";
 import { selectionTouches } from "./decoration-utils";
@@ -82,7 +81,8 @@ class MermaidWidget extends WidgetType {
 		detail.lang = "en";
 		detail.textContent = err instanceof Error ? err.message : String(err);
 		const { t } = this;
-		fillChromeText(el, t("Mermaid error: {error}", { error: "{error}" }), { error: detail });
+		const [before, after = ""] = t("Mermaid error: {error}", { error: "{error}" }).split("{error}");
+		el.replaceChildren(before ?? "", detail, after);
 	}
 
 	// The widget is inert content, not a control; let clicks through so the caret

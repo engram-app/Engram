@@ -1,5 +1,5 @@
-import { useEffect, useMemo } from "react";
-import { Link, Navigate, useLocation, useSearchParams } from "react-router";
+import { useMemo } from "react";
+import { Link, Navigate, useSearchParams } from "react-router";
 import { useT } from "@/i18n/locale-provider";
 import { formatDate } from "@/lib/format-date";
 import { intlLocale } from "@/lib/intl-locale";
@@ -78,26 +78,9 @@ function FolderNotes({ folder }: { folder: string }) {
 	);
 }
 
-// The single-note redirect, marking the vault opened only when it actually
-// happens. On commit, not during render: StrictMode renders twice, and a mark
-// written by the first pass made the second skip the redirect.
-function AutoOpenRedirect({
-	markKey,
-	to,
-}: {
-	markKey: string;
-	to: { pathname: string; hash: string };
-}) {
-	useEffect(() => {
-		sessionStorage.setItem(markKey, "1");
-	}, [markKey]);
-	return <Navigate to={to} replace />;
-}
-
 export default function Dashboard() {
 	const { t } = useT();
 	const [searchParams] = useSearchParams();
-	const { hash } = useLocation();
 	const folder = searchParams.get("folder") ?? "";
 	const { data: vaults } = useVaults();
 	const slug = useActiveVaultSlug();
@@ -129,7 +112,6 @@ export default function Dashboard() {
 	// once, which is harmless.
 	const autoOpenKey = slug ? `engram:auto-opened:${slug}` : null;
 	const alreadyOpened = autoOpenKey !== null && sessionStorage.getItem(autoOpenKey) === "1";
-	const autoOpen = !folder && onlyNote !== null && slug !== null && !alreadyOpened;
 
 	// No note open still looks like an open (empty) document: mount the same
 	// right-panel content an open note gets, so the panel chrome is present.
@@ -153,14 +135,11 @@ export default function Dashboard() {
 		if (manifestPending && !manifest) {
 			return <LoadingPane />;
 		}
-		if (autoOpen && onlyNote && slug && autoOpenKey) {
-			// The hash rides along: Settings (`#settings/...`) overlays any page.
-			return (
-				<AutoOpenRedirect
-					markKey={autoOpenKey}
-					to={{ pathname: noteHref(slug, onlyNote.id), hash }}
-				/>
-			);
+		if (onlyNote && slug && !alreadyOpened) {
+			if (autoOpenKey) {
+				sessionStorage.setItem(autoOpenKey, "1");
+			}
+			return <Navigate to={noteHref(slug, onlyNote.id)} replace />;
 		}
 	}
 

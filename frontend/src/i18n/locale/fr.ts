@@ -823,15 +823,10 @@ export default {
 	"Unknown OAuth client": "Client OAuth inconnu",
 	"The client requesting access is not registered with Engram.":
 		"Le client demandant l'accès n'est pas enregistré auprès d'Engram.",
-	"this app": "cette application",
-	"You're connected": "Tu es connecté",
-	"Your browser blocked the new tab. Open your vault, then go back to {client}.":
-		"Ton navigateur a bloqué l'onglet. Ouvre ton coffre, puis reviens à {client}.",
-	"Open your vault": "Ouvre ton coffre",
-	"Back to {client}": "Retour à {client}",
 	"This app did not register the address it asked to send you back to.":
 		"Cette application n'a pas enregistré l'adresse à laquelle elle voulait te renvoyer.",
 	"Finish setting up Engram": "Termine la configuration d'Engram",
+	"this app": "cette application",
 	"previous connection": "connexion précédente",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Le serveur a accordé plus d'accès que ce que tu as choisi, donc rien n'a été connecté. Réessaie, ou contacte le support si cela continue.",

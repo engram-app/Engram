@@ -36,28 +36,6 @@ let onboardingStatusValue: { data: OnboardingStatus | undefined; isLoading: bool
 };
 
 let connectionsValue: { data: Connection[]; isLoading: boolean } = { data: [], isLoading: false };
-const channel = vi.hoisted(() => ({
-	userId: null as string | null | undefined,
-	event: "",
-	handler: (() => {}) as (payload: unknown) => void,
-	onJoined: undefined as (() => void) | undefined,
-	enabled: false,
-}));
-vi.mock("../api/use-user-channel-event", () => ({
-	useUserChannelEvent: (opts: {
-		userId: string | null | undefined;
-		event: string;
-		onEvent: (payload: unknown) => void;
-		onJoined?: () => void;
-		enabled?: boolean;
-	}) => {
-		channel.userId = opts.userId;
-		channel.event = opts.event;
-		channel.handler = opts.onEvent;
-		channel.onJoined = opts.onJoined;
-		channel.enabled = opts.enabled ?? true;
-	},
-}));
 
 let billingStatusValue: { data: Partial<BillingStatus> | undefined; isLoading: boolean } = {
 	data: { tier: "free", active: false } as Partial<BillingStatus>,
@@ -89,7 +67,6 @@ vi.mock("../api/queries", async () => {
 			return { data, isLoading: onboardingStatusValue.isLoading };
 		},
 		useConnections: () => connectionsValue,
-		useMe: () => ({ data: { id: "u1" } }),
 		useBillingStatus: () => billingStatusValue,
 	};
 });
@@ -686,58 +663,5 @@ describe("ChecklistWidget, interaction tracking", () => {
 			(k) => !(CHECKLIST_ITEMS as readonly string[]).includes(k),
 		);
 		expect(missing).toEqual([]);
-	});
-});
-
-// Approving a connector sends the user to their vault before the client has
-// exchanged its code. The server announces the new grant on the user channel;
-// the row ticks from that, not from polling.
-describe("ChecklistWidget, a tool that is still connecting", () => {
-	it("listens for connection_created while a picked tool has no connection", () => {
-		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
-		render(wrap(<ChecklistWidget />));
-		expect(channel.event).toBe("connection_created");
-		expect(channel.userId).toBe("u1");
-		expect(channel.enabled).toBe(true);
-	});
-
-	// A grant made before this tab joined the channel was never announced to
-	// it, so the list is re-read on join and on mount, not only on the event.
-	it("refetches connections when the channel joins", () => {
-		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
-		render(wrap(<ChecklistWidget />));
-		const invalidate = vi.spyOn(activeQc as QueryClient, "invalidateQueries");
-		channel.onJoined?.();
-		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["connections"] });
-	});
-
-	it("refetches connections when the server announces one", () => {
-		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
-		render(wrap(<ChecklistWidget />));
-		const invalidate = vi.spyOn(activeQc as QueryClient, "invalidateQueries");
-		channel.handler({ client_id: "cli" });
-		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["connections"] });
-	});
-
-	// One connected tool says nothing about the others the user picked.
-	it("keeps listening while another picked tool has no connection", () => {
-		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt", "claude"] };
-		connectionsValue = { data: [{ kind: "mcp", slug: "chatgpt" } as Connection], isLoading: false };
-		render(wrap(<ChecklistWidget />));
-		expect(channel.enabled).toBe(true);
-	});
-
-	it("keeps listening for other_mcp while every grant is claimed by a picked row", () => {
-		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt", "other_mcp"] };
-		connectionsValue = { data: [{ kind: "mcp", slug: "chatgpt" } as Connection], isLoading: false };
-		render(wrap(<ChecklistWidget />));
-		expect(channel.enabled).toBe(true);
-	});
-
-	it("does not listen once an MCP connection exists", () => {
-		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
-		connectionsValue = { data: [{ kind: "mcp", slug: "chatgpt" } as Connection], isLoading: false };
-		render(wrap(<ChecklistWidget />));
-		expect(channel.enabled).toBe(false);
 	});
 });

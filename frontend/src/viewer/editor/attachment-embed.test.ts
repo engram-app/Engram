@@ -2,7 +2,6 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { chromeText } from "@/i18n/ui-chrome.testing";
 import { attachmentEmbeds } from "./attachment-embed";
 
 let view: EditorView;
@@ -35,20 +34,6 @@ describe("attachmentEmbeds", () => {
 		});
 		expect(load).toHaveBeenCalledWith("img/pic.png");
 		expect(img.getAttribute("src")).toBe("blob:pic");
-	});
-
-	// The error is UI text inside the note body: the i18n leak scan skips note
-	// text and only reads elements marked as chrome.
-	test("marks a load failure as UI chrome", async () => {
-		load.mockRejectedValueOnce(new Error("gone"));
-		mount("![[pic.png]]\n\ntail");
-		const err = await vi.waitFor(() => {
-			const el = view.dom.querySelector<HTMLElement>(".cm-attachment-embed-error");
-			expect(el).not.toBeNull();
-			return el as HTMLElement;
-		});
-		expect(chromeText(err)).toBe("Couldn't load ");
-		expect(err.textContent).toBe("Couldn't load img/pic.png");
 	});
 
 	test("reveals the raw source while the caret is on the embed", () => {
