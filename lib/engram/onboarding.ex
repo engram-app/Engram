@@ -29,6 +29,11 @@ defmodule Engram.Onboarding do
   @connector_vault_action "connector_vault_provisioned"
   @connector_vault_client_id "connector-signup"
 
+  # Recorded with a first acceptance that should start on Free, in the same
+  # transaction, so a Free stamp that fails after commit is retried
+  # (`free_start_due?/1`) instead of lost.
+  @free_start_action "free_start_due"
+
   @terms_document "terms_of_service"
   @privacy_document "privacy_policy"
 
@@ -65,8 +70,8 @@ defmodule Engram.Onboarding do
   def accept_terms(user, tos_version, tos_hash, privacy_version, privacy_hash, meta)
       when is_binary(tos_version) and is_binary(privacy_version) do
     # Read before the insert: only a first acceptance starts the account on
-    # Free (`after_terms/2`); re-accepting changed terms is not a plan choice.
-    first_acceptance = is_nil(accepted_version(user, @terms_document))
+    # Free (`after_terms/1`); re-accepting changed terms is not a plan choice.
+    starts_free = is_nil(accepted_version(user, @terms_document)) and starts_free?(user)
     accepted_at = DateTime.utc_now(:second)
     ip = Map.get(meta, :ip_address)
     ua = Map.get(meta, :user_agent)
@@ -97,7 +102,8 @@ defmodule Engram.Onboarding do
                    version: privacy_version,
                    content_hash: privacy_hash
                  })
-               ) do
+               ),
+             :ok <- if(starts_free, do: record_action(user.id, @free_start_action), else: :ok) do
           tos_row
         else
           {:error, changeset} -> Repo.rollback(changeset)
@@ -110,7 +116,7 @@ defmodule Engram.Onboarding do
         # could land over a newer one a concurrent read just stored.
         :ok = Cache.evict(:terms, {user.id, @terms_document})
         :ok = Cache.evict(:terms, {user.id, @privacy_document})
-        :ok = after_terms(user, first_acceptance)
+        :ok = after_terms(user)
         {:ok, tos_row}
 
       other ->
@@ -206,10 +212,15 @@ defmodule Engram.Onboarding do
     # from above — this used to re-read the config key with the OPPOSITE
     # default (true vs false), so an unset key produced self-host wizard
     # steps but SaaS subscription gating in the same response.
+    #
+    # Last, the retry of a Free start that failed after its acceptance
+    # committed (`after_terms/1`). Only reached by an account past the terms
+    # with no plan, so the ordinary read never pays for it.
     subscription_ok =
       not billing_active or
         Engram.Billing.tier(user) in [:starter, :pro] or
-        not is_nil(user.free_tier_accepted_at)
+        not is_nil(user.free_tier_accepted_at) or
+        (terms_ok and repair_free_start(user))
 
     # The cached users row, not a fresh read: set_profile/2 evicts the :user
     # cache after commit, so this sees the saved profile even when the caller
@@ -512,10 +523,15 @@ defmodule Engram.Onboarding do
       open ->
         accepted = accepted_version(user, document)
 
-        # Never accepted (a signup): nothing has changed for them. They agree
-        # to the current text and meet the pending change in the app after.
+        # A signup that has accepted nothing yet: nothing has changed for
+        # them. They agree to the current text and meet the pending change in
+        # the app after. Keyed on the ToS row, not this document's: a legacy
+        # account that accepted only the ToS has no privacy row and still
+        # gets the privacy notice.
+        signup = is_nil(accepted) and is_nil(accepted_version(user, @terms_document))
+
         open
-        |> Enum.filter(&(not is_nil(accepted) and &1.version > accepted))
+        |> Enum.filter(&(not signup and (is_nil(accepted) or &1.version > accepted)))
         |> Enum.sort_by(&{not &1.material, Date.to_iso8601(&1.effective_date)})
         |> Enum.take(1)
         |> Enum.map(&notice_map/1)
@@ -558,7 +574,9 @@ defmodule Engram.Onboarding do
   Validates only the fields actually being set: `tools` must be a non-empty
   list of slugs from `valid_tools/0`; `uses_obsidian` and `tools_prefilled`
   must be booleans; `signup_source` must be a known origin. Empty payloads are
-  rejected so a stray POST can't no-op-succeed.
+  rejected so a stray POST can't no-op-succeed, as are the qualifiers sent
+  without what they qualify: `tools_prefilled` without `tools`,
+  `signup_source` without `uses_obsidian`.
 
   Returns `{:ok, %User{}}` or `{:error, atom}` where atom is one of
   `:invalid_uses_obsidian | :empty_tools | :invalid_tool |
@@ -607,6 +625,16 @@ defmodule Engram.Onboarding do
     end
   end
 
+  # Fields that qualify another, never standalone facts, sent without it.
+  # `tools_prefilled` alone would let a stray POST turn an ordinary signup
+  # into a connector one: vault provisioned, vault step dropped from the
+  # chain. `signup_source` qualifies the Obsidian answer /link sends with it
+  # (`plugin_source?/1` needs both), so on its own it records nothing.
+  defp lone_qualifier?(attrs) do
+    (Map.has_key?(attrs, :tools_prefilled) and not Map.has_key?(attrs, :tools)) or
+      (Map.has_key?(attrs, :signup_source) and not Map.has_key?(attrs, :uses_obsidian))
+  end
+
   defp validate_profile_attrs(attrs) do
     has_tools = Map.has_key?(attrs, :tools)
     has_source = Map.has_key?(attrs, :uses_obsidian)
@@ -620,10 +648,7 @@ defmodule Engram.Onboarding do
       has_signup_source and Map.get(attrs, :signup_source) not in @signup_sources ->
         {:error, :invalid_signup_source}
 
-      # A qualifier on `tools`, never a standalone fact. Accepting it alone
-      # would let a stray POST turn an ordinary signup into a connector one:
-      # vault provisioned, vault step dropped from the chain.
-      has_prefilled and not has_tools ->
+      lone_qualifier?(attrs) ->
         {:error, :nothing_to_set}
 
       has_prefilled and not is_boolean(Map.get(attrs, :tools_prefilled)) ->
@@ -664,20 +689,28 @@ defmodule Engram.Onboarding do
   @spec maybe_provision_connector_vault(Engram.Accounts.User.t()) :: :ok
   def maybe_provision_connector_vault(user) do
     user = Accounts.get_user(user.id) || user
-    status = status(user)
-    profile = status.profile || %{}
 
-    # `profile_complete`: a connector row pre-filled before connector profiles
-    # completed at the pre-answer is still on the vault step, where a minted
-    # "My Vault" would make the Free cap refuse the vault the user creates.
-    # Provisioned once ever: a vault the user deleted stays deleted.
-    due =
-      tools_prefilled?(profile) and status.profile_complete and
-        not is_boolean(profile["uses_obsidian"]) and not status.has_vault and
-        status.terms_ok and status.subscription_ok and
-        @connector_vault_action not in list_actions(user.id)
+    # The cached profile first: most callers (every Free start, every
+    # subscription.created) are not connector signups, and `status/1` is
+    # several reads. Same row `status/1` reads its profile from.
+    if tools_prefilled?(user.onboarding_profile) do
+      status = status(user)
+      profile = status.profile || %{}
 
-    if due, do: provision_connector_vault(user), else: :ok
+      # `profile_complete`: a connector row pre-filled before connector profiles
+      # completed at the pre-answer is still on the vault step, where a minted
+      # "My Vault" would make the Free cap refuse the vault the user creates.
+      # Provisioned once ever: a vault the user deleted stays deleted.
+      due =
+        tools_prefilled?(profile) and status.profile_complete and
+          not is_boolean(profile["uses_obsidian"]) and not status.has_vault and
+          status.terms_ok and status.subscription_ok and
+          @connector_vault_action not in list_actions(user.id)
+
+      if due, do: provision_connector_vault(user), else: :ok
+    else
+      :ok
+    end
   rescue
     # Never raises: one caller is a Paddle webhook, where an escaping error is
     # answered 200 anyway and never retried. The fallback is the vault step.
@@ -698,36 +731,76 @@ defmodule Engram.Onboarding do
   # first acceptance, and only when no plan passes yet: a paid account keeps
   # its plan, and a lapsed one re-accepting changed terms stays at the plan
   # step. Then a connector signup's vault, which is due once terms and plan
-  # both pass. A failed stamp leaves `:billing` in the chain
-  # (`build_steps/3`), the old flow.
-  defp after_terms(user, first_acceptance) do
+  # both pass.
+  #
+  # Runs after the acceptance commits, so it never fails it: the acceptance
+  # is recorded either way. A failed stamp is retried, because the acceptance
+  # recorded `@free_start_action` with it: the next accept lands here again,
+  # and the next `status/1` read repairs it (`repair_free_start/1`).
+  defp after_terms(user) do
     user = Accounts.get_user(user.id) || user
 
-    starts_free =
-      first_acceptance and Application.get_env(:engram, :billing_enabled, false) and
-        is_nil(user.free_tier_accepted_at) and
-        Engram.Billing.tier(user) not in [:starter, :pro]
+    # accept_free_tier/1 provisions the vault itself.
+    if free_start_due?(user),
+      do: start_free(user),
+      else: maybe_provision_connector_vault(user)
+  rescue
+    error ->
+      log_free_start_failure(user, error)
+      :ok
+  end
 
-    if starts_free do
-      case accept_free_tier(user) do
-        # accept_free_tier/1 provisions the vault itself.
-        {:ok, _} ->
-          :ok
+  defp starts_free?(user) do
+    user = Accounts.get_user(user.id) || user
 
-        {:error, reason} ->
-          Logger.warning(
-            "free start failed",
-            Metadata.with_category(:warning, :lifecycle,
-              user_id: user.id,
-              reason: Metadata.safe_reason(reason)
-            )
-          )
+    Application.get_env(:engram, :billing_enabled, false) and
+      is_nil(user.free_tier_accepted_at) and
+      Engram.Billing.tier(user) not in [:starter, :pro]
+  end
 
-          :ok
-      end
-    else
-      maybe_provision_connector_vault(user)
+  # A first acceptance asked for the Free start and it has not landed. No
+  # subscription row at all: an account that has had a plan since chooses
+  # its own, the same as a lapsed payer re-accepting changed terms.
+  defp free_start_due?(user) do
+    Application.get_env(:engram, :billing_enabled, false) and
+      is_nil(user.free_tier_accepted_at) and
+      is_nil(Engram.Billing.get_subscription(user)) and
+      @free_start_action in list_actions(user.id)
+  end
+
+  defp start_free(user) do
+    case accept_free_tier(user) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        log_free_start_failure(user, reason)
+        :ok
     end
+  end
+
+  # `status/1`'s half of the retry: true once the account is on Free.
+  defp repair_free_start(user) do
+    user = Accounts.get_user(user.id) || user
+    free_start_due?(user) and start_free(user) == :ok and free_tier_stamped?(user.id)
+  rescue
+    error ->
+      log_free_start_failure(user, error)
+      false
+  end
+
+  defp free_tier_stamped?(user_id) do
+    match?(%{free_tier_accepted_at: %DateTime{}}, Accounts.get_user(user_id))
+  end
+
+  defp log_free_start_failure(user, reason) do
+    Logger.warning(
+      "free start failed",
+      Metadata.with_category(:warning, :lifecycle,
+        user_id: user.id,
+        reason: Metadata.safe_reason(reason)
+      )
+    )
   end
 
   defp provision_connector_vault(user) do

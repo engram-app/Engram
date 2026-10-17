@@ -1,8 +1,9 @@
 defmodule Engram.Feedback do
   @moduledoc """
-  User-voice answers: how a signup heard about us (asked on the terms screen of
-  a web signup) and what they want Engram for (the in-app survey), why a subscriber cancels or deletes their account,
-  and free-form feedback.
+  User-voice answers: how a signup heard about us (the wizard's own step after
+  the terms, web signups only) and what they want Engram for (the in-app
+  survey, after first value), why a subscriber cancels or deletes their
+  account, and free-form feedback.
 
   Every answer goes to PostHog server-side (ad blockers cannot drop it), with
   the slugs also set as person properties so dashboards can break funnels down
@@ -78,8 +79,8 @@ defmodule Engram.Feedback do
       now = DateTime.utc_now(:second) |> DateTime.to_iso8601()
       stamped = Map.put(fields, "survey_done_at", now)
 
-      # The in-app survey always sends `use_cases` (empty on skip); the terms
-      # screen's heard-from answer never does. This stamp is how the app knows
+      # The in-app survey always sends `use_cases` (empty on skip); the
+      # wizard's heard-from step never does. This stamp is how the app knows
       # the survey itself was asked, since survey_done_at covers both.
       stamped =
         if Map.has_key?(params, "use_cases"),

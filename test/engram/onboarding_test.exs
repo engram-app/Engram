@@ -594,6 +594,67 @@ defmodule Engram.OnboardingTest do
 
       assert Onboarding.status(user).current_privacy_version == "2026-05-19"
     end
+
+    # The Free stamp runs after the acceptance commits. A failure there must
+    # not 500 an acceptance that is already recorded, and must not cost the
+    # user the Free start: the next status read (or accept) re-attempts it.
+    test "a failed Free start does not fail the acceptance; the next status read repairs it" do
+      LegalFixtures.insert_version(version: "2026-05-19", effective_date: nil)
+      LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
+      LegalFixtures.reset_version_cache()
+
+      user = insert(:user, onboarding_profile: %{"uses_obsidian" => false, "completed_at" => "x"})
+      block_free_stamp!()
+
+      assert {:ok, %Agreement{}} =
+               Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
+
+      assert is_nil(Engram.Accounts.get_user!(user.id).free_tier_accepted_at)
+
+      unblock_free_stamp!()
+
+      assert %{subscription_ok: true} = Onboarding.status(user)
+      assert %DateTime{} = Engram.Accounts.get_user!(user.id).free_tier_accepted_at
+    end
+
+    test "a retried acceptance re-attempts a failed Free start" do
+      LegalFixtures.insert_version(version: "2026-05-19", effective_date: nil)
+      LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
+      LegalFixtures.reset_version_cache()
+
+      user = insert(:user, onboarding_profile: %{"uses_obsidian" => false, "completed_at" => "x"})
+      block_free_stamp!()
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
+      unblock_free_stamp!()
+
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
+
+      assert %DateTime{} = Engram.Accounts.get_user!(user.id).free_tier_accepted_at
+    end
+  end
+
+  # A BEFORE UPDATE trigger that skips the row whenever the Free stamp would
+  # change, so `accept_free_tier/1`'s update matches zero rows. Created inside
+  # the test's sandbox transaction, so it rolls back with it.
+  defp block_free_stamp! do
+    Engram.Repo.query!("""
+    CREATE FUNCTION test_block_free_stamp() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW.free_tier_accepted_at IS DISTINCT FROM OLD.free_tier_accepted_at THEN
+        RETURN NULL;
+      END IF;
+      RETURN NEW;
+    END $$
+    """)
+
+    Engram.Repo.query!("""
+    CREATE TRIGGER test_block_free_stamp BEFORE UPDATE ON users
+    FOR EACH ROW EXECUTE FUNCTION test_block_free_stamp()
+    """)
+  end
+
+  defp unblock_free_stamp! do
+    Engram.Repo.query!("DROP TRIGGER test_block_free_stamp ON users")
   end
 
   describe "computed floor gate + legal_notices" do
@@ -671,6 +732,55 @@ defmodule Engram.OnboardingTest do
       LegalFixtures.reset_version_cache()
 
       refute Onboarding.status(user).terms_ok
+    end
+
+    # Accounts that accepted through the ToS-only path have no privacy row at
+    # all. They are not new signups, so a privacy change must still reach them.
+    test "a legacy account with terms but no privacy row still gets the privacy notice" do
+      LegalFixtures.insert_version(version: "2026-05-19", effective_date: nil)
+
+      LegalFixtures.insert_version(
+        document: "privacy_policy",
+        version: "2026-05-19",
+        material: false
+      )
+
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", %{})
+
+      LegalFixtures.insert_version(
+        document: "privacy_policy",
+        version: "2026-06-01",
+        material: false,
+        effective_date: ~D[2099-01-01]
+      )
+
+      LegalFixtures.reset_version_cache()
+
+      assert [%{document: "privacy_policy", version: "2026-06-01"}] =
+               Onboarding.legal_notices(user)
+    end
+
+    test "a brand-new signup who accepted nothing sees no notices" do
+      LegalFixtures.insert_version(version: "2026-05-19", effective_date: nil)
+
+      LegalFixtures.insert_version(
+        version: "2026-06-01",
+        material: true,
+        effective_date: ~D[2099-01-01]
+      )
+
+      LegalFixtures.insert_version(
+        document: "privacy_policy",
+        version: "2026-06-01",
+        material: false,
+        effective_date: ~D[2099-01-01]
+      )
+
+      LegalFixtures.reset_version_cache()
+      user = insert(:user, onboarding_profile: %{})
+
+      assert Onboarding.legal_notices(user) == []
     end
   end
 
@@ -910,8 +1020,18 @@ defmodule Engram.OnboardingTest do
     test "signup_source records a plugin-first signup" do
       user = insert(:user, onboarding_profile: %{})
 
-      assert {:ok, updated} = Onboarding.set_profile(user, %{signup_source: "plugin"})
+      assert {:ok, updated} =
+               Onboarding.set_profile(user, %{uses_obsidian: true, signup_source: "plugin"})
+
       assert updated.onboarding_profile["signup_source"] == "plugin"
+    end
+
+    # Like `tools_prefilled`, a qualifier: on its own it would mark a signup
+    # plugin-first without the Obsidian answer that makes it one.
+    test "signup_source on its own is refused" do
+      user = insert(:user, onboarding_profile: %{})
+
+      assert {:error, :nothing_to_set} = Onboarding.set_profile(user, %{signup_source: "plugin"})
     end
 
     # The origin is where the signup STARTED: a plugin-first user who later

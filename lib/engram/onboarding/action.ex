@@ -19,6 +19,7 @@ defmodule Engram.Onboarding.Action do
     plugin_connected
     ai_connected
     connector_vault_provisioned
+    free_start_due
   )
 
   schema "onboarding_actions" do
