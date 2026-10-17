@@ -2,7 +2,7 @@ defmodule Engram.Workers.RebindNoteLinks do
   @moduledoc """
   Oban worker: re-resolves every link edge (dangling or currently bound)
   whose target basename hmac matches `basename_hmac`, via
-  `Links.bind_danglers_for_hmac/3`.
+  `Links.bind_danglers_in_vault/3`.
 
   Enqueued whenever a note or attachment write might give a dangling (or
   wrongly-bound) edge something new to resolve against: `Notes.upsert_note/4`
@@ -42,8 +42,6 @@ defmodule Engram.Workers.RebindNoteLinks do
   alias Engram.Accounts
   alias Engram.Crypto.RotationGate
   alias Engram.Links
-  alias Engram.Repo
-  alias Engram.Vaults.Vault
   alias Engram.Workers.BackgroundPriority
 
   @impl Oban.Worker
@@ -77,43 +75,32 @@ defmodule Engram.Workers.RebindNoteLinks do
 
     case Base.decode64(basename_hmac_b64) do
       {:ok, basename_hmac} ->
-        case RotationGate.check(user_id) do
-          :ok ->
-            user = Accounts.get_user!(user_id)
-
-            # `vaults` carries FORCE ROW LEVEL SECURITY. Unscoped, this read
-            # returns nil under any role without BYPASSRLS and the job
-            # discards with "vault not found" — observed on staging the moment
-            # the app pool dropped to `engram_app`, for a vault that plainly
-            # exists. `user_id` is already in the job args (used just above),
-            # so there is no tenant to discover here.
-            #
-            # `skip_tenant_check` deliberately dropped rather than kept
-            # alongside the scope: inside `with_tenant/2` the guard passes on
-            # the process-dict tenant anyway, and leaving the option would
-            # silence `Engram.TenantError` if this read were ever hoisted back
-            # out of the closure.
-            #
-            # `bind_danglers_for_hmac/3` opens its own scope and is called
-            # OUTSIDE this block. That costs a second `set_config` round trip
-            # (re-entrancy is free only INSIDE an active `with_tenant`, and
-            # this block has already exited), which is the right trade: the
-            # vault load does not hold a transaction across the per-edge
-            # rebind loop.
-            case Repo.with_tenant(user_id, fn -> Repo.get(Vault, vault_id) end) do
-              {:ok, nil} -> {:discard, "vault #{vault_id} not found"}
-              {:ok, %Vault{} = vault} -> Links.bind_danglers_for_hmac(user, vault, basename_hmac)
-            end
-
-          {:error, :rotation_in_progress} ->
-            {:snooze, 60}
-
-          {:error, :user_not_found} ->
-            {:discard, :user_deleted}
+        # ONE fresh users read serves both the rotation gate and the DEK
+        # (#1502, the same shape as EmbedNote). Uncached on purpose: the gate
+        # must see a lock taken after this job was enqueued.
+        case Accounts.get_user_uncached(user_id) do
+          nil -> {:discard, :user_deleted}
+          user -> rebind(user, vault_id, basename_hmac)
         end
 
       :error ->
         {:discard, "invalid basename_hmac base64"}
+    end
+  end
+
+  defp rebind(user, vault_id, basename_hmac) do
+    case RotationGate.check_user(user) do
+      {:error, :rotation_in_progress} ->
+        {:snooze, 60}
+
+      :ok ->
+        # `vaults` carries FORCE ROW LEVEL SECURITY, so the vault is read
+        # inside the tenant transaction the rebind opens, rather than in a
+        # second one of its own.
+        case Links.bind_danglers_in_vault(user, vault_id, basename_hmac) do
+          :ok -> :ok
+          :vault_not_found -> {:discard, "vault #{vault_id} not found"}
+        end
     end
   end
 end

@@ -48,6 +48,7 @@ defmodule Engram.Links do
   alias Engram.Logger.DecryptFailure
   alias Engram.Notes.Note
   alias Engram.Repo
+  alias Engram.Vaults.Vault
 
   @note_exts ~w(.md .canvas)
   @backlinks_limit 200
@@ -681,6 +682,24 @@ defmodule Engram.Links do
       Repo.with_tenant(user.id, fn -> do_bind_danglers_for_hmac(user, vault, hmac, dek) end)
 
     result
+  end
+
+  @doc """
+  `bind_danglers_for_hmac/3` for a vault id: the vault is read inside the
+  same tenant transaction as the rebind instead of one of its own.
+  `:vault_not_found` when it is gone.
+  """
+  @spec bind_danglers_in_vault(map(), binary(), binary()) :: :ok | :vault_not_found
+  def bind_danglers_in_vault(user, vault_id, hmac) do
+    # Outside the scope, as in `bind_danglers_for_hmac/3`.
+    {:ok, dek} = Crypto.get_dek(user)
+
+    Repo.with_tenant!(user.id, fn ->
+      case Repo.get(Vault, vault_id) do
+        nil -> :vault_not_found
+        %Vault{} = vault -> do_bind_danglers_for_hmac(user, vault, hmac, dek)
+      end
+    end)
   end
 
   defp do_bind_danglers_for_hmac(user, vault, hmac, dek) do
