@@ -19,6 +19,7 @@ export interface AccessRequest {
 export type AccessLevel = "none" | "read" | "write";
 
 // A grant that asked for `mcp:read` and not `mcp`: it can never be given write.
+// Mirrors Engram.OAuth.read_only_scope?/1.
 export function isReadOnlyScope(scope: string): boolean {
 	const parts = scope.split(" ");
 	return parts.includes("mcp:read") && !parts.includes("mcp");

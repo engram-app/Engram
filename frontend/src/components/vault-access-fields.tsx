@@ -297,9 +297,11 @@ export function VaultAccessFields({
 			</fieldset>
 
 			{access.perVault ? (
-				<div className={cn("flex min-h-0 flex-1 flex-col", vaults.length > 3 && "min-h-[17rem]")}>
+				<section
+					className={cn("flex min-h-0 flex-1 flex-col", vaults.length > 3 && "min-h-[17rem]")}
+				>
 					{search.showFilter ? <VaultSearchInput search={search} /> : null}
-					<div className={cn(row, "shrink-0 py-2")}>
+					<header className={cn(row, "shrink-0 py-2")}>
 						<span data-slot="vault-header" className={cn(named, "font-semibold text-base")}>
 							{search.needle ? t("Matching vaults") : t("All vaults")}
 						</span>
@@ -323,7 +325,7 @@ export function VaultAccessFields({
 								return on > 0 && on < total;
 							},
 						)}
-					</div>
+					</header>
 					{leveled ? (
 						// A policy, not a vault: pinned first, set apart by a tint and a stronger divider.
 						<ul className="shrink-0 border-border border-t border-b-2">
@@ -388,7 +390,7 @@ export function VaultAccessFields({
 							{t("{count} of {total} selected", { count: reached, total: vaults.length })}
 						</p>
 					) : null}
-				</div>
+				</section>
 			) : (
 				<ul className="border-border border-y">
 					<li className={row}>

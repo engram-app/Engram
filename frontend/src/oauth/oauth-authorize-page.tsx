@@ -60,7 +60,6 @@ const REQUIRED_PARAMS = [
 // dead-end "Invalid authorization request" page. Mirror the backend default.
 const DEFAULT_SCOPE = "mcp";
 
-// Mirrors Engram.OAuth.read_only_scope?/1: `mcp:read` without `mcp`.
 type RequiredParam = (typeof REQUIRED_PARAMS)[number];
 
 function readParams(search: URLSearchParams): {
