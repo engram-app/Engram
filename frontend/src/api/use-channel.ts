@@ -4,7 +4,7 @@ import { useAuthAdapter } from "../auth/use-auth-adapter";
 import { installCrdtResyncTriggers } from "../crdt/session";
 import { useActiveVaultId } from "./active-vault";
 import {
-	backfillOnWake,
+	backfillStructural,
 	connectChannel,
 	disconnectChannel,
 	installSocketHealthTriggers,
@@ -65,10 +65,10 @@ export function useChannel() {
 		// The triggers above assume the socket is alive; this one refreshes the
 		// token and reconnects the transport in place (no CRDT-session teardown,
 		// so an open editor keeps its live doc). A live socket on a short wake just
-		// backfills, and only if the sync channel isn't joined (backfillOnWake).
+		// backfills — the online-event path the focus-only trigger misses.
 		const removeHealthTriggers = installSocketHealthTriggers(
 			() => reconnectWithFreshToken(() => getTokenRef.current()),
-			() => backfillOnWake(queryClient, vaultId),
+			() => backfillStructural(queryClient, vaultId),
 		);
 
 		return () => {
