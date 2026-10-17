@@ -1319,9 +1319,6 @@ export type OnboardingAction =
 	| "plugin_connected"
 	| "ai_connected"
 	| "connector_vault_provisioned"
-	// Recorded with the first Terms accept; marks a Free start still owed
-	// while the account has no Free stamp.
-	| "free_start_due"
 	| `dismissed:${string}`;
 
 export interface OnboardingStatus {

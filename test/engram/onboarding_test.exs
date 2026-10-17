@@ -595,12 +595,10 @@ defmodule Engram.OnboardingTest do
       assert Onboarding.status(user).current_privacy_version == "2026-05-19"
     end
 
-    # The Free stamp runs after the acceptance commits. A failure there must
-    # not 500 an acceptance that is already recorded, and must not cost the
-    # user the Free start: the next accept re-attempts it. The status read
-    # sits on the gate path, so it never writes: the billing step's
-    # "Continue with Free" is the fallback.
-    test "a failed Free start does not fail the acceptance; status leaves the billing step" do
+    # The Free stamp commits with the first acceptance: a stamp that fails
+    # fails the acceptance, so the user retries accept instead of landing past
+    # the terms with no plan.
+    test "a failed Free start fails the acceptance and records no agreement rows" do
       LegalFixtures.insert_version(version: "2026-05-19", effective_date: nil)
       LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
       LegalFixtures.reset_version_cache()
@@ -608,33 +606,62 @@ defmodule Engram.OnboardingTest do
       user = insert(:user, onboarding_profile: %{"uses_obsidian" => false, "completed_at" => "x"})
       block_free_stamp!()
 
-      assert {:ok, %Agreement{}} =
+      assert {:error, _} =
                Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
 
+      assert {:ok, []} = Engram.Repo.with_tenant(user.id, fn -> Engram.Repo.all(Agreement) end)
       assert is_nil(Engram.Accounts.get_user!(user.id).free_tier_accepted_at)
-
-      unblock_free_stamp!()
-
-      assert %{subscription_ok: false, next_step: :billing} = Onboarding.status(user)
-      assert is_nil(Engram.Accounts.get_user!(user.id).free_tier_accepted_at)
-
-      assert {:ok, %{free_tier_accepted_at: %DateTime{}}} =
-               Onboarding.accept_free_tier(Engram.Accounts.get_user!(user.id))
     end
 
-    test "a retried acceptance re-attempts a failed Free start" do
+    test "a retried acceptance after a failed Free start stamps Free" do
       LegalFixtures.insert_version(version: "2026-05-19", effective_date: nil)
       LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
       LegalFixtures.reset_version_cache()
 
       user = insert(:user, onboarding_profile: %{"uses_obsidian" => false, "completed_at" => "x"})
       block_free_stamp!()
-      {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
+      {:error, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
       unblock_free_stamp!()
 
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
 
       assert %DateTime{} = Engram.Accounts.get_user!(user.id).free_tier_accepted_at
+    end
+
+    test "a paid account is never stamped Free, on first acceptance or re-acceptance" do
+      LegalFixtures.insert_version(version: "2026-05-19", effective_date: nil)
+      LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
+      LegalFixtures.reset_version_cache()
+
+      user = insert(:user, onboarding_profile: %{"uses_obsidian" => false, "completed_at" => "x"})
+      insert(:subscription, user: user, tier: "pro", status: "active")
+
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
+      assert is_nil(Engram.Accounts.get_user!(user.id).free_tier_accepted_at)
+
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h2", "2026-05-19", "h2", %{})
+      assert is_nil(Engram.Accounts.get_user!(user.id).free_tier_accepted_at)
+    end
+
+    # Double-submitted first acceptances: one stamp, one connector vault.
+    test "concurrent first acceptances stamp once and provision one connector vault" do
+      LegalFixtures.insert_version(version: "2026-05-19", effective_date: nil)
+      LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
+      LegalFixtures.reset_version_cache()
+
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.set_profile(user, %{tools: ["chatgpt"], tools_prefilled: true})
+      stale = Engram.Accounts.get_user!(user.id)
+
+      1..5
+      |> Task.async_stream(
+        fn _ -> Onboarding.accept_terms(stale, "2026-05-19", "h", "2026-05-19", "h", %{}) end,
+        max_concurrency: 5
+      )
+      |> Enum.each(fn {:ok, result} -> assert {:ok, %Agreement{}} = result end)
+
+      assert %DateTime{} = Engram.Accounts.get_user!(user.id).free_tier_accepted_at
+      assert [%{name: "My Vault"}] = Engram.Vaults.list_vaults(user)
     end
   end
 

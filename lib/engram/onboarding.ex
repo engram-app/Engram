@@ -29,11 +29,6 @@ defmodule Engram.Onboarding do
   @connector_vault_action "connector_vault_provisioned"
   @connector_vault_client_id "connector-signup"
 
-  # Recorded with a first acceptance that should start on Free, in the same
-  # transaction, so a Free stamp that fails after commit is retried
-  # (`free_start_due?/1`) instead of lost.
-  @free_start_action "free_start_due"
-
   @terms_document "terms_of_service"
   @privacy_document "privacy_policy"
 
@@ -64,13 +59,16 @@ defmodule Engram.Onboarding do
   `privacy_hash`). Both rows share the same `accepted_at`/ip/ua audit metadata.
   `meta` may carry `:ip_address` (string) and `:user_agent` (string).
 
-  Returns `{:ok, %Agreement{}}` (the ToS row) when both inserts succeed, or
-  `{:error, %Ecto.Changeset{}}` for the first row that fails.
+  A first acceptance by an account with no plan also stamps the Free start,
+  in the same transaction (see `starts_free?/1`).
+
+  Returns `{:ok, %Agreement{}}` (the ToS row) when every write succeeds, or
+  `{:error, reason}` for the first that fails, with nothing recorded.
   """
   def accept_terms(user, tos_version, tos_hash, privacy_version, privacy_hash, meta)
       when is_binary(tos_version) and is_binary(privacy_version) do
     # Read before the insert: only a first acceptance starts the account on
-    # Free (`after_terms/1`); re-accepting changed terms is not a plan choice.
+    # Free; re-accepting changed terms is not a plan choice.
     starts_free = is_nil(accepted_version(user, @terms_document)) and starts_free?(user)
     accepted_at = DateTime.utc_now(:second)
     ip = Map.get(meta, :ip_address)
@@ -84,13 +82,13 @@ defmodule Engram.Onboarding do
     }
 
     # Atomic: a ToS row without its paired Privacy row is an incomplete audit
-    # record, so roll back the first insert if the second fails.
+    # record, and an account past the terms without its Free start would sit
+    # on a plan step that no longer exists, so any failure rolls back all of
+    # it and the user retries the accept.
     #
     # `transaction_after_commit`, not a plain transaction: each insert's
-    # `with_tenant` would otherwise run its after-commit work (the
-    # `:onboarding_actions` eviction `record_action/2` queues) at ITS end,
-    # before this commits, and a concurrent `list_actions/1` could re-cache
-    # the list without `@free_start_action`, so the retry never fires.
+    # `with_tenant` would otherwise run its after-commit work at ITS end,
+    # before this commits.
     result =
       Repo.transaction_after_commit(fn ->
         with {:ok, tos_row} <-
@@ -109,10 +107,11 @@ defmodule Engram.Onboarding do
                    content_hash: privacy_hash
                  })
                ),
-             :ok <- if(starts_free, do: record_action(user.id, @free_start_action), else: :ok) do
+             {:ok, _saved, _won} <-
+               if(starts_free, do: stamp_free_tier(user), else: {:ok, nil, nil}) do
           tos_row
         else
-          {:error, changeset} -> Repo.rollback(changeset)
+          {:error, reason} -> Repo.rollback(reason)
         end
       end)
 
@@ -122,7 +121,9 @@ defmodule Engram.Onboarding do
         # could land over a newer one a concurrent read just stored.
         :ok = Cache.evict(:terms, {user.id, @terms_document})
         :ok = Cache.evict(:terms, {user.id, @privacy_document})
-        :ok = after_terms(user)
+        if starts_free, do: :ok = evict_user(user.id)
+        # After commit, and idempotent: due once terms and plan both pass.
+        :ok = maybe_provision_connector_vault(user)
         {:ok, tos_row}
 
       other ->
@@ -402,7 +403,7 @@ defmodule Engram.Onboarding do
   # Enumerates the step chain so the frontend can render "Step X of N"
   # without re-deriving the gate rules: the terms, then for a web signup the
   # heard-from question and the vault step. Every account starts on Free when it accepts the terms
-  # (`after_terms/1`), so the plan step is gone; tools and the survey moved
+  # (`accept_terms/6`), so the plan step is gone; tools and the survey moved
   # into the app.
   #
   # A step must stay listed whenever `next_step/6` can still return it, or the
@@ -728,62 +729,16 @@ defmodule Engram.Onboarding do
   end
 
   # Every signup starts on Free when it first accepts the terms, so there is
-  # no plan step: get people using it first, upgrade prompts later. Only at the
-  # first acceptance, and only when no plan passes yet: a paid account keeps
-  # its plan, and a lapsed one re-accepting changed terms stays at the plan
-  # step. Then a connector signup's vault, which is due once terms and plan
-  # both pass.
-  #
-  # Runs after the acceptance commits, so it never fails it: the acceptance
-  # is recorded either way. A failed stamp is retried, because the acceptance
-  # recorded `@free_start_action` with it: the next accept lands here again.
-  # Until then the account sits on the billing step, whose "Continue with
-  # Free" stamps it. Never from `status/1`, which is on the gate path and
-  # must not write.
-  defp after_terms(user) do
-    user = Accounts.get_user(user.id) || user
-
-    if free_start_due?(user) do
-      # accept_free_tier/1 provisions the vault itself.
-      case accept_free_tier(user) do
-        {:ok, _} -> :ok
-        {:error, reason} -> log_free_start_failure(user, reason)
-      end
-    else
-      maybe_provision_connector_vault(user)
-    end
-  rescue
-    error ->
-      log_free_start_failure(user, error)
-      :ok
-  end
-
+  # no plan step: get people using it first, upgrade prompts later. Only when
+  # no plan passes yet: a paid account keeps its plan, and a lapsed one
+  # re-accepting changed terms stays at the plan step (`accept_terms/6` asks
+  # only at the first acceptance).
   defp starts_free?(user) do
     user = Accounts.get_user(user.id) || user
 
     Application.get_env(:engram, :billing_enabled, false) and
       is_nil(user.free_tier_accepted_at) and
       Engram.Billing.tier(user) not in [:starter, :pro]
-  end
-
-  # A first acceptance asked for the Free start and it has not landed. No
-  # subscription row at all: an account that has had a plan since chooses
-  # its own, the same as a lapsed payer re-accepting changed terms.
-  defp free_start_due?(user) do
-    Application.get_env(:engram, :billing_enabled, false) and
-      is_nil(user.free_tier_accepted_at) and
-      is_nil(Engram.Billing.get_subscription(user)) and
-      @free_start_action in list_actions(user.id)
-  end
-
-  defp log_free_start_failure(user, reason) do
-    Logger.warning(
-      "free start failed",
-      Metadata.with_category(:warning, :lifecycle,
-        user_id: user.id,
-        reason: Metadata.safe_reason(reason)
-      )
-    )
   end
 
   defp provision_connector_vault(user) do
@@ -960,6 +915,25 @@ defmodule Engram.Onboarding do
   def accept_free_tier(%{free_tier_accepted_at: %DateTime{}} = user), do: {:ok, user}
 
   def accept_free_tier(%Engram.Accounts.User{} = user) do
+    case stamp_free_tier(user) do
+      {:ok, saved, :won} ->
+        evict_user(user.id)
+        maybe_provision_connector_vault(saved)
+        {:ok, saved}
+
+      {:ok, saved, :lost} ->
+        {:ok, saved}
+
+      error ->
+        error
+    end
+  end
+
+  # The conditional update both Free starts share. Of concurrent callers
+  # holding the same unstamped struct exactly one matches the row (`:won`,
+  # and only it provisions); the others read the winner's row (`:lost`).
+  # `:not_found` when nothing took the stamp (the user is gone).
+  defp stamp_free_tier(user) do
     import Ecto.Query
 
     query =
@@ -973,14 +947,11 @@ defmodule Engram.Onboarding do
            skip_tenant_check: true
          ) do
       {1, [saved]} ->
-        evict_user(user.id)
-        maybe_provision_connector_vault(saved)
-        {:ok, saved}
+        {:ok, saved, :won}
 
       {0, _} ->
-        # Lost the race: the winner stamped (and provisioned). Read the row.
         case fresh_user(user.id) do
-          %{free_tier_accepted_at: %DateTime{}} = saved -> {:ok, saved}
+          %{free_tier_accepted_at: %DateTime{}} = saved -> {:ok, saved, :lost}
           _ -> {:error, :not_found}
         end
     end
