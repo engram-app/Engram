@@ -173,6 +173,24 @@ defmodule EngramWeb.Plugs.OAuthScopeEnforceTest do
     end
   end
 
+  # Only the POST is exempt: any other method on those paths is a write.
+  test "ReadOnlyRoutes exempts only POST on the read-only and no-vault-data paths" do
+    for path <- [
+          ~w(api feedback),
+          ~w(api logs),
+          ~w(api telemetry spans),
+          ~w(api mcp),
+          ~w(api search)
+        ] do
+      refute EngramWeb.ReadOnlyRoutes.writes?(%Plug.Conn{method: "POST", path_info: path})
+
+      for method <- ~w(PUT PATCH DELETE) do
+        assert EngramWeb.ReadOnlyRoutes.writes?(%Plug.Conn{method: method, path_info: path}),
+               "#{method} /#{Enum.join(path, "/")}"
+      end
+    end
+  end
+
   test "an API key that can write some vault is not blocked account-wide", ctx do
     conn = ctx |> write_key() |> as() |> patch("/api/me", %{"name" => "x"})
     refute conn.status == 403

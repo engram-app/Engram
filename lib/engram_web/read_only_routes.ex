@@ -20,7 +20,9 @@ defmodule EngramWeb.ReadOnlyRoutes do
   the MCP `send_feedback` tool (`Engram.MCP.Tools.writes_vault?/1`):
 
     * `/api/feedback`: a message to the Engram team.
-    * `/api/logs`: the client's own diagnostic log lines.
+    * `/api/logs`: the client's own diagnostic log lines. Rate limited per
+      credential like every vault-scoped route (`PreAuthRateLimit`, and
+      `RequireApiRpsBudget` for API keys).
     * `/api/telemetry/spans`: the client's trace spans.
   """
 
@@ -35,7 +37,8 @@ defmodule EngramWeb.ReadOnlyRoutes do
     ["api", "telemetry", "spans"]
   ]
 
+  # Only the POST on these paths is exempt; any other method there writes.
   @spec writes?(Plug.Conn.t()) :: boolean()
   def writes?(%Plug.Conn{method: method, path_info: path}),
-    do: method not in @safe_methods and path not in @read_only_posts
+    do: method not in @safe_methods and not (method == "POST" and path in @read_only_posts)
 end
