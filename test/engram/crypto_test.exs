@@ -128,6 +128,39 @@ defmodule Engram.CryptoTest do
     end
   end
 
+  # The attachment batch decrypt picks each row's AAD with aad_bound?/1; the
+  # per-row path (decrypt_aad/3) must agree on EVERY version, nil included, or
+  # a row the per-row path reads fails the batch and drags the whole listing
+  # onto the slow path.
+  describe "aad_bound?/1" do
+    test "matches the per-row decrypt for every dek_version", %{user: user} do
+      {:ok, user} = Crypto.ensure_user_dek(user)
+      {:ok, dek} = Crypto.get_dek(user)
+
+      for v <- [nil, 1, 2, 3] do
+        id = Ecto.UUID.generate()
+        aad = if Crypto.aad_bound?(v), do: Crypto.aad_for_row(:attachments, :path, id), else: <<>>
+        {ct, nonce} = Engram.Crypto.Envelope.encrypt("p.png", dek, aad)
+
+        att = %Engram.Attachments.Attachment{
+          id: id,
+          dek_version: v,
+          path_ciphertext: ct,
+          path_nonce: nonce
+        }
+
+        assert {:ok, %{path: "p.png"}} = Crypto.maybe_decrypt_attachment_fields(att, user),
+               "dek_version #{inspect(v)}"
+      end
+    end
+
+    test "nil reads as bound, like decrypt_aad/3's guard" do
+      assert Crypto.aad_bound?(nil)
+      refute Crypto.aad_bound?(1)
+      assert Crypto.aad_bound?(2)
+    end
+  end
+
   describe "encrypt_note_fields/3" do
     test "encrypts content + title with row-id-bound AAD (T3.6)", %{user: user} do
       {:ok, user} = Crypto.ensure_user_dek(user)

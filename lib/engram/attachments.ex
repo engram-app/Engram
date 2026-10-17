@@ -1599,14 +1599,12 @@ defmodule Engram.Attachments do
   # ponytail: one bad row costs the vault the old per-row path on every read;
   # split the batch around it if that ever shows up in the decrypt metrics.
   defp decrypt_batch(atts, user, extra) do
-    bound = Crypto.row_version_aad_bound()
-
     with true <- Enum.all?(atts, &is_binary(&1.path_ciphertext)),
          {:ok, dek} <- Crypto.get_dek(user),
          fields =
            Enum.map(atts, fn att ->
-             {Ecto.UUID.dump!(att.id), is_integer(att.dek_version) and att.dek_version >= bound,
-              att.path_ciphertext, att.path_nonce}
+             {Ecto.UUID.dump!(att.id), Crypto.aad_bound?(att.dek_version), att.path_ciphertext,
+              att.path_nonce}
            end),
          {:ok, paths} <-
            Envelope.decrypt_many(dek, Crypto.aad_prefix(:attachments, :path), fields) do
