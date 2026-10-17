@@ -990,77 +990,19 @@ defmodule Engram.Notes do
          {:ok, path} <- validate_path(path),
          sanitized_path = PathSanitizer.sanitize(path),
          folder = Helpers.extract_folder(sanitized_path),
-         # BEFORE the row transaction, because a claim IS the commit and the row
-         # follows — see `claim_rename/5`. Claiming after the row moves is the
-         # dual-write whose failure mode is projection silently reverting a
-         # completed rename, which is exactly what this leg used to do.
-         {:ok, claimed?} <-
-           claim_crdt_relocate(user, vault, canonical_id, sanitized_path, opts) do
-      # #1710: decided once, before the transaction (see Revisions moduledoc).
-      recording = Revisions.recording?(user)
-
-      # Repo.with_tenant wraps the fn return in {:ok, _} (transaction).
-      # Unwrap once so the public contract matches the @spec above.
-      case Repo.with_tenant(user.id, fn ->
-             case classify_by_id(vault, canonical_id) do
-               {:live, %Note{} = live} ->
-                 # A dek_filter_key failure here must NOT masquerade as a definite
-                 # id_conflict (a transient crypto hiccup would permanently reject
-                 # an idempotent retry): {:ok, true} idempotent, {:ok, false}
-                 # genuine conflict, {:error, _} a clean crypto error (→
-                 # create_failed) — never a fabricated conflict.
-                 case same_path?(live, user, sanitized_path) do
-                   {:ok, true} ->
-                     {:ok, decrypt_or_raise!(live, user)}
-
-                   {:ok, false} ->
-                     # Phase E2 (rename-as-move): a crdt_create for a KNOWN live
-                     # id at a new, FREE path is a rename — relocate the row in
-                     # place (same move_note pipeline the tombstone-resurrect
-                     # rename leg uses), no tombstone-first dance, which also
-                     # removes the #970 delete-wins window from renames entirely.
-                     # A target path OCCUPIED by a DIFFERENT live note stays a
-                     # genuine conflict (the pre-E2 behavior).
-                     genesis_relocate_live(
-                       live,
-                       user,
-                       vault,
-                       sanitized_path,
-                       folder,
-                       origin,
-                       recording
-                     )
-
-                   {:error, _} = err ->
-                     err
-                 end
-
-               {:tombstone, %Note{} = prior} ->
-                 genesis_resurrect(prior, user, vault, sanitized_path, folder, origin, recording)
-
-               :taken ->
-                 # The id is already spoken for by a row of theirs that this
-                 # vault's genesis cannot use, so an INSERT under it is doomed:
-                 # it would no-op on the PK and be recovered by remint_own_id one
-                 # layer down, AFTER burning a crdt merge, an encrypt (KMS/DEK
-                 # work) and a permanently-consumed vault seq. Re-mint here, where
-                 # classify_by_id has already paid for the read that proves it.
-                 # An OCCUPIED path still adopts the note living there, exactly
-                 # like :none, so the fresh id is only reached on the insert leg.
-                 genesis_adopt_or_insert(
-                   user,
-                   vault,
-                   mint_id(),
-                   sanitized_path,
-                   folder,
-                   canonical_id
-                 )
-
-               :none ->
-                 genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder)
-             end
-           end)
-           |> finalize_moved_revision(user) do
+         # #1710: decided once, before the transaction (see Revisions moduledoc).
+         recording = Revisions.recording?(user),
+         genesis = %{
+           user: user,
+           vault: vault,
+           id: canonical_id,
+           path: sanitized_path,
+           folder: folder,
+           origin: origin,
+           recording: recording
+         },
+         {:ran, result, claimed?} <- run_genesis(genesis, initial_claim(opts)) do
+      case finalize_moved_revision(result, user) do
         # Only genesis_resurrect/genesis_insert_bare tag their success with
         # :announce (a REAL create/resurrect). The idempotent same-path and
         # adopt-existing-live-note branches change nothing, so they return a
@@ -1148,6 +1090,111 @@ defmodule Engram.Notes do
 
   defp finalize_moved_revision(result, _user), do: result
 
+  defp initial_claim(opts) do
+    if Keyword.get(opts, :index, :claim) == :skip, do: {:done, false}, else: :pending
+  end
+
+  # One row transaction for every create that claims nothing, which is all of
+  # them except a live id moving to a new path. That one leg classifies inside
+  # the transaction, returns `{:claim_first, live}` before writing anything,
+  # claims OUTSIDE it, and re-runs with the claim settled. The re-run
+  # classifies afresh, so a row that changed in between is handled exactly as
+  # the old claim-then-transaction order handled it.
+  defp run_genesis(g, claim) do
+    case Repo.with_tenant(g.user.id, fn -> genesis_txn(g, claim) end) do
+      {:ok, {:claim_first, live}} ->
+        case claim_crdt_relocate(g, live) do
+          {:ok, claimed?} -> run_genesis(g, {:done, claimed?})
+          {:error, _} = err -> err
+        end
+
+      result ->
+        {:ran, result, claimed_flag(claim)}
+    end
+  end
+
+  defp claimed_flag({:done, claimed?}), do: claimed?
+  defp claimed_flag(:pending), do: false
+
+  # Repo.with_tenant wraps the fn return in {:ok, _} (transaction); the caller
+  # unwraps it so the public contract matches genesis_crdt_note/5's @spec.
+  defp genesis_txn(
+         %{
+           user: user,
+           vault: vault,
+           id: canonical_id,
+           path: sanitized_path,
+           folder: folder,
+           origin: origin,
+           recording: recording
+         },
+         claim
+       ) do
+    case classify_by_id(vault, canonical_id) do
+      {:live, %Note{} = live} ->
+        # A dek_filter_key failure here must NOT masquerade as a definite
+        # id_conflict (a transient crypto hiccup would permanently reject
+        # an idempotent retry): {:ok, true} idempotent, {:ok, false}
+        # genuine conflict, {:error, _} a clean crypto error (→
+        # create_failed) — never a fabricated conflict.
+        case same_path?(live, user, sanitized_path) do
+          {:ok, true} ->
+            {:ok, decrypt_or_raise!(live, user)}
+
+          {:ok, false} when claim == :pending ->
+            # A relocate claims BEFORE the row moves (see
+            # claim_crdt_relocate/2), so back out of this read-only
+            # transaction, claim, and re-run with the claim settled.
+            {:claim_first, live}
+
+          {:ok, false} ->
+            # Phase E2 (rename-as-move): a crdt_create for a KNOWN live
+            # id at a new, FREE path is a rename — relocate the row in
+            # place (same move_note pipeline the tombstone-resurrect
+            # rename leg uses), no tombstone-first dance, which also
+            # removes the #970 delete-wins window from renames entirely.
+            # A target path OCCUPIED by a DIFFERENT live note stays a
+            # genuine conflict (the pre-E2 behavior).
+            genesis_relocate_live(
+              live,
+              user,
+              vault,
+              sanitized_path,
+              folder,
+              origin,
+              recording
+            )
+
+          {:error, _} = err ->
+            err
+        end
+
+      {:tombstone, %Note{} = prior} ->
+        genesis_resurrect(prior, user, vault, sanitized_path, folder, origin, recording)
+
+      :taken ->
+        # The id is already spoken for by a row of theirs that this
+        # vault's genesis cannot use, so an INSERT under it is doomed:
+        # it would no-op on the PK and be recovered by remint_own_id one
+        # layer down, AFTER burning a crdt merge, an encrypt (KMS/DEK
+        # work) and a permanently-consumed vault seq. Re-mint here, where
+        # classify_by_id has already paid for the read that proves it.
+        # An OCCUPIED path still adopts the note living there, exactly
+        # like :none, so the fresh id is only reached on the insert leg.
+        genesis_adopt_or_insert(
+          user,
+          vault,
+          mint_id(),
+          sanitized_path,
+          folder,
+          canonical_id
+        )
+
+      :none ->
+        genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder)
+    end
+  end
+
   # The web app renames and moves EVERY note through `crdt_create`: `queries.ts`
   # `useRenameNote` calls `crdtCreateNote(id, new_path)` under the comment
   # "Replaces POST /notes/rename", and a folder drag-move sends one per id at its
@@ -1158,12 +1205,13 @@ defmodule Engram.Notes do
   # Runs OUTSIDE the row transaction, like `rename_note`: `Identity` warns that a
   # claim inside one has no durability guarantee, because the tail-log append
   # rolls back with the transaction while the caller treats the claim as
-  # committed.
+  # committed. A claim IS the commit and the row follows (see `claim_rename/5`).
   #
   # Deliberately NARROWER than the genesis path it guards — only a live id moving
-  # to a free path claims. A claim cannot be rolled back, so claiming for an
-  # operation that then does not happen makes the path permanently unclaimable,
-  # which is worse than the stale entry this fixes:
+  # to a free path claims, which is why genesis_txn/2 only asks for it on that
+  # leg. A claim cannot be rolled back, so claiming for an operation that then
+  # does not happen makes the path permanently unclaimable, which is worse than
+  # the stale entry this fixes:
   #
   #   * a first-time create claims nothing. Projection never acts on absence, so
   #     an unclaimed new note is benign — while `classify_by_id` answering
@@ -1171,25 +1219,7 @@ defmodule Engram.Notes do
   #     name a row that never exists.
   #   * an OCCUPIED target is `:id_conflict` below, and claiming for a relocate
   #     that is about to be refused is the same permanent-unclaimability bug.
-  defp claim_crdt_relocate(user, vault, canonical_id, sanitized_path, opts) do
-    if Keyword.get(opts, :index, :claim) == :skip do
-      {:ok, false}
-    else
-      case Repo.with_tenant(user.id, fn -> classify_by_id(vault, canonical_id) end) do
-        {:ok, {:live, live}} -> claim_if_relocating(user, vault, live, sanitized_path)
-        _ -> {:ok, false}
-      end
-    end
-  end
-
-  defp claim_if_relocating(user, vault, live, sanitized_path) do
-    case same_path?(live, user, sanitized_path) do
-      # Already there: idempotent replay, nothing moves, nothing to claim.
-      {:ok, true} -> {:ok, false}
-      {:ok, false} -> claim_free_target(user, vault, live.id, sanitized_path)
-      {:error, _} = err -> err
-    end
-  end
+  defp claim_crdt_relocate(g, live), do: claim_free_target(g.user, g.vault, live.id, g.path)
 
   # The same row check `decide_claim/5` makes, load-bearing for the same reason:
   # `Identity.claim/3` sees only collisions recorded IN THE MAP, and in a vault

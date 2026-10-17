@@ -14,8 +14,10 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
   # dispatcher job instead of the embed clamp read plus three unique inserts.
   # 50 -> 51: the seed's checkpoint reads the rotation lock from the DB
   # (#1341: the cached user may not have seen another node's lock).
-  @statements 51
-  @tenant_txns 7
+  # 51 -> 46, 7 -> 6: the relocate-claim probe no longer opens its own
+  # transaction to classify the id; a create that claims nothing classifies once.
+  @statements 46
+  @tenant_txns 6
   @subscription_reads 0
 
   defp frame_for_content(content) do
