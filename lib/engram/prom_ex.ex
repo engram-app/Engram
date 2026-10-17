@@ -17,7 +17,8 @@ defmodule Engram.PromEx do
     [
       Plugins.Application,
       Plugins.Beam,
-      {Plugins.Phoenix, router: EngramWeb.Router, endpoint: EngramWeb.Endpoint},
+      # Plugins.Phoenix minus the response-size histogram.
+      {Engram.PromEx.Phoenix, router: EngramWeb.Router, endpoint: EngramWeb.Endpoint},
       # Not Plugins.Ecto: microsecond sums Peep can keep, no per-source histograms.
       Engram.PromEx.Ecto,
       Plugins.Oban,

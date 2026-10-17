@@ -67,6 +67,23 @@ defmodule Engram.PromEx.StorageTest do
     assert body =~ "# TYPE #{@http} histogram"
   end
 
+  # Only duration + count are read; a response-size histogram per route was
+  # ~8 buckets of series nothing graphed usefully.
+  test "http keeps duration and request count with their labels, drops response size",
+       %{conn: conn} do
+    get(conn, "/api/health")
+    body = scrape()
+
+    for family <- [@http <> "_count{", "engram_prom_ex_phoenix_http_requests_total{"] do
+      [line | _] = body |> lines(family) |> Enum.filter(&(&1 =~ ~s(path="/api/health")))
+
+      for label <- ~w(status method path controller action host),
+          do: assert(line =~ ~s(#{label}="), "#{family} lost #{label}")
+    end
+
+    assert lines(body, "engram_prom_ex_phoenix_http_response_size") == []
+  end
+
   test "label values with a quote, backslash and newline render as valid text format" do
     :telemetry.execute([:engram, :search, :hit_dropped], %{count: 1}, %{reason: "a\"b\\c\nd"})
     body = scrape()
