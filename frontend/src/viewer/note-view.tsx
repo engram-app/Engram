@@ -111,7 +111,8 @@ function NoteView({ content, tags, links, manifestNotes, onCreateWikiTarget }: N
 	const body = useMemo(() => escapeNonMathDollars(stripComments(noteBody(content))), [content]);
 
 	return (
-		<article className="w-full">
+		// data-note-content: the user's own text, which the i18n e2e leak scan skips.
+		<article className="w-full" data-note-content>
 			<header className="mb-6 empty:hidden">
 				{tags.length > 0 && (
 					<ul className="flex flex-wrap gap-1.5">

@@ -180,7 +180,12 @@ export async function checkStep(
 	options: StepOptions = {},
 ): Promise<void> {
 	await expect(page.locator("html")).toHaveAttribute("lang", locale);
-	const scope = options.skipClerk ? { excludeSelector: CLERK_ROOT } : {};
+	// A note's body is the user's text (the seeded welcome note is English in every
+	// locale), never a UI string, so it is not scanned.
+	const noteBody = ".cm-content, [data-note-content]";
+	const scope = {
+		excludeSelector: options.skipClerk ? `${CLERK_ROOT}, ${noteBody}` : noteBody,
+	};
 	const leaks = await findLeaks(page, locale, scope);
 	const suspects = await findSuspectEnglish(page, locale, scope);
 	const name = `${locale}-${step}`;
