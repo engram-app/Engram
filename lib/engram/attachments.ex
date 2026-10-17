@@ -778,6 +778,15 @@ defmodule Engram.Attachments do
 
   def batch_move(user, vault, paths, target_folder)
       when is_list(paths) and is_binary(target_folder) do
+    # Each new path is sanitized again in do_move_attachment/4; this is for the
+    # 422, so `..` is refused instead of silently landing in the vault root.
+    case PathSanitizer.sanitize_target(target_folder) do
+      {:ok, target_folder} -> do_batch_move(user, vault, paths, target_folder)
+      {:error, _} = err -> err
+    end
+  end
+
+  defp do_batch_move(user, vault, paths, target_folder) do
     pairs =
       Enum.map(paths, fn old_path ->
         base = Path.basename(old_path)

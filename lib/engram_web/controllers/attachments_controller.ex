@@ -380,7 +380,8 @@ defmodule EngramWeb.AttachmentsController do
       payment_required:
         {"Attachments require a paid plan", "application/json", Schemas.LimitError},
       not_found: {"An item was not found", "application/json", Schemas.BatchItemError},
-      conflict: {"An item conflicts at target", "application/json", Schemas.BatchItemError}
+      conflict: {"An item conflicts at target", "application/json", Schemas.BatchItemError},
+      unprocessable_entity: {"Target path cleans to nothing", "application/json", Schemas.Error}
     ]
   )
 

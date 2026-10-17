@@ -3960,6 +3960,16 @@
               }
             },
             "description": "An item conflicts at target"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Target path cleans to nothing"
           }
         },
         "summary": "Move attachments to a folder (idempotent)",
@@ -4515,6 +4525,16 @@
               }
             },
             "description": "Target exists"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Target path cleans to nothing"
           }
         },
         "summary": "Rename / move a folder",
@@ -4769,6 +4789,16 @@
               }
             },
             "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Target path cleans to nothing"
           }
         },
         "summary": "Move folders under a new parent (idempotent)",
@@ -5069,6 +5099,16 @@
               }
             },
             "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Target path cleans to nothing"
           }
         },
         "summary": "Move notes to a folder (idempotent)",

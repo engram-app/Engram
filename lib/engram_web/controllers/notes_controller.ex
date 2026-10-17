@@ -571,7 +571,8 @@ defmodule EngramWeb.NotesController do
       ok: {"Moved count", "application/json", Schemas.MovedCount},
       bad_request: {"Invalid input", "application/json", Schemas.Error},
       not_found: {"Some ids not found", "application/json", Schemas.Error},
-      conflict: {"Conflict", "application/json", Schemas.Error}
+      conflict: {"Conflict", "application/json", Schemas.Error},
+      unprocessable_entity: {"Target path cleans to nothing", "application/json", Schemas.Error}
     ]
   )
 

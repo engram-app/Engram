@@ -267,7 +267,8 @@ defmodule EngramWeb.FoldersController do
     responses: [
       ok: {"Renamed", "application/json", Schemas.FolderRenameResponse},
       not_found: {"No such folder", "application/json", Schemas.Error},
-      conflict: {"Target exists", "application/json", Schemas.Error}
+      conflict: {"Target exists", "application/json", Schemas.Error},
+      unprocessable_entity: {"Target path cleans to nothing", "application/json", Schemas.Error}
     ]
   )
 
@@ -368,7 +369,8 @@ defmodule EngramWeb.FoldersController do
       ok: {"Moved count", "application/json", Schemas.MovedCount},
       bad_request: {"Invalid input", "application/json", Schemas.Error},
       not_found: {"Some ids not found", "application/json", Schemas.Error},
-      conflict: {"Conflict", "application/json", Schemas.Error}
+      conflict: {"Conflict", "application/json", Schemas.Error},
+      unprocessable_entity: {"Target path cleans to nothing", "application/json", Schemas.Error}
     ]
   )
 
