@@ -123,7 +123,8 @@ defmodule Engram.PromEx.Native do
   @doc "Polled emitter for `[:engram, :vm, :native_memory]`."
   @spec execute_native_memory() :: :ok
   def execute_native_memory do
-    snapshot = Engram.Native.memory_snapshot()
-    :telemetry.execute(@memory_event, Map.reject(snapshot, fn {_k, v} -> is_nil(v) end), %{})
+    # nil (no /proc RSS) is passed through, not dropped: the Peep reporter
+    # skips a nil measurement but records 1 for an absent key.
+    :telemetry.execute(@memory_event, Engram.Native.memory_snapshot(), %{})
   end
 end

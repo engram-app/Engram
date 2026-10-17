@@ -224,9 +224,10 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     # No ratio sample, and no zero either. An empty doc still carries Yjs
     # framing; dividing it by nothing reports framing overhead as tombstone
     # bloat, which is exactly the artifact that pinned staging's p90 to 2.0.
-    # Telemetry.Metrics skips a metric whose key is absent, so the byte
-    # histograms still take their sample and the ratio histogram does not.
-    refute Map.has_key?(measurements, :bloat_ratio)
+    # The reporter skips a nil measurement, so the byte histograms still take
+    # their sample and the ratio histogram does not. nil, not an omitted key:
+    # Peep records 1 for an absent key (Engram.PromEx.StorageTest).
+    assert Map.fetch!(measurements, :bloat_ratio) == nil
   end
 
   # The hash-unchanged path degrades to a snapshot-compaction write with no
