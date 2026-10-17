@@ -94,8 +94,8 @@ defmodule EngramWeb.SyncChannel do
     Application.get_env(:engram, :reconnect_jitter_max_ms, 5_000)
   end
 
-  # Joined: re-judged on a credential change and periodically, and stopped
-  # once the vault is out of reach (`ChannelAccess`).
+  # Joined: re-checked periodically and stopped once the vault is out of
+  # reach (`ChannelAccess`).
   @impl true
   def handle_info(msg, socket) when is_access_message(msg), do: ChannelAccess.refresh(msg, socket)
 
