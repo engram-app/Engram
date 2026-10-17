@@ -668,4 +668,54 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       assert_receive {:projection, %{unresolved: 0, released: 1}, %{phase: :converged}}, 2_000
     end
   end
+
+  # Prod 2026-10-16: 638 runs/day at ~900 ms each, almost all no-ops. Every
+  # entry was a separate tenant transaction plus a full-row fetch and a CONTENT
+  # decrypt, though only the path is ever read. One meta query per pass is the
+  # budget; this pins that it does not scale with the entry count.
+  describe "query budget" do
+    test "a no-op run reads the notes once, without content, however many entries", ctx do
+      notes = for i <- 1..8, do: note(ctx, "budget/#{i}.md")
+      ghosts = for i <- 1..4, do: {"ghost/#{i}.md", Ecto.UUID.generate()}
+      seed_index(ctx, Enum.map(notes, &{&1.path, &1.id}) ++ ghosts)
+
+      ref = make_ref()
+      test_pid = self()
+
+      :telemetry.attach(
+        {__MODULE__, ref},
+        [:engram, :repo, :query],
+        fn _event, _measure, meta, _cfg ->
+          if meta[:source] == "notes", do: send(test_pid, {ref, meta[:query]})
+        end,
+        nil
+      )
+
+      try do
+        assert :ok = run(ctx)
+      after
+        :telemetry.detach({__MODULE__, ref})
+      end
+
+      queries = drain_queries(ref, [])
+
+      assert length(queries) == 1,
+             "expected one bulk notes read for 12 entries, got #{length(queries)}"
+
+      refute Enum.any?(queries, &String.contains?(&1, "content_ciphertext")),
+             "projection only needs the path; it must not fetch note content"
+
+      for n <- notes, do: assert(path_of(ctx, n.id) == n.path)
+    end
+  end
+
+  # Not a zero timeout: a handler's send/2 can still be in flight, and for a
+  # budget assertion an undercount is a false pass.
+  defp drain_queries(ref, acc) do
+    receive do
+      {^ref, query} -> drain_queries(ref, [query | acc])
+    after
+      100 -> acc
+    end
+  end
 end

@@ -2868,6 +2868,40 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Bulk metadata-only variant of `get_note_by_id/3`: every live note among
+  `ids`, in ONE tenant transaction, without the content column or its decrypt.
+
+  Returns `{:ok, %{id => note}}` keyed by the id as the caller passed it. An id
+  that is not a UUID, names a soft-deleted row, a folder marker or another
+  vault's note is simply absent from the map, the same set `get_note_by_id/3`
+  answers `:not_found` for.
+  """
+  @spec get_note_meta_by_ids(map(), map(), [String.t()]) ::
+          {:ok, %{String.t() => Note.t()}} | {:error, term()}
+  def get_note_meta_by_ids(user, vault, ids) when is_list(ids) do
+    # Cast up front: one non-UUID id would otherwise raise a CastError for the
+    # whole query. Keyed back to the caller's spelling of the id.
+    by_uuid = for id <- ids, {:ok, uuid} <- [Ecto.UUID.cast(id)], into: %{}, do: {uuid, id}
+
+    with {:ok, user} <- Crypto.ensure_user_dek(user) do
+      rows =
+        if map_size(by_uuid) == 0 do
+          []
+        else
+          query =
+            from(n in scoped_live(user, vault),
+              where: n.id in ^Map.keys(by_uuid) and n.kind == "note",
+              select: struct(n, @note_meta_fields)
+            )
+
+          Repo.with_tenant!(user.id, fn -> Repo.all(query) end)
+        end
+
+      {:ok, rows |> decrypt_or_raise!(user) |> Map.new(&{Map.fetch!(by_uuid, &1.id), &1})}
+    end
+  end
+
+  @doc """
   Worker-side note fetch from a job's args map. Picks the tenant-scoped path
   when the job carries a `user_id`, and the legacy unscoped one when it does
   not.
