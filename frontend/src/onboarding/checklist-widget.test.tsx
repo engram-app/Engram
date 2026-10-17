@@ -37,15 +37,25 @@ let onboardingStatusValue: { data: OnboardingStatus | undefined; isLoading: bool
 
 let connectionsValue: { data: Connection[]; isLoading: boolean } = { data: [], isLoading: false };
 const channel = vi.hoisted(() => ({
+	userId: null as string | null | undefined,
 	event: "",
 	handler: (() => {}) as (payload: unknown) => void,
+	onJoined: undefined as (() => void) | undefined,
 	enabled: false,
 }));
 vi.mock("../api/use-user-channel-event", () => ({
-	useUserChannelEvent: (event: string, handler: (payload: unknown) => void, enabled: boolean) => {
-		channel.event = event;
-		channel.handler = handler;
-		channel.enabled = enabled;
+	useUserChannelEvent: (opts: {
+		userId: string | null | undefined;
+		event: string;
+		onEvent: (payload: unknown) => void;
+		onJoined?: () => void;
+		enabled?: boolean;
+	}) => {
+		channel.userId = opts.userId;
+		channel.event = opts.event;
+		channel.handler = opts.onEvent;
+		channel.onJoined = opts.onJoined;
+		channel.enabled = opts.enabled ?? true;
 	},
 }));
 
@@ -79,6 +89,7 @@ vi.mock("../api/queries", async () => {
 			return { data, isLoading: onboardingStatusValue.isLoading };
 		},
 		useConnections: () => connectionsValue,
+		useMe: () => ({ data: { id: "u1" } }),
 		useBillingStatus: () => billingStatusValue,
 	};
 });
@@ -686,7 +697,27 @@ describe("ChecklistWidget, a tool that is still connecting", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
 		render(wrap(<ChecklistWidget />));
 		expect(channel.event).toBe("connection_created");
+		expect(channel.userId).toBe("u1");
 		expect(channel.enabled).toBe(true);
+	});
+
+	// A grant made before this tab joined the channel was never announced to
+	// it, so the list is re-read on join and on mount, not only on the event.
+	it("refetches connections when the channel joins", () => {
+		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
+		render(wrap(<ChecklistWidget />));
+		const invalidate = vi.spyOn(activeQc as QueryClient, "invalidateQueries");
+		channel.onJoined?.();
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["connections"] });
+	});
+
+	it("refetches connections on mount while a picked tool is still connecting", () => {
+		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
+		// wrap() makes a fresh client, so spy before it exists.
+		const invalidate = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+		render(wrap(<ChecklistWidget />));
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["connections"] });
+		invalidate.mockRestore();
 	});
 
 	it("refetches connections when the server announces one", () => {

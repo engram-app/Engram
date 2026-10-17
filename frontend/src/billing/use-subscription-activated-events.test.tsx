@@ -4,45 +4,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type AuthAdapter, AuthContext } from "../auth/auth-context";
 import { useSubscriptionActivatedEvents } from "./use-subscription-activated-events";
 
-const {
-	channelHandlers,
-	channelOn,
-	socketChannelMock,
-	socketConnectMock,
-	socketDisconnectMock,
-	socketCtor,
-} = vi.hoisted(() => {
-	const channelHandlers: Record<string, (payload: unknown) => void> = {};
-	const channelOn = vi.fn((event: string, cb: (payload: unknown) => void) => {
-		channelHandlers[event] = cb;
-	});
-	const channelMock = {
-		on: channelOn,
-		join: () => ({ receive: () => ({}) }),
-	};
-	const socketChannelMock = vi.fn(() => channelMock);
-	const socketConnectMock = vi.fn();
-	const socketDisconnectMock = vi.fn();
-	// Phoenix's Socket is invoked with `new` — use a constructor function (not a
-	// vi.fn() arrow returning an object, which Mock's `new` semantics reject).
-	const socketCtor = vi.fn(function MockSocket(this: object, ..._args: unknown[]) {
-		Object.assign(this, {
-			connect: socketConnectMock,
-			channel: socketChannelMock,
-			disconnect: socketDisconnectMock,
-		});
-	});
-	return {
-		channelHandlers,
-		channelOn,
-		socketChannelMock,
-		socketConnectMock,
-		socketDisconnectMock,
-		socketCtor,
-	};
+const { subscribed, subscribeUserChannel } = vi.hoisted(() => {
+	// Live subscriptions by event; unsubscribe removes the entry.
+	const subscribed: Record<string, (payload: unknown) => void> = {};
+	const subscribeUserChannel = vi.fn(
+		async (_opts: { userId: string }, event: string, handler: (payload: unknown) => void) => {
+			subscribed[event] = handler;
+			return () => {
+				delete subscribed[event];
+			};
+		},
+	);
+	return { subscribed, subscribeUserChannel };
 });
 
-vi.mock("phoenix", () => ({ Socket: socketCtor }));
+vi.mock("../api/channel", () => ({ subscribeUserChannel }));
 
 const authAdapter: AuthAdapter = {
 	isLoaded: true,
@@ -59,13 +35,9 @@ function wrap({ children }: { children: React.ReactNode }) {
 
 describe("useSubscriptionActivatedEvents", () => {
 	beforeEach(() => {
-		socketCtor.mockClear();
-		socketChannelMock.mockClear();
-		socketConnectMock.mockClear();
-		socketDisconnectMock.mockClear();
-		channelOn.mockClear();
-		for (const k of Object.keys(channelHandlers)) {
-			delete channelHandlers[k];
+		subscribeUserChannel.mockClear();
+		for (const k of Object.keys(subscribed)) {
+			delete subscribed[k];
 		}
 	});
 
@@ -78,9 +50,13 @@ describe("useSubscriptionActivatedEvents", () => {
 			await Promise.resolve();
 			await Promise.resolve();
 		});
-		expect(socketCtor).toHaveBeenCalledWith("/socket", { params: { token: "tok-test" } });
-		expect(socketChannelMock).toHaveBeenCalledWith("user:42");
-		expect(channelHandlers.subscription_activated).toBeDefined();
+		expect(subscribeUserChannel).toHaveBeenCalledWith(
+			expect.objectContaining({ userId: "42" }),
+			expect.any(String),
+			expect.any(Function),
+			expect.any(Function),
+		);
+		expect(subscribed.subscription_activated).toBeDefined();
 	});
 
 	it("invokes onActivated when the channel fires subscription_activated", async () => {
@@ -94,7 +70,7 @@ describe("useSubscriptionActivatedEvents", () => {
 		});
 
 		act(() => {
-			channelHandlers.subscription_activated!({
+			subscribed.subscription_activated!({
 				tier: "starter",
 				status: "trialing",
 				subscription_id: "sub_1",
@@ -121,7 +97,7 @@ describe("useSubscriptionActivatedEvents", () => {
 		await act(async () => {
 			await Promise.resolve();
 		});
-		expect(socketCtor).not.toHaveBeenCalled();
+		expect(subscribeUserChannel).not.toHaveBeenCalled();
 	});
 
 	it("does not connect when userId is null", async () => {
@@ -137,10 +113,10 @@ describe("useSubscriptionActivatedEvents", () => {
 		await act(async () => {
 			await Promise.resolve();
 		});
-		expect(socketCtor).not.toHaveBeenCalled();
+		expect(subscribeUserChannel).not.toHaveBeenCalled();
 	});
 
-	it("disconnects the socket on unmount", async () => {
+	it("unsubscribes on unmount", async () => {
 		const { unmount } = renderHook(
 			() =>
 				useSubscriptionActivatedEvents({
@@ -154,7 +130,8 @@ describe("useSubscriptionActivatedEvents", () => {
 			await Promise.resolve();
 			await Promise.resolve();
 		});
+		expect(Object.keys(subscribed)).not.toHaveLength(0);
 		unmount();
-		expect(socketDisconnectMock).toHaveBeenCalledOnce();
+		expect(subscribed).toEqual({});
 	});
 });

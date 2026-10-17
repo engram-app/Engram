@@ -1,56 +1,57 @@
-import { Socket } from "phoenix";
 import { useEffect, useRef } from "react";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
-import { getWsBase, joinWsUrl } from "./base";
-import { useMe } from "./queries";
+import { subscribeUserChannel } from "./channel";
 
 /**
- * Runs `onEvent` for every `event` broadcast on the signed-in user's
- * `user:{id}` channel (lib/engram_web/channels/user_channel.ex lists them).
- * Opens its own socket while `enabled`, the same lifecycle as the older
- * per-event hooks (`useVaultReadyEvents`, `useSubscriptionActivatedEvents`).
+ * Runs `onEvent` for every `event` broadcast on `user:{id}`
+ * (lib/engram_web/channels/user_channel.ex lists them), and `onJoined` after
+ * each (re)join of the channel. Rides the tab's one socket (api/channel.ts),
+ * so any number of these share one channel and one connection.
  */
-export function useUserChannelEvent<P>(
-	event: string,
-	onEvent: (payload: P) => void,
+export function useUserChannelEvent<P>({
+	userId,
+	event,
+	onEvent,
+	onJoined,
 	enabled = true,
-): void {
+}: {
+	userId: string | null | undefined;
+	event: string;
+	onEvent: (payload: P) => void;
+	onJoined?: () => void;
+	enabled?: boolean;
+}): void {
 	const { getToken } = useAuthAdapter();
-	const userId = useMe().data?.id ?? null;
-	// Latest handler without resubscribing on every render.
-	const handler = useRef(onEvent);
+	// Latest handlers without resubscribing on every render.
+	const handlers = useRef({ onEvent, onJoined });
 	useEffect(() => {
-		handler.current = onEvent;
-	}, [onEvent]);
+		handlers.current = { onEvent, onJoined };
+	}, [onEvent, onJoined]);
 
 	useEffect(() => {
-		if (!enabled || userId === null) {
+		if (!enabled || userId === null || userId === undefined) {
 			return;
 		}
-		let socket: Socket | null = null;
+		let unsubscribe: (() => void) | null = null;
 		let cancelled = false;
-
-		async function connect() {
-			const token = await getToken();
-			if (cancelled || !token) {
-				return;
-			}
-			socket = new Socket(joinWsUrl(getWsBase(), "/socket"), { params: { token } });
-			socket.connect();
-			const channel = socket.channel(`user:${userId}`);
-			channel.on(event, (payload: P) => handler.current(payload));
-			channel.join().receive("error", (resp) => {
-				console.error(`user channel join failed (${event} listener)`, resp);
-			});
-		}
-
-		// Never let the fire-and-forget promise dangle as an unhandled rejection.
-		connect().catch((err) => {
-			console.error(`user channel connect failed (${event} listener)`, err);
-		});
+		subscribeUserChannel(
+			{ userId, getToken },
+			event,
+			(payload: P) => handlers.current.onEvent(payload),
+			() => handlers.current.onJoined?.(),
+		)
+			.then((off) => {
+				if (cancelled) {
+					off();
+				} else {
+					unsubscribe = off;
+				}
+			})
+			// Never let the fire-and-forget promise dangle as an unhandled rejection.
+			.catch((err: unknown) => console.error(`user channel subscribe failed (${event})`, err));
 		return () => {
 			cancelled = true;
-			socket?.disconnect();
+			unsubscribe?.();
 		};
 	}, [event, enabled, userId, getToken]);
 }

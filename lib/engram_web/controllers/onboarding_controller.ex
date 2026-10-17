@@ -83,6 +83,10 @@ defmodule EngramWeb.OnboardingController do
           |> put_status(:created)
           |> json(%{version: agreement.version, accepted_at: agreement.accepted_at})
 
+        # The Free stamp found no user row; nothing was recorded.
+        {:error, :not_found} ->
+          conn |> put_status(404) |> json(%{error: "not_found"})
+
         {:error, _changeset} ->
           conn |> put_status(422) |> json(%{error: "invalid"})
       end

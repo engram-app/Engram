@@ -542,7 +542,10 @@ export default function OAuthAuthorizePage() {
 			if (!grantsCode) {
 				vaultTab?.close();
 			} else if (vaultTab === null) {
-				track("vault_tab_blocked", { client: mcpClient });
+				track(
+					"vault_tab_blocked",
+					isMcp ? { client_kind: "mcp", client: mcpClient } : { client_kind: "obsidian" },
+				);
 				setBlockedRedirect(redirect_uri);
 				return;
 			}

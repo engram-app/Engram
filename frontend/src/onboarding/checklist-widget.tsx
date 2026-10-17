@@ -1,13 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Waypoints } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useT } from "@/i18n/locale-provider";
 import { msg } from "@/i18n/msg";
 import type { MsgKey } from "@/i18n/ui-text";
 import { track } from "../analytics/track";
-import { type OnboardingStatus, useConnections, useOnboardingStatus } from "../api/queries";
+import { type OnboardingStatus, useConnections, useMe, useOnboardingStatus } from "../api/queries";
 import { useUserChannelEvent } from "../api/use-user-channel-event";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
 import { Button } from "../components/ui/button";
@@ -96,17 +96,28 @@ function ChecklistWidget() {
 	const profile = status.data?.profile;
 	const connections = useConnections();
 	const qc = useQueryClient();
+	const me = useMe();
 	// A client finishes connecting after its user lands here (the token
 	// exchange follows consent). The server announces the new grant, so the
-	// row ticks without a reload. Only while a picked tool still waits.
+	// row ticks without a reload. Only while a picked tool still waits. A
+	// grant made before this tab joined is never announced to it, so the list
+	// is also re-read on mount and on every (re)join.
 	const waitingOnTool =
 		(profile?.tools ?? []).some((slug) => slug !== "web_only") &&
 		!(connections.data ?? []).some((c) => c.kind === "mcp");
-	useUserChannelEvent(
-		"connection_created",
-		() => qc.invalidateQueries({ queryKey: ["connections"] }),
-		waitingOnTool,
-	);
+	const refetchConnections = () => qc.invalidateQueries({ queryKey: ["connections"] });
+	useUserChannelEvent({
+		userId: me.data?.id,
+		event: "connection_created",
+		onEvent: refetchConnections,
+		onJoined: refetchConnections,
+		enabled: waitingOnTool,
+	});
+	useEffect(() => {
+		if (waitingOnTool) {
+			qc.invalidateQueries({ queryKey: ["connections"] });
+		}
+	}, [waitingOnTool, qc]);
 	const isFreeTier = useIsFreeTier();
 
 	if (ob.isLoading) {

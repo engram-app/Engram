@@ -79,6 +79,9 @@ export const VAULT_SOURCES = ["obsidian", "fresh"] as const;
 
 export const MCP_CLIENTS = ["chatgpt", "claude", "cursor", "other"] as const;
 
+/** Which kind of OAuth client an approval was for (oauth/api.ts `kind`). */
+export const CLIENT_KINDS = ["mcp", "obsidian"] as const;
+
 // Mirrors Engram.Onboarding.gate_missing/1's string list ("terms",
 // "subscription", "profile", "vault") — a DIFFERENT vocabulary from
 // OnboardingStep ("agreement", "billing", "tools", "vault", "done"). Only
@@ -116,6 +119,7 @@ export type PropKind =
 	| "checkout_method"
 	| "tier"
 	| "mcp_client"
+	| "client_kind"
 	| "upgrade_source"
 	| "checklist_item"
 	| "checklist_action"
@@ -147,8 +151,9 @@ export const EVENT_SCHEMAS: Record<EngramEvent, Record<string, PropKind>> = {
 	checkout_abandoned: { method: "checkout_method", reason: "error_code" },
 	mcp_connect_attempted: { client: "mcp_client" },
 	mcp_connect_succeeded: { client: "mcp_client" },
-	// Approve could not open the new signup's vault tab (popup blocked).
-	vault_tab_blocked: { client: "mcp_client" },
+	// Approve could not open the vault tab (popup blocked). `client` only for
+	// an MCP client; an Obsidian device has no MCP_CLIENTS entry.
+	vault_tab_blocked: { client_kind: "client_kind", client: "mcp_client" },
 	mcp_connect_failed: { client: "mcp_client", reason: "error_code" },
 	mcp_connect_denied: { client: "mcp_client" },
 	upgrade_link_clicked: { source: "upgrade_source" },

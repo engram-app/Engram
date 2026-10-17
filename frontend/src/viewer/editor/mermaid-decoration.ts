@@ -75,16 +75,28 @@ class MermaidWidget extends WidgetType {
 	// normal state while typing.
 	private showError(el: HTMLElement, err: unknown) {
 		el.classList.add("cm-mermaid-error");
-		// UI text inside the note body (see the i18n leak scan).
-		el.dataset.uiChrome = "";
 		// Mermaid's own message is third-party English: keep it verbatim, but tag
 		// its language so the translated prefix and it are not read as one.
 		const detail = document.createElement("span");
 		detail.lang = "en";
 		detail.textContent = err instanceof Error ? err.message : String(err);
 		const { t } = this;
-		const [before, after = ""] = t("Mermaid error: {error}", { error: "{error}" }).split("{error}");
-		el.replaceChildren(before ?? "", detail, after);
+		const [before = "", after = ""] = t("Mermaid error: {error}", { error: "{error}" }).split(
+			"{error}",
+		);
+		// Only our translated words are UI chrome inside the note body (see the
+		// i18n leak scan); the message is not ours to translate.
+		const chrome = (text: string) => {
+			const span = document.createElement("span");
+			span.dataset.uiChrome = "";
+			span.textContent = text;
+			return span;
+		};
+		el.replaceChildren(
+			...(before ? [chrome(before)] : []),
+			detail,
+			...(after ? [chrome(after)] : []),
+		);
 	}
 
 	// The widget is inert content, not a control; let clicks through so the caret

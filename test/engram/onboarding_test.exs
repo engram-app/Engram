@@ -604,7 +604,7 @@ defmodule Engram.OnboardingTest do
       LegalFixtures.reset_version_cache()
 
       user = insert(:user, onboarding_profile: %{"uses_obsidian" => false, "completed_at" => "x"})
-      block_free_stamp!()
+      Engram.FreeStampBlock.block!()
 
       assert {:error, _} =
                Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
@@ -619,9 +619,9 @@ defmodule Engram.OnboardingTest do
       LegalFixtures.reset_version_cache()
 
       user = insert(:user, onboarding_profile: %{"uses_obsidian" => false, "completed_at" => "x"})
-      block_free_stamp!()
+      Engram.FreeStampBlock.block!()
       {:error, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
-      unblock_free_stamp!()
+      Engram.FreeStampBlock.unblock!()
 
       {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
 
@@ -663,30 +663,6 @@ defmodule Engram.OnboardingTest do
       assert %DateTime{} = Engram.Accounts.get_user!(user.id).free_tier_accepted_at
       assert [%{name: "My Vault"}] = Engram.Vaults.list_vaults(user)
     end
-  end
-
-  # A BEFORE UPDATE trigger that skips the row whenever the Free stamp would
-  # change, so `accept_free_tier/1`'s update matches zero rows. Created inside
-  # the test's sandbox transaction, so it rolls back with it.
-  defp block_free_stamp! do
-    Engram.Repo.query!("""
-    CREATE FUNCTION test_block_free_stamp() RETURNS trigger LANGUAGE plpgsql AS $$
-    BEGIN
-      IF NEW.free_tier_accepted_at IS DISTINCT FROM OLD.free_tier_accepted_at THEN
-        RETURN NULL;
-      END IF;
-      RETURN NEW;
-    END $$
-    """)
-
-    Engram.Repo.query!("""
-    CREATE TRIGGER test_block_free_stamp BEFORE UPDATE ON users
-    FOR EACH ROW EXECUTE FUNCTION test_block_free_stamp()
-    """)
-  end
-
-  defp unblock_free_stamp! do
-    Engram.Repo.query!("DROP TRIGGER test_block_free_stamp ON users")
   end
 
   describe "computed floor gate + legal_notices" do
@@ -1407,6 +1383,20 @@ defmodule Engram.OnboardingTest do
 
     test "rejects unknown action atom", %{user: user} do
       assert {:error, %Ecto.Changeset{}} = Onboarding.record_action(user.id, :bogus)
+    end
+  end
+
+  describe "stamp_free_tier/1" do
+    # The one write of the stamp owns the `:user` eviction, queued to run when
+    # the caller's outer transaction commits.
+    test "a stamp inside an outer transaction leaves no stale cached user" do
+      user = insert(:user, free_tier_accepted_at: nil)
+      assert %{free_tier_accepted_at: nil} = Engram.Accounts.get_user(user.id)
+
+      {:ok, _} =
+        Engram.Repo.transaction_after_commit(fn -> Onboarding.stamp_free_tier(user) end)
+
+      assert %{free_tier_accepted_at: %DateTime{}} = Engram.Accounts.get_user(user.id)
     end
   end
 

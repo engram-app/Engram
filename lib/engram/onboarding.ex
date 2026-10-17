@@ -126,7 +126,6 @@ defmodule Engram.Onboarding do
         # could land over a newer one a concurrent read just stored.
         :ok = Cache.evict(:terms, {user.id, @terms_document})
         :ok = Cache.evict(:terms, {user.id, @privacy_document})
-        if starts_free, do: :ok = evict_user(user.id)
         # After commit, and idempotent: due once terms and plan both pass.
         :ok = maybe_provision_connector_vault(user)
         {:ok, tos_row}
@@ -923,7 +922,6 @@ defmodule Engram.Onboarding do
   def accept_free_tier(%Engram.Accounts.User{} = user) do
     case stamp_free_tier(user) do
       {:ok, saved, :won} ->
-        evict_user(user.id)
         maybe_provision_connector_vault(saved)
         {:ok, saved}
 
@@ -941,6 +939,11 @@ defmodule Engram.Onboarding do
   provisions); the others read the winner's row (`:lost`). `{:error, :not_found}`
   when nothing took the stamp (the user is gone). Joins the caller's
   transaction when there is one.
+
+  Owns the `:user` cache eviction for the stamp, so no caller repeats it. It
+  is queued with `Repo.after_commit/1`, so inside a transaction that owns the
+  queue (`Repo.transaction_after_commit/1`, `Repo.with_tenant/2`) it runs once
+  the outer transaction commits.
   """
   @spec stamp_free_tier(Engram.Accounts.User.t()) ::
           {:ok, Engram.Accounts.User.t(), :won | :lost} | {:error, :not_found}
@@ -958,6 +961,7 @@ defmodule Engram.Onboarding do
            skip_tenant_check: true
          ) do
       {1, [saved]} ->
+        :ok = Accounts.evict_user(user.id)
         {:ok, saved, :won}
 
       {0, _} ->

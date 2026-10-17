@@ -892,6 +892,32 @@ defmodule Engram.BillingTest do
       assert {:ok, %Subscription{status: "canceled"}} = Billing.upsert_from_paddle_event(event)
     end
 
+    # The Free stamp failing (`:not_found`) must not roll back the cancel:
+    # Paddle's state is the truth, and the webhook is not retried.
+    test "subscription.canceled still cancels when the Free stamp is not taken" do
+      user = insert(:user, free_tier_accepted_at: nil)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_can_nf", status: "active")
+      Engram.FreeStampBlock.block!()
+
+      event = %{
+        "event_type" => "subscription.canceled",
+        "data" => %{
+          "id" => "sub_can_nf",
+          "status" => "canceled",
+          "customer_id" => "ctm_x",
+          "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
+          "current_billing_period" => %{"ends_at" => "2026-07-01T00:00:00Z"}
+        }
+      }
+
+      assert {:ok, %Subscription{status: "canceled"}} = Billing.upsert_from_paddle_event(event)
+
+      assert %Subscription{status: "canceled"} =
+               Engram.Repo.get_by!(Subscription, [paddle_subscription_id: "sub_can_nf"],
+                 skip_tenant_check: true
+               )
+    end
+
     test "subscription.updated for unknown id returns :subscription_not_found" do
       event = %{
         "event_type" => "subscription.updated",

@@ -523,11 +523,34 @@ describe("OAuthAuthorizePage vault tab on Approve", () => {
 
 		const openVault = await screen.findByRole("button", { name: /open your vault/iu });
 		expect(assign).not.toHaveBeenCalled();
-		expect(mockTrack).toHaveBeenCalledWith("vault_tab_blocked", { client: "chatgpt" });
+		expect(mockTrack).toHaveBeenCalledWith("vault_tab_blocked", {
+			client_kind: "mcp",
+			client: "chatgpt",
+		});
 		fireEvent.click(openVault);
 		expect(open).toHaveBeenLastCalledWith("/", "_blank");
 		fireEvent.click(screen.getByRole("button", { name: /back to chatgpt/iu }));
 		expect(assign).toHaveBeenCalledWith("https://app/cb?code=ok");
+	});
+
+	// An Obsidian device is not an MCP client: recording it as one ("other")
+	// would hide which kind of approval the blocker hit.
+	it("records an Obsidian approval's blocked tab as obsidian", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Obsidian",
+			kind: "obsidian",
+		});
+		consentRedirectsTo("https://app/cb?code=ok");
+		vi.spyOn(window.location, "assign").mockImplementation(() => {});
+		vi.spyOn(window, "open").mockReturnValue(null);
+
+		renderAt(VALID_QS);
+		await screen.findByRole("button", { name: /^review$/iu });
+		approve();
+
+		await screen.findByRole("button", { name: /open your vault/iu });
+		expect(mockTrack).toHaveBeenCalledWith("vault_tab_blocked", { client_kind: "obsidian" });
 	});
 });
 

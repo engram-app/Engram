@@ -756,11 +756,8 @@ defmodule Engram.Billing do
               |> Subscription.changeset(update_attrs)
               |> Repo.update!()
 
-            # Raises (rolling both writes back) if the user row is gone.
-            _ =
-              if user && is_nil(user.free_tier_accepted_at) do
-                {:ok, _user, _} = Engram.Onboarding.stamp_free_tier(user)
-              end
+            if user && is_nil(user.free_tier_accepted_at),
+              do: :ok = stamp_free_at_cancel(user, sub)
 
             updated_sub
           end)
@@ -1013,6 +1010,27 @@ defmodule Engram.Billing do
     end)
   end
 
+  # A Free stamp that finds no row must not roll back the cancel beside it:
+  # Paddle's state is the truth, and a webhook answered with an error is not
+  # retried. Logged so the missing stamp is visible.
+  defp stamp_free_at_cancel(user, sub) do
+    case Engram.Onboarding.stamp_free_tier(user) do
+      {:ok, _user, _won_or_lost} ->
+        :ok
+
+      {:error, :not_found} ->
+        Logger.warning(
+          "free stamp at cancel found no user row",
+          Metadata.with_category(:warning, :billing,
+            user_id: user.id,
+            subscription_id: sub.paddle_subscription_id
+          )
+        )
+
+        :ok
+    end
+  end
+
   # Notify the user's open browser tabs that their subscription state
   # changed server-side, so the activation overlay can hand off to the
   # next onboarding step (or settings billing UI can refresh) in
@@ -1025,10 +1043,9 @@ defmodule Engram.Billing do
     # below re-derives the tier through `get_subscription/1`. The triggers
     # evict every node on commit too, but asynchronously; this keeps the
     # writing node coherent for the reads right after (the plan snapshot
-    # below, the frontend's re-fetch of /onboarding/status). `:user` because
-    # cancellation stamps `free_tier_accepted_at`.
+    # below, the frontend's re-fetch of /onboarding/status). The `:user` row
+    # the cancel path stamps is evicted by `Onboarding.stamp_free_tier/1`.
     :ok = Engram.Cache.evict(:subscription, user_id)
-    :ok = Engram.Accounts.evict_user(user_id)
 
     # Tier/status flips can change the onboarding gate's subscription_ok,
     # so the cached pass verdict must re-derive.

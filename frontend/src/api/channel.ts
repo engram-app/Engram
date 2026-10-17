@@ -227,6 +227,97 @@ function flushBatch(batch: PendingBatch): void {
 	}
 }
 
+function openSocket(token: string | null, getToken: ConnectOptions["getToken"]): Socket {
+	latestToken = token ?? "";
+	latestGetToken = getToken;
+	lastForcedMintAt = Number.NEGATIVE_INFINITY;
+	const s = new Socket(joinWsUrl(getWsBase(), "/socket"), {
+		params: () => ({ token: latestToken ?? "" }),
+		reconnectAfterMs: (tries: number) => computeReconnectMs(tries, serverJitterMs),
+	});
+
+	// Fires on every failed (re)connect attempt — incl. an auth 403 on an
+	// expired token. Refresh before the next backoff step retries; clerk-js
+	// caches tokens ~60s so per-attempt refresh is cheap.
+	s.onError(() => {
+		// Never rejects (catches internally) — safe as a floating call.
+		refreshTokenForRetry();
+	});
+
+	s.connect();
+	return s;
+}
+
+// ── User channel (`user:{id}`) ─────────────────────────────────────────────
+//
+// Server events about the account rather than a vault (vault_created,
+// subscription_activated, connection_created; lib/engram_web/channels/
+// user_channel.ex). One channel per tab, shared by every subscriber, on the
+// sync socket when a vault is open or on a socket of its own before there is
+// one (first run). `connectChannel` moves it onto the new sync socket.
+
+// Phoenix's own callback type: its payload is untyped, so each subscriber
+// annotates the shape its event carries, as the `ch.on` calls above do.
+type UserHandler = Parameters<Channel["on"]>[1];
+const userHandlers = new Map<string, Set<UserHandler>>();
+const userJoinedHandlers = new Set<() => void>();
+let userChannel: Channel | null = null;
+// Events `userChannel` already listens to (one listener each, fanned out).
+let userChannelEvents = new Set<string>();
+let userChannelUserId: string | null = null;
+// The current socket exists only for the user channel (no vault open yet).
+let userOnlySocket = false;
+
+function userSubscribed(): boolean {
+	return userHandlers.size > 0 || userJoinedHandlers.size > 0;
+}
+
+function joinUserChannel(userId: string): void {
+	userChannelUserId = userId;
+	if (!(socket && userSubscribed())) {
+		return;
+	}
+	userChannel?.leave();
+	const ch = socket.channel(`user:${userId}`);
+	userChannel = ch;
+	userChannelEvents = new Set();
+	for (const event of userHandlers.keys()) {
+		listenUserEvent(event);
+	}
+	ch.join()
+		.receive("ok", () => {
+			for (const onJoined of userJoinedHandlers) {
+				onJoined();
+			}
+		})
+		.receive("error", (resp) => {
+			console.error("user channel join failed", resp);
+		});
+}
+
+function listenUserEvent(event: string): void {
+	if (!userChannel || userChannelEvents.has(event)) {
+		return;
+	}
+	userChannelEvents.add(event);
+	userChannel.on(event, (payload: unknown) => {
+		for (const handler of userHandlers.get(event) ?? []) {
+			handler(payload);
+		}
+	});
+}
+
+function leaveUserChannel(): void {
+	userChannel?.leave();
+	userChannel = null;
+	userChannelEvents = new Set();
+	if (userOnlySocket && socket) {
+		socket.disconnect();
+		socket = null;
+		userOnlySocket = false;
+	}
+}
+
 // Failure-only push beacon (web.crdt.push): OK pushes are per-keystroke
 // volume and would blow the 60/min beacon rate limit; the failures are the
 // signal. No-ops entirely (resolveTransport returns null) when tracing is off.
@@ -504,23 +595,9 @@ export async function connectChannel({
 		return;
 	}
 
-	latestToken = token ?? "";
-	latestGetToken = getToken;
-	lastForcedMintAt = Number.NEGATIVE_INFINITY;
-	socket = new Socket(joinWsUrl(getWsBase(), "/socket"), {
-		params: () => ({ token: latestToken ?? "" }),
-		reconnectAfterMs: (tries: number) => computeReconnectMs(tries, serverJitterMs),
-	});
-
-	// Fires on every failed (re)connect attempt — incl. an auth 403 on an
-	// expired token. Refresh before the next backoff step retries; clerk-js
-	// caches tokens ~60s so per-attempt refresh is cheap.
-	socket.onError(() => {
-		// Never rejects (catches internally) — safe as a floating call.
-		refreshTokenForRetry();
-	});
-
-	socket.connect();
+	socket = openSocket(token, getToken);
+	userOnlySocket = false;
+	joinUserChannel(userId);
 
 	// Fires on initial connect AND every reconnect. The socket drops events while
 	// disconnected (no replay), so a reconnect re-arms CRDT handshakes (open docs
@@ -904,6 +981,65 @@ export function installSocketHealthTriggers(
 	};
 }
 
+// The tab's one Phoenix socket. Both the sync channels and the user channel
+// ride it, so this is the only `new Socket` in the app.
+/**
+ * Runs `handler` for every `event` on the signed-in user's channel, and
+ * `onJoined` after each (re)join: a broadcast sent before this tab joined is
+ * not replayed, so a subscriber that must not miss one re-reads its data
+ * there. Returns the unsubscribe.
+ */
+export async function subscribeUserChannel<P>(
+	{ userId, getToken }: { userId: string; getToken: ConnectOptions["getToken"] },
+	event: string,
+	handler: (payload: P) => void,
+	onJoined?: () => void,
+): Promise<() => void> {
+	let set = userHandlers.get(event);
+	if (!set) {
+		set = new Set();
+		userHandlers.set(event, set);
+	}
+	set.add(handler);
+	if (onJoined) {
+		userJoinedHandlers.add(onJoined);
+	}
+	const unsubscribe = () => {
+		userHandlers.get(event)?.delete(handler);
+		if (userHandlers.get(event)?.size === 0) {
+			userHandlers.delete(event);
+		}
+		if (onJoined) {
+			userJoinedHandlers.delete(onJoined);
+		}
+		if (!userSubscribed()) {
+			leaveUserChannel();
+		}
+	};
+
+	if (!socket) {
+		const gen = connectGeneration;
+		let token: string | null;
+		try {
+			token = await getToken();
+		} catch (err) {
+			unsubscribe();
+			throw err;
+		}
+		// A sync connect (or another subscriber) opened the socket meanwhile.
+		if (!socket && gen === connectGeneration && token && userSubscribed()) {
+			socket = openSocket(token, getToken);
+			userOnlySocket = true;
+		}
+	}
+	if (!userChannel || userChannelUserId !== userId) {
+		joinUserChannel(userId);
+	} else {
+		listenUserEvent(event);
+	}
+	return unsubscribe;
+}
+
 export function disconnectChannel() {
 	connectGeneration++;
 	latestGetToken = null;
@@ -929,6 +1065,10 @@ export function disconnectChannel() {
 		channel.leave();
 		channel = null;
 	}
+	// Leaves with its socket; subscriptions stay, and the next socket
+	// (`connectChannel` or the next subscriber) rejoins them.
+	userChannel = null;
+	userOnlySocket = false;
 	if (socket) {
 		socket.disconnect();
 		socket = null;
