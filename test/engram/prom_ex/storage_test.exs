@@ -125,6 +125,95 @@ defmodule Engram.PromEx.StorageTest do
     end
   end
 
+  describe "Ecto query metrics" do
+    @ecto "engram_prom_ex_ecto_repo_query_"
+
+    # Emitted on PromEx's proxy event, not the repo's own, so no Engram
+    # handler on `[:engram, :repo, :query]` sees a synthetic query.
+    defp seed_query(source, us) do
+      :telemetry.execute(
+        [:prom_ex, :plugin, :ecto, :query],
+        %{
+          total_time: native(us.total),
+          queue_time: native(us.queue),
+          decode_time: native(us.decode),
+          idle_time: native(us.idle)
+        },
+        %{repo: Engram.Repo, source: source, result: {:ok, %Postgrex.Result{command: :select}}}
+      )
+    end
+
+    defp native(us), do: System.convert_time_unit(us, :microsecond, :native)
+
+    defp labelled(body, family, label) do
+      body |> lines(family <> "{") |> Enum.filter(&(&1 =~ label)) |> Enum.map(&sample/1)
+    end
+
+    defp sample(line), do: line |> String.split(" ") |> List.last() |> String.to_integer()
+
+    test "exposes only the slim microsecond families" do
+      seed_query("zz_probe", %{total: 150, queue: 40, decode: 3, idle: 7})
+      body = scrape()
+
+      for family <- ~w(total_time_microseconds_bucket total_time_microseconds_sum
+                       total_time_microseconds_count source_queries_total
+                       source_time_microseconds_total source_queue_time_microseconds_total
+                       decode_time_microseconds_total idle_time_microseconds_total) do
+        assert lines(body, @ecto <> family) != [], "missing #{@ecto <> family}"
+      end
+
+      for gone <- ~w(execution_time results_returned total_time_milliseconds
+                     queue_time_milliseconds decode_time_milliseconds idle_time_milliseconds) do
+        assert lines(body, @ecto <> gone) == [], "#{@ecto <> gone} should be dropped"
+      end
+
+      refute Enum.any?(lines(body, @ecto <> "total_time_microseconds"), &(&1 =~ "source="))
+    end
+
+    # Peep adds round(value) per sample to an integer `_sum`: in milliseconds
+    # a 0.15 ms query added 0 and every sub-ms average read as zero.
+    test "sums sub-millisecond time as integer microseconds" do
+      src = ~s(source="zz_sub_ms")
+      before = scrape()
+      seed_query("zz_sub_ms", %{total: 150, queue: 40, decode: 3, idle: 7})
+      seed_query("zz_sub_ms", %{total: 150, queue: 40, decode: 3, idle: 7})
+      body = scrape()
+
+      delta = fn family, label ->
+        Enum.sum(labelled(body, @ecto <> family, label)) -
+          Enum.sum(labelled(before, @ecto <> family, label))
+      end
+
+      assert delta.("source_queries_total", src) == 2
+      assert delta.("source_time_microseconds_total", src) == 300
+      assert delta.("source_queue_time_microseconds_total", src) == 80
+      assert delta.("decode_time_microseconds_total", ~s(repo="Engram.Repo")) >= 6
+      assert delta.("idle_time_microseconds_total", ~s(repo="Engram.Repo")) >= 14
+    end
+
+    # Ecto omits queue_time inside a transaction (no checkout) and idle_time
+    # likewise. An absent key must add nothing, not Peep's counter default 1.
+    test "an absent timing adds nothing to its sum" do
+      src = ~s(source="zz_in_txn")
+      before = scrape()
+
+      :telemetry.execute(
+        [:prom_ex, :plugin, :ecto, :query],
+        %{total_time: native(500)},
+        %{
+          repo: Engram.Repo,
+          source: "zz_in_txn",
+          result: {:ok, %Postgrex.Result{command: :select}}
+        }
+      )
+
+      body = scrape()
+      assert labelled(before, @ecto <> "source_queue_time_microseconds_total", src) == []
+      assert labelled(body, @ecto <> "source_queue_time_microseconds_total", src) == []
+      assert labelled(body, @ecto <> "source_time_microseconds_total", src) == [500]
+    end
+  end
+
   defp running_metrics do
     Engram.PromEx.__metrics_collector_name__()
     |> Peep.Persistent.fetch()
