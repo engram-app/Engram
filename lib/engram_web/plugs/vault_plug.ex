@@ -28,22 +28,21 @@ defmodule EngramWeb.Plugs.VaultPlug do
 
     case resolve_vault(conn, user) do
       {:ok, vault} ->
-        scope = Engram.Permissions.vault_scope(conn)
+        need = if EngramWeb.ReadOnlyRoutes.writes?(conn), do: :write, else: :read
 
-        cond do
+        case Engram.Permissions.decide(Engram.Permissions.vault_scope(conn), vault, need) do
+          :ok ->
+            assign(conn, :current_vault, vault)
+
+          # A read-level vault (#174, #332) refuses anything that can change it.
+          :read_only ->
+            Halt.json(conn, 403, %{error: "read_only_vault"})
+
           # Same response as a UUID that resolves to nothing: a 403 here told
           # a restricted credential the vault exists. The reason differs only
           # in the request log.
-          not Engram.Permissions.allows?(scope, vault) ->
+          :forbidden ->
             reject(conn, "vault_out_of_scope", "Vault not found")
-
-          # A read-level vault (#174, #332) refuses anything that can change it.
-          EngramWeb.ReadOnlyRoutes.writes?(conn) and
-              not Engram.Permissions.allows_write?(scope, vault) ->
-            Halt.json(conn, 403, %{error: "read_only_vault"})
-
-          true ->
-            assign(conn, :current_vault, vault)
         end
 
       # A non-UUID X-Vault-ID (e.g. a client sending a stale/placeholder id) is

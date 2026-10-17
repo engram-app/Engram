@@ -56,9 +56,20 @@ defmodule Engram.PermissionsTest do
     assert Permissions.filter(MapSet.new(["b"]), vaults) == [%{id: "b"}]
   end
 
-  test "check/2 mirrors allows?/2" do
-    assert Permissions.check(:all, %{id: "a"}) == :ok
-    assert Permissions.check(MapSet.new(["b"]), %{id: "a"}) == :forbidden
+  # The one access decision REST, MCP and the sockets share.
+  test "decide/3 for a read mirrors allows?/2" do
+    assert Permissions.decide(:all, %{id: "a"}, :read) == :ok
+    assert Permissions.decide(MapSet.new(["b"]), %{id: "a"}, :read) == :forbidden
+  end
+
+  test "decide/3 for a write: ok, read_only, forbidden, revoked" do
+    scope = Permissions.from_levels(%{"w" => :write, "r" => :read}, :none)
+
+    assert Permissions.decide(scope, %{id: "w"}, :write) == :ok
+    assert Permissions.decide(scope, %{id: "r"}, :write) == :read_only
+    assert Permissions.decide(scope, %{id: "r"}, :read) == :ok
+    assert Permissions.decide(scope, %{id: "n"}, :write) == :forbidden
+    assert Permissions.decide(:revoked, %{id: "w"}, :read) == :revoked
   end
 
   test "vault_scope/1 reads a conn and a bare assigns map identically" do

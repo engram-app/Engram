@@ -309,8 +309,23 @@ defmodule Engram.Permissions do
   def new_vault_level(%MapSet{}), do: :none
   def new_vault_level(%{default: default}), do: default
 
-  @spec check(scope, map()) :: :ok | :forbidden
-  def check(scope, vault), do: if(allows?(scope, vault), do: :ok, else: :forbidden)
+  @doc """
+  The one access decision: may a credential with `scope` act on `vault` at
+  `need`? REST (`VaultPlug`), MCP and the sockets (`EngramWeb.ChannelAccess`)
+  all ask here. `:revoked` is a socket's grant that is gone
+  (`EngramWeb.ChannelGate.vault_scope/1`).
+  """
+  @spec decide(scope | :revoked, map(), :read | :write) ::
+          :ok | :read_only | :forbidden | :revoked
+  def decide(:revoked, _vault, _need), do: :revoked
+
+  def decide(scope, vault, need) do
+    case level(scope, vault) do
+      :none -> :forbidden
+      :read when need == :write -> :read_only
+      _reachable -> :ok
+    end
+  end
 
   @spec filter(scope, [map()]) :: [map()]
   def filter(:all, vaults), do: vaults

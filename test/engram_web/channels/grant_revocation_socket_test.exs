@@ -100,10 +100,7 @@ defmodule EngramWeb.GrantRevocationSocketTest do
     test "revoking one grant disconnects its socket and refuses crdt: join", ctx do
       tokens = grant(ctx, :all)
       socket = connect_with(ctx, tokens)
-      assert {:ok, _, joined} = join_crdt(socket, ctx, ctx.a)
-      # The joined channel stops on the change (`ChannelAccess`); unlinked so it
-      # does not take this test with it.
-      Process.unlink(joined.channel_pid)
+      assert {:ok, _, _} = join_crdt(socket, ctx, ctx.a)
 
       :ok = Connections.revoke_oauth_grant(ctx.user.id, gid(tokens))
 
@@ -190,10 +187,7 @@ defmodule EngramWeb.GrantRevocationSocketTest do
     test "sync: join is refused on a vault narrowed to none", ctx do
       tokens = grant(ctx, {%{ctx.a.id => "write", ctx.b.id => "write"}, "none"})
       socket = connect_with(ctx, tokens)
-      assert {:ok, _, joined} = join_sync(socket, ctx.user, ctx.a)
-      # The joined channel stops on the change (`ChannelAccess`); unlinked so it
-      # does not take this test with it.
-      Process.unlink(joined.channel_pid)
+      assert {:ok, _, _} = join_sync(socket, ctx.user, ctx.a)
 
       :ok =
         Connections.update_oauth_grant_access(
