@@ -158,6 +158,24 @@ defmodule Engram.BillingTest do
     end
   end
 
+  # The one paid-plan rule: onboarding's plan gate and its Free start both
+  # ask this instead of matching tiers themselves.
+  describe "paid?/1" do
+    test "true for an entitled paid subscription" do
+      user = build(:user) |> with_subscription(tier: "pro", status: "active")
+      assert Billing.paid?(user)
+    end
+
+    test "false with no subscription, on Free, or canceled" do
+      refute Billing.paid?(build(:user, free_tier_accepted_at: nil))
+      refute Billing.paid?(build(:user, free_tier_accepted_at: DateTime.utc_now()))
+
+      refute build(:user, free_tier_accepted_at: DateTime.utc_now())
+             |> with_subscription(tier: "pro", status: "canceled")
+             |> Billing.paid?()
+    end
+  end
+
   describe "tier/1" do
     test "returns :starter when user has active starter subscription" do
       user = build(:user) |> with_subscription(tier: "starter", status: "active")
@@ -872,6 +890,32 @@ defmodule Engram.BillingTest do
       }
 
       assert {:ok, %Subscription{status: "canceled"}} = Billing.upsert_from_paddle_event(event)
+    end
+
+    # The Free stamp failing (`:not_found`) must not roll back the cancel:
+    # Paddle's state is the truth, and the webhook is not retried.
+    test "subscription.canceled still cancels when the Free stamp is not taken" do
+      user = insert(:user, free_tier_accepted_at: nil)
+      insert(:subscription, user: user, paddle_subscription_id: "sub_can_nf", status: "active")
+      Engram.FreeStampBlock.block!()
+
+      event = %{
+        "event_type" => "subscription.canceled",
+        "data" => %{
+          "id" => "sub_can_nf",
+          "status" => "canceled",
+          "customer_id" => "ctm_x",
+          "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
+          "current_billing_period" => %{"ends_at" => "2026-07-01T00:00:00Z"}
+        }
+      }
+
+      assert {:ok, %Subscription{status: "canceled"}} = Billing.upsert_from_paddle_event(event)
+
+      assert %Subscription{status: "canceled"} =
+               Engram.Repo.get_by!(Subscription, [paddle_subscription_id: "sub_can_nf"],
+                 skip_tenant_check: true
+               )
     end
 
     test "subscription.updated for unknown id returns :subscription_not_found" do

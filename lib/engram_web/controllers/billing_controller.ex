@@ -105,7 +105,7 @@ defmodule EngramWeb.BillingController do
 
     %{
       tier: to_string(Billing.tier(user)),
-      active: Billing.tier(user) in [:starter, :pro],
+      active: Billing.paid?(user),
       trial_days_remaining: Billing.trial_days_remaining(user),
       subscription:
         if sub do

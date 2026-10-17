@@ -83,6 +83,10 @@ defmodule EngramWeb.OnboardingController do
           |> put_status(:created)
           |> json(%{version: agreement.version, accepted_at: agreement.accepted_at})
 
+        # The Free stamp found no user row; nothing was recorded.
+        {:error, :not_found} ->
+          conn |> put_status(404) |> json(%{error: "not_found"})
+
         {:error, _changeset} ->
           conn |> put_status(422) |> json(%{error: "invalid"})
       end
@@ -105,22 +109,28 @@ defmodule EngramWeb.OnboardingController do
 
   # Free-tier acceptance: user clicked "Continue with Free" on /onboard/billing.
   # Stamps `free_tier_accepted_at` (idempotent — Onboarding.accept_free_tier/1
-  # returns {:ok, user} unchanged if already set). Returns the same status
-  # payload shape as GET /api/onboarding/status so the SPA can navigate to the
-  # next step (`:billing` -> `:tools`/`:vault`/`:done`) without a second fetch.
+  # returns {:ok, user} unchanged if already set; 404 if the user row is gone).
+  # Returns the same status payload shape as GET /api/onboarding/status so the
+  # SPA can navigate to the next step (`:billing` -> `:heard`/`:vault`/`:done`)
+  # without a second fetch.
   def accept_free_tier(conn, _params) do
     user = conn.assigns.current_user
 
-    with {:ok, updated} <- Onboarding.accept_free_tier(user) do
-      log_step(user, "free_tier")
+    case Onboarding.accept_free_tier(user) do
+      {:ok, updated} ->
+        log_step(user, "free_tier")
 
-      payload =
-        Onboarding.status(updated)
-        |> Map.update!(:next_step, &Atom.to_string/1)
-        |> Map.update!(:steps, fn steps -> Enum.map(steps, &Atom.to_string/1) end)
-        |> reject_empty_profile()
+        payload =
+          Onboarding.status(updated)
+          |> Map.update!(:next_step, &Atom.to_string/1)
+          |> Map.update!(:steps, fn steps -> Enum.map(steps, &Atom.to_string/1) end)
+          |> reject_empty_profile()
 
-      json(conn, payload)
+        json(conn, payload)
+
+      # Nothing took the stamp: the user row is gone (a purge racing the click).
+      {:error, :not_found} ->
+        conn |> put_status(404) |> json(%{error: "not_found"})
     end
   end
 

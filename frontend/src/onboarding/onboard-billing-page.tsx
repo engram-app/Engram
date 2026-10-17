@@ -57,7 +57,8 @@ export default function OnboardBillingPage() {
 	// tab, or returned to /onboard/billing after subscribing) — bounce forward
 	// to their actual next step instead of re-showing the plan picker. Keys off
 	// `next_step`. Only an account past the terms with no plan is still served
-	// this step; every new signup starts on Free (`Engram.Onboarding.after_terms/1`).
+	// this step; every new signup starts on Free inside its first Terms accept
+	// (`Engram.Onboarding.accept_terms/6`).
 	// Only a live subscription bounces — the same `active` signal BillingPage
 	// uses to choose plan picker vs plan panel. Free users are exempt: the tools
 	// step and the checklist link them here to upgrade, and bouncing them made

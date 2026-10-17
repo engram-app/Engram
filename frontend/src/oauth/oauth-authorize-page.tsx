@@ -37,8 +37,13 @@ import { useConnectionCap } from "../billing/use-connection-cap";
 import AuthPanel from "../layout/auth-panel";
 import AuthShell from "../layout/auth-shell";
 import { isMember } from "../lib/is-member";
+import { ROUTES } from "../routes";
 import { settingsHash, settingsTo } from "../settings/settings-hash";
 import { clearPendingAuthorization, stashPendingAuthorization } from "./pending-authorization";
+
+// The tab an approval opens while the client finishes connecting: the app
+// root, which lands on the active vault.
+const VAULT_URL = ROUTES.HOME;
 
 const REQUIRED_PARAMS = [
 	"client_id",
@@ -393,6 +398,10 @@ export default function OAuthAuthorizePage() {
 	const runSubmit = async (isSwap: boolean) => {
 		setSubmitting(true);
 		setSubmitError(null);
+		// Every approval opens the vault, so the user lands in it while the
+		// client finishes connecting. Before any await: a popup blocker refuses
+		// a tab opened outside the click.
+		const vaultTab = window.open(VAULT_URL, "_blank");
 
 		// Obsidian's device-code flow is a different surface (device-link-page.tsx,
 		// plugin_connect_*) — this event name says "mcp" and must mean it.
@@ -484,14 +493,26 @@ export default function OAuthAuthorizePage() {
 					),
 				);
 				track("mcp_connect_failed", { client: mcpClient, reason: "unknown" });
+				vaultTab?.close();
 				setSubmitting(false);
 				return;
 			}
 			if (isMcp) {
 				track("mcp_connect_succeeded", { client: mcpClient });
 			}
+			// A 200 can still carry a refusal (`?error=`): nothing will connect.
+			if (!grantsCode) {
+				vaultTab?.close();
+			} else if (vaultTab === null) {
+				// Blocked (every in-app/auth webview does): the client comes first.
+				track(
+					"vault_tab_blocked",
+					isMcp ? { client_kind: "mcp", client: mcpClient } : { client_kind: "obsidian" },
+				);
+			}
 			window.location.assign(redirect_uri);
 		} catch (e: unknown) {
+			vaultTab?.close();
 			if (swappedFromName) {
 				// Disconnect succeeded but consent did not — user is now at 0
 				// connections instead of 1. Make that visible.

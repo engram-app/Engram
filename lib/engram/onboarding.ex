@@ -59,14 +59,22 @@ defmodule Engram.Onboarding do
   `privacy_hash`). Both rows share the same `accepted_at`/ip/ua audit metadata.
   `meta` may carry `:ip_address` (string) and `:user_agent` (string).
 
-  Returns `{:ok, %Agreement{}}` (the ToS row) when both inserts succeed, or
-  `{:error, %Ecto.Changeset{}}` for the first row that fails.
+  A first acceptance by an account with no plan also stamps the Free start
+  (`free_tier_accepted_at`, see `starts_free?/1`) in the same transaction.
+  The agreement rows and the stamp commit together or not at all: there is no
+  later retry (`status/1` never writes), so a failure leaves nothing recorded
+  and the user accepts again. The connector vault (see
+  `maybe_provision_connector_vault/1`) is provisioned after commit,
+  idempotently.
+
+  Returns `{:ok, %Agreement{}}` (the ToS row) when every write succeeds, or
+  `{:error, reason}` for the first that fails.
   """
   def accept_terms(user, tos_version, tos_hash, privacy_version, privacy_hash, meta)
       when is_binary(tos_version) and is_binary(privacy_version) do
     # Read before the insert: only a first acceptance starts the account on
-    # Free (`after_terms/2`); re-accepting changed terms is not a plan choice.
-    first_acceptance = is_nil(accepted_version(user, @terms_document))
+    # Free; re-accepting changed terms is not a plan choice.
+    starts_free = is_nil(accepted_version(user, @terms_document)) and starts_free?(user)
     accepted_at = DateTime.utc_now(:second)
     ip = Map.get(meta, :ip_address)
     ua = Map.get(meta, :user_agent)
@@ -79,9 +87,15 @@ defmodule Engram.Onboarding do
     }
 
     # Atomic: a ToS row without its paired Privacy row is an incomplete audit
-    # record, so roll back the first insert if the second fails.
+    # record, and an account past the terms without its Free start would sit
+    # on a plan step that no longer exists, so any failure rolls back all of
+    # it and the user retries the accept.
+    #
+    # `transaction_after_commit`, not a plain transaction: each insert's
+    # `with_tenant` would otherwise run its after-commit work at ITS end,
+    # before this commits.
     result =
-      Repo.transaction(fn ->
+      Repo.transaction_after_commit(fn ->
         with {:ok, tos_row} <-
                insert_agreement(
                  Map.merge(base, %{
@@ -97,10 +111,12 @@ defmodule Engram.Onboarding do
                    version: privacy_version,
                    content_hash: privacy_hash
                  })
-               ) do
+               ),
+             {:ok, _saved, _won} <-
+               if(starts_free, do: stamp_free_tier(user), else: {:ok, nil, nil}) do
           tos_row
         else
-          {:error, changeset} -> Repo.rollback(changeset)
+          {:error, reason} -> Repo.rollback(reason)
         end
       end)
 
@@ -110,7 +126,8 @@ defmodule Engram.Onboarding do
         # could land over a newer one a concurrent read just stored.
         :ok = Cache.evict(:terms, {user.id, @terms_document})
         :ok = Cache.evict(:terms, {user.id, @privacy_document})
-        :ok = after_terms(user, first_acceptance)
+        # After commit, and idempotent: due once terms and plan both pass.
+        :ok = maybe_provision_connector_vault(user)
         {:ok, tos_row}
 
       other ->
@@ -208,7 +225,7 @@ defmodule Engram.Onboarding do
     # steps but SaaS subscription gating in the same response.
     subscription_ok =
       not billing_active or
-        Engram.Billing.tier(user) in [:starter, :pro] or
+        Engram.Billing.paid?(user) or
         not is_nil(user.free_tier_accepted_at)
 
     # The cached users row, not a fresh read: set_profile/2 evicts the :user
@@ -390,14 +407,14 @@ defmodule Engram.Onboarding do
   # Enumerates the step chain so the frontend can render "Step X of N"
   # without re-deriving the gate rules: the terms, then for a web signup the
   # heard-from question and the vault step. Every account starts on Free when it accepts the terms
-  # (`after_terms/1`), so the plan step is gone; tools and the survey moved
+  # (`accept_terms/6`), so the plan step is gone; tools and the survey moved
   # into the app.
   #
   # A step must stay listed whenever `next_step/6` can still return it, or the
   # wizard is pointed at a step the chain does not list and loops:
   #
-  #   * `:billing` when terms pass without a plan (accepted before the Free
-  #     start existed, or the stamp failed).
+  #   * `:billing` when terms pass without a plan: accepted before the Free
+  #     start existed, or by a paid account whose plan has since lapsed.
   #   * `:heard` while a hosted web signup has not answered it, and after,
   #     unless its profile completed without it (`heard_due?/3`).
   #   * `:vault` unless the signup's origin already settled it: a plugin-first
@@ -512,10 +529,20 @@ defmodule Engram.Onboarding do
       open ->
         accepted = accepted_version(user, document)
 
-        # Never accepted (a signup): nothing has changed for them. They agree
-        # to the current text and meet the pending change in the app after.
+        # A signup that has accepted nothing yet: nothing has changed for
+        # them. They agree to the current text and meet the pending change in
+        # the app after. Keyed on the ToS row, not this document's: a legacy
+        # account that accepted only the ToS has no privacy row and still
+        # gets the privacy notice.
+        tos_accepted =
+          if document == @terms_document,
+            do: accepted,
+            else: accepted_version(user, @terms_document)
+
+        signup = is_nil(accepted) and is_nil(tos_accepted)
+
         open
-        |> Enum.filter(&(not is_nil(accepted) and &1.version > accepted))
+        |> Enum.filter(&(not signup and (is_nil(accepted) or &1.version > accepted)))
         |> Enum.sort_by(&{not &1.material, Date.to_iso8601(&1.effective_date)})
         |> Enum.take(1)
         |> Enum.map(&notice_map/1)
@@ -558,7 +585,9 @@ defmodule Engram.Onboarding do
   Validates only the fields actually being set: `tools` must be a non-empty
   list of slugs from `valid_tools/0`; `uses_obsidian` and `tools_prefilled`
   must be booleans; `signup_source` must be a known origin. Empty payloads are
-  rejected so a stray POST can't no-op-succeed.
+  rejected so a stray POST can't no-op-succeed, as are the qualifiers sent
+  without what they qualify: `tools_prefilled` without `tools`,
+  `signup_source` without `uses_obsidian`.
 
   Returns `{:ok, %User{}}` or `{:error, atom}` where atom is one of
   `:invalid_uses_obsidian | :empty_tools | :invalid_tool |
@@ -607,6 +636,16 @@ defmodule Engram.Onboarding do
     end
   end
 
+  # Fields that qualify another, never standalone facts, sent without it.
+  # `tools_prefilled` alone would let a stray POST turn an ordinary signup
+  # into a connector one: vault provisioned, vault step dropped from the
+  # chain. `signup_source` qualifies the Obsidian answer /link sends with it
+  # (`plugin_source?/1` needs both), so on its own it records nothing.
+  defp lone_qualifier?(attrs) do
+    (Map.has_key?(attrs, :tools_prefilled) and not Map.has_key?(attrs, :tools)) or
+      (Map.has_key?(attrs, :signup_source) and not Map.has_key?(attrs, :uses_obsidian))
+  end
+
   defp validate_profile_attrs(attrs) do
     has_tools = Map.has_key?(attrs, :tools)
     has_source = Map.has_key?(attrs, :uses_obsidian)
@@ -620,10 +659,7 @@ defmodule Engram.Onboarding do
       has_signup_source and Map.get(attrs, :signup_source) not in @signup_sources ->
         {:error, :invalid_signup_source}
 
-      # A qualifier on `tools`, never a standalone fact. Accepting it alone
-      # would let a stray POST turn an ordinary signup into a connector one:
-      # vault provisioned, vault step dropped from the chain.
-      has_prefilled and not has_tools ->
+      lone_qualifier?(attrs) ->
         {:error, :nothing_to_set}
 
       has_prefilled and not is_boolean(Map.get(attrs, :tools_prefilled)) ->
@@ -654,7 +690,8 @@ defmodule Engram.Onboarding do
 
   Called where those last two flip: `set_profile/2` (the pre-answer, for an
   account already past them, and self-host, which has neither),
-  `accept_terms/6` (terms re-accepted after the plan), `accept_free_tier/1`,
+  `accept_terms/6` (after commit, for a first acceptance that started Free
+  and for terms re-accepted after the plan), `accept_free_tier/1`,
   and `subscription.created` in `Engram.Billing`.
   Idempotent: keyed on a fixed client_id, and a no-op when not due.
 
@@ -664,20 +701,28 @@ defmodule Engram.Onboarding do
   @spec maybe_provision_connector_vault(Engram.Accounts.User.t()) :: :ok
   def maybe_provision_connector_vault(user) do
     user = Accounts.get_user(user.id) || user
-    status = status(user)
-    profile = status.profile || %{}
 
-    # `profile_complete`: a connector row pre-filled before connector profiles
-    # completed at the pre-answer is still on the vault step, where a minted
-    # "My Vault" would make the Free cap refuse the vault the user creates.
-    # Provisioned once ever: a vault the user deleted stays deleted.
-    due =
-      tools_prefilled?(profile) and status.profile_complete and
-        not is_boolean(profile["uses_obsidian"]) and not status.has_vault and
-        status.terms_ok and status.subscription_ok and
-        @connector_vault_action not in list_actions(user.id)
+    # The cached profile first: most callers (every Free start, every
+    # subscription.created) are not connector signups, and `status/1` is
+    # several reads. Same row `status/1` reads its profile from.
+    if tools_prefilled?(user.onboarding_profile) do
+      status = status(user)
+      profile = status.profile || %{}
 
-    if due, do: provision_connector_vault(user), else: :ok
+      # `profile_complete`: a connector row pre-filled before connector profiles
+      # completed at the pre-answer is still on the vault step, where a minted
+      # "My Vault" would make the Free cap refuse the vault the user creates.
+      # Provisioned once ever: a vault the user deleted stays deleted.
+      due =
+        tools_prefilled?(profile) and status.profile_complete and
+          not is_boolean(profile["uses_obsidian"]) and not status.has_vault and
+          status.terms_ok and status.subscription_ok and
+          @connector_vault_action not in list_actions(user.id)
+
+      if due, do: provision_connector_vault(user), else: :ok
+    else
+      :ok
+    end
   rescue
     # Never raises: one caller is a Paddle webhook, where an escaping error is
     # answered 200 anyway and never retried. The fallback is the vault step.
@@ -694,40 +739,16 @@ defmodule Engram.Onboarding do
   end
 
   # Every signup starts on Free when it first accepts the terms, so there is
-  # no plan step: get people using it first, upgrade prompts later. Only at the
-  # first acceptance, and only when no plan passes yet: a paid account keeps
-  # its plan, and a lapsed one re-accepting changed terms stays at the plan
-  # step. Then a connector signup's vault, which is due once terms and plan
-  # both pass. A failed stamp leaves `:billing` in the chain
-  # (`build_steps/3`), the old flow.
-  defp after_terms(user, first_acceptance) do
+  # no plan step: get people using it first, upgrade prompts later. Only when
+  # no plan passes yet: a paid account keeps its plan, and a lapsed one
+  # re-accepting changed terms stays at the plan step (`accept_terms/6` asks
+  # only at the first acceptance).
+  defp starts_free?(user) do
     user = Accounts.get_user(user.id) || user
 
-    starts_free =
-      first_acceptance and Application.get_env(:engram, :billing_enabled, false) and
-        is_nil(user.free_tier_accepted_at) and
-        Engram.Billing.tier(user) not in [:starter, :pro]
-
-    if starts_free do
-      case accept_free_tier(user) do
-        # accept_free_tier/1 provisions the vault itself.
-        {:ok, _} ->
-          :ok
-
-        {:error, reason} ->
-          Logger.warning(
-            "free start failed",
-            Metadata.with_category(:warning, :lifecycle,
-              user_id: user.id,
-              reason: Metadata.safe_reason(reason)
-            )
-          )
-
-          :ok
-      end
-    else
-      maybe_provision_connector_vault(user)
-    end
+    Application.get_env(:engram, :billing_enabled, false) and
+      is_nil(user.free_tier_accepted_at) and
+      not Engram.Billing.paid?(user)
   end
 
   defp provision_connector_vault(user) do
@@ -892,23 +913,67 @@ defmodule Engram.Onboarding do
   @doc """
   Mark the user as having chosen the Free tier during onboarding. Idempotent:
   if `free_tier_accepted_at` is already set, returns the user unchanged.
+
+  Serialized on the row: the stamp is a conditional update (`WHERE
+  free_tier_accepted_at IS NULL`), so of concurrent callers holding the same
+  unstamped struct exactly one stamps and provisions the connector vault; the
+  others return the winner's row. `{:error, :not_found}` when no row took the
+  stamp (the user is gone).
   """
   @spec accept_free_tier(Engram.Accounts.User.t()) ::
-          {:ok, Engram.Accounts.User.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, Engram.Accounts.User.t()} | {:error, :not_found}
   def accept_free_tier(%{free_tier_accepted_at: %DateTime{}} = user), do: {:ok, user}
 
   def accept_free_tier(%Engram.Accounts.User{} = user) do
-    user
-    |> Ecto.Changeset.change(free_tier_accepted_at: DateTime.utc_now())
-    |> Repo.update()
-    |> tap(fn
-      {:ok, saved} ->
-        evict_user(user.id)
+    case stamp_free_tier(user) do
+      {:ok, saved, :won} ->
         maybe_provision_connector_vault(saved)
+        {:ok, saved}
 
-      _ ->
-        :ok
-    end)
+      {:ok, saved, :lost} ->
+        {:ok, saved}
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  Stamps `free_tier_accepted_at`: the one write of it. A conditional update, so
+  of concurrent callers exactly one matches the row (`:won`, and only it
+  provisions); the others read the winner's row (`:lost`). `{:error, :not_found}`
+  when nothing took the stamp (the user is gone). Joins the caller's
+  transaction when there is one.
+
+  Owns the `:user` cache eviction for the stamp, so no caller repeats it. It
+  is queued with `Repo.after_commit/1`, so inside a transaction that owns the
+  queue (`Repo.transaction_after_commit/1`, `Repo.with_tenant/2`) it runs once
+  the outer transaction commits.
+  """
+  @spec stamp_free_tier(Engram.Accounts.User.t()) ::
+          {:ok, Engram.Accounts.User.t(), :won | :lost} | {:error, :not_found}
+  def stamp_free_tier(user) do
+    import Ecto.Query
+
+    query =
+      from(u in Engram.Accounts.User,
+        where: u.id == ^user.id and is_nil(u.free_tier_accepted_at),
+        select: u
+      )
+
+    # `users` is the tenant root, not a tenant table (Repo.tenant_tables/0), so
+    # the guard does not apply and no skip is needed.
+    case Repo.update_all(query, set: [free_tier_accepted_at: DateTime.utc_now()]) do
+      {1, [saved]} ->
+        :ok = Accounts.evict_user(user.id)
+        {:ok, saved, :won}
+
+      {0, _} ->
+        case Accounts.get_user_uncached(user.id) do
+          %{free_tier_accepted_at: %DateTime{}} = saved -> {:ok, saved, :lost}
+          _ -> {:error, :not_found}
+        end
+    end
   end
 
   # The wizard's very next request (or socket rejoin) reads the cached user and

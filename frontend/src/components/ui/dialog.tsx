@@ -41,8 +41,13 @@ function DialogContent({
 	className,
 	children,
 	showCloseButton = true,
+	closeDisabled = false,
 	...props
-}: React.ComponentProps<typeof DialogPrimitive.Content> & { showCloseButton?: boolean }) {
+}: React.ComponentProps<typeof DialogPrimitive.Content> & {
+	showCloseButton?: boolean;
+	/** Shows the close as busy (e.g. mid-save) instead of hiding it. */
+	closeDisabled?: boolean;
+}) {
 	const { t } = useT();
 	return (
 		<DialogPortal>
@@ -58,7 +63,12 @@ function DialogContent({
 				{children}
 				{Boolean(showCloseButton) && (
 					<DialogPrimitive.Close data-slot="dialog-close" asChild>
-						<Button variant="ghost" className="absolute top-3 right-3" size="icon-sm">
+						<Button
+							variant="ghost"
+							className="absolute top-3 right-3"
+							size="icon-sm"
+							disabled={closeDisabled}
+						>
 							<XIcon />
 							<span className="sr-only">{t("Close")}</span>
 						</Button>

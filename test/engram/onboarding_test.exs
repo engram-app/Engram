@@ -594,6 +594,75 @@ defmodule Engram.OnboardingTest do
 
       assert Onboarding.status(user).current_privacy_version == "2026-05-19"
     end
+
+    # The Free stamp commits with the first acceptance: a stamp that fails
+    # fails the acceptance, so the user retries accept instead of landing past
+    # the terms with no plan.
+    test "a failed Free start fails the acceptance and records no agreement rows" do
+      LegalFixtures.insert_version(version: "2026-05-19", effective_date: nil)
+      LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
+      LegalFixtures.reset_version_cache()
+
+      user = insert(:user, onboarding_profile: %{"uses_obsidian" => false, "completed_at" => "x"})
+      Engram.FreeStampBlock.block!()
+
+      assert {:error, _} =
+               Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
+
+      assert {:ok, []} = Engram.Repo.with_tenant(user.id, fn -> Engram.Repo.all(Agreement) end)
+      assert is_nil(Engram.Accounts.get_user!(user.id).free_tier_accepted_at)
+    end
+
+    test "a retried acceptance after a failed Free start stamps Free" do
+      LegalFixtures.insert_version(version: "2026-05-19", effective_date: nil)
+      LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
+      LegalFixtures.reset_version_cache()
+
+      user = insert(:user, onboarding_profile: %{"uses_obsidian" => false, "completed_at" => "x"})
+      Engram.FreeStampBlock.block!()
+      {:error, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
+      Engram.FreeStampBlock.unblock!()
+
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
+
+      assert %DateTime{} = Engram.Accounts.get_user!(user.id).free_tier_accepted_at
+    end
+
+    test "a paid account is never stamped Free, on first acceptance or re-acceptance" do
+      LegalFixtures.insert_version(version: "2026-05-19", effective_date: nil)
+      LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
+      LegalFixtures.reset_version_cache()
+
+      user = insert(:user, onboarding_profile: %{"uses_obsidian" => false, "completed_at" => "x"})
+      insert(:subscription, user: user, tier: "pro", status: "active")
+
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h", "2026-05-19", "h", %{})
+      assert is_nil(Engram.Accounts.get_user!(user.id).free_tier_accepted_at)
+
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", "h2", "2026-05-19", "h2", %{})
+      assert is_nil(Engram.Accounts.get_user!(user.id).free_tier_accepted_at)
+    end
+
+    # Double-submitted first acceptances: one stamp, one connector vault.
+    test "concurrent first acceptances stamp once and provision one connector vault" do
+      LegalFixtures.insert_version(version: "2026-05-19", effective_date: nil)
+      LegalFixtures.insert_version(document: "privacy_policy", version: "2026-05-19")
+      LegalFixtures.reset_version_cache()
+
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.set_profile(user, %{tools: ["chatgpt"], tools_prefilled: true})
+      stale = Engram.Accounts.get_user!(user.id)
+
+      1..5
+      |> Task.async_stream(
+        fn _ -> Onboarding.accept_terms(stale, "2026-05-19", "h", "2026-05-19", "h", %{}) end,
+        max_concurrency: 5
+      )
+      |> Enum.each(fn {:ok, result} -> assert {:ok, %Agreement{}} = result end)
+
+      assert %DateTime{} = Engram.Accounts.get_user!(user.id).free_tier_accepted_at
+      assert [%{name: "My Vault"}] = Engram.Vaults.list_vaults(user)
+    end
   end
 
   describe "computed floor gate + legal_notices" do
@@ -671,6 +740,55 @@ defmodule Engram.OnboardingTest do
       LegalFixtures.reset_version_cache()
 
       refute Onboarding.status(user).terms_ok
+    end
+
+    # Accounts that accepted through the ToS-only path have no privacy row at
+    # all. They are not new signups, so a privacy change must still reach them.
+    test "a legacy account with terms but no privacy row still gets the privacy notice" do
+      LegalFixtures.insert_version(version: "2026-05-19", effective_date: nil)
+
+      LegalFixtures.insert_version(
+        document: "privacy_policy",
+        version: "2026-05-19",
+        material: false
+      )
+
+      user = insert(:user, onboarding_profile: %{})
+      {:ok, _} = Onboarding.accept_terms(user, "2026-05-19", %{})
+
+      LegalFixtures.insert_version(
+        document: "privacy_policy",
+        version: "2026-06-01",
+        material: false,
+        effective_date: ~D[2099-01-01]
+      )
+
+      LegalFixtures.reset_version_cache()
+
+      assert [%{document: "privacy_policy", version: "2026-06-01"}] =
+               Onboarding.legal_notices(user)
+    end
+
+    test "a brand-new signup who accepted nothing sees no notices" do
+      LegalFixtures.insert_version(version: "2026-05-19", effective_date: nil)
+
+      LegalFixtures.insert_version(
+        version: "2026-06-01",
+        material: true,
+        effective_date: ~D[2099-01-01]
+      )
+
+      LegalFixtures.insert_version(
+        document: "privacy_policy",
+        version: "2026-06-01",
+        material: false,
+        effective_date: ~D[2099-01-01]
+      )
+
+      LegalFixtures.reset_version_cache()
+      user = insert(:user, onboarding_profile: %{})
+
+      assert Onboarding.legal_notices(user) == []
     end
   end
 
@@ -910,8 +1028,18 @@ defmodule Engram.OnboardingTest do
     test "signup_source records a plugin-first signup" do
       user = insert(:user, onboarding_profile: %{})
 
-      assert {:ok, updated} = Onboarding.set_profile(user, %{signup_source: "plugin"})
+      assert {:ok, updated} =
+               Onboarding.set_profile(user, %{uses_obsidian: true, signup_source: "plugin"})
+
       assert updated.onboarding_profile["signup_source"] == "plugin"
+    end
+
+    # Like `tools_prefilled`, a qualifier: on its own it would mark a signup
+    # plugin-first without the Obsidian answer that makes it one.
+    test "signup_source on its own is refused" do
+      user = insert(:user, onboarding_profile: %{})
+
+      assert {:error, :nothing_to_set} = Onboarding.set_profile(user, %{signup_source: "plugin"})
     end
 
     # The origin is where the signup STARTED: a plugin-first user who later
@@ -1258,6 +1386,47 @@ defmodule Engram.OnboardingTest do
     end
   end
 
+  describe "stamp_free_tier/1" do
+    # The one write of the stamp owns the `:user` eviction, queued to run when
+    # the caller's outer transaction commits.
+    test "a stamp inside an outer transaction leaves no stale cached user" do
+      user = insert(:user, free_tier_accepted_at: nil)
+      assert %{free_tier_accepted_at: nil} = Engram.Accounts.get_user(user.id)
+
+      {:ok, _} =
+        Engram.Repo.transaction_after_commit(fn -> Onboarding.stamp_free_tier(user) end)
+
+      assert %{free_tier_accepted_at: %DateTime{}} = Engram.Accounts.get_user(user.id)
+    end
+
+    # Another request reads the still-committed (unstamped) row and caches it
+    # after the stamp but before the outer transaction commits. Evicting at
+    # the stamp would leave that stale entry; the eviction must run on commit.
+    test "evicts after commit, so a read between stamp and commit is not kept" do
+      user = insert(:user, free_tier_accepted_at: nil)
+
+      {:ok, _} =
+        Engram.Repo.transaction_after_commit(fn ->
+          {:ok, _saved, :won} = Onboarding.stamp_free_tier(user)
+          :ok = Engram.Cache.put(:user, user.id, user)
+        end)
+
+      assert %{free_tier_accepted_at: %DateTime{}} = Engram.Accounts.get_user(user.id)
+    end
+
+    test "evicts after commit inside a tenant transaction too" do
+      user = insert(:user, free_tier_accepted_at: nil)
+
+      {:ok, _} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          {:ok, _saved, :won} = Onboarding.stamp_free_tier(user)
+          :ok = Engram.Cache.put(:user, user.id, user)
+        end)
+
+      assert %{free_tier_accepted_at: %DateTime{}} = Engram.Accounts.get_user(user.id)
+    end
+  end
+
   describe "accept_free_tier/1" do
     test "sets free_tier_accepted_at on the user" do
       user = insert(:user, free_tier_accepted_at: nil)
@@ -1270,6 +1439,23 @@ defmodule Engram.OnboardingTest do
       {:ok, first} = Onboarding.accept_free_tier(user)
       {:ok, second} = Onboarding.accept_free_tier(first)
       assert DateTime.compare(first.free_tier_accepted_at, second.free_tier_accepted_at) == :eq
+    end
+
+    # Concurrent callers holding the same unstamped struct (double click, a
+    # retry racing the original): one stamp wins and every caller sees it,
+    # and the connector vault is provisioned once.
+    test "concurrent calls stamp once and provision one connector vault" do
+      user = prefilled_past_terms()
+      stale = Engram.Accounts.get_user!(user.id)
+
+      stamps =
+        1..5
+        |> Task.async_stream(fn _ -> Onboarding.accept_free_tier(stale) end, max_concurrency: 5)
+        |> Enum.map(fn {:ok, {:ok, saved}} -> saved.free_tier_accepted_at end)
+
+      final = Engram.Accounts.get_user!(user.id).free_tier_accepted_at
+      assert Enum.all?(stamps, &(DateTime.compare(&1, final) == :eq))
+      assert [%{name: "My Vault"}] = Engram.Vaults.list_vaults(user)
     end
   end
 
@@ -1381,10 +1567,20 @@ defmodule Engram.OnboardingTest do
   end
 
   # Every captured event named `event` that arrives within half a second.
-  defp collect_posthog_events(event, acc \\ []) do
+  # Waits for the first `event` (the capture is async and slow under load),
+  # then keeps collecting for a short quiet window so a duplicate still shows.
+  defp collect_posthog_events(event) do
     receive do
-      {:posthog, %{"event" => ^event} = body} -> collect_posthog_events(event, [body | acc])
-      {:posthog, _other} -> collect_posthog_events(event, acc)
+      {:posthog, %{"event" => ^event} = body} -> collect_more_posthog_events(event, [body])
+    after
+      5_000 -> []
+    end
+  end
+
+  defp collect_more_posthog_events(event, acc) do
+    receive do
+      {:posthog, %{"event" => ^event} = body} -> collect_more_posthog_events(event, [body | acc])
+      {:posthog, _other} -> collect_more_posthog_events(event, acc)
     after
       500 -> Enum.reverse(acc)
     end

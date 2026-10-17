@@ -1388,7 +1388,7 @@ export interface OnboardingProfile {
 	use_cases?: string[];
 	survey_done_at?: string;
 	// Stamped by the in-app survey (answer or skip); survey_done_at alone also
-	// covers a web signup's heard-from answer on the terms screen.
+	// covers a web signup's answer on the "How did you hear" step.
 	use_cases_done_at?: string;
 	completed_at?: string;
 }
@@ -1754,8 +1754,12 @@ export interface Vault {
 
 // Vault hooks
 
-export function useVaults() {
-	return useQuery({ ...vaultsQuery, select: (data: VaultsPayload) => data.vaults });
+export function useVaults(opts?: { enabled?: boolean }) {
+	return useQuery({
+		...vaultsQuery,
+		select: (data: VaultsPayload) => data.vaults,
+		enabled: opts?.enabled ?? true,
+	});
 }
 
 /** Whether the backend stores per-vault access levels and `mcp:read`. A

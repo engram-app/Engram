@@ -11,6 +11,7 @@ interface AuthPanelProps {
 	scroll?: boolean;
 }
 
+// Each panel is one self-contained step (sign in, terms, a wizard question).
 const card = "rounded-2xl border border-border bg-background";
 
 // Never taller than the screen below the header: a step that does not fit
@@ -25,10 +26,12 @@ export default function AuthPanel({ children, className, scroll = true }: AuthPa
 					className={cn("flex min-h-0 flex-col", card)}
 					viewportClassName="h-auto min-h-0 flex-1 rounded-2xl"
 				>
-					<div className={cn("p-4 sm:p-6", className)}>{children}</div>
+					<article className={cn("p-4 sm:p-6", className)}>{children}</article>
 				</ScrollArea>
 			) : (
-				<div className={cn("flex min-h-0 flex-col p-4 sm:p-6", card, className)}>{children}</div>
+				<article className={cn("flex min-h-0 flex-col p-4 sm:p-6", card, className)}>
+					{children}
+				</article>
 			)}
 		</section>
 	);

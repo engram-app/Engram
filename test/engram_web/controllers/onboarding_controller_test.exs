@@ -99,6 +99,22 @@ defmodule EngramWeb.OnboardingControllerTest do
   end
 
   describe "POST /api/onboarding/accept-terms" do
+    # The Free stamp found no row to take (a purge racing the accept): the
+    # whole acceptance rolled back, and there is no user to accept for.
+    test "404 when the Free stamp finds no user row", %{conn: conn} do
+      Engram.FreeStampBlock.block!()
+
+      conn =
+        post(conn, "/api/onboarding/accept-terms", %{
+          "tos_version" => "2026-05-19",
+          "tos_hash" => "canonical",
+          "privacy_version" => "2026-05-19",
+          "privacy_hash" => "p"
+        })
+
+      assert %{"error" => "not_found"} = json_response(conn, 404)
+    end
+
     # Seed the canonical current versions these tests accept against. The outer
     # setup already seeded "2026-05-15"; adding "2026-05-19" rows makes that the
     # current version, with content hashes "canonical"/"p".
@@ -472,6 +488,23 @@ defmodule EngramWeb.OnboardingControllerTest do
       assert conn
              |> post(~p"/api/onboarding/accept_free_tier")
              |> response(401)
+    end
+
+    # The user row went away between auth and the stamp (a purge racing the
+    # click): nothing took the stamp. Driven through the controller directly,
+    # since the auth plug would 401 a missing user before reaching it.
+    test "404 when the user row is gone" do
+      ghost = build(:user, id: Ecto.UUID.generate(), free_tier_accepted_at: nil)
+
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Plug.Conn.assign(:current_user, ghost)
+        |> Phoenix.Controller.put_format("json")
+        |> EngramWeb.OnboardingController.call(
+          EngramWeb.OnboardingController.init(:accept_free_tier)
+        )
+
+      assert %{"error" => "not_found"} = json_response(conn, 404)
     end
   end
 
