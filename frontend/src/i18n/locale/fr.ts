@@ -238,9 +238,10 @@ export default {
 	"You're on this plan": "Tu es sur cet abonnement",
 	"Start free trial": "Démarre un essai gratuit",
 	Popular: "Populaire",
-	"2,000 notes searchable · 1 vault · 1 GB attachments":
-		"2 000 notes consultables · 1 coffre · 1 Go de pièces jointes",
-	"2,000 notes searchable": "2 000 notes consultables",
+	"3,000 notes · 20 AI searches a day · 1 vault":
+		"3 000 notes · 20 recherches IA par jour · 1 coffre",
+	"3,000 notes, all searchable": "3 000 notes, toutes consultables",
+	"20 AI searches a day": "20 recherches IA par jour",
 	"1 vault": "1 coffre",
 	"1 GB attachments": "1 Go de pièces jointes",
 	"2 devices": "2 appareils",
@@ -251,13 +252,6 @@ export default {
 	"Unlimited vaults": "Coffres illimités",
 	"50 GB attachments": "50 Go de pièces jointes",
 	"Cross-vault search": "Recherche entre les coffres",
-	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
-		{
-			one: "{count} de tes notes n'est pas consultable. Seules tes {indexed} notes les plus anciennes sont indexées, donc tes notes les plus récentes n'apparaîtront pas dans la recherche.",
-			many: "{count} de tes notes ne sont pas consultables. Seules tes {indexed} les plus anciennes sont indexées, donc tes notes les plus récentes n'apparaîtront pas dans les recherches.",
-			other:
-				"{count} de tes notes ne sont pas consultables. Seules tes {indexed} les plus anciennes sont indexées, donc tes notes les plus récentes n'apparaîtront pas dans les résultats de recherche.",
-		},
 	"Loading plan options…": "Chargement des options de plan…",
 	"Plan change confirmed.": "Le plan a bien été modifié.",
 	"Could not change plan. Please try again.": "Impossible de modifier le plan. Veuillez réessayer.",
@@ -733,7 +727,6 @@ export default {
 	"Searching…": "Recherche en cours…",
 	"Search failed: {message}": "Recherche impossible : {message}",
 	'No results for "{term}"': 'Aucun résultat pour "{term}"',
-	"Upgrade to search everything": "Passe à une version supérieure pour tout rechercher",
 	Recent: "Récents",
 	"Any time": "N'importe quand",
 	"7 days": "7 jours",
@@ -871,8 +864,6 @@ export default {
 		"L'accord actuel n'est pas disponible pour le moment.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"Nous ne pouvons pas afficher les dernières conditions pour le moment, donc l'inscription est temporairement suspendue pour éviter que tu acceptes quelque chose que tu ne peux pas lire. Merci de réessayer dans quelques instants.",
-	"How did you hear about Engram?": "Comment as-tu découvert Engram ?",
-	"Pick one to continue.": "Choisis-en un pour continuer.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"J'ai lu et j'accepte les conditions d'utilisation et la politique de confidentialité",
 	"I have read and agree to the agreement shown above and the privacy notice":
@@ -915,6 +906,10 @@ export default {
 	"Connect another MCP client": "Connecte un autre client MCP",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Un coffre contient tes notes. Tu peux le renommer ou en ajouter d'autres plus tard.",
+	"How did you hear about Engram?": "Comment as-tu découvert Engram ?",
+	"Pick one to continue.": "Choisis-en un pour continuer.",
+	"Couldn't save your answers, please try again.":
+		"Impossible de sauvegarder tes réponses, essaie à nouveau.",
 	"Choose your plan": "Choisis ton abonnement",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"Essai gratuit de 7 jours sur les abonnements payants. Carte requise, aucun prélèvement tant que l'essai n'est pas terminé.",
@@ -927,13 +922,6 @@ export default {
 	"your app": "ton application",
 	"Cancel connection": "Annuler la connexion",
 	"Connecting {app}": "Connexion à {app}",
-	"Which AI tools do you use?": "Quels outils d'IA utilises-tu ?",
-	"AI assistants": "Assistants IA",
-	"Coding tools": "Outils de développement",
-	"Another MCP client": "Un autre client MCP",
-	"Why {tool} can't be connected": "Pourquoi {tool} ne peut pas être connecté",
-	"Not a comprehensive list, pick {client} if yours isn't here.":
-		"Liste non exhaustive, choisis {client} si le tien n'est pas ici.",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Impossible de sauvegarder ton choix. Essaie de cliquer à nouveau. Si cela continue de ne pas fonctionner, actualise la page.",
 	"Let's get your notes in.": "Ajoutons tes notes.",
@@ -971,15 +959,20 @@ export default {
 		"Ouvre l'onglet {tab} du plugin, clique sur {action} et authentifie-toi avec ton compte Engram.",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"L'application Gemini ne peut pas ajouter de connecteurs MCP personnalisés. Antigravity, l'outil de codage de Google alimenté par Gemini, peut le faire. Choisis-le dans les outils de codage.",
+	"Another MCP client": "Un autre client MCP",
 	"I'm not connecting an AI tool yet": "Je ne connecte pas encore d'outil d'IA",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Utilise Engram dans l'application web. Tu peux connecter un outil plus tard dans les paramètres.",
 	"Help us shape Engram": "Aide-nous à améliorer Engram",
 	"Two quick questions. Both are optional.": "Deux questions rapides. Les deux sont facultatives.",
-	"Couldn't save your answers, please try again.":
-		"Impossible de sauvegarder tes réponses, essaie à nouveau.",
+	"Which AI tools do you use?": "Quels outils d'IA utilises-tu ?",
 	Skip: "Ignorer",
 	Save: "Enregistrer",
+	"AI assistants": "Assistants IA",
+	"Coding tools": "Outils de développement",
+	"Why {tool} can't be connected": "Pourquoi {tool} ne peut pas être connecté",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"Liste non exhaustive, choisis {client} si le tien n'est pas ici.",
 	Account: "Compte",
 	"Manage your profile, password, and account.": "Gère ton profil, ton mot de passe et ton compte.",
 	"Manage your profile, security, and active sessions.":

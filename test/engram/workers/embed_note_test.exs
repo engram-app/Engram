@@ -6,7 +6,6 @@ defmodule Engram.Workers.EmbedNoteTest do
   import Mox
 
   alias Engram.Accounts.User
-  alias Engram.Billing.OverrideCache
   alias Engram.Crypto
   alias Engram.Crypto.DekCache
   alias Engram.Notes
@@ -330,10 +329,23 @@ defmodule Engram.Workers.EmbedNoteTest do
       import Ecto.Query
 
       # Same row shape as above, but the lifetime embed budget is spent. The
-      # sparse index is already there, so this must neither call Voyage nor
-      # rebuild: it parks the note so ReconcileEmbeddings stops re-selecting it
-      # every tick.
+      # sparse index is already there (the chunk row below), so this must
+      # neither call Voyage nor rebuild: it parks the note so
+      # ReconcileEmbeddings stops re-selecting it every tick.
       Engram.UsageMeters.add_embed_tokens(note.user_id, 20_000_000)
+
+      Repo.insert!(
+        %Engram.Notes.Chunk{
+          note_id: note.id,
+          user_id: note.user_id,
+          vault_id: note.vault_id,
+          position: 0,
+          char_start: 0,
+          char_end: 10,
+          qdrant_point_id: Ecto.UUID.generate()
+        },
+        skip_tenant_check: true
+      )
 
       # Pinned to the current chunker version on purpose: this test is about
       # the BUDGET, not #1620. Left NULL it would match the stale-chunker
@@ -1006,28 +1018,79 @@ defmodule Engram.Workers.EmbedNoteTest do
     end
   end
 
-  describe "perform/1 — entitled but over the index cap" do
-    test "an over-cap note is not stamped as dense-indexed, so raising the cap re-opens it",
-         %{user: user, note: note} do
-      # Any user can be over an indexed_notes_cap — Free by default, anyone
-      # else via a per-user override. A dense pass alone must not stamp the
-      # dense hash: nothing was written, and ReconcileEmbeddings' backfill selects on
-      # `is_nil(dense_indexed_hash)`, so a stamp locks the note out forever.
-      Repo.insert!(%Engram.Billing.UserLimitOverride{
-        user_id: user.id,
-        key: "indexed_notes_cap",
-        value: %{"v" => 0},
-        reason: "test",
-        set_by: "test"
-      })
+  # Self-heal for the removed search-coverage cap (`indexed_notes_cap`, gone
+  # 2026-10-17). A note the cap skipped was stamped "indexed" with no chunk
+  # rows and no dense hash. Nothing may need an operator to fix those: the
+  # normal ReconcileEmbeddings tick must pick them up and EmbedNote must index
+  # them.
+  describe "perform/1 — notes the removed index cap skipped" do
+    # The exact row shape the old over-cap pass left behind.
+    defp stamp_as_cap_skipped(note) do
+      {:ok, _} =
+        Repo.with_tenant(note.user_id, fn ->
+          Repo.update_all(from(n in Note, where: n.id == ^note.id),
+            set: [
+              embed_hash: note.content_hash,
+              dense_indexed_hash: nil,
+              embed_model: nil,
+              chunker_version: Markdown.chunker_version(),
+              keyword_version: Engram.KeywordIndex.version()
+            ]
+          )
+        end)
 
-      OverrideCache.evict(user.id)
+      refute Repo.exists?(from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id),
+               skip_tenant_check: true
+             )
+    end
 
-      # No MockEmbedder expectation and no Qdrant stub: an over-cap note must
-      # reach neither.
+    test "a cap-skipped Free note is indexed by the normal reconcile path",
+         %{bypass: bypass, note: note} do
+      stamp_as_cap_skipped(note)
+
+      assert :ok = perform_job(Engram.Workers.ReconcileEmbeddings, %{})
+      assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts ->
+        {:ok, Enum.map(texts, fn _ -> List.duplicate(0.1, 3) end)}
+      end)
+
+      stub_qdrant(bypass)
+
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      assert %Note{dense_indexed_hash: nil} = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert Repo.exists?(from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id),
+               skip_tenant_check: true
+             )
+
+      indexed = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert indexed.dense_indexed_hash == indexed.content_hash
+    end
+
+    test "with the embed budget spent it still gets a keyword index, not a park",
+         %{bypass: bypass, user: user, note: note} do
+      prev = Application.get_env(:engram, :limits_enforced)
+      Application.put_env(:engram, :limits_enforced, true)
+
+      on_exit(fn ->
+        if is_nil(prev),
+          do: Application.delete_env(:engram, :limits_enforced),
+          else: Application.put_env(:engram, :limits_enforced, prev)
+      end)
+
+      stamp_as_cap_skipped(note)
+      Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
+      stub_qdrant(bypass)
+
+      # No MockEmbedder expectation: a Voyage call fails the test. Parking here
+      # (the budget-spent path for a sparse-indexed note) would leave this note
+      # with no index at all, since it never had one.
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      assert Repo.exists?(from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id),
+               skip_tenant_check: true
+             )
     end
   end
 

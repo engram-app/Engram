@@ -40,11 +40,10 @@ defmodule EngramWeb.BillingUsageTest do
   test "reports the Free caps and a real vault count", %{conn: conn} do
     body = usage(conn)
 
-    assert body["usage"]["notes"]["limit"] == 10_000
+    assert body["usage"]["notes"]["limit"] == 3_000
     assert body["usage"]["vaults"]["limit"] == 1
     # register_vault/3 in setup created exactly one.
     assert body["usage"]["vaults"]["used"] == 1
-    assert body["usage"]["indexed_notes"]["limit"] == 2_000
   end
 
   test "an uncapped limit reports null, not -1 or a sentinel", %{conn: conn, user: user} do
@@ -66,14 +65,14 @@ defmodule EngramWeb.BillingUsageTest do
     assert usage(conn)["usage"]["ai_searches"] == %{"used" => nil, "limit" => 20}
   end
 
-  test "indexed_notes never exceeds the indexed cap", %{conn: conn, user: user} do
-    UsageMeters.inc_notes_count(user.id, 3_000)
+  # Compat shim: plugins before the cap removal render a "Notes searchable"
+  # row from this entry. Uncapped (`limit: nil`) hides it there, and `used`
+  # mirrors stored notes because every stored note is searchable.
+  test "indexed_notes is uncapped and equals stored notes", %{conn: conn, user: user} do
+    UsageMeters.inc_notes_count(user.id, 2_500)
 
     body = usage(conn)
 
-    # notes_cap (10k) is NOT the binding limit on Free — indexed_notes_cap is.
-    assert body["usage"]["notes"]["used"] == 3_000
-    assert body["usage"]["indexed_notes"]["used"] == 2_000
-    assert body["usage"]["indexed_notes"]["limit"] == 2_000
+    assert body["usage"]["indexed_notes"] == %{"used" => 2_500, "limit" => nil}
   end
 end

@@ -640,11 +640,6 @@ export function applyVaultTreeEvents(
 		return true;
 	}
 	qc.setQueryData<VaultTree>(["vault-tree", vaultId], next);
-	// A note appeared or went away, which is what moves the user toward (or back
-	// under) their index cap — the same reason `invalidateVaultTree` stales it.
-	if (next.notes.length !== state.data.notes.length) {
-		qc.invalidateQueries({ queryKey: ["index_status"] });
-	}
 	return true;
 }
 
@@ -745,11 +740,6 @@ export function vaultTreeQueryOptions(vaultId: string | null | undefined) {
 export function invalidateVaultTree(qc: QueryClient, vaultId: string | null | undefined): void {
 	treeInvalidationGen++;
 	qc.invalidateQueries({ queryKey: ["vault-tree", vaultId] });
-	// Every caller of this is a note/folder create, delete, or move — exactly
-	// the mutations that change how many notes exist, and therefore whether the
-	// user is over their index cap. Riding the tree invalidation rather than
-	// hand-listing the mutations means a future write path cannot forget it.
-	qc.invalidateQueries({ queryKey: ["index_status"] });
 }
 
 /** One note's body. Shared by useNote and the first-view prefetch so both hit
@@ -1427,23 +1417,9 @@ export interface Capabilities {
 	limits: Record<string, number | boolean | null>;
 }
 
-// Live note counters. Deliberately NOT part of `capabilities`: that matrix is
-// ETS-cached for 24h server-side, and these move every time the user writes a
-// note. `indexed` is min(total, cap) — the cap is the contract; how far the
-// index queue has drained is an implementation detail we don't surface.
-//
-// Both are 0 for an uncapped tier: the server skips the whole-vault count
-// rather than pay for a number that tier never renders. Read them only as the
-// `indexed < total` question, never as "how many notes exist".
-export interface IndexStatus {
-	indexed: number;
-	total: number;
-}
-
 export interface BootstrapPayload {
 	onboarding: OnboardingStatus;
 	capabilities: Capabilities;
-	index_status: IndexStatus;
 	vaults: VaultsPayload;
 	// Present only when billing is enabled (SaaS); absent on self-host.
 	billing?: BillingStatus;
@@ -1457,30 +1433,6 @@ export function useCapabilities() {
 		// mounts before the gate's bootstrap seed lands.
 		queryFn: () => api.get<BootstrapPayload>("/bootstrap").then((b) => b.capabilities),
 		staleTime: Number.POSITIVE_INFINITY,
-	});
-}
-
-/**
- * Seeded by useAppBootstrap, then kept current on its own — see the staleTime
- * note below for why it cannot stay frozen at the seed.
- *
- * Unlike useCapabilities the fallback is not /bootstrap but /index-status,
- * which returns these two counters alone: a consumer that mounts before the
- * seed lands should not pay for the whole first-load payload to render one
- * advisory line ("Searching 2,000 of 4,312 notes").
- */
-export function useIndexStatus() {
-	return useQuery<IndexStatus>({
-		queryKey: ["index_status"],
-		queryFn: () => api.get<IndexStatus>("/index-status"),
-		// Seeded by /bootstrap, so the first render costs no request. But these
-		// counters move as the user writes and deletes notes, and they drive the
-		// only signal that stops a note past the cap returning nothing from
-		// reading as broken search — frozen at page load, a user who crossed the
-		// cap mid-session saw no banner until a full reload. A finite staleTime
-		// plus invalidation on create/delete keeps it honest; the refetch is
-		// cheap, and free for uncapped users (counts/1 skips the aggregate).
-		staleTime: 60_000,
 	});
 }
 
@@ -1499,7 +1451,6 @@ export function useAppBootstrap() {
 			const data = await api.get<BootstrapPayload>("/bootstrap");
 			qc.setQueryData(["onboarding", "status"], data.onboarding);
 			qc.setQueryData(["capabilities"], data.capabilities);
-			qc.setQueryData(["index_status"], data.index_status);
 			qc.setQueryData(["vaults"], data.vaults);
 			// Runs here, not in an effect: parent effects fire AFTER their
 			// children's, so a gate-level effect would land one render too late and

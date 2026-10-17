@@ -227,9 +227,10 @@ export default {
 	"You're on this plan": "Bạn đang sử dụng gói này",
 	"Start free trial": "Bắt đầu dùng thử miễn phí",
 	Popular: "Phổ biến",
-	"2,000 notes searchable · 1 vault · 1 GB attachments":
-		"2.000 ghi chú có thể tìm kiếm · 1 kho lưu trữ · 1 GB tệp đính kèm",
-	"2,000 notes searchable": "2.000 ghi chú có thể tìm kiếm",
+	"3,000 notes · 20 AI searches a day · 1 vault":
+		"3.000 ghi chú · 20 lượt tìm kiếm AI mỗi ngày · 1 kho lưu trữ",
+	"3,000 notes, all searchable": "3.000 ghi chú, tất cả đều có thể tìm kiếm",
+	"20 AI searches a day": "20 lượt tìm kiếm AI mỗi ngày",
 	"1 vault": "1 kho lưu trữ",
 	"1 GB attachments": "1 GB tệp đính kèm",
 	"2 devices": "2 thiết bị",
@@ -240,11 +241,6 @@ export default {
 	"Unlimited vaults": "Số lượng kho lưu trữ không giới hạn",
 	"50 GB attachments": "50 GB tệp đính kèm",
 	"Cross-vault search": "Tìm kiếm trên nhiều kho lưu trữ",
-	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
-		{
-			other:
-				"{count} trong số ghi chú của bạn không thể tìm kiếm được. Chỉ các ghi chú cũ nhất của bạn ({indexed}) được lập chỉ mục, vì vậy các ghi chú mới nhất sẽ không hiển thị trong kết quả tìm kiếm.",
-		},
 	"Loading plan options…": "Đang tải các tùy chọn gói...",
 	"Plan change confirmed.": "Thay đổi đã được xác nhận.",
 	"Could not change plan. Please try again.": "Không thể thay đổi gói. Vui lòng thử lại.",
@@ -696,7 +692,6 @@ export default {
 	"Searching…": "Đang tìm kiếm…",
 	"Search failed: {message}": "Tìm kiếm thất bại: {message}",
 	'No results for "{term}"': 'Không có kết quả cho "{term}"',
-	"Upgrade to search everything": "Nâng cấp để tìm kiếm mọi thứ",
 	Recent: "Gần đây",
 	"Any time": "Bất kỳ lúc nào",
 	"7 days": "7 ngày",
@@ -830,8 +825,6 @@ export default {
 		"Bản hợp đồng hiện tại không khả dụng ngay bây giờ.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"Chúng tôi không thể hiển thị các điều khoản mới nhất vào lúc này, vì vậy việc đăng ký bị tạm dừng thay vì yêu cầu bạn đồng ý với điều gì đó mà bạn không thể đọc. Vui lòng thử lại sau.",
-	"How did you hear about Engram?": "Bạn biết về Engram như thế nào?",
-	"Pick one to continue.": "Chọn một tùy chọn để tiếp tục.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"Tôi đã đọc và đồng ý với Điều khoản dịch vụ và Chính sách quyền riêng tư",
 	"I have read and agree to the agreement shown above and the privacy notice":
@@ -873,6 +866,10 @@ export default {
 	"Connect another MCP client": "Kết nối một ứng dụng MCP khác",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Một kho lưu trữ chứa các ghi chú của bạn. Bạn có thể đổi tên hoặc thêm nhiều hơn sau.",
+	"How did you hear about Engram?": "Bạn biết về Engram như thế nào?",
+	"Pick one to continue.": "Chọn một tùy chọn để tiếp tục.",
+	"Couldn't save your answers, please try again.":
+		"Không thể lưu lại câu trả lời của bạn, vui lòng thử lại.",
 	"Choose your plan": "Chọn gói của bạn",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"Thử nghiệm miễn phí 7 ngày cho các gói trả phí. Cần thẻ, không tính phí cho đến khi hết hạn.",
@@ -884,13 +881,6 @@ export default {
 	"your app": "ứng dụng của bạn",
 	"Cancel connection": "Hủy kết nối",
 	"Connecting {app}": "Kết nối {app}",
-	"Which AI tools do you use?": "Bạn sử dụng những công cụ AI nào?",
-	"AI assistants": "Trợ lý AI",
-	"Coding tools": "Công cụ lập trình",
-	"Another MCP client": "Một ứng dụng MCP khác",
-	"Why {tool} can't be connected": "Tại sao {tool} không thể kết nối",
-	"Not a comprehensive list, pick {client} if yours isn't here.":
-		"Danh sách này chưa đầy đủ, chọn {client} nếu công cụ của bạn không có trong đây.",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Không thể lưu lựa chọn của bạn. Hãy thử nhấp lại — nếu vẫn không được, hãy làm mới trang.",
 	"Let's get your notes in.": "Chúng ta hãy đưa ghi chú của bạn vào.",
@@ -929,15 +919,20 @@ export default {
 		"Mở tab {tab} của plugin, nhấp vào {action} và xác thực bằng tài khoản Engram của bạn.",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"Ứng dụng Gemini không thể thêm các kết nối MCP tùy chỉnh. Antigravity, công cụ lập trình của Google sử dụng Gemini, có thể. Chọn nó trong phần Công cụ lập trình.",
+	"Another MCP client": "Một ứng dụng MCP khác",
 	"I'm not connecting an AI tool yet": "Tôi chưa kết nối bất kỳ công cụ AI nào",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Sử dụng Engram trên ứng dụng web. Bạn có thể kết nối một công cụ sau này trong phần Cài đặt.",
 	"Help us shape Engram": "Giúp chúng tôi phát triển Engram",
 	"Two quick questions. Both are optional.": "Hai câu hỏi nhanh. Cả hai đều tùy chọn.",
-	"Couldn't save your answers, please try again.":
-		"Không thể lưu lại câu trả lời của bạn, vui lòng thử lại.",
+	"Which AI tools do you use?": "Bạn sử dụng những công cụ AI nào?",
 	Skip: "Bỏ qua",
 	Save: "Lưu",
+	"AI assistants": "Trợ lý AI",
+	"Coding tools": "Công cụ lập trình",
+	"Why {tool} can't be connected": "Tại sao {tool} không thể kết nối",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"Danh sách này chưa đầy đủ, chọn {client} nếu công cụ của bạn không có trong đây.",
 	Account: "Tài khoản",
 	"Manage your profile, password, and account.": "Quản lý hồ sơ mật khẩu và tài khoản của bạn.",
 	"Manage your profile, security, and active sessions.":

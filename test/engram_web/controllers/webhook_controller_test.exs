@@ -402,13 +402,9 @@ defmodule EngramWeb.WebhookControllerTest do
       assert_received {[:engram, :tier_downgraded], ^ref, _meas,
                        %{from: :pro, to: :free, user_id: _}}
 
-      # The over-cap sweep is enqueued under the LEGACY kind for one release:
-      # during a rolling deploy an old node may pick the job up, and it only
-      # knows "revoke_dense" (new nodes map that to the over-cap eviction).
-      assert_enqueued(
-        worker: Engram.Workers.IndexCapMaintenance,
-        args: %{"user_id" => user.id, "kind" => "revoke_dense"}
-      )
+      # No index-cap sweep any more: Free has no search-coverage cap, so a
+      # downgrade leaves every note searchable.
+      refute_enqueued(worker: Engram.Workers.IndexCapMaintenance)
     end
 
     test "subscription.canceled preserves free_tier_accepted_at when already set",

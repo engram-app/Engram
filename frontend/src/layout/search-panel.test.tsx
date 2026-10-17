@@ -49,7 +49,6 @@ const useSearchSpy = vi.fn((q: string, _filters?: unknown) => ({
 
 vi.mock("../api/queries", () => ({
 	useSearch: (q: string, filters: unknown) => useSearchSpy(q, filters),
-	useIndexStatus: () => ({ data: indexStatusMock() }),
 	// Folder.name is the FULL path, which is why the picker can use it directly.
 	useFolders: () => ({ data: [{ id: "f1", parent_id: null, name: "Archive", count: 2 }] }),
 	useTags: () => ({ data: ["project", "reading"] }),
@@ -59,11 +58,6 @@ vi.mock("../api/queries", () => ({
 // ResultRow reads the active vault slug to build note hrefs. Default to null
 // (the fallback/legacy shape) so existing behavior is unaffected; the one
 // test below overrides it to check the vault-scoped shape.
-// Cache-only in real use. `undefined` = bootstrap has not seeded yet, which is
-// the state where the index-cap hint must NOT render.
-const indexStatusMock = vi.hoisted(() =>
-	vi.fn<() => { indexed: number; total: number } | undefined>(() => undefined),
-);
 
 const activeSlugMock = vi.fn<() => string | null>(() => null);
 vi.mock("../api/vault-slug", () => ({ useActiveVaultSlug: () => activeSlugMock() }));
@@ -644,45 +638,6 @@ describe("SearchPanel", () => {
 			fireEvent.click(screen.getByRole("button", { name: /^filters/iu }));
 			openField("Folder");
 			expect(document.querySelector('[data-slot="combobox-content"]')).not.toBeNull();
-		});
-	});
-
-	describe("indexed-note cap hint", () => {
-		afterEach(() => indexStatusMock.mockReturnValue(undefined));
-
-		it("tells the user how many of their newest notes are not searchable", async () => {
-			indexStatusMock.mockReturnValue({ indexed: 2000, total: 4312 });
-			useSearchSpy.mockReturnValue({ data: [], isLoading: false, error: null });
-			renderPanel();
-
-			fireEvent.change(screen.getByPlaceholderText(/search your notes/iu), {
-				target: { value: "hi" },
-			});
-
-			// Without this the only signal is an empty result list, which reads as
-			// "search is broken" rather than "this note is not indexed". IndexCap
-			// keeps the OLDEST notes, so the copy must name the newest as missing.
-			expect(
-				await screen.findByText(
-					/2,312 of your notes aren't searchable\. Only your oldest 2,000 are indexed, so your newest notes won't show up in search\./u,
-				),
-			).toBeInTheDocument();
-			expect(
-				screen.getByRole("link", { name: /upgrade to search everything/iu }),
-			).toBeInTheDocument();
-		});
-
-		it("stays silent when every note is indexed", async () => {
-			indexStatusMock.mockReturnValue({ indexed: 812, total: 812 });
-			useSearchSpy.mockReturnValue({ data: [], isLoading: false, error: null });
-			renderPanel();
-
-			fireEvent.change(screen.getByPlaceholderText(/search your notes/iu), {
-				target: { value: "hi" },
-			});
-
-			expect(await screen.findByText(/No results for/u)).toBeInTheDocument();
-			expect(screen.queryByText(/aren't searchable/u)).not.toBeInTheDocument();
 		});
 	});
 });

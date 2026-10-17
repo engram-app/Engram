@@ -224,9 +224,10 @@ export default {
 	"You're on this plan": "현재 이 요금제를 사용 중입니다",
 	"Start free trial": "무료 체험 시작",
 	Popular: "인기 요금제",
-	"2,000 notes searchable · 1 vault · 1 GB attachments":
-		"2,000개 노트 검색 가능 · 1개 보관함 · 1GB 첨부 파일",
-	"2,000 notes searchable": "2,000개 노트 검색 가능",
+	"3,000 notes · 20 AI searches a day · 1 vault":
+		"3,000개의 노트 · 하루 20회 AI 검색 · 1개의 보관함",
+	"3,000 notes, all searchable": "3,000개의 노트, 모두 검색 가능",
+	"20 AI searches a day": "하루 20회 AI 검색",
 	"1 vault": "1개의 보관함",
 	"1 GB attachments": "1GB 첨부 파일",
 	"2 devices": "2개의 기기",
@@ -237,11 +238,6 @@ export default {
 	"Unlimited vaults": "보관함 수 제한 없음",
 	"50 GB attachments": "50GB 첨부 파일",
 	"Cross-vault search": "보관함 간 검색",
-	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
-		{
-			other:
-				"귀하의 노트 중 {count}개는 검색할 수 없습니다. 가장 오래된 {indexed} 노트만 인덱싱되므로, 최근 작성한 노트는 검색 결과에 나타나지 않습니다.",
-		},
 	"Loading plan options…": "요금제 옵션을 불러오는 중…",
 	"Plan change confirmed.": "계획 변경이 확인되었습니다.",
 	"Could not change plan. Please try again.": "계획 변경에 실패했습니다. 다시 시도해주세요.",
@@ -684,7 +680,6 @@ export default {
 	"Searching…": "검색 중…",
 	"Search failed: {message}": "검색 실패: {message}",
 	'No results for "{term}"': '"{term}"에 대한 검색 결과 없음',
-	"Upgrade to search everything": "모든 내용을 검색하려면 업그레이드하세요",
 	Recent: "최근",
 	"Any time": "언제든지",
 	"7 days": "7일",
@@ -817,8 +812,6 @@ export default {
 	"The current agreement isn’t available right now.": "현재 약관은 이용 불가합니다.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"최신 약관을 표시할 수 없으므로, 읽을 수 없는 내용에 동의하도록 안내하는 대신 가입을 잠시 중단합니다. 잠시 후 다시 시도해주세요.",
-	"How did you hear about Engram?": "Engram에 대해 어떻게 알게 되셨나요?",
-	"Pick one to continue.": "계속하려면 하나를 선택하세요.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"이용 약관 및 개인정보 처리방침을 읽고 동의합니다",
 	"I have read and agree to the agreement shown above and the privacy notice":
@@ -860,6 +853,9 @@ export default {
 	"Connect another MCP client": "다른 MCP 클라이언트 연결",
 	"A vault holds your notes. You can rename it or add more later.":
 		"보관함은 노트를 저장하는 곳입니다. 나중에 이름을 변경하거나 추가할 수 있습니다.",
+	"How did you hear about Engram?": "Engram에 대해 어떻게 알게 되셨나요?",
+	"Pick one to continue.": "계속하려면 하나를 선택하세요.",
+	"Couldn't save your answers, please try again.": "답변을 저장하지 못했습니다. 다시 시도해주세요.",
 	"Choose your plan": "요금제를 선택하세요",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"유료 요금제의 경우 7일 무료 체험 제공. 카드 정보 필요하며, 종료 시까지 요금이 부과되지 않습니다.",
@@ -871,13 +867,6 @@ export default {
 	"your app": "앱",
 	"Cancel connection": "연결 해제",
 	"Connecting {app}": "{app} 연결 중",
-	"Which AI tools do you use?": "어떤 AI 도구를 사용하시나요?",
-	"AI assistants": "AI 어시스턴트",
-	"Coding tools": "코딩 도구",
-	"Another MCP client": "다른 MCP 클라이언트",
-	"Why {tool} can't be connected": "{tool} 연결이 안 되는 이유",
-	"Not a comprehensive list, pick {client} if yours isn't here.":
-		"완전한 목록은 아니지만, 목록에 없으면 {client}을(를) 선택하세요.",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"선택을 저장하지 못했습니다. 다시 클릭해 보세요. 계속 실패하면 페이지를 새로 고쳐 주세요.",
 	"Let's get your notes in.": "노트를 가져오겠습니다.",
@@ -915,14 +904,20 @@ export default {
 		"플러그인의 {tab} 탭을 열고 {action}을 클릭한 다음 Engram 계정으로 인증하세요.",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"Gemini 앱은 사용자 정의 MCP 연결을 지원하지 않습니다. Google의 Gemini 기반 코딩 도구인 Antigravity는 지원합니다. 코딩 도구에서 선택하세요.",
+	"Another MCP client": "다른 MCP 클라이언트",
 	"I'm not connecting an AI tool yet": "아직 AI 도구를 연결하지 않았습니다",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"웹 앱에서 Engram을 사용하세요. 설정에서 나중에 도구를 연결할 수 있습니다.",
 	"Help us shape Engram": "Engram 개선에 참여해주세요",
 	"Two quick questions. Both are optional.": "간단한 질문 두 가지입니다. 선택 사항입니다.",
-	"Couldn't save your answers, please try again.": "답변을 저장하지 못했습니다. 다시 시도해주세요.",
+	"Which AI tools do you use?": "어떤 AI 도구를 사용하시나요?",
 	Skip: "건너뛰기",
 	Save: "저장",
+	"AI assistants": "AI 어시스턴트",
+	"Coding tools": "코딩 도구",
+	"Why {tool} can't be connected": "{tool} 연결이 안 되는 이유",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"완전한 목록은 아니지만, 목록에 없으면 {client}을(를) 선택하세요.",
 	Account: "계정",
 	"Manage your profile, password, and account.": "프로필, 비밀번호, 계정을 관리하세요.",
 	"Manage your profile, security, and active sessions.": "프로필, 보안 및 활성 세션을 관리하세요.",

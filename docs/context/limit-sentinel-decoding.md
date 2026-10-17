@@ -68,12 +68,10 @@ defensive `not is_integer(limit)` clause downstream was flagged `neg_guard_fail`
 — the spec was lying and the compiler said so. If you widen what `cap/2` can
 return, that warning comes back.
 
-Two modules keep their own resolution on purpose:
-`Engram.Indexing.IndexCap.resolve_cap/1` returns `{:cap, n} | :unlimited` and
-logs a warning before falling back to the tier default (fails CLOSED on
-garbage, because the cap bounds Qdrant spend), and
+One module keeps its own resolution on purpose:
 `Billing.inactivity_warnings_exempt?/1` is `!= false` rather than `granted?`
-because refusing THAT grant starts a deletion clock.
+because refusing THAT grant starts a deletion clock. (`IndexCap.resolve_cap/1`
+was the other, removed with the index cap on 2026-10-17.)
 
 ## Adding a limit key
 

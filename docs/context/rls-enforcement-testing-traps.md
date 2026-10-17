@@ -48,7 +48,8 @@ fail in three different ways:
 
 Consequence: a test shaped as "assert this raises" is **vacuous** against
 `update_all`/`delete_all`. There is no exception to catch. From
-`index_cap_rls_test.exs`:
+`index_cap_rls_test.exs` (deleted with the index cap on 2026-10-17; the
+lesson stands, read it in git history):
 
 ```elixir
   # Only INSERT raises `42501` under a policy used as both USING and WITH
@@ -385,7 +386,7 @@ whole thing.
 
 - `test/engram/links/links_rls_test.exs` — fullest moduledoc, both harnesses
 - `test/engram/indexing/commit_index_rls_test.exs`: trap 2
-- `test/engram/indexing/index_cap_rls_test.exs` — filtered-write assertions
+- `test/engram/indexing/index_cap_rls_test.exs` (deleted 2026-10-17, in git history) — filtered-write assertions
 - `test/integration/rls_uuid_binding_test.exs` — where the role-drop technique came from
 - `lib/engram/repo.ex` — `with_tenant/2`, `prepare_query/3`, `@tenant_tables`
 - `lib/engram/release.ex` — `engram_app` role creation

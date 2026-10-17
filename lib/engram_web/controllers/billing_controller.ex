@@ -63,11 +63,11 @@ defmodule EngramWeb.BillingController do
             meters.lifetime_embed_tokens,
             Billing.cap(user, :lifetime_embed_token_cap)
           ),
-        indexed_notes:
-          used_limit(
-            min(meters.notes, indexed_cap(user)),
-            Billing.cap(user, :indexed_notes_cap)
-          ),
+        # COMPAT SHIM, remove in a later contract PR. Plugins from before the
+        # search-coverage cap removal render a "Notes searchable" row from
+        # this; `limit: nil` (uncapped) hides it there. Every stored note is
+        # searchable, so `used` is the stored count.
+        indexed_notes: %{used: meters.notes, limit: nil},
         # `used` is nil on purpose. The budget lives in the cluster-synced ETS
         # counter (`EngramWeb.RateLimiter`), which is a Hammer bucket with no
         # read-without-spend API — asking how much is left must not consume any.
@@ -82,19 +82,6 @@ defmodule EngramWeb.BillingController do
   end
 
   defp used_limit(used, limit), do: %{used: used, limit: cap_json(limit)}
-
-  # `indexed_notes_cap` binds FIRST on Free (2,000 against a 10,000
-  # `notes_cap`), and it fails silently: the notes sync fine, they just stop
-  # being searchable. A user reading only `notes: {used: 3000, limit: 10000}`
-  # concludes they are fine while a third of their vault is invisible to
-  # search — exactly the "you only learn the number when something refuses
-  # you" gap this endpoint exists to close.
-  defp indexed_cap(user) do
-    case Billing.cap(user, :indexed_notes_cap) do
-      n when is_integer(n) and n >= 0 -> n
-      _ -> :infinity
-    end
-  end
 
   # Strict match, deliberately. `storage_usage/1` only fails on a DB error, and
   # reporting `used: 0` there would tell the user they have their whole quota

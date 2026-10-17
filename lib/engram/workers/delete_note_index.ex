@@ -17,7 +17,6 @@ defmodule Engram.Workers.DeleteNoteIndex do
   alias Engram.Notes.Enqueue
   alias Engram.Notes.Note
   alias Engram.Repo
-  alias Engram.Workers.IndexCapMaintenance
   alias Engram.Workers.RebindNoteLinks
 
   @impl Oban.Worker
@@ -94,16 +93,6 @@ defmodule Engram.Workers.DeleteNoteIndex do
     # edge-flip above already ran regardless. `basename_hmac` (base64) —
     # never plaintext, same T3.2/H3 invariant as `path_hmac` above.
     _ = maybe_enqueue_rebind(user_id, vault_id, Map.get(args, "basename_hmac"))
-
-    # Deleting a note frees an indexed-note slot. The note that inherits it
-    # already carries a stamped embed_hash from the pass that skipped it, so
-    # nothing would ever re-index it. No-op for uncapped tiers.
-    #
-    # ENQUEUED, not inline. The sweep is whole-vault, and this worker runs
-    # once per DELETED note — a 5,000-note folder delete ran it 5,000 times
-    # over the same rows. The job is unique per (user, kind) over a 2-minute
-    # window, so a delete burst collapses to one sweep after it settles.
-    _ = IndexCapMaintenance.enqueue(user_id, :backfill_slots)
 
     Indexing.delete_note_index(note)
   end

@@ -112,7 +112,12 @@ defmodule Engram.Workers.EmbedNote do
                 {:discard, :user_deleted}
 
               user ->
-                if embed_budget_left?(user) do
+                # A note with no chunk rows has NO index to keep, so parking it
+                # would leave it unsearchable: the shape the removed
+                # search-coverage cap left behind. Run it; the pass indexes it
+                # sparse-only and parks it itself. The chunk check is only paid
+                # on the budget-spent path.
+                if embed_budget_left?(user) or not has_chunks?(note) do
                   run_and_stamp(note, old_path_hmac_b64, job, user)
                 else
                   park_over_budget(note)
@@ -324,6 +329,17 @@ defmodule Engram.Workers.EmbedNote do
 
   defp budget_park_until,
     do: DateTime.add(DateTime.utc_now(), @budget_park_seconds, :second)
+
+  # Tenant-scoped: `chunks` is under FORCE RLS, and a tenant-less read sees
+  # zero rows, which would run (not park) every budget-spent note.
+  defp has_chunks?(%Note{} = note) do
+    {:ok, exists?} =
+      Repo.with_tenant(note.user_id, fn ->
+        Repo.exists?(from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id))
+      end)
+
+    exists?
+  end
 
   # Tenant-scoped for the same filtered-UPDATE reason as `maybe_mark_poison/3`.
   defp park_over_budget(%Note{} = note) do
@@ -549,11 +565,10 @@ defmodule Engram.Workers.EmbedNote do
     #
     # ONE rule: the dense hash is set only when dense vectors were actually
     # written. A dense pass alone is not enough — `chunk_count == 0` is
-    # index_note/2's no-chunks outcome (empty note, or outside the user's
-    # indexed-note cap), and in both cases the pass just PURGED this note's
+    # index_note/2's no-chunks outcome, and the pass just PURGED this note's
     # points. Stamping it anyway makes the column assert a false fact, and
     # ReconcileEmbeddings' backfill selects on `is_nil(dense_indexed_hash)`,
-    # so the note would be skipped forever once the cap is raised.
+    # so the note would be skipped forever.
     # `chunker_version` is stamped on BOTH paths, including the sparse-only /
     # no-chunks one. It records which chunker last ran, not whether vectors were
     # written, and leaving it NULL after a successful pass would re-select the

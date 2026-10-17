@@ -22,7 +22,6 @@ import {
 	useBillingHistory,
 	useBillingStatus,
 	useBillingSubscriptionDetail,
-	useIndexStatus,
 	useMe,
 } from "../api/queries";
 import { useStableT, useT } from "../i18n/locale-provider";
@@ -277,7 +276,6 @@ export default function BillingPage({
 	// checkout) when the UI language changes, so its eventCallback reads t here.
 	const tRef = useRef(t);
 	tRef.current = t;
-	const { data: indexStatus } = useIndexStatus();
 	const [paddle, setPaddle] = useState<Paddle>();
 	// Ref mirror of `paddle` so the eventCallback (captured pre-instance) can
 	// call Checkout.close() on push activation or cooldown without re-init.
@@ -689,7 +687,7 @@ export default function BillingPage({
 			)}
 
 			{!hideHeading && (
-				<CurrentPlanCard billing={billing} indexStatus={indexStatus}>
+				<CurrentPlanCard billing={billing}>
 					{billing.subscription && panel !== "change" && (
 						<div className="flex flex-wrap justify-end gap-3">
 							<Button onClick={() => setPanel("change")}>{t("Change plan")}</Button>

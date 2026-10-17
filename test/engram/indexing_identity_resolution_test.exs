@@ -86,7 +86,8 @@ defmodule Engram.IndexingIdentityResolutionTest do
   end
 
   # The `users` budget above says nothing about `subscriptions`, and that is
-  # where this path actually leaked: `IndexCap.within_cap?/2` (#1486) and
+  # where this path actually leaked: `IndexCap.within_cap?/2` (#1486, since
+  # removed) and
   # `SearchProfile.resolve/1` each resolve the tier, and on a bare `get_user!/1`
   # struct each costs its own round trip. EmbedNote never hit it because it
   # threads a `get_user_with_subscription/1` user down; the two-arg form,

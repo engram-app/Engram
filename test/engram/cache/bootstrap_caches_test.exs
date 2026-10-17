@@ -2,7 +2,6 @@ defmodule Engram.Cache.BootstrapCachesTest do
   # Not async: the caches and the query recorder's telemetry handler are global.
   use Engram.DataCase, async: false
 
-  alias Engram.Indexing.IndexCap
   alias Engram.Notes
   alias Engram.Onboarding
   alias Engram.QueryRecorder
@@ -12,7 +11,6 @@ defmodule Engram.Cache.BootstrapCachesTest do
     Engram.DataCase.clear_request_caches()
     user = insert(:user)
     insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
-    insert(:user_limit_override, user: user, key: "indexed_notes_cap", value: %{"v" => 100})
     {:ok, user} = Engram.Crypto.ensure_user_dek(user)
     {:ok, vault, _} = Vaults.register_vault(user, "Counts", Ecto.UUID.generate())
     %{user: user, vault: vault}
@@ -58,27 +56,6 @@ defmodule Engram.Cache.BootstrapCachesTest do
 
       {:ok, _, _} = Vaults.register_vault(user, "Second", Ecto.UUID.generate())
       assert Vaults.count_for(user) == 2
-    end
-  end
-
-  describe "live note count (IndexCap.counts)" do
-    test "cached; a create and a delete evict it on the writing node", %{user: user, vault: v} do
-      assert IndexCap.counts(user).total == 0
-      assert db_queries(fn -> IndexCap.counts(user) end) == []
-
-      create!(user, v, "A.md")
-      assert IndexCap.counts(user).total == 1
-
-      :ok = Notes.delete_note(user, v, "A.md")
-      assert IndexCap.counts(user).total == 0
-    end
-
-    test "a note_counts_changed notification evicts it (raw writers)", %{user: user, vault: v} do
-      assert IndexCap.counts(user).total == 0
-      insert(:note, user: user, vault: v)
-      assert IndexCap.counts(user).total == 0
-      notify("note_counts_changed", user.id)
-      assert IndexCap.counts(user).total == 1
     end
   end
 

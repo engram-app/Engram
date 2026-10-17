@@ -440,9 +440,7 @@ describe("OnboardBillingPage — Free tier CTA", () => {
 
 		const btn = await screen.findByRole("button", { name: /continue with free/iu });
 		expect(btn).toBeInTheDocument();
-		expect(
-			screen.getByText(/2,000 notes searchable · 1 vault · 1 GB attachments/iu),
-		).toBeInTheDocument();
+		expect(screen.getByText(/3,000 notes · 20 AI searches a day · 1 vault/iu)).toBeInTheDocument();
 	});
 
 	it("calls POST /api/onboarding/accept_free_tier and navigates to /onboard/vault", async () => {

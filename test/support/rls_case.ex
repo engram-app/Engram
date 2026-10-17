@@ -67,7 +67,8 @@ defmodule Engram.RlsCase do
   Deliberately not provided. A control asserts the dropped role sees ZERO rows,
   and without one a green file is ambiguous between "correctly scoped" and "the
   role drop never engaged" — but the *right* control is per-file. The one in
-  `index_cap_rls_test.exs` first makes a superuser call to reproduce the
+  `index_cap_rls_test.exs` (deleted with the index cap, in git history) first
+  made a superuser call to reproduce the
   tenant-leak condition the clear exists to undo; a templated control would
   quietly drop that step and weaken every file that adopted it.
 

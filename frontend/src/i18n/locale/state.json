@@ -4,7 +4,6 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
-			"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.": "{count} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -66,7 +65,6 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
-			"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.": "{count} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -128,7 +126,6 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
-			"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.": "{count} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -190,7 +187,6 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
-			"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.": "{count} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -249,10 +245,11 @@
 	},
 	"ja": {
 		"translator": "202d8f78",
-		"failed": {},
+		"failed": {
+			"3,000 notes · 20 AI searches a day · 1 vault": "2026-10-17"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
-			"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.": "{count} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -314,7 +311,6 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
-			"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.": "{count} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -376,7 +372,6 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
-			"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.": "{count} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -438,7 +433,6 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
-			"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.": "{count} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -500,7 +494,6 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
-			"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.": "{count} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -562,7 +555,6 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
-			"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.": "{count} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -624,7 +616,6 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
-			"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.": "{count} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -686,7 +677,6 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
-			"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.": "{count} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",

@@ -27,9 +27,12 @@ defmodule Engram.BillingPlanStateUnlimitedTest do
   end
 
   describe "plan_state/1 numeric limits" do
-    test "free carries the real indexed-note cap" do
+    # Compat shim: plugins before the cap removal parse this field. nil means
+    # uncapped, which is now true on every tier.
+    test "indexed_notes_cap is nil (uncapped) on Free" do
       state = Billing.plan_state(insert(:user))
-      assert state.indexed_notes_cap == 2_000
+      assert Map.has_key?(state, :indexed_notes_cap)
+      assert state.indexed_notes_cap == nil
     end
 
     test "a negative override serializes to nil, not to a literal negative cap" do
@@ -37,7 +40,7 @@ defmodule Engram.BillingPlanStateUnlimitedTest do
 
       Engram.Repo.insert!(%Engram.Billing.UserLimitOverride{
         user_id: user.id,
-        key: "indexed_notes_cap",
+        key: "attachment_bytes_cap",
         value: %{"v" => -1},
         reason: "test",
         set_by: "test"
@@ -47,10 +50,10 @@ defmodule Engram.BillingPlanStateUnlimitedTest do
 
       # -1 is the "unlimited" sentinel. Passing it through would make every
       # client responsible for knowing that, and a client that does not invert
-      # the limit: "-1 notes indexed" reads as nothing searchable on the MOST
-      # permissive setting. Same class as attachments_text_only blocking
+      # the limit: "-1 bytes" reads as nothing allowed on the MOST permissive
+      # setting. Same class as attachments_text_only blocking
       # self-host attachments.
-      assert Billing.plan_state(user).indexed_notes_cap == nil
+      assert Billing.plan_state(user).attachment_bytes_cap == nil
     end
   end
 end

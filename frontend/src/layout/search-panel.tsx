@@ -1,6 +1,6 @@
 import { SlidersHorizontal, X } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { Link, useLocation } from "react-router";
+import { Link } from "react-router";
 import { SearchField } from "@/components/search-field";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,15 +26,12 @@ import {
 	type SearchFilters,
 	type SearchResult,
 	useFolders,
-	useIndexStatus,
 	useSearch,
 	useTags,
 	useTypes,
 } from "../api/queries";
 import { useActiveVaultSlug } from "../api/vault-slug";
-import { unsearchableNotesNotice } from "../billing/plan-cards";
 import { noteHref } from "../routes";
-import { settingsTo } from "../settings/settings-hash";
 import CollapseSidebarButton from "./collapse-sidebar-button";
 import { useRailView } from "./rail-view-context";
 import { pushRecent, readRecent } from "./recent-searches";
@@ -185,9 +182,8 @@ function SearchPanel({
 	hideHeader?: boolean;
 	onNavigate?: () => void;
 }) {
-	const { t, tn, renderedLocale } = useT();
+	const { t, tn } = useT();
 	const { setView } = useRailView();
-	const location = useLocation();
 	const { data: folders } = useFolders();
 	const { data: allTags } = useTags();
 	const { data: allTypes } = useTypes();
@@ -232,13 +228,6 @@ function SearchPanel({
 	// search (Voyage embed + Qdrant) per character typed.
 	const deferred = useDebouncedValue(input.trim(), 300);
 	const { data: results, isLoading, error } = useSearch(deferred, filters);
-	const { data: indexStatus } = useIndexStatus();
-	// A capped user's un-indexed notes are simply absent from results. Without
-	// this the only signal is an empty result list, which reads as "search is
-	// broken" rather than "this note is not indexed yet".
-	const unsearchable = indexStatus
-		? unsearchableNotesNotice(indexStatus, tn, renderedLocale)
-		: null;
 	const [recent, setRecent] = useState<string[]>(() => readRecent());
 
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -614,21 +603,6 @@ function SearchPanel({
 						{t("No results for \u0022{term}\u0022", { term: deferred })}
 					</p>
 				)}
-				{unsearchable && deferred && !isLoading ? (
-					<p className="px-3 pb-2 text-muted-foreground text-xs">
-						{`${unsearchable} `}
-						<Link
-							className="underline underline-offset-2"
-							to={settingsTo("billing", location.search)}
-							// settingsTo changes only the hash, and mobile-layout closes the
-							// drawer on a PATHNAME change, so without this the billing overlay
-							// opens behind a still-open sheet. ResultRow already does this.
-							onClick={onNavigate}
-						>
-							{t("Upgrade to search everything")}
-						</Link>
-					</p>
-				) : null}
 				{results && results.length > 0 && (
 					<>
 						<p className="px-3 pt-2 text-muted-foreground text-xs" aria-live="polite">

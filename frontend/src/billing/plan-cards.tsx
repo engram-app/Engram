@@ -1,13 +1,11 @@
 import { ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
-import type { Locale } from "@/i18n/locales";
 import { msg } from "@/i18n/msg";
-import type { Tn, Translate } from "@/i18n/translate";
+import type { Translate } from "@/i18n/translate";
 import type { MsgKey } from "@/i18n/ui-text";
-import { intlLocale } from "@/lib/intl-locale";
 import { cn } from "@/lib/utils";
-import type { BillingCadence, IndexStatus } from "../api/queries";
+import type { BillingCadence } from "../api/queries";
 
 // Feature checklist shared by the full card and the accordion row. `className`
 // merges extra layout (e.g. `flex-1` on the full card).
@@ -75,48 +73,18 @@ export function formatPlanPrice(
 export const FREE_TIER = {
 	name: msg("Free"),
 	price: "$0",
-	// "10k notes" was `notes_cap`, which never binds. The limit that actually
-	// binds on Free is `indexed_notes_cap: 2_000`, and per the v3.1 positioning
-	// that coverage number IS the upgrade lever, so it is the one we state.
-	// Do not say "2,000 most recent": `IndexCap` orders `asc: created_at`, so
-	// the indexed set is the OLDEST 2,000 and it is the user's newest notes
-	// that fall outside.
-	summary: msg("2,000 notes searchable · 1 vault · 1 GB attachments"),
+	// Decision 2026-10-17: Free stores 3,000 notes and every one is
+	// searchable. The upgrade levers are the daily AI search limit and more
+	// vaults, so those are what the summary states.
+	summary: msg("3,000 notes · 20 AI searches a day · 1 vault"),
 	features: [
-		msg("2,000 notes searchable"),
+		msg("3,000 notes, all searchable"),
+		msg("20 AI searches a day"),
 		msg("1 vault"),
 		msg("1 GB attachments"),
 		msg("2 devices"),
 	],
 } as const;
-
-// The one "N notes are not searchable" line, shared by search and billing so
-// the copy cannot drift. `IndexCap` ranks by `created_at` ASC, so the indexed
-// set is the OLDEST notes and it is the user's NEWEST work that is missing —
-// say so, never "your most recent notes are searchable". Uncapped tiers report
-// 0/0, so `hidden <= 0` covers them too. No tier name in the copy: a paid user
-// with a lowered `indexed_notes_cap` override is capped too.
-export function unsearchableNotesNotice(
-	{ indexed, total }: IndexStatus,
-	tn: Tn,
-	locale: Locale = "en",
-): string | null {
-	const hidden = total - indexed;
-	if (hidden <= 0) {
-		return null;
-	}
-	return tn(
-		{
-			one: "{count} of your notes isn't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
-			other:
-				"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.",
-		},
-		hidden,
-		{
-			indexed: indexed.toLocaleString(intlLocale(locale)),
-		},
-	);
-}
 
 // Single catalog source-of-truth: both onboarding (trial signup) and the
 // change-plan panel read display prices from here. Keep in sync with the

@@ -239,9 +239,10 @@ export default {
 	"You're on this plan": "Вы используете этот тарифный план",
 	"Start free trial": "Начать бесплатный пробный период",
 	Popular: "Популярный",
-	"2,000 notes searchable · 1 vault · 1 GB attachments":
-		"2000 заметок с возможностью поиска · 1 хранилище · 1 ГБ вложений",
-	"2,000 notes searchable": "2000 заметок с возможностью поиска",
+	"3,000 notes · 20 AI searches a day · 1 vault":
+		"3000 заметок · 20 AI-запросов в день · 1 хранилище",
+	"3,000 notes, all searchable": "3000 заметок, все доступны для поиска",
+	"20 AI searches a day": "20 AI-запросов в день",
 	"1 vault": "1 хранилище",
 	"1 GB attachments": "1 ГБ вложений",
 	"2 devices": "2 устройства",
@@ -252,14 +253,6 @@ export default {
 	"Unlimited vaults": "Неограниченное количество хранилищ",
 	"50 GB attachments": "50 ГБ вложений",
 	"Cross-vault search": "Поиск по всем хранилищам",
-	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
-		{
-			one: "{count} из ваших заметок не подлежит поиску. Индексируются только ваши самые старые {indexed}, поэтому новые заметки не отображаются в результатах поиска.",
-			few: "{count} из ваших заметок не доступны для поиска. Индексируются только ваши самые старые {indexed}, поэтому новые заметки не отображаются в результатах поиска.",
-			many: "{count} ваших заметок не подлежат поиску. Индексируются только ваши самые старые {indexed}, поэтому новые заметки не отображаются в результатах поиска.",
-			other:
-				"{count} ваших заметок не подлежат поиску. Индексируются только ваши самые старые {indexed}, поэтому новые заметки не отображаются в результатах поиска.",
-		},
 	"Loading plan options…": "Загрузка вариантов тарифных планов…",
 	"Plan change confirmed.": "Изменение плана подтверждено.",
 	"Could not change plan. Please try again.":
@@ -755,7 +748,6 @@ export default {
 	"Searching…": "Поиск…",
 	"Search failed: {message}": "Поиск не удался: {message}",
 	'No results for "{term}"': 'Нет результатов для "{term}"',
-	"Upgrade to search everything": "Обновите, чтобы искать всё",
 	Recent: "Недавние",
 	"Any time": "Всегда",
 	"7 days": "7 дней",
@@ -914,8 +906,6 @@ export default {
 		"Текущее соглашение недоступно в данный момент.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"Мы не можем отобразить последние условия в данный момент, поэтому регистрация приостановлена, чтобы вы не соглашались с тем, что не можете прочитать. Пожалуйста, попробуйте позже.",
-	"How did you hear about Engram?": "Как вы узнали об Engram?",
-	"Pick one to continue.": "Выберите один вариант для продолжения.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"Я прочитал и согласен с Условиями использования и Политикой конфиденциальности",
 	"I have read and agree to the agreement shown above and the privacy notice":
@@ -958,6 +948,10 @@ export default {
 	"Connect another MCP client": "Подключить другой клиент MCP",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Хранилище содержит ваши заметки. Вы можете переименовать его или добавить ещё позже.",
+	"How did you hear about Engram?": "Как вы узнали об Engram?",
+	"Pick one to continue.": "Выберите один вариант для продолжения.",
+	"Couldn't save your answers, please try again.":
+		"Не удалось сохранить ваши ответы, попробуйте ещё раз.",
 	"Choose your plan": "Выберите свой тарифный план",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"7-дневный бесплатный пробный период для платных планов. Требуется карта, списание средств не произойдет до окончания пробного периода.",
@@ -969,13 +963,6 @@ export default {
 	"your app": "ваше приложение",
 	"Cancel connection": "Отменить подключение",
 	"Connecting {app}": "Подключение {app}",
-	"Which AI tools do you use?": "Какие инструменты искусственного интеллекта вы используете?",
-	"AI assistants": "AI-ассистенты",
-	"Coding tools": "Инструменты для программирования",
-	"Another MCP client": "Другой клиент MCP",
-	"Why {tool} can't be connected": "Почему {tool} не может быть подключено",
-	"Not a comprehensive list, pick {client} if yours isn't here.":
-		"Это не полный список, выберите {client}, если вашего инструмента здесь нет.",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Не удалось сохранить ваш выбор. Попробуйте нажать ещё раз — если ошибка повторяется, обновите страницу.",
 	"Let's get your notes in.": "Давайте добавим ваши заметки.",
@@ -1014,15 +1001,20 @@ export default {
 		"Откройте вкладку {tab} плагина, нажмите {action} и авторизуйтесь с помощью вашей учетной записи Engram.",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		'Приложение Gemini не поддерживает добавление пользовательских коннекторов MCP. Antigravity, инструмент для программирования от Google на базе Gemini, поддерживает. Выберите его в разделе "Инструменты для программирования".',
+	"Another MCP client": "Другой клиент MCP",
 	"I'm not connecting an AI tool yet": "Я пока не подключаю инструмент ИИ",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		'Используйте Engram в веб-приложении. Вы можете подключить инструмент позже в разделе "Настройки".',
 	"Help us shape Engram": "Помогите нам улучшить Engram",
 	"Two quick questions. Both are optional.": "Два коротких вопроса. Оба необязательны.",
-	"Couldn't save your answers, please try again.":
-		"Не удалось сохранить ваши ответы, попробуйте ещё раз.",
+	"Which AI tools do you use?": "Какие инструменты искусственного интеллекта вы используете?",
 	Skip: "Пропустить",
 	Save: "Сохранить",
+	"AI assistants": "AI-ассистенты",
+	"Coding tools": "Инструменты для программирования",
+	"Why {tool} can't be connected": "Почему {tool} не может быть подключено",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"Это не полный список, выберите {client}, если вашего инструмента здесь нет.",
 	Account: "Учётная запись",
 	"Manage your profile, password, and account.": "Управляйте профилем, паролем и учётной записью.",
 	"Manage your profile, security, and active sessions.":

@@ -71,7 +71,7 @@ This is acceptable **only because vectors are derived data** — Postgres is gro
     WHERE kind = 'note' AND deleted_at IS NULL;
    ```
 
-   Same shape the billing downgrade path uses (`Engram.Billing` → `IndexCap.evict_over_cap/1`, which nulls both hashes for the notes past the Free cap), so this is a proven mechanism, not a new one.
+   Same shape the former index-cap downgrade sweep used (`IndexCap.evict_over_cap/1`, removed with the cap on 2026-10-17), so this is a proven mechanism, not a new one.
 3. **Wait, or kick.** `Engram.Workers.ReconcileEmbeddings` runs every 5 minutes (`2-59/5`) and queues every stale note in one sweep, no per-tick cap. `ReconcileEmbeddings.kick()` from a remote console starts a sweep now.
 
 **RTO for a full rebuild ≈ the embed queue's drain time**, not a cron cadence: the sweep queues the whole corpus at once, and `embed` concurrency at backfill priority sets the rate. Measured on the 0.42.0 rebuild: a 500-note batch drained in ~2 min, so ~1,574 live notes is roughly 6-10 min plus Voyage 429 snoozes. Search is degraded (keyword-only) for that window; note reads and writes are unaffected throughout. A full rebuild re-bills Voyage for the whole corpus; budget for it before starting.

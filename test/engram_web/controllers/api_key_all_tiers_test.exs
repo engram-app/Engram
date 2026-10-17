@@ -4,7 +4,7 @@ defmodule EngramWeb.ApiKeyAllTiersTest do
   and the sync sockets alike.
 
   Cost is metered where it is incurred (`ai_searches_per_day` at the search
-  cost site, `notes_cap` / `indexed_notes_cap` on writes), not by which
+  cost site, `notes_cap` on writes), not by which
   credential called. Abuse is bounded by `PreAuthRateLimit` and `api_rps_cap`
   (30/s on every tier), which stays as a per-user kill switch.
   """

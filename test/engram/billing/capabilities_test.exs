@@ -18,7 +18,7 @@ defmodule Engram.Billing.CapabilitiesTest do
     caps = Billing.capabilities(user)
 
     assert caps.tier == "free"
-    assert caps.limits["notes_cap"] == 10_000
+    assert caps.limits["notes_cap"] == 3_000
     assert caps.limits["vaults_cap"] == 1
     # #1974: API access is every tier's; there is no write flag any more.
     assert caps.limits["api_rps_cap"] == 30

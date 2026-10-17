@@ -236,9 +236,10 @@ export default {
 	"You're on this plan": "Estás en este plan",
 	"Start free trial": "Empieza la prueba gratuita",
 	Popular: "Popular",
-	"2,000 notes searchable · 1 vault · 1 GB attachments":
-		"2000 notas buscables · 1 bóveda · 1 GB de adjuntos",
-	"2,000 notes searchable": "2000 notas buscables",
+	"3,000 notes · 20 AI searches a day · 1 vault":
+		"3000 notas · 20 búsquedas de IA al día · 1 bóveda",
+	"3,000 notes, all searchable": "3000 notas, todas buscables",
+	"20 AI searches a day": "20 búsquedas de IA al día",
 	"1 vault": "1 bóveda",
 	"1 GB attachments": "1 GB de adjuntos",
 	"2 devices": "2 dispositivos",
@@ -249,13 +250,6 @@ export default {
 	"Unlimited vaults": "Bóvedas ilimitadas",
 	"50 GB attachments": "50 GB de adjuntos",
 	"Cross-vault search": "Búsqueda entre bóvedas",
-	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
-		{
-			one: "{count} de tus notas no es buscable. Solo se indexan tus {indexed} notas más antiguas, así que tus notas más recientes no aparecerán en la búsqueda.",
-			many: "{count} de tus notas no se pueden buscar. Solo se indexan tus {indexed} notas más antiguas, así que tus notas más recientes no aparecerán en la búsqueda.",
-			other:
-				"{count} de tus notas no se pueden buscar. Solo se indexan tus {indexed} notas más antiguas, así que tus notas más recientes no aparecerán en la búsqueda.",
-		},
 	"Loading plan options…": "Cargando opciones de plan…",
 	"Plan change confirmed.": "Cambio de plan confirmado.",
 	"Could not change plan. Please try again.": "No se pudo cambiar el plan. Inténtalo de nuevo.",
@@ -731,7 +725,6 @@ export default {
 	"Searching…": "Buscando…",
 	"Search failed: {message}": "Error al buscar: {message}",
 	'No results for "{term}"': 'Sin resultados para "{term}"',
-	"Upgrade to search everything": "Actualiza para buscar todo",
 	Recent: "Recientes",
 	"Any time": "Cualquier momento",
 	"7 days": "7 días",
@@ -867,8 +860,6 @@ export default {
 	"The current agreement isn’t available right now.": "El acuerdo actual no está disponible ahora.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"No podemos mostrar los términos más recientes en este momento, así que el registro está pausado en lugar de pedirte que aceptes algo que no puedes leer. Inténtalo de nuevo en breve.",
-	"How did you hear about Engram?": "¿Cómo te enteraste de Engram?",
-	"Pick one to continue.": "Elige una opción para continuar.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"He leído y acepto los Términos del Servicio y la Política de Privacidad",
 	"I have read and agree to the agreement shown above and the privacy notice":
@@ -911,6 +902,10 @@ export default {
 	"Connect another MCP client": "Conectar otro cliente MCP",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Una bóveda contiene tus notas. Puedes renombrarla o añadir más después.",
+	"How did you hear about Engram?": "¿Cómo te enteraste de Engram?",
+	"Pick one to continue.": "Elige una opción para continuar.",
+	"Couldn't save your answers, please try again.":
+		"No se pudieron guardar tus respuestas, por favor intenta de nuevo.",
 	"Choose your plan": "Elige tu plan",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"Prueba gratuita de 7 días en los planes de pago. Se requiere tarjeta, no se te cobrará hasta que finalice.",
@@ -922,13 +917,6 @@ export default {
 	"your app": "tu aplicación",
 	"Cancel connection": "Cancelar conexión",
 	"Connecting {app}": "Conectando {app}",
-	"Which AI tools do you use?": "¿Qué herramientas de IA utilizas?",
-	"AI assistants": "Asistentes de IA",
-	"Coding tools": "Herramientas de programación",
-	"Another MCP client": "Otro cliente de MCP",
-	"Why {tool} can't be connected": "¿Por qué {tool} no se puede conectar?",
-	"Not a comprehensive list, pick {client} if yours isn't here.":
-		"No es una lista exhaustiva, elige {client} si la tuya no está aquí.",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"No se pudo guardar tu elección. Intenta hacer clic de nuevo; si sigue fallando, actualiza la página.",
 	"Let's get your notes in.": "Importemos tus notas.",
@@ -967,15 +955,20 @@ export default {
 		"Abre la pestaña {tab} del plugin, haz clic en {action} y autentícate con tu cuenta de Engram.",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"La aplicación Gemini no puede añadir conectores MCP personalizados. Antigravity, la herramienta de programación de Google impulsada por Gemini, sí puede. Selecciónala en Herramientas de programación.",
+	"Another MCP client": "Otro cliente de MCP",
 	"I'm not connecting an AI tool yet": "Aún no estoy conectando una herramienta de IA",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Usa Engram en la aplicación web. Puedes conectar una herramienta más tarde desde Ajustes.",
 	"Help us shape Engram": "Ayúdanos a mejorar Engram",
 	"Two quick questions. Both are optional.": "Dos preguntas rápidas. Ambas son opcionales.",
-	"Couldn't save your answers, please try again.":
-		"No se pudieron guardar tus respuestas, por favor intenta de nuevo.",
+	"Which AI tools do you use?": "¿Qué herramientas de IA utilizas?",
 	Skip: "Omitir",
 	Save: "Guardar",
+	"AI assistants": "Asistentes de IA",
+	"Coding tools": "Herramientas de programación",
+	"Why {tool} can't be connected": "¿Por qué {tool} no se puede conectar?",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"No es una lista exhaustiva, elige {client} si la tuya no está aquí.",
 	Account: "Cuenta",
 	"Manage your profile, password, and account.": "Gestiona tu perfil, tu contraseña y tu cuenta.",
 	"Manage your profile, security, and active sessions.":
