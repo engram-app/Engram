@@ -1,9 +1,4 @@
-import {
-	QueryClient,
-	QueryClientProvider,
-	type UseQueryOptions,
-	useQueryClient,
-} from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { useSyncExternalStore } from "react";
@@ -41,8 +36,18 @@ let onboardingStatusValue: { data: OnboardingStatus | undefined; isLoading: bool
 };
 
 let connectionsValue: { data: Connection[]; isLoading: boolean } = { data: [], isLoading: false };
-type PollFn = UseQueryOptions<Connection[]>["refetchInterval"];
-let connectionsOpts: { refetchInterval?: PollFn } | undefined;
+const channel = vi.hoisted(() => ({
+	event: "",
+	handler: (() => {}) as (payload: unknown) => void,
+	enabled: false,
+}));
+vi.mock("../api/use-user-channel-event", () => ({
+	useUserChannelEvent: (event: string, handler: (payload: unknown) => void, enabled: boolean) => {
+		channel.event = event;
+		channel.handler = handler;
+		channel.enabled = enabled;
+	},
+}));
 
 let billingStatusValue: { data: Partial<BillingStatus> | undefined; isLoading: boolean } = {
 	data: { tier: "free", active: false } as Partial<BillingStatus>,
@@ -73,10 +78,7 @@ vi.mock("../api/queries", async () => {
 			);
 			return { data, isLoading: onboardingStatusValue.isLoading };
 		},
-		useConnections: (opts?: { refetchInterval?: PollFn }) => {
-			connectionsOpts = opts;
-			return connectionsValue;
-		},
+		useConnections: () => connectionsValue,
 		useBillingStatus: () => billingStatusValue,
 	};
 });
@@ -677,54 +679,28 @@ describe("ChecklistWidget, interaction tracking", () => {
 });
 
 // Approving a connector sends the user to their vault before the client has
-// exchanged its code, so the connection does not exist yet when this loads.
-// Only the tab consent opened is marked, so nobody else polls.
-describe("ChecklistWidget, re-checks a tool that is still connecting", () => {
-	const mcp = (slug: string | null) => ({ kind: "mcp", slug }) as Connection;
-	const mark = (client: string | null) =>
-		sessionStorage.setItem("engram:connecting", JSON.stringify({ since: Date.now(), client }));
-
-	afterEach(() => {
-		vi.useRealTimers();
-		sessionStorage.clear();
-	});
-
-	function poll(data: Connection[]): number | false | undefined {
-		const fn = connectionsOpts?.refetchInterval;
-		return typeof fn === "function" ? fn({ state: { data } } as never) : fn;
-	}
-
-	it("polls in the tab consent opened", () => {
-		mark("chatgpt");
-		render(wrap(<ChecklistWidget />));
-		expect(poll([])).toBe(5000);
-	});
-
-	// Another tool's grant is not the one this tab is waiting on.
-	it("keeps polling until the parked client's own connection appears", () => {
-		mark("chatgpt");
-		render(wrap(<ChecklistWidget />));
-		expect(poll([mcp("claude")])).toBe(5000);
-		expect(poll([mcp("chatgpt")])).toBe(false);
-	});
-
-	it("stops on any MCP connection when the client has no slug", () => {
-		mark(null);
-		render(wrap(<ChecklistWidget />));
-		expect(poll([mcp(null)])).toBe(false);
-	});
-
-	it("does not poll in any other tab", () => {
+// exchanged its code. The server announces the new grant on the user channel;
+// the row ticks from that, not from polling.
+describe("ChecklistWidget, a tool that is still connecting", () => {
+	it("listens for connection_created while a picked tool has no connection", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
 		render(wrap(<ChecklistWidget />));
-		expect(poll([])).toBe(false);
+		expect(channel.event).toBe("connection_created");
+		expect(channel.enabled).toBe(true);
 	});
 
-	it("gives up two minutes after consent", () => {
-		vi.useFakeTimers({ toFake: ["Date"] });
-		mark("chatgpt");
+	it("refetches connections when the server announces one", () => {
+		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
 		render(wrap(<ChecklistWidget />));
-		vi.setSystemTime(Date.now() + 121_000);
-		expect(poll([])).toBe(false);
+		const invalidate = vi.spyOn(activeQc as QueryClient, "invalidateQueries");
+		channel.handler({ client_id: "cli" });
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["connections"] });
+	});
+
+	it("does not listen once an MCP connection exists", () => {
+		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
+		connectionsValue = { data: [{ kind: "mcp", slug: "chatgpt" } as Connection], isLoading: false };
+		render(wrap(<ChecklistWidget />));
+		expect(channel.enabled).toBe(false);
 	});
 });

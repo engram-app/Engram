@@ -142,6 +142,18 @@ describe("Dashboard single-note auto-open", () => {
 		expect(screen.getByTestId("loc").textContent).toBe("/v/work/welcome-id");
 	});
 
+	// The mark means "redirected once": a render that does not redirect (no
+	// vault list to land in) must not spend it.
+	it("marks the vault opened only when it redirects", () => {
+		useVaultsSpy.mockReturnValueOnce({ data: [] });
+		useSyncManifestSpy.mockReturnValue({
+			data: { notes: [{ id: "welcome-id", path: "Welcome to Engram.md" }] },
+			isPending: false,
+		});
+		renderAt("/");
+		expect(sessionStorage.getItem("engram:auto-opened:work")).toBeNull();
+	});
+
 	// Settings is a hash overlay on any page: "/#settings/account" into a new
 	// vault must still open Settings over the note it lands on.
 	it("keeps the hash when it opens the note", () => {

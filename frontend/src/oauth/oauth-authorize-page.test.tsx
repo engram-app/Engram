@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
 import { MemoryRouter, useLocation } from "react-router";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { track } from "../analytics/track";
 import type { OAuthConsentParams } from "../api/oauth";
 import OAuthAuthorizePage from "./oauth-authorize-page";
@@ -258,6 +258,12 @@ function approve() {
 	fireEvent.click(screen.getByRole("button", { name: /^approve$/iu }));
 }
 
+// Approve opens the vault in a new tab; by default that tab opens. Tests about
+// the tab itself (and the blocked case) stub window.open themselves.
+beforeEach(() => {
+	vi.spyOn(window, "open").mockImplementation(() => ({ close: vi.fn() }) as unknown as Window);
+});
+
 afterEach(() => {
 	vi.clearAllMocks();
 	vaultsState.current = DEFAULT_VAULTS;
@@ -426,9 +432,9 @@ describe("OAuthAuthorizePage onboarding bounce", () => {
 	});
 });
 
-// Someone who signed up inside the connector flow has never seen their vault.
-// Approving sends this tab back to the client, so the vault opens in another.
-describe("OAuthAuthorizePage vault tab after a signup detour", () => {
+// Every approval opens the vault in a new tab, so the user lands in it while
+// the client finishes connecting in this one.
+describe("OAuthAuthorizePage vault tab on Approve", () => {
 	const CLIENT = {
 		client_id: "cli",
 		client_name: "ChatGPT",
@@ -438,19 +444,10 @@ describe("OAuthAuthorizePage vault tab after a signup detour", () => {
 	const openedTab = () => ({ close: vi.fn() }) as unknown as Window;
 
 	afterEach(() => {
-		window.sessionStorage.clear();
 		vi.restoreAllMocks();
 	});
 
-	function parkThisRequest() {
-		window.sessionStorage.setItem(
-			"engram:pending-oauth",
-			JSON.stringify({ returnTo: `/oauth/consent${VALID_QS}`, toolSlug: null }),
-		);
-	}
-
-	it("opens the vault in a new tab on Approve", async () => {
-		parkThisRequest();
+	it("opens one vault tab on Approve", async () => {
 		fetchOAuthClient.mockResolvedValue(CLIENT);
 		consentRedirectsTo("https://app/cb?code=ok");
 		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
@@ -460,55 +457,14 @@ describe("OAuthAuthorizePage vault tab after a signup detour", () => {
 		await screen.findByRole("button", { name: /^review$/iu });
 		approve();
 
-		// Synchronously, inside the click: a popup blocker refuses one opened
-		// after the consent request resolves. The URL marks the tab as waiting
-		// on this client, so only it re-checks for the connection.
-		expect(open).toHaveBeenCalledWith(
-			expect.stringMatching(/^\/\?connecting=\d+&client=chatgpt$/u),
-			"_blank",
-		);
+		// Synchronously, inside the click: a popup blocker refuses a tab opened
+		// after the consent request resolves.
+		expect(open).toHaveBeenCalledTimes(1);
+		expect(open).toHaveBeenCalledWith("/", "_blank");
 		await waitFor(() => expect(assign).toHaveBeenCalledWith("https://app/cb?code=ok"));
 	});
 
-	// Remounting (a reload, StrictMode) runs the clear effect before this
-	// render, so the return has to outlive the park until Approve finishes.
-	it("still opens the tab after the page remounts", async () => {
-		parkThisRequest();
-		fetchOAuthClient.mockResolvedValue(CLIENT);
-		consentRedirectsTo("https://app/cb?code=ok");
-		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
-		const open = vi.spyOn(window, "open").mockImplementation(openedTab);
-
-		const first = renderAt(VALID_QS);
-		await screen.findByRole("button", { name: /^review$/iu });
-		first.unmount();
-		renderAt(VALID_QS);
-		await screen.findByRole("button", { name: /^review$/iu });
-		approve();
-
-		expect(open).toHaveBeenCalledTimes(1);
-		await waitFor(() => expect(assign).toHaveBeenCalled());
-		expect(window.sessionStorage.getItem("engram:consent-return")).toBeNull();
-	});
-
-	// An Obsidian device signing in has its own surface; no tab, no poll.
-	it("opens nothing for an Obsidian client", async () => {
-		parkThisRequest();
-		fetchOAuthClient.mockResolvedValue({ ...CLIENT, kind: "obsidian", slug: null });
-		consentRedirectsTo("https://app/cb?code=ok");
-		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
-		const open = vi.spyOn(window, "open").mockImplementation(openedTab);
-
-		renderAt(VALID_QS);
-		await screen.findByRole("button", { name: /^review$/iu });
-		approve();
-
-		await waitFor(() => expect(assign).toHaveBeenCalled());
-		expect(open).not.toHaveBeenCalled();
-	});
-
 	it("opens one tab for a double click", async () => {
-		parkThisRequest();
 		fetchOAuthClient.mockResolvedValue(CLIENT);
 		consentRedirectsTo("https://app/cb?code=ok");
 		vi.spyOn(window.location, "assign").mockImplementation(() => {});
@@ -524,30 +480,7 @@ describe("OAuthAuthorizePage vault tab after a signup detour", () => {
 		expect(open).toHaveBeenCalledTimes(1);
 	});
 
-	// A blocked popup must not strand them: the vault is offered in-page,
-	// from a real click, before handing back to the client.
-	it("offers the vault in-page when the popup is blocked", async () => {
-		parkThisRequest();
-		fetchOAuthClient.mockResolvedValue(CLIENT);
-		consentRedirectsTo("https://app/cb?code=ok");
-		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
-		const open = vi.spyOn(window, "open").mockReturnValue(null);
-
-		renderAt(VALID_QS);
-		await screen.findByRole("button", { name: /^review$/iu });
-		approve();
-
-		const openVault = await screen.findByRole("button", { name: /open your vault/iu });
-		expect(assign).not.toHaveBeenCalled();
-		expect(mockTrack).toHaveBeenCalledWith("vault_tab_blocked", { client: "chatgpt" });
-		fireEvent.click(openVault);
-		expect(open).toHaveBeenCalledTimes(2);
-		fireEvent.click(screen.getByRole("button", { name: /back to chatgpt/iu }));
-		expect(assign).toHaveBeenCalledWith("https://app/cb?code=ok");
-	});
-
 	it("closes the tab when the consent fails", async () => {
-		parkThisRequest();
 		fetchOAuthClient.mockResolvedValue(CLIENT);
 		postOAuthConsent.mockRejectedValueOnce(new Error("boom"));
 		const close = vi.fn();
@@ -560,9 +493,8 @@ describe("OAuthAuthorizePage vault tab after a signup detour", () => {
 		await waitFor(() => expect(close).toHaveBeenCalled());
 	});
 
-	// The backend answers some failures with a 200 and an error redirect, not a throw.
+	// The backend answers some failures with a 200 and an error redirect.
 	it("closes the tab when consent comes back as an error redirect", async () => {
-		parkThisRequest();
 		fetchOAuthClient.mockResolvedValue(CLIENT);
 		consentRedirectsTo("https://app/cb?error=server_error&state=xyz");
 		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
@@ -577,7 +509,9 @@ describe("OAuthAuthorizePage vault tab after a signup detour", () => {
 		expect(close).toHaveBeenCalled();
 	});
 
-	it("opens nothing for a user who did not just sign up", async () => {
+	// A blocked popup must not strand them: the vault is offered in-page, from
+	// a real click, before handing back to the client.
+	it("offers the vault in-page when the popup is blocked", async () => {
 		fetchOAuthClient.mockResolvedValue(CLIENT);
 		consentRedirectsTo("https://app/cb?code=ok");
 		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
@@ -587,27 +521,13 @@ describe("OAuthAuthorizePage vault tab after a signup detour", () => {
 		await screen.findByRole("button", { name: /^review$/iu });
 		approve();
 
-		await waitFor(() => expect(assign).toHaveBeenCalled());
-		expect(open).not.toHaveBeenCalled();
-	});
-
-	// A park left by some other request is not this user's return trip.
-	it("opens nothing on a stale park from a different request", async () => {
-		window.sessionStorage.setItem(
-			"engram:pending-oauth",
-			JSON.stringify({ returnTo: "/oauth/consent?old=1", toolSlug: null }),
-		);
-		fetchOAuthClient.mockResolvedValue(CLIENT);
-		consentRedirectsTo("https://app/cb?code=ok");
-		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
-		const open = vi.spyOn(window, "open").mockReturnValue(null);
-
-		renderAt(VALID_QS);
-		await screen.findByRole("button", { name: /^review$/iu });
-		approve();
-
-		await waitFor(() => expect(assign).toHaveBeenCalled());
-		expect(open).not.toHaveBeenCalled();
+		const openVault = await screen.findByRole("button", { name: /open your vault/iu });
+		expect(assign).not.toHaveBeenCalled();
+		expect(mockTrack).toHaveBeenCalledWith("vault_tab_blocked", { client: "chatgpt" });
+		fireEvent.click(openVault);
+		expect(open).toHaveBeenLastCalledWith("/", "_blank");
+		fireEvent.click(screen.getByRole("button", { name: /back to chatgpt/iu }));
+		expect(assign).toHaveBeenCalledWith("https://app/cb?code=ok");
 	});
 });
 

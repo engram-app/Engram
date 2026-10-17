@@ -181,6 +181,23 @@ describe("SurveyModal", () => {
 		expect(onDone).not.toHaveBeenCalled();
 	});
 
+	it("shows the close as busy while saving", () => {
+		state.pending = true;
+		renderUi(<SurveyModal initialTools={[]} onDone={vi.fn()} />);
+		expect(screen.getByRole("button", { name: "Close" })).toBeDisabled();
+	});
+
+	// A failed save must not trap them: closing then skips as usual.
+	it("lets them close after a failed save", async () => {
+		submitFeedback.mockRejectedValueOnce(new Error("boom"));
+		const onDone = vi.fn();
+		renderUi(<SurveyModal initialTools={[]} onDone={onDone} />);
+		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+		await screen.findByRole("alert");
+		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		expect(onDone).toHaveBeenCalled();
+	});
+
 	it("stays open with an error when saving fails", async () => {
 		submitFeedback.mockRejectedValueOnce(new Error("boom"));
 		const onDone = vi.fn();

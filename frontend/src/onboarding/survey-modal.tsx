@@ -120,7 +120,7 @@ function SurveyModal({ initialTools, onDone }: SurveyModalProps) {
 				}
 			}}
 		>
-			<DialogContent className="flex max-h-[90dvh] flex-col sm:max-w-2xl">
+			<DialogContent className="flex max-h-[90dvh] flex-col sm:max-w-2xl" closeDisabled={pending}>
 				<DialogHeader>
 					<DialogTitle>{t("Help us shape Engram")}</DialogTitle>
 					<DialogDescription>{t("Two quick questions. Both are optional.")}</DialogDescription>

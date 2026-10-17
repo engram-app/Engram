@@ -30,3 +30,13 @@ it('does NOT claim "missing" on a transient 5xx — says temporarily unavailable
 	await waitFor(() => expect(screen.getByText(/temporarily unavailable/iu)).toBeInTheDocument());
 	expect(screen.queryByText(/missing attachment/iu)).not.toBeInTheDocument();
 });
+
+// UI text inside the note body: the i18n leak scan reads only marked chrome there.
+it("marks its fallbacks as UI chrome", async () => {
+	vi.spyOn(api, "getBlob").mockRejectedValueOnce(new ApiError(404, "not found"));
+	render(<AttachmentImg path="img/a.png" />);
+	expect(screen.getByText(/loading img\/a\.png/iu)).toHaveAttribute("data-ui-chrome");
+	await waitFor(() =>
+		expect(screen.getByText(/missing attachment/iu)).toHaveAttribute("data-ui-chrome"),
+	);
+});

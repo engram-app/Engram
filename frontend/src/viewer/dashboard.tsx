@@ -78,6 +78,22 @@ function FolderNotes({ folder }: { folder: string }) {
 	);
 }
 
+// The single-note redirect, marking the vault opened only when it actually
+// happens. On commit, not during render: StrictMode renders twice, and a mark
+// written by the first pass made the second skip the redirect.
+function AutoOpenRedirect({
+	markKey,
+	to,
+}: {
+	markKey: string;
+	to: { pathname: string; hash: string };
+}) {
+	useEffect(() => {
+		sessionStorage.setItem(markKey, "1");
+	}, [markKey]);
+	return <Navigate to={to} replace />;
+}
+
 export default function Dashboard() {
 	const { t } = useT();
 	const [searchParams] = useSearchParams();
@@ -114,13 +130,6 @@ export default function Dashboard() {
 	const autoOpenKey = slug ? `engram:auto-opened:${slug}` : null;
 	const alreadyOpened = autoOpenKey !== null && sessionStorage.getItem(autoOpenKey) === "1";
 	const autoOpen = !folder && onlyNote !== null && slug !== null && !alreadyOpened;
-	// Marked on commit, not during render: StrictMode renders twice, and a mark
-	// written by the first pass made the second skip the redirect.
-	useEffect(() => {
-		if (autoOpen && autoOpenKey) {
-			sessionStorage.setItem(autoOpenKey, "1");
-		}
-	}, [autoOpen, autoOpenKey]);
 
 	// No note open still looks like an open (empty) document: mount the same
 	// right-panel content an open note gets, so the panel chrome is present.
@@ -144,9 +153,14 @@ export default function Dashboard() {
 		if (manifestPending && !manifest) {
 			return <LoadingPane />;
 		}
-		if (autoOpen && onlyNote && slug) {
+		if (autoOpen && onlyNote && slug && autoOpenKey) {
 			// The hash rides along: Settings (`#settings/...`) overlays any page.
-			return <Navigate to={{ pathname: noteHref(slug, onlyNote.id), hash }} replace />;
+			return (
+				<AutoOpenRedirect
+					markKey={autoOpenKey}
+					to={{ pathname: noteHref(slug, onlyNote.id), hash }}
+				/>
+			);
 		}
 	}
 

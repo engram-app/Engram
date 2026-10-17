@@ -8,6 +8,7 @@ import { msg } from "@/i18n/msg";
 import type { MsgKey } from "@/i18n/ui-text";
 import { track } from "../analytics/track";
 import { type OnboardingStatus, useConnections, useOnboardingStatus } from "../api/queries";
+import { useUserChannelEvent } from "../api/use-user-channel-event";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
 import { Button } from "../components/ui/button";
 import {
@@ -18,7 +19,6 @@ import {
 	SheetTitle,
 } from "../components/ui/sheet";
 import { Shimmer } from "../components/ui/shimmer";
-import { connecting } from "../oauth/pending-authorization";
 import { DISCORD_INVITE_URL } from "../settings/account/community-section";
 import { settingsTo } from "../settings/settings-hash";
 import { useOnboardingActions } from "./use-onboarding-actions";
@@ -83,9 +83,6 @@ const TOOL_LABELS: Record<string, MsgKey> = {
 	other_mcp: msg("Connect another MCP client"),
 };
 
-const CONNECT_POLL_MS = 5000;
-const CONNECT_POLL_WINDOW_MS = 120_000;
-
 function ChecklistWidget() {
 	const { t } = useT();
 	// Same query app-layout and note-menu use, so this flips at exactly the
@@ -97,23 +94,20 @@ function ChecklistWidget() {
 	const ob = useOnboardingActions();
 	const status = useOnboardingStatus();
 	const profile = status.data?.profile;
-	// The tab consent opened lands here before the client exchanges its code,
-	// so the grant does not exist yet. Re-check briefly rather than tell them
-	// to connect a tool they just connected. Every other tab skips this.
-	const [marker] = useState(connecting);
-	const connections = useConnections({
-		refetchInterval: (query) =>
-			marker !== null &&
-			Date.now() - marker.since < CONNECT_POLL_WINDOW_MS &&
-			// The parked client's own grant; any MCP grant when it had no slug.
-			!(query.state.data ?? []).some(
-				(c) => c.kind === "mcp" && (marker.client === null || c.slug === marker.client),
-			)
-				? CONNECT_POLL_MS
-				: false,
-	});
-	const isFreeTier = useIsFreeTier();
+	const connections = useConnections();
 	const qc = useQueryClient();
+	// A client finishes connecting after its user lands here (the token
+	// exchange follows consent). The server announces the new grant, so the
+	// row ticks without a reload. Only while a picked tool still waits.
+	const waitingOnTool =
+		(profile?.tools ?? []).some((slug) => slug !== "web_only") &&
+		!(connections.data ?? []).some((c) => c.kind === "mcp");
+	useUserChannelEvent(
+		"connection_created",
+		() => qc.invalidateQueries({ queryKey: ["connections"] }),
+		waitingOnTool,
+	);
+	const isFreeTier = useIsFreeTier();
 
 	if (ob.isLoading) {
 		return null;

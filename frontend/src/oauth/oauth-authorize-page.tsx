@@ -39,15 +39,11 @@ import AuthShell from "../layout/auth-shell";
 import { isMember } from "../lib/is-member";
 import { ROUTES } from "../routes";
 import { settingsHash, settingsTo } from "../settings/settings-hash";
-import {
-	clearConsentReturn,
-	clearPendingAuthorization,
-	connectingUrl,
-	consentReturnMarked,
-	markConsentReturn,
-	peekPendingAuthorization,
-	stashPendingAuthorization,
-} from "./pending-authorization";
+import { clearPendingAuthorization, stashPendingAuthorization } from "./pending-authorization";
+
+// Where an approval sends the user while the client finishes connecting: the
+// app root, which lands on their active vault.
+const VAULT_URL = ROUTES.HOME;
 
 const REQUIRED_PARAMS = [
 	"client_id",
@@ -172,20 +168,6 @@ export default function OAuthAuthorizePage() {
 	// backend too old to answer still allows Approve, which it re-validates.
 	const redirectVerified = clientQuery.data?.redirect_uri_registered === true;
 	const bounced = useRef(false);
-	// Back from the signup detour this request parked. Such a user has never
-	// seen their vault, and Approve sends this tab back to the client. The park
-	// is cleared on the first commit, so the return is marked separately and
-	// kept until Approve or Cancel ends it (a reload or remount still knows).
-	const consentUrl = `${ROUTES.OAUTH_CONSENT}${location.search}`;
-	const [returnedFromSignup] = useState(
-		() => peekPendingAuthorization()?.returnTo === consentUrl || consentReturnMarked(consentUrl),
-	);
-	// Declared before the clear effect below, so it runs first.
-	useEffect(() => {
-		if (returnedFromSignup) {
-			markConsentReturn(consentUrl);
-		}
-	}, [returnedFromSignup, consentUrl]);
 	// The popup was blocked: offer the vault from a real click, then hand back.
 	const [blockedRedirect, setBlockedRedirect] = useState<string | null>(null);
 	useEffect(() => {
@@ -376,12 +358,7 @@ export default function OAuthAuthorizePage() {
 							client,
 						})}
 					</p>
-					<Button
-						type="button"
-						onClick={() =>
-							window.open(connectingUrl(ROUTES.HOME, clientQuery.data?.slug ?? null), "_blank")
-						}
-					>
+					<Button type="button" onClick={() => window.open(VAULT_URL, "_blank")}>
 						{t("Open your vault")}
 					</Button>
 					<Button
@@ -459,9 +436,10 @@ export default function OAuthAuthorizePage() {
 		setSubmitError(null);
 		// Before any await: a popup blocker refuses a tab opened outside the click.
 		// MCP clients only: an Obsidian device has its own surface.
-		const opensVault = returnedFromSignup && clientKind === "mcp";
-		const vaultUrl = connectingUrl(ROUTES.HOME, clientQuery.data?.slug ?? null);
-		const vaultTab = opensVault ? window.open(vaultUrl, "_blank") : null;
+		// Every approval opens the vault, so the user lands in it while the
+		// client finishes connecting. Opened now, not after the request: a popup
+		// blocker refuses a tab opened after an await.
+		const vaultTab = window.open(VAULT_URL, "_blank");
 
 		// Obsidian's device-code flow is a different surface (device-link-page.tsx,
 		// plugin_connect_*) — this event name says "mcp" and must mean it.
@@ -560,11 +538,10 @@ export default function OAuthAuthorizePage() {
 			if (isMcp) {
 				track("mcp_connect_succeeded", { client: mcpClient });
 			}
-			clearConsentReturn();
 			// A 200 can still carry a refusal (`?error=`): nothing will connect.
 			if (!grantsCode) {
 				vaultTab?.close();
-			} else if (opensVault && vaultTab === null) {
+			} else if (vaultTab === null) {
 				track("vault_tab_blocked", { client: mcpClient });
 				setBlockedRedirect(redirect_uri);
 				return;
@@ -606,7 +583,6 @@ export default function OAuthAuthorizePage() {
 	};
 
 	const handleCancel = () => {
-		clearConsentReturn();
 		track("mcp_connect_denied", { client: toMcpClient(clientQuery.data?.slug) });
 		window.location.assign(buildCancelUrl(values.redirect_uri, values.state, iss));
 	};

@@ -2,7 +2,6 @@ import {
 	keepPreviousData,
 	type QueryClient,
 	type QueryFunctionContext,
-	type UseQueryOptions,
 	useMutation,
 	useQuery,
 	useQueryClient,
@@ -1632,15 +1631,11 @@ export interface CapErrorBody {
 	upgrade_url: string;
 }
 
-export function useConnections(opts?: {
-	enabled?: boolean;
-	refetchInterval?: UseQueryOptions<Connection[]>["refetchInterval"];
-}) {
+export function useConnections(opts?: { enabled?: boolean }) {
 	return useQuery({
 		queryKey: ["connections"],
 		queryFn: () => api.get<Connection[]>("/connections"),
 		enabled: opts?.enabled ?? true,
-		refetchInterval: opts?.refetchInterval,
 	});
 }
 
