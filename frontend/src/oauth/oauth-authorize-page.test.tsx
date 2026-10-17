@@ -433,6 +433,7 @@ describe("OAuthAuthorizePage vault tab after a signup detour", () => {
 
 	afterEach(() => {
 		window.sessionStorage.clear();
+		vi.restoreAllMocks();
 	});
 
 	function parkThisRequest() {
@@ -471,6 +472,44 @@ describe("OAuthAuthorizePage vault tab after a signup detour", () => {
 		approve();
 
 		await waitFor(() => expect(close).toHaveBeenCalled());
+	});
+
+	// The backend answers some failures with a 200 and an error redirect, not a throw.
+	it("closes the tab when consent comes back as an error redirect", async () => {
+		parkThisRequest();
+		fetchOAuthClient.mockResolvedValue(CLIENT);
+		consentRedirectsTo("https://app/cb?error=server_error&state=xyz");
+		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
+		const close = vi.fn();
+		vi.spyOn(window, "open").mockReturnValue({ close } as unknown as Window);
+
+		renderAt(VALID_QS);
+		await screen.findByRole("button", { name: /^review$/iu });
+		approve();
+
+		await waitFor(() => expect(assign).toHaveBeenCalled());
+		expect(close).toHaveBeenCalled();
+	});
+
+	// window.open copies sessionStorage into the new tab: the mark rides along,
+	// so only that tab re-checks for the connection, and this tab drops it.
+	it("marks only the new tab as connecting", async () => {
+		parkThisRequest();
+		fetchOAuthClient.mockResolvedValue(CLIENT);
+		consentRedirectsTo("https://app/cb?code=ok");
+		vi.spyOn(window.location, "assign").mockImplementation(() => {});
+		let markedAtOpen: string | null = null;
+		vi.spyOn(window, "open").mockImplementation(() => {
+			markedAtOpen = window.sessionStorage.getItem("engram:connecting-since");
+			return null;
+		});
+
+		renderAt(VALID_QS);
+		await screen.findByRole("button", { name: /^review$/iu });
+		approve();
+
+		expect(markedAtOpen).not.toBeNull();
+		expect(window.sessionStorage.getItem("engram:connecting-since")).toBeNull();
 	});
 
 	it("opens nothing for a user who did not just sign up", async () => {

@@ -673,38 +673,40 @@ describe("ChecklistWidget, interaction tracking", () => {
 
 // Approving a connector sends the user to their vault before the client has
 // exchanged its code, so the connection does not exist yet when this loads.
+// Only the tab consent opened is marked, so nobody else polls.
 describe("ChecklistWidget, re-checks a tool that is still connecting", () => {
 	const mcp = { kind: "mcp", slug: "chatgpt" } as Connection;
 
 	afterEach(() => {
 		vi.useRealTimers();
+		sessionStorage.clear();
 	});
 
 	function poll(data: Connection[]): number | false {
 		return connectionsOpts?.refetchInterval?.({ state: { data } }) ?? false;
 	}
 
-	it("polls while a picked tool has no connection", () => {
-		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
+	it("polls in the tab consent opened", () => {
+		sessionStorage.setItem("engram:connecting-since", String(Date.now()));
 		render(wrap(<ChecklistWidget />));
 		expect(poll([])).toBe(5000);
 	});
 
 	it("stops once an MCP connection exists", () => {
-		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
+		sessionStorage.setItem("engram:connecting-since", String(Date.now()));
 		render(wrap(<ChecklistWidget />));
 		expect(poll([mcp])).toBe(false);
 	});
 
-	it("does not poll when no tool was picked", () => {
-		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: [] };
+	it("does not poll in any other tab", () => {
+		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
 		render(wrap(<ChecklistWidget />));
 		expect(poll([])).toBe(false);
 	});
 
-	it("gives up after two minutes", () => {
+	it("gives up two minutes after consent", () => {
 		vi.useFakeTimers({ toFake: ["Date"] });
-		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["chatgpt"] };
+		sessionStorage.setItem("engram:connecting-since", String(Date.now()));
 		render(wrap(<ChecklistWidget />));
 		vi.setSystemTime(Date.now() + 121_000);
 		expect(poll([])).toBe(false);

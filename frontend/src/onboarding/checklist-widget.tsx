@@ -18,6 +18,7 @@ import {
 	SheetTitle,
 } from "../components/ui/sheet";
 import { Shimmer } from "../components/ui/shimmer";
+import { connectingSince } from "../oauth/pending-authorization";
 import { DISCORD_INVITE_URL } from "../settings/account/community-section";
 import { settingsTo } from "../settings/settings-hash";
 import { useOnboardingActions } from "./use-onboarding-actions";
@@ -96,15 +97,14 @@ function ChecklistWidget() {
 	const ob = useOnboardingActions();
 	const status = useOnboardingStatus();
 	const profile = status.data?.profile;
-	// Approving a connector lands the user here before the client exchanges its
-	// code, so the grant does not exist yet. Re-check briefly rather than tell
-	// them to connect a tool they just connected.
-	const [shownAt] = useState(Date.now);
-	const pickedTool = (profile?.tools ?? []).some((slug) => slug !== "web_only");
+	// The tab consent opened lands here before the client exchanges its code,
+	// so the grant does not exist yet. Re-check briefly rather than tell them
+	// to connect a tool they just connected. Every other tab skips this.
+	const [since] = useState(connectingSince);
 	const connections = useConnections({
 		refetchInterval: (query) =>
-			pickedTool &&
-			Date.now() - shownAt < CONNECT_POLL_WINDOW_MS &&
+			since !== null &&
+			Date.now() - since < CONNECT_POLL_WINDOW_MS &&
 			!(query.state.data ?? []).some((c) => c.kind === "mcp")
 				? CONNECT_POLL_MS
 				: false,

@@ -41,6 +41,7 @@ import { ROUTES } from "../routes";
 import { settingsHash, settingsTo } from "../settings/settings-hash";
 import {
 	clearPendingAuthorization,
+	openConnectingTab,
 	peekPendingAuthorization,
 	stashPendingAuthorization,
 } from "./pending-authorization";
@@ -405,7 +406,7 @@ export default function OAuthAuthorizePage() {
 		setSubmitting(true);
 		setSubmitError(null);
 		// Before any await: a popup blocker refuses a tab opened outside the click.
-		const vaultTab = returnedFromSignup ? window.open(ROUTES.HOME, "_blank") : null;
+		const vaultTab = returnedFromSignup ? openConnectingTab(ROUTES.HOME) : null;
 
 		// Obsidian's device-code flow is a different surface (device-link-page.tsx,
 		// plugin_connect_*) — this event name says "mcp" and must mean it.
@@ -503,6 +504,10 @@ export default function OAuthAuthorizePage() {
 			}
 			if (isMcp) {
 				track("mcp_connect_succeeded", { client: mcpClient });
+			}
+			// A 200 can still carry a refusal (`?error=`): nothing will connect.
+			if (!grantsCode) {
+				vaultTab?.close();
 			}
 			window.location.assign(redirect_uri);
 		} catch (e: unknown) {

@@ -23,6 +23,10 @@ import { ROUTES } from "../routes";
 
 const KEY = "engram:pending-oauth";
 
+// Set on the consent tab for the instant `window.open` runs: the new tab gets a
+// copy of sessionStorage, so only it re-checks for the client's connection.
+const CONNECTING_KEY = "engram:connecting-since";
+
 // A cancel navigates via `window.location.assign`, so the boundary that matters
 // is not http-vs-custom-scheme. Native OAuth clients legitimately register
 // custom schemes (`cursor://`, `vscode://`, `com.example.app://`) and DCR
@@ -193,5 +197,31 @@ export function clearPendingAuthorization(): void {
 		window.sessionStorage.removeItem(KEY);
 	} catch {
 		// Nothing to do, and nothing worth breaking a render over.
+	}
+}
+
+/** Opens `url` in a new tab marked as waiting on a client to connect. */
+export function openConnectingTab(url: string): Window | null {
+	try {
+		window.sessionStorage.setItem(CONNECTING_KEY, String(Date.now()));
+	} catch {
+		// Storage off: the tab still opens, it just won't re-check.
+	}
+	const tab = window.open(url, "_blank");
+	try {
+		window.sessionStorage.removeItem(CONNECTING_KEY);
+	} catch {
+		// Nothing was stored.
+	}
+	return tab;
+}
+
+/** When this tab was opened by consent, or null for any other tab. */
+export function connectingSince(): number | null {
+	try {
+		const raw = window.sessionStorage.getItem(CONNECTING_KEY);
+		return raw ? Number(raw) : null;
+	} catch {
+		return null;
 	}
 }
