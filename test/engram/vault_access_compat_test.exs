@@ -367,9 +367,10 @@ defmodule Engram.VaultAccessCompatTest do
     end
   end
 
-  # A pre-levels key (NULL `default_access`) restored and listed every
-  # deleted vault it reaches, whenever the vault was deleted. Levels must not
-  # change that: the created-at bound is for leveled keys and OAuth grants.
+  # A key that predates levels (created before the levels migration ran,
+  # `Accounts.pre_levels_key?/1`) restored and listed every deleted vault it
+  # reaches, whenever the vault was deleted. Levels must not change that: the
+  # created-at bound is for every key created since, and OAuth grants.
   describe "a pre-levels key and the trash" do
     import Phoenix.ConnTest
     import Plug.Conn, only: [put_req_header: 3]
@@ -397,6 +398,16 @@ defmodule Engram.VaultAccessCompatTest do
       backdate_deletion(ctx.user, ctx.n)
       {:ok, raw, key} = Accounts.create_api_key(ctx.user, "legacy")
       assert key.default_access == nil
+      key_id = key.id
+
+      # Created before the levels migration ran on this database.
+      Repo.update_all(
+        from(k in Engram.Accounts.ApiKey, where: k.id == ^key_id),
+        [set: [created_at: ~U[2026-01-01 00:00:00Z]]],
+        skip_tenant_check: true
+      )
+
+      Engram.Cache.evict(:api_key, key.key_hash)
 
       ids =
         raw

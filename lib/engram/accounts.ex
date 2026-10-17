@@ -904,6 +904,43 @@ defmodule Engram.Accounts do
   defp key_scope(%ApiKey{default_access: default}, rows),
     do: Engram.Permissions.from_key(default, rows)
 
+  @levels_migration 20_261_015_020_000
+
+  @doc """
+  Whether `key` predates per-vault access levels (#332): created without
+  levels (NULL `default_access`) BEFORE the levels migration ran on this
+  database. Such a key keeps the reach it had then. A key created without
+  levels since is NOT one: NULL `default_access` alone is not the signal,
+  because `create_api_key/3` still stores NULL for a request with no access
+  params. The cutover is when the migration ran here (`schema_migrations`),
+  not when it was written, so a self-host that upgrades later still treats
+  its older keys as pre-levels. Read once per node.
+  """
+  @spec pre_levels_key?(ApiKey.t()) :: boolean()
+  def pre_levels_key?(%ApiKey{default_access: nil, created_at: %DateTime{} = created}),
+    do: DateTime.compare(created, levels_cutover()) == :lt
+
+  def pre_levels_key?(%ApiKey{}), do: false
+
+  defp levels_cutover do
+    case :persistent_term.get({__MODULE__, :levels_cutover}, nil) do
+      nil ->
+        at =
+          from(m in "schema_migrations",
+            where: m.version == ^@levels_migration,
+            select: m.inserted_at
+          )
+          |> Repo.one(skip_tenant_check: true)
+          |> DateTime.from_naive!("Etc/UTC")
+
+        :persistent_term.put({__MODULE__, :levels_cutover}, at)
+        at
+
+      at ->
+        at
+    end
+  end
+
   def list_api_keys(user) do
     {:ok, keys} =
       Repo.with_tenant(user.id, fn ->
