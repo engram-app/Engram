@@ -587,30 +587,43 @@ defmodule EngramWeb.VaultAccessLevelsTest do
     end
   end
 
-  # Parity with the all-vaults OAuth grant above: a key created without
-  # levels has none to record the trash in either, so restore compares the
-  # vault's deletion with the key's creation. Only a key that predates levels
-  # keeps its old reach (vault_access_compat_test.exs, "a pre-levels key and
-  # the trash"); this one is created now.
-  describe "api_key: an unrestricted key and the trash" do
-    test "cannot restore or list a vault deleted before it, can one deleted after", ctx do
-      {:ok, _} = Vaults.delete_vault(ctx.user, ctx.n.id)
-      n_id = ctx.n.id
+  # The created-at bound is for leveled keys (and OAuth grants, above): a
+  # vault listed at write but deleted before the key was created (a skewed
+  # clock, or a row written by hand) is not restorable by it. A key without
+  # levels (NULL `default_access`) means every vault, trash included, as
+  # before levels existed.
+  describe "api_key: the trash and when the key was created" do
+    defp backdate_vault_deletion(vault) do
+      id = vault.id
 
       Engram.Repo.update_all(
-        from(v in Engram.Vaults.Vault, where: v.id == ^n_id),
+        from(v in Engram.Vaults.Vault, where: v.id == ^id),
         [set: [deleted_at: DateTime.add(DateTime.utc_now(:second), -3600, :second)]],
         skip_tenant_check: true
       )
+    end
 
-      {:ok, raw, _} = Accounts.create_api_key(ctx.user, "legacy")
+    test "a leveled key cannot restore or list a vault deleted before it", ctx do
+      token = credential(ctx, :api_key, levels_all(ctx, "write"))
+      {:ok, _} = Vaults.delete_vault(ctx.user, ctx.n.id)
+      backdate_vault_deletion(ctx.n)
 
-      refute to_string(ctx.n.id) in deleted_ids(raw)
-      assert restore(raw, ctx.n).status == 403
+      refute to_string(ctx.n.id) in deleted_ids(token)
+      assert restore(token, ctx.n).status == 403
 
-      assert raw |> as() |> delete("/api/vaults/#{ctx.w.id}") |> json_response(200)
-      assert to_string(ctx.w.id) in deleted_ids(raw)
-      assert restore(raw, ctx.w).status == 200
+      assert token |> as() |> delete("/api/vaults/#{ctx.w.id}") |> json_response(200)
+      assert to_string(ctx.w.id) in deleted_ids(token)
+      assert restore(token, ctx.w).status == 200
+    end
+
+    test "a key without levels lists and restores it, as before levels", ctx do
+      {:ok, _} = Vaults.delete_vault(ctx.user, ctx.n.id)
+      backdate_vault_deletion(ctx.n)
+      {:ok, raw, key} = Accounts.create_api_key(ctx.user, "all vaults")
+      assert key.default_access == nil
+
+      assert to_string(ctx.n.id) in deleted_ids(raw)
+      assert restore(raw, ctx.n).status == 200
     end
   end
 
