@@ -82,7 +82,7 @@ defmodule EngramWeb.ChannelAccess do
   @spec track(Phoenix.Socket.t(), map(), need) :: Phoenix.Socket.t()
   def track(%Phoenix.Socket{assigns: %{current_user: %{id: user_id}}} = socket, vault, need) do
     :ok = Phoenix.PubSub.subscribe(Engram.PubSub, "user_socket:#{user_id}")
-    arm()
+    :ok = arm()
     assign(socket, :channel_access, %{vault: vault, need: need})
   end
 
@@ -96,23 +96,26 @@ defmodule EngramWeb.ChannelAccess do
       ) do
     case check(socket, vault, need) do
       :ok ->
-        if msg == @recheck, do: arm()
+        if msg == @recheck, do: :ok = arm()
         {:noreply, socket}
 
       _lost ->
         # The user-wide disconnect already closes this socket.
-        if msg == @recheck, do: send(socket.transport_pid, disconnect())
+        if msg == @recheck, do: _ = send(socket.transport_pid, disconnect())
         {:stop, {:shutdown, :access_changed}, socket}
     end
   end
 
-  defp arm,
-    do:
+  defp arm do
+    _timer =
       Process.send_after(
         self(),
         @recheck,
         Application.get_env(:engram, :channel_access_recheck_ms, @recheck_ms)
       )
+
+    :ok
+  end
 
   # What the socket transport acts on to close itself (`Phoenix.Socket`).
   defp disconnect, do: %Phoenix.Socket.Broadcast{event: "disconnect", payload: %{}}
