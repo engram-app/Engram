@@ -764,12 +764,23 @@ defmodule Engram.OAuth do
 
   defp report({:error, reason}, _rt), do: grant_error(reason)
 
-  # Consumed first, even when also revoked: presenting a token after it was
-  # used is a replay whatever happened to the family since (an RFC 7009 revoke
-  # marks every row of it, consumed ones included). Grace needs a live family.
-  defp decide({%RefreshToken{consumed_at: %DateTime{} = at} = rt, family_live}, ip) do
-    with true <- family_live,
-         true <- DateTime.diff(DateTime.utc_now(), at) <= @refresh_reuse_grace_seconds,
+  # Revoked first, even when also consumed: Disconnect, RFC 7009 or an
+  # earlier replay. Each revokes every row of the family, consumed ones
+  # included, so a disconnected client presenting its old token lands here.
+  # Not a theft signal in itself, so it is reported as revoked and never
+  # logged as reuse. Liveness is family-wide (`family_unrevoked/1`), so a
+  # family with any revoked row mints nothing, whichever of its rows was
+  # marked: one read just before a family revoke, or one a release that
+  # revoked a single row left unmarked.
+  defp decide({%RefreshToken{revoked_at: %DateTime{}} = rt, _family_live}, _ip),
+    do: refuse_revoked(rt)
+
+  defp decide({%RefreshToken{} = rt, false = _family_live}, _ip), do: refuse_revoked(rt)
+
+  # Consumed, in a live family: a replay. Inside the grace window it may be a
+  # lost rotation response (`grace_reissue/2`); otherwise it is reuse.
+  defp decide({%RefreshToken{consumed_at: %DateTime{} = at} = rt, true = _family_live}, ip) do
+    with true <- DateTime.diff(DateTime.utc_now(), at) <= @refresh_reuse_grace_seconds,
          {:ok, response, ip_matched} <- grace_reissue(rt, ip) do
       {:ok, response, {:grace, ip_matched}}
     else
@@ -778,16 +789,6 @@ defmodule Engram.OAuth do
         {:error, :refresh_token_reuse}
     end
   end
-
-  # Revoked: Disconnect, RFC 7009 or an earlier replay. Not a theft signal in
-  # itself, so it is reported as revoked and never logged as reuse. Liveness is
-  # family-wide (`family_unrevoked/1`), so a family with any revoked row mints
-  # nothing, whichever of its rows was marked: one read just before a family
-  # revoke, or one a release that revoked a single row left unmarked.
-  defp decide({%RefreshToken{revoked_at: %DateTime{}} = rt, _family_live}, _ip),
-    do: refuse_revoked(rt)
-
-  defp decide({%RefreshToken{} = rt, false = _family_live}, _ip), do: refuse_revoked(rt)
 
   defp decide({%RefreshToken{expires_at: exp} = rt, _family_live}, ip) do
     if DateTime.compare(DateTime.utc_now(), exp) == :gt do
