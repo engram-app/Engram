@@ -18,6 +18,7 @@ import { useT } from "@/i18n/locale-provider";
 import { notify } from "@/lib/notify";
 import { ROUTES } from "@/routes";
 import { useSubmitFeedback } from "../../api/queries";
+import { clearHttpCache } from "../../auth/clear-http-cache";
 import { SettingsSectionCard } from "./section-card";
 
 const CONFIRM = "delete my account";
@@ -64,6 +65,7 @@ export function DangerZoneSection() {
 		}
 		try {
 			await remove();
+			await clearHttpCache();
 			await clerk.signOut({ redirectUrl: ROUTES.SIGN_IN });
 		} catch (e) {
 			setDeleting(false);

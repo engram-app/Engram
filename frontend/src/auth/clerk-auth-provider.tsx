@@ -13,6 +13,7 @@ import { ROUTES } from "../routes";
 import { captureError } from "../sentry";
 import { useTheme } from "../theme/theme-provider";
 import { type AuthAdapter, AuthContext } from "./auth-context";
+import { clearHttpCache } from "./clear-http-cache";
 import { rememberSignupUser } from "./signup-rejection";
 import { useClearQueryCacheOnUserChange } from "./use-clear-query-cache-on-user-change";
 import { useIdentifyUserOnAuthChange } from "./use-identify-user-on-auth-change";
@@ -87,6 +88,7 @@ function ClerkAdapterInner({ children }: { children: React.ReactNode }) {
 			user: isSignedIn && email ? { email, imageUrl } : null,
 			getToken: tokenGetter,
 			logout: async () => {
+				await clearHttpCache();
 				await clerk.signOut();
 			},
 			hasBuiltInUI: true,
