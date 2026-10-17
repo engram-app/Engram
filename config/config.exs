@@ -53,6 +53,17 @@ config :engram, Engram.PromEx,
   grafana: :disabled,
   metrics_server: :disabled
 
+# Peep, not the default TelemetryMetricsPrometheus.Core: Core's exporter ran a
+# regex per series and three String.replace calls per label per bucket line,
+# ~12% of app CPU at a 15 s scrape. Differences that matter to emitters and
+# dashboards (pinned by Engram.PromEx.StorageTest):
+#   * an ABSENT measurement key records 1, so "no sample" must be passed as nil;
+#   * a distribution `_sum` adds `round(value)` per sample, so sub-unit values
+#     (sub-ms Ecto decode/queue times) under-read their `_sum`;
+#   * a value exactly on a bucket boundary lands in the NEXT bucket (`<`, not
+#     Prometheus `le` `<=`), which only moves integer-valued histograms.
+config :prom_ex, :storage_adapter, PromEx.Storage.Peep
+
 # Compress-then-encrypt for large columns (#1872 R2): notes content/crdt_state,
 # vault index state/log, revision blobs (zstd) and attachments (:auto). Format 1
 # rows are readable with this off. Kill switch without a release: set the
