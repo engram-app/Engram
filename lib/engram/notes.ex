@@ -5199,7 +5199,7 @@ defmodule Engram.Notes do
   @doc """
   Raw rows for `list_folders_with_counts/2` — per folder_hmac, one
   representative row (for envelope decryption) plus a SQL-side
-  window-function count of `kind='note'` rows in that folder. MUST run
+  count of `kind='note'` rows in that folder. MUST run
   inside the caller's `Repo.with_tenant/2` — pair with
   `decrypt_folder_count_rows/2`. Extracted so `VaultTreeController` can
   fetch this alongside the note/folder-marker/attachment queries in one
@@ -5219,24 +5219,30 @@ defmodule Engram.Notes do
     # Per folder_hmac, pick any one row (for envelope decryption) and
     # count only kind='note' rows. Marker-only folders yield count 0;
     # mixed folders yield the note count (markers excluded).
-    Repo.all(
-      from(n in scoped_live(user, vault),
-        where: not is_nil(n.folder_hmac),
-        distinct: n.folder_hmac,
-        select: %{
-          id: n.id,
-          dv: n.dek_version,
-          ct: n.folder_ciphertext,
-          nonce: n.folder_nonce,
-          count:
-            fragment(
-              "COUNT(*) FILTER (WHERE ? = 'note') OVER (PARTITION BY ?)",
-              n.kind,
-              n.folder_hmac
-            )
-        }
-      )
+    #
+    # GROUP BY + any_value(ROW(...)) (one row's fields, kept together) is a
+    # HashAggregate; the old DISTINCT ON + window COUNT sorted every live
+    # row first. 50k notes / 2k folders, PG 18 local: 112 ms vs 257 ms, and
+    # the sort spilled 5.7 MB to disk at the default work_mem.
+    from(n in scoped_live(user, vault),
+      where: not is_nil(n.folder_hmac),
+      group_by: n.folder_hmac,
+      select: {
+        fragment(
+          "any_value(ROW(?, ?, ?, ?))",
+          n.id,
+          n.dek_version,
+          n.folder_ciphertext,
+          n.folder_nonce
+        ),
+        fragment("COUNT(*) FILTER (WHERE ? = 'note')", n.kind)
+      }
     )
+    |> Repo.all()
+    |> Enum.map(fn {{id, dv, ct, nonce}, count} ->
+      # A record's fields skip Ecto's type casting, so the uuid is raw bytes.
+      %{id: Ecto.UUID.load!(id), dv: dv, ct: ct, nonce: nonce, count: count}
+    end)
   end
 
   @doc "Decrypts `raw_folder_count_rows/2`'s rows. Pure — no DB access."
