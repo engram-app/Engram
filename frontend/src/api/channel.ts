@@ -32,7 +32,7 @@ import {
 	toastJoinRefused,
 } from "./crdt-ops";
 import { applyVaultTreeEvents, invalidateVaultTree } from "./queries";
-import type { NoteEvent } from "./vault-tree-patch";
+import type { AttachmentEvent, NoteEvent } from "./vault-tree-patch";
 
 // phoenix.js's own default reconnect steps — kept for the 2nd+ attempt. Only
 // the FIRST reconnect is full-jittered, to de-sync a drained fleet so the
@@ -142,10 +142,12 @@ interface PendingBatch {
 	queryClient: QueryClient;
 	vaultId: string;
 	folders: Set<string>;
-	// Note events the tree can absorb as a patch, applied together at flush.
+	// Note and attachment events the tree can absorb as a patch, applied
+	// together at flush.
 	events: NoteEvent[];
-	// Set by any event the tree can't absorb (attachments, folder-marker
-	// deletes with no id): the flush falls back to a full re-fetch.
+	attachmentEvents: AttachmentEvent[];
+	// Set by any event the tree can't absorb (a malformed attachment event, a
+	// folder-marker delete with no id): the flush falls back to a full re-fetch.
 	needsRefetch: boolean;
 	timer: ReturnType<typeof setTimeout>;
 }
@@ -157,12 +159,29 @@ function folderFromPath(path: string): string {
 	return idx === -1 ? "" : path.slice(0, idx);
 }
 
+// What an attachment event (`kind: "attachment"`, addressed by path) means to
+// the vault tree, or null when its shape can't be trusted.
+function toAttachmentEvent(p: NoteChangedPayload): AttachmentEvent | null {
+	if (p.event_type === "delete") {
+		return { kind: "delete", path: p.path };
+	}
+	const { mime_type, size_bytes, mtime } = p;
+	if (
+		p.event_type === "upsert" &&
+		typeof mime_type === "string" &&
+		typeof size_bytes === "number" &&
+		typeof mtime === "number"
+	) {
+		return { kind: "upsert", path: p.path, mime_type, size_bytes, mtime };
+	}
+	return null;
+}
+
 // What a note event means to the vault tree, or null when the tree can't
-// absorb it as a patch. Attachment events ride this same channel
-// (`kind: "attachment"`) but address rows by path with no id; a note event with
-// no id is a folder-marker delete. Both fall back to a re-fetch.
+// absorb it as a patch. A note event with no id is a folder-marker delete,
+// which falls back to a re-fetch.
 function toNoteEvent(p: NoteChangedPayload): NoteEvent | null {
-	if (p.kind === "attachment" || p.id === undefined) {
+	if (p.id === undefined) {
 		return null;
 	}
 	if (p.event_type === "delete") {
@@ -179,7 +198,10 @@ function flushBatch(batch: PendingBatch): void {
 	// The sidebar's folders, attachments and note lists are all `select` views
 	// of the ONE vault-tree query. Patch it with what the events say when that
 	// is trustworthy; re-download the vault only when it isn't.
-	if (batch.needsRefetch || !applyVaultTreeEvents(queryClient, vaultId, batch.events)) {
+	if (
+		batch.needsRefetch ||
+		!applyVaultTreeEvents(queryClient, vaultId, batch.events, batch.attachmentEvents)
+	) {
 		invalidateVaultTree(queryClient, vaultId);
 	}
 	queryClient.invalidateQueries({ queryKey: ["search", vaultId] });
@@ -287,6 +309,9 @@ export interface NoteChangedPayload {
 	folder?: string;
 	tags?: string[];
 	mtime?: number;
+	// Attachment variant only.
+	mime_type?: string;
+	size_bytes?: number;
 	updated_at?: string;
 	version?: number;
 	// Distributed trace leg B: the `sync.fanout` span's W3C traceparent,
@@ -337,6 +362,7 @@ export function handleNoteChanged(
 			vaultId: activeVaultId,
 			folders: new Set(),
 			events: [],
+			attachmentEvents: [],
 			needsRefetch: false,
 			timer: setTimeout(() => {
 				pending = null;
@@ -347,11 +373,20 @@ export function handleNoteChanged(
 	}
 
 	pending.folders.add(payload.folder ?? folderFromPath(payload.path));
-	const event = toNoteEvent(payload);
-	if (event) {
-		pending.events.push(event);
+	if (payload.kind === "attachment") {
+		const event = toAttachmentEvent(payload);
+		if (event) {
+			pending.attachmentEvents.push(event);
+		} else {
+			pending.needsRefetch = true;
+		}
 	} else {
-		pending.needsRefetch = true;
+		const event = toNoteEvent(payload);
+		if (event) {
+			pending.events.push(event);
+		} else {
+			pending.needsRefetch = true;
+		}
 	}
 
 	for (const listener of listeners) {

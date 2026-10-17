@@ -2376,6 +2376,38 @@ describe("useUploadAttachment", () => {
 		expect(spy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
 		expect(spy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
 	});
+
+	// The response is the full row, so a cached tree takes it as a patch instead
+	// of re-downloading the vault per upload. The channel's echo of the same
+	// upload then lands on a known path and is a no-op.
+	it("patches the uploaded row into a cached tree without re-fetching it", async () => {
+		const row = {
+			id: "a1",
+			path: "pic.png",
+			mime_type: "image/png",
+			size_bytes: 3,
+			mtime: 1_718_000_000,
+			updated_at: "u",
+		};
+		post.mockResolvedValue({ attachment: row });
+		const { qc, Wrapper } = wrapper();
+		qc.setQueryData(["vault-tree", "42"], { folders: [], notes: [], attachments: [] });
+		const spy = vi.spyOn(qc, "invalidateQueries");
+		const { result } = renderHook(() => useUploadAttachment(), { wrapper: Wrapper });
+
+		await act(async () => {
+			await result.current.mutateAsync({
+				path: "pic.png",
+				mime_type: "image/png",
+				content_base64: "AAAA",
+				mtime: 1_718_000_000,
+			});
+		});
+
+		expect(spy).not.toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
+		expect(qc.getQueryData<VaultTree>(["vault-tree", "42"])?.attachments).toEqual([row]);
+		expect(spy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
+	});
 });
 
 describe("useAppBootstrap seeding useVaults", () => {

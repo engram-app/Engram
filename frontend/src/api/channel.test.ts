@@ -427,3 +427,102 @@ describe("note events patch the vault tree in place", () => {
 		expect(treeRefetches()).toBe(1);
 	});
 });
+
+// Attachment events address rows by path and carry no id. Re-fetching the
+// whole vault per upload (prod: 60 uploads -> 103 tree fetches) is what these
+// patches replace; only an event the tree can't build a row from re-fetches.
+describe("attachment events patch the vault tree in place", () => {
+	const PIC = {
+		id: "a1",
+		path: "docs/pic.png",
+		mime_type: "image/png",
+		size_bytes: 1,
+		mtime: 0,
+		updated_at: "u1",
+	};
+	const TREE: VaultTree = {
+		folders: [{ id: "m-docs", name: "docs", count: 1, parent_id: null }],
+		notes: [{ id: "n1", path: "docs/a.md", created_at: "c", updated_at: "u1" }],
+		attachments: [PIC],
+	};
+
+	function setup() {
+		const qc = new QueryClient();
+		qc.setQueryData(["vault-tree", "7"], TREE);
+		const invalidate = vi.spyOn(qc, "invalidateQueries");
+		const treeRefetches = () =>
+			invalidate.mock.calls.filter(([f]) => f?.queryKey?.[0] === "vault-tree").length;
+		const tree = () => qc.getQueryData<VaultTree>(["vault-tree", "7"]);
+		return { qc, treeRefetches, tree };
+	}
+
+	const flush = () => vi.advanceTimersByTime(250);
+	const ev = { kind: "attachment", vault_id: "7" };
+
+	it("applies an upsert of a known attachment without re-downloading the vault", () => {
+		const { qc, treeRefetches, tree } = setup();
+		handleNoteChanged(
+			{
+				...ev,
+				event_type: "upsert",
+				path: PIC.path,
+				mime_type: "image/png",
+				size_bytes: 9,
+				mtime: 5,
+			},
+			qc,
+			"7",
+		);
+		flush();
+		expect(treeRefetches()).toBe(0);
+		expect(tree()?.attachments).toEqual([{ ...PIC, size_bytes: 9, mtime: 5 }]);
+	});
+
+	it("applies a delete without re-downloading the vault", () => {
+		const { qc, treeRefetches, tree } = setup();
+		handleNoteChanged({ ...ev, event_type: "delete", path: PIC.path }, qc, "7");
+		flush();
+		expect(treeRefetches()).toBe(0);
+		expect(tree()?.attachments).toEqual([]);
+	});
+
+	it("patches note and attachment events from one burst together", () => {
+		const { qc, treeRefetches, tree } = setup();
+		handleNoteChanged({ ...ev, event_type: "delete", path: PIC.path }, qc, "7");
+		handleNoteChanged(
+			{ event_type: "upsert", id: "n1", path: "docs/a.md", updated_at: "u2", vault_id: "7" },
+			qc,
+			"7",
+		);
+		flush();
+		expect(treeRefetches()).toBe(0);
+		expect(tree()?.attachments).toEqual([]);
+		expect(tree()?.notes[0]?.updated_at).toBe("u2");
+	});
+
+	// An unknown shape is not something to guess at.
+	it("re-fetches for an upsert missing its metadata", () => {
+		const { qc, treeRefetches } = setup();
+		handleNoteChanged({ ...ev, event_type: "upsert", path: PIC.path }, qc, "7");
+		flush();
+		expect(treeRefetches()).toBe(1);
+	});
+
+	it("re-fetches for a new attachment, since the event has no id to build its row", () => {
+		const { qc, treeRefetches } = setup();
+		handleNoteChanged(
+			{
+				...ev,
+				event_type: "upsert",
+				path: "new.png",
+				mime_type: "image/png",
+				size_bytes: 1,
+				mtime: 0,
+			},
+			qc,
+			"7",
+		);
+		flush();
+		expect(treeRefetches()).toBe(1);
+	});
+});

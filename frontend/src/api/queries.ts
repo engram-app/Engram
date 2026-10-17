@@ -30,6 +30,8 @@ import { crdtCreateNote, crdtCreateNoteWithContent, crdtDeleteNote } from "./cha
 import { ApiError, api } from "./client";
 import { CrdtOpError, isPermanentJoinRefusal, toastJoinRefused } from "./crdt-ops";
 import {
+	type AttachmentEvent,
+	applyAttachmentEvents,
 	applyNoteEvents,
 	baseOf,
 	// Path → parent folder, the same rule the backend uses when computing
@@ -579,14 +581,19 @@ export function useUploadAttachment() {
 		{ path: string; mime_type?: string; content_base64: string; mtime: number }
 	>({
 		mutationFn: (body) => api.post<{ attachment: AttachmentSummary }>("/attachments", body),
-		onSuccess: () => {
-			// New attachment row changes the tree's attachment list, its folder's
-			// count, AND the dashboard folder-browse list (which renders attachments).
-			// Mirrors useBatchDeleteAttachments — keep all three keys in sync.
+		onSuccess: ({ attachment }) => {
+			// New attachment row changes the tree's attachment list AND the
+			// dashboard folder-browse list (which renders attachments). The
+			// response is the full row, so the tree takes it as a patch; it
+			// re-fetches only when a patch can't be trusted (see
+			// applyVaultTreeEvents). Re-fetching per upload is what made a bulk
+			// upload cost ~1.7 whole-vault downloads per file.
 			// 402s (disabled / text-only / too-large / quota) throw LimitExceededError
 			// AND open the global UpgradeRequiredDialog via the client's
 			// upgradeHandler — nothing to handle here.
-			invalidateVaultTree(qc, vaultId);
+			if (!applyVaultTreeEvents(qc, vaultId, [], [{ kind: "upsert", ...attachment }])) {
+				invalidateVaultTree(qc, vaultId);
+			}
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 		},
 	});
@@ -610,6 +617,7 @@ export const ROOT_FOLDER_ID = "root";
  *   would mark it fresh and cancel that refetch;
  * - a note moved to a different folder: it may be part of a folder rename,
  *   and the events never say what happened to the folder marker;
+ * - an attachment appeared at a path the tree lacks: the broadcast has no id;
  * - a tree fetch is IN FLIGHT: its response may predate these events and would
  *   land on top of the patch, silently undoing it. Invalidating instead bumps
  *   the generation `fetchVaultTreeFresh` checks, so that fetch re-runs.
@@ -618,6 +626,7 @@ export function applyVaultTreeEvents(
 	qc: QueryClient,
 	vaultId: string | null | undefined,
 	events: readonly NoteEvent[],
+	attachmentEvents: readonly AttachmentEvent[] = [],
 ): boolean {
 	const state = qc.getQueryState<VaultTree>(["vault-tree", vaultId]);
 	if (!state?.data || state.fetchStatus === "fetching") {
@@ -635,7 +644,11 @@ export function applyVaultTreeEvents(
 	if (movesAcrossFolders(state.data, events)) {
 		return false;
 	}
-	const next = applyNoteEvents(state.data, events);
+	// Null: an attachment row the events can't build (a new path, no id).
+	const next = applyAttachmentEvents(applyNoteEvents(state.data, events), attachmentEvents);
+	if (next === null) {
+		return false;
+	}
 	if (next === state.data) {
 		return true;
 	}

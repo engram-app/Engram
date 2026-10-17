@@ -300,3 +300,70 @@ export function movesAcrossFolders(tree: VaultTree, events: readonly NoteEvent[]
 		return to !== undefined && to !== dirOf(e.path);
 	});
 }
+
+/**
+ * An attachment change as the sync channel reports it (`kind: "attachment"`).
+ * Rows are addressed by PATH: the broadcast carries no id. `id`/`updated_at`
+ * are only present when the caller holds a full row (an upload's response).
+ */
+export type AttachmentEvent =
+	| {
+			kind: "upsert";
+			path: string;
+			mime_type: string;
+			size_bytes: number;
+			mtime: number;
+			id?: string;
+			updated_at?: string;
+	  }
+	| { kind: "delete"; path: string };
+
+/**
+ * Apply attachment events by path, returning the SAME tree when nothing
+ * changes. Null when an upsert names a path the tree lacks and carries no id:
+ * the sidebar and the attachment page address rows by id, so the row can't be
+ * built and the caller must re-fetch. A rename (delete old + upsert new) lands
+ * there too, which is correct: the new row's id is the server's to tell.
+ *
+ * An in-place update keeps the row's `updated_at` when the event has none; the
+ * tree sorts attachments by `mtime`, which the event does carry.
+ */
+export function applyAttachmentEvents(
+	tree: VaultTree,
+	events: readonly AttachmentEvent[],
+): VaultTree | null {
+	const byPath = new Map(tree.attachments.map((a) => [a.path, a]));
+	let changed = false;
+	for (const e of events) {
+		const cur = byPath.get(e.path);
+		if (e.kind === "delete") {
+			changed = byPath.delete(e.path) || changed;
+			continue;
+		}
+		const id = e.id ?? cur?.id;
+		if (id === undefined) {
+			return null;
+		}
+		const next: VaultTreeAttachment = {
+			id,
+			path: e.path,
+			mime_type: e.mime_type,
+			size_bytes: e.size_bytes,
+			mtime: e.mtime,
+			updated_at: e.updated_at ?? cur?.updated_at ?? "",
+		};
+		if (
+			cur &&
+			cur.id === next.id &&
+			cur.mime_type === next.mime_type &&
+			cur.size_bytes === next.size_bytes &&
+			cur.mtime === next.mtime &&
+			cur.updated_at === next.updated_at
+		) {
+			continue;
+		}
+		byPath.set(e.path, next);
+		changed = true;
+	}
+	return changed ? { ...tree, attachments: [...byPath.values()] } : tree;
+}
