@@ -20,10 +20,12 @@ defmodule EngramWeb.ReadOnlyRoutes do
   the MCP `send_feedback` tool (`Engram.MCP.Tools.writes_vault?/1`):
 
     * `/api/feedback`: a message to the Engram team.
-    * `/api/logs`: the client's own diagnostic log lines. Rate limited per
-      credential like every vault-scoped route (`PreAuthRateLimit`, and
-      `RequireApiRpsBudget` for API keys).
     * `/api/telemetry/spans`: the client's trace spans.
+
+  `POST /api/logs` is NOT here: it stores lines against the addressed vault,
+  a vault-scoped write a read-only credential is refused. The MCP
+  transport's GET and DELETE answer 405 on an auth-free route, so no
+  exemption is needed for them.
   """
 
   @safe_methods ~w(GET HEAD OPTIONS)
@@ -33,7 +35,6 @@ defmodule EngramWeb.ReadOnlyRoutes do
     ["api", "billing", "plan-change", "preview"],
     # Write no vault data (above).
     ["api", "feedback"],
-    ["api", "logs"],
     ["api", "telemetry", "spans"]
   ]
 
