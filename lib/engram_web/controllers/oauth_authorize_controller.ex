@@ -57,16 +57,20 @@ defmodule EngramWeb.OAuthAuthorizeController do
 
     case OAuth.validate_authorization_request(params) do
       {:ok, validated} ->
-        case OAuth.mint_authorization_code(
+        validated = OAuth.apply_read_only_choice(validated, params["read_only"])
+
+        case OAuth.mint_authorization_code_granted(
                user,
                Map.put(validated, :iss, iss),
                OAuth.parse_vault_selection(params),
                params["label"]
              ) do
-          {:ok, redirect_url} ->
+          {:ok, redirect_url, granted} ->
             Engram.Analytics.track(user, "mcp_oauth_granted", funnel_props(validated))
 
-            json(conn, %{redirect_uri: redirect_url})
+            # `granted` echoes what was stored (#174), so the consent screen
+            # can refuse to redirect when it is wider than the user's pick.
+            json(conn, %{redirect_uri: redirect_url, granted: granted})
 
           {:redirect_error, redirect_uri, error, state} ->
             json(conn, %{

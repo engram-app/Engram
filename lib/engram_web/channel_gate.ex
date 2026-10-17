@@ -240,6 +240,36 @@ defmodule EngramWeb.ChannelGate do
     end
   end
 
+  @doc """
+  The vault scope of a socket's credential as it stands NOW, or `:revoked`.
+
+  The socket read its OAuth grant once, at connect. A revoke or access edit
+  disconnects the owner's sockets (`Engram.OAuth.grants_changed/1`), but no
+  join may rely on that broadcast having landed: this re-resolves the grant
+  (`gid`) from the `:oauth_grant` cache (one indexed query on a miss), so a
+  revoked grant is refused and a vault is judged on what the grant reaches
+  now. Every channel that judges a vault calls this, not
+  `Permissions.vault_scope/1` on the connect-time assigns. API keys are read
+  fresh by `Permissions.vault_scope/1` itself (cached, evicted on edit).
+  """
+  @spec vault_scope(map()) :: Engram.Permissions.scope() | :revoked
+  def vault_scope(%{oauth_claims: %{"gid" => _} = claims} = assigns) do
+    case Engram.OAuth.expand_claims(claims) do
+      {:ok, fresh} ->
+        assigns
+        |> Map.merge(%{
+          oauth_scope_vault_ids: Engram.Permissions.scope_ids_from_claims(fresh),
+          oauth_access: Engram.Permissions.from_claims(fresh)
+        })
+        |> Engram.Permissions.vault_scope()
+
+      :revoked ->
+        :revoked
+    end
+  end
+
+  def vault_scope(assigns), do: Engram.Permissions.vault_scope(assigns)
+
   # Each of these matches STRICTLY on the field it gates rather than falling
   # through a `_user` catch-all, so a renamed or retyped column CRASHES here
   # instead of silently passing every account. Same argument

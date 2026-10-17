@@ -120,7 +120,7 @@ defmodule EngramWeb.SyncChannelTest do
       # Try to join the default vault (which the key does NOT have access to)
       socket = user_socket(user, api_key_record)
 
-      assert {:error, %{reason: "api_key_vault_forbidden"}} =
+      assert {:error, %{reason: "vault_not_found"}} =
                subscribe_and_join(
                  socket,
                  EngramWeb.SyncChannel,

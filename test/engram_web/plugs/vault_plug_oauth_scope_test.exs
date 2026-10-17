@@ -29,7 +29,7 @@ defmodule EngramWeb.VaultPlugOAuthScopeTest do
     assert conn.status == 200
   end
 
-  test "a vault outside the grant is 403", %{
+  test "a vault outside the grant is 404, like a missing one", %{
     conn: conn,
     user: user,
     granted: granted,
@@ -41,14 +41,14 @@ defmodule EngramWeb.VaultPlugOAuthScopeTest do
       |> put_req_header("x-vault-id", other.id)
       |> get("/api/folders")
 
-    assert conn.status == 403
+    assert conn.status == 404
   end
 
   test "the default-vault fallback is also gated", %{conn: conn, user: user, other: other} do
     # `granted` is the DEFAULT vault; a grant for `other` alone must not let a
     # header-less request fall back into the default.
     conn = conn |> scoped(user, [other.id]) |> get("/api/folders")
-    assert conn.status == 403
+    assert conn.status == 404
   end
 
   test "an unscoped grant reaches every vault", %{conn: conn, user: user, other: other} do
@@ -112,7 +112,7 @@ defmodule EngramWeb.VaultPlugOAuthScopeTest do
       assert conn.status == 200
     end
 
-    test "a vault the KEY allows but the grant omits is 403", %{
+    test "a vault the KEY allows but the grant omits is 404", %{
       conn: conn,
       user: user,
       granted: granted,
@@ -129,10 +129,10 @@ defmodule EngramWeb.VaultPlugOAuthScopeTest do
         |> put_req_header("x-vault-id", other.id)
         |> get("/api/folders")
 
-      assert conn.status == 403
+      assert conn.status == 404
     end
 
-    test "a vault the GRANT allows but the key omits is 403", %{
+    test "a vault the GRANT allows but the key omits is 404", %{
       conn: conn,
       user: user,
       granted: granted,
@@ -149,7 +149,7 @@ defmodule EngramWeb.VaultPlugOAuthScopeTest do
         |> put_req_header("x-vault-id", other.id)
         |> get("/api/folders")
 
-      assert conn.status == 403
+      assert conn.status == 404
     end
 
     test "disjoint restrictions reach nothing at all", %{
@@ -169,7 +169,7 @@ defmodule EngramWeb.VaultPlugOAuthScopeTest do
           |> put_req_header("x-vault-id", vault.id)
           |> get("/api/folders")
 
-        assert conn.status == 403
+        assert conn.status == 404
       end
     end
   end

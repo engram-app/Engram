@@ -1275,7 +1275,7 @@
         "destructiveHint": false,
         "idempotentHint": true,
         "openWorldHint": false,
-        "readOnlyHint": true,
+        "readOnlyHint": false,
         "title": "Get Attachment Upload Target"
       },
       "description": "Get the endpoint and this account's limits for uploading an attachment (image, PDF, audio, video). Returns a URL to POST the file to yourself using the credential already authorizing this connection; the bytes do not pass through this tool. Call before uploading to learn the size cap and which file types the plan allows.",

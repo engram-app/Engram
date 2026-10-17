@@ -136,8 +136,16 @@ defmodule EngramWeb.SearchController do
   # `api_key_vaults` SELECT on every plain search for a value that is inert.
   defp narrow_to_vault_scope(opts, conn) do
     case Engram.Permissions.vault_scope(conn) do
-      :all -> opts
-      scope -> Keyword.put(opts, :vault_ids, MapSet.to_list(scope))
+      :all ->
+        opts
+
+      # Resolved against the user's vaults, not read off the scope: a vault
+      # reached through the new-vaults policy (#174) is listed nowhere in it.
+      scope ->
+        vaults =
+          Engram.Permissions.filter(scope, Engram.Vaults.list_vaults(conn.assigns.current_user))
+
+        Keyword.put(opts, :vault_ids, Enum.map(vaults, & &1.id))
     end
   end
 

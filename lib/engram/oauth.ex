@@ -29,8 +29,45 @@ defmodule Engram.OAuth do
   # 32 bytes of CSPRNG output, and three attributes holding 32 invited them to
   # drift into three different strengths.
   @token_bytes 32
-  @valid_scopes ~w(mcp)
+  # `mcp:read` (#174) narrows a grant to the read-only MCP tools. Scopes are a
+  # union (RFC 6749 §3.3), so `mcp` already covers it.
+  @read_scope "mcp:read"
+  @valid_scopes ["mcp", @read_scope]
   @max_requested_scopes 16
+  # The id no vault has: the legacy `vault_ids` of a leveled grant with no
+  # write vault (see `resolve_selection/3`).
+  @no_vault "00000000-0000-0000-0000-000000000000"
+
+  @doc """
+  Query expression: no row of the refresh-token family `family_id` is
+  revoked. A grant is live only then (see `load_grant/1`), whatever any one
+  row says, so every reader of liveness (enforcement, the connections list,
+  the connection cap) uses this one rule. `require Engram.OAuth` to use it.
+
+  A successor superseded by a grace re-issue (`superseded_at`, #1974) is
+  revoked without revoking its family, so it does not count. Nor does a
+  revoked row that was never used while its family still has a live
+  (unconsumed, unrevoked) row: that is a grace re-issue written before
+  `superseded_at` existed (0.52.0, or an old node mid-deploy). A real family
+  revoke marks every live row, and a single-row revoke of the live leaf
+  leaves none, so neither is excused. `backfill_superseded/0` later stamps
+  such rows.
+  """
+  defmacro family_unrevoked(family_id) do
+    quote do
+      fragment(
+        """
+        NOT EXISTS (
+          SELECT 1 FROM oauth_refresh_tokens f
+           WHERE f.family_id = ? AND f.revoked_at IS NOT NULL AND f.superseded_at IS NULL
+             AND (f.consumed_at IS NOT NULL OR NOT EXISTS (
+               SELECT 1 FROM oauth_refresh_tokens g
+                WHERE g.family_id = f.family_id AND g.revoked_at IS NULL AND g.consumed_at IS NULL)))
+        """,
+        unquote(family_id)
+      )
+    end
+  end
 
   # ── Clients (Phase 2) ────────────────────────────────────────────
 
@@ -385,7 +422,7 @@ defmodule Engram.OAuth do
          redirect_uri: redirect_uri,
          code_challenge: params["code_challenge"],
          code_challenge_method: params["code_challenge_method"],
-         scope: granted,
+         scope: effective_scope(granted),
          scope_requested: requested,
          state: params["state"]
        }}
@@ -393,6 +430,50 @@ defmodule Engram.OAuth do
   end
 
   def validate_authorization_request(_), do: {:client_error, "invalid_request"}
+
+  @doc "Every scope this authorization server grants, for discovery metadata."
+  @spec scopes_supported() :: [String.t()]
+  def scopes_supported, do: @valid_scopes
+
+  @doc "The rollback-safety sentinel a leveled grant stores in `vault_ids`: an id no vault has."
+  @spec no_vault() :: String.t()
+  def no_vault, do: @no_vault
+
+  @doc """
+  Whether a token's `scope` claim is the read-only MCP grant.
+
+  True only for `mcp:read` WITHOUT `mcp`: a client that asks for every
+  advertised scope (the MCP spec's fallback when a challenge names none) gets
+  their union, which is full access. Anything else, including an absent scope,
+  is the pre-#174 full grant.
+  """
+  @spec read_only_scope?(term()) :: boolean()
+  def read_only_scope?(scope) when is_binary(scope) do
+    requested = String.split(scope, " ", trim: true)
+    @read_scope in requested and "mcp" not in requested
+  end
+
+  def read_only_scope?(_scope), do: false
+
+  @doc """
+  Applies the consent screen's "Read only" choice to a validated request.
+
+  Only ever narrows: `true` downgrades to `mcp:read`, anything else leaves the
+  client's requested scope alone, so a client that asked for `mcp:read` cannot
+  be upgraded here.
+  """
+  @spec apply_read_only_choice(map(), term()) :: map()
+  def apply_read_only_choice(validated, choice) when choice in [true, "true"],
+    do: %{validated | scope: @read_scope}
+
+  def apply_read_only_choice(validated, _choice), do: validated
+
+  # Stored canonically so every reader matches one string. Takes the narrowed
+  # scope (`narrow_scope/1`, which already defaults an absent one to `mcp`);
+  # any other valid value passes through unchanged.
+  defp effective_scope(scope) do
+    if read_only_scope?(scope), do: @read_scope, else: scope
+  end
 
   # RFC 6749 puts no bound on `state`, and clients legitimately pack routing
   # data into it (Windsurf's exceeded 255 and 500'd us on 2026-07-30, because
@@ -434,22 +515,35 @@ defmodule Engram.OAuth do
   present. Absent params default to `:all`, matching the previous
   `params["vault_choice"] || "vault:*"` behaviour.
   """
-  @spec parse_vault_selection(map()) :: :all | [String.t()] | :invalid
-  def parse_vault_selection(%{"vault_ids" => ids}) when is_list(ids) do
+  @spec parse_vault_selection(map()) ::
+          :all | [String.t()] | {map(), String.t()} | :invalid
+  def parse_vault_selection(params) when is_map(params) do
+    # #174: per-vault levels plus a policy for vaults created later. Absent,
+    # the pre-levels shapes below keep their meaning.
+    case Engram.Permissions.parse_access_params(params) do
+      {:ok, nil} -> parse_legacy_selection(params)
+      {:ok, access} -> access
+      :error -> :invalid
+    end
+  end
+
+  defp parse_legacy_selection(%{"vault_ids" => ids}) when is_list(ids) do
     if Enum.all?(ids, &is_binary/1), do: ids, else: :invalid
   end
 
-  def parse_vault_selection(%{"vault_ids" => _}), do: :invalid
-  def parse_vault_selection(%{"vault_choice" => "vault:*"}), do: :all
-  def parse_vault_selection(%{"vault_choice" => "vault:" <> id}), do: [id]
-  def parse_vault_selection(%{"vault_choice" => _}), do: :invalid
-  def parse_vault_selection(_), do: :all
+  defp parse_legacy_selection(%{"vault_ids" => _}), do: :invalid
+  defp parse_legacy_selection(%{"vault_choice" => "vault:*"}), do: :all
+  defp parse_legacy_selection(%{"vault_choice" => "vault:" <> id}), do: [id]
+  defp parse_legacy_selection(%{"vault_choice" => _}), do: :invalid
+  defp parse_legacy_selection(_), do: :all
 
   @doc """
   Mints an authorization code for a validated request + a vault selection.
 
-  `vault_selection` is `:all` or a list of vault id strings. Ownership is
-  verified for every id — a user cannot grant an OAuth client access to a
+  `vault_selection` is `:all`, a list of vault id strings (write on each), or
+  `{levels, default}` from `parse_vault_selection/1`: a level per vault plus
+  the level for every vault not listed, including ones created later (#174).
+  Ownership is verified for every listed id — a user cannot grant an OAuth client access to a
   vault they do not own, and one bad id rejects the whole grant.
 
   `label` is the optional free-text name the user typed on the consent
@@ -460,7 +554,22 @@ defmodule Engram.OAuth do
   `{:redirect_error, redirect_uri, error_code, state}`.
   """
   def mint_authorization_code(user, validated, vault_selection, label) do
-    with {:ok, vault_ids} <- resolve_vaults(user, vault_selection),
+    case mint_authorization_code_granted(user, validated, vault_selection, label) do
+      {:ok, redirect_url, _granted} -> {:ok, redirect_url}
+      other -> other
+    end
+  end
+
+  @doc """
+  `mint_authorization_code/4`, also returning what was granted as
+  `%{scope:, vault_access:, default_access:}` (`Engram.Permissions.to_params/1`
+  of the stored grant, `mcp:read` cap applied). The consent endpoint echoes it
+  so the consent screen can refuse to continue when the server stored more
+  than the user picked (a server that predates levels echoes nothing).
+  """
+  def mint_authorization_code_granted(user, validated, vault_selection, label) do
+    with {:ok, %{vault_ids: vault_ids} = access} <-
+           resolve_selection(user, vault_selection, validated.scope),
          {:ok, label} <- resolve_label(label) do
       raw_code = mint_token(@authorization_code_prefix)
 
@@ -472,8 +581,10 @@ defmodule Engram.OAuth do
         code_challenge: validated.code_challenge,
         code_challenge_method: validated.code_challenge_method,
         scope: validated.scope,
-        vault_id: scalar_vault_id(vault_ids),
+        vault_id: scalar_vault_id_column(access),
         vault_ids: vault_ids,
+        vault_access: access.vault_access,
+        default_access: access.default_access,
         label: label,
         state: validated.state,
         expires_at: expires_in(@code_ttl_seconds)
@@ -482,9 +593,16 @@ defmodule Engram.OAuth do
       case %AuthorizationCode{}
            |> AuthorizationCode.changeset(attrs)
            |> Repo.insert(skip_tenant_check: true) do
-        {:ok, _row} ->
+        {:ok, row} ->
+          granted =
+            row
+            |> access_claims()
+            |> Engram.Permissions.from_claims()
+            |> Engram.Permissions.to_params()
+            |> Map.put(:scope, row.scope)
+
           params = %{code: raw_code, state: validated.state, iss: Map.get(validated, :iss)}
-          {:ok, build_redirect(validated.redirect_uri, params)}
+          {:ok, build_redirect(validated.redirect_uri, params), granted}
 
         {:error, changeset} ->
           {:error, changeset}
@@ -532,7 +650,10 @@ defmodule Engram.OAuth do
          # The family is the code's own id, so a replay of the code can find
          # and revoke exactly the tokens it minted (RFC 6749 §4.1.2).
          {:ok, refresh_raw, refresh_row} <-
-           insert_refresh_token(grant_attrs(code_row, code_row.id, ip)) do
+           code_row
+           |> grant_attrs(code_row.id, ip)
+           |> Map.put(:granted_at, DateTime.utc_now())
+           |> insert_refresh_token() do
       {:ok, build_token_response(user, code_row, refresh_raw, refresh_row)}
     end
   end
@@ -582,15 +703,21 @@ defmodule Engram.OAuth do
 
   # Every decision about a refresh token is made in ONE transaction, holding
   # `FOR UPDATE` on the presented row (third review of #1974). That one lock is
-  # the whole concurrency story:
+  # the whole concurrency story between refresh tokens:
   #
   #   * two rotations of the same token serialize, so the second sees the first
   #     one's result instead of racing it (no compare-and-set, no lost race);
-  #   * a revoke (`revoke_refresh_tokens/1`, used by every Disconnect path)
+  #   * a revoke (`revoke_refresh_tokens/2`, used by every Disconnect path)
   #     takes `FOR UPDATE` on the live rows it is about to revoke, the presented
   #     row included, before it updates. Whichever commits first, the other sees
   #     it: a rotation that wins has its successor revoked by the revoke's later
   #     UPDATE, and a revoke that wins is seen by the rotation under its lock.
+  #
+  # Before that row lock it takes the user's grant lock (`lock_grants!/1`),
+  # which vault deletion's narrowing also takes (#174), always in that order.
+  # So a narrowing that committed first is in the locked row, and one that
+  # starts later waits for this transaction and then sees the successor: a
+  # successor never undoes a narrowing.
   #
   # A refusal that revokes (reuse) must commit, so the transaction returns the
   # result instead of rolling back. Logging and analytics run after it.
@@ -599,7 +726,9 @@ defmodule Engram.OAuth do
 
   defp rotate_existing(%RefreshToken{} = rt, _client_id, ip) do
     {:ok, outcome} =
-      Repo.transaction(fn ->
+      Repo.transaction_after_commit(fn ->
+        lock_grants!(rt.user_id)
+
         case lock_row(rt) do
           nil -> {:error, :refresh_token_unknown}
           locked -> decide(locked, ip)
@@ -608,6 +737,18 @@ defmodule Engram.OAuth do
 
     report(outcome, rt)
   end
+
+  @doc """
+  Serializes, for one user, rotation (`rotate_refresh_token/3`) with every
+  writer that narrows or revokes that user's grants: vault deletion
+  (`Engram.Connections.drop_vault_from_grants/2`) and every revoke
+  (`revoke_refresh_tokens/2`), and the token deletes in `cleanup_expired/0`.
+  A transaction-scoped
+  advisory lock: the caller must be inside a transaction, and must take it
+  before any refresh-token row lock.
+  """
+  @spec lock_grants!(Ecto.UUID.t()) :: :ok
+  def lock_grants!(user_id), do: Repo.advisory_lock!("oauth_grants:#{user_id}")
 
   defp report({:ok, response}, _rt), do: {:ok, response}
 
@@ -623,15 +764,12 @@ defmodule Engram.OAuth do
 
   defp report({:error, reason}, _rt), do: grant_error(reason)
 
-  # Revoked: Disconnect, RFC 7009 or an earlier replay. Not a theft signal in
-  # itself, so it is reported as revoked and never logged as reuse.
-  defp decide(%RefreshToken{revoked_at: %DateTime{}} = rt, _ip) do
-    revoke_family(rt.family_id)
-    {:error, :refresh_token_revoked}
-  end
-
-  defp decide(%RefreshToken{consumed_at: %DateTime{} = at} = rt, ip) do
-    with true <- DateTime.diff(DateTime.utc_now(), at) <= @refresh_reuse_grace_seconds,
+  # Consumed first, even when also revoked: presenting a token after it was
+  # used is a replay whatever happened to the family since (an RFC 7009 revoke
+  # marks every row of it, consumed ones included). Grace needs a live family.
+  defp decide({%RefreshToken{consumed_at: %DateTime{} = at} = rt, family_live}, ip) do
+    with true <- family_live,
+         true <- DateTime.diff(DateTime.utc_now(), at) <= @refresh_reuse_grace_seconds,
          {:ok, response, ip_matched} <- grace_reissue(rt, ip) do
       {:ok, response, {:grace, ip_matched}}
     else
@@ -641,25 +779,49 @@ defmodule Engram.OAuth do
     end
   end
 
-  defp decide(%RefreshToken{expires_at: exp} = rt, ip) do
+  # Revoked: Disconnect, RFC 7009 or an earlier replay. Not a theft signal in
+  # itself, so it is reported as revoked and never logged as reuse. Liveness is
+  # family-wide (`family_unrevoked/1`), so a family with any revoked row mints
+  # nothing, whichever of its rows was marked: one read just before a family
+  # revoke, or one a release that revoked a single row left unmarked.
+  defp decide({%RefreshToken{revoked_at: %DateTime{}} = rt, _family_live}, _ip),
+    do: refuse_revoked(rt)
+
+  defp decide({%RefreshToken{} = rt, false = _family_live}, _ip), do: refuse_revoked(rt)
+
+  defp decide({%RefreshToken{expires_at: exp} = rt, _family_live}, ip) do
     if DateTime.compare(DateTime.utc_now(), exp) == :gt do
       {:error, :refresh_token_expired}
     else
-      Repo.update_all(
-        from(r in RefreshToken, where: r.id == ^rt.id),
-        [set: [consumed_at: DateTime.utc_now(:second)]],
-        skip_tenant_check: true
-      )
+      # The successor copies the row as the consume LEFT it (RETURNING), not
+      # as it was locked: the latest point anything could have rewritten it.
+      {1, [consumed]} =
+        Repo.update_all(
+          from(r in RefreshToken, where: r.id == ^rt.id, select: r),
+          [set: [consumed_at: DateTime.utc_now(:second)]],
+          skip_tenant_check: true
+        )
 
-      case mint_rotation_successor(rt, ip) do
+      case mint_rotation_successor(consumed, ip) do
         {:ok, response} -> {:ok, response}
         {:error, reason} -> Repo.rollback(reason)
       end
     end
   end
 
+  defp refuse_revoked(rt) do
+    revoke_family(rt.family_id)
+    {:error, :refresh_token_revoked}
+  end
+
+  # The presented row, locked, and whether its family is live.
   defp lock_row(rt) do
-    Repo.one(from(r in RefreshToken, where: r.id == ^rt.id, lock: "FOR UPDATE"),
+    Repo.one(
+      from(r in RefreshToken,
+        where: r.id == ^rt.id,
+        lock: "FOR UPDATE",
+        select: {r, family_unrevoked(r.family_id)}
+      ),
       skip_tenant_check: true
     )
   end
@@ -667,7 +829,14 @@ defmodule Engram.OAuth do
   # Inside rotate_existing/3's transaction, which undoes the insert when the
   # user lookup fails (it should not: the user_id FK guarantees the row).
   defp mint_rotation_successor(rt, ip) do
-    {:ok, refresh_raw, refresh_row} = insert_refresh_token(grant_attrs(rt, rt.family_id, ip))
+    {:ok, refresh_raw, refresh_row} =
+      rt
+      |> grant_attrs(rt.family_id, ip)
+      # A row minted before `granted_at` existed heals here: its successor
+      # stores the value the fallback derives.
+      |> Map.put(:granted_at, rt.granted_at || family_first_inserted_at(rt.family_id))
+      |> Map.put(:parent_id, rt.id)
+      |> insert_refresh_token()
 
     with {:ok, user} <- fetch_user(rt.user_id) do
       {:ok, build_token_response(user, rt, refresh_raw, refresh_row)}
@@ -675,29 +844,50 @@ defmodule Engram.OAuth do
   end
 
   defp revoke_family(family_id) do
-    now = DateTime.utc_now(:second)
+    {_n, changed} =
+      revoke_refresh_tokens(from(rt in RefreshToken, where: rt.family_id == ^family_id),
+        skip_tenant_check: true
+      )
 
-    from(rt in RefreshToken,
-      where: rt.family_id == ^family_id and is_nil(rt.revoked_at)
-    )
-    |> Repo.update_all([set: [revoked_at: now]], skip_tenant_check: true)
+    grants_changed(changed)
+  end
+
+  defp family_first_inserted_at(family_id) do
+    from(t in RefreshToken, where: t.family_id == ^family_id, select: min(t.inserted_at))
+    |> Repo.one(skip_tenant_check: true)
   end
 
   @doc """
   Revokes the live refresh tokens `query` selects, safely against a rotation
-  in flight: it first locks them (`FOR UPDATE`), which waits for any rotation
-  holding one, then revokes with a fresh statement, whose snapshot includes a
-  successor that rotation just committed. Every Disconnect path goes through
-  this. `opts` are passed to both statements.
+  in flight: it takes each owner's grant lock (`lock_grants!/1`), as rotation
+  does, then locks the rows (`FOR UPDATE`, by id), then revokes with a fresh statement, whose snapshot includes a
+  successor that rotation just committed. Every revoke goes through this.
+  `opts` are passed to every statement.
+
+  Returns the count and `{family_id, user_id}` per revoked row. The caller
+  passes that list to `grants_changed/1`, once, after its other writes.
   """
-  @spec revoke_refresh_tokens(Ecto.Queryable.t(), keyword()) :: {non_neg_integer(), nil}
+  @spec revoke_refresh_tokens(Ecto.Queryable.t(), keyword()) ::
+          {non_neg_integer(), [{Ecto.UUID.t(), Ecto.UUID.t()}]}
   def revoke_refresh_tokens(query, opts \\ []) do
     live = from(t in query, where: is_nil(t.revoked_at))
 
     {:ok, result} =
       Repo.transaction(fn ->
-        Repo.all(from(t in live, select: t.id, lock: "FOR UPDATE"), opts)
-        Repo.update_all(live, [set: [revoked_at: DateTime.utc_now(:second)]], opts)
+        # Rotation's lock order: grant lock, then rows, rows by id. Locking
+        # rows first could deadlock with a rotation (one side aborted, and
+        # the match above raised). Users sorted so two revokes agree too.
+        from(t in live, select: t.user_id, distinct: true, order_by: t.user_id)
+        |> Repo.all(opts)
+        |> Enum.each(&lock_grants!/1)
+
+        Repo.all(from(t in live, select: t.id, order_by: t.id, lock: "FOR UPDATE"), opts)
+
+        Repo.update_all(
+          from(t in live, select: {t.family_id, t.user_id}),
+          [set: [revoked_at: DateTime.utc_now(:second)]],
+          opts
+        )
       end)
 
     result
@@ -732,8 +922,16 @@ defmodule Engram.OAuth do
     successors =
       Repo.all(
         from(r in RefreshToken,
+          where: r.family_id == ^rt.family_id and r.id != ^rt.id,
+          # By lineage: `inserted_at` is the minting node's clock, so a
+          # successor from a lagging node would be invisible. A row without
+          # `parent_id` (a family's first row, or one an older release minted
+          # around a deploy) falls back to the old time test, so it is never
+          # judged more loosely than before.
+          # ponytail: the fallback can go once no pre-parent_id release runs.
           where:
-            r.family_id == ^rt.family_id and r.id != ^rt.id and r.inserted_at >= ^rt.consumed_at,
+            r.parent_id == ^rt.id or
+              (is_nil(r.parent_id) and r.inserted_at >= ^rt.consumed_at),
           lock: "FOR UPDATE"
         ),
         skip_tenant_check: true
@@ -755,11 +953,16 @@ defmodule Engram.OAuth do
     end
   end
 
+  # A superseded successor is revoked AND marked `superseded_at`, so the
+  # family stays live (`family_unrevoked/1` skips it, #174) while the row
+  # itself can never mint: presented later, it revokes the family.
   defp revoke_ids(ids) do
+    now = DateTime.utc_now(:second)
+
     from(r in RefreshToken,
       where: r.id in ^ids and is_nil(r.revoked_at) and is_nil(r.consumed_at)
     )
-    |> Repo.update_all([set: [revoked_at: DateTime.utc_now(:second)]], skip_tenant_check: true)
+    |> Repo.update_all([set: [revoked_at: now, superseded_at: now]], skip_tenant_check: true)
   end
 
   defp log_reuse(rt, opts) do
@@ -943,7 +1146,9 @@ defmodule Engram.OAuth do
   # the client's registered list at /authorize, and carried here so the
   # connections list can report where the code actually went rather than where
   # the client declared it could go (see #1204).
-  @grant_fields ~w(client_id user_id vault_id vault_ids label scope redirect_uri)a
+  # `granted_at` is set at exchange (the code row has none) and copied after.
+  @grant_fields ~w(client_id user_id vault_id vault_ids vault_access default_access label scope
+                   redirect_uri granted_at)a
 
   defp grant_attrs(src, family_id, ip) do
     src
@@ -968,26 +1173,245 @@ defmodule Engram.OAuth do
     end
   end
 
-  # Reads the grant's effective vault scope, tolerating rows written before
-  # the vault_ids column existed (scalar set, array NULL).
-  defp grant_vault_ids(%{vault_ids: ids}) when is_list(ids) and ids != [], do: ids
-  defp grant_vault_ids(%{vault_id: id}) when is_binary(id), do: [id]
-  defp grant_vault_ids(_), do: nil
+  @doc """
+  THE reader of a grant row's (code or refresh token) legacy vault columns.
 
-  defp issue_access_token(user, scope, vault_ids) do
-    extras =
-      %{"aud" => Engram.Token.mcp_audience()}
-      |> maybe_put("scope", scope)
-      |> maybe_put("vault_ids", vault_ids)
-      # Every restricted grant also emits the legacy scalar claim, carrying the
-      # same first-of-set id the scalar column stores. A rolled-back reader
-      # knows only `vault_id`, and a missing one reads as unrestricted — so
-      # omitting it on a multi-vault grant would WIDEN the token to every
-      # vault. Current readers check `vault_ids` first, so this is inert here.
-      |> maybe_put("vault_id", scalar_vault_id(vault_ids))
+    * `vault_ids` when set and non-empty, as stored. On a leveled grant that
+      is its write-level ids or `[no_vault()]`, the sentinel, never its read
+      ids; callers that list vaults drop the sentinel, which reaches nothing.
+    * otherwise the scalar `vault_id` as a one-element list: a row written
+      before `vault_ids` existed (array NULL), or by an early writer that
+      left it `[]`.
+    * otherwise nil: every vault (a pre-levels unrestricted grant), or a
+      leveled grant that stores neither (its levels say what it reaches).
+  """
+  @spec grant_vault_ids(map()) :: [Ecto.UUID.t()] | nil
+  def grant_vault_ids(%{vault_ids: ids}) when is_list(ids) and ids != [], do: ids
+  def grant_vault_ids(%{vault_id: id}) when is_binary(id), do: [id]
+  def grant_vault_ids(_), do: nil
 
-    Accounts.generate_jwt(user, extras)
+  @doc """
+  The access claims a grant (authorization code or refresh token) carries into
+  its access token. `Engram.Permissions.from_claims/1` reads them back, and
+  the connections list reads a grant through the same pair, so what a token
+  may do and what the user is shown cannot drift.
+  """
+  @spec access_claims(map()) :: map()
+  def access_claims(grant) do
+    vault_ids = grant_vault_ids(grant)
+
+    %{}
+    |> maybe_put("scope", grant.scope)
+    |> maybe_put("vault_ids", vault_ids)
+    # Every restricted grant also emits the legacy scalar claim, carrying the
+    # same first-of-set id the scalar column stores. A rolled-back reader
+    # knows only `vault_id`, and a missing one reads as unrestricted — so
+    # omitting it on a multi-vault grant would WIDEN the token to every
+    # vault. Current readers check `vault_ids` first, so this is inert here.
+    |> maybe_put("vault_id", scalar_vault_id(vault_ids))
+    # #174. Absent on a pre-levels grant, which keeps its old meaning.
+    |> maybe_put("vault_access", grant.vault_access)
+    |> maybe_put("default_access", grant.default_access)
   end
+
+  # A leveled grant's legacy `vault_ids` claim is read only by a release that
+  # predates levels (as write on each id). Past this many write vaults it
+  # becomes the sentinel instead, so the token stays bounded however many
+  # vaults the grant writes: such an old node then reaches nothing, which
+  # fails closed (degraded during a rollback, never widened).
+  @max_legacy_claim_ids 16
+
+  @doc """
+  The claims an OAuth access token carries, minted from a refresh-token row.
+
+  `access_claims/1` plus `gid`, the grant's `family_id`, which every reader
+  that knows it resolves server-side (`expand_claims/1`): a revoked grant's
+  access tokens stop working at once, not at `exp`. A leveled grant's
+  per-vault map is NOT in the token (its size grew with the user's vault
+  count); it is read from the grant row through the same `gid`. The legacy
+  `vault_ids` / `vault_id` claims stay, for a release that predates levels,
+  bounded by `@max_legacy_claim_ids`. A pre-levels grant's claims are
+  otherwise unchanged: its `vault_ids` IS its scope.
+  """
+  @spec token_claims(RefreshToken.t()) :: map()
+  def token_claims(%RefreshToken{family_id: family_id} = row) do
+    claims = access_claims(row)
+
+    claims =
+      if is_map(row.vault_access) do
+        claims
+        |> Map.drop(["vault_access", "default_access"])
+        |> bound_legacy_ids()
+      else
+        claims
+      end
+
+    Map.put(claims, "gid", family_id)
+  end
+
+  defp bound_legacy_ids(%{"vault_ids" => ids} = claims)
+       when length(ids) > @max_legacy_claim_ids,
+       do: %{claims | "vault_ids" => [@no_vault]} |> Map.put("vault_id", @no_vault)
+
+  defp bound_legacy_ids(claims), do: claims
+
+  @doc """
+  Resolves an access token's `gid` claim against its grant (`token_claims/1`).
+  The grant's rows are the single authority; the token only names them.
+
+    * no `gid`: the claims as they are (a token minted before `gid`, by a
+      release that predates it, or not from an OAuth grant).
+    * a live grant OF THE TOKEN'S USER (`user_id` claim): the claims, with
+      the grant's own access read from its row: `vault_access` /
+      `default_access` when it is leveled, otherwise its `vault_ids` /
+      `vault_id` (a pre-levels grant, or one a pre-levels release rewrote,
+      levels dropped, which lists write vaults only or the sentinel). The
+      token's own `vault_ids` are never trusted: vault deletion narrows the
+      row (`Connections.revoke_by_vault/2`) after tokens were minted.
+    * a revoked or vanished grant, or one that belongs to another user:
+      `:revoked`. Callers refuse the request.
+
+  Cached per family (`:oauth_grant`), evicted by the
+  `oauth_refresh_tokens_changed` NOTIFY on revoke, level change and delete,
+  and locally by every revoke (`grants_changed/1`).
+  """
+  @spec expand_claims(map()) :: {:ok, map()} | :revoked
+  def expand_claims(%{"gid" => _gid} = claims) do
+    case live_grant(claims) do
+      nil ->
+        :revoked
+
+      %{vault_access: nil, vault_ids: ids} ->
+        {:ok,
+         claims
+         |> Map.drop(["vault_ids", "vault_id"])
+         |> maybe_put("vault_ids", ids)
+         |> maybe_put("vault_id", scalar_vault_id(ids))}
+
+      grant ->
+        {:ok,
+         Map.merge(claims, %{
+           "vault_access" => grant.vault_access,
+           "default_access" => grant.default_access
+         })}
+    end
+  end
+
+  def expand_claims(claims), do: {:ok, claims}
+
+  # The grant behind `gid`, or nil when it is revoked, gone, or not the
+  # token's user's. Ownership is checked on every read rather than keyed into
+  # the cache: the grant's owner never changes, so one entry serves it.
+  defp live_grant(%{"gid" => gid} = claims) do
+    with {:ok, family_id} <- Ecto.UUID.cast(gid),
+         {:live, %{user_id: owner} = grant} <-
+           Engram.Cache.fetch(:oauth_grant, family_id, fn -> load_grant(family_id) end),
+         true <- is_binary(owner) and owner == claims["user_id"] do
+      grant
+    else
+      _ -> nil
+    end
+  end
+
+  # A family is live while NO row of it is revoked. Not "its latest row":
+  # `inserted_at` comes from the app clock of whichever node minted the row,
+  # so ordering by it could pick a stale predecessor over a revoked current
+  # row. Every revoke marks the whole family; a single marked row (a release
+  # that revoked one row, or a rotation that raced a revoke) still kills it.
+  # Cleanup deletes a revoked family whole (`cleanup_expired/0`), and a
+  # vanished family is revoked, so deleting rows never brings one back.
+  #
+  # Levels, vault ids and owner are the grant's and immutable for the family,
+  # except that vault deletion narrows only its UNREVOKED rows: a superseded
+  # successor keeps the old set. So an unrevoked row answers, newest first; a
+  # revoked one only when there is none, and then the family is dead anyway.
+  # A row a pre-levels release rewrote fails closed either way.
+  defp load_grant(family_id) do
+    from(t in RefreshToken,
+      where: t.family_id == ^family_id,
+      order_by: [desc: is_nil(t.revoked_at), desc: t.inserted_at, desc: t.id],
+      limit: 1,
+      select: %{
+        live: family_unrevoked(t.family_id),
+        user_id: t.user_id,
+        vault_access: t.vault_access,
+        default_access: t.default_access,
+        vault_ids: t.vault_ids,
+        vault_id: t.vault_id,
+        granted_at:
+          type(
+            fragment(
+              "COALESCE(?, (SELECT min(f.inserted_at) FROM oauth_refresh_tokens f WHERE f.family_id = ?))",
+              t.granted_at,
+              t.family_id
+            ),
+            :utc_datetime_usec
+          )
+      }
+    )
+    |> Repo.one(skip_tenant_check: true)
+    |> case do
+      %{live: true} = row ->
+        {:live, row |> Map.drop([:live, :vault_id]) |> Map.put(:vault_ids, grant_vault_ids(row))}
+
+      _ ->
+        :revoked
+    end
+  end
+
+  @doc """
+  When the grant behind an access token was created (`granted_at`, set at
+  exchange and copied onto every rotation, so cleanup of old rows never
+  moves it), or nil without a `gid`. `:revoked` when the grant is revoked,
+  gone, or not the token's user's: callers refuse.
+
+  A row from before the column falls back to the family's earliest
+  surviving row; its next rotation stores that value.
+  """
+  @spec granted_at(map()) :: DateTime.t() | nil | :revoked
+  def granted_at(%{"gid" => nil}), do: nil
+
+  def granted_at(%{"gid" => _gid} = claims) do
+    case live_grant(claims) do
+      nil -> :revoked
+      grant -> grant.granted_at
+    end
+  end
+
+  def granted_at(_claims), do: nil
+
+  @doc """
+  After grants changed (`{family_id, user_id}` per changed row, as an
+  `update_all ... select` returns them): evicts each family's cached state
+  (`expand_claims/1`) here and on every peer, and once the caller's
+  transaction commits, disconnects each owner's live sockets so a socket
+  riding a revoked or narrowed grant reconnects through the new state.
+  Nothing changed, nothing happens. The `oauth_refresh_tokens_changed`
+  NOTIFY covers every other writer.
+  """
+  @spec grants_changed([{Ecto.UUID.t(), Ecto.UUID.t()}]) :: :ok
+  def grants_changed([]), do: :ok
+
+  def grants_changed(changed) do
+    {families, users} = Enum.unzip(changed)
+    families |> Enum.uniq() |> Enum.each(&Engram.Cache.evict(:oauth_grant, &1))
+
+    users = Enum.uniq(users)
+
+    # Sockets carry no grant id, so this is per user (`UserSocket.id/1`):
+    # the user's other sockets reconnect too, and a crdt: join re-checks the
+    # grant either way.
+    Repo.after_commit(fn ->
+      Enum.each(users, &Engram.Auth.SessionInvalidator.disconnect_user/1)
+    end)
+  end
+
+  defp issue_access_token(user, refresh_row),
+    do:
+      Accounts.generate_jwt(
+        user,
+        Map.put(token_claims(refresh_row), "aud", Engram.Token.mcp_audience())
+      )
 
   defp maybe_put(map, _k, nil), do: map
   defp maybe_put(map, k, v), do: Map.put(map, k, v)
@@ -1006,6 +1430,19 @@ defmodule Engram.OAuth do
   # fails closed. `:all` (nil) stays NULL; unrestricted is what it already means.
   defp scalar_vault_id([first | _]), do: first
   defp scalar_vault_id(_), do: nil
+
+  # The scalar COLUMN is a foreign key to `vaults` with ON DELETE CASCADE.
+  # A leveled grant leaves it NULL: naming one of its vaults there would
+  # delete the whole grant when that vault is purged, however many other
+  # vaults it still reaches, and it cannot hold the `@no_vault` sentinel.
+  # Every reader since `vault_ids` shipped (2026-09) reads the array first,
+  # which a leveled grant always sets (write ids or the sentinel), so NULL
+  # here widens nothing for them. The JWT's scalar claim has no such
+  # constraint and carries the first id or the sentinel. A pre-levels list
+  # keeps its first id; vault deletion repoints it
+  # (`Connections.drop_vault_from_grants/2`).
+  defp scalar_vault_id_column(%{vault_access: nil, vault_ids: ids}), do: scalar_vault_id(ids)
+  defp scalar_vault_id_column(_leveled), do: nil
 
   # ── Revocation (Phase 6) ─────────────────────────────────────────
 
@@ -1026,17 +1463,12 @@ defmodule Engram.OAuth do
     owner = internal_client_id(client_id, row && row.client_id)
 
     case row do
-      %RefreshToken{client_id: ^owner, user_id: user_id} = rt ->
-        _ =
-          revoke_refresh_tokens(from(r in RefreshToken, where: r.id == ^rt.id),
-            skip_tenant_check: true
-          )
-
-        # The matching access JWT lives outside our DB (Joken-signed, stateless)
-        # and remains technically valid until exp. Force-disconnect live sockets
-        # so any session still riding that access token loses its push channel
-        # immediately rather than at exp.
-        Engram.Auth.SessionInvalidator.disconnect_user(user_id)
+      # RFC 7009 §2.1: revoking a refresh token SHOULD also invalidate the
+      # access tokens of the same grant, and liveness is family-wide, so the
+      # whole family goes. `grants_changed/1` evicts the cached grant (its
+      # access tokens answer 401 at once) and disconnects its sockets.
+      %RefreshToken{client_id: ^owner} = rt ->
+        revoke_family(rt.family_id)
         :ok
 
       _ ->
@@ -1051,6 +1483,15 @@ defmodule Engram.OAuth do
   7-day grace window. Returns `{count_deleted, nil}`. Called by the
   hourly Engram.Workers.CleanupDeviceAuthWorker job alongside DeviceFlow
   cleanup so OAuth state doesn't leak.
+
+  A revoked family is deleted WHOLE, once its revocation is past the grace
+  window: deleting only its revoked rows could leave an unrevoked one (a
+  consumed predecessor, a successor that raced the revoke), and liveness is
+  "no revoked row" (`expand_claims/1`), so that would bring the grant back.
+  Expired rows are deleted one by one only in families with no revoked row,
+  where no deletion can change liveness (a family left with no rows at all
+  reads as revoked). Neither changes what any grant may do, so nothing is
+  evicted here.
   """
   def cleanup_expired do
     code_cutoff = DateTime.utc_now(:second) |> DateTime.add(-3600, :second)
@@ -1060,26 +1501,96 @@ defmodule Engram.OAuth do
       from(ac in AuthorizationCode, where: ac.expires_at < ^code_cutoff)
       |> Repo.delete_all(skip_tenant_check: true)
 
-    {revoked_tokens, _} =
-      from(rt in RefreshToken,
-        where: not is_nil(rt.revoked_at) and rt.revoked_at < ^revoked_cutoff
-      )
-      |> Repo.delete_all(skip_tenant_check: true)
+    # Before the reap below, which keys on `superseded_at`.
+    backfill_superseded()
 
-    {expired_tokens, _} =
-      from(rt in RefreshToken, where: rt.expires_at < ^revoked_cutoff)
-      |> Repo.delete_all(skip_tenant_check: true)
+    reaped_families =
+      from(f in RefreshToken,
+        where: not is_nil(f.revoked_at) and f.revoked_at < ^revoked_cutoff,
+        # A grace-superseded row revokes no family (`family_unrevoked/1`).
+        where: is_nil(f.superseded_at),
+        select: f.family_id
+      )
+
+    revoked_tokens =
+      from(rt in RefreshToken, where: rt.family_id in subquery(reaped_families))
+      |> delete_tokens_locked()
+
+    expired_tokens =
+      from(rt in RefreshToken,
+        where: rt.expires_at < ^revoked_cutoff,
+        where: family_unrevoked(rt.family_id)
+      )
+      |> delete_tokens_locked()
 
     {codes + revoked_tokens + expired_tokens, nil}
+  end
+
+  # A bare DELETE locks rows in heap order and takes no grant lock, so against
+  # a revoke (grant lock, then rows by id) each side could hold a row the
+  # other wants: a deadlock. So cleanup takes the revoke's order: every
+  # owner's grant lock, users sorted, then the rows by id, then deletes those
+  # rows. Rows of an owner whose lock it does not hold are left for next hour.
+  # ponytail: one transaction holds one advisory lock per affected user; fine
+  # at hourly volumes, batch by user if a run ever touches thousands.
+  defp delete_tokens_locked(query) do
+    {:ok, count} =
+      Repo.transaction(fn ->
+        users =
+          from(t in query, select: t.user_id, distinct: true, order_by: t.user_id)
+          |> Repo.all(skip_tenant_check: true)
+
+        Enum.each(users, &lock_grants!/1)
+
+        ids =
+          from(t in query,
+            where: t.user_id in ^users,
+            select: t.id,
+            order_by: t.id,
+            lock: "FOR UPDATE"
+          )
+          |> Repo.all(skip_tenant_check: true)
+
+        {count, _} =
+          from(t in RefreshToken, where: t.id in ^ids)
+          |> Repo.delete_all(skip_tenant_check: true)
+
+        count
+      end)
+
+    count
+  end
+
+  @doc """
+  Stamps `superseded_at = revoked_at` on grace-superseded rows written
+  without it (0.52.0, or an old node during a rolling deploy): revoked,
+  never consumed, with a live row in the family. The same predicate as
+  migration 20261015060000, re-applied hourly by `cleanup_expired/0`.
+  Liveness already excuses these rows (`family_unrevoked/1`); this only
+  keeps the reap from treating them as a family revoke. Idempotent.
+  """
+  def backfill_superseded do
+    from(t in RefreshToken,
+      where: not is_nil(t.revoked_at) and is_nil(t.consumed_at) and is_nil(t.superseded_at),
+      where:
+        fragment(
+          "EXISTS (SELECT 1 FROM oauth_refresh_tokens g WHERE g.family_id = ? AND g.revoked_at IS NULL AND g.consumed_at IS NULL)",
+          t.family_id
+        ),
+      update: [set: [superseded_at: t.revoked_at]]
+    )
+    |> Repo.update_all([], skip_tenant_check: true)
   end
 
   # `grant` is the authorization code on the code grant and the just-consumed
   # refresh token on the refresh grant. Both answer `.scope`, `.vault_id` and
   # `.vault_ids`, which is the whole read — so ONE function serves both, and a
   # response field added later cannot land on one grant type and miss the other.
-  defp build_token_response(user, grant, refresh_raw, _refresh_row) do
+  defp build_token_response(user, grant, refresh_raw, refresh_row) do
     %{
-      access_token: issue_access_token(user, grant.scope, grant_vault_ids(grant)),
+      # From the refresh row just written: it carries the grant's columns
+      # unchanged plus the `family_id` the token resolves through.
+      access_token: issue_access_token(user, refresh_row),
       refresh_token: refresh_raw,
       token_type: "Bearer",
       expires_in: Engram.Token.ttl_seconds(),
@@ -1271,7 +1782,108 @@ defmodule Engram.OAuth do
 
   defp narrow_scope(_scope), do: {"mcp", []}
 
-  # Resolves a vault selection to the id list stored on the grant.
+  @doc """
+  The grant columns a leveled selection (`{levels, default}`, as parsed by
+  `Engram.Permissions.parse_access_params/1`) stores under `scope`: the same
+  fail-closed encoding consent writes (see below), so a grant edited from
+  Settings reads exactly like one minted with that pick. `:error` for a vault
+  that is not one of the user's active vaults.
+  """
+  @spec grant_columns(map(), {map(), String.t()}, String.t() | nil) :: {:ok, map()} | :error
+  def grant_columns(user, {levels, default}, scope) do
+    with {:ok, access} <- resolve_selection(user, {levels, default}, scope),
+         do: {:ok, Map.put(access, :vault_id, scalar_vault_id_column(access))}
+  end
+
+  # The columns a vault selection writes.
+  #
+  # FAIL-CLOSED COMPATIBILITY ENCODING. A release that predates levels reads
+  # only `vault_ids` / `vault_id`, as WRITE on each listed id, with NULL (or
+  # a missing claim) meaning every vault. It also copies only those columns
+  # when it exchanges a code or rotates a refresh token, so the level columns
+  # are dropped from every grant an old node touches. And it does not know
+  # `mcp:read`. So for a leveled grant `vault_ids` holds exactly the vaults
+  # the grant may WRITE, listed explicitly, and when there are none (the
+  # write comes from the new-vaults policy, every level is read, or the scope
+  # is `mcp:read`) it holds `[@no_vault]`, an id no vault has. An old node
+  # then grants write on the genuine write vaults and nothing else: read
+  # vaults go invisible and policy-only grants reach nothing. Never NULL or
+  # `[]`: both read as every vault there.
+  #
+  # The new code ignores `vault_ids` whenever `vault_access` is present
+  # (`Permissions.from_claims/1`); if an old node dropped `vault_access`, the
+  # sentinel matches no vault, so the grant still fails closed.
+  #
+  # Two selections an old node already reads exactly stay in the legacy
+  # shape: every vault at write (NULL, only while nothing is in the trash,
+  # see `leveled_selection/3`) and a plain vault list, both under the full
+  # `mcp` scope.
+  defp resolve_selection(user, selection, scope) do
+    read_only? = read_only_scope?(scope)
+
+    case selection do
+      {levels, default} -> leveled_selection(user, {levels, default}, read_only?)
+      legacy when not read_only? -> legacy_selection(user, legacy)
+      legacy -> read_only_legacy_selection(user, legacy)
+    end
+  end
+
+  # "Every vault at write" collapses to the unrestricted NULL grant only when
+  # the STORED levels say so, i.e. when nothing is in the trash.
+  # `resolve_access/2` records every soft-deleted vault as `none` under a
+  # non-none policy: a vault already in the trash at consent was never
+  # offered to the grant, and must stay unreachable after a session restores
+  # it, exactly as for an API key. NULL has nowhere to record that, so such
+  # a pick stays leveled. Rollback: its write comes only from the policy, so
+  # its legacy `vault_ids` is the sentinel and a pre-levels node reaches
+  # nothing (degraded, never widened); see `resolve_selection/3`.
+  defp leveled_selection(user, selection, read_only?) do
+    with {:ok, access, default} <- Engram.Permissions.resolve_access(user, selection) do
+      if not read_only? and Engram.Permissions.from_levels(access, default) == :all,
+        do: {:ok, %{vault_ids: nil, vault_access: nil, default_access: nil}},
+        else: {:ok, leveled_columns(access, default, read_only?)}
+    end
+  end
+
+  # `:all` from a pre-levels SPA is "every vault at write, vaults created
+  # later too": the same pick as the new screen's "every vault at write",
+  # which lists each live vault at write with policy write. It is normalized
+  # to exactly that, so both store ONE grant: NULL while nothing is in the
+  # trash, otherwise the live vaults listed at write, the trashed ones `none`
+  # (`resolve_access/2`). Listing them matters beyond equality: restore and
+  # the deleted list read the LISTED level, so either grant can restore a
+  # live vault it later deletes; and an old node (rollback) writes the vaults
+  # live at consent, never one restored later.
+  defp legacy_selection(user, :all), do: leveled_selection(user, every_live_vault(user), false)
+
+  defp legacy_selection(user, selection) do
+    with {:ok, ids} <- resolve_vaults(user, selection),
+         do: {:ok, %{vault_ids: ids, vault_access: nil, default_access: nil}}
+  end
+
+  # `mcp:read` with a pre-levels selection: an old node would read the plain
+  # list (or NULL) as write, so it is stored as levels like any other.
+  defp read_only_legacy_selection(user, selection) do
+    with {:ok, ids} <- resolve_vaults(user, selection) do
+      selection = if ids, do: {Map.new(ids, &{&1, "write"}), "none"}, else: every_live_vault(user)
+      leveled_selection(user, selection, true)
+    end
+  end
+
+  defp every_live_vault(user),
+    do: {Map.new(Engram.Vaults.active_vault_ids(user.id), &{&1, "write"}), "write"}
+
+  defp leveled_columns(access, default, read_only?) do
+    writable = if read_only?, do: [], else: for({id, "write"} <- access, do: id)
+
+    %{
+      vault_ids: if(writable == [], do: [@no_vault], else: Enum.sort(writable)),
+      vault_access: access,
+      default_access: default
+    }
+  end
+
+  # Resolves a pre-levels vault selection to the id list stored on the grant.
   #
   # `:all` → {:ok, nil} — NULL keeps its existing meaning, including vaults
   # created after the grant. An explicit list is verified in ONE query; if
@@ -1279,39 +1891,11 @@ defmodule Engram.OAuth do
   # honouring a selection would silently hand out a scope the user never
   # confirmed on the consent screen.
   defp resolve_vaults(_user, :all), do: {:ok, nil}
-
   defp resolve_vaults(_user, []), do: :error
 
   defp resolve_vaults(user, ids) when is_list(ids) do
-    casted = Enum.map(ids, &Ecto.UUID.cast/1)
-
-    if Enum.any?(casted, &(&1 == :error)) do
-      :error
-    else
-      wanted = casted |> Enum.map(fn {:ok, id} -> id end) |> Enum.uniq()
-
-      query =
-        from(v in Engram.Vaults.Vault,
-          where: v.id in ^wanted and v.user_id == ^user.id and is_nil(v.deleted_at),
-          select: v.id
-        )
-
-      # `vaults` carries FORCE ROW LEVEL SECURITY, so unscoped this returned
-      # `[]`, the length comparison failed, and EVERY selection was rejected as
-      # `:error` — which `mint_authorization_code/4` turns into an
-      # `access_denied` redirect. A user granting a client access to a vault
-      # they own was refused, and the refusal named the wrong cause.
-      #
-      # The ownership predicate above is still the right check and stays; it
-      # simply never got the chance to be correct, because the policy filters
-      # first. Only this multi-vault branch was affected — `:all`
-      # short-circuits above without a query, which is why the existing OAuth
-      # tests (almost all `:all`) never caught it.
-      case Repo.with_tenant!(user.id, fn -> Repo.all(query) end) do
-        found when length(found) == length(wanted) -> {:ok, Enum.sort(found)}
-        _ -> :error
-      end
-    end
+    with {:ok, canonical} <- Engram.Vaults.owned_active_ids(user, ids),
+         do: {:ok, canonical |> Map.values() |> Enum.uniq() |> Enum.sort()}
   end
 
   defp resolve_vaults(_user, _), do: :error

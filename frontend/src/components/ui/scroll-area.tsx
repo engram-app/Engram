@@ -6,12 +6,15 @@ import { cn } from "@/lib/utils";
 function ScrollArea({
 	className,
 	viewportClassName,
+	viewportLabel,
 	children,
 	...props
 }: React.ComponentProps<typeof ScrollAreaPrimitive.Root> & {
 	/** Classes for the scrolling viewport. A `max-h-*` here makes the area grow with its
 	 *  content up to that height, then scroll, which a height on the root cannot do. */
 	viewportClassName?: string;
+	/** Names the viewport, which is focusable, as a region. */
+	viewportLabel?: string;
 }) {
 	return (
 		<ScrollAreaPrimitive.Root
@@ -27,6 +30,8 @@ function ScrollArea({
 			<ScrollAreaPrimitive.Viewport
 				data-slot="scroll-area-viewport"
 				tabIndex={0}
+				role={viewportLabel ? "region" : undefined}
+				aria-label={viewportLabel}
 				className={cn(
 					"[&>div]:!block size-full rounded-[inherit] outline-none transition-[color,box-shadow] focus-visible:outline-1 focus-visible:ring-[3px] focus-visible:ring-ring/50",
 					viewportClassName,

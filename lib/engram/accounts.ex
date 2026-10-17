@@ -708,6 +708,34 @@ defmodule Engram.Accounts do
     end)
   end
 
+  @doc """
+  The claims of an Engram-issued (HS256) token whose SIGNATURE verifies,
+  without re-checking `exp`, `iss` or `aud`. `:error` for anything else,
+  including a Clerk token, an API key or a forged signature.
+
+  Only for a token this request (or socket connect) has ALREADY
+  authenticated in full through `Engram.Auth.TokenResolver`. Re-validating it
+  is what `OAuthScopeEnforce` and `UserSocket` used to do, and a token in its
+  last second could pass the resolver and then fail the re-check, so its
+  grant claims read as absent, which means unrestricted. Skipping only the
+  time and audience checks of an already-validated token removes that race
+  without trusting anything unsigned.
+  """
+  #
+  # An OAuth access token's `gid` (its grant) is resolved here too
+  # (`Engram.OAuth.expand_claims/1`), so both readers get the grant's levels
+  # and both see a revoke at once. `:revoked` is OUR token whose grant is gone:
+  # every caller refuses it, whatever path authenticated it.
+  @spec grant_claims(term()) :: {:ok, %{String.t() => term()}} | :error | :revoked
+  def grant_claims(token) when is_binary(token) do
+    case Engram.Token.verify(token) do
+      {:ok, claims} -> Engram.OAuth.expand_claims(claims)
+      {:error, _} -> :error
+    end
+  end
+
+  def grant_claims(_token), do: :error
+
   def verify_jwt(token) do
     case Engram.Token.verify_and_validate(token) do
       {:ok, claims} -> {:ok, claims}
@@ -717,21 +745,70 @@ defmodule Engram.Accounts do
 
   # ── API Keys ────────────────────────────────────────────────────
 
-  def create_api_key(user, name) do
-    raw_key = @api_key_prefix <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+  @doc """
+  Creates an API key. `access` is nil for a key on every vault (the pre-#332
+  behaviour), or `{levels, default}` as `Engram.Permissions.parse_access_params/1`
+  returns it: a level ("none" | "read" | "write") per vault plus the level for
+  every vault not listed, including ones created later. Every listed vault
+  must be one of the user's active vaults, or the key is not created
+  (`{:error, :invalid_access}`).
+
+  A leveled key is minted in a raw form whose stored hash a release that
+  predates levels never computes, so that release refuses it (see the note
+  on `hash_api_key/1`).
+  """
+  def create_api_key(user, name, access \\ nil) do
+    raw_key = mint_raw_key(access)
     key_hash = hash_api_key(raw_key)
 
     result =
       Repo.with_tenant(user.id, fn ->
-        %ApiKey{}
-        |> ApiKey.changeset(%{key_hash: key_hash, name: name, user_id: user.id})
-        |> Repo.insert()
+        with {:ok, rows, default} <- key_access(user, access),
+             {:ok, api_key} <-
+               %ApiKey{}
+               |> ApiKey.changeset(%{
+                 key_hash: key_hash,
+                 name: name,
+                 user_id: user.id,
+                 default_access: default
+               })
+               |> Repo.insert() do
+          insert_key_vaults(api_key, rows)
+          {:ok, api_key}
+        end
       end)
 
     case result do
       {:ok, {:ok, api_key}} -> {:ok, raw_key, api_key}
-      {:ok, {:error, changeset}} -> {:error, changeset}
+      {:ok, {:error, reason}} -> {:error, reason}
     end
+  end
+
+  defp key_access(_user, nil), do: {:ok, [], nil}
+
+  defp key_access(user, access) do
+    case Engram.Permissions.resolve_access(user, access) do
+      {:ok, levels, default} -> {:ok, Map.to_list(levels), default}
+      :error -> {:error, :invalid_access}
+    end
+  end
+
+  defp insert_key_vaults(_api_key, []), do: :ok
+
+  defp insert_key_vaults(api_key, rows) do
+    {_, _} =
+      Repo.insert_all(
+        "api_key_vaults",
+        for {vault_id, level} <- rows do
+          %{
+            api_key_id: Ecto.UUID.dump!(api_key.id),
+            vault_id: Ecto.UUID.dump!(vault_id),
+            level: level
+          }
+        end
+      )
+
+    :ok
   end
 
   def validate_api_key(raw_key) do
@@ -764,7 +841,8 @@ defmodule Engram.Accounts do
   key row: a revoked one-vault key whose mapping rows are gone must not come
   back as unrestricted.
   """
-  @spec cached_api_key(String.t()) :: {ApiKey.t(), :all | [Ecto.UUID.t()]} | nil
+  @spec cached_api_key(String.t()) ::
+          {ApiKey.t(), :all | [Ecto.UUID.t()] | Engram.Permissions.scope()} | nil
   def cached_api_key(key_hash),
     do: Engram.Cache.fetch(:api_key, key_hash, fn -> lookup_key(key_hash) end)
 
@@ -787,12 +865,9 @@ defmodule Engram.Accounts do
                 where: k.key_hash == ^key_hash,
                 select:
                   {k,
-                   type(
-                     fragment(
-                       "ARRAY(SELECT v.vault_id FROM public.api_key_vaults AS v WHERE v.api_key_id = ?)",
-                       k.id
-                     ),
-                     {:array, Ecto.UUID}
+                   fragment(
+                     "(SELECT jsonb_object_agg(v.vault_id, v.level) FROM public.api_key_vaults AS v WHERE v.api_key_id = ?)",
+                     k.id
                    )}
               )
             )
@@ -807,13 +882,21 @@ defmodule Engram.Accounts do
 
         case row do
           nil -> nil
-          {key, []} -> {key, :all}
-          {key, vault_ids} -> {key, vault_ids}
+          {key, rows} -> {key, key_scope(key, Map.to_list(rows || %{}))}
         end
       end)
 
     key
   end
+
+  # A pre-#332 key keeps its historical cached shape (`:all | [vault_id]`,
+  # which `Vaults.accessible_vault_ids/1` documents); a leveled key is cached
+  # as its `Engram.Permissions` scope.
+  defp key_scope(%ApiKey{default_access: nil}, []), do: :all
+  defp key_scope(%ApiKey{default_access: nil}, rows), do: Enum.map(rows, &elem(&1, 0))
+
+  defp key_scope(%ApiKey{default_access: default}, rows),
+    do: Engram.Permissions.from_key(default, rows)
 
   def list_api_keys(user) do
     {:ok, keys} =
@@ -848,6 +931,88 @@ defmodule Engram.Accounts do
         {:error, changeset}
     end
   end
+
+  @doc """
+  Replaces a leveled key's vault access (`{levels, default}`, as parsed by
+  `Engram.Permissions.parse_access_params/1`) in place: the raw key, and so
+  its hash, are unchanged. Effective at once: the `:api_key` entry is evicted
+  here and on every node by the `api_keys_changed` / `api_key_vaults_changed`
+  triggers, and the user's live sockets reconnect, as on a revoke.
+
+  `{:error, :legacy_key}` for a pre-levels key (`default_access` NULL): it is
+  stored under the plain hash a pre-levels release reads, which would take
+  read levels as write after a rollback (see the encoding note below). The
+  user creates a new key instead. `{:error, :invalid_access}` for a vault
+  that is not one of the user's active vaults; `{:error, :not_found}` for a
+  key that is not the user's.
+  """
+  @spec update_api_key_access(User.t(), Ecto.UUID.t(), {map(), String.t()}) ::
+          {:ok, ApiKey.t()} | {:error, :not_found | :legacy_key | :invalid_access}
+  def update_api_key_access(user, api_key_id, access) do
+    result =
+      Repo.with_tenant(user.id, fn ->
+        key =
+          Repo.one(
+            from(k in ApiKey,
+              where: k.id == ^api_key_id and k.user_id == ^user.id,
+              lock: "FOR UPDATE"
+            )
+          )
+
+        cond do
+          is_nil(key) -> {:error, :not_found}
+          is_nil(key.default_access) -> {:error, :legacy_key}
+          true -> replace_key_access(user, key, access)
+        end
+      end)
+
+    case result do
+      {:ok, {:ok, key}} ->
+        Engram.Cache.evict(:api_key, key.key_hash)
+        SessionInvalidator.disconnect_user(user.id)
+        {:ok, key}
+
+      {:ok, error} ->
+        error
+    end
+  end
+
+  defp replace_key_access(user, key, access) do
+    with {:ok, rows, default} <- key_access(user, access) do
+      Repo.delete_all(
+        from(v in "api_key_vaults", where: v.api_key_id == type(^key.id, Ecto.UUID))
+      )
+
+      insert_key_vaults(key, rows)
+      key |> Ecto.Changeset.change(default_access: default) |> Repo.update()
+    end
+  end
+
+  # FAIL-CLOSED COMPATIBILITY ENCODING for leveled keys (#332). A release that
+  # predates levels looks a key up by `sha256_hex(raw)` and reads its
+  # `api_key_vaults` rows as write on each (no rows = every vault), ignoring
+  # `level` and `default_access`. A leveled key found there would turn read
+  # into write and a policy-only key into an all-vaults key. A sentinel row
+  # (as OAuth grants use) is impossible: `api_key_vaults.vault_id` is a
+  # foreign key to `vaults`.
+  #
+  # So a leveled key is stored under a DIFFERENT hash, one an old release
+  # never computes: it gets 401 and cannot be widened at all. The raw form
+  # says which hash applies: `engram_lk_` plus 43 random characters (53 in
+  # all). A pre-levels key is `engram_` plus 43 (50 in all), so even one whose
+  # random part happens to start `lk_` is shorter and keeps the plain hash:
+  # the two forms cannot collide. Pre-levels keys are unchanged.
+  @leveled_key_prefix "engram_lk_"
+  @key_random_chars 43
+
+  defp mint_raw_key(access) do
+    prefix = if access, do: @leveled_key_prefix, else: @api_key_prefix
+    prefix <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+  end
+
+  defp hash_api_key(@leveled_key_prefix <> random = raw_key)
+       when byte_size(random) == @key_random_chars,
+       do: Engram.Crypto.sha256_hex("leveled:" <> raw_key)
 
   defp hash_api_key(raw_key), do: Engram.Crypto.sha256_hex(raw_key)
 

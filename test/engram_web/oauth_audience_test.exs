@@ -240,4 +240,21 @@ defmodule EngramWeb.OAuthAudienceTest do
     # MCP 2025-11-25: the same pointer the 401 carries.
     assert challenge =~ ~s(resource_metadata=")
   end
+
+  # #174: `mcp:read` is an MCP scope. A read-only grant's MCP-audience token
+  # reaches /api/mcp (its writes are refused per vault, not here).
+  test "an MCP-audience mcp:read token is not insufficient_scope", %{user: user} do
+    token = oauth_access_token(user, %{"scope" => "mcp:read"})
+    assert {:ok, %{"aud" => "engram:mcp", "scope" => "mcp:read"}} = Accounts.verify_jwt(token)
+
+    conn =
+      token
+      |> bearer()
+      |> post("/api/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
+
+    assert conn.status == 200
+    names = Enum.map(json_response(conn, 200)["result"]["tools"], & &1["name"])
+    assert "get_notes" in names
+    refute "write_note" in names
+  end
 end

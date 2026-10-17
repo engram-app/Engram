@@ -41,10 +41,19 @@ defmodule EngramWeb.VaultsController do
   def index(conn, %{"deleted" => "true"}) do
     user = conn.assigns.current_user
 
+    # A deleted vault is listed only where the credential holds it
+    # explicitly: the new-vaults policy covers vaults created after the
+    # credential, never one that was deleted (#174, #332).
+    # Nor one deleted before the credential (OAuth grant or API key) itself
+    # existed: it is not restorable by it either (`with_restorable_vault/3`).
+    scope = Engram.Permissions.vault_scope(conn)
+    granted = credential_created_at(conn)
+
     vaults =
-      Engram.Permissions.filter(
-        Engram.Permissions.vault_scope(conn),
-        Vaults.list_deleted_vaults(user)
+      Enum.filter(
+        Vaults.list_deleted_vaults(user),
+        &(Engram.Permissions.explicit_level(scope, &1) != :none and
+            not deleted_before?(&1.deleted_at, granted))
       )
 
     counts = Vaults.content_counts_for(user, vaults)
@@ -95,7 +104,15 @@ defmodule EngramWeb.VaultsController do
     vaults = Engram.Permissions.filter(scope, Vaults.list_vaults(user))
 
     counts = Vaults.content_counts_for(user, vaults)
-    %{vaults: Enum.map(vaults, &vault_json(&1, Map.get(counts, &1.id, @zero_counts)))}
+
+    %{
+      vaults: Enum.map(vaults, &vault_json(&1, Map.get(counts, &1.id, @zero_counts))),
+      # Capability flag (#174, #332): this server stores per-vault access
+      # levels and `mcp:read`. The SPA shows the level pickers and "Read only"
+      # only when it is present, so a new SPA never sends them to a server
+      # that would silently ignore them.
+      access_levels: true
+    }
   end
 
   # `POST /vaults` used to live here. It created a vault per call with no
@@ -155,7 +172,12 @@ defmodule EngramWeb.VaultsController do
       {"Fields to change", "application/json", Schemas.UpdateVaultRequest, required: true},
     responses: [
       ok: {"Updated", "application/json", Schemas.VaultResponse},
-      not_found: {"No such vault", "application/json", Schemas.MessageError},
+      forbidden:
+        {"Vault only readable by the credential: this needs write access to the vault",
+         "application/json", Schemas.MessageError},
+      not_found:
+        {"No such vault, or one the credential cannot reach (the two look the same)",
+         "application/json", Schemas.MessageError},
       unprocessable_entity: {"Validation error", "application/json", Schemas.Error}
     ]
   )
@@ -164,7 +186,7 @@ defmodule EngramWeb.VaultsController do
     user = conn.assigns.current_user
     attrs = Map.take(params, ["name", "is_default"])
 
-    with_scoped_vault(conn, id, fn vault_id ->
+    with_writable_vault(conn, id, fn vault_id ->
       case Vaults.update_vault(user, vault_id, attrs) do
         {:ok, vault} ->
           json(conn, %{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
@@ -190,14 +212,19 @@ defmodule EngramWeb.VaultsController do
     parameters: [id: [in: :path, type: :string, required: true, description: "Vault UUID"]],
     responses: [
       ok: {"Soft-deleted (restorable for 30 days)", "application/json", Schemas.VaultDeleted},
-      not_found: {"No such vault", "application/json", Schemas.MessageError}
+      forbidden:
+        {"Vault only readable by the credential: this needs write access to the vault",
+         "application/json", Schemas.MessageError},
+      not_found:
+        {"No such vault, or one the credential cannot reach (the two look the same)",
+         "application/json", Schemas.MessageError}
     ]
   )
 
   def delete(conn, %{"id" => id}) do
     user = conn.assigns.current_user
 
-    with_scoped_vault(conn, id, fn vault_id ->
+    with_writable_vault(conn, id, fn vault_id ->
       case Vaults.delete_vault(user, vault_id) do
         {:ok, vault} -> json(conn, %{deleted: true, id: vault.id})
         {:error, :not_found} -> not_found(conn)
@@ -218,14 +245,19 @@ defmodule EngramWeb.VaultsController do
     responses: [
       ok: {"Restored", "application/json", Schemas.VaultResponse},
       payment_required: {"Vault cap reached", "application/json", Schemas.LimitError},
-      not_found: {"No such vault", "application/json", Schemas.MessageError}
+      forbidden:
+        {"The credential may not restore this vault: this needs write access to it",
+         "application/json", Schemas.MessageError},
+      not_found:
+        {"No such vault, or one the credential cannot reach (the two look the same)",
+         "application/json", Schemas.MessageError}
     ]
   )
 
   def restore(conn, %{"id" => id}) do
     user = conn.assigns.current_user
 
-    with_scoped_vault(conn, id, fn vault_id ->
+    with_restorable_vault(conn, id, fn vault_id ->
       case Vaults.restore_vault(user, vault_id) do
         {:ok, vault} ->
           json(conn, %{vault: vault_json(vault, Vaults.content_counts(user, vault.id))})
@@ -290,7 +322,8 @@ defmodule EngramWeb.VaultsController do
       created: {"Newly created vault", "application/json", Schemas.RegisterVaultResponse},
       bad_request: {"name and client_id are required", "application/json", Schemas.MessageError},
       forbidden:
-        {"Vault outside the credential's scope, or creation by a vault-restricted credential",
+        {"Vault outside the credential's scope, or creation by a credential whose new-vaults " <>
+           "policy is not write (a vault-restricted, read-level or `mcp:read` credential)",
          "application/json", Schemas.MessageError},
       payment_required: {"Vault cap reached", "application/json", Schemas.LimitError},
       unprocessable_entity: {"Validation error", "application/json", Schemas.Error}
@@ -310,11 +343,14 @@ defmodule EngramWeb.VaultsController do
       |> json(%{error: "name and client_id are required"})
     else
       # #1869: a vault-restricted credential may only resolve a vault inside
-      # its scope, and may not create one (it could never reach it anyway).
-      # Both refusals are the same 403, so register is not an existence oracle.
+      # its scope. Creating one needs a WRITE new-vaults policy (#174, #332):
+      # a vault created now is reached through that policy, so with none or
+      # read the credential could not use what it made. Both refusals are the
+      # same 403, so register is not an existence oracle.
       scope = Engram.Permissions.vault_scope(conn)
+      create? = Engram.Permissions.new_vault_level(scope) == :write
 
-      case Vaults.register_vault(user, name, client_id, %{}, create?: scope == :all) do
+      case Vaults.register_vault(user, name, client_id, %{}, create?: create?) do
         {:ok, vault, :created} ->
           # A brand-new user gets their DEK inside the seed below, but `user`
           # predates it. Without the DEK the counts cannot recognise the welcome
@@ -418,23 +454,96 @@ defmodule EngramWeb.VaultsController do
   # delete/purge were outright destructive.
   #
   # Checked against the id alone, with no fetch: that works for soft-deleted
-  # vaults (restore/purge operate on them) and avoids becoming an existence
-  # oracle — an out-of-scope caller gets 403 whether or not the vault exists.
-  defp with_scoped_vault(conn, id, fun) do
+  # vaults (restore/purge operate on them). A vault the credential cannot
+  # reach is a 404 identical to a missing one, so the answer reveals nothing
+  # about which UUIDs exist.
+  defp with_scoped_vault(conn, id, fun),
+    do: with_vault_level(conn, id, &Engram.Permissions.allows?/2, fun)
+
+  # Rename and delete change the vault, so they need WRITE on
+  # it (#174, #332): a read-level vault, listed or reached through the
+  # new-vaults policy, is refused 403. That 403 only goes to a vault the
+  # credential can already see; see `with_vault_level/4`.
+  defp with_writable_vault(conn, id, fun),
+    do: with_vault_level(conn, id, &Engram.Permissions.allows_write?/2, fun)
+
+  # Restore needs write LISTED on the vault, not write through the new-vaults
+  # policy: that policy is for vaults created after the credential, and a
+  # restored vault is not one. (A vault deleted before the credential existed
+  # is recorded as none at creation, `Permissions.resolve_access/2`.)
+  # An explicitly listed write, and for an OAuth grant or API key a vault
+  # deleted AFTER the credential was created: a vault already in the trash
+  # at consent or key creation was never offered to it. This is what keeps
+  # an unrestricted credential (a NULL grant, a key created without levels:
+  # no levels to record the trash in) from restoring one; a leveled one
+  # records such vaults as `none` anyway.
+  defp with_restorable_vault(conn, id, fun) do
+    with_vault_level(
+      conn,
+      id,
+      &(Engram.Permissions.explicit_level(&1, &2) == :write and
+          not deleted_before_credential?(conn, &2.id)),
+      fun
+    )
+  end
+
+  # A grant that is revoked, gone or not this user's (`:revoked`) restores
+  # nothing; the auth plugs refuse such a request before it gets here.
+  defp deleted_before_credential?(conn, vault_id) do
+    case credential_created_at(conn) do
+      nil -> false
+      :revoked -> true
+      granted -> deleted_before?(Vaults.deleted_at(conn.assigns.current_user, vault_id), granted)
+    end
+  end
+
+  # An API key's `created_at`, an OAuth grant's `granted_at`, or nil (a
+  # session, or a grant token minted before `gid`): no bound.
+  defp credential_created_at(%{assigns: %{current_api_key: %{created_at: created}}}),
+    do: created
+
+  defp credential_created_at(conn) do
+    Engram.OAuth.granted_at(%{
+      "gid" => conn.assigns[:oauth_grant_id],
+      "user_id" => conn.assigns.current_user.id
+    })
+  end
+
+  # `deleted_at` has second precision: a vault deleted in the very second the
+  # grant was created counts as after it.
+  defp deleted_before?(%DateTime{} = deleted, %DateTime{} = granted),
+    do: DateTime.compare(deleted, DateTime.truncate(granted, :second)) == :lt
+
+  defp deleted_before?(_deleted, _granted), do: false
+
+  # Out of reach and nonexistent are one 404, or the status is an existence
+  # oracle. A visible vault the action still refuses (write on a read vault)
+  # is 403, but a read or write new-vaults policy also "sees" every random
+  # UUID, so the 403 is only given once the vault is known to exist.
+  defp with_vault_level(conn, id, permitted?, fun) do
+    scope = Engram.Permissions.vault_scope(conn)
+
     with {:ok, vault_id} <- parse_id(id),
-         :ok <- Engram.Permissions.check(Engram.Permissions.vault_scope(conn), %{id: vault_id}) do
+         true <- Engram.Permissions.allows?(scope, %{id: vault_id}) || :hidden,
+         true <- permitted?.(scope, %{id: vault_id}) || :refused do
       fun.(vault_id)
     else
-      :forbidden ->
-        forbidden(conn)
+      :refused ->
+        if vault_exists?(conn.assigns.current_user, id),
+          do: forbidden(conn),
+          else: not_found(conn)
 
-      :error ->
+      _hidden_or_malformed ->
         not_found(conn)
     end
   end
 
-  # Same 403 shape VaultPlug uses, so a client sees one consistent error for
-  # "outside your grant" no matter which surface refused.
+  # Active or in the trash: restore refuses on a trashed vault.
+  defp vault_exists?(user, vault_id),
+    do:
+      match?({:ok, _}, Vaults.get_vault(user, vault_id)) or
+        Vaults.deleted_at(user, vault_id) != nil
+
   defp forbidden(conn) do
     conn |> put_status(:forbidden) |> json(%{error: "Not authorized for this vault"})
   end

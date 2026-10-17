@@ -49,6 +49,16 @@ defmodule Engram.QueryBudgetTest do
   @budgets %{
     # Read target 5. begin, tenant_enter, the note, commit.
     "mcp get_notes" => 4,
+    # As "mcp get_notes", plus the local auth provider's users lookup by
+    # `sub` (not cached; an API key resolves through the :api_key cache). The
+    # grant behind the token's `gid` is read from the `:oauth_grant` cache:
+    # 0 queries warm.
+    "mcp get_notes oauth" => 5,
+    # Every 60 s cache cold: the warm 5, the ONE grant query
+    # (`OAuth.load_grant/1`: liveness, levels, owner, granted_at), the
+    # subscription block (4), the onboarding gate's users row, the vault list
+    # block (4).
+    "mcp get_notes oauth cold" => 15,
     # Write target 12; floor 14, each kept query required:
     #  1 rotation lock: a write reads it fresh from the DB (RotationGate).
     #  2, 3, 14 begin / tenant_enter / commit: the one tenant txn (RLS).
@@ -262,6 +272,60 @@ defmodule Engram.QueryBudgetTest do
 
       measure("mcp delete_note", warm, fn ->
         conn |> call_tool("delete_note", %{"path" => "Work/New.md"}) |> tool_ok!()
+      end)
+    end
+  end
+
+  # An OAuth access token resolves its grant (`gid`) server-side on every
+  # request (`Engram.OAuth.expand_claims/1`), through the `:oauth_grant`
+  # cache. Warm, that costs nothing over an API key's read; cold, the one
+  # grant query.
+  describe "MCP over an OAuth access token" do
+    setup %{user: user} do
+      user = ensure_external_id(user)
+
+      {:ok, client} =
+        Engram.OAuth.register_client(%{
+          "redirect_uris" => ["https://client.example/cb"],
+          "client_name" => "Client"
+        })
+
+      {verifier, challenge} = Engram.OAuthHelpers.pkce_pair()
+
+      {:ok, validated} =
+        Engram.OAuth.validate_authorization_request(%{
+          "client_id" => client.client_id,
+          "redirect_uri" => "https://client.example/cb",
+          "response_type" => "code",
+          "code_challenge" => challenge,
+          "code_challenge_method" => "S256",
+          "scope" => "mcp"
+        })
+
+      {:ok, url} = Engram.OAuth.mint_authorization_code(user, validated, :all, nil)
+
+      {:ok, tokens} =
+        Engram.OAuth.exchange_authorization_code(%{
+          "code" => Engram.OAuthHelpers.code_from_redirect(url),
+          "redirect_uri" => "https://client.example/cb",
+          "client_id" => client.client_id,
+          "code_verifier" => verifier
+        })
+
+      %{
+        oauth: put_req_header(build_conn(), "authorization", "Bearer #{tokens.access_token}")
+      }
+    end
+
+    test "mcp get_notes oauth", %{oauth: conn} do
+      measure("mcp get_notes oauth", true, fn ->
+        conn |> call_tool("get_notes", %{"paths" => ["Work/Existing.md"]}) |> tool_ok!()
+      end)
+    end
+
+    test "mcp get_notes oauth cold", %{oauth: conn} do
+      measure("mcp get_notes oauth cold", :cold, fn ->
+        conn |> call_tool("get_notes", %{"paths" => ["Work/Existing.md"]}) |> tool_ok!()
       end)
     end
   end

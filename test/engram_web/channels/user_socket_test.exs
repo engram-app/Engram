@@ -189,4 +189,44 @@ defmodule EngramWeb.UserSocketTest do
 
     assert socket.assigns.plugin_version == nil
   end
+
+  # Every socket write rides crdt:, which refuses a read-level vault at join,
+  # so a read-only OAuth grant (#174) may still open the socket and listen.
+  test "an mcp:read OAuth token opens the sync socket", %{user: user} do
+    user = EngramWeb.ConnCase.ensure_external_id(user)
+    token = Engram.Accounts.generate_jwt(user, %{"scope" => "mcp:read"})
+
+    assert {:ok, socket} = connect(UserSocket, %{"token" => token})
+
+    refute Engram.Permissions.writable_anywhere?(
+             Engram.Permissions.vault_scope(socket.assigns),
+             []
+           )
+  end
+
+  # The claims are read with the signature checked but NOT `exp`: the resolver
+  # has just validated the token in full, so one that expires in between must
+  # keep its restriction. Re-validating read it as claim-less, which on the
+  # self-host branch meant unrestricted for the socket's life.
+  test "a grant token that expires between resolve and the claims read keeps its scope",
+       %{user: user} do
+    vault_id = Ecto.UUID.generate()
+
+    expired =
+      Engram.Accounts.generate_jwt(user, %{
+        "scope" => "mcp",
+        "vault_ids" => [vault_id],
+        "exp" => System.system_time(:second) - 1
+      })
+
+    assert {:error, _} = Engram.Accounts.verify_jwt(expired)
+    assert {:ok, %{"vault_ids" => [^vault_id]}} = UserSocket.read_claims(expired)
+  end
+
+  test "a full mcp OAuth token still opens the sync socket", %{user: user} do
+    user = EngramWeb.ConnCase.ensure_external_id(user)
+    token = Engram.Accounts.generate_jwt(user, %{"scope" => "mcp"})
+
+    assert {:ok, _socket} = connect(UserSocket, %{"token" => token})
+  end
 end

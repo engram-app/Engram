@@ -162,6 +162,12 @@
       },
       "VaultsResponse": {
         "properties": {
+          "access_levels": {
+            "description": "True when this server supports per-vault access levels and `mcp:read` on OAuth grants and API keys. Absent on servers that predate them.",
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
           "suggested_device_name": {
             "description": "Present only when a `user_code` query param is supplied. The name the plugin suggested for its device (hostname or platform), for a default connection label. Null when the code is invalid or the plugin sent none.",
             "nullable": true,
@@ -514,8 +520,35 @@
           "name": "Claude Desktop"
         },
         "properties": {
+          "default_access": {
+            "description": "Level for every vault not listed in `vault_access`, including vaults you create later. Defaults to `none` when `vault_access` is given. `write` also lets the key create vaults. The key must reach at least one vault now or later.",
+            "enum": [
+              "none",
+              "read",
+              "write"
+            ],
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "name": {
             "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "vault_access": {
+            "additionalProperties": {
+              "enum": [
+                "none",
+                "read",
+                "write"
+              ],
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "description": "Level per vault id: `none`, `read` (search and read) or `write` (also create, edit, rename and delete notes, and rename or delete the vault). Every id must be one of your vaults. Omit both this and `default_access` for a key on every vault with full write access.",
+            "type": "object",
             "x-struct": null,
             "x-validate": null
           }
@@ -1713,6 +1746,47 @@
         "x-struct": "Elixir.EngramWeb.Schemas.AttachmentResponse",
         "x-validate": null
       },
+      "UpdateAccessRequest": {
+        "example": {
+          "default_access": "none",
+          "vault_access": {
+            "<vault id>": "write"
+          }
+        },
+        "properties": {
+          "default_access": {
+            "description": "Level for every vault not listed, including vaults you create later. Defaults to `none`. The credential must reach at least one vault now or later.",
+            "enum": [
+              "none",
+              "read",
+              "write"
+            ],
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "vault_access": {
+            "additionalProperties": {
+              "enum": [
+                "none",
+                "read",
+                "write"
+              ],
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "description": "Level per vault id, replacing the credential's current levels. Every id must be one of your active vaults.",
+            "type": "object",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "title": "UpdateAccessRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.UpdateAccessRequest",
+        "x-validate": null
+      },
       "OkFlag": {
         "properties": {
           "ok": {
@@ -1837,6 +1911,17 @@
             "x-struct": null,
             "x-validate": null
           },
+          "new_vaults": {
+            "description": "The level this connection gets on vaults you create later.",
+            "enum": [
+              "none",
+              "read",
+              "write"
+            ],
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "redirect_uri": {
             "description": "The redirect this grant's authorization code was delivered to. This, not `redirect_uris`, is what decides `verified`. Null for non-OAuth connections and for grants issued before it was recorded.",
             "nullable": true,
@@ -1881,7 +1966,7 @@
             "x-validate": null
           },
           "vault_ids": {
-            "description": "Vaults this connection may reach. Null means all vaults.",
+            "description": "Vaults this connection may reach right now (read or write). Null means every vault, including ones created later. For a connection with per-vault levels this is resolved, not stored: the vaults `vault_levels` shows at read or write. Vaults created later get `new_vaults`, so read both for the full picture.",
             "items": {
               "format": "uuid",
               "type": "string",
@@ -1889,6 +1974,45 @@
               "x-validate": null
             },
             "nullable": true,
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "vault_levels": {
+            "description": "What this connection may do in each of your vaults, resolved now. Every vault you can see is listed, `none` included. `read` = search and read, `write` = also change notes and the vault.",
+            "items": {
+              "properties": {
+                "level": {
+                  "enum": [
+                    "none",
+                    "read",
+                    "write"
+                  ],
+                  "type": "string",
+                  "x-struct": null,
+                  "x-validate": null
+                },
+                "vault_id": {
+                  "format": "uuid",
+                  "type": "string",
+                  "x-struct": null,
+                  "x-validate": null
+                },
+                "vault_name": {
+                  "nullable": true,
+                  "type": "string",
+                  "x-struct": null,
+                  "x-validate": null
+                }
+              },
+              "required": [
+                "vault_id",
+                "level"
+              ],
+              "type": "object",
+              "x-struct": null,
+              "x-validate": null
+            },
             "type": "array",
             "x-struct": null,
             "x-validate": null
@@ -1923,6 +2047,17 @@
       },
       "ApiKeyCreated": {
         "properties": {
+          "default_access": {
+            "description": "The granted level for every vault not in `vault_access`, including later ones.",
+            "enum": [
+              "none",
+              "read",
+              "write"
+            ],
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "id": {
             "format": "uuid",
             "type": "string",
@@ -1939,12 +2074,30 @@
             "type": "string",
             "x-struct": null,
             "x-validate": null
+          },
+          "vault_access": {
+            "additionalProperties": {
+              "enum": [
+                "none",
+                "read",
+                "write"
+              ],
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "description": "What the key was granted, read back from storage: a level per listed vault id. Compare it with what you asked for; revoke the key if it is wider.",
+            "type": "object",
+            "x-struct": null,
+            "x-validate": null
           }
         },
         "required": [
           "key",
           "id",
-          "name"
+          "name",
+          "vault_access",
+          "default_access"
         ],
         "title": "ApiKeyCreated",
         "type": "object",
@@ -2171,11 +2324,42 @@
       },
       "CreateApiKeyRequest": {
         "example": {
-          "name": "CI pipeline"
+          "default_access": "none",
+          "name": "CI pipeline",
+          "vault_access": {
+            "0b7c6a4e-3f1d-4c8e-9a2b-5d6e7f809a1b": "read"
+          }
         },
         "properties": {
+          "default_access": {
+            "description": "Level for every vault not listed in `vault_access`, including vaults you create later. Defaults to `none` when `vault_access` is given. `write` also lets the key create vaults. The key must reach at least one vault now or later.",
+            "enum": [
+              "none",
+              "read",
+              "write"
+            ],
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
           "name": {
             "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "vault_access": {
+            "additionalProperties": {
+              "enum": [
+                "none",
+                "read",
+                "write"
+              ],
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "description": "Level per vault id: `none`, `read` (search and read) or `write` (also create, edit, rename and delete notes, and rename or delete the vault). Every id must be one of your vaults. Omit both this and `default_access` for a key on every vault with full write access.",
+            "type": "object",
             "x-struct": null,
             "x-validate": null
           }
@@ -3192,7 +3376,7 @@
     "/api/connections/oauth/{client_id}": {
       "delete": {
         "callbacks": {},
-        "description": "Revokes the refresh tokens for an OAuth client family (e.g. an MCP client) so it can no longer mint access tokens. Pass `family_id` to revoke ONE grant — a client the user authorized twice has two, and each is its own row in `GET /connections`. Omit it to disconnect the client entirely, which is what frees a connection-cap slot. `vault_id` is the older, coarser narrowing and is ignored when `family_id` is given. Session-auth only.",
+        "description": "Revokes the refresh tokens for an OAuth client family (e.g. an MCP client) so it can no longer mint access tokens. Pass `family_id` to revoke ONE grant — a client the user authorized twice has two, and each is its own row in `GET /connections`. Omit it to disconnect the client entirely, which is what frees a connection-cap slot. `vault_id` is the older, coarser narrowing and is ignored when `family_id` is given: it revokes, whole, each of the client's grants that can reach that vault. A grant with per-vault levels counts as reaching it at read or write, and through its new-vaults policy; a grant that lists vaults without levels, when the vault is one of them; and an all-vaults grant, which reaches every vault. A revoked grant's access tokens stop working at once and its live sockets are disconnected. Session-auth only.",
         "operationId": "connections-delete-oauth",
         "parameters": [
           {
@@ -3218,7 +3402,7 @@
             }
           },
           {
-            "description": "Scope revoke to one vault",
+            "description": "Revoke only the grants that can reach this vault, all-vaults grants included",
             "in": "query",
             "name": "vault_id",
             "required": false,
@@ -3245,6 +3429,92 @@
           }
         },
         "summary": "Revoke an OAuth client connection",
+        "tags": [
+          "Connections"
+        ]
+      },
+      "patch": {
+        "callbacks": {},
+        "description": "Replaces the vault levels of ONE grant (`family_id`) of an OAuth client. Takes effect at once: issued access tokens and every later refresh carry the new access, and the user's live sockets reconnect. Widening is allowed. A grant the client asked to be read only (`mcp:read`) cannot be given write: 422. Session-auth only.",
+        "operationId": "connections-update-oauth",
+        "parameters": [
+          {
+            "description": "OAuth client id",
+            "in": "path",
+            "name": "client_id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "The grant to change",
+            "in": "query",
+            "name": "family_id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAccessRequest"
+              }
+            }
+          },
+          "description": "New access",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            },
+            "description": "The updated connection"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Missing family_id"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "No such connection"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Access the grant cannot have"
+          }
+        },
+        "summary": "Change an OAuth connection's vault access",
         "tags": [
           "Connections"
         ]
@@ -4319,7 +4589,7 @@
                 }
               }
             },
-            "description": "Vault outside the credential's scope, or creation by a vault-restricted credential"
+            "description": "Vault outside the credential's scope, or creation by a credential whose new-vaults policy is not write (a vault-restricted, read-level or `mcp:read` credential)"
           },
           "422": {
             "content": {
@@ -4372,6 +4642,71 @@
           }
         },
         "summary": "Revoke a personal access token",
+        "tags": [
+          "Connections"
+        ]
+      },
+      "patch": {
+        "callbacks": {},
+        "description": "Replaces the vault levels of a key created with levels (`engram_lk_`). The raw key is unchanged, and the change takes effect at once. A key created before levels cannot be changed (422); create a new key instead. 404 for an unknown or malformed id. Session-auth only.",
+        "operationId": "connections-update-pat",
+        "parameters": [
+          {
+            "description": "PAT (API key) UUID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAccessRequest"
+              }
+            }
+          },
+          "description": "New access",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            },
+            "description": "The updated connection"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "No such PAT"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Access the key cannot have"
+          }
+        },
+        "summary": "Change a personal access token's vault access",
         "tags": [
           "Connections"
         ]
@@ -4946,6 +5281,16 @@
             },
             "description": "Vault cap reached"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "The credential may not restore this vault: this needs write access to it"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -4954,7 +5299,7 @@
                 }
               }
             },
-            "description": "No such vault"
+            "description": "No such vault, or one the credential cannot reach (the two look the same)"
           }
         },
         "summary": "Restore a soft-deleted vault",
@@ -5360,6 +5705,16 @@
             },
             "description": "Soft-deleted (restorable for 30 days)"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Vault only readable by the credential: this needs write access to the vault"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -5368,7 +5723,7 @@
                 }
               }
             },
-            "description": "No such vault"
+            "description": "No such vault, or one the credential cannot reach (the two look the same)"
           }
         },
         "summary": "Soft-delete a vault",
@@ -5459,6 +5814,16 @@
             },
             "description": "Updated"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Vault only readable by the credential: this needs write access to the vault"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -5467,7 +5832,7 @@
                 }
               }
             },
-            "description": "No such vault"
+            "description": "No such vault, or one the credential cannot reach (the two look the same)"
           },
           "422": {
             "content": {

@@ -76,6 +76,21 @@ defmodule Engram.Cache.Registry do
       pg_channel: "api_keys_changed",
       pg_clear_channel: "api_key_vaults_changed"
     },
+    # oauth_refresh_tokens.family_id (the access token's `gid` claim) =>
+    # `{:live, %{user_id, vault_access, default_access, vault_ids,
+    # granted_at}}` | `:revoked`: what an OAuth grant may do now and whose it
+    # is, read from its rows so the token need carry neither a per-vault map
+    # nor a trusted vault list (Engram.OAuth.expand_claims/1). The NOTIFY
+    # trigger (migration 20261015030000) evicts on a revoke, a level or
+    # vault-list change and a delete; every revoke also evicts its families
+    # locally (`OAuth.grants_changed/1`); the TTL is only a backstop.
+    %{
+      name: :oauth_grant,
+      ttl: 60_000,
+      cache_nil: false,
+      evict_match: :key,
+      pg_channel: "oauth_refresh_tokens_changed"
+    },
     # users.id => %Subscription{} | nil (nil cached: most users have none).
     %{
       name: :subscription,

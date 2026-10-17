@@ -115,16 +115,16 @@ defmodule EngramWeb.McpController do
   # call against a stale list fails with a tool error, which the spec names as
   # a reason a client MAY re-fetch early.
   #
-  # `tools/list` is `public` on one invariant: `Tools.list/0` takes no user and
-  # no conn, so every credential gets a byte-identical list. `public` lets a
-  # cache serve one caller's response to another ACROSS access tokens, so the
-  # day a tool becomes plan- or scope-gated this MUST become `private`.
-  # Per-call authorization lives in `tools/call` and does not depend on this.
-  # `prompts/list` is public on the same invariant: `Prompts.wire_list/0` is a
-  # compile-time constant.
+  # `tools/list` is `private`: a credential with no writable vault (an
+  # `mcp:read` grant, or every level read, #174) sees only the read-only
+  # tools, so the list varies by credential and a shared cache must
+  # not serve one token's list to another. Per-call authorization lives in
+  # `tools/call` and does not depend on this.
+  # `prompts/list` is public: `Prompts.wire_list/0` is a compile-time constant
+  # and identical for every caller.
   @cacheable_results %{
     "server/discover" => %{"ttlMs" => 3_600_000, "cacheScope" => "public"},
-    "tools/list" => %{"ttlMs" => 3_600_000, "cacheScope" => "public"},
+    "tools/list" => %{"ttlMs" => 3_600_000, "cacheScope" => "private"},
     "prompts/list" => %{"ttlMs" => 3_600_000, "cacheScope" => "public"},
     "resources/templates/list" => %{"ttlMs" => 3_600_000, "cacheScope" => "public"},
     # Per user and per credential scope, and notes change constantly.
@@ -612,8 +612,17 @@ defmodule EngramWeb.McpController do
      }}
   end
 
-  defp dispatch(_conn, "tools/list", _params) do
-    {:ok, %{"tools" => Tools.wire_list()}}
+  # The same check `tools/call` applies to a vault write (a credential that
+  # can write no vault), so every listed tool is one the caller can call. The
+  # per-vault check stays at call time: a credential that can write SOME vault
+  # lists the write tools. No plan gate: API keys write on every tier (#1974).
+  defp dispatch(conn, "tools/list", _params) do
+    tools =
+      if read_only_grant?(conn),
+        do: Enum.reject(Tools.wire_list(), &Tools.writes_vault?(&1["name"])),
+        else: Tools.wire_list()
+
+    {:ok, %{"tools" => tools}}
   end
 
   defp dispatch(_conn, "prompts/list", _params) do
@@ -717,6 +726,7 @@ defmodule EngramWeb.McpController do
     # so this controller cannot forget to charge a new retrieval tool. Volume is
     # bounded by `EngramWeb.Plugs.PreAuthRateLimit` on the shared pipeline.
     with {:ok, tool} <- Tools.get(name),
+         :ok <- check_read_only_grant(conn, tool),
          user = conn.assigns.current_user,
          # §E — record origin fingerprint for daily-rollup aggregation.
          _ = OriginStats.record(user.id, List.first(get_req_header(conn, "user-agent"))),
@@ -726,6 +736,11 @@ defmodule EngramWeb.McpController do
     else
       :error ->
         {:error, -32_602, "Unknown tool: #{tool_name_label(name)}"}
+
+      :read_only_grant ->
+        {:error, -32_602,
+         "This connection was granted read-only access: #{name} changes vault data and is not " <>
+           "available. Reconnect without \"Read only\" to allow changes."}
 
       {:error, tool_name, msg} ->
         # `with`/`else` doesn't carry earlier clauses' bindings into `else` —
@@ -749,6 +764,49 @@ defmodule EngramWeb.McpController do
 
   defp dispatch(_conn, _method, _params) do
     {:error, -32_601, "Method not found"}
+  end
+
+  # Enforced at call time, not only by hiding the tool from `tools/list`: a
+  # client can call any name it likes, including retired aliases never listed.
+  # Only tools that write vault data (`Tools.writes_vault?/1`): send_feedback
+  # changes nothing in a vault, so a read-only grant may still send it.
+  defp check_read_only_grant(conn, tool) do
+    if Tools.writes_vault?(tool.name) and read_only_grant?(conn),
+      do: :read_only_grant,
+      else: :ok
+  end
+
+  # No vault the credential can write, listed or created later: an `mcp:read`
+  # grant, or every level read (#174, #332). Write tools are hidden and refused.
+  # An unrestricted credential writes everywhere: answered without reading
+  # the vault list.
+  defp read_only_grant?(conn) do
+    case Engram.Permissions.vault_scope(conn) do
+      :all ->
+        false
+
+      scope ->
+        live = Enum.map(Engram.Vaults.list_vaults(conn.assigns.current_user), & &1.id)
+        not Engram.Permissions.writable_anywhere?(scope, live)
+    end
+  end
+
+  # A credential that can write SOME vault still lists the write tools, so the
+  # vault each call acts on is checked here, after it is resolved. The tool is
+  # listed and the call well-formed, so this is a Tool Execution Error
+  # (`isError: true`) the model can act on by picking another vault, the same
+  # shape as a no-access vault. `check_read_only_grant/2` stays a protocol
+  # error: there the tool is not in this credential's `tools/list` at all.
+  defp check_vault_writable(conn, tool, vault) do
+    if not Tools.writes_vault?(tool.name) or
+         Engram.Permissions.allows_write?(Engram.Permissions.vault_scope(conn), vault) do
+      :ok
+    else
+      {:error,
+       "Vault #{vault.name || vault.id} is read-only for this connection: #{tool.name} " <>
+         "changes notes and is not available there. Use a vault this connection can write, " <>
+         "or reconnect with write access to this one."}
+    end
   end
 
   defp tool_name_label(name) when is_binary(name), do: name
@@ -1229,9 +1287,11 @@ defmodule EngramWeb.McpController do
   end
 
   defp resolve_and_call(tool, user, args, conn) do
-    case resolve_mcp_vault(user, args, conn) do
+    with {:ok, vault} <- resolve_mcp_vault(user, args, conn),
+         :ok <- check_vault_writable(conn, tool, vault) do
+      call_tool(tool, user, vault, args)
+    else
       {:error, msg} -> error_result(msg)
-      {:ok, vault} -> call_tool(tool, user, vault, args)
     end
   end
 
@@ -1369,15 +1429,15 @@ defmodule EngramWeb.McpController do
     end
   end
 
-  # Explains why a requested vault isn't reachable — an OAuth grant's vault set,
-  # an API-key restriction, or a genuinely unknown vault — so the caller gets
-  # actionable guidance instead of a flat "not found".
+  # Explains why a requested vault isn't reachable — a restricted credential
+  # (an OAuth grant's levels, an API-key restriction, or both) or a genuinely
+  # unknown vault — so the caller gets actionable guidance instead of a flat
+  # "not found".
   defp vault_denied_message(requested, conn) do
-    cond do
-      is_list(conn.assigns[:oauth_scope_vault_ids]) ->
-        "This connection is authorized for #{length(conn.assigns.oauth_scope_vault_ids)} " <>
-          "vault(s) and cannot access vault #{requested}. Call list_vaults to see which " <>
-          "ones it can reach, or reconnect with a grant that includes this vault."
+    case Engram.Permissions.vault_scope(conn) do
+      :all ->
+        "Vault not found: #{requested}. vault_id takes a vault's name or its UUID; " <>
+          "call list_vaults to see the ones this connection can use."
 
       # Keyed on the credential's SCOPE, never on whether `requested` exists.
       #
@@ -1391,14 +1451,19 @@ defmodule EngramWeb.McpController do
       # two cases — these two paths must not disagree about that rule.
       #
       # A restricted credential therefore gets one answer for every ref, real
-      # or invented. It loses nothing: the guidance is identical either way.
-      Engram.Permissions.vault_scope(conn) != :all ->
-        "This connection is restricted to a subset of your vaults and cannot " <>
-          "access vault #{requested}. Call list_vaults to see the ones it can use."
+      # or invented. The count is of the vaults it reaches by its LEVELS
+      # (#174 / #332), the same answer list_vaults gives, and does not depend
+      # on `requested`. Never the legacy `vault_ids` claim: on a leveled grant
+      # that lists only write vaults, or a sentinel no vault has.
+      scope ->
+        reachable =
+          length(
+            Engram.Permissions.filter(scope, Engram.Vaults.list_vaults(conn.assigns.current_user))
+          )
 
-      true ->
-        "Vault not found: #{requested}. vault_id takes a vault's name or its UUID; " <>
-          "call list_vaults to see the ones this connection can use."
+        "This connection is restricted to a subset of your vaults (it can reach " <>
+          "#{reachable}) and cannot access vault #{requested}. Call list_vaults to see the " <>
+          "ones it can use, or reconnect with access to this vault."
     end
   end
 

@@ -2,6 +2,7 @@ defmodule EngramWeb.Plugs.AuthTest do
   use EngramWeb.ConnCase, async: false
 
   alias Engram.Accounts
+  alias Engram.Auth.Providers.Local
   alias Engram.Test.LogCapture
   alias EngramWeb.Plugs.Auth
 
@@ -10,6 +11,64 @@ defmodule EngramWeb.Plugs.AuthTest do
     {:ok, raw_key, _api_key} = Accounts.create_api_key(user, "test")
 
     %{user: user, raw_key: raw_key}
+  end
+
+  # Counts `Accounts.grant_claims/1` calls made by THIS process inside `fun`.
+  # A separate collector is the tracer: trace messages are not delivered to
+  # the traced process itself.
+  defp trace_grant_claims(fun) do
+    mfa = {Engram.Accounts, :grant_claims, 1}
+    # A pattern set on a module not loaded yet matches nothing.
+    Code.ensure_loaded!(Engram.Accounts)
+    test = self()
+
+    collector =
+      spawn_link(fn ->
+        count = fn count, n ->
+          receive do
+            {:trace, ^test, :call, {Engram.Accounts, :grant_claims, _}} -> count.(count, n + 1)
+            {:done, from} -> send(from, {:grant_claims_calls, n})
+          end
+        end
+
+        count.(count, 0)
+      end)
+
+    # `Engram.Crypto` marks a process that touched key material `:sensitive`,
+    # which suppresses call tracing: a silent zero. Cleared for the trace.
+    Process.flag(:sensitive, false)
+    :erlang.trace_pattern(mfa, true, [:global])
+    :erlang.trace(self(), true, [:call, {:tracer, collector}])
+
+    try do
+      fun.()
+    after
+      :erlang.trace(self(), false, [:call])
+      :erlang.trace_pattern(mfa, false, [:global])
+    end
+
+    # Trace messages are delivered asynchronously: wait until every one this
+    # process generated has reached the collector.
+    ref = :erlang.trace_delivered(self())
+    assert_receive {:trace_delivered, _, ^ref}
+    send(collector, {:done, self()})
+    assert_receive {:grant_claims_calls, n}
+    n
+  end
+
+  # Self-host: an OAuth access token resolves as a provider JWT there, so its
+  # grant IS read (and a revoked one refused).
+  test "reads a local-provider JWT as an OAuth grant", %{user: user} do
+    user = ensure_external_id(user)
+    {:ok, token} = Local.issue_access_token(user.external_id, user.email)
+
+    calls =
+      trace_grant_claims(fn ->
+        conn = build_conn() |> put_req_header("authorization", "Bearer #{token}") |> Auth.call([])
+        refute conn.halted
+      end)
+
+    assert calls == 1
   end
 
   test "authenticates with valid API key", %{user: user, raw_key: raw_key} do
@@ -100,9 +159,9 @@ defmodule EngramWeb.Plugs.AuthTest do
     on_exit(fn -> Application.put_env(:engram, :auth_provider, :local) end)
 
     {:ok, %{external_id: ext_id}} =
-      Engram.Auth.Providers.Local.register_user("plugtest@example.com", "StrongPass123!", %{})
+      Local.register_user("plugtest@example.com", "StrongPass123!", %{})
 
-    {:ok, token} = Engram.Auth.Providers.Local.issue_access_token(ext_id, "plugtest@example.com")
+    {:ok, token} = Local.issue_access_token(ext_id, "plugtest@example.com")
 
     conn =
       build_conn()
@@ -287,6 +346,27 @@ defmodule EngramWeb.Plugs.AuthTest do
       refute conn.halted
       assert conn.assigns.current_user.external_id == "clerk_new_user"
       assert conn.assigns.current_user.email == "clerktest@example.com"
+    end
+
+    # A Clerk token is RS256 and never ours, so reading it as an OAuth grant
+    # (`Accounts.grant_claims/1`, an HS256 verify) can only fail: it is
+    # skipped. Traced on this process, which runs the plug; the self-host
+    # control below proves the trace sees the call when it happens.
+    test "does not read a Clerk JWT as an OAuth grant" do
+      token =
+        "clerk_no_grant"
+        |> Engram.ClerkHelpers.clerk_claims(email: "nogrant@example.com")
+        |> Engram.ClerkHelpers.sign_clerk_jwt()
+
+      calls =
+        trace_grant_claims(fn ->
+          conn =
+            build_conn() |> put_req_header("authorization", "Bearer #{token}") |> Auth.call([])
+
+          refute conn.halted
+        end)
+
+      assert calls == 0
     end
 
     test "authenticates with Clerk JWT and finds existing user by external_id" do

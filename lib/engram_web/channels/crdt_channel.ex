@@ -169,10 +169,7 @@ defmodule EngramWeb.CrdtChannel do
           {:ok, vault_id} ->
             case Vaults.get_vault(user, vault_id) do
               {:ok, vault} ->
-                case Engram.Permissions.check(
-                       Engram.Permissions.vault_scope(socket.assigns),
-                       vault
-                     ) do
+                case crdt_access(socket, vault) do
                   :ok ->
                     Logger.info(
                       "crdt join",
@@ -220,8 +217,15 @@ defmodule EngramWeb.CrdtChannel do
                        drained: MapSet.new()
                      )}
 
-                  _ ->
-                    {:error, %{reason: "api_key_vault_forbidden"}}
+                  :read_only ->
+                    {:error, %{reason: "read_only_vault"}}
+
+                  :revoked ->
+                    {:error, %{reason: "unauthorized"}}
+
+                  # Same reply as a missing vault: no existence oracle.
+                  :forbidden ->
+                    {:error, %{reason: "vault_not_found"}}
                 end
 
               _ ->
@@ -2263,4 +2267,23 @@ defmodule EngramWeb.CrdtChannel do
 
   defp effective_hs_limit,
     do: Application.get_env(:engram, :crdt_hs_rate_limit_override) || @hs_limit
+
+  # Every crdt: frame can change a note (crdt_msg, create, rename, delete,
+  # index updates), so a read-level vault (#174, #332) is refused at join:
+  # nothing reaches it through this channel; reads of a read-level vault go
+  # through REST, MCP or sync:. The grant is re-read at join
+  # (`ChannelGate.vault_scope/1`), not trusted from connect.
+  defp crdt_access(socket, vault) do
+    case ChannelGate.vault_scope(socket.assigns) do
+      :revoked ->
+        :revoked
+
+      scope ->
+        cond do
+          not Engram.Permissions.allows?(scope, vault) -> :forbidden
+          Engram.Permissions.allows_write?(scope, vault) -> :ok
+          true -> :read_only
+        end
+    end
+  end
 end

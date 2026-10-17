@@ -27,6 +27,7 @@ defmodule Engram.Workers.CleanupVault do
   alias Engram.Auth.SessionInvalidator
   alias Engram.Logger.Metadata
   alias Engram.Notes.{Chunk, Note}
+  alias Engram.Permissions
   alias Engram.Repo
   alias Engram.UsageMeters
   alias Engram.Vaults.Vault
@@ -194,7 +195,7 @@ defmodule Engram.Workers.CleanupVault do
     # below needs the tenant: a filtered `delete_all` reports `{0, nil}` with
     # no error, and `Repo.delete!(vault)` carries no bypass at all, so a
     # filtered delete would raise `Ecto.StaleEntryError` instead.
-    {:ok, revoked_keys} =
+    {:ok, {revoked_keys, revoked_grants}} =
       Repo.with_tenant(vault.user_id, fn ->
         vault_id = vault.id
 
@@ -225,22 +226,30 @@ defmodule Engram.Workers.CleanupVault do
         |> where(vault_id: ^vault_id)
         |> Repo.delete_all()
 
-        # Revoke every key restricted to THIS vault alone, before its mapping
-        # rows go. A key with no `api_key_vaults` rows is unrestricted
-        # (`Vaults.accessible_vault_ids/1`), so deleting the mapping would widen a
-        # one-vault key to every vault the user owns, and the key can start that
-        # itself through `DELETE /api/vaults/:id`. Deleting the key cascades its
-        # mapping rows. `bool_and` holds only when all of a key's rows are this
-        # vault. Scoped by `with_tenant` via `api_keys`' own policy.
-        sole_vault_keys =
-          from(akv in "api_key_vaults",
-            group_by: akv.api_key_id,
-            having: fragment("bool_and(? = ?)", akv.vault_id, type(^vault_id, Ecto.UUID)),
-            select: akv.api_key_id
-          )
+        # Revoke every key that reaches NOTHING once this vault is gone, before
+        # its mapping rows go. A pre-#332 key with no `api_key_vaults` rows is
+        # unrestricted (`Permissions.from_key/2`), so deleting the mapping
+        # would widen a one-vault key to every vault the user owns, and the key
+        # can start that itself through `DELETE /api/vaults/:id`. A leveled key
+        # whose only reachable vault was this one, with a `none` new-vaults
+        # policy, reaches nothing afterwards either. One rule for both kinds
+        # (and the one `Connections.revoke_by_vault/2` applies to OAuth
+        # grants): the key's scope without this vault reaches nothing. A key
+        # with a non-none policy keeps working. Deleting the key cascades its
+        # mapping rows. Scoped by `with_tenant` via `api_keys`' own policy.
+        live = List.delete(Engram.Vaults.active_vault_ids(vault.user_id), vault_id)
 
         {revoked, _} =
-          from(k in ApiKey, where: k.id in subquery(sole_vault_keys)) |> Repo.delete_all()
+          from(k in ApiKey, where: k.id in ^keys_left_with_nothing(vault_id, live))
+          |> Repo.delete_all()
+
+        # The same judgement for OAuth grants, mirroring keys: soft delete
+        # already ran it, but a listed vault purged or deleted since can leave
+        # a grant reaching nothing live, and a grant soft delete missed still
+        # names this vault. BEFORE the vault row goes: a grant's scalar
+        # `vault_id` cascades on delete, so a grant still naming this vault
+        # there would vanish uncounted instead of being narrowed or revoked.
+        revoked_grants = Engram.Connections.drop_vault_from_grants(vault.user_id, vault_id)
 
         # `api_key_vaults` carries no RLS policy, so the guard never fires for it
         # and the option here is inert either way. Left as-is to keep this diff
@@ -249,12 +258,12 @@ defmodule Engram.Workers.CleanupVault do
         |> Repo.delete_all(skip_tenant_check: true)
 
         Repo.delete!(vault)
-        revoked
+        {revoked, revoked_grants}
       end)
 
     # Same as `Accounts.revoke_api_key/2`: an open socket authenticated with a
     # revoked key must not outlive it.
-    if revoked_keys > 0, do: SessionInvalidator.disconnect_user(vault.user_id)
+    if revoked_keys + revoked_grants > 0, do: SessionInvalidator.disconnect_user(vault.user_id)
 
     # Post-commit: delete storage blobs (best-effort)
     # If this fails, we have orphan blobs but no ghost rows — safe to retry
@@ -266,7 +275,8 @@ defmodule Engram.Workers.CleanupVault do
       Metadata.with_category(:info, :lifecycle,
         vault_id: vault.id,
         user_id: vault.user_id,
-        revoked_api_keys: revoked_keys
+        revoked_api_keys: revoked_keys,
+        revoked_oauth_grants: revoked_grants
       )
     )
 
@@ -339,5 +349,27 @@ defmodule Engram.Workers.CleanupVault do
         "CleanupVault: storage delete raised",
         Metadata.with_category(:warning, :oban, storage_key: key, reason: Metadata.safe_reason(e))
       )
+  end
+
+  # Keys mapped to `vault_id` whose scope reaches no LIVE vault (`live`, the
+  # user's active vaults without this one). Read inside the caller's tenant
+  # transaction (`api_keys` RLS).
+  defp keys_left_with_nothing(vault_id, live) do
+    rows =
+      Repo.all(
+        from(k in ApiKey,
+          join: mine in "api_key_vaults",
+          on: mine.api_key_id == k.id and mine.vault_id == type(^vault_id, Ecto.UUID),
+          join: akv in "api_key_vaults",
+          on: akv.api_key_id == k.id,
+          select: {k.id, k.default_access, type(akv.vault_id, Ecto.UUID), akv.level}
+        )
+      )
+
+    for {key_id, entries} <- Enum.group_by(rows, &elem(&1, 0)),
+        {_, default, _, _} = hd(entries),
+        scope = Permissions.from_key(default, Enum.map(entries, &{elem(&1, 2), elem(&1, 3)})),
+        not Permissions.reaches_anything?(scope, live),
+        do: key_id
   end
 end

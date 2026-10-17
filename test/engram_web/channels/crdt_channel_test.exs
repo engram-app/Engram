@@ -75,7 +75,7 @@ defmodule EngramWeb.CrdtChannelTest do
         %{api_key_id: Ecto.UUID.dump!(api_key_record.id), vault_id: Ecto.UUID.dump!(vault_b.id)}
       ])
 
-      assert {:error, %{reason: "api_key_vault_forbidden"}} =
+      assert {:error, %{reason: "vault_not_found"}} =
                subscribe_and_join(
                  user_socket(user, api_key_record),
                  EngramWeb.CrdtChannel,

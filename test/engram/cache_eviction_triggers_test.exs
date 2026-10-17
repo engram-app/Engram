@@ -7,7 +7,7 @@ defmodule Engram.CacheEvictionTriggersTest do
   alias Ecto.Adapters.SQL.Sandbox
   alias Engram.Repo
 
-  @channels ~w(users_changed subscriptions_changed api_keys_changed api_key_vaults_changed vaults_changed note_counts_changed)
+  @channels ~w(users_changed subscriptions_changed api_keys_changed api_key_vaults_changed vaults_changed note_counts_changed oauth_refresh_tokens_changed)
 
   setup do
     {:ok, pid} = Postgrex.Notifications.start_link(Repo.config())
@@ -66,6 +66,48 @@ defmodule Engram.CacheEvictionTriggersTest do
     after
       300 -> :ok
     end
+  end
+
+  # The `:oauth_grant` cache (an access token's `gid` resolved server-side)
+  # must drop a family the moment it is revoked, or a revoked grant keeps
+  # working on other nodes for the TTL.
+  test "oauth_refresh_tokens: rotation is silent; revoke and delete notify the family id" do
+    with_user(fn user_id ->
+      family = Ecto.UUID.generate()
+
+      %{rows: [[id]]} =
+        sql(
+          """
+          INSERT INTO oauth_refresh_tokens
+            (token_hash, family_id, client_id, user_id, expires_at, inserted_at)
+          VALUES ($1, $2, $3, $4, now() + interval '1 day', now()) RETURNING id
+          """,
+          [
+            "h#{System.unique_integer([:positive])}",
+            Ecto.UUID.dump!(family),
+            Ecto.UUID.dump!(Ecto.UUID.generate()),
+            Ecto.UUID.dump!(user_id)
+          ]
+        )
+
+      refute_receive {:notification, _, _, "oauth_refresh_tokens_changed", _}, 300
+
+      sql(
+        "UPDATE oauth_refresh_tokens SET consumed_at = now(), last_used_at = now() WHERE id = $1",
+        [id]
+      )
+
+      refute_receive {:notification, _, _, "oauth_refresh_tokens_changed", _}, 300
+
+      sql("UPDATE oauth_refresh_tokens SET revoked_at = now() WHERE id = $1", [id])
+      assert_receive {:notification, _, _, "oauth_refresh_tokens_changed", ^family}, 1_000
+
+      sql("UPDATE oauth_refresh_tokens SET default_access = 'read' WHERE id = $1", [id])
+      assert_receive {:notification, _, _, "oauth_refresh_tokens_changed", ^family}, 1_000
+
+      sql("DELETE FROM oauth_refresh_tokens WHERE id = $1", [id])
+      assert_receive {:notification, _, _, "oauth_refresh_tokens_changed", ^family}, 1_000
+    end)
   end
 
   test "vaults: change_seq/updated_at-only update is silent; rename and insert/delete notify the user id" do

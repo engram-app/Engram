@@ -1,3 +1,4 @@
+import type { AccessLevel } from "@/components/access-level-select";
 import { getApiBase, joinApiUrl } from "./base";
 import { api } from "./client";
 
@@ -48,10 +49,29 @@ export interface OAuthConsentParams {
 	// be stored as if they chose it. Over 120 chars is REJECTED by the backend
 	// (access_denied), not truncated.
 	label?: string;
+	// A pick with no Write anywhere (#174). `true` narrows the grant
+	// to `mcp:read`; the backend never widens a client's requested scope.
+	read_only?: boolean;
+	// #174, MCP clients only, and only to a backend that advertises levels. A
+	// level per vault id and the level for every vault not listed, including
+	// ones created later. "None" entries are sent only when the policy is not
+	// none (otherwise they repeat it, at a cost in token size). "All vaults"
+	// sends only `default_access`.
+	vault_access?: Record<string, AccessLevel>;
+	default_access?: AccessLevel;
+}
+
+// What the backend stored, echoed back (#174). Absent from a backend that
+// predates levels, and from a refusal redirect (which grants nothing).
+export interface GrantedAccess {
+	scope?: string;
+	vault_access: Record<string, AccessLevel>;
+	default_access: AccessLevel;
 }
 
 export interface OAuthConsentResponse {
 	redirect_uri: string;
+	granted?: GrantedAccess;
 }
 
 // `redirectUri` is the one THIS request is using, not the registered list.

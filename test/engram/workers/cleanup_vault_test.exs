@@ -81,6 +81,71 @@ defmodule Engram.Workers.CleanupVaultTest do
       end)
     end
 
+    # Mirrors the key pass: purge revokes a leveled OAuth grant that, with
+    # this vault gone, reaches no LIVE vault (its other listed one was
+    # deleted too).
+    test "revokes a leveled OAuth grant left reaching no live vault", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      stub_qdrant(bypass)
+      other = insert(:vault, user: user, deleted_at: DateTime.utc_now(:second))
+      client = insert(:oauth_client, kind: "mcp")
+
+      grant =
+        insert(:oauth_refresh_token,
+          user_id: user.id,
+          client_id: client.client_id,
+          vault_ids: ["00000000-0000-0000-0000-000000000000"],
+          vault_access: %{vault.id => "read", other.id => "read"},
+          default_access: "none"
+        )
+
+      survivor =
+        insert(:oauth_refresh_token,
+          user_id: user.id,
+          client_id: client.client_id,
+          vault_ids: ["00000000-0000-0000-0000-000000000000"],
+          vault_access: %{vault.id => "read"},
+          default_access: "read"
+        )
+
+      assert :ok = CleanupVault.perform_cleanup(vault.id, user.id)
+
+      assert Repo.get(Engram.OAuth.RefreshToken, grant.id, skip_tenant_check: true).revoked_at
+      refute Repo.get(Engram.OAuth.RefreshToken, survivor.id, skip_tenant_check: true).revoked_at
+    end
+
+    # A pre-levels grant still listing only this vault (soft delete missed
+    # it: a row written by a release that predates the narrowing) used to
+    # vanish through the scalar column's ON DELETE CASCADE: gone, but never
+    # counted and its sockets never kicked. Purge judges it like soft delete.
+    test "revokes and kicks a pre-levels grant left reaching nothing", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      stub_qdrant(bypass)
+      client = insert(:oauth_client, kind: "mcp")
+
+      grant =
+        insert(:oauth_refresh_token,
+          user_id: user.id,
+          client_id: client.client_id,
+          vault_id: vault.id,
+          vault_ids: [vault.id]
+        )
+
+      Phoenix.PubSub.subscribe(Engram.PubSub, "user_socket:#{user.id}")
+
+      assert :ok = CleanupVault.perform_cleanup(vault.id, user.id)
+
+      # Its row then goes with the vault (the cascade), which is revoked too.
+      assert Repo.get(Engram.OAuth.RefreshToken, grant.id, skip_tenant_check: true) == nil
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+    end
+
     test "hard-deletes notes, attachments, and vault when soft-deleted", %{
       bypass: bypass,
       user: user,
