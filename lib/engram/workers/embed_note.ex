@@ -41,6 +41,7 @@ defmodule Engram.Workers.EmbedNote do
   import Ecto.Query
 
   alias Engram.Accounts
+  alias Engram.Accounts.User
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
@@ -73,6 +74,29 @@ defmodule Engram.Workers.EmbedNote do
     # T3.2 — `old_path_hmac` is a base64-encoded HMAC, never plaintext path.
     old_path_hmac_b64 = args["old_path_hmac"]
 
+    case load(args, old_path_hmac_b64) do
+      {:run, note, user, vault, opts} ->
+        run_and_stamp(note, user, vault, old_path_hmac_b64, job, opts)
+
+      other ->
+        other
+    end
+  end
+
+  # Every read the job needs before it embeds, in ONE tenant transaction: the
+  # note, the user and the vault used to open one each (3 round trips
+  # apiece). Reads only, so nothing here holds a lock, and the
+  # Voyage call is far below, outside any transaction. The inner `with_tenant`
+  # calls are re-entrant for the same tenant and cost nothing.
+  #
+  # A legacy job (no `user_id` in args) has no tenant to open it with; it takes
+  # the unscoped path, which discards under an RLS-enforcing role anyway.
+  defp load(%{"user_id" => user_id} = args, old_path_hmac_b64) when is_binary(user_id),
+    do: Repo.with_tenant!(user_id, fn -> route(args, old_path_hmac_b64) end)
+
+  defp load(args, old_path_hmac_b64), do: route(args, old_path_hmac_b64)
+
+  defp route(args, old_path_hmac_b64) do
     case Engram.Notes.fetch_note_for_worker_job(args) do
       {:discard, _reason} = discard ->
         discard
@@ -88,9 +112,7 @@ defmodule Engram.Workers.EmbedNote do
           # never grants dense vectors the cap refused. `run_and_stamp`
           # re-stamps both versions, so this matches at most once per bump.
           version_stale?(note) ->
-            run_and_stamp(note, old_path_hmac_b64, job, nil,
-              maintenance: note.dense_indexed_hash == hash
-            )
+            load_for_run(note, maintenance: note.dense_indexed_hash == hash)
 
           # Current content, chunker and model, with dense vectors: skip.
           note.dense_indexed_hash == hash ->
@@ -119,13 +141,13 @@ defmodule Engram.Workers.EmbedNote do
                 # on the budget-spent path.
                 cond do
                   embed_budget_left?(user) ->
-                    run_and_stamp(note, old_path_hmac_b64, job, user)
+                    load_for_run(note, [], user)
 
                   # Spent budget is already known: index keyword-only without
                   # asking for a reservation, so a former over-cap vault's
                   # backfill does not fire one abuse event per note.
                   not has_chunks?(note) ->
-                    run_and_stamp(note, old_path_hmac_b64, job, user, budget_spent: true)
+                    load_for_run(note, [budget_spent: true], user)
 
                   true ->
                     park_over_budget(note)
@@ -134,7 +156,34 @@ defmodule Engram.Workers.EmbedNote do
         end
 
       {:ok, note} ->
-        run_and_stamp(note, old_path_hmac_b64, job)
+        load_for_run(note, [])
+    end
+  end
+
+  # `_with_subscription`: the budget gate calls `Billing.limit_enforced?/2`
+  # and then `check_limit/3`, and each resolves the tier via
+  # `get_subscription/1` — which queries unless the association is already
+  # loaded. On a bare `get_user/1` struct that is two `subscriptions`
+  # round trips per job. The join makes them zero at no extra query, since
+  # this fetch has to happen anyway. See #1502.
+  #
+  # Missing vault means the note is orphaned — nothing to index, discard.
+  # Tenant-scoped: `vaults` carries FORCE ROW LEVEL SECURITY, so unscoped
+  # this returns nil for a vault that plainly exists and EVERY embed
+  # discards as "orphaned".
+  defp load_for_run(note, opts, user \\ nil) do
+    case user || Accounts.get_user_with_subscription(note.user_id) do
+      nil ->
+        {:discard, :user_deleted}
+
+      %User{} = user ->
+        case Repo.with_tenant!(note.user_id, fn -> Repo.get(Vault, note.vault_id) end) do
+          nil ->
+            {:discard, "vault #{note.vault_id} not found for note #{note.id}"}
+
+          %Vault{} = vault ->
+            {:run, note, user, vault, opts}
+        end
     end
   end
 
@@ -157,63 +206,52 @@ defmodule Engram.Workers.EmbedNote do
   # not apply to one fetched at the top of this job: the read is exactly as
   # fresh as `check/1` was, and it is the read whose result is actually used.
   #
-  # `user` is threaded from the caller when it already has one. Resolved once
-  # and passed down from here — the budget gate, the decrypt in run_embed and
-  # both halves of Indexing all take it. Nothing below may re-resolve it.
-  # See #1502.
-  defp run_and_stamp(note, old_path_hmac_b64, job, user \\ nil, opts \\ []) do
-    # `_with_subscription`: the budget gate calls `Billing.limit_enforced?/2`
-    # and then `check_limit/3`, and each resolves the tier via
-    # `get_subscription/1` — which queries unless the association is already
-    # loaded. On a bare `get_user/1` struct that is two `subscriptions`
-    # round trips per job. The join makes them zero at no extra query, since
-    # this fetch has to happen anyway. See #1502.
-    case user || Accounts.get_user_with_subscription(note.user_id) do
-      nil ->
-        {:discard, :user_deleted}
+  # `user` is resolved once in `load/2` and passed down from here — the budget
+  # gate, the decrypt in run_embed and both halves of Indexing all take it.
+  # Nothing below may re-resolve it. See #1502.
+  defp run_and_stamp(note, user, vault, old_path_hmac_b64, job, opts) do
+    case RotationGate.check_user(user) do
+      {:error, :rotation_in_progress} ->
+        :telemetry.execute(
+          [:engram, :crypto, :rotate, :dek, :gate_blocked],
+          %{count: 1},
+          %{gate_path: :worker, op: :embed_note}
+        )
 
-      user ->
-        case RotationGate.check_user(user) do
-          {:error, :rotation_in_progress} ->
-            :telemetry.execute(
-              [:engram, :crypto, :rotate, :dek, :gate_blocked],
-              %{count: 1},
-              %{gate_path: :worker, op: :embed_note}
-            )
+        {:snooze, 60}
 
-            {:snooze, 60}
-
-          :ok ->
-            # An over-budget pass still runs, sparse-only: cancelling it (the
-            # old behaviour) left the note with no BM25 index either, so it
-            # vanished from keyword search too. The meter is charged inside
-            # the pass, by the reservation (see `reserve_embed_tokens/2`).
-            case CrashGuard.check(note, job) do
-              :run ->
-                case guarded_embed(note, user, old_path_hmac_b64, opts) do
-                  :ok ->
-                    :ok
-
-                  other ->
-                    _ = maybe_mark_poison(note, other, job)
-                    other
-                end
+      :ok ->
+        # An over-budget pass still runs, sparse-only: cancelling it (the
+        # old behaviour) left the note with no BM25 index either, so it
+        # vanished from keyword search too. The meter is charged inside
+        # the pass, by the reservation (see `reserve_embed_tokens/2`).
+        case CrashGuard.check(note, job) do
+          :run ->
+            case guarded_embed(note, user, vault, old_path_hmac_b64, opts) do
+              :ok ->
+                :ok
 
               other ->
+                _ = maybe_mark_poison(note, other, job)
                 other
             end
+
+          other ->
+            other
         end
     end
   end
 
   # The dead-man stamp brackets the embed: written before, cleared however the
   # attempt returns, raise and exit included. Only a killed node leaves it.
-  defp guarded_embed(note, user, old_path_hmac_b64, opts) do
+  # A success clears it inside the index write's transaction
+  # (`stamp_embed_hash/3`), so only the other outcomes clear it here.
+  defp guarded_embed(note, user, vault, old_path_hmac_b64, opts) do
     :ok = CrashGuard.stamp(note)
 
     try do
-      result = run_embed(note, user, old_path_hmac_b64, opts)
-      :ok = CrashGuard.clear(note, result)
+      result = run_embed(note, user, vault, old_path_hmac_b64, opts)
+      if result != :ok, do: :ok = CrashGuard.clear(note, result)
       result
     rescue
       e ->
@@ -470,91 +508,78 @@ defmodule Engram.Workers.EmbedNote do
 
   defp maybe_mark_poison(_note, _result, _job), do: :ok
 
-  defp run_embed(note, user, old_path_hmac_b64, opts) do
-    # Load vault up front so we can drive both the decrypt path (future) and
-    # the index call.
-    # Missing vault means the note is orphaned — nothing to index, discard.
-    #
-    # Tenant-scoped: `vaults` carries FORCE ROW LEVEL SECURITY, so unscoped
-    # this returns nil for a vault that plainly exists and EVERY embed
-    # discards as "orphaned". `RebindNoteLinks` and `ExtractNoteLinks` carried
-    # the identical read; all three are fixed in this change-set, none of them
-    # earlier. `note.user_id` is in scope.
-    case Repo.with_tenant(note.user_id, fn -> Repo.get(Vault, note.vault_id) end) do
-      {:ok, nil} ->
-        {:discard, "vault #{note.vault_id} not found for note #{note.id}"}
+  defp run_embed(note, user, vault, old_path_hmac_b64, opts) do
+    case Crypto.maybe_decrypt_note_fields(note, user) do
+      {:ok, decrypted_note} ->
+        # If renamed, clean up old path's Qdrant points before re-indexing
+        _ =
+          if old_path_hmac_b64 do
+            Indexing.delete_points_by_path_hmac(decrypted_note, old_path_hmac_b64)
+          end
 
-      {:ok, %Vault{} = vault} ->
-        case Crypto.maybe_decrypt_note_fields(note, user) do
-          {:ok, decrypted_note} ->
-            # If renamed, clean up old path's Qdrant points before re-indexing
-            _ =
-              if old_path_hmac_b64 do
-                Indexing.delete_points_by_path_hmac(decrypted_note, old_path_hmac_b64)
-              end
+        budget =
+          if opts[:budget_spent],
+            do: [reserve_tokens: fn _ -> false end, release_tokens: fn _ -> :ok end],
+            else: budget_opts(user, Keyword.get(opts, :maintenance, false))
 
-            budget =
-              if opts[:budget_spent],
-                do: [reserve_tokens: fn _ -> false end, release_tokens: fn _ -> :ok end],
-                else: budget_opts(user, Keyword.get(opts, :maintenance, false))
+        # `dense?` is what Indexing actually wrote. Do NOT re-check the
+        # budget here: a second read can land a DIFFERENT answer, and
+        # the stamp would then disagree with the index. The stamp runs
+        # inside the chunk-row transaction (`:in_commit`).
+        index_opts = budget ++ [in_commit: &stamp_embed_hash(note, &2, &1)]
 
-            case Indexing.index_note_with_usage(decrypted_note, vault, user, budget) do
-              {:ok, count, _embedded_bytes, dense?} ->
-                # `dense?` is what Indexing actually wrote. Do NOT re-check the
-                # budget here: a second read can land a DIFFERENT answer, and
-                # the stamp would then disagree with the index.
-                stamp_embed_hash(note, dense?, count)
-                :ok
+        case Indexing.index_note_with_usage(decrypted_note, vault, user, index_opts) do
+          {:ok, _count, _embedded_bytes, _dense?} ->
+            :ok
 
-              # Voyage 429 — back off without burning an Oban attempt. Voyage's
-              # paid-tier RPM is finite; without this guard five consecutive
-              # rate-limit hits discard the job entirely.
-              {:error, {429, _body}} ->
-                :telemetry.execute(
-                  [:engram, :embed, :rate_limited],
-                  %{count: 1},
-                  %{user_id: note.user_id, vault_id: note.vault_id, note_id: note.id}
-                )
+          # Voyage 429 — back off without burning an Oban attempt. Voyage's
+          # paid-tier RPM is finite; without this guard five consecutive
+          # rate-limit hits discard the job entirely.
+          {:error, {429, _body}} ->
+            :telemetry.execute(
+              [:engram, :embed, :rate_limited],
+              %{count: 1},
+              %{user_id: note.user_id, vault_id: note.vault_id, note_id: note.id}
+            )
 
-                {:snooze, snooze_seconds_on_429()}
-
-              {:error, reason} ->
-                # Per-attempt failure (Voyage non-429 / Qdrant). Previously
-                # silent until the terminal discard after 5 retries — log it now
-                # so the stall is visible on the first attempt, with a bounded
-                # error_kind (no upstream body / token in the message).
-                error_kind = Engram.Telemetry.error_kind(reason)
-                status = embed_error_status(reason)
-
-                :telemetry.execute(
-                  [:engram, :embed, :failed],
-                  %{count: 1},
-                  %{error_kind: error_kind, status: status}
-                )
-
-                Logger.warning(
-                  "embed_attempt_failed",
-                  Metadata.with_category(:warning, :search,
-                    user_id: note.user_id,
-                    vault_id: note.vault_id,
-                    note_id: note.id,
-                    error_kind: error_kind,
-                    status: status,
-                    detail: Metadata.upstream_error(reason)
-                  )
-                )
-
-                {:error, reason}
-            end
+            {:snooze, snooze_seconds_on_429()}
 
           {:error, reason} ->
-            DecryptFailure.log("embed_decrypt_failed", reason,
-              user_id: note.user_id,
-              note_id: note.id
+            # Per-attempt failure (Voyage non-429 / Qdrant). Previously
+            # silent until the terminal discard after 5 retries — log it now
+            # so the stall is visible on the first attempt, with a bounded
+            # error_kind (no upstream body / token in the message).
+            error_kind = Engram.Telemetry.error_kind(reason)
+            status = embed_error_status(reason)
+
+            :telemetry.execute(
+              [:engram, :embed, :failed],
+              %{count: 1},
+              %{error_kind: error_kind, status: status}
+            )
+
+            Logger.warning(
+              "embed_attempt_failed",
+              Metadata.with_category(:warning, :search,
+                user_id: note.user_id,
+                vault_id: note.vault_id,
+                note_id: note.id,
+                error_kind: error_kind,
+                status: status,
+                detail: Metadata.upstream_error(reason)
+              )
             )
 
             {:error, reason}
         end
+
+      {:error, reason} ->
+        DecryptFailure.log("embed_decrypt_failed", reason,
+          user_id: note.user_id,
+          note_id: note.id
+        )
+
+        {:error, reason}
     end
   end
 
@@ -562,8 +587,10 @@ defmodule Engram.Workers.EmbedNote do
   # we started embedding. If it changed (concurrent edit), this is a no-op —
   # the reconciliation cron or the next debounced job will pick up the new version.
   # Also clears any embed_retry_after poison cooldown — a successful embed means
-  # the note is no longer broken.
-  defp stamp_embed_hash(%Note{content_hash: nil}, _dense?, _count), do: :ok
+  # the note is no longer broken, and the crash guard's dead-man stamp, since
+  # this runs inside the index write's transaction.
+  defp stamp_embed_hash(%Note{content_hash: nil} = note, _dense?, _count),
+    do: CrashGuard.clear(note, :ok)
 
   defp stamp_embed_hash(note, dense?, chunk_count) do
     # `embed_hash` = "this content is indexed" (keyword and/or dense).
@@ -642,7 +669,7 @@ defmodule Engram.Workers.EmbedNote do
       )
     end
 
-    :ok
+    CrashGuard.clear(note, :ok)
   end
 
   @doc """

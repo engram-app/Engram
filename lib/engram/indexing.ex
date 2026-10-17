@@ -66,6 +66,11 @@ defmodule Engram.Indexing do
       keyword-searchable. `EmbedNote` passes the lifetime embed budget here.
     * `:release_tokens` — `fn tokens -> any end`, called when the embed call
       fails after a reservation, so a failed attempt is not charged.
+    * `:in_commit` — `fn chunk_count, dense? -> any end`, run on success INSIDE
+      the tenant transaction that writes the chunk rows (or, on the no-chunks
+      path, in one opened after the purge). `EmbedNote` stamps its
+      hashes here, so the stamp shares the index write's transaction instead
+      of opening its own.
   """
   def index_note_with_usage(note, %Engram.Vaults.Vault{} = vault, user \\ nil, opts \\ []) do
     # Resolve identity ONCE for the whole call. This function and
@@ -103,7 +108,10 @@ defmodule Engram.Indexing do
             # the dense vectors it ever will, so `true`: leaving it `false`
             # keeps `dense_indexed_hash` nil and ReconcileEmbeddings re-selects
             # it every tick.
-            with :ok <- purge_stale_index(note), do: {:ok, 0, 0, true}
+            with :ok <- purge_stale_index(note) do
+              run_in_commit(note, opts, 0, true)
+              {:ok, 0, 0, true}
+            end
 
           {:error, :no_dek} = err ->
             emit_no_dek_telemetry(note)
@@ -111,7 +119,8 @@ defmodule Engram.Indexing do
         end
 
       {:ok, prepared} ->
-        with {:ok, count} <- commit_index(prepared),
+        with {:ok, count} <-
+               commit_index(prepared, &run_in_commit(note, opts, &1, prepared.dense?)),
              do: {:ok, count, prepared.embedded_bytes, prepared.dense?}
 
       {:error, _} = err ->
@@ -184,6 +193,15 @@ defmodule Engram.Indexing do
     end
   end
 
+  # Re-entrant inside commit_index/2's chunk transaction; on the purge path it
+  # opens one of its own.
+  defp run_in_commit(note, opts, chunk_count, dense?) do
+    case Keyword.get(opts, :in_commit) do
+      nil -> :ok
+      fun -> Repo.with_tenant!(note.user_id, fn -> fun.(chunk_count, dense?) end)
+    end
+  end
+
   # Guarded on chunk rows existing so the overwhelmingly common case (a note
   # that never had chunks) does not pay a Qdrant round trip on every index.
   # The cheap Postgres existence check gates the expensive remote delete.
@@ -239,23 +257,31 @@ defmodule Engram.Indexing do
   42501. Scoping each write removes the dependency on how the app happens to
   connect.
 
+  `in_commit` runs with the chunk count inside the chunk-row transaction, so
+  a caller's own bookkeeping commits atomically with the rows.
+
   Returns `{:ok, chunk_count}` or `{:error, reason}`.
   """
-  def commit_index(%{
-        note: note,
-        chunk_rows: chunk_rows,
-        qdrant_points: qdrant_points,
-        reused_point_ids: reused_point_ids,
-        stale_point_ids: stale_point_ids,
-        note_payload: note_payload
-      }) do
+  def commit_index(prepared, in_commit \\ fn _count -> :ok end)
+
+  def commit_index(
+        %{
+          note: note,
+          chunk_rows: chunk_rows,
+          qdrant_points: qdrant_points,
+          reused_point_ids: reused_point_ids,
+          stale_point_ids: stale_point_ids,
+          note_payload: note_payload
+        },
+        in_commit
+      ) do
     # Ordered so that every failure leaves STRAY points (which OrphanSweep
     # reaps) rather than a chunk row naming a point that is already gone —
     # which nothing self-heals and which reads as silently missing content.
     # That means the stale delete goes LAST, after the rows stop naming those
     # points. Deleting first and crashing before the row write would leave the
     # next attempt happily "reusing" ids that no longer exist in Qdrant.
-    with :ok <- purge_before_rebuild(note, reused_point_ids),
+    with :ok <- purge_before_rebuild(note, reused_point_ids, stale_point_ids),
          :ok <- upsert_points_batched(qdrant_points),
          # Reused points keep their vectors AND their ciphertext (every
          # encrypted field is inside `context_text`, so an equal hmac means an
@@ -286,7 +312,8 @@ defmodule Engram.Indexing do
       {:ok, _} =
         Repo.with_tenant(note.user_id, fn ->
           Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
-          Repo.insert_all(Chunk, chunk_rows, skip_tenant_check: true)
+          {_, _} = Repo.insert_all(Chunk, chunk_rows, skip_tenant_check: true)
+          in_commit.(length(chunk_rows))
         end)
 
       drop_stale_points(reused_point_ids, stale_point_ids, note)
@@ -322,10 +349,18 @@ defmodule Engram.Indexing do
   # wholesale, including the ones being kept. It relies on `OrphanSweep`'s
   # point pass for that class instead, which is the same reconciliation on a
   # weekly tick rather than per index.
-  defp purge_before_rebuild(note, []), do: delete_note_points(note)
-  defp purge_before_rebuild(_note, _reused), do: :ok
+  # Nothing reused, so the plan's stale ids are every point the chunk rows
+  # name: `plan_chunks/4` already read them, and `delete_note_points/1` would
+  # read them again in a tenant transaction of its own. The by-filter delete
+  # still follows as the belt.
+  defp purge_before_rebuild(note, [], stale_point_ids) do
+    with :ok <- Qdrant.delete_points(collection(), stale_point_ids),
+         do: delete_points_by_filter(note)
+  end
 
-  # Already handled wholesale by `purge_before_rebuild/2`.
+  defp purge_before_rebuild(_note, _reused, _stale), do: :ok
+
+  # Already handled wholesale by `purge_before_rebuild/3`.
   defp drop_stale_points([], _stale, _note), do: :ok
 
   defp drop_stale_points(_reused, stale, note) do
@@ -585,14 +620,16 @@ defmodule Engram.Indexing do
   # the old points stranded. See `delete_points_for_note/1`. The filter then
   # catches the reverse case: points whose rows are already gone.
   defp delete_note_points(note) do
-    with :ok <- delete_points_for_note(note) do
-      Qdrant.delete_by_note(
-        collection(),
-        to_string(note.user_id),
-        to_string(note.vault_id),
-        encode_hmac(note.path_hmac)
-      )
-    end
+    with :ok <- delete_points_for_note(note), do: delete_points_by_filter(note)
+  end
+
+  defp delete_points_by_filter(note) do
+    Qdrant.delete_by_note(
+      collection(),
+      to_string(note.user_id),
+      to_string(note.vault_id),
+      encode_hmac(note.path_hmac)
+    )
   end
 
   # Delete a note's Qdrant points by the ids recorded on its chunk rows.
