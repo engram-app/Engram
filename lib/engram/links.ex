@@ -632,7 +632,18 @@ defmodule Engram.Links do
   resolution rules on `resolve_target/4`).
   """
   @spec bind_danglers_for_hmac(map(), map(), binary()) :: :ok
-  def bind_danglers_for_hmac(user, vault, hmac) do
+  def bind_danglers_for_hmac(user, vault, hmac), do: bind_danglers_for_hmacs(user, vault, [hmac])
+
+  @doc """
+  `bind_danglers_for_hmac/3` for a set of basename hmacs in one pass: one edge
+  query and one candidate query per table for the whole set, instead of a set
+  of each per hmac. The bulk-create rebind (`RebindNoteLinks` scope
+  `"created"`) uses it.
+  """
+  @spec bind_danglers_for_hmacs(map(), map(), [binary()]) :: :ok
+  def bind_danglers_for_hmacs(_user, _vault, []), do: :ok
+
+  def bind_danglers_for_hmacs(user, vault, hmacs) when is_list(hmacs) do
     # Outside the scope and threaded down: see `resolve_target/4` above. This
     # one's transaction already spans a per-edge decrypt/update loop, so a
     # provider round trip inside it would hold row locks for the KMS latency
@@ -640,34 +651,38 @@ defmodule Engram.Links do
     {:ok, dek} = Crypto.get_dek(user)
 
     {:ok, result} =
-      Repo.with_tenant(user.id, fn -> do_bind_danglers_for_hmac(user, vault, hmac, dek) end)
+      Repo.with_tenant(user.id, fn -> do_bind_danglers_for_hmacs(user, vault, hmacs, dek) end)
 
     result
   end
 
-  defp do_bind_danglers_for_hmac(user, vault, hmac, dek) do
+  defp do_bind_danglers_for_hmacs(user, vault, hmacs, dek) do
     edges =
       Repo.all(
         from(l in NoteLink,
           where:
-            l.user_id == ^user.id and l.vault_id == ^vault.id and l.target_basename_hmac == ^hmac
+            l.user_id == ^user.id and l.vault_id == ^vault.id and
+              l.target_basename_hmac in ^hmacs
         ),
         skip_tenant_check: true
       )
 
     if edges != [] do
-      # Every edge here shares `hmac` (the WHERE clause above), so the
-      # candidate query + decrypt below is IDENTICAL for all of them —
-      # fetch once instead of once per edge (was N Repo.all + N decrypt
-      # passes per table). Only the per-edge target text varies the
-      # resolution (extension routing, path filter, tiebreak), which
-      # `rebind_edge/6` applies in memory against these shared lists via
-      # the same `route_resolution/3` + `resolve_from_candidates/3` rules
-      # `resolve_target/4` uses.
-      note_candidates = fetch_decrypted_candidates(user, vault, hmac, :notes, dek)
-      attachment_candidates = fetch_decrypted_candidates(user, vault, hmac, :attachments, dek)
+      # Every edge sharing an hmac resolves against the SAME candidates, so
+      # they are fetched once per table for every hmac that has an edge
+      # (was N Repo.all + N decrypt passes per table). Only the per-edge
+      # target text varies the resolution (extension routing, path filter,
+      # tiebreak), which `rebind_edge/6` applies in memory against these
+      # shared lists via the same `route_resolution/3` +
+      # `resolve_from_candidates/3` rules `resolve_target/4` uses.
+      linked = edges |> Enum.map(& &1.target_basename_hmac) |> Enum.uniq()
+      notes_by_hmac = fetch_candidates_by_hmac(user, vault, linked, :notes, dek)
+      attachments_by_hmac = fetch_candidates_by_hmac(user, vault, linked, :attachments, dek)
 
       Enum.each(edges, fn edge ->
+        note_candidates = Map.get(notes_by_hmac, edge.target_basename_hmac, [])
+        attachment_candidates = Map.get(attachments_by_hmac, edge.target_basename_hmac, [])
+
         target_text =
           decrypt_field(
             edge.target_text_ciphertext,

@@ -14,6 +14,7 @@ defmodule Engram.LinksLifecycleTest do
   alias Engram.Links
   alias Engram.Notes
   alias Engram.Workers.ExtractNoteLinks
+  alias Engram.Workers.RebindNoteLinks
 
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
@@ -156,6 +157,71 @@ defmodule Engram.LinksLifecycleTest do
     assert is_nil(link.target_note_id)
 
     assert Links.links_for_note(user, target.id) == []
+  end
+
+  # Prod 2026-10-17: a 10k-note first sync ran one RebindNoteLinks job per
+  # created note. A burst of creates now shares ONE pending vault-scoped job
+  # that re-resolves every basename created since its first note.
+  test "a burst of creates enqueues one rebind job and every dangler still binds",
+       %{user: user, vault: vault} do
+    targets = for i <- 1..12, do: "Burst#{i}"
+    body = Enum.map_join(targets, " ", &"[[#{&1}]]")
+
+    {:ok, source} =
+      Notes.upsert_note(user, vault, %{"path" => "BurstSource.md", "content" => body},
+        actor: "api"
+      )
+
+    extract_links!(user, source.id)
+    drain_indexing!()
+    assert Enum.all?(Links.links_for_note(user, source.id), & &1.dangling)
+
+    rebinds_before = length(all_enqueued(worker: RebindNoteLinks))
+
+    # Half over REST, half over CRDT genesis: both create legs share the job.
+    {rest, crdt} = Enum.split(targets, 6)
+
+    for t <- rest do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "deep/#{t}.md", "content" => "# #{t}"},
+          actor: "api"
+        )
+    end
+
+    for t <- crdt do
+      {:ok, _} = Notes.genesis_crdt_note(user, vault, Ecto.UUID.generate(), "deep/#{t}.md")
+    end
+
+    assert length(all_enqueued(worker: RebindNoteLinks)) - rebinds_before == 1
+
+    drain_indexing!()
+
+    links = Links.links_for_note(user, source.id)
+    assert length(links) == 12
+    refute Enum.any?(links, & &1.dangling)
+  end
+
+  test "a create older than the pending burst job's start still gets its own rebind",
+       %{user: user, vault: vault} do
+    {:ok, source} =
+      Notes.upsert_note(user, vault, %{"path" => "LateSource.md", "content" => "[[Late]]"},
+        actor: "api"
+      )
+
+    extract_links!(user, source.id)
+    drain_indexing!()
+
+    # A pending burst job whose scan starts AFTER the note about to be created:
+    # collapsing into it would skip the note, so the create must fall back to
+    # a per-basename job.
+    {:ok, _} = Oban.insert(RebindNoteLinks.new_for_created(user.id, vault.id, 1_000_000_000))
+
+    {:ok, target} =
+      Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "# Late"}, actor: "api")
+
+    drain_indexing!()
+
+    assert only_link(user, source.id).target_note_id == target.id
   end
 
   # --- CRDT genesis path (Notes.genesis_crdt_note/4) — the primary

@@ -14,7 +14,12 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
   # dispatcher job instead of the embed clamp read plus three unique inserts.
   # 50 -> 51: the seed's checkpoint reads the rotation lock from the DB
   # (#1341: the cached user may not have seen another node's lock).
-  @statements 51
+  # 51 -> 53: the genesis create's RebindNoteLinks enqueue moved after the
+  # commit into Oban's own unique transaction (begin + commit around the
+  # unique check), so a create burst shares ONE vault-scoped rebind job
+  # instead of running one job per note (prod 2026-10-17). The notes_cap slot
+  # claim replaced the old counter increment one for one.
+  @statements 53
   @tenant_txns 7
   @subscription_reads 0
 

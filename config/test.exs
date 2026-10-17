@@ -162,6 +162,11 @@ config :engram, :storage, Engram.Storage.InMemory
 # Use Oban.Testing.with_testing_mode(:inline, fn -> ... end) in tests that need inline execution
 config :engram, Oban, testing: :manual
 
+# RebindNoteLinks scope "created" debounce: 0 inserts the job `available`, so
+# `Oban.drain_queue/1` runs it. Uniqueness, not the delay, is what collapses a
+# burst, so tests still see one job per burst.
+config :engram, :link_rebind_delay_seconds, 0
+
 # JWT signing secret (Joken)
 config :joken, default_signer: "test-jwt-secret"
 

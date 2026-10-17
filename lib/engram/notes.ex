@@ -515,16 +515,18 @@ defmodule Engram.Notes do
           if is_nil(prev_hash) do
             # A brand-new note may be the exact target a dangling link (or an
             # existing binding losing the shortest-path tiebreak) has been
-            # waiting on — re-resolve every edge sharing its basename (#591).
-            _ =
-              Enqueue.enqueue(
-                RebindNoteLinks.new_for(
+            # waiting on: re-resolve every edge sharing its basename (#591).
+            # A burst of creates shares one vault-scoped job (RebindNoteLinks
+            # scope "created").
+            :ok =
+              Repo.after_commit(fn ->
+                RebindNoteLinks.enqueue_created(
                   user.id,
                   vault.id,
+                  note.seq,
                   Links.basename_hmac(user, Links.basename_key(note.path))
-                ),
-                "rebind_note_links"
-              )
+                )
+              end)
 
             # FTUX vault page listens for this — fires when an empty vault
             # gets its first note (typical case: Obsidian plugin completes
@@ -1641,16 +1643,14 @@ defmodule Engram.Notes do
         {:inserted, inserted, _crdt} ->
           # #591 — CRDT genesis create is the primary create path (web/plugin);
           # mirror upsert_note's create-branch rebind so danglers waiting on
-          # this basename bind here too, not only on the REST path.
-          _ =
-            Enqueue.enqueue(
-              RebindNoteLinks.new_for(
-                user.id,
-                vault.id,
-                Links.basename_hmac(user, Links.basename_key(sanitized_path))
-              ),
-              "rebind_note_links"
-            )
+          # this basename bind here too, not only on the REST path. After the
+          # commit: the shared burst job must not scan before this row exists.
+          hmac = Links.basename_hmac(user, Links.basename_key(sanitized_path))
+
+          :ok =
+            Repo.after_commit(fn ->
+              RebindNoteLinks.enqueue_created(user.id, vault.id, inserted.seq, hmac)
+            end)
 
           {:ok, decrypt_or_raise!(inserted, user), :announce}
 

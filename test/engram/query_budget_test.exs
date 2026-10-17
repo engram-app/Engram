@@ -73,12 +73,16 @@ defmodule Engram.QueryBudgetTest do
     "GET notes/*path" => 5,
     # As "mcp write_note update" (1-13), plus the response's note_links read.
     "POST notes update" => 15,
-    # Write target 12; floor 19: rotation lock, begin, enter, path lookup,
-    # notes cap (usage_meters), path-collision probe, seq bump, INSERT, the
-    # inserted row's re-read, usage_meters increment, EmbedNote and
-    # ExtractNoteLinks unique check + insert (4), RebindNoteLinks insert +
-    # pg_notify, the vault_populated probe, the response's links read, commit.
-    "POST notes create" => 19,
+    # Write target 12; floor 21: rotation lock, begin, enter, path lookup,
+    # notes cap read (usage_meters), path-collision probe, conditional slot
+    # claim (usage_meters), seq bump, INSERT, the inserted row's re-read,
+    # EmbedNote and ExtractNoteLinks unique check + insert (4), the
+    # vault_populated probe, the response's links read, commit. Then, AFTER
+    # the commit, the RebindNoteLinks "created" enqueue in Oban's own unique
+    # transaction (begin, unique check, commit, pg_notify): +2 over the old
+    # in-transaction plain insert, paid so a create burst shares ONE rebind
+    # job instead of running one per note (prod 2026-10-17).
+    "POST notes create" => 21,
     # As "mcp append_to_note" (1-13), plus the response's note_links read.
     "POST notes/append" => 15,
     # Not consolidated in Task 10b (no query-classify item; a rename claims its
