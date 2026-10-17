@@ -309,6 +309,52 @@ defmodule Engram.Notes.GenesisCrdtNoteTest do
     assert created.seq == base.seq + 1
   end
 
+  # The vault seq is allocated AFTER the row lands (do_bare_insert/7), so an
+  # INSERT that no-ops on a taken PK no longer burns one. The REST leg still
+  # takes that INSERT before remint_own_id recovers, which made it two.
+  test "a REST insert re-minted off a taken id consumes one vault seq", %{
+    user: user,
+    vault: vault
+  } do
+    {:ok, other, _} = Vaults.register_vault(user, "GenesisSeqC", Ecto.UUID.generate())
+
+    {:ok, foreign} =
+      Notes.upsert_note(user, other, %{"path" => "Notes/f.md", "content" => "x"}, actor: "api")
+
+    before = Vaults.current_seq(user.id, vault.id)
+
+    {:ok, created} =
+      Notes.upsert_note(
+        user,
+        vault,
+        %{"id" => foreign.id, "path" => "Notes/r.md", "content" => "y"},
+        actor: "api"
+      )
+
+    refute created.id == foreign.id
+    assert created.seq == before + 1
+    assert Vaults.current_seq(user.id, vault.id) == before + 1
+  end
+
+  # The seq is stamped onto the row in a second statement now, so pin that the
+  # value the caller sees is the one persisted, never the insert placeholder.
+  test "a created row persists the seq it allocated", %{user: user, vault: vault} do
+    {:ok, a} = Notes.genesis_crdt_note(user, vault, Ecto.UUID.generate(), "Notes/s1.md")
+    {:ok, b} = Notes.genesis_crdt_note(user, vault, Ecto.UUID.generate(), "Notes/s2.md")
+
+    assert b.seq == a.seq + 1
+    assert b.seq == Vaults.current_seq(user.id, vault.id)
+
+    persisted =
+      Engram.Repo.with_tenant!(user.id, fn ->
+        Engram.Repo.all(
+          from(n in Engram.Notes.Note, where: n.id in ^[a.id, b.id], select: {n.id, n.seq})
+        )
+      end)
+
+    assert Map.new(persisted) == %{a.id => a.seq, b.id => b.seq}
+  end
+
   defp fetch_id_by_path(user, vault, path) do
     case Notes.get_note(user, vault, path) do
       {:ok, n} -> {:ok, n.id}

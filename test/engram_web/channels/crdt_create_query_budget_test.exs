@@ -84,4 +84,23 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
     assert tenant_txns == @tenant_txns, "#{tenant_txns} tenant transactions"
     assert subscription_reads == @subscription_reads, "#{subscription_reads} tier reads"
   end
+
+  # The vault row lock (`UPDATE vaults ... change_seq`) serializes every write
+  # in the vault until commit, so the create takes it after its INSERT and
+  # re-fetch, not before them. Seq order still equals commit order: the lock is
+  # held to commit wherever in the transaction it is taken.
+  test "the create takes the vault seq lock after its insert", %{socket: socket} do
+    queries =
+      TenantQueryCounter.count_matching_queries(
+        fn -> create(socket, "F/late.md", "# late") end,
+        fn _ -> true end,
+        socket.channel_pid
+      )
+
+    insert_at = Enum.find_index(queries, &(&1 =~ ~s(INSERT INTO "notes")))
+    seq_at = Enum.find_index(queries, &(&1 =~ "change_seq = change_seq + 1"))
+
+    assert insert_at && seq_at
+    assert seq_at > insert_at + 1, Enum.join(queries, "\n")
+  end
 end
