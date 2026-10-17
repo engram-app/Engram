@@ -94,7 +94,12 @@ describe("Dashboard single-note auto-open", () => {
 
 	function LocationProbe() {
 		const loc = useLocation();
-		return <span data-testid="loc">{loc.pathname}</span>;
+		return (
+			<span data-testid="loc">
+				{loc.pathname}
+				{loc.hash}
+			</span>
+		);
 	}
 
 	function renderAt(url: string) {
@@ -135,6 +140,17 @@ describe("Dashboard single-note auto-open", () => {
 			</StrictMode>,
 		);
 		expect(screen.getByTestId("loc").textContent).toBe("/v/work/welcome-id");
+	});
+
+	// Settings is a hash overlay on any page: "/#settings/account" into a new
+	// vault must still open Settings over the note it lands on.
+	it("keeps the hash when it opens the note", () => {
+		useSyncManifestSpy.mockReturnValue({
+			data: { notes: [{ id: "welcome-id", path: "Welcome to Engram.md" }] },
+			isPending: false,
+		});
+		renderAt("/#settings/account");
+		expect(screen.getByTestId("loc").textContent).toBe("/v/work/welcome-id#settings/account");
 	});
 
 	it("stays on the empty pane once a second note exists", () => {

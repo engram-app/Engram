@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { Link, Navigate, useSearchParams } from "react-router";
+import { Link, Navigate, useLocation, useSearchParams } from "react-router";
 import { useT } from "@/i18n/locale-provider";
 import { formatDate } from "@/lib/format-date";
 import { intlLocale } from "@/lib/intl-locale";
@@ -81,6 +81,7 @@ function FolderNotes({ folder }: { folder: string }) {
 export default function Dashboard() {
 	const { t } = useT();
 	const [searchParams] = useSearchParams();
+	const { hash } = useLocation();
 	const folder = searchParams.get("folder") ?? "";
 	const { data: vaults } = useVaults();
 	const slug = useActiveVaultSlug();
@@ -144,7 +145,8 @@ export default function Dashboard() {
 			return <LoadingPane />;
 		}
 		if (autoOpen && onlyNote && slug) {
-			return <Navigate to={noteHref(slug, onlyNote.id)} replace />;
+			// The hash rides along: Settings (`#settings/...`) overlays any page.
+			return <Navigate to={{ pathname: noteHref(slug, onlyNote.id), hash }} replace />;
 		}
 	}
 
