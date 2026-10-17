@@ -37,8 +37,13 @@ import { useConnectionCap } from "../billing/use-connection-cap";
 import AuthPanel from "../layout/auth-panel";
 import AuthShell from "../layout/auth-shell";
 import { isMember } from "../lib/is-member";
+import { ROUTES } from "../routes";
 import { settingsHash, settingsTo } from "../settings/settings-hash";
-import { clearPendingAuthorization, stashPendingAuthorization } from "./pending-authorization";
+import {
+	clearPendingAuthorization,
+	peekPendingAuthorization,
+	stashPendingAuthorization,
+} from "./pending-authorization";
 
 const REQUIRED_PARAMS = [
 	"client_id",
@@ -163,6 +168,12 @@ export default function OAuthAuthorizePage() {
 	// backend too old to answer still allows Approve, which it re-validates.
 	const redirectVerified = clientQuery.data?.redirect_uri_registered === true;
 	const bounced = useRef(false);
+	// Back from the signup detour this request parked. Read once, before the
+	// effect below clears the park. Such a user has never seen their vault,
+	// and Approve sends this tab back to the client.
+	const [returnedFromSignup] = useState(
+		() => peekPendingAuthorization()?.returnTo === `${ROUTES.OAUTH_CONSENT}${location.search}`,
+	);
 
 	useEffect(() => {
 		if (!needsOnboarding || bounced.current || missing.length > 0) {
@@ -393,6 +404,8 @@ export default function OAuthAuthorizePage() {
 	const runSubmit = async (isSwap: boolean) => {
 		setSubmitting(true);
 		setSubmitError(null);
+		// Before any await: a popup blocker refuses a tab opened outside the click.
+		const vaultTab = returnedFromSignup ? window.open(ROUTES.HOME, "_blank") : null;
 
 		// Obsidian's device-code flow is a different surface (device-link-page.tsx,
 		// plugin_connect_*) — this event name says "mcp" and must mean it.
@@ -484,6 +497,7 @@ export default function OAuthAuthorizePage() {
 					),
 				);
 				track("mcp_connect_failed", { client: mcpClient, reason: "unknown" });
+				vaultTab?.close();
 				setSubmitting(false);
 				return;
 			}
@@ -492,6 +506,7 @@ export default function OAuthAuthorizePage() {
 			}
 			window.location.assign(redirect_uri);
 		} catch (e: unknown) {
+			vaultTab?.close();
 			if (swappedFromName) {
 				// Disconnect succeeded but consent did not — user is now at 0
 				// connections instead of 1. Make that visible.

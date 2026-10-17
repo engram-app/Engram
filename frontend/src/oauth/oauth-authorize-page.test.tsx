@@ -426,6 +426,87 @@ describe("OAuthAuthorizePage onboarding bounce", () => {
 	});
 });
 
+// Someone who signed up inside the connector flow has never seen their vault.
+// Approving sends this tab back to the client, so the vault opens in another.
+describe("OAuthAuthorizePage vault tab after a signup detour", () => {
+	const CLIENT = { client_id: "cli", client_name: "ChatGPT", kind: "mcp" as const };
+
+	afterEach(() => {
+		window.sessionStorage.clear();
+	});
+
+	function parkThisRequest() {
+		window.sessionStorage.setItem(
+			"engram:pending-oauth",
+			JSON.stringify({ returnTo: `/oauth/consent${VALID_QS}`, toolSlug: null }),
+		);
+	}
+
+	it("opens the vault in a new tab on Approve", async () => {
+		parkThisRequest();
+		fetchOAuthClient.mockResolvedValue(CLIENT);
+		consentRedirectsTo("https://app/cb?code=ok");
+		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
+		const open = vi.spyOn(window, "open").mockReturnValue(null);
+
+		renderAt(VALID_QS);
+		await screen.findByRole("button", { name: /^review$/iu });
+		approve();
+
+		// Synchronously, inside the click: a popup blocker refuses one opened
+		// after the consent request resolves.
+		expect(open).toHaveBeenCalledWith("/", "_blank");
+		await waitFor(() => expect(assign).toHaveBeenCalledWith("https://app/cb?code=ok"));
+	});
+
+	it("closes the tab when the consent fails", async () => {
+		parkThisRequest();
+		fetchOAuthClient.mockResolvedValue(CLIENT);
+		postOAuthConsent.mockRejectedValue(new Error("boom"));
+		const close = vi.fn();
+		vi.spyOn(window, "open").mockReturnValue({ close } as unknown as Window);
+
+		renderAt(VALID_QS);
+		await screen.findByRole("button", { name: /^review$/iu });
+		approve();
+
+		await waitFor(() => expect(close).toHaveBeenCalled());
+	});
+
+	it("opens nothing for a user who did not just sign up", async () => {
+		fetchOAuthClient.mockResolvedValue(CLIENT);
+		consentRedirectsTo("https://app/cb?code=ok");
+		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
+		const open = vi.spyOn(window, "open").mockReturnValue(null);
+
+		renderAt(VALID_QS);
+		await screen.findByRole("button", { name: /^review$/iu });
+		approve();
+
+		await waitFor(() => expect(assign).toHaveBeenCalled());
+		expect(open).not.toHaveBeenCalled();
+	});
+
+	// A park left by some other request is not this user's return trip.
+	it("opens nothing on a stale park from a different request", async () => {
+		window.sessionStorage.setItem(
+			"engram:pending-oauth",
+			JSON.stringify({ returnTo: "/oauth/consent?old=1", toolSlug: null }),
+		);
+		fetchOAuthClient.mockResolvedValue(CLIENT);
+		consentRedirectsTo("https://app/cb?code=ok");
+		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
+		const open = vi.spyOn(window, "open").mockReturnValue(null);
+
+		renderAt(VALID_QS);
+		await screen.findByRole("button", { name: /^review$/iu });
+		approve();
+
+		await waitFor(() => expect(assign).toHaveBeenCalled());
+		expect(open).not.toHaveBeenCalled();
+	});
+});
+
 describe("OAuthAuthorizePage", () => {
 	it("renders the consent prompt with client name and signed-in email", async () => {
 		fetchOAuthClient.mockResolvedValue({
