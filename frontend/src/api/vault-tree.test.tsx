@@ -294,6 +294,27 @@ describe("the vault tree is the single source for the sidebar views", () => {
 		expect(treeCalls).toBe(2);
 	});
 
+	// A cancelled tree fetch (an optimistic mutation's snapshot, a restart on
+	// invalidation) used to run its whole-vault server-side decrypt to
+	// completion for nobody, then maybe retry on top.
+	it("aborts the in-flight tree request when the query is cancelled", async () => {
+		const qc = newQc();
+		let signal: AbortSignal | undefined;
+		get.mockImplementation((url: string, opts?: { signal?: AbortSignal }) => {
+			if (url !== "/vault/tree") {
+				return Promise.resolve(legacyFrozen(url));
+			}
+			signal = opts?.signal;
+			return new Promise<Tree>(() => {});
+		});
+		renderHook(() => useNotesIn("Projects"), { wrapper: wrapperFor(qc) });
+		await waitFor(() => expect(signal).toBeDefined());
+
+		await qc.cancelQueries({ queryKey: ["vault-tree", "42"] });
+
+		expect(signal?.aborted).toBe(true);
+	});
+
 	// The invariant CI caught: a cross-tab move must converge in the sidebar
 	// with no reload. Invalidate exactly as api/channel.ts's flushBatch does.
 	it("converges every derived list when the tree is invalidated the way channel.ts does", async () => {

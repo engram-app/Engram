@@ -54,7 +54,6 @@ defmodule Engram.Workers.ExtractNoteLinks do
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
   alias Engram.Links
-  alias Engram.Links.NoteLink
   alias Engram.Links.Parser
   alias Engram.Logger.DecryptFailure
   alias Engram.Notes.Note
@@ -73,21 +72,43 @@ defmodule Engram.Workers.ExtractNoteLinks do
   def perform(%Oban.Job{args: args}) do
     :ok = BackgroundPriority.demote()
 
-    case fetch(args) do
+    case load(args) do
       {:discard, _reason} = discard ->
         discard
 
-      {:ok, %Note{} = note, tail} ->
+      {:ok, %Note{} = note, tail, vault} ->
         # One fresh users read serves both the rotation gate and the DEK. A
         # deleted user cascades their notes, so the fetch above discards first.
         user = Accounts.get_user!(note.user_id)
 
         case RotationGate.check_user(user) do
           {:error, :rotation_in_progress} -> {:snooze, 60}
-          :ok -> extract(note, tail, user)
+          :ok -> extract(note, tail, user, vault)
         end
     end
   end
+
+  # The note (with its tail) and its vault, in ONE tenant transaction instead
+  # of one each. A legacy job has no tenant to open it with, so its reads
+  # scope themselves.
+  defp load(%{"user_id" => user_id} = args) when is_binary(user_id),
+    do: Repo.with_tenant!(user_id, fn -> with_vault(fetch(args)) end)
+
+  defp load(args), do: with_vault(fetch(args))
+
+  # Missing vault = orphaned note (same rule as EmbedNote): nothing to do.
+  #
+  # Tenant-scoped: `vaults` carries FORCE ROW LEVEL SECURITY, so unscoped
+  # this returns nil for a vault that exists and the job discards as
+  # "orphaned". Re-entrant inside `load/1`'s block.
+  defp with_vault({:ok, note, tail}) do
+    case Repo.with_tenant!(note.user_id, fn -> Repo.get(Vault, note.vault_id) end) do
+      nil -> {:discard, "vault #{note.vault_id} not found for note #{note.id}"}
+      %Vault{} = vault -> {:ok, note, tail, vault}
+    end
+  end
+
+  defp with_vault(discard), do: discard
 
   # With a tenant in the args, the row and its tail come from one statement
   # (authoritative_content/3 then does not read the row again). A legacy job
@@ -105,44 +126,31 @@ defmodule Engram.Workers.ExtractNoteLinks do
   defp authoritative(user, decrypted, tail),
     do: Engram.Notes.authoritative_content(user, decrypted, tail)
 
-  defp extract(note, tail, user) do
-    # Missing vault = orphaned note (same rule as EmbedNote): nothing to do.
-    #
-    # Tenant-scoped: `vaults` carries FORCE ROW LEVEL SECURITY, so unscoped
-    # this returns nil for a vault that exists and the job discards as
-    # "orphaned". `note.user_id` is in hand from the fetch above, so there is
-    # no tenant to discover. `RebindNoteLinks` and `EmbedNote` carried the
-    # identical unscoped vault read; all three are fixed in this change-set.
-    case Repo.with_tenant(note.user_id, fn -> Repo.get(Vault, note.vault_id) end) do
-      {:ok, nil} ->
-        {:discard, "vault #{note.vault_id} not found for note #{note.id}"}
+  defp extract(note, tail, user, vault) do
+    # notes.content is the REST/search FACADE — since #1141 it's only
+    # materialized from the CRDT doc at checkpoint, so it lags a live doc
+    # write (same staleness class as #1159, see
+    # `Engram.Notes.authoritative_content/2` moduledoc and
+    # `NotesController.append/2`). A rewrite's `Rewriter.finish/4` writes
+    # the correct edges immediately via the CRDT-projected content but
+    # (deliberately) does not materialize the facade — reading it here
+    # would re-derive stale edges on the very next extraction and clobber
+    # what the rewrite just fixed. Decrypt first (still needed to recover
+    # a legacy/no-crdt-state row's plaintext as the fallback base), then
+    # resolve through the authority.
+    with {:ok, decrypted} <- Crypto.maybe_decrypt_note_fields(note, user),
+         {:ok, content} <- authoritative(user, decrypted, tail) do
+      dangling = Links.replace_links_dangling(user, vault, note.id, Parser.extract(content))
+      :ok = repair_rename_danglers(user, vault, dangling)
+      :ok
+    else
+      {:error, reason} ->
+        DecryptFailure.log("extract_links_decrypt_failed", reason,
+          user_id: note.user_id,
+          note_id: note.id
+        )
 
-      {:ok, %Vault{} = vault} ->
-        # notes.content is the REST/search FACADE — since #1141 it's only
-        # materialized from the CRDT doc at checkpoint, so it lags a live doc
-        # write (same staleness class as #1159, see
-        # `Engram.Notes.authoritative_content/2` moduledoc and
-        # `NotesController.append/2`). A rewrite's `Rewriter.finish/4` writes
-        # the correct edges immediately via the CRDT-projected content but
-        # (deliberately) does not materialize the facade — reading it here
-        # would re-derive stale edges on the very next extraction and clobber
-        # what the rewrite just fixed. Decrypt first (still needed to recover
-        # a legacy/no-crdt-state row's plaintext as the fallback base), then
-        # resolve through the authority.
-        with {:ok, decrypted} <- Crypto.maybe_decrypt_note_fields(note, user),
-             {:ok, content} <- authoritative(user, decrypted, tail) do
-          :ok = Links.replace_links(user, vault, note.id, Parser.extract(content))
-          :ok = repair_rename_danglers(user, vault, note.id)
-          :ok
-        else
-          {:error, reason} ->
-            DecryptFailure.log("extract_links_decrypt_failed", reason,
-              user_id: note.user_id,
-              note_id: note.id
-            )
-
-            {:error, reason}
-        end
+        {:error, reason}
     end
   end
 
@@ -195,24 +203,9 @@ defmodule Engram.Workers.ExtractNoteLinks do
   # rewrite persists nothing → no re-extraction → no re-trigger.
   # Plugin/Obsidian-origin renames never enqueued a rewrite (one-rewriter
   # invariant) → no evidence row → correctly never repaired here.
-  defp repair_rename_danglers(user, vault, source_note_id) do
-    # Tenant-scoped: `note_links` carries FORCE ROW LEVEL SECURITY, so
-    # unscoped this returns [] and bind-time rename repair silently stops
-    # working — no error, no dangler ever repaired. `user.id` is in scope.
-    {:ok, dangling_hmacs} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.all(
-          from(l in NoteLink,
-            where:
-              l.source_note_id == ^source_note_id and l.user_id == ^user.id and
-                l.vault_id == ^vault.id and is_nil(l.target_note_id) and
-                is_nil(l.target_attachment_id),
-            distinct: true,
-            select: l.target_basename_hmac
-          )
-        )
-      end)
-
+  # `dangling_hmacs` comes from `Links.replace_links_dangling/4`, which knows
+  # which edges it just left dangling, so this no longer reads them back.
+  defp repair_rename_danglers(user, vault, dangling_hmacs) do
     dangling_hmacs
     |> Enum.map(&Base.encode64/1)
     |> recent_rename_job_args(user.id, vault.id)

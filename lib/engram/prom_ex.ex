@@ -17,8 +17,10 @@ defmodule Engram.PromEx do
     [
       Plugins.Application,
       Plugins.Beam,
-      {Plugins.Phoenix, router: EngramWeb.Router, endpoint: EngramWeb.Endpoint},
-      Plugins.Ecto,
+      # Plugins.Phoenix minus the response-size histogram.
+      {Engram.PromEx.Phoenix, router: EngramWeb.Router, endpoint: EngramWeb.Endpoint},
+      # Not Plugins.Ecto: microsecond sums Peep can keep, no per-source histograms.
+      Engram.PromEx.Ecto,
       Plugins.Oban,
       # engram-app/engram-infra#340 — custom subscribers for in-house
       # telemetry events that the bundled plugins don't cover.

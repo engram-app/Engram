@@ -14,8 +14,12 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
   # dispatcher job instead of the embed clamp read plus three unique inserts.
   # 50 -> 51: the seed's checkpoint reads the rotation lock from the DB
   # (#1341: the cached user may not have seen another node's lock).
-  @statements 51
-  @tenant_txns 7
+  # 51 -> 46, 7 -> 6: the relocate-claim probe no longer opens its own
+  # transaction to classify the id; a create that claims nothing classifies once.
+  # 46 -> 42, 6 -> 5: the vault_populated probe runs inside the row
+  # transaction instead of opening its own after commit.
+  @statements 42
+  @tenant_txns 5
   @subscription_reads 0
 
   defp frame_for_content(content) do
@@ -79,5 +83,24 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
     assert length(queries) == @statements, "#{length(queries)} statements"
     assert tenant_txns == @tenant_txns, "#{tenant_txns} tenant transactions"
     assert subscription_reads == @subscription_reads, "#{subscription_reads} tier reads"
+  end
+
+  # Lock order: every note writer (append, move, rename, get_note_for_update)
+  # takes the vault row lock (`UPDATE vaults ... change_seq`) BEFORE it writes a
+  # note row. A create that inserted first and locked after reversed that order
+  # and deadlocked against them (Postgres 40P01), so the lock must come first.
+  test "the create takes the vault seq lock before its insert", %{socket: socket} do
+    queries =
+      TenantQueryCounter.count_matching_queries(
+        fn -> create(socket, "F/order.md", "# order") end,
+        fn _ -> true end,
+        socket.channel_pid
+      )
+
+    insert_at = Enum.find_index(queries, &(&1 =~ ~s(INSERT INTO "notes")))
+    seq_at = Enum.find_index(queries, &(&1 =~ "change_seq = change_seq + 1"))
+
+    assert insert_at && seq_at
+    assert seq_at < insert_at, Enum.join(queries, "\n")
   end
 end

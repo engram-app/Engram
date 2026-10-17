@@ -1804,6 +1804,90 @@
         "x-struct": "Elixir.EngramWeb.Schemas.OkFlag",
         "x-validate": null
       },
+      "BatchCreateFoldersResponse": {
+        "properties": {
+          "folders": {
+            "items": {
+              "properties": {
+                "count": {
+                  "type": "integer",
+                  "x-struct": null,
+                  "x-validate": null
+                },
+                "input": {
+                  "description": "The folder as sent",
+                  "type": "string",
+                  "x-struct": null,
+                  "x-validate": null
+                },
+                "name": {
+                  "description": "The folder as stored (sanitized)",
+                  "type": "string",
+                  "x-struct": null,
+                  "x-validate": null
+                }
+              },
+              "required": [
+                "input",
+                "name"
+              ],
+              "type": "object",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "rejected": {
+            "description": "Inputs that sanitize to the vault root; nothing was created for them",
+            "items": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "folders",
+          "rejected"
+        ],
+        "title": "BatchCreateFoldersResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.BatchCreateFoldersResponse",
+        "x-validate": null
+      },
+      "BatchCreateFoldersRequest": {
+        "example": {
+          "folders": [
+            "Projects/Engram",
+            "Archive"
+          ]
+        },
+        "properties": {
+          "folders": {
+            "items": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "maxItems": 500,
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "folders"
+        ],
+        "title": "BatchCreateFoldersRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.BatchCreateFoldersRequest",
+        "x-validate": null
+      },
       "RenameNoteResponse": {
         "properties": {
           "new_path": {
@@ -3294,6 +3378,51 @@
         ]
       }
     },
+    "/api/folders/batch": {
+      "post": {
+        "callbacks": {},
+        "description": "Creates explicit folder markers for up to 500 folders in one transaction and returns 201 with one entry per distinct input: the `input` as sent and the `name` it was stored under. Idempotent per folder like `POST /folders`. Paths are sanitized (traversal segments and illegal characters stripped); inputs that sanitize to the root are listed in `rejected` and create nothing. More than 500 entries is rejected with 422.",
+        "operationId": "folders-batch-create",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchCreateFoldersRequest"
+              }
+            }
+          },
+          "description": "Folder paths",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchCreateFoldersResponse"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid input or too many folders"
+          }
+        },
+        "summary": "Create many folders",
+        "tags": [
+          "Folders"
+        ]
+      }
+    },
     "/api/notes/rename": {
       "post": {
         "callbacks": {},
@@ -3960,6 +4089,16 @@
               }
             },
             "description": "An item conflicts at target"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Target path cleans to nothing"
           }
         },
         "summary": "Move attachments to a folder (idempotent)",
@@ -4515,6 +4654,16 @@
               }
             },
             "description": "Target exists"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Target path cleans to nothing"
           }
         },
         "summary": "Rename / move a folder",
@@ -4769,6 +4918,16 @@
               }
             },
             "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Target path cleans to nothing"
           }
         },
         "summary": "Move folders under a new parent (idempotent)",
@@ -5069,6 +5228,16 @@
               }
             },
             "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Target path cleans to nothing"
           }
         },
         "summary": "Move notes to a folder (idempotent)",

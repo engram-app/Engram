@@ -920,6 +920,26 @@ defmodule Engram.AttachmentsTest do
       {:ok, _} = Attachments.get_attachment(user, vault, "a.png")
     end
 
+    # The target is sanitized for the 422, then each item's new path again in
+    # the mover; both passes must agree, or a double-encoded `..` survives the
+    # first and lands the file in the vault root on the second.
+    test "batch_move refuses a double-encoded traversal target", %{user: user, vault: vault} do
+      assert {:error, :invalid_path} =
+               Attachments.batch_move(user, vault, ["a.png"], "%252e%252e")
+
+      {:ok, _} = Attachments.get_attachment(user, vault, "a.png")
+    end
+
+    test "batch_move into B/%252e%252e lands in B", %{user: user, vault: vault} do
+      {:ok, %{moved: 1}} = Attachments.batch_move(user, vault, ["a.png"], "B/%252e%252e")
+      {:ok, %{path: "B/a.png"}} = Attachments.get_attachment(user, vault, "B/a.png")
+    end
+
+    test "batch_move into a%252Fb lands in a/b", %{user: user, vault: vault} do
+      {:ok, %{moved: 1}} = Attachments.batch_move(user, vault, ["a.png"], "a%252Fb")
+      {:ok, %{path: "a/b/a.png"}} = Attachments.get_attachment(user, vault, "a/b/a.png")
+    end
+
     test "batch_move rolls back on conflict", %{user: user, vault: vault} do
       {:ok, _} =
         Attachments.upsert_attachment(user, vault, %{

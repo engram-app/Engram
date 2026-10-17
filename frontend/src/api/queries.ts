@@ -30,6 +30,8 @@ import { crdtCreateNote, crdtCreateNoteWithContent, crdtDeleteNote } from "./cha
 import { ApiError, api } from "./client";
 import { CrdtOpError, isPermanentJoinRefusal, toastJoinRefused } from "./crdt-ops";
 import {
+	type AttachmentEvent,
+	applyAttachmentEvents,
 	applyNoteEvents,
 	baseOf,
 	// Path → parent folder, the same rule the backend uses when computing
@@ -222,12 +224,20 @@ const MAX_STALE_TREE_REFETCHES = 3;
  * so it cannot oscillate between two states; each iteration strictly consumes
  * the generation value that triggered it.
  */
-async function fetchVaultTreeFresh({ client, queryKey }: QueryFunctionContext): Promise<VaultTree> {
+async function fetchVaultTreeFresh({
+	client,
+	queryKey,
+	signal,
+}: QueryFunctionContext): Promise<VaultTree> {
+	// The signal makes a cancelled fetch (a mutation's snapshot, a restart on
+	// invalidation) abort its request instead of running a whole-vault
+	// server-side decrypt for nobody. An abort rejects, which also ends the
+	// retry loop below rather than chaining a re-fetch nobody will read.
 	let seen = treeInvalidationGen;
-	let tree = await api.get<VaultTree>("/vault/tree");
+	let tree = await api.get<VaultTree>("/vault/tree", { signal });
 	for (let i = 0; treeInvalidationGen !== seen && i < MAX_STALE_TREE_REFETCHES; i++) {
 		seen = treeInvalidationGen;
-		tree = await api.get<VaultTree>("/vault/tree");
+		tree = await api.get<VaultTree>("/vault/tree", { signal });
 	}
 	return rebasePendingTreeWrites(client, queryKey[1], tree);
 }
@@ -343,12 +353,8 @@ async function snapshotTree(
 	qc: QueryClient,
 	vaultId: string | null | undefined,
 ): Promise<VaultTree | undefined> {
-	// This stops an in-flight tree fetch from LANDING on top of the patch below
-	// — query-core discards a cancelled fetch's result whether or not the
-	// queryFn is abortable. It does not stop the request: `fetchVaultTreeFresh`
-	// takes no AbortSignal and `api.get` has no way to pass one, so a whole-vault
-	// server-side decrypt runs to completion for nobody. Correct, wasteful.
-	// Plumbing a signal through the shared client is the fix, not a wider cancel.
+	// This stops an in-flight tree fetch from LANDING on top of the patch below,
+	// and aborts its request (`fetchVaultTreeFresh` passes the signal through).
 	await qc.cancelQueries({ queryKey: ["vault-tree", vaultId] });
 	return qc.getQueryData<VaultTree>(["vault-tree", vaultId]);
 }
@@ -579,14 +585,19 @@ export function useUploadAttachment() {
 		{ path: string; mime_type?: string; content_base64: string; mtime: number }
 	>({
 		mutationFn: (body) => api.post<{ attachment: AttachmentSummary }>("/attachments", body),
-		onSuccess: () => {
-			// New attachment row changes the tree's attachment list, its folder's
-			// count, AND the dashboard folder-browse list (which renders attachments).
-			// Mirrors useBatchDeleteAttachments — keep all three keys in sync.
+		onSuccess: ({ attachment }) => {
+			// New attachment row changes the tree's attachment list AND the
+			// dashboard folder-browse list (which renders attachments). The
+			// response is the full row, so the tree takes it as a patch; it
+			// re-fetches only when a patch can't be trusted (see
+			// applyVaultTreeEvents). Re-fetching per upload is what made a bulk
+			// upload cost ~1.7 whole-vault downloads per file.
 			// 402s (disabled / text-only / too-large / quota) throw LimitExceededError
 			// AND open the global UpgradeRequiredDialog via the client's
 			// upgradeHandler — nothing to handle here.
-			invalidateVaultTree(qc, vaultId);
+			if (!applyVaultTreeEvents(qc, vaultId, [], [{ kind: "upsert", ...attachment }])) {
+				invalidateVaultTree(qc, vaultId);
+			}
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 		},
 	});
@@ -610,6 +621,7 @@ export const ROOT_FOLDER_ID = "root";
  *   would mark it fresh and cancel that refetch;
  * - a note moved to a different folder: it may be part of a folder rename,
  *   and the events never say what happened to the folder marker;
+ * - an attachment appeared at a path the tree lacks: the broadcast has no id;
  * - a tree fetch is IN FLIGHT: its response may predate these events and would
  *   land on top of the patch, silently undoing it. Invalidating instead bumps
  *   the generation `fetchVaultTreeFresh` checks, so that fetch re-runs.
@@ -618,6 +630,7 @@ export function applyVaultTreeEvents(
 	qc: QueryClient,
 	vaultId: string | null | undefined,
 	events: readonly NoteEvent[],
+	attachmentEvents: readonly AttachmentEvent[] = [],
 ): boolean {
 	const state = qc.getQueryState<VaultTree>(["vault-tree", vaultId]);
 	if (!state?.data || state.fetchStatus === "fetching") {
@@ -635,7 +648,11 @@ export function applyVaultTreeEvents(
 	if (movesAcrossFolders(state.data, events)) {
 		return false;
 	}
-	const next = applyNoteEvents(state.data, events);
+	// Null: an attachment row the events can't build (a new path, no id).
+	const next = applyAttachmentEvents(applyNoteEvents(state.data, events), attachmentEvents);
+	if (next === null) {
+		return false;
+	}
 	if (next === state.data) {
 		return true;
 	}

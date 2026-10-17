@@ -290,12 +290,11 @@ defmodule Engram.PromEx.Crdt do
         # clears the table, so a deploy leaves every panel at "No data" until
         # the next run.
         #
-        # Assumes the default `PromEx.Storage.Core` reporter. Under
-        # `PromEx.Storage.Peep` a MISSING measurement key records 1.0 rather
-        # than being skipped, which would silently turn every sub-floor note
-        # into a perfect 1.0 bloat ratio — the exact artifact
-        # `Engram.Notes.CrdtBloat` exists to keep out. Do not set
-        # `:storage_adapter` without revisiting the omit-vs-zero decision in
+        # The reporter is `PromEx.Storage.Peep` (config/config.exs). Peep
+        # records 1 for a MISSING measurement key rather than skipping it, so
+        # an emitter meaning "no sample" passes nil instead: an omitted key
+        # would file every sub-floor note as a perfect 1.0 bloat ratio, the
+        # exact artifact `Engram.Notes.CrdtBloat` exists to keep out. See
         # `CrdtCheckpoint.emit_doc_stats/3`.
         # The freshness signal. `last_value` never expires, so a sweep that stops
         # running keeps serving its last reading and reads as healthy on every

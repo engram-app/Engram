@@ -157,9 +157,11 @@ NIFs queue behind that one scheduler. On the worker that includes
 `md_outline_nif`, which always runs dirty (every index job parses the note), so
 the `EnvelopeFormat` re-encode window slows indexing; expect a longer embed
 backlog drain while the migration runs. Watch the PromEx
-`engram_prom_ex_nif_call_duration_milliseconds` histogram (`[:engram, :nif, :call, :stop]`),
+`engram_prom_ex_nif_call_duration_microseconds_total` /
+`engram_prom_ex_nif_call_total` pair (`[:engram, :nif, :call, :stop]`),
 tagged `nif` and `dirty`, for `nif="envelope_seal"` / `"envelope_open"` with
-`dirty="true"`; a rising p99 there means dirty queueing, and the remedies are a
+`dirty="true"`; a rising average (rate of the sum over rate of the count)
+there means dirty queueing, and the remedies are a
 bigger task (which raises `+SDcpu`) or `ENVELOPE_COMPRESSION=false`. Inline
 format-0 seals (up to 16 KB) and successful inline opens emit no per-call
 event, so the envelope series hold format-1 seals (`dirty="false"` when small)

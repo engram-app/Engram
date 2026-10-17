@@ -223,6 +223,10 @@ defmodule Engram.Notes do
   @doc """
   Creates an explicit empty-folder marker row (kind="folder").
 
+  The folder goes through `PathSanitizer.sanitize/1` first (traversal,
+  absolute, null-byte, encoded-dot segments rewritten, as for note paths);
+  one that sanitizes to "" is rejected as root.
+
   Idempotent: if a marker for this folder_hmac already exists, it is
   returned. A soft-deleted marker is undeleted in place (preserves id /
   the AAD-bound envelope). Rejects root folder ("") — root is implicit
@@ -234,9 +238,16 @@ defmodule Engram.Notes do
   """
   @spec create_folder_marker(map(), map(), String.t()) ::
           {:ok, Note.t()} | {:error, term()}
-  def create_folder_marker(_user, _vault, ""), do: {:error, :root_folder_not_marker}
-
   def create_folder_marker(user, vault, folder) when is_binary(folder) do
+    # Every marker write (REST, MCP, batch, materialization) lands here, so
+    # this is the one guard: same rewrite notes get, never stored as given.
+    case PathSanitizer.sanitize(folder) do
+      "" -> {:error, :root_folder_not_marker}
+      folder -> do_create_folder_marker(user, vault, folder)
+    end
+  end
+
+  defp do_create_folder_marker(user, vault, folder) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user),
          {:ok, dek} <- Crypto.get_dek(user) do
@@ -245,27 +256,121 @@ defmodule Engram.Notes do
       # Repo.with_tenant wraps the fn return in {:ok, _} (transaction).
       # Unwrap once so the public contract is {:ok, note} | {:error, _}.
       case Repo.with_tenant(user.id, fn ->
-             case find_folder_marker(user, vault, folder_hmac) do
-               {:ok, %Note{deleted_at: nil} = existing} ->
-                 {:ok, hydrate_folder_marker(existing, dek)}
-
-               {:ok, %Note{} = soft_deleted} ->
-                 soft_deleted
-                 |> Ecto.Changeset.change(deleted_at: nil, updated_at: DateTime.utc_now())
-                 |> Ecto.Changeset.put_change(:seq, Engram.Vaults.next_seq!(vault.id))
-                 |> Repo.update()
-                 |> case do
-                   {:ok, undeleted} -> {:ok, hydrate_folder_marker(undeleted, dek)}
-                   {:error, _} = err -> err
-                 end
-
-               :not_found ->
-                 insert_folder_marker(user, vault, dek, folder, folder_hmac)
-             end
+             upsert_folder_marker(user, vault, dek, folder, folder_hmac, fn ->
+               Engram.Vaults.next_seq!(vault.id)
+             end)
            end) do
         {:ok, inner} -> inner
         {:error, _} = err -> err
       end
+    end
+  end
+
+  @max_batch_folders 500
+
+  @doc """
+  Batch `create_folder_marker/3`: one tenant transaction and at most one
+  shared `seq` for the whole batch. Each folder goes through
+  `PathSanitizer.sanitize/1`; duplicate inputs collapse. Idempotent per
+  folder like the single create.
+
+  Returns `{:ok, %{folders: entries, rejected: inputs}}`: one entry per
+  distinct input that names a folder, `%{input, name, created}` where `name`
+  is the stored (sanitized) folder and `created` is true only when this call
+  inserted or undeleted the marker; `rejected` lists the inputs that sanitize
+  to the root (`..`, `""`). `{:error, :batch_too_large}` above
+  #{@max_batch_folders} entries, or the first per-folder error (the whole
+  batch rolls back).
+  """
+  @spec create_folder_markers(map(), map(), [String.t()]) ::
+          {:ok, %{folders: [map()], rejected: [String.t()]}} | {:error, term()}
+  def create_folder_markers(_user, _vault, folders)
+      when is_list(folders) and length(folders) > @max_batch_folders,
+      do: {:error, :batch_too_large}
+
+  def create_folder_markers(user, vault, inputs) when is_list(inputs) do
+    {rejected, kept} =
+      inputs
+      |> Enum.uniq()
+      |> Enum.map(&{&1, PathSanitizer.sanitize(&1)})
+      |> Enum.split_with(fn {_input, name} -> name == "" end)
+
+    with {:ok, created} <-
+           upsert_folder_batch(user, vault, kept |> Enum.map(&elem(&1, 1)) |> Enum.uniq()) do
+      folders =
+        Enum.map(kept, fn {input, name} ->
+          %{input: input, name: name, created: MapSet.member?(created, name)}
+        end)
+
+      {:ok, %{folders: folders, rejected: Enum.map(rejected, &elem(&1, 0))}}
+    end
+  end
+
+  defp upsert_folder_batch(_user, _vault, []), do: {:ok, MapSet.new()}
+
+  defp upsert_folder_batch(user, vault, names) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, filter_key} <- Crypto.dek_filter_key(user),
+         {:ok, dek} <- Crypto.get_dek(user) do
+      Repo.with_tenant(user.id, fn ->
+        # One seq for the batch, taken lazily: the seq feed keys on (seq, id),
+        # so ties are safe, and the vault row is locked at most once. It is
+        # taken by the first write's seq_fun, right BEFORE that write, never
+        # after one: every note writer locks the vault row before a note row,
+        # and reversing that deadlocks (40P01). An all-existing batch takes
+        # no lock at all.
+        seq_key = {__MODULE__, :folder_batch_seq, make_ref()}
+
+        seq_fun = fn ->
+          Process.get(seq_key) ||
+            tap(Engram.Vaults.next_seq!(vault.id), &Process.put(seq_key, &1))
+        end
+
+        try do
+          markers = upsert_folder_markers(user, vault, dek, filter_key, names, seq_fun)
+          seq = Process.get(seq_key)
+
+          # A marker carrying this call's seq is one this call wrote; a live
+          # marker found as-is (or a raced insert's winner) carries an older one.
+          for m <- markers, seq != nil and m.seq == seq, into: MapSet.new(), do: m.folder
+        after
+          Process.delete(seq_key)
+        end
+      end)
+    end
+  end
+
+  defp upsert_folder_markers(user, vault, dek, filter_key, folders, seq_fun) do
+    Enum.map(folders, fn folder ->
+      folder_hmac = Crypto.hmac_field(filter_key, folder)
+
+      case upsert_folder_marker(user, vault, dek, folder, folder_hmac, seq_fun) do
+        {:ok, marker} -> marker
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  # Shared by the single and batch creates. `seq_fun` is only called when a
+  # row is written, so an idempotent single create on a live marker never
+  # takes the vault row lock.
+  defp upsert_folder_marker(user, vault, dek, folder, folder_hmac, seq_fun) do
+    case find_folder_marker(user, vault, folder_hmac) do
+      {:ok, %Note{deleted_at: nil} = existing} ->
+        {:ok, hydrate_folder_marker(existing, dek)}
+
+      {:ok, %Note{} = soft_deleted} ->
+        soft_deleted
+        |> Ecto.Changeset.change(deleted_at: nil, updated_at: DateTime.utc_now())
+        |> Ecto.Changeset.put_change(:seq, seq_fun.())
+        |> Repo.update()
+        |> case do
+          {:ok, undeleted} -> {:ok, hydrate_folder_marker(undeleted, dek)}
+          {:error, _} = err -> err
+        end
+
+      :not_found ->
+        insert_folder_marker(user, vault, dek, folder, folder_hmac, seq_fun)
     end
   end
 
@@ -292,7 +397,7 @@ defmodule Engram.Notes do
     if row, do: {:ok, row}, else: :not_found
   end
 
-  defp insert_folder_marker(user, vault, dek, folder, folder_hmac) do
+  defp insert_folder_marker(user, vault, dek, folder, folder_hmac, seq_fun) do
     marker_id = mint_id()
     now = DateTime.utc_now()
     folder_aad = Crypto.aad_for_row(:notes, :folder, marker_id)
@@ -313,7 +418,7 @@ defmodule Engram.Notes do
     changeset =
       %Note{id: marker_id}
       |> Note.changeset(attrs)
-      |> Ecto.Changeset.put_change(:seq, Engram.Vaults.next_seq!(vault.id))
+      |> Ecto.Changeset.put_change(:seq, seq_fun.())
 
     # INSERT ... ON CONFLICT DO NOTHING on the folder-marker partial unique
     # index. A concurrent create of the same folder races us: find_folder_marker
@@ -782,6 +887,10 @@ defmodule Engram.Notes do
 
       changeset = Note.changeset(%Note{id: note_id}, phase_b)
 
+      # Lock order: the vault seq lock BEFORE any note row write. Every other
+      # writer (append, move, rename, get_note_for_update/3) takes the vault row
+      # first, so inserting first and locking after deadlocks against them
+      # (Postgres 40P01). Pinned by crdt_create_query_budget_test.exs.
       seq = Engram.Vaults.next_seq!(base_attrs.vault_id)
       changeset = Ecto.Changeset.put_change(changeset, :seq, seq)
 
@@ -916,77 +1025,19 @@ defmodule Engram.Notes do
          {:ok, path} <- validate_path(path),
          sanitized_path = PathSanitizer.sanitize(path),
          folder = Helpers.extract_folder(sanitized_path),
-         # BEFORE the row transaction, because a claim IS the commit and the row
-         # follows — see `claim_rename/5`. Claiming after the row moves is the
-         # dual-write whose failure mode is projection silently reverting a
-         # completed rename, which is exactly what this leg used to do.
-         {:ok, claimed?} <-
-           claim_crdt_relocate(user, vault, canonical_id, sanitized_path, opts) do
-      # #1710: decided once, before the transaction (see Revisions moduledoc).
-      recording = Revisions.recording?(user)
-
-      # Repo.with_tenant wraps the fn return in {:ok, _} (transaction).
-      # Unwrap once so the public contract matches the @spec above.
-      case Repo.with_tenant(user.id, fn ->
-             case classify_by_id(vault, canonical_id) do
-               {:live, %Note{} = live} ->
-                 # A dek_filter_key failure here must NOT masquerade as a definite
-                 # id_conflict (a transient crypto hiccup would permanently reject
-                 # an idempotent retry): {:ok, true} idempotent, {:ok, false}
-                 # genuine conflict, {:error, _} a clean crypto error (→
-                 # create_failed) — never a fabricated conflict.
-                 case same_path?(live, user, sanitized_path) do
-                   {:ok, true} ->
-                     {:ok, decrypt_or_raise!(live, user)}
-
-                   {:ok, false} ->
-                     # Phase E2 (rename-as-move): a crdt_create for a KNOWN live
-                     # id at a new, FREE path is a rename — relocate the row in
-                     # place (same move_note pipeline the tombstone-resurrect
-                     # rename leg uses), no tombstone-first dance, which also
-                     # removes the #970 delete-wins window from renames entirely.
-                     # A target path OCCUPIED by a DIFFERENT live note stays a
-                     # genuine conflict (the pre-E2 behavior).
-                     genesis_relocate_live(
-                       live,
-                       user,
-                       vault,
-                       sanitized_path,
-                       folder,
-                       origin,
-                       recording
-                     )
-
-                   {:error, _} = err ->
-                     err
-                 end
-
-               {:tombstone, %Note{} = prior} ->
-                 genesis_resurrect(prior, user, vault, sanitized_path, folder, origin, recording)
-
-               :taken ->
-                 # The id is already spoken for by a row of theirs that this
-                 # vault's genesis cannot use, so an INSERT under it is doomed:
-                 # it would no-op on the PK and be recovered by remint_own_id one
-                 # layer down, AFTER burning a crdt merge, an encrypt (KMS/DEK
-                 # work) and a permanently-consumed vault seq. Re-mint here, where
-                 # classify_by_id has already paid for the read that proves it.
-                 # An OCCUPIED path still adopts the note living there, exactly
-                 # like :none, so the fresh id is only reached on the insert leg.
-                 genesis_adopt_or_insert(
-                   user,
-                   vault,
-                   mint_id(),
-                   sanitized_path,
-                   folder,
-                   canonical_id
-                 )
-
-               :none ->
-                 genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder)
-             end
-           end)
-           |> finalize_moved_revision(user) do
+         # #1710: decided once, before the transaction (see Revisions moduledoc).
+         recording = Revisions.recording?(user),
+         genesis = %{
+           user: user,
+           vault: vault,
+           id: canonical_id,
+           path: sanitized_path,
+           folder: folder,
+           origin: origin,
+           recording: recording
+         },
+         {:ran, result, claimed?} <- run_genesis(genesis, initial_claim(opts)) do
+      case finalize_moved_revision(result, user) do
         # Only genesis_resurrect/genesis_insert_bare tag their success with
         # :announce (a REAL create/resurrect). The idempotent same-path and
         # adopt-existing-live-note branches change nothing, so they return a
@@ -1000,13 +1051,8 @@ defmodule Engram.Notes do
           # crdt_doc_ready never reaches the sync topic the name index reads.
           :ok = Engram.Notes.NameIndex.announce(vault.id, note.id, note.path, note.title)
 
-          # The web /link success page waits on this before forwarding the user
-          # to their vault. It used to fire only from the REST upsert/batch
-          # paths — which the Obsidian plugin stopped using when it moved to
-          # CRDT — so an Obsidian first sync, the exact case that page exists
-          # for, never advanced. Same post-commit position as the announce
-          # above; the helper's own 0->1 probe keeps it to the first note.
-          :ok = maybe_broadcast_vault_populated(user, vault)
+          # vault_populated was probed inside the row transaction
+          # (probe_vault_populated/2) and its broadcast already ran on commit.
           {:ok, note}
 
         {:ok, {:ok, note, {:announce_moved, old_path}}} ->
@@ -1074,6 +1120,129 @@ defmodule Engram.Notes do
 
   defp finalize_moved_revision(result, _user), do: result
 
+  defp initial_claim(opts) do
+    if Keyword.get(opts, :index, :claim) == :skip, do: {:done, false}, else: :pending
+  end
+
+  # One row transaction for every create that claims nothing, which is all of
+  # them except a live id moving to a new path. That one leg classifies inside
+  # the transaction, returns `{:claim_first, live}` before writing anything,
+  # claims OUTSIDE it, and re-runs with the claim settled. The re-run
+  # classifies afresh, so a row that changed in between is handled exactly as
+  # the old claim-then-transaction order handled it.
+  defp run_genesis(g, claim) do
+    case Repo.with_tenant(g.user.id, fn -> g |> genesis_txn(claim) |> probe_vault_populated(g) end) do
+      {:ok, {:claim_first, live}} ->
+        case claim_crdt_relocate(g, live) do
+          {:ok, claimed?} -> run_genesis(g, {:done, claimed?})
+          {:error, _} = err -> err
+        end
+
+      result ->
+        {:ran, result, claimed_flag(claim)}
+    end
+  end
+
+  # The web /link success page waits on vault_populated before forwarding the
+  # user to their vault. It used to fire only from the REST upsert/batch paths,
+  # which the Obsidian plugin stopped using when it moved to CRDT, so an
+  # Obsidian first sync, the exact case that page exists for, never advanced.
+  #
+  # Only a REAL create/resurrect (:announce) probes. It runs inside the row
+  # transaction rather than after it, so it costs one query instead of a
+  # transaction of its own (with_tenant is re-entrant), and the broadcast is
+  # still post-commit via Repo.after_commit. The probe sees this row plus every
+  # committed one, so two racing first notes cannot both read 2 and stay silent.
+  defp probe_vault_populated({:ok, _note, :announce} = result, g),
+    do: tap(result, fn _ -> :ok = maybe_broadcast_vault_populated(g.user, g.vault) end)
+
+  defp probe_vault_populated({:ok, _note, :announce, _finalize?} = result, g),
+    do: tap(result, fn _ -> :ok = maybe_broadcast_vault_populated(g.user, g.vault) end)
+
+  defp probe_vault_populated(result, _g), do: result
+
+  defp claimed_flag({:done, claimed?}), do: claimed?
+  defp claimed_flag(:pending), do: false
+
+  # Repo.with_tenant wraps the fn return in {:ok, _} (transaction); the caller
+  # unwraps it so the public contract matches genesis_crdt_note/5's @spec.
+  defp genesis_txn(
+         %{
+           user: user,
+           vault: vault,
+           id: canonical_id,
+           path: sanitized_path,
+           folder: folder,
+           origin: origin,
+           recording: recording
+         },
+         claim
+       ) do
+    case classify_by_id(vault, canonical_id) do
+      {:live, %Note{} = live} ->
+        # A dek_filter_key failure here must NOT masquerade as a definite
+        # id_conflict (a transient crypto hiccup would permanently reject
+        # an idempotent retry): {:ok, true} idempotent, {:ok, false}
+        # genuine conflict, {:error, _} a clean crypto error (→
+        # create_failed) — never a fabricated conflict.
+        case same_path?(live, user, sanitized_path) do
+          {:ok, true} ->
+            {:ok, decrypt_or_raise!(live, user)}
+
+          {:ok, false} when claim == :pending ->
+            # A relocate claims BEFORE the row moves (see
+            # claim_crdt_relocate/2), so back out of this read-only
+            # transaction, claim, and re-run with the claim settled.
+            {:claim_first, live}
+
+          {:ok, false} ->
+            # Phase E2 (rename-as-move): a crdt_create for a KNOWN live
+            # id at a new, FREE path is a rename — relocate the row in
+            # place (same move_note pipeline the tombstone-resurrect
+            # rename leg uses), no tombstone-first dance, which also
+            # removes the #970 delete-wins window from renames entirely.
+            # A target path OCCUPIED by a DIFFERENT live note stays a
+            # genuine conflict (the pre-E2 behavior).
+            genesis_relocate_live(
+              live,
+              user,
+              vault,
+              sanitized_path,
+              folder,
+              origin,
+              recording
+            )
+
+          {:error, _} = err ->
+            err
+        end
+
+      {:tombstone, %Note{} = prior} ->
+        genesis_resurrect(prior, user, vault, sanitized_path, folder, origin, recording)
+
+      :taken ->
+        # The id is already spoken for by a row of theirs that this
+        # vault's genesis cannot use, so an INSERT under it is doomed:
+        # it would no-op on the PK and be recovered by remint_own_id one
+        # layer down, AFTER burning a crdt merge, an encrypt (KMS/DEK
+        # work) and a permanently-consumed vault seq. Re-mint here, where
+        # classify_by_id has already paid for the read that proves it.
+        # An OCCUPIED path still adopts the note living there, exactly
+        # like :none, so the fresh id is only reached on the insert leg.
+        genesis_adopt_or_insert(
+          user,
+          vault,
+          mint_id(),
+          sanitized_path,
+          folder,
+          canonical_id
+        )
+
+      :none ->
+        genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder)
+    end
+  end
+
   # The web app renames and moves EVERY note through `crdt_create`: `queries.ts`
   # `useRenameNote` calls `crdtCreateNote(id, new_path)` under the comment
   # "Replaces POST /notes/rename", and a folder drag-move sends one per id at its
@@ -1084,12 +1253,13 @@ defmodule Engram.Notes do
   # Runs OUTSIDE the row transaction, like `rename_note`: `Identity` warns that a
   # claim inside one has no durability guarantee, because the tail-log append
   # rolls back with the transaction while the caller treats the claim as
-  # committed.
+  # committed. A claim IS the commit and the row follows (see `claim_rename/5`).
   #
   # Deliberately NARROWER than the genesis path it guards — only a live id moving
-  # to a free path claims. A claim cannot be rolled back, so claiming for an
-  # operation that then does not happen makes the path permanently unclaimable,
-  # which is worse than the stale entry this fixes:
+  # to a free path claims, which is why genesis_txn/2 only asks for it on that
+  # leg. A claim cannot be rolled back, so claiming for an operation that then
+  # does not happen makes the path permanently unclaimable, which is worse than
+  # the stale entry this fixes:
   #
   #   * a first-time create claims nothing. Projection never acts on absence, so
   #     an unclaimed new note is benign — while `classify_by_id` answering
@@ -1097,25 +1267,7 @@ defmodule Engram.Notes do
   #     name a row that never exists.
   #   * an OCCUPIED target is `:id_conflict` below, and claiming for a relocate
   #     that is about to be refused is the same permanent-unclaimability bug.
-  defp claim_crdt_relocate(user, vault, canonical_id, sanitized_path, opts) do
-    if Keyword.get(opts, :index, :claim) == :skip do
-      {:ok, false}
-    else
-      case Repo.with_tenant(user.id, fn -> classify_by_id(vault, canonical_id) end) do
-        {:ok, {:live, live}} -> claim_if_relocating(user, vault, live, sanitized_path)
-        _ -> {:ok, false}
-      end
-    end
-  end
-
-  defp claim_if_relocating(user, vault, live, sanitized_path) do
-    case same_path?(live, user, sanitized_path) do
-      # Already there: idempotent replay, nothing moves, nothing to claim.
-      {:ok, true} -> {:ok, false}
-      {:ok, false} -> claim_free_target(user, vault, live.id, sanitized_path)
-      {:error, _} = err -> err
-    end
-  end
+  defp claim_crdt_relocate(g, live), do: claim_free_target(g.user, g.vault, live.id, g.path)
 
   # The same row check `decide_claim/5` makes, load-bearing for the same reason:
   # `Identity.claim/3` sees only collisions recorded IN THE MAP, and in a vault
@@ -2794,6 +2946,40 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Bulk metadata-only variant of `get_note_by_id/3`: every live note among
+  `ids`, in ONE tenant transaction, without the content column or its decrypt.
+
+  Returns `{:ok, %{id => note}}` keyed by the id as the caller passed it. An id
+  that is not a UUID, names a soft-deleted row, a folder marker or another
+  vault's note is simply absent from the map, the same set `get_note_by_id/3`
+  answers `:not_found` for.
+  """
+  @spec get_note_meta_by_ids(map(), map(), [String.t()]) ::
+          {:ok, %{String.t() => Note.t()}} | {:error, term()}
+  def get_note_meta_by_ids(user, vault, ids) when is_list(ids) do
+    # Cast up front: one non-UUID id would otherwise raise a CastError for the
+    # whole query. Keyed back to the caller's spelling of the id.
+    by_uuid = for id <- ids, {:ok, uuid} <- [Ecto.UUID.cast(id)], into: %{}, do: {uuid, id}
+
+    with {:ok, user} <- Crypto.ensure_user_dek(user) do
+      rows =
+        if map_size(by_uuid) == 0 do
+          []
+        else
+          query =
+            from(n in scoped_live(user, vault),
+              where: n.id in ^Map.keys(by_uuid) and n.kind == "note",
+              select: struct(n, @note_meta_fields)
+            )
+
+          Repo.with_tenant!(user.id, fn -> Repo.all(query) end)
+        end
+
+      {:ok, rows |> decrypt_or_raise!(user) |> Map.new(&{Map.fetch!(by_uuid, &1.id), &1})}
+    end
+  end
+
+  @doc """
   Worker-side note fetch from a job's args map. Picks the tenant-scoped path
   when the job carries a `user_id`, and the legacy unscoped one when it does
   not.
@@ -3115,6 +3301,10 @@ defmodule Engram.Notes do
   @doc """
   Renames a note to a new path. Sanitizes the new path, updates folder and title.
   Returns {:ok, updated_note} or {:error, :not_found}.
+
+  `note_id:` renames only if THAT note is at `old_path`, `{:error, :not_found}`
+  otherwise. For a caller holding a path from an earlier read: the note may
+  have moved and another note taken its old path since.
   """
   @spec rename_note(map(), map(), String.t(), String.t(), keyword()) ::
           {:ok, Note.t()} | {:error, :not_found | :conflict | term()}
@@ -3125,7 +3315,7 @@ defmodule Engram.Notes do
 
     with {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, claimed?} <- claim_rename(user, vault, old_path, new_path, opts) do
-      case do_rename_note(user, vault, old_path, new_path, new_folder, now) do
+      case do_rename_note(user, vault, old_path, new_path, new_folder, now, opts[:note_id]) do
         {:ok, _} = ok -> ok
         {:error, reason} = err -> report_orphan_claim(user, vault, claimed?, reason, err)
       end
@@ -3244,8 +3434,12 @@ defmodule Engram.Notes do
     :ok
   end
 
-  defp do_rename_note(user, vault, old_path, new_path, new_folder, now) do
+  defp do_rename_note(user, vault, old_path, new_path, new_folder, now, note_id) do
     {:ok, lookup_query} = note_by_path_query(user, vault, old_path)
+
+    lookup_query =
+      if note_id, do: from(n in lookup_query, where: n.id == ^note_id), else: lookup_query
+
     {:ok, target_query} = note_by_path_query(user, vault, new_path)
 
     result =
@@ -3885,7 +4079,8 @@ defmodule Engram.Notes do
   # exists purely as a path on its notes. `folder == ""` means the vault root.
   def batch_move_notes(user, vault, ids, {:path, folder})
       when is_list(ids) and is_binary(folder) do
-    with {:ok, user} <- Crypto.ensure_user_dek(user) do
+    with {:ok, folder} <- PathSanitizer.sanitize_target(folder),
+         {:ok, user} <- Crypto.ensure_user_dek(user) do
       move_notes_claimed(user, vault, ids, folder)
     end
   end
@@ -5124,7 +5319,7 @@ defmodule Engram.Notes do
   @doc """
   Raw rows for `list_folders_with_counts/2` — per folder_hmac, one
   representative row (for envelope decryption) plus a SQL-side
-  window-function count of `kind='note'` rows in that folder. MUST run
+  count of `kind='note'` rows in that folder. MUST run
   inside the caller's `Repo.with_tenant/2` — pair with
   `decrypt_folder_count_rows/2`. Extracted so `VaultTreeController` can
   fetch this alongside the note/folder-marker/attachment queries in one
@@ -5144,24 +5339,30 @@ defmodule Engram.Notes do
     # Per folder_hmac, pick any one row (for envelope decryption) and
     # count only kind='note' rows. Marker-only folders yield count 0;
     # mixed folders yield the note count (markers excluded).
-    Repo.all(
-      from(n in scoped_live(user, vault),
-        where: not is_nil(n.folder_hmac),
-        distinct: n.folder_hmac,
-        select: %{
-          id: n.id,
-          dv: n.dek_version,
-          ct: n.folder_ciphertext,
-          nonce: n.folder_nonce,
-          count:
-            fragment(
-              "COUNT(*) FILTER (WHERE ? = 'note') OVER (PARTITION BY ?)",
-              n.kind,
-              n.folder_hmac
-            )
-        }
-      )
+    #
+    # GROUP BY + any_value(ROW(...)) (one row's fields, kept together) is a
+    # HashAggregate; the old DISTINCT ON + window COUNT sorted every live
+    # row first. 50k notes / 2k folders, PG 18 local: 112 ms vs 257 ms, and
+    # the sort spilled 5.7 MB to disk at the default work_mem.
+    from(n in scoped_live(user, vault),
+      where: not is_nil(n.folder_hmac),
+      group_by: n.folder_hmac,
+      select: {
+        fragment(
+          "any_value(ROW(?, ?, ?, ?))",
+          n.id,
+          n.dek_version,
+          n.folder_ciphertext,
+          n.folder_nonce
+        ),
+        fragment("COUNT(*) FILTER (WHERE ? = 'note')", n.kind)
+      }
     )
+    |> Repo.all()
+    |> Enum.map(fn {{id, dv, ct, nonce}, count} ->
+      # A record's fields skip Ecto's type casting, so the uuid is raw bytes.
+      %{id: Ecto.UUID.load!(id), dv: dv, ct: ct, nonce: nonce, count: count}
+    end)
   end
 
   @doc "Decrypts `raw_folder_count_rows/2`'s rows. Pure — no DB access."
@@ -6182,7 +6383,8 @@ defmodule Engram.Notes do
   # target — a "derived" parent exists purely as a path. `folder == ""` is root.
   def batch_move_folders(user, vault, marker_ids, {:path, folder})
       when is_list(marker_ids) and is_binary(folder) do
-    with {:ok, user} <- Crypto.ensure_user_dek(user),
+    with {:ok, folder} <- PathSanitizer.sanitize_target(folder),
+         {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, dek} <- Crypto.get_dek(user) do
       reduce_move_folders(user, vault, marker_ids, folder, dek)
     end
@@ -6505,9 +6707,9 @@ defmodule Engram.Notes do
     # The cost that comment was guarding against is real but small, and
     # `with_tenant/2` is RE-ENTRANT for the same tenant: the REST upsert
     # caller is already inside the block opened in `upsert_note/4`, so it pays
-    # nothing. Only the CRDT genesis caller opens a transaction here, and that
-    # one is deliberately post-commit with no tenant in force — which is
-    # precisely why it was the broken caller.
+    # nothing. The CRDT genesis caller used to run it post-commit with no
+    # tenant in force, which is precisely why it was the broken caller; it now
+    # probes inside its own row transaction too (probe_vault_populated/2).
     ids =
       Repo.with_tenant!(user.id, fn ->
         Repo.all(from(n in populating_notes(user, vault), select: n.id, limit: 2))

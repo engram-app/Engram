@@ -111,7 +111,7 @@ defmodule Engram.IndexingIdentityResolutionTest do
 
   # Counts Ecto queries against the `users` source for the duration of `fun`.
   # Ecto tags each query with its schema source, which is what the prod
-  # `sum by (source) (rate(ecto_repo_query_total_time_milliseconds_count))`
+  # `sum by (source) (rate(engram_prom_ex_ecto_repo_query_source_queries_total))`
   # measurement keys on — so this test counts the same thing the dashboard does.
   defp count_user_queries(fun), do: count_queries("users", fun)
 

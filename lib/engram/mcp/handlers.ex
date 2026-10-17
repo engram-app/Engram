@@ -239,6 +239,13 @@ defmodule Engram.MCP.Handlers do
   def handle("create_folder", user, vault, %{"folder" => folder}) when is_binary(folder) do
     case Notes.create_folder_marker(user, vault, folder) do
       {:ok, marker} ->
+        # Same event as POST /folders: an empty folder has no note_changed, so
+        # this is the only way connected devices learn of it.
+        EngramWeb.BatchOps.broadcast_batch(user, vault, "folders.batch", %{
+          op: "create",
+          folder: marker.folder
+        })
+
         {:ok, "Created folder: #{marker.folder}", %{"folder" => marker.folder}}
 
       {:error, :root_folder_not_marker} ->
@@ -541,6 +548,9 @@ defmodule Engram.MCP.Handlers do
       {:error, :conflict} ->
         {:error, "Folder rename conflict: #{new_folder} already exists"}
 
+      {:error, :invalid_path} ->
+        {:error, "new_folder must be a non-empty path"}
+
       # Catch-all (Bug 2): Folders.rename can surface a non-:conflict
       # {:error, reason} (e.g. a crypto failure in the attachment leg). Without
       # this clause it CaseClauseError'd → 500.
@@ -571,6 +581,14 @@ defmodule Engram.MCP.Handlers do
     else
       case Engram.Folders.delete(user, vault, folder, recursive: recursive) do
         {:ok, %{notes: n, attachments: a}} ->
+          # Same event as DELETE /folders/*path, on every success (0/0 included,
+          # see FoldersController.delete_recursive/4): a cleared empty-folder
+          # marker reports no counts, and peers only re-poll /folders/explicit.
+          EngramWeb.BatchOps.broadcast_batch(user, vault, "folders.batch", %{
+            op: "delete",
+            folder: folder
+          })
+
           counts =
             if n == 0 and a == 0, do: "", else: " (#{n} notes, #{a} attachments removed)"
 

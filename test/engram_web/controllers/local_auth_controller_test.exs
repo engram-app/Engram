@@ -291,6 +291,30 @@ defmodule EngramWeb.LocalAuthControllerTest do
       assert response(conn2, 204)
       assert conn2.resp_cookies["refresh_token"].max_age == 0
     end
+
+    # GET /api/vault/tree is `private, no-cache` with an ETag, so the browser
+    # keeps the signed-out user's tree in its HTTP cache. Logout clears it.
+    test "tells the browser to drop its HTTP cache", %{conn: conn} do
+      conn = post(conn, "/api/auth/logout")
+      assert response(conn, 204)
+      assert get_resp_header(conn, "clear-site-data") == [~s("cache")]
+    end
+  end
+
+  # Clerk signs out client-side, so the SPA calls this to get the same header.
+  describe "POST /api/auth/clear-cache" do
+    test "answers 204 with Clear-Site-Data, no session needed", %{conn: conn} do
+      conn = post(conn, "/api/auth/clear-cache")
+      assert response(conn, 204)
+      assert get_resp_header(conn, "clear-site-data") == [~s("cache")]
+    end
+
+    test "is served under the clerk provider too", %{conn: conn} do
+      Application.put_env(:engram, :auth_provider, :clerk)
+
+      conn = post(conn, "/api/auth/clear-cache")
+      assert get_resp_header(conn, "clear-site-data") == [~s("cache")]
+    end
   end
 
   describe "RequireLocalAuth plug" do

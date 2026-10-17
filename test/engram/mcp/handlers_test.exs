@@ -100,6 +100,51 @@ defmodule Engram.MCP.HandlersTest do
     end
   end
 
+  describe "rename_folder handler: target sanitizing" do
+    for {input, expected} <- [
+          {"../evil", "evil"},
+          {"/abs", "abs"},
+          {"a/../../b", "a/b"},
+          {"nul\0byte", "nulbyte"},
+          {"%2e%2e/enc", "enc"}
+        ] do
+      test "#{inspect(input)} -> #{expected}", %{user: user, vault: vault} do
+        {:ok, _} =
+          Attachments.upsert_attachment(user, vault, %{
+            "path" => "Docs/a.png",
+            "content_base64" => Base.encode64("x")
+          })
+
+        {:ok, n} = Notes.upsert_note(user, vault, %{path: "Docs/n.md"}, actor: "api")
+
+        assert {:ok, _msg, _} =
+                 Handlers.handle("rename_folder", user, vault, %{
+                   "old_folder" => "Docs",
+                   "new_folder" => unquote(input)
+                 })
+
+        user = Engram.Repo.reload!(user)
+        {:ok, note} = Notes.get_note_by_id(user, vault, n.id)
+        assert note.path == unquote(expected) <> "/n.md"
+        {:ok, metas} = Attachments.list_attachments(user, vault)
+        assert Enum.map(metas, & &1.path) == [unquote(expected) <> "/a.png"]
+      end
+    end
+
+    test "a target that cleans to empty is refused", %{user: user, vault: vault} do
+      {:ok, n} = Notes.upsert_note(user, vault, %{path: "Docs/n.md"}, actor: "api")
+
+      assert {:error, _} =
+               Handlers.handle("rename_folder", user, vault, %{
+                 "old_folder" => "Docs",
+                 "new_folder" => ".."
+               })
+
+      {:ok, note} = Notes.get_note_by_id(Engram.Repo.reload!(user), vault, n.id)
+      assert note.path == "Docs/n.md"
+    end
+  end
+
   describe "move_attachment handler" do
     test "moves a single attachment", %{user: user, vault: vault} do
       {:ok, _} =
@@ -317,6 +362,28 @@ defmodule Engram.MCP.HandlersTest do
 
     test "registered as a tool",
       do: assert({:ok, %{name: "get_notes"}} = Tools.get("get_notes"))
+  end
+
+  describe "create_folder handler: path sanitizing" do
+    for {input, expected} <- [
+          {"../x", "x"},
+          {"/abs", "abs"},
+          {"a/../../b", "a/b"},
+          {"nul\0byte", "nulbyte"},
+          {"%2e%2e/enc", "enc"}
+        ] do
+      test "stores #{inspect(input)} as #{expected}", %{user: user, vault: vault} do
+        assert {:ok, _msg, %{"folder" => unquote(expected)}} =
+                 Handlers.handle("create_folder", user, vault, %{"folder" => unquote(input)})
+
+        {:ok, names} = Notes.list_explicit_folders(Engram.Repo.reload!(user), vault)
+        assert names == [unquote(expected)]
+      end
+    end
+
+    test "a folder that sanitizes to the root is refused", %{user: user, vault: vault} do
+      assert {:error, _} = Handlers.handle("create_folder", user, vault, %{"folder" => ".."})
+    end
   end
 
   describe "delete_folder handler" do

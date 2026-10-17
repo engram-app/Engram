@@ -19,29 +19,14 @@ defmodule Engram.PromEx.SearchTest do
       assert Enum.any?(metrics, fn m -> Enum.at(m.name, 2) == :search end)
     end
 
-    test "declares distribution + counter on [:engram, :search, :request, :stop]" do
+    # Duration and result-count histograms had no reader; search latency is
+    # in Tempo. The request counter stays.
+    test "declares only a counter on [:engram, :search, :request, :stop]" do
       metrics =
         SearchPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
-      target = [:engram, :search, :request, :stop]
-
-      assert Enum.any?(metrics, fn m ->
-               match?(%Telemetry.Metrics.Distribution{}, m) and m.event_name == target
-             end)
-
-      assert Enum.any?(metrics, fn m ->
-               match?(%Telemetry.Metrics.Counter{}, m) and m.event_name == target
-             end)
-    end
-
-    test "declares a result_count distribution" do
-      metrics =
-        SearchPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
-
-      assert Enum.any?(metrics, fn m ->
-               match?(%Telemetry.Metrics.Distribution{}, m) and m.measurement == :result_count
-             end),
-             "Must expose result count as its own distribution measurement"
+      assert [%Telemetry.Metrics.Counter{tags: [:status, :cross_vault, :rerank]}] =
+               Enum.filter(metrics, &(&1.event_name == [:engram, :search, :request, :stop]))
     end
 
     test "sums dropped hits from [:engram, :search, :hit_dropped]" do

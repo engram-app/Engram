@@ -52,6 +52,11 @@ defmodule EngramWeb.FallbackController do
     conn |> put_status(409) |> json(%{error: "conflict", item_id: id})
   end
 
+  # A rename/move target that sanitizes to nothing (PathSanitizer.sanitize_target/1).
+  def call(conn, {:error, :invalid_path}) do
+    conn |> put_status(422) |> json(%{error: "invalid_path"})
+  end
+
   def call(conn, {:error, :last_admin}) do
     conn |> put_status(409) |> json(%{error: "last_admin"})
   end

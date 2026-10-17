@@ -3,10 +3,10 @@ defmodule Engram.PromEx.Native do
   PromEx plugin for native (Rust NIF) code, the exported half of the NIF
   memory standard (see `Engram.Native`):
 
-    * `[:engram, :nif, :call, :stop]`, per call: duration and NATIVE peak
-      bytes, tagged by `:nif` and `:dirty` (which scheduler ran it). The peak
-      is the NIF's analogue of a process's heap high-water mark, which no
-      BEAM metric can see. Envelope calls that stay inline and write or read
+    * `[:engram, :nif, :call, :stop]`, per call: a call count and summed
+      duration, tagged by `:nif` and `:dirty` (which scheduler ran it). The
+      event also carries native peak and input bytes; they are not exported
+      (series cost with no reader). Envelope calls that stay inline and write or read
       format 0 (seal `:none` up to 16 KB, a successful inline open) emit no
       event, so the envelope series cover format-1 seals (`dirty="false"`
       for small inline ones) and every dirty seal or open.
@@ -37,27 +37,19 @@ defmodule Engram.PromEx.Native do
     prefix = PromEx.metric_prefix(Keyword.fetch!(opts, :otp_app), :nif)
 
     Event.build(:engram_nif_event_metrics, [
-      distribution(prefix ++ [:call, :duration, :milliseconds],
+      counter(prefix ++ [:call, :total],
         event_name: @call_event,
-        measurement: :duration,
-        description: "NIF call wall time.",
-        tags: [:nif, :dirty],
-        unit: {:native, :millisecond},
-        reporter_options: [buckets: [1, 5, 25, 100, 250, 1_000, 5_000]]
+        description: "NIF calls.",
+        tags: [:nif, :dirty]
       ),
-      distribution(prefix ++ [:call, :native_peak, :bytes],
+      # Integer microseconds, not a histogram: Peep rounds each Sum sample,
+      # and most NIF calls are sub-millisecond. Average = sum / count.
+      sum(prefix ++ [:call, :duration, :microseconds, :total],
         event_name: @call_event,
-        measurement: :native_peak_bytes,
-        description: "Peak Rust heap bytes allocated during one NIF call.",
-        tags: [:nif, :dirty],
-        reporter_options: [
-          buckets: [65_536, 1_048_576, 8_388_608, 33_554_432, 134_217_728, 536_870_912]
-        ]
-      ),
-      sum(prefix ++ [:call, :input, :bytes],
-        event_name: @call_event,
-        measurement: :input_bytes,
-        description: "Bytes handed to NIFs.",
+        measurement: fn %{duration: native} ->
+          System.convert_time_unit(native, :native, :microsecond)
+        end,
+        description: "NIF call wall time, microseconds.",
         tags: [:nif, :dirty]
       )
     ])
@@ -123,7 +115,8 @@ defmodule Engram.PromEx.Native do
   @doc "Polled emitter for `[:engram, :vm, :native_memory]`."
   @spec execute_native_memory() :: :ok
   def execute_native_memory do
-    snapshot = Engram.Native.memory_snapshot()
-    :telemetry.execute(@memory_event, Map.reject(snapshot, fn {_k, v} -> is_nil(v) end), %{})
+    # nil (no /proc RSS) is passed through, not dropped: the Peep reporter
+    # skips a nil measurement but records 1 for an absent key.
+    :telemetry.execute(@memory_event, Engram.Native.memory_snapshot(), %{})
   end
 end

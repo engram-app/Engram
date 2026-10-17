@@ -351,6 +351,9 @@ defmodule EngramWeb.Router do
     # Public: explain why a just-completed sign-up was rejected (multi-account
     # block deletes the Clerk user, so there is no session to authenticate with).
     get "/auth/signup-rejection", SignupRejectionController, :show
+
+    # Public: Clear-Site-Data for a Clerk sign-out (the local logout sets it itself).
+    post "/auth/clear-cache", ClearCacheController, :create
   end
 
   # Local auth endpoints — always compiled, guarded at runtime by RequireLocalAuth plug
@@ -656,6 +659,7 @@ defmodule EngramWeb.Router do
     get "/folders/list", FoldersController, :list
     get "/folders/by-id/:id/notes", FoldersController, :list_notes
     post "/folders/rename", FoldersController, :rename
+    post "/folders/batch", FoldersController, :batch_create
     post "/folders", FoldersController, :create
     get "/folders", FoldersController, :index
     delete "/folders/*path", FoldersController, :delete

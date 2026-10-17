@@ -8,11 +8,6 @@ defmodule Engram.PromEx.Crypto do
       `%{outcome: :hit | :miss}`. A miss pairs with a provider unwrap
       (network RPC under AwsKms), so the hit/miss ratio is the leading
       indicator of unwrap cost on the read path.
-    * `[:engram, :crypto, :decrypt_batch]` — `%{count: rows,
-      duration_us: µs}`, metadata `%{kind: :notes | :manifest_notes |
-      :manifest_attachments}`. Sizes the per-request decrypt fan-out on
-      list endpoints + the sync manifest.
-
     * `[:engram, :envelope, :compression_gate]`: `%{allowed: 0 | 1}`,
       emitted by `Engram.Crypto.CompressionGate` on every verdict change.
     * `[:engram, :envelope, :compression_gate, :reason]`: `%{current: 0 | 1}`,
@@ -28,9 +23,6 @@ defmodule Engram.PromEx.Crypto do
   Metrics:
 
     * `engram_prom_ex_crypto_dek_cache_total` — tags `[:outcome]`.
-    * `engram_prom_ex_crypto_decrypt_batch_duration_microseconds` —
-      tags `[:kind]`.
-    * `engram_prom_ex_crypto_decrypt_batch_rows` — tags `[:kind]`.
     * `engram_prom_ex_crypto_compression_gate_allowed`: 1 while this node
       may write compressed envelopes, 0 while the cluster gate blocks it.
       Untagged: the last value is the verdict. 0 on every node for over an
@@ -59,7 +51,6 @@ defmodule Engram.PromEx.Crypto do
   use PromEx.Plugin
 
   @dek_cache_event [:engram, :crypto, :dek_cache]
-  @decrypt_batch_event [:engram, :crypto, :decrypt_batch]
   @gate_event [:engram, :envelope, :compression_gate]
   @gate_reason_event [:engram, :envelope, :compression_gate, :reason]
   @kms_attempt_event [:ex_aws, :request, :stop]
@@ -78,26 +69,6 @@ defmodule Engram.PromEx.Crypto do
           event_name: @dek_cache_event,
           description: "DekCache lookups by outcome (hit | miss).",
           tags: [:outcome]
-        ),
-        distribution(
-          metric_prefix ++ [:decrypt_batch, :duration, :microseconds],
-          event_name: @decrypt_batch_event,
-          measurement: :duration_us,
-          description: "Batch decrypt wall-time per kind.",
-          reporter_options: [
-            buckets: [100, 500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000, 1_000_000]
-          ],
-          tags: [:kind]
-        ),
-        distribution(
-          metric_prefix ++ [:decrypt_batch, :rows],
-          event_name: @decrypt_batch_event,
-          measurement: :count,
-          description: "Rows decrypted per batch, per kind.",
-          reporter_options: [
-            buckets: [1, 10, 50, 100, 500, 1_000, 5_000, 10_000]
-          ],
-          tags: [:kind]
         ),
         last_value(
           metric_prefix ++ [:compression_gate, :allowed],

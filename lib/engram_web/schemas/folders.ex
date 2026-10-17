@@ -90,6 +90,51 @@ defmodule EngramWeb.Schemas.CreateFolderRequest do
   })
 end
 
+defmodule EngramWeb.Schemas.BatchCreateFoldersRequest do
+  @moduledoc false
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "BatchCreateFoldersRequest",
+    type: :object,
+    properties: %{folders: %Schema{type: :array, items: %Schema{type: :string}, maxItems: 500}},
+    required: [:folders],
+    example: %{"folders" => ["Projects/Engram", "Archive"]}
+  })
+end
+
+defmodule EngramWeb.Schemas.BatchCreateFoldersResponse do
+  @moduledoc false
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "BatchCreateFoldersResponse",
+    type: :object,
+    properties: %{
+      folders: %Schema{
+        type: :array,
+        items: %Schema{
+          type: :object,
+          properties: %{
+            input: %Schema{type: :string, description: "The folder as sent"},
+            name: %Schema{type: :string, description: "The folder as stored (sanitized)"},
+            count: %Schema{type: :integer}
+          },
+          required: [:input, :name]
+        }
+      },
+      rejected: %Schema{
+        type: :array,
+        items: %Schema{type: :string},
+        description: "Inputs that sanitize to the vault root; nothing was created for them"
+      }
+    },
+    required: [:folders, :rejected]
+  })
+end
+
 defmodule EngramWeb.Schemas.FolderResponse do
   @moduledoc false
   require OpenApiSpex

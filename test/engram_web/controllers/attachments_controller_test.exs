@@ -1125,6 +1125,57 @@ defmodule EngramWeb.AttachmentsControllerTest do
       body = json_response(conn, 200)
       assert body["moved"] == 1
     end
+
+    test "sanitizes the target folder", %{conn: conn, user: user, vault: vault} do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "a.png",
+          "content_base64" => Base.encode64("A"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
+      conn
+      |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
+      |> post("/api/attachments/batch-move", %{
+        "paths" => ["a.png"],
+        "target_folder" => "%2e%2e/img"
+      })
+      |> json_response(200)
+
+      {:ok, metas} = Attachments.list_attachments(Engram.Repo.reload!(user), vault)
+      assert Enum.map(metas, & &1.path) == ["img/a.png"]
+    end
+
+    test "a target that cleans to empty is 422 and moves nothing", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "keep/a.png",
+          "content_base64" => Base.encode64("A"),
+          "mime_type" => "image/png",
+          "mtime" => 1.0
+        })
+
+      for bad <- ["..", "%2e%2e", "./.."] do
+        body =
+          conn
+          |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
+          |> post("/api/attachments/batch-move", %{
+            "paths" => ["keep/a.png"],
+            "target_folder" => bad
+          })
+          |> json_response(422)
+
+        assert body["error"] == "invalid_path"
+      end
+
+      {:ok, metas} = Attachments.list_attachments(Engram.Repo.reload!(user), vault)
+      assert Enum.map(metas, & &1.path) == ["keep/a.png"]
+    end
   end
 
   describe "POST /attachments/batch-delete" do

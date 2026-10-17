@@ -182,6 +182,72 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
     end
   end
 
+  # A pass reads every entry's note once, then renames from that snapshot's
+  # path. If the note moved away and ANOTHER note took its old path in between,
+  # a rename by path would move the wrong note. Simulated by moving A and
+  # creating C at A's old path right after the snapshot read lands.
+  # Peep records 1 for a measurement KEY the event omits (it assumes a
+  # counter), so every early-exit emit must carry every key a PromEx metric
+  # reads off this event, as 0, or a no-op run reports one released claim.
+  describe "telemetry measurements" do
+    test "an early-exit run carries every measurement the metrics read", ctx do
+      required =
+        for %{event_name: [:engram, :crdt, :index_projection], measurement: m} = metric <-
+              Engram.PromEx.__metrics_collector_name__()
+              |> Peep.Persistent.fetch()
+              |> Peep.Persistent.ids_to_metrics()
+              |> Map.values(),
+            # A counter counts events and reads no measurement.
+            not is_struct(metric, Telemetry.Metrics.Counter),
+            is_atom(m),
+            uniq: true,
+            do: m
+
+      assert :released in required
+
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :crdt, :index_projection]])
+      assert :ok = run(ctx)
+
+      assert_receive {[:engram, :crdt, :index_projection], ^ref, measurements,
+                      %{phase: :no_snapshot}}
+
+      assert required -- Map.keys(measurements) == []
+      assert measurements.released == 0
+    end
+  end
+
+  describe "a snapshot-stale path" do
+    test "never moves a different note that took the old path", ctx do
+      a = note(ctx, "P/a.md")
+      seed_index(ctx, [{"R/a.md", a.id}])
+      test_pid = self()
+      handler_id = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        handler_id,
+        [:engram, :repo, :query],
+        fn _event, _measurements, %{query: q}, _config ->
+          if self() == test_pid and q =~ ~s("kind" = 'note') and q =~ "ANY(" and
+               Process.put(:stale_snapshot_injected, true) == nil do
+            {:ok, _} = Notes.rename_note(ctx.user, ctx.vault, "P/a.md", "Q/a.md", index: :skip)
+            send(test_pid, {:intruder, note(ctx, "P/a.md")})
+          end
+        end,
+        nil
+      )
+
+      try do
+        ExUnit.CaptureLog.capture_log(fn -> assert :ok = run(ctx) end)
+      after
+        :telemetry.detach(handler_id)
+      end
+
+      assert_received {:intruder, c}
+      assert path_of(ctx, c.id) == "P/a.md"
+      assert path_of(ctx, a.id) == "Q/a.md"
+    end
+  end
+
   describe "never acts on absence" do
     # THE safety property. In prod today the index is empty for every vault,
     # because no client writes it yet. A projection that reconciled by absence
@@ -666,6 +732,56 @@ defmodule Engram.Workers.ProjectVaultIndexTest do
       # `released` must survive into the final report, not get overwritten by
       # pass 2's outcome (which never touches the already-released entry).
       assert_receive {:projection, %{unresolved: 0, released: 1}, %{phase: :converged}}, 2_000
+    end
+  end
+
+  # Prod 2026-10-16: 638 runs/day at ~900 ms each, almost all no-ops. Every
+  # entry was a separate tenant transaction plus a full-row fetch and a CONTENT
+  # decrypt, though only the path is ever read. One meta query per pass is the
+  # budget; this pins that it does not scale with the entry count.
+  describe "query budget" do
+    test "a no-op run reads the notes once, without content, however many entries", ctx do
+      notes = for i <- 1..8, do: note(ctx, "budget/#{i}.md")
+      ghosts = for i <- 1..4, do: {"ghost/#{i}.md", Ecto.UUID.generate()}
+      seed_index(ctx, Enum.map(notes, &{&1.path, &1.id}) ++ ghosts)
+
+      ref = make_ref()
+      test_pid = self()
+
+      :telemetry.attach(
+        {__MODULE__, ref},
+        [:engram, :repo, :query],
+        fn _event, _measure, meta, _cfg ->
+          if meta[:source] == "notes", do: send(test_pid, {ref, meta[:query]})
+        end,
+        nil
+      )
+
+      try do
+        assert :ok = run(ctx)
+      after
+        :telemetry.detach({__MODULE__, ref})
+      end
+
+      queries = drain_queries(ref, [])
+
+      assert length(queries) == 1,
+             "expected one bulk notes read for 12 entries, got #{length(queries)}"
+
+      refute Enum.any?(queries, &String.contains?(&1, "content_ciphertext")),
+             "projection only needs the path; it must not fetch note content"
+
+      for n <- notes, do: assert(path_of(ctx, n.id) == n.path)
+    end
+  end
+
+  # Not a zero timeout: a handler's send/2 can still be in flight, and for a
+  # budget assertion an undercount is a false pass.
+  defp drain_queries(ref, acc) do
+    receive do
+      {^ref, query} -> drain_queries(ref, [query | acc])
+    after
+      100 -> acc
     end
   end
 end

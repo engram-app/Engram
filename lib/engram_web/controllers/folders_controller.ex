@@ -156,6 +156,65 @@ defmodule EngramWeb.FoldersController do
     conn |> put_status(422) |> json(%{error: "folder parameter is required"})
   end
 
+  operation(:batch_create,
+    operation_id: "folders-batch-create",
+    summary: "Create many folders",
+    description:
+      "Creates explicit folder markers for up to 500 folders in one transaction and returns 201 " <>
+        "with one entry per distinct input: the `input` as sent and the `name` it was stored " <>
+        "under. Idempotent per folder like `POST /folders`. Paths are sanitized (traversal " <>
+        "segments and illegal characters stripped); inputs that sanitize to the root are listed " <>
+        "in `rejected` and create nothing. More than 500 entries is rejected with 422.",
+    tags: ["Folders"],
+    request_body:
+      {"Folder paths", "application/json", Schemas.BatchCreateFoldersRequest, required: true},
+    responses: [
+      created: {"Created", "application/json", Schemas.BatchCreateFoldersResponse},
+      unprocessable_entity:
+        {"Invalid input or too many folders", "application/json", Schemas.Error}
+    ]
+  )
+
+  def batch_create(conn, %{"folders" => folders}) when is_list(folders) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    with true <- Enum.all?(folders, &is_binary/1),
+         {:ok, %{folders: entries, rejected: rejected}} <-
+           Notes.create_folder_markers(user, vault, folders) do
+      # One event for the batch, not N, naming only folders this call created
+      # or undeleted: an all-existing batch (a reconnect re-seed) changes
+      # nothing, so it must not make every peer re-poll /folders/explicit.
+      created = for %{created: true, name: name} <- entries, uniq: true, do: name
+
+      if created != [] do
+        BatchOps.broadcast_batch(user, vault, "folders.batch", %{op: "create", folders: created})
+      end
+
+      # `input` echoes what the client sent and `name` is what was stored, so a
+      # client can map a folder the sanitizer rewrote to its server name.
+      conn
+      |> put_status(:created)
+      |> json(%{
+        folders: Enum.map(entries, &%{input: &1.input, name: &1.name, count: 0}),
+        rejected: rejected
+      })
+    else
+      false ->
+        conn |> put_status(422) |> json(%{error: "folders must be strings"})
+
+      {:error, :batch_too_large} ->
+        conn |> put_status(422) |> json(%{error: "batch_too_large", max: 500})
+
+      {:error, reason} ->
+        conn |> put_status(500) |> json(%{error: format_error(reason)})
+    end
+  end
+
+  def batch_create(conn, _params) do
+    conn |> put_status(422) |> json(%{error: "folders parameter must be a list"})
+  end
+
   operation(:delete,
     operation_id: "folders-delete",
     summary: "Delete a folder by path",
@@ -267,7 +326,8 @@ defmodule EngramWeb.FoldersController do
     responses: [
       ok: {"Renamed", "application/json", Schemas.FolderRenameResponse},
       not_found: {"No such folder", "application/json", Schemas.Error},
-      conflict: {"Target exists", "application/json", Schemas.Error}
+      conflict: {"Target exists", "application/json", Schemas.Error},
+      unprocessable_entity: {"Target path cleans to nothing", "application/json", Schemas.Error}
     ]
   )
 
@@ -368,12 +428,14 @@ defmodule EngramWeb.FoldersController do
       ok: {"Moved count", "application/json", Schemas.MovedCount},
       bad_request: {"Invalid input", "application/json", Schemas.Error},
       not_found: {"Some ids not found", "application/json", Schemas.Error},
-      conflict: {"Conflict", "application/json", Schemas.Error}
+      conflict: {"Conflict", "application/json", Schemas.Error},
+      unprocessable_entity: {"Target path cleans to nothing", "application/json", Schemas.Error}
     ]
   )
 
-  # Re-parent under a folder PATH — works for a derived parent (no marker). The
-  # target path is sanitized downstream by rename_folder, so traversal is safe.
+  # Re-parent under a folder PATH — works for a derived parent (no marker).
+  # Notes.batch_move_folders/4 sanitizes the target (PathSanitizer.sanitize_target/1);
+  # one that cleans to nothing is a 422 via the fallback.
   def batch_move(conn, %{"ids" => ids, "target_parent" => folder})
       when is_list(ids) and is_binary(folder) do
     user = conn.assigns.current_user

@@ -24,6 +24,7 @@ defmodule EngramWeb.VaultTreeController do
   alias Engram.Notes
   alias Engram.Repo
   alias Engram.Vaults
+  alias EngramWeb.ETag
   alias EngramWeb.Schemas
 
   require Logger
@@ -55,35 +56,54 @@ defmodule EngramWeb.VaultTreeController do
     {:ok, raw} =
       Repo.with_tenant(user.id, fn ->
         seq = Vaults.raw_current_seq(vault.id)
+        etag = etag(user, vault, seq)
 
-        case dek_result do
-          {:ok, _dek} ->
+        cond do
+          # Nothing in the tree moved since the client's copy: answer from
+          # the seq read alone, before the note/folder/attachment queries.
+          # A real DEK fault still 500s below rather than hiding behind a 304.
+          dek_usable?(dek_result) and ETag.matches?(conn, etag) ->
+            %{seq: seq, etag: etag, not_modified: true}
+
+          match?({:ok, _}, dek_result) ->
             %{
               seq: seq,
+              etag: etag,
               note_rows: Notes.raw_tree_note_rows(user, vault),
               folder_count_rows: Notes.raw_folder_count_rows(user, vault),
               folder_marker_rows: Notes.raw_folder_marker_rows(user, vault),
               attachment_rows: Attachments.raw_tree_rows(user, vault)
             }
 
-          _ ->
+          true ->
             # No usable DEK: nothing decryptable exists to fetch (:no_dek) or
             # the caller is about to 500 without using rows anyway (any other
             # error) — skip the note/folder/attachment queries entirely.
-            %{seq: seq}
+            %{seq: seq, etag: etag}
         end
       end)
 
-    case dek_result do
-      {:ok, dek} ->
+    conn =
+      conn
+      |> put_resp_header("etag", raw.etag)
+      # Per-user, per-vault body: a browser may keep it but must revalidate
+      # every time, and no shared cache may store it. Not on the Cloudflare
+      # Cache Rule (docs/context/edge-cache-request-varying-headers.md).
+      |> put_resp_header("cache-control", "private, no-cache")
+
+    case {raw, dek_result} do
+      {%{not_modified: true}, _} ->
+        send_resp(conn, 304, "")
+
+      {_, {:ok, dek}} ->
         render_tree(conn, raw, dek, user)
 
-      {:error, :no_dek} ->
+      {_, {:error, :no_dek}} ->
         # Brand-new user, zero writes yet: every upsert provisions a DEK, so
         # no DEK means nothing encrypted exists to render.
         json(conn, empty_tree(raw.seq))
 
-      {:error, reason} ->
+      {_, {:error, reason}} ->
         # Anything else (:unrecognised_blob, a propagated unwrap_dek/2
         # failure) is a real crypto fault, not "no notes yet" — rendering an
         # empty tree here would tell the user their vault is gone when it
@@ -101,6 +121,23 @@ defmodule EngramWeb.VaultTreeController do
         raise "vault tree: DEK unavailable (#{Crypto.format_dek_error(reason)})"
     end
   end
+
+  # Every write to a note, folder marker or attachment row takes a fresh seq
+  # from vaults.change_seq (Vaults.next_seq!/1), the same invariant the sync
+  # manifest's `since_seq` short-circuit relies on, so the seq alone tracks
+  # the payload. Writes that skip it (DEK rotation, AAD rebind) re-encrypt
+  # the same plaintext and change nothing the tree shows. user and vault ids
+  # keep a tag unusable against another tree (two fresh vaults share seq 0);
+  # the release version retires every tag when the payload shape changes.
+  defp etag(user, vault, seq) do
+    vsn = Application.spec(:engram, :vsn)
+    hash = :crypto.hash(:sha256, "#{user.id}:#{vault.id}:#{seq}:#{vsn}")
+    ~s(") <> Base.url_encode64(binary_part(hash, 0, 16), padding: false) <> ~s(")
+  end
+
+  defp dek_usable?({:ok, _}), do: true
+  defp dek_usable?({:error, :no_dek}), do: true
+  defp dek_usable?(_), do: false
 
   defp empty_tree(current_seq) do
     %{folders: [], notes: [], attachments: [], change_seq: current_seq}

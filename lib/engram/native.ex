@@ -64,7 +64,9 @@ defmodule Engram.Native do
     {:json_decode, :json_decode_nif, :json_decode_dirty_nif, 1},
     {:envelope_seal, :envelope_seal_nif, :envelope_seal_dirty_nif, 4},
     {:envelope_open, :envelope_open_nif, :envelope_open_dirty_nif, 4},
-    {:envelope_open_many, :envelope_open_many_nif, :envelope_open_many_dirty_nif, 3}
+    {:envelope_open_many, :envelope_open_many_nif, :envelope_open_many_dirty_nif, 3},
+    {:b64_decode, :b64_decode_nif, :b64_decode_dirty_nif, 1},
+    {:b64_encode, :b64_encode_nif, :b64_encode_dirty_nif, 1}
   ]
 
   # NIFs reached only through a wrapper below that fixes their schedule.
@@ -434,6 +436,26 @@ defmodule Engram.Native do
       :error -> :error
       plain -> {:ok, plain}
     end
+  end
+
+  # Base64 for the CRDT channel's frames, a drop-in for `Base.decode64/1` and
+  # `Base.encode64/1` (standard alphabet, padding required; same answers, an
+  # invalid string is `:error`). Like the envelope pair, an inline call (up to
+  # @inline_max bytes of input) skips call/4: the per-call event with PromEx
+  # attached costs more than the decode. Larger frames run dirty and emit.
+
+  @doc "`Base.decode64/1`, natively: `{:ok, bytes}` or `:error`."
+  def decode64(b64) when is_binary(b64) do
+    if byte_size(b64) <= @inline_max,
+      do: elem(b64_decode_nif(b64), 0),
+      else: sized(:b64_decode, b64, [b64])
+  end
+
+  @doc "`Base.encode64/1`, natively."
+  def encode64(bytes) when is_binary(bytes) do
+    if byte_size(bytes) <= @inline_max,
+      do: elem(b64_encode_nif(bytes), 0),
+      else: sized(:b64_encode, bytes, [bytes])
   end
 
   # Every NIF entry point goes through here: one event shape for all of them,

@@ -266,7 +266,7 @@ defmodule Engram.Notes.CrdtPersistence do
       # omit the key rather than ship "seq" => nil to the behind-detector.
       payload = %{
         "note_id" => note_id,
-        "b64" => Base.encode64(update),
+        "b64" => Engram.Native.encode64(update),
         "head" => CrdtTransport.head_marker(doc)
       }
 

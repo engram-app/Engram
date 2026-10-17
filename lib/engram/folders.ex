@@ -37,6 +37,7 @@ defmodule Engram.Folders do
   alias Engram.Crypto
   alias Engram.Logger.Metadata
   alias Engram.Notes
+  alias Engram.Notes.PathSanitizer
   alias Engram.Repo
   alias Engram.Sync.Broadcast
 
@@ -82,12 +83,16 @@ defmodule Engram.Folders do
 
   @spec rename(map(), map(), String.t(), String.t()) :: {:ok, counts()} | {:error, term()}
   def rename(user, vault, old_folder, new_folder) do
-    atomic(fn ->
-      with {:ok, notes} <- Notes.rename_folder(user, vault, old_folder, new_folder),
-           {:ok, atts} <- Attachments.rename_folder(user, vault, old_folder, new_folder) do
-        {:ok, %{notes: notes, attachments: atts}}
-      end
-    end)
+    # Sanitize the target once here: it is the only entry for REST and MCP
+    # folder renames, and both legs below would otherwise write it verbatim.
+    with {:ok, new_folder} <- PathSanitizer.sanitize_target(new_folder) do
+      atomic(fn ->
+        with {:ok, notes} <- Notes.rename_folder(user, vault, old_folder, new_folder),
+             {:ok, atts} <- Attachments.rename_folder(user, vault, old_folder, new_folder) do
+          {:ok, %{notes: notes, attachments: atts}}
+        end
+      end)
+    end
   end
 
   @doc """

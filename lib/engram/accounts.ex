@@ -14,7 +14,13 @@ defmodule Engram.Accounts do
 
   @api_key_prefix "engram_"
 
-  def get_user!(id), do: Repo.get!(User, id, skip_tenant_check: true)
+  def get_user!(id), do: get_user_uncached(id) || raise(Ecto.NoResultsError, queryable: User)
+
+  @doc """
+  A fresh `users` read (no cache), nil when the user is gone. For a gate that
+  must see live state, e.g. `RotationGate.check_user/1` on a worker's user.
+  """
+  def get_user_uncached(id), do: Repo.get(User, id, skip_tenant_check: true)
 
   @doc """
   Cached (`:user`, evicted by the `users_changed` trigger on any UPDATE or

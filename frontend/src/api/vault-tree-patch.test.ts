@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { VaultTree } from "./queries";
 import {
+	applyAttachmentEvents,
 	applyNoteEvents,
 	isUnder,
 	moveFolders,
@@ -257,6 +258,44 @@ describe("movesAcrossFolders", () => {
 				{ kind: "delete", id: "n3", path: "Archive/2023/old.md" },
 			]),
 		).toBe(false);
+	});
+});
+
+describe("applyAttachmentEvents", () => {
+	const tree: VaultTree = { folders: [], notes: [], attachments: [att("a1", "docs/pic.png")] };
+	const meta = { mime_type: "image/jpeg", size_bytes: 9, mtime: 5 };
+
+	it("updates a known path in place, keeping its id", () => {
+		const next = applyAttachmentEvents(tree, [{ kind: "upsert", path: "docs/pic.png", ...meta }]);
+		expect(next?.attachments).toEqual([{ ...att("a1", "docs/pic.png"), ...meta }]);
+	});
+
+	it("removes a deleted path", () => {
+		const next = applyAttachmentEvents(tree, [{ kind: "delete", path: "docs/pic.png" }]);
+		expect(next?.attachments).toEqual([]);
+	});
+
+	// An echo of what the tree already shows must not redraw anything.
+	it("returns the SAME tree for an echo or a delete of an unknown path", () => {
+		const a = att("a1", "docs/pic.png");
+		expect(
+			applyAttachmentEvents(tree, [
+				{ kind: "upsert", path: a.path, mime_type: a.mime_type, size_bytes: 1, mtime: 0 },
+				{ kind: "delete", path: "gone.png" },
+			]),
+		).toBe(tree);
+	});
+
+	it("inserts an unknown path when the event carries an id", () => {
+		const row = att("a2", "new.png");
+		const next = applyAttachmentEvents(tree, [{ kind: "upsert", ...row }]);
+		expect(next?.attachments).toContainEqual(row);
+	});
+
+	// The sidebar and the attachment page address rows by id, and a broadcast
+	// carries none: building a row without one would be a broken link.
+	it("returns null for an unknown path with no id", () => {
+		expect(applyAttachmentEvents(tree, [{ kind: "upsert", path: "new.png", ...meta }])).toBeNull();
 	});
 });
 

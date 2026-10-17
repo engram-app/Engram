@@ -152,7 +152,7 @@ defmodule Engram.Notes.CrdtDeliver do
       "note_yjs_update",
       %{
         "note_id" => note_id,
-        "b64" => Base.encode64(state),
+        "b64" => Engram.Native.encode64(state),
         "head" => head,
         "seq" => seq
       },

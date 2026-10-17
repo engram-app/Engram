@@ -103,10 +103,20 @@ defmodule Engram.Crypto do
   @spec aad_for_wrapped_dek(term()) :: binary()
   def aad_for_wrapped_dek(user_id), do: "dek:v1:" <> to_string(user_id)
 
+  @doc """
+  True when a row at `dek_version` binds its ciphertext to its own id (AAD),
+  false for a legacy empty-AAD row. The one rule every decrypt applies, batch
+  or per row. `nil` reads as bound: Erlang term order puts an atom above any
+  integer, which is what the guard below has always done.
+  """
+  @spec aad_bound?(integer() | nil) :: boolean()
+  def aad_bound?(dek_version), do: dek_version >= @row_version_aad_bound
+
   # Returns the AAD to pass at decrypt time for a given row column. Legacy
   # rows return `<<>>`; AAD-bound rows return the constructed bind string.
-  defp decrypt_aad(%_{dek_version: v} = row, table, column) when v >= @row_version_aad_bound,
-    do: aad_for_row(table, column, row.id)
+  defp decrypt_aad(%_{dek_version: v} = row, table, column) do
+    if aad_bound?(v), do: aad_for_row(table, column, row.id), else: <<>>
+  end
 
   defp decrypt_aad(_row, _table, _column), do: <<>>
 

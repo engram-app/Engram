@@ -218,6 +218,7 @@ defmodule EngramWeb.LocalAuthController do
 
     conn
     |> delete_resp_cookie("refresh_token", path: "/api/auth")
+    |> EngramWeb.ClearCacheController.clear_http_cache()
     |> send_resp(204, "")
   end
 

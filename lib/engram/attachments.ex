@@ -778,6 +778,15 @@ defmodule Engram.Attachments do
 
   def batch_move(user, vault, paths, target_folder)
       when is_list(paths) and is_binary(target_folder) do
+    # Each new path is sanitized again in do_move_attachment/4; this is for the
+    # 422, so `..` is refused instead of silently landing in the vault root.
+    case PathSanitizer.sanitize_target(target_folder) do
+      {:ok, target_folder} -> do_batch_move(user, vault, paths, target_folder)
+      {:error, _} = err -> err
+    end
+  end
+
+  defp do_batch_move(user, vault, paths, target_folder) do
     pairs =
       Enum.map(paths, fn old_path ->
         base = Path.basename(old_path)
@@ -1269,7 +1278,7 @@ defmodule Engram.Attachments do
     # :manifest_*). Label is caller-agnostic — per-endpoint attribution comes
     # from the OTel request span, not this tag.
     Crypto.measure_decrypt_batch(:attachments, length(atts), fn ->
-      decrypt_each(atts, user, fn att, meta ->
+      decrypt_batch(atts, user, fn att, meta ->
         # content_hash rides along so the listing a client sweeps before
         # deciding what to push can answer "you already have these bytes"
         # without a per-file round trip. Additive for every other caller.
@@ -1565,19 +1574,43 @@ defmodule Engram.Attachments do
   # vault.
   defp decrypt_metadata(att, user) do
     case Crypto.maybe_decrypt_attachment_fields(att, user) do
-      {:ok, decrypted} ->
-        {:ok,
-         %{
-           path: decrypted.path,
-           mime_type: decrypted.mime_type,
-           size_bytes: decrypted.size_bytes,
-           mtime: decrypted.mtime,
-           updated_at: decrypted.updated_at,
-           deleted_at: decrypted.deleted_at
-         }}
+      {:ok, decrypted} -> {:ok, metadata(decrypted)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
-      {:error, reason} ->
-        {:error, reason}
+  defp metadata(att) do
+    %{
+      path: att.path,
+      mime_type: att.mime_type,
+      size_bytes: att.size_bytes,
+      mtime: att.mtime,
+      updated_at: att.updated_at,
+      deleted_at: att.deleted_at
+    }
+  end
+
+  # One NIF call for the whole list (the same batch the sync manifest uses)
+  # instead of a get_dek + NIF round trip per row. The AAD per row is the one
+  # decrypt_aad/3 builds: the row's own id when dek_version >= the bound
+  # version, empty for legacy rows. Any failure (a corrupt or mis-bound row,
+  # a nil-ciphertext legacy row, no DEK) falls back to decrypt_each/3, so the
+  # skip-and-log behavior and every result stay exactly what they were.
+  # ponytail: one bad row costs the vault the old per-row path on every read;
+  # split the batch around it if that ever shows up in the decrypt metrics.
+  defp decrypt_batch(atts, user, extra) do
+    with true <- Enum.all?(atts, &is_binary(&1.path_ciphertext)),
+         {:ok, dek} <- Crypto.get_dek(user),
+         fields =
+           Enum.map(atts, fn att ->
+             {Ecto.UUID.dump!(att.id), Crypto.aad_bound?(att.dek_version), att.path_ciphertext,
+              att.path_nonce}
+           end),
+         {:ok, paths} <-
+           Envelope.decrypt_many(dek, Crypto.aad_prefix(:attachments, :path), fields) do
+      Enum.zip_with(atts, paths, fn att, path -> extra.(att, metadata(%{att | path: path})) end)
+    else
+      _ -> decrypt_each(atts, user, extra)
     end
   end
 

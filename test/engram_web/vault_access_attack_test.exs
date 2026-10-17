@@ -167,6 +167,7 @@ defmodule EngramWeb.VaultAccessAttackTest do
       {:post, "/api/notes/batch-delete", %{"ids" => [note.id]}},
       {:post, "/api/notes/batch-move", %{"ids" => [note.id], "target_folder" => "Moved"}},
       {:post, "/api/folders", %{"folder" => "NewDir"}},
+      {:post, "/api/folders/batch", %{"folders" => ["NewDir"]}},
       {:post, "/api/folders/rename", %{"old_path" => "Dir", "new_path" => "Dir2"}},
       {:delete, "/api/folders/Dir", %{}},
       {:post, "/api/folders/batch-delete", %{"ids" => [Ecto.UUID.generate()]}},

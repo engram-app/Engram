@@ -206,18 +206,27 @@ defmodule Engram.Workers.ProjectVaultIndex do
     # this at runtime, in a background job.
     vault = %{id: vault_id}
 
-    totals =
-      pass(
-        user,
-        vault,
-        vault_id,
-        entries,
-        @max_passes,
-        %{applied: 0, passes: 0, unknown_note: 0, malformed: 0, released: 0, conflict: 0}
-      )
+    case pass(
+           user,
+           vault,
+           vault_id,
+           entries,
+           @max_passes,
+           %{applied: 0, passes: 0, unknown_note: 0, malformed: 0, released: 0, conflict: 0}
+         ) do
+      {:error, reason} ->
+        Logger.error(
+          "vault index projection failed to read notes, will retry: " <>
+            Metadata.safe_reason(reason),
+          Metadata.with_category(:error, :sync, user_id: user.id, vault_id: vault_id)
+        )
 
-    report(vault_id, user.id, totals, duplicate_ids)
-    :ok
+        {:error, reason}
+
+      totals ->
+        report(vault_id, user.id, totals, duplicate_ids)
+        :ok
+    end
   end
 
   # Two entries naming the SAME note_id cannot both be satisfied, and applying
@@ -254,10 +263,24 @@ defmodule Engram.Workers.ProjectVaultIndex do
     {kept, MapSet.size(duplicates)}
   end
 
+  # ONE metadata read per pass, not one full-row fetch + content decrypt per
+  # entry: prod ran this ~640 times a day at ~900 ms each, almost all no-ops,
+  # and only the path is ever read. Re-read per pass because the previous pass
+  # moved rows. A DEK failure here used to read as "unknown note" per entry;
+  # now it fails the job so Oban retries it.
   defp pass(user, vault, vault_id, entries, passes_left, acc) do
+    ids = for {_path, %{"note_id" => id}} when is_binary(id) <- entries, do: id
+
+    case Notes.get_note_meta_by_ids(user, vault, ids) do
+      {:ok, notes} -> pass(user, vault, vault_id, entries, notes, passes_left, acc)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp pass(user, vault, vault_id, entries, notes, passes_left, acc) do
     {outcome, retry} =
       Enum.reduce(entries, {blank_outcome(), []}, fn entry, {o, retry} ->
-        case apply_entry(user, vault, vault_id, entry) do
+        case apply_entry(user, vault, vault_id, entry, notes) do
           :conflict = result -> {tally(o, result), [entry | retry]}
           result -> {tally(o, result), retry}
         end
@@ -303,9 +326,9 @@ defmodule Engram.Workers.ProjectVaultIndex do
 
   defp tally(outcome, key), do: Map.update!(outcome, key, &(&1 + 1))
 
-  defp apply_entry(user, vault, vault_id, {path, %{"note_id" => note_id}})
+  defp apply_entry(user, vault, vault_id, {path, %{"note_id" => note_id}}, notes)
        when is_binary(path) and is_binary(note_id) do
-    case Notes.get_note_by_id(user, vault, note_id) do
+    case Map.fetch(notes, note_id) do
       {:ok, note} when is_binary(note.path) ->
         # This `==` is what makes the fixpoint loop terminate: without it every
         # already-correct entry counts as progress and the loop always runs to
@@ -353,7 +376,7 @@ defmodule Engram.Workers.ProjectVaultIndex do
     end
   end
 
-  defp apply_entry(user, _vault, vault_id, {_path, _other}) do
+  defp apply_entry(user, _vault, vault_id, {_path, _other}, _notes) do
     # The path is NOT logged, in the message or the metadata. Interpolating it
     # into the message body would ship a plaintext note path to Loki and
     # CloudWatch in the clear — RedactFilter deliberately does not touch
@@ -442,7 +465,10 @@ defmodule Engram.Workers.ProjectVaultIndex do
   end
 
   defp rename(user, vault, note, path, vault_id) do
-    case Notes.rename_note(user, vault, note.path, path, index: :skip) do
+    # `note_id:`: `note.path` is from this pass's snapshot. If the note moved
+    # and another note took that path since, renaming by path alone would move
+    # the other note. Pinned to the id, that race is a :not_found instead.
+    case Notes.rename_note(user, vault, note.path, path, index: :skip, note_id: note.id) do
       {:ok, _note} ->
         :applied
 
@@ -508,8 +534,16 @@ defmodule Engram.Workers.ProjectVaultIndex do
     :ok
   end
 
+  # Every measurement a PromEx metric reads off @event, as 0: Peep records 1
+  # for an ABSENT key, so a missing `released` reported one released claim per
+  # no-op run.
   defp emit(phase) do
-    :telemetry.execute(@event, %{applied: 0, unresolved: 0, passes: 0}, %{phase: phase})
+    :telemetry.execute(
+      @event,
+      %{applied: 0, unresolved: 0, released: 0, passes: 0},
+      %{phase: phase}
+    )
+
     :ok
   end
 end

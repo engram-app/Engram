@@ -62,8 +62,10 @@ Two other rules inherited from `claim_rename/5`:
 - **Claim BEFORE the row transaction.** `Identity.apply_targets/4` calls
   `warn_if_in_transaction/3` — a claim inside a transaction has *"durability
   not guaranteed"*, because the tail-log append rolls back with the transaction
-  while the caller treats the claim as committed. Threading the claim through
-  the existing `with` head keeps it outside without re-indenting the body.
+  while the caller treats the claim as committed. Since 2026-10-16 the row
+  transaction classifies first and, only on the relocate leg, returns
+  `{:claim_first, live}` before writing anything; `run_genesis/2` claims and
+  re-runs it. Every create that claims nothing pays one classify, not two.
 - **The row check is load-bearing, not redundant.** `Identity.claim/3` sees only
   collisions recorded IN THE MAP. In a vault whose notes predate any client
   writing it, essentially every collision is invisible there, so a target held by

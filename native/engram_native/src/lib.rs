@@ -361,6 +361,44 @@ fn json_decode<'a>(env: Env<'a>, text: Binary<'a>) -> NifResult<(Term<'a>, usize
 
 sized_nif!(json_decode, json_decode_nif, json_decode_dirty_nif, <'a>(env, text: Binary<'a>) [text] -> NifResult<(Term<'a>, usize)>);
 
+/// `Base.decode64/1`'s contract: standard alphabet, padding required, no
+/// whitespace, unused trailing bits ignored (`"QR=="` is `"A"`, as in
+/// Elixir). The output is decoded straight into its BEAM binary.
+const B64: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+    &base64::alphabet::STANDARD,
+    base64::engine::GeneralPurposeConfig::new()
+        .with_decode_allow_trailing_bits(true)
+        .with_decode_padding_mode(base64::engine::DecodePaddingMode::RequireCanonical),
+);
+
+/// `{:ok, bytes}` or `:error`, and the call's native peak.
+fn b64_decode<'a>(env: Env<'a>, b64: Binary<'a>) -> NifResult<(Term<'a>, usize)> {
+    use base64::Engine;
+    let mut out = OwnedBinary::new(base64::decoded_len_estimate(b64.len())).ok_or(Error::BadArg)?;
+    let term = match B64.decode_slice(b64.as_slice(), out.as_mut_slice()) {
+        Ok(n) => {
+            out.realloc_or_copy(n);
+            (rustler::types::atom::ok(), out.release(env)).encode(env)
+        }
+        Err(_) => rustler::types::atom::error().encode(env),
+    };
+    Ok((term, 0))
+}
+
+sized_nif!(b64_decode, b64_decode_nif, b64_decode_dirty_nif, <'a>(env, b64: Binary<'a>) [b64] -> NifResult<(Term<'a>, usize)>);
+
+/// `Base.encode64/1`, padded, and the call's native peak.
+fn b64_encode<'a>(env: Env<'a>, bytes: Binary<'a>) -> NifResult<(Binary<'a>, usize)> {
+    use base64::Engine;
+    let len = base64::encoded_len(bytes.len(), true).ok_or(Error::BadArg)?;
+    let mut out = NewBinary::new(env, len);
+    B64.encode_slice(bytes.as_slice(), out.as_mut_slice())
+        .map_err(|_| Error::BadArg)?;
+    Ok((out.into(), 0))
+}
+
+sized_nif!(b64_encode, b64_encode_nif, b64_encode_dirty_nif, <'a>(env, bytes: Binary<'a>) [bytes] -> NifResult<(Binary<'a>, usize)>);
+
 /// `Engram.Parsers.Markdown.parse/2`'s chunks (positions are assigned in
 /// Elixir), and the call's native peak.
 fn chunk<'a>(env: Env<'a>, content: &str, folder: &str, title: &str) -> (Vec<Term<'a>>, usize) {

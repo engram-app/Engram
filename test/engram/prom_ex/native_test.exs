@@ -36,6 +36,16 @@ defmodule Engram.PromEx.NativeTest do
     opts = [otp_app: :engram]
     assert %Event{metrics: metrics} = Native.event_metrics(opts)
     for m <- metrics, do: assert(m.tags == [:nif, :dirty])
+
+    # Count + integer microsecond sum only: no per-call histograms, and no
+    # peak/input bytes (the polled envelope counters carry input volume).
+    assert [
+             %Telemetry.Metrics.Counter{name: [:engram, :prom_ex, :nif, :call, :total]},
+             %Telemetry.Metrics.Sum{
+               name: [:engram, :prom_ex, :nif, :call, :duration, :microseconds, :total]
+             }
+           ] = metrics
+
     assert [%Polling{}, %Polling{}] = Native.polling_metrics(opts)
   end
 end

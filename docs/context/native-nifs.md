@@ -523,6 +523,39 @@ in `cargo test --release` on the loaded dev box: 50k names, 64 ms per search.
 Why not a prefix blind index: see #1925 (leaks prefix structure, no fuzzy,
 truncation guidance makes it decrypt most of the vault anyway).
 
+### Base64 (`b64_decode` / `b64_encode`, 2026-10-16)
+
+`Engram.Native.decode64/1` and `encode64/1` replace `Base.decode64/1` and
+`Base.encode64/1` on the CRDT hot path: `CrdtChannel` frame decode, its
+`crdt_msg`/`crdt_index_msg` pushes and handshake reply, and the
+`note_yjs_update` fanout in `CrdtPersistence` and `CrdtDeliver`. Pyroscope
+had `Base.decode64base!/1` at 72 s flat / 88 s cum per 24h. Crate `base64`
+0.22 with Elixir's exact contract: standard alphabet, padding required, no
+whitespace, unused trailing bits ignored (`"QR=="` is `"A"`; the crate
+rejects that by default), `:error` on bad input. StreamData diffs both on
+random binaries and 20k near-valid strings (`test/engram/native/b64_test.exs`).
+The output is written straight into the BEAM binary, so the peak is 0.
+Inline calls (up to `@inline_max`) skip the per-call event, as the envelope
+does: with PromEx attached it costs more than a 1 KB decode. Not counted in
+the NIF either; add counters if the call volume ever needs a panel.
+
+Same Xeon at load 52 (other agents), `mix run`, us per call, best of 7:
+
+| Bytes | `Base` dec | NIF dec | NIF dirty dec | `Base` enc | NIF enc | NIF dirty enc |
+|---|---|---|---|---|---|---|
+| 3 | 1.6 | 1.9 | 16.7 | 1.5 | 0.5 | 19.7 |
+| 64 | 4.3 | 2.9 | 17.0 | 2.6 | 1.7 | 12.3 |
+| 1 KB | 27.5 | 3.7 | 14.2 | 15.7 | 2.6 | 13.9 |
+| 16 KB | 390 | 61 | 49 | 188 | 26 | 69 |
+| 256 KB | 6,339 | 676 | 528 | 3,210 | 607 | 561 |
+| 4 MB | 95,040 | 6,305 | 5,469 | 49,020 | 5,356 | 5,927 |
+
+`:base64` (OTP 27) was no faster than `Base`. Prod sizes (24h,
+`websocket_frame_bytes_total / frames_total`): inbound `crdt` pushes average
+2.8 KB on the wire, outbound `crdt` pushes 660 B, `sync` broadcasts 9.2 KB.
+`frame_class_b64/1`'s 4-character prefix decode stays on `Base`: at 3 bytes
+the NIF does not win.
+
 ## The memory standard
 
 BEAM tooling (`:erlang.memory/0`, `max_heap_size`, recon_alloc) cannot see a
@@ -539,7 +572,9 @@ following closes part of it:
    threads: **ours must not** (no rayon).
 3. **One telemetry shape for every NIF.** `Engram.Native.call/4` emits
    `[:engram, :nif, :call, :stop]` with `duration`, `native_peak_bytes`,
-   `input_bytes`, metadata `%{nif: atom}`. `Engram.PromEx.Native` exports it.
+   `input_bytes`, metadata `%{nif: atom}`. `Engram.PromEx.Native` exports a
+   call count and summed duration (integer microseconds); the peak and input
+   bytes stay in the event for tests and ad hoc handlers, not `/metrics`.
    One exception: inline format-0 envelope calls emit nothing and are counted
    in the NIF instead (above, "Envelope telemetry"); the event cost 7x the
    crypto on a 40-byte field.
@@ -605,10 +640,11 @@ bumping pulldown-cmark: `ENGRAM_FUZZ_CASES=2000000 ENGRAM_FUZZ_SEED=7 cargo test
 ## Scheduling
 
 `schedule = "DirtyCpu"` on everything whose input size the caller controls,
-EXCEPT small inputs on a hot path. Twelve NIFs export a normal and a
+EXCEPT small inputs on a hot path. Fifteen NIFs export a normal and a
 `_dirty_nif` variant: `link_extract`, `note_title`, `note_meta`, `chunk`,
 `frontmatter_split`, `frontmatter_parse`, `text_diff`, `utf16_offsets`,
-`hmac_hex_many`, `json_decode`, `envelope_seal`, `envelope_open`, `envelope_open_many`. `envelope_open`'s
+`hmac_hex_many`, `json_decode`, `envelope_seal`, `envelope_open`, `envelope_open_many`,
+`b64_decode`, `b64_encode`. `envelope_open`'s
 inline variant also refuses to inflate a zstd body declaring over 16 KB
 (decompression work is not bounded by input size): it returns `:reschedule`
 and the wrapper reruns the dirty variant (`sized/4`'s `force_dirty`). That
@@ -625,8 +661,9 @@ One rule, one place each side. Rust: declare the pair with
 add `{name, inline_nif, dirty_nif, arity}` to `@sized` in `Engram.Native`
 (it generates the stubs) and call `sized(name, input, args)`; `input` is
 what `call/4` measures (a binary, iolist or byte count). Never write the
-`> @inline_max` check yourself; the one exception is the envelope pair's
-event-free inline path inside `Engram.Native` ("Envelope telemetry").
+`> @inline_max` check yourself; the exceptions are the envelope pair's and
+base64's event-free inline paths inside `Engram.Native` ("Envelope
+telemetry", "Base64").
 Telemetry metadata carries `dirty: true | false`.
 Dirty CPU schedulers cannot be preempted and default to one per normal
 scheduler. **Prod tasks run ONE** (`task_cpu_units = 512` → `BEAM_SCHEDULERS=1`,

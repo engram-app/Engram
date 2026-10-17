@@ -27,6 +27,8 @@ defmodule Engram.PromEx.WebSocket do
 
   use PromEx.Plugin
 
+  alias Engram.PromEx.WebSocket.ChannelMemoryBuckets
+
   @impl true
   def event_metrics(opts) do
     metric_prefix = PromEx.metric_prefix(Keyword.fetch!(opts, :otp_app), :websocket)
@@ -78,11 +80,27 @@ defmodule Engram.PromEx.WebSocket do
             "Per-channel-process RAM. A high bucket is a tenant pinning a fat subscription.",
           tags: [:topic_prefix],
           unit: :byte,
+          # The calculator is explicit because this is a POLLING metric: PromEx
+          # builds a Peep bucket module from `buckets:` for event metrics only,
+          # so without it Peep falls back to its exponential default and the
+          # configured `le` boundaries never render.
           reporter_options: [
-            buckets: [16_384, 65_536, 262_144, 1_048_576, 4_194_304, 16_777_216, 67_108_864]
+            buckets: ChannelMemoryBuckets.buckets(),
+            peep_bucket_calculator: ChannelMemoryBuckets
           ]
         )
       ]
     )
   end
+end
+
+defmodule Engram.PromEx.WebSocket.ChannelMemoryBuckets do
+  @moduledoc false
+  # Peep bucket calculator for the polled channel-memory histogram (see the
+  # metric in Engram.PromEx.WebSocket for why it is explicit).
+  use Peep.Buckets.Custom,
+    buckets: [16_384, 65_536, 262_144, 1_048_576, 4_194_304, 16_777_216, 67_108_864]
+
+  @doc "The boundaries, also passed as `buckets:` for the Core reporter."
+  def buckets, do: [16_384, 65_536, 262_144, 1_048_576, 4_194_304, 16_777_216, 67_108_864]
 end
