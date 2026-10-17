@@ -16,8 +16,10 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
   # (#1341: the cached user may not have seen another node's lock).
   # 51 -> 46, 7 -> 6: the relocate-claim probe no longer opens its own
   # transaction to classify the id; a create that claims nothing classifies once.
-  @statements 46
-  @tenant_txns 6
+  # 46 -> 42, 6 -> 5: the vault_populated probe runs inside the row
+  # transaction instead of opening its own after commit.
+  @statements 42
+  @tenant_txns 5
   @subscription_reads 0
 
   defp frame_for_content(content) do

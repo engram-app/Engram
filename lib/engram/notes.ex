@@ -1016,13 +1016,8 @@ defmodule Engram.Notes do
           # crdt_doc_ready never reaches the sync topic the name index reads.
           :ok = Engram.Notes.NameIndex.announce(vault.id, note.id, note.path, note.title)
 
-          # The web /link success page waits on this before forwarding the user
-          # to their vault. It used to fire only from the REST upsert/batch
-          # paths — which the Obsidian plugin stopped using when it moved to
-          # CRDT — so an Obsidian first sync, the exact case that page exists
-          # for, never advanced. Same post-commit position as the announce
-          # above; the helper's own 0->1 probe keeps it to the first note.
-          :ok = maybe_broadcast_vault_populated(user, vault)
+          # vault_populated was probed inside the row transaction
+          # (probe_vault_populated/2) and its broadcast already ran on commit.
           {:ok, note}
 
         {:ok, {:ok, note, {:announce_moved, old_path}}} ->
@@ -1101,7 +1096,7 @@ defmodule Engram.Notes do
   # classifies afresh, so a row that changed in between is handled exactly as
   # the old claim-then-transaction order handled it.
   defp run_genesis(g, claim) do
-    case Repo.with_tenant(g.user.id, fn -> genesis_txn(g, claim) end) do
+    case Repo.with_tenant(g.user.id, fn -> g |> genesis_txn(claim) |> probe_vault_populated(g) end) do
       {:ok, {:claim_first, live}} ->
         case claim_crdt_relocate(g, live) do
           {:ok, claimed?} -> run_genesis(g, {:done, claimed?})
@@ -1112,6 +1107,24 @@ defmodule Engram.Notes do
         {:ran, result, claimed_flag(claim)}
     end
   end
+
+  # The web /link success page waits on vault_populated before forwarding the
+  # user to their vault. It used to fire only from the REST upsert/batch paths,
+  # which the Obsidian plugin stopped using when it moved to CRDT, so an
+  # Obsidian first sync, the exact case that page exists for, never advanced.
+  #
+  # Only a REAL create/resurrect (:announce) probes. It runs inside the row
+  # transaction rather than after it, so it costs one query instead of a
+  # transaction of its own (with_tenant is re-entrant), and the broadcast is
+  # still post-commit via Repo.after_commit. The probe sees this row plus every
+  # committed one, so two racing first notes cannot both read 2 and stay silent.
+  defp probe_vault_populated({:ok, _note, :announce} = result, g),
+    do: tap(result, fn _ -> :ok = maybe_broadcast_vault_populated(g.user, g.vault) end)
+
+  defp probe_vault_populated({:ok, _note, :announce, _finalize?} = result, g),
+    do: tap(result, fn _ -> :ok = maybe_broadcast_vault_populated(g.user, g.vault) end)
+
+  defp probe_vault_populated(result, _g), do: result
 
   defp claimed_flag({:done, claimed?}), do: claimed?
   defp claimed_flag(:pending), do: false
@@ -6651,9 +6664,9 @@ defmodule Engram.Notes do
     # The cost that comment was guarding against is real but small, and
     # `with_tenant/2` is RE-ENTRANT for the same tenant: the REST upsert
     # caller is already inside the block opened in `upsert_note/4`, so it pays
-    # nothing. Only the CRDT genesis caller opens a transaction here, and that
-    # one is deliberately post-commit with no tenant in force — which is
-    # precisely why it was the broken caller.
+    # nothing. The CRDT genesis caller used to run it post-commit with no
+    # tenant in force, which is precisely why it was the broken caller; it now
+    # probes inside its own row transaction too (probe_vault_populated/2).
     ids =
       Repo.with_tenant!(user.id, fn ->
         Repo.all(from(n in populating_notes(user, vault), select: n.id, limit: 2))
