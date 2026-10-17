@@ -117,10 +117,18 @@ defmodule Engram.Workers.EmbedNote do
                 # search-coverage cap left behind. Run it; the pass indexes it
                 # sparse-only and parks it itself. The chunk check is only paid
                 # on the budget-spent path.
-                if embed_budget_left?(user) or not has_chunks?(note) do
-                  run_and_stamp(note, old_path_hmac_b64, job, user)
-                else
-                  park_over_budget(note)
+                cond do
+                  embed_budget_left?(user) ->
+                    run_and_stamp(note, old_path_hmac_b64, job, user)
+
+                  # Spent budget is already known: index keyword-only without
+                  # asking for a reservation, so a former over-cap vault's
+                  # backfill does not fire one abuse event per note.
+                  not has_chunks?(note) ->
+                    run_and_stamp(note, old_path_hmac_b64, job, user, budget_spent: true)
+
+                  true ->
+                    park_over_budget(note)
                 end
             end
         end
@@ -333,12 +341,9 @@ defmodule Engram.Workers.EmbedNote do
   # Tenant-scoped: `chunks` is under FORCE RLS, and a tenant-less read sees
   # zero rows, which would run (not park) every budget-spent note.
   defp has_chunks?(%Note{} = note) do
-    {:ok, exists?} =
-      Repo.with_tenant(note.user_id, fn ->
-        Repo.exists?(from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id))
-      end)
-
-    exists?
+    Repo.with_tenant!(note.user_id, fn ->
+      Repo.exists?(from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id))
+    end)
   end
 
   # Tenant-scoped for the same filtered-UPDATE reason as `maybe_mark_poison/3`.
@@ -488,7 +493,10 @@ defmodule Engram.Workers.EmbedNote do
                 Indexing.delete_points_by_path_hmac(decrypted_note, old_path_hmac_b64)
               end
 
-            budget = budget_opts(user, Keyword.get(opts, :maintenance, false))
+            budget =
+              if opts[:budget_spent],
+                do: [reserve_tokens: fn _ -> false end, release_tokens: fn _ -> :ok end],
+                else: budget_opts(user, Keyword.get(opts, :maintenance, false))
 
             case Indexing.index_note_with_usage(decrypted_note, vault, user, budget) do
               {:ok, count, _embedded_bytes, dense?} ->
@@ -586,14 +594,6 @@ defmodule Engram.Workers.EmbedNote do
           [
             dense_indexed_hash: note.content_hash,
             embed_model: Indexing.embed_model(),
-            embed_retry_after: nil,
-            embed_budget_parked: nil
-          ]
-
-        chunk_count == 0 ->
-          [
-            dense_indexed_hash: nil,
-            embed_model: nil,
             embed_retry_after: nil,
             embed_budget_parked: nil
           ]

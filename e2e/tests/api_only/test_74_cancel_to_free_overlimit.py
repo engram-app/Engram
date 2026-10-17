@@ -185,6 +185,12 @@ def test_cancel_pro_to_free_over_limit():
     # subscription afterwards so Billing.tier/1 returns :pro until the
     # cancel webhook fires.
     user_id = grant_test_plan(email)
+    # grant_test_plan lifts notes_cap for every other test; this one asserts
+    # the cap, so drop that single override again.
+    _psql(
+        "DELETE FROM user_limit_overrides "
+        f"WHERE user_id = '{user_id}' AND key = 'notes_cap'"
+    )
 
     # Onboarding (Free was the path; we'll overwrite to Pro next).
     api.session.post(f"{api.base_url}/onboarding/accept_free_tier", timeout=10)

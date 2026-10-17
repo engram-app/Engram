@@ -350,7 +350,7 @@ defmodule Engram.Billing do
   @doc """
   Returns the user's full, JSON-ready entitlement snapshot:
 
-      %{tier: "free", limits: %{"notes_cap" => 10_000, "api_rps_cap" => 30, ...}}
+      %{tier: "free", limits: %{"notes_cap" => 3_000, "api_rps_cap" => 30, ...}}
 
   Every `LimitKeys` key is resolved through `effective_limit/2` and normalized:
   integer caps stay integers (`:unlimited`/`nil`/`-1` → `null`), boolean

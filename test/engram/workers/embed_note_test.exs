@@ -1092,6 +1092,45 @@ defmodule Engram.Workers.EmbedNoteTest do
                skip_tenant_check: true
              )
     end
+
+    test "the budget-spent backfill does not fire the abuse warning per note",
+         %{bypass: bypass, user: user, note: note} do
+      prev = Application.get_env(:engram, :limits_enforced)
+      Application.put_env(:engram, :limits_enforced, true)
+
+      on_exit(fn ->
+        if is_nil(prev),
+          do: Application.delete_env(:engram, :limits_enforced),
+          else: Application.put_env(:engram, :limits_enforced, prev)
+      end)
+
+      stamp_as_cap_skipped(note)
+      Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
+      stub_qdrant(bypass)
+
+      handler = "budget-exhausted-#{System.unique_integer()}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler,
+        [:engram, :abuse, :embed_budget_exhausted],
+        fn _, _, _, _ -> send(test_pid, :budget_exhausted) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      # A spent budget is already known before the pass; a former over-cap
+      # vault backfills thousands of these, one abuse event each would drown
+      # the real signal.
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+        end)
+
+      refute_received :budget_exhausted
+      refute log =~ "lifetime embed-token cap reached"
+    end
   end
 
   describe "perform/1 — lifetime embed-token budget (pricing v2 §B)" do
