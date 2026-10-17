@@ -226,8 +226,7 @@ defmodule EngramWeb.WellKnownController do
 
   # ETag + If-None-Match -> 304, which the server-card spec asks hosts to honour.
   # The tag hashes the content type too, so the two representations of the card
-  # never share one. `W/` is accepted because Cloudflare weakens ETags when it
-  # compresses a response.
+  # never share one. Matching (lists, `*`, `W/`) is EngramWeb.ETag's.
   #
   # Callers set any non-JSON content type with a LITERAL first, and the body goes
   # out through `json/2`, which keeps a preset content type. Sobelow's XSS checks
@@ -240,15 +239,7 @@ defmodule EngramWeb.WellKnownController do
 
     conn = put_resp_header(conn, "etag", etag)
 
-    if etag_matches?(conn, etag), do: send_resp(conn, 304, ""), else: json(conn, doc)
-  end
-
-  defp etag_matches?(conn, etag) do
-    conn
-    |> get_req_header("if-none-match")
-    |> Enum.flat_map(&String.split(&1, ","))
-    |> Enum.map(&String.trim/1)
-    |> Enum.any?(&(&1 in ["*", etag, "W/" <> etag]))
+    if EngramWeb.ETag.matches?(conn, etag), do: send_resp(conn, 304, ""), else: json(conn, doc)
   end
 
   @doc """

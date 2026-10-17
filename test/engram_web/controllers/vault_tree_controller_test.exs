@@ -329,6 +329,124 @@ defmodule EngramWeb.VaultTreeControllerTest do
       assert log =~ "vault tree: DEK unavailable"
     end
   end
+
+  describe "GET /vault/tree conditional requests" do
+    defp tree(conn, etag \\ nil) do
+      conn = if etag, do: put_req_header(conn, "if-none-match", etag), else: conn
+      get(conn, "/api/vault/tree")
+    end
+
+    defp etag!(resp) do
+      assert [etag] = get_resp_header(resp, "etag")
+      etag
+    end
+
+    test "answers a matching If-None-Match with an empty 304", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "A.md", content: "# A", mtime: 1_000.0})
+
+      first = tree(conn)
+      assert first.status == 200
+      etag = etag!(first)
+
+      # Per-user, per-vault body: never storable by a shared cache.
+      assert [cc] = get_resp_header(first, "cache-control")
+      assert cc =~ "private"
+      assert cc =~ "no-cache"
+
+      second = tree(conn, etag)
+      assert second.status == 304
+      assert second.resp_body == ""
+      assert etag!(second) == etag
+    end
+
+    test "matches a weak or listed If-None-Match the way browsers send it", %{conn: conn} do
+      etag = conn |> tree() |> etag!()
+
+      assert tree(conn, "W/" <> etag).status == 304
+      assert tree(conn, ~s("nope", ) <> etag).status == 304
+      assert tree(conn, ~s("nope")).status == 200
+    end
+
+    test "a note write changes the ETag", %{conn: conn} do
+      before = conn |> tree() |> etag!()
+      post(conn, "/api/notes", %{path: "A.md", content: "# A", mtime: 1_000.0})
+
+      resp = tree(conn, before)
+      assert resp.status == 200
+      assert etag!(resp) != before
+      assert [%{"path" => "A.md"}] = json_response(resp, 200)["notes"]
+    end
+
+    test "an attachment write changes the ETag", %{conn: conn} do
+      post(conn, "/api/notes", %{path: "A.md", content: "# A", mtime: 1_000.0})
+      before = conn |> tree() |> etag!()
+
+      post(conn, "/api/attachments", %{
+        path: "img.png",
+        content_base64: Base.encode64("hi"),
+        mtime: 1_000.0
+      })
+
+      resp = tree(conn, before)
+      assert resp.status == 200
+      assert etag!(resp) != before
+      assert [%{"path" => "img.png"}] = json_response(resp, 200)["attachments"]
+    end
+
+    test "a folder marker write changes the ETag", %{conn: conn, user: user, vault: vault} do
+      post(conn, "/api/notes", %{path: "A.md", content: "# A", mtime: 1_000.0})
+      before = conn |> tree() |> etag!()
+
+      user = Engram.Repo.reload!(user, skip_tenant_check: true)
+      {:ok, _} = Engram.Notes.create_folder_marker(user, vault, "Empty")
+
+      resp = tree(conn, before)
+      assert resp.status == 200
+      assert etag!(resp) != before
+      assert Enum.any?(json_response(resp, 200)["folders"], &(&1["name"] == "Empty"))
+    end
+
+    test "an ETag from another vault of the same user is not honored", %{conn: conn, user: user} do
+      # Both vaults are fresh (change_seq 0): a tag built from the seq alone
+      # would collide here and hand vault B a 304 for vault A's tree.
+      {:ok, other_vault, _} = Engram.Vaults.register_vault(user, "Other", Ecto.UUID.generate())
+      other_conn = put_req_header(conn, "x-vault-id", to_string(other_vault.id))
+
+      etag = conn |> tree() |> etag!()
+      resp = tree(other_conn, etag)
+
+      assert resp.status == 200
+      assert etag!(resp) != etag
+    end
+
+    test "a DEK fault still 500s when the client's ETag matches", %{conn: conn, user: user} do
+      post(conn, "/api/notes", %{path: "A.md", content: "# A", mtime: 1_000.0})
+      etag = conn |> tree() |> etag!()
+
+      user = Engram.Repo.reload!(user, skip_tenant_check: true)
+      corrupt = Ecto.Changeset.change(user, encrypted_dek: :crypto.strong_rand_bytes(32))
+      {:ok, _} = Engram.Repo.update(corrupt, skip_tenant_check: true)
+      Engram.Crypto.DekCache.invalidate(user.id)
+
+      log = capture_log(fn -> assert_error_sent(500, fn -> tree(conn, etag) end) end)
+      assert log =~ "vault tree: DEK unavailable"
+    end
+
+    test "an ETag from another user's vault is not honored", %{conn: conn} do
+      other = insert(:user)
+      insert(:subscription, user: other, tier: "pro", status: "active")
+      _ = insert(:vault, user: other, is_default: true)
+      {:ok, other_key, _} = Engram.Accounts.create_api_key(other, "other-key")
+      lift_api_rps_cap!(other)
+      other_conn = put_req_header(build_conn(), "authorization", "Bearer #{other_key}")
+
+      etag = conn |> tree() |> etag!()
+      resp = tree(other_conn, etag)
+
+      assert resp.status == 200
+      assert etag!(resp) != etag
+    end
+  end
 end
 
 defmodule EngramWeb.VaultTreeTenantBlocksTest do
