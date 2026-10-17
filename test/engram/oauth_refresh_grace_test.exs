@@ -204,14 +204,35 @@ defmodule Engram.OAuthRefreshGraceTest do
     assert live_in_family(row(rt2).family_id) == 0
   end
 
-  # Disconnect revokes every row of the family, the consumed ones too. A
-  # consumed token presented afterwards is answered as revoked (the family is
-  # dead, whoever holds it), but a used token turning up again is still the
-  # theft signal, so it is logged as reuse, marked as a dead family.
-  test "a consumed token presented after Disconnect is answered revoked, logged as reuse", ctx do
+  # Disconnect revokes every row of the family, the consumed ones too. The
+  # family is already dead, so a client presenting its old token later is
+  # answered revoked and raises no theft alert.
+  test "a consumed token presented after Disconnect is revoked, not logged as reuse", ctx do
     {:ok, %{refresh_token: rt2}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
     old = row(ctx.rt1)
     :ok = Engram.Connections.revoke_oauth_grant(old.user_id, old.family_id)
+
+    log =
+      capture_log(fn ->
+        for raw <- [ctx.rt1, rt2] do
+          assert {:error, {:invalid_grant, :refresh_token_revoked}} =
+                   OAuth.rotate_refresh_token(raw, ctx.client_id)
+        end
+      end)
+
+    refute log =~ "oauth_refresh_reuse"
+  end
+
+  # A used token that is revoked while its family still has a live row (one
+  # row revoked alone, as an older release did): presenting it revokes the
+  # family, which is the theft signal, logged once. Answered revoked.
+  test "a used token that first revokes its family is logged as reuse, once", ctx do
+    {:ok, %{refresh_token: rt2}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+
+    ctx.rt1
+    |> row()
+    |> Ecto.Changeset.change(revoked_at: DateTime.utc_now(:second))
+    |> Repo.update!(skip_tenant_check: true)
 
     log =
       capture_log(fn ->
@@ -221,12 +242,12 @@ defmodule Engram.OAuthRefreshGraceTest do
 
     assert log =~ "oauth_refresh_reuse"
     assert log =~ "reason=family_revoked"
+    assert row(rt2).revoked_at
 
-    # The unused successor was never handed out twice: revoked, not reuse.
     log =
       capture_log(fn ->
         assert {:error, {:invalid_grant, :refresh_token_revoked}} =
-                 OAuth.rotate_refresh_token(rt2, ctx.client_id)
+                 OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
       end)
 
     refute log =~ "oauth_refresh_reuse"

@@ -772,11 +772,11 @@ defmodule Engram.OAuth do
   # Revoked first, even when also consumed: Disconnect, RFC 7009 or an
   # earlier replay. Each revokes every row of the family, consumed ones
   # included, so a disconnected client presenting its old token lands here.
-  # Answered as revoked; a consumed row is still logged as reuse
-  # (`refuse_revoked/1`), an unconsumed one is not. Liveness is family-wide (`family_unrevoked/1`), so a
-  # family with any revoked row mints nothing, whichever of its rows was
-  # marked: one read just before a family revoke, or one a release that
-  # revoked a single row left unmarked.
+  # Answered as revoked; logged as reuse only when this presentation is what
+  # revokes the family (`refuse_revoked/1`). Liveness is family-wide
+  # (`family_unrevoked/1`), so a family with any revoked row mints nothing,
+  # whichever of its rows was marked: one read just before a family revoke,
+  # or one a release that revoked a single row left unmarked.
   defp decide({%RefreshToken{revoked_at: %DateTime{}} = rt, _family_live}, _ip),
     do: refuse_revoked(rt)
 
@@ -815,12 +815,15 @@ defmodule Engram.OAuth do
     end
   end
 
-  # A used token in a dead family is still answered as revoked, but reported
-  # (`report/2`) as reuse: a token that was already exchanged turning up
-  # again is the theft signal, whatever killed the family.
+  # Answered as revoked. A used token whose presentation is what revokes the
+  # family (some row of it was still live) is also reported (`report/2`) as
+  # reuse: an exchanged token turning up again is the theft signal. Once the
+  # family is dead (Disconnect, RFC 7009, an earlier replay), presenting any
+  # of its tokens changes nothing and is not logged again.
   defp refuse_revoked(rt) do
-    revoke_family(rt.family_id)
-    if rt.consumed_at, do: {:error, :revoked_after_use}, else: {:error, :refresh_token_revoked}
+    if revoke_family(rt.family_id) != [] and rt.consumed_at,
+      do: {:error, :revoked_after_use},
+      else: {:error, :refresh_token_revoked}
   end
 
   # The presented row, locked, and whether its family is live.
@@ -858,7 +861,8 @@ defmodule Engram.OAuth do
         skip_tenant_check: true
       )
 
-    grants_changed(changed)
+    :ok = grants_changed(changed)
+    changed
   end
 
   defp family_first_inserted_at(family_id) do
