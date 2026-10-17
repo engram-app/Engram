@@ -111,6 +111,32 @@ defmodule EngramWeb.VaultAccessSocketAttackTest do
     assert {:error, %{reason: "read_only_vault"}} = crdt_join(s, ctx.user, ctx.w)
   end
 
+  # The disconnect broadcast above is best-effort: a channel that missed it
+  # (here: a test socket, which never acts on it) must still not write.
+  test "PATCH narrowing W->read: an already-joined crdt channel stops writing", ctx do
+    {:ok, raw, key} = Accounts.create_api_key(ctx.user, "k", ctx.access)
+    {:ok, _, chan} = crdt_join(key_socket(raw), ctx.user, ctx.w)
+    Ecto.Adapters.SQL.Sandbox.allow(Engram.Repo, self(), chan.channel_pid)
+    # Control: the same frame writes while the key is still write.
+    ref0 = push(chan, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "ok.md"})
+    assert_reply ref0, :ok, _, 10_000
+
+    {:ok, _} =
+      Accounts.update_api_key_access(
+        ctx.user,
+        key.id,
+        {%{to_string(ctx.w.id) => "read"}, "none"}
+      )
+
+    # The refusal stops the channel (the client rejoins and is refused there).
+    Process.unlink(chan.channel_pid)
+    mon = Process.monitor(chan.channel_pid)
+    ref = push(chan, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "pwn.md"})
+    assert_reply ref, :error, %{reason: "read_only_vault"}, 10_000
+    assert_receive {:DOWN, ^mon, :process, _, {:shutdown, :access_changed}}
+    assert {:error, :not_found} = Engram.Notes.get_note(ctx.user, ctx.w, "pwn.md")
+  end
+
   test "legacy key restricted to W: crdt join on R/N refused", ctx do
     {:ok, raw, key} = Accounts.create_api_key(ctx.user, "legacy", nil)
 

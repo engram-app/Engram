@@ -217,15 +217,8 @@ defmodule EngramWeb.CrdtChannel do
                        drained: MapSet.new()
                      )}
 
-                  :read_only ->
-                    {:error, %{reason: "read_only_vault"}}
-
-                  :revoked ->
-                    {:error, %{reason: "unauthorized"}}
-
-                  # Same reply as a missing vault: no existence oracle.
-                  :forbidden ->
-                    {:error, %{reason: "vault_not_found"}}
+                  refused ->
+                    {:error, %{reason: refusal_reason(refused)}}
                 end
 
               _ ->
@@ -241,8 +234,28 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
+  # Join checked write once, but a credential can be narrowed (or revoked)
+  # while the channel is open. The disconnect broadcast that follows is
+  # best-effort, so every inbound frame re-checks write on this vault before
+  # it is handled. `crdt_access/2` reads the API key and OAuth grant from
+  # their caches (ETS; a DB read only on a miss after an edit evicted them),
+  # and a session socket resolves to `:all` without reading anything.
+  #
+  # A refused frame stops the channel: the client rejoins and gets the join's
+  # own refusal, exactly as after the disconnect broadcast.
   @impl true
-  def handle_in("crdt_msg", %{"doc_id" => doc_id, "b64" => b64}, socket) do
+  def handle_in(event, payload, socket) do
+    case crdt_access(socket, socket.assigns.vault) do
+      :ok ->
+        handle_frame(event, payload, socket)
+
+      refused ->
+        {:stop, {:shutdown, :access_changed}, {:error, %{reason: refusal_reason(refused)}},
+         socket}
+    end
+  end
+
+  defp handle_frame("crdt_msg", %{"doc_id" => doc_id, "b64" => b64}, socket) do
     # Classify (O(1), first 4 b64 chars) BEFORE the rate check so sync
     # handshakes ride their own, larger bucket than edit frames: connect-time
     # enrollment fires one STEP1 (+ tiny STEP2 echo) per note, so on a
@@ -349,8 +362,7 @@ defmodule EngramWeb.CrdtChannel do
   # exist and their volume is known — putting ALL index traffic on the handshake
   # lane just moves the starvation risk onto handshakes, which is the shape
   # behind the 2026-07-07 cross-file-overwrite incident.
-  @impl true
-  def handle_in("crdt_index_msg", %{"b64" => b64}, socket) do
+  defp handle_frame("crdt_index_msg", %{"b64" => b64}, socket) do
     with :ok <- check_rate(socket, frame_class_b64(b64)),
          {:ok, frame} <- decode_frame(b64),
          :ok <- guard_frame(frame),
@@ -381,8 +393,7 @@ defmodule EngramWeb.CrdtChannel do
   # STEP2 — small (or absent) rides :handshake, oversized pays :edit. All are
   # still bounded either way (not exempt): the 2400/10s ceiling applies same
   # as real STEP1s.
-  @impl true
-  def handle_in("crdt_create", %{"doc_id" => doc_id, "path" => path} = payload, socket) do
+  defp handle_frame("crdt_create", %{"doc_id" => doc_id, "path" => path} = payload, socket) do
     b64 = Map.get(payload, "b64")
 
     with :ok <- check_rate(socket, state_frame_class(b64)),
@@ -494,8 +505,7 @@ defmodule EngramWeb.CrdtChannel do
   #
   # Handshake lane: this is the frame that REPLACES a handshake, so it must
   # bill the same budget or it would be a way to dodge it.
-  @impl true
-  def handle_in("crdt_doc_state", %{"doc_id" => doc_id}, socket) do
+  defp handle_frame("crdt_doc_state", %{"doc_id" => doc_id}, socket) do
     with :ok <- check_rate(socket, :handshake),
          {:ok, note_id} <- cast_doc_id(doc_id),
          {:ok, %{update: update, head: head}} <-
@@ -579,9 +589,8 @@ defmodule EngramWeb.CrdtChannel do
   # raise in `handle_in` costs the whole channel — every room it owns, every
   # monitor — for one malformed frame. A non-binary falls to the catch-all
   # `handle_in/3` and gets a `bad_frame` reply instead.
-  @impl true
-  def handle_in("crdt_doc_update", %{"doc_id" => doc_id, "b64" => b64}, socket)
-      when is_binary(b64) do
+  defp handle_frame("crdt_doc_update", %{"doc_id" => doc_id, "b64" => b64}, socket)
+       when is_binary(b64) do
     with :ok <- check_rate(socket, state_frame_class(b64)),
          {:ok, note_id} <- cast_doc_id(doc_id),
          {:ok, frame} <- decode_frame(b64),
@@ -643,8 +652,7 @@ defmodule EngramWeb.CrdtChannel do
       {:reply, {:error, %{reason: "doc_update_failed"}}, socket}
   end
 
-  @impl true
-  def handle_in("crdt_delete", %{"doc_id" => doc_id}, socket) do
+  defp handle_frame("crdt_delete", %{"doc_id" => doc_id}, socket) do
     with :ok <- check_rate(socket, :handshake),
          {:ok, note_id} <- cast_doc_id(doc_id) do
       user = socket.assigns.current_user
@@ -668,8 +676,7 @@ defmodule EngramWeb.CrdtChannel do
   # never pend the way `crdt_catchup_delta` did (the e2e test_85 deaf-note bug).
   # Tombstones ride the same feed (deletes replay as ops). Paginated: the client
   # advances its cursor by `next_seq` and re-requests until `has_more` is false.
-  @impl true
-  def handle_in("crdt_catchup_since", payload, socket) do
+  defp handle_frame("crdt_catchup_since", payload, socket) do
     with :ok <- check_rate(socket, :handshake),
          {:ok, cursor} <- cast_cursor(Map.get(payload, "cursor_seq", 0)) do
       # Composite keyset cursor: `cursor_id` pairs with `cursor_seq` so the next
@@ -754,8 +761,7 @@ defmodule EngramWeb.CrdtChannel do
   #
   # Rides the :handshake bucket: it is once-per-note connection bookkeeping, the
   # same shape as the STEP1 that opened the room.
-  @impl true
-  def handle_in("crdt_release", %{"doc_id" => doc_id}, socket) do
+  defp handle_frame("crdt_release", %{"doc_id" => doc_id}, socket) do
     case check_rate(socket, :handshake) do
       {:error, :rate_limited} ->
         {:reply, {:error, %{reason: "rate_limited"}}, socket}
@@ -775,8 +781,7 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
-  @impl true
-  def handle_in(_event, _payload, socket) do
+  defp handle_frame(_event, _payload, socket) do
     case check_rate(socket, :handshake) do
       :ok -> {:reply, {:error, %{reason: "bad_frame"}}, socket}
       {:error, :rate_limited} -> {:reply, {:error, %{reason: "rate_limited"}}, socket}
@@ -2271,8 +2276,8 @@ defmodule EngramWeb.CrdtChannel do
   # Every crdt: frame can change a note (crdt_msg, create, rename, delete,
   # index updates), so a read-level vault (#174, #332) is refused at join:
   # nothing reaches it through this channel; reads of a read-level vault go
-  # through REST, MCP or sync:. The grant is re-read at join
-  # (`ChannelGate.vault_scope/1`), not trusted from connect.
+  # through REST, MCP or sync:. The grant is re-read at join and on every
+  # inbound frame (`handle_in/3`), not trusted from connect.
   defp crdt_access(socket, vault) do
     case ChannelGate.vault_scope(socket.assigns) do
       :revoked ->
@@ -2286,4 +2291,9 @@ defmodule EngramWeb.CrdtChannel do
         end
     end
   end
+
+  defp refusal_reason(:read_only), do: "read_only_vault"
+  defp refusal_reason(:revoked), do: "unauthorized"
+  # Same reply as a missing vault: no existence oracle.
+  defp refusal_reason(:forbidden), do: "vault_not_found"
 end
