@@ -84,7 +84,7 @@ let latestToken: string | null = null;
 // 2026-07-15: one tab replayed a single frozen token for 8h at ~7s cadence).
 // socket.onError fires on every failed attempt, so the token refreshes THERE:
 // the next retry (phoenix backoff caps at 5s) reads params() and self-heals.
-let latestGetToken: (() => Promise<string | null>) | null = null;
+let latestGetToken: ConnectOptions["getToken"] | null = null;
 let tokenRefreshInFlight = false;
 
 // The crdt room is reliably usable only once its join succeeded (sync status
@@ -103,7 +103,7 @@ async function refreshTokenForRetry(): Promise<void> {
 	tokenRefreshInFlight = true;
 	const gen = connectGeneration;
 	try {
-		const token = await latestGetToken();
+		const token = await latestGetToken({ skipCache: true });
 		// A teardown/vault switch landed mid-fetch, or Clerk returned nothing —
 		// keep the previous token; the next onError attempts another refresh.
 		if (gen === connectGeneration && token) {
@@ -120,7 +120,9 @@ async function refreshTokenForRetry(): Promise<void> {
 interface ConnectOptions {
 	userId: string;
 	vaultId: string;
-	getToken: () => Promise<string | null>;
+	// `skipCache` only on the error path: a just-refused token must not be
+	// handed back from cache (browser clock behind the server, prod 2026-10-17).
+	getToken: (opts?: { skipCache?: boolean }) => Promise<string | null>;
 	queryClient: QueryClient;
 	// The caller's `t` (useT) for the plan-limit toast.
 	t: Translate;

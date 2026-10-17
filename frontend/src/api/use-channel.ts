@@ -51,7 +51,7 @@ export function useChannel() {
 		connectChannel({
 			userId,
 			vaultId,
-			getToken: () => getTokenRef.current(),
+			getToken: (opts) => getTokenRef.current(opts),
 			queryClient,
 			t: (en, vars) => tRef.current(en, vars),
 		});
