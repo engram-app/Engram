@@ -172,8 +172,8 @@ export class LimitExceededError extends Error {
 }
 
 export const api = {
-	async get<T>(path: string): Promise<T> {
-		const res = await authFetch(path);
+	async get<T>(path: string, opts?: { signal?: AbortSignal }): Promise<T> {
+		const res = await authFetch(path, { signal: opts?.signal });
 		return res.json();
 	},
 

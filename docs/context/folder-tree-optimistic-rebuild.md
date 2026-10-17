@@ -54,8 +54,10 @@ once. Hoist the stub's array.
 `api/channel.ts` coalesces `note_changed` events for 250 ms
 (`BATCH_WINDOW_MS`); `queries.ts` applies the batch in one pass
 (`applyNoteEvents` in `vault-tree-patch.ts`) instead of re-downloading the vault. It re-fetches
-instead when a patch can't be trusted: an attachment event (`kind:
-"attachment"`, no id), a folder-marker delete (no id), no tree cached, a tree
+instead when a patch can't be trusted: an attachment upsert at a path the tree
+lacks (the broadcast carries no id; known paths and deletes patch by path via
+`applyAttachmentEvents`, and the web's own upload patches from its response),
+a malformed attachment event, a folder-marker delete (no id), no tree cached, a tree
 fetch already in flight (its older response would land on top of the patch), or
 **any note moving to a different folder** (`movesAcrossFolders`). That last one
 is the non-obvious one: `rename_folder` broadcasts one upsert+delete pair per

@@ -224,12 +224,20 @@ const MAX_STALE_TREE_REFETCHES = 3;
  * so it cannot oscillate between two states; each iteration strictly consumes
  * the generation value that triggered it.
  */
-async function fetchVaultTreeFresh({ client, queryKey }: QueryFunctionContext): Promise<VaultTree> {
+async function fetchVaultTreeFresh({
+	client,
+	queryKey,
+	signal,
+}: QueryFunctionContext): Promise<VaultTree> {
+	// The signal makes a cancelled fetch (a mutation's snapshot, a restart on
+	// invalidation) abort its request instead of running a whole-vault
+	// server-side decrypt for nobody. An abort rejects, which also ends the
+	// retry loop below rather than chaining a re-fetch nobody will read.
 	let seen = treeInvalidationGen;
-	let tree = await api.get<VaultTree>("/vault/tree");
+	let tree = await api.get<VaultTree>("/vault/tree", { signal });
 	for (let i = 0; treeInvalidationGen !== seen && i < MAX_STALE_TREE_REFETCHES; i++) {
 		seen = treeInvalidationGen;
-		tree = await api.get<VaultTree>("/vault/tree");
+		tree = await api.get<VaultTree>("/vault/tree", { signal });
 	}
 	return rebasePendingTreeWrites(client, queryKey[1], tree);
 }
@@ -345,12 +353,8 @@ async function snapshotTree(
 	qc: QueryClient,
 	vaultId: string | null | undefined,
 ): Promise<VaultTree | undefined> {
-	// This stops an in-flight tree fetch from LANDING on top of the patch below
-	// — query-core discards a cancelled fetch's result whether or not the
-	// queryFn is abortable. It does not stop the request: `fetchVaultTreeFresh`
-	// takes no AbortSignal and `api.get` has no way to pass one, so a whole-vault
-	// server-side decrypt runs to completion for nobody. Correct, wasteful.
-	// Plumbing a signal through the shared client is the fix, not a wider cancel.
+	// This stops an in-flight tree fetch from LANDING on top of the patch below,
+	// and aborts its request (`fetchVaultTreeFresh` passes the signal through).
 	await qc.cancelQueries({ queryKey: ["vault-tree", vaultId] });
 	return qc.getQueryData<VaultTree>(["vault-tree", vaultId]);
 }
