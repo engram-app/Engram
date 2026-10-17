@@ -118,9 +118,8 @@ defmodule Engram.Cache.Registry do
       evict_match: :key,
       pg_channel: nil
     },
-    # {users.id, what} => the user's live note count (IndexCap) or per-vault
-    # content counts (Vaults). Evicted per user by the note_counts_changed
-    # trigger (a notes/attachments row entering or leaving the counted set,
+    # {users.id, what} => per-vault content counts (Vaults). Evicted per user
+    # by the note_counts_changed trigger (a notes/attachments row entering or leaving the counted set,
     # migration 20261009130000) and, on the writing node, by UsageMeters' note
     # counter, so a create or delete is visible to the writer's next read.
     %{

@@ -25,11 +25,11 @@ defmodule EngramWeb.Plugs.RequirePluginVersionTest do
     test "passes and records the version when at the floor", %{conn: conn} do
       result =
         conn
-        |> with_version("1.28.0")
+        |> with_version("1.36.0")
         |> RequirePluginVersion.call([])
 
       refute result.halted
-      assert result.assigns[:plugin_version] == "1.28.0"
+      assert result.assigns[:plugin_version] == "1.36.0"
     end
 
     test "passes for an unparseable version", %{conn: conn} do
@@ -49,7 +49,7 @@ defmodule EngramWeb.Plugs.RequirePluginVersionTest do
       # even if that module is corrupted — the same trap plugin_version_test
       # opens by naming.
       assert body["error"] == "plugin_upgrade_required"
-      assert body["min_version"] == "1.28.0"
+      assert body["min_version"] == "1.36.0"
       assert body["your_version"] == "1.0.0"
       assert body["update_url"] == "obsidian://show-plugin?id=engram-vault-sync"
     end

@@ -1,70 +1,20 @@
 defmodule Engram.Workers.IndexCapMaintenance do
   @moduledoc """
-  Moves the two bulk index-cap sweeps off the request path.
+  COMPAT SHIM, remove in a later contract PR (along with its entry in the
+  Oban queue config test).
 
-  Both were previously inline, and both are O(the user's whole vault):
-
-    * `:evict_over_cap` — after a downgrade, re-open the notes past the new
-      cap so their points are purged. Its predecessor (`revoke_dense`) ran
-      synchronously inside the Paddle webhook, where a 60k-note UPDATE can
-      outlive the webhook timeout and get the delivery recorded as failed even
-      though the cancellation committed.
-
-    * `:backfill_slots` — after a delete frees a capped slot, re-open the note
-      that inherits it. Ran once per DELETED note, so a 5,000-note folder
-      delete ran it 5,000 times over the same rows.
-
-  `unique` collapses a burst to one job per user per kind: the work is
-  idempotent and whole-vault, so running it once after the burst is both
-  cheaper and more correct than running it per row. `states: :incomplete` means
-  a *completed* job does not block a later one, so a second delete an hour on
-  still gets its backfill.
+  This worker ran the index-cap sweeps (evict notes past the cap on a
+  downgrade, re-open a freed slot on a delete). The search-coverage cap was
+  removed on 2026-10-17, so nothing enqueues it any more. It stays as a no-op
+  for one release so jobs enqueued by the previous release, or by an old node
+  during a rolling deploy, complete instead of failing as an unknown worker.
   """
 
-  use Oban.Worker,
-    queue: :maintenance,
-    max_attempts: 3,
-    unique: [keys: [:user_id, :kind], period: 120, states: :incomplete]
-
-  alias Engram.Indexing.IndexCap
-  alias Engram.Workers.ReconcileEmbeddings
+  use Oban.Worker, queue: :maintenance, max_attempts: 3
 
   @impl Oban.Worker
-  def timeout(_job), do: :timer.minutes(10)
-
-  @doc """
-  Enqueue a sweep. Never raises — the callers are a webhook handler and a
-  delete worker, and neither should fail because a follow-up sweep could not
-  be queued.
-  """
-  @spec enqueue(Ecto.UUID.t(), :evict_over_cap | :revoke_dense | :backfill_slots) :: :ok
-  def enqueue(user_id, kind)
-      when is_binary(user_id) and kind in [:evict_over_cap, :revoke_dense, :backfill_slots] do
-    %{user_id: user_id, kind: Atom.to_string(kind)}
-    |> new()
-    |> Oban.insert()
-    |> case do
-      {:ok, _job} -> :ok
-      {:error, _reason} -> :ok
-    end
-  end
+  def timeout(_job), do: :timer.minutes(1)
 
   @impl Oban.Worker
-  # "revoke_dense" is the previous release's kind for the same downgrade
-  # trigger; a job enqueued before deploy runs as the over-cap sweep.
-  def perform(%Oban.Job{args: %{"user_id" => user_id, "kind" => kind}})
-      when kind in ["evict_over_cap", "revoke_dense"] do
-    user_id |> IndexCap.evict_over_cap() |> then_reconcile()
-  end
-
-  def perform(%Oban.Job{args: %{"user_id" => user_id, "kind" => "backfill_slots"}}) do
-    user_id |> IndexCap.backfill_freed_slots() |> then_reconcile()
-  end
-
-  # Both sweeps only null hashes; ReconcileEmbeddings re-indexes. Queue it
-  # now rather than leave the notes for its next tick.
-  defp then_reconcile(result) do
-    _ = ReconcileEmbeddings.kick()
-    result
-  end
+  def perform(%Oban.Job{}), do: :ok
 end

@@ -9,7 +9,6 @@ defmodule Engram.Indexing do
   import Ecto.Query
 
   alias Engram.Crypto
-  alias Engram.Indexing.IndexCap
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Chunk
@@ -77,22 +76,18 @@ defmodule Engram.Indexing do
     # optional so the six test modules and any future caller can keep passing
     # two args; the hot path passes the user it already has.
     #
-    # `_with_subscription`: everything downstream asks about a limit —
-    # `IndexCap.within_cap?/2` resolves the tier — and on a bare `get_user!/1` struct that is one `subscriptions`
-    # query. The join folds it into this fetch. See #1502.
+    # `_with_subscription`: everything downstream asks about a limit (the
+    # embed budget resolves the tier), and on a bare `get_user!/1` struct that
+    # is one `subscriptions` query. The join folds it into this fetch. See #1502.
     user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
 
     case prepare_index(note, vault, user, opts) do
-      {:ok, reason} when reason in [:no_chunks, :over_cap] ->
+      {:ok, :no_chunks} ->
         case Crypto.get_dek(user) do
           {:ok, _dek} ->
             # `:no_chunks` means this note must end up with ZERO index
-            # artifacts, and it is reached two ways: the note was emptied, or
-            # it fell outside the user's indexed-note cap. Both need the
-            # PREVIOUS artifacts gone, and neither got that before — the
-            # branch only wrote links and returned. A Pro->Free downgrade left
-            # notes past the cap fully searchable with their dense vectors
-            # intact, which is precisely the RAM the cap exists to reclaim.
+            # artifacts: the note was emptied, so the PREVIOUS artifacts must
+            # go, or stale content stays searchable.
             #
             # Errors PROPAGATE. Swallowing a failed Qdrant delete here would
             # let the caller stamp `embed_hash` and never revisit the note, so
@@ -107,9 +102,8 @@ defmodule Engram.Indexing do
             # with nothing to index (empty, or only base64 blobs) has all of
             # the dense vectors it ever will, so `true`: leaving it `false`
             # keeps `dense_indexed_hash` nil and ReconcileEmbeddings re-selects
-            # it for paid users every tick. Over the cap it is `false`, so the
-            # note is backfilled when the cap is raised.
-            with :ok <- purge_stale_index(note), do: {:ok, 0, 0, reason == :no_chunks}
+            # it every tick.
+            with :ok <- purge_stale_index(note), do: {:ok, 0, 0, true}
 
           {:error, :no_dek} = err ->
             emit_no_dek_telemetry(note)
@@ -133,8 +127,6 @@ defmodule Engram.Indexing do
   slow Voyage AI HTTP call run outside any Postgres connection.
 
   Returns:
-    * `{:ok, :over_cap}` — outside the user's indexed-note cap; same handling
-      as `:no_chunks`, but the dense leg stays incomplete
     * `{:ok, :no_chunks}` — note has no parseable chunks; caller must still
       purge the previous index
     * `{:ok, prepared}` — ready to hand to `commit_index/1`
@@ -144,57 +136,50 @@ defmodule Engram.Indexing do
     chunks = Markdown.parse(note.content || "", note.path)
 
     # An empty note needs no identity at all, so that branch stays ahead of the
-    # fetch. Everything past it does: the cap check and the embed below both
-    # want the same `%User{}`, and resolving it once here is what keeps this
-    # path at one `users` query per note. See #1502.
+    # fetch. Everything past it does: the embed below wants the `%User{}`,
+    # and resolving it once here is what keeps this path at one `users` query
+    # per note. See #1502.
     if chunks == [] do
       {:ok, :no_chunks}
     else
       user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
 
-      if IndexCap.within_cap?(note, user) do
-        dims = Application.get_env(:engram, :embed_dims, @default_dims)
+      dims = Application.get_env(:engram, :embed_dims, @default_dims)
 
-        # A sparse-only pass (`dense: false`, or the embed budget refused the
-        # reservation) never calls Voyage. `nil` vectors flow through
-        # build_prepared/8, which emits a sparse-only named vector — the BM25
-        # leg is computed locally from the chunk text, so keyword search works
-        # with zero embedding spend.
-        with :ok <- Qdrant.ensure_collection(collection(), dims),
-             {:ok, filter_key} <- Crypto.dek_filter_key(user),
-             {:ok, content_key} <- Crypto.dek_content_hash_key(user),
-             {dense?, plan} =
-               plan_within_budget(
-                 note,
-                 chunks,
-                 content_key,
-                 Keyword.get(opts, :dense, true),
-                 opts
-               ),
-             texts = embed_texts(plan),
-             {:ok, vectors} <- embed_or_release(dense?, texts, opts),
-             :ok <- ensure_one_vector_per_text(vectors, texts, note),
-             avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id),
-             {:ok, prepared} <-
-               build_prepared(note, user, plan, vectors, filter_key, avgdl) do
-          # What the embedder was actually sent (#1618): reused chunks and
-          # sparse-only passes cost nothing, so the meter must not bill them.
-          embedded_bytes = if dense?, do: text_bytes(texts), else: 0
+      # A sparse-only pass (`dense: false`, or the embed budget refused the
+      # reservation) never calls Voyage. `nil` vectors flow through
+      # build_prepared/8, which emits a sparse-only named vector — the BM25
+      # leg is computed locally from the chunk text, so keyword search works
+      # with zero embedding spend.
+      with :ok <- Qdrant.ensure_collection(collection(), dims),
+           {:ok, filter_key} <- Crypto.dek_filter_key(user),
+           {:ok, content_key} <- Crypto.dek_content_hash_key(user),
+           {dense?, plan} =
+             plan_within_budget(
+               note,
+               chunks,
+               content_key,
+               Keyword.get(opts, :dense, true),
+               opts
+             ),
+           texts = embed_texts(plan),
+           {:ok, vectors} <- embed_or_release(dense?, texts, opts),
+           :ok <- ensure_one_vector_per_text(vectors, texts, note),
+           avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id),
+           {:ok, prepared} <-
+             build_prepared(note, user, plan, vectors, filter_key, avgdl) do
+        # What the embedder was actually sent (#1618): reused chunks and
+        # sparse-only passes cost nothing, so the meter must not bill them.
+        embedded_bytes = if dense?, do: text_bytes(texts), else: 0
 
-          {:ok, prepared |> Map.put(:embedded_bytes, embedded_bytes) |> Map.put(:dense?, dense?)}
-        else
-          {:error, :no_dek} = err ->
-            emit_no_dek_telemetry(note)
-            err
-
-          other ->
-            other
-        end
+        {:ok, prepared |> Map.put(:embedded_bytes, embedded_bytes) |> Map.put(:dense?, dense?)}
       else
-        # Outside the user's indexed-note cap: no chunks and no Qdrant points.
-        # The link graph is not search and is not capped; ExtractNoteLinks
-        # writes it regardless.
-        {:ok, :over_cap}
+        {:error, :no_dek} = err ->
+          emit_no_dek_telemetry(note)
+          err
+
+        other ->
+          other
       end
     end
   end

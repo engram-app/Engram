@@ -59,7 +59,11 @@ defmodule EngramWeb.BootstrapControllerTest do
 
       # Capabilities slice — free-tier matrix.
       assert body["capabilities"]["tier"] == "free"
-      assert body["capabilities"]["limits"]["notes_cap"] == 10_000
+      assert body["capabilities"]["limits"]["notes_cap"] == 3_000
+      refute Map.has_key?(body["capabilities"]["limits"], "indexed_notes_cap")
+      # Compat shim for SPA bundles from before the cap removal: zeros read as
+      # "nothing unsearchable" there.
+      assert body["index_status"] == %{"indexed" => 0, "total" => 0}
       refute Map.has_key?(body["capabilities"]["limits"], "api_write_enabled")
 
       # Vaults slice — empty for a brand-new user.
@@ -125,27 +129,14 @@ defmodule EngramWeb.BootstrapControllerTest do
   end
 
   describe "GET /api/index-status" do
-    test "returns the counters on their own", %{conn: conn} do
+    # Compat shim: SPA bundles from before the cap removal refetch this. With
+    # no search-coverage cap nothing is ever unsearchable, so it is constant.
+    test "reports nothing unsearchable", %{conn: conn} do
       {conn, user} = authed_conn(conn)
       vault = insert(:vault, user: user)
-
-      insert(:note, user: user, vault: vault)
       insert(:note, user: user, vault: vault)
 
-      Engram.Repo.insert!(%Engram.Billing.UserLimitOverride{
-        user_id: user.id,
-        key: "indexed_notes_cap",
-        value: %{"v" => 1},
-        reason: "test",
-        set_by: "test"
-      })
-
-      Engram.Billing.OverrideCache.evict(user.id)
-
-      # The banner this drives is the only thing that keeps a note past the cap
-      # returning nothing from reading as broken search. Seeded by /bootstrap,
-      # but refetchable so it does not stay frozen at page load.
-      assert %{"indexed" => 1, "total" => 2} =
+      assert %{"indexed" => 0, "total" => 0} =
                conn |> get(~p"/api/index-status") |> json_response(200)
     end
 

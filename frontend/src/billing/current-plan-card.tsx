@@ -5,9 +5,8 @@ import { msg } from "@/i18n/msg";
 import type { MsgKey } from "@/i18n/ui-text";
 import { intlLocale } from "@/lib/intl-locale";
 import { cn } from "@/lib/utils";
-import type { BillingStatus, IndexStatus } from "../api/queries";
+import type { BillingStatus } from "../api/queries";
 import { statusLabel } from "./format";
-import { unsearchableNotesNotice } from "./plan-cards";
 
 const TIER_LABELS: Record<BillingStatus["tier"], MsgKey> = {
 	free: msg("Free"),
@@ -21,18 +20,13 @@ const FLASHY_TIERS: BillingStatus["tier"][] = ["starter", "pro"];
 
 export default function CurrentPlanCard({
 	billing,
-	indexStatus,
 	children,
 }: {
 	billing: BillingStatus;
-	indexStatus?: IndexStatus;
 	children?: ReactNode;
 }) {
 	const { t, tn, renderedLocale } = useT();
 	const localeTag = intlLocale(renderedLocale);
-	const unsearchable = indexStatus
-		? unsearchableNotesNotice(indexStatus, tn, renderedLocale)
-		: null;
 	const sub = billing.subscription;
 	const canceled = sub?.status === "canceled";
 	const trialing = sub?.status === "trialing";
@@ -71,8 +65,6 @@ export default function CurrentPlanCard({
 					)}
 				</p>
 			)}
-
-			{unsearchable ? <p className="text-muted-foreground text-sm">{unsearchable}</p> : null}
 
 			{sub ? (
 				<dl className="grid grid-cols-2 gap-4 text-sm">

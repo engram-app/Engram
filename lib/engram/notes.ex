@@ -642,7 +642,7 @@ defmodule Engram.Notes do
 
   defp insert_new_note(base_attrs, user, sanitized_path, folder, client_id, lookup_query) do
     # Pricing v2 §G — server-side notes_cap enforcement. Free tier defaults
-    # to 10k notes; Starter to 50k; Pro unlimited. Resolver returns nil for
+    # to 3k notes; Starter to 50k; Pro unlimited. Resolver returns nil for
     # the unlimited case, in which check_limit is a no-op. The current count is
     # a maintained counter (usage_meters.notes_count), not a per-insert
     # COUNT(*); we increment it inside this tenant transaction so it stays

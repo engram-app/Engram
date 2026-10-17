@@ -232,9 +232,9 @@ export default {
 	"You're on this plan": "Anda menggunakan pelan ini",
 	"Start free trial": "Mulakan percubaan percuma",
 	Popular: "Popular",
-	"2,000 notes searchable · 1 vault · 1 GB attachments":
-		"2,000 nota boleh dicari · 1 peti nota · 1 GB lampiran",
-	"2,000 notes searchable": "2,000 nota boleh dicari",
+	"3,000 notes · 20 AI searches a day · 1 vault": "3,000 nota · 20 carian AI sehari · 1 peti nota",
+	"3,000 notes, all searchable": "3,000 nota, semua boleh dicari",
+	"20 AI searches a day": "20 carian AI sehari",
 	"1 vault": "1 peti nota",
 	"1 GB attachments": "1 GB lampiran",
 	"2 devices": "2 peranti",
@@ -245,11 +245,6 @@ export default {
 	"Unlimited vaults": "Peti nota tanpa had",
 	"50 GB attachments": "50 GB lampiran",
 	"Cross-vault search": "Carian merentasi peti nota",
-	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
-		{
-			other:
-				"{count} daripada nota anda tidak dapat dicari. Hanya {indexed} nota tertua anda yang diindeks, jadi nota terbaru anda tidak akan muncul dalam carian.",
-		},
 	"Loading plan options…": "Memuatkan pilihan pelan…",
 	"Plan change confirmed.": "Perubahan pelan telah disahkan.",
 	"Could not change plan. Please try again.": "Tidak dapat mengubah pelan. Sila cuba lagi.",
@@ -700,7 +695,6 @@ export default {
 	"Searching…": "Mencari…",
 	"Search failed: {message}": "Pencarian gagal: {message}",
 	'No results for "{term}"': 'Tiada hasil untuk "{term}"',
-	"Upgrade to search everything": "Tingkatkan untuk mencari semua",
 	Recent: "Terkini",
 	"Any time": "Sebarang masa",
 	"7 days": "7 hari",
@@ -833,8 +827,6 @@ export default {
 	"The current agreement isn’t available right now.": "Perjanjian semasa tidak tersedia sekarang.",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"Kami tidak dapat memaparkan terma terkini pada masa ini, jadi pendaftaran ditangguhkan daripada meminta anda bersetuju dengan sesuatu yang tidak dapat anda baca. Sila cuba lagi sebentar.",
-	"How did you hear about Engram?": "Bagaimana anda mengetahui tentang Engram?",
-	"Pick one to continue.": "Pilih satu untuk meneruskan.",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"Saya telah membaca dan bersetuju dengan Terma Perkhidmatan dan Dasar Privasi",
 	"I have read and agree to the agreement shown above and the privacy notice":
@@ -876,6 +868,10 @@ export default {
 	"Connect another MCP client": "Sambungkan klien MCP lain",
 	"A vault holds your notes. You can rename it or add more later.":
 		"Peti nota menyimpan nota anda. Anda boleh menamakan semula atau menambah lagi kemudian.",
+	"How did you hear about Engram?": "Bagaimana anda mengetahui tentang Engram?",
+	"Pick one to continue.": "Pilih satu untuk meneruskan.",
+	"Couldn't save your answers, please try again.":
+		"Tidak dapat menyimpan jawapan anda, sila cuba lagi.",
 	"Choose your plan": "Pilih pelan anda",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"Tempoh percubaan 7 hari untuk pelan berbayar. Kad diperlukan, tiada caj sehingga tamat.",
@@ -887,13 +883,6 @@ export default {
 	"your app": "aplikasi anda",
 	"Cancel connection": "Batalkan sambungan",
 	"Connecting {app}": "Menyambung {app}",
-	"Which AI tools do you use?": "Alat AI apa yang anda gunakan?",
-	"AI assistants": "Pembantu AI",
-	"Coding tools": "Alat pengkodan",
-	"Another MCP client": "Pelanggan MCP lain",
-	"Why {tool} can't be connected": "Mengapa {tool} tidak dapat disambungkan",
-	"Not a comprehensive list, pick {client} if yours isn't here.":
-		"Senarai ini tidak lengkap, pilih {client} jika alat anda tidak ada di sini.",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Tidak dapat menyimpan pilihan anda. Cuba klik sekali lagi — jika masih gagal, muat semula halaman.",
 	"Let's get your notes in.": "Mari kita masukkan nota anda.",
@@ -932,15 +921,20 @@ export default {
 		"Buka tab {tab} plugin, klik {action}, dan autentikasi dengan akaun Engram anda.",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"Aplikasi Gemini tidak boleh menambah sambungan MCP khusus. Antigravity, alat pengkodan berkuasa Gemini dari Google, boleh. Pilih ia di bawah Alat pengkodan.",
+	"Another MCP client": "Pelanggan MCP lain",
 	"I'm not connecting an AI tool yet": "Saya belum menyambungkan alat AI",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Gunakan Engram dalam aplikasi web. Anda boleh menyambungkan alat kemudian dari Tetapan.",
 	"Help us shape Engram": "Bantu kami membangunkan Engram",
 	"Two quick questions. Both are optional.": "Dua soalan ringkas. Kedua-duanya adalah pilihan.",
-	"Couldn't save your answers, please try again.":
-		"Tidak dapat menyimpan jawapan anda, sila cuba lagi.",
+	"Which AI tools do you use?": "Alat AI apa yang anda gunakan?",
 	Skip: "Lompati",
 	Save: "Simpan",
+	"AI assistants": "Pembantu AI",
+	"Coding tools": "Alat pengkodan",
+	"Why {tool} can't be connected": "Mengapa {tool} tidak dapat disambungkan",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"Senarai ini tidak lengkap, pilih {client} jika alat anda tidak ada di sini.",
 	Account: "Akaun",
 	"Manage your profile, password, and account.": "Urus profil, kata laluan dan akaun anda.",
 	"Manage your profile, security, and active sessions.":

@@ -183,11 +183,6 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # Pure function from conn assigns to an actor string ("api:<key id>" or
     # "sync"). No Logger call, never touches content, path, title or a query.
     "lib/engram_web/write_actor.ex",
-    # Counts rows and compares created_at/id. Selects only count(n.id) — never
-    # content, path, title or a query — and has no Logger call at all. Listed as
-    # the specific file, not `lib/engram/indexing/`, so a future sibling module
-    # that CAN reach content still trips this test.
-    "lib/engram/indexing/index_cap.ex",
     # A bare `use Ecto.Repo` — the second connection pool for cross-tenant
     # work. No function bodies, no Logger call, nothing to render. Listed as
     # the specific file rather than `lib/engram/repo/`, so its sibling

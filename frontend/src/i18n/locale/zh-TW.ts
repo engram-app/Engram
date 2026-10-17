@@ -211,9 +211,9 @@ export default {
 	"You're on this plan": "您正在使用此方案",
 	"Start free trial": "開始免費試用",
 	Popular: "熱門",
-	"2,000 notes searchable · 1 vault · 1 GB attachments":
-		"可搜尋 2,000 筆筆記 · 1 個儲存庫 · 1 GB 附件",
-	"2,000 notes searchable": "可搜尋 2000 筆記",
+	"3,000 notes · 20 AI searches a day · 1 vault": "3000 筆記 · 每天 20 次 AI 搜尋 · 1 個儲存庫",
+	"3,000 notes, all searchable": "3000 筆記，全部可搜尋",
+	"20 AI searches a day": "每天 20 次 AI 搜尋",
 	"1 vault": "1 個儲存庫",
 	"1 GB attachments": "1 GB 附件",
 	"2 devices": "2 部裝置",
@@ -224,11 +224,6 @@ export default {
 	"Unlimited vaults": "無限制儲存庫",
 	"50 GB attachments": "50 GB 附件",
 	"Cross-vault search": "跨儲存庫搜尋",
-	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
-		{
-			other:
-				"您的 {count} 筆記無法搜尋。僅索引最舊的 {indexed} 筆記，因此最新的筆記不會顯示在搜尋結果中。",
-		},
 	"Loading plan options…": "載入方案選項…",
 	"Plan change confirmed.": "方案變更已確認。",
 	"Could not change plan. Please try again.": "方案變更失敗。請再試一次。",
@@ -352,7 +347,7 @@ export default {
 	Clear: "清除",
 	"Search vaults": "搜尋儲存庫",
 	Read: "讀取",
-	Write: "修改權限",
+	Write: "編輯權限",
 	"Read and write": "讀取與寫入",
 	"All vaults": "所有儲存庫",
 	"Choose vaults": "選擇儲存庫",
@@ -663,7 +658,6 @@ export default {
 	"Searching…": "搜尋中…",
 	"Search failed: {message}": "搜尋失敗：{message}",
 	'No results for "{term}"': '"{term}" 無任何結果',
-	"Upgrade to search everything": "升級以搜尋全部內容",
 	Recent: "最近",
 	"Any time": "任何時間",
 	"7 days": "7 天",
@@ -793,8 +787,6 @@ export default {
 	"The current agreement isn’t available right now.": "目前無法提供最新協議。",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"我們目前無法顯示最新條款，因此暫停註冊，避免您同意無法閱讀的內容。請稍後再試。",
-	"How did you hear about Engram?": "你是從哪裡得知 Engram 的？",
-	"Pick one to continue.": "選擇一個繼續。",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"我已閱讀並同意服務條款和隱私權政策",
 	"I have read and agree to the agreement shown above and the privacy notice":
@@ -836,6 +828,9 @@ export default {
 	"Connect another MCP client": "連接其他 MCP 客戶端",
 	"A vault holds your notes. You can rename it or add more later.":
 		"儲存庫包含你的筆記。你可以稍後重新命名或新增更多。",
+	"How did you hear about Engram?": "你是從哪裡得知 Engram 的？",
+	"Pick one to continue.": "選擇一個繼續。",
+	"Couldn't save your answers, please try again.": "儲存答案失敗，請重試。",
 	"Choose your plan": "選擇方案",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"付費方案提供 7 天免費試用。需綁定信用卡，試用期滿後才會扣款。",
@@ -847,13 +842,6 @@ export default {
 	"your app": "你的應用程式",
 	"Cancel connection": "取消連線",
 	"Connecting {app}": "連線 {app}",
-	"Which AI tools do you use?": "您使用哪些 AI 工具？",
-	"AI assistants": "AI 助理",
-	"Coding tools": "程式碼工具",
-	"Another MCP client": "另一個 MCP 客戶端",
-	"Why {tool} can't be connected": "為什麼 {tool} 無法連接",
-	"Not a comprehensive list, pick {client} if yours isn't here.":
-		"並非完整清單，如果您的工具不在這裡，請選擇 {client}。",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"儲存您的選擇失敗。請再次點擊 — 如果持續失敗，請重新載入頁面。",
 	"Let's get your notes in.": "讓我們將您的筆記導入。",
@@ -889,14 +877,20 @@ export default {
 		"開啟插件的 {tab} 標籤，點擊 {action}，然後使用你的 Engram 帳號進行驗證。",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"Gemini 應用程式無法新增自訂 MCP 連接器。Antigravity，Google 的 Gemini 驅動程式碼工具，可以。請在「程式碼工具」中選擇它。",
+	"Another MCP client": "另一個 MCP 客戶端",
 	"I'm not connecting an AI tool yet": "我目前沒有連接任何 AI 工具",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"在網頁應用程式中使用 Engram。您稍後可以在「設定」中連接工具。",
 	"Help us shape Engram": "幫助我們完善 Engram",
 	"Two quick questions. Both are optional.": "兩個簡單問題，皆為選項。",
-	"Couldn't save your answers, please try again.": "儲存答案失敗，請重試。",
+	"Which AI tools do you use?": "您使用哪些 AI 工具？",
 	Skip: "跳過",
 	Save: "儲存",
+	"AI assistants": "AI 助理",
+	"Coding tools": "程式碼工具",
+	"Why {tool} can't be connected": "為什麼 {tool} 無法連接",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"並非完整清單，如果您的工具不在這裡，請選擇 {client}。",
 	Account: "帳戶",
 	"Manage your profile, password, and account.": "管理你的個人資料、密碼與帳號。",
 	"Manage your profile, security, and active sessions.": "管理您的個人資料、安全設定和活躍會話。",

@@ -396,17 +396,6 @@ describe("note events patch the vault tree in place", () => {
 		expect(treeRefetches()).toBe(before + 1);
 	});
 
-	it("stales the index cap when a note appears or disappears", () => {
-		const { qc, invalidate } = setup();
-		handleNoteChanged(
-			{ event_type: "upsert", id: "n2", path: "docs/new.md", updated_at: "u", vault_id: "7" },
-			qc,
-			"7",
-		);
-		flush();
-		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["index_status"] });
-	});
-
 	it("falls back to a re-fetch for an attachment event", () => {
 		const { qc, treeRefetches } = setup();
 		handleNoteChanged(

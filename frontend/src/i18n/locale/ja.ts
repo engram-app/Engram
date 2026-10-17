@@ -229,9 +229,8 @@ export default {
 	"You're on this plan": "このプランを利用中",
 	"Start free trial": "無料トライアル開始",
 	Popular: "人気",
-	"2,000 notes searchable · 1 vault · 1 GB attachments":
-		"検索可能なノート 2,000個 · 1つの保管庫 · 1GB 添付ファイル",
-	"2,000 notes searchable": "検索可能なノート 2,000個",
+	"3,000 notes, all searchable": "3000ノート、すべて検索可能",
+	"20 AI searches a day": "1日20回AI検索",
 	"1 vault": "1つの保管庫",
 	"1 GB attachments": "1 GBの添付ファイル",
 	"2 devices": "2台のデバイス",
@@ -242,11 +241,6 @@ export default {
 	"Unlimited vaults": "保管庫数無制限",
 	"50 GB attachments": "50 GBの添付ファイル",
 	"Cross-vault search": "保管庫間検索",
-	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
-		{
-			other:
-				"あなたのノートのうち、{count} は検索できません。最も古い {indexed} しかインデックス化されないため、最新のノートは検索結果に表示されません。",
-		},
 	"Loading plan options…": "プランのオプションを読み込み中…",
 	"Plan change confirmed.": "変更内容を確認しました。",
 	"Could not change plan. Please try again.": "変更できませんでした。再度お試しください。",
@@ -695,7 +689,6 @@ export default {
 	"Searching…": "検索中…",
 	"Search failed: {message}": "検索エラー: {message}",
 	'No results for "{term}"': '"{term}" に一致する結果はありません',
-	"Upgrade to search everything": "すべてを検索するにはアップグレードしてください",
 	Recent: "最近",
 	"Any time": "いつでも",
 	"7 days": "7日間",
@@ -830,8 +823,6 @@ export default {
 	"The current agreement isn’t available right now.": "現在の利用規約は利用できません。",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"最新の利用規約を表示できないため、サインアップを一時停止しています。しばらくしてから再度お試しください。",
-	"How did you hear about Engram?": "Engram をどこで知りましたか？",
-	"Pick one to continue.": "続けるには、いずれかを選択してください。",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"利用規約とプライバシーポリシーを読み、同意します",
 	"I have read and agree to the agreement shown above and the privacy notice":
@@ -874,6 +865,10 @@ export default {
 	"Connect another MCP client": "他の MCP クライアントを接続",
 	"A vault holds your notes. You can rename it or add more later.":
 		"保管庫にはノートが保存されます。後で名前を変更したり、追加したりできます。",
+	"How did you hear about Engram?": "Engram をどこで知りましたか？",
+	"Pick one to continue.": "続けるには、いずれかを選択してください。",
+	"Couldn't save your answers, please try again.":
+		"回答を保存できませんでした。もう一度お試しください。",
 	"Choose your plan": "プランを選択してください",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"有料プランでは、7日間の無料トライアルがあります。カード情報が必要ですが、終了するまでは料金は発生しません。",
@@ -885,13 +880,6 @@ export default {
 	"your app": "あなたのアプリ",
 	"Cancel connection": "接続を解除",
 	"Connecting {app}": "{app} に接続中",
-	"Which AI tools do you use?": "どのAIツールをご利用ですか？",
-	"AI assistants": "AIアシスタント",
-	"Coding tools": "コーディングツール",
-	"Another MCP client": "別のMCPクライアント",
-	"Why {tool} can't be connected": "なぜ{tool}に接続できないのか",
-	"Not a comprehensive list, pick {client} if yours isn't here.":
-		"完全なリストではありません。こちらにない場合は{client}を選択してください。",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"選択を保存できませんでした。もう一度クリックしてみてください。それでもうまくいかない場合は、ページを更新してください。",
 	"Let's get your notes in.": "ノートをインポートしましょう。",
@@ -928,15 +916,20 @@ export default {
 		"プラグインの {tab} タブを開き、{action} をクリックして、Engram アカウントで認証します。",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"Geminiアプリでは、カスタムMCPコネクタを追加できません。GoogleのGemini搭載コーディングツールであるAntigravityは可能です。コーディングツールから選択してください。",
+	"Another MCP client": "別のMCPクライアント",
 	"I'm not connecting an AI tool yet": "まだAIツールとの接続は行っていません",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"Engramをウェブアプリで使用します。後で設定からツールを接続できます。",
 	"Help us shape Engram": "Engram の改善にご協力ください",
 	"Two quick questions. Both are optional.": "簡単な質問が2つあります。どちらも任意です。",
-	"Couldn't save your answers, please try again.":
-		"回答を保存できませんでした。もう一度お試しください。",
+	"Which AI tools do you use?": "どのAIツールをご利用ですか？",
 	Skip: "スキップ",
 	Save: "保存",
+	"AI assistants": "AIアシスタント",
+	"Coding tools": "コーディングツール",
+	"Why {tool} can't be connected": "なぜ{tool}に接続できないのか",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"完全なリストではありません。こちらにない場合は{client}を選択してください。",
 	Account: "アカウント",
 	"Manage your profile, password, and account.":
 		"プロフィール、パスワード、アカウントを管理します。",

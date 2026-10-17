@@ -145,6 +145,20 @@ defmodule Engram.Adv1760Test do
       skip_tenant_check: true
     )
 
+    # The sparse index it already has: a parked note is one that HAS chunks.
+    Repo.insert!(
+      %Engram.Notes.Chunk{
+        note_id: note.id,
+        user_id: note.user_id,
+        vault_id: note.vault_id,
+        position: 0,
+        char_start: 0,
+        char_end: 10,
+        qdrant_point_id: Ecto.UUID.generate()
+      },
+      skip_tenant_check: true
+    )
+
     # Parks it (no Voyage, no Qdrant).
     assert :ok = perform_job(EmbedNote, %{note_id: note.id})
     parked = Repo.get!(Note, note.id, skip_tenant_check: true)

@@ -180,15 +180,30 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
     end
 
     # SQL three-valued logic: on a sparse-only note `dense_indexed_hash =
-    # content_hash` is NULL, and NOT (NULL) excludes the row. The keyword sweep
-    # must still reach it.
+    # content_hash` is NULL, and NOT (NULL) excludes the row. The keyword
+    # sweep's filter must still match it.
+    #
+    # In a real tick the dense sweep claims it first (every note with no dense
+    # hash is eligible there), and that full pass stamps the keyword version
+    # too. So the end-to-end assertion is "it is reached", and the keyword
+    # filter is pinned directly.
     test "the keyword sweep reaches a sparse-only note" do
+      import Ecto.Query, only: [where: 2, where: 3, dynamic: 2]
+
       user = insert(:user)
       note = current_note(user, keyword_version: nil, dense_indexed_hash: nil, embed_model: nil)
 
+      keyword_eligible =
+        IndexVersions.content_current_notes()
+        |> where(^IndexVersions.keyword_stale_dynamic())
+        |> where(^dynamic([n], not (^IndexVersions.stale_dynamic())))
+        |> where([n], n.id == ^note.id)
+
+      assert Repo.exists?(keyword_eligible, skip_tenant_check: true)
+
       assert :ok = perform_job(ReconcileEmbeddings, %{})
 
-      assert_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => note.id})
+      assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
     end
 
     test "the keyword sweep skips current notes, content-stale notes and deleted ones" do
@@ -297,10 +312,9 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       end
     end
 
-    test "backfills dense vectors for a Free user's sparse-only note inside the cap" do
+    test "backfills dense vectors for a Free user's sparse-only note" do
       # Free was keyword-only until semantic search shipped for every tier, so
       # existing Free notes are indexed (chunks + embed_hash) with no dense leg.
-      # Having chunk rows is what marks a note as inside the indexed-notes cap.
       user = insert(:user)
       note = note_for(user, content_hash: "abc123", embed_hash: "abc123", dense_indexed_hash: nil)
       insert_chunk!(note)
@@ -321,17 +335,17 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute_enqueued(worker: Engram.Workers.ExtractNoteLinks, args: %{"note_id" => note.id})
     end
 
-    test "does not select a Free user's note outside the cap (no chunk rows)" do
-      # An over-cap note is stamped with embed_hash and no chunks. Selecting it
-      # would re-run EmbedNote on it every tick forever, since the cap makes
-      # every pass end with no dense vectors.
+    test "selects a Free note the removed index cap left with no chunk rows" do
+      # The search-coverage cap (gone 2026-10-17) stamped skipped notes with
+      # embed_hash and no chunks. Nothing re-opens them but this sweep, so it
+      # must select them for every tier, or they stay unsearchable forever.
       user = insert(:user)
 
-      _note =
+      note =
         note_for(user, content_hash: "abc123", embed_hash: "abc123", dense_indexed_hash: nil)
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
-      refute_enqueued(worker: EmbedNote)
+      assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
     end
 
     test "does not select a Free note parked for an exhausted embed budget" do
@@ -384,35 +398,42 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
                Engram.Repo.get!(Note, parked.id, skip_tenant_check: true)
     end
 
-    test "does not backfill for a tier:free row, whose status defaults to entitled" do
+    test "a tier:free row, whose status defaults to entitled, does not skip a budget park" do
       # `subscriptions.tier` accepts "free" and `status` DEFAULTS to
-      # "trialing", so a status-only join selects a user that `tier/1` resolves
-      # to :free. This note has no chunk rows (outside the cap), so selecting
-      # it would re-run EmbedNote on it every tick forever.
+      # "trialing", so a status-only join treats a user that `tier/1` resolves
+      # to :free as paying, and re-runs their budget-parked notes every tick.
       user = insert(:user)
       insert(:subscription, user: user, tier: "free", status: "trialing")
 
-      _note =
+      note =
         note_for(user,
           content_hash: "abc123",
           embed_hash: "abc123",
-          dense_indexed_hash: nil
+          dense_indexed_hash: nil,
+          embed_retry_after: DateTime.add(DateTime.utc_now(), 3600, :second),
+          embed_budget_parked: true
         )
+
+      insert_chunk!(note)
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       refute_enqueued(worker: EmbedNote)
     end
 
-    test "does not backfill dense vectors for an unentitled subscription" do
+    test "an unentitled subscription does not skip a budget park" do
       user = insert(:user)
       insert(:subscription, user: user, tier: "pro", status: "canceled")
 
-      _note =
+      note =
         note_for(user,
           content_hash: "abc123",
           embed_hash: "abc123",
-          dense_indexed_hash: nil
+          dense_indexed_hash: nil,
+          embed_retry_after: DateTime.add(DateTime.utc_now(), 3600, :second),
+          embed_budget_parked: true
         )
+
+      insert_chunk!(note)
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       refute_enqueued(worker: EmbedNote)
@@ -420,7 +441,9 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
 
     test "skips notes where embed_hash matches content_hash" do
       user = insert(:user)
-      _note = note_for(user, content_hash: "abc123", embed_hash: "abc123")
+
+      _note =
+        note_for(user, content_hash: "abc123", embed_hash: "abc123", dense_indexed_hash: "abc123")
 
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       refute_enqueued(worker: EmbedNote)
@@ -601,6 +624,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
         note_for(user,
           content_hash: "abc123",
           embed_hash: "abc123",
+          dense_indexed_hash: "abc123",
           keyword_version: KeywordIndex.version()
         )
 

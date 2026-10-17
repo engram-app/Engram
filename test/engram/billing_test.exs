@@ -1529,14 +1529,14 @@ defmodule Engram.BillingTest do
   end
 
   describe "broadcast plan payload" do
-    test "carries indexed_notes_cap so a live plugin does not reset it to uncapped" do
+    test "carries indexed_notes_cap: nil (compat shim, uncapped) on a downgrade" do
       user = insert(:user)
       insert(:subscription, user: user, paddle_subscription_id: "sub_cap_1", status: "active")
       EngramWeb.Endpoint.subscribe("user:#{user.id}")
 
-      # canceled drops the user to :free, so the plan snapshot in this
-      # broadcast is the one that must carry the Free index cap. (past_due is
-      # deliberately NOT the case to use here — it is in @entitled_statuses.)
+      # canceled drops the user to :free. Free has no search-coverage cap any
+      # more, but plugins before the removal still parse the field, so it stays
+      # on the wire as nil (uncapped) until the contract PR.
       event = %{
         "event_type" => "subscription.canceled",
         "data" => %{
@@ -1552,15 +1552,11 @@ defmodule Engram.BillingTest do
 
       assert_receive %Phoenix.Socket.Broadcast{event: "subscription_activated", payload: payload}
 
-      # The plugin REPLACES its plan snapshot wholesale from this payload, so a
-      # missing field reads as "no cap" rather than "unchanged" — a Free user
-      # would be told their whole vault is searchable while only the oldest
-      # 2,000 notes are indexed.
       assert Map.has_key?(payload, :indexed_notes_cap)
 
       reloaded = Engram.Accounts.get_user(user.id)
       assert payload.indexed_notes_cap == Engram.Billing.plan_state(reloaded).indexed_notes_cap
-      assert payload.indexed_notes_cap == 2_000
+      assert payload.indexed_notes_cap == nil
     end
   end
 end

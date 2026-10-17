@@ -15,13 +15,21 @@ credential called; cost is metered where it is incurred.
 | Limit | Free | Starter | Pro | Where it is enforced |
 |---|---|---|---|---|
 | `ai_searches_per_day` (THE cost meter) | 20 | unlimited | unlimited | `Engram.Search.search/4`, every transport |
-| `notes_cap` | 10,000 | 50,000 | unlimited | note writes |
-| `indexed_notes_cap` | 2,000 | unlimited | unlimited | indexing |
+| `notes_cap` | 3,000 | 50,000 | unlimited | note writes |
 | `api_rps_cap` (API-key traffic, per user per second) | 30 | 30 | 30 | `RequireApiRpsBudget`; `0` also refuses API-key sockets (`ChannelGate.api_access/2`) |
 | `PreAuthRateLimit` (per endpoint family) | 600/min | 600/min | 600/min | `:authed_api` pipeline |
 | `obsidian_connections_cap` / `concurrent_devices` | 2 | unlimited | unlimited | OAuth consent / device-flow authorize (UNCHANGED) |
 | MCP connections | unlimited | unlimited | unlimited | none (removed) |
 | `api_write_enabled` | — | — | — | removed |
+
+Every stored note is searchable on every tier. The separate search-coverage
+cap (`indexed_notes_cap`, 2,000 on Free) was removed on 2026-10-17, when Free
+`notes_cap` dropped from 10,000 to 3,000. Notes it had skipped re-index on
+their own through `ReconcileEmbeddings` (it selects every note with no dense
+hash). `plan_state.indexed_notes_cap` (always `nil`), `/billing/usage`
+`indexed_notes` (`limit: nil`), `/api/index-status` and bootstrap
+`index_status` (always zeros) are compat shims for older plugins and SPA
+bundles, to remove in a later contract PR.
 
 `api_rps_cap` stays a limit key rather than a constant so a per-user
 override can lift it, or set it to `0` as a kill switch for one abusive key

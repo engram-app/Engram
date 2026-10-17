@@ -16,7 +16,6 @@ defmodule Engram.Billing do
   alias Engram.Logger.Metadata
   alias Engram.Paddle.Client
   alias Engram.Repo
-  alias Engram.Workers.IndexCapMaintenance
 
   require Logger
 
@@ -324,11 +323,11 @@ defmodule Engram.Billing do
       attachments_all_types: all_types?,
       max_file_bytes: numeric_limit(user, :max_file_bytes),
       attachment_bytes_cap: numeric_limit(user, :attachment_bytes_cap),
-      # How many notes this plan indexes for search. The plugin pairs it with
-      # its own vault file count to tell the user "Searching 2,000 of 4,312
-      # notes" — a capped note that silently returns nothing reads as broken
-      # search, and the capped-out notes are the user's NEWEST.
-      indexed_notes_cap: numeric_limit(user, :indexed_notes_cap)
+      # COMPAT SHIM, remove in a later contract PR. The search-coverage cap was
+      # removed (every stored note is searchable on every tier), but plugins
+      # from before the removal still parse this field. nil means uncapped
+      # there, which is now always true.
+      indexed_notes_cap: nil
     }
   end
 
@@ -351,7 +350,7 @@ defmodule Engram.Billing do
   @doc """
   Returns the user's full, JSON-ready entitlement snapshot:
 
-      %{tier: "free", limits: %{"notes_cap" => 10_000, "api_rps_cap" => 30, ...}}
+      %{tier: "free", limits: %{"notes_cap" => 3_000, "api_rps_cap" => 30, ...}}
 
   Every `LimitKeys` key is resolved through `effective_limit/2` and normalized:
   integer caps stay integers (`:unlimited`/`nil`/`-1` → `null`), boolean
@@ -777,26 +776,6 @@ defmodule Engram.Billing do
                 %{count: 1},
                 %{user_id: user.id, from: prev_tier, to: :free}
               )
-
-              # Free is capped at `indexed_notes_cap`, and nothing re-checks
-              # the cap until a note is re-indexed, so the notes past it would
-              # stay searchable forever. Re-opens those notes so
-              # ReconcileEmbeddings purges their points. Notes inside the cap
-              # keep their dense vectors (semantic is every tier's). See
-              # IndexCap.evict_over_cap/1.
-              #
-              # ENQUEUED, not inline. This is an unbounded UPDATE over the
-              # user's whole vault, and we are inside a Paddle webhook request:
-              # a 60k-note account made the delivery outlive Paddle's timeout,
-              # so a cancellation that COMMITTED was recorded as a failed
-              # delivery and retried. Only fires on a real downgrade — `user`
-              # is nil unless prev_tier was paid.
-              #
-              # LEGACY kind, deliberately, for one release: during a rolling
-              # deploy an old node can pick this job up, and it only matches
-              # "revoke_dense" (a new node maps that to the over-cap sweep).
-              # Switch this to :evict_over_cap in the release after this one.
-              _ = IndexCapMaintenance.enqueue(user.id, :revoke_dense)
             end
 
             {:ok, updated}
@@ -835,7 +814,7 @@ defmodule Engram.Billing do
             # listener re-fetches /onboarding/status to decide what to do,
             # so plan changes and trial→active flips both push downstream UI.
             broadcast_subscription_activated(updated.user_id, updated)
-            # An upgrade can lift the index cap: the backfill starts now.
+            # An upgrade lifts the embed budget: the dense backfill starts now.
             _ = Engram.Workers.ReconcileEmbeddings.kick()
 
             # Realtime sync (and other tier-gated features) are evaluated at
@@ -845,15 +824,6 @@ defmodule Engram.Billing do
             if updated.tier != prev_tier or updated.status != prev_status do
               Engram.Auth.SessionInvalidator.disconnect_user(updated.user_id)
             end
-
-            # NOTE: no IndexCap.evict_over_cap/1 here, unlike the
-            # subscription.canceled clause. `past_due` is in
-            # @entitled_statuses, so tier/1 still resolves to starter/pro and
-            # the user stays uncapped through Paddle's dunning window —
-            # evicting would be wrong, not merely expensive. It would also
-            # purge and re-index the notes past the Free cap on a transient
-            # failed charge and again when payment recovers. The window is
-            # bounded and ends in subscription.canceled, which does evict.
 
             {:ok, updated}
 
@@ -1075,11 +1045,8 @@ defmodule Engram.Billing do
     # BUT the allowlist cuts both ways: the plugin REPLACES its plan snapshot
     # wholesale from this payload (`sync.ts` planState = parsePlanState(...)),
     # so a plan field that is missing here reads as absent/permissive, not as
-    # unchanged. `indexed_notes_cap` was omitted when it was added to
-    # plan_state/1 and the effect was a Free user being told their whole vault
-    # is searchable while only the oldest 2,000 notes are indexed — the exact
-    # silent failure the visible cap counter exists to prevent. Anything
-    # plan_state/1 publishes that a client acts on belongs in BOTH lists.
+    # unchanged. Anything plan_state/1 publishes that a client acts on belongs
+    # in BOTH lists. (`indexed_notes_cap` is a compat shim, always nil.)
     plan_fields =
       case Engram.Accounts.get_user(user_id) do
         %Engram.Accounts.User{} = u ->

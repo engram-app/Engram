@@ -3,8 +3,8 @@ existing notes stay readable/deletable, new creates 402 until under cap.
 
 Covers Phase 4 (cancel webhook → tier flip) end-to-end at the wire level:
   1. Provision a fresh user; SQL-seed an active Pro subscription.
-  2. SQL-seed usage_meters.notes_count = 12_000 (over the Free
-     notes_cap of 10_000).
+  2. SQL-seed usage_meters.notes_count = 4_000 (over the Free
+     notes_cap of 3_000).
   3. POST /webhooks/paddle with a SIGNED subscription.canceled event —
      this exercises verify_signature → upsert_from_paddle_event → the
      Subscription row flips to status=canceled, which makes
@@ -12,7 +12,7 @@ Covers Phase 4 (cancel webhook → tier flip) end-to-end at the wire level:
   4. GET /api/billing/status returns tier=free.
   5. GET /sync/manifest still responds (read still works, not 402'd).
   6. POST /notes for a NEW path returns 402 reason=notes_cap_exceeded.
-  7. Delete enough notes via the API to drop usage under 10_000 — but
+  7. Delete enough notes via the API to drop usage under 3_000 — but
      since we never inserted real rows for the seeded count, the
      delete loop relies on a direct SQL decrement of usage_meters.
   8. POST /notes for a NEW path returns 200.
@@ -25,7 +25,7 @@ Webhook secret note:
 Seed-vs-real-rows note:
   The notes_cap_exceeded path is gated by UsageMeters.notes_count/1,
   which reads from the usage_meters table — NOT from a COUNT(*) of the
-  notes table. So we can put a user over-cap by writing 12_000 to that
+  notes table. So we can put a user over-cap by writing 4_000 to that
   single integer column without bulk-inserting real notes. Step 7
   similarly decrements the meter directly (Notes.delete_note would
   fail with "note not found" on the synthetic count).
@@ -73,8 +73,8 @@ pytestmark = pytest.mark.skipif(
     reason="E2E_CLERK_SECRET_KEY not set — Clerk auth required",
 )
 
-FREE_NOTES_CAP = 10_000
-SEED_NOTES_COUNT = 12_000
+FREE_NOTES_CAP = 3_000
+SEED_NOTES_COUNT = 4_000
 
 
 def _ts() -> str:
@@ -185,6 +185,12 @@ def test_cancel_pro_to_free_over_limit():
     # subscription afterwards so Billing.tier/1 returns :pro until the
     # cancel webhook fires.
     user_id = grant_test_plan(email)
+    # grant_test_plan lifts notes_cap for every other test; this one asserts
+    # the cap, so drop that single override again.
+    _psql(
+        "DELETE FROM user_limit_overrides "
+        f"WHERE user_id = '{user_id}' AND key = 'notes_cap'"
+    )
 
     # Onboarding (Free was the path; we'll overwrite to Pro next).
     api.session.post(f"{api.base_url}/onboarding/accept_free_tier", timeout=10)

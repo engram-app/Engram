@@ -75,8 +75,13 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     # One page of eligible stale notes, oldest-first, kept as a subquery so
     # the whole select-and-stamp is ONE statement (see the UPDATE below).
-    # The SQL proxy for "uncapped and unmetered": a paid, entitled
-    # subscription. See the comments on its two uses below.
+    # The SQL proxy for "unmetered": a paid, entitled subscription. Used to
+    # let an embed-budget park lapse once the user upgrades (see below).
+    # `entitled_statuses/0` rather than a hand-rolled subset: dropping
+    # `past_due` stalled the backfill for users who were still paying. The
+    # `tier` filter is load-bearing: `subscriptions.tier` accepts "free" while
+    # `status` DEFAULTS to "trialing", so matching on status alone would treat
+    # a Free user as paying.
     paid =
       from(s in Engram.Billing.Subscription,
         where:
@@ -106,29 +111,15 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         IndexVersions.live_notes()
         # Two ways a note is stale:
         #   1. content changed since it was indexed (or was never indexed)
-        #   2. it is indexed but has NO dense vectors, and a dense pass could
-        #      add them. That is the backfill for notes indexed sparse-only:
-        #      every Free note from before semantic search was every tier's,
-        #      and any note a spent embed budget left sparse.
-        #
-        # (2) is narrowed to notes where the dense pass can actually write
-        # something, or it is the forever-loop this column split exists to
-        # prevent — EmbedNote clears the backoff stamp below on every pass that
-        # ends with no dense hash, so an unwinnable note comes back every tick:
-        #
-        #   * `exists(chunk)` — the note is INSIDE the indexed-notes cap. An
-        #     over-cap note is stamped with no chunk rows and no dense hash, and
-        #     can never get one while the cap holds. On Free, with its 2,000
-        #     cap, that is most of any large vault. `IndexCap` re-opens those
-        #     notes itself when a slot frees (`backfill_freed_slots/1`).
-        #   * OR a paid, entitled subscription — the SQL proxy for "uncapped",
-        #     so an upgrade backfills the notes that were over the Free cap
-        #     (no chunks yet). Self-healing with no hook on the billing path.
-        #     `entitled_statuses/0` rather than a hand-rolled subset: dropping
-        #     `past_due` stalled the backfill for users who were still paying.
-        #     The `tier` filter is load-bearing: `subscriptions.tier` accepts
-        #     "free" while `status` DEFAULTS to "trialing", and matching on
-        #     status alone would select a capped user's over-cap notes.
+        #   2. it is indexed but has NO dense vectors. That is the backfill for
+        #      notes indexed sparse-only (every Free note from before semantic
+        #      search was every tier's, and any note a spent embed budget left
+        #      sparse) AND the self-heal for notes the removed search-coverage
+        #      cap skipped: those were stamped with no chunk rows and no dense
+        #      hash, and this is the only path that re-opens them. Every pass
+        #      now either writes dense vectors, stamps a no-chunks note as
+        #      dense-complete, or parks it on the embed budget, so (2) no
+        #      longer needs narrowing to avoid a forever-loop.
         #
         # A note whose embed budget is spent is kept out by the cooldown filter
         # below: EmbedNote parks it with a future `embed_retry_after`.
@@ -136,15 +127,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
           ^dynamic(
             [n],
             is_nil(n.embed_hash) or n.embed_hash != n.content_hash or
-              ^version_stale or
-              (is_nil(n.dense_indexed_hash) and
-                 (exists(
-                    from(c in Engram.Notes.Chunk,
-                      where: c.note_id == parent_as(:note).id,
-                      select: 1
-                    )
-                  ) or
-                    exists(paid)))
+              ^version_stale or is_nil(n.dense_indexed_hash)
           )
         )
         # Poison-loop guard: a note that exhausts its EmbedNote attempts gets an

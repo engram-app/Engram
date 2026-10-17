@@ -26,24 +26,18 @@ defmodule EngramWeb.BootstrapController do
   use EngramWeb, :controller
 
   alias Engram.Billing
-  alias Engram.Indexing.IndexCap
   alias EngramWeb.BillingController
   alias EngramWeb.OnboardingController
   alias EngramWeb.VaultsController
 
-  @doc """
-  Just the two index counters, refetchable on its own.
+  # COMPAT SHIM, remove in a later contract PR (with the route and the
+  # `index_status` key below). The search-coverage cap was removed, so nothing
+  # is ever unsearchable; SPA bundles from before the removal still read this
+  # and treat `indexed < total` as "show the banner". Zeros never show it.
+  @no_unsearchable_notes %{indexed: 0, total: 0}
 
-  `/bootstrap` seeds these once at page load, but they move as the user writes
-  and delete notes — and the banner they drive ("2,000 of 4,312 notes indexed")
-  is the only thing that stops a note past the cap returning nothing from
-  reading as broken search. A user who crossed the cap mid-session saw no
-  banner until a full reload. Cheap for uncapped users: `counts/1` resolves the
-  cap first and skips the aggregate entirely.
-  """
-  def index_status(conn, _params) do
-    json(conn, IndexCap.counts(conn.assigns.current_user))
-  end
+  @doc false
+  def index_status(conn, _params), do: json(conn, @no_unsearchable_notes)
 
   def show(conn, _params) do
     user = conn.assigns.current_user
@@ -62,12 +56,8 @@ defmodule EngramWeb.BootstrapController do
     payload = %{
       onboarding: OnboardingController.status_payload(user),
       capabilities: Billing.capabilities(user),
-      # Two live counters, not part of the cached capability matrix: these move
-      # as the user writes notes, and `capabilities` is ETS-cached for 24h.
-      # Clients render "2,000 of 4,312 notes indexed" from this — a capped note
-      # that silently returns nothing is the support ticket the cap exists to
-      # avoid.
-      index_status: IndexCap.counts(user),
+      # Compat shim, see `@no_unsearchable_notes`.
+      index_status: @no_unsearchable_notes,
       vaults: VaultsController.index_payload(user, scope)
     }
 

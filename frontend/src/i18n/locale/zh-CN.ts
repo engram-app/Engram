@@ -209,9 +209,9 @@ export default {
 	"You're on this plan": "你正在使用此套餐",
 	"Start free trial": "开始免费试用",
 	Popular: "常用",
-	"2,000 notes searchable · 1 vault · 1 GB attachments":
-		"可搜索 2000 个笔记 · 1 个仓库 · 1 GB 附件",
-	"2,000 notes searchable": "可搜索 2000 笔记",
+	"3,000 notes · 20 AI searches a day · 1 vault": "3000 笔记 · 每天 20 次 AI 搜索 · 1 个仓库",
+	"3,000 notes, all searchable": "3000 笔记，全部可搜索",
+	"20 AI searches a day": "每天 20 次 AI 搜索",
 	"1 vault": "1 个仓库",
 	"1 GB attachments": "1 GB 附件",
 	"2 devices": "2 个设备",
@@ -222,11 +222,6 @@ export default {
 	"Unlimited vaults": "无限仓库",
 	"50 GB attachments": "50 GB 附件",
 	"Cross-vault search": "跨仓库搜索",
-	"{count} of your notes aren't searchable. Only your oldest {indexed} are indexed, so your newest notes won't show up in search.":
-		{
-			other:
-				"您的 {count} 笔记无法搜索。仅索引最近 {indexed} 个笔记，因此最新的笔记不会出现在搜索结果中。",
-		},
 	"Loading plan options…": "正在加载方案选项…",
 	"Plan change confirmed.": "计划变更已确认。",
 	"Could not change plan. Please try again.": "无法更改计划。请重试。",
@@ -660,7 +655,6 @@ export default {
 	"Searching…": "搜索中…",
 	"Search failed: {message}": "搜索失败：{message}",
 	'No results for "{term}"': '没有找到 "{term}" 的结果',
-	"Upgrade to search everything": "升级以搜索全部内容",
 	Recent: "最近",
 	"Any time": "任何时间",
 	"7 days": "7天",
@@ -791,8 +785,6 @@ export default {
 	"The current agreement isn’t available right now.": "当前协议暂时不可用。",
 	"We can’t display the latest terms at the moment, so signup is paused rather than asking you to agree to something you can’t read. Please try again shortly.":
 		"暂时无法显示最新条款，因此暂停注册，而不是要求您同意您无法阅读的内容。请稍后再试。",
-	"How did you hear about Engram?": "你是通过什么途径了解 Engram 的？",
-	"Pick one to continue.": "选择一个继续。",
 	"I have read and agree to the Terms of Service and Privacy Policy":
 		"我已阅读并同意服务条款和隐私政策",
 	"I have read and agree to the agreement shown above and the privacy notice":
@@ -834,6 +826,9 @@ export default {
 	"Connect another MCP client": "连接其他 MCP 客户端",
 	"A vault holds your notes. You can rename it or add more later.":
 		"一个仓库包含你的笔记。你可以稍后重命名或添加更多。",
+	"How did you hear about Engram?": "你是通过什么途径了解 Engram 的？",
+	"Pick one to continue.": "选择一个继续。",
+	"Couldn't save your answers, please try again.": "无法保存你的答案，请重试。",
 	"Choose your plan": "选择你的方案",
 	"7-day free trial on paid plans. Card required, no charge until it ends.":
 		"付费方案提供 7 天免费试用。需要信用卡，到期才收费。",
@@ -845,13 +840,6 @@ export default {
 	"your app": "你的应用",
 	"Cancel connection": "取消连接",
 	"Connecting {app}": "连接 {app}",
-	"Which AI tools do you use?": "您使用哪些 AI 工具？",
-	"AI assistants": "AI 助手",
-	"Coding tools": "编程工具",
-	"Another MCP client": "另一个 MCP 客户端",
-	"Why {tool} can't be connected": "为什么无法连接 {tool}",
-	"Not a comprehensive list, pick {client} if yours isn't here.":
-		"并非完整列表，如果您的工具不在列表中，请选择 {client}。",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"无法保存您的选择。请重试点击 — 如果仍然失败，请刷新页面。",
 	"Let's get your notes in.": "让我们开始导入您的笔记。",
@@ -887,14 +875,20 @@ export default {
 		"打开插件的 {tab} 选项卡，点击 {action}，然后使用你的 Engram 账号进行身份验证。",
 	"The Gemini app can't add custom MCP connectors. Antigravity, Google's Gemini-powered coding tool, can. Pick it under Coding tools.":
 		"Gemini应用无法添加自定义MCP连接器。Antigravity，谷歌的Gemini驱动的编码工具，可以。在“编码工具”中选择它。",
+	"Another MCP client": "另一个 MCP 客户端",
 	"I'm not connecting an AI tool yet": "我暂时不连接任何AI工具",
 	"Use Engram in the web app. You can connect a tool later from Settings.":
 		"在网页版Engram中使用。稍后可以在“设置”中连接工具。",
 	"Help us shape Engram": "帮助我们改进 Engram",
 	"Two quick questions. Both are optional.": "两个简单问题，均可选择。",
-	"Couldn't save your answers, please try again.": "无法保存你的答案，请重试。",
+	"Which AI tools do you use?": "您使用哪些 AI 工具？",
 	Skip: "跳过",
 	Save: "保存",
+	"AI assistants": "AI 助手",
+	"Coding tools": "编程工具",
+	"Why {tool} can't be connected": "为什么无法连接 {tool}",
+	"Not a comprehensive list, pick {client} if yours isn't here.":
+		"并非完整列表，如果您的工具不在列表中，请选择 {client}。",
 	Account: "账户",
 	"Manage your profile, password, and account.": "管理你的资料、密码和账号。",
 	"Manage your profile, security, and active sessions.": "管理你的资料、安全设置和活动会话。",

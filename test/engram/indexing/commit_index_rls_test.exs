@@ -47,7 +47,8 @@ defmodule Engram.Indexing.CommitIndexRlsTest do
   never exercising RLS at all.
 
   **2. Driving this through `index_note/2` would pass vacuously.** That path
-  calls `IndexCap.within_cap?/2` first, which opens its own
+  opens a tenant block before commit (it was `IndexCap.within_cap?/2` when
+  this was written; any prelude read does the same), which opens its own
   `Repo.with_tenant/2`. Its exit runs `set_config('role', 'none', true)`, and a
   subtransaction's `SET LOCAL` persists to the enclosing transaction once it
   commits — that is precisely why `Repo.with_tenant/2` resets the role from
