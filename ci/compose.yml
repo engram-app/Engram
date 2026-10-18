@@ -37,6 +37,9 @@ services:
         RUNNER_IMAGE: debian:bookworm-20241202-slim
         # LAN Hex pull-through (set by CI env; empty for local dev = upstream).
         HEX_MIRROR: ${HEX_MIRROR:-}
+        # Prebuilt toolchain + compiled-deps image (CI sets it; see the
+        # Dockerfile's DEPS_IMAGE). Default = build the `deps` stage inline.
+        DEPS_IMAGE: ${DEPS_IMAGE:-deps}
     ports:
       - "${CI_ENGRAM_PORT:-8100}:4000"
     environment:

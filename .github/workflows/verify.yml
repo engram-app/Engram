@@ -629,6 +629,21 @@ jobs:
           # Build locally only if this daemon doesn't already have the layers.
           IMAGE_LOCAL="engram-ci:${HASH}"
           if ! docker image inspect "$IMAGE_LOCAL" >/dev/null 2>&1; then
+            # Toolchain + compiled deps, shared by every runner via the registry
+            # and rebuilt only when its inputs move (lockfile, Dockerfile, deps'
+            # compile-time config). Cuts ~210s of dep compile from every build.
+            # No registry = leave DEPS_IMAGE unset and build the stage inline.
+            if [ -n "${LOCAL_REGISTRY:-}" ]; then
+              DEPS_HASH=$(cat Dockerfile mix.lock config/config.exs config/prod.exs native/Cargo.lock | sha256sum | cut -c1-16)
+              export DEPS_IMAGE="${LOCAL_REGISTRY}/engram-deps:${DEPS_HASH}"
+              if docker pull -q "$DEPS_IMAGE" >/dev/null 2>&1; then
+                echo "::notice::Reusing $DEPS_IMAGE"
+              else
+                echo "::notice::Building $DEPS_IMAGE (deps inputs changed)"
+                docker build --target deps --build-arg "HEX_MIRROR=${HEX_MIRROR:-}" -t "$DEPS_IMAGE" .
+                docker push "$DEPS_IMAGE"
+              fi
+            fi
             # The buildkit/docker daemon on the isolated pool can be reclaimed
             # mid-`mix release`, dropping the gRPC transport with `graceful_stop`
             # (#567) — a host/daemon event, not a build error. The build is
