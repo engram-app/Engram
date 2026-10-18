@@ -156,6 +156,12 @@ config :engram, :embedder, Engram.MockEmbedder
 # Tests that need real Qdrant interaction use Bypass and override :qdrant_url.
 config :engram, :qdrant_collection, "engram_notes"
 config :engram, :qdrant_retry, false
+# Search's 5s fail-fast is a prod budget. Under full-suite load a Bypass reply
+# can starve past it and read as `%Req.TransportError{reason: :timeout}`, a
+# false failure (#886). Nine suites hit search through Bypass and only some
+# pinned a per-process override; this covers all of them. No test asserts the
+# 5s default (qdrant_req_opts_test checks retry counts, not the budget).
+config :engram, :qdrant_search_timeout, 30_000
 
 # Use in-memory ETS storage in tests — no DB I/O, no S3 required
 config :engram, :storage, Engram.Storage.InMemory
