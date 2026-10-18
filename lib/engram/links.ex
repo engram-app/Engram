@@ -251,10 +251,13 @@ defmodule Engram.Links do
     uniq = Enum.uniq(hmacs)
 
     %{
-      notes: fetch_candidates_by_hmac(user, vault, uniq, :notes, dek),
-      attachments: fetch_candidates_by_hmac(user, vault, uniq, :attachments, dek)
+      notes: user |> fetch_candidates_by_hmac(vault, uniq, :notes, dek) |> index_by_hmac(),
+      attachments:
+        user |> fetch_candidates_by_hmac(vault, uniq, :attachments, dek) |> index_by_hmac()
     }
   end
+
+  defp index_by_hmac(groups), do: Map.new(groups, fn {h, l} -> {h, index_candidates(l)} end)
 
   # Same extension-preference + cross-table-fallback rule as `resolve_target/4`,
   # reading from the prefetch instead of the DB.
@@ -461,32 +464,57 @@ defmodule Engram.Links do
     end)
   end
 
-  # Target-dependent filter + tiebreak — the part that varies per edge even
-  # when the candidate set (fetched above) is shared.
-  defp resolve_from_candidates(candidates, target, tag) do
-    candidates
-    |> filter_by_path(target)
-    |> Enum.sort_by(fn {_id, path} -> {String.length(path), path} end)
-    |> case do
-      [] -> :dangling
-      [{id, _path} | _] -> {tag, id}
-    end
+  # The tiebreak order and the case-insensitive path lookup, built ONCE per
+  # candidate set. Callers that resolve many targets against one shared set
+  # (`bind_danglers_for_hmac/3`, `replace_links/4`'s prefetch) index it once
+  # and then pay O(1) per target. Re-sorting per target made a rebind over a
+  # basename shared by C notes with E inbound edges O(E * C log C): 733
+  # `index.md` notes x 1,787 edges pinned the prod worker (2026-10-18).
+  #
+  # The order is `{String.length(path), path}`: shortest path wins, ties break
+  # lexicographically. Live rows in one vault have distinct paths, so it is
+  # total. `by_path` keeps the best-ranked row per lowercased path, so a
+  # folder target's winner is the lowest rank among its variants' hits.
+  defp index_candidates(candidates) do
+    sorted = Enum.sort_by(candidates, fn {_id, path} -> {String.length(path), path} end)
+
+    by_path =
+      sorted
+      |> Enum.with_index()
+      |> Enum.reduce(%{}, fn {{id, path}, rank}, acc ->
+        Map.put_new(acc, String.downcase(path), {rank, id})
+      end)
+
+    %{sorted: sorted, by_path: by_path}
   end
 
-  # A target with a folder segment narrows candidates to a full-path match
-  # (case-insensitive); a bare basename target keeps every same-basename
-  # candidate so the shortest-path tiebreak below can pick a winner.
-  defp filter_by_path(candidates, target) do
-    if String.contains?(target, "/") do
-      variants =
-        [target | Enum.map(@note_exts, &(target <> &1))]
-        |> Enum.map(&String.downcase/1)
+  # Target-dependent filter + tiebreak — the part that varies per edge even
+  # when the candidate set (fetched above) is shared. A raw list is indexed
+  # here, for one-shot callers; loops pass a prebuilt index.
+  defp resolve_from_candidates(candidates, target, tag) when is_list(candidates),
+    do: candidates |> index_candidates() |> resolve_from_candidates(target, tag)
 
-      Enum.filter(candidates, fn {_id, path} ->
-        is_binary(path) and String.downcase(path) in variants
+  # A target with a folder segment narrows candidates to a full-path match
+  # (case-insensitive, also trying `.md`/`.canvas` appended); a bare basename
+  # target takes the best-ranked same-basename candidate.
+  defp resolve_from_candidates(%{sorted: sorted, by_path: by_path}, target, tag) do
+    if String.contains?(target, "/") do
+      [target | Enum.map(@note_exts, &(target <> &1))]
+      |> Enum.flat_map(fn variant ->
+        case Map.fetch(by_path, String.downcase(variant)) do
+          {:ok, hit} -> [hit]
+          :error -> []
+        end
       end)
+      |> case do
+        [] -> :dangling
+        hits -> {tag, hits |> Enum.min() |> elem(1)}
+      end
     else
-      candidates
+      case sorted do
+        [] -> :dangling
+        [{id, _path} | _] -> {tag, id}
+      end
     end
   end
 
@@ -728,8 +756,11 @@ defmodule Engram.Links do
       # `rebind_edge/6` applies in memory against these shared lists via
       # the same `route_resolution/3` + `resolve_from_candidates/3` rules
       # `resolve_target/4` uses.
-      note_candidates = fetch_decrypted_candidates(user, vault, hmac, :notes, dek)
-      attachment_candidates = fetch_decrypted_candidates(user, vault, hmac, :attachments, dek)
+      note_candidates =
+        user |> fetch_decrypted_candidates(vault, hmac, :notes, dek) |> index_candidates()
+
+      attachment_candidates =
+        user |> fetch_decrypted_candidates(vault, hmac, :attachments, dek) |> index_candidates()
 
       Enum.each(edges, fn edge ->
         target_text =
