@@ -1,5 +1,7 @@
 # CI registry (`:5001`) down, and how to keep and prune it safely
 
+_Last verified: 2026-10-18_
+
 The FastRaid CI registry (`LocalCIRegistry`, `10.0.20.214:5001`) holds the
 `engram-ci` images and the `ci-*` fingerprint markers. Until 2026-08 the Unraid
 Appdata Backup plugin stopped it every Monday ~04:00 to tar it, breaking CI for
@@ -79,6 +81,28 @@ the retention pass cannot parse `-failed`-suffixed dir names
 `false`), so it keeps them forever. After any stretch of red backups, delete
 `-failed` dirs by hand on both FastRaid and SlowRaid.
 
+## Host layout
+
+- `LocalCIRegistry`: plain `registry:2`, `10.0.20.214:5001 -> 5000`.
+- Data: `/mnt/cache/appdata/local-ci-registry`.
+- DockerMan template:
+  `/boot/config/plugins/dockerMan/templates-user/my-LocalCIRegistry.xml`.
+  Change env there, then recreate with the dockerman label, or the next
+  DockerMan update reverts it.
+- Repos: `engram-ci` (one app image per CI run), `engram-deps` (below), and the
+  `ci-*` fingerprint markers.
+- `REGISTRY_STORAGE_DELETE_ENABLED=true` since 2026-10-18 (template + container),
+  so `DELETE /v2/<repo>/manifests/<digest>` returns `202`. Before that the API
+  refused deletes; the prune script never needed it (it works on disk).
+
+### `engram-deps`
+
+Prebuilt toolchain + compiled-deps base image (PR #2014). Tag = sha256 of
+`Dockerfile`, `mix.lock`, `config/config.exs`, `config/prod.exs`,
+`native/Cargo.lock`. Rebuilt only when one of those changes (~9 min cold);
+otherwise reused, which took the CI image build from 7m to 1m44s. Retention
+must never delete the newest tag, or every run pays the cold build.
+
 ## Pruning the registry: retention, not GC
 
 One full app image is pushed per CI run and nothing else prunes them. A plain
@@ -86,11 +110,31 @@ One full app image is pushed per CI run and nothing else prunes them. A plain
 blobs no manifest references and every manifest is still tagged. The lever is
 **tag retention**: remove tag dirs under `repositories/<repo>/_manifests/tags/`,
 then `garbage-collect --delete-untagged`. `storage.delete.enabled` gates only the
-HTTP DELETE API, not the CLI.
+HTTP DELETE API, not the CLI (on-disk tag removal works either way).
 
-Source of truth: **`ci/prune-ci-registry.sh`**, copied to the FastRaid host and
-run by the User Scripts plugin Sundays 05:00. Knobs: `KEEP_DAYS` (default 14),
-`MIN_IDLE_SEC` (default 1800), `DRY_RUN=1`.
+Source of truth: **`ci/prune-ci-registry.sh`**, copied to the FastRaid host as
+the User Script "Prune CI Registry"
+(`/boot/config/plugins/user.scripts/scripts/Prune CI Registry/script`). Knobs:
+`KEEP_DAYS` (default 14), `MIN_IDLE_SEC` (default 1800), `DRY_RUN=1`. It deletes
+tag dirs on disk (`engram-ci` > 15d, `ci-*` markers > 14d, `engram-deps` > 15d
+except the newest), then runs `garbage-collect --delete-untagged`.
+
+**Drift:** as of 2026-10-18 the `engram-deps` rule exists only in the host copy;
+the repo script still prunes `engram-ci` + markers only. Port it before the next
+copy-to-host, or the copy silently drops it. Host edits leave backups with the
+suffix `bak-2026-10-18`.
+
+### The schedule lives in `customSchedule.cron`
+
+The User Scripts plugin builds `/etc/cron.d/root` (via `update_cron`) from
+`/boot/config/plugins/user.scripts/customSchedule.cron`. Editing
+`schedule.json` alone changes nothing. Runs are now **daily 03:30** (was weekly
+Sun 05:00). The weekly run hit the idle guard on 2026-10-11 and aborted, so a
+whole extra week piled up: 473 `engram-ci` tags (146 past 14 days), 1001 stale
+markers, 54 GB. Daily gives it seven chances a week at a quiet window. If the
+registry is growing, read the log first:
+`/tmp/user.scripts/tmpScripts/Prune CI Registry/log.txt` (an `ABORT` on the idle
+guard is expected occasionally, not every day).
 
 **The marker window MUST be shorter than the image window.** A marker says
 "this content already went green", so CI skips `prebuild-ci-image`. A marker
@@ -117,6 +161,13 @@ not relax it.
 - The script holds a `flock` (two concurrent sweeps delete blobs the other still
   references) and checks the `garbage-collect` exit status (never pipe it
   through `grep || true`).
+
+## Runner-side image prune
+
+The registry is not the only place images pile up. `cron.yml`'s nightly runner
+prune keeps only the newest `*/engram-ci:*` and `*/engram-deps:*` on each runner.
+The old `reference=engram-ci:*` filter never matched, because pulled tags are
+registry-qualified (`10.0.20.214:5001/engram-ci:...`); match on `*/<repo>:*`.
 
 ## Related
 
