@@ -20,8 +20,8 @@ services:
       args:
         # Bare image refs; runner's HTTPS_PROXY config caches via FastRaid
         # transparently (see docs/context/runner-vm-setup.md Gotcha #6).
-        NODE_IMAGE: node:20-slim
-        BUILDER_IMAGE: hexpm/elixir:1.17.3-erlang-27.3.4.14-debian-bookworm-20260623-slim
+        # No BUILDER_IMAGE here: the Dockerfile default is the single source,
+        # and it feeds the engram-deps hash (CI builds the deps stage directly).
         RUNNER_IMAGE: debian:bookworm-20241202-slim
     ports:
       - "${CI_ENGRAM_PORT:-8110}:4000"

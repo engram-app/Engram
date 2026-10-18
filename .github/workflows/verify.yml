@@ -640,8 +640,17 @@ jobs:
                 echo "::notice::Reusing $DEPS_IMAGE"
               else
                 echo "::notice::Building $DEPS_IMAGE (deps inputs changed)"
-                docker build --target deps --build-arg "HEX_MIRROR=${HEX_MIRROR:-}" -t "$DEPS_IMAGE" .
-                docker push "$DEPS_IMAGE"
+                # Same retry as the compose build below: the daemon can be
+                # reclaimed mid-build (#567) and :5001 has a nightly outage.
+                for attempt in 1 2 3; do
+                  if docker build --target deps --build-arg "HEX_MIRROR=${HEX_MIRROR:-}" -t "$DEPS_IMAGE" . \
+                     && docker push "$DEPS_IMAGE"; then
+                    break
+                  fi
+                  [ "$attempt" = 3 ] && { echo "::error::engram-deps build/push failed after 3 attempts"; exit 1; }
+                  echo "::warning::engram-deps attempt $attempt failed, retrying in 15s"
+                  sleep 15
+                done
               fi
             fi
             # The buildkit/docker daemon on the isolated pool can be reclaimed
