@@ -54,12 +54,21 @@ once. Hoist the stub's array.
 `api/channel.ts` coalesces `note_changed` events for 250 ms
 (`BATCH_WINDOW_MS`); `queries.ts` applies the batch in one pass
 (`applyNoteEvents` in `vault-tree-patch.ts`) instead of re-downloading the vault. It re-fetches
-instead when a patch can't be trusted: an attachment upsert at a path the tree
-lacks (the broadcast carries no id; known paths and deletes patch by path via
-`applyAttachmentEvents`, and the web's own upload patches from its response),
-a malformed attachment event, a folder-marker delete (no id), no tree cached, a tree
-fetch already in flight (its older response would land on top of the patch), or
-**any note moving to a different folder** (`movesAcrossFolders`). That last one
+instead when a patch can't be trusted: an attachment upsert at a new path with
+no `id` (an older server; current upserts carry `id` + `updated_at`), a
+malformed attachment event, a folder-marker delete, a folder create naming no
+marker ids (older server), no tree cached, or **any note moving to a different
+folder** (`movesAcrossFolders`).
+
+**In-flight fetch:** events that land while a tree request is out go into that
+request's buffer (`openTreeEventBuffer`, per vault) and are replayed onto its
+response by `replayTreeEvents`, instead of restarting the fetch (that restart
+was a 298-fetch loop in a 1,000-note first sync). All buffered events replay,
+since no seq says which the response already holds; every patch is
+last-writer-wins per row, so a re-applied one is a no-op. A request that is
+cancelled or fails owes one `invalidateVaultTree` if its buffer was non-empty:
+a cancel reverts to data that may be marked fresh, and the events exist
+nowhere else. That last one
 is the non-obvious one: `rename_folder` broadcasts one upsert+delete pair per
 note and NOTHING about the folder marker, so a patch moves the notes but leaves
 the old marker listed (markers survive empty). A plain move out of a marker
@@ -163,8 +172,9 @@ error from a cumulative one.
   was ~35ms.
 
 ## Gotchas
-- **`api.get<T>(path)` does NOT forward an AbortSignal** (only `post`/etc. take
-  a `signal` opt), so `qc.cancelQueries` cannot abort an in-flight GET.
+- **A test mock of `api.get` must reject on `signal` abort**, as the real one
+  does (`client.ts`). A mock promise that never settles keeps the queryFn's
+  `finally` from running, so cancel-path code never executes in the test.
 
 ### Deliberately NOT consolidated
 - **`['folderNotes', vaultId, folder]` (`/folders/list`) stays a second copy**

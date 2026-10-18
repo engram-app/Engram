@@ -241,6 +241,7 @@ async function fetchVaultTreeFresh({
 	// `applyVaultTreeEvents` and replayed onto its response. Each request gets a
 	// fresh buffer: events seen before it was issued are already in its answer.
 	let buffer = openTreeEventBuffer(vaultId);
+	let landed = false;
 	try {
 		let seen = treeInvalidationGen;
 		let tree = await api.get<VaultTree>("/vault/tree", { signal });
@@ -262,10 +263,17 @@ async function fetchVaultTreeFresh({
 			// coalesced into it and cleared by its success.
 			setTimeout(() => invalidateVaultTree(client, vaultId), 0);
 		}
+		landed = true;
 		return rebasePendingTreeWrites(client, vaultId, patched ?? tree);
 	} finally {
 		if (treeEventBuffers.get(vaultId) === buffer) {
 			treeEventBuffers.delete(vaultId);
+			// A cancel or failure drops events nothing else holds: a cancel reverts
+			// to data that may be marked fresh. Owe a refetch, on a timer for the
+			// same reason as above.
+			if (!(landed || isEmptyBuffer(buffer))) {
+				setTimeout(() => invalidateVaultTree(client, vaultId), 0);
+			}
 		}
 	}
 }
@@ -291,17 +299,22 @@ function openTreeEventBuffer(vaultId: unknown): TreeEventBuffer {
  * one needs a request issued after it (the same rules as `applyVaultTreeEvents`).
  *
  * No seq says which events the response already reflects (see the `VaultTree`
- * note), so ALL of them are replayed, in arrival order. That is safe because
+ * note), so ALL of them are replayed, in arrival order within each kind (notes,
+ * attachments, markers are separate rows). That is safe because
  * every patch is last-writer-wins per note or attachment: an event the snapshot
  * already contains re-applies the same value, and any later change to that row
  * has its own later event, here or still to come over the socket.
  */
-function replayTreeEvents(tree: VaultTree, buffer: TreeEventBuffer): VaultTree | null {
-	if (
+function isEmptyBuffer(buffer: TreeEventBuffer): boolean {
+	return (
 		buffer.events.length === 0 &&
 		buffer.attachmentEvents.length === 0 &&
 		buffer.markers.length === 0
-	) {
+	);
+}
+
+function replayTreeEvents(tree: VaultTree, buffer: TreeEventBuffer): VaultTree | null {
+	if (isEmptyBuffer(buffer)) {
 		return tree;
 	}
 	return applySyncEvents(tree, buffer.events, buffer.attachmentEvents, buffer.markers);
