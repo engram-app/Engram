@@ -24,12 +24,14 @@ export default defineConfig({
 	// wait budgets (the note-live-update / tree-ops / note-properties flakes,
 	// issue #547). Locally, leave Playwright to pick worker count.
 	workers: isCI ? 1 : undefined,
-	retries: isCI ? 1 : 0,
+	// No retries: a pass-on-retry was counted green and recorded nowhere, which
+	// hid flakes from the nightly ledger. A flaky test is a finding.
+	retries: 0,
 	reporter: isCI ? "github" : "html",
 	globalSetup: "./e2e/global-setup.ts",
 	globalTeardown: "./e2e/global-teardown.ts",
 	use: {
-		trace: "on-first-retry",
+		trace: "retain-on-failure",
 		screenshot: "only-on-failure",
 		...devices["Desktop Chrome"],
 		// The app follows navigator.languages; pin English so specs do not depend on the dev machine's locale.

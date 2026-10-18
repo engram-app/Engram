@@ -2655,14 +2655,13 @@ jobs:
           # Mirrors prod entrypoint.sh ordering.
           MIX_ENV=test mix engram.prepare_database
           MIX_ENV=test mix ecto.migrate
-          # Ensure Tailwind binary is valid (cache prune can corrupt native deps)
-          mix tailwind.install 2>/dev/null || true
           # --warnings-as-errors treats compile-time warnings in test files
           # (unused aliases, unused vars, etc.) as fatal. Lib warnings are
           # already gated by `mix compile --warnings-as-errors` in the lint
           # job; this extends the same bar to test/**.
-          # --slowest 20 surfaces the slowest tests each run so async/serial
-          # tuning stays data-driven (the suite is sync-pool-bound, not CPU-bound).
+          # No --slowest: it implies --trace, which runs EVERY test serially
+          # (async ones included, the log showed max_cases: 1). For timings,
+          # run `mix test --slowest 20` locally.
           #
           # ALWAYS the whole suite. This used to run `mix test --stale` on PRs
           # and the full suite only on main ("a mis-narrowed --stale set on a
@@ -2678,7 +2677,7 @@ jobs:
           # costing the correctness premise of the entire marker system. The
           # marker skip now saves far more than --stale ever did, because it
           # skips the compile too.
-          mix test --warnings-as-errors --slowest 20
+          mix test --warnings-as-errors
 
       - name: Qdrant state after a test failure
         if: failure()
@@ -4224,10 +4223,11 @@ jobs:
     # runner VMs there are enough heavy slots for all three suites at once.
     # Needs-set matches e2e-clerk (see its needs comment: shared set = one
     # run-graph cluster of the e2e family). This suite consumes prebuild-mix
-    # (boots Phoenix from _build); prebuild-ci-image is unconsumed here.
+    # (boots Phoenix from _build); prebuild-ci-image is unconsumed here, so it
+    # is not in needs (waiting on it cost 1.5-5 min of wall-clock per PR).
     # No !cancelled(): on repository_dispatch prebuild-mix skips and the
     # resulting auto-skip is exactly what this suite wants there.
-    needs: [fingerprint, prebuild-ci-image, prebuild-mix]
+    needs: [fingerprint, prebuild-mix]
     # Skip on cross-repo plugin dispatch — Playwright targets backend's React
     # frontend, which the plugin (separate repo) cannot affect.
     # Also skip via the per-job fingerprint (skip-e2e-browser =
@@ -4363,7 +4363,7 @@ jobs:
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: mix deps.get
 
-      - name: Wait for DB + ecto setup + tailwind
+      - name: Wait for DB + ecto setup
         env:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_dev
         run: |
@@ -4377,10 +4377,6 @@ jobs:
           # See unit-tests job comment — prepare_database must precede migrate.
           mix engram.prepare_database
           mix ecto.migrate
-          # Ensure Tailwind binary is valid (cache prune can corrupt native deps).
-          # Mirror of unit-tests fix — Playwright's webServer boots Phoenix
-          # which boots Tailwind, and a corrupt :eacces binary kills the boot.
-          mix tailwind.install 2>/dev/null || true
 
       - name: Install frontend deps + Playwright
         working-directory: frontend
@@ -4432,6 +4428,10 @@ jobs:
           E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
           CLERK_JWKS_URL: ${{ secrets.CLERK_JWKS_URL }}
           CLERK_ISSUER: ${{ secrets.CLERK_ISSUER }}
+          # The per-locale i18n specs (15 locales x 3 specs, ~45 tests, 7-9 min)
+          # run on the nightly and on force_full dispatches (the release-v*
+          # gate), not on PR/main pushes. See e2e/support/i18n-leaks.ts.
+          E2E_ALL_LOCALES: ${{ (github.event_name == 'schedule' || github.event.inputs.force_full == 'true') && '1' || '' }}
           CI: "true"
         run: |
           export PATH="$HOME/.bun/bin:$PATH"
@@ -4478,7 +4478,12 @@ jobs:
     # non-failing, because a content-addressed marker hit is a sound reason not
     # to re-run. Only the reporting is new.
     if: always()
-    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, e2e-lint, storage-database, e2e-clerk, e2e-crdt, e2e-browser, migration-gates, static-checks]
+    # e2e-clerk / e2e-crdt / e2e-browser are deliberately NOT here. They are
+    # report-only (they post their own PR checks), and waiting on them made the
+    # 16-28 min e2e-browser the PR's wall-clock even though `ci` ignored its
+    # result. record-pass waits on them instead, so the e2e marker still means
+    # "e2e passed".
+    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, e2e-lint, storage-database, migration-gates, static-checks]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Check required jobs
@@ -4489,9 +4494,6 @@ jobs:
           FL="${{ needs.frontend-lint.result }}"
           EL="${{ needs.e2e-lint.result }}"
           SD="${{ needs.storage-database.result }}"
-          EC="${{ needs.e2e-clerk.result }}"
-          ED="${{ needs.e2e-crdt.result }}"
-          EB="${{ needs.e2e-browser.result }}"
           SC="${{ needs.static-checks.result }}"
           MG="${{ needs.migration-gates.result }}"
 
@@ -4510,24 +4512,8 @@ jobs:
           fi
 
           # Full-Obsidian e2e (e2e-clerk / e2e-crdt / e2e-browser) is REPORT-ONLY
-          # as of the testing-architecture migration: it is structurally
-          # nondeterministic (real Obsidian + Xvfb + shared runners), and a ~50%
-          # flaky gate stopped nothing while blocking correct, unit-proven work.
-          # Convergence is now gated deterministically (unit-tests incl. the CRDT
-          # head-consistency property + the plugin sim tier's differential gate);
-          # the full Obsidian suite still RUNS here and posts its own PR checks,
-          # and remains the gate on main/nightly + the release-v* gate — it just
-          # no longer blocks a PR. The deterministic jobs below stay hard-required.
-          if [ "$EC" != "success" ] && [ "$EC" != "skipped" ]; then
-            echo "::warning::e2e-clerk failed: $EC (report-only — not gating; see docs/context/testing-architecture-migration.md)"
-          fi
-          if [ "$ED" != "success" ] && [ "$ED" != "skipped" ]; then
-            echo "::warning::e2e-crdt failed: $ED (report-only — not gating)"
-          fi
-          if [ "$EB" != "success" ] && [ "$EB" != "skipped" ]; then
-            echo "::warning::e2e-browser failed: $EB (report-only — not gating)"
-          fi
-
+          # (docs/context/testing-architecture-migration.md) and is not in this
+          # job's needs: each posts its own PR check; the release-v* gate blocks.
           # A SKIPPED job is not a pass — it is "an earlier tree passed, and the
           # content fingerprint says nothing this job covers has changed since".
           # That inference is sound, but it renders identically to a verified
@@ -4548,8 +4534,7 @@ jobs:
           # So gate the same, but stop the SIGNAL from lying (option C).
           SKIPPED=()
           for pair in "unit-tests=$UT" "lint=$LN" "frontend-lint=$FL" "e2e-lint=$EL" \
-                      "storage-database=$SD" "static-checks=$SC" "migration-gates=$MG" \
-                      "e2e-clerk=$EC" "e2e-crdt=$ED" "e2e-browser=$EB"; do
+                      "storage-database=$SD" "static-checks=$SC" "migration-gates=$MG"; do
             [ "${pair#*=}" = "skipped" ] && SKIPPED+=("${pair%=*}")
           done
           if [ ${#SKIPPED[@]} -gt 0 ]; then
@@ -4786,7 +4771,7 @@ jobs:
   # that case to avoid recording a green for jobs that didn't execute.
   record-pass:
     if: always() && needs.ci.result == 'success' && github.event_name != 'schedule'
-    needs: [fingerprint, ci]
+    needs: [fingerprint, ci, e2e-clerk, e2e-crdt, e2e-browser]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       # Markers live in LOCAL_REGISTRY (FastRaid 10.0.20.214:5001) as tiny
@@ -4816,7 +4801,16 @@ jobs:
           rm -rf "$WORKDIR"
           echo "::notice::Saved backend marker $TAG"
 
+      # The e2e-hash marker lets a later run skip e2e-clerk, so e2e-clerk must
+      # have actually RUN green here, and no other suite may have failed. `ci`
+      # passes on a red e2e (report-only), so gating on `ci` alone recorded
+      # "e2e passed" for red e2e runs. (Targeted [e2e: ...] runs never reach
+      # here: `ci` fails them.)
       - name: Save e2e marker to registry
+        if: >-
+          needs.e2e-clerk.result == 'success'
+          && !contains(fromJSON('["failure","cancelled"]'), needs.e2e-crdt.result)
+          && !contains(fromJSON('["failure","cancelled"]'), needs.e2e-browser.result)
         env:
           E2E_HASH: ${{ needs.fingerprint.outputs.e2e-hash }}
           PLUGIN_SHA: ${{ needs.fingerprint.outputs.plugin-sha }}
@@ -4911,6 +4905,9 @@ jobs:
           record storage-database "$STORAGE_DATABASE_RESULT" "$HASH_STORAGE_DATABASE"
           record e2e-clerk        "$E2E_CLERK_RESULT"        "$HASH_E2E_CLERK"
           record e2e-crdt         "$E2E_CRDT_RESULT"         "$HASH_E2E_CRDT"
+          # e2e-browser's marker covers the PR tier (English). The per-locale
+          # specs run only on the nightly and force_full release gate, and both
+          # bypass markers, so this marker can never skip them where they gate.
           record e2e-browser      "$E2E_BROWSER_RESULT"      "$HASH_E2E_BROWSER"
 
   # Single source of truth for the backend/e2e commit status on plugin PRs.
