@@ -13,14 +13,11 @@ describe("pending authorization stash", () => {
 		window.sessionStorage.clear();
 	});
 
-	it("round-trips the consent URL, the tool slug and the client name", () => {
-		stashPendingAuthorization(SEARCH, "antigravity", "Google Antigravity");
+	it("round-trips the consent URL", () => {
+		stashPendingAuthorization(SEARCH);
 
 		expect(peekPendingAuthorization()).toEqual({
 			returnTo: `/oauth/consent${SEARCH}`,
-			toolSlug: "antigravity",
-			clientName: "Google Antigravity",
-			redirectVerified: false,
 		});
 	});
 
@@ -32,9 +29,6 @@ describe("pending authorization stash", () => {
 
 		expect(peekPendingAuthorization()).toEqual({
 			returnTo: "/link?code=ENGR-7X4K",
-			toolSlug: null,
-			clientName: "Obsidian",
-			redirectVerified: false,
 		});
 	});
 
@@ -52,23 +46,17 @@ describe("pending authorization stash", () => {
 	// where onboarding should land, and the first one to ask must not delete
 	// the answer for the rest.
 	it("peek does not consume the stash", () => {
-		stashPendingAuthorization(SEARCH, null, null);
+		stashPendingAuthorization(SEARCH);
 
 		expect(peekPendingAuthorization()).not.toBeNull();
 		expect(peekPendingAuthorization()).not.toBeNull();
 	});
 
 	it("clear removes it", () => {
-		stashPendingAuthorization(SEARCH, null, null);
+		stashPendingAuthorization(SEARCH);
 		clearPendingAuthorization();
 
 		expect(peekPendingAuthorization()).toBeNull();
-	});
-
-	it("carries a null slug for a client we cannot attribute", () => {
-		stashPendingAuthorization(SEARCH, null, null);
-
-		expect(peekPendingAuthorization()?.toolSlug).toBeNull();
 	});
 
 	describe("rejects a tampered stash", () => {
@@ -99,15 +87,6 @@ describe("pending authorization stash", () => {
 			);
 
 			expect(peekPendingAuthorization()).toBeNull();
-		});
-
-		it("drops a non-string tool slug", () => {
-			window.sessionStorage.setItem(
-				"engram:pending-oauth",
-				JSON.stringify({ returnTo: "/oauth/consent?a=1", toolSlug: { evil: true } }),
-			);
-
-			expect(peekPendingAuthorization()?.toolSlug).toBeNull();
 		});
 
 		it("drops malformed JSON rather than throwing", () => {

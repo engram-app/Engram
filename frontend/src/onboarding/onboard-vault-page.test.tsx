@@ -212,7 +212,7 @@ describe("OnboardVaultPage: with an OAuth consent parked", () => {
 	});
 
 	it("returns to the consent screen once Obsidian is picked", async () => {
-		stashPendingAuthorization("?client_id=chatgpt&state=s1", "chatgpt", "ChatGPT");
+		stashPendingAuthorization("?client_id=chatgpt&state=s1");
 		renderPage();
 
 		fireEvent.click(screen.getByText(/i already use obsidian/iu));

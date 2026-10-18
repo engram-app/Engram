@@ -62,16 +62,11 @@ describe("OnboardLayout pending authorization", () => {
 	});
 
 	it("shows no connecting bar while an authorization is parked", () => {
-		stashPendingAuthorization(
-			"?redirect_uri=https://app/cb&state=xyz",
-			null,
-			"Google Antigravity",
-			true,
-		);
+		stashPendingAuthorization("?redirect_uri=https://app/cb&state=xyz");
 
 		renderAt("/onboard/heard", SAAS);
 
-		expect(screen.queryByText(/Google Antigravity/u)).toBeNull();
+		expect(screen.queryByText(/connecting/iu)).toBeNull();
 		expect(screen.queryByRole("button", { name: /cancel connection/iu })).toBeNull();
 	});
 });

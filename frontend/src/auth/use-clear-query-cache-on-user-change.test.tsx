@@ -77,7 +77,7 @@ describe("useClearQueryCacheOnUserChange", () => {
 	// Approving there mints a grant on B's account and ships the code to A's
 	// redirect.
 	it("drops a parked OAuth authorization on sign-out", () => {
-		stashPendingAuthorization("?client_id=abc&state=xyz", null, "Claude Code");
+		stashPendingAuthorization("?client_id=abc&state=xyz");
 		expect(peekPendingAuthorization()).not.toBeNull();
 
 		const { rerender } = mount("user_A");
@@ -87,7 +87,7 @@ describe("useClearQueryCacheOnUserChange", () => {
 	});
 
 	it("drops a parked OAuth authorization on a direct cross-account swap", () => {
-		stashPendingAuthorization("?client_id=abc&state=xyz", null, "Claude Code");
+		stashPendingAuthorization("?client_id=abc&state=xyz");
 
 		const { rerender } = mount("user_A");
 		rerender({ userId: "user_B" });
