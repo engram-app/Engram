@@ -14,6 +14,7 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
 
   alias Engram.Attachments
   alias Engram.Links
+  alias Engram.MCP.Handlers
   alias Engram.Notes
   alias Engram.Workers.ExtractNoteLinks
 
@@ -325,6 +326,129 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
       settle!()
 
       assert target_of(user, source).dangling
+    end
+  end
+
+  describe "CRDT renames" do
+    # Obsidian rewrites links itself on rename, so the server must not. Until
+    # the plugin's rewritten content arrives, a bare link falls through to
+    # whatever the old name now resolves to.
+    test "an Obsidian rename of the winner falls through to the sibling until the plugin rewrites",
+         %{user: user, vault: vault} do
+      short = note!(user, vault, "CrdtA.md")
+      sibling = note!(user, vault, "b/CrdtA.md")
+      source = note!(user, vault, "Source.md", "See [[CrdtA]].")
+      assert target_of(user, source).target_note_id == short.id
+
+      assert {:ok, _} =
+               Notes.genesis_crdt_note(user, vault, short.id, "CrdtZ.md", origin: "obsidian")
+
+      settle!()
+
+      assert target_of(user, source).target_note_id == sibling.id
+      assert backlink_sources(user, sibling) == [source.id]
+      assert backlink_sources(user, short) == []
+
+      # The plugin's rewrite lands as ordinary content.
+      _ = note!(user, vault, "Source.md", "See [[CrdtZ]].")
+      settle!()
+
+      link = target_of(user, source)
+      assert link.target_note_id == short.id
+      assert link.target_path == "CrdtZ.md"
+      assert backlink_sources(user, short) == [source.id]
+      assert backlink_sources(user, sibling) == []
+    end
+
+    test "an Obsidian rename with no sibling leaves the link dangling until the plugin rewrites",
+         %{user: user, vault: vault} do
+      target = note!(user, vault, "Solo.md")
+      source = note!(user, vault, "Source.md", "See [[Solo]].")
+
+      assert {:ok, _} =
+               Notes.genesis_crdt_note(user, vault, target.id, "Renamed.md", origin: "obsidian")
+
+      settle!()
+      assert target_of(user, source).dangling
+
+      _ = note!(user, vault, "Source.md", "See [[Renamed]].")
+      settle!()
+
+      assert target_of(user, source).target_note_id == target.id
+      assert backlink_sources(user, target) == [source.id]
+    end
+
+    test "an Obsidian folder move keeps bare links and drops stale folder links",
+         %{user: user, vault: vault} do
+      inner = note!(user, vault, "old/Inner.md")
+      source = note!(user, vault, "Source.md", "See [[Inner]] and [[old/Inner]].")
+
+      assert {:ok, _} =
+               Notes.genesis_crdt_note(user, vault, inner.id, "new/Inner.md", origin: "obsidian")
+
+      settle!()
+
+      assert [bare, folder] = outgoing(user, source)
+      assert bare.target_note_id == inner.id
+      assert bare.target_path == "new/Inner.md"
+      assert folder.dangling
+    end
+
+    test "a web-app rename rewrites the link and keeps it on the moved note",
+         %{user: user, vault: vault} do
+      short = note!(user, vault, "WebA.md")
+      _sibling = note!(user, vault, "b/WebA.md")
+      source = note!(user, vault, "Source.md", "See [[WebA]].")
+
+      assert {:ok, _} = Notes.genesis_crdt_note(user, vault, short.id, "WebZ.md", origin: "web")
+      settle!()
+
+      link = target_of(user, source)
+      assert link.target_note_id == short.id
+      assert link.target_text == "WebZ"
+      assert backlink_sources(user, short) == [source.id]
+    end
+  end
+
+  describe "MCP get_notes" do
+    defp mcp_links(user, vault, path) do
+      assert {:ok, _text, %{"notes" => [n]}} =
+               Handlers.handle("get_notes", user, vault, %{
+                 "paths" => [path],
+                 "include_links" => true
+               })
+
+      Map.take(n, ["backlinks", "outgoing", "unresolved"])
+    end
+
+    test "an attachment link is neither outgoing nor unresolved", %{user: user, vault: vault} do
+      _att = upload!(user, vault, "pic.png")
+      _note = note!(user, vault, "Note.md")
+      _source = note!(user, vault, "Source.md", "![[pic.png]] and [[Note]] and [[Ghost]]")
+      settle!()
+
+      assert mcp_links(user, vault, "Source.md") == %{
+               "backlinks" => [],
+               "outgoing" => ["Note.md"],
+               "unresolved" => ["Ghost"]
+             }
+    end
+
+    test "backlinks follow a shorter-path takeover and drop deleted sources",
+         %{user: user, vault: vault} do
+      _long = note!(user, vault, "deep/Hub.md")
+      _a = note!(user, vault, "A.md", "[[Hub]]")
+      _b = note!(user, vault, "B.md", "[[Hub]]")
+      settle!()
+      assert mcp_links(user, vault, "deep/Hub.md")["backlinks"] == ["A.md", "B.md"]
+
+      _short = note!(user, vault, "Hub.md")
+      :ok = Notes.delete_note(user, vault, "B.md")
+      settle!()
+
+      assert mcp_links(user, vault, "Hub.md")["backlinks"] == ["A.md"]
+      assert mcp_links(user, vault, "deep/Hub.md")["backlinks"] == []
+      assert mcp_links(user, vault, "A.md")["outgoing"] == ["Hub.md"]
     end
   end
 end
