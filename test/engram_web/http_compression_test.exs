@@ -35,7 +35,7 @@ defmodule EngramWeb.HttpCompressionTest do
 
     {:ok, {_ip, port}} = ThousandIsland.listener_info(pid)
 
-    {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port)
+    {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, mode: :passive)
     {:ok, conn, ref} = Mint.HTTP.request(conn, "GET", "/", [{"accept-encoding", accept}], nil)
     {headers, body} = recv_response(conn, ref, nil, [])
     Mint.HTTP.close(conn)
@@ -48,23 +48,20 @@ defmodule EngramWeb.HttpCompressionTest do
   # HTTP "deflate" is zlib-wrapped (RFC 1950), which :zlib.uncompress reads.
   defp decode("deflate", body), do: :zlib.uncompress(body)
 
+  # Passive mode: no mailbox, and no deadline but ExUnit's own test timeout. A
+  # private 5s one failed on a CI runner stall that timed out unrelated tests.
   defp recv_response(conn, ref, headers, chunks) do
-    receive do
-      message ->
-        {:ok, conn, responses} = Mint.HTTP.stream(conn, message)
+    {:ok, conn, responses} = Mint.HTTP.recv(conn, 0, :infinity)
 
-        Enum.reduce_while(responses, {headers, chunks}, fn
-          {:headers, ^ref, h}, {_, c} -> {:cont, {h, c}}
-          {:data, ^ref, d}, {h, c} -> {:cont, {h, [d | c]}}
-          {:done, ^ref}, {h, c} -> {:halt, {:done, h, c}}
-          _, acc -> {:cont, acc}
-        end)
-        |> case do
-          {:done, h, c} -> {h, c |> Enum.reverse() |> IO.iodata_to_binary()}
-          {h, c} -> recv_response(conn, ref, h, c)
-        end
-    after
-      5_000 -> flunk("no complete response")
+    Enum.reduce_while(responses, {headers, chunks}, fn
+      {:headers, ^ref, h}, {_, c} -> {:cont, {h, c}}
+      {:data, ^ref, d}, {h, c} -> {:cont, {h, [d | c]}}
+      {:done, ^ref}, {h, c} -> {:halt, {:done, h, c}}
+      _, acc -> {:cont, acc}
+    end)
+    |> case do
+      {:done, h, c} -> {h, c |> Enum.reverse() |> IO.iodata_to_binary()}
+      {h, c} -> recv_response(conn, ref, h, c)
     end
   end
 
