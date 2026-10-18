@@ -74,9 +74,15 @@ export default function OnboardLayout() {
 					{counter ? (
 						<p className="whitespace-nowrap text-muted-foreground text-sm">{counter}</p>
 					) : null}
-					<Button type="button" variant="ghost" size="sm" onClick={() => logout()}>
-						<LogOut aria-hidden="true" className="sm:hidden" />
-						<span className="sr-only sm:not-sr-only">{t("Sign out")}</span>
+					<Button
+						type="button"
+						variant="ghost"
+						size="icon"
+						aria-label={t("Sign out")}
+						title={t("Sign out")}
+						onClick={() => logout()}
+					>
+						<LogOut aria-hidden="true" />
 					</Button>
 				</>
 			}
