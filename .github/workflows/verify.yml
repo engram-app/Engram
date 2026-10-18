@@ -2768,7 +2768,8 @@ jobs:
           # run N sync modules at once. Logs are printed per partition on exit.
           pids=()
           for p in $(seq 1 "$PARTITIONS"); do
-            MIX_TEST_PARTITION=$p mix test --warnings-as-errors --partitions "$PARTITIONS" > "partition-$p.log" 2>&1 &
+            QDRANT_INTEGRATION=0 MIX_TEST_PARTITION=$p \
+              mix test --warnings-as-errors --partitions "$PARTITIONS" > "partition-$p.log" 2>&1 &
             pids+=($!)
           done
           rc=0
@@ -2779,6 +2780,14 @@ jobs:
           done
           # Failures again, outside the collapsed groups.
           [ "$rc" -eq 0 ] || grep -hE -A30 '^\s+[0-9]+\) (test|property) ' partition-*.log || true
+
+          # The real-Qdrant suites run once, after the partitions, against the
+          # one Qdrant. Each creates ~10 payload indexes per test; two suites at
+          # once (different partitions) slowed each index from 2-5s to 7-9s and
+          # pushed tests past the 60s timeout (#2018 run 39111119606).
+          echo "::group::qdrant_integration (serial)"
+          MIX_TEST_PARTITION=1 mix test --warnings-as-errors --only qdrant_integration || rc=1
+          echo "::endgroup::"
           exit "$rc"
 
       - name: Qdrant state after a test failure
