@@ -46,6 +46,9 @@ lint .sobelow-conf Sobelow
 lint .sobelow-skips Sobelow
 lint mix.lock Hex-CVE-audit-mix_audit
 e2e-browser frontend browser-e2e-serves-the-SPA
+frontend-lint frontend frontend-lint-types-unit
+frontend-lint lib/engram/mailer.ex frontend-lint-path-guard
+frontend-lint priv/i18n/email frontend-lint-path-guard
 storage-database Dockerfile boots-the-release-image
 unit-tests native Run-Elixir-unit-tests-compiles-the-Rust-NIF
 lint native Compile-warnings-as-errors

@@ -20,6 +20,9 @@ group_paths() {
     priv)        echo "priv" ;;
     e2e-harness) echo "e2e" ;;
     frontend)    echo "frontend" ;;
+    # Backend files the SPA's vitest suite reads (email strings, legal seeder);
+    # the same list as frontend-lint's path guard.
+    email-strings) echo "lib/engram/mailer.ex lib/engram/email/template.ex lib/engram/legal/seeder.ex priv/i18n/email" ;;
     # rel/ is COPY'd into the release image (Dockerfile `COPY rel rel`: env.sh.eex
     # cluster gate + RELEASE_NODE). ci/compose*.yml drive every e2e/storage stack.
     # Both were in BACKEND_HASH; dropping them lets a stack/release-env change skip.

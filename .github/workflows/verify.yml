@@ -192,6 +192,7 @@ jobs:
       skip-e2e-clerk: ${{ steps.skips.outputs.skip-e2e-clerk }}
       skip-e2e-crdt: ${{ steps.skips.outputs.skip-e2e-crdt }}
       skip-e2e-browser: ${{ steps.skips.outputs.skip-e2e-browser }}
+      skip-frontend-lint: ${{ steps.skips.outputs.skip-frontend-lint }}
       skip-n1-compat: ${{ steps.skips.outputs.skip-n1-compat }}
       skip-build-and-publish-image: ${{ steps.skips.outputs.skip-build-and-publish-image }}
       # Per-job hashes, consumed by each job's "Record pass marker" step so a
@@ -207,6 +208,7 @@ jobs:
       hash-e2e-clerk: ${{ steps.skips.outputs.hash-e2e-clerk }}
       hash-e2e-crdt: ${{ steps.skips.outputs.hash-e2e-crdt }}
       hash-e2e-browser: ${{ steps.skips.outputs.hash-e2e-browser }}
+      hash-frontend-lint: ${{ steps.skips.outputs.hash-frontend-lint }}
       hash-n1-compat: ${{ steps.skips.outputs.hash-n1-compat }}
       hash-build-and-publish-image: ${{ steps.skips.outputs.hash-build-and-publish-image }}
       # "This ref belongs to a bot whose PRs never run e2e." ONE definition,
@@ -4195,7 +4197,10 @@ jobs:
   frontend-lint:
     name: frontend lint+types+unit
     # Skip on cross-repo plugin dispatch — the plugin cannot regress the SPA.
-    if: github.event_name != 'repository_dispatch'
+    # Fingerprinted: skips when this exact frontend/ + email-strings content
+    # already passed (any branch, incl. the squash-merge to main).
+    needs: fingerprint
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-frontend-lint != 'true'
     runs-on: [self-hosted, linux, x64, isolated, light]  # cheap: pin to FastRaid (bringup #15)
     # The full SPA PR gate, one bun install:
     #   - Biome lint + format check (`bun run ci` → `biome ci .`) with
@@ -4349,6 +4354,15 @@ jobs:
           # Same build, second check: the JS needed before the app can start
           # stays under budget (scripts/check-bundle-budget.ts).
           bun scripts/check-bundle-budget.ts "$OUT"
+
+      # Seed this job's marker as soon as it is green (see e2e-clerk). Only when
+      # the job actually ran its checks (the path guard can skip them all).
+      - name: Record pass marker
+        if: success() && steps.guard.outputs.skip != 'true' && github.event_name != 'schedule'
+        env:
+          MARKER_HASH: ${{ needs.fingerprint.outputs.hash-frontend-lint }}
+        run: IS_FULL_RUN=true bash ci/fingerprint/record.sh record frontend-lint
+
 
   e2e-browser:
     # Runs in parallel with the Obsidian suites on a `heavy` runner (max 2
