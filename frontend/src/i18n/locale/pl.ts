@@ -89,7 +89,7 @@ export default {
 		"Zwykle zajmuje to kilka sekund. Odśwież za chwilę lub skontaktuj się z pomocą techniczną, jeśli problem się powtarza.",
 	Refresh: "Odśwież",
 	"Contact support": "Skontaktuj się z pomocą techniczną",
-	"Reference: {id}": "Numer referencyjny: {id}",
+	"Reference number: {id}": "Numer referencyjny: {id}",
 	"Loading billing": "Ładowanie faktury",
 	"Could not open the billing portal. Please try again.":
 		"Nie udało się otworzyć panelu płatności. Spróbuj ponownie.",

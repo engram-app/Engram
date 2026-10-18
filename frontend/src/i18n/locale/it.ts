@@ -89,7 +89,7 @@ export default {
 		"Di solito, questa operazione richiede pochi secondi. Ricarica tra un istante, oppure contatta l'assistenza se il problema persiste.",
 	Refresh: "Ricarica",
 	"Contact support": "Contatta l'assistenza",
-	"Reference: {id}": "Riferimento: {id}",
+	"Reference number: {id}": "Numero di riferimento: {id}",
 	"Loading billing": "Caricamento fatturazione",
 	"Could not open the billing portal. Please try again.":
 		"Impossibile aprire il portale di fatturazione. Riprova.",

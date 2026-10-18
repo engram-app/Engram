@@ -90,7 +90,7 @@ export default {
 		"Cela prend généralement quelques secondes. Actualise dans un instant, ou contacte le support si le problème persiste.",
 	Refresh: "Actualiser",
 	"Contact support": "Contacter le support",
-	"Reference: {id}": "Référence : {id}",
+	"Reference number: {id}": "Numéro de référence : {id}",
 	"Loading billing": "Chargement de la facturation",
 	"Could not open the billing portal. Please try again.":
 		"Impossible d'ouvrir le portail de facturation. Veuillez réessayer.",

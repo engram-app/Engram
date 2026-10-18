@@ -1,4 +1,5 @@
 import { expect, type Page, type TestInfo } from "@playwright/test";
+import cs from "../../src/i18n/locale/cs";
 import de from "../../src/i18n/locale/de";
 import es from "../../src/i18n/locale/es";
 import fr from "../../src/i18n/locale/fr";
@@ -11,6 +12,7 @@ import pl from "../../src/i18n/locale/pl";
 import ptBR from "../../src/i18n/locale/pt-BR";
 import ru from "../../src/i18n/locale/ru";
 import tr from "../../src/i18n/locale/tr";
+import uk from "../../src/i18n/locale/uk";
 import vi from "../../src/i18n/locale/vi";
 import zhCN from "../../src/i18n/locale/zh-CN";
 import zhTW from "../../src/i18n/locale/zh-TW";
@@ -40,6 +42,7 @@ interface StepOptions {
 const CLERK_ROOT = ".cl-rootBox";
 
 const CATALOGS: Record<string, CatalogLike> = {
+	cs,
 	de,
 	es,
 	fr,
@@ -52,6 +55,7 @@ const CATALOGS: Record<string, CatalogLike> = {
 	"pt-BR": ptBR,
 	ru,
 	tr,
+	uk,
 	vi,
 	"zh-CN": zhCN,
 	"zh-TW": zhTW,
@@ -59,6 +63,7 @@ const CATALOGS: Record<string, CatalogLike> = {
 
 // Browser locale tag -> the app locale code it must resolve to.
 const BROWSER_LOCALES = [
+	{ tag: "cs-CZ", code: "cs" },
 	{ tag: "de-DE", code: "de" },
 	{ tag: "es-ES", code: "es" },
 	{ tag: "fr-FR", code: "fr" },
@@ -71,6 +76,7 @@ const BROWSER_LOCALES = [
 	{ tag: "pt-BR", code: "pt-BR" },
 	{ tag: "ru-RU", code: "ru" },
 	{ tag: "tr-TR", code: "tr" },
+	{ tag: "uk-UA", code: "uk" },
 	{ tag: "vi-VN", code: "vi" },
 	{ tag: "zh-CN", code: "zh-CN" },
 	{ tag: "zh-TW", code: "zh-TW" },

@@ -88,7 +88,7 @@ export default {
 		"Thông thường, quá trình này mất vài giây. Vui lòng đợi một lát để tải lại, hoặc liên hệ hỗ trợ nếu sự cố vẫn tiếp diễn.",
 	Refresh: "Tải lại",
 	"Contact support": "Liên hệ hỗ trợ",
-	"Reference: {id}": "Tham khảo: {id}",
+	"Reference number: {id}": "Mã tham chiếu: {id}",
 	"Loading billing": "Đang tải thông tin thanh toán",
 	"Could not open the billing portal. Please try again.":
 		"Không thể mở trang thanh toán. Vui lòng thử lại.",

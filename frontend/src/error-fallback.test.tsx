@@ -25,17 +25,17 @@ describe("ErrorFallback", () => {
 
 	it("shows the Sentry reference id only when reporting is active", () => {
 		render(<ErrorFallback error={new Error("boom")} eventId="abc123" reported />);
-		expect(screen.getByText(/^Reference:/u)).toBeInTheDocument();
+		expect(screen.getByText(/^Reference number:/u)).toBeInTheDocument();
 		expect(screen.getByText(/abc123/u)).toBeInTheDocument();
 	});
 
 	it("omits the reference line when reporting is off, even with an event id", () => {
 		render(<ErrorFallback error={new Error("boom")} eventId="abc123" reported={false} />);
-		// Anchored to the literal "Reference:" line this component renders, NOT a
+		// Anchored to the literal "Reference number:" line this component renders, NOT a
 		// bare /reference/i sweep of the whole document — the DEV-only <pre> also
 		// dumps error.stack, whose absolute paths made this assertion fail in any
 		// checkout whose directory name happened to contain "reference".
-		expect(screen.queryByText(/^Reference:/u)).not.toBeInTheDocument();
+		expect(screen.queryByText(/^Reference number:/u)).not.toBeInTheDocument();
 		expect(screen.queryByText(/abc123/u)).not.toBeInTheDocument();
 	});
 

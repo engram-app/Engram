@@ -86,7 +86,7 @@ export default {
 		"일반적으로 몇 초가 소요됩니다. 잠시 후 다시 시도하거나 문제가 지속되면 지원팀에 문의하세요.",
 	Refresh: "새로 고침",
 	"Contact support": "지원팀에 문의",
-	"Reference: {id}": "참조: {id}",
+	"Reference number: {id}": "참조 번호: {id}",
 	"Loading billing": "결제 정보 불러오는 중",
 	"Could not open the billing portal. Please try again.":
 		"결제 페이지를 열 수 없습니다. 다시 시도해주세요.",
@@ -224,8 +224,7 @@ export default {
 	"You're on this plan": "현재 이 요금제를 사용 중입니다",
 	"Start free trial": "무료 체험 시작",
 	Popular: "인기 요금제",
-	"3,000 notes · 20 AI searches a day · 1 vault":
-		"3,000개의 노트 · 하루 20회 AI 검색 · 1개의 보관함",
+	"3,000 notes · 20 AI searches a day · 1 vault": "3,000개 노트 · 하루 20회 AI 검색 · 1개 보관함",
 	"3,000 notes, all searchable": "3,000개의 노트, 모두 검색 가능",
 	"20 AI searches a day": "하루 20회 AI 검색",
 	"1 vault": "1개의 보관함",
@@ -1186,7 +1185,7 @@ export default {
 	"No backlinks yet": "아직 백링크가 없습니다",
 	"Failed to load notes.": "노트 불러오기 실패.",
 	"No notes in this folder.": "이 폴더에 노트가 없습니다.",
-	"Notes in {folder}": "{folder}의 노트",
+	"Notes in {folder}": "{folder} 폴더의 노트",
 	"No note open": "노트가 열려 있지 않습니다",
 	"No note is open": "열려 있는 노트가 없습니다",
 	"Resize document, left edge": "문서 크기 조절, 왼쪽 가장자리",

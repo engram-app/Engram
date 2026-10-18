@@ -40,6 +40,8 @@ describe("paddleLocale", () => {
 		expect(paddleLocale("vi")).toBe("en");
 		expect(paddleLocale("ms")).toBe("en");
 		expect(paddleLocale("id")).toBe("en");
+		expect(paddleLocale("cs")).toBe("en");
+		expect(paddleLocale("uk")).toBe("en");
 	});
 
 	it("passes Turkish and Polish through", () => {
