@@ -4504,15 +4504,17 @@ jobs:
 
       # e2e/lighthouse.spec.ts audits the PRODUCTION bundle Phoenix serves at
       # `/` (priv/static/app): the Vite dev server injects CSS from JS and
-      # reports a layout shift production never has. The other specs use Vite
-      # and are unaffected. Self-host shape, to match the `local` project.
+      # reports a layout shift production never has. In CI the `local`
+      # project runs against this same bundle too (Vite dev transformed
+      # hundreds of modules per fresh browser context, 13-30s per test).
+      # Self-host shape, to match the `local` project.
       #
       # Writing priv/static/app here is safe for the [clerk] project in this
       # same job: it runs against its own Vite dev server, never this bundle.
       # Plain `vite build`, not build:selfhost: the legal-manifest and tsc
       # checks it chains are already gated in frontend-lint, and no PostHog
       # key is set in this job for its key-clearing to matter.
-      - name: Build SPA for the Lighthouse spec
+      - name: Build SPA (served by Phoenix for the local + Lighthouse specs)
         working-directory: frontend
         run: |
           export PATH="$HOME/.bun/bin:$PATH"

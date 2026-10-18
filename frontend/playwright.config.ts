@@ -45,11 +45,15 @@ export default defineConfig({
 
 	projects: [
 		{
+			// In CI the local specs drive the PRODUCTION bundle Phoenix serves
+			// (built by the "Build SPA" step), not the Vite dev server: every
+			// fresh browser context made Vite transform hundreds of unbundled
+			// modules, and the specs open a context (often two) per test.
 			name: "local",
 			testMatch:
 				/\/(?:local-auth|dark-mode|mobile|note-live-update|note-properties|tree-ops-sync|wiki-nav|i18n-detection|i18n-onboarding|device-link)\.spec\.ts$/u,
 			use: {
-				baseURL: `http://localhost:${LOCAL_VITE_PORT}`,
+				baseURL: `http://localhost:${isCI ? LOCAL_BACKEND_PORT : LOCAL_VITE_PORT}`,
 			},
 		},
 		{
@@ -98,23 +102,28 @@ export default defineConfig({
 					process.env.ENCRYPTION_MASTER_KEY ?? "uB2okhpf1lb6quoXIk+ZVIQDenCUnGnZuTb8IA/iZ4w=",
 			},
 		},
-		{
-			command: `bun run dev -- --port ${LOCAL_VITE_PORT}`,
-			cwd: ".",
-			// A bare `port:` check only proves Vite accepted a TCP connection —
-			// not that its /api proxy can actually reach Phoenix (#964). Poll
-			// through the proxy so this only goes green once the whole chain
-			// (Vite -> proxy -> Phoenix -> Postgres) is really up.
-			url: `http://localhost:${LOCAL_VITE_PORT}/api/health/deep`,
-			// Must cover Phoenix's boot budget too: this URL proxies to Phoenix,
-			// so a 15s cap would fail Vite while Phoenix is still legitimately booting.
-			timeout: 120_000,
-			reuseExistingServer: !isCI,
-			env: {
-				VITE_AUTH_PROVIDER: "local",
-				VITE_API_TARGET: `http://localhost:${LOCAL_BACKEND_PORT}`,
-			},
-		},
+		// Local Vite server: dev only (CI serves the built bundle, see projects).
+		...(isCI
+			? []
+			: [
+					{
+						command: `bun run dev -- --port ${LOCAL_VITE_PORT}`,
+						cwd: ".",
+						// A bare `port:` check only proves Vite accepted a TCP connection —
+						// not that its /api proxy can actually reach Phoenix (#964). Poll
+						// through the proxy so this only goes green once the whole chain
+						// (Vite -> proxy -> Phoenix -> Postgres) is really up.
+						url: `http://localhost:${LOCAL_VITE_PORT}/api/health/deep`,
+						// Must cover Phoenix's boot budget too: this URL proxies to Phoenix,
+						// so a 15s cap would fail Vite while Phoenix is still legitimately booting.
+						timeout: 120_000,
+						reuseExistingServer: !isCI,
+						env: {
+							VITE_AUTH_PROVIDER: "local",
+							VITE_API_TARGET: `http://localhost:${LOCAL_BACKEND_PORT}`,
+						},
+					},
+				]),
 		// Clerk servers are only started when credentials are present (CI or explicit local dev).
 		...(hasClerkCreds
 			? [
