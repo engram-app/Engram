@@ -2106,7 +2106,14 @@ jobs:
           # template-interpolated into this script — no command-injection surface.
           E2E_K="${E2E_PATTERN:-}"
           K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
-          python3 -m pytest tests/api_only/ "${K_ARGS[@]}" -v --timeout=600 -p no:cacheprovider --no-header
+          # Only the auth-dependent API tests. e2e-clerk already runs the rest of
+          # tests/api_only/ (52 tests, ~131s here), and ci/compose.local.yml
+          # changes nothing but AUTH_PROVIDER and rate limits, so a second pass
+          # on local auth re-proved search/storage/billing for nothing.
+          python3 -m pytest tests/api_only/local/ \
+            tests/api_only/test_61_auth_agnostic.py \
+            tests/api_only/test_76_vault_access_levels.py \
+            "${K_ARGS[@]}" -v --timeout=600 -p no:cacheprovider --no-header
 
       # always(): a local-auth API failure above must not mask the CRDT suite's
       # signal (the job still fails on the failed step).
@@ -2479,7 +2486,7 @@ jobs:
           # up to 5 times; each retry gets a fresh allocation.
           for attempt in 1 2 3 4 5; do
             # Throwaway DB: tmpfs data dir + no fsync. max_connections=300 because
-            # the test partitions each open a schedulers*2+10 pool (3 x 38 > 100).
+            # the test partitions each open a schedulers*2+10 pool (4 x 38 > 100).
             if docker run -d --name "$PG_CONTAINER" \
                 -e POSTGRES_USER=engram \
                 -e POSTGRES_PASSWORD=engram \
@@ -2713,7 +2720,7 @@ jobs:
           # 127.0.0.1, not localhost: the container publishes on IPv4 and the
           # BEAM would try ::1 first.
           QDRANT_URL: http://127.0.0.1:${{ steps.qdrant.outputs.qdrant_port }}
-          PARTITIONS: "3"
+          PARTITIONS: "4"
         run: |
           for i in $(seq 1 30); do
             if docker exec "$PG_CONTAINER" pg_isready -U engram > /dev/null 2>&1; then
@@ -2723,14 +2730,16 @@ jobs:
             sleep 1
           done
           # One DB per partition (config/test.exs appends MIX_TEST_PARTITION to
-          # the URL). Sequential: the first iteration also does the compile.
-          for p in $(seq 1 "$PARTITIONS"); do
-            # Idempotent cluster bootstrap (engram_app role + DEFAULT
-            # PRIVILEGES). Must run BEFORE migrate — baseline migration's
-            # structure dump references engram_app in GRANT statements.
-            # Mirrors prod entrypoint.sh ordering.
-            MIX_TEST_PARTITION=$p MIX_ENV=test mix do ecto.create + engram.prepare_database + ecto.migrate
-          done
+          # the URL). Partition 1 first (it also compiles), the rest in parallel.
+          # engram.prepare_database: idempotent cluster bootstrap (engram_app
+          # role + DEFAULT PRIVILEGES). Must run BEFORE migrate — baseline
+          # migration's structure dump references engram_app in GRANT
+          # statements. Mirrors prod entrypoint.sh ordering.
+          setup_db() { MIX_TEST_PARTITION=$1 MIX_ENV=test mix do ecto.create + engram.prepare_database + ecto.migrate; }
+          setup_db 1
+          pids=()
+          for p in $(seq 2 "$PARTITIONS"); do setup_db "$p" & pids+=($!); done
+          for pid in "${pids[@]}"; do wait "$pid"; done
           # --warnings-as-errors treats compile-time warnings in test files
           # (unused aliases, unused vars, etc.) as fatal. Lib warnings are
           # already gated by `mix compile --warnings-as-errors` in the lint
@@ -4179,7 +4188,7 @@ jobs:
         run: python3 -m ruff check --output-format=github .
 
   frontend-lint:
-    name: frontend lint+types+unit
+    name: frontend lint+types+unit (${{ matrix.shard }}/3)
     # Skip on cross-repo plugin dispatch — the plugin cannot regress the SPA.
     if: github.event_name != 'repository_dispatch'
     runs-on: [self-hosted, linux, x64, isolated, light]  # cheap: pin to FastRaid (bringup #15)
@@ -4193,6 +4202,12 @@ jobs:
     #   - vitest run: the SPA unit suite (~790 tests, ~2 min) previously ran
     #     in no CI job at all.
     # Path-gated to frontend/ so backend-only pushes skip it.
+    # vitest (3,200 tests, ~5 min, 90% of this job) is split across 3 runners;
+    # shard 1 also runs the one-off checks (registry URLs, biome, tsc, bundle).
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -4256,7 +4271,7 @@ jobs:
       # (oven-sh/bun#18411). It only takes effect while the lockfile stays
       # portable, which is exactly what this step enforces.
       - name: No private-registry URLs in bun.lock
-        if: steps.guard.outputs.skip != 'true'
+        if: steps.guard.outputs.skip != 'true' && matrix.shard == 1
         working-directory: frontend
         run: |
           set -euo pipefail
@@ -4273,7 +4288,7 @@ jobs:
         run: bun install --frozen-lockfile --registry http://10.0.20.214:4873
 
       - name: Biome check (lint + format, --error-on-warnings)
-        if: steps.guard.outputs.skip != 'true'
+        if: steps.guard.outputs.skip != 'true' && matrix.shard == 1
         working-directory: frontend
         run: bun run ci
 
@@ -4283,14 +4298,14 @@ jobs:
       # these runners don't have — bun run executes the local bin under bun,
       # the same mechanism deploy-frontend's build:saas already relies on.
       - name: Typecheck (tsc --noEmit)
-        if: steps.guard.outputs.skip != 'true'
+        if: steps.guard.outputs.skip != 'true' && matrix.shard == 1
         working-directory: frontend
         run: bun run tsc --noEmit
 
-      - name: Unit tests (vitest run)
+      - name: Unit tests (vitest run, shard ${{ matrix.shard }}/3)
         if: steps.guard.outputs.skip != 'true'
         working-directory: frontend
-        run: bun run test
+        run: bun run test --shard=${{ matrix.shard }}/3
 
       # Dockerfile:42-46 exists so self-host images never carry the SaaS
       # PostHog token. That's a comment, not an enforcement — this proves it
@@ -4313,7 +4328,7 @@ jobs:
       # third-party SDK's own source, not a real leak. The key is the actual
       # secret and the only thing that turns that inert code live.
       - name: Self-host bundle carries no PostHog key leakage, initial JS under budget
-        if: steps.guard.outputs.skip != 'true'
+        if: steps.guard.outputs.skip != 'true' && matrix.shard == 1
         working-directory: frontend
         run: |
           set -euo pipefail
