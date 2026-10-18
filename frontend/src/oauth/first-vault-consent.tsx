@@ -31,7 +31,6 @@ export default function FirstVaultConsent({
 	const inputId = useId();
 	const hintId = useId();
 	const laterId = useId();
-	const laterHintId = useId();
 	const [name, setName] = useState(vaultName);
 	const [includeLater, setIncludeLater] = useState(true);
 	const trimmed = name.trim();
@@ -74,7 +73,6 @@ export default function FirstVaultConsent({
 					id={laterId}
 					type="checkbox"
 					checked={includeLater}
-					aria-describedby={laterHintId}
 					onChange={(e) => setIncludeLater(e.target.checked)}
 					className="size-4 shrink-0 accent-primary"
 				/>
@@ -82,7 +80,7 @@ export default function FirstVaultConsent({
 					<span className="font-medium text-foreground">
 						{t("Also allow {client} to read and write vaults I create later", { client })}
 					</span>
-					<span id={laterHintId} className="text-muted-foreground text-sm">
+					<span className="text-muted-foreground text-sm">
 						{t("Turn this off to keep {client} to this vault only.", { client })}
 					</span>
 				</span>

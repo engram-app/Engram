@@ -837,6 +837,8 @@ export default {
 	"this app": "esta aplicación",
 	"Couldn't rename your vault to {name}. Try a different name.":
 		"No se pudo renombrar tu bóveda a {name}. Intenta con otro nombre.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"No se pudo renombrar tu bóveda. Verifica tu conexión e inténtalo de nuevo.",
 	"previous connection": "conexión anterior",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"El servidor concedió más acceso del que elegiste, así que nada se conectó. Inténtalo de nuevo, o contacta con soporte si esto sigue ocurriendo.",

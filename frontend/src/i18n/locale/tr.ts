@@ -804,6 +804,8 @@ export default {
 	"this app": "bu uygulama",
 	"Couldn't rename your vault to {name}. Try a different name.":
 		"Kasanızı {name} olarak yeniden adlandıramadık. Farklı bir isim deneyin.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Kasanızı yeniden adlandıramadık. Bağlantınızı kontrol edin ve tekrar deneyin.",
 	"previous connection": "önceki bağlantı",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Sunucu, seçtiğinizden daha fazla erişim sağladı, bu yüzden hiçbir şey bağlanmadı. Tekrar deneyin veya sorun devam ederse destek ile iletişime geçin.",

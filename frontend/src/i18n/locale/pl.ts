@@ -866,6 +866,8 @@ export default {
 	"this app": "tej aplikacji",
 	"Couldn't rename your vault to {name}. Try a different name.":
 		"Nie udało się zmienić nazwy twojego sejfu na {name}. Spróbuj innej nazwy.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Nie udało się zmienić nazwy twojego sejfu. Sprawdź połączenie i spróbuj ponownie.",
 	"previous connection": "poprzednie połączenie",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Serwer przyznał więcej uprawnień niż wybrałeś, więc nic nie zostało połączone. Spróbuj ponownie lub skontaktuj się z działem pomocy, jeśli problem się powtarza.",

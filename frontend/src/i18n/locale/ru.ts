@@ -881,6 +881,8 @@ export default {
 	"this app": "это приложение",
 	"Couldn't rename your vault to {name}. Try a different name.":
 		"Не удалось переименовать ваше хранилище в {name}. Попробуйте другое имя.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Не удалось переименовать ваше хранилище. Проверьте подключение и попробуйте снова.",
 	"previous connection": "предыдущее подключение",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Сервер предоставил больше доступа, чем вы выбрали, поэтому ничего не было подключено. Попробуйте ещё раз или обратитесь в службу поддержки, если это повторяется.",

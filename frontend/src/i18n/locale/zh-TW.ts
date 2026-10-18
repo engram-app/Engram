@@ -765,6 +765,8 @@ export default {
 	"this app": "此應用程式",
 	"Couldn't rename your vault to {name}. Try a different name.":
 		"無法將你的儲存庫重新命名為 {name}。請嘗試其他名稱。",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"無法重新命名您的儲存庫。請檢查連線並再次嘗試。",
 	"previous connection": "之前的連線",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"伺服器授予了比您選擇的更多權限，因此沒有任何內容連接。請重試，或如果此問題持續發生，請聯絡支援。",

@@ -4,6 +4,7 @@ import { StrictMode } from "react";
 import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { track } from "../analytics/track";
+import { ApiError } from "../api/client";
 import type { OAuthConsentParams } from "../api/oauth";
 import OAuthAuthorizePage from "./oauth-authorize-page";
 import { stashPendingAuthorization } from "./pending-authorization";
@@ -703,14 +704,45 @@ describe("OAuthAuthorizePage", () => {
 			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
 		});
 
-		it("names the vault, not the connection, when the rename fails", async () => {
-			updateVaultMock.mockRejectedValueOnce(new Error("name taken"));
-			renderAt(VALID_QS);
+		const renameTo = async (name: string) => {
 			const input = await screen.findByLabelText(/name your first vault/iu);
-			fireEvent.change(input, { target: { value: "Northwind" } });
+			fireEvent.change(input, { target: { value: name } });
 			fireEvent.click(screen.getByRole("button", { name: /^approve$/iu }));
-			expect(await screen.findByRole("alert")).toHaveTextContent(/couldn't rename your vault/iu);
+		};
+
+		it("asks for a different name when the server rejects it (422)", async () => {
+			const close = vi.fn();
+			vi.spyOn(window, "open").mockReturnValue({ close } as unknown as Window);
+			updateVaultMock.mockRejectedValueOnce(new ApiError(422, "invalid"));
+			renderAt(VALID_QS);
+			await renameTo("Northwind");
+			expect(await screen.findByRole("alert")).toHaveTextContent(/try a different name/iu);
 			expect(postOAuthConsent).not.toHaveBeenCalled();
+			expect(close).toHaveBeenCalled();
+			expect(screen.getByRole("button", { name: /^approve$/iu })).toBeEnabled();
+		});
+
+		// A network or server failure is not the name's fault.
+		it("does not blame the name for a server failure", async () => {
+			updateVaultMock.mockRejectedValueOnce(new ApiError(500, "boom"));
+			renderAt(VALID_QS);
+			await renameTo("Northwind");
+			const alert = await screen.findByRole("alert");
+			expect(alert).toHaveTextContent(/couldn't rename your vault/iu);
+			expect(alert).not.toHaveTextContent(/different name/iu);
+		});
+
+		// Rename landed, consent failed: the retry must connect without renaming
+		// again from a stale name.
+		it("retries consent without a second rename once the rename landed", async () => {
+			postOAuthConsent.mockRejectedValueOnce(new ApiError(500, "boom"));
+			renderAt(VALID_QS);
+			await renameTo("Northwind");
+			await screen.findByRole("alert");
+			// Before the vaults list has refetched: the old name is still current.
+			fireEvent.click(screen.getByRole("button", { name: /^approve$/iu }));
+			await waitFor(() => expect(postOAuthConsent).toHaveBeenCalledTimes(2));
+			expect(updateVaultMock).toHaveBeenCalledTimes(1);
 		});
 
 		it("grants this vault and ones created later by default", async () => {
@@ -735,6 +767,44 @@ describe("OAuthAuthorizePage", () => {
 			expect(body.vault_ids).toEqual([id]);
 			expect(body.vault_access).toEqual({ [id]: "write" });
 			expect(body.default_access).toBe("none");
+		});
+
+		it("keeps the full picker for a client that asked for read only", async () => {
+			renderAt(VALID_QS.replace("scope=vault.read", "scope=mcp:read"));
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+		});
+
+		// `populated === false`, not falsy: an older backend that omits the flag
+		// must get the full picker.
+		it("keeps the full picker when the backend omits populated", async () => {
+			vaultsState.current = [freshVault({ populated: undefined })];
+			renderAt(VALID_QS);
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+		});
+
+		it("keeps the full picker when created_at cannot be read", async () => {
+			vaultsState.current = [freshVault({ created_at: "not a date" })];
+			renderAt(VALID_QS);
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+		});
+
+		it("shows neither form until the connections list has loaded", async () => {
+			connectionsState.current = undefined as unknown as typeof OBSIDIAN_ONLY;
+			renderAt(VALID_QS);
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+			expect(screen.queryByLabelText(/name your first vault/iu)).toBeNull();
+		});
+
+		it("grants only this vault through vault_ids on a backend without levels", async () => {
+			accessLevelsState.current = false;
+			renderAt(VALID_QS);
+			fireEvent.click(await screen.findByRole("checkbox", { name: /vaults i create later/iu }));
+			fireEvent.click(screen.getByRole("button", { name: /^approve$/iu }));
+			await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
+			const body = postOAuthConsent.mock.calls[0]?.[0] as OAuthConsentParams;
+			expect(body.vault_ids).toEqual([String(DEFAULT_VAULTS[0]?.id)]);
+			expect(body.vault_access).toBeUndefined();
+			expect(body.default_access).toBeUndefined();
 		});
 
 		it("keeps the full picker when the account already has several vaults", async () => {

@@ -788,6 +788,8 @@ export default {
 	"this app": "이 앱",
 	"Couldn't rename your vault to {name}. Try a different name.":
 		"보관함 이름을 {name}으로 변경할 수 없습니다. 다른 이름을 사용해 보세요.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"보관함 이름을 변경할 수 없습니다. 연결을 확인하고 다시 시도하세요.",
 	"previous connection": "이전 연결",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"서버가 귀하가 선택한 것보다 더 많은 접근 권한을 부여하여 연결되지 않았습니다. 다시 시도하거나, 문제가 계속 발생하면 지원팀에 문의하세요.",

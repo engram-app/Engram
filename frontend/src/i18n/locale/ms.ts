@@ -804,6 +804,8 @@ export default {
 	"this app": "aplikasi ini",
 	"Couldn't rename your vault to {name}. Try a different name.":
 		"Tidak dapat menukar nama peti nota anda kepada {name}. Cuba nama yang lain.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Tidak dapat menukar nama peti nota anda. Semak sambungan anda dan cuba lagi.",
 	"previous connection": "sambungan sebelumnya",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Pelayan memberikan akses lebih daripada yang anda pilih, jadi tiada apa yang disambungkan. Cuba lagi, atau hubungi sokongan jika ini berterusan.",

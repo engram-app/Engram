@@ -838,6 +838,8 @@ export default {
 	"this app": "cette application",
 	"Couldn't rename your vault to {name}. Try a different name.":
 		"Impossible de renommer ton coffre en {name}. Essaie un autre nom.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Impossible de renommer ton coffre. Vérifie ta connexion et réessaie.",
 	"previous connection": "connexion précédente",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Le serveur a accordé plus d'accès que ce que tu as choisi, donc rien n'a été connecté. Réessaie, ou contacte le support si cela continue.",

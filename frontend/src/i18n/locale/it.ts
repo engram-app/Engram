@@ -835,6 +835,8 @@ export default {
 	"this app": "questa app",
 	"Couldn't rename your vault to {name}. Try a different name.":
 		"Impossibile rinominare il tuo vault in {name}. Prova un nome diverso.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Impossibile rinominare il tuo vault. Controlla la connessione e riprova.",
 	"previous connection": "connessione precedente",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Il server ha concesso più accesso di quanto tu abbia scelto, quindi nulla è stato collegato. Riprova o contatta l'assistenza se il problema persiste.",

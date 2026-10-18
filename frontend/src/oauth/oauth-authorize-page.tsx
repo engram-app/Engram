@@ -21,7 +21,7 @@ import { destructiveAlert, heading } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { MCP_CLIENTS } from "../analytics/events";
 import { track } from "../analytics/track";
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 import { fetchOAuthClient, type OAuthConsentParams, postOAuthConsent } from "../api/oauth";
 import {
 	type Connection,
@@ -282,6 +282,9 @@ export default function OAuthAuthorizePage() {
 	);
 	// Mount time, for the signup vault's age: render has to stay pure.
 	const [mountedAt] = useState(() => Date.now());
+	// The name a rename already landed, so a retry after a failed consent
+	// does not rename again (or race the vaults refetch for the old name).
+	const renamedTo = useRef<string | null>(null);
 	const existingPeer = (connections.data ?? []).find((c): c is Connection => c.kind === clientKind);
 
 	// "All vaults" (`selected === null`) stays all-vaults as new ones are
@@ -504,12 +507,17 @@ export default function OAuthAuthorizePage() {
 			if (firstVaultChoice?.rename) {
 				try {
 					await updateVault.mutateAsync({ id: firstVaultChoice.id, name: firstVaultChoice.rename });
-				} catch {
+					renamedTo.current = firstVaultChoice.rename;
+				} catch (err) {
 					vaultTab?.close();
+					// 422 is the name itself (the changeset refused it); anything
+					// else is the network or the server, not the user's choice.
 					setSubmitError(
-						t("Couldn't rename your vault to {name}. Try a different name.", {
-							name: firstVaultChoice.rename,
-						}),
+						err instanceof ApiError && err.status === 422
+							? t("Couldn't rename your vault to {name}. Try a different name.", {
+									name: firstVaultChoice.rename,
+								})
+							: t("Couldn't rename your vault. Check your connection and try again."),
 					);
 					if (isMcp) {
 						track("mcp_connect_failed", { client: mcpClient, reason: "unknown" });
@@ -680,7 +688,7 @@ export default function OAuthAuthorizePage() {
 								onApprove={(name, onlyThisVault) =>
 									runSubmit(false, {
 										id: String(onlyVault.id),
-										rename: name === onlyVault.name ? undefined : name,
+										rename: name === (renamedTo.current ?? onlyVault.name) ? undefined : name,
 										onlyThisVault,
 									})
 								}

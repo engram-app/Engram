@@ -800,6 +800,8 @@ export default {
 	"this app": "ứng dụng này",
 	"Couldn't rename your vault to {name}. Try a different name.":
 		"Không thể đổi tên kho lưu trữ của bạn thành {name}. Hãy thử một tên khác.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Không thể đổi tên kho lưu trữ của bạn. Kiểm tra kết nối và thử lại.",
 	"previous connection": "kết nối trước đó",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Máy chủ đã cấp quyền truy cập lớn hơn mức bạn chọn, vì vậy không có gì được kết nối. Thử lại, hoặc liên hệ bộ phận hỗ trợ nếu sự cố này tiếp diễn.",

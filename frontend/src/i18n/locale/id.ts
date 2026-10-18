@@ -804,6 +804,8 @@ export default {
 	"this app": "aplikasi ini",
 	"Couldn't rename your vault to {name}. Try a different name.":
 		"Tidak dapat mengganti nama vault Anda menjadi {name}. Coba nama lain.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Tidak dapat mengganti nama vault Anda. Periksa koneksi Anda dan coba lagi.",
 	"previous connection": "koneksi sebelumnya",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Server memberikan akses lebih dari yang Anda pilih, sehingga tidak ada yang terhubung. Coba lagi, atau hubungi dukungan jika ini terus terjadi.",
