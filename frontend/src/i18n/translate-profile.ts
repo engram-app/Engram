@@ -8,6 +8,12 @@ type Target = Exclude<Locale, "en">;
 const HAN = /\p{Script=Han}/u;
 
 const SPECS: Record<Target, Spec> = {
+	cs: {
+		name: "Czech",
+		tone: "Address the user formally (vy, váš), never ty.",
+		formal:
+			/(?<![\p{L}])(?:tvůj|tvoje|tvého|tvému|tvém|tvým|tvá|tvé|tvou|tvoji|tvých|tvými|tebe|tobě|tebou)(?![\p{L}])/iu,
+	},
 	de: {
 		name: "German",
 		tone: "Address the user informally (du, dein), never Sie.",
@@ -61,6 +67,12 @@ const SPECS: Record<Target, Spec> = {
 		tone: "Use polite, concise UI Turkish.",
 		formal: /(?<![\p{L}])(?:sen|senin|sana|seni|sende|senden|seninle)(?![\p{L}])/iu,
 	},
+	uk: {
+		name: "Ukrainian",
+		tone: "Address the user formally (ви, ваш), never ти.",
+		formal: /(?<![\p{L}])(?:ти|твій|твоя|твоє|твої|твого|твоїй|тебе|тобі|тобою)(?![\p{L}])/iu,
+		script: /\p{Script=Cyrillic}/u,
+	},
 	vi: { name: "Vietnamese", tone: "Address the user as bạn." },
 	"zh-CN": {
 		name: "Simplified Chinese",
@@ -97,6 +109,7 @@ const GLOSSARY_KEYS = [
 // string: the model's answer meant something else ("Strikethrough" as underline,
 // "Reading" as loading) or differed from the word Obsidian users already know.
 const PINNED: Partial<Record<Target, readonly string[]>> = {
+	cs: ["Backlinks", "Tags", "Vault", "Vaults", "Wikilink"],
 	de: ["Reading view"],
 	it: ["Outline", "Strikethrough"],
 	ja: ["Dark", "Light", "Outline", "Reading", "Reading view"],
@@ -137,6 +150,11 @@ const PINNED: Partial<Record<Target, readonly string[]>> = {
 // (on 2026-10-12 it turned ms "Light" into "lightweight"), so keep only notes
 // whose output you reviewed.
 const DESCRIPTIONS: Readonly<Record<string, string>> = {
+	// cs read {folder} as a vault ("ve skladu", 2026-10-18).
+	"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
+	// ja joined the items with 、 and dropped the separators (2026-10-18).
+	"3,000 notes · 20 AI searches a day · 1 vault":
+		"Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 	Reading: "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view.",
 	"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 	Idea: "Feedback category: suggest a feature.",

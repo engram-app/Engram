@@ -26,6 +26,12 @@ describe("matchLocale", () => {
 		["pl", "pl"],
 		["id-ID", "id"],
 		["id", "id"],
+		["cs-CZ", "cs"],
+		["uk-UA", "uk"],
+		["uk", "uk"],
+		// Slovak readers get Czech, the closest language we ship.
+		["sk-SK", "cs"],
+		["sk", "cs"],
 	])("%s -> %s", (tag, expected) => {
 		expect(matchLocale(tag)).toBe(expected);
 	});

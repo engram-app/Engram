@@ -91,7 +91,7 @@ export default {
 		"Esto suele tardar segundos. Refresca en un momento, o contacta con soporte si persiste.",
 	Refresh: "Refrescar",
 	"Contact support": "Contacta con soporte",
-	"Reference: {id}": "Referencia: {id}",
+	"Reference number: {id}": "Número de referencia: {id}",
 	"Loading billing": "Cargando la información de facturación",
 	"Could not open the billing portal. Please try again.":
 		"No se pudo abrir el portal de facturación. Inténtalo de nuevo.",

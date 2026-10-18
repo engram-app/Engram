@@ -202,7 +202,7 @@ function SlowActivationBanner({
 			</div>
 			{transactionId ? (
 				<p className="mt-3 text-muted-foreground text-xs">
-					{t("Reference: {id}", { id: transactionId })}
+					{t("Reference number: {id}", { id: transactionId })}
 				</p>
 			) : null}
 		</div>

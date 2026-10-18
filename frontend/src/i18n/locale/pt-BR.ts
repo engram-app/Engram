@@ -92,7 +92,7 @@ export default {
 		"Isso geralmente leva alguns segundos. Atualize em um momento, ou entre em contato com o suporte se o problema persistir.",
 	Refresh: "Atualizar",
 	"Contact support": "Entre em contato com o suporte",
-	"Reference: {id}": "Referência: {id}",
+	"Reference number: {id}": "Número de referência: {id}",
 	"Loading billing": "Carregando informações de pagamento",
 	"Could not open the billing portal. Please try again.":
 		"Não foi possível abrir o portal de pagamento. Tente novamente.",
@@ -238,8 +238,7 @@ export default {
 	"You're on this plan": "Você está neste plano",
 	"Start free trial": "Comece o teste gratuito",
 	Popular: "Popular",
-	"3,000 notes · 20 AI searches a day · 1 vault":
-		"3.000 notas · 20 buscas por IA por dia · 1 cofre",
+	"3,000 notes · 20 AI searches a day · 1 vault": "3.000 notas · 20 buscas de IA por dia · 1 cofre",
 	"3,000 notes, all searchable": "3.000 notas, todas pesquisáveis",
 	"20 AI searches a day": "20 buscas por IA por dia",
 	"1 vault": "1 cofre",

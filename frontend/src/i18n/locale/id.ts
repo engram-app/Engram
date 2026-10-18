@@ -91,7 +91,7 @@ export default {
 		"Biasanya ini hanya membutuhkan beberapa detik. Segarkan halaman sebentar, atau hubungi dukungan jika masalah berlanjut.",
 	Refresh: "Segarkan",
 	"Contact support": "Hubungi dukungan",
-	"Reference: {id}": "Referensi: {id}",
+	"Reference number: {id}": "Nomor referensi: {id}",
 	"Loading billing": "Memuat informasi penagihan",
 	"Could not open the billing portal. Please try again.":
 		"Tidak dapat membuka portal penagihan. Silakan coba lagi.",

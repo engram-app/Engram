@@ -13,7 +13,7 @@ defmodule Engram.I18n do
   """
 
   # Mirrors frontend/src/i18n/locales.ts (`LOCALES`, `matchLocale`).
-  @locales ~w(en de es fr id it ja ko ms pl pt-BR ru tr vi zh-CN zh-TW)
+  @locales ~w(en cs de es fr id it ja ko ms pl pt-BR ru tr uk vi zh-CN zh-TW)
   @by_lower Map.new(@locales, &{String.downcase(&1), &1})
 
   @dir Path.expand("../../priv/i18n/email", __DIR__)
@@ -39,6 +39,8 @@ defmodule Engram.I18n do
       Regex.match?(~r/^zh-(tw|hk|mo|hant)/, tag) -> "zh-TW"
       base == "zh" -> "zh-CN"
       base == "pt" -> "pt-BR"
+      # Slovak readers get Czech, the closest language we ship.
+      base == "sk" -> "cs"
       true -> @by_lower[base]
     end
   end

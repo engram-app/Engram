@@ -41,7 +41,7 @@ const SUSPECT_MAX_WORDS = 3;
 // (SaaS flow, where that step exists).
 const INTENTIONAL_ENGLISH: ReadonlySet<string> = new Set(["My Vault"]);
 
-const NON_LATIN_LOCALES = ["ja", "ko", "ru", "zh-CN", "zh-TW"] as const;
+const NON_LATIN_LOCALES = ["ja", "ko", "ru", "uk", "zh-CN", "zh-TW"] as const;
 
 function escapeRegex(text: string): string {
 	return text.replace(REGEX_SPECIALS, String.raw`\$&`);

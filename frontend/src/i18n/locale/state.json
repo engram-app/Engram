@@ -46,6 +46,7 @@
 		},
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -56,6 +57,7 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -107,6 +109,7 @@
 		},
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -117,6 +120,7 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -168,6 +172,7 @@
 		},
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -178,6 +183,7 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -229,6 +235,7 @@
 		},
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -239,15 +246,14 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
 	},
 	"ja": {
 		"translator": "202d8f78",
-		"failed": {
-			"3,000 notes · 20 AI searches a day · 1 vault": "2026-10-17"
-		},
+		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"{count} notes": "{count} note",
@@ -292,6 +298,7 @@
 		},
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -302,6 +309,7 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -353,6 +361,7 @@
 		},
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -363,6 +372,7 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -414,6 +424,7 @@
 		},
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -424,6 +435,7 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -475,6 +487,7 @@
 		},
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -485,6 +498,7 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -536,6 +550,7 @@
 		},
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -546,6 +561,7 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -597,6 +613,7 @@
 		},
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -607,6 +624,7 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -658,6 +676,7 @@
 		},
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -668,6 +687,7 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -719,6 +739,7 @@
 		},
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -729,6 +750,7 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -780,6 +802,7 @@
 		},
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -790,6 +813,7 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -841,6 +865,7 @@
 		},
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -851,6 +876,7 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}
@@ -902,6 +928,7 @@
 		},
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -912,6 +939,133 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
+		}
+	},
+	"cs": {
+		"translator": "8cd06f57",
+		"failed": {},
+		"one": {
+			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"{count} notes": "{count} note",
+			"{count} files": "{count} file",
+			"{count} minutes ago": "{count} minute ago",
+			"{count} hours ago": "{count} hour ago",
+			"{count} days ago": "{count} day ago",
+			"{count} months ago": "{count} month ago",
+			"{count} years ago": "{count} year ago",
+			"{count} days left in your trial.": "{count} day left in your trial.",
+			"{count} results": "{count} result",
+			"{count} days": "{count} day",
+			"{count} weeks": "{count} week",
+			"{count} months": "{count} month",
+			"{count} years": "{count} year",
+			"Your {plan} plan allows {count} vaults. Upgrade for more vaults.": "Your {plan} plan allows {count} vault. Upgrade for more vaults.",
+			"{count} attachments": "{count} attachment",
+			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
+			"Uploaded {count} files": "Uploaded {count} file",
+			"Copied {count} wikilinks": "Copied wikilink",
+			"Move {count} items to…": "Move {count} item to…",
+			"Copy {count} wikilinks": "Copy wikilink",
+			"Delete {count} items": "Delete {count} item",
+			"Delete {count} items?": "Delete {count} item?",
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+		},
+		"glossary": {
+			"Note": "Poznámka",
+			"Vault": "Trezor",
+			"Vaults": "Trezory",
+			"Sync": "Synchronizace",
+			"Attachments": "Přílohy",
+			"Folder": "Složka",
+			"Tags": "Tagy",
+			"Backlinks": "Zpětné odkazy",
+			"Properties": "Vlastnosti",
+			"Wikilink": "Wiki odkaz",
+			"Connections": "Připojení",
+			"Settings": "Nastavení",
+			"Search": "Vyhledávání",
+			"Manage your profile, password, and account.": "Spravujte svůj profil heslo a účet."
+		},
+		"descriptions": {
+			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
+			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
+			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
+			"the device on {os} that syncs your '{vault}' vault": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
+			"the device that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
+			"the device that syncs your '{vault}' vault": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
+			"Idea": "Feedback category: suggest a feature.",
+			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
+			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
+			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
+			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
+			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
+		}
+	},
+	"uk": {
+		"translator": "4cd2bf55",
+		"failed": {},
+		"one": {
+			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"{count} notes": "{count} note",
+			"{count} files": "{count} file",
+			"{count} minutes ago": "{count} minute ago",
+			"{count} hours ago": "{count} hour ago",
+			"{count} days ago": "{count} day ago",
+			"{count} months ago": "{count} month ago",
+			"{count} years ago": "{count} year ago",
+			"{count} days left in your trial.": "{count} day left in your trial.",
+			"{count} results": "{count} result",
+			"{count} days": "{count} day",
+			"{count} weeks": "{count} week",
+			"{count} months": "{count} month",
+			"{count} years": "{count} year",
+			"Your {plan} plan allows {count} vaults. Upgrade for more vaults.": "Your {plan} plan allows {count} vault. Upgrade for more vaults.",
+			"{count} attachments": "{count} attachment",
+			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
+			"Uploaded {count} files": "Uploaded {count} file",
+			"Copied {count} wikilinks": "Copied wikilink",
+			"Move {count} items to…": "Move {count} item to…",
+			"Copy {count} wikilinks": "Copy wikilink",
+			"Delete {count} items": "Delete {count} item",
+			"Delete {count} items?": "Delete {count} item?",
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+		},
+		"glossary": {
+			"Note": "Замітка",
+			"Vault": "Сховище",
+			"Vaults": "Сховища",
+			"Sync": "Синхронізація",
+			"Attachments": "Вкладення",
+			"Folder": "Папка",
+			"Tags": "Теги",
+			"Backlinks": "Зворотні посилання",
+			"Properties": "Властивості",
+			"Wikilink": "Міжсторінкове посилання",
+			"Connections": "З'єднання",
+			"Settings": "Налаштування",
+			"Search": "Пошук",
+			"Manage your profile, password, and account.": "Керуйте вашим профілем паролем та обліковим записом."
+		},
+		"descriptions": {
+			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
+			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
+			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
+			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
+			"the device on {os} that syncs your '{vault}' vault": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
+			"the device that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
+			"the device that syncs your '{vault}' vault": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
+			"Idea": "Feedback category: suggest a feature.",
+			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
+			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
+			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"Reading": "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view."
 		}

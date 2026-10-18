@@ -81,7 +81,7 @@ export default {
 		"这通常只需几秒。请稍等片刻刷新，或如果问题持续存在，请联系支持。",
 	Refresh: "刷新",
 	"Contact support": "联系支持",
-	"Reference: {id}": "参考: {id}",
+	"Reference number: {id}": "参考编号：{id}",
 	"Loading billing": "加载账单信息",
 	"Could not open the billing portal. Please try again.": "无法打开账单页面。请重试。",
 	"Could not start the payment update. Please try again.": "无法启动支付更新。请重试。",
