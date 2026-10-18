@@ -2655,10 +2655,6 @@ jobs:
           # Mirrors prod entrypoint.sh ordering.
           MIX_ENV=test mix engram.prepare_database
           MIX_ENV=test mix ecto.migrate
-          # Ensure Tailwind binary is valid (cache prune can corrupt native deps).
-          # MIX_ENV=test: without it this compiled every dep + the app in dev
-          # (~100s) for a binary download.
-          MIX_ENV=test mix tailwind.install 2>/dev/null || true
           # --warnings-as-errors treats compile-time warnings in test files
           # (unused aliases, unused vars, etc.) as fatal. Lib warnings are
           # already gated by `mix compile --warnings-as-errors` in the lint
@@ -4367,7 +4363,7 @@ jobs:
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: mix deps.get
 
-      - name: Wait for DB + ecto setup + tailwind
+      - name: Wait for DB + ecto setup
         env:
           DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_dev
         run: |
@@ -4381,10 +4377,6 @@ jobs:
           # See unit-tests job comment — prepare_database must precede migrate.
           mix engram.prepare_database
           mix ecto.migrate
-          # Ensure Tailwind binary is valid (cache prune can corrupt native deps).
-          # Mirror of unit-tests fix — Playwright's webServer boots Phoenix
-          # which boots Tailwind, and a corrupt :eacces binary kills the boot.
-          mix tailwind.install 2>/dev/null || true
 
       - name: Install frontend deps + Playwright
         working-directory: frontend
@@ -4437,8 +4429,9 @@ jobs:
           CLERK_JWKS_URL: ${{ secrets.CLERK_JWKS_URL }}
           CLERK_ISSUER: ${{ secrets.CLERK_ISSUER }}
           # The per-locale i18n specs (15 locales x 3 specs, ~45 tests, 7-9 min)
-          # run nightly only; PRs run English. See e2e/support/i18n-leaks.ts.
-          E2E_ALL_LOCALES: ${{ github.event_name == 'schedule' && '1' || '' }}
+          # run on the nightly and on force_full dispatches (the release-v*
+          # gate), not on PR/main pushes. See e2e/support/i18n-leaks.ts.
+          E2E_ALL_LOCALES: ${{ (github.event_name == 'schedule' || github.event.inputs.force_full == 'true') && '1' || '' }}
           CI: "true"
         run: |
           export PATH="$HOME/.bun/bin:$PATH"
@@ -4808,11 +4801,14 @@ jobs:
           rm -rf "$WORKDIR"
           echo "::notice::Saved backend marker $TAG"
 
-      # Only when no e2e suite FAILED. `ci` passes on a red e2e (report-only),
-      # so gating on `ci` alone recorded "e2e passed" for red e2e runs.
+      # The e2e-hash marker lets a later run skip e2e-clerk, so e2e-clerk must
+      # have actually RUN green here, and no other suite may have failed. `ci`
+      # passes on a red e2e (report-only), so gating on `ci` alone recorded
+      # "e2e passed" for red e2e runs. (Targeted [e2e: ...] runs never reach
+      # here: `ci` fails them.)
       - name: Save e2e marker to registry
         if: >-
-          !contains(fromJSON('["failure","cancelled"]'), needs.e2e-clerk.result)
+          needs.e2e-clerk.result == 'success'
           && !contains(fromJSON('["failure","cancelled"]'), needs.e2e-crdt.result)
           && !contains(fromJSON('["failure","cancelled"]'), needs.e2e-browser.result)
         env:
@@ -4909,6 +4905,9 @@ jobs:
           record storage-database "$STORAGE_DATABASE_RESULT" "$HASH_STORAGE_DATABASE"
           record e2e-clerk        "$E2E_CLERK_RESULT"        "$HASH_E2E_CLERK"
           record e2e-crdt         "$E2E_CRDT_RESULT"         "$HASH_E2E_CRDT"
+          # e2e-browser's marker covers the PR tier (English). The per-locale
+          # specs run only on the nightly and force_full release gate, and both
+          # bypass markers, so this marker can never skip them where they gate.
           record e2e-browser      "$E2E_BROWSER_RESULT"      "$HASH_E2E_BROWSER"
 
   # Single source of truth for the backend/e2e commit status on plugin PRs.
