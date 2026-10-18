@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.54.0](https://github.com/engram-app/Engram/compare/0.53.1...0.54.0) (2026-10-18)
+
+
+### Features
+
+* **billing:** Free tier is 3,000 notes, all searchable ([#2004](https://github.com/engram-app/Engram/issues/2004)) ([c505df5](https://github.com/engram-app/Engram/commit/c505df5d672c8e15b6eb861eb2f9bfd8f420709b))
+* **i18n:** add Turkish, Polish and Indonesian ([#2000](https://github.com/engram-app/Engram/issues/2000)) ([fe8b826](https://github.com/engram-app/Engram/commit/fe8b826d3c08dacd6e75a0a6ee8201ea6dc7ccaf))
+* **oauth:** open the vault on Approve; onboarding v2 review fixes ([#2003](https://github.com/engram-app/Engram/issues/2003)) ([be146cc](https://github.com/engram-app/Engram/commit/be146cc59c62855fca4335aba9ecb2c7e87c57d8))
+* **oauth:** per-vault access levels, mcp:read, editable connections ([#1996](https://github.com/engram-app/Engram/issues/1996)) ([90b9d68](https://github.com/engram-app/Engram/commit/90b9d68dee6ddd385ade280a2cee39a644929284))
+* **onboarding:** onboarding v2, terms-only wizard and in-app survey ([#1993](https://github.com/engram-app/Engram/issues/1993)) ([7b7cbe5](https://github.com/engram-app/Engram/commit/7b7cbe55fd89a981fe12cfd184867933ed63828f))
+
+
+### Bug Fixes
+
+* CIMD JWKS exec time + socket token retry ([#2006](https://github.com/engram-app/Engram/issues/2006)) ([3f038f6](https://github.com/engram-app/Engram/commit/3f038f619a23c0f91451eca37abe90327ebcc926))
+* **oauth:** harden per-vault access ([#1996](https://github.com/engram-app/Engram/issues/1996) review fixes) ([#2007](https://github.com/engram-app/Engram/issues/2007)) ([1250471](https://github.com/engram-app/Engram/commit/125047150fdd00f548591898eaa26741c0a4acee))
+
+
+### Performance Improvements
+
+* prod hot paths, metrics export, path sanitize ([#2005](https://github.com/engram-app/Engram/issues/2005)) ([ecfb287](https://github.com/engram-app/Engram/commit/ecfb287498088a1b2609e1edcea90be64cfb9994))
+
 ## [0.53.1](https://github.com/engram-app/Engram/compare/0.53.0...0.53.1) (2026-10-16)
 
 
