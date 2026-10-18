@@ -394,7 +394,11 @@ defmodule Engram.Accounts.Lifecycle do
     # A partial Qdrant delete is exactly the case that must not keep markers.
     _ = Indexing.forget_chunk_reuse_for_user(user.id)
 
-    case Qdrant.delete_by_user(user.id) do
+    # Fail fast (the synchronous `:search` profile): this runs inside the
+    # user's delete request, and a failure is already best-effort, collected
+    # by OrphanSweep once the user row is gone. The patient indexing retries
+    # held the request ~7s per call during a Qdrant outage.
+    case Qdrant.delete_by_user(nil, user.id, :search) do
       :ok ->
         :ok
 
