@@ -116,14 +116,15 @@ describe("TreeRow", () => {
 				<TreeRow instance={folder} />
 			</MemoryRouter>,
 		);
-		expect(screen.getByText("Projects")).toHaveAttribute("translate", "no");
+		expect(screen.getByRole("treeitem")).toHaveAttribute("translate", "no");
 		unmount();
 		render(
 			<MemoryRouter>
 				<TreeRow instance={mockInstance({ data: noteItem })} />
 			</MemoryRouter>,
 		);
-		expect(screen.getByText("a")).toHaveAttribute("translate", "no");
+		// On the row itself, so its aria-label (the name) is covered too.
+		expect(screen.getByRole("link")).toHaveAttribute("translate", "no");
 	});
 
 	it("folder row exposes aria-expanded matching HT state", () => {

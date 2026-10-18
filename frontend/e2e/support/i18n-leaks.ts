@@ -131,8 +131,9 @@ export async function collectVisibleText(
 			const rect = el.getBoundingClientRect();
 			return rect.width > 0 && rect.height > 0;
 		};
-		// `translate="no"` marks user content (note and folder names): a note the
-		// user titled "Welcome to Engram" is not an untranslated UI string.
+		// `translate="no"` marks user content (note and folder names in the tree,
+		// dashboard, search, backlinks, note header): a note titled "Welcome to
+		// Engram" is not an untranslated UI string.
 		const skipped = (el: Element): boolean =>
 			SKIPPED_TAGS.has(el.tagName) ||
 			el.closest('[translate="no"]') !== null ||

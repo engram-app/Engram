@@ -733,7 +733,8 @@ export default function NotePage() {
 							title={t("Click to rename")}
 							onClick={() => setRenaming({ id: note.id, at: "header" })}
 						>
-							{name}
+							{/* The name is user content; the button's tooltip is not. */}
+							<span translate="no">{name}</span>
 						</button>
 					)
 				}

@@ -287,14 +287,14 @@ export function TreeRow({
 				aria-expanded={instance.isExpanded()}
 				aria-selected={instance.isSelected()}
 				{...fileDrop}
+				// Every row is user content, its aria-label (the name) included.
+				translate="no"
 				className={rowClass(instance, active, menuOpen, multiSelect)}
 				style={{ paddingLeft: `${folderPad}px`, height: TREE_ROW_HEIGHT }}
 			>
 				<IndentGuides depth={depth} />
 				<Chevron open={instance.isExpanded()} />
-				<span translate="no" className="min-w-0 flex-1 truncate">
-					{item.name}
-				</span>
+				<span className="min-w-0 flex-1 truncate">{item.name}</span>
 			</button>
 		);
 	}
@@ -330,6 +330,8 @@ export function TreeRow({
 				onContextMenu={contextMenuHandler}
 				aria-selected={instance.isSelected()}
 				aria-current={active ? "page" : undefined}
+				// Every row is user content, its aria-label (the name) included.
+				translate="no"
 				className={rowClass(instance, active, menuOpen, multiSelect)}
 				style={{ paddingLeft: `${notePad}px`, height: TREE_ROW_HEIGHT }}
 			>
@@ -343,9 +345,7 @@ export function TreeRow({
 				{/* Base name only — the badge beside it already carries the type,
 				    and this keeps the row consistent with note rows and with what
 				    the rename box seeds. */}
-				<span translate="no" className="min-w-0 flex-1 truncate">
-					{noteName(item.path)}
-				</span>
+				<span className="min-w-0 flex-1 truncate">{noteName(item.path)}</span>
 				{ext ? (
 					<span className={`shrink-0 text-xs ${active ? "opacity-75" : "text-muted-foreground"}`}>
 						{ext.toUpperCase()}
@@ -381,13 +381,13 @@ export function TreeRow({
 			{...fileDrop}
 			aria-selected={instance.isSelected()}
 			aria-current={active ? "page" : undefined}
+			// Every row is user content, its aria-label (the name) included.
+			translate="no"
 			className={rowClass(instance, active, menuOpen, multiSelect)}
 			style={{ paddingLeft: `${notePad}px`, height: TREE_ROW_HEIGHT }}
 		>
 			<IndentGuides depth={depth} />
-			<span translate="no" className="min-w-0 flex-1 truncate">
-				{noteLabel(item)}
-			</span>
+			<span className="min-w-0 flex-1 truncate">{noteLabel(item)}</span>
 			{item.ext && item.ext !== "md" && (
 				<span
 					className={`shrink-0 text-xs uppercase ${active ? "opacity-75" : "text-muted-foreground"}`}
