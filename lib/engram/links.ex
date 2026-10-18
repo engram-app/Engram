@@ -50,6 +50,12 @@ defmodule Engram.Links do
   alias Engram.Repo
   alias Engram.Vaults.Vault
 
+  @typedoc "A candidate set indexed by `index_candidates/1`."
+  @type candidate_index :: %{
+          sorted: [{binary(), String.t()}],
+          by_path: %{String.t() => {non_neg_integer(), binary()}}
+        }
+
   @note_exts ~w(.md .canvas)
   @backlinks_limit 200
 
@@ -251,10 +257,13 @@ defmodule Engram.Links do
     uniq = Enum.uniq(hmacs)
 
     %{
-      notes: fetch_candidates_by_hmac(user, vault, uniq, :notes, dek),
-      attachments: fetch_candidates_by_hmac(user, vault, uniq, :attachments, dek)
+      notes: user |> fetch_candidates_by_hmac(vault, uniq, :notes, dek) |> index_by_hmac(),
+      attachments:
+        user |> fetch_candidates_by_hmac(vault, uniq, :attachments, dek) |> index_by_hmac()
     }
   end
+
+  defp index_by_hmac(groups), do: Map.new(groups, fn {h, l} -> {h, index_candidates(l)} end)
 
   # Same extension-preference + cross-table-fallback rule as `resolve_target/4`,
   # reading from the prefetch instead of the DB.
@@ -439,7 +448,7 @@ defmodule Engram.Links do
   #
   # Rows that fail to decrypt are dropped, same as before. Grouping reverses
   # each bucket's query order, which `resolve_from_candidates/3` cannot
-  # observe: it sorts on `{String.length(path), path}`, and live rows in one
+  # observe: `index_candidates/1` sorts on `{String.length(path), path}`, and live rows in one
   # vault have distinct paths, so that ordering is total and no stable-sort tie
   # survives to break.
   defp decrypt_and_group([], _dek, _table), do: %{}
@@ -461,32 +470,69 @@ defmodule Engram.Links do
     end)
   end
 
-  # Target-dependent filter + tiebreak — the part that varies per edge even
-  # when the candidate set (fetched above) is shared.
-  defp resolve_from_candidates(candidates, target, tag) do
-    candidates
-    |> filter_by_path(target)
-    |> Enum.sort_by(fn {_id, path} -> {String.length(path), path} end)
-    |> case do
-      [] -> :dangling
-      [{id, _path} | _] -> {tag, id}
-    end
+  @doc """
+  Indexes a `pre_rename_candidates/5` result for repeated
+  `pre_rename_winner?/4` calls, so a walk over many occurrences pays the
+  sort once instead of once per occurrence.
+  """
+  @spec index_candidate_sets(%{notes: list(), attachments: list()}) :: %{
+          notes: candidate_index(),
+          attachments: candidate_index()
+        }
+  def index_candidate_sets(%{notes: notes, attachments: attachments}),
+    do: %{notes: index_candidates(notes), attachments: index_candidates(attachments)}
+
+  # The tiebreak order and the case-insensitive path lookup, built ONCE per
+  # candidate set. Callers that resolve many targets against one shared set
+  # (`bind_danglers_for_hmac/3`, `replace_links/4`'s prefetch) index it once
+  # and then pay O(1) per target. Re-sorting per target made a rebind over a
+  # basename shared by C notes with E inbound edges O(E * C log C): 733
+  # `index.md` notes x 1,787 edges pinned the prod worker (2026-10-18).
+  #
+  # The order is `{String.length(path), path}`: shortest path wins, ties break
+  # lexicographically. Live rows in one vault have distinct paths, so it is
+  # total. `by_path` keeps the best-ranked row per lowercased path, so a
+  # folder target's winner is the lowest rank among its variants' hits.
+  defp index_candidates(candidates) do
+    sorted = Enum.sort_by(candidates, fn {_id, path} -> {String.length(path), path} end)
+
+    by_path =
+      sorted
+      |> Enum.with_index()
+      |> Enum.reduce(%{}, fn {{id, path}, rank}, acc ->
+        Map.put_new(acc, String.downcase(path), {rank, id})
+      end)
+
+    %{sorted: sorted, by_path: by_path}
   end
 
-  # A target with a folder segment narrows candidates to a full-path match
-  # (case-insensitive); a bare basename target keeps every same-basename
-  # candidate so the shortest-path tiebreak below can pick a winner.
-  defp filter_by_path(candidates, target) do
-    if String.contains?(target, "/") do
-      variants =
-        [target | Enum.map(@note_exts, &(target <> &1))]
-        |> Enum.map(&String.downcase/1)
+  # Target-dependent filter + tiebreak — the part that varies per edge even
+  # when the candidate set (fetched above) is shared. A raw list is indexed
+  # here, for one-shot callers; loops pass a prebuilt index.
+  defp resolve_from_candidates(candidates, target, tag) when is_list(candidates),
+    do: candidates |> index_candidates() |> resolve_from_candidates(target, tag)
 
-      Enum.filter(candidates, fn {_id, path} ->
-        is_binary(path) and String.downcase(path) in variants
+  # A target with a folder segment narrows candidates to a full-path match
+  # (case-insensitive, also trying `.md`/`.canvas` appended); a bare basename
+  # target takes the best-ranked same-basename candidate.
+  defp resolve_from_candidates(%{sorted: sorted, by_path: by_path}, target, tag) do
+    if String.contains?(target, "/") do
+      [target | Enum.map(@note_exts, &(target <> &1))]
+      |> Enum.flat_map(fn variant ->
+        case Map.fetch(by_path, String.downcase(variant)) do
+          {:ok, hit} -> [hit]
+          :error -> []
+        end
       end)
+      |> case do
+        [] -> :dangling
+        hits -> {tag, hits |> Enum.min() |> elem(1)}
+      end
     else
-      candidates
+      case sorted do
+        [] -> :dangling
+        [{id, _path} | _] -> {tag, id}
+      end
     end
   end
 
@@ -601,8 +647,8 @@ defmodule Engram.Links do
   candidate tables the prefetch consulted.
   """
   @spec pre_rename_winner?(String.t(), String.t(), binary(), %{
-          notes: [{binary(), String.t()}],
-          attachments: [{binary(), String.t()}]
+          notes: [{binary(), String.t()}] | candidate_index(),
+          attachments: [{binary(), String.t()}] | candidate_index()
         }) :: boolean()
   def pre_rename_winner?(target, old_path, renamed_id, %{notes: notes, attachments: attachments}) do
     if basename_key(target) != basename_key(old_path) do
@@ -725,11 +771,14 @@ defmodule Engram.Links do
       # fetch once instead of once per edge (was N Repo.all + N decrypt
       # passes per table). Only the per-edge target text varies the
       # resolution (extension routing, path filter, tiebreak), which
-      # `rebind_edge/6` applies in memory against these shared lists via
+      # `rebind_edge/6` applies in memory against these shared indexes via
       # the same `route_resolution/3` + `resolve_from_candidates/3` rules
       # `resolve_target/4` uses.
-      note_candidates = fetch_decrypted_candidates(user, vault, hmac, :notes, dek)
-      attachment_candidates = fetch_decrypted_candidates(user, vault, hmac, :attachments, dek)
+      note_candidates =
+        user |> fetch_decrypted_candidates(vault, hmac, :notes, dek) |> index_candidates()
+
+      attachment_candidates =
+        user |> fetch_decrypted_candidates(vault, hmac, :attachments, dek) |> index_candidates()
 
       Enum.each(edges, fn edge ->
         target_text =
