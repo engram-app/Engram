@@ -404,9 +404,9 @@ export default {
 	"previous device": "이전 기기",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"'{name}' 기기는 연결 해제되었지만, 새 기기 연결에 실패했습니다. Obsidian에서 다시 연결하세요. 현재 동기화된 기기가 없습니다.",
-	"Authorization failed": "인증 실패",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"이 코드는 유효하지 않거나 만료되었습니다. Obsidian에서 다시 시도하세요.",
+	"Authorization failed": "인증 실패",
 	"Welcome to Engram": "Engram에 오신 것을 환영합니다",
 	"Name your first vault. Your Obsidian notes will sync into it.":
 		"첫 번째 보관함 이름을 지정하세요. Obsidian 노트가 이 보관함에 동기화됩니다.",

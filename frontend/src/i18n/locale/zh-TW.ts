@@ -388,9 +388,9 @@ export default {
 	"previous device": "之前的裝置",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"已斷開 '{name}'，但連結新裝置失敗。請從 Obsidian 重新連結 — 目前沒有任何裝置同步。",
-	"Authorization failed": "授權失敗",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"此碼無效或已過期。請從 Obsidian 重新嘗試。",
+	"Authorization failed": "授權失敗",
 	"Welcome to Engram": "歡迎使用 Engram",
 	"Name your first vault. Your Obsidian notes will sync into it.":
 		"為你的第一個儲存庫命名。你的 Obsidian 筆記將同步到其中。",

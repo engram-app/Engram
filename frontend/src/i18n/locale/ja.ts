@@ -411,9 +411,12 @@ export default {
 	"previous device": "以前のデバイス",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"'{name}' からの接続を切断しましたが、新しいデバイスへのリンクに失敗しました。Obsidian から再リンクしてください — 現在、同期されているデバイスはありません。",
-	"Authorization failed": "認証に失敗しました",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"このコードは無効であるか、期限切れです。Obsidian から再度お試しください。",
+	"Authorization failed": "認証に失敗しました",
+	"Welcome to Engram": "Engramへようこそ",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"最初の保管庫の名前を入力してください。Obsidianのノートがここに同期されます。",
 	"Enter the code shown in your Obsidian plugin:":
 		"Obsidian プラグインに表示されているコードを入力してください。",
 	"Verifying…": "認証中です…",
@@ -424,11 +427,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"接続リストに表示され、デバイスを区別できます。",
 	"Obsidian Vault Sync": "Obsidian 保管庫の同期",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"保管庫の制限に達しました。無料プランでは1つの保管庫が利用可能です",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"無料プランでは新しい保管庫を作成できません。上記で既存の保管庫と同期するか、アップグレードしてさらに保管庫を追加してください。",
-	"Upgrade plan": "アップグレードプラン",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"無料プランでは1つの保管庫が含まれます。このデバイスは上記の保管庫と同期されます。",
+	"Need more vaults? Upgrade": "より多くの保管庫が必要ですか？アップグレードしてください",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"同期により、このデバイスがあなたのノートにアクセスできるようになります。ご自身でこのリンクを開始した場合のみ、続行してください。他の方があなたをここに誘導した場合、このページを閉じます。",
 	"Syncing…": "同期中…",
@@ -452,7 +453,6 @@ export default {
 	"Sync with an existing vault": "既存の保管庫と同期します",
 	"(choose from {count} vaults)": "( {count} 個の保管庫から選択)",
 	"Or create a new vault": "または、新しい保管庫を作成します",
-	"Create your first vault": "最初の保管庫を作成します",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"{os}に同期している'{vault}'という保管庫のデバイス (最終アクティブ: {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -832,6 +832,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"続きに進む前に、以下の利用規約を全文お読みください。当社の {privacy} (サインアップ時に確認) は、お客様のデータを取り扱い方について説明しています。",
 	"Connect {tool}": "{tool} に接続",
+	"Create your first vault": "最初の保管庫を作成します",
 	"Join our Discord": "Discordに参加",
 	Join: "参加",
 	"Install the Obsidian plugin": "Obsidianプラグインをインストール",

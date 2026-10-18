@@ -424,9 +424,12 @@ export default {
 	"previous device": "předchozí zařízení",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"Odpojeno '{name}', ale propojení nového zařízení selhalo. Propojte znovu z Obsidian – v současné době nejsou žádná zařízení synchronizována.",
-	"Authorization failed": "Autorizace selhala",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Tento kód je neplatný nebo vypršel. Zkuste to znovu z Obsidian.",
+	"Authorization failed": "Autorizace selhala",
+	"Welcome to Engram": "Vítejte v Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Pojmenujte svůj první trezor. Vaše poznámky Obsidian se do něj synchronizují.",
 	"Enter the code shown in your Obsidian plugin:":
 		"Zadejte kód zobrazený ve vašem pluginu Obsidian:",
 	"Verifying…": "Ověřování…",
@@ -437,11 +440,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Zobrazí se ve vašem seznamu připojení, abyste mohli rozlišit svá zařízení.",
 	"Obsidian Vault Sync": "Synchronizace trezoru Obsidian",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Limit trezorů byl dosažen: váš bezplatný plán zahrnuje 1 trezor",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Na bezplatném plánu nemůžete vytvořit nový trezor. Synchronizujte se se stávajícím trezorem výše nebo upgradujte, abyste přidali další.",
-	"Upgrade plan": "Plán předplatného",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Váš bezplatný plán zahrnuje 1 trezor, takže toto zařízení se synchronizuje s tím výše.",
+	"Need more vaults? Upgrade": "Potřebujete více trezorů? Upgradujte",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"Synchronizace umožňuje tomuto zařízení přístup k vašim poznámkám. Pokračujte pouze pokud jste tuto stránku otevřeli sami. Pokud vás sem poslal někdo jiný, zavřete tuto stránku.",
 	"Syncing…": "Probíhá synchronizace…",
@@ -465,7 +466,6 @@ export default {
 	"Sync with an existing vault": "Synchronizace s existujícím trezorem",
 	"(choose from {count} vaults)": "(vyberte z {count} trezorů)",
 	"Or create a new vault": "Nebo vytvořte nový trezor",
-	"Create your first vault": "Vytvořte svůj první trezor",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"zařízení na {os}, které synchronizuje váš trezor '{vault}' (poslední aktivita {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -669,7 +669,6 @@ export default {
 		many: "Zbývá {count} dne do konce zkušební verze.",
 		other: "Zbývá {count} dní do konce zkušební verze.",
 	},
-	"Free plan device limit: {count}.": "Limit zařízení pro bezplatný plán: {count}.",
 	"Collapse sidebar": "Sbalit boční panel",
 	"No vaults": "Žádné trezory",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -900,6 +899,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Před pokračováním si, prosím, přečtěte celou smlouvu níže. Naše {privacy} (prohlédnuta při registraci) popisuje, jak nakládáme s vašimi daty.",
 	"Connect {tool}": "Připojit {tool}",
+	"Create your first vault": "Vytvořte svůj první trezor",
 	"Join our Discord": "Připojte se k našemu Discordu",
 	Join: "Připojit",
 	"Install the Obsidian plugin": "Nainstalovat plugin Obsidian",
@@ -913,7 +913,8 @@ export default {
 	"{completed} of {total} done": "{completed} z {total} dokončeno",
 	"Setup guide": "Návod k nastavení",
 	"Dismiss {label}": "Zrušit {label}",
-	"You're on the Free plan.": "Používáte bezplatný plán.",
+	"Want more devices and vaults?": "Chcete více zařízení a trezorů?",
+	"See paid plans": "Prohlédněte si placené plány",
 	"Connect Claude Desktop": "Připojit Claude Desktop",
 	"Connect Cursor": "Připojit Cursor",
 	"Connect Devin": "Připojit Devin",
@@ -945,9 +946,6 @@ export default {
 	"Could not continue. Please try again.": "Nelze pokračovat. Zkuste to znovu.",
 	"Step {step} of {total}": "Krok {step} z {total}",
 	Onboarding: "Úvodní nastavení",
-	"your app": "vaše aplikace",
-	"Cancel connection": "Zrušit připojení",
-	"Connecting {app}": "Připojení k {app}",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Nelze uložit vaši volbu. Zkuste kliknout znovu – pokud to stále nefunguje, obnovte stránku.",
 	"Let's get your notes in.": "Připravme vaše poznámky.",

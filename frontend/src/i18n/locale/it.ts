@@ -417,9 +417,9 @@ export default {
 	"previous device": "dispositivo precedente",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"Disconnesso '{name}', ma il collegamento del nuovo dispositivo è fallito. Ricollega da Obsidian: al momento non ci sono dispositivi sincronizzati.",
-	"Authorization failed": "Autorizzazione fallita",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Questo codice non è valido o è scaduto. Riprova da Obsidian.",
+	"Authorization failed": "Autorizzazione fallita",
 	"Welcome to Engram": "Benvenuto in Engram",
 	"Name your first vault. Your Obsidian notes will sync into it.":
 		"Dai un nome alla tua prima vault. Le tue note Obsidian verranno sincronizzate al suo interno.",
