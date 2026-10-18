@@ -70,21 +70,21 @@ export default function OnboardLayout() {
 		<AuthShell
 			navLabel={t("Onboarding")}
 			actions={
-				<>
-					{counter ? (
-						<p className="whitespace-nowrap text-muted-foreground text-sm">{counter}</p>
-					) : null}
-					<Button
-						type="button"
-						variant="ghost"
-						size="icon"
-						aria-label={t("Sign out")}
-						title={t("Sign out")}
-						onClick={() => logout()}
-					>
-						<LogOut aria-hidden="true" />
-					</Button>
-				</>
+				counter ? (
+					<p className="whitespace-nowrap text-muted-foreground text-sm">{counter}</p>
+				) : null
+			}
+			trailing={
+				<Button
+					type="button"
+					variant="ghost"
+					size="icon"
+					aria-label={t("Sign out")}
+					title={t("Sign out")}
+					onClick={() => logout()}
+				>
+					<LogOut aria-hidden="true" />
+				</Button>
 			}
 		>
 			<Outlet />
