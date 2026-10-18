@@ -6,6 +6,10 @@ Ecto.Adapters.SQL.Sandbox.mode(Engram.Repo, :manual)
 # See Engram.ServiceConfig.
 Engram.ServiceConfig.ensure_table()
 
+# Same for the in-memory storage blobs: a test that created the table would
+# take every other test's blobs with it when it exits.
+Engram.Storage.InMemory.ensure_table()
+
 # One suite-wide structured-log capture handler; see Engram.Test.LogCapture.
 Engram.Test.LogCapture.install()
 

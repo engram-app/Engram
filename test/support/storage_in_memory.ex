@@ -11,8 +11,18 @@ defmodule Engram.Storage.InMemory do
 
   @table :engram_test_storage_in_memory
 
-  @doc "Lazily ensures the ETS table exists. Idempotent and safe to call concurrently."
+  @doc """
+  Ensures the blob and multipart ETS tables exist. Idempotent and safe to
+  call concurrently.
+
+  An ETS table dies with the process that created it, so `test_helper.exs`
+  calls this once to make the suite runner the owner. Otherwise the first
+  test to store a blob owns the tables, and its exit wipes every concurrent
+  test's blobs (`{:storage, :blob_missing}`).
+  """
   def ensure_table do
+    ensure_multipart_table()
+
     case :ets.whereis(@table) do
       :undefined ->
         try do
