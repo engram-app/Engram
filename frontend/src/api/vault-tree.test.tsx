@@ -2,11 +2,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import type React from "react";
 import { MemoryRouter } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FolderTreeProvider } from "../layout/folder-tree-context";
 import FolderTree from "../viewer/folder-tree";
 import { syntheticFolderId } from "../viewer/tree/synthesize-folders";
-import { backfillStructural } from "./channel";
+import { __resetNoteChangeBatch, backfillStructural, handleNoteChanged } from "./channel";
 import { type NoteSummary, useAttachments, useFolders, useVaultNotes } from "./queries";
 import { dirOf } from "./vault-tree-patch";
 
@@ -391,5 +391,134 @@ describe("FolderTree renders from a real /vault/tree payload", () => {
 		// `/vaults` is the row href's slug lookup (api/vault-slug.ts), unrelated to
 		// the sidebar's data. Everything the tree renders came from ONE request.
 		expect(urls().filter((u) => u !== "/vaults")).toEqual(["/vault/tree"]);
+	});
+});
+
+// A large first sync streams note events continuously. Each batch that landed
+// while a tree fetch was in flight used to invalidate, which re-ran the fetch,
+// during which the next batch landed: back-to-back whole-vault fetches for the
+// whole sync (prod: 161 in 20 min, ~0.55 CPU-s each). Events seen mid-flight
+// are now buffered and replayed onto the response instead.
+describe("sync events during an in-flight tree fetch", () => {
+	afterEach(() => {
+		__resetNoteChangeBatch();
+	});
+
+	// Load the tree, then hold its NEXT fetch open until `release` is called.
+	async function loadThenHoldRefetch() {
+		const qc = newQc();
+		let treeCalls = 0;
+		let release: (t: Tree) => void = () => {};
+		let fail: (e: Error) => void = () => {};
+		get.mockImplementation((url: string) => {
+			if (url !== "/vault/tree") {
+				return Promise.resolve(legacyFrozen(url));
+			}
+			treeCalls++;
+			if (treeCalls === 2) {
+				return new Promise<Tree>((resolve, reject) => {
+					release = resolve;
+					fail = reject;
+				});
+			}
+			return Promise.resolve(current);
+		});
+		const { result } = renderHook(() => useVaultNotes(), { wrapper: wrapperFor(qc) });
+		await waitFor(() => expect(result.current.data).toBeDefined());
+		backfillStructural(qc, "42");
+		await waitFor(() => expect(treeCalls).toBe(2));
+		return {
+			qc,
+			result,
+			calls: () => treeCalls,
+			release: (t: Tree) => release(t),
+			fail: (e: Error) => fail(e),
+		};
+	}
+
+	const upsert = (id: string, path: string, updated_at: string) => ({
+		event_type: "upsert" as const,
+		id,
+		path,
+		updated_at,
+		vault_id: "42",
+	});
+	// Past the channel's 250 ms coalescing window.
+	const flushBatch = () => new Promise((r) => setTimeout(r, 300));
+
+	it("does not re-fetch, and applies the events once the fetch lands", async () => {
+		const h = await loadThenHoldRefetch();
+		handleNoteChanged(upsert("n9", "Projects/new.md", "u9"), h.qc, "42");
+		await flushBatch();
+		handleNoteChanged(upsert("n2", "root.md", "u2"), h.qc, "42");
+		await flushBatch();
+
+		// The held response was snapshotted before either write.
+		h.release(BASE_TREE);
+
+		await waitFor(() =>
+			expect(h.result.current.data?.find((n) => n.id === "n9")?.path).toBe("Projects/new.md"),
+		);
+		expect(h.result.current.data?.find((n) => n.id === "n2")?.updated_at).toBe("u2");
+		expect(h.calls()).toBe(2);
+	});
+
+	it("does not duplicate a buffered event the response already contains", async () => {
+		const h = await loadThenHoldRefetch();
+		handleNoteChanged(upsert("n9", "Projects/new.md", "u9"), h.qc, "42");
+		await flushBatch();
+
+		const n9 = { id: "n9", path: "Projects/new.md", created_at: "u9", updated_at: "u9" };
+		h.release({ ...BASE_TREE, notes: [...BASE_TREE.notes, n9] });
+
+		await waitFor(() => expect(h.result.current.data?.some((n) => n.id === "n9")).toBe(true));
+		expect(h.result.current.data?.filter((n) => n.id === "n9")).toHaveLength(1);
+		expect(h.calls()).toBe(2);
+	});
+
+	// The events live with the request that failed. Replaying them onto a LATER
+	// response, issued after they happened, could resurrect a stale state.
+	it("drops the buffer when the fetch fails", async () => {
+		const h = await loadThenHoldRefetch();
+		handleNoteChanged(upsert("n2", "root.md", "stale"), h.qc, "42");
+		await flushBatch();
+		h.fail(new Error("boom"));
+		await waitFor(() => expect(h.qc.getQueryState(["vault-tree", "42"])?.status).toBe("error"));
+
+		// Server truth since then: n2 is gone.
+		current = { ...BASE_TREE, notes: BASE_TREE.notes.filter((n) => n.id !== "n2") };
+		backfillStructural(h.qc, "42");
+
+		await waitFor(() => expect(h.calls()).toBe(3));
+		await waitFor(() => expect(h.result.current.data?.some((n) => n.id === "n2")).toBe(false));
+	});
+
+	it("keeps another vault's events out of this vault's buffer", async () => {
+		const h = await loadThenHoldRefetch();
+		handleNoteChanged({ ...upsert("x1", "other.md", "u"), vault_id: "43" }, h.qc, "43");
+		await flushBatch();
+		h.release(BASE_TREE);
+
+		await waitFor(() => expect(h.qc.getQueryState(["vault-tree", "42"])?.fetchStatus).toBe("idle"));
+		expect(h.result.current.data?.some((n) => n.id === "x1")).toBe(false);
+	});
+
+	// A move between folders may be a folder rename; the events say nothing
+	// about the marker, so a request issued after the move is still required.
+	it("re-fetches once when a buffered event moves a note across folders", async () => {
+		const h = await loadThenHoldRefetch();
+		handleNoteChanged(upsert("n1", "spec.md", "u2"), h.qc, "42");
+		await flushBatch();
+		const moved = {
+			...BASE_TREE,
+			notes: BASE_TREE.notes.map((n) => (n.id === "n1" ? { ...n, path: "spec.md" } : n)),
+		};
+		current = moved;
+		h.release(BASE_TREE);
+
+		await waitFor(() =>
+			expect(h.result.current.data?.find((n) => n.id === "n1")?.path).toBe("spec.md"),
+		);
+		expect(h.calls()).toBe(3);
 	});
 });
