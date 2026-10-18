@@ -210,9 +210,14 @@ defmodule Engram.Logs do
 
   defp parse_ts(_), do: nil
 
-  # Mirror each ingested plugin log line into the backend Logger under the
-  # :client category so it flows through FireLens to CloudWatch (everything)
-  # and Loki (warn+ always; info only when the client marks it diagnostic).
+  # Mirror ingested plugin log lines into the backend Logger under the :client
+  # category so they flow through FireLens to CloudWatch and Loki. Only lines
+  # Loki takes are written (warn+, or info the client marks diagnostic): a plain
+  # info line was formatted and written to stdout for every entry only to be
+  # dropped by Fluent Bit's Loki route, and the row is in client_logs anyway.
+  # That was most of the logging CPU during a first sync (2026-10-17: 6,344
+  # info lines from one device in 20 min). Identical lines in one batch are
+  # written once with a `repeat` count.
   # This makes both sides of a WS connection greppable by conn_id in ONE Loki
   # query, without the read-only DB bastion.
   #
@@ -240,7 +245,9 @@ defmodule Engram.Logs do
        if(entry.diagnostic, do: max(budget - 1, 0), else: budget)}
     end)
     |> elem(0)
-    |> Enum.each(fn {entry, ship?} ->
+    |> Enum.filter(fn {entry, ship?} -> ship? or normalize_level(entry.level) == :warning end)
+    |> collapse_repeats()
+    |> Enum.each(fn {{entry, ship?}, repeat} ->
       try do
         level = normalize_level(entry.level)
         msg = "[client:#{entry.category}] #{entry.message}"
@@ -263,6 +270,8 @@ defmodule Engram.Logs do
             forced: entry.forced
           )
 
+        meta = if repeat > 1, do: Keyword.put(meta, :repeat, repeat), else: meta
+
         # Verbose diagnostic-mode entries opt into Loki per-entry even at :info,
         # up to @max_diagnostic_ships per batch. Via Metadata.ship_to_loki/1,
         # never a bare Keyword.put: the routing field Fluent Bit reads is the
@@ -279,6 +288,25 @@ defmodule Engram.Logs do
           )
       end
     end)
+  end
+
+  # Identical lines of one batch (a refused frame retried per flush) as one
+  # `{first, count}`, in first-seen order. Everything that ends up in the line
+  # or its metadata is part of the key, so collapsing never merges two lines
+  # that would have read differently.
+  defp collapse_repeats(items) do
+    {order, counts} =
+      Enum.reduce(items, {[], %{}}, fn {e, ship?} = item, {order, counts} ->
+        key =
+          {e.level, e.category, e.message, ship?, e.forced, e.conn_id, e.device_id, e.platform}
+
+        case counts do
+          %{^key => {first, n}} -> {order, Map.put(counts, key, {first, n + 1})}
+          _ -> {[key | order], Map.put(counts, key, {item, 1})}
+        end
+      end)
+
+    order |> Enum.reverse() |> Enum.map(&Map.fetch!(counts, &1))
   end
 
   # How many diagnostic entries this batch may ship, and how many it loses.
