@@ -484,21 +484,21 @@ describe("sync events during an in-flight tree fetch", () => {
 
 	// The events live with the request that failed. Replaying them onto a LATER
 	// response, issued after they happened, could resurrect a stale state.
-	it("drops the buffer when the fetch fails, and re-fetches", async () => {
+	it("drops the buffer when the fetch fails", async () => {
 		const h = await loadThenHoldRefetch();
 		handleNoteChanged(upsert("n2", "root.md", "stale"), h.qc, "42");
 		await flushBatch();
+		h.fail(new Error("boom"));
+		await waitFor(() => expect(h.qc.getQueryState(["vault-tree", "42"])?.status).toBe("error"));
+
 		// Server truth since then: n2 is gone.
 		current = { ...BASE_TREE, notes: BASE_TREE.notes.filter((n) => n.id !== "n2") };
-		h.fail(new Error("boom"));
+		backfillStructural(h.qc, "42");
 
-		// The dropped events are owed a refetch, which shows the truth.
 		await waitFor(() => expect(h.calls()).toBe(3));
 		await waitFor(() => expect(h.result.current.data?.some((n) => n.id === "n2")).toBe(false));
 	});
 
-	// A stale refetch (focus, remount) is not invalidated, so a cancel reverts to
-	// data marked fresh. The buffered events then exist nowhere: owe a refetch.
 	it("re-fetches after a cancelled fetch drops buffered events", async () => {
 		const h = await loadThenHoldRefetch();
 		h.release(BASE_TREE);

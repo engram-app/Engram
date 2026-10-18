@@ -268,10 +268,12 @@ async function fetchVaultTreeFresh({
 	} finally {
 		if (treeEventBuffers.get(vaultId) === buffer) {
 			treeEventBuffers.delete(vaultId);
-			// A cancel or failure drops events nothing else holds: a cancel reverts
-			// to data that may be marked fresh. Owe a refetch, on a timer for the
-			// same reason as above.
-			if (!(landed || isEmptyBuffer(buffer))) {
+			// A cancel drops events nothing else holds: it reverts to data that may
+			// be marked fresh. Owe a refetch, on a timer for the same reason as
+			// above. A failure needs none: the query is in `error`, so the next
+			// event re-fetches (`applyVaultTreeEvents`), with no loop and no backoff
+			// to bypass while the server keeps failing.
+			if (signal.aborted && !(landed || isEmptyBuffer(buffer))) {
 				setTimeout(() => invalidateVaultTree(client, vaultId), 0);
 			}
 		}

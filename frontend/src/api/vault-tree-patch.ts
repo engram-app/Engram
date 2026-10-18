@@ -303,8 +303,8 @@ export function movesAcrossFolders(tree: VaultTree, events: readonly NoteEvent[]
 
 /**
  * An attachment change as the sync channel reports it (`kind: "attachment"`).
- * Rows are addressed by PATH: the broadcast carries no id. `id`/`updated_at`
- * are only present when the caller holds a full row (an upload's response).
+ * Rows are addressed by PATH. `id`/`updated_at` come with an upload's response
+ * and with a current server's upsert broadcast; an older server's carries none.
  */
 export type AttachmentEvent =
 	| {
@@ -322,8 +322,8 @@ export type AttachmentEvent =
  * Apply attachment events by path, returning the SAME tree when nothing
  * changes. Null when an upsert names a path the tree lacks and carries no id:
  * the sidebar and the attachment page address rows by id, so the row can't be
- * built and the caller must re-fetch. A rename (delete old + upsert new) lands
- * there too, which is correct: the new row's id is the server's to tell.
+ * built and the caller must re-fetch (an older server's broadcast). A current
+ * server's move upsert carries the row's id, so it patches in place.
  *
  * An in-place update keeps the row's `updated_at` when the event has none; the
  * tree sorts attachments by `mtime`, which the event does carry.

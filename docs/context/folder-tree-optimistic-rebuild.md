@@ -66,9 +66,10 @@ response by `replayTreeEvents`, instead of restarting the fetch (that restart
 was a 298-fetch loop in a 1,000-note first sync). All buffered events replay,
 since no seq says which the response already holds; every patch is
 last-writer-wins per row, so a re-applied one is a no-op. A request that is
-cancelled or fails owes one `invalidateVaultTree` if its buffer was non-empty:
-a cancel reverts to data that may be marked fresh, and the events exist
-nowhere else. That last one
+cancelled owes one `invalidateVaultTree` if its buffer was non-empty: a cancel
+reverts to data that may be marked fresh, and the events exist nowhere else. A
+failed one owes nothing: `error` already makes the next event re-fetch, and a
+timer there would bypass retry backoff while the server keeps failing. That last one
 is the non-obvious one: `rename_folder` broadcasts one upsert+delete pair per
 note and NOTHING about the folder marker, so a patch moves the notes but leaves
 the old marker listed (markers survive empty). A plain move out of a marker
