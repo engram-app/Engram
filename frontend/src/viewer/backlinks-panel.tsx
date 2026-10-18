@@ -32,7 +32,7 @@ export default function BacklinksPanel({ noteId }: { noteId: string | null }) {
 								to={noteHref(slug, b.source_note_id)}
 								className="flex items-center gap-1 truncate rounded px-3 py-0.5 text-foreground/80 hover:bg-muted hover:text-foreground"
 							>
-								{b.source_title ?? noteName(b.source_path)}
+								<span translate="no">{b.source_title ?? noteName(b.source_path)}</span>
 							</Link>
 						</li>
 					))}

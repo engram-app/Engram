@@ -690,7 +690,7 @@ function ResultRow({
 				active ? "border-primary/50 bg-accent" : "border-border bg-card"
 			}`}
 		>
-			<p className="font-medium">
+			<p translate="no" className="font-medium">
 				<Highlighted text={noteName(result.path)} term={term} />
 			</p>
 			{/* The API has always returned this and the row never showed it, so two
