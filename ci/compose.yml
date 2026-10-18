@@ -32,11 +32,14 @@ services:
         # see docs/context/runner-vm-setup.md Gotcha #6. Prefixing with
         # ${LOCAL_REGISTRY} treats the proxy as a registry mirror, which it is
         # not, and BuildKit fails with "unexpected media type / not found".
-        NODE_IMAGE: node:20-slim
-        BUILDER_IMAGE: hexpm/elixir:1.17.3-erlang-27.3.4.14-debian-bookworm-20260623-slim
+        # No BUILDER_IMAGE here: the Dockerfile default is the single source,
+        # and it feeds the engram-deps hash (CI builds the deps stage directly).
         RUNNER_IMAGE: debian:bookworm-20241202-slim
         # LAN Hex pull-through (set by CI env; empty for local dev = upstream).
         HEX_MIRROR: ${HEX_MIRROR:-}
+        # Prebuilt toolchain + compiled-deps image (CI sets it; see the
+        # Dockerfile's DEPS_IMAGE). Default = build the `deps` stage inline.
+        DEPS_IMAGE: ${DEPS_IMAGE:-deps}
     ports:
       - "${CI_ENGRAM_PORT:-8100}:4000"
     environment:

@@ -20,6 +20,12 @@ ARG DEBIAN_VERSION=bookworm-20260623-slim
 
 ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
 ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
+# The image the app compiles on top of: toolchain + fetched AND compiled prod
+# deps. Default = the `deps` stage below, so a plain `docker build` (self-host,
+# local) is self-contained. CI passes a prebuilt `${LOCAL_REGISTRY}/engram-deps:
+# <hash of mix.lock + Cargo.lock + this file + deps' config>` instead, so no runner
+# recompiles 69 deps (~210s) unless the lockfile moved.
+ARG DEPS_IMAGE=deps
 
 # ─── Frontend build ──────────────────────────────────────────────────────
 FROM oven/bun:1.3 AS frontend
@@ -67,8 +73,8 @@ COPY frontend/ ./
 RUN --mount=type=secret,id=sentry_auth_token,env=SENTRY_AUTH_TOKEN \
     bun run build:selfhost
 
-# ─── Elixir build ────────────────────────────────────────────────────────
-FROM ${BUILDER_IMAGE} AS builder
+# ─── Elixir toolchain + compiled deps ─────────────────────────────────────
+FROM ${BUILDER_IMAGE} AS deps
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -111,35 +117,40 @@ RUN --mount=type=cache,target=/root/.hex,id=mix-hex \
     --mount=type=cache,target=/root/.cache/rebar3,id=mix-rebar \
     mix local.hex --force && mix local.rebar --force
 
-# Fetch deps — cache mount means only changed deps are re-downloaded.
-# sharing=locked: concurrent builds (push + plugin dispatch) serialize on
-# this mount inside buildkit instead of corrupting shared state. Default
-# sharing=shared raced and aborted with "graceful_stop" mid-compile.
+# deps/ and _build/ live in LAYERS, not cache mounts. The old mounts were
+# per-daemon (useless across the runner pool), pruned to 2GB after e2e jobs,
+# and absent from the final RUN, so every build compiled all deps twice and
+# kept neither. Only download caches (hex, rebar) stay as mounts.
 COPY mix.exs mix.lock ./
-RUN --mount=type=cache,target=/app/deps,id=mix-deps,sharing=locked \
-    --mount=type=cache,target=/root/.hex,id=mix-hex,sharing=locked \
+RUN --mount=type=cache,target=/root/.hex,id=mix-hex,sharing=locked \
     --mount=type=cache,target=/root/.cache/rebar3,id=mix-rebar,sharing=locked \
     mix deps.get --only $MIX_ENV
 
-# Compile deps — cache mount preserves compiled artifacts between builds.
-# sharing=locked on the large write-heavy mounts (mix-deps, mix-build) —
-# see comment above.
+# config.exs/prod.exs carry deps' compile-time config, so they are inputs of
+# this stage (and of the CI deps-image hash). runtime.exs is not.
 RUN mkdir -p config
-COPY config/config.exs config/runtime.exs config/prod.exs config/
-RUN --mount=type=cache,target=/app/deps,id=mix-deps,sharing=locked \
-    --mount=type=cache,target=/app/_build,id=mix-build,sharing=locked \
-    --mount=type=cache,target=/root/.hex,id=mix-hex,sharing=locked \
+COPY config/config.exs config/prod.exs config/
+RUN --mount=type=cache,target=/root/.hex,id=mix-hex,sharing=locked \
     --mount=type=cache,target=/root/.cache/rebar3,id=mix-rebar,sharing=locked \
     mix deps.compile
 
-# Compile app code — frontend assets not needed for compilation,
-# only for the release. Keeping them separate means frontend-only
-# changes don't invalidate the Elixir compile layer.
-# (runtime.exs already copied above — not re-copied here.)
+# Warm native/target with the NIF's crates.io deps (~1 min of the old build).
+# The builder stage re-COPYs native/ and Rustler's cargo build reuses every
+# unchanged crate, so this layer only has to be roughly current, never exact.
+COPY native native
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry,sharing=locked \
+    cd native && cargo build --release -p engram_native
+
+# ─── Elixir app build ────────────────────────────────────────────────────
+FROM ${DEPS_IMAGE} AS builder
+
+# Real project files over whatever the deps image was built from (mix.exs's
+# version moves every release; the deps image is keyed on mix.lock only).
+COPY mix.exs mix.lock ./
+COPY config config
 COPY lib lib
 COPY native native
 COPY priv priv
-COPY --from=frontend /priv/static/app priv/static/app
 # rel/ holds env.sh.eex, whose ECS_ENABLE_CLUSTER gate exports
 # RELEASE_DISTRIBUTION=name + RELEASE_NODE=engram@<ip> for BEAM clustering
 # (engram-app/Engram#710). Without this COPY, `mix release` below never sees
@@ -147,26 +158,21 @@ COPY --from=frontend /priv/static/app priv/static/app
 # clustering env var lands on a release that can't read it and nodes never
 # connect (peers=0). Must be COPY'd before `mix release`.
 COPY rel rel
-# Compile and release in one RUN, no _build cache mount. Splitting the
-# two steps with a shared _build cache produced stale beams in CI —
-# `mix compile --force` ran but `mix release` in the next RUN still
-# saw old beam files. Single-step build is correct; the extra minute
-# of compile time is worth the guarantee that the release matches the
-# current source.
-# deps.get here reconciles the shared mix-deps cache mount to THIS image's
-# mix.lock before compiling. The earlier deps.get (~line 46) is layer-cached and
-# skipped when mix.lock is unchanged, so it can't repair a mount that another
-# branch's build (different lock) mutated — and the CI `docker builder prune
-# --keep-storage=2gb` step can evict deps from the mount. Without this, compile
-# fails with "Unchecked dependencies ... lock mismatch". Keeps the cache mounts
-# intact (no caching disabled) while making the build robust to mount drift.
-RUN --mount=type=cache,target=/app/deps,id=mix-deps,sharing=locked \
-    --mount=type=cache,target=/root/.hex,id=mix-hex,sharing=locked \
+# `deps.get` is a no-op when the deps image matches mix.lock and fetches the
+# delta when it does not (a stale/foreign DEPS_IMAGE can never ship old deps).
+# `--force` recompiles only this app; deps are already compiled in the layer.
+# No _build cache mount: a shared _build mount is what produced stale beams in
+# CI before, so _build stays in the layer.
+RUN --mount=type=cache,target=/root/.hex,id=mix-hex,sharing=locked \
     --mount=type=cache,target=/root/.cache/rebar3,id=mix-rebar,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry,sharing=locked \
     mix deps.get --only $MIX_ENV && \
-    mix compile --force && \
-    mix release && \
+    mix compile --force
+
+# Frontend assets are needed by `mix release` only, so a frontend-only change
+# starts here instead of recompiling the Elixir app.
+COPY --from=frontend /priv/static/app priv/static/app
+RUN mix release && \
     sh -c 'grep -q ECS_ENABLE_CLUSTER /app/_build/prod/rel/engram/releases/*/env.sh || { echo "FATAL: clustering gate (ECS_ENABLE_CLUSTER) missing from release env.sh — was rel/ copied before mix release? See engram-app/Engram#710" >&2; exit 1; }' && \
     cp -r /app/_build/prod/rel/engram /app/_release
 

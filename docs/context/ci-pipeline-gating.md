@@ -78,7 +78,7 @@ e2e matrix.
 | `prebuild-ci-image` | Builds/loads the shared engram CI docker image |
 | `prebuild-mix` | Builds/caches mix deps + `_build` |
 | `ci` | **The single required aggregate** — normalizes skipped jobs, fails on any deterministic red, downgrades e2e to `::warning::` |
-| `record-pass` / `record-job-markers` | Persist green fingerprints so an identical/no-op push short-circuits next time |
+| `record-pass` / each job's "Record pass marker" step | Persist green fingerprints so an identical/no-op push short-circuits next time |
 | `report-e2e-to-plugin` | Posts the `backend/e2e` cross-repo status to a plugin PR (see "two-repo entanglement") |
 | `build-and-publish-image` / `deploy-frontend` / `submit-dep-graph` | Post-merge / main artifact + dep-graph work |
 

@@ -45,7 +45,7 @@ input-coverage assertion — add a pair there whenever a job step starts reading
 a new path.
 
 **2. Reduced modes.** If a job can pass while doing *less* work, its marker
-lies. `record-job-markers` therefore refuses to seed when
+lies. Each job's "Record pass marker" step therefore refuses to seed when
 `e2e-target-suite` is set (a `pytest -k` subset must never seed a full-hash
 e2e marker), and `mix test --stale` was **removed** for the same reason.
 
