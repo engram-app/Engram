@@ -5,7 +5,10 @@
 # CI, installed as a User Script and fired by cron:
 #
 #   dest: /boot/config/plugins/user.scripts/scripts/Prune CI Registry/script
-#   cron: 0 5 * * 0   (Sundays 05:00, via /etc/cron.d/root)
+#   cron: 30 3 * * *  (daily 03:30, set in
+#         /boot/config/plugins/user.scripts/customSchedule.cron; update_cron
+#         regenerates /etc/cron.d/root from it). Was weekly: one aborted run
+#         on the idle guard meant a week of backlog (54 GB on 2026-10-18).
 #
 # To change it: edit here, merge, then copy it up —
 #   scp ci/prune-ci-registry.sh \
@@ -48,6 +51,11 @@ CONTAINER=LocalCIRegistry
 ROOT=/mnt/cache/appdata/local-ci-registry/docker/registry/v2
 REPOS="$ROOT/repositories"
 TAGS="$REPOS/engram-ci/_manifests/tags"
+# Prebuilt toolchain + compiled-deps base (engram-app/Engram#2014). One tag per
+# lockfile/Dockerfile hash, ~400MB of unique layers each. Same window as the
+# images, but the NEWEST is always kept: it is what every CI build pulls, and a
+# quiet repo (no lockfile bump for weeks) must not lose its only base.
+DEPS_TAGS="$REPOS/engram-deps/_manifests/tags"
 
 log() { echo "[$(date '+%F %T')] $*"; }
 
@@ -63,7 +71,7 @@ docker ps --filter "name=$CONTAINER" --filter status=running -q | grep -q . \
   || { log "FATAL: $CONTAINER not running"; exit 1; }
 
 # Refuse if anything was pushed recently — see the RACE note above.
-newest_epoch=$(find "$TAGS" -maxdepth 1 -mindepth 1 -type d -printf '%T@\n' | sort -n | tail -1 | cut -d. -f1)
+newest_epoch=$(find "$TAGS" $( [ -d "$DEPS_TAGS" ] && echo "$DEPS_TAGS" ) -maxdepth 1 -mindepth 1 -type d -printf '%T@\n' | sort -n | tail -1 | cut -d. -f1)
 idle=$(( $(date +%s) - ${newest_epoch:-0} ))
 if [ "$idle" -lt "$MIN_IDLE_SEC" ]; then
   log "ABORT: newest tag is ${idle}s old (< ${MIN_IDLE_SEC}s) — a push may still be settling"
@@ -75,10 +83,13 @@ IMAGE_KEEP_DAYS=$((KEEP_DAYS + 1))
 total=$(find "$TAGS" -maxdepth 1 -mindepth 1 -type d | wc -l)
 stale=$(find "$TAGS" -maxdepth 1 -mindepth 1 -type d -mtime "+$IMAGE_KEEP_DAYS" | wc -l)
 before=$(du -sh "$ROOT/blobs" | cut -f1)
+deps_newest=$( [ -d "$DEPS_TAGS" ] && ls -td "$DEPS_TAGS"/*/ 2>/dev/null | head -1 | sed 's#/$##' || true)
+deps_stale=0
+[ -n "$deps_newest" ] && deps_stale=$(find "$DEPS_TAGS" -maxdepth 1 -mindepth 1 -type d -mtime "+$IMAGE_KEEP_DAYS" ! -path "$deps_newest" | wc -l)
 markers_stale=$(find "$REPOS"/ci-*/_manifests/tags -maxdepth 1 -mindepth 1 -type d -mtime "+$KEEP_DAYS" 2>/dev/null | wc -l)
-log "tags=$total stale(>${IMAGE_KEEP_DAYS}d)=$stale keep=$((total - stale)) markers_stale(>${KEEP_DAYS}d)=$markers_stale blobs=$before"
+log "tags=$total stale(>${IMAGE_KEEP_DAYS}d)=$stale keep=$((total - stale)) markers_stale(>${KEEP_DAYS}d)=$markers_stale deps_stale=$deps_stale blobs=$before"
 
-if [ "$stale" -eq 0 ] && [ "$markers_stale" -eq 0 ]; then
+if [ "$stale" -eq 0 ] && [ "$markers_stale" -eq 0 ] && [ "$deps_stale" -eq 0 ]; then
   log "nothing to prune"
   exit 0
 fi
@@ -89,6 +100,7 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 find "$TAGS" -maxdepth 1 -mindepth 1 -type d -mtime "+$IMAGE_KEEP_DAYS" -exec rm -rf {} +
+[ -n "$deps_newest" ] && find "$DEPS_TAGS" -maxdepth 1 -mindepth 1 -type d -mtime "+$IMAGE_KEEP_DAYS" ! -path "$deps_newest" -exec rm -rf {} +
 # Markers first-expiring, per the note above.
 find "$REPOS"/ci-*/_manifests/tags -maxdepth 1 -mindepth 1 -type d -mtime "+$KEEP_DAYS" -exec rm -rf {} + 2>/dev/null || true
 log "pruned $stale image tags + $markers_stale markers; running garbage-collect"
