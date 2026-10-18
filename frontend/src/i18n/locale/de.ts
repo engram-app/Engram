@@ -792,18 +792,13 @@ export default {
 	"Page not found": "Seite nicht gefunden",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Wir konnten nicht finden, wonach du suchst. Der Link könnte defekt sein oder die Seite könnte verschoben worden sein.",
-	"How this works": "Wie das funktioniert",
-	"What {client} gets": "Was {client} erhält",
-	"It can search and read your notes, and add or edit them if you allow it.":
-		"Es kann deine Notizen durchsuchen und lesen, und sie bei Bedarf ändern oder ergänzen, wenn du das erlaubst.",
-	"What you choose here": "Was du hier auswählst",
-	"You choose which vaults {client} can reach, and whether it is read only.":
-		"Du wählst, welche Vaults {client} erreichen kann, und ob es nur lesend ist.",
-	"After you approve": "Nachdem du zugestimmt hast",
-	"You return to {client}, and your vault opens in a new tab.":
-		"Du kehrst zu {client} zurück, und dein Vault öffnet sich in einem neuen Tab.",
-	"Change or revoke access anytime in Settings > Connections.":
-		"Ändere oder widerrufe den Zugriff jederzeit in Einstellungen > Verbindungen.",
+	"Name your first vault": "Gib deinem ersten Vault einen Namen",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Ein Vault ist eine Sammlung von Notizen. {client} kann die Notizen darin lesen und schreiben.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Du kannst jederzeit in den Einstellungen > Verbindungen festlegen, was jede App sehen oder ändern darf.",
+	"Approving…": "Wird genehmigt…",
+	Approve: "Genehmigen",
 	"Invalid authorization request": "Ungültige Autorisierungsanfrage",
 	"Missing required OAuth parameters:": "Fehlende erforderliche OAuth-Parameter:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -828,8 +823,6 @@ export default {
 		"Dadurch wirst du zu einer App auf diesem Computer weitergeleitet. Bestätige nur, wenn du gerade von dieser App aus eine Verbindung herstellst.",
 	"your existing connection": "deine bestehende Verbindung",
 	"Which vaults can {client} access?": "Auf welche Vaults kann {client} zugreifen?",
-	Approve: "Genehmigen",
-	"Approving…": "Wird genehmigt…",
 	"Disconnect {name}?": "Verbindung zu {name} trennen?",
 	"Connecting…": "Wird verbunden…",
 	"Disconnect & connect {client}": "Verbindung trennen & verbinden {client}",
@@ -933,7 +926,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Vault erkannt. Warte auf die erste Synchronisierung…",
 	"Syncing your notes, almost there…": "Synchronisiere deine Notizen, fast fertig…",
-	"Name your first vault": "Gib deinem ersten Vault einen Namen",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Ein Vault ist ein Ordner für zusammengehörige Notizen. Wir füllen es mit einer Willkommensnotiz, damit der Editor nicht leer ist, wenn du ankommst.",
 	"Create vault & continue": "Vault erstellen & fortfahren",

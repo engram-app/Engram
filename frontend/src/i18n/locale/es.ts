@@ -813,18 +813,13 @@ export default {
 	"Page not found": "Página no encontrada",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"No pudimos encontrar lo que buscas. El enlace podría estar roto o la página podría haberse movido.",
-	"How this works": "Cómo funciona esto",
-	"What {client} gets": "Lo que {client} obtiene",
-	"It can search and read your notes, and add or edit them if you allow it.":
-		"Puede buscar y leer tus notas, y agregarlas o editarlas si lo permites.",
-	"What you choose here": "Lo que eliges aquí",
-	"You choose which vaults {client} can reach, and whether it is read only.":
-		"Eliges qué bóvedas puede acceder {client}, y si es solo de lectura.",
-	"After you approve": "Después de que apruebes",
-	"You return to {client}, and your vault opens in a new tab.":
-		"Regresas a {client}, y tu bóveda se abre en una nueva pestaña.",
-	"Change or revoke access anytime in Settings > Connections.":
-		"Cambia o revoca el acceso en cualquier momento en Ajustes > Conexiones.",
+	"Name your first vault": "Ponle un nombre a tu primera bóveda",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Una bóveda es una colección de notas. {client} puede leer y escribir las notas en ella.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Puedes limitar lo que cada aplicación puede ver o cambiar en cualquier momento en Ajustes > Conexiones.",
+	"Approving…": "Aprobando…",
+	Approve: "Aprobar",
 	"Invalid authorization request": "Solicitud de autorización inválida",
 	"Missing required OAuth parameters:": "Faltan parámetros OAuth requeridos:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -849,8 +844,6 @@ export default {
 		"Esto te lleva a una aplicación en este ordenador. Acepta solo si acabas de empezar a conectarte desde esa aplicación.",
 	"your existing connection": "tu conexión existente",
 	"Which vaults can {client} access?": "¿A qué bóvedas puede acceder {client}?",
-	Approve: "Aprobar",
-	"Approving…": "Aprobando…",
 	"Disconnect {name}?": "Desconectar {name}?",
 	"Connecting…": "Conectando…",
 	"Disconnect & connect {client}": "Desconectar y conectar {client}",
@@ -952,7 +945,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Bóveda detectada. Esperando tu primera sincronización…",
 	"Syncing your notes, almost there…": "Sincronizando tus notas, casi listo…",
-	"Name your first vault": "Ponle un nombre a tu primera bóveda",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Una bóveda es una carpeta para notas relacionadas. La inicializaremos con una nota de bienvenida para que el editor no esté vacío cuando llegues.",
 	"Create vault & continue": "Crear bóveda y continuar",

@@ -842,18 +842,13 @@ export default {
 	"Page not found": "Strona nie znaleziona",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Nie mogliśmy znaleźć tego, czego szukasz. Link może być nieprawidłowy lub strona mogła zostać przeniesiona.",
-	"How this works": "Jak to działa",
-	"What {client} gets": "Co otrzymuje {client}",
-	"It can search and read your notes, and add or edit them if you allow it.":
-		"Może wyszukiwać i czytać twoje notatki, oraz dodawać lub edytować je, jeśli na to zezwolisz.",
-	"What you choose here": "Co wybierasz tutaj",
-	"You choose which vaults {client} can reach, and whether it is read only.":
-		"Wybierasz, do których sejfów {client} może uzyskać dostęp i czy dostęp jest tylko do odczytu.",
-	"After you approve": "Po zatwierdzeniu",
-	"You return to {client}, and your vault opens in a new tab.":
-		"Wracasz do {client}, a twój sejf otwiera się w nowej zakładce.",
-	"Change or revoke access anytime in Settings > Connections.":
-		"Zmień lub odejmij dostęp w dowolnym momencie w Ustawieniach > Połączenia.",
+	"Name your first vault": "Nadaj nazwę swojemu pierwszemu sejfowi",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Sejf to zbiór notatek. {client} może czytać i zapisywać notatki w nim.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Możesz ograniczyć, co każda aplikacja może zobaczyć lub zmienić, w Ustawieniach > Połączenia.",
+	"Approving…": "Zatwierdzam…",
+	Approve: "Zatwierdź",
 	"Invalid authorization request": "Nieprawidłowe żądanie autoryzacji",
 	"Missing required OAuth parameters:": "Brak wymaganych parametrów OAuth:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -879,8 +874,6 @@ export default {
 		"To przekieruje cię do aplikacji na tym komputerze. Zatwierdź tylko, jeśli właśnie rozpocząłeś połączenie z tej aplikacji.",
 	"your existing connection": "twoje istniejące połączenie",
 	"Which vaults can {client} access?": "Do których sejfów {client} może uzyskać dostęp?",
-	Approve: "Zatwierdź",
-	"Approving…": "Zatwierdzam…",
 	"Disconnect {name}?": "Odłącz {name}?",
 	"Connecting…": "Łączenie…",
 	"Disconnect & connect {client}": "Odłącz i połącz {client}",
@@ -982,7 +975,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Sejf wykryty. Czekam na pierwszą synchronizację…",
 	"Syncing your notes, almost there…": "Synchronizuję twoje notatki, prawie gotowe…",
-	"Name your first vault": "Nadaj nazwę swojemu pierwszemu sejfowi",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Sejf to folder dla powiązanych notatek. Wypełnimy go notatką powitalną, aby edytor nie był pusty, gdy do niego wejdziesz.",
 	"Create vault & continue": "Utwórz sejf i kontynuuj",

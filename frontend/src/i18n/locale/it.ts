@@ -811,18 +811,13 @@ export default {
 	"Page not found": "Pagina non trovata",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Non abbiamo trovato quello che stavi cercando. Il link potrebbe essere interrotto o la pagina potrebbe essere stata spostata.",
-	"How this works": "Come funziona",
-	"What {client} gets": "Cosa ottiene {client}",
-	"It can search and read your notes, and add or edit them if you allow it.":
-		"Può cercare e leggere le tue note, e aggiungerle o modificarle se lo permetti.",
-	"What you choose here": "Ciò che scegli qui",
-	"You choose which vaults {client} can reach, and whether it is read only.":
-		"Scegli quali vault {client} può raggiungere, e se l'accesso è in sola lettura.",
-	"After you approve": "Dopo aver approvato",
-	"You return to {client}, and your vault opens in a new tab.":
-		"Ritorni a {client}, e il tuo vault si apre in una nuova scheda.",
-	"Change or revoke access anytime in Settings > Connections.":
-		"Modifica o revoca l'accesso in qualsiasi momento in Impostazioni > Connessioni.",
+	"Name your first vault": "Dai un nome alla tua prima vault",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Un vault è una raccolta di note. {client} può leggere e scrivere le note al suo interno.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Puoi limitare ciò che ogni app può vedere o modificare in qualsiasi momento in Impostazioni > Connessioni.",
+	"Approving…": "Approvando…",
+	Approve: "Approvato",
 	"Invalid authorization request": "Richiesta di autorizzazione non valida",
 	"Missing required OAuth parameters:": "Mancano parametri OAuth obbligatori:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -847,8 +842,6 @@ export default {
 		"Questo ti porta a un'app su questo computer. Approva solo se hai appena iniziato a connetterti da quell'app.",
 	"your existing connection": "la tua connessione esistente",
 	"Which vaults can {client} access?": "A quali vault può accedere {client}?",
-	Approve: "Approvato",
-	"Approving…": "Approvando…",
 	"Disconnect {name}?": "Disconnetti {name}?",
 	"Connecting…": "Connessione in corso…",
 	"Disconnect & connect {client}": "Disconnetti e connetti {client}",
@@ -950,7 +943,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Vault rilevato. In attesa della tua prima sincronizzazione…",
 	"Syncing your notes, almost there…": "Sincronizzazione delle note, quasi fatta…",
-	"Name your first vault": "Dai un nome alla tua prima vault",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Una vault è una cartella per note correlate. La popoliamo con una nota di benvenuto, così l'editor non sarà vuoto quando la aprirai.",
 	"Create vault & continue": "Crea vault e continua",

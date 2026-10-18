@@ -741,18 +741,13 @@ export default {
 	"Page not found": "頁面未找到",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"我們找不到您要查找的內容。連結可能已失效，或頁面可能已移動。",
-	"How this works": "運作方式",
-	"What {client} gets": "{client} 提供的功能",
-	"It can search and read your notes, and add or edit them if you allow it.":
-		"它可以搜尋和閱讀您的筆記，並在您允許的情況下新增或編輯它們。",
-	"What you choose here": "您在此選擇的內容",
-	"You choose which vaults {client} can reach, and whether it is read only.":
-		"您可以選擇 {client} 可以存取的儲存庫，以及是否僅限讀取。",
-	"After you approve": "您批准後",
-	"You return to {client}, and your vault opens in a new tab.":
-		"您會返回到 {client}，您的儲存庫將在新標籤頁中開啟。",
-	"Change or revoke access anytime in Settings > Connections.":
-		"您可以在「設定」>「連線」隨時變更或撤銷存取權。",
+	"Name your first vault": "為你的第一個儲存庫命名",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"儲存庫是筆記的集合。{client} 可以讀取和修改其中的筆記。",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"您可以在「設定」>「連線」中隨時限制每個應用程式的訪問權限。",
+	"Approving…": "正在批准…",
+	Approve: "批准",
 	"Invalid authorization request": "無效的授權請求",
 	"Missing required OAuth parameters:": "缺少必要的 OAuth 參數：",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -777,8 +772,6 @@ export default {
 		"這會將您導向電腦上的應用程式。僅在您剛從該應用程式開始連接時才允許。",
 	"your existing connection": "您的現有連線",
 	"Which vaults can {client} access?": "{client} 可以存取哪些儲存庫？",
-	Approve: "批准",
-	"Approving…": "正在批准…",
 	"Disconnect {name}?": "斷線 {name}?",
 	"Connecting…": "正在連線…",
 	"Disconnect & connect {client}": "斷線並連線 {client}",
@@ -874,7 +867,6 @@ export default {
 	"Waiting for the plugin to sign in…": "等待插件登入…",
 	"Vault detected. Waiting for your first sync…": "偵測到儲存庫。等待你的首次同步…",
 	"Syncing your notes, almost there…": "同步你的筆記，稍後完成…",
-	"Name your first vault": "為你的第一個儲存庫命名",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"儲存庫是一個用於存放相關筆記的資料夾。我們會加入一個歡迎筆記，讓編輯器在你開始使用時不會是空白的。",
 	"Create vault & continue": "建立儲存庫 & 繼續",

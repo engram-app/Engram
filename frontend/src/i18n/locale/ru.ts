@@ -857,18 +857,13 @@ export default {
 	"Page not found": "Страница не найдена",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Мы не смогли найти то, что вы ищете. Ссылка может быть недействительной, или страница могла быть перемещена.",
-	"How this works": "Как это работает",
-	"What {client} gets": "Что получает {client}",
-	"It can search and read your notes, and add or edit them if you allow it.":
-		"Он может искать и читать ваши заметки, а также добавлять или редактировать их, если вы разрешите.",
-	"What you choose here": "Что вы выбираете здесь",
-	"You choose which vaults {client} can reach, and whether it is read only.":
-		"Вы выбираете, к каким хранилищам {client} может получить доступ, и разрешаете ли вы только чтение.",
-	"After you approve": "После вашего одобрения",
-	"You return to {client}, and your vault opens in a new tab.":
-		"Вы возвращаетесь к {client}, и ваше хранилище открывается во вкладке.",
-	"Change or revoke access anytime in Settings > Connections.":
-		"Измените или отмените доступ в любое время в разделе Настройки > Подключения.",
+	"Name your first vault": "Назовите ваше первое хранилище",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Хранилище – это набор заметок. {client} может читать и записывать заметки в нём.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		'Вы можете ограничить, что каждое приложение может видеть или изменять, в любое время в разделе "Настройки" > "Подключения".',
+	"Approving…": "Подтверждается…",
+	Approve: "Подтвердить",
 	"Invalid authorization request": "Неверный запрос авторизации",
 	"Missing required OAuth parameters:": "Отсутствуют необходимые параметры OAuth:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -894,8 +889,6 @@ export default {
 		"Это перенаправит вас к приложению на этом компьютере. Подтверждайте только если вы только что начали подключение из этого приложения.",
 	"your existing connection": "ваше текущее подключение",
 	"Which vaults can {client} access?": "К каким хранилищам {client} может получить доступ?",
-	Approve: "Подтвердить",
-	"Approving…": "Подтверждается…",
 	"Disconnect {name}?": "Отключить {name}?",
 	"Connecting…": "Подключается…",
 	"Disconnect & connect {client}": "Отключить и подключить {client}",
@@ -997,7 +990,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Хранилище обнаружено. Ожидание первой синхронизации…",
 	"Syncing your notes, almost there…": "Синхронизируются ваши заметки, почти готово…",
-	"Name your first vault": "Назовите ваше первое хранилище",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Хранилище – это папка для связанных заметок. Мы добавим приветственную заметку, чтобы редактор не был пустым, когда вы войдете.",
 	"Create vault & continue": "Создать хранилище и продолжить",

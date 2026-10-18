@@ -30,6 +30,7 @@ import {
 	useMe,
 	useOnboardingStatus,
 	useSetOnboardingProfile,
+	useUpdateVault,
 	useVaults,
 } from "../api/queries";
 import { connectionId as oauthConnectionId } from "../billing/existing-connections-panel";
@@ -39,7 +40,7 @@ import AuthShell from "../layout/auth-shell";
 import { isMember } from "../lib/is-member";
 import { ROUTES } from "../routes";
 import { settingsHash, settingsTo } from "../settings/settings-hash";
-import FirstTimeGuide from "./first-time-guide";
+import FirstVaultConsent from "./first-vault-consent";
 import { clearPendingAuthorization, stashPendingAuthorization } from "./pending-authorization";
 
 // The tab an approval opens while the client finishes connecting: the app
@@ -262,13 +263,8 @@ export default function OAuthAuthorizePage() {
 	// The existing-connection details feed the at-cap heads-up + implicit
 	// disconnect on Approve, and tell whether this is the user's first app.
 	const connections = useConnections();
+	const updateVault = useUpdateVault();
 	const existingPeer = (connections.data ?? []).find((c): c is Connection => c.kind === clientKind);
-	// Waits for the list: guessing "first time" while it loads would flash the
-	// guide at someone who has connected before.
-	const firstTime =
-		clientKind === "mcp" &&
-		connections.data !== undefined &&
-		!connections.data.some((c) => c.kind === "mcp");
 
 	// "All vaults" (`selected === null`) stays all-vaults as new ones are
 	// created. Choosing per vault is exactly the vaults not at No access, even
@@ -384,6 +380,18 @@ export default function OAuthAuthorizePage() {
 		);
 	}
 
+	// A brand-new account's first app: one vault (provisioned at signup) and no
+	// MCP connection yet. It gets the short form, name the vault and approve,
+	// on the default access. Waits for the connections list: guessing while it
+	// loads would show the short form to someone who has connected before.
+	const firstVault =
+		clientKind === "mcp" &&
+		!clientAskedReadOnly &&
+		live?.length === 1 &&
+		connections.data !== undefined &&
+		!connections.data.some((c) => c.kind === "mcp");
+	const onlyVault = firstVault ? live?.[0] : undefined;
+
 	const handleApprove = async () => {
 		// At cap with a known peer: open the confirm modal first so the user
 		// sees the exact disconnect that's about to happen. Confirm there runs
@@ -395,7 +403,7 @@ export default function OAuthAuthorizePage() {
 		await runSubmit(false);
 	};
 
-	const runSubmit = async (isSwap: boolean) => {
+	const runSubmit = async (isSwap: boolean, renameVault?: { id: string; name: string }) => {
 		setSubmitting(true);
 		setSubmitError(null);
 		// Every approval opens the vault, so the user lands in it while the
@@ -455,6 +463,11 @@ export default function OAuthAuthorizePage() {
 		// shape — the confirm modal already named what's about to disconnect.
 		let swappedFromName: string | null = null;
 		try {
+			// After the tab opened (a popup blocker refuses one opened past an
+			// await), before consent: a failed rename stops the connect.
+			if (renameVault) {
+				await updateVault.mutateAsync(renameVault);
+			}
 			if (isSwap && existingPeer) {
 				const existingId = oauthConnectionId(existingPeer);
 				if (existingId) {
@@ -604,7 +617,6 @@ export default function OAuthAuthorizePage() {
 					<p className="text-muted-foreground text-sm">{t("Loading…")}</p>
 				) : (
 					<>
-						{firstTime ? <FirstTimeGuide client={clientName} /> : null}
 						{capCheck.atCap && existingPeer ? (
 							<div
 								role="status"
@@ -632,54 +644,76 @@ export default function OAuthAuthorizePage() {
 								/>
 							</div>
 						) : null}
-						{/* Pick, then a plain-language summary to approve. Same route,
-						    so the OAuth params are untouched. */}
-						<VaultAccessFlow
-							access={access}
-							vaults={live ?? []}
-							legend={t("Which vaults can {client} access?", { client: clientName })}
-							name={label.trim() || clientName}
-							leveled={leveled}
-							lockReadOnly={clientAskedReadOnly}
-							backFocus={titleRef}
-							fields={
-								<label className="flex flex-col gap-1.5">
-									<span className="font-medium text-foreground text-sm">
-										<Trans
-											text="Name this connection {optional}"
-											slots={{
-												optional: (
-													<span className="font-normal text-muted-foreground">
-														{t("(optional)")}
-													</span>
-												),
-											}}
+						{onlyVault ? (
+							<FirstVaultConsent
+								client={clientName}
+								vaultName={onlyVault.name}
+								pending={submitting}
+								onApprove={(name) =>
+									runSubmit(
+										false,
+										name === onlyVault.name ? undefined : { id: String(onlyVault.id), name },
+									)
+								}
+								onCancel={redirectVerified ? handleCancel : undefined}
+								error={
+									submitError ? (
+										<p role="alert" className={cn(destructiveAlert, "p-3 text-foreground")}>
+											{submitError}
+										</p>
+									) : null
+								}
+							/>
+						) : (
+							/* Pick, then a plain-language summary to approve. Same route,
+							   so the OAuth params are untouched. */
+							<VaultAccessFlow
+								access={access}
+								vaults={live ?? []}
+								legend={t("Which vaults can {client} access?", { client: clientName })}
+								name={label.trim() || clientName}
+								leveled={leveled}
+								lockReadOnly={clientAskedReadOnly}
+								backFocus={titleRef}
+								fields={
+									<label className="flex flex-col gap-1.5">
+										<span className="font-medium text-foreground text-sm">
+											<Trans
+												text="Name this connection {optional}"
+												slots={{
+													optional: (
+														<span className="font-normal text-muted-foreground">
+															{t("(optional)")}
+														</span>
+													),
+												}}
+											/>
+										</span>
+										<Input
+											type="text"
+											maxLength={120}
+											value={label}
+											onChange={(e) => setLabel(e.target.value)}
+											placeholder={clientName}
 										/>
-									</span>
-									<Input
-										type="text"
-										maxLength={120}
-										value={label}
-										onChange={(e) => setLabel(e.target.value)}
-										placeholder={clientName}
-									/>
-								</label>
-							}
-							confirmLabel={t("Approve")}
-							pendingLabel={t("Approving…")}
-							pending={submitting}
-							onConfirm={handleApprove}
-							// Cancel redirects from the query string: only a redirect the
-							// backend confirmed gets one (an open redirect otherwise).
-							onCancel={redirectVerified ? handleCancel : undefined}
-							error={
-								submitError ? (
-									<p role="alert" className={cn(destructiveAlert, "p-3 text-foreground")}>
-										{submitError}
-									</p>
-								) : null
-							}
-						/>
+									</label>
+								}
+								confirmLabel={t("Approve")}
+								pendingLabel={t("Approving…")}
+								pending={submitting}
+								onConfirm={handleApprove}
+								// Cancel redirects from the query string: only a redirect the
+								// backend confirmed gets one (an open redirect otherwise).
+								onCancel={redirectVerified ? handleCancel : undefined}
+								error={
+									submitError ? (
+										<p role="alert" className={cn(destructiveAlert, "p-3 text-foreground")}>
+											{submitError}
+										</p>
+									) : null
+								}
+							/>
+						)}
 					</>
 				)}
 

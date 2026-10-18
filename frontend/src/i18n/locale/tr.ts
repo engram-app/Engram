@@ -780,18 +780,13 @@ export default {
 	"Page not found": "Sayfa bulunamadı",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Aradığınızı bulamadık. Bağlantı bozuk olabilir veya sayfa taşınmış olabilir.",
-	"How this works": "İşleyiş şekli",
-	"What {client} gets": "{client} neler sağlar",
-	"It can search and read your notes, and add or edit them if you allow it.":
-		"Notlarınızı arayıp okuyabilir ve izin verirseniz bunları ekleyebilir veya düzenleyebilir.",
-	"What you choose here": "Burada seçtikleriniz",
-	"You choose which vaults {client} can reach, and whether it is read only.":
-		"{client}'ın erişebileceği kasaları ve sadece okuma modunda olup olmadığını seçin.",
-	"After you approve": "Onayladıktan sonra",
-	"You return to {client}, and your vault opens in a new tab.":
-		"{client}'a geri dönersiniz ve kasanız yeni bir sekmede açılır.",
-	"Change or revoke access anytime in Settings > Connections.":
-		"Erişimi istediğiniz zaman Ayarlar > Bağlantılar'da değiştirebilir veya iptal edebilirsiniz.",
+	"Name your first vault": "İlk kasanıza bir isim verin",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Bir kasa, notların bir koleksiyonudur. {client}, içindeki notları okuyabilir ve yazabilir.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Her uygulamanın neyi görebileceğini veya değiştirebileceğini, Ayarlar > Bağlantılar'da istediğiniz zaman sınırlayabilirsiniz.",
+	"Approving…": "Onaylanıyor…",
+	Approve: "Onayla",
 	"Invalid authorization request": "Geçersiz yetkilendirme isteği",
 	"Missing required OAuth parameters:": "Gerekli OAuth parametreleri eksik:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -817,8 +812,6 @@ export default {
 		"Bu, bu bilgisayardaki bir uygulamaya yönlendirir. Sadece o uygulamadan yeni bağlantı kurduysanız onaylayın.",
 	"your existing connection": "mevcut bağlantınız",
 	"Which vaults can {client} access?": "{client}, hangi kasalara erişebilir?",
-	Approve: "Onayla",
-	"Approving…": "Onaylanıyor…",
 	"Disconnect {name}?": "{name} ile bağlantıyı kes?",
 	"Connecting…": "Bağlanıyor…",
 	"Disconnect & connect {client}": "{client} ile bağlantıyı kes ve tekrar bağla",
@@ -919,7 +912,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Kasa tespit edildi. İlk senkronizasyon için bekleniyor…",
 	"Syncing your notes, almost there…": "Notlarınız senkronize ediliyor, neredeyse tamam…",
-	"Name your first vault": "İlk kasanıza bir isim verin",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Bir kasa, ilgili notlar için bir klasördür. Düzenleyicinin boş olmaması için, hoş geldiniz notuyla başlatacağız.",
 	"Create vault & continue": "Kasa oluştur ve devam et",

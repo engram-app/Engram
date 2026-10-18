@@ -812,18 +812,13 @@ export default {
 	"Page not found": "Página não encontrada",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Não encontramos o que você está procurando. O link pode estar quebrado ou a página pode ter sido movida.",
-	"How this works": "Como isso funciona",
-	"What {client} gets": "O que {client} acessa",
-	"It can search and read your notes, and add or edit them if you allow it.":
-		"Ele pode pesquisar e ler suas notas, e adicioná-las ou editá-las, se você permitir.",
-	"What you choose here": "O que você escolhe aqui",
-	"You choose which vaults {client} can reach, and whether it is read only.":
-		"Você escolhe quais cofres {client} pode acessar, e se o acesso é somente leitura.",
-	"After you approve": "Depois que você aprova",
-	"You return to {client}, and your vault opens in a new tab.":
-		"Você retorna para {client}, e seu cofre abre em uma nova aba.",
-	"Change or revoke access anytime in Settings > Connections.":
-		"Altere ou revogue o acesso a qualquer momento em Configurações > Conexões.",
+	"Name your first vault": "Nomeie seu primeiro cofre",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Um cofre é uma coleção de notas. {client} pode ler e escrever as notas nele.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Você pode limitar o que cada aplicativo pode ver ou alterar a qualquer momento em Configurações > Conexões.",
+	"Approving…": "Aprovando…",
+	Approve: "Aprovar",
 	"Invalid authorization request": "Solicitação de autorização inválida",
 	"Missing required OAuth parameters:": "Parâmetros OAuth obrigatórios ausentes:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -849,8 +844,6 @@ export default {
 		"Isso te direciona para um aplicativo neste computador. Aprovе apenas se você acabou de começar a conexão a partir desse aplicativo.",
 	"your existing connection": "sua conexão existente",
 	"Which vaults can {client} access?": "Quais cofres {client} pode acessar?",
-	Approve: "Aprovar",
-	"Approving…": "Aprovando…",
 	"Disconnect {name}?": "Desconectar {name}?",
 	"Connecting…": "Conectando…",
 	"Disconnect & connect {client}": "Desconectar e conectar {client}",
@@ -953,7 +946,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Cofre detectado. Aguardando sua primeira sincronização…",
 	"Syncing your notes, almost there…": "Sincronizando suas notas, quase lá…",
-	"Name your first vault": "Nomeie seu primeiro cofre",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Um cofre é uma pasta para notas relacionadas. Vamos preenchê-lo com uma nota de boas-vindas para que o editor não esteja vazio quando você chegar.",
 	"Create vault & continue": "Criar cofre e continuar",

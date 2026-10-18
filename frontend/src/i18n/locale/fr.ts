@@ -814,18 +814,13 @@ export default {
 	"Page not found": "Page introuvable",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Nous n'avons pas trouvé ce que tu recherches. Le lien est peut-être incorrect ou la page a peut-être été déplacée.",
-	"How this works": "Comment ça marche",
-	"What {client} gets": "Ce que {client} obtient",
-	"It can search and read your notes, and add or edit them if you allow it.":
-		"Il peut rechercher et lire tes notes, et les modifier si tu le permets.",
-	"What you choose here": "Ce que tu choisis ici",
-	"You choose which vaults {client} can reach, and whether it is read only.":
-		"Tu choisis quels coffres {client} peut atteindre, et si l'accès est en lecture seule.",
-	"After you approve": "Une fois que tu as approuvé",
-	"You return to {client}, and your vault opens in a new tab.":
-		"Tu retournes à {client}, et ton coffre s'ouvre dans un nouvel onglet.",
-	"Change or revoke access anytime in Settings > Connections.":
-		"Modifie ou révoque l'accès à tout moment dans Paramètres > Connexions.",
+	"Name your first vault": "Nomme ton premier coffre",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Un coffre est une collection de notes. {client} peut lire et écrire les notes qu'il contient.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Tu peux limiter ce que chaque application peut voir ou modifier à tout moment dans Paramètres > Connexions.",
+	"Approving…": "En cours d'approbation…",
+	Approve: "Approuver",
 	"Invalid authorization request": "Requête d'autorisation invalide",
 	"Missing required OAuth parameters:": "Paramètres OAuth requis manquants :",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -851,8 +846,6 @@ export default {
 		"Cela t'ouvre une application sur cet ordinateur. N'accepte que si tu viens de te connecter depuis cette application.",
 	"your existing connection": "ta connexion existante",
 	"Which vaults can {client} access?": "Quels coffres {client} peut-il consulter ?",
-	Approve: "Approuver",
-	"Approving…": "En cours d'approbation…",
 	"Disconnect {name}?": "Déconnecter {name} ?",
 	"Connecting…": "En cours de connexion…",
 	"Disconnect & connect {client}": "Déconnecter et connecter {client}",
@@ -955,7 +948,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Coffre détecté. En attente de ta première synchronisation…",
 	"Syncing your notes, almost there…": "Synchronisation de tes notes, presque terminé…",
-	"Name your first vault": "Nomme ton premier coffre",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Un coffre est un dossier pour les notes connexes. Nous le remplirons avec une note de bienvenue pour que l'éditeur ne soit pas vide à ton arrivée.",
 	"Create vault & continue": "Créer un coffre et continuer",

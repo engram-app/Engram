@@ -739,18 +739,13 @@ export default {
 	"Page not found": "页面未找到",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"找不到您要查找的内容。链接可能已损坏，或页面可能已移动。",
-	"How this works": "工作原理",
-	"What {client} gets": "{client} 可以访问的内容",
-	"It can search and read your notes, and add or edit them if you allow it.":
-		"它可以搜索和阅读你的笔记，并在你允许的情况下添加或编辑它们。",
-	"What you choose here": "你在这里的选择",
-	"You choose which vaults {client} can reach, and whether it is read only.":
-		"你选择 {client} 可以访问哪些仓库，以及是否只读。",
-	"After you approve": "你批准后",
-	"You return to {client}, and your vault opens in a new tab.":
-		"你返回到 {client}，你的仓库将在新标签页中打开。",
-	"Change or revoke access anytime in Settings > Connections.":
-		"随时在 设置 > 连接 中更改或撤销访问权限。",
+	"Name your first vault": "命名你的第一个仓库",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"仓库是一组笔记。{client} 可以读取和写入其中的笔记。",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"你可以在 设置 > 连接 中随时限制每个应用可以查看或修改的内容。",
+	"Approving…": "正在批准…",
+	Approve: "批准",
 	"Invalid authorization request": "无效的授权请求",
 	"Missing required OAuth parameters:": "缺少必需的 OAuth 参数：",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -775,8 +770,6 @@ export default {
 		"这会将你引导到电脑上的一个应用。仅在从该应用首次连接时才批准。",
 	"your existing connection": "您的现有连接",
 	"Which vaults can {client} access?": "{client} 可以访问哪些仓库？",
-	Approve: "批准",
-	"Approving…": "正在批准…",
 	"Disconnect {name}?": "断开 {name}？",
 	"Connecting…": "正在连接…",
 	"Disconnect & connect {client}": "断开并连接 {client}",
@@ -873,7 +866,6 @@ export default {
 	"Waiting for the plugin to sign in…": "正在等待插件登录…",
 	"Vault detected. Waiting for your first sync…": "检测到仓库。等待首次同步…",
 	"Syncing your notes, almost there…": "正在同步你的笔记，稍等…",
-	"Name your first vault": "命名你的第一个仓库",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"仓库是一个用于存放相关笔记的文件夹。我们会添加一个欢迎笔记，这样编辑器在您打开时就不会是空的。",
 	"Create vault & continue": "创建仓库并继续",

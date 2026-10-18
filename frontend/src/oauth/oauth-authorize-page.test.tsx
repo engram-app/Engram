@@ -18,6 +18,7 @@ const { fetchOAuthClient, postOAuthConsent } = vi.hoisted(() => ({
 vi.mock("../api/oauth", () => ({ fetchOAuthClient, postOAuthConsent }));
 
 const { apiDel } = vi.hoisted(() => ({ apiDel: vi.fn() }));
+const { updateVaultMock } = vi.hoisted(() => ({ updateVaultMock: vi.fn() }));
 
 vi.mock("../api/client", async (importOriginal) => ({
 	ApiError: (await importOriginal<typeof import("../api/client")>()).ApiError,
@@ -140,6 +141,7 @@ vi.mock("../api/queries", () => ({
 	useBillingStatus: () => ({ data: billingState.current }),
 	useOnboardingStatus: () => ({ data: onboardingState.current, isLoading: false }),
 	useSetOnboardingProfile: () => ({ mutateAsync: setProfileMock }),
+	useUpdateVault: () => ({ mutateAsync: updateVaultMock }),
 	useConnections: () => ({ data: connectionsState.current, isLoading: false }),
 }));
 
@@ -590,9 +592,10 @@ describe("OAuthAuthorizePage", () => {
 		expect(screen.queryByRole("button", { name: /cancel/iu })).toBeNull();
 	});
 
-	// First time through, the consent screen has to teach: what the app gets,
-	// what the user chooses here, and what happens after Approve.
-	describe("first-time guide", () => {
+	// A brand-new account's first app: one vault, no MCP connection. The only
+	// question is the vault's name; access is the default, every vault read and
+	// write. Anyone else keeps the full picker.
+	describe("first vault", () => {
 		beforeEach(() => {
 			fetchOAuthClient.mockResolvedValue({
 				client_id: "https://claude.ai/oauth/claude-code-client-metadata",
@@ -600,24 +603,58 @@ describe("OAuthAuthorizePage", () => {
 				kind: "mcp",
 				redirect_uri_registered: true,
 			});
+			vaultsState.current = DEFAULT_VAULTS.slice(0, 1);
+			connectionsState.current = OBSIDIAN_ONLY;
+			consentRedirectsTo("https://claude.ai/cb?code=abc");
 		});
 
-		it("explains the flow when the user has no MCP connection yet", async () => {
+		it("asks only for the vault name, prefilled, with no vault picker", async () => {
 			renderAt(VALID_QS);
-			expect(await screen.findByRole("heading", { name: /how this works/iu })).toBeInTheDocument();
-			expect(screen.getByText(/you choose which vaults/iu)).toBeInTheDocument();
-			expect(screen.getByText(/after you approve/iu)).toBeInTheDocument();
-			expect(screen.getByText(/settings > connections/iu)).toBeInTheDocument();
+			const input = await screen.findByLabelText(/name your first vault/iu);
+			expect(input).toHaveValue("Personal");
+			expect(screen.queryByRole("button", { name: /^review$/iu })).toBeNull();
+			expect(screen.queryByText(/all vaults/iu)).toBeNull();
 		});
 
-		it("stays out of the way once the user has connected an app before", async () => {
+		it("approves on the default access without renaming an unchanged name", async () => {
+			renderAt(VALID_QS);
+			fireEvent.click(await screen.findByRole("button", { name: /^approve$/iu }));
+			await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
+			const body = postOAuthConsent.mock.calls[0]?.[0] as OAuthConsentParams;
+			expect(body.vault_ids).toBeUndefined();
+			expect(body.read_only).toBeUndefined();
+			expect(updateVaultMock).not.toHaveBeenCalled();
+		});
+
+		it("renames the vault before connecting", async () => {
+			renderAt(VALID_QS);
+			const input = await screen.findByLabelText(/name your first vault/iu);
+			fireEvent.change(input, { target: { value: "Northwind" } });
+			fireEvent.click(screen.getByRole("button", { name: /^approve$/iu }));
+			await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
+			expect(updateVaultMock).toHaveBeenCalledWith({
+				id: DEFAULT_VAULTS[0]?.id,
+				name: "Northwind",
+			});
+			expect(updateVaultMock.mock.invocationCallOrder[0]).toBeLessThan(
+				postOAuthConsent.mock.invocationCallOrder[0] ?? 0,
+			);
+		});
+
+		it("keeps the full picker once the user has connected an app before", async () => {
 			connectionsState.current = [
 				...OBSIDIAN_ONLY,
-				{ ...OBSIDIAN_ONLY[0], kind: "mcp", client_id: "claude-prev" },
+				{ ...OBSIDIAN_ONLY[0], kind: "mcp", client_id: "prev" },
 			];
 			renderAt(VALID_QS);
-			await screen.findByRole("button", { name: /^review$/iu });
-			expect(screen.queryByRole("heading", { name: /how this works/iu })).toBeNull();
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+			expect(screen.queryByLabelText(/name your first vault/iu)).toBeNull();
+		});
+
+		it("keeps the full picker when the account already has several vaults", async () => {
+			vaultsState.current = DEFAULT_VAULTS;
+			renderAt(VALID_QS);
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
 		});
 	});
 

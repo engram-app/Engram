@@ -776,18 +776,13 @@ export default {
 	"Page not found": "Trang không tìm thấy",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Chúng tôi không thể tìm thấy những gì bạn đang tìm kiếm. Liên kết có thể bị hỏng hoặc trang có thể đã được chuyển.",
-	"How this works": "Cách thức hoạt động",
-	"What {client} gets": "{client} có thể làm gì",
-	"It can search and read your notes, and add or edit them if you allow it.":
-		"Nó có thể tìm kiếm và đọc ghi chú của bạn, và thêm hoặc chỉnh sửa chúng nếu bạn cho phép.",
-	"What you choose here": "Những gì bạn chọn ở đây",
-	"You choose which vaults {client} can reach, and whether it is read only.":
-		"Bạn chọn các kho lưu trữ mà {client} có thể truy cập, và liệu nó chỉ có quyền đọc hay không.",
-	"After you approve": "Sau khi bạn chấp thuận",
-	"You return to {client}, and your vault opens in a new tab.":
-		"Bạn quay lại {client}, và kho lưu trữ của bạn sẽ mở trong một tab mới.",
-	"Change or revoke access anytime in Settings > Connections.":
-		"Thay đổi hoặc thu hồi quyền truy cập bất cứ lúc nào trong Cài đặt > Kết nối.",
+	"Name your first vault": "Đặt tên cho kho lưu trữ đầu tiên của bạn",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Một kho lưu trữ là một tập hợp các ghi chú. {client} có thể đọc và ghi các ghi chú trong đó.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Bạn có thể giới hạn những gì mỗi ứng dụng có thể xem hoặc thay đổi bất cứ lúc nào trong Cài đặt > Kết nối.",
+	"Approving…": "Đang phê duyệt…",
+	Approve: "Phê duyệt",
 	"Invalid authorization request": "Yêu cầu xác thực không hợp lệ",
 	"Missing required OAuth parameters:": "Thiếu các tham số OAuth bắt buộc:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -813,8 +808,6 @@ export default {
 		"Điều này sẽ đưa bạn đến một ứng dụng trên máy tính này. Chỉ chấp nhận nếu bạn vừa mới bắt đầu kết nối từ ứng dụng đó.",
 	"your existing connection": "kết nối hiện tại của bạn",
 	"Which vaults can {client} access?": "Kho lưu trữ nào mà {client} có thể truy cập?",
-	Approve: "Phê duyệt",
-	"Approving…": "Đang phê duyệt…",
 	"Disconnect {name}?": "Ngắt kết nối {name}?",
 	"Connecting…": "Đang kết nối…",
 	"Disconnect & connect {client}": "Ngắt kết nối & kết nối {client}",
@@ -915,7 +908,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Phát hiện kho lưu trữ. Đang chờ lần đồng bộ hóa đầu tiên của bạn…",
 	"Syncing your notes, almost there…": "Đang đồng bộ hóa ghi chú của bạn, sắp xong…",
-	"Name your first vault": "Đặt tên cho kho lưu trữ đầu tiên của bạn",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Một kho lưu trữ là một thư mục chứa các ghi chú liên quan. Chúng tôi sẽ tạo một ghi chú chào mừng để trình soạn thảo không trống khi bạn truy cập.",
 	"Create vault & continue": "Tạo kho lưu trữ & tiếp tục",

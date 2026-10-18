@@ -780,18 +780,13 @@ export default {
 	"Page not found": "Halaman tidak ditemukan",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Kami tidak dapat menemukan apa yang Anda cari. Tautan mungkin rusak atau halaman mungkin telah dipindahkan.",
-	"How this works": "Cara kerjanya",
-	"What {client} gets": "Apa yang didapatkan {client}",
-	"It can search and read your notes, and add or edit them if you allow it.":
-		"Ini dapat mencari dan membaca catatan Anda, serta menambah atau mengeditnya jika Anda mengizinkannya.",
-	"What you choose here": "Pilihan Anda di sini",
-	"You choose which vaults {client} can reach, and whether it is read only.":
-		"Anda memilih vault mana yang dapat diakses oleh {client}, dan apakah hanya untuk dibaca.",
-	"After you approve": "Setelah Anda menyetujui",
-	"You return to {client}, and your vault opens in a new tab.":
-		"Anda kembali ke {client}, dan vault Anda terbuka di tab baru.",
-	"Change or revoke access anytime in Settings > Connections.":
-		"Ubah atau batalkan akses kapan saja di Pengaturan > Koneksi.",
+	"Name your first vault": "Beri nama vault pertama Anda",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Sebuah vault adalah kumpulan catatan. {client} dapat membaca dan menulis catatan di dalamnya.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Anda dapat membatasi apa yang dapat dilihat atau diubah oleh setiap aplikasi kapan saja di Pengaturan > Koneksi.",
+	"Approving…": "Menyetujui…",
+	Approve: "Setujui",
 	"Invalid authorization request": "Permintaan otorisasi tidak valid",
 	"Missing required OAuth parameters:": "Parameter OAuth yang diperlukan tidak ada:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -816,8 +811,6 @@ export default {
 		"Ini akan mengarahkan Anda ke aplikasi di komputer ini. Hanya setujui jika Anda baru saja memulai koneksi dari aplikasi tersebut.",
 	"your existing connection": "koneksi Anda yang ada",
 	"Which vaults can {client} access?": "Vault mana yang dapat diakses oleh {client}?",
-	Approve: "Setujui",
-	"Approving…": "Menyetujui…",
 	"Disconnect {name}?": "Putuskan sambungan {name}?",
 	"Connecting…": "Menghubungkan…",
 	"Disconnect & connect {client}": "Putuskan sambungan & hubungkan {client}",
@@ -919,7 +912,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Vault terdeteksi. Menunggu sinkronisasi pertama Anda…",
 	"Syncing your notes, almost there…": "Mensinkronkan catatan Anda, sebentar lagi…",
-	"Name your first vault": "Beri nama vault pertama Anda",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Vault adalah folder untuk catatan terkait. Kami akan mengisinya dengan catatan selamat agar editor tidak kosong saat Anda tiba.",
 	"Create vault & continue": "Buat vault & lanjutkan",
