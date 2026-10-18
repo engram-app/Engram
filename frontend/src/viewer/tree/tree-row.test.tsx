@@ -107,6 +107,25 @@ describe("TreeRow", () => {
 		expect(screen.getByText("Projects")).toBeInTheDocument();
 	});
 
+	// Names are user content: browsers must not auto-translate them, and the
+	// i18n leak check must not read a note titled like a UI string as a leak.
+	it("marks folder and note names translate=no", () => {
+		const folder = mockInstance({ data: folderItem });
+		const { unmount } = render(
+			<MemoryRouter>
+				<TreeRow instance={folder} />
+			</MemoryRouter>,
+		);
+		expect(screen.getByText("Projects")).toHaveAttribute("translate", "no");
+		unmount();
+		render(
+			<MemoryRouter>
+				<TreeRow instance={mockInstance({ data: noteItem })} />
+			</MemoryRouter>,
+		);
+		expect(screen.getByText("a")).toHaveAttribute("translate", "no");
+	});
+
 	it("folder row exposes aria-expanded matching HT state", () => {
 		const instance = mockInstance({ data: folderItem, isExpanded: true });
 		render(
