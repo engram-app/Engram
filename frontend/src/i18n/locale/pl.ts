@@ -847,6 +847,8 @@ export default {
 		"Sejf to zbiór notatek. {client} może czytać i zapisywać notatki w nim.",
 	"Also allow {client} to read and write vaults I create later":
 		"Umożliw również {client} odczyt i zapis sejfów, które utworzę później",
+	"Turn this off to keep {client} to this vault only.":
+		"Wyłącz to, aby ograniczyć {client} tylko do tego sejfu.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Możesz ograniczyć, co każda aplikacja może zobaczyć lub zmienić, w Ustawieniach > Połączenia.",
 	"Approving…": "Zatwierdzam…",

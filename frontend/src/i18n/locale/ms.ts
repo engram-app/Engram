@@ -785,6 +785,8 @@ export default {
 		"Sebuah peti nota ialah koleksi nota. {client} boleh membaca dan menulis nota di dalamnya.",
 	"Also allow {client} to read and write vaults I create later":
 		"Izinkan juga {client} membaca dan menulis peti nota yang saya cipta kemudian",
+	"Turn this off to keep {client} to this vault only.":
+		"Matikan ini untuk mengehadkan {client} kepada peti nota ini sahaja.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Anda boleh hadkan apa yang setiap aplikasi boleh lihat atau ubah pada bila-bila masa dalam Tetapan > Sambungan.",
 	"Approving…": "Memperuntukkan…",

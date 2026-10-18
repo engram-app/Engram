@@ -785,6 +785,8 @@ export default {
 		"Sebuah vault adalah kumpulan catatan. {client} dapat membaca dan menulis catatan di dalamnya.",
 	"Also allow {client} to read and write vaults I create later":
 		"Izinkan juga {client} untuk membaca dan menulis vault yang Anda buat nanti",
+	"Turn this off to keep {client} to this vault only.":
+		"Matikan ini untuk menjaga {client} hanya di vault ini.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Anda dapat membatasi apa yang dapat dilihat atau diubah oleh setiap aplikasi kapan saja di Pengaturan > Koneksi.",
 	"Approving…": "Menyetujui…",

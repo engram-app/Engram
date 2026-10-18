@@ -785,6 +785,8 @@ export default {
 		"Bir kasa, notların bir koleksiyonudur. {client}, içindeki notları okuyabilir ve yazabilir.",
 	"Also allow {client} to read and write vaults I create later":
 		"Ayrıca, daha sonra oluşturacağım kasaları da {client}'ın okuyup yazmasına izin verin",
+	"Turn this off to keep {client} to this vault only.":
+		"Bunu kapatarak {client} öğelerini yalnızca bu kasaya kaydedin.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Her uygulamanın neyi görebileceğini veya değiştirebileceğini, Ayarlar > Bağlantılar'da istediğiniz zaman sınırlayabilirsiniz.",
 	"Approving…": "Onaylanıyor…",

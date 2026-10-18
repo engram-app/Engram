@@ -819,6 +819,8 @@ export default {
 		"Un coffre est une collection de notes. {client} peut lire et écrire les notes qu'il contient.",
 	"Also allow {client} to read and write vaults I create later":
 		"Autorise également {client} à lire et à écrire dans les coffres que tu crées plus tard",
+	"Turn this off to keep {client} to this vault only.":
+		"Désactive ceci pour que {client} reste limité à ce coffre.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Tu peux limiter ce que chaque application peut voir ou modifier à tout moment dans Paramètres > Connexions.",
 	"Approving…": "En cours d'approbation…",

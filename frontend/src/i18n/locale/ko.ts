@@ -769,6 +769,8 @@ export default {
 		"보관함은 노트들의 모음입니다. {client}은 이 보관함 내의 노트를 읽고 쓸 수 있습니다.",
 	"Also allow {client} to read and write vaults I create later":
 		"나중에 제가 생성하는 보관함에 대해 {client}가 읽고 쓸 수 있도록 허용합니다",
+	"Turn this off to keep {client} to this vault only.":
+		"이 기능을 끄면 {client}가 이 보관함에만 적용됩니다.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"각 앱이 볼 수 있거나 변경할 수 있는 내용을 언제든지 설정 > 연결에서 제한할 수 있습니다.",
 	"Approving…": "승인 중입니다…",

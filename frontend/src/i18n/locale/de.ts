@@ -797,6 +797,8 @@ export default {
 		"Ein Vault ist eine Sammlung von Notizen. {client} kann die Notizen darin lesen und schreiben.",
 	"Also allow {client} to read and write vaults I create later":
 		"Erlaube auch {client}, Vaults zu lesen und zu schreiben, die ich später erstelle",
+	"Turn this off to keep {client} to this vault only.":
+		"Deaktiviere dies, um {client} nur für diesen Vault zu speichern.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Du kannst jederzeit in den Einstellungen > Verbindungen festlegen, was jede App sehen oder ändern darf.",
 	"Approving…": "Wird genehmigt…",

@@ -31,6 +31,7 @@ export default function FirstVaultConsent({
 	const inputId = useId();
 	const hintId = useId();
 	const laterId = useId();
+	const laterHintId = useId();
 	const [name, setName] = useState(vaultName);
 	const [includeLater, setIncludeLater] = useState(true);
 	const trimmed = name.trim();
@@ -64,15 +65,27 @@ export default function FirstVaultConsent({
 				aria-describedby={hintId}
 				onChange={(e) => setName(e.target.value)}
 			/>
-			<label htmlFor={laterId} className="flex items-center gap-2 text-foreground text-sm">
+			{/* A real decision about future vaults, so a full row, not a footnote. */}
+			<label
+				htmlFor={laterId}
+				className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-muted/30 p-3 has-checked:border-primary/60"
+			>
 				<input
 					id={laterId}
 					type="checkbox"
 					checked={includeLater}
+					aria-describedby={laterHintId}
 					onChange={(e) => setIncludeLater(e.target.checked)}
-					className="accent-primary"
+					className="mt-0.5 size-4 accent-primary"
 				/>
-				{t("Also allow {client} to read and write vaults I create later", { client })}
+				<span className="flex flex-col gap-0.5">
+					<span className="font-medium text-foreground">
+						{t("Also allow {client} to read and write vaults I create later", { client })}
+					</span>
+					<span id={laterHintId} className="text-muted-foreground text-sm">
+						{t("Turn this off to keep {client} to this vault only.", { client })}
+					</span>
+				</span>
 			</label>
 			<p className="text-muted-foreground text-xs">
 				{t("You can limit what each app can see or change anytime in Settings > Connections.")}

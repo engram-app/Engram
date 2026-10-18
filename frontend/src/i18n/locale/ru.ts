@@ -862,6 +862,8 @@ export default {
 		"Хранилище – это набор заметок. {client} может читать и записывать заметки в нём.",
 	"Also allow {client} to read and write vaults I create later":
 		"Также разрешите {client} читать и записывать хранилища, которые я создаю позже",
+	"Turn this off to keep {client} to this vault only.":
+		"Отключите эту опцию, чтобы {client} хранились только в этом хранилище.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		'Вы можете ограничить, что каждое приложение может видеть или изменять, в любое время в разделе "Настройки" > "Подключения".',
 	"Approving…": "Подтверждается…",

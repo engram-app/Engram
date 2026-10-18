@@ -744,6 +744,7 @@ export default {
 		"仓库是一组笔记。{client} 可以读取和写入其中的笔记。",
 	"Also allow {client} to read and write vaults I create later":
 		"允许 {client} 读取和写入我之后创建的仓库",
+	"Turn this off to keep {client} to this vault only.": "禁用此项，使 {client} 仅同步到此仓库。",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"你可以在 设置 > 连接 中随时限制每个应用可以查看或修改的内容。",
 	"Approving…": "正在批准…",

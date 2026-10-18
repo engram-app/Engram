@@ -818,6 +818,8 @@ export default {
 		"Una bóveda es una colección de notas. {client} puede leer y escribir las notas en ella.",
 	"Also allow {client} to read and write vaults I create later":
 		"También permite que {client} lea y escriba en las bóvedas que crees más adelante",
+	"Turn this off to keep {client} to this vault only.":
+		"Desactiva esto para mantener {client} solo en esta bóveda.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Puedes limitar lo que cada aplicación puede ver o cambiar en cualquier momento en Ajustes > Conexiones.",
 	"Approving…": "Aprobando…",

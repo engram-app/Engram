@@ -817,6 +817,8 @@ export default {
 		"Um cofre é uma coleção de notas. {client} pode ler e escrever as notas nele.",
 	"Also allow {client} to read and write vaults I create later":
 		"Permitir também que {client} leia e escreva nos cofres que você criar posteriormente",
+	"Turn this off to keep {client} to this vault only.":
+		"Desative isso para manter {client} apenas neste cofre.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Você pode limitar o que cada aplicativo pode ver ou alterar a qualquer momento em Configurações > Conexões.",
 	"Approving…": "Aprovando…",

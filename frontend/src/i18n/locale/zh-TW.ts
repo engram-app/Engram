@@ -746,6 +746,8 @@ export default {
 		"儲存庫是筆記的集合。{client} 可以讀取和修改其中的筆記。",
 	"Also allow {client} to read and write vaults I create later":
 		"允許 {client} 讀取和寫入我之後建立的儲存庫",
+	"Turn this off to keep {client} to this vault only.":
+		"關閉此選項，讓 {client} 只與此儲存庫同步。",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"您可以在「設定」>「連線」中隨時限制每個應用程式的訪問權限。",
 	"Approving…": "正在批准…",

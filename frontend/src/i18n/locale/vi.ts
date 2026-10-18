@@ -781,6 +781,8 @@ export default {
 		"Một kho lưu trữ là một tập hợp các ghi chú. {client} có thể đọc và ghi các ghi chú trong đó.",
 	"Also allow {client} to read and write vaults I create later":
 		"Cho phép {client} đọc và ghi vào các kho lưu trữ mà bạn tạo sau này",
+	"Turn this off to keep {client} to this vault only.":
+		"Tắt tùy chọn này để giữ {client} chỉ trong kho lưu trữ này.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Bạn có thể giới hạn những gì mỗi ứng dụng có thể xem hoặc thay đổi bất cứ lúc nào trong Cài đặt > Kết nối.",
 	"Approving…": "Đang phê duyệt…",
