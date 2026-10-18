@@ -776,6 +776,17 @@ export default {
 	"Page not found": "ページが見つかりません",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"お探しのものが見つかりませんでした。リンクが壊れているか、ページが移動している可能性があります。",
+	"Name your first vault": "最初の保管庫の名前を入力",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"保管庫は、ノートの集まりです。{client} は、その中のノートを読み書きできます。",
+	"Also allow {client} to read and write vaults I create later":
+		"後に作成する保管庫も、{client} が読み書きできるようにします",
+	"Turn this off to keep {client} to this vault only.":
+		"これをオフにすると、{client} はこの保管庫のみに制限されます。",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"各アプリが参照または変更できる内容を、設定 > 接続 でいつでも制限できます。",
+	"Approving…": "承認中…",
+	Approve: "承認",
 	"Invalid authorization request": "無効な認証リクエスト",
 	"Missing required OAuth parameters:": "必須のOAuthパラメータがありません:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -787,22 +798,22 @@ export default {
 		"このアプリは、戻る際に使用するアドレスを登録できませんでした。",
 	"Finish setting up Engram": "Engramの設定を完了する",
 	"this app": "このアプリ",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"保管庫の名前を {name} に変更できませんでした。別の名前を試してください。",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"保管庫の名前を変更できませんでした。接続を確認し、再試行してください。",
 	"previous connection": "前の接続",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"サーバーが許可したアクセス権が、お客様が選択したものよりも大きいため、何も接続されませんでした。もう一度お試しください。それでも問題が解決しない場合は、サポートまでお問い合わせください。",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"'{name}'との接続が解除されましたが、新しい接続の認証に失敗しました。{client}からのリクエストを再実行してください。この種類の接続は現在アクティブではありません。",
-	"This app is requesting access to your Engram.":
-		"このアプリは、Engramへのアクセスを要求しています。",
-	"Signed in as {email}.": "{email} としてサインインしました。",
-	"App details from {host}.": "{host}からのアプリ詳細.",
-	"You will return to {host}.": "{host} に戻ります。",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"これにより、このコンピューター上のアプリに移動します。そのアプリから初めて接続する場合のみ承認してください。",
 	"your existing connection": "現在の接続",
 	"Which vaults can {client} access?": "{client} はどの保管庫にアクセスできますか？",
-	Approve: "承認",
-	"Approving…": "承認中…",
+	"Signed in as {email}.": "{email} としてサインインしました。",
+	"App details from {host}.": "{host}からのアプリ詳細.",
+	"You will return to {host}.": "{host} に戻ります。",
 	"Disconnect {name}?": "{name}から切断しますか？",
 	"Connecting…": "接続中…",
 	"Disconnect & connect {client}": "切断して{client}に接続",
@@ -902,7 +913,6 @@ export default {
 	"Waiting for the plugin to sign in…": "プラグインがサインインを待機中です…",
 	"Vault detected. Waiting for your first sync…": "保管庫を検出しました。最初の同期を待機中です…",
 	"Syncing your notes, almost there…": "ノートの同期中、もうすぐ完了します…",
-	"Name your first vault": "最初の保管庫の名前を入力",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"保管庫は関連するノートをまとめるフォルダです。ウェルカムノートを登録して、編集画面が空にならないようにします。",
 	"Create vault & continue": "保管庫を作成して続行",

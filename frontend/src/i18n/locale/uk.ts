@@ -853,6 +853,17 @@ export default {
 	"Page not found": "Сторінка не знайдена",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Ми не змогли знайти те, що ви шукаєте. Посилання може бути недійсним або сторінка могла бути переміщена.",
+	"Name your first vault": "Назвіть ваше перше сховище",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Сховище – це колекція заміток. {client} може читати та записувати ці замітки.",
+	"Also allow {client} to read and write vaults I create later":
+		"Також дозвольте {client} читати та записувати сховища, які ви створите пізніше",
+	"Turn this off to keep {client} to this vault only.":
+		"Вимкніть цю опцію, щоб {client} працював лише з цим сховищем.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Ви можете обмежити, що кожен додаток може бачити або змінювати, у будь-який час у розділі Налаштування > З'єднання.",
+	"Approving…": "Підключення…",
+	Approve: "Підтвердити",
 	"Invalid authorization request": "Некоректний запит авторизації",
 	"Missing required OAuth parameters:": "Відсутні обов'язкові параметри OAuth:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -864,21 +875,22 @@ export default {
 		"Ця програма не зареєструвала адресу, на яку вона просила вас перенаправити.",
 	"Finish setting up Engram": "Завершіть налаштування Engram",
 	"this app": "ця програма",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"Не вдалося перейменувати ваше сховище на {name}. Спробуйте інше ім'я.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Не вдалося перейменувати ваше сховище. Перевірте ваше з'єднання та спробуйте ще раз.",
 	"previous connection": "попереднє з'єднання",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Сервер надав більше прав, ніж ви обрали, тому жодне з'єднання не було встановлено. Спробуйте ще раз або зверніться до служби підтримки, якщо це повторюється.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Відключено '{name}', але авторизація нового з'єднання не вдалася. Повторіть запит з {client} — наразі немає активних з'єднань такого типу.",
-	"This app is requesting access to your Engram.": "Ця програма запитує доступ до вашого Engram.",
-	"Signed in as {email}.": "Увійшли як {email}.",
-	"App details from {host}.": "Інформація про додаток від {host}.",
-	"You will return to {host}.": "Ви повернетесь до {host}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Це перенаправить вас до програми на цьому комп'ютері. Підтверджуйте лише якщо ви щойно почали підключення з цієї програми.",
 	"your existing connection": "ваше поточне з'єднання",
 	"Which vaults can {client} access?": "До яких сховищ {client} має доступ?",
-	Approve: "Підтвердити",
-	"Approving…": "Підключення…",
+	"Signed in as {email}.": "Увійшли як {email}.",
+	"App details from {host}.": "Інформація про додаток від {host}.",
+	"You will return to {host}.": "Ви повернетесь до {host}.",
 	"Disconnect {name}?": "Від'єднати {name}?",
 	"Connecting…": "Підключення…",
 	"Disconnect & connect {client}": "Від'єднати та підключити {client}",
@@ -979,7 +991,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Сховище знайдено. Очікування першої синхронізації…",
 	"Syncing your notes, almost there…": "Синхронізація ваших заміток, майже готово…",
-	"Name your first vault": "Назвіть ваше перше сховище",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Сховище – це папка для пов'язаних заміток. Ми додамо туди вітальну замітку, щоб редактор не був порожнім, коли ви зайдете.",
 	"Create vault & continue": "Створити сховище та продовжити",

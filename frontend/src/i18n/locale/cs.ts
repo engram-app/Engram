@@ -844,6 +844,17 @@ export default {
 	"Page not found": "Stránka nenalezena",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Nenašli jsme, co hledáte. Odkaz může být nefunkční nebo se stránka mohla přesunout.",
+	"Name your first vault": "Pojmenujte svůj první trezor",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Trezor je kolekce poznámek. {client} může číst a zapisovat poznámky v něm.",
+	"Also allow {client} to read and write vaults I create later":
+		"Umožněte také {client} číst a zapisovat trezory, které vytvořím později",
+	"Turn this off to keep {client} to this vault only.":
+		"Vypněte toto, pokud chcete, aby {client} měl přístup pouze k tomuto trezoru.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Můžete omezit, co každá aplikace může vidět nebo měnit, kdykoli v Nastavení > Připojení.",
+	"Approving…": "Probíhá schvalování…",
+	Approve: "Schválit",
 	"Invalid authorization request": "Neplatná žádost o autorizaci",
 	"Missing required OAuth parameters:": "Chybí povinné parametry OAuth:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -855,21 +866,22 @@ export default {
 		"Tato aplikace neregistrovala adresu, na kterou se pokoušela vás přesměrovat.",
 	"Finish setting up Engram": "Dokončete nastavení Engram",
 	"this app": "tato aplikace",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"Nepodařilo se přejmenovat váš trezor na {name}. Zkuste jiné jméno.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Nepodařilo se přejmenovat váš trezor. Zkontrolujte připojení a zkuste to znovu.",
 	"previous connection": "předchozí připojení",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Server udělil více oprávnění, než jste vybrali, takže nic nebylo připojeno. Zkuste to znovu, nebo kontaktujte podporu, pokud se to bude opakovat.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Odpojeno '{name}', ale autorizace nového připojení selhala. Spusťte požadavek znovu z {client} – žádná připojení tohoto typu nejsou aktuálně aktivní.",
-	"This app is requesting access to your Engram.": "Tato aplikace žádá přístup k vašemu Engram.",
-	"Signed in as {email}.": "Přihlášeno jako {email}.",
-	"App details from {host}.": "Podrobnosti aplikace z {host}.",
-	"You will return to {host}.": "Vrátíte se do {host}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"To vás přesměruje na aplikaci v tomto počítači. Schvalte pouze pokud jste se právě začali připojovat z této aplikace.",
 	"your existing connection": "vaše stávající připojení",
 	"Which vaults can {client} access?": "Které trezory může {client} přistupovat?",
-	Approve: "Schválit",
-	"Approving…": "Probíhá schvalování…",
+	"Signed in as {email}.": "Přihlášeno jako {email}.",
+	"App details from {host}.": "Podrobnosti aplikace z {host}.",
+	"You will return to {host}.": "Vrátíte se do {host}.",
 	"Disconnect {name}?": "Odpojit {name}?",
 	"Connecting…": "Probíhá připojování…",
 	"Disconnect & connect {client}": "Odpojit a připojit {client}",
@@ -970,7 +982,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Trezor detekován. Čekáme na vaši první synchronizaci…",
 	"Syncing your notes, almost there…": "Synchronizace vašich poznámek, už skoro hotovo…",
-	"Name your first vault": "Pojmenujte svůj první trezor",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Trezor je složka pro související poznámky. Naplníme ji uvítací poznámkou, aby editor nebyl prázdný, až k němu přijdete.",
 	"Create vault & continue": "Vytvořit trezor a pokračovat",
