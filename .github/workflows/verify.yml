@@ -192,6 +192,7 @@ jobs:
       skip-e2e-clerk: ${{ steps.skips.outputs.skip-e2e-clerk }}
       skip-e2e-crdt: ${{ steps.skips.outputs.skip-e2e-crdt }}
       skip-e2e-browser: ${{ steps.skips.outputs.skip-e2e-browser }}
+      skip-frontend-lint: ${{ steps.skips.outputs.skip-frontend-lint }}
       skip-n1-compat: ${{ steps.skips.outputs.skip-n1-compat }}
       skip-build-and-publish-image: ${{ steps.skips.outputs.skip-build-and-publish-image }}
       # Per-job hashes, consumed by each job's "Record pass marker" step so a
@@ -207,6 +208,7 @@ jobs:
       hash-e2e-clerk: ${{ steps.skips.outputs.hash-e2e-clerk }}
       hash-e2e-crdt: ${{ steps.skips.outputs.hash-e2e-crdt }}
       hash-e2e-browser: ${{ steps.skips.outputs.hash-e2e-browser }}
+      hash-frontend-lint: ${{ steps.skips.outputs.hash-frontend-lint }}
       hash-n1-compat: ${{ steps.skips.outputs.hash-n1-compat }}
       hash-build-and-publish-image: ${{ steps.skips.outputs.hash-build-and-publish-image }}
       # "This ref belongs to a bot whose PRs never run e2e." ONE definition,
@@ -646,16 +648,23 @@ jobs:
             # No registry = leave DEPS_IMAGE unset and build the stage inline.
             if [ -n "${LOCAL_REGISTRY:-}" ]; then
               DEPS_HASH=$(cat Dockerfile mix.lock config/config.exs config/prod.exs native/Cargo.lock | sha256sum | cut -c1-16)
-              export DEPS_IMAGE="${LOCAL_REGISTRY}/engram-deps:${DEPS_HASH}"
-              if docker pull -q "$DEPS_IMAGE" >/dev/null 2>&1; then
-                echo "::notice::Reusing $DEPS_IMAGE"
+              DEPS_REMOTE="${LOCAL_REGISTRY}/engram-deps:${DEPS_HASH}"
+              # The build FROMs a LOCAL tag. A registry-qualified FROM made
+              # BuildKit re-resolve the ref over HTTPS against the plain-HTTP
+              # :5001 ("server gave HTTP response to HTTPS client") even after
+              # `docker pull` had fetched it, on some runner daemons.
+              export DEPS_IMAGE="engram-deps:${DEPS_HASH}"
+              if docker pull -q "$DEPS_REMOTE" >/dev/null 2>&1; then
+                docker tag "$DEPS_REMOTE" "$DEPS_IMAGE"
+                echo "::notice::Reusing $DEPS_REMOTE"
               else
-                echo "::notice::Building $DEPS_IMAGE (deps inputs changed)"
+                echo "::notice::Building $DEPS_REMOTE (deps inputs changed)"
                 # Same retry as the compose build below: the daemon can be
                 # reclaimed mid-build (#567) and :5001 has a nightly outage.
                 for attempt in 1 2 3; do
                   if docker build --target deps --build-arg "HEX_MIRROR=${HEX_MIRROR:-}" -t "$DEPS_IMAGE" . \
-                     && docker push "$DEPS_IMAGE"; then
+                     && docker tag "$DEPS_IMAGE" "$DEPS_REMOTE" \
+                     && docker push "$DEPS_REMOTE"; then
                     break
                   fi
                   [ "$attempt" = 3 ] && { echo "::error::engram-deps build/push failed after 3 attempts"; exit 1; }
@@ -1367,6 +1376,14 @@ jobs:
             if curl -sf http://10.0.20.214:11434/api/tags > /dev/null 2>&1; then
               echo "Ollama OK"
               touch "${MARKER_PREFIX}-ollama.marker"
+              # Warm the embed model while the stack boots. The shared Ollama
+              # unloads it after 10 idle minutes and on every auto-update
+              # restart; a cold load (~25s) stalls the first embed batch ~50s
+              # and the backlog pushes test_32/test_50 past their index waits.
+              curl -sf --max-time 120 http://10.0.20.214:11434/api/embed \
+                -d '{"model":"mxbai-embed-large","input":"warm","keep_alive":"30m"}' > /dev/null \
+                && echo "Ollama embed model warm" \
+                || echo "WARNING: Ollama embed warm-up failed"
             else
               echo "WARNING: Ollama on FastRaid not reachable — embedding tests may fail"
               touch "${MARKER_PREFIX}-ollama-warn.marker"
@@ -2002,6 +2019,14 @@ jobs:
             if curl -sf http://10.0.20.214:11434/api/tags > /dev/null 2>&1; then
               echo "Ollama OK"
               touch "${MARKER_PREFIX}-ollama.marker"
+              # Warm the embed model while the stack boots. The shared Ollama
+              # unloads it after 10 idle minutes and on every auto-update
+              # restart; a cold load (~25s) stalls the first embed batch ~50s
+              # and the backlog pushes test_32/test_50 past their index waits.
+              curl -sf --max-time 120 http://10.0.20.214:11434/api/embed \
+                -d '{"model":"mxbai-embed-large","input":"warm","keep_alive":"30m"}' > /dev/null \
+                && echo "Ollama embed model warm" \
+                || echo "WARNING: Ollama embed warm-up failed"
             else
               echo "WARNING: Ollama on FastRaid not reachable — embedding tests may fail"
               touch "${MARKER_PREFIX}-ollama-warn.marker"
@@ -4181,7 +4206,10 @@ jobs:
   frontend-lint:
     name: frontend lint+types+unit
     # Skip on cross-repo plugin dispatch — the plugin cannot regress the SPA.
-    if: github.event_name != 'repository_dispatch'
+    # Fingerprinted: skips when this exact frontend/ + email-strings content
+    # already passed (any branch, incl. the squash-merge to main).
+    needs: fingerprint
+    if: github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.skip-frontend-lint != 'true'
     runs-on: [self-hosted, linux, x64, isolated, light]  # cheap: pin to FastRaid (bringup #15)
     # The full SPA PR gate, one bun install:
     #   - Biome lint + format check (`bun run ci` → `biome ci .`) with
@@ -4332,6 +4360,15 @@ jobs:
           # Same build, second check: the JS needed before the app can start
           # stays under budget (scripts/check-bundle-budget.ts).
           bun scripts/check-bundle-budget.ts "$OUT"
+
+      # Seed this job's marker as soon as it is green (see e2e-clerk). Only when
+      # the job actually ran its checks (the path guard can skip them all).
+      - name: Record pass marker
+        if: success() && steps.guard.outputs.skip != 'true' && github.event_name != 'schedule'
+        env:
+          MARKER_HASH: ${{ needs.fingerprint.outputs.hash-frontend-lint }}
+        run: IS_FULL_RUN=true bash ci/fingerprint/record.sh record frontend-lint
+
 
   e2e-browser:
     # Runs in parallel with the Obsidian suites on a `heavy` runner (max 2
@@ -4545,10 +4582,11 @@ jobs:
           E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
           CLERK_JWKS_URL: ${{ secrets.CLERK_JWKS_URL }}
           CLERK_ISSUER: ${{ secrets.CLERK_ISSUER }}
-          # The per-locale i18n specs (15 locales x 3 specs, ~45 tests, 7-9 min)
-          # run on the nightly and on force_full dispatches (the release-v*
-          # gate), not on PR/main pushes. See e2e/support/i18n-leaks.ts.
-          E2E_ALL_LOCALES: ${{ (github.event_name == 'schedule' || github.event.inputs.force_full == 'true') && '1' || '' }}
+          # The per-locale i18n specs (all locales x 3 specs, ~45+ tests, 7-9
+          # min) run on the nightly only: not on PR/main pushes and not on the
+          # release-v* gate's force_full dispatch (too slow for every release).
+          # See e2e/support/i18n-leaks.ts.
+          E2E_ALL_LOCALES: ${{ github.event_name == 'schedule' && '1' || '' }}
           CI: "true"
         run: |
           export PATH="$HOME/.bun/bin:$PATH"
@@ -4574,9 +4612,8 @@ jobs:
       # Seed this job's marker as soon as it is green (see e2e-clerk).
       - name: Record pass marker
         if: success() && github.event_name != 'schedule' && needs.fingerprint.outputs.e2e-target-suite == ''
-        # This marker covers the PR tier (English). The per-locale specs run
-        # only on the nightly and force_full release gate, and both bypass
-        # markers, so it can never skip them where they gate.
+        # This marker covers English. The per-locale specs run only on the
+        # nightly, which bypasses markers, so it can never skip them there.
         env:
           MARKER_HASH: ${{ needs.fingerprint.outputs.hash-e2e-browser }}
         run: IS_FULL_RUN=true bash ci/fingerprint/record.sh record e2e-browser
