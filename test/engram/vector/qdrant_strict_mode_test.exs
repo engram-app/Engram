@@ -32,7 +32,9 @@ defmodule Engram.Vector.QdrantStrictModeTest do
     # here dies with econnrefused against a perfectly healthy container.
     ServiceConfig.put_override(:qdrant_url, qdrant_url())
 
-    col = "engram_strict_#{System.unique_integer([:positive])}"
+    # Partitioned like search_integration_test: one Qdrant, several BEAMs.
+    col =
+      "engram_strict_#{System.get_env("MIX_TEST_PARTITION")}_#{System.unique_integer([:positive])}"
 
     :ok = Qdrant.ensure_collection(col, @dims)
     :ok = enable_strict_mode(col)

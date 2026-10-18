@@ -83,8 +83,10 @@ repo_opts =
         database: "engram_test#{System.get_env("MIX_TEST_PARTITION")}"
       ]
 
+    # Same partition suffix for CI's DATABASE_URL (`.../engram_test` ->
+    # `.../engram_test2`), so `mix test --partitions N` gets one DB each.
     url ->
-      [url: url]
+      [url: url <> (System.get_env("MIX_TEST_PARTITION") || "")]
   end
 
 config :engram,
