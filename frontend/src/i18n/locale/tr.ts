@@ -417,6 +417,9 @@ export default {
 	"Authorization failed": "Yetkilendirme başarısız oldu",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Bu kod geçersiz veya süresi dolmuş. Lütfen Obsidian üzerinden tekrar deneyin.",
+	"Welcome to Engram": "Engram uygulamasına hoş geldiniz",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"İlk kasanıza bir isim verin. Obsidian notlarınız bu kasaya senkronize edilecek.",
 	"Enter the code shown in your Obsidian plugin:": "Obsidian eklentinizde gösterilen kodu girin:",
 	"Verifying…": "Doğrulama yapılıyor...",
 	Verify: "Doğrula",
@@ -426,11 +429,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Cihazlarınızı ayırt edebilmeniz için bağlantı listenizde gösterilir.",
 	"Obsidian Vault Sync": "Obsidian Kasa Senkronizasyonu",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Kasa limiti aşıldı: Ücretsiz planınızda 1 kasa bulunur",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Ücretsiz planda yeni kasa oluşturamazsınız. Yukarıdaki mevcut kasanızla senkronize edin veya daha fazla kasa eklemek için yükseltin.",
-	"Upgrade plan": "Yükseltme planı",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Ücretsiz planınızda 1 kasa bulunur, bu nedenle bu cihaz yukarıdaki kasayla senkronize olur.",
+	"Need more vaults? Upgrade": "Daha fazla kasaya mı ihtiyacınız var? Ücretsiz aboneliği yükseltin",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"Senkronizasyon, bu cihazın notlarınıza erişmesini sağlar. Sadece kendiniz başlattıysanız devam edin. Başka biri sizi buraya gönderdiyse, bu sayfayı kapatın.",
 	"Syncing…": "Senkronize ediliyor…",
@@ -453,7 +454,6 @@ export default {
 	"Sync with an existing vault": "Mevcut bir kasayla senkronize edin",
 	"(choose from {count} vaults)": "({count} kasa arasından seçin)",
 	"Or create a new vault": "Veya yeni bir kasa oluşturun",
-	"Create your first vault": "İlk kasanızı oluşturun",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"{os} ile senkronize edilen '{vault}' kasası (son kullanım {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -837,6 +837,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Lütfen devam etmeden önce aşağıdaki tam anlaşmayı okuyun. {privacy} (kayıt sırasında incelenir), verilerinizi nasıl işlediğimizi açıklar.",
 	"Connect {tool}": "{tool} ile bağlantı kurun",
+	"Create your first vault": "İlk kasanızı oluşturun",
 	"Join our Discord": "Discord'umuza katılın",
 	Join: "Katıl",
 	"Install the Obsidian plugin": "Obsidian eklentisini yükleyin",

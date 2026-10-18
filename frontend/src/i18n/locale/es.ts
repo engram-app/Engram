@@ -422,6 +422,9 @@ export default {
 	"Authorization failed": "La autorización falló",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Este código no es válido o ha expirado. Inténtalo de nuevo desde Obsidian.",
+	"Welcome to Engram": "Bienvenido a Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Ponle un nombre a tu primera bóveda. Tus notas de Obsidian se sincronizarán en ella.",
 	"Enter the code shown in your Obsidian plugin:":
 		"Introduce el código que aparece en tu plugin de Obsidian:",
 	"Verifying…": "Verificando…",
@@ -432,11 +435,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Se mostrará en tu lista de conexiones para que puedas distinguir tus dispositivos.",
 	"Obsidian Vault Sync": "Sincronización de la Bóveda de Obsidian",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Límite de bóvedas alcanzado: tu plan gratuito incluye 1 bóveda",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"No puedes crear una nueva bóveda en el plan gratuito. Sincroniza con tu bóveda existente arriba, o actualiza para añadir más.",
-	"Upgrade plan": "Plan de actualización",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Tu plan gratuito incluye 1 bóveda, así que este dispositivo se sincroniza con la bóveda anterior.",
+	"Need more vaults? Upgrade": "¿Necesitas más bóvedas? Actualiza",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"Sincronizar le da a este dispositivo acceso a tus notas. Continúa solo si iniciaste tú esta conexión. Si alguien más te envió aquí, cierra esta página.",
 	"Syncing…": "Sincronizando…",
@@ -460,7 +461,6 @@ export default {
 	"Sync with an existing vault": "Sincroniza con una bóveda existente",
 	"(choose from {count} vaults)": "(elige entre {count} bóvedas)",
 	"Or create a new vault": "O crea una nueva bóveda",
-	"Create your first vault": "Crea tu primera bóveda",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"el dispositivo en {os} que sincroniza tu bóveda '{vault}' (última actividad: {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -869,6 +869,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Por favor, lee el acuerdo completo a continuación antes de continuar. Nuestro {privacy} (revisado al registrarte) describe cómo manejamos tus datos.",
 	"Connect {tool}": "Conectar {tool}",
+	"Create your first vault": "Crea tu primera bóveda",
 	"Join our Discord": "Únete a nuestro Discord",
 	Join: "Únete",
 	"Install the Obsidian plugin": "Instala el plugin de Obsidian",

@@ -389,6 +389,9 @@ export default {
 	"Authorization failed": "授权失败",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"此代码无效或已过期。请从 Obsidian 重新尝试。",
+	"Welcome to Engram": "欢迎使用 Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"为你的第一个仓库命名。你的 Obsidian 笔记将同步到其中。",
 	"Enter the code shown in your Obsidian plugin:": "输入你在 Obsidian 插件中看到的代码：",
 	"Verifying…": "验证中…",
 	Verify: "验证",
@@ -398,10 +401,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"在你的连接列表中显示，以便区分你的设备。",
 	"Obsidian Vault Sync": "Obsidian 仓库同步",
-	"Vault limit reached: your Free plan includes 1 vault": "仓库数量已达上限：免费版包含 1 个仓库",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"您无法在免费版中创建新的仓库。请同步您现有的仓库，或升级以添加更多。",
-	"Upgrade plan": "升级方案",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"你的免费版包含 1 个仓库，所以此设备同步的是上面的那个。",
+	"Need more vaults? Upgrade": "需要更多仓库？升级",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"同步会使此设备访问你的笔记。仅在你主动发起此连接时继续。如果其他人将你引导到这里，请关闭此页面。",
 	"Syncing…": "同步中…",
@@ -424,7 +426,6 @@ export default {
 	"Sync with an existing vault": "同步到现有仓库",
 	"(choose from {count} vaults)": "(从 {count} 个仓库中选择)",
 	"Or create a new vault": "或创建新仓库",
-	"Create your first vault": "创建你的第一个仓库",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"与 '{vault}' 仓库同步的设备 ({os}) (上次活动 {since})",
 	"the device on {os} that syncs your '{vault}' vault": "与 '{vault}' 仓库同步的 {os} 设备",
@@ -794,6 +795,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"请在继续之前阅读完整的协议。我们的 {privacy} (注册时查看) 描述了我们如何处理您的数据。",
 	"Connect {tool}": "连接 {tool}",
+	"Create your first vault": "创建你的第一个仓库",
 	"Join our Discord": "加入我们的 Discord",
 	Join: "加入",
 	"Install the Obsidian plugin": "安装 Obsidian 插件",

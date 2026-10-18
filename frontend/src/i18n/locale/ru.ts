@@ -437,6 +437,9 @@ export default {
 	"Authorization failed": "Авторизация не удалась",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Этот код недействителен или истек. Пожалуйста, попробуйте еще раз из Obsidian.",
+	"Welcome to Engram": "Добро пожаловать в Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Назовите ваше первое хранилище. Ваши заметки Obsidian будут синхронизированы с ним.",
 	"Enter the code shown in your Obsidian plugin:":
 		"Введите код, отображаемый в вашем плагине Obsidian:",
 	"Verifying…": "Проверка…",
@@ -447,11 +450,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Отображается в списке ваших подключений, чтобы вы могли различать устройства.",
 	"Obsidian Vault Sync": "Синхронизация с хранилищем Obsidian",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Предел хранилищ достигнут: ваш бесплатный план включает 1 хранилище",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Вы не можете создать новое хранилище на бесплатном плане. Синхронизируйтесь с существующим хранилищем выше или обновите подписку, чтобы добавить больше.",
-	"Upgrade plan": "Обновить подписку",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Ваш бесплатный план включает 1 хранилище, поэтому это устройство синхронизируется с указанным выше.",
+	"Need more vaults? Upgrade": "Требуется больше хранилищ? Обновите подписку",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"Синхронизация предоставляет этому устройству доступ к вашим заметкам. Продолжайте только в том случае, если вы сами инициировали это подключение. Если вас сюда перенаправил кто-то другой, закройте эту страницу.",
 	"Syncing…": "Синхронизация…",
@@ -475,7 +476,6 @@ export default {
 	"Sync with an existing vault": "Синхронизировать с существующим хранилищем",
 	"(choose from {count} vaults)": "(выберите из {count} хранилищ)",
 	"Or create a new vault": "Или создайте новое хранилище",
-	"Create your first vault": "Создайте ваше первое хранилище",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"устройство, подключенное к {os}, которое синхронизирует ваше хранилище '{vault}' (последняя активность {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -915,6 +915,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Пожалуйста, ознакомьтесь с полным текстом соглашения ниже, прежде чем продолжить. Наше {privacy} (просматривается при регистрации) описывает, как мы обрабатываем ваши данные.",
 	"Connect {tool}": "Подключить {tool}",
+	"Create your first vault": "Создайте ваше первое хранилище",
 	"Join our Discord": "Присоединитесь к нашему Discord",
 	Join: "Присоединиться",
 	"Install the Obsidian plugin": "Установите плагин для Obsidian",
