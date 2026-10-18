@@ -74,15 +74,18 @@ on:
 # group per plugin branch (a re-push there supersedes the same way). main and
 # the nightly are never cancelled: every main commit publishes/deploys.
 concurrency:
-  group: verify-${{ github.event_name }}-${{ github.event.client_payload.plugin_branch || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' || github.event_name == 'repository_dispatch' }}
+  # main/nightly get a per-run group (run_id): a shared group with
+  # cancel-in-progress=false would still serialize them, and GitHub replaces a
+  # PENDING run when a newer one queues, cancelling intermediate main commits.
+  group: verify-${{ github.event_name }}-${{ (github.ref == 'refs/heads/main' && github.event_name != 'repository_dispatch') && github.run_id || github.event.client_payload.plugin_branch || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
-# No workflow-level concurrency group: backend CI runs in parallel across
-# triggers (push + plugin dispatch). Previously serialized because shared
-# state collided — that's been addressed:
+# Runs of DIFFERENT branches/triggers still run in parallel (the concurrency
+# group above only cancels a superseded run of the same branch). They were
+# once serialized because shared state collided — that's been addressed:
 #   1. Dockerfile cache mounts (`mix-deps`, `mix-build`) now use sharing=locked,
 #      so buildkit serializes mount access internally instead of corrupting.
 #   2. Xvfb cleanup is scoped to each run's owned display range
@@ -2724,7 +2727,7 @@ jobs:
 
       - name: OpenAPI spec drift gate
         env:
-          DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_test
+          DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_test1  # partition 1 DB; the bare engram_test is never migrated
         run: |
           # Regenerate the spec and fail if it differs from the committed
           # openapi.json. Keeps the docs source-of-truth honest: any
@@ -2754,11 +2757,11 @@ jobs:
           # (rls_disabled_in_public, *_table_exposed) stay silent; only genuine
           # schema/security findings surface. unused_index is filtered by the
           # gate (no scan stats on a fresh CI database).
-          docker exec "$PG_CONTAINER" psql -U engram -d engram_test -q -v ON_ERROR_STOP=1 -c "
+          docker exec "$PG_CONTAINER" psql -U engram -d engram_test1 -q -v ON_ERROR_STOP=1 -c "
             DO \$\$ BEGIN CREATE ROLE anon NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END \$\$;
             DO \$\$ BEGIN CREATE ROLE authenticated NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END \$\$;
             DO \$\$ BEGIN CREATE ROLE service_role NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END \$\$;"
-          docker exec -i "$PG_CONTAINER" psql -U engram -d engram_test -At -F'|' \
+          docker exec -i "$PG_CONTAINER" psql -U engram -d engram_test1 -At -F'|' \
             < priv/repo/splinter.sql | bash priv/repo/lint_schema.sh
 
       - name: Lint new migrations (squawk)
