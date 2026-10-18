@@ -107,6 +107,32 @@ const billingState = vi.hoisted(() => ({
 // predates them would silently ignore the level fields and mint full access.
 const accessLevelsState = vi.hoisted(() => ({ current: true }));
 
+const connectionsState = vi.hoisted(() => {
+	const OBSIDIAN_ONLY: Record<string, unknown>[] = [
+		{
+			kind: "obsidian",
+			client_id: "existing-obsidian-id",
+			key_id: null,
+			name: "Claude Desktop (old)",
+			software_id: null,
+			software_version: null,
+			verified: false,
+			logo: null,
+			vault_id: null,
+			vault_name: null,
+			scope: null,
+			last_used_at: null,
+			connected_at: null,
+			first_user_agent: null,
+			first_ip: null,
+			redirect_uri: null,
+			redirect_uris: [],
+		},
+	];
+	return { OBSIDIAN_ONLY, current: OBSIDIAN_ONLY };
+});
+const { OBSIDIAN_ONLY } = connectionsState;
+
 vi.mock("../api/queries", () => ({
 	useMe: () => ({ data: { email: "todd@example.com" }, isLoading: false }),
 	useVaults: () => ({ data: vaultsState.current, isLoading: false }),
@@ -114,30 +140,7 @@ vi.mock("../api/queries", () => ({
 	useBillingStatus: () => ({ data: billingState.current }),
 	useOnboardingStatus: () => ({ data: onboardingState.current, isLoading: false }),
 	useSetOnboardingProfile: () => ({ mutateAsync: setProfileMock }),
-	useConnections: () => ({
-		data: [
-			{
-				kind: "obsidian",
-				client_id: "existing-obsidian-id",
-				key_id: null,
-				name: "Claude Desktop (old)",
-				software_id: null,
-				software_version: null,
-				verified: false,
-				logo: null,
-				vault_id: null,
-				vault_name: null,
-				scope: null,
-				last_used_at: null,
-				connected_at: null,
-				first_user_agent: null,
-				first_ip: null,
-				redirect_uri: null,
-				redirect_uris: [],
-			},
-		],
-		isLoading: false,
-	}),
+	useConnections: () => ({ data: connectionsState.current, isLoading: false }),
 }));
 
 // A backend that supports levels echoes what it stored. These tests model one
@@ -267,6 +270,7 @@ afterEach(() => {
 	vi.clearAllMocks();
 	vaultsState.current = DEFAULT_VAULTS;
 	accessLevelsState.current = true;
+	connectionsState.current = OBSIDIAN_ONLY;
 	billingState.current = {
 		caps: {
 			obsidian_connections: null,
@@ -584,6 +588,37 @@ describe("OAuthAuthorizePage", () => {
 		).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: /approve/iu })).toBeNull();
 		expect(screen.queryByRole("button", { name: /cancel/iu })).toBeNull();
+	});
+
+	// First time through, the consent screen has to teach: what the app gets,
+	// what the user chooses here, and what happens after Approve.
+	describe("first-time guide", () => {
+		beforeEach(() => {
+			fetchOAuthClient.mockResolvedValue({
+				client_id: "https://claude.ai/oauth/claude-code-client-metadata",
+				client_name: "Claude Code",
+				kind: "mcp",
+				redirect_uri_registered: true,
+			});
+		});
+
+		it("explains the flow when the user has no MCP connection yet", async () => {
+			renderAt(VALID_QS);
+			expect(await screen.findByRole("heading", { name: /how this works/iu })).toBeInTheDocument();
+			expect(screen.getByText(/you choose which vaults/iu)).toBeInTheDocument();
+			expect(screen.getByText(/after you approve/iu)).toBeInTheDocument();
+			expect(screen.getByText(/settings > connections/iu)).toBeInTheDocument();
+		});
+
+		it("stays out of the way once the user has connected an app before", async () => {
+			connectionsState.current = [
+				...OBSIDIAN_ONLY,
+				{ ...OBSIDIAN_ONLY[0], kind: "mcp", client_id: "claude-prev" },
+			];
+			renderAt(VALID_QS);
+			await screen.findByRole("button", { name: /^review$/iu });
+			expect(screen.queryByRole("heading", { name: /how this works/iu })).toBeNull();
+		});
 	});
 
 	// MCP 2025-11-25: the user sees where the authorization code is sent.

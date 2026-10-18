@@ -780,6 +780,18 @@ export default {
 	"Page not found": "Sayfa bulunamadı",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Aradığınızı bulamadık. Bağlantı bozuk olabilir veya sayfa taşınmış olabilir.",
+	"How this works": "İşleyiş şekli",
+	"What {client} gets": "{client} neler sağlar",
+	"It can search and read your notes, and add or edit them if you allow it.":
+		"Notlarınızı arayıp okuyabilir ve izin verirseniz bunları ekleyebilir veya düzenleyebilir.",
+	"What you choose here": "Burada seçtikleriniz",
+	"You choose which vaults {client} can reach, and whether it is read only.":
+		"{client}'ın erişebileceği kasaları ve sadece okuma modunda olup olmadığını seçin.",
+	"After you approve": "Onayladıktan sonra",
+	"You return to {client}, and your vault opens in a new tab.":
+		"{client}'a geri dönersiniz ve kasanız yeni bir sekmede açılır.",
+	"Change or revoke access anytime in Settings > Connections.":
+		"Erişimi istediğiniz zaman Ayarlar > Bağlantılar'da değiştirebilir veya iptal edebilirsiniz.",
 	"Invalid authorization request": "Geçersiz yetkilendirme isteği",
 	"Missing required OAuth parameters:": "Gerekli OAuth parametreleri eksik:",
 	"This page should be opened via an OAuth client redirect, not directly.":

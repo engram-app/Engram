@@ -776,6 +776,18 @@ export default {
 	"Page not found": "Trang không tìm thấy",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Chúng tôi không thể tìm thấy những gì bạn đang tìm kiếm. Liên kết có thể bị hỏng hoặc trang có thể đã được chuyển.",
+	"How this works": "Cách thức hoạt động",
+	"What {client} gets": "{client} có thể làm gì",
+	"It can search and read your notes, and add or edit them if you allow it.":
+		"Nó có thể tìm kiếm và đọc ghi chú của bạn, và thêm hoặc chỉnh sửa chúng nếu bạn cho phép.",
+	"What you choose here": "Những gì bạn chọn ở đây",
+	"You choose which vaults {client} can reach, and whether it is read only.":
+		"Bạn chọn các kho lưu trữ mà {client} có thể truy cập, và liệu nó chỉ có quyền đọc hay không.",
+	"After you approve": "Sau khi bạn chấp thuận",
+	"You return to {client}, and your vault opens in a new tab.":
+		"Bạn quay lại {client}, và kho lưu trữ của bạn sẽ mở trong một tab mới.",
+	"Change or revoke access anytime in Settings > Connections.":
+		"Thay đổi hoặc thu hồi quyền truy cập bất cứ lúc nào trong Cài đặt > Kết nối.",
 	"Invalid authorization request": "Yêu cầu xác thực không hợp lệ",
 	"Missing required OAuth parameters:": "Thiếu các tham số OAuth bắt buộc:",
 	"This page should be opened via an OAuth client redirect, not directly.":

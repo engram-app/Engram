@@ -813,6 +813,18 @@ export default {
 	"Page not found": "Página no encontrada",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"No pudimos encontrar lo que buscas. El enlace podría estar roto o la página podría haberse movido.",
+	"How this works": "Cómo funciona esto",
+	"What {client} gets": "Lo que {client} obtiene",
+	"It can search and read your notes, and add or edit them if you allow it.":
+		"Puede buscar y leer tus notas, y agregarlas o editarlas si lo permites.",
+	"What you choose here": "Lo que eliges aquí",
+	"You choose which vaults {client} can reach, and whether it is read only.":
+		"Eliges qué bóvedas puede acceder {client}, y si es solo de lectura.",
+	"After you approve": "Después de que apruebes",
+	"You return to {client}, and your vault opens in a new tab.":
+		"Regresas a {client}, y tu bóveda se abre en una nueva pestaña.",
+	"Change or revoke access anytime in Settings > Connections.":
+		"Cambia o revoca el acceso en cualquier momento en Ajustes > Conexiones.",
 	"Invalid authorization request": "Solicitud de autorización inválida",
 	"Missing required OAuth parameters:": "Faltan parámetros OAuth requeridos:",
 	"This page should be opened via an OAuth client redirect, not directly.":

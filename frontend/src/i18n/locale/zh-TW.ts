@@ -741,6 +741,18 @@ export default {
 	"Page not found": "頁面未找到",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"我們找不到您要查找的內容。連結可能已失效，或頁面可能已移動。",
+	"How this works": "運作方式",
+	"What {client} gets": "{client} 提供的功能",
+	"It can search and read your notes, and add or edit them if you allow it.":
+		"它可以搜尋和閱讀您的筆記，並在您允許的情況下新增或編輯它們。",
+	"What you choose here": "您在此選擇的內容",
+	"You choose which vaults {client} can reach, and whether it is read only.":
+		"您可以選擇 {client} 可以存取的儲存庫，以及是否僅限讀取。",
+	"After you approve": "您批准後",
+	"You return to {client}, and your vault opens in a new tab.":
+		"您會返回到 {client}，您的儲存庫將在新標籤頁中開啟。",
+	"Change or revoke access anytime in Settings > Connections.":
+		"您可以在「設定」>「連線」隨時變更或撤銷存取權。",
 	"Invalid authorization request": "無效的授權請求",
 	"Missing required OAuth parameters:": "缺少必要的 OAuth 參數：",
 	"This page should be opened via an OAuth client redirect, not directly.":

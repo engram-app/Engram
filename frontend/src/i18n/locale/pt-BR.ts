@@ -812,6 +812,18 @@ export default {
 	"Page not found": "Página não encontrada",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Não encontramos o que você está procurando. O link pode estar quebrado ou a página pode ter sido movida.",
+	"How this works": "Como isso funciona",
+	"What {client} gets": "O que {client} acessa",
+	"It can search and read your notes, and add or edit them if you allow it.":
+		"Ele pode pesquisar e ler suas notas, e adicioná-las ou editá-las, se você permitir.",
+	"What you choose here": "O que você escolhe aqui",
+	"You choose which vaults {client} can reach, and whether it is read only.":
+		"Você escolhe quais cofres {client} pode acessar, e se o acesso é somente leitura.",
+	"After you approve": "Depois que você aprova",
+	"You return to {client}, and your vault opens in a new tab.":
+		"Você retorna para {client}, e seu cofre abre em uma nova aba.",
+	"Change or revoke access anytime in Settings > Connections.":
+		"Altere ou revogue o acesso a qualquer momento em Configurações > Conexões.",
 	"Invalid authorization request": "Solicitação de autorização inválida",
 	"Missing required OAuth parameters:": "Parâmetros OAuth obrigatórios ausentes:",
 	"This page should be opened via an OAuth client redirect, not directly.":

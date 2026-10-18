@@ -811,6 +811,18 @@ export default {
 	"Page not found": "Pagina non trovata",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Non abbiamo trovato quello che stavi cercando. Il link potrebbe essere interrotto o la pagina potrebbe essere stata spostata.",
+	"How this works": "Come funziona",
+	"What {client} gets": "Cosa ottiene {client}",
+	"It can search and read your notes, and add or edit them if you allow it.":
+		"Può cercare e leggere le tue note, e aggiungerle o modificarle se lo permetti.",
+	"What you choose here": "Ciò che scegli qui",
+	"You choose which vaults {client} can reach, and whether it is read only.":
+		"Scegli quali vault {client} può raggiungere, e se l'accesso è in sola lettura.",
+	"After you approve": "Dopo aver approvato",
+	"You return to {client}, and your vault opens in a new tab.":
+		"Ritorni a {client}, e il tuo vault si apre in una nuova scheda.",
+	"Change or revoke access anytime in Settings > Connections.":
+		"Modifica o revoca l'accesso in qualsiasi momento in Impostazioni > Connessioni.",
 	"Invalid authorization request": "Richiesta di autorizzazione non valida",
 	"Missing required OAuth parameters:": "Mancano parametri OAuth obbligatori:",
 	"This page should be opened via an OAuth client redirect, not directly.":

@@ -764,6 +764,18 @@ export default {
 	"Page not found": "페이지를 찾을 수 없습니다",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"찾으시는 내용을 찾을 수 없습니다. 링크가 잘못되었거나 페이지가 이동했을 수 있습니다.",
+	"How this works": "작동 방식",
+	"What {client} gets": "{client}이 제공하는 기능",
+	"It can search and read your notes, and add or edit them if you allow it.":
+		"노트를 검색하고 읽을 수 있으며, 허용하는 경우 추가하거나 수정할 수 있습니다.",
+	"What you choose here": "여기서 선택하는 내용",
+	"You choose which vaults {client} can reach, and whether it is read only.":
+		"{client}이 접근할 수 있는 보관함과 읽기 전용 여부를 선택합니다.",
+	"After you approve": "승인 후",
+	"You return to {client}, and your vault opens in a new tab.":
+		"{client}으로 돌아가면, 선택한 보관함이 새 탭에서 열립니다.",
+	"Change or revoke access anytime in Settings > Connections.":
+		"설정 > 연결에서 언제든지 접근 권한을 변경하거나 취소할 수 있습니다.",
 	"Invalid authorization request": "잘못된 인증 요청",
 	"Missing required OAuth parameters:": "필수 OAuth 매개변수가 누락되었습니다:",
 	"This page should be opened via an OAuth client redirect, not directly.":

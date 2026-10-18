@@ -780,6 +780,18 @@ export default {
 	"Page not found": "Halaman tidak ditemukan",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Kami tidak dapat menemukan apa yang Anda cari. Tautan mungkin rusak atau halaman mungkin telah dipindahkan.",
+	"How this works": "Cara kerjanya",
+	"What {client} gets": "Apa yang didapatkan {client}",
+	"It can search and read your notes, and add or edit them if you allow it.":
+		"Ini dapat mencari dan membaca catatan Anda, serta menambah atau mengeditnya jika Anda mengizinkannya.",
+	"What you choose here": "Pilihan Anda di sini",
+	"You choose which vaults {client} can reach, and whether it is read only.":
+		"Anda memilih vault mana yang dapat diakses oleh {client}, dan apakah hanya untuk dibaca.",
+	"After you approve": "Setelah Anda menyetujui",
+	"You return to {client}, and your vault opens in a new tab.":
+		"Anda kembali ke {client}, dan vault Anda terbuka di tab baru.",
+	"Change or revoke access anytime in Settings > Connections.":
+		"Ubah atau batalkan akses kapan saja di Pengaturan > Koneksi.",
 	"Invalid authorization request": "Permintaan otorisasi tidak valid",
 	"Missing required OAuth parameters:": "Parameter OAuth yang diperlukan tidak ada:",
 	"This page should be opened via an OAuth client redirect, not directly.":

@@ -857,6 +857,18 @@ export default {
 	"Page not found": "Страница не найдена",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Мы не смогли найти то, что вы ищете. Ссылка может быть недействительной, или страница могла быть перемещена.",
+	"How this works": "Как это работает",
+	"What {client} gets": "Что получает {client}",
+	"It can search and read your notes, and add or edit them if you allow it.":
+		"Он может искать и читать ваши заметки, а также добавлять или редактировать их, если вы разрешите.",
+	"What you choose here": "Что вы выбираете здесь",
+	"You choose which vaults {client} can reach, and whether it is read only.":
+		"Вы выбираете, к каким хранилищам {client} может получить доступ, и разрешаете ли вы только чтение.",
+	"After you approve": "После вашего одобрения",
+	"You return to {client}, and your vault opens in a new tab.":
+		"Вы возвращаетесь к {client}, и ваше хранилище открывается во вкладке.",
+	"Change or revoke access anytime in Settings > Connections.":
+		"Измените или отмените доступ в любое время в разделе Настройки > Подключения.",
 	"Invalid authorization request": "Неверный запрос авторизации",
 	"Missing required OAuth parameters:": "Отсутствуют необходимые параметры OAuth:",
 	"This page should be opened via an OAuth client redirect, not directly.":

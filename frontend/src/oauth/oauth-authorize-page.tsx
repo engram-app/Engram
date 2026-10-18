@@ -39,6 +39,7 @@ import AuthShell from "../layout/auth-shell";
 import { isMember } from "../lib/is-member";
 import { ROUTES } from "../routes";
 import { settingsHash, settingsTo } from "../settings/settings-hash";
+import FirstTimeGuide from "./first-time-guide";
 import { clearPendingAuthorization, stashPendingAuthorization } from "./pending-authorization";
 
 // The tab an approval opens while the client finishes connecting: the app
@@ -258,10 +259,16 @@ export default function OAuthAuthorizePage() {
 	// predates them would ignore the fields and mint full access.
 	const leveled = clientKind === "mcp" && levelsSupported;
 	const capCheck = useConnectionCap(clientKind);
-	// Only need the existing-connection details when at cap (for the heads-up
-	// banner + the implicit disconnect on Approve).
-	const connections = useConnections({ enabled: capCheck.atCap });
+	// The existing-connection details feed the at-cap heads-up + implicit
+	// disconnect on Approve, and tell whether this is the user's first app.
+	const connections = useConnections();
 	const existingPeer = (connections.data ?? []).find((c): c is Connection => c.kind === clientKind);
+	// Waits for the list: guessing "first time" while it loads would flash the
+	// guide at someone who has connected before.
+	const firstTime =
+		clientKind === "mcp" &&
+		connections.data !== undefined &&
+		!connections.data.some((c) => c.kind === "mcp");
 
 	// "All vaults" (`selected === null`) stays all-vaults as new ones are
 	// created. Choosing per vault is exactly the vaults not at No access, even
@@ -597,6 +604,7 @@ export default function OAuthAuthorizePage() {
 					<p className="text-muted-foreground text-sm">{t("Loading…")}</p>
 				) : (
 					<>
+						{firstTime ? <FirstTimeGuide client={clientName} /> : null}
 						{capCheck.atCap && existingPeer ? (
 							<div
 								role="status"

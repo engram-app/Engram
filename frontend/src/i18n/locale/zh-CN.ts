@@ -739,6 +739,18 @@ export default {
 	"Page not found": "页面未找到",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"找不到您要查找的内容。链接可能已损坏，或页面可能已移动。",
+	"How this works": "工作原理",
+	"What {client} gets": "{client} 可以访问的内容",
+	"It can search and read your notes, and add or edit them if you allow it.":
+		"它可以搜索和阅读你的笔记，并在你允许的情况下添加或编辑它们。",
+	"What you choose here": "你在这里的选择",
+	"You choose which vaults {client} can reach, and whether it is read only.":
+		"你选择 {client} 可以访问哪些仓库，以及是否只读。",
+	"After you approve": "你批准后",
+	"You return to {client}, and your vault opens in a new tab.":
+		"你返回到 {client}，你的仓库将在新标签页中打开。",
+	"Change or revoke access anytime in Settings > Connections.":
+		"随时在 设置 > 连接 中更改或撤销访问权限。",
 	"Invalid authorization request": "无效的授权请求",
 	"Missing required OAuth parameters:": "缺少必需的 OAuth 参数：",
 	"This page should be opened via an OAuth client redirect, not directly.":

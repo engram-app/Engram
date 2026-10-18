@@ -842,6 +842,18 @@ export default {
 	"Page not found": "Strona nie znaleziona",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Nie mogliśmy znaleźć tego, czego szukasz. Link może być nieprawidłowy lub strona mogła zostać przeniesiona.",
+	"How this works": "Jak to działa",
+	"What {client} gets": "Co otrzymuje {client}",
+	"It can search and read your notes, and add or edit them if you allow it.":
+		"Może wyszukiwać i czytać twoje notatki, oraz dodawać lub edytować je, jeśli na to zezwolisz.",
+	"What you choose here": "Co wybierasz tutaj",
+	"You choose which vaults {client} can reach, and whether it is read only.":
+		"Wybierasz, do których sejfów {client} może uzyskać dostęp i czy dostęp jest tylko do odczytu.",
+	"After you approve": "Po zatwierdzeniu",
+	"You return to {client}, and your vault opens in a new tab.":
+		"Wracasz do {client}, a twój sejf otwiera się w nowej zakładce.",
+	"Change or revoke access anytime in Settings > Connections.":
+		"Zmień lub odejmij dostęp w dowolnym momencie w Ustawieniach > Połączenia.",
 	"Invalid authorization request": "Nieprawidłowe żądanie autoryzacji",
 	"Missing required OAuth parameters:": "Brak wymaganych parametrów OAuth:",
 	"This page should be opened via an OAuth client redirect, not directly.":
