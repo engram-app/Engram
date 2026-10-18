@@ -367,3 +367,41 @@ export function applyAttachmentEvents(
 	}
 	return changed ? { ...tree, attachments: [...byPath.values()] } : tree;
 }
+
+/** A folder marker the server just created, as `folders.batch` reports it. */
+export interface FolderMarkerEvent {
+	id: string;
+	name: string;
+}
+
+/**
+ * Add created folder markers, returning the SAME tree when all are known.
+ *
+ * Mirrors `combine_folders_payload/2`: a marker row carries its id, and every
+ * row's `parent_id` is the marker id of its parent path. So a marker that lands
+ * on a DERIVED row (same name, null id) takes it over, and the direct children
+ * of a new marker are re-parented onto it.
+ */
+export function applyFolderMarkers(
+	tree: VaultTree,
+	markers: readonly FolderMarkerEvent[],
+): VaultTree {
+	const ids = new Map(tree.folders.filter((f) => f.id !== null).map((f) => [f.name, f.id]));
+	const fresh = markers.filter((m) => m.name !== "" && ids.get(m.name) !== m.id);
+	if (fresh.length === 0) {
+		return tree;
+	}
+	for (const m of fresh) {
+		ids.set(m.name, m.id);
+	}
+	const names = new Set(tree.folders.map((f) => f.name));
+	const added = fresh
+		.filter((m) => !names.has(m.name))
+		.map((m) => ({ id: m.id, name: m.name, count: 0, parent_id: null }));
+	const folders = [...tree.folders, ...added].map((f) => {
+		const id = ids.get(f.name) ?? null;
+		const parent_id = f.name.includes("/") ? (ids.get(dirOf(f.name)) ?? null) : null;
+		return f.id === id && f.parent_id === parent_id ? f : { ...f, id, parent_id };
+	});
+	return rebuild(tree.notes, folders, tree.attachments);
+}

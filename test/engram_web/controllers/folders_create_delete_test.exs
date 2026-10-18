@@ -38,6 +38,19 @@ defmodule EngramWeb.FoldersCreateDeleteTest do
       }
     end
 
+    test "the create broadcast names the marker's id", %{conn: conn, user: user, vault: vault} do
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      post(conn, "/api/folders", %{"folder" => "Live/New"})
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "folders.batch",
+        payload: %{op: "create", markers: [%{id: id, name: "Live/New"}]}
+      }
+
+      tree = json_response(get(conn, "/api/vault/tree"), 200)
+      assert %{"id" => ^id} = Enum.find(tree["folders"], &(&1["name"] == "Live/New"))
+    end
+
     test "broadcasts folders.batch create on idempotent re-create too", %{
       conn: conn,
       user: user,

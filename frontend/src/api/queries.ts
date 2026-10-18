@@ -32,8 +32,10 @@ import { CrdtOpError, isPermanentJoinRefusal, toastJoinRefused } from "./crdt-op
 import {
 	type AttachmentEvent,
 	applyAttachmentEvents,
+	applyFolderMarkers,
 	applyNoteEvents,
 	baseOf,
+	type FolderMarkerEvent,
 	// Path → parent folder, the same rule the backend uses when computing
 	// `folder` on a NoteSummary. One definition, shared with the tree patches
 	// so a path can't mean two things on the two sides of a mutation.
@@ -271,6 +273,7 @@ async function fetchVaultTreeFresh({
 interface TreeEventBuffer {
 	events: NoteEvent[];
 	attachmentEvents: AttachmentEvent[];
+	markers: FolderMarkerEvent[];
 }
 
 // The buffer of the tree request currently in flight, per vault. Keyed by
@@ -278,7 +281,7 @@ interface TreeEventBuffer {
 const treeEventBuffers = new Map<unknown, TreeEventBuffer>();
 
 function openTreeEventBuffer(vaultId: unknown): TreeEventBuffer {
-	const buffer: TreeEventBuffer = { events: [], attachmentEvents: [] };
+	const buffer: TreeEventBuffer = { events: [], attachmentEvents: [], markers: [] };
 	treeEventBuffers.set(vaultId, buffer);
 	return buffer;
 }
@@ -294,13 +297,33 @@ function openTreeEventBuffer(vaultId: unknown): TreeEventBuffer {
  * has its own later event, here or still to come over the socket.
  */
 function replayTreeEvents(tree: VaultTree, buffer: TreeEventBuffer): VaultTree | null {
-	if (buffer.events.length === 0 && buffer.attachmentEvents.length === 0) {
+	if (
+		buffer.events.length === 0 &&
+		buffer.attachmentEvents.length === 0 &&
+		buffer.markers.length === 0
+	) {
 		return tree;
 	}
-	if (movesAcrossFolders(tree, buffer.events)) {
+	return applySyncEvents(tree, buffer.events, buffer.attachmentEvents, buffer.markers);
+}
+
+// Every event kind the tree can absorb without the server, in one pass, or null
+// when one of them needs a fresh fetch. Shared by the live patch and the replay
+// onto an in-flight response, so the two can never disagree on what needs one.
+function applySyncEvents(
+	tree: VaultTree,
+	events: readonly NoteEvent[],
+	attachmentEvents: readonly AttachmentEvent[],
+	markers: readonly FolderMarkerEvent[],
+): VaultTree | null {
+	// A move between folders can hide a folder rename, which the events do not
+	// describe (see `movesAcrossFolders`). Only the server knows the markers.
+	if (movesAcrossFolders(tree, events)) {
 		return null;
 	}
-	return applyAttachmentEvents(applyNoteEvents(tree, buffer.events), buffer.attachmentEvents);
+	// Null: an attachment row the events can't build (a new path, no id).
+	const next = applyAttachmentEvents(applyNoteEvents(tree, events), attachmentEvents);
+	return next && applyFolderMarkers(next, markers);
 }
 
 /**
@@ -693,6 +716,7 @@ export function applyVaultTreeEvents(
 	vaultId: string | null | undefined,
 	events: readonly NoteEvent[],
 	attachmentEvents: readonly AttachmentEvent[] = [],
+	markers: readonly FolderMarkerEvent[] = [],
 ): boolean {
 	const state = qc.getQueryState<VaultTree>(["vault-tree", vaultId]);
 	if (state?.fetchStatus === "fetching") {
@@ -705,6 +729,7 @@ export function applyVaultTreeEvents(
 		}
 		buffer.events.push(...events);
 		buffer.attachmentEvents.push(...attachmentEvents);
+		buffer.markers.push(...markers);
 		return true;
 	}
 	if (!state?.data) {
@@ -717,13 +742,7 @@ export function applyVaultTreeEvents(
 	if (state.isInvalidated || state.status === "error") {
 		return false;
 	}
-	// A move between folders can hide a folder rename, which the events do not
-	// describe (see `movesAcrossFolders`). Only the server knows the markers.
-	if (movesAcrossFolders(state.data, events)) {
-		return false;
-	}
-	// Null: an attachment row the events can't build (a new path, no id).
-	const next = applyAttachmentEvents(applyNoteEvents(state.data, events), attachmentEvents);
+	const next = applySyncEvents(state.data, events, attachmentEvents, markers);
 	if (next === null) {
 		return false;
 	}

@@ -243,7 +243,8 @@ defmodule Engram.MCP.Handlers do
         # this is the only way connected devices learn of it.
         EngramWeb.BatchOps.broadcast_batch(user, vault, "folders.batch", %{
           op: "create",
-          folder: marker.folder
+          folder: marker.folder,
+          markers: [%{id: marker.id, name: marker.folder}]
         })
 
         {:ok, "Created folder: #{marker.folder}", %{"folder" => marker.folder}}

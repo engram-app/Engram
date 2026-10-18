@@ -133,7 +133,8 @@ defmodule EngramWeb.FoldersController do
         # materialize the empty folder live instead of on the next pull.
         BatchOps.broadcast_batch(user, vault, "folders.batch", %{
           op: "create",
-          folder: marker.folder
+          folder: marker.folder,
+          markers: [%{id: marker.id, name: marker.folder}]
         })
 
         conn
@@ -185,10 +186,17 @@ defmodule EngramWeb.FoldersController do
       # One event for the batch, not N, naming only folders this call created
       # or undeleted: an all-existing batch (a reconnect re-seed) changes
       # nothing, so it must not make every peer re-poll /folders/explicit.
-      created = for %{created: true, name: name} <- entries, uniq: true, do: name
+      # `markers` carries each row's id so the web app can patch its tree
+      # instead of re-fetching the whole vault per batch.
+      created =
+        for %{created: true, name: name, id: id} <- entries, uniq: true, do: %{id: id, name: name}
 
       if created != [] do
-        BatchOps.broadcast_batch(user, vault, "folders.batch", %{op: "create", folders: created})
+        BatchOps.broadcast_batch(user, vault, "folders.batch", %{
+          op: "create",
+          folders: Enum.map(created, & &1.name),
+          markers: created
+        })
       end
 
       # `input` echoes what the client sent and `name` is what was stored, so a

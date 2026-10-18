@@ -1174,9 +1174,18 @@ defmodule Engram.Attachments do
       "content_hash" => att.content_hash
     }
 
-    _ = Broadcast.emit("sync:#{user_id}:#{vault_id}", "note_changed", payload)
+    _ = Broadcast.emit("sync:#{user_id}:#{vault_id}", "note_changed", with_row_id(payload, att))
     :ok
   end
+
+  # Upserts carry the row's id and updated_at: the web app builds a tree row
+  # from them for a path it has never seen, instead of re-fetching the whole
+  # vault tree once per upload. NOT on deletes: the plugin treats a delete's
+  # `id` as the NOTE id it addresses and keys CRDT room teardown on it.
+  defp with_row_id(%{"event_type" => "upsert"} = payload, att),
+    do: Map.merge(payload, %{"id" => att.id, "updated_at" => att.updated_at})
+
+  defp with_row_id(payload, _att), do: payload
 
   @doc """
   Lists non-deleted attachment metadata for a vault (no content).

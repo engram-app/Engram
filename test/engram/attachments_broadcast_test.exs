@@ -71,6 +71,30 @@ defmodule Engram.AttachmentsBroadcastTest do
       assert hash == att.content_hash
     end
 
+    test "the upsert payload carries the row's id and updated_at", %{
+      user: user,
+      vault: vault
+    } do
+      # The web app builds a tree row for a path it has never seen from these;
+      # without the id it re-fetched the whole vault tree once per upload.
+      Mox.stub(Engram.MockStorage, :put, fn _key, _bin, _opts -> :ok end)
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+
+      assert {:ok, att} =
+               Attachments.upsert_attachment(user, vault, %{
+                 "path" => "photos/new.png",
+                 "content_base64" => Base.encode64("fresh bytes")
+               })
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "note_changed",
+        payload: %{"event_type" => "upsert", "id" => id, "updated_at" => updated_at}
+      }
+
+      assert id == att.id
+      assert updated_at == att.updated_at
+    end
+
     test "the move legs carry content_hash on both delete and upsert", %{
       user: user,
       vault: vault
@@ -98,6 +122,29 @@ defmodule Engram.AttachmentsBroadcastTest do
 
       assert del_hash == att.content_hash
       assert up_hash == att.content_hash
+    end
+
+    test "a move's delete leg carries no id; the upsert leg carries the row's", %{
+      user: user,
+      vault: vault
+    } do
+      # The plugin reads a delete's `id` as the note it addresses and tears down
+      # the CRDT room keyed on it, so an attachment id must never ride a delete.
+      Mox.stub(Engram.MockStorage, :put, fn _key, _bin, _opts -> :ok end)
+
+      {:ok, att} =
+        Attachments.upsert_attachment(user, vault, %{
+          "path" => "old/pic.png",
+          "content_base64" => Base.encode64("bytes")
+        })
+
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      {:ok, _} = Attachments.move_attachment(user, vault, "old/pic.png", "new/pic.png")
+
+      assert_receive %Phoenix.Socket.Broadcast{payload: %{"event_type" => "delete"} = del}
+      assert_receive %Phoenix.Socket.Broadcast{payload: %{"event_type" => "upsert"} = up}
+      refute Map.has_key?(del, "id")
+      assert up["id"] == att.id
     end
   end
 

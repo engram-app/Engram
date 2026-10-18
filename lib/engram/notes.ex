@@ -299,14 +299,19 @@ defmodule Engram.Notes do
            upsert_folder_batch(user, vault, kept |> Enum.map(&elem(&1, 1)) |> Enum.uniq()) do
       folders =
         Enum.map(kept, fn {input, name} ->
-          %{input: input, name: name, created: MapSet.member?(created, name)}
+          %{
+            input: input,
+            name: name,
+            created: Map.has_key?(created, name),
+            id: Map.get(created, name)
+          }
         end)
 
       {:ok, %{folders: folders, rejected: Enum.map(rejected, &elem(&1, 0))}}
     end
   end
 
-  defp upsert_folder_batch(_user, _vault, []), do: {:ok, MapSet.new()}
+  defp upsert_folder_batch(_user, _vault, []), do: {:ok, %{}}
 
   defp upsert_folder_batch(user, vault, names) do
     with {:ok, user} <- Crypto.ensure_user_dek(user),
@@ -332,7 +337,8 @@ defmodule Engram.Notes do
 
           # A marker carrying this call's seq is one this call wrote; a live
           # marker found as-is (or a raced insert's winner) carries an older one.
-          for m <- markers, seq != nil and m.seq == seq, into: MapSet.new(), do: m.folder
+          # Name => id, so the broadcast can name the rows it created.
+          for m <- markers, seq != nil and m.seq == seq, into: %{}, do: {m.folder, m.id}
         after
           Process.delete(seq_key)
         end
