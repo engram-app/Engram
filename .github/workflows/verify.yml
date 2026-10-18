@@ -1480,7 +1480,7 @@ jobs:
       # always(): an api_only failure above must not mask the Obsidian suite's
       # signal (the job still fails on the failed step).
       - name: Wait for plugin + Playwright
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           echo "Waiting for plugin build..."
           for i in $(seq 1 300); do
@@ -1511,7 +1511,7 @@ jobs:
       # Guards helper logic like the Clerk session-create retry budget (#869).
       # always(): keep this guard's signal even if the api step failed.
       - name: "Harness unit tests"
-        if: always()
+        if: ${{ !cancelled() }}
         working-directory: e2e/unit
         run: python3 -m pytest . -v --no-header -p no:cacheprovider
 
@@ -1519,7 +1519,7 @@ jobs:
       # Obsidian E2E tests
       # ------------------------------------------------------------------
       - name: "Run Obsidian E2E tests"
-        if: always()
+        if: ${{ !cancelled() }}
         working-directory: e2e
         # -n 1 --dist=loadfile: SINGLE worker (default). Under -n 2, two workers
         # each drive their own Obsidian instance doing live Clerk auth + CRDT
@@ -1581,7 +1581,7 @@ jobs:
       # ------------------------------------------------------------------
       # Reap stale e2e Clerk orphans on EVERY run (not just the throttled
       # hourly cron, which GitHub fires only ~every 3-5h and a CI burst
-      # outpaces). Runs `if: always()` so it fires even when pytest is
+      # outpaces). Runs `if: !cancelled()` so it fires even when pytest is
       # hard-killed before its session_cleanup fixture (helpers/clerk.py
       # ClerkClient.cleanup_tracked) could delete this run's users. The
       # `--older-than 1h` age filter protects any concurrent run's in-flight
@@ -1589,7 +1589,7 @@ jobs:
       # sibling. Together: per-run fixture cleanup handles this run's users
       # immediately; this step + cron mop up crashed-run orphans frequently.
       - name: Reap stale Clerk orphans (>1h)
-        if: always()
+        if: ${{ !cancelled() }}
         env:
           E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
         run: |
@@ -2118,7 +2118,7 @@ jobs:
       # always(): a local-auth API failure above must not mask the CRDT suite's
       # signal (the job still fails on the failed step).
       - name: Wait for plugin + Playwright
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           echo "Waiting for plugin build..."
           for i in $(seq 1 300); do
@@ -2148,7 +2148,7 @@ jobs:
       # CRDT E2E tests (local auth stack)
       # ------------------------------------------------------------------
       - name: "Run CRDT E2E tests"
-        if: always() && needs.fingerprint.outputs.e2e-target-suite != 'local'
+        if: ${{ !cancelled() && needs.fingerprint.outputs.e2e-target-suite != 'local' }}
         working-directory: e2e
         # Single-process (no -n): the CRDT suite runs serially. It stays green
         # this way, and is the stability reference the e2e-clerk suite above now
