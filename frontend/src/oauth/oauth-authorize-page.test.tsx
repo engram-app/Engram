@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { track } from "../analytics/track";
 import type { OAuthConsentParams } from "../api/oauth";
 import OAuthAuthorizePage from "./oauth-authorize-page";
+import { stashPendingAuthorization } from "./pending-authorization";
 
 vi.mock("../analytics/track", () => ({ track: vi.fn() }));
 const mockTrack = vi.mocked(track);
@@ -603,9 +604,18 @@ describe("OAuthAuthorizePage", () => {
 				kind: "mcp",
 				redirect_uri_registered: true,
 			});
-			vaultsState.current = DEFAULT_VAULTS.slice(0, 1);
+			// The signup flow: the consent page parked this request before the
+			// wizard, and the vault provisioned at signup holds nothing yet.
+			stashPendingAuthorization(VALID_QS);
+			vaultsState.current = [
+				{ ...DEFAULT_VAULTS[0], populated: false } as (typeof DEFAULT_VAULTS)[number],
+			];
 			connectionsState.current = OBSIDIAN_ONLY;
 			consentRedirectsTo("https://claude.ai/cb?code=abc");
+		});
+
+		afterEach(() => {
+			window.sessionStorage.clear();
 		});
 
 		it("asks only for the vault name, prefilled, with no vault picker", async () => {
@@ -649,6 +659,31 @@ describe("OAuthAuthorizePage", () => {
 			renderAt(VALID_QS);
 			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
 			expect(screen.queryByLabelText(/name your first vault/iu)).toBeNull();
+		});
+
+		// An existing account connecting its first app is not a signup: renaming
+		// its vault and granting write everywhere would be a decision it never
+		// saw. Only a request resumed from the signup detour gets the short form.
+		it("keeps the full picker when the request was not resumed from signup", async () => {
+			window.sessionStorage.clear();
+			renderAt(VALID_QS);
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+			expect(screen.queryByLabelText(/name your first vault/iu)).toBeNull();
+		});
+
+		it("keeps the full picker when the vault already holds notes", async () => {
+			vaultsState.current = [
+				{ ...DEFAULT_VAULTS[0], populated: true } as (typeof DEFAULT_VAULTS)[number],
+			];
+			renderAt(VALID_QS);
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+		});
+
+		it("keeps the full picker when a different request was parked", async () => {
+			window.sessionStorage.clear();
+			stashPendingAuthorization(`${VALID_QS}&state=other`);
+			renderAt(VALID_QS);
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
 		});
 
 		it("keeps the full picker when the account already has several vaults", async () => {

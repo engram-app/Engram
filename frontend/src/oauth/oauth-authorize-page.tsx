@@ -41,7 +41,11 @@ import { isMember } from "../lib/is-member";
 import { ROUTES } from "../routes";
 import { settingsHash, settingsTo } from "../settings/settings-hash";
 import FirstVaultConsent from "./first-vault-consent";
-import { clearPendingAuthorization, stashPendingAuthorization } from "./pending-authorization";
+import {
+	clearPendingAuthorization,
+	peekPendingAuthorization,
+	stashPendingAuthorization,
+} from "./pending-authorization";
 
 // The tab an approval opens while the client finishes connecting: the app
 // root, which lands on the active vault.
@@ -264,6 +268,12 @@ export default function OAuthAuthorizePage() {
 	// disconnect on Approve, and tell whether this is the user's first app.
 	const connections = useConnections();
 	const updateVault = useUpdateVault();
+	// This very request was parked before the signup wizard and is now back:
+	// the account-creation flow. Read once, at mount, because the effect below
+	// clears the stash on this same visit.
+	const [resumedFromSignup] = useState(
+		() => peekPendingAuthorization()?.returnTo === `${ROUTES.OAUTH_CONSENT}${location.search}`,
+	);
 	const existingPeer = (connections.data ?? []).find((c): c is Connection => c.kind === clientKind);
 
 	// "All vaults" (`selected === null`) stays all-vaults as new ones are
@@ -380,14 +390,19 @@ export default function OAuthAuthorizePage() {
 		);
 	}
 
-	// A brand-new account's first app: one vault (provisioned at signup) and no
-	// MCP connection yet. It gets the short form, name the vault and approve,
-	// on the default access. Waits for the connections list: guessing while it
-	// loads would show the short form to someone who has connected before.
+	// Account creation only: the request came back from the signup wizard, the
+	// account holds one vault (provisioned at signup) with nothing but the
+	// seeded note, and no app is connected yet. It gets the short form, name
+	// the vault and approve, on the default access. An existing account never
+	// does: renaming its vault and granting write everywhere is a decision it
+	// has to see. `populated === false`, not falsy: a backend that does not
+	// send the flag gets the full picker. Waits for the connections list.
 	const firstVault =
+		resumedFromSignup &&
 		clientKind === "mcp" &&
 		!clientAskedReadOnly &&
 		live?.length === 1 &&
+		live[0]?.populated === false &&
 		connections.data !== undefined &&
 		!connections.data.some((c) => c.kind === "mcp");
 	const onlyVault = firstVault ? live?.[0] : undefined;
