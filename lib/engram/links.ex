@@ -39,12 +39,6 @@ defmodule Engram.Links do
   `RewriteNoteLinks` — pays nothing.
   """
 
-  @typedoc "A candidate set indexed by `index_candidates/1`."
-  @type candidate_index :: %{
-          sorted: [{binary(), String.t()}],
-          by_path: %{String.t() => {non_neg_integer(), binary()}}
-        }
-
   import Ecto.Query
 
   alias Engram.Attachments.Attachment
@@ -55,6 +49,12 @@ defmodule Engram.Links do
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vaults.Vault
+
+  @typedoc "A candidate set indexed by `index_candidates/1`."
+  @type candidate_index :: %{
+          sorted: [{binary(), String.t()}],
+          by_path: %{String.t() => {non_neg_integer(), binary()}}
+        }
 
   @note_exts ~w(.md .canvas)
   @backlinks_limit 200
