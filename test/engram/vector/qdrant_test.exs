@@ -10,6 +10,10 @@ defmodule Engram.Vector.QdrantTest do
     bypass = Bypass.open()
     # Per-process override (not global put_env) so this suite runs async.
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+    # Search fails fast at 5s (a prod budget). Under full-suite load a Bypass
+    # reply can starve past it and read as a Req timeout, not a real failure
+    # (same pin as qdrant_hybrid_test / qdrant_req_opts_test, #886).
+    ServiceConfig.put_override(:qdrant_search_timeout, 30_000)
     # ensure_collection now creates payload indexes (#626); stub them so tests
     # asserting other behaviour don't trip on the index PUTs.
     stub_payload_indexes(bypass)
