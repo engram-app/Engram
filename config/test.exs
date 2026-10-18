@@ -162,10 +162,6 @@ config :engram, :embedder, Engram.MockEmbedder
 config :engram, :qdrant_collection, "engram_notes"
 config :engram, :qdrant_retry, false
 
-# bcrypt's default cost (12, ~250ms/hash) is a production budget. Tests hash
-# hundreds of passwords; 4 rounds keeps the same code path at ~1ms.
-config :bcrypt_elixir, log_rounds: 4
-
 # Use in-memory ETS storage in tests — no DB I/O, no S3 required
 config :engram, :storage, Engram.Storage.InMemory
 
