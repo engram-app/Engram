@@ -61,3 +61,20 @@ class OnScreenObserver implements IntersectionObserver {
 	}
 }
 globalThis.IntersectionObserver = OnScreenObserver;
+
+// The Selection API spec queues `selectionchange` as a task; happy-dom
+// dispatches it synchronously from inside Selection.collapse(). CodeMirror
+// collapses the DOM selection while EditorView.update is running, and since
+// @codemirror/view 6.43.14 a seen selection change always re-renders, so the
+// sync event re-enters update() and throws "Calls to EditorView.update are
+// not allowed while an update is in progress". Defer it like a browser does.
+if (typeof document !== "undefined") {
+	const dispatch = document.dispatchEvent.bind(document);
+	document.dispatchEvent = (event: Event) => {
+		if (event.type !== "selectionchange") {
+			return dispatch(event);
+		}
+		setTimeout(() => dispatch(event));
+		return true;
+	};
+}
