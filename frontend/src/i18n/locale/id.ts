@@ -803,14 +803,13 @@ export default {
 		"Server memberikan akses lebih dari yang Anda pilih, sehingga tidak ada yang terhubung. Coba lagi, atau hubungi dukungan jika ini terus terjadi.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Terputus dari '{name}' tetapi otorisasi koneksi baru gagal. Coba lagi permintaan dari {client} — tidak ada koneksi jenis ini yang aktif saat ini.",
-	"This app is requesting access to your Engram.": "Aplikasi ini meminta akses ke Engram Anda.",
-	"Signed in as {email}.": "Masuk sebagai {email}.",
-	"App details from {host}.": "Detail aplikasi dari {host}.",
-	"You will return to {host}.": "Anda akan kembali ke {host}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Ini akan mengarahkan Anda ke aplikasi di komputer ini. Hanya setujui jika Anda baru saja memulai koneksi dari aplikasi tersebut.",
 	"your existing connection": "koneksi Anda yang ada",
 	"Which vaults can {client} access?": "Vault mana yang dapat diakses oleh {client}?",
+	"Signed in as {email}.": "Masuk sebagai {email}.",
+	"App details from {host}.": "Detail aplikasi dari {host}.",
+	"You will return to {host}.": "Anda akan kembali ke {host}.",
 	"Disconnect {name}?": "Putuskan sambungan {name}?",
 	"Connecting…": "Menghubungkan…",
 	"Disconnect & connect {client}": "Putuskan sambungan & hubungkan {client}",

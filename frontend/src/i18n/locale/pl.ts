@@ -865,15 +865,13 @@ export default {
 		"Serwer przyznał więcej uprawnień niż wybrałeś, więc nic nie zostało połączone. Spróbuj ponownie lub skontaktuj się z działem pomocy, jeśli problem się powtarza.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Odłączono '{name}', ale autoryzacja nowego połączenia się nie powiodła. Spróbuj ponownie z {client} — obecnie nie są aktywne żadne połączenia tego typu.",
-	"This app is requesting access to your Engram.":
-		"Ta aplikacja próbuje uzyskać dostęp do twojego Engram.",
-	"Signed in as {email}.": "Zalogowano jako {email}.",
-	"App details from {host}.": "Szczegóły aplikacji z {host}.",
-	"You will return to {host}.": "Wrócisz do {host}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"To przekieruje cię do aplikacji na tym komputerze. Zatwierdź tylko, jeśli właśnie rozpocząłeś połączenie z tej aplikacji.",
 	"your existing connection": "twoje istniejące połączenie",
 	"Which vaults can {client} access?": "Do których sejfów {client} może uzyskać dostęp?",
+	"Signed in as {email}.": "Zalogowano jako {email}.",
+	"App details from {host}.": "Szczegóły aplikacji z {host}.",
+	"You will return to {host}.": "Wrócisz do {host}.",
 	"Disconnect {name}?": "Odłącz {name}?",
 	"Connecting…": "Łączenie…",
 	"Disconnect & connect {client}": "Odłącz i połącz {client}",

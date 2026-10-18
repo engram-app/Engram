@@ -803,15 +803,13 @@ export default {
 		"Sunucu, seçtiğinizden daha fazla erişim sağladı, bu yüzden hiçbir şey bağlanmadı. Tekrar deneyin veya sorun devam ederse destek ile iletişime geçin.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"'{name}' bağlantısı kesildi, ancak yeni bağlantının yetkilendirilmesi başarısız oldu. {client} adresinden isteği tekrar deneyin — şu anda bu tür aktif bağlantı yok.",
-	"This app is requesting access to your Engram.":
-		"Bu uygulama, Engram hesabınıza erişim talep ediyor.",
-	"Signed in as {email}.": "{email} olarak giriş yapıldı.",
-	"App details from {host}.": "{host} uygulamasının bilgileri.",
-	"You will return to {host}.": "{host} sayfasına geri döneceksiniz.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Bu, bu bilgisayardaki bir uygulamaya yönlendirir. Sadece o uygulamadan yeni bağlantı kurduysanız onaylayın.",
 	"your existing connection": "mevcut bağlantınız",
 	"Which vaults can {client} access?": "{client}, hangi kasalara erişebilir?",
+	"Signed in as {email}.": "{email} olarak giriş yapıldı.",
+	"App details from {host}.": "{host} uygulamasının bilgileri.",
+	"You will return to {host}.": "{host} sayfasına geri döneceksiniz.",
 	"Disconnect {name}?": "{name} ile bağlantıyı kes?",
 	"Connecting…": "Bağlanıyor…",
 	"Disconnect & connect {client}": "{client} ile bağlantıyı kes ve tekrar bağla",

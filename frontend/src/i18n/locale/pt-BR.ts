@@ -835,15 +835,13 @@ export default {
 		"O servidor concedeu mais acesso do que você escolheu, então nada foi conectado. Tente novamente ou entre em contato com o suporte se isso continuar acontecendo.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Desconectado '{name}', mas a autorização da nova conexão falhou. Tente novamente a partir de {client} — nenhuma conexão desse tipo está ativa no momento.",
-	"This app is requesting access to your Engram.":
-		"Este aplicativo está solicitando acesso ao seu Engram.",
-	"Signed in as {email}.": "Logado como {email}.",
-	"App details from {host}.": "Detalhes do aplicativo de {host}.",
-	"You will return to {host}.": "Você retornará para {host}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Isso te direciona para um aplicativo neste computador. Aprovе apenas se você acabou de começar a conexão a partir desse aplicativo.",
 	"your existing connection": "sua conexão existente",
 	"Which vaults can {client} access?": "Quais cofres {client} pode acessar?",
+	"Signed in as {email}.": "Logado como {email}.",
+	"App details from {host}.": "Detalhes do aplicativo de {host}.",
+	"You will return to {host}.": "Você retornará para {host}.",
 	"Disconnect {name}?": "Desconectar {name}?",
 	"Connecting…": "Conectando…",
 	"Disconnect & connect {client}": "Desconectar e conectar {client}",

@@ -803,14 +803,13 @@ export default {
 		"Pelayan memberikan akses lebih daripada yang anda pilih, jadi tiada apa yang disambungkan. Cuba lagi, atau hubungi sokongan jika ini berterusan.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Telah memutuskan sambungan '{name}' tetapi pengesahan sambungan baharu gagal. Jalankan semula permintaan daripada {client} — tiada sambungan seumpama ini yang aktif pada masa ini.",
-	"This app is requesting access to your Engram.": "Aplikasi ini meminta akses ke Engram anda.",
-	"Signed in as {email}.": "Log masuk sebagai {email}.",
-	"App details from {host}.": "Butiran aplikasi daripada {host}.",
-	"You will return to {host}.": "Anda akan kembali ke {host}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Ini akan membawa anda ke aplikasi di komputer ini. Sahkan sahaja jika anda baru sahaja mula berhubung dari aplikasi tersebut.",
 	"your existing connection": "sambungan anda yang sedia ada",
 	"Which vaults can {client} access?": "Peti Nota mana yang boleh diakses oleh {client}?",
+	"Signed in as {email}.": "Log masuk sebagai {email}.",
+	"App details from {host}.": "Butiran aplikasi daripada {host}.",
+	"You will return to {host}.": "Anda akan kembali ke {host}.",
 	"Disconnect {name}?": "Putuskan sambungan {name}?",
 	"Connecting…": "Menyambung…",
 	"Disconnect & connect {client}": "Putuskan sambungan & sambung {client}",

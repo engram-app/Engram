@@ -799,15 +799,13 @@ export default {
 		"Máy chủ đã cấp quyền truy cập lớn hơn mức bạn chọn, vì vậy không có gì được kết nối. Thử lại, hoặc liên hệ bộ phận hỗ trợ nếu sự cố này tiếp diễn.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Đã ngắt kết nối '{name}' nhưng việc cấp quyền cho kết nối mới không thành công. Hãy thử lại yêu cầu từ {client} — hiện tại không có kết nối nào như vậy đang hoạt động.",
-	"This app is requesting access to your Engram.":
-		"Ứng dụng này đang yêu cầu quyền truy cập vào Engram của bạn.",
-	"Signed in as {email}.": "Đã đăng nhập với tư cách là {email}.",
-	"App details from {host}.": "Chi tiết ứng dụng từ {host}.",
-	"You will return to {host}.": "Bạn sẽ quay lại {host}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Điều này sẽ đưa bạn đến một ứng dụng trên máy tính này. Chỉ chấp nhận nếu bạn vừa mới bắt đầu kết nối từ ứng dụng đó.",
 	"your existing connection": "kết nối hiện tại của bạn",
 	"Which vaults can {client} access?": "Kho lưu trữ nào mà {client} có thể truy cập?",
+	"Signed in as {email}.": "Đã đăng nhập với tư cách là {email}.",
+	"App details from {host}.": "Chi tiết ứng dụng từ {host}.",
+	"You will return to {host}.": "Bạn sẽ quay lại {host}.",
 	"Disconnect {name}?": "Ngắt kết nối {name}?",
 	"Connecting…": "Đang kết nối…",
 	"Disconnect & connect {client}": "Ngắt kết nối & kết nối {client}",

@@ -581,29 +581,6 @@ export default function OAuthAuthorizePage() {
 							slots={{ client: <span className="text-primary-ink">{clientName}</span> }}
 						/>
 					</h1>
-					<p className="text-muted-foreground text-sm">
-						{t("This app is requesting access to your Engram.")}
-					</p>
-					{meQuery.data ? (
-						// Own line, one line: a long address wrapped mid-sentence.
-						<p className="truncate text-muted-foreground text-sm" title={meQuery.data.email}>
-							{t("Signed in as {email}.", { email: meQuery.data.email })}
-						</p>
-					) : null}
-					{/* Provenance is anti-phishing (the name is self-asserted, the
-					    hosts are not), but when both hosts match the return line
-					    already says it. */}
-					{clientQuery.data?.client_host &&
-					clientQuery.data.client_host !== clientQuery.data.redirect_host ? (
-						<p className="text-muted-foreground text-sm">
-							{t("App details from {host}.", { host: clientQuery.data.client_host })}
-						</p>
-					) : null}
-					{clientQuery.data?.redirect_host ? (
-						<p className="text-muted-foreground text-sm">
-							{t("You will return to {host}.", { host: clientQuery.data.redirect_host })}
-						</p>
-					) : null}
 					{clientQuery.data?.redirect_loopback ? (
 						<p className="text-destructive text-sm">
 							{t(
@@ -716,6 +693,25 @@ export default function OAuthAuthorizePage() {
 						)}
 					</>
 				)}
+
+				{/* Who you are and where this goes: checkable, not the decision, so
+				    it sits small under the buttons. The return host is the
+				    anti-phishing fact (the app name is self-asserted, hosts are
+				    not); the metadata host only shows when it differs. */}
+				<footer className="flex flex-col gap-0.5 text-muted-foreground text-xs">
+					{meQuery.data ? (
+						<p className="truncate" title={meQuery.data.email}>
+							{t("Signed in as {email}.", { email: meQuery.data.email })}
+						</p>
+					) : null}
+					{clientQuery.data?.client_host &&
+					clientQuery.data.client_host !== clientQuery.data.redirect_host ? (
+						<p>{t("App details from {host}.", { host: clientQuery.data.client_host })}</p>
+					) : null}
+					{clientQuery.data?.redirect_host ? (
+						<p>{t("You will return to {host}.", { host: clientQuery.data.redirect_host })}</p>
+					) : null}
+				</footer>
 
 				<Dialog open={showSwapConfirm} onOpenChange={setShowSwapConfirm}>
 					<DialogContent className="sm:max-w-md">

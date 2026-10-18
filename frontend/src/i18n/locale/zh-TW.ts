@@ -764,14 +764,13 @@ export default {
 		"伺服器授予了比您選擇的更多權限，因此沒有任何內容連接。請重試，或如果此問題持續發生，請聯絡支援。",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"已斷開 '{name}'，但授權新的連線失敗。請重新從 {client} 執行請求 — 目前沒有任何此類連線。",
-	"This app is requesting access to your Engram.": "此應用程式正在請求存取您的 Engram。",
-	"Signed in as {email}.": "已登入 {email}。",
-	"App details from {host}.": "來自 {host} 的應用程式資訊。",
-	"You will return to {host}.": "您將返回至 {host}。",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"這會將您導向電腦上的應用程式。僅在您剛從該應用程式開始連接時才允許。",
 	"your existing connection": "您的現有連線",
 	"Which vaults can {client} access?": "{client} 可以存取哪些儲存庫？",
+	"Signed in as {email}.": "已登入 {email}。",
+	"App details from {host}.": "來自 {host} 的應用程式資訊。",
+	"You will return to {host}.": "您將返回至 {host}。",
 	"Disconnect {name}?": "斷線 {name}?",
 	"Connecting…": "正在連線…",
 	"Disconnect & connect {client}": "斷線並連線 {client}",

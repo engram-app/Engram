@@ -880,15 +880,13 @@ export default {
 		"Сервер предоставил больше доступа, чем вы выбрали, поэтому ничего не было подключено. Попробуйте ещё раз или обратитесь в службу поддержки, если это повторяется.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Отключено '{name}', но авторизация нового подключения не удалась. Повторите запрос из {client} — в данный момент нет активных подключений этого типа.",
-	"This app is requesting access to your Engram.":
-		"Это приложение запрашивает доступ к вашему Engram.",
-	"Signed in as {email}.": "Вошли как {email}.",
-	"App details from {host}.": "Информация о приложении от {host}.",
-	"You will return to {host}.": "Вы вернетесь на страницу {host}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Это перенаправит вас к приложению на этом компьютере. Подтверждайте только если вы только что начали подключение из этого приложения.",
 	"your existing connection": "ваше текущее подключение",
 	"Which vaults can {client} access?": "К каким хранилищам {client} может получить доступ?",
+	"Signed in as {email}.": "Вошли как {email}.",
+	"App details from {host}.": "Информация о приложении от {host}.",
+	"You will return to {host}.": "Вы вернетесь на страницу {host}.",
 	"Disconnect {name}?": "Отключить {name}?",
 	"Connecting…": "Подключается…",
 	"Disconnect & connect {client}": "Отключить и подключить {client}",

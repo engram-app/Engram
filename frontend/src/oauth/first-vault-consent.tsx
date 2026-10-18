@@ -41,11 +41,11 @@ export default function FirstVaultConsent({
 
 	return (
 		<form onSubmit={submit} className="flex flex-col gap-4">
-			<p className="flex flex-col gap-1.5">
-				<label htmlFor={inputId} className="font-medium text-foreground text-sm">
+			<p className="flex flex-col gap-1">
+				<label htmlFor={inputId} className="font-semibold text-foreground text-lg">
 					{t("Name your first vault")}
 				</label>
-				<span id={hintId} className="text-muted-foreground text-sm">
+				<span id={hintId} className="text-foreground/80">
 					{t("A vault is a collection of notes. {client} can read and write the notes in it.", {
 						client,
 					})}
