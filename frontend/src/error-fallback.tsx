@@ -68,7 +68,7 @@ export default function ErrorFallback({ error, eventId, reported = false }: Erro
 						{reported && eventId ? (
 							<p className="text-muted-foreground text-xs">
 								<Trans
-									text="Reference: {id}"
+									text="Reference number: {id}"
 									slots={{
 										id: <code className="rounded bg-muted px-1.5 py-0.5 font-mono">{eventId}</code>,
 									}}
