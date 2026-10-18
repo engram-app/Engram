@@ -1,5 +1,6 @@
 const localesArray = [
 	"en",
+	"cs",
 	"de",
 	"es",
 	"fr",
@@ -12,6 +13,7 @@ const localesArray = [
 	"pt-BR",
 	"ru",
 	"tr",
+	"uk",
 	"vi",
 	"zh-CN",
 	"zh-TW",
@@ -24,6 +26,7 @@ const TRADITIONAL = /^zh-(?<region>tw|hk|mo|hant)/u;
 
 const localeNames: Record<Locale, string> = {
 	en: "English",
+	cs: "Čeština",
 	de: "Deutsch",
 	es: "Español",
 	fr: "Français",
@@ -36,6 +39,7 @@ const localeNames: Record<Locale, string> = {
 	"pt-BR": "Português (Brasil)",
 	ru: "Русский",
 	tr: "Türkçe",
+	uk: "Українська",
 	vi: "Tiếng Việt",
 	"zh-CN": "简体中文",
 	"zh-TW": "繁體中文",
@@ -56,6 +60,10 @@ function matchLocale(tag: string): Locale | null {
 	}
 	if (base === "pt") {
 		return "pt-BR";
+	}
+	// Slovak readers get Czech, the closest language we ship.
+	if (base === "sk") {
+		return "cs";
 	}
 	return BY_LOWER.get(base) ?? null;
 }

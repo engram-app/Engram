@@ -17,7 +17,10 @@ defmodule Engram.I18nTest do
             {"es-419", "es"},
             {"tr-TR", "tr"},
             {"pl", "pl"},
-            {"id-ID", "id"}
+            {"id-ID", "id"},
+            {"cs-CZ", "cs"},
+            {"uk", "uk"},
+            {"sk-SK", "cs"}
           ],
           do: assert(I18n.locale_for(%{locale: tag}) == want, tag)
     end

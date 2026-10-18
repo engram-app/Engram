@@ -7,12 +7,14 @@ type ClerkLocalizationLoaders = Partial<
 >;
 
 // Paddle.js `settings.locale` codes match ours except Simplified Chinese.
-// Paddle checkout has no Vietnamese, Malay or Indonesian, so those open in English.
+// Paddle checkout has no Czech, Indonesian, Malay, Ukrainian or Vietnamese, so those open in English.
 const PADDLE_CODES: Partial<Record<Locale, string>> = {
 	"zh-CN": "zh-Hans",
 	vi: "en",
 	ms: "en",
 	id: "en",
+	cs: "en",
+	uk: "en",
 };
 
 function paddleLocale(locale: Locale): string {
@@ -30,6 +32,7 @@ function localizationLoader<Key extends string>(
 
 // Literal specifiers: Vite emits one lazy chunk per language. `en` is Clerk's default.
 const clerkLocalizationLoaders: ClerkLocalizationLoaders = {
+	cs: localizationLoader(() => import("@clerk/localizations/cs-CZ"), "csCZ"),
 	de: localizationLoader(() => import("@clerk/localizations/de-DE"), "deDE"),
 	es: localizationLoader(() => import("@clerk/localizations/es-ES"), "esES"),
 	fr: localizationLoader(() => import("@clerk/localizations/fr-FR"), "frFR"),
@@ -42,6 +45,7 @@ const clerkLocalizationLoaders: ClerkLocalizationLoaders = {
 	"pt-BR": localizationLoader(() => import("@clerk/localizations/pt-BR"), "ptBR"),
 	ru: localizationLoader(() => import("@clerk/localizations/ru-RU"), "ruRU"),
 	tr: localizationLoader(() => import("@clerk/localizations/tr-TR"), "trTR"),
+	uk: localizationLoader(() => import("@clerk/localizations/uk-UA"), "ukUA"),
 	vi: localizationLoader(() => import("@clerk/localizations/vi-VN"), "viVN"),
 	"zh-CN": localizationLoader(() => import("@clerk/localizations/zh-CN"), "zhCN"),
 	"zh-TW": localizationLoader(() => import("@clerk/localizations/zh-TW"), "zhTW"),
