@@ -123,65 +123,21 @@ describe("AppSidebar — collapse button", () => {
 	});
 });
 
-describe("AppSidebar — Free-tier footer", () => {
+// The plan nudge lives in the Finish setup checklist only. A second, permanent
+// copy under the vault picker read as nagging on every page.
+describe("AppSidebar — no plan footer", () => {
 	beforeEach(() => {
 		window.localStorage.clear();
 		billingEnabled = true;
 	});
 
-	it("renders the Free footer with the real device cap and an Upgrade link", () => {
+	it("shows no device limit or upgrade link on the Free tier", () => {
 		billingStatusValue = {
 			data: {
 				tier: "free",
 				active: false,
 				caps: { obsidian_connections: 2, vaults: 1 },
 			} as Partial<BillingStatus>,
-			isLoading: false,
-		};
-		renderSidebar();
-
-		expect(screen.getByText(/free plan device limit: 2\./iu)).toBeInTheDocument();
-		expect(screen.queryByText(/1 connection/iu)).toBeNull();
-		const link = screen.getByRole("link", { name: /upgrade/iu });
-		expect(link).toHaveAttribute("href", "/#settings/billing");
-	});
-
-	// A cap the response does not carry (or an uncapped override) must not be
-	// replaced by a guessed number: the Upgrade link alone is still true.
-	it("names no number when the device cap is absent", () => {
-		billingStatusValue = {
-			data: { tier: "free", active: false } as Partial<BillingStatus>,
-			isLoading: false,
-		};
-		renderSidebar();
-
-		expect(screen.queryByText(/device limit/iu)).toBeNull();
-		expect(screen.getByRole("link", { name: /upgrade/iu })).toBeInTheDocument();
-	});
-
-	it("does not render the footer when tier=pro", () => {
-		billingStatusValue = {
-			data: { tier: "pro", active: true } as Partial<BillingStatus>,
-			isLoading: false,
-		};
-		renderSidebar();
-
-		expect(screen.queryByText(/device limit/iu)).toBeNull();
-		expect(screen.queryByRole("link", { name: /upgrade/iu })).toBeNull();
-	});
-
-	it("does not render the footer while billing status is loading", () => {
-		billingStatusValue = { data: undefined, isLoading: true };
-		renderSidebar();
-
-		expect(screen.queryByText(/device limit/iu)).toBeNull();
-		expect(screen.queryByRole("link", { name: /upgrade/iu })).toBeNull();
-	});
-
-	it("does not render the footer on self-host (billing disabled) even when tier=free", () => {
-		billingEnabled = false;
-		billingStatusValue = {
-			data: { tier: "free", active: false } as Partial<BillingStatus>,
 			isLoading: false,
 		};
 		renderSidebar();

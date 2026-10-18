@@ -613,7 +613,6 @@ export default {
 	Language: "언어",
 	"My Vault": "내 보관함",
 	"{count} days left in your trial.": { other: "무료 체험은 {count}일 남았습니다." },
-	"Free plan device limit: {count}.": "무료 플랜의 기기 연결 제한: {count}.",
 	"Collapse sidebar": "사이드바 접기",
 	"No vaults": "보관함 없음",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -833,7 +832,8 @@ export default {
 	"{completed} of {total} done": "{completed} / {total} 완료",
 	"Setup guide": "설정 안내",
 	"Dismiss {label}": "{label} 닫기",
-	"You're on the Free plan.": "무료 플랜을 사용 중입니다.",
+	"Want more devices and vaults?": "더 많은 기기 및 보관함을 원하시나요?",
+	"See paid plans": "유료 플랜을 확인하세요",
 	"Connect Claude Desktop": "Claude Desktop 연결",
 	"Connect Cursor": "Cursor 연결",
 	"Connect Devin": "Devin 연결",

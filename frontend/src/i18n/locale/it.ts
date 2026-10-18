@@ -651,7 +651,6 @@ export default {
 		many: "Rimangono {count} giorni alla fine della tua prova.",
 		other: "Rimangono {count} giorni alla fine della tua prova.",
 	},
-	"Free plan device limit: {count}.": "Limite di dispositivi del piano Free: {count}.",
 	"Collapse sidebar": "Comprimi la barra laterale",
 	"No vaults": "Nessuna vault",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -882,7 +881,8 @@ export default {
 	"{completed} of {total} done": "{completed} su {total} completati",
 	"Setup guide": "Guida alla configurazione",
 	"Dismiss {label}": "Chiudi {label}",
-	"You're on the Free plan.": "Sei sul piano gratuito.",
+	"Want more devices and vaults?": "Vuoi più dispositivi e vault?",
+	"See paid plans": "Vedi i piani a pagamento",
 	"Connect Claude Desktop": "Connetti Claude Desktop",
 	"Connect Cursor": "Connetti Cursor",
 	"Connect Devin": "Connetti Devin",

@@ -626,7 +626,6 @@ export default {
 	"{count} days left in your trial.": {
 		other: "Còn {count} ngày trong thời gian dùng thử của bạn.",
 	},
-	"Free plan device limit: {count}.": "Giới hạn thiết bị của gói Free: {count}.",
 	"Collapse sidebar": "Thu gọn thanh bên",
 	"No vaults": "Không có kho lưu trữ",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -847,7 +846,8 @@ export default {
 	"{completed} of {total} done": "{completed} trong {total} đã hoàn thành",
 	"Setup guide": "Hướng dẫn thiết lập",
 	"Dismiss {label}": "Bỏ qua {label}",
-	"You're on the Free plan.": "Bạn đang sử dụng gói miễn phí.",
+	"Want more devices and vaults?": "Muốn thêm thiết bị và kho lưu trữ?",
+	"See paid plans": "Xem các gói trả phí",
 	"Connect Claude Desktop": "Kết nối với Claude Desktop",
 	"Connect Cursor": "Kết nối Cursor",
 	"Connect Devin": "Kết nối Devin",

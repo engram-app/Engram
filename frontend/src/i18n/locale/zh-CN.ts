@@ -590,7 +590,6 @@ export default {
 	Language: "语言",
 	"My Vault": "我的仓库",
 	"{count} days left in your trial.": { other: "试用期剩余{count}天。" },
-	"Free plan device limit: {count}.": "免费计划的设备数量限制：{count}。",
 	"Collapse sidebar": "隐藏侧边栏",
 	"No vaults": "没有仓库",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -808,7 +807,8 @@ export default {
 	"{completed} of {total} done": "已完成 {completed} 个，总共 {total} 个",
 	"Setup guide": "配置指南",
 	"Dismiss {label}": "关闭 {label}",
-	"You're on the Free plan.": "您使用的是免费版。",
+	"Want more devices and vaults?": "想要更多设备和仓库吗？",
+	"See paid plans": "查看付费计划",
 	"Connect Claude Desktop": "连接 Claude Desktop",
 	"Connect Cursor": "连接 Cursor",
 	"Connect Devin": "连接 Devin",

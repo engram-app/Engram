@@ -624,7 +624,6 @@ export default {
 	Language: "言語",
 	"My Vault": "私の保管庫",
 	"{count} days left in your trial.": { other: "トライアル期間は残り{count}日です。" },
-	"Free plan device limit: {count}.": "無料プランのデバイス接続台数制限: {count}.",
 	"Collapse sidebar": "サイドバーを折りたたみ",
 	"No vaults": "保管庫がありません",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -846,7 +845,8 @@ export default {
 	"{completed} of {total} done": "{completed} / {total} 完了",
 	"Setup guide": "セットアップガイド",
 	"Dismiss {label}": "{label} を閉じる",
-	"You're on the Free plan.": "無料プランをお使いです。",
+	"Want more devices and vaults?": "もっと多くのデバイスと保管庫をご希望ですか？",
+	"See paid plans": "有料プランをご覧ください",
 	"Connect Claude Desktop": "Claude Desktopに接続",
 	"Connect Cursor": "Cursorに接続",
 	"Connect Devin": "Devinに接続",

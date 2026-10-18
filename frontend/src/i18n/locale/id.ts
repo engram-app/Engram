@@ -629,7 +629,6 @@ export default {
 	Language: "Bahasa",
 	"My Vault": "Vault Saya",
 	"{count} days left in your trial.": { other: "Sisa {count} hari dalam masa percobaan Anda." },
-	"Free plan device limit: {count}.": "Batas perangkat untuk paket gratis: {count}.",
 	"Collapse sidebar": "Sembunyikan bilah sisi",
 	"No vaults": "Tidak ada vault",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -851,7 +850,8 @@ export default {
 	"{completed} of {total} done": "{completed} dari {total} selesai",
 	"Setup guide": "Panduan pengaturan",
 	"Dismiss {label}": "Tutup {label}",
-	"You're on the Free plan.": "Anda menggunakan paket Gratis.",
+	"Want more devices and vaults?": "Ingin lebih banyak perangkat dan vault?",
+	"See paid plans": "Lihat paket berbayar",
 	"Connect Claude Desktop": "Hubungkan Claude Desktop",
 	"Connect Cursor": "Hubungkan Cursor",
 	"Connect Devin": "Hubungkan Devin",
