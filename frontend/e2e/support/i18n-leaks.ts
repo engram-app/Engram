@@ -62,7 +62,7 @@ const CATALOGS: Record<string, CatalogLike> = {
 };
 
 // Browser locale tag -> the app locale code it must resolve to.
-const BROWSER_LOCALES = [
+const ALL_BROWSER_LOCALES = [
 	{ tag: "cs-CZ", code: "cs" },
 	{ tag: "de-DE", code: "de" },
 	{ tag: "es-ES", code: "es" },
@@ -81,6 +81,11 @@ const BROWSER_LOCALES = [
 	{ tag: "zh-CN", code: "zh-CN" },
 	{ tag: "zh-TW", code: "zh-TW" },
 ] as const;
+
+// Every per-locale spec loops over this, so each locale costs ~30s x 3 specs.
+// PR CI runs none (English is covered by the other specs); the nightly sets
+// E2E_ALL_LOCALES=1. Run locally with E2E_ALL_LOCALES=1 when touching i18n.
+const BROWSER_LOCALES = process.env.E2E_ALL_LOCALES ? ALL_BROWSER_LOCALES : [];
 
 // The catalog's string for an English key; throws when the locale has none, so a
 // renamed key fails the spec loudly instead of asserting on English.
