@@ -11,10 +11,10 @@ import DeviceLinkPage from "./device-link-page";
 vi.mock("../analytics/track", () => ({ track: vi.fn() }));
 const mockTrack = vi.mocked(track);
 
-const { get, post } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
+const { get, post, del } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), del: vi.fn() }));
 vi.mock("../api/client", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../api/client")>()),
-	api: { get, post },
+	api: { get, post, del },
 }));
 
 const { setActiveVaultId } = vi.hoisted(() => ({ setActiveVaultId: vi.fn() }));
@@ -88,8 +88,9 @@ vi.mock("../api/queries", async (importOriginal) => {
 			data: [
 				{
 					kind: "obsidian",
-					client_id: null,
-					key_id: 42,
+					// Device-flow rows carry their family id here (connectionId reads it).
+					client_id: "family-old-laptop",
+					key_id: null,
 					name: "Old laptop",
 					software_id: null,
 					software_version: null,
@@ -767,8 +768,11 @@ describe("DeviceLinkPage", () => {
 		fireEvent.click(await screen.findByRole("radio", { name: /personal/iu }));
 		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
 
-		expect(await screen.findByRole("alert")).not.toHaveTextContent(/invalid or has expired/iu);
-		expect(screen.getByRole("button", { name: /^sync$/iu })).toBeInTheDocument();
+		// The server's 403 is shown as itself (localized), never as an expiry.
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent(/permission/iu);
+		expect(alert).not.toHaveTextContent(/invalid or has expired/iu);
+		expect(screen.getByRole("radio", { name: /personal/iu })).toBeChecked();
 	});
 
 	// No vault yet: greet rather than ask to "choose" from an empty list.
@@ -1003,6 +1007,52 @@ describe("DeviceLinkPage", () => {
 		expect(screen.getByRole("status")).toHaveTextContent(/device limit \(2\)/iu);
 		expect(screen.getByRole("status")).toHaveTextContent(/will disconnect/iu);
 		expect(screen.getByPlaceholderText(/XXXX-XXXX/iu)).toBeInTheDocument();
+	});
+
+	// At the cap, Sync first disconnects the old device. One already revoked
+	// elsewhere answers 404: that is the outcome we wanted, not an expired code.
+	describe("swap at the device cap", () => {
+		const atCap = () => {
+			billingState.current = {
+				caps: { obsidian_connections: 2 },
+				current_connections: { obsidian: 2 },
+				device_swap_cooldown_remaining_hours: null,
+			};
+			get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
+		};
+		const syncPersonal = async () => {
+			fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), {
+				target: { value: "ENGR7X4K" },
+			});
+			fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+			fireEvent.click(await screen.findByRole("radio", { name: /personal/iu }));
+			fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+		};
+
+		it("links anyway when the old device was already disconnected (404)", async () => {
+			atCap();
+			del.mockRejectedValue(new ApiError(404, "not found"));
+			post.mockResolvedValue({ ok: true, vault_id: "7" });
+			renderPage();
+			await syncPersonal();
+
+			await waitFor(() => expect(post).toHaveBeenCalled());
+			expect(del).toHaveBeenCalledWith("/connections/device/family-old-laptop");
+			expect(await screen.findByRole("heading", { name: /finish in obsidian/iu })).toBeVisible();
+		});
+
+		it("reports a failed disconnect as itself, not as an expired code", async () => {
+			atCap();
+			del.mockRejectedValue(new ApiError(500, "server exploded"));
+			renderPage();
+			await syncPersonal();
+
+			await waitFor(() => expect(del).toHaveBeenCalled());
+			const alert = await screen.findByRole("alert");
+			expect(alert).not.toHaveTextContent(/invalid or has expired/iu);
+			expect(post).not.toHaveBeenCalled();
+			expect(screen.getByRole("radio", { name: /personal/iu })).toBeInTheDocument();
+		});
 	});
 
 	it("shows a cooldown banner and disables Sync when atCap and a swap cooldown is active", async () => {
