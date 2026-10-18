@@ -16,11 +16,17 @@ Engram.Test.LogCapture.install()
 # preserving full diagnostic output for real failures.
 ExUnit.configure(capture_log: true)
 
-# #1210: building the OpenAPI spec `ensure_loaded`s every schema module through
-# the single code server. Cold, that is ~0.7 s on an idle box; inside a timed
-# test under a loaded parallel suite it queued past ExUnit's 60 s timeout.
-# Prod is unaffected (releases run in embedded mode, every module preloaded).
-# Pay it once here, outside any test.
+# Preload every module, as prod's embedded-mode release does. Tests run in
+# interactive mode, so a module's first use goes through the single code
+# server. Under a loaded parallel suite that queue stalled >15 s, while the
+# caller held a sandbox connection inside a transaction: DBConnection killed
+# the connection and the whole partition cascaded (nightly 39117525505,
+# first stuck call `Engram.Native.text_diff/2`; #1210 hit the same with the
+# OpenAPI schema modules). Pay the load once here, outside any test.
+for {app, _, _} <- Application.loaded_applications() do
+  Code.ensure_all_loaded(Application.spec(app, :modules) || [])
+end
+
 _ = EngramWeb.ApiSpec.spec()
 
 # Infra-dependent tags excluded by default; opt in via env var.
