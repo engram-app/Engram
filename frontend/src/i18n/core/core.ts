@@ -1,4 +1,4 @@
-// i18n-core 6a9ff750
+// i18n-core 79b262f1
 // The translategemma pipeline shared by the web app, the Obsidian plugin and the
 // marketing site: prompts, the checks an answer must pass, and catalog state.
 // Canonical copy: engram-app/Engram frontend/src/i18n/core/. The other repos
@@ -123,7 +123,8 @@ function numbers(s: string, source = false): string[] {
 
 // Terms a language's own software leaves in English, by base language, so an
 // echo of one is a translation and not a miss. Each comes from Obsidian's or VS
-// Code's translations for that language; add one only with such a source.
+// Code's translations for that language (or Clerk's, for its own UI terms); add
+// one only with such a source.
 // Lowercase, letters only, brands already removed ("💬 Feedback" is "feedback").
 const LOANWORDS: Record<string, readonly string[]> = {
 	// Names every language keeps, for profiles that do not list them as brands.
@@ -165,6 +166,9 @@ const LOANWORDS: Record<string, readonly string[]> = {
 		"version",
 		"web",
 	],
+	// Obsidian's Czech keeps the first four in English; Clerk's Czech heads its
+	// members table "Role".
+	cs: ["frontmatter", "markdown", "offline", "role", "text"],
 	es: ["error", "idea", "legal", "markdown", "popular", "subtotal", "token", "total", "web"],
 	fr: [
 		"actions",
@@ -287,6 +291,8 @@ const LOANWORDS: Record<string, readonly string[]> = {
 	],
 	ru: ["markdown"],
 	tr: ["markdown"],
+	// Obsidian's Ukrainian keeps both in English.
+	uk: ["frontmatter", "markdown"],
 	vi: ["backend", "cloud", "email", "frontmatter", "markdown", "token"],
 	zh: ["bug", "markdown"],
 };
