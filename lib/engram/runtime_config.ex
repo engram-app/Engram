@@ -49,6 +49,25 @@ defmodule Engram.RuntimeConfig do
   end
 
   @doc """
+  Bandit `http_options` for response compression, from `ENGRAM_SAAS_ONLY`.
+
+  SaaS serves only the api/mcp hosts, all behind Cloudflare, which compresses
+  at the edge, so compressing at the origin is CPU spent for nothing
+  (`:zlib.gzip/1` was 9% of web CPU in the 2026-10-17 prod profile). Self-host
+  has no edge and keeps compressing, but prefers deflate at level 1: Bandit's
+  gzip has no level knob, and level 1 halves the CPU for ~11% more bytes
+  (bench/vault_tree_compression.exs).
+  """
+  @spec http_compression((String.t() -> String.t() | nil)) :: keyword()
+  def http_compression(getenv) do
+    if getenv.("ENGRAM_SAAS_ONLY") == "true" do
+      [compress: false]
+    else
+      [compress: true, response_encodings: ~w(deflate gzip x-gzip), deflate_options: [level: 1]]
+    end
+  end
+
+  @doc """
   The `{env var, application env key}` pairs for every CI-gated rate-limit
   override. See `ci_gated_int_override/2` for the gating rule.
   """
