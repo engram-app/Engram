@@ -202,6 +202,17 @@ jobs:
             | tail -n +2 \
             | xargs -r docker rmi 2>/dev/null || true
 
+          # 5b. Same for the registry-qualified pulls (`:5001/engram-ci:<hash>`,
+          #     which the bare `engram-ci:*` filter never matched) and the
+          #     prebuilt deps base (`:5001/engram-deps:<hash>`, ~2.4GB, see the
+          #     Dockerfile's DEPS_IMAGE). `docker images` lists newest first.
+          for repo in engram-ci engram-deps; do
+            docker images --format '{{.Repository}}:{{.Tag}}' \
+              --filter "reference=*/${repo}:*" \
+              | tail -n +2 \
+              | xargs -r docker rmi 2>/dev/null || true
+          done
+
           # 6. Remove stale per-run images that slipped through teardown (cancelled jobs)
           docker images --format '{{.Repository}}:{{.Tag}}' \
             --filter "reference=engram-ci-*-engram:latest" \
