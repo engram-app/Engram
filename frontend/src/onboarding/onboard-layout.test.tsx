@@ -54,62 +54,25 @@ const SELF: Steps = ["vault"];
 // the user should know whose authorization is waiting, and be able to refuse
 // in a way the client actually hears (access_denied), rather than closing a
 // tab the client waits on forever.
+// Mid-OAuth signup shows no "Connecting {app}" bar: it cluttered the wizard,
+// and the consent screen at the end names the app anyway.
 describe("OnboardLayout pending authorization", () => {
-	const PARKED = "?redirect_uri=https://app/cb&state=xyz";
-
 	afterEach(() => {
 		window.sessionStorage.clear();
 	});
 
-	it("names the app that is waiting", () => {
-		stashPendingAuthorization(PARKED, null, "Google Antigravity", true);
+	it("shows no connecting bar while an authorization is parked", () => {
+		stashPendingAuthorization(
+			"?redirect_uri=https://app/cb&state=xyz",
+			null,
+			"Google Antigravity",
+			true,
+		);
 
 		renderAt("/onboard/heard", SAAS);
 
-		expect(screen.getByText(/Google Antigravity/u)).toBeTruthy();
-	});
-
-	it("falls back to neutral wording for an unnamed client", () => {
-		stashPendingAuthorization(PARKED, null, null, true);
-
-		renderAt("/onboard/heard", SAAS);
-
-		expect(screen.getByRole("button", { name: /cancel/iu })).toBeTruthy();
-	});
-
-	it("offers no Cancel when the redirect was never confirmed", () => {
-		stashPendingAuthorization(PARKED, null, "Google Antigravity");
-
-		renderAt("/onboard/heard", SAAS);
-
-		expect(screen.getByText(/Google Antigravity/u)).toBeTruthy();
-		expect(screen.queryByRole("button", { name: /cancel/iu })).toBeNull();
-	});
-
-	it("says nothing at all when no authorization is pending", () => {
-		renderAt("/onboard/heard", SAAS);
-
-		expect(screen.queryByRole("button", { name: /cancel/iu })).toBeNull();
-	});
-
-	it("reports access_denied to the client on cancel", () => {
-		stashPendingAuthorization(PARKED, null, "Google Antigravity", true);
-		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
-
-		renderAt("/onboard/heard", SAAS);
-		fireEvent.click(screen.getByRole("button", { name: /cancel/iu }));
-
-		expect(assign).toHaveBeenCalledWith("https://app/cb?error=access_denied&state=xyz");
-	});
-
-	it("drops the parked request on cancel so it cannot resurface", () => {
-		stashPendingAuthorization(PARKED, null, "Google Antigravity", true);
-		vi.spyOn(window.location, "assign").mockImplementation(() => {});
-
-		renderAt("/onboard/heard", SAAS);
-		fireEvent.click(screen.getByRole("button", { name: /cancel/iu }));
-
-		expect(window.sessionStorage.getItem("engram:pending-oauth")).toBeNull();
+		expect(screen.queryByText(/Google Antigravity/u)).toBeNull();
+		expect(screen.queryByRole("button", { name: /cancel connection/iu })).toBeNull();
 	});
 });
 

@@ -840,9 +840,6 @@ export default {
 	"Could not continue. Please try again.": "執行失敗。請重試。",
 	"Step {step} of {total}": "第 {step} 步，共 {total} 步",
 	Onboarding: "入門指南",
-	"your app": "你的應用程式",
-	"Cancel connection": "取消連線",
-	"Connecting {app}": "連線 {app}",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"儲存您的選擇失敗。請再次點擊 — 如果持續失敗，請重新載入頁面。",
 	"Let's get your notes in.": "讓我們將您的筆記導入。",

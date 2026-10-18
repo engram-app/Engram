@@ -1,21 +1,14 @@
-import { LogOut, X } from "lucide-react";
+import { LogOut } from "lucide-react";
 import { useEffect } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
-import { Trans } from "@/i18n/trans";
-import { cn } from "@/lib/utils";
 import { track } from "../analytics/track";
 import { type OnboardingStep, useOnboardingStatus } from "../api/queries";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
 import AuthShell from "../layout/auth-shell";
 import LoadingScreen from "../layout/loading-screen";
 import { isMember } from "../lib/is-member";
-import {
-	clearPendingAuthorization,
-	peekPendingAuthorization,
-	pendingCancelUrl,
-} from "../oauth/pending-authorization";
 
 const STEP_PATHS: OnboardingStep[] = ["agreement", "billing", "heard", "vault"];
 
@@ -73,76 +66,13 @@ export default function OnboardLayout() {
 	const total = data.steps.length;
 	const counter = index >= 0 ? t("Step {step} of {total}", { step: index + 1, total }) : null;
 
-	// Someone pulled in here mid-OAuth is not doing a normal signup, and a
-	// wizard that says nothing about it reads like the connection silently
-	// failed. Naming the app, and offering a refusal the app actually hears,
-	// is what keeps an interrupted authorization legible.
-	const pending = peekPendingAuthorization();
-
-	// Derived from the parked request, so it must be read before anything
-	// clears it. Null means the refusal has nowhere to go.
-	const cancelUrl = pendingCancelUrl();
-
-	const cancelPending = () => {
-		if (!cancelUrl) {
-			return;
-		}
-		// Clear only once the refusal is actually deliverable. Clearing
-		// unconditionally ALSO dropped the parked request, so a user whose
-		// client had no usable redirect got a button that did nothing and then
-		// finished the wizard onto `/` instead of back to consent.
-		clearPendingAuthorization();
-		window.location.assign(cancelUrl);
-	};
-
 	return (
 		<AuthShell
 			navLabel={t("Onboarding")}
-			notice={
-				pending ? (
-					<>
-						<p className="truncate">
-							<Trans
-								text="Connecting {app}"
-								slots={{
-									app: (
-										<span className="font-medium text-foreground">
-											{pending.clientName ?? t("your app")}
-										</span>
-									),
-								}}
-							/>
-						</p>
-						{/* Rendered only when the refusal can actually be delivered.
-						    A button that silently no-ops reads as a broken app. */}
-						{cancelUrl ? (
-							<Button
-								type="button"
-								variant="ghost"
-								size="icon-sm"
-								className="shrink-0"
-								aria-label={t("Cancel connection")}
-								title={t("Cancel connection")}
-								onClick={cancelPending}
-							>
-								<X aria-hidden="true" />
-							</Button>
-						) : null}
-					</>
-				) : null
-			}
 			actions={
 				<>
 					{counter ? (
-						// Hidden on phones while a connection is pending: the notice needs the room.
-						<p
-							className={cn(
-								"whitespace-nowrap text-muted-foreground text-sm",
-								pending && "hidden sm:block",
-							)}
-						>
-							{counter}
-						</p>
+						<p className="whitespace-nowrap text-muted-foreground text-sm">{counter}</p>
 					) : null}
 					<Button type="button" variant="ghost" size="sm" onClick={() => logout()}>
 						<LogOut aria-hidden="true" className="sm:hidden" />

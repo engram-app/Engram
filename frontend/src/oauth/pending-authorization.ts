@@ -23,18 +23,6 @@ import { ROUTES } from "../routes";
 
 const KEY = "engram:pending-oauth";
 
-// A cancel navigates via `window.location.assign`, so the boundary that matters
-// is not http-vs-custom-scheme. Native OAuth clients legitimately register
-// custom schemes (`cursor://`, `vscode://`, `com.example.app://`) and DCR
-// admits them — `cursor://` is documented as observed in prod. Requiring
-// http(s) left the Cancel button dead for exactly those clients.
-//
-// What must never reach `location.assign` is a script-executing scheme. Host
-// trust is deliberately NOT decided here; that belongs upstream, against the
-// client's registered redirect_uris.
-const ABSOLUTE_URI = /^[a-z][a-z0-9+.-]*:/iu;
-const SCRIPT_SCHEME = /^(?:javascript|data|vbscript|blob|file):/iu;
-
 // The two screens that can be interrupted by the wizard: OAuth consent, and
 // /link for a plugin-first signup. Both sit outside OnboardingGate.
 function isResumablePath(path: string): boolean {
@@ -144,45 +132,6 @@ export function peekPendingAuthorization(): PendingAuthorization | null {
 	} catch {
 		return null;
 	}
-}
-
-/**
- * Where to send the client when the user abandons setup instead of finishing.
- *
- * OAuth 2.1 expects an interrupted authorization to end in a standards-
- * compliant response, not a tab the user closes: a refusal is `access_denied`
- * carrying the original `state`. Null when there is nothing pending, or when
- * the parked request has no usable redirect — there is nowhere to report to
- * then, and inventing a destination is how an open redirect gets built by
- * accident.
- */
-export function pendingCancelUrl(): string | null {
-	const pending = peekPendingAuthorization();
-	if (!pending?.redirectVerified) {
-		return null;
-	}
-
-	const query = new URLSearchParams(pending.returnTo.split("?").slice(1).join("?"));
-	const redirectUri = query.get("redirect_uri")?.trim();
-	if (!redirectUri) {
-		return null;
-	}
-	if (SCRIPT_SCHEME.test(redirectUri) || !ABSOLUTE_URI.test(redirectUri)) {
-		return null;
-	}
-
-	const answer = new URLSearchParams({ error: "access_denied" });
-	const state = query.get("state");
-	if (state) {
-		answer.set("state", state);
-	}
-	// RFC 9207 §2: error responses carry `iss` too, when the server sent one.
-	const iss = query.get("iss");
-	if (iss) {
-		answer.set("iss", iss);
-	}
-
-	return `${redirectUri}${redirectUri.includes("?") ? "&" : "?"}${answer.toString()}`;
 }
 
 export function clearPendingAuthorization(): void {

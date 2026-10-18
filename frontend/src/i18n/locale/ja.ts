@@ -878,9 +878,6 @@ export default {
 	"Could not continue. Please try again.": "続行できませんでした。もう一度お試しください。",
 	"Step {step} of {total}": "{total} の {step} 段階",
 	Onboarding: "初期設定",
-	"your app": "あなたのアプリ",
-	"Cancel connection": "接続を解除",
-	"Connecting {app}": "{app} に接続中",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"選択を保存できませんでした。もう一度クリックしてみてください。それでもうまくいかない場合は、ページを更新してください。",
 	"Let's get your notes in.": "ノートをインポートしましょう。",

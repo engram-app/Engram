@@ -946,9 +946,6 @@ export default {
 	"Could not continue. Please try again.": "Nie udało się kontynuować. Spróbuj ponownie.",
 	"Step {step} of {total}": "Krok {step} z {total}",
 	Onboarding: "Wprowadzenie",
-	"your app": "twoja aplikacja",
-	"Cancel connection": "Anuluj połączenie",
-	"Connecting {app}": "Połączenie z {app}",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Nie udało się zapisać Twojego wyboru. Spróbuj kliknąć ponownie — jeśli problem nadal występuje, odśwież stronę.",
 	"Let's get your notes in.": "Przenieśmy Twoje notatki.",

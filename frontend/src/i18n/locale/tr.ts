@@ -883,9 +883,6 @@ export default {
 	"Could not continue. Please try again.": "Devam edilemedi. Lütfen tekrar deneyin.",
 	"Step {step} of {total}": "{step} adımı, {total} toplam",
 	Onboarding: "Tanıtım",
-	"your app": "uygulamanız",
-	"Cancel connection": "Bağlantıyı iptal et",
-	"Connecting {app}": "{app} ile bağlantı kuruluyor",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Seçiminizi kaydedemedik. Lütfen tekrar tıklayın; sorun devam ederse sayfayı yenileyin.",
 	"Let's get your notes in.": "Notlarınızı ekleyelim.",

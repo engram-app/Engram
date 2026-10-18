@@ -569,9 +569,18 @@ export default function OAuthAuthorizePage() {
 					</h1>
 					<p className="text-muted-foreground text-sm">
 						{t("This app is requesting access to your Engram.")}
-						{meQuery.data ? ` ${t("Signed in as {email}.", { email: meQuery.data.email })}` : ""}
 					</p>
-					{clientQuery.data?.client_host ? (
+					{meQuery.data ? (
+						// Own line, one line: a long address wrapped mid-sentence.
+						<p className="truncate text-muted-foreground text-sm" title={meQuery.data.email}>
+							{t("Signed in as {email}.", { email: meQuery.data.email })}
+						</p>
+					) : null}
+					{/* Provenance is anti-phishing (the name is self-asserted, the
+					    hosts are not), but when both hosts match the return line
+					    already says it. */}
+					{clientQuery.data?.client_host &&
+					clientQuery.data.client_host !== clientQuery.data.redirect_host ? (
 						<p className="text-muted-foreground text-sm">
 							{t("App details from {host}.", { host: clientQuery.data.client_host })}
 						</p>
