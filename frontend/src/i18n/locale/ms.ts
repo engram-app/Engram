@@ -629,7 +629,6 @@ export default {
 	Language: "Bahasa",
 	"My Vault": "Peti Nota Saya",
 	"{count} days left in your trial.": { other: "{count} hari lagi untuk tempoh percubaan anda." },
-	"Free plan device limit: {count}.": "Had peranti pelan percuma: {count}.",
 	"Collapse sidebar": "Lipat bar sisi",
 	"No vaults": "Tiada peti nota",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -849,7 +848,8 @@ export default {
 	"{completed} of {total} done": "{completed} daripada {total} selesai",
 	"Setup guide": "Panduan persediaan",
 	"Dismiss {label}": "Tutup {label}",
-	"You're on the Free plan.": "Anda menggunakan pelan percuma.",
+	"Want more devices and vaults?": "Ingin lebih peranti dan peti nota?",
+	"See paid plans": "Lihat pelan berbayar",
 	"Connect Claude Desktop": "Sambungkan Claude Desktop",
 	"Connect Cursor": "Sambung Cursor",
 	"Connect Devin": "Sambung Devin",

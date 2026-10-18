@@ -682,7 +682,6 @@ export default {
 		many: "До конца пробного периода осталось {count} дней.",
 		other: "До конца пробного периода осталось {count} дня.",
 	},
-	"Free plan device limit: {count}.": "Лимит устройств для бесплатного плана: {count}.",
 	"Collapse sidebar": "Свернуть боковую панель",
 	"No vaults": "Нет хранилищ",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -929,7 +928,8 @@ export default {
 	"{completed} of {total} done": "Выполнено {completed} из {total}",
 	"Setup guide": "Руководство по настройке",
 	"Dismiss {label}": "Закрыть {label}",
-	"You're on the Free plan.": "Вы используете бесплатный тариф.",
+	"Want more devices and vaults?": "Хотите больше устройств и хранилищ?",
+	"See paid plans": "Ознакомьтесь с платными тарифами",
 	"Connect Claude Desktop": "Подключить Claude Desktop",
 	"Connect Cursor": "Подключить Cursor",
 	"Connect Devin": "Подключить Devin",

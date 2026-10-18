@@ -628,7 +628,6 @@ export default {
 		one: "Deneme süreniz sona ermeye {count} gün kaldı.",
 		other: "Deneme sürenizin bitmesine {count} gün kaldı.",
 	},
-	"Free plan device limit: {count}.": "Ücretsiz plan cihaz limiti: {count}.",
 	"Collapse sidebar": "Yan menüyü gizle",
 	"No vaults": "Kasa yok",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -851,7 +850,8 @@ export default {
 	"{completed} of {total} done": "{completed} / {total} tamamlandı",
 	"Setup guide": "Kurulum kılavuzu",
 	"Dismiss {label}": "{label} öğesini kapatın",
-	"You're on the Free plan.": "Ücretsiz planı kullanıyorsunuz.",
+	"Want more devices and vaults?": "Daha fazla cihaz ve kasa mı istiyorsunuz?",
+	"See paid plans": "Ücretli planları inceleyin",
 	"Connect Claude Desktop": "Claude Masaüstü uygulamasını bağlayın",
 	"Connect Cursor": "Cursor'ı bağla",
 	"Connect Devin": "Devin'i bağla",
