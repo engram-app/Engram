@@ -91,7 +91,7 @@ export default {
 		"Ini biasanya mengambil beberapa saat. Segarkan semula dalam sekejap, atau hubungi sokongan jika masalah berterusan.",
 	Refresh: "Segarkan semula",
 	"Contact support": "Hubungi sokongan",
-	"Reference: {id}": "Rujukan: {id}",
+	"Reference number: {id}": "Nombor rujukan: {id}",
 	"Loading billing": "Memuatkan maklumat pembayaran",
 	"Could not open the billing portal. Please try again.":
 		"Tidak dapat membuka portal pembayaran. Sila cuba lagi.",

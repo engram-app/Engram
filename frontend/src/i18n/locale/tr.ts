@@ -89,7 +89,7 @@ export default {
 		"Bu genellikle birkaç saniye sürer. Birkaç saniye sonra yenileyin veya sorun devam ederse destek ile iletişime geçin.",
 	Refresh: "Yenile",
 	"Contact support": "Destek ile iletişime geç",
-	"Reference: {id}": "Referans: {id}",
+	"Reference number: {id}": "Referans numarası: {id}",
 	"Loading billing": "Fatura bilgileri yükleniyor",
 	"Could not open the billing portal. Please try again.":
 		"Fatura portalını açamadık. Lütfen tekrar deneyin.",
@@ -233,8 +233,7 @@ export default {
 	"You're on this plan": "Şu paketi kullanıyorsunuz",
 	"Start free trial": "Ücretsiz denemeye başlayın",
 	Popular: "Popüler",
-	"3,000 notes · 20 AI searches a day · 1 vault":
-		"3.000 not · Günde 20 yapay zeka sorgusu · 1 kasa",
+	"3,000 notes · 20 AI searches a day · 1 vault": "3000 not · Günde 20 yapay zeka sorgusu · 1 kasa",
 	"3,000 notes, all searchable": "3.000 not, hepsi aranabilir",
 	"20 AI searches a day": "Günde 20 yapay zeka sorgusu",
 	"1 vault": "1 kasa",
@@ -1208,7 +1207,7 @@ export default {
 	"No backlinks yet": "Henüz geri bağlantı yok",
 	"Failed to load notes.": "Notlar yüklenemedi.",
 	"No notes in this folder.": "Bu klasörde not yok.",
-	"Notes in {folder}": "{folder} içindeki notlar",
+	"Notes in {folder}": "{folder} içindeki Notlar",
 	"No note open": "Açık not yok",
 	"No note is open": "Açık bir not yok",
 	"Resize document, left edge": "Belgeyi yeniden boyutlandır, sol kenar",

@@ -92,7 +92,7 @@ export default {
 		"Das dauert normalerweise nur Sekunden. Aktualisiere in einem Moment, oder kontaktiere den Support, wenn das Problem weiterhin besteht.",
 	Refresh: "Aktualisieren",
 	"Contact support": "Support kontaktieren",
-	"Reference: {id}": "Referenz: {id}",
+	"Reference number: {id}": "Referenznummer: {id}",
 	"Loading billing": "Abrechnung wird geladen",
 	"Could not open the billing portal. Please try again.":
 		"Es konnte nicht auf das Abrechnungsportal zugegriffen werden. Bitte versuche es erneut.",
