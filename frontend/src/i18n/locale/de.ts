@@ -897,9 +897,6 @@ export default {
 		"Konnte nicht fortgesetzt werden. Bitte versuche es erneut.",
 	"Step {step} of {total}": "Schritt {step} von {total}",
 	Onboarding: "Einrichtung",
-	"your app": "deine App",
-	"Cancel connection": "Verbindung aufheben",
-	"Connecting {app}": "Verbindung zu {app} herstellen",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Deine Auswahl konnte nicht gespeichert werden. Versuche es erneut – wenn es weiterhin fehlschlägt, lade die Seite neu.",
 	"Let's get your notes in.": "Lass uns deine Notizen importieren.",

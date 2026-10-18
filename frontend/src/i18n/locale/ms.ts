@@ -881,9 +881,6 @@ export default {
 	"Could not continue. Please try again.": "Tidak dapat meneruskan. Sila cuba lagi.",
 	"Step {step} of {total}": "Langkah {step} daripada {total}",
 	Onboarding: "Pengenalan",
-	"your app": "aplikasi anda",
-	"Cancel connection": "Batalkan sambungan",
-	"Connecting {app}": "Menyambung {app}",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Tidak dapat menyimpan pilihan anda. Cuba klik sekali lagi — jika masih gagal, muat semula halaman.",
 	"Let's get your notes in.": "Mari kita masukkan nota anda.",

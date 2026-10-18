@@ -644,6 +644,21 @@ describe("OAuthAuthorizePage", () => {
 		expect(await screen.findByText(/app details from claude\.ai/iu)).toBeInTheDocument();
 	});
 
+	// Same host for metadata and redirect: one provenance line, not two.
+	it("shows one provenance line when the metadata and redirect hosts match", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "https://claude.ai/oauth/claude-code-client-metadata",
+			client_name: "Claude Code",
+			kind: "mcp",
+			redirect_uri_registered: true,
+			client_host: "claude.ai",
+			redirect_host: "claude.ai",
+		});
+		renderAt(VALID_QS);
+		expect(await screen.findByText(/you will return to claude\.ai/iu)).toBeInTheDocument();
+		expect(screen.queryByText(/app details from/iu)).toBeNull();
+	});
+
 	// MCP 2025-11-25 "Localhost Redirect URI Risks": any local process can claim
 	// a vendor's client_id on a loopback port.
 	it("warns when the redirect is on this computer", async () => {

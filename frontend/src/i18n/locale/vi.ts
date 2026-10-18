@@ -879,9 +879,6 @@ export default {
 	"Could not continue. Please try again.": "Không thể tiếp tục. Vui lòng thử lại.",
 	"Step {step} of {total}": "Bước {step} trong {total}",
 	Onboarding: "Hướng dẫn sử dụng",
-	"your app": "ứng dụng của bạn",
-	"Cancel connection": "Hủy kết nối",
-	"Connecting {app}": "Kết nối {app}",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Không thể lưu lựa chọn của bạn. Hãy thử nhấp lại — nếu vẫn không được, hãy làm mới trang.",
 	"Let's get your notes in.": "Chúng ta hãy đưa ghi chú của bạn vào.",

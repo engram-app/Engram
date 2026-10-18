@@ -961,9 +961,6 @@ export default {
 	"Could not continue. Please try again.": "Не удалось продолжить. Пожалуйста, попробуйте ещё раз.",
 	"Step {step} of {total}": "Шаг {step} из {total}",
 	Onboarding: "Обучение",
-	"your app": "ваше приложение",
-	"Cancel connection": "Отменить подключение",
-	"Connecting {app}": "Подключение {app}",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Не удалось сохранить ваш выбор. Попробуйте нажать ещё раз — если ошибка повторяется, обновите страницу.",
 	"Let's get your notes in.": "Давайте добавим ваши заметки.",
