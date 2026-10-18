@@ -1376,6 +1376,14 @@ jobs:
             if curl -sf http://10.0.20.214:11434/api/tags > /dev/null 2>&1; then
               echo "Ollama OK"
               touch "${MARKER_PREFIX}-ollama.marker"
+              # Warm the embed model while the stack boots. The shared Ollama
+              # unloads it after 10 idle minutes and on every auto-update
+              # restart; a cold load (~25s) stalls the first embed batch ~50s
+              # and the backlog pushes test_32/test_50 past their index waits.
+              curl -sf --max-time 120 http://10.0.20.214:11434/api/embed \
+                -d '{"model":"mxbai-embed-large","input":"warm","keep_alive":"30m"}' > /dev/null \
+                && echo "Ollama embed model warm" \
+                || echo "WARNING: Ollama embed warm-up failed"
             else
               echo "WARNING: Ollama on FastRaid not reachable — embedding tests may fail"
               touch "${MARKER_PREFIX}-ollama-warn.marker"
@@ -2011,6 +2019,14 @@ jobs:
             if curl -sf http://10.0.20.214:11434/api/tags > /dev/null 2>&1; then
               echo "Ollama OK"
               touch "${MARKER_PREFIX}-ollama.marker"
+              # Warm the embed model while the stack boots. The shared Ollama
+              # unloads it after 10 idle minutes and on every auto-update
+              # restart; a cold load (~25s) stalls the first embed batch ~50s
+              # and the backlog pushes test_32/test_50 past their index waits.
+              curl -sf --max-time 120 http://10.0.20.214:11434/api/embed \
+                -d '{"model":"mxbai-embed-large","input":"warm","keep_alive":"30m"}' > /dev/null \
+                && echo "Ollama embed model warm" \
+                || echo "WARNING: Ollama embed warm-up failed"
             else
               echo "WARNING: Ollama on FastRaid not reachable — embedding tests may fail"
               touch "${MARKER_PREFIX}-ollama-warn.marker"
