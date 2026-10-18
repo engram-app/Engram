@@ -68,7 +68,7 @@ export default function FirstVaultConsent({
 			{/* A real decision about future vaults, so a full row, not a footnote. */}
 			<label
 				htmlFor={laterId}
-				className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-muted/30 p-3 has-checked:border-primary/60"
+				className="flex cursor-pointer items-center gap-3 rounded-md border border-border bg-muted/30 p-3 has-checked:border-primary/60"
 			>
 				<input
 					id={laterId}
@@ -76,7 +76,7 @@ export default function FirstVaultConsent({
 					checked={includeLater}
 					aria-describedby={laterHintId}
 					onChange={(e) => setIncludeLater(e.target.checked)}
-					className="mt-0.5 size-4 accent-primary"
+					className="size-4 shrink-0 accent-primary"
 				/>
 				<span className="flex flex-col gap-0.5">
 					<span className="font-medium text-foreground">
