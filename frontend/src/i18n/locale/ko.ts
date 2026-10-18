@@ -767,6 +767,8 @@ export default {
 	"Name your first vault": "첫 번째 보관함 이름을 지정하세요",
 	"A vault is a collection of notes. {client} can read and write the notes in it.":
 		"보관함은 노트들의 모음입니다. {client}은 이 보관함 내의 노트를 읽고 쓸 수 있습니다.",
+	"Also allow {client} to read and write vaults I create later":
+		"나중에 제가 생성하는 보관함에 대해 {client}가 읽고 쓸 수 있도록 허용합니다",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"각 앱이 볼 수 있거나 변경할 수 있는 내용을 언제든지 설정 > 연결에서 제한할 수 있습니다.",
 	"Approving…": "승인 중입니다…",
@@ -782,6 +784,8 @@ export default {
 		"이 앱은 사용자가 다시 연결되도록 요청한 주소를 등록하지 못했습니다.",
 	"Finish setting up Engram": "Engram 설정 완료",
 	"this app": "이 앱",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"보관함 이름을 {name}으로 변경할 수 없습니다. 다른 이름을 사용해 보세요.",
 	"previous connection": "이전 연결",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"서버가 귀하가 선택한 것보다 더 많은 접근 권한을 부여하여 연결되지 않았습니다. 다시 시도하거나, 문제가 계속 발생하면 지원팀에 문의하세요.",

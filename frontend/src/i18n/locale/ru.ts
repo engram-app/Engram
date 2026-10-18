@@ -860,6 +860,8 @@ export default {
 	"Name your first vault": "Назовите ваше первое хранилище",
 	"A vault is a collection of notes. {client} can read and write the notes in it.":
 		"Хранилище – это набор заметок. {client} может читать и записывать заметки в нём.",
+	"Also allow {client} to read and write vaults I create later":
+		"Также разрешите {client} читать и записывать хранилища, которые я создаю позже",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		'Вы можете ограничить, что каждое приложение может видеть или изменять, в любое время в разделе "Настройки" > "Подключения".',
 	"Approving…": "Подтверждается…",
@@ -875,6 +877,8 @@ export default {
 		"Это приложение не смогло зарегистрировать адрес, на который пытается вас перенаправить.",
 	"Finish setting up Engram": "Завершите настройку Engram",
 	"this app": "это приложение",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"Не удалось переименовать ваше хранилище в {name}. Попробуйте другое имя.",
 	"previous connection": "предыдущее подключение",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Сервер предоставил больше доступа, чем вы выбрали, поэтому ничего не было подключено. Попробуйте ещё раз или обратитесь в службу поддержки, если это повторяется.",

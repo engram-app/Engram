@@ -742,6 +742,8 @@ export default {
 	"Name your first vault": "命名你的第一个仓库",
 	"A vault is a collection of notes. {client} can read and write the notes in it.":
 		"仓库是一组笔记。{client} 可以读取和写入其中的笔记。",
+	"Also allow {client} to read and write vaults I create later":
+		"允许 {client} 读取和写入我之后创建的仓库",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"你可以在 设置 > 连接 中随时限制每个应用可以查看或修改的内容。",
 	"Approving…": "正在批准…",
@@ -757,6 +759,8 @@ export default {
 		"此应用未注册您要返回的地址。",
 	"Finish setting up Engram": "完成 Engram 的设置",
 	"this app": "此应用",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"无法将你的仓库重命名为 {name}。尝试其他名称。",
 	"previous connection": "上次连接",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"服务器授予了比你选择的更多权限，因此没有建立连接。请重试，或如果问题持续出现，请联系支持。",

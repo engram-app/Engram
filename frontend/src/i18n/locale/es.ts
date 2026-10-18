@@ -816,6 +816,8 @@ export default {
 	"Name your first vault": "Ponle un nombre a tu primera bóveda",
 	"A vault is a collection of notes. {client} can read and write the notes in it.":
 		"Una bóveda es una colección de notas. {client} puede leer y escribir las notas en ella.",
+	"Also allow {client} to read and write vaults I create later":
+		"También permite que {client} lea y escriba en las bóvedas que crees más adelante",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Puedes limitar lo que cada aplicación puede ver o cambiar en cualquier momento en Ajustes > Conexiones.",
 	"Approving…": "Aprobando…",
@@ -831,6 +833,8 @@ export default {
 		"Esta aplicación no registró la dirección a la que intentó enviarte.",
 	"Finish setting up Engram": "Finaliza la configuración de Engram",
 	"this app": "esta aplicación",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"No se pudo renombrar tu bóveda a {name}. Intenta con otro nombre.",
 	"previous connection": "conexión anterior",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"El servidor concedió más acceso del que elegiste, así que nada se conectó. Inténtalo de nuevo, o contacta con soporte si esto sigue ocurriendo.",

@@ -9,15 +9,16 @@ interface Props {
 	vaultName: string;
 	pending: boolean;
 	error: ReactNode;
-	onApprove: (vaultName: string) => Promise<void>;
+	/** `onlyThisVault`: the user unticked access to vaults created later. */
+	onApprove: (vaultName: string, onlyThisVault: boolean) => Promise<void>;
 	onCancel?: () => void;
 }
 
 // First connection on a brand-new account: one vault, nothing in it worth
 // scoping yet. The all/choose picker and its review step ask a question this
-// user has no basis to answer, so the only choice offered is the vault's name;
-// access is the default (every vault, read and write), and the connections
-// page is where they narrow it later.
+// user has no basis to answer. What is left: the vault's name, and whether the
+// app also reaches vaults made later (on by default, the same as the picker's
+// All vaults). Read and write either way; the connections page narrows it.
 export default function FirstVaultConsent({
 	client,
 	vaultName,
@@ -29,13 +30,17 @@ export default function FirstVaultConsent({
 	const { t } = useT();
 	const inputId = useId();
 	const hintId = useId();
+	const laterId = useId();
 	const [name, setName] = useState(vaultName);
+	const [includeLater, setIncludeLater] = useState(true);
 	const trimmed = name.trim();
 
 	const submit = (e: FormEvent) => {
 		e.preventDefault();
-		if (trimmed) {
-			onApprove(trimmed);
+		// The disabled button already blocks a second click; this blocks a
+		// second Enter, which would open a second tab and rename twice.
+		if (trimmed && !pending) {
+			onApprove(trimmed, !includeLater);
 		}
 	};
 
@@ -59,6 +64,16 @@ export default function FirstVaultConsent({
 				aria-describedby={hintId}
 				onChange={(e) => setName(e.target.value)}
 			/>
+			<label htmlFor={laterId} className="flex items-center gap-2 text-foreground text-sm">
+				<input
+					id={laterId}
+					type="checkbox"
+					checked={includeLater}
+					onChange={(e) => setIncludeLater(e.target.checked)}
+					className="accent-primary"
+				/>
+				{t("Also allow {client} to read and write vaults I create later", { client })}
+			</label>
 			<p className="text-muted-foreground text-xs">
 				{t("You can limit what each app can see or change anytime in Settings > Connections.")}
 			</p>

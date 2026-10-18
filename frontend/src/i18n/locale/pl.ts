@@ -845,6 +845,8 @@ export default {
 	"Name your first vault": "Nadaj nazwę swojemu pierwszemu sejfowi",
 	"A vault is a collection of notes. {client} can read and write the notes in it.":
 		"Sejf to zbiór notatek. {client} może czytać i zapisywać notatki w nim.",
+	"Also allow {client} to read and write vaults I create later":
+		"Umożliw również {client} odczyt i zapis sejfów, które utworzę później",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Możesz ograniczyć, co każda aplikacja może zobaczyć lub zmienić, w Ustawieniach > Połączenia.",
 	"Approving…": "Zatwierdzam…",
@@ -860,6 +862,8 @@ export default {
 		"Ta aplikacja nie zarejestrowała adresu, na który próbowała przekierować.",
 	"Finish setting up Engram": "Zakończ konfigurację Engram",
 	"this app": "tej aplikacji",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"Nie udało się zmienić nazwy twojego sejfu na {name}. Spróbuj innej nazwy.",
 	"previous connection": "poprzednie połączenie",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Serwer przyznał więcej uprawnień niż wybrałeś, więc nic nie zostało połączone. Spróbuj ponownie lub skontaktuj się z działem pomocy, jeśli problem się powtarza.",

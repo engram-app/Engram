@@ -493,6 +493,8 @@ describe("OAuthAuthorizePage vault tab on Approve", () => {
 
 		await waitFor(() => expect(assign).toHaveBeenCalled());
 		expect(close).toHaveBeenCalled();
+		// A refusal connected nothing: it must not count as a success.
+		expect(mockTrack).not.toHaveBeenCalledWith("mcp_connect_succeeded", expect.anything());
 	});
 
 	// Blocked (every in-app/auth webview): the client comes first, so hand
@@ -597,6 +599,15 @@ describe("OAuthAuthorizePage", () => {
 	// question is the vault's name; access is the default, every vault read and
 	// write. Anyone else keeps the full picker.
 	describe("first vault", () => {
+		// Provisioned at signup moments ago, holding only the seeded note.
+		const freshVault = (over: Record<string, unknown> = {}) =>
+			({
+				...DEFAULT_VAULTS[0],
+				populated: false,
+				created_at: new Date().toISOString(),
+				...over,
+			}) as (typeof DEFAULT_VAULTS)[number];
+
 		beforeEach(() => {
 			fetchOAuthClient.mockResolvedValue({
 				client_id: "https://claude.ai/oauth/claude-code-client-metadata",
@@ -607,9 +618,7 @@ describe("OAuthAuthorizePage", () => {
 			// The signup flow: the consent page parked this request before the
 			// wizard, and the vault provisioned at signup holds nothing yet.
 			stashPendingAuthorization(VALID_QS);
-			vaultsState.current = [
-				{ ...DEFAULT_VAULTS[0], populated: false } as (typeof DEFAULT_VAULTS)[number],
-			];
+			vaultsState.current = [freshVault()];
 			connectionsState.current = OBSIDIAN_ONLY;
 			consentRedirectsTo("https://claude.ai/cb?code=abc");
 		});
@@ -672,9 +681,7 @@ describe("OAuthAuthorizePage", () => {
 		});
 
 		it("keeps the full picker when the vault already holds notes", async () => {
-			vaultsState.current = [
-				{ ...DEFAULT_VAULTS[0], populated: true } as (typeof DEFAULT_VAULTS)[number],
-			];
+			vaultsState.current = [freshVault({ populated: true })];
 			renderAt(VALID_QS);
 			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
 		});
@@ -684,6 +691,50 @@ describe("OAuthAuthorizePage", () => {
 			stashPendingAuthorization(`${VALID_QS}&state=other`);
 			renderAt(VALID_QS);
 			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+		});
+
+		// A Terms update also routes an existing account through the wizard and
+		// back. Its vault is not a day-old signup vault.
+		it("keeps the full picker for a vault older than a day", async () => {
+			vaultsState.current = [
+				freshVault({ created_at: new Date(Date.now() - 2 * 86_400_000).toISOString() }),
+			];
+			renderAt(VALID_QS);
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+		});
+
+		it("names the vault, not the connection, when the rename fails", async () => {
+			updateVaultMock.mockRejectedValueOnce(new Error("name taken"));
+			renderAt(VALID_QS);
+			const input = await screen.findByLabelText(/name your first vault/iu);
+			fireEvent.change(input, { target: { value: "Northwind" } });
+			fireEvent.click(screen.getByRole("button", { name: /^approve$/iu }));
+			expect(await screen.findByRole("alert")).toHaveTextContent(/couldn't rename your vault/iu);
+			expect(postOAuthConsent).not.toHaveBeenCalled();
+		});
+
+		it("grants this vault and ones created later by default", async () => {
+			renderAt(VALID_QS);
+			expect(
+				await screen.findByRole("checkbox", { name: /vaults i create later/iu }),
+			).toBeChecked();
+			fireEvent.click(screen.getByRole("button", { name: /^approve$/iu }));
+			await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
+			const body = postOAuthConsent.mock.calls[0]?.[0] as OAuthConsentParams;
+			expect(body.vault_ids).toBeUndefined();
+			expect(body.default_access).toBe("write");
+		});
+
+		it("grants only this vault when later vaults are unticked", async () => {
+			renderAt(VALID_QS);
+			fireEvent.click(await screen.findByRole("checkbox", { name: /vaults i create later/iu }));
+			fireEvent.click(screen.getByRole("button", { name: /^approve$/iu }));
+			await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
+			const body = postOAuthConsent.mock.calls[0]?.[0] as OAuthConsentParams;
+			const id = String(DEFAULT_VAULTS[0]?.id);
+			expect(body.vault_ids).toEqual([id]);
+			expect(body.vault_access).toEqual({ [id]: "write" });
+			expect(body.default_access).toBe("none");
 		});
 
 		it("keeps the full picker when the account already has several vaults", async () => {

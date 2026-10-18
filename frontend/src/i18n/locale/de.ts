@@ -795,6 +795,8 @@ export default {
 	"Name your first vault": "Gib deinem ersten Vault einen Namen",
 	"A vault is a collection of notes. {client} can read and write the notes in it.":
 		"Ein Vault ist eine Sammlung von Notizen. {client} kann die Notizen darin lesen und schreiben.",
+	"Also allow {client} to read and write vaults I create later":
+		"Erlaube auch {client}, Vaults zu lesen und zu schreiben, die ich später erstelle",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Du kannst jederzeit in den Einstellungen > Verbindungen festlegen, was jede App sehen oder ändern darf.",
 	"Approving…": "Wird genehmigt…",
@@ -810,6 +812,8 @@ export default {
 		"Diese App hat die Adresse nicht registriert, zu der sie dich zurücksenden sollte.",
 	"Finish setting up Engram": "Engram einrichten abschließen",
 	"this app": "diese App",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"Dein Vault konnte nicht in {name} umbenannt werden. Versuche einen anderen Namen.",
 	"previous connection": "vorherige Verbindung",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Der Server gewährte mehr Zugriff, als du gewählt hast, daher wurde nichts verbunden. Versuche es erneut oder kontaktiere den Support, wenn das weiterhin passiert.",

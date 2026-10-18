@@ -817,6 +817,8 @@ export default {
 	"Name your first vault": "Nomme ton premier coffre",
 	"A vault is a collection of notes. {client} can read and write the notes in it.":
 		"Un coffre est une collection de notes. {client} peut lire et écrire les notes qu'il contient.",
+	"Also allow {client} to read and write vaults I create later":
+		"Autorise également {client} à lire et à écrire dans les coffres que tu crées plus tard",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Tu peux limiter ce que chaque application peut voir ou modifier à tout moment dans Paramètres > Connexions.",
 	"Approving…": "En cours d'approbation…",
@@ -832,6 +834,8 @@ export default {
 		"Cette application n'a pas enregistré l'adresse à laquelle elle voulait te renvoyer.",
 	"Finish setting up Engram": "Termine la configuration d'Engram",
 	"this app": "cette application",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"Impossible de renommer ton coffre en {name}. Essaie un autre nom.",
 	"previous connection": "connexion précédente",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Le serveur a accordé plus d'accès que ce que tu as choisi, donc rien n'a été connecté. Réessaie, ou contacte le support si cela continue.",

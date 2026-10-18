@@ -744,6 +744,8 @@ export default {
 	"Name your first vault": "為你的第一個儲存庫命名",
 	"A vault is a collection of notes. {client} can read and write the notes in it.":
 		"儲存庫是筆記的集合。{client} 可以讀取和修改其中的筆記。",
+	"Also allow {client} to read and write vaults I create later":
+		"允許 {client} 讀取和寫入我之後建立的儲存庫",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"您可以在「設定」>「連線」中隨時限制每個應用程式的訪問權限。",
 	"Approving…": "正在批准…",
@@ -759,6 +761,8 @@ export default {
 		"此應用程式未記錄您要返回的地址。",
 	"Finish setting up Engram": "完成 Engram 的設定",
 	"this app": "此應用程式",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"無法將你的儲存庫重新命名為 {name}。請嘗試其他名稱。",
 	"previous connection": "之前的連線",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"伺服器授予了比您選擇的更多權限，因此沒有任何內容連接。請重試，或如果此問題持續發生，請聯絡支援。",

@@ -50,6 +50,12 @@ import {
 // The tab an approval opens while the client finishes connecting: the app
 // root, which lands on the active vault.
 const VAULT_URL = ROUTES.HOME;
+// A Terms update also sends existing accounts through the wizard and back, so
+// "resumed from the wizard" alone is not a signup. A vault provisioned within
+// the day is. ponytail: wall-clock age; a skewed client clock can misjudge it,
+// and the cost is only which form is shown, never which access is granted
+// without the user seeing it.
+const SIGNUP_VAULT_MAX_AGE_MS = 86_400_000;
 
 const REQUIRED_PARAMS = [
 	"client_id",
@@ -274,6 +280,8 @@ export default function OAuthAuthorizePage() {
 	const [resumedFromSignup] = useState(
 		() => peekPendingAuthorization()?.returnTo === `${ROUTES.OAUTH_CONSENT}${location.search}`,
 	);
+	// Mount time, for the signup vault's age: render has to stay pure.
+	const [mountedAt] = useState(() => Date.now());
 	const existingPeer = (connections.data ?? []).find((c): c is Connection => c.kind === clientKind);
 
 	// "All vaults" (`selected === null`) stays all-vaults as new ones are
@@ -403,6 +411,7 @@ export default function OAuthAuthorizePage() {
 		!clientAskedReadOnly &&
 		live?.length === 1 &&
 		live[0]?.populated === false &&
+		mountedAt - Date.parse(live[0].created_at) < SIGNUP_VAULT_MAX_AGE_MS &&
 		connections.data !== undefined &&
 		!connections.data.some((c) => c.kind === "mcp");
 	const onlyVault = firstVault ? live?.[0] : undefined;
@@ -418,7 +427,10 @@ export default function OAuthAuthorizePage() {
 		await runSubmit(false);
 	};
 
-	const runSubmit = async (isSwap: boolean, renameVault?: { id: string; name: string }) => {
+	const runSubmit = async (
+		isSwap: boolean,
+		firstVaultChoice?: { id: string; rename?: string; onlyThisVault: boolean },
+	) => {
 		setSubmitting(true);
 		setSubmitError(null);
 		// Every approval opens the vault, so the user lands in it while the
@@ -434,54 +446,77 @@ export default function OAuthAuthorizePage() {
 			track("mcp_connect_attempted", { client: mcpClient });
 		}
 
-		const body: OAuthConsentParams = {
-			client_id: values.client_id,
-			redirect_uri: values.redirect_uri,
-			response_type: values.response_type,
-			code_challenge: values.code_challenge,
-			code_challenge_method: values.code_challenge_method,
-			scope: values.scope,
-		};
-		if (values.state) {
-			body.state = values.state;
-		}
-		if (resource) {
-			body.resource = resource;
-		}
-		if (iss) {
-			body.iss = iss;
-		}
-		if (selected && selected.size > 0) {
-			body.vault_ids = [...selected];
-		}
-		const trimmed = label.trim();
-		if (trimmed) {
-			body.label = trimmed;
-		}
-		if (leveled && readOnly) {
-			body.read_only = true;
-		}
-		if (leveled) {
-			// Every "none" entry rides in the access token, so the request spells
-			// one out only where the policy would otherwise reach that vault.
-			Object.assign(
-				body,
-				access.request(
-					(live ?? []).map((v) => String(v.id)),
-					maxLevel,
-				),
-			);
-		}
-
-		// If swapping, disconnect the existing connection of the same kind
-		// first so the consent call doesn't 402. Mirrors the /link page swap
-		// shape — the confirm modal already named what's about to disconnect.
 		let swappedFromName: string | null = null;
+		// Everything after the tab opened sits inside the try: a throw while
+		// building the request must still close the tab and release the button.
 		try {
+			const body: OAuthConsentParams = {
+				client_id: values.client_id,
+				redirect_uri: values.redirect_uri,
+				response_type: values.response_type,
+				code_challenge: values.code_challenge,
+				code_challenge_method: values.code_challenge_method,
+				scope: values.scope,
+			};
+			if (values.state) {
+				body.state = values.state;
+			}
+			if (resource) {
+				body.resource = resource;
+			}
+			if (iss) {
+				body.iss = iss;
+			}
+			if (firstVaultChoice?.onlyThisVault) {
+				body.vault_ids = [firstVaultChoice.id];
+			} else if (selected && selected.size > 0) {
+				body.vault_ids = [...selected];
+			}
+			const trimmed = label.trim();
+			if (trimmed) {
+				body.label = trimmed;
+			}
+			if (leveled && readOnly) {
+				body.read_only = true;
+			}
+			if (leveled && firstVaultChoice?.onlyThisVault) {
+				// This vault only: nothing created later.
+				body.vault_access = { [firstVaultChoice.id]: "write" };
+				body.default_access = "none";
+			} else if (leveled) {
+				// Every "none" entry rides in the access token, so the request spells
+				// one out only where the policy would otherwise reach that vault.
+				Object.assign(
+					body,
+					access.request(
+						(live ?? []).map((v) => String(v.id)),
+						maxLevel,
+					),
+				);
+			}
+
+			// If swapping, disconnect the existing connection of the same kind
+			// first so the consent call doesn't 402. Mirrors the /link page swap
+			// shape — the confirm modal already named what's about to disconnect.
 			// After the tab opened (a popup blocker refuses one opened past an
-			// await), before consent: a failed rename stops the connect.
-			if (renameVault) {
-				await updateVault.mutateAsync(renameVault);
+			// await), before consent: a failed rename stops the connect, and says
+			// it was the name, not the authorization.
+			if (firstVaultChoice?.rename) {
+				try {
+					await updateVault.mutateAsync({ id: firstVaultChoice.id, name: firstVaultChoice.rename });
+				} catch {
+					vaultTab?.close();
+					setSubmitError(
+						t("Couldn't rename your vault to {name}. Try a different name.", {
+							name: firstVaultChoice.rename,
+						}),
+					);
+					if (isMcp) {
+						track("mcp_connect_failed", { client: mcpClient, reason: "unknown" });
+					}
+					setSubmitting(false);
+					return;
+				}
 			}
 			if (isSwap && existingPeer) {
 				const existingId = oauthConnectionId(existingPeer);
@@ -525,7 +560,8 @@ export default function OAuthAuthorizePage() {
 				setSubmitting(false);
 				return;
 			}
-			if (isMcp) {
+			// Only a code is a connection: a 200 carrying `?error=` connected nothing.
+			if (isMcp && grantsCode) {
 				track("mcp_connect_succeeded", { client: mcpClient });
 			}
 			// A 200 can still carry a refusal (`?error=`): nothing will connect.
@@ -641,11 +677,12 @@ export default function OAuthAuthorizePage() {
 								client={clientName}
 								vaultName={onlyVault.name}
 								pending={submitting}
-								onApprove={(name) =>
-									runSubmit(
-										false,
-										name === onlyVault.name ? undefined : { id: String(onlyVault.id), name },
-									)
+								onApprove={(name, onlyThisVault) =>
+									runSubmit(false, {
+										id: String(onlyVault.id),
+										rename: name === onlyVault.name ? undefined : name,
+										onlyThisVault,
+									})
 								}
 								onCancel={redirectVerified ? handleCancel : undefined}
 								error={

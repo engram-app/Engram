@@ -783,6 +783,8 @@ export default {
 	"Name your first vault": "Namakan peti nota pertama anda",
 	"A vault is a collection of notes. {client} can read and write the notes in it.":
 		"Sebuah peti nota ialah koleksi nota. {client} boleh membaca dan menulis nota di dalamnya.",
+	"Also allow {client} to read and write vaults I create later":
+		"Izinkan juga {client} membaca dan menulis peti nota yang saya cipta kemudian",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Anda boleh hadkan apa yang setiap aplikasi boleh lihat atau ubah pada bila-bila masa dalam Tetapan > Sambungan.",
 	"Approving…": "Memperuntukkan…",
@@ -798,6 +800,8 @@ export default {
 		"Aplikasi ini tidak merekod alamat yang diminta untuk menghantar anda kembali.",
 	"Finish setting up Engram": "Selesaikan persediaan Engram",
 	"this app": "aplikasi ini",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"Tidak dapat menukar nama peti nota anda kepada {name}. Cuba nama yang lain.",
 	"previous connection": "sambungan sebelumnya",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Pelayan memberikan akses lebih daripada yang anda pilih, jadi tiada apa yang disambungkan. Cuba lagi, atau hubungi sokongan jika ini berterusan.",

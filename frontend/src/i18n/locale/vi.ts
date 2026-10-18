@@ -779,6 +779,8 @@ export default {
 	"Name your first vault": "Đặt tên cho kho lưu trữ đầu tiên của bạn",
 	"A vault is a collection of notes. {client} can read and write the notes in it.":
 		"Một kho lưu trữ là một tập hợp các ghi chú. {client} có thể đọc và ghi các ghi chú trong đó.",
+	"Also allow {client} to read and write vaults I create later":
+		"Cho phép {client} đọc và ghi vào các kho lưu trữ mà bạn tạo sau này",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Bạn có thể giới hạn những gì mỗi ứng dụng có thể xem hoặc thay đổi bất cứ lúc nào trong Cài đặt > Kết nối.",
 	"Approving…": "Đang phê duyệt…",
@@ -794,6 +796,8 @@ export default {
 		"Ứng dụng này không đăng ký địa chỉ mà nó yêu cầu gửi bạn đến.",
 	"Finish setting up Engram": "Hoàn tất thiết lập Engram",
 	"this app": "ứng dụng này",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"Không thể đổi tên kho lưu trữ của bạn thành {name}. Hãy thử một tên khác.",
 	"previous connection": "kết nối trước đó",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Máy chủ đã cấp quyền truy cập lớn hơn mức bạn chọn, vì vậy không có gì được kết nối. Thử lại, hoặc liên hệ bộ phận hỗ trợ nếu sự cố này tiếp diễn.",
