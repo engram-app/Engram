@@ -4188,7 +4188,7 @@ jobs:
         run: python3 -m ruff check --output-format=github .
 
   frontend-lint:
-    name: frontend lint+types+unit (${{ matrix.shard }}/3)
+    name: frontend lint+types+unit
     # Skip on cross-repo plugin dispatch — the plugin cannot regress the SPA.
     if: github.event_name != 'repository_dispatch'
     runs-on: [self-hosted, linux, x64, isolated, light]  # cheap: pin to FastRaid (bringup #15)
@@ -4202,12 +4202,9 @@ jobs:
     #   - vitest run: the SPA unit suite (~790 tests, ~2 min) previously ran
     #     in no CI job at all.
     # Path-gated to frontend/ so backend-only pushes skip it.
-    # vitest (3,200 tests, ~5 min, 90% of this job) is split across 3 runners;
-    # shard 1 also runs the one-off checks (registry URLs, biome, tsc, bundle).
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3]
+    # Not sharded: all light runners are processes on ONE VM (gh-runner-fr),
+    # so a 3-way vitest matrix split the same CPU and each shard took as long
+    # as the whole suite (measured on #2018: 98 files ~230s per shard).
     steps:
       - uses: actions/checkout@v7
         with:
@@ -4271,7 +4268,7 @@ jobs:
       # (oven-sh/bun#18411). It only takes effect while the lockfile stays
       # portable, which is exactly what this step enforces.
       - name: No private-registry URLs in bun.lock
-        if: steps.guard.outputs.skip != 'true' && matrix.shard == 1
+        if: steps.guard.outputs.skip != 'true'
         working-directory: frontend
         run: |
           set -euo pipefail
@@ -4288,7 +4285,7 @@ jobs:
         run: bun install --frozen-lockfile --registry http://10.0.20.214:4873
 
       - name: Biome check (lint + format, --error-on-warnings)
-        if: steps.guard.outputs.skip != 'true' && matrix.shard == 1
+        if: steps.guard.outputs.skip != 'true'
         working-directory: frontend
         run: bun run ci
 
@@ -4298,14 +4295,14 @@ jobs:
       # these runners don't have — bun run executes the local bin under bun,
       # the same mechanism deploy-frontend's build:saas already relies on.
       - name: Typecheck (tsc --noEmit)
-        if: steps.guard.outputs.skip != 'true' && matrix.shard == 1
+        if: steps.guard.outputs.skip != 'true'
         working-directory: frontend
         run: bun run tsc --noEmit
 
-      - name: Unit tests (vitest run, shard ${{ matrix.shard }}/3)
+      - name: Unit tests (vitest run)
         if: steps.guard.outputs.skip != 'true'
         working-directory: frontend
-        run: bun run test --shard=${{ matrix.shard }}/3
+        run: bun run test
 
       # Dockerfile:42-46 exists so self-host images never carry the SaaS
       # PostHog token. That's a comment, not an enforcement — this proves it
@@ -4328,7 +4325,7 @@ jobs:
       # third-party SDK's own source, not a real leak. The key is the actual
       # secret and the only thing that turns that inert code live.
       - name: Self-host bundle carries no PostHog key leakage, initial JS under budget
-        if: steps.guard.outputs.skip != 'true' && matrix.shard == 1
+        if: steps.guard.outputs.skip != 'true'
         working-directory: frontend
         run: |
           set -euo pipefail
