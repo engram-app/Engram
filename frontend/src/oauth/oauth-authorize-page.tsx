@@ -189,12 +189,7 @@ export default function OAuthAuthorizePage() {
 		// `onboardingDoneTarget()` already falls back to "/" when nothing was
 		// parked. Reading it into state here would also mean an effect that
 		// synchronously sets state, which the render-compiler lint rejects.
-		stashPendingAuthorization(
-			location.search,
-			slug,
-			clientQuery.data?.client_name ?? null,
-			redirectVerified,
-		);
+		stashPendingAuthorization(location.search);
 
 		// Connecting a tool IS the answer to "which tools do you use", so the
 		// questionnaire is pre-answered instead of asked. An unattributable
@@ -235,7 +230,6 @@ export default function OAuthAuthorizePage() {
 		clientQuery.isLoading,
 		clientQuery.isError,
 		redirectRefused,
-		redirectVerified,
 		location.search,
 		navigate,
 		onboarding,
@@ -364,8 +358,8 @@ export default function OAuthAuthorizePage() {
 					    the previous copy ("you'll come straight back here")
 					    guaranteed a comeback that then quietly ended on the
 					    dashboard with the waiting client never mentioned again.
-					    The wizard banner names the client and offers the cancel,
-					    so under-promising here costs nothing. */}
+					    The wizard shows no banner (it cluttered every step); the
+					    consent screen it returns to names the client. */}
 					<p className="text-muted-foreground text-sm">
 						<Trans
 							text="Taking you to setup so you can finish connecting {app}."

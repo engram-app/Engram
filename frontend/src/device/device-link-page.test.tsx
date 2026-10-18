@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { track } from "../analytics/track";
+import { ApiError } from "../api/client";
 import { signInRedirectTarget } from "../auth/sign-in-redirect";
 import { peekPendingAuthorization, stashPendingDeviceLink } from "../oauth/pending-authorization";
 import DeviceLinkPage from "./device-link-page";
@@ -11,7 +12,10 @@ vi.mock("../analytics/track", () => ({ track: vi.fn() }));
 const mockTrack = vi.mocked(track);
 
 const { get, post } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
-vi.mock("../api/client", () => ({ api: { get, post } }));
+vi.mock("../api/client", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../api/client")>()),
+	api: { get, post },
+}));
 
 const { setActiveVaultId } = vi.hoisted(() => ({ setActiveVaultId: vi.fn() }));
 vi.mock("../api/active-vault", () => ({ setActiveVaultId }));
@@ -718,7 +722,7 @@ describe("DeviceLinkPage", () => {
 
 	it("emits plugin_connect_failed when authorize rejects", async () => {
 		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
-		post.mockRejectedValue(new Error("404 not found"));
+		post.mockRejectedValue(new ApiError(404, "code not found or expired"));
 		renderPage();
 
 		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
@@ -738,7 +742,7 @@ describe("DeviceLinkPage", () => {
 	// there with the error and no way to enter the fresh code from Obsidian.
 	it("returns to an empty code form when the code expires at authorize", async () => {
 		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
-		post.mockRejectedValue(new Error("404 not found"));
+		post.mockRejectedValue(new ApiError(404, "code not found or expired"));
 		renderPage();
 
 		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
@@ -749,6 +753,22 @@ describe("DeviceLinkPage", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent(/invalid or has expired/iu);
 		expect(await screen.findByPlaceholderText(/XXXX-XXXX/iu)).toHaveValue("");
 		expect(screen.queryByRole("button", { name: /^sync$/iu })).toBeNull();
+	});
+
+	// A 403 "vault not found or not owned by user" also says "not found". It is
+	// not an expired code: the code is still good and must stay on the picker.
+	it("keeps the picker and the code when authorize fails with a non-404", async () => {
+		get.mockResolvedValue({ vaults: [{ id: 7, name: "Personal", note_count: 0 }] });
+		post.mockRejectedValue(new ApiError(403, "vault not found or not owned by user"));
+		renderPage();
+
+		fireEvent.change(screen.getByPlaceholderText(/XXXX-XXXX/iu), { target: { value: "ENGR7X4K" } });
+		fireEvent.click(screen.getByRole("button", { name: /verify/iu }));
+		fireEvent.click(await screen.findByRole("radio", { name: /personal/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /^sync$/iu }));
+
+		expect(await screen.findByRole("alert")).not.toHaveTextContent(/invalid or has expired/iu);
+		expect(screen.getByRole("button", { name: /^sync$/iu })).toBeInTheDocument();
 	});
 
 	// No vault yet: greet rather than ask to "choose" from an empty list.

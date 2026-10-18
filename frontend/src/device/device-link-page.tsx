@@ -21,7 +21,7 @@ import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { track } from "../analytics/track";
 import { setActiveVaultId } from "../api/active-vault";
-import { api } from "../api/client";
+import { api, isNotFound } from "../api/client";
 import {
 	type Connection,
 	useBillingStatus,
@@ -385,7 +385,13 @@ function DeviceLinkPage() {
 				const existingId = obsidianConnectionId(existingObsidian);
 				if (existingId) {
 					swappedFromName = existingObsidian.name ?? t("previous device");
-					await api.del(`/connections/device/${existingId}`);
+					// Already gone (revoked in another tab) is the outcome we
+					// wanted; letting that 404 through would read as an expired code.
+					await api.del(`/connections/device/${existingId}`).catch((err: unknown) => {
+						if (!isNotFound(err)) {
+							throw err;
+						}
+					});
 					await qc.invalidateQueries({ queryKey: ["connections"] });
 					await qc.invalidateQueries({ queryKey: ["billing", "status"] });
 				}
@@ -451,8 +457,10 @@ function DeviceLinkPage() {
 				track("plugin_connect_failed", { reason: "limit_exceeded" });
 				return;
 			}
-			const message = e instanceof Error ? e.message : t("Authorization failed");
-			const notFound = message.includes("404") || message.includes("not found");
+			// By status, not message: a 403 "vault not found or not owned by
+			// user" also says "not found", and its code is still good. Only the
+			// authorize 404 means the code is gone.
+			const notFound = isNotFound(e);
 			if (notFound) {
 				setError(t("This code is invalid or has expired. Please try again from Obsidian."));
 				// Expired while picking: back to the code form so the new code
