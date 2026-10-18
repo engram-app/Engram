@@ -146,6 +146,79 @@ defmodule Engram.Workers.CleanupVaultTest do
       assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
     end
 
+    # `drop_vault_from_grants/2` already kicks the owner for a changed grant
+    # (`OAuth.grants_changed/1`); the worker kicks only for revoked keys.
+    test "a revoked grant kicks the owner's sockets once", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      stub_qdrant(bypass)
+      client = insert(:oauth_client, kind: "mcp")
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: vault.id,
+        vault_ids: [vault.id]
+      )
+
+      Phoenix.PubSub.subscribe(Engram.PubSub, "user_socket:#{user.id}")
+      assert :ok = CleanupVault.perform_cleanup(vault.id, user.id)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+      refute_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 200
+    end
+
+    # A purge that revokes a key AND changes a grant kicks the owner once.
+    test "revoking a key and a grant together kicks the owner's sockets once", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      stub_qdrant(bypass)
+      client = insert(:oauth_client, kind: "mcp")
+
+      insert(:oauth_refresh_token,
+        user_id: user.id,
+        client_id: client.client_id,
+        vault_id: vault.id,
+        vault_ids: [vault.id]
+      )
+
+      {:ok, _raw, key} = Engram.Accounts.create_api_key(user, "one-vault")
+
+      Repo.insert_all("api_key_vaults", [
+        %{api_key_id: Ecto.UUID.dump!(key.id), vault_id: Ecto.UUID.dump!(vault.id)}
+      ])
+
+      Phoenix.PubSub.subscribe(Engram.PubSub, "user_socket:#{user.id}")
+      assert :ok = CleanupVault.perform_cleanup(vault.id, user.id)
+
+      assert Repo.get(Engram.Accounts.ApiKey, key.id, skip_tenant_check: true) == nil
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+      refute_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 200
+    end
+
+    test "revoking only a key still kicks the owner's sockets, once", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      stub_qdrant(bypass)
+      {:ok, _raw, key} = Engram.Accounts.create_api_key(user, "one-vault")
+
+      Repo.insert_all("api_key_vaults", [
+        %{api_key_id: Ecto.UUID.dump!(key.id), vault_id: Ecto.UUID.dump!(vault.id)}
+      ])
+
+      Phoenix.PubSub.subscribe(Engram.PubSub, "user_socket:#{user.id}")
+      assert :ok = CleanupVault.perform_cleanup(vault.id, user.id)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}
+      refute_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 200
+    end
+
     test "hard-deletes notes, attachments, and vault when soft-deleted", %{
       bypass: bypass,
       user: user,

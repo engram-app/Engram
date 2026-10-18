@@ -71,6 +71,25 @@ defmodule EngramWeb.Plugs.AuthTest do
     assert calls == 1
   end
 
+  # A raw API key carries no grant: Auth says so (`grant_claims: :error`), so
+  # `OAuthScopeEnforce` does not try to verify the key as a JWT.
+  test "an API key is never read as an OAuth grant", %{raw_key: raw_key} do
+    calls =
+      trace_grant_claims(fn ->
+        conn =
+          build_conn()
+          |> put_req_header("authorization", "Bearer #{raw_key}")
+          |> Auth.call([])
+
+        assert conn.assigns.grant_claims == :error
+
+        conn = EngramWeb.Plugs.OAuthScopeEnforce.call(conn, [])
+        refute conn.halted
+      end)
+
+    assert calls == 0
+  end
+
   test "authenticates with valid API key", %{user: user, raw_key: raw_key} do
     conn =
       build_conn()

@@ -510,7 +510,7 @@ function CreatePatModal({
 		<ModalShell onClose={onClose} title={t("New API Key")} wide>
 			{/* A flex column whose vault list gives way first, so the dialog fits
 			    the viewport; it scrolls inside only as a last resort. */}
-			<div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
+			<section className="flex min-h-0 flex-col gap-4 overflow-y-auto">
 				<VaultAccessFlow
 					access={access.access}
 					vaults={access.vaults}
@@ -563,7 +563,7 @@ function CreatePatModal({
 						</>
 					}
 				/>
-			</div>
+			</section>
 		</ModalShell>
 	);
 }
@@ -644,7 +644,7 @@ function EditAccessModal({
 			titleRef={titleRef}
 			wide
 		>
-			<div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
+			<section className="flex min-h-0 flex-col gap-4 overflow-y-auto">
 				{/* Only a loaded list: an empty one would save no levels at all
 				    and replace every level the user never saw on Review. */}
 				{vaultsQuery.isSuccess ? (
@@ -694,7 +694,7 @@ function EditAccessModal({
 						</Button>
 					</>
 				)}
-			</div>
+			</section>
 		</ModalShell>
 	);
 }

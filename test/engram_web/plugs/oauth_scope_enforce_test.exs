@@ -108,9 +108,41 @@ defmodule EngramWeb.Plugs.OAuthScopeEnforceTest do
         assert json_response(conn, 403)["error"] == "read_only_grant"
       end
 
-      test "is refused POST /api/telemetry/spans", ctx do
+      # These write no vault data, like the MCP `send_feedback` tool the same
+      # credential may call (`Tools.writes_vault?/1`): the two gates agree.
+      test "may still POST /api/telemetry/spans", ctx do
         conn = ctx |> unquote(fun)() |> as() |> post("/api/telemetry/spans", %{"spans" => []})
-        assert json_response(conn, 403)["error"] == "read_only_grant"
+        refute conn.status == 403, conn.resp_body
+      end
+
+      test "may still POST /api/feedback", ctx do
+        conn =
+          ctx
+          |> unquote(fun)()
+          |> as()
+          |> post("/api/feedback", %{"kind" => "general", "message" => "hi"})
+
+        # RequireSession still refuses an OAuth grant here; not as read-only.
+        refute conn.resp_body =~ "read_only_grant"
+      end
+
+      # A vault-scoped write: a read-only credential stays refused.
+      test "is refused POST /api/logs", ctx do
+        conn =
+          ctx
+          |> unquote(fun)()
+          |> as()
+          |> put_req_header("x-vault-id", ctx.granted.id)
+          |> post("/api/logs", %{"logs" => [%{"level" => "info", "message" => "m"}]})
+
+        assert conn.status in [401, 403], conn.resp_body
+        refute conn.status == 200
+      end
+
+      # The MCP transport's other methods answer 405 whatever the credential.
+      test "DELETE /api/mcp still reaches its 405", ctx do
+        conn = ctx |> unquote(fun)() |> as() |> delete("/api/mcp")
+        assert conn.status == 405
       end
 
       test "is refused POST /api/vaults/register", ctx do
@@ -147,6 +179,27 @@ defmodule EngramWeb.Plugs.OAuthScopeEnforceTest do
         assert ctx |> unquote(fun)() |> as() |> get("/api/me") |> json_response(200)
       end
     end
+  end
+
+  # Only the POST is exempt: any other method on those paths is a write.
+  test "ReadOnlyRoutes exempts only POST on the read-only and no-vault-data paths" do
+    for path <- [
+          ~w(api feedback),
+          ~w(api telemetry spans),
+          ~w(api mcp),
+          ~w(api search)
+        ] do
+      refute EngramWeb.ReadOnlyRoutes.writes?(%Plug.Conn{method: "POST", path_info: path})
+
+      for method <- ~w(PUT PATCH DELETE) do
+        assert EngramWeb.ReadOnlyRoutes.writes?(%Plug.Conn{method: method, path_info: path}),
+               "#{method} /#{Enum.join(path, "/")}"
+      end
+    end
+  end
+
+  test "ReadOnlyRoutes treats POST /api/logs as a write" do
+    assert EngramWeb.ReadOnlyRoutes.writes?(%Plug.Conn{method: "POST", path_info: ~w(api logs)})
   end
 
   test "an API key that can write some vault is not blocked account-wide", ctx do

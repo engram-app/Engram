@@ -192,15 +192,65 @@ defmodule Engram.OAuthRefreshGraceTest do
   end
 
   # A successor revoked any other way (RFC 7009) must stay revoked: a replay
-  # of its parent is not a way back in.
+  # of its parent is not a way back in. The revoke marked the parent too, so
+  # the replay is refused as revoked (not reuse: see the Disconnect case).
   test "a replay never resurrects a successor revoked by the client", ctx do
     {:ok, %{refresh_token: rt2}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
     :ok = OAuth.revoke_token(rt2, ctx.client_id, nil)
 
-    assert {:error, {:invalid_grant, :refresh_token_reuse}} =
+    assert {:error, {:invalid_grant, :refresh_token_revoked}} =
              OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
 
     assert live_in_family(row(rt2).family_id) == 0
+  end
+
+  # Disconnect revokes every row of the family, the consumed ones too. The
+  # family is already dead, so a client presenting its old token later is
+  # answered revoked and raises no theft alert.
+  test "a consumed token presented after Disconnect is revoked, not logged as reuse", ctx do
+    {:ok, %{refresh_token: rt2}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+    old = row(ctx.rt1)
+    :ok = Engram.Connections.revoke_oauth_grant(old.user_id, old.family_id)
+
+    log =
+      capture_log(fn ->
+        for raw <- [ctx.rt1, rt2] do
+          assert {:error, {:invalid_grant, :refresh_token_revoked}} =
+                   OAuth.rotate_refresh_token(raw, ctx.client_id)
+        end
+      end)
+
+    refute log =~ "oauth_refresh_reuse"
+  end
+
+  # A used token that is revoked while its family still has a live row (one
+  # row revoked alone, as an older release did): presenting it revokes the
+  # family, which is the theft signal, logged once. Answered revoked.
+  test "a used token that first revokes its family is logged as reuse, once", ctx do
+    {:ok, %{refresh_token: rt2}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+
+    ctx.rt1
+    |> row()
+    |> Ecto.Changeset.change(revoked_at: DateTime.utc_now(:second))
+    |> Repo.update!(skip_tenant_check: true)
+
+    log =
+      capture_log(fn ->
+        assert {:error, {:invalid_grant, :refresh_token_revoked}} =
+                 OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+      end)
+
+    assert log =~ "oauth_refresh_reuse"
+    assert log =~ "reason=family_revoked"
+    assert row(rt2).revoked_at
+
+    log =
+      capture_log(fn ->
+        assert {:error, {:invalid_grant, :refresh_token_revoked}} =
+                 OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+      end)
+
+    refute log =~ "oauth_refresh_reuse"
   end
 
   # Review of #1974: every re-issue is visible, with whether it came from the
@@ -266,10 +316,21 @@ defmodule Engram.OAuthRefreshGraceTest do
   test "cleanup keeps used refresh tokens long enough for reuse detection", ctx do
     {:ok, %{refresh_token: rt2}} = OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
     age_consumed(ctx.rt1, 31 * 60)
-
     {:ok, %{refresh_token: rt3}} = OAuth.rotate_refresh_token(rt2, ctx.client_id)
-    :ok = OAuth.revoke_token(rt3, ctx.client_id, nil)
 
+    OAuth.cleanup_expired()
+    assert row(ctx.rt1).consumed_at
+
+    # The family is live (rt3), so the replay is reuse and revokes it.
+    log =
+      capture_log(fn ->
+        assert {:error, {:invalid_grant, :refresh_token_reuse}} =
+                 OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
+      end)
+
+    assert log =~ "oauth_refresh_reuse"
+
+    # Revoked rows are kept well past the window too.
     rt3
     |> row()
     |> Ecto.Changeset.change(revoked_at: DateTime.add(DateTime.utc_now(:second), -31 * 60))
@@ -279,13 +340,5 @@ defmodule Engram.OAuthRefreshGraceTest do
 
     assert row(ctx.rt1).consumed_at
     assert row(rt3).revoked_at
-
-    log =
-      capture_log(fn ->
-        assert {:error, {:invalid_grant, :refresh_token_reuse}} =
-                 OAuth.rotate_refresh_token(ctx.rt1, ctx.client_id)
-      end)
-
-    assert log =~ "oauth_refresh_reuse"
   end
 end

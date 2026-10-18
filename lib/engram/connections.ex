@@ -181,7 +181,7 @@ defmodule Engram.Connections do
 
     for t <- rows,
         scope = Permissions.from_claims(Engram.OAuth.access_claims(t)),
-        Permissions.allows?(scope, %{id: vault_id}),
+        Permissions.decide(scope, %{id: vault_id}, :read) == :ok,
         keep?.(scope),
         uniq: true,
         do: t.family_id
@@ -320,21 +320,22 @@ defmodule Engram.Connections do
   `vault_id` for `user_id`.
 
   Called at vault soft-delete time so the connections page clears immediately.
-  Idempotent — safe to call twice.
+  Idempotent — safe to call twice. The owner's sockets are kicked once after
+  commit if any token went (`drop_vault_from_grants/3` decides it).
   """
   @spec revoke_by_vault(Ecto.UUID.t(), Ecto.UUID.t()) :: :ok
   def revoke_by_vault(user_id, vault_id) do
-    _ = drop_vault_from_grants(user_id, vault_id)
+    {devices, _} =
+      Repo.update_all(
+        from(rt in DeviceRefreshToken,
+          where: rt.user_id == ^user_id,
+          where: rt.vault_id == ^vault_id,
+          where: is_nil(rt.revoked_at)
+        ),
+        set: [revoked_at: DateTime.utc_now(:second)]
+      )
 
-    Repo.update_all(
-      from(rt in DeviceRefreshToken,
-        where: rt.user_id == ^user_id,
-        where: rt.vault_id == ^vault_id,
-        where: is_nil(rt.revoked_at)
-      ),
-      set: [revoked_at: DateTime.utc_now(:second)]
-    )
-
+    _ = drop_vault_from_grants(user_id, vault_id, kick_owner: devices > 0)
     :ok
   end
 
@@ -364,21 +365,30 @@ defmodule Engram.Connections do
 
   Run at soft delete (`revoke_by_vault/2`) and again at purge (`CleanupVault`),
   which catches a grant a soft delete missed before its rows can go.
+
+  Live vaults are read under the grant lock, so a vault created or restored
+  meanwhile is judged as it is now.
+
+  The owner's sockets are kicked once after commit when a grant changed.
+  `kick_owner: true` asks for that kick even when none did, for a caller
+  that revoked other credentials in the same transaction (`CleanupVault`'s
+  keys, `revoke_by_vault/2`'s device tokens): one kick either way, decided
+  here.
   """
-  @spec drop_vault_from_grants(Ecto.UUID.t(), Ecto.UUID.t()) :: non_neg_integer()
-  def drop_vault_from_grants(user_id, vault_id) do
+  @spec drop_vault_from_grants(Ecto.UUID.t(), Ecto.UUID.t(), keyword()) :: non_neg_integer()
+  def drop_vault_from_grants(user_id, vault_id, opts \\ []) do
     {:ok, revoked} =
       Repo.transaction_after_commit(fn ->
         # Rotation copies a family's state under the same lock, so a
         # successor minted concurrently cannot undo the narrowing below.
         Engram.OAuth.lock_grants!(user_id)
-        do_drop_vault_from_grants(user_id, vault_id)
+        do_drop_vault_from_grants(user_id, vault_id, Keyword.get(opts, :kick_owner, false))
       end)
 
     revoked
   end
 
-  defp do_drop_vault_from_grants(user_id, vault_id) do
+  defp do_drop_vault_from_grants(user_id, vault_id, kick_owner) do
     {_, narrowed} =
       Repo.update_all(
         from(t in RefreshToken,
@@ -425,7 +435,14 @@ defmodule Engram.Connections do
          |> leveled_reaching(vault_id, &(not Permissions.reaches_anything?(&1, live)))
          |> revoke_families())
 
-    Engram.OAuth.grants_changed(narrowed ++ revoked)
+    case narrowed ++ revoked do
+      [] when kick_owner ->
+        Repo.after_commit(fn -> Engram.Auth.SessionInvalidator.disconnect_user(user_id) end)
+
+      changed ->
+        Engram.OAuth.grants_changed(changed)
+    end
+
     revoked |> Enum.uniq_by(&elem(&1, 0)) |> length()
   end
 
@@ -553,7 +570,7 @@ defmodule Engram.Connections do
   defp leveled_vault_ids(%{leveled: true, access: access} = row, visible),
     do: %{
       Map.delete(row, :leveled)
-      | vault_ids: for(v <- visible, Permissions.allows?(access, v), do: v.id)
+      | vault_ids: for(v <- visible, Permissions.decide(access, v, :read) == :ok, do: v.id)
     }
 
   defp leveled_vault_ids(row, _visible), do: Map.delete(row, :leveled)

@@ -14,16 +14,32 @@ defmodule EngramWeb.ReadOnlyRoutes do
     * `/api/search`: a query, sent as a body.
     * `/api/billing/plan-change/preview`: prices a hypothetical plan swap,
       changes and mints nothing (see the router).
+
+  These POSTs write, but no vault data (no note, folder, attachment or
+  vault), so a read-only credential may make them, exactly as it may call
+  the MCP `send_feedback` tool (`Engram.MCP.Tools.writes_vault?/1`):
+
+    * `/api/feedback`: a message to the Engram team.
+    * `/api/telemetry/spans`: the client's trace spans.
+
+  `POST /api/logs` is NOT here: it stores lines against the addressed vault,
+  a vault-scoped write a read-only credential is refused. The MCP
+  transport's GET and DELETE answer 405 on an auth-free route, so no
+  exemption is needed for them.
   """
 
   @safe_methods ~w(GET HEAD OPTIONS)
   @read_only_posts [
     ["api", "mcp"],
     ["api", "search"],
-    ["api", "billing", "plan-change", "preview"]
+    ["api", "billing", "plan-change", "preview"],
+    # Write no vault data (above).
+    ["api", "feedback"],
+    ["api", "telemetry", "spans"]
   ]
 
+  # Only the POST on these paths is exempt; any other method there writes.
   @spec writes?(Plug.Conn.t()) :: boolean()
   def writes?(%Plug.Conn{method: method, path_info: path}),
-    do: method not in @safe_methods and path not in @read_only_posts
+    do: method not in @safe_methods and not (method == "POST" and path in @read_only_posts)
 end

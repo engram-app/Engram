@@ -41,9 +41,12 @@ defmodule EngramWeb.Plugs.Auth do
         |> assign_grant_claims(claims)
 
       {:ok, user, api_key} ->
+        # A raw API key carries no grant. Said here so `OAuthScopeEnforce`
+        # does not verify the key as a JWT to find that out.
         conn
         |> assign(:current_user, Engram.Billing.with_subscription(user))
         |> assign(:current_api_key, api_key)
+        |> assign_grant_claims(:error)
 
       {:error, reason} ->
         Logger.warning(

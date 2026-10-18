@@ -741,7 +741,7 @@ defmodule Engram.OAuth do
   @doc """
   Serializes, for one user, rotation (`rotate_refresh_token/3`) with every
   writer that narrows or revokes that user's grants: vault deletion
-  (`Engram.Connections.drop_vault_from_grants/2`) and every revoke
+  (`Engram.Connections.drop_vault_from_grants/3`) and every revoke
   (`revoke_refresh_tokens/2`), and the token deletes in `cleanup_expired/0`.
   A transaction-scoped
   advisory lock: the caller must be inside a transaction, and must take it
@@ -762,32 +762,38 @@ defmodule Engram.OAuth do
     grant_error(:refresh_token_reuse)
   end
 
-  defp report({:error, reason}, _rt), do: grant_error(reason)
-
-  # Consumed first, even when also revoked: presenting a token after it was
-  # used is a replay whatever happened to the family since (an RFC 7009 revoke
-  # marks every row of it, consumed ones included). Grace needs a live family.
-  defp decide({%RefreshToken{consumed_at: %DateTime{} = at} = rt, family_live}, ip) do
-    with true <- family_live,
-         true <- DateTime.diff(DateTime.utc_now(), at) <= @refresh_reuse_grace_seconds,
-         {:ok, response, ip_matched} <- grace_reissue(rt, ip) do
-      {:ok, response, {:grace, ip_matched}}
-    else
-      _not_eligible ->
-        revoke_family(rt.family_id)
-        {:error, :refresh_token_reuse}
-    end
+  defp report({:error, :revoked_after_use}, rt) do
+    log_reuse(rt, within_grace: false, family_revoked: true)
+    grant_error(:refresh_token_revoked)
   end
 
-  # Revoked: Disconnect, RFC 7009 or an earlier replay. Not a theft signal in
-  # itself, so it is reported as revoked and never logged as reuse. Liveness is
-  # family-wide (`family_unrevoked/1`), so a family with any revoked row mints
-  # nothing, whichever of its rows was marked: one read just before a family
-  # revoke, or one a release that revoked a single row left unmarked.
+  defp report({:error, reason}, _rt), do: grant_error(reason)
+
+  # Revoked first, even when also consumed: Disconnect, RFC 7009 or an
+  # earlier replay. Each revokes every row of the family, consumed ones
+  # included, so a disconnected client presenting its old token lands here.
+  # Answered as revoked; logged as reuse only when this presentation is what
+  # revokes the family (`refuse_revoked/1`). Liveness is family-wide
+  # (`family_unrevoked/1`), so a family with any revoked row mints nothing,
+  # whichever of its rows was marked: one read just before a family revoke,
+  # or one a release that revoked a single row left unmarked.
   defp decide({%RefreshToken{revoked_at: %DateTime{}} = rt, _family_live}, _ip),
     do: refuse_revoked(rt)
 
   defp decide({%RefreshToken{} = rt, false = _family_live}, _ip), do: refuse_revoked(rt)
+
+  # Consumed, in a live family: a replay. Inside the grace window it may be a
+  # lost rotation response (`grace_reissue/2`); otherwise it is reuse.
+  defp decide({%RefreshToken{consumed_at: %DateTime{} = at} = rt, true = _family_live}, ip) do
+    with true <- DateTime.diff(DateTime.utc_now(), at) <= @refresh_reuse_grace_seconds,
+         {:ok, response, ip_matched} <- grace_reissue(rt, ip) do
+      {:ok, response, {:grace, ip_matched}}
+    else
+      _not_eligible ->
+        _ = revoke_family(rt.family_id)
+        {:error, :refresh_token_reuse}
+    end
+  end
 
   defp decide({%RefreshToken{expires_at: exp} = rt, _family_live}, ip) do
     if DateTime.compare(DateTime.utc_now(), exp) == :gt do
@@ -809,9 +815,15 @@ defmodule Engram.OAuth do
     end
   end
 
+  # Answered as revoked. A used token whose presentation is what revokes the
+  # family (some row of it was still live) is also reported (`report/2`) as
+  # reuse: an exchanged token turning up again is the theft signal. Once the
+  # family is dead (Disconnect, RFC 7009, an earlier replay), presenting any
+  # of its tokens changes nothing and is not logged again.
   defp refuse_revoked(rt) do
-    revoke_family(rt.family_id)
-    {:error, :refresh_token_revoked}
+    if revoke_family(rt.family_id) != [] and rt.consumed_at,
+      do: {:error, :revoked_after_use},
+      else: {:error, :refresh_token_revoked}
   end
 
   # The presented row, locked, and whether its family is live.
@@ -849,7 +861,8 @@ defmodule Engram.OAuth do
         skip_tenant_check: true
       )
 
-    grants_changed(changed)
+    :ok = grants_changed(changed)
+    changed
   end
 
   defp family_first_inserted_at(family_id) do
@@ -979,7 +992,8 @@ defmodule Engram.OAuth do
     # Strings: the text formatter drops `false` metadata entirely.
     metadata =
       [within_grace: to_string(within_grace), client_id: rt.client_id, family_id: rt.family_id] ++
-        if(within_grace, do: [ip_matched: to_string(Keyword.fetch!(opts, :ip_matched))], else: [])
+        if(within_grace, do: [ip_matched: to_string(Keyword.fetch!(opts, :ip_matched))], else: []) ++
+        if(opts[:family_revoked], do: [reason: "family_revoked"], else: [])
 
     Logger.warning(
       if(within_grace, do: "oauth_refresh_grace_reissue", else: "oauth_refresh_reuse"),
@@ -1297,6 +1311,14 @@ defmodule Engram.OAuth do
     end
   end
 
+  # No `gid`. For an OAuth access token that means nothing names its grant,
+  # so a revoke, narrowing or vault-delete narrowing does not reach it: it
+  # keeps the claims it was minted with until `exp`. Only tokens minted
+  # before the `gid` claim existed lack it, so the window is bounded by the
+  # 15-minute access-token TTL (`Engram.Token.ttl_seconds/0`). No lookup can
+  # close it: the token carries no family id, and its `jti` is random and
+  # stored nowhere. Its refresh token, once revoked or narrowed, mints
+  # nothing wider.
   def expand_claims(claims), do: {:ok, claims}
 
   # The grant behind `gid`, or nil when it is revoked, gone, or not the
@@ -1440,7 +1462,7 @@ defmodule Engram.OAuth do
   # here widens nothing for them. The JWT's scalar claim has no such
   # constraint and carries the first id or the sentinel. A pre-levels list
   # keeps its first id; vault deletion repoints it
-  # (`Connections.drop_vault_from_grants/2`).
+  # (`Connections.drop_vault_from_grants/3`).
   defp scalar_vault_id_column(%{vault_access: nil, vault_ids: ids}), do: scalar_vault_id(ids)
   defp scalar_vault_id_column(_leveled), do: nil
 
@@ -1468,7 +1490,7 @@ defmodule Engram.OAuth do
       # whole family goes. `grants_changed/1` evicts the cached grant (its
       # access tokens answer 401 at once) and disconnects its sockets.
       %RefreshToken{client_id: ^owner} = rt ->
-        revoke_family(rt.family_id)
+        _ = revoke_family(rt.family_id)
         :ok
 
       _ ->

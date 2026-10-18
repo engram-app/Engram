@@ -799,7 +799,7 @@ defmodule EngramWeb.McpController do
   # error: there the tool is not in this credential's `tools/list` at all.
   defp check_vault_writable(conn, tool, vault) do
     if not Tools.writes_vault?(tool.name) or
-         Engram.Permissions.allows_write?(Engram.Permissions.vault_scope(conn), vault) do
+         Engram.Permissions.decide(Engram.Permissions.vault_scope(conn), vault, :write) == :ok do
       :ok
     else
       {:error,
@@ -1407,7 +1407,7 @@ defmodule EngramWeb.McpController do
     # The scope check below is unchanged and still runs on the resolved vault,
     # so a name cannot reach anything a UUID could not.
     with {:ok, vault} <- Engram.Vaults.get_vault_by_ref(user, requested),
-         :ok <- Engram.Permissions.check(Engram.Permissions.vault_scope(conn), vault) do
+         :ok <- Engram.Permissions.decide(Engram.Permissions.vault_scope(conn), vault, :read) do
       {:ok, vault}
     else
       # Two vaults share this display name (#1665). Naming the candidates is

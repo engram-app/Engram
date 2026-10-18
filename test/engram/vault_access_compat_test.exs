@@ -367,6 +367,58 @@ defmodule Engram.VaultAccessCompatTest do
     end
   end
 
+  # A key without levels (NULL `default_access`, the encoding a pre-levels
+  # release reads) restored and listed every deleted vault, whenever it was
+  # deleted. Levels must not change that: the created-at bound is for leveled
+  # keys and OAuth grants.
+  describe "a pre-levels key and the trash" do
+    import Phoenix.ConnTest
+    import Plug.Conn, only: [put_req_header: 3]
+    @endpoint EngramWeb.Endpoint
+
+    setup ctx do
+      insert(:user_limit_override, user: ctx.user, key: "api_rps_cap", value: %{"v" => 100})
+      :ok
+    end
+
+    defp backdate_deletion(user, vault) do
+      {:ok, _} = Vaults.delete_vault(user, vault.id)
+      id = vault.id
+
+      Repo.update_all(
+        from(v in Engram.Vaults.Vault, where: v.id == ^id),
+        [set: [deleted_at: DateTime.add(DateTime.utc_now(:second), -3600, :second)]],
+        skip_tenant_check: true
+      )
+    end
+
+    defp key_conn(raw), do: put_req_header(build_conn(), "authorization", "Bearer #{raw}")
+
+    test "an all-vaults key lists and restores a vault deleted before it", ctx do
+      backdate_deletion(ctx.user, ctx.n)
+      {:ok, raw, key} = Accounts.create_api_key(ctx.user, "legacy")
+      assert key.default_access == nil
+
+      ids =
+        raw
+        |> key_conn()
+        |> get("/api/vaults?deleted=true")
+        |> json_response(200)
+        |> Map.fetch!("vaults")
+        |> Enum.map(& &1["id"])
+
+      assert to_string(ctx.n.id) in ids
+      assert (raw |> key_conn() |> post("/api/vaults/#{ctx.n.id}/restore")).status == 200
+    end
+
+    test "a leveled all-write key still cannot restore one deleted before it", ctx do
+      backdate_deletion(ctx.user, ctx.n)
+      {:ok, raw, _} = Accounts.create_api_key(ctx.user, "leveled", {%{}, "write"})
+
+      refute (raw |> key_conn() |> post("/api/vaults/#{ctx.n.id}/restore")).status == 200
+    end
+  end
+
   defp insert_legacy_key(user, raw) do
     {:ok, key} =
       Repo.with_tenant(user.id, fn ->

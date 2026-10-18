@@ -28,7 +28,9 @@ defmodule EngramWeb.Plugs.OAuthScopeEnforce do
   grant, an all-read grant or a read-only API key, #174 / #332) and the
   request can write (`EngramWeb.ReadOnlyRoutes`). That covers the
   account-level routes no vault check guards (`PATCH /api/me`, onboarding
-  actions, telemetry, vault registration). The MCP access token also
+  actions, vault registration). The POSTs that write no vault data
+  (`/api/feedback`, `/api/telemetry/spans`) stay allowed for such a
+  credential, as `send_feedback` is on MCP (`ReadOnlyRoutes` lists them). The MCP access token also
   authenticates the REST API (`get_attachment_upload_target` tells the model
   to POST there with it), so "read only" would be a lie if only the MCP tool
   list enforced it.

@@ -270,6 +270,24 @@ defmodule EngramWeb.ChannelGate do
 
   def vault_scope(assigns), do: Engram.Permissions.vault_scope(assigns)
 
+  @doc """
+  The join decision for a vault channel: `Engram.Permissions.decide/3` on
+  the socket's credential as it stands now (`vault_scope/1`). `sync:` needs
+  read, `crdt:` write. Judged at join only; a later narrowing or revoke
+  closes the socket through the owner's disconnect broadcast.
+  """
+  @spec vault_access(Phoenix.Socket.t(), map(), :read | :write) ::
+          :ok | {:error, %{reason: String.t()}}
+  def vault_access(%Phoenix.Socket{assigns: assigns}, vault, need) do
+    case Engram.Permissions.decide(vault_scope(assigns), vault, need) do
+      :ok -> :ok
+      :read_only -> {:error, %{reason: "read_only_vault"}}
+      :revoked -> {:error, %{reason: "unauthorized"}}
+      # Same reply as a missing vault: no existence oracle.
+      :forbidden -> {:error, %{reason: "vault_not_found"}}
+    end
+  end
+
   # Each of these matches STRICTLY on the field it gates rather than falling
   # through a `_user` catch-all, so a renamed or retyped column CRASHES here
   # instead of silently passing every account. Same argument

@@ -79,10 +79,8 @@ defmodule EngramWeb.UserChannel do
   def handle_out(event, %{vault_id: vault_id} = payload, socket) do
     # The grant as it stands now: a vault narrowed away after join stops
     # receiving events at once, and a revoked grant receives none.
-    case ChannelGate.vault_scope(socket.assigns) do
-      :revoked -> :ok
-      scope -> if Permissions.allows?(scope, %{id: vault_id}), do: push(socket, event, payload)
-    end
+    if Permissions.decide(ChannelGate.vault_scope(socket.assigns), %{id: vault_id}, :read) == :ok,
+      do: push(socket, event, payload)
 
     {:noreply, socket}
   end
