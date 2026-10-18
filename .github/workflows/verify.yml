@@ -194,8 +194,13 @@ jobs:
       skip-e2e-browser: ${{ steps.skips.outputs.skip-e2e-browser }}
       skip-n1-compat: ${{ steps.skips.outputs.skip-n1-compat }}
       skip-build-and-publish-image: ${{ steps.skips.outputs.skip-build-and-publish-image }}
-      # Per-job hashes — consumed by record-job-markers so a recorded marker
-      # matches the exact hash a later run looks up (no recompute on the recorder).
+      # Per-job hashes, consumed by each job's "Record pass marker" step so a
+      # recorded marker matches the exact hash a later run looks up.
+      # Invariant: a ci-<job>:<hash> marker means "this job ran to FULL success
+      # for this content". So: no marker from the nightly or a targeted
+      # `[e2e: ...]` subset, `mix test --stale` stays removed, and
+      # migration-gates never records one (its early `exit 0` paths are green
+      # without running the rollforward; it is cheap and always runs).
       hash-lint: ${{ steps.skips.outputs.hash-lint }}
       hash-unit-tests: ${{ steps.skips.outputs.hash-unit-tests }}
       hash-storage-database: ${{ steps.skips.outputs.hash-storage-database }}
@@ -488,7 +493,7 @@ jobs:
           # main is checked EXPLICITLY (IS_MAIN), not via is-full: main is no
           # longer a full run, but a squash-merge whose body still carries the
           # feature branch's [e2e: ...] tag must not narrow main's e2e matrix
-          # to one -k subset — which would also let record-job-markers seed a
+          # to one -k subset — which would also let a job's marker step seed a
           # full-hash e2e marker off that subset, and fail the ci aggregate on
           # main (targeted runs are deliberately non-mergeable).
           #
@@ -558,10 +563,16 @@ jobs:
     # skipped this prebuild, cascade-skipping every e2e/storage job, so "main
     # runs everything full" silently did not hold. This makes the coarse gate
     # is-full-aware to match the per-job layer.
+    #
+    # Not on a bot PR (release-please/Dependabot) whose storage-database is
+    # marker-skipped: every other consumer skips on bot-pr, so the image had no
+    # reader. The release PR paid ~460s here on every merge to main, because
+    # the image tag hashes raw mix.exs and release-please bumps its version.
     if: |
-      needs.fingerprint.outputs.is-full == 'true'
-      || needs.fingerprint.outputs.e2e-cache-hit != 'true'
-      || (github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true')
+      (needs.fingerprint.outputs.is-full == 'true'
+       || needs.fingerprint.outputs.e2e-cache-hit != 'true'
+       || (github.event_name != 'repository_dispatch' && needs.fingerprint.outputs.backend-cache-hit != 'true'))
+      && !(needs.fingerprint.outputs.bot-pr == 'true' && needs.fingerprint.outputs.skip-storage-database == 'true')
     runs-on: [self-hosted, linux, x64, isolated]
     outputs:
       image: ${{ steps.tag.outputs.image }}
@@ -1694,6 +1705,18 @@ jobs:
           rm -rf ci-artifacts/
           find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
+      # Seed this job's fingerprint marker the moment it is green, so a merge
+      # right after `ci` passes leaves main nothing to redo. (A single
+      # record-job-markers job used to wait for every e2e suite; merging or
+      # cancelling before e2e finished recorded nothing and main re-ran it
+      # all.) Invariants: see the hash-* outputs of the fingerprint job.
+      - name: Record pass marker
+        if: success() && github.event_name != 'schedule' && needs.fingerprint.outputs.e2e-target-suite == ''
+        env:
+          MARKER_HASH: ${{ needs.fingerprint.outputs.hash-e2e-clerk }}
+        run: IS_FULL_RUN=true bash ci/fingerprint/record.sh record e2e-clerk
+
+
   e2e-crdt:
     # Local-auth E2E suite: tests/crdt/ (spec §12a, Obsidian/Xvfb/CDP machinery
     # cloned from e2e-clerk) PLUS tests/api_only/ (absorbed from the deleted
@@ -2241,6 +2264,14 @@ jobs:
           rm -rf ci-artifacts/
           find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
+
+      # Seed this job's marker as soon as it is green (see e2e-clerk).
+      - name: Record pass marker
+        if: success() && github.event_name != 'schedule' && needs.fingerprint.outputs.e2e-target-suite == ''
+        env:
+          MARKER_HASH: ${{ needs.fingerprint.outputs.hash-e2e-crdt }}
+        run: IS_FULL_RUN=true bash ci/fingerprint/record.sh record e2e-crdt
+
   # REPORT-ONLY (intentionally NOT in the required `ci` aggregate gate below).
   # This tier boots the REAL plugin SyncEngine against the REAL backend over
   # real WebSockets with event barriers (no wall-clock sleeps) — deterministic
@@ -2255,6 +2286,7 @@ jobs:
   # (#1078) runs this job on schedule, so its flake rate is measurable in the
   # ci-ledger. Flip only once green with zero infra-only reds (docker --wait /
   # docker pull / bun install --frozen-lockfile).
+
   headless-protocol:
     # Headless PROTOCOL tier (e2e/headless/): real plugin SyncEngine vs the real
     # backend over real WebSockets, event barriers, no wall-clock waits. Mirrors
@@ -2840,6 +2872,14 @@ jobs:
         if: always()
         run: find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
+      # Seed this job's marker as soon as it is green (see e2e-clerk).
+      - name: Record pass marker
+        if: success() && github.event_name != 'schedule' && needs.fingerprint.outputs.e2e-target-suite == ''
+        env:
+          MARKER_HASH: ${{ needs.fingerprint.outputs.hash-unit-tests }}
+        run: IS_FULL_RUN=true bash ci/fingerprint/record.sh record unit-tests
+
+
   storage-database:
     # Image-only, like the e2e suites: consumes only
     # prebuild-ci-image.outputs.image, so prebuild-mix is dropped from needs
@@ -2980,6 +3020,14 @@ jobs:
           docker compose -f ci/compose.database.yml -p "$CI_PROJECT" down -v --remove-orphans --rmi local 2>/dev/null || true
           docker image prune -f 2>/dev/null || true
           docker volume prune -f 2>/dev/null || true
+
+      # Seed this job's marker as soon as it is green (see e2e-clerk).
+      - name: Record pass marker
+        if: success() && github.event_name != 'schedule' && needs.fingerprint.outputs.e2e-target-suite == ''
+        env:
+          MARKER_HASH: ${{ needs.fingerprint.outputs.hash-storage-database }}
+        run: IS_FULL_RUN=true bash ci/fingerprint/record.sh record storage-database
+
 
   lint:
     needs: [fingerprint, prebuild-mix]
@@ -3254,6 +3302,14 @@ jobs:
         run: |
           mkdir -p priv/plts
           mix dialyzer --quiet
+
+
+      # Seed this job's marker as soon as it is green (see e2e-clerk).
+      - name: Record pass marker
+        if: success() && github.event_name != 'schedule' && needs.fingerprint.outputs.e2e-target-suite == ''
+        env:
+          MARKER_HASH: ${{ needs.fingerprint.outputs.hash-lint }}
+        run: IS_FULL_RUN=true bash ci/fingerprint/record.sh record lint
 
   # ── Hygiene checks (folded from lint.yml + frontend-audit.yml) ──
   # Run on every trigger except cross-repo plugin dispatch (plugin
@@ -4514,6 +4570,17 @@ jobs:
           docker rm -fv "$PG_CONTAINER" 2>/dev/null || true
           find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
+
+      # Seed this job's marker as soon as it is green (see e2e-clerk).
+      - name: Record pass marker
+        if: success() && github.event_name != 'schedule' && needs.fingerprint.outputs.e2e-target-suite == ''
+        # This marker covers the PR tier (English). The per-locale specs run
+        # only on the nightly and force_full release gate, and both bypass
+        # markers, so it can never skip them where they gate.
+        env:
+          MARKER_HASH: ${{ needs.fingerprint.outputs.hash-e2e-browser }}
+        run: IS_FULL_RUN=true bash ci/fingerprint/record.sh record e2e-browser
+
   # #360 — prove the legal hashes agree across all three repos. The per-repo
   # check (frontend build's check-legal-manifest.ts) only proves a repo's own
   # manifest matches its own markdown; this re-hashes the MARKETING markdown
@@ -4521,6 +4588,7 @@ jobs:
   # one-sided legal bump fails here instead of 409-ing every signup in prod
   # (the automated backstop for the manual #667 launch gate). Marketing CI runs
   # the mirror check so a marketing-only bump is caught there too.
+
   ci:
     # ALWAYS runs. It used to carry the same cache-hit condition as the jobs it
     # aggregates, which meant that on the one case the provenance report exists
@@ -4892,98 +4960,7 @@ jobs:
           rm -rf "$WORKDIR"
           echo "::notice::Saved e2e marker $TAG"
 
-  # Fine-grained per-job markers (ci-<job>:<hash-job>) in LOCAL_REGISTRY — the
-  # forward-looking replacement for the coarse ci-pass/ci-e2e-pass markers above
-  # (legacy record-pass retired in Phase 5).
-  #
-  # Branches now PRODUCE markers, not just consume them. This was gated on
-  # `is-full` (main only), which made the store write-only on main and
-  # read-only on branches: main seeded markers main would never read, and the
-  # squash-merge push — the exact case the ref-agnostic registry was built for
-  # — could never hit one, because nothing had ever seeded the merged tree's
-  # hash. Branch-seeds + main-consumes closes that loop.
-  #
-  # The invariant that makes seeding from a branch safe: a marker must mean
-  # "this job ran to FULL success for this content hash". Two reduced modes
-  # could violate it —
-  #   * `mix test --stale` on PRs: REMOVED (unit-tests always runs the whole
-  #     suite now; it bought ~1min and cost this invariant).
-  #   * targeted e2e (`[e2e: suite/pattern]`): still exists, so the whole job
-  #     is gated on e2e-target-suite being empty. A `pytest -k` subset must
-  #     never seed a full-hash e2e marker. Targeted runs are deliberately
-  #     non-mergeable anyway, so losing marker seeding there costs nothing.
-  # The nightly (schedule) still never seeds: its e2e results are measurement,
-  # explicitly non-gating, and tolerated-flaky (see ledger-append).
-  #
-  # Each job seeds its own marker independently iff it ran to success this run;
-  # skipped/failed jobs are left unmarked (see `record()` below). Hashes come
-  # straight from the fingerprint job (MARKER_HASH) so a recorded tag always
-  # matches the hash a later run looks up — no recompute, no
-  # BEAM-on-recorder-host dependency.
-  record-job-markers:
-    if: always() && github.event_name != 'schedule' && needs.fingerprint.outputs.e2e-target-suite == ''
-    # migration-gates is intentionally EXCLUDED: it has several early `exit 0` success
-    # paths (no migration changes) that return
-    # green WITHOUT running the migration rollforward. Recording a marker off
-    # those would let a later identical-content PR skip the real check. It is a
-    # cheap branch-only job, so it simply always runs (never marker-skipped).
-    needs: [fingerprint, lint, unit-tests, storage-database, e2e-clerk, e2e-crdt, e2e-browser]
-    runs-on: [self-hosted, linux, x64, isolated]
-    env:
-      LINT_RESULT: ${{ needs.lint.result }}
-      UNIT_TESTS_RESULT: ${{ needs.unit-tests.result }}
-      STORAGE_DATABASE_RESULT: ${{ needs.storage-database.result }}
-      E2E_CLERK_RESULT: ${{ needs.e2e-clerk.result }}
-      E2E_CRDT_RESULT: ${{ needs.e2e-crdt.result }}
-      E2E_BROWSER_RESULT: ${{ needs.e2e-browser.result }}
-      HASH_LINT: ${{ needs.fingerprint.outputs.hash-lint }}
-      HASH_UNIT_TESTS: ${{ needs.fingerprint.outputs.hash-unit-tests }}
-      HASH_STORAGE_DATABASE: ${{ needs.fingerprint.outputs.hash-storage-database }}
-      HASH_E2E_CLERK: ${{ needs.fingerprint.outputs.hash-e2e-clerk }}
-      HASH_E2E_CRDT: ${{ needs.fingerprint.outputs.hash-e2e-crdt }}
-      HASH_E2E_BROWSER: ${{ needs.fingerprint.outputs.hash-e2e-browser }}
-    steps:
-      - uses: actions/checkout@v7
-      - name: Record per-job markers for jobs that passed this full run
-        run: |
-          set -uo pipefail
-          # record <job> <result> <hash>: seed ci-<job>:<hash> iff the job
-          # succeeded. record.sh self-guards on IS_FULL_RUN and uses MARKER_HASH
-          # verbatim (no recompute) so the tag matches the fingerprint lookup.
-          record() {
-            if [ "$2" != "success" ]; then
-              echo "::notice::skip marker $1 (result=$2)"
-              return 0
-            fi
-            if [ -z "$3" ]; then
-              echo "::warning::no hash for $1 — marker not recorded"
-              return 0
-            fi
-            IS_FULL_RUN=true MARKER_HASH="$3" bash ci/fingerprint/record.sh record "$1"
-          }
-          record lint             "$LINT_RESULT"             "$HASH_LINT"
-          record unit-tests       "$UNIT_TESTS_RESULT"       "$HASH_UNIT_TESTS"
-          record storage-database "$STORAGE_DATABASE_RESULT" "$HASH_STORAGE_DATABASE"
-          record e2e-clerk        "$E2E_CLERK_RESULT"        "$HASH_E2E_CLERK"
-          record e2e-crdt         "$E2E_CRDT_RESULT"         "$HASH_E2E_CRDT"
-          # e2e-browser's marker covers the PR tier (English). The per-locale
-          # specs run only on the nightly and force_full release gate, and both
-          # bypass markers, so this marker can never skip them where they gate.
-          record e2e-browser      "$E2E_BROWSER_RESULT"      "$HASH_E2E_BROWSER"
 
-  # Single source of truth for the backend/e2e commit status on plugin PRs.
-  # Runs on EVERY plugin dispatch (always()), needs all e2e suites, and posts
-  # one aggregate status. Supersedes two brittle mechanisms that left plugin
-  # PRs hung with no status:
-  #   * the e2e-clerk in-job reporter — e2e-clerk is skippable
-  #     (Clerk-quota / suite targeting), so it went silent when skipped;
-  #   * report-cached-pass-to-plugin — fired only on a FULL e2e cache-hit,
-  #     which was unreachable because the api_only slice (then its own
-  #     e2e-api job, since folded into e2e-clerk) always ran, so a
-  #     plugin-only change posted nothing.
-  # A skipped suite is a cached pass, not a failure — only a real
-  # failure/cancellation reds the check. curl (not gh CLI): engram-isolated
-  # runners don't ship gh on PATH.
   report-e2e-to-plugin:
     if: always() && github.event_name == 'repository_dispatch'
     needs: [e2e-clerk, e2e-crdt, e2e-browser]
