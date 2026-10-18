@@ -407,6 +407,9 @@ export default {
 	"Authorization failed": "인증 실패",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"이 코드는 유효하지 않거나 만료되었습니다. Obsidian에서 다시 시도하세요.",
+	"Welcome to Engram": "Engram에 오신 것을 환영합니다",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"첫 번째 보관함 이름을 지정하세요. Obsidian 노트가 이 보관함에 동기화됩니다.",
 	"Enter the code shown in your Obsidian plugin:": "Obsidian 플러그인에 표시된 코드를 입력하세요:",
 	"Verifying…": "확인 중입니다…",
 	Verify: "확인",
@@ -416,11 +419,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"연결 목록에 표시되어 기기를 구별할 수 있습니다.",
 	"Obsidian Vault Sync": "Obsidian 보관함 동기화",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"보관함 제한에 도달했습니다. 무료 플랜은 1개의 보관함을 포함합니다",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"무료 플랜에서는 새 보관함을 만들 수 없습니다. 위의 기존 보관함과 동기화하거나, 더 많은 보관함을 사용하려면 업그레이드하세요.",
-	"Upgrade plan": "업그레이드 플랜",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"무료 플랜에는 1개의 보관함이 포함되어 있으며, 이 장치는 위에 표시된 보관함과 동기화됩니다.",
+	"Need more vaults? Upgrade": "더 많은 보관함이 필요하신가요? 업그레이드하세요",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"동기화는 이 기기가 노트에 접근할 수 있도록 합니다. 직접 이 링크를 시작했다면 계속 진행하세요. 다른 사람이 이 페이지로 연결했다면, 이 페이지를 닫으세요.",
 	"Syncing…": "동기화 중…",
@@ -443,7 +444,6 @@ export default {
 	"Sync with an existing vault": "기존 보관함과 동기화합니다",
 	"(choose from {count} vaults)": "(다음 중 선택: {count} 보관함)",
 	"Or create a new vault": "또는 새 보관함을 만듭니다",
-	"Create your first vault": "첫 번째 보관함을 만듭니다",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"{os}에 동기화되는 '{vault}' 보관함이 연결된 장치 (최근 사용 {since})",
 	"the device on {os} that syncs your '{vault}' vault": "'{vault}' 보관함과 동기화되는 {os}의 장치",
@@ -820,6 +820,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"계속하기 전에 아래의 전체 약관을 읽어주세요. 저희 {privacy} (가입 시 확인)은 귀하의 데이터 처리 방식에 대한 설명을 담고 있습니다.",
 	"Connect {tool}": "{tool} 연결",
+	"Create your first vault": "첫 번째 보관함을 만듭니다",
 	"Join our Discord": "Discord 참여",
 	Join: "참여",
 	"Install the Obsidian plugin": "Obsidian 플러그인 설치",

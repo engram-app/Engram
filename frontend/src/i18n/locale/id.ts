@@ -417,6 +417,9 @@ export default {
 	"Authorization failed": "Otorisasi gagal",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Kode ini tidak valid atau telah kedaluwarsa. Silakan coba lagi dari Obsidian.",
+	"Welcome to Engram": "Selamat datang di Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Beri nama vault pertama Anda. Catatan Obsidian Anda akan disinkronkan ke dalamnya.",
 	"Enter the code shown in your Obsidian plugin:":
 		"Masukkan kode yang ditampilkan di plugin Obsidian Anda:",
 	"Verifying…": "Memverifikasi…",
@@ -427,11 +430,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Ditampilkan dalam daftar koneksi Anda sehingga Anda dapat membedakan perangkat Anda.",
 	"Obsidian Vault Sync": "Sinkronisasi Vault Obsidian",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Batas Vault tercapai: paket Gratis Anda mencakup 1 vault",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Anda tidak dapat membuat vault baru di paket Gratis. Sinkronkan dengan vault yang sudah ada di atas, atau tingkatkan untuk menambahkan lebih banyak.",
-	"Upgrade plan": "Tingkatkan paket",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Paket Gratis Anda mencakup 1 vault, jadi perangkat ini menyinkronkan dengan vault di atas.",
+	"Need more vaults? Upgrade": "Butuh lebih banyak vault? Tingkatkan",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"Sinkronisasi memberikan perangkat ini akses ke catatan Anda. Lanjutkan hanya jika Anda memulai tautan ini sendiri. Jika orang lain mengirim Anda ke sini, tutup halaman ini.",
 	"Syncing…": "Mensinkronkan…",
@@ -455,7 +456,6 @@ export default {
 	"Sync with an existing vault": "Sinkronkan dengan vault yang sudah ada",
 	"(choose from {count} vaults)": "(pilih dari {count} vault)",
 	"Or create a new vault": "Atau buat vault baru",
-	"Create your first vault": "Buat vault pertama Anda",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"perangkat di {os} yang menyinkronkan Vault '{vault}' Anda (terakhir aktif {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -837,6 +837,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Harap baca perjanjian lengkap di bawah ini sebelum melanjutkan. {privacy} kami (ditinjau saat pendaftaran) menjelaskan bagaimana kami menangani data Anda.",
 	"Connect {tool}": "Hubungkan {tool}",
+	"Create your first vault": "Buat vault pertama Anda",
 	"Join our Discord": "Bergabunglah dengan Discord kami",
 	Join: "Bergabung",
 	"Install the Obsidian plugin": "Instal plugin Obsidian",

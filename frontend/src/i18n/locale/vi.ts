@@ -413,6 +413,9 @@ export default {
 	"Authorization failed": "Xác thực thất bại",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Mã này không hợp lệ hoặc đã hết hạn. Vui lòng thử lại từ Obsidian.",
+	"Welcome to Engram": "Chào mừng bạn đến với Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Đặt tên cho kho lưu trữ đầu tiên của bạn. Các ghi chú Obsidian của bạn sẽ được đồng bộ hóa vào đó.",
 	"Enter the code shown in your Obsidian plugin:":
 		"Nhập mã hiển thị trong tiện ích Obsidian của bạn:",
 	"Verifying…": "Đang xác minh…",
@@ -423,11 +426,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Hiển thị trong danh sách kết nối của bạn để bạn có thể phân biệt các thiết bị.",
 	"Obsidian Vault Sync": "Đồng bộ hóa Kho lưu trữ Obsidian",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Đạt giới hạn kho lưu trữ: gói miễn phí của bạn bao gồm 1 kho lưu trữ",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Bạn không thể tạo kho lưu trữ mới trên gói miễn phí. Đồng bộ hóa với kho lưu trữ hiện có của bạn ở trên, hoặc nâng cấp để thêm nhiều hơn.",
-	"Upgrade plan": "Nâng cấp gói",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Gói miễn phí của bạn bao gồm 1 kho lưu trữ, vì vậy thiết bị này đồng bộ hóa với kho lưu trữ trên.",
+	"Need more vaults? Upgrade": "Cần thêm kho lưu trữ? Nâng cấp",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"Đồng bộ hóa cho phép thiết bị này truy cập ghi chú của bạn. Chỉ tiếp tục nếu bạn tự khởi động liên kết này. Nếu ai đó gửi bạn đến đây, hãy đóng trang này.",
 	"Syncing…": "Đang đồng bộ hóa…",
@@ -451,7 +452,6 @@ export default {
 	"Sync with an existing vault": "Đồng bộ hóa với một kho lưu trữ hiện có",
 	"(choose from {count} vaults)": "(chọn từ {count} kho lưu trữ)",
 	"Or create a new vault": "Hoặc tạo một kho lưu trữ mới",
-	"Create your first vault": "Tạo kho lưu trữ đầu tiên của bạn",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"thiết bị trên {os} đồng bộ hóa kho lưu trữ '{vault}' của bạn (lần hoạt động gần nhất {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -834,6 +834,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Vui lòng đọc toàn bộ bản hợp đồng bên dưới trước khi tiếp tục. Chính sách {privacy} của chúng tôi (được xem xét khi đăng ký) mô tả cách chúng tôi xử lý dữ liệu của bạn.",
 	"Connect {tool}": "Kết nối {tool}",
+	"Create your first vault": "Tạo kho lưu trữ đầu tiên của bạn",
 	"Join our Discord": "Tham gia Discord của chúng tôi",
 	Join: "Tham gia",
 	"Install the Obsidian plugin": "Cài đặt tiện ích Obsidian",

@@ -423,6 +423,9 @@ export default {
 	"Authorization failed": "Autorização falhou",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Este código é inválido ou expirou. Por favor, tente novamente a partir do Obsidian.",
+	"Welcome to Engram": "Bem-vindo ao Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Dê um nome ao seu primeiro cofre. Suas notas do Obsidian serão sincronizadas nele.",
 	"Enter the code shown in your Obsidian plugin:":
 		"Insira o código exibido no seu plugin do Obsidian:",
 	"Verifying…": "Verificando…",
@@ -433,11 +436,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Aparecerá na sua lista de conexões para que você possa diferenciar seus dispositivos.",
 	"Obsidian Vault Sync": "Sincronização do Cofre Obsidian",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Limite de cofres atingido: seu plano gratuito inclui 1 cofre",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Você não pode criar um novo cofre no plano gratuito. Sincronize com o seu cofre existente acima ou faça um upgrade para adicionar mais.",
-	"Upgrade plan": "Plano de upgrade",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Seu plano gratuito inclui 1 cofre, então este dispositivo sincroniza com o acima.",
+	"Need more vaults? Upgrade": "Precisa de mais cofres? Faça um upgrade",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"A sincronização permite que este dispositivo acesse suas notas. Continue apenas se você iniciou este processo. Se outra pessoa o direcionou para aqui, feche esta página.",
 	"Syncing…": "Sincronizando…",
@@ -461,7 +462,6 @@ export default {
 	"Sync with an existing vault": "Sincronizar com um cofre existente",
 	"(choose from {count} vaults)": "(escolha entre {count} cofres)",
 	"Or create a new vault": "Ou crie um novo cofre",
-	"Create your first vault": "Crie seu primeiro cofre",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"o dispositivo em {os} que sincroniza seu cofre '{vault}' (última atividade: {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -870,6 +870,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Por favor, leia o contrato completo abaixo antes de continuar. Nosso {privacy} (revisado durante o cadastro) descreve como lidamos com seus dados.",
 	"Connect {tool}": "Conectar {tool}",
+	"Create your first vault": "Crie seu primeiro cofre",
 	"Join our Discord": "Junte-se ao nosso Discord",
 	Join: "Junte-se",
 	"Install the Obsidian plugin": "Instale o plugin do Obsidian",

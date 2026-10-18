@@ -391,6 +391,9 @@ export default {
 	"Authorization failed": "授權失敗",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"此碼無效或已過期。請從 Obsidian 重新嘗試。",
+	"Welcome to Engram": "歡迎使用 Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"為你的第一個儲存庫命名。你的 Obsidian 筆記將同步到其中。",
 	"Enter the code shown in your Obsidian plugin:": "輸入您 Obsidian 插件中顯示的碼：",
 	"Verifying…": "驗證中…",
 	Verify: "驗證",
@@ -400,11 +403,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"在您的連線列表中顯示，以便區分您的裝置。",
 	"Obsidian Vault Sync": "Obsidian 儲存庫同步",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"已達儲存庫上限：您的免費方案包含 1 個儲存庫",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"您無法在免費方案中建立新的儲存庫。請與上方現有的儲存庫同步，或升級以新增更多。",
-	"Upgrade plan": "升級方案",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"您的免費方案包含 1 個儲存庫，此裝置同步的是上述儲存庫。",
+	"Need more vaults? Upgrade": "需要更多儲存庫嗎？升級",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"同步會讓此裝置存取您的筆記。僅在您自行啟動此連線時才繼續。如果是其他人將您引導至此，請關閉此頁面。",
 	"Syncing…": "同步中…",
@@ -427,7 +428,6 @@ export default {
 	"Sync with an existing vault": "與現有儲存庫同步",
 	"(choose from {count} vaults)": "(從 {count} 個儲存庫中選擇)",
 	"Or create a new vault": "或建立新的儲存庫",
-	"Create your first vault": "建立您的第一個儲存庫",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"與您的 '{vault}' 儲存庫同步的裝置 ({os}) (上次活動：{since})",
 	"the device on {os} that syncs your '{vault}' vault": "與您的 '{vault}' 儲存庫同步的 {os} 裝置",
@@ -796,6 +796,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"請在繼續之前，閱讀下方完整的協議。我們的 {privacy}（註冊時檢閱）說明我們如何處理您的資料。",
 	"Connect {tool}": "連接 {tool}",
+	"Create your first vault": "建立您的第一個儲存庫",
 	"Join our Discord": "加入我們的 Discord",
 	Join: "加入",
 	"Install the Obsidian plugin": "安裝 Obsidian 插件",

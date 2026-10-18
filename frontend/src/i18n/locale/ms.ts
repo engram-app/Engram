@@ -418,6 +418,9 @@ export default {
 	"Authorization failed": "Pengesahan gagal",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Kod ini tidak sah atau telah tamat tempoh. Sila cuba lagi dari Obsidian.",
+	"Welcome to Engram": "Selamat datang ke Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Namakan peti nota pertama anda. Nota Obsidian anda akan disegerakkan ke dalamnya.",
 	"Enter the code shown in your Obsidian plugin:":
 		"Masukkan kod yang ditunjukkan dalam plugin Obsidian anda:",
 	"Verifying…": "Mengesahkan…",
@@ -428,11 +431,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Ditunjukkan dalam senarai sambungan anda supaya anda boleh membezakan peranti anda.",
 	"Obsidian Vault Sync": "Obsidian Segerakan Peti Nota",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Had petinya telah dicapai: pelan percuma anda termasuk 1 petinya",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Anda tidak boleh mencipta peti nota baharu dalam pelan percuma. Segerakkan dengan peti nota anda yang sedia ada di atas, atau tingkatkan untuk menambah lebih banyak.",
-	"Upgrade plan": "Tingkatkan pelan",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Pelan percuma anda termasuk 1 peti nota, jadi peranti ini menyegerakkan dengan yang di atas.",
+	"Need more vaults? Upgrade": "Perlukan lebih banyak peti nota? Tingkatkan",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"Menyinkronkan memberikan peranti ini akses kepada nota anda. Teruskan hanya jika anda yang memulakan pautan ini. Jika orang lain menghantar anda ke sini, tutup halaman ini.",
 	"Syncing…": "Menyinkronkan…",
@@ -456,7 +457,6 @@ export default {
 	"Sync with an existing vault": "Segerakkan dengan peti nota yang sudah ada",
 	"(choose from {count} vaults)": "(pilih daripada {count} peti nota)",
 	"Or create a new vault": "Atau, cipta peti nota baharu",
-	"Create your first vault": "Cipta peti nota pertama anda",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"peranti pada {os} yang menyegerakkan peti nota anda '{vault}' (terakhir aktif {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -836,6 +836,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Sila baca keseluruhan perjanjian di bawah sebelum meneruskan. {privacy} kami (disemak semasa pendaftaran) menerangkan bagaimana kami mengendalikan data anda.",
 	"Connect {tool}": "Sambungkan {tool}",
+	"Create your first vault": "Cipta peti nota pertama anda",
 	"Join our Discord": "Sertai Discord kami",
 	Join: "Sertai",
 	"Install the Obsidian plugin": "Pasang plugin Obsidian",

@@ -423,6 +423,9 @@ export default {
 	"Authorization failed": "L'autorisation a échoué",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Ce code est invalide ou a expiré. Essaie à nouveau depuis Obsidian.",
+	"Welcome to Engram": "Bienvenue sur Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Donne un nom à ton premier coffre. Tes notes Obsidian seront synchronisées dedans.",
 	"Enter the code shown in your Obsidian plugin:":
 		"Entrez le code affiché dans ton plugin Obsidian :",
 	"Verifying…": "Vérification en cours…",
@@ -433,11 +436,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Affiché dans ta liste de connexions pour que tu puisses distinguer tes appareils.",
 	"Obsidian Vault Sync": "Synchronisation du Coffre Obsidian",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Limite de coffres atteinte : ton abonnement gratuit inclut 1 coffre",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Tu ne peux pas créer de nouveau coffre avec l'abonnement gratuit. Synchronise avec ton coffre existant ci-dessus, ou passe à un abonnement payant pour en ajouter d'autres.",
-	"Upgrade plan": "Abonnement",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Ton plan gratuit inclut 1 coffre, donc cet appareil se synchronise avec celui ci-dessus.",
+	"Need more vaults? Upgrade": "Besoin de plus de coffres ? Passe à la version payante",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"La synchronisation donne à cet appareil accès à tes notes. Continue uniquement si tu as initié cette connexion. Si quelqu'un t'a envoyé ici, ferme cette page.",
 	"Syncing…": "Synchronisation en cours…",
@@ -461,7 +462,6 @@ export default {
 	"Sync with an existing vault": "Synchroniser avec un coffre existant",
 	"(choose from {count} vaults)": "(choisis parmi {count} coffres)",
 	"Or create a new vault": "Ou crée un nouveau coffre",
-	"Create your first vault": "Crée ton premier coffre",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"l'appareil sur {os} qui synchronise ton coffre '{vault}' (dernière activité : {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -873,6 +873,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Veuillez lire l'intégralité de l'accord ci-dessous avant de continuer. Notre {privacy} (consulté lors de l'inscription) explique comment nous traitons tes données.",
 	"Connect {tool}": "Connecte {tool}",
+	"Create your first vault": "Crée ton premier coffre",
 	"Join our Discord": "Rejoins notre Discord",
 	Join: "Rejoindre",
 	"Install the Obsidian plugin": "Installer le plugin Obsidian",
