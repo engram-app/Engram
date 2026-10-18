@@ -646,16 +646,23 @@ jobs:
             # No registry = leave DEPS_IMAGE unset and build the stage inline.
             if [ -n "${LOCAL_REGISTRY:-}" ]; then
               DEPS_HASH=$(cat Dockerfile mix.lock config/config.exs config/prod.exs native/Cargo.lock | sha256sum | cut -c1-16)
-              export DEPS_IMAGE="${LOCAL_REGISTRY}/engram-deps:${DEPS_HASH}"
-              if docker pull -q "$DEPS_IMAGE" >/dev/null 2>&1; then
-                echo "::notice::Reusing $DEPS_IMAGE"
+              DEPS_REMOTE="${LOCAL_REGISTRY}/engram-deps:${DEPS_HASH}"
+              # The build FROMs a LOCAL tag. A registry-qualified FROM made
+              # BuildKit re-resolve the ref over HTTPS against the plain-HTTP
+              # :5001 ("server gave HTTP response to HTTPS client") even after
+              # `docker pull` had fetched it, on some runner daemons.
+              export DEPS_IMAGE="engram-deps:${DEPS_HASH}"
+              if docker pull -q "$DEPS_REMOTE" >/dev/null 2>&1; then
+                docker tag "$DEPS_REMOTE" "$DEPS_IMAGE"
+                echo "::notice::Reusing $DEPS_REMOTE"
               else
-                echo "::notice::Building $DEPS_IMAGE (deps inputs changed)"
+                echo "::notice::Building $DEPS_REMOTE (deps inputs changed)"
                 # Same retry as the compose build below: the daemon can be
                 # reclaimed mid-build (#567) and :5001 has a nightly outage.
                 for attempt in 1 2 3; do
                   if docker build --target deps --build-arg "HEX_MIRROR=${HEX_MIRROR:-}" -t "$DEPS_IMAGE" . \
-                     && docker push "$DEPS_IMAGE"; then
+                     && docker tag "$DEPS_IMAGE" "$DEPS_REMOTE" \
+                     && docker push "$DEPS_REMOTE"; then
                     break
                   fi
                   [ "$attempt" = 3 ] && { echo "::error::engram-deps build/push failed after 3 attempts"; exit 1; }
