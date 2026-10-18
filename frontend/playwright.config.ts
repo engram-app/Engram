@@ -27,7 +27,12 @@ export default defineConfig({
 	// No retries: a pass-on-retry was counted green and recorded nowhere, which
 	// hid flakes from the nightly ledger. A flaky test is a finding.
 	retries: 0,
-	reporter: isCI ? "github" : "html",
+	// list: per-test durations in the CI log (the github reporter prints only
+	// failures, so nobody could see which spec ate the 10+ minutes). json: a
+	// machine-readable record (incl. the `flaky` outcome) for the flake ledger.
+	reporter: isCI
+		? [["github"], ["list"], ["json", { outputFile: "test-results/results.json" }]]
+		: "html",
 	globalSetup: "./e2e/global-setup.ts",
 	globalTeardown: "./e2e/global-teardown.ts",
 	use: {
@@ -82,6 +87,8 @@ export default defineConfig({
 			stderr: "pipe",
 			env: {
 				MIX_ENV: "dev",
+				// :debug logs every SQL query (~55k lines per CI run).
+				LOG_LEVEL: process.env.LOG_LEVEL ?? (isCI ? "info" : "debug"),
 				AUTH_PROVIDER: "local",
 				PHX_SERVER: "true",
 				PORT: String(LOCAL_BACKEND_PORT),
@@ -122,6 +129,7 @@ export default defineConfig({
 						stderr: "pipe" as const,
 						env: {
 							MIX_ENV: "dev",
+							LOG_LEVEL: process.env.LOG_LEVEL ?? (isCI ? "info" : "debug"),
 							AUTH_PROVIDER: "clerk",
 							PHX_SERVER: "true",
 							PORT: String(CLERK_BACKEND_PORT),

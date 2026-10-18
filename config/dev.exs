@@ -97,6 +97,9 @@ config :engram, :spa_cache_enabled?, false
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"
 
+# Default :debug; the Playwright e2e servers set LOG_LEVEL=info in CI.
+config :logger, level: String.to_existing_atom(System.get_env("LOG_LEVEL", "debug"))
+
 # Set a higher stacktrace during development. Avoid configuring such
 # in production as building large stacktraces may be expensive.
 config :phoenix, :stacktrace_depth, 20

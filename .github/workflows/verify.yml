@@ -68,12 +68,24 @@ on:
         type: boolean
         default: false
 
+# A newer push to the same branch cancels the older run. Without this, 53 of
+# 221 branch runs (Oct 12-18) kept running after being superseded, ~1,460 wall-
+# minutes holding runners the live run was queueing for. Plugin dispatches
+# group per plugin branch (a re-push there supersedes the same way). main and
+# the nightly are never cancelled: every main commit publishes/deploys.
+concurrency:
+  # main/nightly get a per-run group (run_id): a shared group with
+  # cancel-in-progress=false would still serialize them, and GitHub replaces a
+  # PENDING run when a newer one queues, cancelling intermediate main commits.
+  group: verify-${{ github.event_name }}-${{ (github.ref == 'refs/heads/main' && github.event_name != 'repository_dispatch') && github.run_id || github.event.client_payload.plugin_branch || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
-# No workflow-level concurrency group: backend CI runs in parallel across
-# triggers (push + plugin dispatch). Previously serialized because shared
-# state collided — that's been addressed:
+# Runs of DIFFERENT branches/triggers still run in parallel (the concurrency
+# group above only cancels a superseded run of the same branch). They were
+# once serialized because shared state collided — that's been addressed:
 #   1. Dockerfile cache mounts (`mix-deps`, `mix-build`) now use sharing=locked,
 #      so buildkit serializes mount access internally instead of corrupting.
 #   2. Xvfb cleanup is scoped to each run's owned display range
@@ -2410,6 +2422,8 @@ jobs:
           # bind another runner (or any process) can claim it. Retry the run
           # up to 5 times; each retry gets a fresh allocation.
           for attempt in 1 2 3 4 5; do
+            # Throwaway DB: tmpfs data dir + no fsync. max_connections=300 because
+            # the test partitions each open a schedulers*2+10 pool (3 x 38 > 100).
             if docker run -d --name "$PG_CONTAINER" \
                 -e POSTGRES_USER=engram \
                 -e POSTGRES_PASSWORD=engram \
@@ -2419,7 +2433,10 @@ jobs:
                 --health-interval 3s \
                 --health-timeout 3s \
                 --health-retries 10 \
-                "$PG_IMAGE"; then
+                --tmpfs /var/lib/postgresql \
+                "$PG_IMAGE" \
+                -c max_connections=300 \
+                -c fsync=off -c synchronous_commit=off -c full_page_writes=off; then
               break
             fi
             echo "Attempt $attempt: docker run failed (likely port race) — cleaning up + retrying"
@@ -2640,6 +2657,7 @@ jobs:
           # 127.0.0.1, not localhost: the container publishes on IPv4 and the
           # BEAM would try ::1 first.
           QDRANT_URL: http://127.0.0.1:${{ steps.qdrant.outputs.qdrant_port }}
+          PARTITIONS: "3"
         run: |
           for i in $(seq 1 30); do
             if docker exec "$PG_CONTAINER" pg_isready -U engram > /dev/null 2>&1; then
@@ -2648,13 +2666,15 @@ jobs:
             fi
             sleep 1
           done
-          MIX_ENV=test mix ecto.create
-          # Idempotent cluster bootstrap (engram_app role + DEFAULT
-          # PRIVILEGES). Must run BEFORE migrate — baseline migration's
-          # structure dump references engram_app in GRANT statements.
-          # Mirrors prod entrypoint.sh ordering.
-          MIX_ENV=test mix engram.prepare_database
-          MIX_ENV=test mix ecto.migrate
+          # One DB per partition (config/test.exs appends MIX_TEST_PARTITION to
+          # the URL). Sequential: the first iteration also does the compile.
+          for p in $(seq 1 "$PARTITIONS"); do
+            # Idempotent cluster bootstrap (engram_app role + DEFAULT
+            # PRIVILEGES). Must run BEFORE migrate — baseline migration's
+            # structure dump references engram_app in GRANT statements.
+            # Mirrors prod entrypoint.sh ordering.
+            MIX_TEST_PARTITION=$p MIX_ENV=test mix do ecto.create + engram.prepare_database + ecto.migrate
+          done
           # --warnings-as-errors treats compile-time warnings in test files
           # (unused aliases, unused vars, etc.) as fatal. Lib warnings are
           # already gated by `mix compile --warnings-as-errors` in the lint
@@ -2677,7 +2697,24 @@ jobs:
           # costing the correctness premise of the entire marker system. The
           # marker skip now saves far more than --stale ever did, because it
           # skips the compile too.
-          mix test --warnings-as-errors
+          #
+          # Partitioned: 388 test files are async: false, so a single BEAM spent
+          # ~370s of a ~465s run executing them one at a time. N BEAMs on N DBs
+          # run N sync modules at once. Logs are printed per partition on exit.
+          pids=()
+          for p in $(seq 1 "$PARTITIONS"); do
+            MIX_TEST_PARTITION=$p mix test --warnings-as-errors --partitions "$PARTITIONS" > "partition-$p.log" 2>&1 &
+            pids+=($!)
+          done
+          rc=0
+          for i in "${!pids[@]}"; do
+            p=$((i + 1))
+            wait "${pids[$i]}" || { rc=1; echo "::error::test partition $p failed"; }
+            echo "::group::partition $p"; cat "partition-$p.log"; echo "::endgroup::"
+          done
+          # Failures again, outside the collapsed groups.
+          [ "$rc" -eq 0 ] || grep -hE -A30 '^\s+[0-9]+\) (test|property) ' partition-*.log || true
+          exit "$rc"
 
       - name: Qdrant state after a test failure
         if: failure()
@@ -2690,7 +2727,7 @@ jobs:
 
       - name: OpenAPI spec drift gate
         env:
-          DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_test
+          DATABASE_URL: postgresql://engram:engram@localhost:${{ steps.pg.outputs.pg_port }}/engram_test1  # partition 1 DB; the bare engram_test is never migrated
         run: |
           # Regenerate the spec and fail if it differs from the committed
           # openapi.json. Keeps the docs source-of-truth honest: any
@@ -2720,11 +2757,11 @@ jobs:
           # (rls_disabled_in_public, *_table_exposed) stay silent; only genuine
           # schema/security findings surface. unused_index is filtered by the
           # gate (no scan stats on a fresh CI database).
-          docker exec "$PG_CONTAINER" psql -U engram -d engram_test -q -v ON_ERROR_STOP=1 -c "
+          docker exec "$PG_CONTAINER" psql -U engram -d engram_test1 -q -v ON_ERROR_STOP=1 -c "
             DO \$\$ BEGIN CREATE ROLE anon NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END \$\$;
             DO \$\$ BEGIN CREATE ROLE authenticated NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END \$\$;
             DO \$\$ BEGIN CREATE ROLE service_role NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END \$\$;"
-          docker exec -i "$PG_CONTAINER" psql -U engram -d engram_test -At -F'|' \
+          docker exec -i "$PG_CONTAINER" psql -U engram -d engram_test1 -At -F'|' \
             < priv/repo/splinter.sql | bash priv/repo/lint_schema.sh
 
       - name: Lint new migrations (squawk)

@@ -34,7 +34,11 @@ defmodule Engram.SearchIntegrationTest do
       Engram.Vaults.register_vault(user, "SearchIntegration", Ecto.UUID.generate())
 
     # Use a test-isolated Qdrant collection so we can drop it after.
-    col = "engram_test_#{System.unique_integer([:positive])}"
+    # Partition in the name: partitions share one Qdrant, and unique_integer is
+    # only unique within one BEAM.
+    col =
+      "engram_test_#{System.get_env("MIX_TEST_PARTITION")}_#{System.unique_integer([:positive])}"
+
     old_col = Application.get_env(:engram, :qdrant_collection)
     Application.put_env(:engram, :qdrant_collection, col)
 
