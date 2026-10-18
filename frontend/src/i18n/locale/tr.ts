@@ -414,9 +414,9 @@ export default {
 	"previous device": "önceki cihaz",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"'{name}' cihazından bağlantı kesildi, ancak yeni cihazla bağlantı kurulamadı. Obsidian üzerinden yeniden bağlayın - şu anda hiçbir cihaz senkronize değil.",
-	"Authorization failed": "Yetkilendirme başarısız oldu",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Bu kod geçersiz veya süresi dolmuş. Lütfen Obsidian üzerinden tekrar deneyin.",
+	"Authorization failed": "Yetkilendirme başarısız oldu",
 	"Welcome to Engram": "Engram uygulamasına hoş geldiniz",
 	"Name your first vault. Your Obsidian notes will sync into it.":
 		"İlk kasanıza bir isim verin. Obsidian notlarınız bu kasaya senkronize edilecek.",

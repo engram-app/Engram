@@ -431,9 +431,12 @@ export default {
 	"previous device": "попередній пристрій",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"Від'єднано '{name}', але підключення нового пристрою не вдалося. Підключіть знову з Obsidian — наразі жоден пристрій не синхронізовано.",
-	"Authorization failed": "Авторизація не вдалася",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Цей код недійсний або закінчився термін його дії. Будь ласка, спробуйте ще раз з Obsidian.",
+	"Authorization failed": "Авторизація не вдалася",
+	"Welcome to Engram": "Ласкаво просимо до Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Назвіть ваше перше сховище. Ваші Obsidian замітки будуть синхронізуватися з ним.",
 	"Enter the code shown in your Obsidian plugin:":
 		"Введіть код, показаний у вашому плагіні Obsidian:",
 	"Verifying…": "Перевірка…",
@@ -444,11 +447,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Відображається у вашому списку з'єднань, щоб ви могли розрізняти ваші пристрої.",
 	"Obsidian Vault Sync": "Синхронізація Obsidian сховища",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Досягнуто ліміт сховищ: ваш безкоштовний план включає 1 сховище",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Ви не можете створити нове сховище на безкоштовному плані. Синхронізуйте існуюче сховище вище або оновіть підписку, щоб додати більше.",
-	"Upgrade plan": "План оновлення",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Ваш безкоштовний план включає 1 сховище, тому цей пристрій синхронізується з ним.",
+	"Need more vaults? Upgrade": "Потрібно більше сховищ? Оновіть",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"Синхронізація надає цьому пристрою доступ до ваших заміток. Продовжуйте лише якщо ви самі ініціювали цей процес. Якщо вас сюди перенаправила інша особа, закрийте цю сторінку.",
 	"Syncing…": "Синхронізація…",
@@ -472,7 +473,6 @@ export default {
 	"Sync with an existing vault": "Синхронізувати з існуючим сховищем",
 	"(choose from {count} vaults)": "(виберіть з {count} сховищ)",
 	"Or create a new vault": "Або створити нове сховище",
-	"Create your first vault": "Створіть ваше перше сховище",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"пристрій на {os}, який синхронізує ваше сховище '{vault}' (останній активний {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -678,7 +678,6 @@ export default {
 		many: "Залишилося {count} днів до закінчення пробного періоду.",
 		other: "До кінця вашого пробного періоду залишилося {count} дні.",
 	},
-	"Free plan device limit: {count}.": "Обмеження пристроїв для безкоштовного плану: {count}.",
 	"Collapse sidebar": "Згорнути бічну панель",
 	"No vaults": "Немає сховищ",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -909,6 +908,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Будь ласка, прочитайте повну угоду нижче, перш ніж продовжувати. Наша {privacy} (переглянута під час реєстрації) описує, як ми обробляємо ваші дані.",
 	"Connect {tool}": "Підключити {tool}",
+	"Create your first vault": "Створіть ваше перше сховище",
 	"Join our Discord": "Приєднайтеся до нашого Discord",
 	Join: "Приєднатися",
 	"Install the Obsidian plugin": "Встановити плагін Obsidian",
@@ -922,7 +922,8 @@ export default {
 	"{completed} of {total} done": "Виконано {completed} із {total}",
 	"Setup guide": "Інструкція з налаштування",
 	"Dismiss {label}": "Закрити {label}",
-	"You're on the Free plan.": "Ви використовуєте безкоштовний план.",
+	"Want more devices and vaults?": "Бажаєте більше пристроїв і сховищ?",
+	"See paid plans": "Перегляньте платні плани",
 	"Connect Claude Desktop": "Підключити Claude Desktop",
 	"Connect Cursor": "Підключити Cursor",
 	"Connect Devin": "Підключити Devin",
@@ -954,9 +955,6 @@ export default {
 	"Could not continue. Please try again.": "Не вдалося продовжити. Будь ласка, спробуйте ще раз.",
 	"Step {step} of {total}": "Крок {step} з {total}",
 	Onboarding: "Ознайомлення",
-	"your app": "ваш додаток",
-	"Cancel connection": "Скасувати з'єднання",
-	"Connecting {app}": "Підключення до {app}",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Не вдалося зберегти ваш вибір. Спробуйте натиснути ще раз — якщо помилка повторюється, оновіть сторінку.",
 	"Let's get your notes in.": "Давайте імпортуємо ваші замітки.",

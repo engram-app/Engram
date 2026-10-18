@@ -410,9 +410,9 @@ export default {
 	"previous device": "thiết bị trước đó",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"Đã ngắt kết nối '{name}' nhưng việc liên kết thiết bị mới không thành công. Hãy liên kết lại từ Obsidian – hiện tại không có thiết bị nào được đồng bộ hóa.",
-	"Authorization failed": "Xác thực thất bại",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Mã này không hợp lệ hoặc đã hết hạn. Vui lòng thử lại từ Obsidian.",
+	"Authorization failed": "Xác thực thất bại",
 	"Welcome to Engram": "Chào mừng bạn đến với Engram",
 	"Name your first vault. Your Obsidian notes will sync into it.":
 		"Đặt tên cho kho lưu trữ đầu tiên của bạn. Các ghi chú Obsidian của bạn sẽ được đồng bộ hóa vào đó.",

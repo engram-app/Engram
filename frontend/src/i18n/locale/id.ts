@@ -414,9 +414,9 @@ export default {
 	"previous device": "perangkat sebelumnya",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"Terputus dari '{name}' tetapi menghubungkan perangkat baru gagal. Hubungkan kembali dari Obsidian — tidak ada perangkat yang sedang disinkronkan.",
-	"Authorization failed": "Otorisasi gagal",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Kode ini tidak valid atau telah kedaluwarsa. Silakan coba lagi dari Obsidian.",
+	"Authorization failed": "Otorisasi gagal",
 	"Welcome to Engram": "Selamat datang di Engram",
 	"Name your first vault. Your Obsidian notes will sync into it.":
 		"Beri nama vault pertama Anda. Catatan Obsidian Anda akan disinkronkan ke dalamnya.",
