@@ -95,7 +95,11 @@ defmodule Engram.Links.Rewriter do
       |> Parser.extract_all()
       |> Enum.filter(&(Links.basename_key(&1.target) == old_key))
 
-    candidates = if occurrences != [], do: pre_rename_candidates(user, vault, target)
+    # Indexed once per source note, so each occurrence resolves in O(1)
+    # rather than re-sorting every same-basename candidate.
+    candidates =
+      if occurrences != [],
+        do: user |> pre_rename_candidates(vault, target) |> Links.index_candidate_sets()
 
     occurrences
     |> Enum.filter(fn occ ->

@@ -39,6 +39,12 @@ defmodule Engram.Links do
   `RewriteNoteLinks` — pays nothing.
   """
 
+  @typedoc "A candidate set indexed by `index_candidates/1`."
+  @type candidate_index :: %{
+          sorted: [{binary(), String.t()}],
+          by_path: %{String.t() => {non_neg_integer(), binary()}}
+        }
+
   import Ecto.Query
 
   alias Engram.Attachments.Attachment
@@ -442,7 +448,7 @@ defmodule Engram.Links do
   #
   # Rows that fail to decrypt are dropped, same as before. Grouping reverses
   # each bucket's query order, which `resolve_from_candidates/3` cannot
-  # observe: it sorts on `{String.length(path), path}`, and live rows in one
+  # observe: `index_candidates/1` sorts on `{String.length(path), path}`, and live rows in one
   # vault have distinct paths, so that ordering is total and no stable-sort tie
   # survives to break.
   defp decrypt_and_group([], _dek, _table), do: %{}
@@ -463,6 +469,18 @@ defmodule Engram.Links do
       end
     end)
   end
+
+  @doc """
+  Indexes a `pre_rename_candidates/5` result for repeated
+  `pre_rename_winner?/4` calls, so a walk over many occurrences pays the
+  sort once instead of once per occurrence.
+  """
+  @spec index_candidate_sets(%{notes: list(), attachments: list()}) :: %{
+          notes: candidate_index(),
+          attachments: candidate_index()
+        }
+  def index_candidate_sets(%{notes: notes, attachments: attachments}),
+    do: %{notes: index_candidates(notes), attachments: index_candidates(attachments)}
 
   # The tiebreak order and the case-insensitive path lookup, built ONCE per
   # candidate set. Callers that resolve many targets against one shared set
@@ -629,8 +647,8 @@ defmodule Engram.Links do
   candidate tables the prefetch consulted.
   """
   @spec pre_rename_winner?(String.t(), String.t(), binary(), %{
-          notes: [{binary(), String.t()}],
-          attachments: [{binary(), String.t()}]
+          notes: [{binary(), String.t()}] | candidate_index(),
+          attachments: [{binary(), String.t()}] | candidate_index()
         }) :: boolean()
   def pre_rename_winner?(target, old_path, renamed_id, %{notes: notes, attachments: attachments}) do
     if basename_key(target) != basename_key(old_path) do
@@ -753,7 +771,7 @@ defmodule Engram.Links do
       # fetch once instead of once per edge (was N Repo.all + N decrypt
       # passes per table). Only the per-edge target text varies the
       # resolution (extension routing, path filter, tiebreak), which
-      # `rebind_edge/6` applies in memory against these shared lists via
+      # `rebind_edge/6` applies in memory against these shared indexes via
       # the same `route_resolution/3` + `resolve_from_candidates/3` rules
       # `resolve_target/4` uses.
       note_candidates =
