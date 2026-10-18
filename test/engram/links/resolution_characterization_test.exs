@@ -23,7 +23,6 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
   """
 
   use Engram.DataCase, async: false
-  use Oban.Testing, repo: Engram.Repo
 
   import Engram.RlsCase
 
@@ -143,7 +142,6 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
       assert target_of(user, source).dangling
 
       node = note!(user, vault, "Node.js.md")
-      settle!()
 
       assert target_of(user, source).target_note_id == node.id
     end
@@ -157,7 +155,6 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
       assert target_of(user, source).dangling
 
       hub = note!(user, vault, "deep/Hub.md")
-      settle!()
 
       assert target_of(user, source).target_note_id == hub.id
     end
@@ -341,7 +338,6 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
       assert target_of(user, source).dangling
 
       target = note!(user, vault, "x/Later.md")
-      settle!()
 
       assert target_of(user, source).target_note_id == target.id
       assert backlink_sources(user, target) == [source.id]
@@ -354,7 +350,6 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
       assert backlink_sources(user, long) == [source.id]
 
       short = note!(user, vault, "Hub.md")
-      settle!()
 
       assert target_of(user, source).target_note_id == short.id
       assert backlink_sources(user, short) == [source.id]
@@ -370,7 +365,6 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
       assert target_of(user, source).target_note_id == first.id
 
       later = note!(user, vault, "b/Hub.md")
-      settle!()
 
       assert target_of(user, source).target_note_id == first.id
       assert backlink_sources(user, later) == []
@@ -492,7 +486,6 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
       # Byte-different content: an identical re-push inside the delete-wins
       # window is refused as a stale resurrection, by design.
       restored = note!(user, vault, "Back.md", "# back, rewritten")
-      settle!()
 
       link = target_of(user, source)
       assert link.target_note_id == restored.id
@@ -507,7 +500,6 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
       assert target_of(user, source).dangling
 
       att = upload!(user, vault, "late.png")
-      settle!()
 
       assert target_of(user, source).target_attachment_id == att.id
     end
@@ -530,14 +522,16 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
       vault: vault
     } do
       other_vault = insert(:vault, user: user)
-      foreign = note!(user, other_vault, "Shared.md")
       source = note!(user, vault, "Source.md", "See [[Shared]].")
+      assert target_of(user, source).dangling
+
+      # Created after the link, so its create-time rebind runs too.
+      foreign = note!(user, other_vault, "Shared.md")
 
       assert target_of(user, source).dangling
       assert backlink_sources(user, foreign) == []
 
       local = note!(user, vault, "Shared.md")
-      settle!()
 
       assert target_of(user, source).target_note_id == local.id
       assert backlink_sources(user, local) == [source.id]
@@ -547,10 +541,13 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
     test "another user's same-named note never resolves", %{user: user, vault: vault} do
       {:ok, stranger} = Engram.Fixtures.user_with_dek_fixture()
       stranger_vault = insert(:vault, user: stranger)
-      _theirs = note!(stranger, stranger_vault, "Secret.md")
       source = note!(user, vault, "Source.md", "See [[Secret]].")
+      assert target_of(user, source).dangling
+
+      theirs = note!(stranger, stranger_vault, "Secret.md")
 
       assert target_of(user, source).dangling
+      assert backlink_sources(stranger, theirs) == []
     end
   end
 
@@ -583,7 +580,6 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
       assert backlink_sources(user, t) == [source.id]
 
       later = note!(user, vault, "Later.md")
-      settle!()
 
       assert [%{target_note_id: ^tid}, %{target_note_id: lid}] = outgoing(user, source)
       assert lid == later.id
@@ -732,7 +728,7 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
       _a = note!(user, vault, "A.md", "[[T]]")
       _b = note!(user, vault, "B.md", "[[T]]")
 
-      assert {%{"backlinks" => [_one], "links_truncated" => true}, {true, 0, 0}} =
+      assert {%{"backlinks" => [_one], "links_truncated" => true}, _telemetry} =
                Handlers.links_payload(user, t, 1)
     end
   end
@@ -748,14 +744,8 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
       ref = make_ref()
       handler = {__MODULE__, ref}
 
-      :telemetry.attach(
-        handler,
-        [:engram, :repo, :query],
-        fn _e, _m, _meta, _c ->
-          if self() == me, do: send(me, {ref, :q})
-        end,
-        nil
-      )
+      :ok =
+        :telemetry.attach(handler, [:engram, :repo, :query], &__MODULE__.count_query/4, {me, ref})
 
       try do
         fun.()
@@ -764,6 +754,12 @@ defmodule Engram.Links.ResolutionCharacterizationTest do
       end
 
       count_msgs(ref, 0)
+    end
+
+    # Counts queries from the caller and anything it spawned (`Task`s carry
+    # `$callers`), so moving resolution into a Task cannot hide its cost.
+    def count_query(_event, _measurements, _meta, {me, ref}) do
+      if self() == me or me in Process.get(:"$callers", []), do: send(me, {ref, :q})
     end
 
     defp count_msgs(ref, n) do
