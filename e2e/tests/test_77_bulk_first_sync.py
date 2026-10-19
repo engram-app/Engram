@@ -12,7 +12,7 @@ The transport claim is asserted by COUNT, not wall clock (route_probe): every
 flaked ~5/7 nights: on the shared runner pool (two heavy e2e suites per VM) the
 whole test took 31s to 153s for identical code, and at the slow end it is as
 slow as the REST fallback it was meant to catch. The count separates the two
-regardless of load. The remaining deadline is a HANG detector only.
+regardless of load. The remaining bound is a no-progress (stall) detector only.
 
 The room-allocation bound is the #1409 acceptance criterion. A room is a
 live-collaboration actor; an import has no collaborators, so genesis content
@@ -41,13 +41,17 @@ from helpers.vault import write_note
 # a slow box.
 NOTE_COUNT = int(os.environ.get("E2E_BULK_NOTE_COUNT", "1000"))
 
-# HANG detector, not a performance bound — the transport claim is the route
-# count. Across 36 CI runs of the same code (2026-09-25) this whole test took 31s
-# to 153s, driven by runner contention, and the slowest sync ran ~5 notes/s
-# (~200s for 1,000); 200s is sized to that tail while still failing a sync that
-# stopped making progress. Do not tighten this into a
-# throughput assert again: on a shared pool it measures the neighbours.
-CONVERGE_DEADLINE_S = 200
+# STALL detector, not a performance bound: the transport claim is the route
+# count. CI artifacts show slow syncs making steady progress (~3-5 notes/s on a
+# contended runner) right up to the old absolute 200s deadline, so a wall-clock
+# bound measured the neighbours, not a stall. The test now fails only when the
+# server's Bulk/ count stops moving for NO_PROGRESS_WINDOW_S. Do not turn this
+# back into a throughput assert.
+NO_PROGRESS_WINDOW_S = 30
+
+# Absolute ceiling so a sync that crawls forward one note per window cannot hang
+# the suite. Not a performance bound either; its failure message is distinct.
+SAFETY_CEILING_S = 15 * 60
 
 # Rooms this sync may allocate. The criterion is O(open editors), not O(N) —
 # the bound is a small constant on purpose, so a per-note regression fails by
@@ -226,7 +230,7 @@ async def _cleanup_bulk_residue(vault_a, cdp_a, api_sync) -> None:
         pass
 
 
-@pytest.mark.timeout(300)  # index wait (60s) + CONVERGE_DEADLINE_S + probes/cleanup
+@pytest.mark.timeout(SAFETY_CEILING_S + 300)  # ceiling + index wait + probes/cleanup
 @pytest.mark.asyncio
 async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
     sampler: _PeakResidencySampler | None = None
@@ -280,11 +284,12 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
         # re-kicked (never stacked on an in-flight one).
         sampler = _PeakResidencySampler().start()
         started = time.monotonic()
-        deadline = started + CONVERGE_DEADLINE_S
+        last_progress = started
         bulk_count = 0
         kicks = 0
         last_state = None
-        while time.monotonic() < deadline:
+        stalled = False
+        while True:
             raw = await cdp_a.evaluate(SYNC_STATE)
             last_state = json.loads(raw) if isinstance(raw, str) else None
             if last_state is None or last_state.get("done"):
@@ -292,25 +297,39 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
                 await cdp_a.evaluate(KICK_SYNC)
                 kicks += 1
             manifest = api_sync.get_manifest()
-            bulk_count = sum(
-                1 for n in manifest["notes"] if n["path"].startswith("Bulk/")
-            )
+            count = sum(1 for n in manifest["notes"] if n["path"].startswith("Bulk/"))
+            now = time.monotonic()
+            if count > bulk_count:
+                bulk_count = count
+                last_progress = now
             if bulk_count >= NOTE_COUNT:
+                break
+            if now - last_progress >= NO_PROGRESS_WINDOW_S:
+                stalled = True
+                break
+            if now - started >= SAFETY_CEILING_S:
                 break
             await asyncio.sleep(2)
         elapsed = time.monotonic() - started
+        idle = time.monotonic() - last_progress
+        rate = bulk_count / elapsed if elapsed > 0 else 0.0
         peak_resident = sampler.stop()
         sampler = None
 
-        # Informational only — a trend line, deliberately not asserted.
-        print(
-            f"\ntest_77 converged {bulk_count}/{NOTE_COUNT} in {elapsed:.1f}s "
-            f"({kicks} fullSync kick(s), last={last_state})"
+        # Informational only: a trend line, deliberately not asserted.
+        progress = (
+            f"{bulk_count}/{NOTE_COUNT} after {elapsed:.1f}s ({rate:.1f} notes/s, "
+            f"last progress {idle:.1f}s ago, {kicks} fullSync kick(s), "
+            f"last={last_state})"
+        )
+        print(f"\ntest_77 converged {progress}")
+        assert not stalled, (
+            f"bulk first sync stalled: the server's Bulk/ count did not increase "
+            f"for {NO_PROGRESS_WINDOW_S}s; {progress}"
         )
         assert bulk_count >= NOTE_COUNT, (
-            f"bulk first sync converged only {bulk_count}/{NOTE_COUNT} notes "
-            f"within the {CONVERGE_DEADLINE_S}s hang deadline — the sync stalled "
-            f"({kicks} fullSync kick(s), last={last_state})"
+            f"bulk first sync was still progressing but hit the "
+            f"{SAFETY_CEILING_S}s safety ceiling; {progress}"
         )
 
         # The transport claim, load-invariant: every note came over crdt_create
