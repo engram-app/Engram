@@ -632,18 +632,10 @@ defmodule Engram.Workers.EmbedNote do
           {:error, :index_tier_changed} ->
             {:snooze, 5}
 
-          # The write is queued but not applied within its wait (Qdrant 200
-          # with status "wait_timeout"), so the note is not stamped. Same as a
-          # refusal: snooze without burning an attempt; the retry reuses the
-          # retained vectors and the upsert is idempotent.
-          {:error, :qdrant_wait_timeout} ->
-            Qdrant.wait_timeout_snooze()
-
-          # Input over the model's context window (H7): no re-send can fix
-          # it. Index the note keyword-only now (zero Voyage spend) and park
-          # it until its content changes, so it is findable and never loops.
-          {:error, {:permanent, :input_too_long}} ->
-            index_keyword_only(note, decrypted_note, vault, user)
+          # A newer edit replaced the content this pass planned from; that
+          # edit's own job indexes it. Nothing failed.
+          {:error, :superseded} ->
+            :ok
 
           {:error, reason} ->
             # Per-attempt failure (Voyage non-429 / Qdrant). Previously
