@@ -34,18 +34,27 @@ defmodule EngramWeb.RateLimiter do
           | :mcp_complete
           | :analytics_activity
           | :feedback
+          | :client_logs
           | :other
 
   @doc """
   Count a hit against `key` and emit `[:engram, :rate_limiter, :hit]` with the
   bounded `purpose` label and the allow/deny `result` (covers both backends).
+
+  `increment` weights the hit (e.g. one hit per log line in a batch). Hammer
+  counts a denied increment too, so a denied batch keeps the bucket over its
+  limit until the window rolls.
   """
-  @spec hit(String.t(), pos_integer(), non_neg_integer(), purpose()) :: hit_result()
-  def hit(key, scale_ms, limit, purpose \\ :other) do
+  @spec hit(String.t(), pos_integer(), non_neg_integer(), purpose(), pos_integer()) ::
+          hit_result()
+  def hit(key, scale_ms, limit, purpose \\ :other, increment \\ 1) do
     result =
       case backend() do
-        :distributed_ets -> EngramWeb.RateLimiter.DistributedETS.hit(key, scale_ms, limit)
-        _ets -> EngramWeb.RateLimiter.ETS.hit(key, scale_ms, limit)
+        :distributed_ets ->
+          EngramWeb.RateLimiter.DistributedETS.hit(key, scale_ms, limit, increment)
+
+        _ets ->
+          EngramWeb.RateLimiter.ETS.hit(key, scale_ms, limit, increment)
       end
 
     :telemetry.execute(
