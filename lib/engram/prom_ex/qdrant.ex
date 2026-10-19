@@ -171,7 +171,7 @@ defmodule Engram.PromEx.Qdrant do
     case Qdrant.collection_info(col, :search) do
       {:ok, info} ->
         :telemetry.execute(@collection_event, collection_measurements(info), %{})
-        poll_memory(col)
+        _ = poll_memory(col)
         _ = Qdrant.reconcile_strict_mode(col, info, limits, version)
 
       {:error, reason} ->
