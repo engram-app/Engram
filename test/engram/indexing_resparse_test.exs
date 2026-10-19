@@ -10,6 +10,7 @@ defmodule Engram.IndexingResparseTest do
   alias Engram.Crypto
   alias Engram.Indexing
   alias Engram.Notes
+  alias Engram.Parsers.Markdown
 
   setup :set_mox_global
   setup :verify_on_exit!
@@ -174,7 +175,34 @@ defmodule Engram.IndexingResparseTest do
 
     Repo.update_all(
       from(n in Notes.Note, where: n.id == ^note.id),
-      [set: [chunker_version: Engram.Parsers.Markdown.chunker_version(), keyword_version: nil]],
+      [set: [chunker_version: Markdown.chunker_version(), keyword_version: nil]],
+      skip_tenant_check: true
+    )
+
+    assert :ok =
+             perform_job(Engram.Workers.RefreshKeywordVectors, %{
+               note_id: note.id,
+               user_id: user.id
+             })
+
+    assert is_nil(Repo.get!(Notes.Note, note.id, skip_tenant_check: true).keyword_version)
+  end
+
+  # After a rollback the stamp is NEWER than this build's chunker, and the
+  # rebuild ignores newer stamps (#2044): nothing else will fix these points,
+  # so they take the current-chunker branch, not stamp-and-skip.
+  test "unmatched points on a newer-chunker note leave it unstamped", ctx do
+    %{user: user, note: note} = ctx
+    orphan_one_row(note)
+
+    Repo.update_all(
+      from(n in Notes.Note, where: n.id == ^note.id),
+      [
+        set: [
+          chunker_version: Markdown.chunker_version() + 1,
+          keyword_version: nil
+        ]
+      ],
       skip_tenant_check: true
     )
 
@@ -193,7 +221,7 @@ defmodule Engram.IndexingResparseTest do
   test "matches a point stored under the legacy unprefixed fingerprint", ctx do
     %{user: user, note: note, upserted: upserted} = ctx
     {:ok, key} = Crypto.dek_content_hash_key(user)
-    [first | _] = Engram.Parsers.Markdown.parse(note.content, note.path)
+    [first | _] = Markdown.parse(note.content, note.path)
 
     {:ok, _} =
       Repo.with_tenant(note.user_id, fn ->
