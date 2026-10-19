@@ -1,6 +1,6 @@
 # Product activity analytics — who is using Engram, and how
 
-_Last verified: 2026-10-03. Shipped in v0.39.0 (#1813). Dashboards: Grafana `engram-usage`, plus the DAU/MAU/Activated tiles on `engram-business`._
+_Last verified: 2026-10-19. Shipped in v0.39.0 (#1813). Dashboards: Grafana `engram-usage`, plus the DAU/MAU/Activated tiles on `engram-business`._
 
 Read this before touching `Engram.Observability.PostHog`, adding an event, or
 trusting a "daily active users" number. For the **client-side** (posthog-js)
@@ -24,6 +24,7 @@ it. Replacing PostHog means rewriting that one adapter.
 | `mcp_tool_called` | MCP tool call (also argument-rejected ones) | 1 per person per tool per min | `tool` (allowlist, else `unknown`), `status` |
 | `mcp_client_connected` | MCP `initialize` | 1 per person per client family per hour | `client` (bucketed, else `other`) |
 | `plugin_linked`, `api_key_created`, `mcp_oauth_granted` | one-shot milestones | none | none |
+| `note_created` | a REST or MCP write creates a note | none | `vault_id`, `surface` (`web` `obsidian_sync` `mcp` `api` `welcome` `other`) |
 
 Throttling is `EngramWeb.RateLimiter` (Hammer fixed window, epoch-aligned,
 cluster-shared under `:distributed_ets`), so two events can land seconds apart
@@ -51,7 +52,16 @@ Since privacy policy 2026-10-12, PostHog persons are identified. A daily job
 
 ## Definitions that are easy to get wrong
 
-- **`obsidian_sync` means "pushed an edit", not "connected".** Join and
+- **`note_created` with `surface = 'welcome'` is OUR seed note**, fired for
+  every new vault. Exclude it from any "the user created a note" query.
+- **`note_created` does not see CRDT creates.** Obsidian creates notes over
+  `crdt_create`, which counts as `surface_active{obsidian_sync}` instead (a bulk
+  import would otherwise send one event per note). Use `surface_active` for
+  "synced from Obsidian".
+- **The web editor also joins the CRDT channel** (`client_type: "web"`). Its
+  edits count as `web`; only an Obsidian or untagged client counts as
+  `obsidian_sync`. Before 2026-10-19 web edits were miscounted as `obsidian_sync`.
+- **`obsidian_sync` means "pushed an edit or created a note", not "connected".** Join and
   handshake frames are excluded on purpose: an idle plugin reconnects and
   handshakes every note without the user doing anything. A user who only
   *receives* changes is invisible.

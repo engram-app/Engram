@@ -395,10 +395,14 @@ defmodule EngramWeb.CrdtChannel do
              origin: socket.assigns[:client_type],
              seed: seed
            ) do
+        # A bulk import creates notes without ever sending an edit frame, so
+        # count the create itself or an import-only user never shows as active.
         {:seeded, note, outcome} ->
+          note_sync_activity(socket)
           reply_created(note, reconcile_with_row(outcome, note), socket)
 
         {:ok, note} ->
+          note_sync_activity(socket)
           reply_created(note, note |> seed.() |> reconcile_with_row(note), socket)
 
         {:adopted, note} ->
@@ -1953,9 +1957,9 @@ defmodule EngramWeb.CrdtChannel do
   # STEP2 and mutate at 10x the intended cap.
   @hs_step2_max_b64 4096
 
-  # Product analytics: the user pushed a real edit, not merely connected. Join
-  # and handshake frames are deliberately excluded (an idle plugin reconnects
-  # and handshakes every note without the user doing anything).
+  # Product analytics: the user pushed a real edit or created a note, not merely
+  # connected. Join and handshake frames are deliberately excluded (an idle
+  # plugin reconnects and handshakes every note without the user doing anything).
   #
   # `plugin_version` and `client_type` are already length-bounded at the socket /
   # join boundary (user_socket.ex bounded_version/1, client_type/1 above), so
@@ -1971,10 +1975,15 @@ defmodule EngramWeb.CrdtChannel do
 
     Engram.Analytics.track_activity(
       socket.assigns.current_user,
-      :obsidian_sync,
+      activity_surface(socket.assigns[:client_type]),
       props
     )
   end
+
+  # The SPA's editor joins this channel too (client_type "web"). An untagged
+  # client is an older plugin, so only an explicit "web" leaves obsidian_sync.
+  defp activity_surface("web"), do: :web
+  defp activity_surface(_client_type), do: :obsidian_sync
 
   defp frame_class_b64(<<prefix::binary-size(4), _::binary>> = b64) do
     case Base.decode64(prefix) do

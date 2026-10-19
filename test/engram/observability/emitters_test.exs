@@ -102,6 +102,34 @@ defmodule Engram.Observability.EmittersTest do
       assert body["event"] == "note_created"
       assert body["distinct_id"] == PostHog.analytics_id(user.email)
       assert body["properties"]["vault_id"] == vault.id
+      assert body["properties"]["surface"] == "api"
+    end
+
+    for {actor, opts, surface} <- [
+          {"mcp", [], "mcp"},
+          {"api:key-1", [], "api"},
+          {"system", [announce_vault_populated: false], "welcome"},
+          {"sync", [surface: "web"], "web"},
+          {"sync", [surface: "obsidian_sync"], "obsidian_sync"},
+          {"sync", [], "other"}
+        ] do
+      test "surface is #{surface} for actor #{actor} #{inspect(opts)}", %{bypass: bypass} do
+        user = user_with_clerk_id()
+        {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
+        expect_capture(bypass)
+
+        {:ok, _} =
+          Notes.upsert_note(
+            user,
+            vault,
+            %{"path" => "S.md", "content" => "x", "mtime" => 1_000.0},
+            [actor: unquote(actor)] ++ unquote(opts)
+          )
+
+        assert_receive {:posthog_body, body}, 1_500
+        assert body["event"] == "note_created"
+        assert body["properties"]["surface"] == unquote(surface)
+      end
     end
 
     test "does NOT fire on an update to an existing note (idempotent re-push)",
