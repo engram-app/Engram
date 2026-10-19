@@ -46,6 +46,9 @@ defmodule Engram.Notes.Note do
     field :chunker_version, :integer
     field :keyword_version, :integer
     field :embed_model, :string
+    # Free index budget: NULL = full index, "floor" / "floor_paid" = one
+    # sparse-only point for the whole note. See `Engram.Indexing.floor_plan/2`.
+    field :index_tier, :string
     # Poison-loop guard: when a note exhausts its EmbedNote attempts, the worker
     # stamps a cooldown timestamp here. ReconcileEmbeddings skips notes whose
     # cooldown hasn't elapsed, so a permanently-failing note re-bills Voyage at
