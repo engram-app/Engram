@@ -66,6 +66,8 @@ defmodule Engram.Links do
     :position,
     :link_type,
     :target_basename_hmac,
+    :target_note_id,
+    :target_attachment_id,
     :target_text_ciphertext,
     :target_text_nonce,
     :alias_ciphertext,
@@ -841,6 +843,11 @@ defmodule Engram.Links do
     {resolved, candidates} = resolve_edges(user, edges, texts, dek)
     note_paths = candidate_paths(candidates.notes)
 
+    note_paths =
+      for({:note, id} <- resolved, not Map.has_key?(note_paths, id), do: id)
+      |> Enum.uniq()
+      |> then(&Map.merge(note_paths, note_paths_by_id(user, &1, dek)))
+
     Enum.zip_with([edges, texts, resolved], fn [edge, text, resolution] ->
       {target_note_id, target_attachment_id} = target_ids(resolution)
 
@@ -902,8 +909,8 @@ defmodule Engram.Links do
       edges
       |> Enum.zip(texts)
       |> Enum.map_reduce(%{}, fn
-        {_edge, nil}, memo ->
-          {:dangling, memo}
+        {edge, nil}, memo ->
+          {stored_target(edge), memo}
 
         {edge, text}, memo ->
           key = {edge.target_basename_hmac, text}
@@ -1034,6 +1041,29 @@ defmodule Engram.Links do
     [stale, pathed, shortest]
   end
 
+  # An edge whose text will not decrypt cannot be resolved by name; it keeps
+  # the target resolved when it was written, as reads did before resolving
+  # on read.
+  defp stored_target(%{target_note_id: id}) when is_binary(id), do: {:note, id}
+  defp stored_target(%{target_attachment_id: id}) when is_binary(id), do: {:attachment, id}
+  defp stored_target(_edge), do: :dangling
+
+  defp note_paths_by_id(_user, [], _dek), do: %{}
+
+  defp note_paths_by_id(user, ids, dek) do
+    rows =
+      Repo.all(
+        from(n in Note,
+          where: n.user_id == ^user.id and n.id in ^ids,
+          select: map(n, [:id, :path_ciphertext, :path_nonce, :dek_version])
+        ),
+        skip_tenant_check: true
+      )
+
+    paths = decrypt_column(rows, dek, :notes, :path, &{&1.path_ciphertext, &1.path_nonce})
+    for {row, path} <- Enum.zip(rows, paths), is_binary(path), into: %{}, do: {row.id, path}
+  end
+
   defp target_ids({:note, id}), do: {id, nil}
   defp target_ids({:attachment, id}), do: {nil, id}
   defp target_ids(:dangling), do: {nil, nil}
@@ -1125,6 +1155,13 @@ defmodule Engram.Links do
       nil ->
         []
 
+      {:undecryptable, vault_id} ->
+        user
+        |> stored_backlinks(vault_id, note_id, limit, distinct_sources?)
+        |> Enum.sort_by(&{&1.position, &1.id})
+        |> pick_backlinks(limit, distinct_sources?)
+        |> render_backlinks(user, dek)
+
       {vault_id, hmac, path} ->
         filter_key = Crypto.dek_filter_key_from_bytes(dek)
         targets = winning_targets(user, vault_id, hmac, path, note_id, dek)
@@ -1132,14 +1169,16 @@ defmodule Engram.Links do
 
         user
         |> incoming_edges(vault_id, hmac, keys, limit, distinct_sources?)
-        |> matching_edges(MapSet.new(targets), dek)
+        |> matching_edges(MapSet.new(targets), note_id, dek)
         |> Enum.sort_by(&{&1.position, &1.id})
         |> pick_backlinks(limit, distinct_sources?)
         |> render_backlinks(user, dek)
     end
   end
 
-  # A deleted note is no candidate, so it has no backlinks.
+  # A deleted note is no candidate, so it has no backlinks. A note whose path
+  # will not decrypt has no name to match, so it falls back to the edges that
+  # resolved to it when they were written.
   defp live_note_name(user, note_id, dek) do
     Repo.one(
       from(n in Note,
@@ -1165,7 +1204,7 @@ defmodule Engram.Links do
                :path,
                n.id
              ) do
-          nil -> nil
+          nil -> {:undecryptable, n.vault_id}
           path -> {n.vault_id, n.basename_hmac, path}
         end
     end
@@ -1234,6 +1273,16 @@ defmodule Engram.Links do
     |> Repo.all(skip_tenant_check: true)
   end
 
+  defp stored_backlinks(user, vault_id, note_id, limit, distinct?) do
+    from(l in NoteLink,
+      where: l.user_id == ^user.id and l.vault_id == ^vault_id and l.target_note_id == ^note_id,
+      limit: ^limit,
+      select: map(l, ^@backlink_read_fields)
+    )
+    |> backlinks_order(distinct?)
+    |> Repo.all(skip_tenant_check: true)
+  end
+
   # DISTINCT ON collapses a linking note's edges to its first (by position,
   # id); Postgres requires the leading ORDER BY column to match it.
   defp backlinks_order(query, false), do: order_by(query, [l], asc: l.position, asc: l.id)
@@ -1247,13 +1296,18 @@ defmodule Engram.Links do
   # Keyed edges matched in SQL. The rest (written before the keys existed,
   # or re-encrypted by a writer that does not know them) match by their
   # decrypted text. The `LinkResolutionKeys` data migration empties that set.
-  defp matching_edges(edges, targets, dek) do
+  # An edge whose text will not decrypt matches by the target stored when it
+  # was written.
+  defp matching_edges(edges, targets, note_id, dek) do
     {keyed, unkeyed} =
       Enum.split_with(edges, &keys_current?(&1.link_keys_stamp, &1.target_text_nonce))
 
     matched =
       for {edge, text} <- Enum.zip(unkeyed, target_texts(unkeyed, dek)),
-          is_binary(text) and MapSet.member?(targets, String.downcase(text)),
+          if(is_binary(text),
+            do: MapSet.member?(targets, String.downcase(text)),
+            else: edge.target_note_id == note_id
+          ),
           do: edge
 
     keyed ++ matched

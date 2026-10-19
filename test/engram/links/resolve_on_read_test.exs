@@ -168,6 +168,50 @@ defmodule Engram.Links.ResolveOnReadTest do
     assert src == ctx.source.id
   end
 
+  describe "undecryptable rows fall back to the target stored at write" do
+    import ExUnit.CaptureLog
+
+    setup ctx do
+      target = Fixtures.insert_note!(ctx.user, ctx.vault, %{path: "Later.md"})
+      :ok = Links.replace_links(ctx.user, ctx.vault, ctx.source.id, [edge("Later")])
+      %{target: target}
+    end
+
+    test "an edge whose text won't decrypt", ctx do
+      corrupt(
+        ctx.user,
+        from(l in Engram.Links.NoteLink, where: l.source_note_id == ^ctx.source.id),
+        target_text_ciphertext: <<0::128>>,
+        target_key_hmac: nil,
+        link_keys_stamp: nil
+      )
+
+      capture_log(fn ->
+        assert [%{target_text: nil, target_note_id: id, target_path: "Later.md", dangling: false}] =
+                 Links.links_for_note(ctx.user, ctx.source.id)
+
+        assert id == ctx.target.id
+        assert [%{source_note_id: src}] = Links.backlinks_for_note(ctx.user, ctx.target.id)
+        assert src == ctx.source.id
+      end)
+    end
+
+    test "a note whose path won't decrypt", ctx do
+      corrupt(ctx.user, from(n in Engram.Notes.Note, where: n.id == ^ctx.target.id),
+        path_ciphertext: <<0::128>>
+      )
+
+      capture_log(fn ->
+        assert [%{source_note_id: src}] = Links.backlinks_for_note(ctx.user, ctx.target.id)
+        assert src == ctx.source.id
+      end)
+    end
+  end
+
+  defp corrupt(user, query, set) do
+    {:ok, _} = Repo.with_tenant(user.id, fn -> Repo.update_all(query, set: set) end)
+  end
+
   defp edge(target),
     do: %{target: target, alias: nil, anchor: nil, link_type: "wikilink", position: 0}
 end
