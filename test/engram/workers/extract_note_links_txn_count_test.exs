@@ -47,7 +47,9 @@ defmodule Engram.Workers.ExtractNoteLinksTxnCountTest do
     assert link_ids(note) == before
   end
 
-  test "a changed resolution is still rewritten", %{user: user, vault: vault, note: note} do
+  # Rows store the target's name, not what it resolves to, so a target
+  # appearing changes no row: the read resolves it.
+  test "a changed resolution rewrites nothing", %{user: user, vault: vault, note: note} do
     assert :ok = perform_job(ExtractNoteLinks, %{note_id: note.id, user_id: user.id})
     before = link_ids(note)
 
@@ -55,7 +57,7 @@ defmodule Engram.Workers.ExtractNoteLinksTxnCountTest do
       Notes.upsert_note(user, vault, %{"path" => "Later.md", "content" => "# l"}, actor: "api")
 
     assert :ok = perform_job(ExtractNoteLinks, %{note_id: note.id, user_id: user.id})
-    assert link_ids(note) != before
+    assert link_ids(note) == before
     assert [%{target_note_id: tid, dangling: false}] = Links.links_for_note(user, note.id)
     assert tid == target.id
   end
