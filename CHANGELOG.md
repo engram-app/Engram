@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.57.0](https://github.com/engram-app/Engram/compare/0.56.0...0.57.0) (2026-10-19)
+
+
+### Features
+
+* **indexing:** embed less, keep it keyword-searchable ([#2041](https://github.com/engram-app/Engram/issues/2041)) ([8da3a0b](https://github.com/engram-app/Engram/commit/8da3a0b2f399717c8baa155d24637de1e9e46a0a))
+
+
+### Bug Fixes
+
+* cut prod alert noise at the source ([#2048](https://github.com/engram-app/Engram/issues/2048)) ([7a5ff89](https://github.com/engram-app/Engram/commit/7a5ff899091115d9d2179b0c393471a5408190f4))
+* false-red CI, and seed new notes atomically ([#1409](https://github.com/engram-app/Engram/issues/1409)) ([#2043](https://github.com/engram-app/Engram/issues/2043)) ([28c406e](https://github.com/engram-app/Engram/commit/28c406eb3c1a8bee736a761c1c506356332cf1c6))
+* **indexing:** hold chunker at v3 until the bundled re-chunk ([#2057](https://github.com/engram-app/Engram/issues/2057)) ([986356f](https://github.com/engram-app/Engram/commit/986356f76e7ae318aad138baed934f342aab9ebf))
+* **qdrant:** publish live gauges from every node ([#2053](https://github.com/engram-app/Engram/issues/2053)) ([1343632](https://github.com/engram-app/Engram/commit/1343632c304c602ed8a2c0141c9ed6607fa9e3bc))
+
+
+### Performance Improvements
+
+* **links:** resolve link targets on read, drop rebind fan-out ([#2030](https://github.com/engram-app/Engram/issues/2030)) ([5f88ae1](https://github.com/engram-app/Engram/commit/5f88ae16bc1bf430227ff09dc271c6722a9ae29f))
+
 ## [0.56.0](https://github.com/engram-app/Engram/compare/0.55.0...0.56.0) (2026-10-19)
 
 
