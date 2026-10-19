@@ -168,6 +168,59 @@ defmodule Engram.IndexingLanguageTest do
            "language was taken from the frontmatter block instead of the body"
   end
 
+  # Data chunks (number tables, logs) are not prose: they must not take the
+  # sample slots and leave the note with no language.
+  @data_first_content """
+  # Figures
+
+  #{Enum.map_join(1..30, "\n", fn i -> "| #{i} | #{i * 3} | #{i * 11}.5 | 2026-10-#{rem(i, 28) + 1} |" end)}
+
+  # Logs
+
+  #{Enum.map_join(1..30, "\n", fn i -> "2026-10-19T05:14:49.08Z id=#{i * 977} status=200" end)}
+
+  # More figures
+
+  #{Enum.map_join(1..30, "\n", fn i -> "#{i},#{i * 7}.25,#{rem(i * 31, 97)}" end)}
+
+  # Introduction
+
+  The quick brown fox jumps over the lazy dog while the sun rises slowly over
+  the quiet English countryside on this particular morning, and the whole of
+  this note is written in plain English prose from beginning to end.
+  """
+
+  test "language comes from prose chunks, not data chunks", %{
+    bypass: bypass,
+    user: user,
+    vault: vault
+  } do
+    {:ok, note} =
+      Notes.upsert_note(
+        user,
+        vault,
+        %{"path" => "figures.md", "content" => @data_first_content, "mtime" => 3_000.0},
+        actor: "api"
+      )
+
+    {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
+
+    Engram.MockEmbedder
+    |> expect(:embed_texts, fn texts ->
+      {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+    end)
+
+    Bypass.stub(bypass, :any, :any, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, ~s({"result": true}))
+    end)
+
+    {:ok, _prepared} = Indexing.prepare_index(note, vault)
+
+    assert [:en] = Enum.uniq(drain_languages())
+  end
+
   defp drain_languages(acc \\ []) do
     receive do
       {:encode_document_language, language} -> drain_languages([language | acc])

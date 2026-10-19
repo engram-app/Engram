@@ -36,8 +36,14 @@ defmodule Engram.PromEx.Indexing do
       content). That spend is ours, never charged to a user's embed cap, so
       this is the only place it is counted. Untagged.
 
-  Cardinality contract: only `:outcome`/`:reason` (closed enums). NEVER add
-  note_id, user_id, or vault_id.
+    * `engram_prom_ex_indexing_points_written_total`: Qdrant points written
+      by a commit (reused points excluded), tagged by `:kind` (`prose | data |
+      frontmatter | drawing | canvas | base`) and `:dense` (`"true" | "false"`).
+      Sizes each embed-less lever. `drawing` stays 0 while drawing data is
+      dropped; canvas and base are labelled from the note path.
+
+  Cardinality contract: only `:outcome`/`:reason`/`:kind`/`:dense` (closed
+  enums). NEVER add note_id, user_id, or vault_id.
   """
 
   use PromEx.Plugin
@@ -46,6 +52,7 @@ defmodule Engram.PromEx.Indexing do
   @link_rewrite_failed_event [:engram, :links, :rewrite, :failed]
   @stale_points_leaked_event [:engram, :indexing, :stale_points_leaked]
   @maintenance_embed_event [:engram, :embed, :maintenance]
+  @points_written_event [:engram, :indexing, :points_written]
 
   @impl true
   def event_metrics(opts) do
@@ -94,6 +101,15 @@ defmodule Engram.PromEx.Indexing do
           description:
             "Embed tokens sent by version rebuilds (chunker or embed-model bump, content " <>
               "unchanged): our maintenance spend, never charged to a user's embed cap."
+        ),
+        sum(
+          metric_prefix ++ [:points_written, :total],
+          event_name: @points_written_event,
+          measurement: :count,
+          description:
+            "Qdrant points written by a commit (reused excluded), by chunk kind and " <>
+              "whether the point carries a dense vector.",
+          tags: [:kind, :dense]
         )
       ]
     )

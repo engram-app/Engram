@@ -19,6 +19,10 @@ defmodule Engram.Adv1760Test do
 
   setup :verify_on_exit!
 
+  # Letters only: a section of `word3 word3 ...` has no word-shaped token, so
+  # the chunker classifies it data and it is never embedded.
+  @words ~w(alpha bravo charlie delta echo foxtrot)
+
   setup do
     bypass = Bypass.open()
     Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
@@ -59,7 +63,11 @@ defmodule Engram.Adv1760Test do
     stub(Engram.MockEmbedder, :embed_texts, fn texts -> vectors(texts) end)
 
     body =
-      Enum.map_join(1..6, "\n\n", &"## Section #{&1}\n\n#{String.duplicate("word#{&1} ", 200)}")
+      Enum.map_join(
+        1..6,
+        "\n\n",
+        &"## Section #{&1}\n\n#{String.duplicate("#{Enum.at(@words, &1 - 1)} ", 200)}"
+      )
 
     note = Engram.Fixtures.insert_note!(user, vault, %{path: "N.md", content: "# N\n\n" <> body})
     assert :ok = perform_job(EmbedNote, %{note_id: note.id})
@@ -75,7 +83,7 @@ defmodule Engram.Adv1760Test do
         vault,
         %{
           "path" => "N.md",
-          "content" => "# N\n\n" <> String.replace(body, "word3 ", "edited3 ", global: false),
+          "content" => "# N\n\n" <> String.replace(body, "charlie ", "edited ", global: false),
           "mtime" => 2_000.0
         },
         actor: "api"

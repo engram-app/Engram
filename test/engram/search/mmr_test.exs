@@ -41,6 +41,29 @@ defmodule Engram.Search.MMRTest do
     assert [^a, ^b] = MMR.rerank([a, b], 2, 1.0)
   end
 
+  # Embed less: frontmatter and data chunks come back from the keyword leg with
+  # no dense vector. Scored as similarity 0 they dodged every diversity
+  # penalty, so a note's YAML beat the next prose chunk (v3 picked a, b).
+  test "a chunk with no vector takes the full penalty against its own note" do
+    n = fn score, vec, path -> %{score: score, vector: vec, source_path: path, vault_id: 1} end
+    a = n.(1.0, [1.0, 0.0], "X.md")
+    b = n.(0.95, [0.99, 0.141], "Y.md")
+    fm = n.(0.9, nil, "X.md")
+    d = n.(0.5, [0.0, 1.0], "Z.md")
+
+    assert MMR.rerank([a, b, fm, d], 2, 0.3) == [a, b]
+  end
+
+  test "a chunk with no vector is as similar as its note's dense chunk" do
+    n = fn score, vec, path -> %{score: score, vector: vec, source_path: path, vault_id: 1} end
+    a = n.(1.0, [1.0, 0.0], "X.md")
+    other = n.(0.9, [0.6, 0.8], "Y.md")
+    fm = n.(0.95, nil, "Z.md")
+    z = n.(0.5, [1.0, 0.0], "Z.md")
+
+    assert MMR.rerank([a, other, fm, z], 2, 0.5) == [a, other]
+  end
+
   test "a non-positive limit picks nothing" do
     cands = [c(0.9, [1.0, 0.0]), c(0.8, [0.0, 1.0])]
     assert MMR.rerank(cands, 0, 0.5) == []

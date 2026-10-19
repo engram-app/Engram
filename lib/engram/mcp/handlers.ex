@@ -1298,12 +1298,15 @@ defmodule Engram.MCP.Handlers do
   # `dense_indexed_hash` is nil unless the last index pass wrote dense vectors
   # (EmbedNote.stamp_embed_hash/3). Qdrant rejects a recommend whose positive
   # point has no dense vector, so refuse here with a message the caller can act on.
+  # A dense-stamped note still has sparse-only points (frontmatter, data) or
+  # none at all (canvas, base), so only its dense points are positives.
   defp stored_points(%{dense_indexed_hash: nil}, path), do: {:error, not_embedded(path)}
 
   defp stored_points(note, path) do
-    case Engram.Indexing.point_ids_for_note(note) do
-      [] -> {:error, not_embedded(path)}
-      ids -> {:ok, ids}
+    case Engram.Indexing.dense_point_ids_for_note(note) do
+      {:ok, []} -> {:error, not_embedded(path)}
+      {:ok, ids} -> {:ok, ids}
+      {:error, _} = err -> render_search(err, %{})
     end
   end
 

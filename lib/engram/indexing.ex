@@ -297,7 +297,7 @@ defmodule Engram.Indexing do
           stale_point_ids: stale_point_ids,
           note_payload: note_payload,
           payload_hash: payload_hash
-        },
+        } = prepared,
         in_commit
       ) do
     # Skip the PATCH when the note-level payload is what was last written:
@@ -354,6 +354,9 @@ defmodule Engram.Indexing do
 
       drop_stale_points(reused_point_ids, stale_point_ids, note)
 
+      # Only once the rows are committed: a failed attempt is retried, and
+      # counting its upsert too would count the same points twice.
+      emit_points_written(prepared)
       {:ok, length(chunk_rows)}
     end
   end
@@ -368,6 +371,20 @@ defmodule Engram.Indexing do
         from(n in Note, where: n.kind == "note" and n.id == ^note.id),
         set: [payload_hash: hash]
       )
+
+    :ok
+  end
+
+  # One event per (kind, dense) pair, never per point. Only points written in
+  # this commit: reused points have no `:point_kinds` entry.
+  defp emit_points_written(%{point_kinds: point_kinds}) do
+    for {{kind, dense?}, count} <- Enum.frequencies(point_kinds) do
+      :telemetry.execute(
+        [:engram, :indexing, :points_written],
+        %{count: count},
+        %{kind: kind, dense: to_string(dense?)}
+      )
+    end
 
     :ok
   end
@@ -715,6 +732,15 @@ defmodule Engram.Indexing do
     Enum.reject(point_ids, &is_nil/1)
   end
 
+  @doc """
+  `point_ids_for_note/1` narrowed to the points Qdrant holds a dense vector
+  for. Frontmatter, data, canvas and base points are sparse-only.
+  """
+  @spec dense_point_ids_for_note(map()) :: {:ok, [String.t()]} | {:error, term()}
+  def dense_point_ids_for_note(note) do
+    Qdrant.dense_point_ids(collection(), point_ids_for_note(note))
+  end
+
   defp delete_points_for_note(note) do
     Qdrant.delete_points(collection(), point_ids_for_note(note))
   end
@@ -1040,7 +1066,7 @@ defmodule Engram.Indexing do
   # the second chunk silently adopts the first one's point.
   defp plan_chunks(note, chunks, content_key, dense?) do
     chunks =
-      Enum.zip_with(chunks, fingerprints(content_key, chunks, dense?), fn chunk, hmac ->
+      Enum.zip_with(chunks, plan_fingerprints(content_key, chunks, dense?), fn chunk, hmac ->
         Map.put(chunk, :context_hmac, hmac)
       end)
 
@@ -1084,6 +1110,7 @@ defmodule Engram.Indexing do
 
     %{
       entries: entries,
+      dense?: dense?,
       reused_point_ids: reused,
       stale_point_ids: Enum.map(existing, fn {_h, id, _t} -> id end) -- reused
     }
@@ -1098,6 +1125,27 @@ defmodule Engram.Indexing do
   # One NIF call for the whole note (`Engram.Native.hmac_hex_many/3`): the same
   # hex HMAC as `Crypto.hmac_content_hash/2` over `prefix <> context_text`,
   # without building each prefixed copy or hex-encoding in Elixir.
+  #
+  # Per chunk on a dense pass: only prose gets a dense vector, so the rest are
+  # fingerprinted as the sparse-only points they become, and a chunk whose kind
+  # changes never reuses a point of the other shape.
+  defp plan_fingerprints(content_key, chunks, dense?) do
+    {dense, sparse} = Enum.split_with(chunks, &dense_chunk?(&1, dense?))
+
+    {hmacs, {[], []}} =
+      Enum.map_reduce(
+        chunks,
+        {fingerprints(content_key, dense, true), fingerprints(content_key, sparse, false)},
+        fn chunk, {d, s} ->
+          if dense_chunk?(chunk, dense?), do: {hd(d), {tl(d), s}}, else: {hd(s), {d, tl(s)}}
+        end
+      )
+
+    hmacs
+  end
+
+  defp dense_chunk?(chunk, dense?), do: dense? and chunk.kind == "prose"
+
   defp fingerprints(content_key, chunks, dense?) do
     Engram.Native.hmac_hex_many(
       content_key,
@@ -1124,11 +1172,36 @@ defmodule Engram.Indexing do
 
   # `embed_text`, not `context_text`: no folder, which is a filter key, not
   # meaning (#1621). The reuse fingerprint covers both (`fingerprint_input/1`).
-  defp embed_texts(plan), do: for({:embed, chunk} <- plan.entries, do: chunk.embed_text)
+  # Only the chunks that get a dense vector: this list is what is reserved,
+  # metered and sent to Voyage.
+  defp embed_texts(plan),
+    do:
+      for(
+        {:embed, chunk} <- plan.entries,
+        dense_chunk?(chunk, plan.dense?),
+        do: chunk.embed_text
+      )
+
+  # One vector per :embed entry, in entry order: the embedder's in turn, nil
+  # for a chunk that is sparse-only.
+  defp entry_vectors(plan, vectors) do
+    {spread, []} =
+      Enum.flat_map_reduce(plan.entries, vectors, fn
+        {:reuse, _chunk, _point_id, _tokens}, left ->
+          {[], left}
+
+        {:embed, chunk}, left ->
+          if dense_chunk?(chunk, plan.dense?),
+            do: {[hd(left)], tl(left)},
+            else: {[nil], left}
+      end)
+
+    spread
+  end
 
   defp note_language(chunks) do
     chunks
-    |> Enum.reject(&(&1.heading_path == "frontmatter"))
+    |> Enum.filter(&(&1.kind == "prose"))
     |> Enum.take(3)
     |> Enum.map_join("\n\n", & &1.text)
     |> detect_language()
@@ -1348,12 +1421,13 @@ defmodule Engram.Indexing do
     #
     # Bounded to a few chunks so a large note doesn't build a large throwaway
     # binary just to have detect/1 slice the front off it.
-    # Reject by heading_path rather than trusting position: the frontmatter chunk
-    # is appended last today, but a short note can have so few body chunks that a
-    # positional take swallows it anyway (a one-section note has exactly two).
-    # A note that is ONLY frontmatter then yields no sample and falls back to raw
-    # token indexing, which is the right answer — YAML keys should not pick a
-    # stemmer for prose that doesn't exist.
+    # Keep prose chunks only, rather than trusting position: the frontmatter
+    # chunk is appended last today, but a short note can have so few body chunks
+    # that a positional take swallows it anyway (a one-section note has exactly
+    # two), and data chunks (logs, number tables) can lead the note. A note with
+    # no prose then yields no sample and falls back to raw token indexing, which
+    # is the right answer: YAML keys or numbers should not pick a stemmer for
+    # prose that doesn't exist.
     language = note_language(Enum.map(plan.entries, &entry_chunk/1))
 
     note_payload = note_payload(note)
@@ -1361,9 +1435,9 @@ defmodule Engram.Indexing do
 
     # The whole note in one call so the encoder can share per-note work (the
     # token -> dim memo) across chunks. One sparse vector per :embed entry, in
-    # the same order as `vectors`. `context_text`, not `text`: the folder, title
-    # and heading path live only in the prefix, and a note with no H1 is
-    # otherwise unfindable by its own name on the keyword leg (#1615).
+    # the same order as `entry_vectors/2`. `context_text`, not `text`: the
+    # folder, title and heading path live only in the prefix, and a note with
+    # no H1 is otherwise unfindable by its own name on the keyword leg (#1615).
     # `resparse_note/2` must encode the same string.
     sparse =
       KeywordIndex.module().encode_documents(
@@ -1374,13 +1448,17 @@ defmodule Engram.Indexing do
       )
 
     prepared =
-      Enum.reduce_while(plan.entries, {:ok, [], Enum.zip(vectors, sparse)}, fn
-        entry, {:ok, acc, pending} ->
-          case build_entry(entry, ctx, pending) do
-            {:ok, built, rest} -> {:cont, {:ok, [built | acc], rest}}
-            {:error, _reason} = err -> {:halt, err}
-          end
-      end)
+      Enum.reduce_while(
+        plan.entries,
+        {:ok, [], Enum.zip(entry_vectors(plan, vectors), sparse)},
+        fn
+          entry, {:ok, acc, pending} ->
+            case build_entry(entry, ctx, pending) do
+              {:ok, built, rest} -> {:cont, {:ok, [built | acc], rest}}
+              {:error, _reason} = err -> {:halt, err}
+            end
+        end
+      )
 
     with {:ok, reversed, _spent} <- prepared do
       built = Enum.reverse(reversed)
@@ -1390,6 +1468,7 @@ defmodule Engram.Indexing do
          note: note,
          chunk_rows: Enum.map(built, & &1.row),
          qdrant_points: for(%{point: p} <- built, p != nil, do: p),
+         point_kinds: for(%{kind: k, dense?: d} <- built, do: {k, d}),
          # Straight from the plan, not re-derived from `built`. Two independent
          # derivations of the same list is how "reused" and "not deleted" drift
          # apart, and the drift is silent: an id in one list but not the other
@@ -1439,7 +1518,9 @@ defmodule Engram.Indexing do
 
         built = %{
           row: chunk_row(note, chunk, point_id, doc_len, now),
-          point: %{id: point_id, vector: named_vectors, payload: payload}
+          point: %{id: point_id, vector: named_vectors, payload: payload},
+          kind: metric_kind(note.path, chunk.kind),
+          dense?: vector != nil
         }
 
         {:ok, built, rest}
@@ -1457,6 +1538,17 @@ defmodule Engram.Indexing do
         )
 
         err
+    end
+  end
+
+  # Canvas and base chunks are "data" to the chunker; the metric wants them
+  # apart so each embed-less lever can be sized on its own. Closed enum.
+  defp metric_kind(path, kind) do
+    case Path.extname(path) do
+      ".canvas" -> "canvas"
+      ".base" -> "base"
+      _ when kind in ~w(prose data frontmatter drawing) -> kind
+      _ -> "prose"
     end
   end
 

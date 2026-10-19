@@ -1,4 +1,4 @@
-//! `Engram.Parsers.Markdown.parse/2` in Rust (chunker version 3): the
+//! `Engram.Parsers.Markdown.parse/2` in Rust (chunker version 4): the
 //! frontmatter split, heading sections, base64 blob stripping, splitting and
 //! the size caps. The Elixir side keeps CRLF normalisation, the folder and
 //! the title, and assigns positions.
@@ -33,9 +33,10 @@ const WINDOW: usize = 1024;
 const RUNT: usize = 512;
 
 /// One chunk: (text, context_text, embed_text, heading_path, char_start,
-/// char_end). context_text carries the folder for keyword search (#1615);
-/// embed_text, the dense input, drops it (#1621).
-pub type Chunk = (String, String, String, String, usize, usize);
+/// char_end, kind). context_text carries the folder for keyword search
+/// (#1615); embed_text, the dense input, drops it (#1621). kind is `prose`,
+/// `data`, `frontmatter` or `drawing`: only prose gets a dense vector.
+pub type Chunk = (String, String, String, String, usize, usize, &'static str);
 
 struct Heading {
     level: usize,
@@ -73,6 +74,7 @@ const COUNT_FROM: usize = 16 * 1024;
 /// `budget` is chunked again with its small sections coalesced.
 pub fn each_chunk(content: &str, folder: &str, title: &str, mut emit: impl FnMut(Chunk)) {
     let (block, body) = crate::frontmatter::parts(content);
+    let body = &*excalidraw(block.as_deref(), body);
     let coalesce = body.len() >= COUNT_FROM && {
         let mut n = 0;
         chunk_body(body, folder, title, false, &mut |_| n += 1);
@@ -84,8 +86,8 @@ pub fn each_chunk(content: &str, folder: &str, title: &str, mut emit: impl FnMut
     if !emitted {
         let rest = strip_blobs(body);
         if !markup_only(&rest) {
-            for t in split(&normalize("", &rest)) {
-                emit(make(folder, title, title, t, 0, body.len()));
+            for (t, kind) in classified(split(&normalize("", &rest))) {
+                emit(make(folder, title, title, t, 0, body.len(), kind));
             }
         }
     }
@@ -96,7 +98,7 @@ pub fn each_chunk(content: &str, folder: &str, title: &str, mut emit: impl FnMut
             .into_iter()
             .filter(|t| !t.is_empty())
         {
-            emit(make(folder, &path, "frontmatter", t, 0, 0));
+            emit(make(folder, &path, "frontmatter", t, 0, 0, "frontmatter"));
         }
     }
 }
@@ -179,8 +181,8 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
             return;
         }
         self.flush();
-        for t in split(&text) {
-            (self.emit)(make(self.folder, &path, &path, t, self.start, end));
+        for (t, kind) in classified(split(&text)) {
+            (self.emit)(make(self.folder, &path, &path, t, self.start, end, kind));
             self.emitted = true;
         }
     }
@@ -200,13 +202,149 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
 
     fn flush(&mut self) {
         if let Some((text, path, from, to)) = self.pending.take() {
-            (self.emit)(make(self.folder, &path, &path, &text, from, to));
+            let kind = classify(&text, false).0;
+            (self.emit)(make(self.folder, &path, &path, &text, from, to, kind));
             self.emitted = true;
         }
     }
 }
 
-fn make(folder: &str, path: &str, heading_path: &str, text: &str, s: usize, e: usize) -> Chunk {
+const PROSE: &str = "prose";
+
+/// An Excalidraw note (a frontmatter line starting `excalidraw-plugin:`) is
+/// indexed by its text elements: the ```json / ```compressed-json drawing
+/// fences after `## Drawing` (`# Drawing` in the old format) leave the indexed text, and so do the ` ^id` block refs that
+/// end the element lines. The note keeps every byte. Chunk offsets count the
+/// edited body.
+fn excalidraw<'a>(block: Option<&str>, body: &'a str) -> std::borrow::Cow<'a, str> {
+    if !block.is_some_and(|b| b.lines().any(|l| l.starts_with("excalidraw-plugin:"))) {
+        return body.into();
+    }
+    let (head, tail) = match re!(r"(?m)^##? Drawing[ \t]*$").find(body) {
+        Some(m) => body.split_at(m.start()),
+        None => (body, ""),
+    };
+    let head = re!(r"(?m)[ \t]+\^[A-Za-z0-9]{6,}[ \t]*$").replace_all(head, "");
+    let tail = re!(r"(?ms)^```(?:compressed-)?json[^\n]*\n.*?^```[ \t]*$").replace_all(tail, "");
+    format!("{head}{tail}").into()
+}
+
+/// `data` for a body chunk that is mostly not words (minified JSON, CSV of
+/// numbers, log dumps, number tables): it is keyword-only, as a dense vector
+/// of it means nothing. Judged per paragraph (blank-line runs), so a table
+/// does not take the dense leg off the analysis above it: the chunk is
+/// `data` only when 80% or more of its bytes sit in data-shaped paragraphs.
+/// Code fence lines count as prose (code is searched by meaning), and so
+/// does any chunk under 200 bytes. Linear time. `open`: the chunk starts
+/// inside a code fence. Returns whether it ends in one.
+fn classify(text: &str, mut open: bool) -> (&'static str, bool) {
+    let mut data = 0;
+    let mut para: Option<(usize, usize)> = None;
+    let mut pos = 0;
+    for line in text.split_inclusive('\n') {
+        let end = pos + line.len();
+        let t = line.trim_start();
+        let fence = t.starts_with("```") || t.starts_with("~~~");
+        if open || fence || t.is_empty() {
+            data += para.take().map_or(0, |(s, e)| data_bytes(&text[s..e]));
+        } else {
+            para = Some((para.map_or(pos, |(s, _)| s), end));
+        }
+        open ^= fence;
+        pos = end;
+    }
+    data += para.map_or(0, |(s, e)| data_bytes(&text[s..e]));
+    if text.len() >= 200 && data * 100 >= text.len() * 80 {
+        ("data", open)
+    } else {
+        (PROSE, open)
+    }
+}
+
+/// `p.len()` when the paragraph is data-shaped, else 0. Data-shaped: under
+/// 35% of its tokens are words, unless it is written in a script without
+/// spaces (CJK: non-ASCII letters are most of the text). Tokens with no
+/// letter or digit (`|`, `---`, `-`) are markup and not counted, so a
+/// table of words is prose.
+fn data_bytes(p: &str) -> usize {
+    let (mut wide, mut other) = (0, 0);
+    let (mut words, mut tokens) = (0, 0);
+    for tok in p.split_whitespace() {
+        for c in tok.chars() {
+            if c.is_alphabetic() && !c.is_ascii() {
+                wide += 1;
+            } else {
+                other += 1;
+            }
+        }
+        // `[[Note|Alias]]`: both sides are words.
+        let parts = if tok.contains("[[") {
+            tok.split('|')
+        } else {
+            tok.split('\u{0}')
+        };
+        for tok in parts.filter(|t| t.chars().any(char::is_alphanumeric)) {
+            tokens += 1;
+            words += (word(tok) || wide_word(tok)) as usize;
+        }
+    }
+    // Non-ASCII letters only: string-heavy minified JSON is over half ASCII
+    // letters, and the word rule is what catches it.
+    let prose = tokens == 0 || wide >= other || words * 100 >= tokens * 35;
+    if prose {
+        0
+    } else {
+        p.len()
+    }
+}
+
+/// The pieces of one section with their kinds. A code block longer than a
+/// chunk leaves pieces with no fence of their own, so the fence state
+/// carries from piece to piece.
+fn classified(pieces: Vec<&str>) -> impl Iterator<Item = (&str, &'static str)> {
+    let mut open = false;
+    pieces.into_iter().map(move |t| {
+        let (kind, after) = classify(t, open);
+        open = after;
+        (t, kind)
+    })
+}
+
+/// 2+ letters, letters only (an inner `'` or `-` allowed), with markup and
+/// punctuation trimmed from both ends: `[[Inbox]]`, `**Owner:**` and `"so"`
+/// are words. `[Why Rust](https://...)`: the title counts, the url does not.
+fn word(tok: &str) -> bool {
+    let tok = tok.split("](").next().unwrap_or(tok);
+    let w = tok
+        .trim_start_matches(['[', '(', '*', '_', '`', '"', '\'', '#', '>', '~'])
+        .trim_end_matches(|c: char| !c.is_alphanumeric());
+    w.chars().filter(|c| c.is_alphabetic()).count() >= 2
+        && w.chars()
+            .all(|c| c.is_alphabetic() || matches!(c, '\'' | '’' | '-'))
+        && w.starts_with(char::is_alphabetic)
+}
+
+/// A token of a script written without spaces (CJK): a whole clause, inline
+/// code included, is one token. 2+ non-ASCII letters, at least as many as
+/// its ASCII letters and digits, so minified JSON with a few non-ASCII
+/// string values stays a non-word.
+fn wide_word(tok: &str) -> bool {
+    let wide = tok
+        .chars()
+        .filter(|c| c.is_alphabetic() && !c.is_ascii())
+        .count();
+    wide >= 2 && wide >= tok.chars().filter(char::is_ascii_alphanumeric).count()
+}
+
+fn make(
+    folder: &str,
+    path: &str,
+    heading_path: &str,
+    text: &str,
+    s: usize,
+    e: usize,
+    kind: &'static str,
+) -> Chunk {
     let emb = cap(path);
     let ctx = if folder.is_empty() {
         emb.to_string()
@@ -220,6 +358,7 @@ fn make(folder: &str, path: &str, heading_path: &str, text: &str, s: usize, e: u
         heading_path.to_string(),
         s,
         e,
+        kind,
     )
 }
 
@@ -355,20 +494,128 @@ fn normalize(head: &str, rest: &str) -> String {
     out
 }
 
-/// Base64 runs (data URIs, Excalidraw, encrypted blocks) are removed from the
-/// indexed text; the note keeps every byte. A run must also LOOK encoded, so
-/// a long URL or path in the same character class survives.
+/// Base64 and hex blobs are removed from the indexed text; the note keeps
+/// every byte. A run must also LOOK encoded, so a long URL or path in the
+/// same character class survives.
 fn strip_blobs(text: &str) -> std::borrow::Cow<'_, str> {
-    re!(r"(?:data:[A-Za-z0-9_/+.-]+;base64,)?[A-Za-z0-9+/=_-]{100,}").replace_all(
-        text,
+    let text = strip_wrapped(text);
+    let out = re!(r"(?:data:[A-Za-z0-9_/+.-]+;base64,)?([A-Za-z0-9+/=_-]{100,})").replace_all(
+        &text,
         |c: &regex::Captures| {
-            if encoded(&c[0]) {
+            let body = &c[1];
+            let blob = encoded(body) || random_hex(body);
+            if blob {
                 String::new()
             } else {
                 c[0].to_string()
             }
         },
-    )
+    );
+    match out {
+        std::borrow::Cow::Borrowed(_) => text,
+        std::borrow::Cow::Owned(s) => s.into(),
+    }
+}
+
+/// 60-120 base64 chars: PEM wraps at 64, MIME and `base64 -w` at 76. Under
+/// 60 sit identifiers that must stay searchable (ETH addresses 42, Solana
+/// 32-44, IPFS CIDv0 46).
+fn b64_line(line: &str) -> bool {
+    (60..=120).contains(&line.trim().len()) && b64_chars(line)
+}
+
+fn b64_chars(line: &str) -> bool {
+    let l = line.trim();
+    !l.is_empty()
+        && l.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/' | b'='))
+}
+
+fn pem_armour(line: &str, word: &str) -> bool {
+    let l = line.trim();
+    l.starts_with("-----") && l.ends_with("-----") && l[5..].starts_with(word)
+}
+
+/// Runs of 3+ lines of 60-120 base64 chars (PEM bodies, MIME parts) that
+/// together look encoded, plus the PEM armour lines around them. After a
+/// BEGIN line the run also takes the short last line, so the END line is
+/// next and goes too. One linear line scan, no regex.
+fn strip_wrapped(text: &str) -> std::borrow::Cow<'_, str> {
+    // Byte ranges to drop; a note with no wrapped blob allocates nothing.
+    let mut cut: Vec<(usize, usize)> = Vec::new();
+    let mut prev: Option<(usize, &str)> = None;
+    let mut run: Option<(usize, usize, usize)> = None; // start, end, lines
+    let mut sample = String::new(); // first 4 KB of the run, what encoded() reads
+    let mut pem = false; // the run follows a BEGIN armour line
+    let mut pos = 0;
+    let mut close = |run: &mut Option<(usize, usize, usize)>,
+                     sample: &mut String,
+                     prev: Option<(usize, &str)>,
+                     next: Option<(usize, usize, &str)>| {
+        if let Some((s, e, n)) = run.take() {
+            if n >= 3 && encoded(sample) {
+                let s = match prev {
+                    Some((ps, l)) if pem_armour(l, "BEGIN") => ps,
+                    _ => s,
+                };
+                let e = match next {
+                    Some((_, ne, l)) if pem_armour(l, "END") => ne,
+                    _ => e,
+                };
+                cut.push((s, e));
+            }
+        }
+        sample.clear();
+    };
+    for line in text.split_inclusive('\n') {
+        let end = pos + line.len();
+        if b64_line(line) || (pem && run.is_some() && b64_chars(line)) {
+            match &mut run {
+                Some((_, e, n)) => {
+                    *e = end;
+                    *n += 1;
+                }
+                None => {
+                    run = Some((pos, end, 1));
+                    pem = prev.is_some_and(|(_, l)| pem_armour(l, "BEGIN"));
+                }
+            }
+            if sample.len() < 4096 {
+                sample.push_str(line.trim());
+            }
+        } else {
+            close(&mut run, &mut sample, prev, Some((pos, end, line)));
+            pem = false;
+            prev = Some((pos, line));
+        }
+        pos = end;
+    }
+    close(&mut run, &mut sample, prev, None);
+    if cut.is_empty() {
+        return text.into();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut from = 0;
+    for (s, e) in cut {
+        // An END armour line already swallowed by the previous cut cannot
+        // overlap: it is not a base64 line, so no later run starts inside it.
+        out.push_str(&text[from..s]);
+        from = e;
+    }
+    out.push_str(&text[from..]);
+    out.into()
+}
+
+/// A hex dump: 256+ hex chars that also look random (digits AND letters),
+/// so sha256/sha512 hashes stay searchable and "aaaa..." is plain text.
+fn random_hex(run: &str) -> bool {
+    if run.len() < 256 || !run.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return false;
+    }
+    let sample = &run.as_bytes()[..run.len().min(4096)];
+    let d = sample.iter().filter(|b| b.is_ascii_digit()).count();
+    let len = sample.len() as f64;
+    d as f64 >= len * 0.2 && (sample.len() - d) as f64 >= len * 0.2
 }
 
 /// Random base64 is ~41% upper, ~41% lower, ~16% digits. Counted over the
@@ -627,6 +874,20 @@ mod tests {
     }
 
     #[test]
+    fn frontmatter_chunks_are_their_own_kind() {
+        let cs = chunk("---\ntags: [a]\n---\n# T\n\nbody\n\n## S\n\nmore", "", "T");
+        let kinds: Vec<_> = cs.iter().map(|c| (c.3.as_str(), c.6)).collect();
+        assert_eq!(
+            kinds,
+            [
+                ("T", "prose"),
+                ("T > S", "prose"),
+                ("frontmatter", "frontmatter")
+            ]
+        );
+    }
+
+    #[test]
     fn notes_under_the_budget_chunk_as_before() {
         // A few hundred small sections: one chunk each, unchanged.
         let note = "## s\n\nbody text\n\n".repeat(300);
@@ -691,6 +952,7 @@ mod tests {
             fill("a line of text\n") + "#tag\n",
             fill("-\n"),
             fill("h\n=\n"),
+            fill(r#"{"id":4821,"ok":true},"#),
         ] {
             let ((), peak) = crate::memory::measured(|| each_chunk(&content, "f", "T", |_| {}));
             assert!(peak <= 10 * content.len(), "{peak} for {:?}", &content[..8]);
@@ -725,9 +987,385 @@ mod tests {
         assert_eq!(paths("a\n\n#\n\nb"), ["T"]);
     }
 
+    fn indexed(s: &str) -> String {
+        strip_blobs(s).into_owned()
+    }
+
+    fn b64_lines(n: usize, w: usize) -> String {
+        let alpha = b"AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/aBcDeFgHiJkLmNoPqRsTuVwXyZ";
+        (0..n)
+            .map(|r| {
+                (0..w)
+                    .map(|i| alpha[(i * 7 + r * 13) % 64] as char)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn pem_block_is_stripped_prose_kept() {
+        let note = format!(
+            "before text\n-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\nafter text",
+            b64_lines(5, 64)
+        );
+        assert_eq!(indexed(&note), "before text\nafter text");
+    }
+
+    #[test]
+    fn mime_attachment_is_stripped() {
+        let note = format!("hello\n\n{}\n\nbye", b64_lines(8, 76));
+        assert_eq!(indexed(&note), "hello\n\n\nbye");
+    }
+
+    #[test]
+    fn random_hex_dump_is_stripped_hashes_and_repeats_kept() {
+        let dump = "0123456789abcdef".repeat(32);
+        assert_eq!(indexed(&format!("sum {dump} end")), "sum  end");
+        let sha512 = "0123456789abcdef".repeat(8);
+        let keep = format!("sha {sha512} commit 2fc980c3a1b0d5e7f9a1b2c3d4e5f60718293a4b deadbeef");
+        assert_eq!(indexed(&keep), keep);
+        for same in ["a".repeat(300), "A".repeat(10_000), "7".repeat(300)] {
+            assert_eq!(indexed(&same), same);
+        }
+    }
+
+    #[test]
+    fn urls_paths_and_tables_are_kept() {
+        let url = format!("https://example.com/{}", "segment/".repeat(20));
+        let path = format!("/home/user/{}", "dir42/".repeat(20));
+        let table = "| a | b |\n|---|---|\n| one | two |\n| three | four |\n";
+        for s in [url.as_str(), path.as_str(), table] {
+            assert_eq!(indexed(s), s);
+        }
+        // Two wrapped lines are below the 3-line threshold.
+        let two = b64_lines(2, 64);
+        assert_eq!(indexed(&two), two);
+    }
+
+    #[test]
+    fn wallet_addresses_and_cids_stay_in_the_index() {
+        let notes = [
+            "## Wallets\n7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV\n\
+             9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin\n\
+             4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R\n",
+            "## Wallets\n0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed\n\
+             0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359\n\
+             0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB\n",
+            "## Pins\nQmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG\n\
+             QmT78zSuBmuS4z925WZfrqQ1qHaJ56DQaTfyMUF7F8ff5o\n\
+             QmPZ9gcCEpqKTo6aq61g2nXGUhM4iCL3ewB6LDXZCtioEB\n",
+        ];
+        for note in notes {
+            assert_eq!(indexed(note), note);
+        }
+    }
+
+    /// Self-signed certs (RSA 1024-4096, P-256, Ed25519): their last base64
+    /// line runs from 4 to 64 chars.
+    const CERTS: &str = include_str!("testdata/certs.pem");
+
+    #[test]
+    fn real_certificates_leave_no_base64_or_armour() {
+        let certs: Vec<String> = CERTS
+            .split_inclusive("-----END CERTIFICATE-----\n")
+            .map(str::to_string)
+            .collect();
+        assert_eq!(certs.len(), 6);
+        for cert in certs {
+            let out = indexed(&format!("The staging cert:\n{cert}Rotate it yearly.\n"));
+            assert_eq!(out, "The staging cert:\nRotate it yearly.\n");
+        }
+    }
+
+    #[test]
+    fn multibyte_text_next_to_a_pem_block_survives() {
+        let note = format!(
+            "Привет мир\n-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\nПока мир",
+            b64_lines(5, 64)
+        );
+        assert_eq!(indexed(&note), "Привет мир\nПока мир");
+    }
+
     #[test]
     fn empty_body_and_blank_note() {
         assert!(chunk("", "", "T").is_empty());
         assert!(chunk("   \n\n", "", "T").is_empty());
+    }
+
+    fn kinds(note: &str) -> Vec<&'static str> {
+        chunk(note, "", "T").into_iter().map(|c| c.6).collect()
+    }
+
+    fn all(note: &str, kind: &str) {
+        let ks = kinds(note);
+        assert!(!ks.is_empty() && ks.iter().all(|k| *k == kind), "{ks:?}");
+    }
+
+    #[test]
+    fn minified_json_is_data() {
+        let rec = r#"{"id":4821,"name":"Alice Smith","role":"admin","tags":["work","home"],"score":12.5,"ok":true}"#;
+        let json = format!("[{}]", vec![rec; 21].join(","));
+        assert!(json.len() > 1900 && json.len() < MAX_CHUNK);
+        all(&json, "data");
+    }
+
+    #[test]
+    fn numeric_csv_is_data() {
+        let rows: Vec<String> = (0..40)
+            .map(|i| format!("{i},{}.25,{},2026-10-{:02}", i * 7, i * 31 % 97, i % 28 + 1))
+            .collect();
+        all(&format!("id,value,count,date\n{}", rows.join("\n")), "data");
+    }
+
+    #[test]
+    fn log_dump_is_data() {
+        let lines: Vec<String> = (0..30)
+            .map(|i| format!("2026-10-19T05:14:{i:02}.0863647Z id=7f3c{i:04x}e2 status=200"))
+            .collect();
+        all(&lines.join("\n"), "data");
+    }
+
+    #[test]
+    fn number_table_is_data() {
+        let rows: Vec<String> = (0..30)
+            .map(|i| format!("| {i} | {} | {}.5 |", i * 3, i * 11))
+            .collect();
+        all(
+            &format!("| a | b | c |\n|---|---|---|\n{}", rows.join("\n")),
+            "data",
+        );
+    }
+
+    #[test]
+    fn prose_with_dates_and_figures_is_prose() {
+        let p = "On 2026-10-19 revenue grew 12.5% to $3.4M, up from $2.9M in Q3 2025. \
+                 We shipped v0.54.0 at 05:14 UTC and 1,204 of 1,310 users (91.9%) synced \
+                 within 30 s. Costs fell 18% after the 2026-09-26 migration to 2 nodes.";
+        assert!(p.len() >= 200);
+        all(p, "prose");
+    }
+
+    #[test]
+    fn german_and_cyrillic_paragraphs_are_prose() {
+        all(
+            "Der Hund und die Katze spielen im Garten. Über die Brücke gehen täglich \
+             viele Menschen zur Arbeit, während die Sonne über der Stadt aufgeht und \
+             die Straßen sich langsam füllen.",
+            "prose",
+        );
+        all(
+            "Собака и кошка играют в саду. Каждый день много людей идут через мост на \
+             работу, пока солнце встаёт над городом и улицы медленно наполняются.",
+            "prose",
+        );
+    }
+
+    #[test]
+    fn cjk_paragraphs_are_prose() {
+        all(
+            "東京は日本の首都であり、世界で最も人口の多い都市圏の一つです。毎日多くの人々が電車で通勤し、\
+             街は朝から夜まで活気にあふれています。春には桜が咲き、多くの観光客が訪れます。",
+            "prose",
+        );
+        all(
+            "北京是中国的首都，也是一座历史悠久的城市。每天都有很多人乘坐地铁上班，\
+             城市从早到晚都充满活力。春天的时候，公园里开满了鲜花，吸引了许多游客。",
+            "prose",
+        );
+    }
+
+    #[test]
+    fn cjk_prose_with_inline_code_is_prose() {
+        all(
+            "今日は`mix test`を実行した。`indexing_test.exs`で3件失敗したので、`plan_chunks`のロジックを\
+             見直した。原因は`chunk_rows`の順序で、修正後はすべてのテストが通った。明日は`EmbedNote`の\
+             リトライ処理を確認する予定です。",
+            "prose",
+        );
+        all(
+            "今天运行了`mix test`，`indexing_test.exs`里有3个测试失败，所以重新检查了`plan_chunks`的逻辑。\
+             原因是`chunk_rows`的顺序不对，修复之后所有测试都通过了。明天打算确认`EmbedNote`的重试处理。",
+            "prose",
+        );
+        all(
+            "오늘 `mix test`를 실행했더니 `indexing_test.exs`에서 테스트 3개가 실패했다. 그래서 \
+             `plan_chunks`의 로직을 다시 살펴보았다. 원인은 `chunk_rows`의 순서였고, 수정한 뒤에는 모든 \
+             테스트가 통과했다. 내일은 `EmbedNote`의 재시도 처리를 확인할 예정이다.",
+            "prose",
+        );
+    }
+
+    #[test]
+    fn minified_json_with_unicode_values_is_data() {
+        let rec =
+            r#"{"id":4821,"name":"山田太郎","city":"東京","role":"admin","score":12.5,"ok":true}"#;
+        let json = format!("[{}]", [rec; 10].join(","));
+        assert!(json.len() >= 200 && json.len() < MAX_CHUNK);
+        all(&json, "data");
+    }
+
+    fn metrics_table(rows: usize) -> String {
+        let rows: Vec<String> = (0..rows)
+            .map(|i| {
+                format!(
+                    "| {i} | {} | {} | {}.{} | {} |",
+                    4810 + i * 37,
+                    i * 3,
+                    i % 4,
+                    i % 10,
+                    900 + i
+                )
+            })
+            .collect();
+        format!(
+            "| wk | mrr | new | churn | dau |\n|---|---|---|---|---|\n{}",
+            rows.join("\n")
+        )
+    }
+
+    #[test]
+    fn analysis_paragraph_above_a_metrics_table_is_prose() {
+        let para = "Revenue grew faster than expected because the annual plan landed in week \
+                    three, but churn stayed high among teams that never finished setup. The \
+                    onboarding funnel is the next thing to fix, starting with the invite step \
+                    that most new admins skip.";
+        assert!(para.len() >= 230);
+        let note = format!("## Q3 results\n\n{para}\n\n{}", metrics_table(20));
+        all(&note, "prose");
+        all(&format!("## Q3 results\n\n{}", metrics_table(20)), "data");
+    }
+
+    #[test]
+    fn fenced_code_is_prose() {
+        let code = "```elixir\ndefmodule Foo do\n  def bar(%{id: id} = m, opts \\\\ []) do\n    \
+                    {:ok, Map.put(m, :n, id * 2 + Keyword.get(opts, :k, 0))}\n  end\n\n  \
+                    def baz([h | t]), do: {h, length(t), Enum.sum(t) / 3}\n  \
+                    def qux(<<n::32, r::binary>>), do: {n + 1, byte_size(r) * 8}\nend\n```";
+        assert!(code.len() >= 200);
+        all(code, "prose");
+    }
+
+    // A code block longer than a chunk is cut into pieces with no fence of
+    // their own: the fence state carries from the section start.
+    #[test]
+    fn every_piece_of_a_long_code_block_is_prose() {
+        let line = "    let (ct, n) = seal(&K, b\"x\", 7)?;\n";
+        let note = format!("```rust\n{}```\n", line.repeat(200));
+        assert!(chunk(&note, "", "T").len() >= 3);
+        all(&note, "prose");
+    }
+
+    #[test]
+    fn table_of_words_is_prose() {
+        let rows: Vec<&str> = vec![
+            "| Alice | engineer | Berlin |",
+            "| Bob | designer | Lisbon |",
+        ]
+        .into_iter()
+        .cycle()
+        .take(20)
+        .collect();
+        all(
+            &format!("| Name | Role | City |\n|---|---|---|\n{}", rows.join("\n")),
+            "prose",
+        );
+    }
+
+    #[test]
+    fn link_lists_and_bold_keys_are_prose() {
+        let wikis = [
+            "Inbox",
+            "Project Alpha",
+            "Weekly Review",
+            "Reading",
+            "Ideas",
+        ];
+        let note: Vec<String> = (0..4)
+            .flat_map(|_| wikis.iter().map(|w| format!("- [[{w}]]")))
+            .collect();
+        all(&note.join("\n"), "prose");
+        let reads = ["Why Rust", "Elixir", "On Writing Well", "Ownership"];
+        let note: Vec<String> = (0..3)
+            .flat_map(|_| {
+                reads
+                    .iter()
+                    .map(|r| format!("- [{r}](https://example.com/a/b-{})", r.len()))
+            })
+            .collect();
+        all(&note.join("\n"), "prose");
+        let keys = ["Owner", "Status", "Due", "Team", "Budget", "Region"];
+        let note: Vec<String> = (0..3)
+            .flat_map(|_| keys.iter().map(|k| format!("- **{k}:** Alice")))
+            .collect();
+        all(&note.join("\n"), "prose");
+    }
+
+    #[test]
+    fn aliased_wikilinks_are_prose() {
+        let note: Vec<&str> = std::iter::repeat_n("- [[Inbox|In]]", 20).collect();
+        all(&note.join("\n"), "prose");
+    }
+
+    const DRAWING: &str = "---\nexcalidraw-plugin: parsed\n---\n\n# Excalidraw Data\n\n## Text Elements\nLaunch plan zanzibar ^abc12345\n\nShip it ^Zz9Yy8Xx\n\n%%\n## Drawing\n```compressed-json\nN4IgLgngDgpiBcIBeA7AHABgOgIwG8AaGmAJwIC2AlgIYAmQAXGAGzBMNwHtqAnAF8D7VkRH0AIgCEAlAAIAKwAUYAXUkBjAGZQAbmwD6mgFYAGAIyWAnAF4A8hCDEAIgGEAEsQDWAMQCkAQVoAVQAIAIgCEfTwBFQKdIgGEfQIBlAAsAdVJALAAEnQBVAH5\n```\n%%\n";
+
+    #[test]
+    fn excalidraw_drawing_data_is_dropped_text_kept() {
+        let text: String = chunk(DRAWING, "", "T")
+            .iter()
+            .map(|c| c.0.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("N4IgLgng"), "{text}");
+        assert!(
+            text.contains("Launch plan zanzibar") && text.contains("Ship it"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("^abc12345") && !text.contains("^Zz9Yy8Xx"),
+            "{text}"
+        );
+        assert!(text.contains("excalidraw-plugin"), "{text}");
+        let raw = DRAWING.replace(
+            "compressed-json\nN4IgLgngDgpiBcIBeA7AHABgOgIwG8AaGm",
+            "json\n{\"type\": \"rectangle\", \"x\": 1, \"id\": \"qq\"}\nN4",
+        );
+        let text: String = chunk(&raw, "", "T").iter().map(|c| c.0.clone()).collect();
+        assert!(!text.contains("rectangle"), "{text}");
+    }
+
+    #[test]
+    fn excalidraw_needs_the_frontmatter_key() {
+        let clipped = "---\nsource: https://github.com/zsviczian/obsidian-excalidraw-plugin\n---\n\
+                       # Notes\n\n## Drawing\n\nThe API:\n\n```json\n{\"keep\": \"me\"}\n```\n";
+        let text: String = chunk(clipped, "", "T")
+            .iter()
+            .map(|c| c.0.clone())
+            .collect();
+        assert!(text.contains("keep"), "{text}");
+    }
+
+    #[test]
+    fn old_format_h1_drawing_is_dropped() {
+        let old = DRAWING.replace(
+            "## Drawing\n```compressed-json\nN4IgLgngDgpiBcIBeA7AHABgOgIwG8AaGm",
+            "# Drawing\n```json\n{\"type\": \"rectangle\", \"x\": 1, \"id\": \"qq\"}\nN4",
+        );
+        assert!(old.contains("# Drawing\n```json"));
+        let text: String = chunk(&old, "", "T").iter().map(|c| c.0.clone()).collect();
+        assert!(!text.contains("rectangle"), "{text}");
+        assert!(text.contains("Launch plan zanzibar"), "{text}");
+    }
+
+    #[test]
+    fn json_fences_outside_excalidraw_are_kept() {
+        let note = "# T\n\n## Drawing\n```json\n{\"keep\": \"me\"}\n```\n";
+        let text: String = chunk(note, "", "T").iter().map(|c| c.0.clone()).collect();
+        assert!(text.contains("keep"), "{text}");
+    }
+
+    #[test]
+    fn short_chunks_are_prose() {
+        all("id=1 status=200 2026-10-19", "prose");
     }
 }

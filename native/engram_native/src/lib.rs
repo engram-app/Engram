@@ -254,11 +254,13 @@ fn vector(t: Term) -> NifResult<Option<Vec<f64>>> {
 }
 
 /// MMR picks: indices into the pool, in pick order. `vectors` entries are a
-/// float list or `nil`. Dirty: a pool is ~200 x 1024 floats.
+/// float list or `nil`; `groups` holds one note id per candidate. Dirty: a
+/// pool is ~200 x 1024 floats.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn mmr_select_nif(
     vectors: Vec<Term>,
     scores: Vec<Term>,
+    groups: Vec<u64>,
     limit: usize,
     d: f64,
 ) -> NifResult<(Vec<usize>, usize)> {
@@ -271,10 +273,10 @@ fn mmr_select_nif(
             .into_iter()
             .map(number)
             .collect::<NifResult<Vec<_>>>()?;
-        if vectors.len() != scores.len() {
+        if vectors.len() != scores.len() || groups.len() != scores.len() {
             return Err(Error::BadArg);
         }
-        Ok(mmr::select(vectors, &scores, limit, d))
+        Ok(mmr::select(vectors, &scores, &groups, limit, d))
     });
     Ok((picked?, peak))
 }

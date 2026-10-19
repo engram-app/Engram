@@ -72,7 +72,7 @@ defmodule Engram.Native do
   # NIFs reached only through a wrapper below that fixes their schedule.
   @single [
     encode_documents_nif: 4,
-    mmr_select_nif: 4,
+    mmr_select_nif: 5,
     pack_f32_nif: 1,
     dense_json_nif: 1,
     sparse_json_nif: 2,
@@ -203,16 +203,17 @@ defmodule Engram.Native do
 
   @doc """
   MMR picks over a candidate pool: indices into it, in pick order. `vectors`
-  holds a float list or `nil` per candidate. Emits `[:engram, :nif, :call, :stop]`.
+  holds a float list or `nil` per candidate, `groups` a note id (non-negative
+  integer) per candidate. Emits `[:engram, :nif, :call, :stop]`.
   """
-  def mmr_select(vectors, scores, limit, diversity) do
+  def mmr_select(vectors, scores, groups, limit, diversity) do
     # input_bytes: the f64s the NIF holds, from one vector's width. Summing
     # every list's length would walk the whole pool in Elixir, the cost this
     # NIF exists to remove.
     width = Enum.find_value(vectors, 0, &(is_list(&1) && length(&1)))
 
     call(:mmr_select, length(scores) * (width + 1) * 8, %{dirty: true}, fn ->
-      mmr_select_nif(vectors, scores, limit, diversity / 1)
+      mmr_select_nif(vectors, scores, groups, limit, diversity / 1)
     end)
   end
 

@@ -36,6 +36,21 @@ defmodule Engram.Search.CollapseToNotesTest do
     assert by_path["b.md"].match_count == 1
   end
 
+  # Embed less: a note whose best hit is its sparse-only frontmatter chunk
+  # still has a direction for the diversity pass, its best dense chunk's.
+  test "the note's vector is its best dense chunk's when the best chunk has none" do
+    chunks = [
+      chunk("a.md", "v1", 0.9, nil, %{text: "frontmatter"}),
+      chunk("a.md", "v1", 0.6, [0.0, 1.0]),
+      chunk("a.md", "v1", 0.7, [1.0, 0.0])
+    ]
+
+    assert [%{text: "frontmatter", vector: vector}] = Search.collapse_to_notes(chunks)
+    # Compared, not pattern-matched: matching on 0.0 warns on OTP 27 (it no
+    # longer matches -0.0), and the suite runs with --warnings-as-errors.
+    assert vector == [1.0, 0.0]
+  end
+
   test "same source_path in different vaults stays distinct" do
     chunks = [
       chunk("note.md", "v1", 0.8, [1.0, 0.0]),

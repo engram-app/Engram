@@ -1229,6 +1229,24 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
+  The ids among `point_ids` whose points hold a `dense` vector. A recommend
+  positive without one is refused for the whole request, and sparse-only
+  points (frontmatter, data, canvas, base) are normal. One page: the
+  `has_id` filter caps the matches at `length(point_ids)`.
+  """
+  def dense_point_ids(col \\ nil, point_ids)
+  def dense_point_ids(_col, []), do: {:ok, []}
+
+  def dense_point_ids(col, point_ids) do
+    filter = %{must: [%{has_id: point_ids}, %{has_vector: "dense"}]}
+
+    with {:ok, %{points: points}} <-
+           scroll(col, filter: filter, with_payload: false, limit: length(point_ids)) do
+      {:ok, Enum.map(points, & &1["id"])}
+    end
+  end
+
+  @doc """
   Points similar to the given stored points: Qdrant averages their dense
   vectors (`average_vector`) and searches with the centroid. No embed call.
   The given points are excluded from the results. Same options as `search/3`.

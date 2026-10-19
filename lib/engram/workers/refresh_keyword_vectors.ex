@@ -58,11 +58,11 @@ defmodule Engram.Workers.RefreshKeywordVectors do
         unmatched == 0 ->
           stamp_keyword_version(note)
 
-        note.chunker_version != Markdown.chunker_version() ->
+        stale_chunker?(note.chunker_version) ->
           log_unmatched(note, unmatched)
           stamp_keyword_version(note)
 
-        # Unmatched on a CURRENT chunker: nothing else will rebuild these
+        # Unmatched on a current (or newer) chunker: nothing else will rebuild these
         # points (a DEK rotation clears every context_hmac without touching
         # content or chunker). Stay unstamped and say so; the sweep retries
         # once per cooldown window, which costs no embedder call.
@@ -80,6 +80,10 @@ defmodule Engram.Workers.RefreshKeywordVectors do
       {:error, _} = err -> err
     end
   end
+
+  # Only an OLDER (or missing) stamp is the chunker rebuild's. A newer one,
+  # after a rollback, is left alone by the rebuild, so it is ours to report.
+  defp stale_chunker?(v), do: is_nil(v) or v < Markdown.chunker_version()
 
   # Every point now carries the current keyword encoding, so the note leaves
   # ReconcileEmbeddings' keyword sweep. Guarded on the content it read: an edit

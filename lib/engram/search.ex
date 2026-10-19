@@ -667,10 +667,25 @@ defmodule Engram.Search do
         heading_path: Map.get(best, :heading_path),
         text: Map.get(best, :text),
         score: best.score,
-        vector: Map.get(best, :vector),
+        vector: note_vector(group, best),
         match_count: length(group)
       }
     end)
+  end
+
+  # The note's direction for the diversity pass: its best chunk's vector, or
+  # its best dense chunk's when the best hit is sparse-only (frontmatter, data).
+  defp note_vector(group, best) do
+    case Map.get(best, :vector) do
+      nil ->
+        group
+        |> Enum.filter(&Map.get(&1, :vector))
+        |> Enum.max_by(& &1.score, fn -> %{} end)
+        |> Map.get(:vector)
+
+      vector ->
+        vector
+    end
   end
 
   # THE metering point for `ai_searches_per_day`: at the cost site, not at each
