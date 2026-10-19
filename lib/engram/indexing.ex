@@ -70,10 +70,12 @@ defmodule Engram.Indexing do
       success INSIDE the tenant transaction that writes the chunk rows (or, on
       the no-chunks path, in one opened after the purge). `EmbedNote` stamps its
       hashes here, so the stamp shares the index write's transaction instead
-      of opening its own. `index_tier` is `floor_tier/2` of this pass.
+      of opening its own. `index_tier` is the tier this pass used: `floor_tier/2`,
+      or a floor tier when a full pass would overrun `points_budget_ok?/3`.
     * `:index_tier` — overrides the note's own `index_tier` (see
       `floor_tier/2`). `"floor"` / `"floor_paid"` take the floor path
-      (`floor_plan/2`); an explicit `nil` forces a full pass. Either way the
+      (`floor_plan/2`); an explicit `nil` asks for a full pass, which still
+      floors if it would overrun `points_budget_ok?/3`. Either way the
       note row ends up stamped with the tier the pass used.
   """
   def index_note_with_usage(note, %Engram.Vaults.Vault{} = vault, user \\ nil, opts \\ []) do
@@ -165,7 +167,6 @@ defmodule Engram.Indexing do
 
   defp prepare_chunks(note, user, chunks, opts) do
     dims = Application.get_env(:engram, :embed_dims, @default_dims)
-    tier = floor_tier(note, opts)
 
     # A sparse-only pass (`dense: false`, or the embed budget refused the
     # reservation) never calls Voyage. `nil` vectors flow through
@@ -173,21 +174,19 @@ defmodule Engram.Indexing do
     # leg is computed locally from the chunk text, so keyword search works
     # with zero embedding spend. A floor pass is sparse-only too, and asks no
     # budget at all: it is maintenance, never metered.
+    #
+    # The points-budget count and the plan's chunk read share ONE tenant
+    # transaction (both `with_tenant` calls nest into it), so the check costs
+    # a query, not a transaction. ponytail: the token reservation's one-row
+    # upsert runs inside it too, holding the meter row until this short
+    # transaction commits; split the plan read out if that ever contends.
     with :ok <- Qdrant.ensure_collection(collection(), dims),
          {:ok, filter_key} <- Crypto.dek_filter_key(user),
          {:ok, content_key} <- Crypto.dek_content_hash_key(user),
-         {dense?, plan} =
-           if(tier,
-             do: {false, floor_plan(note, chunks)},
-             else:
-               plan_within_budget(
-                 note,
-                 chunks,
-                 content_key,
-                 Keyword.get(opts, :dense, true),
-                 opts
-               )
-           ),
+         {tier, dense?, plan} =
+           Repo.with_tenant!(note.user_id, fn ->
+             plan_index(note, user, chunks, content_key, opts)
+           end),
          texts = embed_texts(plan),
          {:ok, vectors} <- embed_or_release(dense?, texts, opts),
          :ok <- ensure_one_vector_per_text(vectors, texts, note),
@@ -211,6 +210,59 @@ defmodule Engram.Indexing do
   end
 
   @floor_tiers ["floor", "floor_paid"]
+
+  defp plan_index(note, user, chunks, content_key, opts) do
+    case floor_tier(note, opts) || over_points_budget_tier(note, user, chunks) do
+      nil ->
+        dense_opt = Keyword.get(opts, :dense, true)
+        {dense?, plan} = plan_within_budget(note, chunks, content_key, dense_opt, opts)
+        {nil, dense?, plan}
+
+      tier ->
+        {tier, false, floor_plan(note, chunks)}
+    end
+  end
+
+  # Decided BEFORE any token reservation, so a floored pass reserves nothing.
+  # A full plan writes one point per chunk, reused or not. A note that never
+  # had dense vectors floors as "floor"; one that carries "floor_paid" keeps it.
+  defp over_points_budget_tier(note, user, chunks) do
+    unless points_budget_ok?(user, note.id, length(chunks)) do
+      if Map.get(note, :index_tier) == "floor_paid", do: "floor_paid", else: "floor"
+    end
+  end
+
+  @doc """
+  Whether a full index of `planned_points` points for `note_id` fits the
+  user's `index_points_cap`. The note's own rows are about to be replaced, so
+  they do not count. True when the cap does not apply (billing disabled, or an
+  unlimited plan). Counts inside `Repo.with_tenant/2`: unscoped, RLS filters
+  the count to 0 and every pass would fit.
+
+  No lock: two concurrent passes can both fit on one reading, so the cap can
+  be overshot by one note's chunks. Accepted.
+  """
+  @spec points_budget_ok?(map(), Ecto.UUID.t(), non_neg_integer()) :: boolean()
+  def points_budget_ok?(user, note_id, planned_points) do
+    case Engram.Billing.effective_limit(user, :index_points_cap) do
+      cap when is_integer(cap) and cap >= 0 ->
+        {:ok, used} =
+          Repo.with_tenant(user.id, fn ->
+            Repo.one(
+              from(c in Chunk,
+                where: c.user_id == ^user.id and c.note_id != ^note_id,
+                select: count()
+              )
+            )
+          end)
+
+        used + planned_points <= cap
+
+      # nil / :unlimited / a negative sentinel: no ceiling.
+      _ ->
+        true
+    end
+  end
 
   @doc """
   The floor tier a pass over `note` uses, or nil for a full pass.
