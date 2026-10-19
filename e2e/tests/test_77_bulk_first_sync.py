@@ -23,6 +23,7 @@ actually open in an editor. Importing a 1,700-file vault once allocated
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import threading
@@ -118,6 +119,8 @@ HANDSHAKE_ROOM_RATCHET = 700
 # again — that is exactly the 2026-08-18 shape.
 PEAK_RESIDENT_ROOM_BOUND = 32
 
+logger = logging.getLogger(__name__)
+
 ENGINE = "app.plugins.plugins['engram-vault-sync'].syncEngine"
 SET_BLOCKED = ENGINE + ".setSyncBlocked({})"
 
@@ -176,27 +179,63 @@ class _PeakResidencySampler:
         return self.peak
 
 
+def _server_bulk_count(api_sync) -> int:
+    manifest = api_sync.get_manifest()
+    return sum(
+        1 for n in manifest.get("notes", []) if n.get("path", "").startswith("Bulk/")
+    )
+
+
+async def _wait_for_kicked_sync_settled(cdp_a, api_sync) -> None:
+    """Wait until the fire-and-forget fullSync (KICK_SYNC) has settled.
+
+    Closing the gate does NOT stop an in-flight fullSync: `pushFile` has no
+    gate of its own, so a sync still running when the test fails keeps creating
+    Bulk/ notes after cleanup deleted them, leaking residue into test_81/78/98.
+    Bounded the same way the test is: fail only when the sync stops settling AND
+    the server count stops moving for NO_PROGRESS_WINDOW_S.
+    """
+    last_count = -1
+    last_progress = time.monotonic()
+    while True:
+        raw = await cdp_a.evaluate(SYNC_STATE)
+        state = json.loads(raw) if isinstance(raw, str) else None
+        if state is None or state.get("done"):
+            return
+        count = _server_bulk_count(api_sync)
+        now = time.monotonic()
+        if count != last_count:
+            last_count, last_progress = count, now
+        elif now - last_progress >= NO_PROGRESS_WINDOW_S:
+            raise AssertionError(
+                f"test_77 cleanup: kicked fullSync never settled and the server's "
+                f"Bulk/ count sat at {count} for {NO_PROGRESS_WINDOW_S}s (state={state})"
+            )
+        await asyncio.sleep(1)
+
+
 async def _cleanup_bulk_residue(vault_a, cdp_a, api_sync) -> None:
     """Remove this test's 1,000 Bulk/* notes from the session vault.
 
     Fixtures are session-scoped (conftest) and only Clerk USERS are swept
-    between runs — vault notes persist. Left behind, these 1,000 notes storm
+    between runs; vault notes persist. Left behind, these 1,000 notes storm
     a later run's test_66: reconnect churn re-handshakes them (~454/window,
     the #193 handshake-budget class), saturating the /logs pipeline past
     test_66's 5s delivery budget (#1093, rerun-safety playbook §5). Deleting
     both sides (local files + server rows) keeps the session vault clean.
 
-    Server rows go via POST /notes/batch-delete (one idempotent request over
-    the manifest's ids), not 1,000 paced DELETEs — no time budget, no
-    rate-limit starvation, deletes every note in one shot.
+    Order matters: close the gate, wait for the kicked fullSync to settle (it
+    keeps pushing through a closed gate), delete, then wait for the server's
+    Bulk/ count to reach 0. Server rows go via POST /notes/batch-delete (one
+    idempotent request over the manifest's ids), not 1,000 paced DELETEs.
 
-    The whole body is guarded: teardown must never fail or hang the suite. If
-    CDP/Obsidian died (the reason the test failed), swallowing here keeps the
-    real AssertionError as the headline instead of a chained cleanup error.
-    Gate closed first so the local unlink doesn't fan out 1,000 delete-pushes.
+    Failures are logged and re-raised: a silent cleanup failure is what let
+    test_77 residue fail test_81, test_78 and test_98 without a trace. If the
+    test body already failed, pytest reports that error as the context.
     """
     try:
         await cdp_a.evaluate(SET_BLOCKED.format("true"))
+        await _wait_for_kicked_sync_settled(cdp_a, api_sync)
         shutil.rmtree(vault_a / "Bulk", ignore_errors=True)
 
         manifest = api_sync.get_manifest()
@@ -207,7 +246,8 @@ async def _cleanup_bulk_residue(vault_a, cdp_a, api_sync) -> None:
         ]
         # Chunk so one oversized body can't trip a request-size limit.
         for start in range(0, len(ids), 500):
-            api_sync.batch_delete_notes(ids[start : start + 500])
+            status = api_sync.batch_delete_notes(ids[start : start + 500])
+            assert status < 300, f"test_77 cleanup: batch-delete returned {status}"
 
         # Drop the 1,000 deletes the closed gate journaled (plugin #247 replays
         # gated deletes on reopen). The server copies are already batch-deleted
@@ -215,6 +255,7 @@ async def _cleanup_bulk_residue(vault_a, cdp_a, api_sync) -> None:
         # here to prevent. The watcher delivers rmtree's deletes asynchronously,
         # so wait (bounded) until Obsidian has seen them all, or late ones land
         # after the discard. `?.` keeps pre-#247 plugin builds working.
+        left = None
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             left = await cdp_a.evaluate(
@@ -223,11 +264,31 @@ async def _cleanup_bulk_residue(vault_a, cdp_a, api_sync) -> None:
             if left == 0:
                 break
             await asyncio.sleep(0.5)
+        assert left == 0, f"test_77 cleanup: Obsidian still indexes {left} Bulk/ files"
         await cdp_a.evaluate(ENGINE + ".discardGateJournal?.()")
-        # Re-open the gate so subsequent tests sync normally.
-        await cdp_a.evaluate(SET_BLOCKED.format("false"))
-    except Exception:  # teardown is strictly best-effort — never mask the real failure
-        pass
+
+        remaining = None
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            remaining = _server_bulk_count(api_sync)
+            if remaining == 0:
+                break
+            await asyncio.sleep(1)
+        assert remaining == 0, (
+            f"test_77 cleanup: server still holds {remaining} Bulk/ notes"
+        )
+    except Exception:
+        logger.exception(
+            "test_77 cleanup failed; Bulk/ residue may leak into later tests"
+        )
+        raise
+    finally:
+        # Re-open the gate so subsequent tests sync normally, even on failure.
+        try:
+            await cdp_a.evaluate(SET_BLOCKED.format("false"))
+        except Exception:
+            logger.exception("test_77 cleanup: could not re-open the sync gate")
+            raise
 
 
 @pytest.mark.timeout(SAFETY_CEILING_S + 300)  # ceiling + index wait + probes/cleanup
@@ -296,8 +357,7 @@ async def test_bulk_first_sync_timing(vault_a, cdp_a, api_sync):
                 await cdp_a.evaluate(SET_BLOCKED.format("false"))
                 await cdp_a.evaluate(KICK_SYNC)
                 kicks += 1
-            manifest = api_sync.get_manifest()
-            count = sum(1 for n in manifest["notes"] if n["path"].startswith("Bulk/"))
+            count = _server_bulk_count(api_sync)
             now = time.monotonic()
             if count > bulk_count:
                 bulk_count = count
