@@ -100,4 +100,27 @@ defmodule Engram.MCP.HandlersEchoStoredPathTest do
 
     assert msg == "Note rename conflict: a/e.md is already taken"
   end
+
+  # Rows written before #2005 can hold an unsanitized path (folder renames
+  # stored the target verbatim). append_to_note must still reach them.
+  test "append_to_note reaches a legacy unsanitized path", %{user: user, vault: vault} do
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "f/x.md", "content" => "legacy"}, actor: "api")
+
+    {:ok, _} = Notes.rename_folder(user, vault, "f", "My  Folder")
+    assert {:ok, _} = Notes.get_note(user, vault, "My  Folder/x.md")
+
+    # The append lands on the legacy row (no duplicate), and the write moves it
+    # to its sanitized path, which the reply names.
+    assert {:ok, _text, %{"path" => "My Folder/x.md", "created" => false}} =
+             Handlers.handle("append_to_note", user, vault, %{
+               "path" => "My  Folder/x.md",
+               "text" => "more"
+             })
+
+    {:ok, note} = Notes.get_note(user, vault, "My Folder/x.md")
+    assert note.content =~ "legacy"
+    assert note.content =~ "more"
+    assert {:error, :not_found} = Notes.get_note(user, vault, "My  Folder/x.md")
+  end
 end

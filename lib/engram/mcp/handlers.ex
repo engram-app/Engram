@@ -455,10 +455,7 @@ defmodule Engram.MCP.Handlers do
   end
 
   def handle("append_to_note", user, vault, args) do
-    # Sanitized up front: the lookup hashes the path as given while a create
-    # stores it sanitized, so `a/../b.md` missed the existing `a/b.md` and the
-    # create then overwrote it with only the appended text.
-    path = Notes.PathSanitizer.sanitize(args["path"] || "")
+    path = args["path"] || ""
     text = args["text"] || ""
 
     with {:ok, position} <- resolve_append_position(args["position"]) do
@@ -1139,8 +1136,22 @@ defmodule Engram.MCP.Handlers do
 
   # -- Private helpers --
 
-  defp append_or_create(user, vault, path, text, rebuild) do
-    case rmw_upsert(user, vault, path, rebuild) do
+  # The lookup hashes the path as given while a create stores it sanitized, so
+  # `a/../b.md` missed the existing `a/b.md` and the create overwrote it with
+  # only the appended text. Try the raw path first (rows stored before #2005
+  # can be unsanitized), then the sanitized one, and create at the sanitized one.
+  defp append_or_create(user, vault, raw, text, rebuild) do
+    path = Notes.PathSanitizer.sanitize(raw)
+
+    found =
+      Enum.reduce_while(Enum.uniq([raw, path]), {:error, :not_found}, fn p, miss ->
+        case rmw_upsert(user, vault, p, rebuild) do
+          {:error, :not_found} -> {:cont, miss}
+          result -> {:halt, {p, result}}
+        end
+      end)
+
+    case found do
       {:error, :not_found} ->
         content = "# #{Path.basename(path, ".md")}\n\n#{text}"
 
@@ -1164,7 +1175,8 @@ defmodule Engram.MCP.Handlers do
           %{"path" => path, "created" => true}
         )
 
-      result ->
+      # The write re-sanitizes a legacy row's path, so the note now lives at `path`.
+      {_hit, result} ->
         upsert_reply(
           result,
           [
