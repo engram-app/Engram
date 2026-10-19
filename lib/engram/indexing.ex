@@ -296,13 +296,14 @@ defmodule Engram.Indexing do
   content-defined group boundaries so an edit moves only the groups around
   it. `key` is the user's content hash key (`Crypto.dek_content_hash_key/1`).
 
-  Over the cap: `g = ceil(n / cap)`, and a group closes after each chunk
-  whose keyed hash is `0 mod g` (an HMAC under `key` of the same input the
-  reuse fingerprint covers, under its own prefix), or before a chunk that
-  would take it past the merged-point ceiling. More than `cap` groups doubles
-  `g` and redoes it. If the ceiling alone forces more than `cap` groups the
-  result stays over the cap and the caller floors the note. Contiguous, in
-  order, no text dropped. Every chunk of a capped note is a merged chunk:
+  Over the cap: `g = ceil(1.25 * n / cap)`, aiming at ~0.8 x cap groups. A
+  group closes after each chunk whose keyed hash is `0 mod g` (an HMAC under
+  `key` of the same input the reuse fingerprint covers, under its own
+  prefix), or before a chunk that would take it past the merged-point
+  ceiling. More than `cap` groups doubles `g` and redoes it; that regroups
+  the whole note (a full re-embed), which the headroom keeps rare. If the
+  ceiling alone forces more than `cap` groups the result stays over the cap
+  and the caller floors the note. Contiguous, in order, no text dropped. Every chunk of a capped note is a merged chunk:
 
     * `text`: the members' `text` joined with "\n\n"
     * `context_text` / `embed_text`: its first member's prefix + that text,
@@ -326,7 +327,7 @@ defmodule Engram.Indexing do
 
     chunks
     |> Enum.zip(hashes)
-    |> content_groups(cap, div(length(chunks) + cap - 1, cap))
+    |> content_groups(cap, div(5 * length(chunks) + 4 * cap - 1, 4 * cap))
     |> Enum.with_index(fn members, position -> %{merge_group(members) | position: position} end)
   end
 
