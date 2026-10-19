@@ -152,13 +152,16 @@ defmodule EngramWeb.AttachmentsController do
 
   # Plug.Parsers passes octet-stream through unread, so the body is read here,
   # after every gate, and never past the smaller of the plan's per-file cap
-  # and the endpoint's body ceiling. A declared content-length over that bound
-  # is refused without reading at all.
+  # and the endpoint's body ceiling. A declared content-length over that bound,
+  # or over the remaining attachment quota, is refused without reading at all
+  # (a quota refusal used to cost the whole body read first: 12-13 s per 402
+  # in the 2026-10-19 bulk-upload storm).
   defp upload_raw(conn, user, vault, params) do
     {limit, bound_by} = raw_read_limit(user)
 
     with {:ok, mtime} <- parse_mtime(params["mtime"]),
-         :ok <- check_declared_length(conn, limit) do
+         :ok <- check_declared_length(conn, limit),
+         :ok <- check_declared_quota(conn, user, vault, params["path"]) do
       read_raw(conn, user, vault, Map.put(params, "mtime", mtime), limit, bound_by)
     else
       :invalid_mtime ->
@@ -168,8 +171,29 @@ defmodule EngramWeb.AttachmentsController do
 
       :too_large ->
         conn |> too_large(limit, bound_by)
+
+      {:error, {:storage_cap_reached, used, cap}} ->
+        quota_exceeded(conn, used, cap)
     end
   end
+
+  defp check_declared_quota(conn, user, vault, path) do
+    case RequestMeta.declared_length(conn) do
+      n when is_integer(n) -> Attachments.check_storage_cap(user, vault, path, n)
+      nil -> :ok
+    end
+  end
+
+  # Free-tier launch §4.5 — paid user over lifetime attachment quota.
+  defp quota_exceeded(conn, used, cap),
+    do:
+      EngramWeb.LimitResponse.halt(
+        conn,
+        "attachments_quota_exceeded",
+        :attachment_bytes_cap,
+        cap,
+        used
+      )
 
   # Reads limit + 1 so "more than limit" is decided by size, not by the tag.
   # Bandit returns `:more` when it hits `length` even if the body ended there
@@ -292,14 +316,7 @@ defmodule EngramWeb.AttachmentsController do
         )
 
       {:error, {:storage_cap_reached, used, limit}} ->
-        # Free-tier launch §4.5 — paid user over lifetime attachment quota.
-        EngramWeb.LimitResponse.halt(
-          conn,
-          "attachments_quota_exceeded",
-          :attachment_bytes_cap,
-          limit,
-          used
-        )
+        quota_exceeded(conn, used, limit)
 
       {:error, {:storage, _reason}} ->
         conn |> put_status(502) |> json(%{error: "failed to upload to storage backend"})
