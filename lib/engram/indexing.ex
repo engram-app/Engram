@@ -697,6 +697,8 @@ defmodule Engram.Indexing do
       # the comment above depends on is unchanged.
       committed =
         Repo.with_tenant(note.user_id, fn ->
+          content_current!(note)
+
           with {:ok, tier} <- Map.fetch(prepared, :index_tier),
                do: stamp_index_tier(note, tier, Map.get(prepared, :chunk_count))
 
@@ -714,6 +716,29 @@ defmodule Engram.Indexing do
            do: {:ok, length(chunk_rows)}
     end
   end
+
+  # A pass planned from content a newer edit has since replaced (a recap or
+  # version rebuild running beside the edit's own EmbedNote) rolls back
+  # rather than write its rows over the newer ones: the edit's pass already
+  # stamped `embed_hash`, so nothing would re-select the note and its index
+  # would stay stale. Its new points become strays for OrphanSweep. The row
+  # lock holds off the edit until this commit. A struct with no hash (built
+  # by hand) is not checked.
+  defp content_current!(%{content_hash: hash} = note) when is_binary(hash) do
+    current =
+      Repo.one(
+        from(n in Note,
+          where: n.id == ^note.id and n.kind == "note",
+          select: n.content_hash,
+          lock: "FOR UPDATE"
+        )
+      )
+
+    if current not in [nil, hash], do: Repo.rollback(:superseded)
+    :ok
+  end
+
+  defp content_current!(_note), do: :ok
 
   # With the chunk rows, so the tier always names the rows that exist, and
   # compare-and-set on the tier this pass was planned from: if the index

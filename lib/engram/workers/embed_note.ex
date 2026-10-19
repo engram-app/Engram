@@ -577,6 +577,11 @@ defmodule Engram.Workers.EmbedNote do
           {:error, :index_tier_changed} ->
             {:snooze, 5}
 
+          # A newer edit replaced the content this pass planned from; that
+          # edit's own job indexes it. Nothing failed.
+          {:error, :superseded} ->
+            :ok
+
           {:error, reason} ->
             # Per-attempt failure (Voyage non-429 / Qdrant). Previously
             # silent until the terminal discard after 5 retries — log it now

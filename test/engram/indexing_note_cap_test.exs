@@ -684,6 +684,29 @@ defmodule Engram.IndexingNoteCapTest do
     end
   end
 
+  # Adversarial S2: a slow pass (a recap, a version rebuild) planned from
+  # older content must not commit its rows over a newer edit's: the edit's
+  # pass already stamped `embed_hash`, so nothing would ever re-select it.
+  describe "a pass whose content was superseded" do
+    test "refuses to commit and leaves the newer rows", %{user: user, vault: vault} do
+      note = insert_note(user, vault, sections(10))
+      stub_embedder()
+      assert note.content_hash
+
+      {:ok, prepared} = Indexing.prepare_index(note, %Engram.Vaults.Vault{}, user)
+
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.update_all(from(n in Note, where: n.id == ^note.id),
+            set: [content_hash: "newer-edit"]
+          )
+        end)
+
+      assert {:error, :superseded} = Indexing.commit_index(prepared)
+      assert rows_for(note) == []
+    end
+  end
+
   describe "reconcile self-heal" do
     # Indexed uncapped (billing off), then the cap applies.
     defp index_uncapped(note) do
