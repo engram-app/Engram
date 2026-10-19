@@ -29,6 +29,7 @@ defmodule Engram.Vector.QdrantLayout do
   ]
 
   @default_limits %{disk: %{percent: 85, reserve: nil}, heap: %{percent: 85, reserve: nil}}
+  @off_limits %{disk: %{percent: 100, reserve: nil}, heap: %{percent: 100, reserve: nil}}
 
   @gib 1024 * 1024 * 1024
   @min_memory_reserve 256 * 1024 * 1024
@@ -57,12 +58,17 @@ defmodule Engram.Vector.QdrantLayout do
   @spec desired(Version.t() | nil, map() | nil, boolean()) :: map()
   def desired(version, limits \\ @default_limits, strict? \\ true)
 
-  # Ops kill switch (QDRANT_STRICT_MODE=false): actively turn refusals off on
-  # any server whose version is known.
-  def desired(nil, _limits, false), do: @storage
-
-  def desired(_version, _limits, false),
-    do: Map.put(@storage, "strict_mode_config", %{"enabled" => false})
+  # Ops kill switch (QDRANT_STRICT_MODE=false): our two guards at 100 (a
+  # refusal only on a full disk/heap), never `enabled: false`, which would also
+  # drop Qdrant Cloud's own strict-mode guards (unindexed filtering). 100, not
+  # null: the strict-mode PATCH merge keeps the old value for a null field
+  # (`x.or(self.x)` in lib/collection/src/operations/config_diff.rs, 1.18.2).
+  def desired(version, _limits, false) do
+    case supported_guards(version, @off_limits) do
+      [] -> @storage
+      guards -> Map.put(@storage, "strict_mode_config", Map.new(guards))
+    end
+  end
 
   def desired(version, limits, true) do
     case supported_guards(version, limits || @default_limits) do

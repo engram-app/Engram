@@ -305,8 +305,23 @@ defmodule Engram.Vector.QdrantReconcileTest do
       stub_no_sys_metrics(bypass)
 
       assert {:ok, _} = Qdrant.reconcile_config("engram_notes")
-      assert_receive {:patch, %{"strict_mode_config" => %{"enabled" => false}} = body}
-      assert map_size(body["strict_mode_config"]) == 1
+
+      assert_receive {:patch,
+                      %{
+                        "strict_mode_config" =>
+                          %{
+                            "max_disk_usage_percent" => 100,
+                            "max_resident_memory_percent" => 100
+                          } = strict
+                      }}
+
+      refute Map.has_key?(strict, "enabled")
+      refute Map.has_key?(strict, "unindexed_filtering_retrieve")
+
+      # The fixture's Cloud guards survive the merge.
+      {:ok, info} = Qdrant.collection_info("engram_notes")
+      assert info["config"]["strict_mode_config"]["enabled"] == true
+      assert info["config"]["strict_mode_config"]["unindexed_filtering_retrieve"] == false
 
       # Applied: the next run leaves it alone.
       assert {:ok, []} = Qdrant.reconcile_config("engram_notes")

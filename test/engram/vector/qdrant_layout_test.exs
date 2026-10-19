@@ -56,11 +56,21 @@ defmodule Engram.Vector.QdrantLayoutTest do
       refute Map.has_key?(QdrantLayout.desired(nil), "strict_mode_config")
     end
 
-    test "strict mode off: only enabled=false, on any known version" do
-      for v <- [@v1171, @v1182] do
-        assert QdrantLayout.desired(v, nil, false)["strict_mode_config"] == %{"enabled" => false}
-      end
+    # Off = our two guards at 100 (Qdrant's strict-mode PATCH merge keeps the
+    # old value for a null field: config_diff.rs `x.or(self.x)`, so null
+    # cannot clear one). `enabled` and every other strict field are left as
+    # they are, so Qdrant Cloud's unindexed-filter guard survives.
+    test "strict mode off: only our guards, at 100, version-gated" do
+      assert QdrantLayout.desired(@v1182, nil, false)["strict_mode_config"] == %{
+               "max_disk_usage_percent" => 100,
+               "max_resident_memory_percent" => 100
+             }
 
+      assert QdrantLayout.desired(@v1181, nil, false)["strict_mode_config"] == %{
+               "max_resident_memory_percent" => 100
+             }
+
+      refute Map.has_key?(QdrantLayout.desired(@v1171, nil, false), "strict_mode_config")
       refute Map.has_key?(QdrantLayout.desired(nil, nil, false), "strict_mode_config")
     end
 
