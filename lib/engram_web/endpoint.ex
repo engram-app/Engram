@@ -184,7 +184,9 @@ defmodule EngramWeb.Endpoint do
   # JSON-RPC rather than raised (#1974). The parser below then sees the body
   # already parsed and only merges params.
   plug EngramWeb.Plugs.McpBodyParser, @parser_opts
-  plug Plug.Parsers, @parser_opts
+  # Plug.Parsers that also logs and span-tags a too-large body (status and
+  # body unchanged); without it that 413 has no request line at all.
+  plug EngramWeb.Plugs.BodyParser, @parser_opts
 
   # Sentry context: attaches conn metadata (request_id, method, route,
   # status) to any exception reported by PlugCapture above. Placed after
