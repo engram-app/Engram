@@ -29,13 +29,13 @@ defmodule Engram.Repo.Migrations.AddLinkResolutionKeys do
   def change do
     alter table(:notes) do
       add :path_ci_hmac, :binary
-      add :path_length, :integer
+      add :path_length, :bigint
       add :link_keys_stamp, :binary
     end
 
     alter table(:attachments) do
       add :path_ci_hmac, :binary
-      add :path_length, :integer
+      add :path_length, :bigint
       add :link_keys_stamp, :binary
     end
 
