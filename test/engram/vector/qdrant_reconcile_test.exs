@@ -1,0 +1,342 @@
+defmodule Engram.Vector.QdrantReconcileTest do
+  use ExUnit.Case, async: true
+
+  alias Engram.ServiceConfig
+  alias Engram.Vector.Qdrant
+
+  @prod_info "test/support/fixtures/qdrant/collection_info_prod_2026_10_18.json"
+             |> File.read!()
+             |> Jason.decode!()
+
+  setup do
+    bypass = Bypass.open()
+    ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+    # Off suite-wide (config/test.exs) so unrelated Bypass suites see no PATCH.
+    ServiceConfig.put_override(:qdrant_reconcile_config, true)
+    %{bypass: bypass}
+  end
+
+  defp json(conn, status, body) do
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(status, Jason.encode!(body))
+  end
+
+  defp stub_version(bypass, version) do
+    Bypass.stub(bypass, "GET", "/", fn conn ->
+      json(conn, 200, %{title: "qdrant - vector search engine", version: version})
+    end)
+  end
+
+  # A stateful fake: GET returns `info`, PATCH merges the body into it the way
+  # Qdrant does (see collection_meta_ops.rs update_collection) and records it.
+  defp fake_collection(bypass, col, info) do
+    test_pid = self()
+    {:ok, agent} = Agent.start_link(fn -> info end)
+
+    Bypass.stub(bypass, "GET", "/collections/#{col}", fn conn ->
+      json(conn, 200, %{result: Agent.get(agent, & &1)})
+    end)
+
+    Bypass.stub(bypass, "PATCH", "/collections/#{col}", fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      body = Jason.decode!(raw)
+      send(test_pid, {:patch, body})
+      Agent.update(agent, &apply_patch(&1, body))
+      json(conn, 200, %{result: true, status: "ok"})
+    end)
+  end
+
+  defp apply_patch(info, body) do
+    Enum.reduce(body, info, fn
+      {"vectors", v}, acc ->
+        update_in(acc, ["config", "params", "vectors"], &deep_merge(&1, v))
+
+      {"sparse_vectors", v}, acc ->
+        update_in(acc, ["config", "params", "sparse_vectors"], &deep_merge(&1, v))
+
+      {"optimizers_config", v}, acc ->
+        update_in(acc, ["config", "optimizer_config"], &deep_merge(&1, v))
+
+      {"strict_mode_config", v}, acc ->
+        update_in(acc, ["config", "strict_mode_config"], &deep_merge(&1 || %{}, v))
+    end)
+  end
+
+  defp deep_merge(a, b),
+    do:
+      Map.merge(a, b, fn _k, x, y -> if is_map(x) and is_map(y), do: deep_merge(x, y), else: y end)
+
+  @gib 1024 * 1024 * 1024
+
+  defp stub_memory(bypass, col, disk_bytes) do
+    Bypass.stub(bypass, "GET", "/collections/#{col}/memory", fn conn ->
+      json(conn, 200, %{result: %{total: %{disk_bytes: disk_bytes, ram_bytes: 0}}})
+    end)
+  end
+
+  defp stub_no_memory(bypass, col) do
+    Bypass.stub(bypass, "GET", "/collections/#{col}/memory", fn conn ->
+      Plug.Conn.send_resp(conn, 404, "")
+    end)
+  end
+
+  # Qdrant Cloud's /sys_metrics, Prometheus text.
+  defp stub_sys_metrics(bypass, capacity, used) do
+    Bypass.stub(bypass, "GET", "/sys_metrics", fn conn ->
+      Plug.Conn.send_resp(conn, 200, """
+      # TYPE kubelet_volume_stats_capacity_bytes gauge
+      kubelet_volume_stats_capacity_bytes{persistentvolumeclaim="qdrant-storage-qdrant-0"} #{capacity}
+      kubelet_volume_stats_used_bytes{persistentvolumeclaim="qdrant-storage-qdrant-0"} #{used}
+      """)
+    end)
+  end
+
+  defp stub_no_sys_metrics(bypass) do
+    Bypass.stub(bypass, "GET", "/sys_metrics", fn conn -> Plug.Conn.send_resp(conn, 404, "") end)
+  end
+
+  defp attach(event) do
+    ref = make_ref()
+    test_pid = self()
+
+    :telemetry.attach(
+      {__MODULE__, ref},
+      event,
+      fn e, m, meta, _ -> send(test_pid, {e, m, meta}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
+  end
+
+  @strict %{
+    "strict_mode_config" => %{
+      "enabled" => true,
+      "max_disk_usage_percent" => 85,
+      "max_resident_memory_percent" => 85
+    }
+  }
+  @optimizers %{"optimizers_config" => %{"max_optimization_threads" => 1}}
+  @on_disk %{
+    "vectors" => %{"dense" => %{"on_disk" => true}},
+    "sparse_vectors" => %{"keyword" => %{"modifier" => "idf", "index" => %{"on_disk" => true}}}
+  }
+
+  test "today's prod numbers: strict + optimizers apply, on-disk is deferred", %{bypass: bypass} do
+    attach([:engram, :qdrant, :headroom_gate])
+    stub_version(bypass, "1.18.2")
+    fake_collection(bypass, "engram_notes", @prod_info)
+    # Measured 2026-10-18: 4.89 GB used of an 8 GiB volume, ~3.7 GB free.
+    stub_memory(bypass, "engram_notes", 4_890_000_000)
+    stub_sys_metrics(bypass, 8 * @gib, 4_890_000_000)
+
+    assert {:ok, changed} = Qdrant.reconcile_config("engram_notes")
+    assert Enum.sort(changed) == ~w(optimizers_config strict_mode_config)
+
+    assert_receive {:patch, @strict}
+    assert_receive {:patch, @optimizers}
+    refute_receive {:patch, _}
+
+    free = 8 * @gib - 4_890_000_000
+
+    assert_receive {[:engram, :qdrant, :headroom_gate],
+                    %{free_bytes: ^free, collection_bytes: 4_890_000_000},
+                    %{decision: :defer, source: :sys_metrics}}
+
+    # Second boot: nothing to PATCH; the deferred group stays deferred.
+    assert {:ok, []} = Qdrant.reconcile_config("engram_notes")
+    refute_receive {:patch, _}
+  end
+
+  test "with headroom all three groups apply in order, then nothing", %{bypass: bypass} do
+    stub_version(bypass, "1.18.2")
+    fake_collection(bypass, "engram_notes", @prod_info)
+    stub_memory(bypass, "engram_notes", 4_890_000_000)
+    stub_sys_metrics(bypass, 16 * @gib, 4_890_000_000)
+
+    assert {:ok, changed} = Qdrant.reconcile_config("engram_notes")
+    assert Enum.sort(changed) == ~w(optimizers_config sparse_vectors strict_mode_config vectors)
+
+    assert_receive {:patch, @strict}
+    assert_receive {:patch, @optimizers}
+    assert_receive {:patch, @on_disk}
+
+    assert {:ok, []} = Qdrant.reconcile_config("engram_notes")
+    refute_receive {:patch, _}
+  end
+
+  test "self-host (no /sys_metrics): a collection under 1 GiB gets on-disk", %{bypass: bypass} do
+    stub_version(bypass, "1.18.2")
+    fake_collection(bypass, "obsidian_notes", @prod_info)
+    stub_memory(bypass, "obsidian_notes", 200_000_000)
+    stub_no_sys_metrics(bypass)
+
+    assert {:ok, changed} = Qdrant.reconcile_config("obsidian_notes")
+    assert "vectors" in changed
+  end
+
+  test "self-host (no /sys_metrics): a collection over 1 GiB defers on-disk", %{bypass: bypass} do
+    attach([:engram, :qdrant, :headroom_gate])
+    stub_version(bypass, "1.18.2")
+    fake_collection(bypass, "obsidian_notes", @prod_info)
+    stub_memory(bypass, "obsidian_notes", 2 * @gib)
+    stub_no_sys_metrics(bypass)
+
+    assert {:ok, changed} = Qdrant.reconcile_config("obsidian_notes")
+    refute "vectors" in changed
+    assert_receive {_, _, %{decision: :defer, source: :self_host_rule}}
+  end
+
+  test "on 1.17.1 (self-host pin) strict mode is never sent and on-disk defers", %{bypass: bypass} do
+    stub_version(bypass, "1.17.1")
+    fake_collection(bypass, "obsidian_notes", @prod_info)
+    stub_no_memory(bypass, "obsidian_notes")
+    stub_no_sys_metrics(bypass)
+
+    assert {:ok, ["optimizers_config"]} = Qdrant.reconcile_config("obsidian_notes")
+    assert_receive {:patch, @optimizers}
+    refute_receive {:patch, _}
+  end
+
+  describe "headroom/2" do
+    test "decisions" do
+      assert {:apply, :sys_metrics, 10} = Qdrant.headroom(5, 10)
+      assert {:defer, :sys_metrics, 5} = Qdrant.headroom(5, 5)
+      assert {:apply, :self_host_rule, nil} = Qdrant.headroom(@gib - 1, nil)
+      assert {:defer, :self_host_rule, nil} = Qdrant.headroom(@gib, nil)
+      assert {:defer, :unknown_size, 99} = Qdrant.headroom(nil, 99)
+    end
+
+    test "parse_free_bytes prefers available, else capacity - used" do
+      assert Qdrant.parse_free_bytes("kubelet_volume_stats_available_bytes{a=\"b\"} 3.7e+09\n") ==
+               3_700_000_000
+
+      assert Qdrant.parse_free_bytes(
+               "kubelet_volume_stats_capacity_bytes 100\nkubelet_volume_stats_used_bytes 40\n"
+             ) == 60
+
+      assert Qdrant.parse_free_bytes("# nothing here\n") == nil
+    end
+  end
+
+  test "an unreadable version skips strict mode instead of failing", %{bypass: bypass} do
+    Bypass.stub(bypass, "GET", "/", fn conn -> Plug.Conn.send_resp(conn, 500, "boom") end)
+    fake_collection(bypass, "engram_notes", @prod_info)
+    stub_no_memory(bypass, "engram_notes")
+    stub_no_sys_metrics(bypass)
+
+    assert {:ok, changed} = Qdrant.reconcile_config("engram_notes")
+    refute "strict_mode_config" in changed
+  end
+
+  test "a rejected PATCH is an error, not a crash", %{bypass: bypass} do
+    stub_version(bypass, "1.18.2")
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes", fn conn ->
+      json(conn, 200, %{result: @prod_info})
+    end)
+
+    Bypass.stub(bypass, "PATCH", "/collections/engram_notes", fn conn ->
+      json(conn, 403, %{status: %{error: "forbidden"}})
+    end)
+
+    stub_no_memory(bypass, "engram_notes")
+    stub_no_sys_metrics(bypass)
+
+    assert {:error, _} = Qdrant.reconcile_config("engram_notes")
+  end
+
+  test "emits a telemetry event when it applies a change", %{bypass: bypass} do
+    stub_version(bypass, "1.18.2")
+    fake_collection(bypass, "engram_notes", @prod_info)
+    stub_memory(bypass, "engram_notes", 100)
+    stub_no_sys_metrics(bypass)
+
+    ref = make_ref()
+    test_pid = self()
+
+    :telemetry.attach(
+      {__MODULE__, ref},
+      [:engram, :qdrant, :config_reconciled],
+      fn _e, m, meta, _ -> send(test_pid, {:reconciled, m, meta}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
+
+    assert {:ok, _} = Qdrant.reconcile_config("engram_notes")
+    assert_receive {:reconciled, %{count: 1}, %{changed: changed}}
+    assert "vectors" in changed
+  end
+
+  test "ensure_collection reconciles an existing collection", %{bypass: bypass} do
+    stub_version(bypass, "1.18.2")
+    fake_collection(bypass, "engram_notes", @prod_info)
+    stub_memory(bypass, "engram_notes", 100)
+    stub_no_sys_metrics(bypass)
+
+    Bypass.expect_once(bypass, "PUT", "/collections/engram_notes", fn conn ->
+      json(conn, 409, %{status: %{error: "already exists"}})
+    end)
+
+    assert :ok = Qdrant.ensure_collection("engram_notes", 1024)
+    assert_receive {:patch, %{"vectors" => _}}
+  end
+
+  test "ensure_collection still succeeds when the reconcile fails", %{bypass: bypass} do
+    stub_version(bypass, "1.18.2")
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes", fn conn ->
+      json(conn, 200, %{result: @prod_info})
+    end)
+
+    Bypass.stub(bypass, "PATCH", "/collections/engram_notes", fn conn ->
+      json(conn, 500, %{status: %{error: "nope"}})
+    end)
+
+    stub_no_memory(bypass, "engram_notes")
+    stub_no_sys_metrics(bypass)
+
+    Bypass.expect_once(bypass, "PUT", "/collections/engram_notes", fn conn ->
+      json(conn, 409, %{status: %{error: "already exists"}})
+    end)
+
+    assert :ok = Qdrant.ensure_collection("engram_notes", 1024)
+  end
+
+  test "a fresh create sends the desired storage params", %{bypass: bypass} do
+    test_pid = self()
+    stub_version(bypass, "1.18.2")
+
+    Bypass.stub(bypass, "PUT", "/collections/fresh/index", fn conn ->
+      Plug.Conn.send_resp(conn, 200, ~s({"status":"ok"}))
+    end)
+
+    Bypass.expect_once(bypass, "PUT", "/collections/fresh", fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:create, Jason.decode!(raw)})
+      json(conn, 200, %{result: true})
+    end)
+
+    # After create, the reconcile reads back what was created: only the
+    # strict-mode guard (version-gated, so not part of create) is left.
+    created =
+      @prod_info
+      |> put_in(["config", "params", "vectors", "dense", "on_disk"], true)
+      |> put_in(["config", "params", "sparse_vectors", "keyword", "index"], %{"on_disk" => true})
+      |> put_in(["config", "optimizer_config", "max_optimization_threads"], 1)
+
+    fake_collection(bypass, "fresh", created)
+
+    assert :ok = Qdrant.ensure_collection("fresh", 1024)
+    assert_receive {:create, body}
+    assert body["vectors"]["dense"]["on_disk"] == true
+    assert body["sparse_vectors"]["keyword"]["index"] == %{"on_disk" => true}
+    assert body["optimizers_config"] == %{"max_optimization_threads" => 1}
+    assert body["quantization_config"] == %{"binary" => %{"always_ram" => true}}
+
+    assert_receive {:patch, patch}
+    assert Map.keys(patch) == ["strict_mode_config"]
+  end
+end

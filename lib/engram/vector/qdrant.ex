@@ -8,8 +8,11 @@ defmodule Engram.Vector.Qdrant do
   - QDRANT_API_KEY env var — API key for Qdrant Cloud (optional for local)
   """
 
+  alias Engram.Logger.Metadata
   alias Engram.ServiceConfig
+  alias Engram.Vector.QdrantLayout
 
+  require Logger
   require OpenTelemetry.Tracer, as: Tracer
 
   @default_url "http://localhost:6333"
@@ -209,30 +212,34 @@ defmodule Engram.Vector.Qdrant do
   defp do_ensure_collection(col, dims) do
     case create_collection(col, dims) do
       {:ok, :created} ->
-        with :ok <- ensure_payload_indexes(col, MapSet.new()), do: {:ok, :verified}
+        with :ok <- ensure_payload_indexes(col, MapSet.new()), do: reconciled(col)
 
       {:ok, {:exists, :unknown}} ->
         {:ok, :unverified}
 
       {:ok, {:exists, indexed}} ->
-        with :ok <- ensure_payload_indexes(col, indexed), do: {:ok, :verified}
+        with :ok <- ensure_payload_indexes(col, indexed), do: reconciled(col)
 
       {:error, _} = error ->
         error
     end
   end
 
-  defp create_collection(col, dims) do
-    dense = %{size: dims, distance: "Cosine"}
+  # Storage/safety params are best-effort: a failed reconcile is logged and
+  # retried next boot, never a reason to stop indexing. Only the payload
+  # indexes above gate `:verified`, because strict mode 400s without them.
+  defp reconciled(col) do
+    if ServiceConfig.get(:qdrant_reconcile_config, true), do: reconcile_config(col)
+    {:ok, :verified}
+  end
 
+  defp create_collection(col, dims) do
     body =
-      %{
-        vectors: %{"dense" => dense},
-        sparse_vectors: %{"keyword" => %{modifier: "idf"}}
-      }
+      dims
+      |> QdrantLayout.create_params()
       |> then(fn b ->
         if binary_quantization_enabled?() do
-          Map.put(b, :quantization_config, %{binary: %{always_ram: true}})
+          Map.put(b, "quantization_config", %{"binary" => %{"always_ram" => true}})
         else
           b
         end
@@ -340,18 +347,180 @@ defmodule Engram.Vector.Qdrant do
 
   @doc """
   Get collection info. Returns the raw `result` map from Qdrant
-  (includes config, point count, etc.).
+  (includes config, point count, etc.). `purpose` picks the Req opts
+  (`:search` = 5s fail-fast, for pollers).
   """
-  def collection_info(col) do
-    opts = req_opts()
+  def collection_info(col, purpose \\ :indexing) do
+    instrument(:collection_info, fn -> get_result("/collections/#{col}", purpose) end)
+  end
 
-    instrument(:collection_info, fn ->
-      case Req.get("#{base_url()}/collections/#{col}", opts) do
-        {:ok, %{status: 200, body: %{"result" => result}}} -> {:ok, result}
+  @doc """
+  `GET /collections/{col}/memory` (Qdrant >= 1.18): disk/RAM/page-cache bytes
+  per component. Older servers answer 404 -> `{:error, :unsupported}`.
+  """
+  def collection_memory(col) do
+    instrument(:collection_memory, fn ->
+      case get_result("/collections/#{col}/memory", :search) do
+        {:error, {404, _}} -> {:error, :unsupported}
+        other -> other
+      end
+    end)
+  end
+
+  defp get_result(path, purpose) do
+    case Req.get(base_url() <> path, req_opts(purpose)) do
+      {:ok, %{status: 200, body: %{"result" => result}}} -> {:ok, result}
+      {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Bring the collection's params to `QdrantLayout.desired/1`, PATCHing only
+  what differs. Returns the PATCH keys applied (`[]` when already in shape, so
+  a normal boot sends no PATCH).
+
+  Three groups, each its own PATCH so one refusal cannot block another, in
+  this order:
+
+    1. strict mode (version-gated in `QdrantLayout`), so the disk guard is
+       live before anything rebuilds;
+    2. optimizers, always (one optimization thread serialises the rebuild);
+    3. on-disk (dense + sparse index), ONLY past `headroom/2`: Qdrant rewrites
+       every segment for it, and no optimizer splits an existing segment, so
+       the worst case is a rewrite of the whole collection at once.
+  """
+  def reconcile_config(col \\ nil) do
+    col = col || collection()
+
+    with {:ok, info} <- collection_info(col) do
+      diff = QdrantLayout.diff(info["config"] || %{}, QdrantLayout.desired(server_version()))
+      {strict, rest} = Map.split(diff, ["strict_mode_config"])
+      {on_disk, optimizers} = Map.split(rest, QdrantLayout.on_disk_keys())
+
+      results =
+        [strict, optimizers, gate_on_disk(col, on_disk)]
+        |> Enum.map(&{&1, patch_collection(col, &1)})
+
+      applied = for {body, :ok} <- results, key <- Map.keys(body), do: key
+      if applied != [], do: report_reconciled(applied)
+
+      case for({_body, {:error, _} = e} <- results, do: e) do
+        [] -> {:ok, applied}
+        [error | _] -> error
+      end
+    end
+    |> tap(&log_reconcile_failure/1)
+  end
+
+  defp log_reconcile_failure({:error, reason}),
+    do: Logger.warning("qdrant config reconcile failed: #{Metadata.safe_reason(reason)}")
+
+  defp log_reconcile_failure(_ok), do: :ok
+
+  @self_host_on_disk_limit 1024 * 1024 * 1024
+
+  # The on-disk group, or `%{}` when the headroom gate defers it. Only
+  # evaluated when there is something to apply, so a steady-state boot makes
+  # no /memory or /sys_metrics request.
+  defp gate_on_disk(_col, on_disk) when map_size(on_disk) == 0, do: on_disk
+
+  defp gate_on_disk(col, on_disk) do
+    collection_bytes =
+      case collection_memory(col) do
+        {:ok, %{"total" => %{"disk_bytes" => b}}} -> b
+        _ -> nil
+      end
+
+    {decision, source, free} = headroom(collection_bytes, free_disk_bytes())
+
+    meta = %{decision: decision, source: source}
+    measurements = %{free_bytes: free, collection_bytes: collection_bytes}
+
+    Logger.info(
+      "qdrant_reconcile_#{if decision == :apply, do: "on_disk_applied", else: "deferred"} " <>
+        "source=#{source} free_bytes=#{inspect(free)} collection_bytes=#{inspect(collection_bytes)}"
+    )
+
+    :telemetry.execute([:engram, :qdrant, :headroom_gate], measurements, meta)
+    if decision == :apply, do: on_disk, else: %{}
+  end
+
+  @doc """
+  The on-disk headroom decision: `{:apply | :defer, source, free_bytes}`.
+
+  With a known free-disk figure (Qdrant Cloud `/sys_metrics`), apply only when
+  free disk exceeds the whole collection's `disk_bytes`. Without one
+  (self-host), apply only to a collection under 1 GiB. An unknown collection
+  size (no `/memory` before Qdrant 1.18) always defers.
+  """
+  def headroom(nil, free), do: {:defer, :unknown_size, free}
+  def headroom(size, free) when is_integer(free) and free > size, do: {:apply, :sys_metrics, free}
+  def headroom(_size, free) when is_integer(free), do: {:defer, :sys_metrics, free}
+  def headroom(size, nil) when size < @self_host_on_disk_limit, do: {:apply, :self_host_rule, nil}
+  def headroom(_size, nil), do: {:defer, :self_host_rule, nil}
+
+  # Qdrant Cloud exposes the volume's kubelet stats on `/sys_metrics`
+  # (Prometheus text). Self-host has no such endpoint: nil.
+  defp free_disk_bytes do
+    case Req.get(base_url() <> "/sys_metrics", req_opts(:search)) do
+      {:ok, %{status: 200, body: body}} when is_binary(body) -> parse_free_bytes(body)
+      _ -> nil
+    end
+  end
+
+  @doc false
+  def parse_free_bytes(text) do
+    stats =
+      for line <- String.split(text, "\n"),
+          [name, value] <- [
+            Regex.run(~r/^(kubelet_volume_stats_\w+_bytes)(?:\{[^}]*\})?\s+(\S+)/, line,
+              capture: :all_but_first
+            ) || []
+          ],
+          {num, _} <- [Float.parse(value)],
+          into: %{},
+          do: {name, trunc(num)}
+
+    case stats do
+      %{"kubelet_volume_stats_available_bytes" => free} ->
+        free
+
+      %{"kubelet_volume_stats_capacity_bytes" => cap, "kubelet_volume_stats_used_bytes" => used} ->
+        cap - used
+
+      _ ->
+        nil
+    end
+  end
+
+  defp report_reconciled(changed) do
+    Logger.info("qdrant config reconciled: #{Enum.join(changed, ", ")}")
+    :telemetry.execute([:engram, :qdrant, :config_reconciled], %{count: 1}, %{changed: changed})
+  end
+
+  defp patch_collection(_col, body) when map_size(body) == 0, do: :ok
+
+  defp patch_collection(col, body) do
+    instrument(:update_collection, fn ->
+      case Req.patch("#{base_url()}/collections/#{col}", [json: body] ++ req_opts()) do
+        {:ok, %{status: 200}} -> :ok
         {:ok, %{status: status, body: body}} -> {:error, {status, body}}
         {:error, reason} -> {:error, reason}
       end
     end)
+  end
+
+  # `GET /` -> `%{"version" => "1.18.2"}`. nil when unreadable: strict mode is
+  # then skipped (not guessed), and the next boot tries again.
+  defp server_version do
+    with {:ok, %{status: 200, body: %{"version" => v}}} <-
+           Req.get(base_url() <> "/", req_opts(:search)),
+         {:ok, version} <- Version.parse(v) do
+      version
+    else
+      _ -> nil
+    end
   end
 
   @doc """
