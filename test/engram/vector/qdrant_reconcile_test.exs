@@ -112,13 +112,17 @@ defmodule Engram.Vector.QdrantReconcileTest do
     on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
   end
 
-  @strict %{
-    "strict_mode_config" => %{
-      "enabled" => true,
-      "max_disk_usage_percent" => 85,
-      "max_resident_memory_percent" => 85
+  # Strict-mode limits derive from an absolute reserve (QdrantLayout.strict_limits/2).
+  defp strict(disk, heap) do
+    %{
+      "strict_mode_config" => %{
+        "enabled" => true,
+        "max_disk_usage_percent" => disk,
+        "max_resident_memory_percent" => heap
+      }
     }
-  }
+  end
+
   @optimizers %{"optimizers_config" => %{"max_optimization_threads" => 1}}
   @on_disk %{
     "vectors" => %{"dense" => %{"on_disk" => true}},
@@ -128,6 +132,7 @@ defmodule Engram.Vector.QdrantReconcileTest do
   test "today's prod numbers: all three groups apply", %{bypass: bypass} do
     attach([:engram, :qdrant, :headroom_gate])
     stub_version(bypass, "1.18.2")
+    ServiceConfig.put_override(:qdrant_memory_limit_bytes, 2 * @gib)
     fake_collection(bypass, "engram_notes", @prod_info)
     # Measured 2026-10-18: volume 8.37 GB, 4.35 GB used, collection 4.89 GB.
     # Free 4.02 GB >= half the collection; projected peak 4.35 + 0.35 * 4.89
@@ -138,7 +143,9 @@ defmodule Engram.Vector.QdrantReconcileTest do
     assert {:ok, changed} = Qdrant.reconcile_config("engram_notes")
     assert Enum.sort(changed) == ~w(optimizers_config sparse_vectors strict_mode_config vectors)
 
-    assert_receive {:patch, @strict}
+    # Disk reserve 0.35 * 4.89 GB = 1.71 GB -> 79%; heap 2 GiB - 256 MiB -> 87%.
+    assert_receive {:patch, strict}
+    assert strict == strict(79, 87)
     assert_receive {:patch, @optimizers}
     assert_receive {:patch, @on_disk}
 
@@ -160,7 +167,8 @@ defmodule Engram.Vector.QdrantReconcileTest do
     assert {:ok, changed} = Qdrant.reconcile_config("engram_notes")
     assert Enum.sort(changed) == ~w(optimizers_config strict_mode_config)
 
-    assert_receive {:patch, @strict}
+    assert_receive {:patch, strict}
+    assert strict == strict(79, 85)
     assert_receive {:patch, @optimizers}
     refute_receive {:patch, _}
 
@@ -181,7 +189,8 @@ defmodule Engram.Vector.QdrantReconcileTest do
     assert {:ok, changed} = Qdrant.reconcile_config("engram_notes")
     assert Enum.sort(changed) == ~w(optimizers_config sparse_vectors strict_mode_config vectors)
 
-    assert_receive {:patch, @strict}
+    assert_receive {:patch, strict}
+    assert strict == strict(90, 85)
     assert_receive {:patch, @optimizers}
     assert_receive {:patch, @on_disk}
 
@@ -377,6 +386,8 @@ defmodule Engram.Vector.QdrantReconcileTest do
       |> put_in(["config", "optimizer_config", "max_optimization_threads"], 1)
 
     fake_collection(bypass, "fresh", created)
+    stub_no_memory(bypass, "fresh")
+    stub_no_sys_metrics(bypass)
 
     assert :ok = Qdrant.ensure_collection("fresh", 1024)
     assert_receive {:create, body}

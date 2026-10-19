@@ -126,4 +126,86 @@ defmodule Engram.Vector.QdrantLayoutTest do
       assert body["optimizers_config"] == %{"max_optimization_threads" => 1}
     end
   end
+
+  describe "strict_limits/2" do
+    @gib 1024 * 1024 * 1024
+    @mib 1024 * 1024
+    @opts %{memory_reserve: 256 * @mib, static: %{disk: 85, heap: 85}}
+
+    test "today's prod: disk reserve 0.35x collection -> 79%, memory 2 GiB - 256 MiB -> 87%" do
+      limits =
+        QdrantLayout.strict_limits(
+          %{capacity: 8_370_000_000, collection: 4_890_000_000, memory_limit: 2 * @gib},
+          @opts
+        )
+
+      assert limits == %{
+               disk: %{percent: 79, reserve: 1_711_500_000},
+               heap: %{percent: 87, reserve: 256 * @mib}
+             }
+    end
+
+    test "the same data on a 16 GiB volume -> 90%" do
+      assert %{disk: %{percent: 90}} =
+               QdrantLayout.strict_limits(
+                 %{capacity: 16 * @gib, collection: 4_890_000_000, memory_limit: nil},
+                 @opts
+               )
+    end
+
+    test "disk reserve is at least 1 GiB" do
+      assert %{disk: %{percent: 87, reserve: 1_073_741_824}} =
+               QdrantLayout.strict_limits(
+                 %{capacity: 8_370_000_000, collection: 1_000_000_000, memory_limit: nil},
+                 @opts
+               )
+    end
+
+    test "clamped to 70..95" do
+      small = %{capacity: 2_000_000_000, collection: 1_000_000_000, memory_limit: 300 * @mib}
+
+      assert %{disk: %{percent: 70}, heap: %{percent: 70}} =
+               QdrantLayout.strict_limits(small, @opts)
+
+      big = %{capacity: 1_000_000_000_000, collection: 1_000, memory_limit: 64 * @gib}
+
+      assert %{disk: %{percent: 95}, heap: %{percent: 95}} =
+               QdrantLayout.strict_limits(big, @opts)
+    end
+
+    test "memory reserve is the configured value, never below 256 MiB" do
+      vol = %{capacity: nil, collection: nil, memory_limit: 2 * @gib}
+
+      assert %{heap: %{percent: 75, reserve: 536_870_912}} =
+               QdrantLayout.strict_limits(vol, %{@opts | memory_reserve: 512 * @mib})
+
+      assert %{heap: %{percent: 87, reserve: 268_435_456}} =
+               QdrantLayout.strict_limits(vol, %{@opts | memory_reserve: 100 * @mib})
+    end
+
+    test "unknown sizes keep the configured static percent" do
+      unknown = %{capacity: nil, collection: 4_890_000_000, memory_limit: nil}
+
+      assert QdrantLayout.strict_limits(unknown, %{@opts | static: %{disk: 83, heap: 81}}) == %{
+               disk: %{percent: 83, reserve: nil},
+               heap: %{percent: 81, reserve: nil}
+             }
+
+      assert %{disk: %{percent: 85, reserve: nil}} =
+               QdrantLayout.strict_limits(
+                 %{unknown | capacity: 8_370_000_000, collection: nil},
+                 @opts
+               )
+    end
+
+    test "desired/2 takes the limits' percents" do
+      limits = %{disk: %{percent: 79, reserve: 1}, heap: %{percent: 87, reserve: 1}}
+
+      assert QdrantLayout.desired(Version.parse!("1.18.2"), limits)["strict_mode_config"] == %{
+               "enabled" => true,
+               "max_disk_usage_percent" => 79,
+               "max_resident_memory_percent" => 87
+             }
+    end
+  end
 end

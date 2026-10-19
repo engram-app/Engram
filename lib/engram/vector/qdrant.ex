@@ -397,7 +397,7 @@ defmodule Engram.Vector.Qdrant do
       diff =
         QdrantLayout.diff(
           info["config"] || %{},
-          QdrantLayout.desired(server_version(), strict_thresholds())
+          QdrantLayout.desired(server_version(), strict_limits(col, volume_stats()))
         )
 
       {strict, rest} = Map.split(diff, ["strict_mode_config"])
@@ -418,13 +418,64 @@ defmodule Engram.Vector.Qdrant do
     |> tap(&log_reconcile_failure/1)
   end
 
-  # Strict mode's refusal thresholds (`QDRANT_STRICT_DISK_PERCENT` /
-  # `QDRANT_STRICT_MEMORY_PERCENT`). A change reaches Qdrant on the next boot.
-  defp strict_thresholds do
-    %{
-      disk: ServiceConfig.get(:qdrant_strict_disk_percent, 85),
-      memory: ServiceConfig.get(:qdrant_strict_memory_percent, 85)
-    }
+  @doc """
+  Strict-mode limits for `col` now (`QdrantLayout.strict_limits/2`): the
+  volume from `/sys_metrics`, the collection's `/memory` disk_bytes and
+  `QDRANT_MEMORY_LIMIT_BYTES`. Unknown sizes fall back to
+  `QDRANT_STRICT_DISK_PERCENT` / `QDRANT_STRICT_MEMORY_PERCENT` (85).
+  """
+  def strict_limits(col, volume) do
+    collection_bytes =
+      case collection_memory(col) do
+        {:ok, %{"total" => %{"disk_bytes" => b}}} when is_integer(b) -> b
+        _ -> nil
+      end
+
+    QdrantLayout.strict_limits(
+      %{
+        capacity: volume && volume.capacity,
+        collection: collection_bytes,
+        memory_limit: ServiceConfig.get(:qdrant_memory_limit_bytes)
+      },
+      %{
+        memory_reserve: ServiceConfig.get(:qdrant_memory_reserve_bytes, 256 * 1024 * 1024),
+        static: %{
+          disk: ServiceConfig.get(:qdrant_strict_disk_percent, 85),
+          heap: ServiceConfig.get(:qdrant_strict_memory_percent, 85)
+        }
+      }
+    )
+  end
+
+  @doc """
+  Keep the collection's strict-mode limits at `limits` (the poller, every
+  tick), so they follow data growth and volume resizes without a deploy.
+  PATCHes only when a percent moved (whole points, so >= 1), then logs and
+  emits `[:engram, :qdrant, :strict_limits_changed]`.
+  """
+  def reconcile_strict_mode(col, info, limits) do
+    want = server_version() |> QdrantLayout.desired(limits) |> Map.take(["strict_mode_config"])
+
+    case QdrantLayout.diff(info["config"] || %{}, want) do
+      diff when map_size(diff) == 0 ->
+        :ok
+
+      diff ->
+        with :ok <- patch_collection(col, diff) do
+          strict = diff["strict_mode_config"]
+
+          Logger.info(
+            "qdrant strict-mode limits changed: disk=#{inspect(strict["max_disk_usage_percent"])} " <>
+              "memory=#{inspect(strict["max_resident_memory_percent"])}"
+          )
+
+          :telemetry.execute(
+            [:engram, :qdrant, :strict_limits_changed],
+            %{count: 1},
+            %{disk: limits.disk.percent, heap: limits.heap.percent}
+          )
+        end
+    end
   end
 
   defp log_reconcile_failure({:error, reason}),
@@ -562,7 +613,8 @@ defmodule Engram.Vector.Qdrant do
   defp write_error(status, body), do: {:error, {status, body}}
 
   @doc """
-  How full Qdrant is, in whole percent: `%{disk: pct | nil, heap: pct | nil}`.
+  How full Qdrant is, in whole percent, with the strict-mode limits it is
+  measured against: `%{disk: pct | nil, heap: pct | nil, limits: limits}`.
   Disk is the storage volume from Qdrant Cloud `/sys_metrics`; heap is
   `memory_resident_bytes` from `/metrics` (the jemalloc figure strict mode
   checks) over `QDRANT_MEMORY_LIMIT_BYTES`. nil = unknown (self-host has no
@@ -575,20 +627,34 @@ defmodule Engram.Vector.Qdrant do
   def forget_pressure, do: Engram.Cache.evict_local(:qdrant_pressure, base_url())
 
   @doc "A fresh `pressure/0` reading (the poller), refreshing the cache."
+  # ponytail: every node reads /sys_metrics, /metrics and /memory once a
+  # minute. Cheap at a handful of nodes; share the poller's reading over
+  # PubSub if the fleet grows.
   def read_pressure do
-    reading = %{disk: disk_percent(volume_stats()), heap: heap_percent()}
+    volume = volume_stats()
+
+    reading = %{
+      disk: disk_percent(volume),
+      heap: heap_percent(),
+      limits: strict_limits(collection(), volume)
+    }
+
     Engram.Cache.put(:qdrant_pressure, base_url(), reading)
     reading
   end
 
+  @static_limits %{disk: %{percent: 85, reserve: nil}, heap: %{percent: 85, reserve: nil}}
+
   @doc """
-  True when disk or heap is at or past its preflight threshold
-  (`QDRANT_PREFLIGHT_DISK_PERCENT` / `QDRANT_PREFLIGHT_HEAP_PERCENT`, default
-  80, below strict mode's refusal at 85). Unknown is never over.
+  True when disk or heap is within `QDRANT_PREFLIGHT_MARGIN_POINTS` (default
+  5) of its strict-mode limit, i.e. about to be refused. Unknown is never over.
   """
-  def over_pressure?(%{disk: disk, heap: heap}) do
-    at_or_over?(disk, ServiceConfig.get(:qdrant_preflight_disk_percent, 80)) or
-      at_or_over?(heap, ServiceConfig.get(:qdrant_preflight_heap_percent, 80))
+  def over_pressure?(%{disk: disk, heap: heap} = reading) do
+    limits = Map.get(reading, :limits, @static_limits)
+    margin = ServiceConfig.get(:qdrant_preflight_margin_points, 5)
+
+    at_or_over?(disk, limits.disk.percent - margin) or
+      at_or_over?(heap, limits.heap.percent - margin)
   end
 
   defp at_or_over?(pct, limit), do: is_integer(pct) and pct >= limit

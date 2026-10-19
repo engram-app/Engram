@@ -29,6 +29,10 @@ defmodule Engram.PromEx.Qdrant do
       `total`, `dense` (storage + HNSW), `sparse_index`, `payload_index`,
       `payload`, `quantized`, `id_tracker`.
 
+    * `engram_prom_ex_qdrant_strict_limit_percent{kind="disk"|"heap"}` and
+      `engram_prom_ex_qdrant_reserve_bytes{kind}`: the strict-mode limits the
+      poller keeps applied (`QdrantLayout.strict_limits/2`), recomputed and
+      re-PATCHed on change every tick.
     * `engram_prom_ex_qdrant_pressure_percent{kind="disk"|"heap"}`: what the
       EmbedNote preflight reads (`Qdrant.pressure/0`); unknown kinds are absent.
 
@@ -55,6 +59,8 @@ defmodule Engram.PromEx.Qdrant do
   @disk_event [:engram, :qdrant, :disk]
   @ram_event [:engram, :qdrant, :memory]
   @pressure_event [:engram, :qdrant, :pressure]
+  @limit_event [:engram, :qdrant, :strict_limit]
+  @reserve_event [:engram, :qdrant, :reserve]
   @poller_name {__MODULE__, :collection_poller}
 
   @impl true
@@ -99,6 +105,20 @@ defmodule Engram.PromEx.Qdrant do
           tags: [:component],
           description: "Non-evictable RAM the Qdrant collection holds, by component."
         ),
+        last_value(prefix ++ [:strict_limit, :percent],
+          event_name: @limit_event,
+          measurement: :percent,
+          tags: [:kind],
+          description:
+            "Strict-mode write-refusal limit applied to the collection, derived from the reserve."
+        ),
+        last_value(prefix ++ [:reserve, :bytes],
+          event_name: @reserve_event,
+          measurement: :bytes,
+          tags: [:kind],
+          description:
+            "Headroom kept free below the strict-mode limit (absent when the limit is the static fallback)."
+        ),
         last_value(prefix ++ [:pressure, :percent],
           event_name: @pressure_event,
           measurement: :percent,
@@ -116,8 +136,9 @@ defmodule Engram.PromEx.Qdrant do
   @spec execute_collection_metrics() :: :ok
   def execute_collection_metrics do
     if ServiceConfig.get(:qdrant_collection_metrics, true) and poller?() do
-      poll(Qdrant.collection_name())
-      poll_pressure()
+      col = Qdrant.collection_name()
+      reading = poll_pressure()
+      poll(col, reading.limits)
     end
 
     :ok
@@ -143,11 +164,12 @@ defmodule Engram.PromEx.Qdrant do
     end
   end
 
-  defp poll(col) do
+  defp poll(col, limits) do
     case Qdrant.collection_info(col, :search) do
       {:ok, info} ->
         :telemetry.execute(@collection_event, collection_measurements(info), %{})
         poll_memory(col)
+        _ = Qdrant.reconcile_strict_mode(col, info, limits)
 
       {:error, reason} ->
         Logger.warning("qdrant collection poll skipped: #{Metadata.safe_reason(reason)}")
@@ -156,9 +178,22 @@ defmodule Engram.PromEx.Qdrant do
 
   # An unknown kind publishes nothing (absent, not a misleading 0).
   defp poll_pressure do
-    for {kind, pct} <- Qdrant.read_pressure(), is_integer(pct) do
-      :telemetry.execute(@pressure_event, %{percent: pct}, %{kind: Atom.to_string(kind)})
+    reading = Qdrant.read_pressure()
+
+    for kind <- [:disk, :heap] do
+      tags = %{kind: Atom.to_string(kind)}
+      limit = reading.limits[kind]
+
+      if is_integer(reading[kind]),
+        do: :telemetry.execute(@pressure_event, %{percent: reading[kind]}, tags)
+
+      :telemetry.execute(@limit_event, %{percent: limit.percent}, tags)
+
+      if is_integer(limit.reserve),
+        do: :telemetry.execute(@reserve_event, %{bytes: limit.reserve}, tags)
     end
+
+    reading
   end
 
   defp collection_measurements(info) do

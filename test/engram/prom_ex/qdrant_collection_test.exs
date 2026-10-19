@@ -19,6 +19,8 @@ defmodule Engram.PromEx.QdrantCollectionTest do
   @ram_event [:engram, :qdrant, :memory]
   @disk_event [:engram, :qdrant, :disk]
   @pressure_event [:engram, :qdrant, :pressure]
+  @limit_event [:engram, :qdrant, :strict_limit]
+  @reserve_event [:engram, :qdrant, :reserve]
 
   setup do
     bypass = Bypass.open()
@@ -33,7 +35,7 @@ defmodule Engram.PromEx.QdrantCollectionTest do
 
     :telemetry.attach_many(
       {__MODULE__, ref},
-      [@collection_event, @ram_event, @disk_event, @pressure_event],
+      [@collection_event, @ram_event, @disk_event, @pressure_event, @limit_event, @reserve_event],
       fn e, m, meta, _ -> send(test_pid, {e, m, meta}) end,
       nil
     )
@@ -51,6 +53,8 @@ defmodule Engram.PromEx.QdrantCollectionTest do
   defp stub_info(bypass, info \\ @info) do
     Bypass.stub(bypass, "GET", "/sys_metrics", &Plug.Conn.send_resp(&1, 404, ""))
     Bypass.stub(bypass, "GET", "/metrics", &Plug.Conn.send_resp(&1, 404, ""))
+    # Pre-1.18.1: no strict-mode limit to keep in step, so no PATCH.
+    Bypass.stub(bypass, "GET", "/", &json(&1, 200, %{version: "1.17.1"}))
 
     Bypass.stub(bypass, "GET", "/collections/engram_notes", fn conn ->
       json(conn, 200, %{result: info, status: "ok"})
@@ -69,7 +73,9 @@ defmodule Engram.PromEx.QdrantCollectionTest do
           [:engram, :prom_ex, :qdrant, :points],
           [:engram, :prom_ex, :qdrant, :disk, :bytes],
           [:engram, :prom_ex, :qdrant, :ram, :bytes],
-          [:engram, :prom_ex, :qdrant, :pressure, :percent]
+          [:engram, :prom_ex, :qdrant, :pressure, :percent],
+          [:engram, :prom_ex, :qdrant, :strict_limit, :percent],
+          [:engram, :prom_ex, :qdrant, :reserve, :bytes]
         ] do
       assert n in names
     end
@@ -101,6 +107,7 @@ defmodule Engram.PromEx.QdrantCollectionTest do
     )
 
     Bypass.stub(bypass, "GET", "/metrics", &Plug.Conn.send_resp(&1, 404, ""))
+    Bypass.stub(bypass, "GET", "/", &json(&1, 200, %{version: "1.17.1"}))
 
     Bypass.stub(bypass, "GET", "/sys_metrics", fn conn ->
       Plug.Conn.send_resp(conn, 200, """
@@ -196,5 +203,64 @@ defmodule Engram.PromEx.QdrantCollectionTest do
 
     assert :ok = Plugin.execute_collection_metrics()
     refute_receive {@collection_event, _, _}
+  end
+
+  # Limits follow growth and resizes without a deploy: each tick recomputes
+  # them from the reserve and PATCHes strict mode only when a value moved.
+  test "keeps strict-mode limits in step with the volume, PATCHing only on change",
+       %{bypass: bypass} do
+    test_pid = self()
+    ServiceConfig.put_override(:qdrant_memory_limit_bytes, 2 * 1024 * 1024 * 1024)
+    {:ok, info} = Agent.start_link(fn -> @info end)
+
+    Bypass.stub(bypass, "GET", "/", &json(&1, 200, %{version: "1.18.2"}))
+    Bypass.stub(bypass, "GET", "/metrics", &Plug.Conn.send_resp(&1, 404, ""))
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes", fn conn ->
+      json(conn, 200, %{result: Agent.get(info, & &1)})
+    end)
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes/memory", fn conn ->
+      json(conn, 200, %{result: @memory})
+    end)
+
+    Bypass.stub(bypass, "GET", "/sys_metrics", fn conn ->
+      Plug.Conn.send_resp(conn, 200, """
+      kubelet_volume_stats_capacity_bytes{persistentvolumeclaim="qdrant-storage-qdrant-0"} 8.37e+09
+      kubelet_volume_stats_used_bytes{persistentvolumeclaim="qdrant-storage-qdrant-0"} 4.35e+09
+      """)
+    end)
+
+    Bypass.stub(bypass, "PATCH", "/collections/engram_notes", fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      body = Jason.decode!(raw)
+      send(test_pid, {:patch, body})
+
+      Agent.update(info, fn i ->
+        update_in(i, ["config", "strict_mode_config"], &Map.merge(&1, body["strict_mode_config"]))
+      end)
+
+      json(conn, 200, %{result: true})
+    end)
+
+    Plugin.execute_collection_metrics()
+
+    assert_receive {:patch,
+                    %{
+                      "strict_mode_config" => %{
+                        "enabled" => true,
+                        "max_disk_usage_percent" => 79,
+                        "max_resident_memory_percent" => 87
+                      }
+                    }}
+
+    assert_receive {@limit_event, %{percent: 79}, %{kind: "disk"}}
+    assert_receive {@limit_event, %{percent: 87}, %{kind: "heap"}}
+    assert_receive {@reserve_event, %{bytes: 1_711_500_000}, %{kind: "disk"}}
+    assert_receive {@reserve_event, %{bytes: 268_435_456}, %{kind: "heap"}}
+
+    Engram.Vector.Qdrant.forget_pressure()
+    Plugin.execute_collection_metrics()
+    refute_receive {:patch, _}
   end
 end

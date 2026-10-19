@@ -25,6 +25,23 @@ defmodule Engram.Vector.QdrantBackpressureTest do
     |> Plug.Conn.send_resp(status, body)
   end
 
+  @static_limits %{disk: %{percent: 85, reserve: nil}, heap: %{percent: 85, reserve: nil}}
+
+  defp stub_collection_bytes(bypass, nil) do
+    Bypass.stub(
+      bypass,
+      "GET",
+      "/collections/engram_notes/memory",
+      &Plug.Conn.send_resp(&1, 404, "")
+    )
+  end
+
+  defp stub_collection_bytes(bypass, bytes) do
+    Bypass.stub(bypass, "GET", "/collections/engram_notes/memory", fn conn ->
+      respond(conn, 200, Jason.encode!(%{result: %{total: %{disk_bytes: bytes}}}))
+    end)
+  end
+
   @point %{id: "00000000-0000-0000-0000-000000000001", vector: %{}, payload: %{}}
 
   describe "strict-mode refusal" do
@@ -95,7 +112,18 @@ defmodule Engram.Vector.QdrantBackpressureTest do
         """)
       end)
 
-      assert Qdrant.pressure() == %{disk: 82, heap: 55}
+      stub_collection_bytes(bypass, 2_000_000_000)
+
+      # Disk reserve max(1 GiB, 0.35 * 2 GB) = 1 GiB of 10 GB -> 89%;
+      # heap 2 GB - 256 MiB -> 86%.
+      assert Qdrant.pressure() == %{
+               disk: 82,
+               heap: 55,
+               limits: %{
+                 disk: %{percent: 89, reserve: 1_073_741_824},
+                 heap: %{percent: 86, reserve: 268_435_456}
+               }
+             }
     end
 
     test "unknown when neither source answers (fail open)", %{bypass: bypass} do
@@ -108,13 +136,15 @@ defmodule Engram.Vector.QdrantBackpressureTest do
         &Plug.Conn.send_resp(&1, 200, "memory_resident_bytes 5\n")
       )
 
+      stub_collection_bytes(bypass, nil)
+
       # No QDRANT_MEMORY_LIMIT_BYTES: heap is not computed.
-      assert Qdrant.pressure() == %{disk: nil, heap: nil}
+      assert Qdrant.pressure() == %{disk: nil, heap: nil, limits: @static_limits}
     end
 
     test "Qdrant down reads as unknown, never raises", %{bypass: bypass} do
       Bypass.down(bypass)
-      assert Qdrant.pressure() == %{disk: nil, heap: nil}
+      assert Qdrant.pressure() == %{disk: nil, heap: nil, limits: @static_limits}
     end
 
     test "is cached: a second read makes no request", %{bypass: bypass} do
@@ -126,6 +156,7 @@ defmodule Engram.Vector.QdrantBackpressureTest do
       end)
 
       Bypass.stub(bypass, "GET", "/metrics", &Plug.Conn.send_resp(&1, 404, ""))
+      stub_collection_bytes(bypass, nil)
 
       Qdrant.pressure()
       Qdrant.pressure()
@@ -135,7 +166,20 @@ defmodule Engram.Vector.QdrantBackpressureTest do
   end
 
   describe "over_pressure?/1" do
-    test "80% of either is over; unknown never is" do
+    test "pauses 5 points below each strict limit" do
+      limits = %{disk: %{percent: 79, reserve: 1}, heap: %{percent: 87, reserve: 1}}
+      refute Qdrant.over_pressure?(%{disk: 73, heap: 81, limits: limits})
+      assert Qdrant.over_pressure?(%{disk: 74, heap: nil, limits: limits})
+      assert Qdrant.over_pressure?(%{disk: nil, heap: 82, limits: limits})
+    end
+
+    test "the margin is configurable" do
+      ServiceConfig.put_override(:qdrant_preflight_margin_points, 10)
+      limits = %{disk: %{percent: 79, reserve: 1}, heap: %{percent: 87, reserve: 1}}
+      assert Qdrant.over_pressure?(%{disk: 69, heap: nil, limits: limits})
+    end
+
+    test "without limits: static 85 - 5 = 80; unknown never is over" do
       refute Qdrant.over_pressure?(%{disk: nil, heap: nil})
       refute Qdrant.over_pressure?(%{disk: 79, heap: 79})
       assert Qdrant.over_pressure?(%{disk: 80, heap: nil})

@@ -271,14 +271,14 @@ if config_env() != :test do
     config :engram, :qdrant_memory_limit_bytes, String.to_integer(limit)
   end
 
-  # Backpressure thresholds, whole percent. Strict mode REFUSES writes at the
-  # strict values (applied to the collection on boot); EmbedNote snoozes before
-  # paying Voyage at the lower preflight values.
+  # Backpressure. Strict-mode limits derive from absolute reserves
+  # (QdrantLayout.strict_limits/2); the static percents apply only when a size
+  # is unknown. EmbedNote pauses MARGIN points below each limit.
   for {env, key} <- [
+        {"QDRANT_MEMORY_RESERVE_BYTES", :qdrant_memory_reserve_bytes},
         {"QDRANT_STRICT_DISK_PERCENT", :qdrant_strict_disk_percent},
         {"QDRANT_STRICT_MEMORY_PERCENT", :qdrant_strict_memory_percent},
-        {"QDRANT_PREFLIGHT_DISK_PERCENT", :qdrant_preflight_disk_percent},
-        {"QDRANT_PREFLIGHT_HEAP_PERCENT", :qdrant_preflight_heap_percent}
+        {"QDRANT_PREFLIGHT_MARGIN_POINTS", :qdrant_preflight_margin_points}
       ],
       value = System.get_env(env) do
     config :engram, key, String.to_integer(value)
