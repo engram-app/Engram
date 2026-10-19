@@ -64,42 +64,42 @@ URL='https://github.com/engram-app/Engram/releases/tag/release-v0.14.0'
 # --- Test 1: user-facing sections survive; SCHEMA-IMPACT preamble does not ---
 out=$(printf '%s' "$ENGRAM_BODY" | bash "$SCRIPT" "Engram Cloud" "release-v0.14.0" "$URL")
 
-echo "$out" | grep -q 'release-v0.14.0'            || fail "Test 1: missing tag"
-echo "$out" | grep -q 'Obsidian-style note header' || fail "Test 1: missing feature bullet"
-echo "$out" | grep -q 'link-extract fast path'     || fail "Test 1: missing second feature bullet"
-echo "$out" | grep -q 'frontmatter boundary'       || fail "Test 1: missing fix bullet"
-echo "$out" | grep -q "$URL"                       || fail "Test 1: missing full-notes link"
+grep -q 'release-v0.14.0' <<<"$out"            || fail "Test 1: missing tag"
+grep -q 'Obsidian-style note header' <<<"$out" || fail "Test 1: missing feature bullet"
+grep -q 'link-extract fast path' <<<"$out"     || fail "Test 1: missing second feature bullet"
+grep -q 'frontmatter boundary' <<<"$out"       || fail "Test 1: missing fix bullet"
+grep -q "$URL" <<<"$out"                       || fail "Test 1: missing full-notes link"
 
 # The whole point: self-host upgrade choreography must NOT be the announcement.
-echo "$out" | grep -q 'docker compose down' && fail "Test 1: leaked self-host upgrade steps" || true
-echo "$out" | grep -q 'Engram.Release.rollback' && fail "Test 1: leaked rollback block" || true
-echo "$out" | grep -q 'Schema-impacting PRs' && fail "Test 1: leaked schema PR list" || true
+grep -q 'docker compose down' <<<"$out" && fail "Test 1: leaked self-host upgrade steps" || true
+grep -q 'Engram.Release.rollback' <<<"$out" && fail "Test 1: leaked rollback block" || true
+grep -q 'Schema-impacting PRs' <<<"$out" && fail "Test 1: leaked schema PR list" || true
 
 # --- Test 2: no upgrade warning is added, even for an old body that has the block ---
 # Database changes need no operator step, so the announcement never says
 # "back up before upgrading".
-echo "$out" | grep -qi 'schema' && fail "Test 2: a schema/backup warning was added" || true
-echo "$out" | grep -qi 'back up' && fail "Test 2: a backup warning was added" || true
+grep -qi 'schema' <<<"$out" && fail "Test 2: a schema/backup warning was added" || true
+grep -qi 'back up' <<<"$out" && fail "Test 2: a backup warning was added" || true
 
 # --- Test 3: markdown link noise stripped, PR ref kept ---
-echo "$out" | grep -q '(#1219)' || fail "Test 3: PR number not preserved as plain ref"
-echo "$out" | grep -q 'https://github.com/engram-app/Engram/issues/' && \
+grep -q '(#1219)' <<<"$out" || fail "Test 3: PR number not preserved as plain ref"
+grep -q 'https://github.com/engram-app/Engram/issues/' <<<"$out" && \
   fail "Test 3: raw issue URLs leaked into announcement" || true
-echo "$out" | grep -q 'commit/f7415ae' && fail "Test 3: commit link leaked" || true
+grep -q 'commit/f7415ae' <<<"$out" && fail "Test 3: commit link leaked" || true
 
 # --- Test 4: non-user-facing sections are counted, not listed ---
-echo "$out" | grep -q 'tidy the makefile' && fail "Test 4: chore listed as a change" || true
-echo "$out" | grep -q 'route the headless-rAF doc' && fail "Test 4: docs listed as a change" || true
+grep -q 'tidy the makefile' <<<"$out" && fail "Test 4: chore listed as a change" || true
+grep -q 'route the headless-rAF doc' <<<"$out" && fail "Test 4: docs listed as a change" || true
 
 # --- Test 4b: internal SCOPES are counted too, even inside Bug Fixes ---
 # release-please files `fix(ci):` and `fix(deps):` under "Bug Fixes", but a
 # CI plumbing fix is not an announcement. Filtering by section alone leaves
 # the list dominated by ci/deps noise — the scope is the real signal.
-echo "$out" | grep -q 'prebuild-ci-image' && fail "Test 4b: ci-scoped fix listed as a user-facing change" || true
-echo "$out" | grep -q 'bandit 1.12.4'     && fail "Test 4b: deps-scoped fix listed as a user-facing change" || true
-echo "$out" | grep -q 'frontmatter boundary' || fail "Test 4b: real user-facing fix was wrongly filtered"
+grep -q 'prebuild-ci-image' <<<"$out" && fail "Test 4b: ci-scoped fix listed as a user-facing change" || true
+grep -q 'bandit 1.12.4' <<<"$out"     && fail "Test 4b: deps-scoped fix listed as a user-facing change" || true
+grep -q 'frontmatter boundary' <<<"$out" || fail "Test 4b: real user-facing fix was wrongly filtered"
 # 2 chores/docs + 1 doc entry + 2 internal-scope fixes = 5 counted
-echo "$out" | grep -qE '5 (chore|other|internal)' || fail "Test 4: expected a count of the 5 skipped entries"
+grep -qE '5 (chore|other|internal)' <<<"$out" || fail "Test 4: expected a count of the 5 skipped entries"
 
 # --- Test 5: plugin-shaped body (no schema impact, fixes only) ---
 PLUGIN_BODY='## [1.20.1](https://github.com/engram-app/Engram-obsidian/compare/1.20.0...1.20.1) (2026-08-06)
@@ -112,9 +112,9 @@ PLUGIN_BODY='## [1.20.1](https://github.com/engram-app/Engram-obsidian/compare/1
 
 out_plugin=$(printf '%s' "$PLUGIN_BODY" | bash "$SCRIPT" "Engram Vault Sync" "1.20.1" "https://example.test/r/1.20.1")
 
-echo "$out_plugin" | grep -q 'Engram Vault Sync'   || fail "Test 5: missing product name"
-echo "$out_plugin" | grep -q 'id-keyed move'       || fail "Test 5: missing fix bullet"
-echo "$out_plugin" | grep -qi 'schema' && fail "Test 5: schema flagged on a release with no schema impact" || true
+grep -q 'Engram Vault Sync' <<<"$out_plugin"   || fail "Test 5: missing product name"
+grep -q 'id-keyed move' <<<"$out_plugin"       || fail "Test 5: missing fix bullet"
+grep -qi 'schema' <<<"$out_plugin" && fail "Test 5: schema flagged on a release with no schema impact" || true
 
 # --- Test 6: output always fits Discord's 2000-char content cap ---
 # Build a body with far more bullets than could ever fit.
@@ -127,14 +127,14 @@ out_big=$(printf '%s' "$big_body" | bash "$SCRIPT" "Engram Cloud" "release-v9.9.
 len=${#out_big}
 [ "$len" -le 2000 ] || fail "Test 6: output ${len} chars exceeds Discord's 2000 cap"
 # Truncation must drop whole bullets and still land the link — never cut mid-URL.
-echo "$out_big" | grep -q "$URL" || fail "Test 6: full-notes link lost to truncation"
-echo "$out_big" | grep -qE 'more' || fail "Test 6: no indication that changes were omitted"
+grep -q "$URL" <<<"$out_big" || fail "Test 6: full-notes link lost to truncation"
+grep -qE 'more' <<<"$out_big" || fail "Test 6: no indication that changes were omitted"
 
 # --- Test 7: empty / unparseable body still produces a valid announcement ---
 out_empty=$(printf '%s' "" | bash "$SCRIPT" "Engram Cloud" "release-v0.0.1" "$URL")
 [ -n "$out_empty" ] || fail "Test 7: empty output on empty notes"
-echo "$out_empty" | grep -q 'release-v0.0.1' || fail "Test 7: missing tag on empty notes"
-echo "$out_empty" | grep -q "$URL"           || fail "Test 7: missing link on empty notes"
+grep -q 'release-v0.0.1' <<<"$out_empty" || fail "Test 7: missing tag on empty notes"
+grep -q "$URL" <<<"$out_empty"           || fail "Test 7: missing link on empty notes"
 
 # --- Test 8: no unescaped backticks/quotes break the JSON the caller builds ---
 TRICKY='### Bug Fixes
