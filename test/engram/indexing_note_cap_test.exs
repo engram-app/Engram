@@ -135,6 +135,18 @@ defmodule Engram.IndexingNoteCapTest do
              |> Enum.all?(fn [a, b] -> a < b end)
     end
 
+    # Headroom: the first `g` aims at ~0.8 x cap, so the doubling fallback
+    # (which regroups the whole note) is rare. Fixed keys: deterministic.
+    test "the first g fits without doubling", %{chunks: chunks} do
+      counts =
+        for i <- 1..10 do
+          chunks |> Indexing.cap_chunks(128, :crypto.hash(:sha256, "key #{i}")) |> length()
+        end
+
+      # Doubled from g = 5 would land near 50.
+      assert Enum.all?(counts, &(&1 in 80..128)), inspect(counts, charlists: :as_lists)
+    end
+
     test "the same chunks and key give the same groups", %{chunks: chunks, key: key} do
       assert Indexing.cap_chunks(chunks, 128, key) == Indexing.cap_chunks(chunks, 128, key)
     end
@@ -290,6 +302,36 @@ defmodule Engram.IndexingNoteCapTest do
       assert Enum.all?(rows_for(note), &is_nil(&1.token_count))
     end
 
+    # ~50 single-chunk edits, one after another: only crossing the cap (which
+    # doubles `g`) regroups the whole note, and the headroom keeps that rare.
+    @tag timeout: :timer.minutes(5)
+    test "50 single-chunk edits: at most one re-embeds the whole note", %{
+      user: user,
+      vault: vault
+    } do
+      note = insert_note(user, vault, sections(500))
+      stub_embedder()
+      assert {:ok, first, _, true} = Indexing.index_note_with_usage(note, vault, user)
+      assert first <= 128
+      _ = embedded_texts()
+
+      {results, _content} =
+        Enum.map_reduce(Enum.to_list(10..490//10), note.content, fn i, content ->
+          edited = String.replace(content, "section#{i} body", "section#{i} edited body")
+          assert edited != content
+
+          {:ok, count, _, true} =
+            Indexing.index_note_with_usage(%{note | content: edited}, vault, user)
+
+          {{count, length(embedded_texts())}, edited}
+        end)
+
+      assert length(results) == 49
+      assert Enum.all?(results, fn {count, _calls} -> count <= 128 end)
+      # A local edit re-embeds 1-3 groups; a whole-note regroup re-embeds most.
+      assert Enum.count(results, fn {_count, calls} -> calls > 3 end) <= 1
+    end
+
     test "a capped note leaves the vault's avgdl alone", %{user: user, vault: vault} do
       stub_embedder()
       plain = insert_note(user, vault, "# Plain\n\nA short ordinary note.", "Plain.md")
@@ -317,6 +359,39 @@ defmodule Engram.IndexingNoteCapTest do
 
       assert Enum.all?(rows_for(note), &is_nil(&1.token_count))
       assert avgdl.() == before
+    end
+
+    # One section, ~2 MB: hash-only groups would pass the 10,000-token
+    # ceiling and floor the note; closing groups at the ceiling merges it.
+    @tag timeout: :timer.minutes(5)
+    test "a 2 MB single-section note merges under the ceiling, no floor", %{
+      user: user,
+      vault: vault
+    } do
+      body = Enum.map_join(1..10_000, "\n\n", &"Paragraph #{&1} #{String.duplicate("word ", 38)}")
+      note = insert_note(user, vault, "# Huge\n\n" <> body, "Huge.md")
+      assert byte_size(note.content) > 2_000_000
+      stub_embedder()
+
+      assert {:ok, count, _, true} = Indexing.index_note_with_usage(note, vault, user)
+      assert count <= 128
+      assert reload(note).index_tier == nil
+      assert Enum.all?(embedded_texts(), &(UsageMeters.estimate_tokens(&1) <= 10_000))
+    end
+
+    # Over 128 x 40 KB: no 128 groups fit under the ceiling. No embedder
+    # stub: any Voyage call fails the test.
+    @tag timeout: :timer.minutes(5)
+    test "a note needing more than 128 ceiling-sized groups floors", %{
+      user: user,
+      vault: vault
+    } do
+      body = Enum.map_join(1..30_000, "\n\n", &"Paragraph #{&1} #{String.duplicate("word ", 38)}")
+      note = insert_note(user, vault, "# Huger\n\n" <> body, "Huger.md")
+      assert byte_size(note.content) > 128 * 40_000
+
+      assert {:ok, 1, 0, false} = Indexing.index_note_with_usage(note, vault, user)
+      assert reload(note).index_tier == "floor"
     end
 
     # Cap 1, ~150 KB of text: one group would estimate far over 10,000
