@@ -213,4 +213,47 @@ defmodule EngramWeb.AttachmentsRefusalTelemetryTest do
     assert event.meta.declared_bytes == declared
     assert event.meta.content_type == "application/json"
   end
+
+  # The body below is 2 bytes of valid JSON: read, it would parse and reach the
+  # controller. Only the declared length can make this a 413, so a 413 proves
+  # the parser refused before reading.
+  test "a declared-oversize JSON body is 413 before the body is read", %{conn: conn} do
+    declared = EngramWeb.Endpoint.max_body_bytes() + 1
+
+    {result, events} =
+      LogCapture.with_events(fn ->
+        OpenTelemetry.Tracer.with_span "test.request" do
+          assert_error_sent(413, fn ->
+            conn
+            |> put_req_header("content-type", "application/json")
+            |> put_req_header("content-length", Integer.to_string(declared))
+            |> post("/api/attachments", "{}")
+          end)
+        end
+      end)
+
+    assert {413, _, resp_body} = result
+    assert %{"errors" => %{"detail" => _}} = Jason.decode!(resp_body)
+
+    assert_receive {:span, span(name: "test.request", attributes: attrs)}, 2_000
+    attrs = :otel_attributes.map(attrs)
+    assert attrs["engram.request.reject_reason"] == "request_too_large"
+    assert attrs["engram.request.declared_bytes"] == declared
+
+    assert Enum.any?(events, fn e ->
+             match?({:string, _}, e.msg) and
+               IO.iodata_to_binary(elem(e.msg, 1)) == "request body too large" and
+               e.meta.declared_bytes == declared
+           end)
+  end
+
+  test "an undeclared (chunked) small JSON body still parses", %{conn: conn} do
+    conn =
+      conn
+      |> put_req_header("content-type", "application/json")
+      |> post("/api/attachments", ~s({"mtime":1}))
+
+    # Reached the controller: its own 422, not a parser 413.
+    assert json_response(conn, 422)["error"] == "path is required"
+  end
 end
