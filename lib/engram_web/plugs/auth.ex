@@ -56,7 +56,8 @@ defmodule EngramWeb.Plugs.Auth do
             request_path: conn.request_path,
             # request_path is redacted in Loki; this bounded tag is what lets
             # the no-auth-storm alert drop protocol-normal MCP 401s.
-            surface: if(String.starts_with?(conn.request_path, "/api/mcp"), do: "mcp", else: "api")
+            surface:
+              if(String.starts_with?(conn.request_path, "/api/mcp"), do: "mcp", else: "api")
           )
         )
 
