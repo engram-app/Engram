@@ -98,6 +98,8 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # key-based redactor cannot catch a value travelling under another name.
     "lib/engram/storage/",
     "lib/engram/indexing.ex",
+    # Holds paid Voyage vectors of note text, keyed by a hash of that text.
+    "lib/engram/indexing/retained_vectors.ex",
     "lib/engram/crypto.ex",
     "lib/engram_web/controllers/attachments_controller.ex",
     "lib/engram/backfill/",

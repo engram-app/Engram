@@ -47,7 +47,7 @@ defmodule Engram.Indexing.RetainedVectors do
 
   @doc "Bytes of vectors currently held on this node."
   @spec total_bytes() :: non_neg_integer()
-  def total_bytes, do: entries() |> Enum.map(&elem(&1, 2)) |> Enum.sum()
+  def total_bytes, do: sum_bytes(entries())
 
   defp max_bytes,
     do: Engram.ServiceConfig.get(:retained_vectors_max_bytes, @default_max_bytes)
@@ -55,7 +55,7 @@ defmodule Engram.Indexing.RetainedVectors do
   # Oldest first until what remains fits in `budget`.
   defp trim(budget) do
     held = entries()
-    total = held |> Enum.map(&elem(&1, 2)) |> Enum.sum()
+    total = sum_bytes(held)
 
     _remaining =
       held
@@ -71,6 +71,9 @@ defmodule Engram.Indexing.RetainedVectors do
 
     :ok
   end
+
+  # Enum.sum/1 is typed number(), which dialyzer reads as a possible float.
+  defp sum_bytes(held), do: Enum.reduce(held, 0, fn {_key, _seq, bytes}, acc -> acc + bytes end)
 
   @spec entries() :: [{{Ecto.UUID.t(), binary()}, integer(), non_neg_integer()}]
   defp entries do
