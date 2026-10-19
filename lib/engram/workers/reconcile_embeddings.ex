@@ -36,9 +36,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   import Ecto.Query
 
   alias Engram.Backfill.TenantScan
+  alias Engram.Billing.LimitKeys
   alias Engram.DataMigrations.IndexVersions
   alias Engram.Logger.Metadata
-  alias Engram.Notes.Note
+  alias Engram.Notes.{Chunk, Note}
   alias Engram.Repo
   alias Engram.Workers.{EmbedNote, ExtractNoteLinks, RebuildStaleNote, RefreshKeywordVectors}
 
@@ -213,7 +214,104 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       )
     )
 
+    :ok = sweep_over_note_cap(now, paid)
     if versions_done, do: :ok, else: sweep_keyword_stale(now, paid, page_size)
+  end
+
+  # Notes rebuilt per tick by `sweep_over_note_cap/2`.
+  @recap_batch 100
+
+  # Notes indexed before the per-note cap (or on a plan since downgraded)
+  # that hold more chunks than their tier's `note_points_cap`. They go to
+  # RebuildStaleNote with `recap: true`, which re-merges them unmetered. One
+  # bounded batch per tick: the backlog is a one-off (641 notes in prod on
+  # 2026-10-18), and new notes are capped as they are indexed.
+  #
+  # "More than `cap` chunks" is read as "a chunk at position >= cap": positions
+  # are unique per note and start at 0, so a note over the cap always has one,
+  # and the (note_id, position) index answers it per note.
+  #
+  # ponytail: tier defaults only. A per-user or plan-env override of
+  # `note_points_cap` is invisible here: a raised cap reselects its notes once
+  # per backoff window for a no-op pass (every point reused), a lowered one
+  # caps on the next edit. Join the overrides if either ever matters.
+  #
+  # Dense notes only: a sparse-only note reaches the dense backfill (term 2 of
+  # the main sweep), whose pass caps it.
+  defp sweep_over_note_cap(now, paid) do
+    # The flag `Billing.effective_limit/2` reads: off (self-host), no cap.
+    if Application.get_env(:engram, :limits_enforced, true) do
+      free_cap = LimitKeys.default_for(:note_points_cap, :free)
+      paid_cap = LimitKeys.default_for(:note_points_cap, :starter)
+      backoff_until = DateTime.add(now, reconcile_backoff_seconds(), :second)
+
+      over = fn cap ->
+        from(c in Chunk,
+          where: c.note_id == parent_as(:note).id and c.position >= ^cap,
+          select: 1
+        )
+      end
+
+      page = fn repo, limit ->
+        eligible =
+          IndexVersions.content_current_notes()
+          |> where([n], n.dense_indexed_hash == n.content_hash and is_nil(n.index_tier))
+          |> where([n], is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now)
+          |> where(
+            [n],
+            exists(over.(free_cap)) and (not exists(paid) or exists(over.(paid_cap)))
+          )
+          |> order_by([n], asc: n.updated_at)
+          |> limit(^limit)
+          |> select([n], n.id)
+
+        {_count, found} =
+          from(n in Note, where: n.kind == "note" and n.id in subquery(eligible))
+          |> select([n], {n.id, n.user_id})
+          |> repo.update_all(set: [embed_retry_after: backoff_until])
+
+        found
+      end
+
+      rows =
+        case Repo.maintenance() do
+          Repo ->
+            Enum.reduce_while(TenantScan.user_ids(), [], fn user_id, acc ->
+              case @recap_batch - length(acc) do
+                0 ->
+                  {:halt, acc}
+
+                left ->
+                  {:ok, found} = Repo.with_tenant(user_id, fn -> page.(Repo, left) end)
+                  {:cont, acc ++ found}
+              end
+            end)
+
+          maintenance ->
+            page.(maintenance, @recap_batch)
+        end
+
+      fresh = reject_pending(rows, RebuildStaleNote)
+
+      _ =
+        Oban.insert_all(
+          Enum.map(fresh, fn {note_id, user_id} ->
+            RebuildStaleNote.new(%{note_id: to_string(note_id), user_id: user_id, recap: true},
+              priority: EmbedNote.backfill_priority()
+            )
+          end)
+        )
+
+      Logger.info(
+        "reconcile_embeddings: swept notes over the per-note cap",
+        Metadata.with_category(:info, :search,
+          eligible_count: length(rows),
+          total_count: length(fresh)
+        )
+      )
+    end
+
+    :ok
   end
 
   # The hour a day (04:00-04:59 UTC, twelve "2-59/5" ticks) that re-checks

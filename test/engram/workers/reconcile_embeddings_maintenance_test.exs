@@ -126,8 +126,9 @@ defmodule Engram.Workers.ReconcileEmbeddingsMaintenanceTest do
     assert_enqueued(worker: EmbedNote, args: %{"note_id" => notes.stale.id})
     assert_enqueued(worker: RefreshKeywordVectors, args: %{"note_id" => notes.keyword.id})
 
-    # Each sweep: a full page, then an empty one that ends the loop.
-    assert count_messages(:maintenance_page) == 4
+    # Each paging sweep: a full page, then an empty one that ends the loop.
+    # Plus the per-note cap sweep's one bounded page.
+    assert count_messages(:maintenance_page) == 5
   end
 
   defp count_messages(msg, n \\ 0) do

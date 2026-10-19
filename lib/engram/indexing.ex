@@ -233,12 +233,18 @@ defmodule Engram.Indexing do
 
   @floor_tiers ["floor", "floor_paid"]
 
+  # The per-note cap runs first, so the points budget below counts the points
+  # a full pass would actually write.
   defp plan_index(note, user, chunks, content_key, opts) do
-    case floor_tier(note, opts) || over_points_budget_tier(note, user, chunks) do
+    forced = floor_tier(note, opts)
+    capped = if forced, do: chunks, else: cap_chunks(chunks, note_points_cap(user))
+
+    case forced || oversized_group_tier(note, capped) ||
+           over_points_budget_tier(note, user, capped) do
       nil ->
         dense_opt = Keyword.get(opts, :dense, true)
         {dense?, plan, retained} =
-          plan_within_budget(note, chunks, content_key, dense_opt, opts)
+          plan_within_budget(note, capped, content_key, dense_opt, opts)
 
         {nil, dense?, plan, retained}
 
@@ -248,13 +254,101 @@ defmodule Engram.Indexing do
   end
 
   # Decided BEFORE any token reservation, so a floored pass reserves nothing.
-  # A full plan writes one point per chunk, reused or not. A note that never
-  # had dense vectors floors as "floor"; one that carries "floor_paid" keeps it.
+  # A full plan writes one point per chunk, reused or not.
   defp over_points_budget_tier(note, user, chunks) do
-    unless points_budget_ok?(user, note.id, length(chunks)) do
-      if Map.get(note, :index_tier) == "floor_paid", do: "floor_paid", else: "floor"
+    unless points_budget_ok?(user, note.id, length(chunks)), do: demoted_tier(note)
+  end
+
+  # ponytail: 30,000 estimated tokens per merged point, under Voyage's 32,000
+  # input limit (the estimate is bytes / 4, as the reservation counts). Past
+  # it the note would need more points than its cap, so it floors instead.
+  # Only a note over ~15 MB reaches it at a 128 cap; raise the cap for that
+  # tier if real notes ever do.
+  @max_merged_tokens 30_000
+
+  defp oversized_group_tier(note, chunks) do
+    if Enum.any?(chunks, &(UsageMeters.estimate_tokens(&1.embed_text) > @max_merged_tokens)),
+      do: demoted_tier(note)
+  end
+
+  # A note that never had dense vectors floors as "floor"; one that carries
+  # "floor_paid" keeps it.
+  defp demoted_tier(note),
+    do: if(Map.get(note, :index_tier) == "floor_paid", do: "floor_paid", else: "floor")
+
+  # nil: no cap (billing disabled, or a non-positive override).
+  defp note_points_cap(user) do
+    case Engram.Billing.effective_limit(user, :note_points_cap) do
+      cap when is_integer(cap) and cap > 0 -> cap
+      _ -> nil
     end
   end
+
+  @doc """
+  Merges ADJACENT chunks so a note holds at most `cap` points. Over the cap
+  the result is exactly `cap` contiguous groups, in order, balanced by
+  estimated tokens (`UsageMeters.estimate_tokens/1` of each member's text, or
+  its `:token_count` if it has one); no text is dropped. A merged chunk:
+
+    * `text`: the members' `text` joined with "\n\n"
+    * `context_text` / `embed_text`: its first member's prefix + that text,
+      exactly what the chunker gives a single chunk with that text, so its
+      fingerprint is over the merged text and an unchanged note reuses it
+    * `heading_path`: its first member's
+    * `char_start` of its first member to the largest `char_end` (the
+      trailing frontmatter chunk has `char_end` 0)
+    * `token_count`: the members' sum
+
+  A group of one is the member itself, plus `token_count`. Positions are renumbered `0..cap-1`.
+  At or under the cap (or with a nil cap) the list comes back unchanged.
+  """
+  @spec cap_chunks([map()], pos_integer() | nil) :: [map()]
+  def cap_chunks(chunks, cap) when is_integer(cap) and cap > 0 and length(chunks) > cap do
+    weights =
+      Enum.map(chunks, &max(1, Map.get(&1, :token_count) || UsageMeters.estimate_tokens(&1.text)))
+
+    total = Enum.sum(weights)
+    n = length(chunks)
+
+    # Group of chunk i: the one its token midpoint falls in, held to at most
+    # one step past the previous chunk's group, and never so far behind that
+    # the chunks left cannot reach the last group.
+    {groups, _} =
+      chunks
+      |> Enum.zip(weights)
+      |> Enum.with_index()
+      |> Enum.map_reduce({0, 0}, fn {{chunk, w}, i}, {seen, prev} ->
+        ideal = div((seen * 2 + w) * cap, total * 2)
+        g = ideal |> max(prev) |> max(cap - n + i) |> min(prev + 1) |> min(i)
+        {{g, {chunk, w}}, {seen + w, g}}
+      end)
+
+    groups
+    |> Enum.chunk_by(&elem(&1, 0))
+    |> Enum.with_index(fn members, position ->
+      %{merge_group(Enum.map(members, &elem(&1, 1))) | position: position}
+    end)
+  end
+
+  def cap_chunks(chunks, _cap), do: chunks
+
+  defp merge_group([{chunk, w}]), do: Map.put(chunk, :token_count, w)
+
+  defp merge_group([{first, _w} | _] = members) do
+    chunks = Enum.map(members, &elem(&1, 0))
+    text = Enum.map_join(chunks, "\n\n", & &1.text)
+
+    Map.merge(first, %{
+      text: text,
+      context_text: prefix(first.context_text, first.text) <> text,
+      embed_text: prefix(first.embed_text, first.text) <> text,
+      char_end: chunks |> Enum.map(& &1.char_end) |> Enum.max(),
+      token_count: members |> Enum.map(&elem(&1, 1)) |> Enum.sum()
+    })
+  end
+
+  # The chunker builds each input as `prefix <> "\n\n" <> text`.
+  defp prefix(input, text), do: binary_part(input, 0, byte_size(input) - byte_size(text))
 
   @doc """
   Whether a full index of `planned_points` points for `note_id` fits the

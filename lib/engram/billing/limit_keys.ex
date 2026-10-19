@@ -27,6 +27,11 @@ defmodule Engram.Billing.LimitKeys do
       type: :integer,
       defaults: %{free: 10_000, starter: 100_000, pro: 250_000}
     },
+    # Dense points one note may hold. A note chunked past it has adjacent
+    # chunks merged into exactly this many points, so the whole note stays
+    # covered (`Indexing.cap_chunks/2`). 641 prod notes over 128 chunks held
+    # 62.6% of all points (2026-10-18 audit).
+    note_points_cap: %{type: :integer, defaults: %{free: 128, starter: 1_024, pro: 1_024}},
     # PACKAGING, NOT A RESOURCE (pricing v3.1, 2026-09-03). An earlier draft
     # justified a Pro ceiling on per-vault CRDT index-room memory. That was
     # wrong three ways and is recorded so it is not re-derived:

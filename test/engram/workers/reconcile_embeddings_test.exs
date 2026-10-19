@@ -527,10 +527,11 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
 
       assert length(all_enqueued(worker: EmbedNote)) == 1_205
 
-      # One tenant transaction PER PAGE (embed sweep: 2 pages, keyword sweep:
-      # 1), not one per user: a transaction holding a whole backlog runs past
-      # the 15 s checkout deadline, rolls back, and stalls every later user.
-      assert txns == 3
+      # One tenant transaction PER PAGE (embed sweep: 2 pages, per-note cap
+      # sweep: 1, keyword sweep: 1), not one per user: a transaction holding a
+      # whole backlog runs past the 15 s checkout deadline, rolls back, and
+      # stalls every later user.
+      assert txns == 4
     end
 
     # The keyword sweep pages to the end too, never "the first page".
@@ -544,12 +545,13 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
         end)
 
       assert length(all_enqueued(worker: RefreshKeywordVectors)) == 5
-      # Embed sweep: one empty page. Keyword sweep: 2, 2, then 1.
-      assert txns == 4
+      # Embed sweep: one empty page. Per-note cap sweep: one. Keyword sweep:
+      # 2, 2, then 1.
+      assert txns == 5
     end
 
-    # One notes query per SWEEP per tenant (the embed sweep and the keyword
-    # sweep), never one per vault.
+    # One notes query per SWEEP per tenant (the embed sweep, the per-note cap
+    # sweep and the keyword sweep), never one per vault.
     test "runs one notes query per sweep regardless of vault count" do
       user = insert(:user)
 
@@ -583,7 +585,7 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       end
 
       queries = collect_queries()
-      assert Enum.count(queries, &(&1 == "notes")) == 2
+      assert Enum.count(queries, &(&1 == "notes")) == 3
       refute Enum.any?(queries, &(&1 == "vaults"))
     end
 

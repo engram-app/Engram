@@ -144,6 +144,9 @@ defmodule Engram.IndexingTest do
       user: user,
       vault: vault
     } do
+      # Self-host shape: no per-note cap, so the note keeps all its points.
+      insert(:user_limit_override, user: user, key: "note_points_cap", value: %{"v" => 10_000})
+
       # A 10MB-class note can yield thousands of chunks; a single Voyage
       # call with all of them is a guaranteed 4xx (1,000-input API limit)
       # that retries can never fix — the job then churns through
@@ -312,6 +315,9 @@ defmodule Engram.IndexingTest do
       user: user,
       vault: vault
     } do
+      # Self-host shape: no per-note cap, so the note keeps all its points.
+      insert(:user_limit_override, user: user, key: "note_points_cap", value: %{"v" => 10_000})
+
       # 5k chunks × 1024-dim float vectors as one JSON body is tens of MB
       # per upsert — split the PUT into bounded batches.
       {:ok, big_note} =
