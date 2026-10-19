@@ -60,4 +60,44 @@ defmodule Engram.MCP.HandlersEchoStoredPathTest do
 
     assert text =~ "Folder renamed: f -> h/sub "
   end
+
+  test "append_to_note on a dotted path appends to the stored note", %{user: user, vault: vault} do
+    {:ok, _} =
+      Notes.upsert_note(user, vault, %{"path" => "a/b.md", "content" => "keep me"}, actor: "api")
+
+    assert {:ok, _text, %{"path" => "a/b.md"}} =
+             Handlers.handle("append_to_note", user, vault, %{
+               "path" => "a/../b.md",
+               "text" => "more"
+             })
+
+    {:ok, note} = Notes.get_note(user, vault, "a/b.md")
+    assert note.content =~ "keep me"
+    assert note.content =~ "more"
+  end
+
+  test "append_to_note creating a note echoes the stored path", %{user: user, vault: vault} do
+    assert {:ok, text, %{"path" => "a/n.md", "created" => true}} =
+             Handlers.handle("append_to_note", user, vault, %{
+               "path" => "a/../n.md",
+               "text" => "x"
+             })
+
+    assert text =~ "a/n.md"
+  end
+
+  test "rename_note conflict names the stored path", %{user: user, vault: vault} do
+    for p <- ["d.md", "a/e.md"],
+        do:
+          {:ok, _} =
+            Notes.upsert_note(user, vault, %{"path" => p, "content" => "x"}, actor: "api")
+
+    assert {:error, msg} =
+             Handlers.handle("rename_note", user, vault, %{
+               "old_path" => "d.md",
+               "new_path" => "a/../e.md"
+             })
+
+    assert msg == "Note rename conflict: a/e.md is already taken"
+  end
 end

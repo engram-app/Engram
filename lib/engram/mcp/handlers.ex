@@ -455,7 +455,10 @@ defmodule Engram.MCP.Handlers do
   end
 
   def handle("append_to_note", user, vault, args) do
-    path = args["path"] || ""
+    # Sanitized up front: the lookup hashes the path as given while a create
+    # stores it sanitized, so `a/../b.md` missed the existing `a/b.md` and the
+    # create then overwrote it with only the appended text.
+    path = Notes.PathSanitizer.sanitize(args["path"] || "")
     text = args["text"] || ""
 
     with {:ok, position} <- resolve_append_position(args["position"]) do
@@ -513,11 +516,11 @@ defmodule Engram.MCP.Handlers do
   def handle("rename_note", user, vault, args) do
     old_path = args["old_path"] || ""
     new_path = args["new_path"] || ""
+    # Replies name the path rename_note stores and checks for conflicts.
+    stored = Notes.PathSanitizer.sanitize(new_path)
 
     case Notes.rename_note(user, vault, old_path, new_path) do
       {:ok, _note} ->
-        stored = Notes.PathSanitizer.sanitize(new_path)
-
         {:ok, "Note renamed: #{old_path} -> #{stored}",
          %{"old_path" => old_path, "new_path" => stored}}
 
@@ -525,7 +528,7 @@ defmodule Engram.MCP.Handlers do
         {:error, "Note not found: #{old_path}"}
 
       {:error, :conflict} ->
-        {:error, "Note rename conflict: #{new_path} is already taken"}
+        {:error, "Note rename conflict: #{stored} is already taken"}
 
       # Same catch-all as rename_folder below, and now load-bearing for a second
       # reason: rename_note/5 claims the path in the CRDT authority before
@@ -557,7 +560,8 @@ defmodule Engram.MCP.Handlers do
          }}
 
       {:error, :conflict} ->
-        {:error, "Folder rename conflict: #{new_folder} already exists"}
+        {:ok, stored} = Notes.PathSanitizer.sanitize_target(new_folder)
+        {:error, "Folder rename conflict: #{stored} already exists"}
 
       {:error, :invalid_path} ->
         {:error, "new_folder must be a non-empty path"}
