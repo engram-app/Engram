@@ -2180,7 +2180,7 @@ defmodule Engram.NotesTest do
     # `claim_cascade/4` validates every target against the rows before claiming
     # the cascade in the authority, so a nested collision is now refused up
     # front instead of surfacing as a raised unique_violation from
-    # `bulk_rename_update!` mid-transaction.
+    # `BulkRename.update!` mid-transaction.
     #
     # That ordering is load-bearing, not cosmetic. The claim commits before the
     # rows move, so a raise below it would leave the whole cascade claimed at

@@ -79,7 +79,7 @@ Interpolation builds query **shape** only: `$N` placeholder tuples from
 `@marker_rename_cols` / `@v2_rename_cols` / `@v1_rename_cols`, and a whitelisted
 `rename_col_sql_type/1`. Every actual value is a Postgrex bind parameter.
 
-> **Forward-looking trap.** `bulk_rename_update!/3` is safe **because** `cols` is
+> **Forward-looking trap.** `BulkRename.update!/3` is safe **because** `cols` is
 > currently unreachable from runtime data. If someone later passes a
 > caller-derived column list, the `set_sql` interpolation becomes a genuine
 > injection point, and the fingerprint skip will not catch it. Guard it at review

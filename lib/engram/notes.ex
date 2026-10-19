@@ -5665,7 +5665,7 @@ defmodule Engram.Notes do
   # resolves each cascade target against the rows before claiming, so a nested
   # collision returns `{:error, :conflict}` instead of the
   # `Postgrex.Error{unique_violation}` it used to raise from
-  # `bulk_rename_update!`. That check is O(moved notes) rather than O(vault),
+  # `BulkRename.update!`. That check is O(moved notes) rather than O(vault),
   # and it had to exist anyway: the claim commits before the rows move, so a
   # raise below it would leave the cascade claimed at paths the rows never took.
   # This check stays because it is the cheaper one and it short-circuits first.
@@ -5865,7 +5865,7 @@ defmodule Engram.Notes do
       # in the map, and until a client populates it the rows are where
       # collisions live. This also closes the NESTED-COLLISION GAP documented at
       # `folder_target_exists?` — a nested collision surfaces as a raised
-      # Postgrex unique_violation from `bulk_rename_update!` BELOW the claim,
+      # Postgrex unique_violation from `BulkRename.update!` BELOW the claim,
       # which would leave the whole cascade claimed at paths the rows never
       # took, and projection would then apply whichever of them do not collide:
       # a partial folder rename executing asynchronously after a 500.
@@ -5877,7 +5877,7 @@ defmodule Engram.Notes do
 
         :ok ->
           # Everything below runs with the cascade's claim ALREADY COMMITTED, so
-          # a raise here (bulk_rename_update! can still surface a Postgrex
+          # a raise here (BulkRename.update! can still surface a Postgrex
           # unique_violation for a shape the row validation cannot see) leaves
           # the map claiming N paths the rows never took. Report it before it
           # propagates — projection is what converges the divergence, and

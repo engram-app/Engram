@@ -46,11 +46,13 @@ defmodule Engram.RawSqlTenantTableLintTest do
     # `update_all` cannot express. Both statements run inside the enclosing
     # `Repo.with_tenant/2` transaction, so RLS tenant context is active.
     "engram/attachments.ex",
-    # Notes.bulk_rename_update!/4 — the folder-rename cascade's batched
+    # Notes.BulkRename.update!/3 — the folder-rename cascade's batched
     # `UPDATE notes ... FROM (VALUES ...)`: each row carries distinct
     # re-encrypted ciphertexts (per-row values, one statement). Runs inside
     # do_rename_folder's `Repo.with_tenant/2` transaction — RLS context active.
-    "engram/notes.ex",
+    # Lives in its own file (moved out of notes.ex) so notes.ex needs no
+    # exemption at all.
+    "engram/notes/bulk_rename.ex",
     # CrdtBloatSweep.measure/0 — one whole-table aggregate over `notes`
     # computing size percentiles for the history/trash epic (#1706). Genuinely
     # cross-tenant by design: the question is "how much is CRDT state costing
