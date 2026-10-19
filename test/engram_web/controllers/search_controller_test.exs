@@ -475,6 +475,33 @@ defmodule EngramWeb.SearchControllerTest do
       %{"results" => results} = json_response(conn, 200)
       assert length(results) == 3
     end
+
+    # A merged chunk (several chunks in one point, under the per-note cap)
+    # holds up to ~30 KB: the snippet is a window around the match.
+    test "a merged hit's snippet is a window of at most 1,500 chars around the match", %{
+      conn: conn,
+      bypass: bypass,
+      user: user
+    } do
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+
+      text = merged_text("quixotic")
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+        c
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"result" => [chunk("uuid-m", 0.9, "Big.md", "Big", text, user)]})
+        )
+      end)
+
+      conn = post(conn, "/api/search", %{query: "quixotic finale", diversity: 0})
+      assert %{"results" => [hit]} = json_response(conn, 200)
+      assert String.length(hit["snippet"]) <= 1_500
+      assert hit["snippet"] =~ "quixotic finale"
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -705,6 +732,14 @@ defmodule EngramWeb.SearchControllerTest do
         "vault_id" => to_string(vault_id)
       }
     }
+  end
+
+  # ~30 KB of filler paragraphs with `word` in one near the end.
+  defp merged_text(word) do
+    Enum.map_join(1..600, "\n\n", fn
+      550 -> "Paragraph 550 holds the #{word} finale."
+      i -> "Paragraph #{i} of ordinary filler text."
+    end)
   end
 
   defp default_vault_id(user) do
