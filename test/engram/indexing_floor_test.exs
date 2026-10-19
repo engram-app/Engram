@@ -1,5 +1,5 @@
 defmodule Engram.IndexingFloorTest do
-  # async: false — the reconcile and EmbedNote paths assert on the global
+  # async: false: the reconcile and EmbedNote paths assert on the global
   # Oban job table.
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
