@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Containerized `mix` for CI (put on PATH by ci/mix-builder/setup.sh).
+#
+# Runs mix in engram-mix-builder:ci with the repo bind-mounted at /app. Mix's
+# compile manifest embeds the absolute project root and the OTP version, so a
+# _build compiled at /app (prebuild-mix) is only reusable by a mix that also
+# sees /app and the same OTP. Bare-metal mix on the runner recompiled the
+# whole app plus the Rust NIF on every job.
+#
+# --network host: the job's postgres/qdrant containers publish ports on
+# localhost, and a host-network container reaches them (verified on the
+# rootless runner VM). Inbound connections into it do NOT work under rootless
+# docker, so this wrapper cannot serve a port to the host.
+#
+# The repo is also mounted at its host path, and /tmp + RUNNER_TEMP at theirs,
+# so absolute paths that steps pass to mix resolve the same in both places.
+set -euo pipefail
+
+root="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel)}"
+case "$PWD/" in
+  "$root"/*) rel="${PWD#"$root"}" ;;
+  *) echo "ci/bin/mix: cwd $PWD is outside the repo $root" >&2; exit 2 ;;
+esac
+
+# Forward the caller's environment, minus host-specific variables that would
+# break the container (toolchain paths, home, locale, the docker socket).
+env_args=()
+while IFS= read -r name; do
+  case "$name" in
+    PATH|HOME|HOSTNAME|PWD|OLDPWD|SHLVL|_|USER|LOGNAME|SHELL|TERM|TMPDIR|LANG|LANGUAGE|LC_*) ;;
+    XDG_*|DOCKER_*|MIX_HOME|MIX_ARCHIVES|HEX_HOME|REBAR_*|ASDF_*|MISE_*|CARGO_HOME|RUSTUP_HOME) ;;
+    BASH_*|DBUS_*|SSH_*|INVOCATION_ID|JOURNAL_STREAM|SYSTEMD_*|MANAGERPID|ERL_LIBS) ;;
+    *) env_args+=(-e "$name") ;;
+  esac
+done < <(compgen -e)
+
+mounts=(-v "$root:/app" -v "$root:$root" -v /tmp:/tmp)
+if [ -n "${RUNNER_TEMP:-}" ]; then mounts+=(-v "$RUNNER_TEMP:$RUNNER_TEMP"); fi
+
+exec docker run --rm -i --init --network host \
+  --label "engram-mixw=${GITHUB_RUN_ID:-local}" \
+  "${mounts[@]}" -w "/app$rel" \
+  "${env_args[@]}" \
+  engram-mix-builder:ci mix "$@"

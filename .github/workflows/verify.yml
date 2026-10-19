@@ -761,6 +761,7 @@ jobs:
       # parse time with zero jobs created, "workflow file issue").
       MIX_BUILDER_IMAGE: "hexpm/elixir:1.17.3-erlang-27.3.4.14-debian-bookworm-20260623-slim"
     outputs:
+      builder-image: ${{ env.MIX_BUILDER_IMAGE }}
       beam-tag: ${{ steps.beam.outputs.tag }}
       deps-key: ${{ steps.keys.outputs.deps }}
       build-dev-key: ${{ steps.keys.outputs.build-dev }}
@@ -817,20 +818,7 @@ jobs:
         # on repeat hosts via Docker's own layer cache); the actual fix this
         # job depends on is /app being a fixed bind-mount path, which this
         # derived image inherits unchanged from MIX_BUILDER_IMAGE.
-        run: |
-          docker build -t engram-mix-builder:ci --build-arg "HEX_MIRROR=${HEX_MIRROR:-}" - <<EOF
-          FROM ${MIX_BUILDER_IMAGE}
-          ARG HEX_MIRROR=""
-          ENV HEX_MIRROR=\${HEX_MIRROR}
-          RUN apt-get update -y && apt-get install -y --no-install-recommends build-essential git \
-              && rm -rf /var/lib/apt/lists/*
-          # Rust for native/ (in-house NIFs): same digest-pinned image as the
-          # release Dockerfile's builder stage.
-          COPY --from=rust:1.94.1-slim-bookworm@sha256:cf9dd0ec73e75f827fe59123fff9dc65af1a1c8363c3c31ee8d7f8ad0b6a5fb2 /usr/local/rustup /usr/local/rustup
-          COPY --from=rust:1.94.1-slim-bookworm@sha256:cf9dd0ec73e75f827fe59123fff9dc65af1a1c8363c3c31ee8d7f8ad0b6a5fb2 /usr/local/cargo /usr/local/cargo
-          ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:\$PATH
-          RUN mix local.hex --force && mix local.rebar --force
-          EOF
+        run: bash ci/mix-builder/setup.sh "$MIX_BUILDER_IMAGE"
 
       - name: Compute cache keys
         id: keys
@@ -2720,6 +2708,14 @@ jobs:
           # Three attempts all lost the SDK to a concurrent prune.
           exit 99
 
+      - name: Containerized mix (reuse the prebuilt _build)
+        # prebuild-mix compiles at /app inside engram-mix-builder:ci. Bare-metal
+        # mix here sees a different project root and OTP patch, so it threw the
+        # restored _build away and recompiled everything plus the Rust NIF. This
+        # puts ci/bin/mix (same image, same /app mount) first on PATH.
+        # See docs/context/ci-mix-compile-cache-runner-path.md.
+        run: bash ci/mix-builder/setup.sh "${{ needs.prebuild-mix.outputs.builder-image }}"
+
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
         # fallback can populate deps/ from a stale cache when the
@@ -3107,20 +3103,13 @@ jobs:
           restore-keys: |
             ${{ needs.prebuild-mix.outputs.build-dev-restore }}
 
-      - name: Rust toolchain (native/ NIFs)
-        # rustup into the runner user's home, once per VM, at the version
-        # native/rust-toolchain.toml pins. Under flock: the
-        # runners on one VM share ~/.rustup, and rustup is not safe to run
-        # concurrently.
-        run: |
-          mkdir -p "$HOME/.cargo"
-          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/rust-toolchain.toml)
-          flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
-            [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
-            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --component rustfmt --component clippy --no-self-update
-          ' "$RUST_VERSION"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Containerized mix (reuse the prebuilt _build)
+        # prebuild-mix compiles at /app inside engram-mix-builder:ci. Bare-metal
+        # mix here sees a different project root and OTP patch, so it threw the
+        # restored _build away and recompiled everything plus the Rust NIF. This
+        # puts ci/bin/mix (same image, same /app mount) first on PATH.
+        # See docs/context/ci-mix-compile-cache-runner-path.md.
+        run: bash ci/mix-builder/setup.sh "${{ needs.prebuild-mix.outputs.builder-image }}"
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
@@ -3135,8 +3124,8 @@ jobs:
         uses: runs-on/cache@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         with:
           path: priv/plts
-          key: ${{ runner.os }}-dialyzer-${{ needs.prebuild-mix.outputs.beam-tag }}-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-dialyzer-${{ needs.prebuild-mix.outputs.beam-tag }}-
+          key: ${{ runner.os }}-dialyzer-v2-${{ needs.prebuild-mix.outputs.beam-tag }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-dialyzer-v2-${{ needs.prebuild-mix.outputs.beam-tag }}-
 
       # ── Quality gates ──
       # Phase 1: all checks informational (continue-on-error: true).
