@@ -28,16 +28,19 @@ defmodule Engram.Vector.QdrantLayout do
   #     node-wide `/quotas`. 1.19 answers a PATCH carrying it with 200 and
   #     drops it, so sending it there never converges.
   # Outside its range a field is never sent, so `diff/2` never compares it.
-  # Self-host CI pins 1.17.1, which has neither.
+  # CI pins 1.17.1, which has neither; self-host compose pins 1.18.3 (both).
   #
-  # ponytail: no `/quotas` management. It is node-wide, and staging, Cloud and
-  # shared self-host servers carry other collections. Add it for single-tenant
-  # self-host when needed; until then the app-side preflight is the only disk
-  # guard on 1.19+.
+  # From 1.19.0 both guards also live in the node-wide `PUT /quotas`
+  # (`QuotaConfig`, openapi v1.19.2), see `desired_quotas/2`. The strict
+  # memory field stays sent until 1.21 at the SAME percent, so a server whose
+  # quotas are unmanaged keeps a heap guard and a stored 1.18 value never goes
+  # stale.
   @strict_guards [
     {"max_resident_memory_percent", :heap, "1.18.1", "1.21.0"},
     {"max_disk_usage_percent", :disk, "1.18.2", "1.19.0"}
   ]
+
+  @quota_fields [disk: "max_disk_usage_percent", heap: "max_resident_memory_percent"]
 
   @default_limits %{disk: %{percent: 85, reserve: nil}, heap: %{percent: 85, reserve: nil}}
   @off_limits %{disk: %{percent: 100, reserve: nil}, heap: %{percent: 100, reserve: nil}}
@@ -97,23 +100,66 @@ defmodule Engram.Vector.QdrantLayout do
   end
 
   @doc """
-  The strict-mode limits `config` (a GET `result.config`) says Qdrant
-  enforces, `%{kind => percent}`, only for guards `version` honours (a 1.19
-  server may keep a stored disk field it ignores). `%{}` when strict mode is
-  off or nothing is set.
+  The write limits Qdrant enforces, `%{kind => percent}`: the strict-mode
+  ones in `config` (a GET `result.config`) for guards `version` honours (a
+  1.19 server may keep a stored disk field it ignores), and on 1.19+ the
+  node-wide `quotas` (a GET `/quotas` `result.config`). Where both cap a kind
+  the lower one refuses first, so it wins. `%{}` when nothing is enforced.
   """
-  @spec applied_limits(map() | nil, Version.t() | nil) :: %{optional(:heap | :disk) => integer()}
-  def applied_limits(config, version) do
+  @spec applied_limits(map() | nil, Version.t() | nil, map() | nil) ::
+          %{optional(:heap | :disk) => integer()}
+  def applied_limits(config, version, quotas \\ nil) do
     strict = (config || %{})["strict_mode_config"] || %{}
     kinds = guard_kinds(version)
 
-    for {field, kind, _since, _until} <- @strict_guards,
-        strict["enabled"] == true,
-        kind in kinds,
-        is_integer(strict[field]),
-        into: %{},
-        do: {kind, strict[field]}
+    from_strict =
+      for {field, kind, _since, _until} <- @strict_guards,
+          strict["enabled"] == true,
+          kind in kinds,
+          is_integer(strict[field]),
+          into: %{},
+          do: {kind, strict[field]}
+
+    Map.merge(from_strict, applied_quotas(quotas, version), fn _kind, a, b -> min(a, b) end)
   end
+
+  defp applied_quotas(%{"enabled" => true} = quotas, version) do
+    kinds = quota_kinds(version)
+
+    for {kind, field} <- @quota_fields,
+        kind in kinds,
+        is_integer(quotas[field]),
+        into: %{},
+        do: {kind, quotas[field]}
+  end
+
+  defp applied_quotas(_quotas, _version), do: %{}
+
+  @doc "The guards `version` can enforce through `/quotas` (Qdrant >= 1.19.0); `[]` when unknown."
+  @spec quota_kinds(Version.t() | nil) :: [:heap | :disk]
+  def quota_kinds(nil), do: []
+
+  def quota_kinds(version),
+    do: if(Version.compare(version, "1.19.0") == :lt, do: [], else: [:disk, :heap])
+
+  @doc """
+  The `PUT /quotas` body for `limits` (see `strict_limits/2`; default 85/85),
+  or 100/100 when `strict?` is false (the same kill switch as strict mode).
+  PUT replaces the whole config, so this is all of it; `release_margin_percent`
+  is left unset, i.e. Qdrant's default (5).
+  """
+  @spec desired_quotas(map() | nil, boolean()) :: map()
+  def desired_quotas(limits, strict?) do
+    limits = if strict?, do: limits || @default_limits, else: @off_limits
+
+    Map.new([
+      {"enabled", true} | for({kind, field} <- @quota_fields, do: {field, limits[kind].percent})
+    ])
+  end
+
+  @doc "True when the GET `/quotas` `config` does not already satisfy `desired`."
+  @spec quotas_drift?(map() | nil, map()) :: boolean()
+  def quotas_drift?(config, desired), do: not subset?(desired, config || %{})
 
   @doc "The strict-mode guards (`:heap`, `:disk`) `version` honours; `[]` when unknown."
   @spec guard_kinds(Version.t() | nil) :: [:heap | :disk]

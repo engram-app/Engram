@@ -7,7 +7,7 @@ defmodule Engram.PromEx.Qdrant do
     * `[:engram, :qdrant, :request, :start]`
     * `[:engram, :qdrant, :request, :stop]` — `%{duration: native}`,
       metadata `%{op: atom, status: :ok | :error}` where `op` is one of
-      `:search | :upsert | :update_vectors | :delete | :scroll | :ensure_collection | :create_payload_index | :set_payload | :collection_info | :collection_memory | :update_collection`.
+      `:search | :upsert | :update_vectors | :delete | :scroll | :ensure_collection | :create_payload_index | :set_payload | :collection_info | :collection_memory | :update_collection | :quotas | :update_quotas`.
 
   Metrics:
 
@@ -40,9 +40,11 @@ defmodule Engram.PromEx.Qdrant do
 
     * `engram_prom_ex_qdrant_strict_limit_percent{kind="disk"|"heap"}`: the
       limit Qdrant ENFORCES, read from the collection's `strict_mode_config`
-      (`QdrantLayout.applied_limits/2`), so every node reports the same value
-      whatever its own reads computed. Absent for a guard the server does not
-      honour (no disk guard on Qdrant 1.19+) or before strict mode is set.
+      and, on Qdrant 1.19+, the node-wide `GET /quotas` (one more GET per
+      tick; the lower limit wins, `QdrantLayout.applied_limits/3`), so every
+      node reports the same value whatever its own reads computed. Absent for
+      a guard nothing enforces (1.19+ disk without enabled quotas) or before
+      strict mode / quotas are set.
     * `engram_prom_ex_qdrant_reserve_bytes{kind}`: the headroom the desired
       limits keep (`QdrantLayout.strict_limits/2`, computed on each node).
       Only ONE process in the cluster (a `:global` name) PATCHes the desired
@@ -222,7 +224,9 @@ defmodule Engram.PromEx.Qdrant do
       {:ok, info} ->
         :telemetry.execute(@collection_event, collection_measurements(info), %{})
 
-        for {kind, percent} <- QdrantLayout.applied_limits(info["config"], version) do
+        limits = QdrantLayout.applied_limits(info["config"], version, poll_quotas(version))
+
+        for {kind, percent} <- limits do
           :telemetry.execute(@limit_event, %{percent: percent}, %{kind: Atom.to_string(kind)})
         end
 
@@ -230,6 +234,17 @@ defmodule Engram.PromEx.Qdrant do
 
       {:error, reason} ->
         skipped("collection", Metadata.safe_reason(reason))
+    end
+  end
+
+  # Qdrant 1.19+: the node-wide quota config (nil before 1.19 or unreadable).
+  defp poll_quotas(version) do
+    if QdrantLayout.quota_kinds(version) != [] do
+      case Qdrant.quotas() do
+        {:ok, %{"config" => config}} -> config
+        {:ok, _} -> nil
+        {:error, reason} -> skipped("quotas", Metadata.safe_reason(reason))
+      end
     end
   end
 

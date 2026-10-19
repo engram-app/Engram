@@ -21,7 +21,10 @@ services:
     restart: unless-stopped
 
   qdrant:
-    image: qdrant/qdrant:v1.17.1
+    # Qdrant upgrades one minor at a time on persistent storage: 1.17 ->
+    # 1.18.3 -> 1.19.x. Boot this pin once before moving to a 1.19 image.
+    # See https://engram.page/docs/self-host/upgrade/#qdrant-version-steps
+    image: qdrant/qdrant:v1.18.3
     container_name: engram-dev-qdrant
     ports:
       - "6334:6333"

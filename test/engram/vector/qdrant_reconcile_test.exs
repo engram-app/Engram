@@ -224,7 +224,7 @@ defmodule Engram.Vector.QdrantReconcileTest do
     assert_receive {_, _, %{decision: :defer, source: :self_host_rule}}
   end
 
-  test "on 1.17.1 (self-host pin) strict mode is never sent and on-disk defers", %{bypass: bypass} do
+  test "on 1.17.1 (CI pin) strict mode is never sent and on-disk defers", %{bypass: bypass} do
     stub_version(bypass, "1.17.1")
     fake_collection(bypass, "obsidian_notes", @prod_info)
     stub_no_memory(bypass, "obsidian_notes")
@@ -329,6 +329,227 @@ defmodule Engram.Vector.QdrantReconcileTest do
 
       assert map_size(strict) == 1
       assert {:ok, []} = Qdrant.reconcile_config("engram_notes")
+    end
+  end
+
+  describe "/quotas (Qdrant 1.19+, QDRANT_MANAGE_QUOTAS)" do
+    # GET/PUT /quotas the way 1.19 answers them: PUT replaces the whole
+    # QuotaConfig (openapi `update_quotas`), GET returns it under `config`.
+    defp fake_quotas(bypass, config \\ %{"enabled" => false}) do
+      test_pid = self()
+      {:ok, agent} = Agent.start_link(fn -> config end)
+
+      Bypass.stub(bypass, "GET", "/quotas", fn conn ->
+        json(conn, 200, %{result: %{config: Agent.get(agent, & &1), usage: %{}}, status: "ok"})
+      end)
+
+      Bypass.stub(bypass, "PUT", "/quotas", fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        body = Jason.decode!(raw)
+        send(test_pid, {:put_quotas, body, conn.query_string})
+        Agent.update(agent, fn _ -> body end)
+        json(conn, 200, %{result: true, status: "ok"})
+      end)
+
+      agent
+    end
+
+    @limits %{disk: %{percent: 79, reserve: 1}, heap: %{percent: 87, reserve: 1}}
+    @want_quotas %{
+      "enabled" => true,
+      "max_disk_usage_percent" => 79,
+      "max_resident_memory_percent" => 87
+    }
+    @v1182 Version.parse!("1.18.2")
+    @v1192 Version.parse!("1.19.2")
+
+    defp info!(col) do
+      {:ok, info} = Qdrant.collection_info(col)
+      info
+    end
+
+    test "1.19.2 boot: disk + heap go to /quotas, then nothing", %{bypass: bypass} do
+      ServiceConfig.put_override(:qdrant_manage_quotas, true)
+      ServiceConfig.put_override(:qdrant_memory_limit_bytes, 2 * @gib)
+      stub_version(bypass, "1.19.2")
+      fake_collection(bypass, "engram_notes", @prod_info, ["max_disk_usage_percent"])
+      fake_quotas(bypass)
+      stub_memory(bypass, "engram_notes", 4_890_000_000)
+      stub_sys_metrics(bypass, 8_370_000_000, 4_350_000_000)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, changed} = Qdrant.reconcile_config("engram_notes")
+          assert "quotas" in changed
+        end)
+
+      refute log =~ "write guard unavailable"
+      assert_receive {:put_quotas, @want_quotas, "wait=true"}
+
+      assert {:ok, []} = Qdrant.reconcile_config("engram_notes")
+      refute_receive {:put_quotas, _, _}
+    end
+
+    test "poller on 1.19.2: PUTs when a limit moves, idempotent otherwise", %{bypass: bypass} do
+      ServiceConfig.put_override(:qdrant_manage_quotas, true)
+      fake_collection(bypass, "engram_notes", @prod_info, ["max_disk_usage_percent"])
+      fake_quotas(bypass)
+
+      assert :ok =
+               Qdrant.reconcile_strict_mode(
+                 "engram_notes",
+                 info!("engram_notes"),
+                 @limits,
+                 @v1192
+               )
+
+      assert_receive {:put_quotas, @want_quotas, "wait=true"}
+
+      for _ <- 1..3,
+          do:
+            assert(
+              :ok =
+                Qdrant.reconcile_strict_mode(
+                  "engram_notes",
+                  info!("engram_notes"),
+                  @limits,
+                  @v1192
+                )
+            )
+
+      refute_receive {:put_quotas, _, _}
+
+      grown = put_in(@limits, [:disk, :percent], 75)
+
+      assert :ok =
+               Qdrant.reconcile_strict_mode("engram_notes", info!("engram_notes"), grown, @v1192)
+
+      assert_receive {:put_quotas, %{"max_disk_usage_percent" => 75}, _}
+    end
+
+    test "below 1.19 /quotas is never touched", %{bypass: bypass} do
+      ServiceConfig.put_override(:qdrant_manage_quotas, true)
+      fake_collection(bypass, "engram_notes", @prod_info)
+      fake_quotas(bypass)
+
+      assert :ok =
+               Qdrant.reconcile_strict_mode(
+                 "engram_notes",
+                 info!("engram_notes"),
+                 @limits,
+                 @v1182
+               )
+
+      assert_receive {:patch, %{"strict_mode_config" => %{"max_disk_usage_percent" => 79}}}
+      refute_receive {:put_quotas, _, _}
+    end
+
+    test "unmanaged (the default, shared servers): 1.19 never PUTs /quotas", %{bypass: bypass} do
+      fake_collection(bypass, "engram_notes", @prod_info, ["max_disk_usage_percent"])
+      fake_quotas(bypass)
+
+      assert :ok =
+               Qdrant.reconcile_strict_mode(
+                 "engram_notes",
+                 info!("engram_notes"),
+                 @limits,
+                 @v1192
+               )
+
+      refute_receive {:put_quotas, _, _}
+    end
+
+    test "QDRANT_STRICT_MODE=false sets the quotas to 100/100", %{bypass: bypass} do
+      ServiceConfig.put_override(:qdrant_manage_quotas, true)
+      ServiceConfig.put_override(:qdrant_strict_mode, false)
+      fake_collection(bypass, "engram_notes", @prod_info, ["max_disk_usage_percent"])
+      fake_quotas(bypass, @want_quotas)
+
+      assert :ok =
+               Qdrant.reconcile_strict_mode(
+                 "engram_notes",
+                 info!("engram_notes"),
+                 @limits,
+                 @v1192
+               )
+
+      assert_receive {:put_quotas,
+                      %{"max_disk_usage_percent" => 100, "max_resident_memory_percent" => 100}, _}
+    end
+
+    test "a refused PUT is an error, not a crash", %{bypass: bypass} do
+      ServiceConfig.put_override(:qdrant_manage_quotas, true)
+      fake_collection(bypass, "engram_notes", @prod_info, ["max_disk_usage_percent"])
+
+      Bypass.stub(bypass, "GET", "/quotas", fn conn ->
+        json(conn, 200, %{result: %{config: %{enabled: false}}})
+      end)
+
+      Bypass.stub(bypass, "PUT", "/quotas", &json(&1, 403, %{status: %{error: "forbidden"}}))
+
+      assert {:error, {403, _}} =
+               Qdrant.reconcile_strict_mode(
+                 "engram_notes",
+                 info!("engram_notes"),
+                 @limits,
+                 @v1192
+               )
+    end
+
+    # Mid-upgrade every node keeps its cached version for up to 10 minutes, so
+    # some reconcile as 1.18 and some as 1.19 against the same (1.19) server.
+    # They must converge, not undo each other.
+    test "mixed fleet (1.18 and 1.19 views of one 1.19 server) does not fight",
+         %{bypass: bypass} do
+      ServiceConfig.put_override(:qdrant_manage_quotas, true)
+      fake_collection(bypass, "engram_notes", @prod_info, ["max_disk_usage_percent"])
+      quotas = fake_quotas(bypass)
+
+      for _ <- 1..3, version <- [@v1182, @v1192] do
+        assert :ok =
+                 Qdrant.reconcile_strict_mode(
+                   "engram_notes",
+                   info!("engram_notes"),
+                   @limits,
+                   version
+                 )
+      end
+
+      # Only the 1.19 view writes /quotas, once.
+      assert_received {:put_quotas, @want_quotas, _}
+      refute_received {:put_quotas, _, _}
+      assert Agent.get(quotas, & &1) == @want_quotas
+
+      # Every strict PATCH, from either view, carries the same heap limit, so
+      # the stored value never flips. The 1.18 view re-sends only the disk
+      # field 1.19 drops (until its version cache expires); harmless.
+      patches = for {:patch, %{"strict_mode_config" => s}} <- flush(), do: s
+      assert patches != []
+      assert Enum.all?(patches, &(&1["max_resident_memory_percent"] in [nil, 87]))
+      refute Enum.any?(patches, &(&1["max_disk_usage_percent"] not in [nil, 79]))
+
+      assert info!("engram_notes")["config"]["strict_mode_config"]["max_resident_memory_percent"] ==
+               87
+
+      # Once every node sees 1.19: fully quiet.
+      assert :ok =
+               Qdrant.reconcile_strict_mode(
+                 "engram_notes",
+                 info!("engram_notes"),
+                 @limits,
+                 @v1192
+               )
+
+      refute_receive {:patch, _}
+      refute_receive {:put_quotas, _, _}
+    end
+
+    defp flush do
+      receive do
+        msg -> [msg | flush()]
+      after
+        0 -> []
+      end
     end
   end
 
