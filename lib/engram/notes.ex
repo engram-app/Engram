@@ -5652,6 +5652,8 @@ defmodule Engram.Notes do
     :path_nonce,
     :path_hmac,
     :basename_hmac,
+    :path_ci_hmac,
+    :path_length,
     :folder_ciphertext,
     :folder_nonce,
     :folder_hmac
@@ -5665,6 +5667,8 @@ defmodule Engram.Notes do
     :path_nonce,
     :path_hmac,
     :basename_hmac,
+    :path_ci_hmac,
+    :path_length,
     :folder_ciphertext,
     :folder_nonce,
     :folder_hmac,
@@ -5674,7 +5678,7 @@ defmodule Engram.Notes do
     :dek_version
   ]
 
-  # Statement-size bound for the VALUES join: 500 rows × ≤16 params stays
+  # Statement-size bound for the VALUES join: 500 rows × ≤19 params stays
   # well under Postgres's 65535-bind-param protocol limit.
   @rename_update_chunk 500
 
@@ -7065,15 +7069,18 @@ defmodule Engram.Notes do
       path_ciphertext: path_ct,
       path_nonce: path_n,
       path_hmac: Crypto.hmac_field(filter_key, path),
-      basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(path)),
-      folder_ciphertext: folder_ct,
-      folder_nonce: folder_n,
-      folder_hmac: Crypto.hmac_field(filter_key, folder),
-      tags_ciphertext: tags_ct,
-      tags_nonce: tags_n,
-      tags_hmac: Enum.map(tags || [], &Crypto.hmac_field(filter_key, &1)),
-      dek_version: Crypto.row_version_aad_bound()
-    ]
+      basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(path))
+    ] ++
+      Links.path_keys(filter_key, path) ++
+      [
+        folder_ciphertext: folder_ct,
+        folder_nonce: folder_n,
+        folder_hmac: Crypto.hmac_field(filter_key, folder),
+        tags_ciphertext: tags_ct,
+        tags_nonce: tags_n,
+        tags_hmac: Enum.map(tags || [], &Crypto.hmac_field(filter_key, &1)),
+        dek_version: Crypto.row_version_aad_bound()
+      ]
   end
 
   # Same as phase_b_keyword_for/5 but only re-keys path + folder. Used by
@@ -7091,10 +7098,13 @@ defmodule Engram.Notes do
       path_ciphertext: path_ct,
       path_nonce: path_n,
       path_hmac: Crypto.hmac_field(filter_key, path),
-      basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(path)),
-      folder_ciphertext: folder_ct,
-      folder_nonce: folder_n,
-      folder_hmac: Crypto.hmac_field(filter_key, folder)
-    ]
+      basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(path))
+    ] ++
+      Links.path_keys(filter_key, path) ++
+      [
+        folder_ciphertext: folder_ct,
+        folder_nonce: folder_n,
+        folder_hmac: Crypto.hmac_field(filter_key, folder)
+      ]
   end
 end

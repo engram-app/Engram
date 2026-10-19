@@ -83,6 +83,11 @@ defmodule Engram.Notes.Note do
     # existing rows; production writers (Task 4) stamp it on every write.
     field :basename_hmac, :binary
 
+    # Link resolution keys (`Engram.Links.path_keys/2`). NULL = not yet
+    # computed; readers decrypt such rows instead.
+    field :path_ci_hmac, :binary
+    field :path_length, :integer
+
     # CRDT (Yjs) document state for posture-C file-level sync. The full v1
     # `Yex.encode_state_as_update` snapshot, AES-256-GCM encrypted under the
     # per-user DEK with AAD `aad_for_row(:notes, :crdt_state, id)`. NULL until
@@ -137,6 +142,8 @@ defmodule Engram.Notes.Note do
     :folder_hmac,
     :tags_hmac,
     :basename_hmac,
+    :path_ci_hmac,
+    :path_length,
     :crdt_state_ciphertext,
     :crdt_state_nonce,
     :type_ciphertext,

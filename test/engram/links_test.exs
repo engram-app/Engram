@@ -326,8 +326,10 @@ defmodule Engram.LinksTest do
           [l2] = Links.links_for_note(user, source2.id)
           assert l2.target_note_id == target.id
 
-          assert [%{source_note_id: src}] = Links.backlinks_for_note(user, target.id)
-          assert src == source2.id
+          # Backlinks select by the key written with the edge, never decrypting
+          # its text, so the corrupt edge still counts there.
+          sources = user |> Links.backlinks_for_note(target.id) |> Enum.map(& &1.source_note_id)
+          assert source2.id in sources
 
           assert [%{dangling: true, target_text: nil}] = Links.links_for_note(user, source1.id)
         end)

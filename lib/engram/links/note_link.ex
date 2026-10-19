@@ -16,6 +16,8 @@ defmodule Engram.Links.NoteLink do
     field :target_text_ciphertext, :binary
     field :target_text_nonce, :binary
     field :target_basename_hmac, :binary
+    # `Engram.Links.target_key_hmac/2` of the target; NULL = not computed.
+    field :target_key_hmac, :binary
     field :alias_ciphertext, :binary
     field :alias_nonce, :binary
     field :anchor_ciphertext, :binary

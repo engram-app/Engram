@@ -589,14 +589,15 @@ defmodule Engram.Attachments do
             {1, _} =
               from(a in Attachment, where: a.id == ^live.id)
               |> Repo.update_all(
-                set: [
-                  path_ciphertext: path_ct,
-                  path_nonce: path_n,
-                  path_hmac: new_hmac,
-                  basename_hmac: new_basename_hmac,
-                  updated_at: now,
-                  seq: seq
-                ]
+                set:
+                  [
+                    path_ciphertext: path_ct,
+                    path_nonce: path_n,
+                    path_hmac: new_hmac,
+                    basename_hmac: new_basename_hmac,
+                    updated_at: now,
+                    seq: seq
+                  ] ++ Links.path_keys(filter_key, new_path)
               )
 
             # Insert the old-path tombstone (fresh uuid, path encrypted under
@@ -1431,6 +1432,12 @@ defmodule Engram.Attachments do
         path_hmac: path_hmac,
         basename_hmac: basename_hmac
       }
+
+      attrs =
+        Map.merge(
+          attrs,
+          Map.new(Links.path_keys(Crypto.dek_filter_key_from_bytes(dek), path))
+        )
 
       {:ok, key, attrs, ciphertext}
     end

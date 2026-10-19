@@ -62,6 +62,44 @@ defmodule Engram.Links.ResolveOnReadTest do
     refute_enqueued(worker: Engram.Workers.RebindNoteLinks)
   end
 
+  test "rows written before the resolution keys existed read the same", ctx do
+    %{user: user, vault: vault} = ctx
+    note = &Fixtures.insert_note!(user, vault, %{path: &1})
+
+    hubs = Enum.map(~w(Hub.md a/Hub.md B/hub.md a/b/Hub.canvas Node.js.md x/Node.js.md), note)
+    _att = Fixtures.insert_attachment!(user, vault, %{path: "img/Hub.png"})
+
+    targets =
+      ~w(Hub hub.md HUB.canvas a/hub b/HUB.md A/B/Hub.canvas Node.js x/node.js.md Hub.png missing/Hub)
+
+    src = note.("Src.md")
+
+    :ok =
+      Links.replace_links(
+        user,
+        vault,
+        src.id,
+        targets |> Enum.with_index() |> Enum.map(fn {t, i} -> %{edge(t) | position: i} end)
+      )
+
+    read = fn ->
+      {Links.links_for_note(user, src.id),
+       Map.new(hubs, &{&1.id, Links.backlinks_for_note(user, &1.id)})}
+    end
+
+    keyed = read.()
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(Engram.Notes.Note, set: [path_ci_hmac: nil, path_length: nil])
+        Repo.update_all(Engram.Attachments.Attachment, set: [path_ci_hmac: nil, path_length: nil])
+        Repo.update_all(Engram.Links.NoteLink, set: [target_key_hmac: nil])
+      end)
+
+    assert read.() == keyed
+    assert Enum.count(elem(keyed, 0), & &1.dangling) == 1
+  end
+
   defp edge(target),
     do: %{target: target, alias: nil, anchor: nil, link_type: "wikilink", position: 0}
 end

@@ -113,6 +113,8 @@ defmodule Engram.Fixtures do
       basename_hmac: Engram.Crypto.hmac_field(filter_key, Engram.Links.basename_key(path))
     }
 
+    base_attrs = Map.merge(base_attrs, Map.new(Engram.Links.path_keys(filter_key, path)))
+
     # Pull through any caller-specified overrides for non-Phase-B fields so
     # tests can set embed_hash, version, deleted_at, etc.
     extras =
@@ -279,6 +281,8 @@ defmodule Engram.Fixtures do
       path_nonce: path_nonce,
       path_hmac: Engram.Crypto.hmac_field(filter_key, path),
       basename_hmac: Engram.Crypto.hmac_field(filter_key, Engram.Links.basename_key(path)),
+      path_ci_hmac: Keyword.fetch!(Engram.Links.path_keys(filter_key, path), :path_ci_hmac),
+      path_length: String.length(path),
       content_hash: Engram.Crypto.hmac_content_hash(content_key, content),
       content_nonce: content_nonce,
       storage_key: storage_key,
