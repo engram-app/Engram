@@ -296,6 +296,8 @@ async def test_typed_frontmatter_survives_close_and_reopen(
         "published", timeout=MS
     )
 
+    await _close_all_in_obsidian(cdp_a)
+
     # Assert while CLOSED. This is the reported state, and it is the strict one:
     # reopening first runs attach() -> enroll -> room rejoin, and any update
     # delivered on that rejoin flushes the FULL projection back to disk, which
