@@ -12,6 +12,6 @@ Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/legal/manif
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram/release/preflight.ex:117,4094D02
 Traversal.FileModule: Directory Traversal in `File.read!`,lib/engram_web/controllers/spa_controller.ex:44,6BED2D7
 Traversal.FileModule: Directory Traversal in `File.read`,lib/engram/spa_integrity.ex:43,5D1BE94
-XSS.ContentType: XSS in `put_resp_content_type`,lib/engram_web/controllers/attachments_controller.ex:572,2F43C52
-XSS.SendResp: XSS in `send_resp`,lib/engram_web/controllers/attachments_controller.ex:576,38A7764
+XSS.ContentType: XSS in `put_resp_content_type`,lib/engram_web/attachment_raw_response.ex:26,1CB0DBF
+XSS.SendResp: XSS in `send_resp`,lib/engram_web/attachment_raw_response.ex:28,703089F
 XSS.SendResp: XSS in `send_resp`,lib/engram_web/controllers/spa_controller.ex:7,589845D

@@ -1,6 +1,7 @@
 defmodule EngramWeb.AttachmentsController do
   use EngramWeb, :controller
   use OpenApiSpex.ControllerSpecs
+  alias EngramWeb.AttachmentRawResponse
   alias EngramWeb.Plugs.SettleUnreadBody
   alias EngramWeb.RequestMeta
   alias EngramWeb.Schemas
@@ -571,23 +572,10 @@ defmodule EngramWeb.AttachmentsController do
 
       {:ok, att} ->
         if params["raw"] == "1" do
-          # Raw bytes are served from the API origin. nosniff (set on the :api
-          # pipeline) stops content-type confusion, but a declared inline type
-          # still renders in the browser — and HTML/SVG/XML can execute script
-          # (SVG <script>, XML via xml-stylesheet/XSLT). The MIME whitelist admits
-          # the whole `text/` prefix, so an allowlist of types known-safe to
-          # render inline is the correct gate; everything else force-downloads.
-          disposition = if inline_safe?(att.mime_type), do: "inline", else: "attachment"
-          # Strip control chars/quotes so a crafted filename can't break the
-          # header (Plug rejects control chars → 500 otherwise).
-          filename = String.replace(Path.basename(att.path), ~r/[[:cntrl:]"]/u, "")
-
           conn
-          |> put_resp_content_type(att.mime_type || "application/octet-stream")
-          |> put_resp_header("content-disposition", ~s(#{disposition}; filename="#{filename}"))
           |> maybe_skip_compression(att.mime_type)
           |> put_metadata_headers(att)
-          |> send_resp(200, att.content)
+          |> AttachmentRawResponse.send(att, inline_safe?(att.mime_type))
         else
           # compat(plugin): raw_attachment_download - remove when plugin floor includes Engram-obsidian#555 (#1877)
           json(conn, %{
