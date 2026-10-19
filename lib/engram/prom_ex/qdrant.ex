@@ -159,8 +159,10 @@ defmodule Engram.PromEx.Qdrant do
   def execute_collection_metrics do
     if ServiceConfig.get(:qdrant_collection_metrics, true) do
       col = Qdrant.collection_name()
-      version = Qdrant.cached_server_version()
-      memory = Qdrant.collection_memory(col)
+      # nil version is already a valid "unknown"; a skipped memory fetch reads
+      # as the same error shape collection_memory returns on failure.
+      version = stage("version", &Qdrant.cached_server_version/0)
+      memory = stage("memory", fn -> Qdrant.collection_memory(col) end) || {:error, :skipped}
       info = stage("collection", fn -> poll(col, version) end)
       stage("memory", fn -> poll_memory(memory) end)
 
