@@ -61,7 +61,7 @@ defmodule Engram.Native.B64Test do
 
     for bad <- ["QQ", "QUJ!", "Q==="] do
       assert_raise ArgumentError, fn -> Base.decode64!(bad) end
-      assert_raise ArgumentError, fn -> Native.decode64!(bad) end
+      assert_raise ArgumentError, ~r/#{byte_size(bad)} bytes/, fn -> Native.decode64!(bad) end
     end
   end
 

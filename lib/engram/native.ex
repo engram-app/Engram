@@ -455,8 +455,13 @@ defmodule Engram.Native do
   @doc "`Base.decode64!/1`, natively: the bytes, or `ArgumentError`."
   def decode64!(b64) when is_binary(b64) do
     case decode64(b64) do
-      {:ok, bytes} -> bytes
-      :error -> raise ArgumentError, "non-alphabet character or bad padding in base64 input"
+      {:ok, bytes} ->
+        bytes
+
+      # The length, never the payload: it can be a note's ciphertext.
+      :error ->
+        raise ArgumentError,
+              "non-alphabet character or bad padding in base64 input (#{byte_size(b64)} bytes)"
     end
   end
 
