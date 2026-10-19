@@ -210,18 +210,21 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       )
     )
 
-    :ok = sweep_over_note_cap(now)
+    if daily_reverify?(scheduled_at), do: :ok = sweep_over_note_cap(now)
     if versions_done, do: :ok, else: sweep_keyword_stale(now, paid, page_size)
   end
 
-  # Notes rebuilt per tick by `sweep_over_note_cap/2`.
+  # Notes rebuilt per tick by `sweep_over_note_cap/1`: 1,200 a day over the
+  # twelve re-verify ticks.
   @recap_batch 100
 
   # Notes indexed before the per-note cap (or on a plan since downgraded)
   # that hold more chunks than their tier's `note_points_cap`. They go to
   # RebuildStaleNote with `recap: true`, which re-merges them unmetered. One
-  # bounded batch per tick: the backlog is a one-off (641 notes in prod on
-  # 2026-10-18), and new notes are capped as they are indexed.
+  # bounded batch per tick, and only in the daily re-verify hour: the probe
+  # touches every dense note, the backlog is a one-off (641 notes in prod on
+  # 2026-10-18, under a day of ticks), new notes are capped as they are indexed,
+  # and a downgrade can wait a day.
   #
   # "More than `cap` chunks" is read as "a chunk at position >= cap": positions
   # are unique per note and start at 0, so a note over the cap always has one,
