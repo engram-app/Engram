@@ -158,6 +158,10 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
 	Reading: "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view.",
 	"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 	Idea: "Feedback category: suggest a feature.",
+	// uk gave its word for Weekly to both (2026-10-19), so the billing toggle
+	// read "Weekly | Annually".
+	Monthly: "Billing period: charged once a month. Not weekly.",
+	monthly: "Billing period, lower case: charged once a month. Not weekly.",
 	// The Revoke confirm dialog's destructive button. Its own key because the
 	// generic "Revoke" matched Cancel in ko, ms and ru (2026-10-14).
 	"Revoke access":

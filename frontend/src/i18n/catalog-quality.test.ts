@@ -52,3 +52,21 @@ describe("Revoke confirm dialog", () => {
 		}
 	});
 });
+
+// Billing cadences sit side by side (the Monthly | Annual toggle, Paddle
+// interval labels). uk rendered Monthly and monthly as its word for Weekly,
+// so the toggle read "Weekly | Annually" (2026-10-19).
+describe("billing cadences", () => {
+	// Each set is shown together: the toggle, then Paddle's interval labels.
+	const sets = [
+		["Monthly", "Annual"],
+		["Daily", "Weekly", "Monthly", "Annually"],
+		["daily", "weekly", "monthly", "annual"],
+	];
+	it.each(catalogs)("%s: each cadence reads differently", (_code, catalog) => {
+		for (const keys of sets) {
+			const values = keys.map((k) => catalog[k]).filter((v) => typeof v === "string");
+			expect(new Set(values).size, keys.join(" / ")).toBe(values.length);
+		}
+	});
+});
