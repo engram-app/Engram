@@ -776,7 +776,7 @@ export default {
 	daily: "quotidien",
 	Weekly: "Hebdomadaire",
 	weekly: "hebdomadaire",
-	monthly: "Mensuel",
+	monthly: "mensuel",
 	Annually: "Annuellement",
 	annual: "annuel",
 	"Charge prorated amount now": "Facturer le montant proratisé maintenant",

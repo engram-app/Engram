@@ -798,7 +798,7 @@ export default {
 	daily: "ежедневно",
 	Weekly: "Еженедельно",
 	weekly: "еженедельно",
-	monthly: "Ежемесячно",
+	monthly: "ежемесячно",
 	Annually: "Ежегодно",
 	annual: "годовой",
 	"Charge prorated amount now": "Списать указанную сумму сейчас",

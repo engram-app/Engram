@@ -766,7 +766,7 @@ export default {
 	daily: "giornaliero",
 	Weekly: "Settimanale",
 	weekly: "settimanale",
-	monthly: "Mensile",
+	monthly: "mensile",
 	Annually: "Annualmente",
 	annual: "annuale",
 	"Charge prorated amount now": "Addebita l'importo proporzionale ora",
