@@ -144,6 +144,12 @@ defmodule Engram.Workers.EmbedNote do
           note.dense_indexed_hash == hash ->
             :ok
 
+          # Floor-indexed at its current content: a floor note has no dense
+          # leg to backfill. Promoting it back to a full index is the index
+          # budget's call (it clears `index_tier`), not this job's.
+          Indexing.floor_tier(note) ->
+            :ok
+
           true ->
             # Content is indexed but has no dense vectors: the dense backfill for
             # a note indexed sparse-only (Free before semantic search was every
@@ -576,7 +582,7 @@ defmodule Engram.Workers.EmbedNote do
         # budget here: a second read can land a DIFFERENT answer, and
         # the stamp would then disagree with the index. The stamp runs
         # inside the chunk-row transaction (`:in_commit`).
-        index_opts = budget ++ [in_commit: &stamp_embed_hash(note, &2, &1)]
+        index_opts = budget ++ [in_commit: &stamp_embed_hash(note, &2, &1, &3)]
 
         case Indexing.index_note_with_usage(decrypted_note, vault, user, index_opts) do
           {:ok, _count, _embedded_bytes, _dense?} ->
@@ -692,10 +698,10 @@ defmodule Engram.Workers.EmbedNote do
   # Also clears any embed_retry_after poison cooldown — a successful embed means
   # the note is no longer broken, and the crash guard's dead-man stamp, since
   # this runs inside the index write's transaction.
-  defp stamp_embed_hash(%Note{content_hash: nil} = note, _dense?, _count),
+  defp stamp_embed_hash(%Note{content_hash: nil} = note, _dense?, _count, _index_tier),
     do: CrashGuard.clear(note, :ok)
 
-  defp stamp_embed_hash(note, dense?, chunk_count, sparse_park \\ :budget) do
+  defp stamp_embed_hash(note, dense?, chunk_count, index_tier) do
     # `embed_hash` = "this content is indexed" (keyword and/or dense).
     # `dense_indexed_hash` = "this content has dense vectors in Qdrant".
     # Keeping them separate is what lets ReconcileEmbeddings backfill the
@@ -736,11 +742,15 @@ defmodule Engram.Workers.EmbedNote do
             embed_budget_parked: nil
           ]
 
-        sparse_park == :too_long ->
+        # A floor pass is sparse-only by design, not because the embed budget
+        # refused it: nothing to park. ReconcileEmbeddings' dense backfill
+        # skips a note with `index_tier` set (Indexing stamps it in this
+        # transaction), so a cleared cooldown does not re-select it.
+        index_tier != nil ->
           [
             dense_indexed_hash: nil,
             embed_model: nil,
-            embed_retry_after: @parked_until_edited,
+            embed_retry_after: nil,
             embed_budget_parked: nil
           ]
 

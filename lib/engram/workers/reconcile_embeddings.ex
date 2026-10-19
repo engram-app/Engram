@@ -123,11 +123,16 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         #
         # A note whose embed budget is spent is kept out by the cooldown filter
         # below: EmbedNote parks it with a future `embed_retry_after`.
+        #
+        # A floor note (`index_tier` set) has no dense leg by design, so (2)
+        # skips it; it would otherwise come back every tick. (1) and the
+        # version term still reach it: an edit or a version bump re-floors it,
+        # unmetered.
         |> where(
           ^dynamic(
             [n],
             is_nil(n.embed_hash) or n.embed_hash != n.content_hash or
-              ^version_stale or is_nil(n.dense_indexed_hash)
+              ^version_stale or (is_nil(n.dense_indexed_hash) and is_nil(n.index_tier))
           )
         )
         # Poison-loop guard: a note that exhausts its EmbedNote attempts gets an

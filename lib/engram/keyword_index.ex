@@ -29,6 +29,22 @@ defmodule Engram.KeywordIndex do
               language :: atom() | nil
             ) :: [{packed_sparse(), doc_len :: non_neg_integer()}]
 
+  # Optional: only the floor index calls it, and test doubles implement /4.
+  @optional_callbacks encode_documents: 5
+
+  @doc """
+  `encode_documents/4` with options. `cap_doc_len: true` length-normalizes
+  each document as if it were at most `avgdl` long (the floor index's one
+  whole-note vector).
+  """
+  @callback encode_documents(
+              texts :: [String.t()],
+              filter_key :: binary(),
+              avgdl :: float(),
+              language :: atom() | nil,
+              opts :: keyword()
+            ) :: [{packed_sparse(), doc_len :: non_neg_integer()}]
+
   @doc "Encode a query string into a sparse query vector (unit values)."
   @callback encode_query(query :: String.t(), filter_key :: binary(), language :: atom() | nil) ::
               sparse()
