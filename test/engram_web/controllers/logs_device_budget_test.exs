@@ -88,4 +88,22 @@ defmodule EngramWeb.LogsDeviceBudgetTest do
     assert %{"count" => ^remaining} = send_logs(conn, remaining, "dev-a")
     assert %{"count" => 0} = send_logs(conn, 1, "dev-a")
   end
+
+  # X-Device-Id is client-chosen: rotating it per request must not mint a fresh
+  # budget each time. The per-user total is 4 devices' worth.
+  test "rotating device ids cannot exceed the per-user total", %{conn: conn, user: user} do
+    for d <- 1..4, do: exhaust(conn, "dev-#{d}")
+    assert %{"count" => 0} = send_logs(conn, 1, "dev-5")
+    assert stored(user) == 4 * @budget
+  end
+
+  # The e2e harness keeps one device id for the whole run and its log oracle
+  # reads these lines, so CI must be able to lift the budget.
+  test "the budget honours the CI override", %{conn: conn} do
+    Application.put_env(:engram, :client_log_line_budget_override, 10)
+    on_exit(fn -> Application.delete_env(:engram, :client_log_line_budget_override) end)
+
+    assert %{"count" => 10} = send_logs(conn, 10, "dev-a")
+    assert %{"count" => 0} = send_logs(conn, 1, "dev-a")
+  end
 end

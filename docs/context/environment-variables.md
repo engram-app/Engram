@@ -194,6 +194,7 @@ Paddle is the Merchant-of-Record. Server keys gate API calls; the client token f
 | `RATE_LIMIT_AUTH_OVERRIDE` | ignored unless `CI=true` | Auth-limiter override for CI/E2E only. |
 | `PRE_AUTH_RATE_LIMIT_OVERRIDE` | ignored unless `CI=true` | Pre-auth (vault-pipeline) limiter override for CI/E2E only. |
 | `CRDT_MSG_RATE_LIMIT_OVERRIDE` | ignored unless `CI=true` | `CrdtChannel` per-message budget override for CI/E2E only. |
+| `CLIENT_LOG_LINE_BUDGET_OVERRIDE` | ignored unless `CI=true` | `/api/logs` per-device line budget (default 5,000 per 10m) override for CI/E2E only. |
 | `CRDT_HS_RATE_LIMIT_OVERRIDE` | ignored unless `CI=true` | `CrdtChannel` handshake budget override for CI/E2E only. |
 | `CI` | unset | `true` unlocks the four rate-limit overrides above. |
 

@@ -44,21 +44,41 @@ defmodule EngramWeb.LogsController do
   # remote logger re-buffers a failed batch and logs the failure into the same
   # buffer, so a 429 would turn into a retry storm of the lines we refused.
   #
-  # The key is scoped under the user, so a spoofed X-Device-Id can only split
-  # the caller's own budget; requests without one share a per-user bucket.
+  # X-Device-Id is client-chosen, so a rotating id would mint a fresh device
+  # budget per value; a per-user total (4 devices' worth) caps that. Requests
+  # without an id share a per-user fallback device bucket.
+  #
+  # CI/E2E can lift the device budget via CLIENT_LOG_LINE_BUDGET_OVERRIDE
+  # (CI=true only, Engram.RuntimeConfig): the harness keeps one device id per
+  # run and its log oracle reads these lines.
   # ponytail: a batch that crosses the budget is dropped whole (Hammer's deny
   # carries no count to accept a partial batch); partial accept if it matters.
   @line_budget 5_000
+  @user_budget_devices 4
   @line_window_ms :timer.minutes(10)
 
   defp within_line_budget?(conn, user, lines) do
+    budget = Application.get_env(:engram, :client_log_line_budget_override) || @line_budget
     device = OriginDevice.from_conn(conn) || "user"
-    key = "client_logs:#{user.id}:#{device}"
 
-    case RateLimiter.hit(key, @line_window_ms, @line_budget, :client_logs, lines) do
-      {:allow, _} ->
-        true
-
+    with {:allow, _} <-
+           RateLimiter.hit(
+             "client_logs:#{user.id}:#{device}",
+             @line_window_ms,
+             budget,
+             :client_logs,
+             lines
+           ),
+         {:allow, _} <-
+           RateLimiter.hit(
+             "client_logs:#{user.id}",
+             @line_window_ms,
+             budget * @user_budget_devices,
+             :client_logs,
+             lines
+           ) do
+      true
+    else
       {:deny, _} ->
         Logger.warning(
           "client log budget exceeded: dropped #{lines} lines",
