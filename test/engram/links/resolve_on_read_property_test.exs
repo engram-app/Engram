@@ -87,45 +87,88 @@ defmodule Engram.Links.ResolveOnReadPropertyTest do
           ) do
       {:ok, user} = Fixtures.user_with_dek_fixture()
       vault = insert(:vault, user: user)
+      enters = count_tenant_enters()
 
-      # Paths are unique exactly, not case-insensitively: `a/Hub.md` beside
-      # `A/hub.md` is legal, and the ranking must break that tie.
-      rows = Enum.map(notes, &Fixtures.insert_note!(user, vault, %{path: &1}))
-      Enum.each(atts, &Fixtures.insert_attachment!(user, vault, %{path: &1}))
-      src = Fixtures.insert_note!(user, vault, %{path: "zz/Source.md"})
+      # One tenant transaction per run. Every fixture insert and Links read
+      # below opens its own `with_tenant` otherwise, and in the sandbox each
+      # costs SAVEPOINT + tenant_enter + tenant_exit + RELEASE. That was over
+      # half the property's round trips (9,958 -> 4,557 over 80 runs), and
+      # took it past the 60s timeout on an oversubscribed runner. Nested
+      # calls join this transaction, and resolution does not depend on which
+      # transaction reads the rows.
+      Repo.with_tenant!(user.id, fn -> check_run(user, vault, notes, atts, targets, keys) end)
 
-      :ok =
-        Links.replace_links(
-          user,
-          vault,
-          src.id,
-          targets
-          |> Enum.with_index()
-          |> Enum.map(fn {t, i} ->
-            %{target: t, alias: nil, anchor: nil, link_type: "wikilink", position: i}
-          end)
-        )
+      assert enters.() == 1
+    end
+  end
 
-      damage_keys(user, keys)
+  defp check_run(user, vault, notes, atts, targets, keys) do
+    # Paths are unique exactly, not case-insensitively: `a/Hub.md` beside
+    # `A/hub.md` is legal, and the ranking must break that tie.
+    rows = Enum.map(notes, &Fixtures.insert_note!(user, vault, %{path: &1}))
+    Enum.each(atts, &Fixtures.insert_attachment!(user, vault, %{path: &1}))
+    src = Fixtures.insert_note!(user, vault, %{path: "zz/Source.md"})
 
-      links = Links.links_for_note(user, src.id)
-
-      expected =
-        Enum.map(targets, fn t ->
-          case Links.resolve_target(user, vault, t, "wikilink") do
-            {:note, id} -> {id, nil}
-            {:attachment, id} -> {nil, id}
-            :dangling -> {nil, nil}
-          end
+    :ok =
+      Links.replace_links(
+        user,
+        vault,
+        src.id,
+        targets
+        |> Enum.with_index()
+        |> Enum.map(fn {t, i} ->
+          %{target: t, alias: nil, anchor: nil, link_type: "wikilink", position: i}
         end)
+      )
 
-      assert Enum.map(links, &{&1.target_note_id, &1.target_attachment_id}) == expected
+    damage_keys(user, keys)
 
-      for row <- [src | rows] do
-        want = for {{id, _}, i} <- Enum.with_index(expected), id == row.id, do: i
-        got = user |> Links.backlinks_for_note(row.id) |> length()
-        assert got == length(want), "backlinks of #{row.path}: #{got} != #{length(want)}"
-      end
+    links = Links.links_for_note(user, src.id)
+
+    expected =
+      Enum.map(targets, fn t ->
+        case Links.resolve_target(user, vault, t, "wikilink") do
+          {:note, id} -> {id, nil}
+          {:attachment, id} -> {nil, id}
+          :dangling -> {nil, nil}
+        end
+      end)
+
+    assert Enum.map(links, &{&1.target_note_id, &1.target_attachment_id}) == expected
+
+    for row <- [src | rows] do
+      want = for {{id, _}, i} <- Enum.with_index(expected), id == row.id, do: i
+      got = user |> Links.backlinks_for_note(row.id) |> length()
+      assert got == length(want), "backlinks of #{row.path}: #{got} != #{length(want)}"
+    end
+  end
+
+  # Counts `tenant_enter` statements this process issues from now on.
+  defp count_tenant_enters do
+    me = self()
+    ref = make_ref()
+    id = {__MODULE__, ref}
+
+    :telemetry.attach(
+      id,
+      [:engram, :repo, :query],
+      fn _, _, metadata, _ ->
+        if self() == me and metadata.source == "tenant_enter", do: send(me, {ref, :enter})
+      end,
+      nil
+    )
+
+    fn ->
+      :telemetry.detach(id)
+      count_msgs(ref, 0)
+    end
+  end
+
+  defp count_msgs(ref, n) do
+    receive do
+      {^ref, :enter} -> count_msgs(ref, n + 1)
+    after
+      0 -> n
     end
   end
 end
