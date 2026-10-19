@@ -29,6 +29,10 @@ defmodule Engram.PromEx.QdrantCollectionTest do
     :global.unregister_name({Plugin, :collection_poller})
     Engram.Vector.Qdrant.forget_pressure()
     on_exit(&Engram.Vector.Qdrant.forget_pressure/0)
+    # Version is node-cached per base URL; a reused Bypass port must not leak it.
+    url = "http://localhost:#{bypass.port}"
+    Engram.Cache.evict_local(:qdrant_version, url)
+    on_exit(fn -> Engram.Cache.evict_local(:qdrant_version, url) end)
 
     test_pid = self()
     ref = make_ref()
@@ -70,6 +74,7 @@ defmodule Engram.PromEx.QdrantCollectionTest do
     for n <- [
           [:engram, :prom_ex, :qdrant, :collection, :green],
           [:engram, :prom_ex, :qdrant, :optimizer, :ok],
+          [:engram, :prom_ex, :qdrant, :last_poll, :timestamp, :seconds],
           [:engram, :prom_ex, :qdrant, :points],
           [:engram, :prom_ex, :qdrant, :disk, :bytes],
           [:engram, :prom_ex, :qdrant, :ram, :bytes],
@@ -203,8 +208,18 @@ defmodule Engram.PromEx.QdrantCollectionTest do
       """)
     end)
 
+    # Qdrant enforces 81/83; this node would compute 79/87. The gauge must
+    # report what is applied, so a failed PATCH or a fallback 85 on one node
+    # cannot mislead max().
+    applied =
+      put_in(@info, ["config", "strict_mode_config"], %{
+        "enabled" => true,
+        "max_disk_usage_percent" => 81,
+        "max_resident_memory_percent" => 83
+      })
+
     Bypass.stub(bypass, "GET", "/collections/engram_notes", fn conn ->
-      json(conn, 200, %{result: @info})
+      json(conn, 200, %{result: applied})
     end)
 
     Bypass.stub(bypass, "GET", "/collections/engram_notes/memory", fn conn ->
@@ -236,7 +251,10 @@ defmodule Engram.PromEx.QdrantCollectionTest do
     assert_receive {@disk_event, %{bytes: 4_890_000_000}, %{}}
     assert_receive {@ram_event, %{ram_bytes: 657_000_000}, %{component: "total"}}
     assert_receive {@pressure_event, %{percent: 51}, %{kind: "disk"}}
-    assert_receive {@limit_event, %{percent: 79}, %{kind: "disk"}}
+    assert_receive {@limit_event, %{percent: 81}, %{kind: "disk"}}
+    assert_receive {@limit_event, %{percent: 83}, %{kind: "heap"}}
+    refute_received {@limit_event, %{percent: 79}, _}
+    refute_received {@limit_event, %{percent: 87}, _}
     assert_receive {@reserve_event, %{bytes: 268_435_456}, %{kind: "heap"}}
     refute_receive :patched
     assert Agent.get(patches, & &1) == 0
@@ -281,7 +299,10 @@ defmodule Engram.PromEx.QdrantCollectionTest do
       json(conn, 200, %{result: true})
     end)
 
+    # The name starts free: this tick registers AND reconciles.
+    assert :global.whereis_name({Plugin, :collection_poller}) == :undefined
     Plugin.execute_collection_metrics()
+    assert :global.whereis_name({Plugin, :collection_poller}) == self()
 
     assert_receive {:patch,
                     %{
@@ -292,14 +313,16 @@ defmodule Engram.PromEx.QdrantCollectionTest do
                       }
                     }}
 
-    assert_receive {@limit_event, %{percent: 79}, %{kind: "disk"}}
-    assert_receive {@limit_event, %{percent: 87}, %{kind: "heap"}}
+    # Before the PATCH lands, Qdrant applies no limit: none is published.
+    refute_received {@limit_event, _, _}
     assert_receive {@reserve_event, %{bytes: 1_711_500_000}, %{kind: "disk"}}
     assert_receive {@reserve_event, %{bytes: 268_435_456}, %{kind: "heap"}}
 
     Engram.Vector.Qdrant.forget_pressure()
     Plugin.execute_collection_metrics()
     refute_receive {:patch, _}
+    assert_received {@limit_event, %{percent: 79}, %{kind: "disk"}}
+    assert_received {@limit_event, %{percent: 87}, %{kind: "heap"}}
   end
 
   test "QDRANT_RECONCILE_CONFIG=false: the poller never PATCHes", %{bypass: bypass} do
@@ -369,13 +392,87 @@ defmodule Engram.PromEx.QdrantCollectionTest do
 
     Plugin.execute_collection_metrics()
     assert_receive {:patch, %{"enabled" => true, "max_resident_memory_percent" => 85}}
-    assert_receive {@limit_event, %{percent: 85}, %{kind: "heap"}}
-    refute_received {@limit_event, _, %{kind: "disk"}}
     # The app-side disk reading still feeds the preflight.
     assert_received {@pressure_event, %{percent: 51}, %{kind: "disk"}}
 
     Engram.Vector.Qdrant.forget_pressure()
     Plugin.execute_collection_metrics()
     refute_receive {:patch, _}
+    assert_received {@limit_event, %{percent: 85}, %{kind: "heap"}}
+    refute_received {@limit_event, _, %{kind: "disk"}}
+  end
+
+  # The freshness signal infra filters on: a node whose health GET fails must
+  # not keep looking current, or its frozen optimizer_ok=1 masks the alert.
+  test "a good poll stamps last_poll; a failed poll after it does not", %{bypass: bypass} do
+    {:ok, status} = Agent.start_link(fn -> 200 end)
+    stub_info(bypass)
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes", fn conn ->
+      json(conn, Agent.get(status, & &1), %{result: @info})
+    end)
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes/memory", fn conn ->
+      json(conn, 200, %{result: @memory})
+    end)
+
+    Plugin.execute_collection_metrics()
+    assert_receive {@collection_event, %{polled_at: ts}, _}
+    assert_in_delta ts, System.os_time(:second), 5
+
+    Agent.update(status, fn _ -> 503 end)
+    log = capture_log(fn -> Plugin.execute_collection_metrics() end)
+    assert log =~ "qdrant collection poll skipped"
+    refute_receive {@collection_event, _, _}
+  end
+
+  # 4 GETs per node per tick: /memory once (shared by the gauges and the
+  # strict limits), the version once per cache TTL.
+  test "fetches /memory once per tick and the version once across ticks", %{bypass: bypass} do
+    {:ok, hits} = Agent.start_link(fn -> %{} end)
+    count = fn key -> Agent.update(hits, &Map.update(&1, key, 1, fn n -> n + 1 end)) end
+
+    Bypass.stub(bypass, "GET", "/sys_metrics", &Plug.Conn.send_resp(&1, 404, ""))
+    Bypass.stub(bypass, "GET", "/metrics", &Plug.Conn.send_resp(&1, 404, ""))
+
+    Bypass.stub(bypass, "GET", "/", fn conn ->
+      count.(:version)
+      json(conn, 200, %{version: "1.17.1"})
+    end)
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes", &json(&1, 200, %{result: @info}))
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes/memory", fn conn ->
+      count.(:memory)
+      json(conn, 200, %{result: @memory})
+    end)
+
+    Plugin.execute_collection_metrics()
+    Engram.Vector.Qdrant.forget_pressure()
+    Plugin.execute_collection_metrics()
+
+    assert Agent.get(hits, & &1) == %{memory: 2, version: 1}
+  end
+
+  # A raise in one stage (here a malformed shared /memory report) skips only
+  # that stage: health, the timestamp and pressure still publish.
+  test "a malformed /memory body cannot suppress health or pressure", %{bypass: bypass} do
+    stub_info(bypass)
+
+    Bypass.stub(bypass, "GET", "/sys_metrics", fn conn ->
+      Plug.Conn.send_resp(conn, 200, """
+      kubelet_volume_stats_capacity_bytes{persistentvolumeclaim="qdrant-storage-qdrant-0"} 8.37e+09
+      kubelet_volume_stats_used_bytes{persistentvolumeclaim="qdrant-storage-qdrant-0"} 4.35e+09
+      """)
+    end)
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes/memory", fn conn ->
+      json(conn, 200, %{result: %{"total" => []}})
+    end)
+
+    log = capture_log(fn -> assert :ok = Plugin.execute_collection_metrics() end)
+    assert log =~ "qdrant memory poll skipped"
+    assert_receive {@collection_event, %{optimizer_ok: 1, polled_at: _}, _}
+    assert_receive {@pressure_event, %{percent: 51}, %{kind: "disk"}}
   end
 end
