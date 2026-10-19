@@ -16,6 +16,7 @@ defmodule Engram.Billing do
   alias Engram.Logger.Metadata
   alias Engram.Paddle.Client
   alias Engram.Repo
+  alias Engram.Workers.IndexCapMaintenance
 
   require Logger
 
@@ -777,6 +778,13 @@ defmodule Engram.Billing do
                 %{count: 1},
                 %{user_id: user.id, from: prev_tier, to: :free}
               )
+
+              # Free embeds at most `notes_cap` notes, and nothing re-checks the
+              # cap until a note is re-indexed, so the notes past it would keep
+              # their dense vectors forever. ENQUEUED: a whole-vault UPDATE
+              # inside a Paddle webhook can outlive its timeout. `user` is nil
+              # unless prev_tier was paid, so this fires on a real downgrade only.
+              _ = IndexCapMaintenance.enqueue(user.id, :evict_over_cap)
             end
 
             {:ok, updated}

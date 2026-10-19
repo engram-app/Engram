@@ -9,6 +9,7 @@ defmodule Engram.Indexing do
   import Ecto.Query
 
   alias Engram.Crypto
+  alias Engram.Indexing.IndexCap
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Chunk
@@ -177,7 +178,9 @@ defmodule Engram.Indexing do
                note,
                chunks,
                content_key,
-               Keyword.get(opts, :dense, true),
+               # Past Free's embed cap the pass is keyword-only, the same
+               # shape as a spent embed budget (EmbedNote parks it).
+               Keyword.get(opts, :dense, true) and IndexCap.within_cap?(note, user),
                opts
              ),
            texts = embed_texts(plan),

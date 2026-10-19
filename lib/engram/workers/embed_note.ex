@@ -46,6 +46,7 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Crypto
   alias Engram.Crypto.RotationGate
   alias Engram.Indexing
+  alias Engram.Indexing.IndexCap
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
@@ -142,6 +143,12 @@ defmodule Engram.Workers.EmbedNote do
                 # sparse-only and parks it itself. The chunk check is only paid
                 # on the budget-spent path.
                 cond do
+                  # Past Free's embed cap with its keyword index in place: a
+                  # rebuild would be keyword-only again, so park it. Re-checked
+                  # when the park lapses, or sooner on a delete or upgrade.
+                  not IndexCap.within_cap?(note, user) and has_chunks?(note) ->
+                    park_over_budget(note)
+
                   embed_budget_left?(user) ->
                     load_for_run(note, [], user)
 

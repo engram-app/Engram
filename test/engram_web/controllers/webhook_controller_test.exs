@@ -402,9 +402,12 @@ defmodule EngramWeb.WebhookControllerTest do
       assert_received {[:engram, :tier_downgraded], ^ref, _meas,
                        %{from: :pro, to: :free, user_id: _}}
 
-      # No index-cap sweep any more: Free has no search-coverage cap, so a
-      # downgrade leaves every note searchable.
-      refute_enqueued(worker: Engram.Workers.IndexCapMaintenance)
+      # Free embeds at most notes_cap notes: the downgrade drops the dense
+      # vectors past it (keyword search stays).
+      assert_enqueued(
+        worker: Engram.Workers.IndexCapMaintenance,
+        args: %{"user_id" => user.id, "kind" => "evict_over_cap"}
+      )
     end
 
     test "subscription.canceled preserves free_tier_accepted_at when already set",

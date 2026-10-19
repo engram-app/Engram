@@ -18,6 +18,7 @@ defmodule Engram.Workers.DeleteNoteIndex do
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vector.Qdrant
+  alias Engram.Workers.IndexCapMaintenance
   alias Engram.Workers.RebindNoteLinks
 
   @impl Oban.Worker
@@ -94,6 +95,12 @@ defmodule Engram.Workers.DeleteNoteIndex do
     # edge-flip above already ran regardless. `basename_hmac` (base64) —
     # never plaintext, same T3.2/H3 invariant as `path_hmac` above.
     _ = maybe_enqueue_rebind(user_id, vault_id, Map.get(args, "basename_hmac"))
+
+    # Deleting a note frees an embed-cap slot; the note that inherits it is
+    # parked keyword-only. No-op for uncapped users. ENQUEUED, not inline: the
+    # sweep is whole-vault and this runs once per deleted note, so a folder
+    # delete collapses to one sweep (unique per user and kind).
+    _ = IndexCapMaintenance.enqueue(user_id, :backfill_slots)
 
     # Strict mode never refuses a delete; mapped anyway so a refusal is a
     # snooze here like on every other Qdrant writer.

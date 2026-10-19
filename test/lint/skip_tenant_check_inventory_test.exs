@@ -81,6 +81,7 @@ defmodule Engram.SkipTenantCheckInventoryTest do
     "engram/feedback.ex" => 2,
     "engram/idempotency.ex" => 1,
     "engram/indexing.ex" => 2,
+    "engram/indexing/index_cap.ex" => 2,
     "engram/instance.ex" => 7,
     "engram/legal.ex" => 5,
     "engram/legal/seeder.ex" => 2,

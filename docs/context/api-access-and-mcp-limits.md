@@ -26,7 +26,15 @@ Every stored note is searchable on every tier. The separate search-coverage
 cap (`indexed_notes_cap`, 2,000 on Free) was removed on 2026-10-17, when Free
 `notes_cap` dropped from 10,000 to 3,000. Notes it had skipped re-index on
 their own through `ReconcileEmbeddings` (it selects every note with no dense
-hash). `plan_state.indexed_notes_cap` (always `nil`), `/billing/usage`
+hash).
+
+Dense (Voyage) embedding on Free is capped at `notes_cap`, oldest first
+(`Engram.Indexing.IndexCap`). Free users can hold more than 3,000 notes
+(stored under the old 10,000 cap, or a downgraded paid account), and the
+0.55.0 deploy embedded all of them until this cap was restored. Notes past it
+are indexed keyword-only and parked like a spent embed budget; a delete frees
+a slot (`IndexCapMaintenance` `backfill_slots`), a downgrade drops the dense
+vectors past it (`evict_over_cap`), an upgrade lifts it. `plan_state.indexed_notes_cap` (always `nil`), `/billing/usage`
 `indexed_notes` (`limit: nil`), `/api/index-status` and bootstrap
 `index_status` (always zeros) are compat shims for older plugins and SPA
 bundles, to remove in a later contract PR.

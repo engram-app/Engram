@@ -118,11 +118,12 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         #      cap skipped: those were stamped with no chunk rows and no dense
         #      hash, and this is the only path that re-opens them. Every pass
         #      now either writes dense vectors, stamps a no-chunks note as
-        #      dense-complete, or parks it on the embed budget, so (2) no
-        #      longer needs narrowing to avoid a forever-loop.
+        #      dense-complete, or parks it (spent embed budget, or past Free's
+        #      embed cap, `IndexCap`), so (2) no longer needs narrowing to
+        #      avoid a forever-loop.
         #
-        # A note whose embed budget is spent is kept out by the cooldown filter
-        # below: EmbedNote parks it with a future `embed_retry_after`.
+        # A parked note is kept out by the cooldown filter below: EmbedNote
+        # parks it with a future `embed_retry_after`.
         |> where(
           ^dynamic(
             [n],
