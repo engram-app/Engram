@@ -459,14 +459,6 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
-  # `seeded` is retained for older plugins, but it is a LOSSY view of `genesis`
-  # and must never again be the only thing on the wire (#476).
-  defp reply_created(note, genesis, socket) do
-    {:reply,
-     {:ok, %{doc_id: note.id, seeded: genesis == :stored, genesis: Atom.to_string(genesis)}},
-     socket}
-  end
-
   # Room-FREE full-state read for a cold note (#1409).
   #
   # This is the whole point of the frame: `crdt_msg` routes every syncStep1
@@ -906,6 +898,14 @@ defmodule EngramWeb.CrdtChannel do
   # reports `occupied`, which under the client's adopt-then-diff contract means
   # "acquire the lineage, then send a diff" — correct whether or not the room
   # actually holds anything.
+  # `seeded` is retained for older plugins, but it is a LOSSY view of `genesis`
+  # and must never again be the only thing on the wire (#476).
+  defp reply_created(note, genesis, socket) do
+    {:reply,
+     {:ok, %{doc_id: note.id, seeded: genesis == :stored, genesis: Atom.to_string(genesis)}},
+     socket}
+  end
+
   defp reconcile_with_row(:stored, _note), do: :stored
 
   # Authoritative: both read something fresher than the caller's note snapshot.
