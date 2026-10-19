@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.56.0](https://github.com/engram-app/Engram/compare/0.55.0...0.56.0) (2026-10-19)
+
+
+### Features
+
+* **qdrant:** self-tuning write limits, on-disk storage, backpressure ([#2029](https://github.com/engram-app/Engram/issues/2029)) ([d3a5e92](https://github.com/engram-app/Engram/commit/d3a5e92be61d3155f8bf1142763c12683a867dcc))
+
+
+### Bug Fixes
+
+* **ci:** release gate reuses a green e2e run ([#2038](https://github.com/engram-app/Engram/issues/2038)) ([b9100f5](https://github.com/engram-app/Engram/commit/b9100f5e47aa00812f63569a90ab3b3cd9e298e3))
+* **folders:** bulk-upsert folder batch markers ([#2036](https://github.com/engram-app/Engram/issues/2036)) ([a747545](https://github.com/engram-app/Engram/commit/a7475458bed61ae22cae0e2c50a52236c4997794))
+* **indexing:** batch chunk inserts under the Postgres parameter cap ([#2045](https://github.com/engram-app/Engram/issues/2045)) ([7f9b3bb](https://github.com/engram-app/Engram/commit/7f9b3bb1704baa6dfeb1162fa6b61471c0e34fa4))
+* **indexing:** forward-compatible version stamps, skip no-op payload rewrites ([#2044](https://github.com/engram-app/Engram/issues/2044)) ([1603408](https://github.com/engram-app/Engram/commit/1603408dc1159b274b6d316f2a69320074f380a6))
+
+
+### Performance Improvements
+
+* **embed:** decode Voyage vectors with the shared NIF ([#2042](https://github.com/engram-app/Engram/issues/2042)) ([985015b](https://github.com/engram-app/Engram/commit/985015bc5735cdcb156c740e8a0b0130c50649b3))
+
 ## [0.55.0](https://github.com/engram-app/Engram/compare/0.54.0...0.55.0) (2026-10-19)
 
 
