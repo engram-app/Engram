@@ -965,25 +965,6 @@ class CdpClient:
         result = await self.evaluate(f"{ENGINE_PATH}.getCatchupSeq()")
         return result if isinstance(result, int) else 0
 
-    async def wait_for_catchup_past(
-        self, seq: int, timeout: float = DELIVERY_TIMEOUT, poll: float = 0.5
-    ) -> None:
-        """Poll until the seq-replay cursor reaches ``seq``. Does not drive.
-
-        Only the seq replay moves this cursor (live ops stamp per-path seq), so
-        reaching ``seq`` proves a catch-up consumed every op up to it: the
-        positive barrier for "the device has processed that write".
-        """
-        deadline = time.monotonic() + timeout
-        cursor = await self.get_catchup_seq()
-        while cursor < seq:
-            if time.monotonic() >= deadline:
-                raise TimeoutError(
-                    f"catch-up cursor stuck at {cursor}, below seq {seq}, after {timeout}s"
-                )
-            await asyncio.sleep(poll)
-            cursor = await self.get_catchup_seq()
-
     async def check_stream_connected(self) -> bool:
         """Check if the plugin's real-time stream (WebSocket channel) is connected."""
         result = await self.evaluate(f"{PLUGIN_PATH}.isLiveConnected()")
