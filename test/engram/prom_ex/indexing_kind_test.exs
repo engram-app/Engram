@@ -107,6 +107,27 @@ defmodule Engram.PromEx.IndexingKindTest do
     assert drain() == []
   end
 
+  test "a commit that fails after the upsert counts nothing", ctx do
+    {:ok, note} =
+      Notes.upsert_note(
+        ctx.user,
+        ctx.vault,
+        %{"path" => "Plan.md", "content" => @content, "mtime" => 1_000.0},
+        actor: "api"
+      )
+
+    {:ok, note} = Crypto.maybe_decrypt_note_fields(note, ctx.user)
+    {:ok, prepared} = Indexing.prepare_index(note, ctx.vault, ctx.user)
+
+    # The points reach Qdrant, then the chunk-row transaction raises: the
+    # retry will write them again, so this attempt must not count them.
+    assert_raise RuntimeError, fn ->
+      Indexing.commit_index(prepared, fn _ -> raise "chunk txn failed" end)
+    end
+
+    assert drain() == []
+  end
+
   test "the counter is registered with closed-enum tags" do
     metric =
       [otp_app: :engram]

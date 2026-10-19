@@ -269,7 +269,7 @@ fn classify(text: &str, mut open: bool) -> (&'static str, bool) {
         };
         for tok in parts.filter(|t| t.chars().any(char::is_alphanumeric)) {
             tokens += 1;
-            words += word(tok) as usize;
+            words += (word(tok) || wide_word(tok)) as usize;
         }
     }
     // Non-ASCII letters only: string-heavy minified JSON is over half ASCII
@@ -305,6 +305,18 @@ fn word(tok: &str) -> bool {
         && w.chars()
             .all(|c| c.is_alphabetic() || matches!(c, '\'' | '’' | '-'))
         && w.starts_with(char::is_alphabetic)
+}
+
+/// A token of a script written without spaces (CJK): a whole clause, inline
+/// code included, is one token. 2+ non-ASCII letters, at least as many as
+/// its ASCII letters and digits, so minified JSON with a few non-ASCII
+/// string values stays a non-word.
+fn wide_word(tok: &str) -> bool {
+    let wide = tok
+        .chars()
+        .filter(|c| c.is_alphabetic() && !c.is_ascii())
+        .count();
+    wide >= 2 && wide >= tok.chars().filter(char::is_ascii_alphanumeric).count()
 }
 
 fn make(
@@ -1099,6 +1111,36 @@ mod tests {
     }
 
     #[test]
+    fn cjk_prose_with_inline_code_is_prose() {
+        all(
+            "今日は`mix test`を実行した。`indexing_test.exs`で3件失敗したので、`plan_chunks`のロジックを\
+             見直した。原因は`chunk_rows`の順序で、修正後はすべてのテストが通った。明日は`EmbedNote`の\
+             リトライ処理を確認する予定です。",
+            "prose",
+        );
+        all(
+            "今天运行了`mix test`，`indexing_test.exs`里有3个测试失败，所以重新检查了`plan_chunks`的逻辑。\
+             原因是`chunk_rows`的顺序不对，修复之后所有测试都通过了。明天打算确认`EmbedNote`的重试处理。",
+            "prose",
+        );
+        all(
+            "오늘 `mix test`를 실행했더니 `indexing_test.exs`에서 테스트 3개가 실패했다. 그래서 \
+             `plan_chunks`의 로직을 다시 살펴보았다. 원인은 `chunk_rows`의 순서였고, 수정한 뒤에는 모든 \
+             테스트가 통과했다. 내일은 `EmbedNote`의 재시도 처리를 확인할 예정이다.",
+            "prose",
+        );
+    }
+
+    #[test]
+    fn minified_json_with_unicode_values_is_data() {
+        let rec =
+            r#"{"id":4821,"name":"山田太郎","city":"東京","role":"admin","score":12.5,"ok":true}"#;
+        let json = format!("[{}]", [rec; 10].join(","));
+        assert!(json.len() >= 200 && json.len() < MAX_CHUNK);
+        all(&json, "data");
+    }
+
+    #[test]
     fn fenced_code_is_prose() {
         let code = "```elixir\ndefmodule Foo do\n  def bar(%{id: id} = m, opts \\\\ []) do\n    \
                     {:ok, Map.put(m, :n, id * 2 + Keyword.get(opts, :k, 0))}\n  end\n\n  \
@@ -1165,7 +1207,7 @@ mod tests {
 
     #[test]
     fn aliased_wikilinks_are_prose() {
-        let note: Vec<&str> = std::iter::repeat("- [[Inbox|In]]").take(20).collect();
+        let note: Vec<&str> = std::iter::repeat_n("- [[Inbox|In]]", 20).collect();
         all(&note.join("\n"), "prose");
     }
 

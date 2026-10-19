@@ -102,6 +102,28 @@ defmodule Engram.MCP.HandlersSimilarTest do
     |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => points}}))
   end
 
+  # Qdrant's answer to "which of these points hold a dense vector". The
+  # recommend averages dense vectors, so only those ids may be positives.
+  defp dense_points(bypass, dense_ids) do
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/scroll", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      json = Jason.decode!(body)
+      assert %{"has_vector" => "dense"} in json["filter"]["must"]
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(
+        200,
+        Jason.encode!(%{
+          "result" => %{
+            "points" => Enum.map(dense_ids, &%{"id" => &1}),
+            "next_page_offset" => nil
+          }
+        })
+      )
+    end)
+  end
+
   test "recommends from the source's stored points and excludes them", %{
     bypass: bypass,
     user: u,
@@ -109,6 +131,7 @@ defmodule Engram.MCP.HandlersSimilarTest do
   } do
     s_ids = note_with_points(u, v, "S.md", 2, true)
     [o_id] = note_with_points(u, v, "O.md", 1, true)
+    dense_points(bypass, s_ids)
 
     Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -175,7 +198,7 @@ defmodule Engram.MCP.HandlersSimilarTest do
   end
 
   test "does not spend the search budget", %{bypass: bypass, user: u, vault: v} do
-    note_with_points(u, v, "S.md", 1, true)
+    dense_points(bypass, note_with_points(u, v, "S.md", 1, true))
     insert(:user_limit_override, user: u, key: "ai_searches_per_day", value: %{"v" => 0})
     assert {:error, :search_cap_exceeded, 0} = Engram.Search.search(u, v, "anything")
 
@@ -183,6 +206,60 @@ defmodule Engram.MCP.HandlersSimilarTest do
 
     assert {:ok, "No results found.", %{"results" => []}} =
              Handlers.handle("search_notes", u, v, %{"similar_to" => "S.md"})
+  end
+
+  # Embed less: a note's frontmatter and data points are sparse-only, so a
+  # recommend that named them would be refused for the whole note.
+  test "a note with frontmatter and prose recommends from its dense points only", %{
+    bypass: bypass,
+    user: u,
+    vault: v
+  } do
+    [frontmatter | prose] = s_ids = note_with_points(u, v, "S.md", 3, true)
+    [o_id] = note_with_points(u, v, "O.md", 1, true)
+
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/scroll", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      must = Jason.decode!(body)["filter"]["must"]
+      assert %{"has_vector" => "dense"} in must
+      assert [ids] = for(%{"has_id" => ids} <- must, do: ids)
+      assert Enum.sort(ids) == Enum.sort(s_ids)
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(
+        200,
+        Jason.encode!(%{
+          "result" => %{"points" => Enum.map(prose, &%{"id" => &1}), "next_page_offset" => nil}
+        })
+      )
+    end)
+
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      positive = Jason.decode!(body)["query"]["recommend"]["positive"]
+      assert Enum.sort(positive) == Enum.sort(prose)
+      refute frontmatter in positive
+      respond(conn, [hit(u, v, o_id)])
+    end)
+
+    assert {:ok, _text, %{"results" => [r]}} =
+             Handlers.handle("search_notes", u, v, %{"similar_to" => "S.md"})
+
+    assert r["source_path"] == "O.md"
+  end
+
+  test "a note whose points are all sparse-only has no stored embedding", %{
+    bypass: bypass,
+    user: u,
+    vault: v
+  } do
+    note_with_points(u, v, "Meta.md", 2, true)
+    # No dense point, so no recommend: a query call would fail the test.
+    dense_points(bypass, [])
+
+    assert {:error, msg} = Handlers.handle("search_notes", u, v, %{"similar_to" => "Meta.md"})
+    assert msg =~ "Meta.md has no stored embedding yet"
   end
 
   # Review Focus 2: no Bypass expectation, so any Qdrant call fails the test.
@@ -215,7 +292,7 @@ defmodule Engram.MCP.HandlersSimilarTest do
     vault: v
   } do
     other = insert(:vault, user: u)
-    note_with_points(u, v, "S.md", 1, true)
+    dense_points(bypass, note_with_points(u, v, "S.md", 1, true))
 
     Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -251,7 +328,7 @@ defmodule Engram.MCP.HandlersSimilarTest do
   for status <- [400, 404] do
     test "a Qdrant #{status} on recommend is the fixable not_embedded error, not an outage",
          %{bypass: bypass, user: u, vault: v} do
-      note_with_points(u, v, "S.md", 1, true)
+      dense_points(bypass, note_with_points(u, v, "S.md", 1, true))
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
         Plug.Conn.resp(conn, unquote(status), "")
@@ -270,6 +347,7 @@ defmodule Engram.MCP.HandlersSimilarTest do
   } do
     s_ids = note_with_points(u, v, "S.md", 2, true)
     [o_id] = note_with_points(u, v, "O.md", 1, true)
+    dense_points(bypass, s_ids)
     [stray_id | _] = s_ids
 
     Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
@@ -286,7 +364,7 @@ defmodule Engram.MCP.HandlersSimilarTest do
   end
 
   test "folder, tags, and limit reach the Qdrant request", %{bypass: bypass, user: u, vault: v} do
-    note_with_points(u, v, "S.md", 1, true)
+    dense_points(bypass, note_with_points(u, v, "S.md", 1, true))
 
     Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)

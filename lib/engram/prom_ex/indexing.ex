@@ -42,8 +42,8 @@ defmodule Engram.PromEx.Indexing do
       Sizes each embed-less lever. `drawing` stays 0 while drawing data is
       dropped; canvas and base are labelled from the note path.
 
-  Cardinality contract: only `:outcome`/`:reason` (closed enums). NEVER add
-  note_id, user_id, or vault_id.
+  Cardinality contract: only `:outcome`/`:reason`/`:kind`/`:dense` (closed
+  enums). NEVER add note_id, user_id, or vault_id.
   """
 
   use PromEx.Plugin

@@ -313,7 +313,6 @@ defmodule Engram.Indexing do
     # next attempt happily "reusing" ids that no longer exist in Qdrant.
     with :ok <- purge_before_rebuild(note, reused_point_ids, stale_point_ids),
          :ok <- upsert_points_batched(qdrant_points),
-         :ok <- emit_points_written(prepared),
          # Reused points keep their vectors AND their ciphertext (every
          # encrypted field is inside `context_text`, so an equal hmac means an
          # identical payload), but the note-level filter keys on them are
@@ -355,6 +354,9 @@ defmodule Engram.Indexing do
 
       drop_stale_points(reused_point_ids, stale_point_ids, note)
 
+      # Only once the rows are committed: a failed attempt is retried, and
+      # counting its upsert too would count the same points twice.
+      emit_points_written(prepared)
       {:ok, length(chunk_rows)}
     end
   end
@@ -728,6 +730,15 @@ defmodule Engram.Indexing do
       end)
 
     Enum.reject(point_ids, &is_nil/1)
+  end
+
+  @doc """
+  `point_ids_for_note/1` narrowed to the points Qdrant holds a dense vector
+  for. Frontmatter, data, canvas and base points are sparse-only.
+  """
+  @spec dense_point_ids_for_note(map()) :: {:ok, [String.t()]} | {:error, term()}
+  def dense_point_ids_for_note(note) do
+    Qdrant.dense_point_ids(collection(), point_ids_for_note(note))
   end
 
   defp delete_points_for_note(note) do
