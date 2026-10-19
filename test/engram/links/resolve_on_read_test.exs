@@ -168,7 +168,40 @@ defmodule Engram.Links.ResolveOnReadTest do
     assert src == ctx.source.id
   end
 
-  describe "undecryptable rows fall back to the target stored at write" do
+  # No stored target to fall back to: a name that will not decrypt resolves
+  # to nothing.
+  test "batched reads answer exactly what per-note reads do", ctx do
+    # Two notes share a basename, a third is unrelated, one id has no row.
+    a = Fixtures.insert_note!(ctx.user, ctx.vault, %{path: "a/index.md"})
+    b = Fixtures.insert_note!(ctx.user, ctx.vault, %{path: "bb/index.md"})
+    c = Fixtures.insert_note!(ctx.user, ctx.vault, %{path: "Later.md"})
+    missing = Ecto.UUID.generate()
+
+    :ok =
+      Links.replace_links(ctx.user, ctx.vault, ctx.source.id, [
+        edge("index"),
+        %{edge("bb/index") | position: 1},
+        %{edge("Later") | position: 2},
+        %{edge("Nowhere") | position: 3}
+      ])
+
+    :ok = Links.replace_links(ctx.user, ctx.vault, c.id, [edge("bb/index")])
+
+    ids = [ctx.source.id, a.id, b.id, c.id, missing]
+
+    for opts <- [[], [limit: 1], [distinct_sources: true]] do
+      assert Links.backlinks_for_notes(ctx.user, ids, opts) ==
+               Map.new(ids, &{&1, Links.backlinks_for_note(ctx.user, &1, opts)})
+    end
+
+    assert Links.links_for_notes(ctx.user, ids) ==
+             Map.new(ids, &{&1, Links.links_for_note(ctx.user, &1)})
+
+    assert [_] = Links.backlinks_for_note(ctx.user, a.id)
+    assert [_, _] = Links.backlinks_for_note(ctx.user, b.id)
+  end
+
+  describe "undecryptable rows resolve to nothing" do
     import ExUnit.CaptureLog
 
     setup ctx do
@@ -187,12 +220,17 @@ defmodule Engram.Links.ResolveOnReadTest do
       )
 
       capture_log(fn ->
-        assert [%{target_text: nil, target_note_id: id, target_path: "Later.md", dangling: false}] =
-                 Links.links_for_note(ctx.user, ctx.source.id)
+        assert [
+                 %{
+                   target_text: nil,
+                   target_note_id: nil,
+                   target_attachment_id: nil,
+                   dangling: true
+                 }
+               ] = Links.links_for_note(ctx.user, ctx.source.id)
 
-        assert id == ctx.target.id
-        assert [%{source_note_id: src}] = Links.backlinks_for_note(ctx.user, ctx.target.id)
-        assert src == ctx.source.id
+        # Unkeyed, so backlinks would have to match its text: none to match.
+        assert Links.backlinks_for_note(ctx.user, ctx.target.id) == []
       end)
     end
 
@@ -202,8 +240,7 @@ defmodule Engram.Links.ResolveOnReadTest do
       )
 
       capture_log(fn ->
-        assert [%{source_note_id: src}] = Links.backlinks_for_note(ctx.user, ctx.target.id)
-        assert src == ctx.source.id
+        assert Links.backlinks_for_note(ctx.user, ctx.target.id) == []
       end)
     end
   end

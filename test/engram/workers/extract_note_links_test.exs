@@ -339,6 +339,36 @@ defmodule Engram.Workers.ExtractNoteLinksTest do
       assert [] == all_enqueued(worker: RewriteNoteLinks)
     end
 
+    test "rename evidence for a name that RESOLVES (a new note took it) is not repaired",
+         %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# t"}, actor: "api")
+
+      {:ok, _renamed} = Notes.rename_note(user, vault, "Old.md", "Fresh.md")
+      [rename_job] = all_enqueued(worker: RewriteNoteLinks)
+      clear_jobs!("Engram.Workers.RewriteNoteLinks")
+      {:ok, _} = Oban.insert(RewriteNoteLinks.new(rename_job.args))
+
+      Repo.update_all(
+        from(j in Oban.Job, where: j.worker == "Engram.Workers.RewriteNoteLinks"),
+        set: [state: "completed", completed_at: DateTime.utc_now()]
+      )
+
+      # A new note takes the old name, so [[Old]] is no dangler: the
+      # evidence matches its basename but there is nothing to repair.
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Old.md", "content" => "# new"}, actor: "api")
+
+      {:ok, late} =
+        Notes.upsert_note(user, vault, %{"path" => "Late.md", "content" => "see [[Old]]"},
+          actor: "api"
+        )
+
+      assert :ok = perform_job(ExtractNoteLinks, %{note_id: late.id})
+      assert [] == all_enqueued(worker: RewriteNoteLinks)
+      assert [%{dangling: false}] = Links.links_for_note(user, late.id)
+    end
+
     test "rename evidence OLDER than the 10-minute repair window is not repaired",
          %{user: user, vault: vault} do
       {:ok, _} =

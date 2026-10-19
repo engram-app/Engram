@@ -103,13 +103,14 @@ The workflow opens an engram-infra PR bumping the var to that older `sha-<7>`. M
 
 ### Rolling back past link resolve-on-read (PR #2030)
 
-Releases from #2030 on resolve link targets when read. They still write
-`note_links.target_note_id`/`target_attachment_id` when a note's own links
-are extracted, but no longer re-resolve OTHER notes' edges when a note is
-created, renamed or deleted. Releases before it read those columns directly.
-After rolling back past #2030, links written while it ran can show as
-dangling, or point at a renamed or deleted note, until their source note is
-saved again. Nothing on the old release heals them by itself.
+Releases from #2030 on resolve link targets when read. #2030 itself stopped
+re-resolving OTHER notes' edges when a note is created, renamed or deleted;
+the release after it stops writing `note_links.target_note_id`/
+`target_attachment_id` at all (a later release drops them). Releases before
+#2030 read those columns directly. After rolling back past #2030, links
+written since can show as dangling, or point at a renamed or deleted note,
+until their source note is saved again. Nothing on the old release heals them
+by itself.
 
 Heal it once, in a remote console on the rolled-back release. This queues
 the old per-basename rebind for every linked name, at background priority:
