@@ -5654,6 +5654,7 @@ defmodule Engram.Notes do
     :basename_hmac,
     :path_ci_hmac,
     :path_length,
+    :link_keys_stamp,
     :folder_ciphertext,
     :folder_nonce,
     :folder_hmac
@@ -5669,6 +5670,7 @@ defmodule Engram.Notes do
     :basename_hmac,
     :path_ci_hmac,
     :path_length,
+    :link_keys_stamp,
     :folder_ciphertext,
     :folder_nonce,
     :folder_hmac,
@@ -5678,7 +5680,7 @@ defmodule Engram.Notes do
     :dek_version
   ]
 
-  # Statement-size bound for the VALUES join: 500 rows × ≤19 params stays
+  # Statement-size bound for the VALUES join: 500 rows × ≤20 params stays
   # well under Postgres's 65535-bind-param protocol limit.
   @rename_update_chunk 500
 
@@ -7071,7 +7073,7 @@ defmodule Engram.Notes do
       path_hmac: Crypto.hmac_field(filter_key, path),
       basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(path))
     ] ++
-      Links.path_keys(filter_key, path) ++
+      Links.path_keys(filter_key, path, path_n) ++
       [
         folder_ciphertext: folder_ct,
         folder_nonce: folder_n,
@@ -7100,7 +7102,7 @@ defmodule Engram.Notes do
       path_hmac: Crypto.hmac_field(filter_key, path),
       basename_hmac: Crypto.hmac_field(filter_key, Links.basename_key(path))
     ] ++
-      Links.path_keys(filter_key, path) ++
+      Links.path_keys(filter_key, path, path_n) ++
       [
         folder_ciphertext: folder_ct,
         folder_nonce: folder_n,

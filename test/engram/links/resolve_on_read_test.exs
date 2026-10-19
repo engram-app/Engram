@@ -91,13 +91,61 @@ defmodule Engram.Links.ResolveOnReadTest do
 
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(Engram.Notes.Note, set: [path_ci_hmac: nil, path_length: nil])
-        Repo.update_all(Engram.Attachments.Attachment, set: [path_ci_hmac: nil, path_length: nil])
-        Repo.update_all(Engram.Links.NoteLink, set: [target_key_hmac: nil])
+        Repo.update_all(Engram.Notes.Note,
+          set: [path_ci_hmac: nil, path_length: nil, link_keys_stamp: nil]
+        )
+
+        Repo.update_all(Engram.Attachments.Attachment,
+          set: [path_ci_hmac: nil, path_length: nil, link_keys_stamp: nil]
+        )
+
+        Repo.update_all(Engram.Links.NoteLink, set: [target_key_hmac: nil, link_keys_stamp: nil])
       end)
 
     assert read.() == keyed
     assert Enum.count(elem(keyed, 0), & &1.dangling) == 1
+  end
+
+  # The previous release renames a note mid-deploy: it re-encrypts the path
+  # and recomputes the HMACs it knows, leaving the new keys describing the
+  # OLD path. The fresh nonce breaks their stamp, so reads ignore them.
+  test "keys a previous release left behind on rename are not trusted", ctx do
+    %{user: user, vault: vault} = ctx
+    note = Fixtures.insert_note!(user, vault, %{path: "a/Later.md"})
+    _other = Fixtures.insert_note!(user, vault, %{path: "Later.md"})
+    src = Fixtures.insert_note!(user, vault, %{path: "Src.md"})
+
+    :ok =
+      Links.replace_links(user, vault, src.id, [
+        %{edge("b/Later") | position: 0},
+        %{edge("Later") | position: 1}
+      ])
+
+    {:ok, dek} = Engram.Crypto.get_dek(user)
+    {:ok, filter_key} = Engram.Crypto.dek_filter_key(user)
+    new_path = "b/Later.md"
+
+    # Fixture rows are legacy (dek_version 1): empty AAD.
+    {ct, nonce} = Engram.Crypto.Envelope.encrypt(new_path, dek)
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(from(n in Engram.Notes.Note, where: n.id == ^note.id),
+          set: [
+            path_ciphertext: ct,
+            path_nonce: nonce,
+            path_hmac: Engram.Crypto.hmac_field(filter_key, new_path)
+          ]
+        )
+      end)
+
+    assert [%{target_note_id: qualified}, %{target_note_id: bare}] =
+             Links.links_for_note(user, src.id)
+
+    assert qualified == note.id
+    refute bare == note.id
+    assert [%{source_note_id: s}] = Links.backlinks_for_note(user, note.id)
+    assert s == src.id
   end
 
   defp edge(target),

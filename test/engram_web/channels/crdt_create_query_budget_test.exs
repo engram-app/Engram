@@ -21,7 +21,9 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
   # 42 -> 26, 5 -> 1: the genesis seed runs inside the row transaction
   # (#1409 open half), so its with_tenant legs join it instead of opening
   # their own.
-  @statements 26
+  # 26 -> 24: link targets resolve on read, so a create no longer enqueues a
+  # RebindNoteLinks job (insert + pg_notify).
+  @statements 24
   @tenant_txns 1
   @subscription_reads 0
 

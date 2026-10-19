@@ -82,22 +82,52 @@ defmodule Engram.Links do
   # the overflow.
   @insert_chunk 2000
 
+  # Unicode decides `String.length/1` (graphemes) and `String.downcase/1`,
+  # so keys computed under another Unicode version are not trusted.
+  @link_keys_version String.Unicode.version() |> Tuple.to_list() |> Enum.join(".")
+
   @doc """
   The link resolution keys a note or attachment row stores for `path`:
-  `path_ci_hmac` (lowercased path, the folder-qualified lookup) and
-  `path_length` (graphemes, the first tiebreak). Written with the path.
+  `path_ci_hmac` (lowercased path, the folder-qualified lookup),
+  `path_length` (graphemes, the first tiebreak), and `link_keys_stamp`.
+
+  The stamp is the `path_nonce` the path was just encrypted under plus the
+  Unicode version. Readers trust the keys only while the stamp equals the
+  row's current nonce and version, so any writer that re-encrypts the path
+  without recomputing them (a previous release mid-deploy or after a
+  rollback, AAD rebind) invalidates them, and the row is decrypted instead.
   """
-  @spec path_keys(binary(), String.t()) :: [path_ci_hmac: binary(), path_length: integer()]
-  def path_keys(filter_key, path),
-    do: [path_ci_hmac: ci_hmac(filter_key, path), path_length: String.length(path)]
+  @spec path_keys(binary(), String.t(), binary()) :: keyword()
+  def path_keys(filter_key, path, path_nonce) do
+    [
+      path_ci_hmac: ci_hmac(filter_key, path),
+      path_length: String.length(path),
+      link_keys_stamp: path_nonce <> @link_keys_version
+    ]
+  end
+
+  @doc "`path_keys/3` for a link edge: its `target_key_hmac` and stamp."
+  @spec target_keys(binary(), String.t(), binary()) :: keyword()
+  def target_keys(filter_key, target, target_nonce),
+    do: [
+      target_key_hmac: target_key_hmac(filter_key, target),
+      link_keys_stamp: target_nonce <> @link_keys_version
+    ]
+
+  @doc "The version suffix of every `link_keys_stamp`."
+  @spec link_keys_version() :: String.t()
+  def link_keys_version, do: @link_keys_version
 
   @doc """
   The `target_key_hmac` a link edge stores for its raw `target`: the same
-  lowercased key `path_keys/2` writes for a path, so an edge naming a path
+  lowercased key `path_keys/3` writes for a path, so an edge naming a path
   and the row at that path share it.
   """
   @spec target_key_hmac(binary(), String.t()) :: binary()
   def target_key_hmac(filter_key, target), do: ci_hmac(filter_key, target)
+
+  defp keys_current?(stamp, nonce),
+    do: is_binary(stamp) and is_binary(nonce) and stamp == nonce <> @link_keys_version
 
   # Own domain, so a lowercase path's key never equals its `path_hmac`.
   defp ci_hmac(filter_key, text),
@@ -247,7 +277,14 @@ defmodule Engram.Links do
             :undecryptable
       end
 
-      {l.position, l.link_type, l.target_basename_hmac, l.target_key_hmac, l.target_note_id,
+      # A key whose stamp no longer matches is not a key: compare unequal so
+      # the next extraction rewrites the row with fresh ones.
+      key =
+        if keys_current?(l.link_keys_stamp, l.target_text_nonce),
+          do: l.target_key_hmac,
+          else: :stale
+
+      {l.position, l.link_type, l.target_basename_hmac, key, l.target_note_id,
        l.target_attachment_id,
        decrypt.(l.target_text_ciphertext, l.target_text_nonce, :target_text),
        decrypt.(l.alias_ciphertext, l.alias_nonce, :alias),
@@ -265,6 +302,8 @@ defmodule Engram.Links do
     {tct, tnonce} =
       Envelope.encrypt(target, dek, Crypto.aad_for_row(:note_links, :target_text, id))
 
+    stamp = tnonce <> @link_keys_version
+
     %{
       id: id,
       user_id: user.id,
@@ -276,6 +315,7 @@ defmodule Engram.Links do
       target_text_nonce: tnonce,
       target_basename_hmac: hmac,
       target_key_hmac: key_hmac,
+      link_keys_stamp: stamp,
       link_type: link_type,
       position: position,
       dek_version: dek_version,
@@ -427,8 +467,6 @@ defmodule Engram.Links do
   # Batch form: `%{basename_hmac => [{id, decrypted_path}]}` for a set of
   # hmacs, one query per table. `fetch_decrypted_candidates/5` is the
   # single-hmac projection of this.
-  defp fetch_candidates_by_hmac(_user, _vault, [], _table, _dek), do: %{}
-
   defp fetch_candidates_by_hmac(user, vault, hmacs, :notes, dek) do
     from(n in Note,
       where:
@@ -890,42 +928,55 @@ defmodule Engram.Links do
   defp variant_keys(filter_key, target),
     do: Enum.map(["" | @note_exts], &target_key_hmac(filter_key, target <> &1))
 
+  # Raw SQL for the conditional window: the shortest length is taken over
+  # rows whose keys are current only (a stale length could hide the real
+  # winner), and rows with stale or missing keys come back to be decrypted.
+  # Runs inside the caller's tenant transaction; RLS scopes it, and the
+  # user/vault filters are belt and braces as elsewhere in this module.
   defp keyed_candidates(user, vault_id, keys, table, dek) do
-    schema = if table == :notes, do: Note, else: Attachment
+    {source, kind} =
+      if table == :notes, do: {"notes", "AND c.kind = 'note'"}, else: {"attachments", ""}
 
-    same_name =
-      from(c in schema,
-        where:
-          c.user_id == ^user.id and c.vault_id == ^vault_id and
-            c.basename_hmac in ^keys.hmacs and is_nil(c.deleted_at),
-        windows: [same_name: [partition_by: c.basename_hmac]],
-        select: %{
-          id: c.id,
-          basename_hmac: c.basename_hmac,
-          path_ciphertext: c.path_ciphertext,
-          path_nonce: c.path_nonce,
-          dek_version: c.dek_version,
-          path_ci_hmac: c.path_ci_hmac,
-          path_length: c.path_length,
-          shortest: over(min(c.path_length), :same_name)
-        }
+    %{rows: rows} =
+      Repo.query!(
+        """
+        SELECT s.id, s.basename_hmac, s.path_ciphertext, s.path_nonce, s.dek_version
+        FROM (
+          SELECT c.id, c.basename_hmac, c.path_ciphertext, c.path_nonce, c.dek_version,
+                 c.path_ci_hmac, c.path_length, k.current,
+                 min(CASE WHEN k.current THEN c.path_length END)
+                   OVER (PARTITION BY c.basename_hmac) AS shortest
+          FROM #{source} AS c
+          CROSS JOIN LATERAL (
+            SELECT coalesce(c.link_keys_stamp = (c.path_nonce || $6::bytea), false) AS current
+          ) AS k
+          WHERE c.user_id = $1 AND c.vault_id = $2 AND c.basename_hmac = ANY($3)
+            AND c.deleted_at IS NULL #{kind}
+        ) AS s
+        WHERE NOT s.current
+           OR s.path_ci_hmac = ANY($4)
+           OR (s.basename_hmac = ANY($5) AND s.path_length = s.shortest)
+        """,
+        [
+          Ecto.UUID.dump!(user.id),
+          Ecto.UUID.dump!(vault_id),
+          keys.hmacs,
+          keys.path_keys,
+          keys.bare_hmacs,
+          @link_keys_version
+        ]
       )
 
-    same_name = if table == :notes, do: where(same_name, [c], c.kind == "note"), else: same_name
-
-    from(c in subquery(same_name),
-      where:
-        is_nil(c.path_ci_hmac) or is_nil(c.path_length) or c.path_ci_hmac in ^keys.path_keys or
-          (c.basename_hmac in ^keys.bare_hmacs and c.path_length == c.shortest),
-      select: %{
-        id: type(c.id, Ecto.UUID),
-        basename_hmac: c.basename_hmac,
-        path_ciphertext: c.path_ciphertext,
-        path_nonce: c.path_nonce,
-        dek_version: c.dek_version
+    rows
+    |> Enum.map(fn [id, hmac, ct, nonce, version] ->
+      %{
+        id: Ecto.UUID.load!(id),
+        basename_hmac: hmac,
+        path_ciphertext: ct,
+        path_nonce: nonce,
+        dek_version: version
       }
-    )
-    |> Repo.all(skip_tenant_check: true)
+    end)
     |> decrypt_and_group(dek, table)
   end
 
@@ -957,7 +1008,7 @@ defmodule Engram.Links do
         {Ecto.UUID.dump!(row.id), Crypto.aad_bound?(row.dek_version), ct, nonce}
       end)
 
-    case is_list(fields) and Enum.all?(fields, &is_binary(elem(&1, 2))) &&
+    case Enum.all?(fields, &is_binary(elem(&1, 2))) &&
            Envelope.decrypt_many(dek, Crypto.aad_prefix(table, column), fields) do
       {:ok, plain} ->
         plain
@@ -1025,9 +1076,14 @@ defmodule Engram.Links do
         targets = winning_targets(user, vault_id, hmac, path, note_id, dek)
         keys = Enum.map(targets, &target_key_hmac(filter_key, &1))
 
+        # Unkeyed first: a backfill committing between the two reads then
+        # makes an edge show up twice (deduped), never zero times.
+        unkeyed = unkeyed_backlinks(user, vault_id, hmac, MapSet.new(targets), dek)
+
         user
         |> keyed_backlinks(vault_id, hmac, keys, limit, distinct_sources?)
-        |> Kernel.++(unkeyed_backlinks(user, vault_id, hmac, MapSet.new(targets), dek))
+        |> Kernel.++(unkeyed)
+        |> Enum.uniq_by(& &1.id)
         |> Enum.sort_by(&{&1.position, &1.id})
         |> pick_backlinks(limit, distinct_sources?)
         |> render_backlinks(user, dek)
@@ -1104,7 +1160,13 @@ defmodule Engram.Links do
     from(l in NoteLink,
       where:
         l.user_id == ^user.id and l.vault_id == ^vault_id and l.target_basename_hmac == ^hmac and
-          l.target_key_hmac in ^keys,
+          l.target_key_hmac in ^keys and
+          fragment(
+            "? = (? || ?::bytea)",
+            l.link_keys_stamp,
+            l.target_text_nonce,
+            ^@link_keys_version
+          ),
       limit: ^limit,
       select: map(l, ^@edge_read_fields)
     )
@@ -1122,15 +1184,22 @@ defmodule Engram.Links do
     |> order_by([l], asc: l.source_note_id, asc: l.position, asc: l.id)
   end
 
-  # Edges written before `target_key_hmac` existed: decrypt and match by text.
-  # The `LinkResolutionKeys` data migration empties this set.
+  # Edges whose key is missing or stale (written before the keys existed, or
+  # re-encrypted by a writer that does not know them): decrypt and match by
+  # text. The `LinkResolutionKeys` data migration empties this set.
   defp unkeyed_backlinks(user, vault_id, hmac, targets, dek) do
     edges =
       Repo.all(
         from(l in NoteLink,
           where:
             l.user_id == ^user.id and l.vault_id == ^vault_id and
-              l.target_basename_hmac == ^hmac and is_nil(l.target_key_hmac),
+              l.target_basename_hmac == ^hmac and
+              fragment(
+                "? IS DISTINCT FROM (? || ?::bytea)",
+                l.link_keys_stamp,
+                l.target_text_nonce,
+                ^@link_keys_version
+              ),
           select: map(l, ^@edge_read_fields)
         ),
         skip_tenant_check: true

@@ -730,7 +730,7 @@ defmodule Engram.Crypto.UserDekRotation do
                 [
                   {:basename_hmac,
                    Crypto.hmac_field(new_filter_key, Engram.Links.basename_key(plaintext))}
-                  | Engram.Links.path_keys(new_filter_key, plaintext)
+                  | Engram.Links.path_keys(new_filter_key, plaintext, new_nonce)
                 ]
               else
                 []
@@ -847,8 +847,8 @@ defmodule Engram.Crypto.UserDekRotation do
             hmac_updates =
               if hmac_key && is_binary(plaintext) do
                 [
-                  {hmac_key, Crypto.hmac_field(new_filter_key, hmac_transform.(plaintext))},
-                  {:target_key_hmac, Engram.Links.target_key_hmac(new_filter_key, plaintext)}
+                  {hmac_key, Crypto.hmac_field(new_filter_key, hmac_transform.(plaintext))}
+                  | Engram.Links.target_keys(new_filter_key, plaintext, new_nonce)
                 ]
               else
                 []
@@ -1308,7 +1308,7 @@ defmodule Engram.Crypto.UserDekRotation do
                   [
                     {:basename_hmac,
                      Crypto.hmac_field(new_filter_key, Engram.Links.basename_key(plaintext))}
-                    | Engram.Links.path_keys(new_filter_key, plaintext)
+                    | Engram.Links.path_keys(new_filter_key, plaintext, new_nonce)
                   ]
                 else
                   []

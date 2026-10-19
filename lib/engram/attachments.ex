@@ -597,7 +597,7 @@ defmodule Engram.Attachments do
                     basename_hmac: new_basename_hmac,
                     updated_at: now,
                     seq: seq
-                  ] ++ Links.path_keys(filter_key, new_path)
+                  ] ++ Links.path_keys(filter_key, new_path, path_n)
               )
 
             # Insert the old-path tombstone (fresh uuid, path encrypted under
@@ -999,7 +999,7 @@ defmodule Engram.Attachments do
         |> Repo.all()
 
       if rows == [] do
-        {[], [], [], []}
+        {[], [], []}
       else
         n = length(rows)
 
@@ -1436,7 +1436,7 @@ defmodule Engram.Attachments do
       attrs =
         Map.merge(
           attrs,
-          Map.new(Links.path_keys(Crypto.dek_filter_key_from_bytes(dek), path))
+          Map.new(Links.path_keys(Crypto.dek_filter_key_from_bytes(dek), path, path_n))
         )
 
       {:ok, key, attrs, ciphertext}

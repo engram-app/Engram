@@ -35,12 +35,39 @@ defmodule Engram.Links.ResolveOnReadPropertyTest do
     end
   end
 
+  # :missing = written before the keys existed. :stale = keys a writer left
+  # behind when it re-encrypted without recomputing them: garbage values whose
+  # stamp no longer matches, which readers must ignore, never trust.
+  defp damage_keys(_user, :fresh), do: :ok
+
+  defp damage_keys(user, state) do
+    {path_set, link_set} =
+      case state do
+        :missing ->
+          {[path_ci_hmac: nil, path_length: nil, link_keys_stamp: nil],
+           [target_key_hmac: nil, link_keys_stamp: nil]}
+
+        :stale ->
+          junk = :crypto.strong_rand_bytes(32)
+
+          {[path_ci_hmac: junk, path_length: 1, link_keys_stamp: junk],
+           [target_key_hmac: junk, link_keys_stamp: junk]}
+      end
+
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.update_all(Engram.Notes.Note, set: path_set)
+        Repo.update_all(Engram.Attachments.Attachment, set: path_set)
+        Repo.update_all(Engram.Links.NoteLink, set: link_set)
+      end)
+  end
+
   property "links and backlinks agree with resolve_target/4" do
     check all(
             notes <- uniq_list_of(note_path(), min_length: 1, max_length: 8),
             atts <- uniq_list_of(att_path(), max_length: 3),
             targets <- list_of(target(), min_length: 1, max_length: 8),
-            strip_keys? <- boolean(),
+            keys <- member_of([:fresh, :missing, :stale]),
             max_runs: 40
           ) do
       {:ok, user} = Fixtures.user_with_dek_fixture()
@@ -64,18 +91,7 @@ defmodule Engram.Links.ResolveOnReadPropertyTest do
           end)
         )
 
-      if strip_keys? do
-        {:ok, _} =
-          Repo.with_tenant(user.id, fn ->
-            Repo.update_all(Engram.Notes.Note, set: [path_ci_hmac: nil, path_length: nil])
-
-            Repo.update_all(Engram.Attachments.Attachment,
-              set: [path_ci_hmac: nil, path_length: nil]
-            )
-
-            Repo.update_all(Engram.Links.NoteLink, set: [target_key_hmac: nil])
-          end)
-      end
+      damage_keys(user, keys)
 
       links = Links.links_for_note(user, src.id)
 

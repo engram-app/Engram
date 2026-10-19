@@ -15,24 +15,33 @@ defmodule Engram.Repo.Migrations.AddLinkResolutionKeys do
       backlinks select the edges that name a note instead of every edge
       sharing its basename.
 
-  Nullable, no default: metadata-only ALTERs. NULL means "not yet computed";
-  readers decrypt those rows instead, and the `LinkResolutionKeys` data
-  migration fills them.
+  `link_keys_stamp` (each table) is the nonce the keys were derived under
+  plus the Unicode version (`Engram.Links.path_keys/3`). Keys whose stamp
+  does not match the row's current nonce are ignored, so a writer that
+  re-encrypts without recomputing them (the previous release, mid-deploy or
+  after a rollback) can never leave stale keys that readers trust.
+
+  Nullable, no default: metadata-only ALTERs. NULL or unmatched means "not
+  computed"; readers decrypt those rows instead, and the
+  `LinkResolutionKeys` data migration fills them.
   """
 
   def change do
     alter table(:notes) do
       add :path_ci_hmac, :binary
       add :path_length, :integer
+      add :link_keys_stamp, :binary
     end
 
     alter table(:attachments) do
       add :path_ci_hmac, :binary
       add :path_length, :integer
+      add :link_keys_stamp, :binary
     end
 
     alter table(:note_links) do
       add :target_key_hmac, :binary
+      add :link_keys_stamp, :binary
     end
   end
 end
