@@ -40,7 +40,7 @@ defmodule EngramWeb.BillingUsageTest do
   test "reports the Free caps and a real vault count", %{conn: conn} do
     body = usage(conn)
 
-    assert body["usage"]["notes"]["limit"] == 3_000
+    assert body["usage"]["notes"]["limit"] == 2_000
     assert body["usage"]["vaults"]["limit"] == 1
     # register_vault/3 in setup created exactly one.
     assert body["usage"]["vaults"]["used"] == 1

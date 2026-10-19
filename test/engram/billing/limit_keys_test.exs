@@ -49,9 +49,9 @@ defmodule Engram.Billing.LimitKeysTest do
 
   describe "default_for/2 — full matrix pin" do
     test "free tier matrix matches spec §9.2" do
-      # 3,000 since 2026-10-17: Free stores 3,000 notes and all of them are
-      # searchable. The search-coverage cap was removed, not lowered.
-      assert LimitKeys.default_for(:notes_cap, :free) == 3_000
+      # 2,000 since 2026-10-19 (owner decision): Free stores 2,000 notes and
+      # all of them are searchable. The search-coverage cap was removed.
+      assert LimitKeys.default_for(:notes_cap, :free) == 2_000
       assert LimitKeys.default_for(:vaults_cap, :free) == 1
       assert LimitKeys.default_for(:attachment_bytes_cap, :free) == 1_073_741_824
       assert LimitKeys.default_for(:max_file_bytes, :free) == 10_485_760
@@ -75,7 +75,7 @@ defmodule Engram.Billing.LimitKeysTest do
     end
 
     test "starter tier matrix matches spec §9.2" do
-      assert LimitKeys.default_for(:notes_cap, :starter) == 50_000
+      assert LimitKeys.default_for(:notes_cap, :starter) == 20_000
       assert LimitKeys.default_for(:vaults_cap, :starter) == 10
       # 10 GiB. Raised from 3 GiB in pricing v3.1 (2026-09-03).
       assert LimitKeys.default_for(:attachment_bytes_cap, :starter) == 10_737_418_240
@@ -85,7 +85,8 @@ defmodule Engram.Billing.LimitKeysTest do
     end
 
     test "pro tier matrix matches spec §9.2" do
-      assert LimitKeys.default_for(:notes_cap, :pro) == nil
+      # Finite since 2026-10-19 (owner decision).
+      assert LimitKeys.default_for(:notes_cap, :pro) == 40_000
       # Unlimited as of pricing v3.1 — vaults are packaging, not a resource.
       # Rooms are demand-started with `auto_exit`, index rooms are not
       # LRU-tracked, and every quota is per-user. See the decision log.
@@ -226,9 +227,15 @@ defmodule Engram.Billing.LimitKeysTest do
   test "index_points_cap bounds Qdrant points per account" do
     assert LimitKeys.defined?(:index_points_cap)
     assert LimitKeys.type(:index_points_cap) == :integer
-    assert LimitKeys.default_for(:index_points_cap, :free) == 10_000
-    assert LimitKeys.default_for(:index_points_cap, :starter) == 100_000
-    assert LimitKeys.default_for(:index_points_cap, :pro) == 250_000
+    # notes_cap x 8.5, the median points per indexed note in prod.
+    assert LimitKeys.default_for(:index_points_cap, :free) == 17_000
+    assert LimitKeys.default_for(:index_points_cap, :starter) == 170_000
+    assert LimitKeys.default_for(:index_points_cap, :pro) == 340_000
+
+    for tier <- [:free, :starter, :pro] do
+      assert LimitKeys.default_for(:index_points_cap, tier) ==
+               div(LimitKeys.default_for(:notes_cap, tier) * 17, 2)
+    end
   end
 
   test "note_points_cap bounds dense points per note" do

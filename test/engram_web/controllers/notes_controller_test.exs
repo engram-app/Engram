@@ -657,11 +657,11 @@ defmodule EngramWeb.NotesControllerTest do
       lift_api_rps_cap!(user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
-      # Fast-set the maintained meter to the Free-tier default cap (3_000)
-      # instead of inserting 3k real notes. Limit enforcement reads
+      # Fast-set the maintained meter to the Free-tier default cap (2_000)
+      # instead of inserting 2k real notes. Limit enforcement reads
       # UsageMeters.notes_count/1, so this is the only state the resolver
       # cares about for the 402 branch.
-      :ok = Engram.UsageMeters.inc_notes_count(user.id, 3_000)
+      :ok = Engram.UsageMeters.inc_notes_count(user.id, 2_000)
 
       authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
       %{conn: authed, user: user}
@@ -675,8 +675,8 @@ defmodule EngramWeb.NotesControllerTest do
       assert body["reason"] == "notes_cap_exceeded"
       assert body["tier"] == "free"
       assert body["limit_key"] == "notes_cap"
-      assert body["limit"] == 3_000
-      assert body["current"] == 3_000
+      assert body["limit"] == 2_000
+      assert body["current"] == 2_000
       assert body["upgrade_url"] =~ "/#settings/billing"
     end
   end
@@ -696,7 +696,7 @@ defmodule EngramWeb.NotesControllerTest do
       lift_api_rps_cap!(user)
       {:ok, user} = Engram.Crypto.ensure_user_dek(user)
 
-      # Simulate a user well over the Free-tier 3_000-note cap (e.g. they
+      # Simulate a user well over the Free-tier 2_000-note cap (e.g. they
       # were Pro, hit 12k notes, then subscription.canceled flipped them
       # back to Free). The resolver reads UsageMeters.notes_count/1, so
       # fast-setting the meter is enough — we don't need to materialize
