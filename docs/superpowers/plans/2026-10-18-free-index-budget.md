@@ -177,3 +177,33 @@ Email copy:
 |---|---|
 | Gate Task 3 on chunker v4 (`review-migration` #24) | The cap counts real rows at whatever chunker version is live; v4 moves the count only -19% |
 | Keep demoted vectors cold for free promotion (`review-migration` #25, C1) | Needs the S3 vector store (epic #609 follow-up); promotion of `"floor_paid"` is unmetered instead |
+
+---
+
+### Task 7: Per-note dense cap by merging chunks (added 2026-10-19)
+
+Evidence: `engram-workspace/reports/2026-10-18-qdrant-eval/large-notes-audit.md`. 641 live notes over 128 chunks hold 62.6% of points; 359 of them are 1-2.7 MB single-section dumps. A per-note cap of 128 saves 210k points (45%); merged points are p50 1.3k, p99 3.3k Voyage tokens, none over the 32k input limit.
+
+**Files:**
+- Modify: `lib/engram/billing/limit_keys.ex` (new key), `lib/engram/indexing.ex` (merge step after chunking, before the budget check of Task 3), `lib/engram/workers/reconcile_embeddings.ex` (self-heal: select notes whose live chunk count exceeds their tier's cap)
+- Test: `test/engram/indexing_note_cap_test.exs`, `test/engram/billing/limit_keys_test.exs`
+
+**Interfaces:**
+- `LimitKeys.default_for(:note_points_cap, :free) == 128`, `:starter == 1_024`, `:pro == 1_024`, `type == :integer`. Self-host unlimited (billing disabled).
+- `Indexing.cap_chunks(chunks, cap) :: chunks`: when `length(chunks) > cap`, merge ADJACENT chunks into exactly `cap` groups balanced by token count (contiguous, order kept, no text dropped). A merged chunk spans `char_start` of its first member to `char_end` of its last, its text is the members' text joined with "\n\n", `heading_path` of its first member, `token_count` the sum. Under the cap the list is returned unchanged (identity).
+- Any merged group estimated over 30,000 Voyage tokens: the whole note takes the floor path instead (Task 2), `ponytail:` comment naming the ceiling.
+- `planned_points` for Task 3's `points_budget_ok?` is the CAPPED count.
+- Re-merging a note that already has dense vectors is unmetered maintenance (never charge twice); a first-ever embed meters as usual.
+
+- [ ] **Step 1: Failing tests:**
+  - 500 chunks, cap 128: 128 chunks out, contiguous, first `char_start` and last `char_end` preserved, concatenated text equals the members' text in order, token sums equal
+  - 100 chunks, cap 128: identical list returned
+  - a Free note of 500 chunks indexes 128 points; the same note for a Starter user indexes 500 (under 1,024)
+  - a term only in the last 1% of a 500-chunk Free note is found by dense+sparse search
+  - a merged group over 30k estimated tokens floors the note, zero embedder calls
+  - the reconcile sweep selects a Free note with 500 live chunks and rebuilds it to 128 unmetered; a Starter note of 500 is not selected
+  - billing disabled: never capped
+- [ ] **Step 2: Run** `mise exec -- mix test test/engram/indexing_note_cap_test.exs`. Expected: FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** the new file plus `test/engram/indexing*`, `test/engram/workers/reconcile*`, `test/engram/workers/embed_note*`. Expected: PASS.
+- [ ] **Step 5: Commit** `feat(indexing): cap dense points per note by merging chunks`.
