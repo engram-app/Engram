@@ -55,18 +55,41 @@ defmodule Engram.KeywordIndex.QdrantSparse do
   # Guards: a non-32-byte key would make dims a reversible hash of the token,
   # and avgdl <= 0 would silently zero every weight. Both raised before the
   # encoder moved to Rust, and still do.
+  #
+  # `cap_doc_len: true` normalizes each document as if it were at most
+  # `avgdl` long (BM25 with `min(doc_len, avgdl)`). Only the floor index uses
+  # it: a whole note in one vector would otherwise be buried by length
+  # normalization under every short chunk. A document longer than `avgdl` is
+  # encoded a second time with `avgdl = doc_len`, which makes the norm exactly
+  # 1; the NIF has no length knob, and that second pass is one note's text.
   @impl Engram.KeywordIndex
-  def encode_documents(texts, filter_key, avgdl, language)
+  def encode_documents(texts, filter_key, avgdl, language, opts \\ [])
       when byte_size(filter_key) == 32 and is_number(avgdl) and avgdl > 0 do
     lang = Tokenizer.lang(language)
 
-    texts
-    |> Enum.chunk_every(@docs_per_call)
-    |> Enum.flat_map(fn batch ->
-      for {indices, values, doc_len} <-
-            Engram.Native.encode_documents(batch, filter_key, avgdl / 1, lang),
-          do: {%{indices: indices, values: values}, doc_len}
-    end)
+    encoded =
+      texts
+      |> Enum.chunk_every(@docs_per_call)
+      |> Enum.flat_map(fn batch ->
+        for {indices, values, doc_len} <-
+              Engram.Native.encode_documents(batch, filter_key, avgdl / 1, lang),
+            do: {%{indices: indices, values: values}, doc_len}
+      end)
+
+    if Keyword.get(opts, :cap_doc_len, false),
+      do: Enum.zip_with(texts, encoded, &cap_doc_len(&1, &2, filter_key, avgdl, lang)),
+      else: encoded
+  end
+
+  defp cap_doc_len(text, {_vector, doc_len} = encoded, filter_key, avgdl, lang) do
+    if doc_len > avgdl do
+      [{indices, values, ^doc_len}] =
+        Engram.Native.encode_documents([text], filter_key, doc_len / 1, lang)
+
+      {%{indices: indices, values: values}, doc_len}
+    else
+      encoded
+    end
   end
 
   @impl Engram.KeywordIndex

@@ -66,11 +66,15 @@ defmodule Engram.Indexing do
       keyword-searchable. `EmbedNote` passes the lifetime embed budget here.
     * `:release_tokens` — `fn tokens -> any end`, called when the embed call
       fails after a reservation, so a failed attempt is not charged.
-    * `:in_commit` — `fn chunk_count, dense? -> any end`, run on success INSIDE
-      the tenant transaction that writes the chunk rows (or, on the no-chunks
-      path, in one opened after the purge). `EmbedNote` stamps its
+    * `:in_commit` — `fn chunk_count, dense?, index_tier -> any end`, run on
+      success INSIDE the tenant transaction that writes the chunk rows (or, on
+      the no-chunks path, in one opened after the purge). `EmbedNote` stamps its
       hashes here, so the stamp shares the index write's transaction instead
-      of opening its own.
+      of opening its own. `index_tier` is `floor_tier/2` of this pass.
+    * `:index_tier` — overrides the note's own `index_tier` (see
+      `floor_tier/2`). `"floor"` / `"floor_paid"` take the floor path
+      (`floor_plan/2`); an explicit `nil` forces a full pass. Either way the
+      note row ends up stamped with the tier the pass used.
   """
   def index_note_with_usage(note, %Engram.Vaults.Vault{} = vault, user \\ nil, opts \\ []) do
     # Resolve identity ONCE for the whole call. This function and
@@ -109,7 +113,7 @@ defmodule Engram.Indexing do
             # keeps `dense_indexed_hash` nil and ReconcileEmbeddings re-selects
             # it every tick.
             with :ok <- purge_stale_index(note) do
-              run_in_commit(note, opts, 0, true)
+              run_in_commit(note, opts, 0, true, floor_tier(note, opts))
               {:ok, 0, 0, true}
             end
 
@@ -120,7 +124,10 @@ defmodule Engram.Indexing do
 
       {:ok, prepared} ->
         with {:ok, count} <-
-               commit_index(prepared, &run_in_commit(note, opts, &1, prepared.dense?)),
+               commit_index(
+                 prepared,
+                 &run_in_commit(note, opts, &1, prepared.dense?, prepared.index_tier)
+               ),
              do: {:ok, count, prepared.embedded_bytes, prepared.dense?}
 
       {:error, _} = err ->
@@ -152,53 +159,112 @@ defmodule Engram.Indexing do
       {:ok, :no_chunks}
     else
       user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
-
-      dims = Application.get_env(:engram, :embed_dims, @default_dims)
-
-      # A sparse-only pass (`dense: false`, or the embed budget refused the
-      # reservation) never calls Voyage. `nil` vectors flow through
-      # build_prepared/8, which emits a sparse-only named vector — the BM25
-      # leg is computed locally from the chunk text, so keyword search works
-      # with zero embedding spend.
-      with :ok <- Qdrant.ensure_collection(collection(), dims),
-           {:ok, filter_key} <- Crypto.dek_filter_key(user),
-           {:ok, content_key} <- Crypto.dek_content_hash_key(user),
-           {dense?, plan} =
-             plan_within_budget(
-               note,
-               chunks,
-               content_key,
-               Keyword.get(opts, :dense, true),
-               opts
-             ),
-           texts = embed_texts(plan),
-           {:ok, vectors} <- embed_or_release(dense?, texts, opts),
-           :ok <- ensure_one_vector_per_text(vectors, texts, note),
-           avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id),
-           {:ok, prepared} <-
-             build_prepared(note, user, plan, vectors, filter_key, avgdl) do
-        # What the embedder was actually sent (#1618): reused chunks and
-        # sparse-only passes cost nothing, so the meter must not bill them.
-        embedded_bytes = if dense?, do: text_bytes(texts), else: 0
-
-        {:ok, prepared |> Map.put(:embedded_bytes, embedded_bytes) |> Map.put(:dense?, dense?)}
-      else
-        {:error, :no_dek} = err ->
-          emit_no_dek_telemetry(note)
-          err
-
-        other ->
-          other
-      end
+      prepare_chunks(note, user, chunks, opts)
     end
+  end
+
+  defp prepare_chunks(note, user, chunks, opts) do
+    dims = Application.get_env(:engram, :embed_dims, @default_dims)
+    tier = floor_tier(note, opts)
+
+    # A sparse-only pass (`dense: false`, or the embed budget refused the
+    # reservation) never calls Voyage. `nil` vectors flow through
+    # build_prepared/8, which emits a sparse-only named vector — the BM25
+    # leg is computed locally from the chunk text, so keyword search works
+    # with zero embedding spend. A floor pass is sparse-only too, and asks no
+    # budget at all: it is maintenance, never metered.
+    with :ok <- Qdrant.ensure_collection(collection(), dims),
+         {:ok, filter_key} <- Crypto.dek_filter_key(user),
+         {:ok, content_key} <- Crypto.dek_content_hash_key(user),
+         {dense?, plan} =
+           if(tier,
+             do: {false, floor_plan(note, chunks)},
+             else:
+               plan_within_budget(
+                 note,
+                 chunks,
+                 content_key,
+                 Keyword.get(opts, :dense, true),
+                 opts
+               )
+           ),
+         texts = embed_texts(plan),
+         {:ok, vectors} <- embed_or_release(dense?, texts, opts),
+         :ok <- ensure_one_vector_per_text(vectors, texts, note),
+         avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id),
+         {:ok, prepared} <-
+           build_prepared(note, user, plan, vectors, filter_key, avgdl) do
+      # What the embedder was actually sent (#1618): reused chunks and
+      # sparse-only passes cost nothing, so the meter must not bill them.
+      embedded_bytes = if dense?, do: text_bytes(texts), else: 0
+
+      {:ok,
+       Map.merge(prepared, %{embedded_bytes: embedded_bytes, dense?: dense?, index_tier: tier})}
+    else
+      {:error, :no_dek} = err ->
+        emit_no_dek_telemetry(note)
+        err
+
+      other ->
+        other
+    end
+  end
+
+  @floor_tiers ["floor", "floor_paid"]
+
+  @doc """
+  The floor tier a pass over `note` uses, or nil for a full pass.
+  `opts[:index_tier]` wins over the note's own `index_tier`, so a caller can
+  floor a note (or, with an explicit `nil`, promote it) in the same pass that
+  stamps it.
+  """
+  @spec floor_tier(map(), keyword()) :: String.t() | nil
+  def floor_tier(note, opts \\ []) do
+    tier = Keyword.get(opts, :index_tier, Map.get(note, :index_tier))
+    if tier in @floor_tiers, do: tier
+  end
+
+  @doc """
+  The plan for a note over the Free index budget: ONE sparse-only point for
+  the whole note, so it stays keyword-searchable for one point of budget.
+
+  The keyword input is every chunk's `context_text` joined, so the vector
+  holds the union of the note's terms (headings and title prefix included).
+  It has no dense vector and no display text: its payload text is `""`, and a
+  hit's snippet is the note's title and path from `notes`. The row's
+  `token_count` is nil, so a whole-note length never enters the vault's
+  `avgdl`, and the encoder normalizes it as if it were at most `avgdl` long
+  (`cap_doc_len`). No `context_hmac`: nothing may reuse a floor point, and a
+  later full pass deletes it as stale.
+  """
+  def floor_plan(note, chunks) do
+    floor = %{
+      position: 0,
+      char_start: 0,
+      char_end: chunks |> Enum.map(& &1.char_end) |> Enum.max(),
+      heading_path: nil,
+      text: "",
+      embed_text: "",
+      context_text: Enum.map_join(chunks, "\n\n", & &1.context_text),
+      context_hmac: nil,
+      floor: true
+    }
+
+    %{
+      entries: [{:embed, floor}],
+      reused_point_ids: [],
+      stale_point_ids: point_ids_for_note(note),
+      # The floor chunk has no text to detect a language from.
+      language: note_language(chunks)
+    }
   end
 
   # Re-entrant inside commit_index/2's chunk transaction; on the purge path it
   # opens one of its own.
-  defp run_in_commit(note, opts, chunk_count, dense?) do
+  defp run_in_commit(note, opts, chunk_count, dense?, index_tier) do
     case Keyword.get(opts, :in_commit) do
       nil -> :ok
-      fun -> Repo.with_tenant!(note.user_id, fn -> fun.(chunk_count, dense?) end)
+      fun -> Repo.with_tenant!(note.user_id, fn -> fun.(chunk_count, dense?, index_tier) end)
     end
   end
 
@@ -272,7 +338,7 @@ defmodule Engram.Indexing do
           reused_point_ids: reused_point_ids,
           stale_point_ids: stale_point_ids,
           note_payload: note_payload
-        },
+        } = prepared,
         in_commit
       ) do
     # Ordered so that every failure leaves STRAY points (which OrphanSweep
@@ -313,6 +379,7 @@ defmodule Engram.Indexing do
         Repo.with_tenant(note.user_id, fn ->
           Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
           {_, _} = Repo.insert_all(Chunk, chunk_rows, skip_tenant_check: true)
+          with {:ok, tier} <- Map.fetch(prepared, :index_tier), do: stamp_index_tier(note, tier)
           in_commit.(length(chunk_rows))
         end)
 
@@ -320,6 +387,20 @@ defmodule Engram.Indexing do
 
       {:ok, length(chunk_rows)}
     end
+  end
+
+  # With the chunk rows, so the tier always names the rows that exist.
+  # Unconditional rather than trusting `note.index_tier`: the struct can be
+  # older than the row (a demotion landed while this pass ran), and the rows
+  # this pass wrote are what the tier must describe. `IS DISTINCT FROM`
+  # keeps the common NULL-to-NULL case from writing a tuple.
+  defp stamp_index_tier(note, tier) do
+    Repo.update_all(
+      from(n in Note,
+        where: n.id == ^note.id and fragment("? IS DISTINCT FROM ?", n.index_tier, ^tier)
+      ),
+      set: [index_tier: tier]
+    )
   end
 
   # Bounded upsert bodies: thousands of 1024-dim float vectors as one JSON PUT
@@ -1076,6 +1157,22 @@ defmodule Engram.Indexing do
   def resparse_note(note, user) do
     chunks = Markdown.parse(note.content || "", note.path)
 
+    if floor_tier(note), do: refloor(note, user, chunks), else: resparse(note, user, chunks)
+  end
+
+  # A floor point matches no chunk fingerprint, and on a one-section note it
+  # can match chunk 0 by offsets, which would swap the whole-note vector for
+  # one chunk's and give the row a length. Rebuild the floor instead: one
+  # point, no embedder, same cost class as a resparse.
+  defp refloor(_note, _user, []), do: {:ok, 0, 0}
+
+  defp refloor(note, user, chunks) do
+    with {:ok, prepared} <- prepare_chunks(note, user, chunks, []),
+         {:ok, count} <- commit_index(prepared),
+         do: {:ok, count, 0}
+  end
+
+  defp resparse(note, user, chunks) do
     with {:ok, content_key} <- Crypto.dek_content_hash_key(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       case match_stored_points(note, chunks, content_key) do
@@ -1243,6 +1340,8 @@ defmodule Engram.Indexing do
     end
   end
 
+  defp floor_plan?(plan), do: match?([{:embed, %{floor: true}}], plan.entries)
+
   defp entry_chunk({:reuse, chunk, _point_id, _tokens}), do: chunk
   defp entry_chunk({:embed, chunk}), do: chunk
 
@@ -1276,7 +1375,10 @@ defmodule Engram.Indexing do
     # A note that is ONLY frontmatter then yields no sample and falls back to raw
     # token indexing, which is the right answer — YAML keys should not pick a
     # stemmer for prose that doesn't exist.
-    language = note_language(Enum.map(plan.entries, &entry_chunk/1))
+    language =
+      Map.get_lazy(plan, :language, fn ->
+        note_language(Enum.map(plan.entries, &entry_chunk/1))
+      end)
 
     note_payload = note_payload(note)
     ctx = {note, user, note_payload, now}
@@ -1287,13 +1389,20 @@ defmodule Engram.Indexing do
     # and heading path live only in the prefix, and a note with no H1 is
     # otherwise unfindable by its own name on the keyword leg (#1615).
     # `resparse_note/2` must encode the same string.
+    #
+    # ponytail: a floor plan is the whole note as ONE document, so one NIF call
+    # (dirty CPU scheduler) tokenizes all of it, unbounded by `@docs_per_call`.
+    # Fine for notes of a few MB; split the text and merge term counts if a
+    # floor encode ever shows up as a long dirty-scheduler hold.
+    texts = for({:embed, chunk} <- plan.entries, do: chunk.context_text)
+
     sparse =
-      KeywordIndex.module().encode_documents(
-        for({:embed, chunk} <- plan.entries, do: chunk.context_text),
-        filter_key,
-        avgdl,
-        language
-      )
+      if floor_plan?(plan),
+        do:
+          KeywordIndex.module().encode_documents(texts, filter_key, avgdl, language,
+            cap_doc_len: true
+          ),
+        else: KeywordIndex.module().encode_documents(texts, filter_key, avgdl, language)
 
     prepared =
       Enum.reduce_while(plan.entries, {:ok, [], Enum.zip(vectors, sparse)}, fn
@@ -1358,8 +1467,11 @@ defmodule Engram.Indexing do
             v -> %{"dense" => v, "keyword" => sparse}
           end
 
+        # A floor row's length stays out of `avgdl` (see `floor_plan/2`).
+        token_count = if Map.get(chunk, :floor), do: nil, else: doc_len
+
         built = %{
-          row: chunk_row(note, chunk, point_id, doc_len, now),
+          row: chunk_row(note, chunk, point_id, token_count, now),
           point: %{id: point_id, vector: named_vectors, payload: payload}
         }
 
