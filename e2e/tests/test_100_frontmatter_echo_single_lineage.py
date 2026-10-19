@@ -17,15 +17,16 @@ a second full copy.
 The suspect is frontmatter normalisation. Every e2e fixture so far used simple
 block-style YAML that round-trips exactly; the reporter's vault is full of
 inline arrays, quoted scalars, comments and irregular spacing. So the fixtures
-here are deliberately round-trip HOSTILE, and the assertion is direct: the bytes
-on disk after a sync must equal the bytes written before it.
+here are deliberately round-trip HOSTILE.
 
-The fence is the LINEAGE COUNT, not the disk bytes. The rewrite itself is
-expected and benign: the CRDT stores frontmatter structurally, so its projection
-re-serialises YAML, and writing that back is the authoritative content winning.
-What must never follow is a second lineage. The rewrite list is printed rather
-than asserted so a future change to the codec shows up as context on a failure
-instead of as a failure of its own.
+The fence is the LINEAGE COUNT, not the disk bytes. Today the CRDT stores
+frontmatter structurally and its projection re-serialises YAML, so a first sync
+rewrites these files on disk. That rewrite is a known defect (#1928: a sync
+should leave untouched bytes alone; fix 2, text-as-truth, removes it), not
+something this test may require. Whether or not a rewrite happens, what must
+never follow is a second lineage. The rewrite list is printed, not asserted, so
+it is context on a failure and this test keeps passing once #1928 fix 2 lands.
+The IDENTICAL_ECHO rewrite below exercises the echo path regardless.
 
 Verified to catch the defect: against the code before
 `applyLocalEdit`'s projection-equality guard, this reported 7 of 10 notes
@@ -40,6 +41,7 @@ this test can never drive to zero. See `helpers/lineage_probe`.
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from pathlib import Path
@@ -83,7 +85,7 @@ IDENTICAL_ECHO = "identical-bytes"
 
 
 @pytest.mark.asyncio
-async def test_sync_leaves_disk_bytes_untouched(
+async def test_frontmatter_echo_forks_no_lineage(
     vault_a, cdp_a, api_sync, sync_vault_id
 ):
     run = uuid.uuid4().hex[:12]
@@ -111,7 +113,7 @@ async def test_sync_leaves_disk_bytes_untouched(
         )
         if isinstance(indexed, int) and indexed >= expected:
             break
-        time.sleep(1)
+        await asyncio.sleep(1)
     else:
         raise TimeoutError(f"Obsidian indexed only {indexed}/{expected} files")
 
@@ -126,7 +128,7 @@ async def test_sync_leaves_disk_bytes_untouched(
         landed = sum(1 for n in manifest["notes"] if n["path"].startswith(prefix))
         if landed >= expected:
             break
-        time.sleep(2)
+        await asyncio.sleep(2)
     assert landed >= expected, f"sync landed only {landed}/{expected}"
 
     # Second echo shape: rewrite one file with its OWN bytes. Nothing for the
@@ -136,7 +138,11 @@ async def test_sync_leaves_disk_bytes_untouched(
     Path(vault_a, identical_rel).write_text(written[identical_rel], encoding="utf-8")
 
     # Give both write-backs and the modify events they trigger time to land.
-    time.sleep(10)
+    # Deliberately a timed window: A forked lineage ships as a cold crdt_msg with
+    # no client-visible ack or log line to wait on, and driving a fullSync here
+    # would route the echo through the mtime sweep instead of the modify event
+    # this test fences. Swap for a barrier if applyLocalEdit grows a signal.
+    await asyncio.sleep(10)
 
     rewritten = {
         rel: Path(vault_a, rel).read_text(encoding="utf-8")
@@ -147,17 +153,6 @@ async def test_sync_leaves_disk_bytes_untouched(
     rooms = read_room_starts() - rooms_before
     print(
         f"\ntest_100 rewritten-on-disk={sorted(rewritten)} | {lineages} | rooms: {rooms}"
-    )
-
-    # The rewrite is the TRIGGER, and it is expected — see the module docstring.
-    # Asserted only to the extent that it must still be happening, because a run
-    # where nothing was rewritten never exercised the path this test exists for
-    # and would pass vacuously.
-    assert rewritten, (
-        "no file was rewritten, so this run never exercised the write-back echo "
-        "that the lineage assertion below is fencing. Did the frontmatter codec "
-        "start round-tripping byte-for-byte? If so this fixture needs a new "
-        "round-trip-hostile shape."
     )
 
     # The lineage sample is scoped to THIS test's prefix, so a broken filter

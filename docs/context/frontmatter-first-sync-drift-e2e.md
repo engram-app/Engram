@@ -43,7 +43,7 @@ Detect it live instead: install an `app.vault.on('create', ...)` listener over C
 Gotcha: end the CDP evaluate expression with `; true`. Otherwise CDP tries to serialize the returned EventRef and fails with "Object reference chain is too long".
 
 ## 3. test_100 never caught this
-test_100 asserts the rewrite HAPPENS and fences only the lineage count. It never looks for new files, so it passed straight through this defect.
+test_100 fences only the lineage count (it used to also assert the rewrite HAPPENS; that assert was removed because the rewrite is itself the #1928 defect). It never looks for new files, so it passed straight through this defect.
 
 ## Failed Approaches / Dead Ends
 - Seq-cursor rewind (`setCatchupSeq`) to force catch-up over the pushed notes: unnecessary. The drift fires inside the first FullSync on its own, because pushes and catch-up interleave.

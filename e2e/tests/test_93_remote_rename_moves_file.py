@@ -1,8 +1,8 @@
 """Test 93: a rename received from a peer MOVES B's file, it does not recreate it.
 
-test_10 already covers rename PROPAGATION -- new path present, old path gone --
-and that is exactly what made this class of bug invisible for so long. Those
-assertions pass perfectly when the receiver deletes the old file and writes a
+This also covers rename PROPAGATION (new path present, old path gone; the old
+test_10 asserted only that), and propagation alone is what made this class of
+bug invisible for so long. Those assertions pass perfectly when the receiver deletes the old file and writes a
 new one in its place, which is what it was doing: right bytes, brand-new file.
 Obsidian treats that as a different note, so the open tab closes, backlinks
 re-resolve and the creation date resets.
@@ -14,8 +14,8 @@ suite cannot check, because only a real filesystem has inodes.
 Fixed in plugin PR #441; see plugin docs/context/remote-rename-identity-vs-file.md.
 """
 
+import asyncio
 import os
-import time
 import uuid
 
 import pytest
@@ -33,7 +33,7 @@ async def test_remote_rename_moves_the_file(vault_a, vault_b, cdp_a, cdp_b, api_
     """B's file must be MOVED to the new path, keeping its identity on disk."""
     # Unique per-run paths: the A/B instances are session-scoped and not reset
     # between reruns, so a fixed path lets a prior attempt's note_id map and
-    # sync-state contaminate the next one (same reasoning as test_10).
+    # sync-state contaminate the next one (rerun-safety, same pattern as test_49).
     suffix = uuid.uuid4().hex[:12]
     old_path = f"E2E/MoveOld-{suffix}.md"
     new_path = f"E2E/MoveNew-{suffix}.md"
@@ -71,6 +71,8 @@ async def test_remote_rename_moves_the_file(vault_a, vault_b, cdp_a, cdp_b, api_
     # And the move must not echo back as a fresh rename from B, which would have
     # the two devices trading renames. Give the echo a chance to land, then
     # confirm the server still agrees with A.
-    time.sleep(2)
+    # Deliberately a timed window: B's echo would leave via handleRename with no
+    # completion signal, so nothing positive orders after it.
+    await asyncio.sleep(2)
     api_sync.wait_for_note(new_path)
     api_sync.wait_for_note_gone(old_path)

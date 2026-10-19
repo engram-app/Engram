@@ -1,6 +1,6 @@
 # Context Doc: `prebuild-mix` full recompile despite a `_build` cache hit
 
-_Last verified: 2026-10-03_
+_Last verified: 2026-10-18_
 
 ## The trap
 The `prebuild-mix` job in `.github/workflows/verify.yml` restores `deps/`,
@@ -32,8 +32,22 @@ Details that matter:
 - **Resolve the OTP/Elixir tag inside the container.** The cache key must match
   what compiles. The host toolchain is a different OTP patch.
 
-Scope: only `prebuild-mix` is docker-wrapped. `unit-tests`, `lint` and
-`e2e-browser` restore the same cache bare-metal.
+Scope: `prebuild-mix`, `unit-tests`, `lint` and `e2e-browser` run mix in the builder image.
+The consumers get it from `ci/mix-builder/setup.sh`, which builds the image
+from `ci/mix-builder/Dockerfile` and puts `ci/bin/mix` first on PATH. That
+wrapper runs `docker run --network host -v $REPO:/app` with the caller's env,
+so every later `mix ...` in the job (and scripts that call mix) hit the
+prebuilt `_build`. Before this, both consumers ran bare-metal and logged
+`Compiling 455-480 files (.ex)` plus `Compiling crate engram_native` on every
+run (about 60-75s each), despite an exact cache hit.
+
+`e2e-browser` uses the same wrapper with one twist. Under rootless docker a
+host-network container reaches published ports on localhost but cannot
+accept inbound connections from the host (verified on the runner VM
+2026-10-18). So the job puts postgres on a private network (alias `pg`) and
+exports `MIXW_NETWORK` + `MIXW_DATABASE_URL`; the wrapper then joins that
+network, publishes `$PORT` on 127.0.0.1 for Playwright and Vite, and points
+`DATABASE_URL` at `pg:5432`.
 
 ### The mtime-normalize step is vestigial
 `prebuild-mix` also resets each source file's mtime to its last-commit time

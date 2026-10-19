@@ -61,17 +61,19 @@ defmodule Engram.Repo.TenancyGuardOutermostTest do
     end
 
     test "the probe actually routes through it" do
-      # Asserted by source because the behavioural alternative is the
-      # contaminating one described in the moduledoc. Without this, `run_probe/0`
-      # could keep its hardcoded `mode: :savepoint` and every test above would
-      # still pass.
-      source = File.read!("lib/engram/repo/tenancy_guard.ex")
+      # Without this, `run_probe/0` could keep a hardcoded `mode: :savepoint`
+      # and every test above would still pass. Outermost, that savepoint fails
+      # before the probe body runs, so the probe's own statements (reading
+      # every tenant table) never reach the database. Read-only: nothing is
+      # written outside the sandbox.
+      {_verdict, queries} = Engram.QueryRecorder.record(&TenancyGuard.observed_enforcement/0)
 
-      assert source =~ "Engram.Repo.transaction(&probe/0, probe_opts())",
-             "run_probe/0 must take its transaction mode from probe_opts/0"
+      probe_reads =
+        Enum.filter(queries, &(&1.pid == self() and &1.sql =~ ~r/FROM "notes"/))
 
-      refute source =~ "transaction(&probe/0, mode: :savepoint)",
-             "an unconditional :savepoint means the probe is dead in production again"
+      assert probe_reads != [],
+             "the outermost probe never ran its table reads: run_probe/0 must take " <>
+               "its transaction mode from probe_opts/0\n" <> Engram.QueryRecorder.format(queries)
     end
   end
 

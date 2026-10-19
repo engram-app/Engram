@@ -1,73 +1,21 @@
 import { expect, type Page, test } from "@playwright/test";
 import { LOCALE_NAMES } from "../src/i18n/locales";
-import { createVault, deleteAccount, PASS, registerAndLogin } from "./support/api";
-import { BROWSER_LOCALES, translationOf } from "./support/i18n-leaks";
+import { createVault, deleteAccount, registerAndLogin, signIn } from "./support/api";
+import { translationOf } from "./support/i18n-leaks";
 
-// Language selection in a real browser: stored pick, then navigator.languages, then
-// English, and the in-app picker. Catalog-derived strings (never hard-coded per
-// locale) prove the catalog on screen is the one `<html lang>` claims.
+// The in-app language picker in a real browser. Detection order (stored pick,
+// then navigator.languages, then English) is unit-tested in i18n/locales.test.ts,
+// i18n/storage.test.ts and i18n/locale-provider.test.tsx; every catalog loading
+// in a real browser is covered by i18n-onboarding.spec.ts. Catalog-derived
+// strings (never hard-coded per locale) prove the catalog on screen is the one
+// `<html lang>` claims.
 //
 // The picker test registers a user; its title carries "[registers user]" so it can
 // be excluded with --grep-invert when the backend's database is not disposable.
 
-const SIGN_IN_HEADING = "Sign in to Engram";
-
 async function expectLanguage(page: Page, code: string): Promise<void> {
 	await expect(page.locator("html")).toHaveAttribute("lang", code);
 }
-
-async function expectSignInHeading(page: Page, code: string): Promise<void> {
-	const name = code === "en" ? SIGN_IN_HEADING : translationOf(code, SIGN_IN_HEADING);
-	await expect(page.getByRole("heading", { name })).toBeVisible();
-}
-
-for (const { tag, code } of BROWSER_LOCALES) {
-	test.describe(`browser locale ${tag}`, () => {
-		test.use({ locale: tag });
-
-		test(`sign-in page renders ${code}`, async ({ page }) => {
-			await page.goto("/sign-in/");
-			await expectLanguage(page, code);
-			await expectSignInHeading(page, code);
-		});
-	});
-}
-
-const FALLBACKS = [
-	{ tag: "en-GB", code: "en" },
-	{ tag: "zh-HK", code: "zh-TW" },
-	{ tag: "pt-PT", code: "pt-BR" },
-	{ tag: "nl-NL", code: "en" },
-] as const;
-
-for (const { tag, code } of FALLBACKS) {
-	test.describe(`fallback ${tag}`, () => {
-		test.use({ locale: tag });
-
-		test(`resolves to ${code}`, async ({ page }) => {
-			await page.goto("/sign-in/");
-			await expectLanguage(page, code);
-			await expectSignInHeading(page, code);
-		});
-	});
-}
-
-test.describe("stored pick beats the browser", () => {
-	test.use({ locale: "de-DE" });
-
-	test("engram:locale=ja under a German browser renders Japanese", async ({ page }) => {
-		await page.addInitScript(() => window.localStorage.setItem("engram:locale", "ja"));
-		await page.goto("/sign-in/");
-		await expectLanguage(page, "ja");
-		await expectSignInHeading(page, "ja");
-	});
-
-	test("an unknown stored value is ignored", async ({ page }) => {
-		await page.addInitScript(() => window.localStorage.setItem("engram:locale", "xx"));
-		await page.goto("/sign-in/");
-		await expectLanguage(page, "de");
-	});
-});
 
 test.describe("language picker", () => {
 	let pickerEmail: string | null = null;
@@ -88,12 +36,7 @@ test.describe("language picker", () => {
 		const token = await registerAndLogin(baseURL ?? "", email);
 		await createVault(baseURL ?? "", token, "I18n Picker Vault");
 
-		await page.goto("/sign-in/");
-		await page.getByLabel("Email").fill(email);
-		await page.getByLabel("Password", { exact: true }).fill(PASS);
-		await page.getByRole("button", { name: "Sign in" }).click();
-		// `/\/$/` would also match /sign-in/, so wait for the page to leave it.
-		await expect(page).not.toHaveURL(/\/sign-in/u, { timeout: 15_000 });
+		await signIn(page, email);
 		await expectLanguage(page, "en");
 
 		await page.goto("/#settings/account");

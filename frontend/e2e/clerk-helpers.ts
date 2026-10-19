@@ -3,10 +3,9 @@ import path from "node:path";
 import { clerk } from "@clerk/testing/playwright";
 import type { Page } from "@playwright/test";
 
-// Promoted out of clerk-auth.spec.ts / onboarding-ftux.spec.ts, which both
-// carry a copy and both say to extract "if a third Clerk spec lands". One has.
-// Those two still hold their copies — migrating them is mechanical but would
-// mean editing passing specs inside an unrelated change.
+// Shared by the Clerk specs. clerk-auth.spec.ts keeps its own no-retry sign-in
+// on purpose (a "No user found" there must surface immediately, see its
+// comment); it shares only loadAuthState.
 
 const AUTH_STATE_PATH = path.join(__dirname, ".auth-state.json");
 

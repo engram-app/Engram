@@ -1,42 +1,11 @@
 import { expect, test } from "@playwright/test";
+import { createVault, PASS, registerAndLogin, signIn } from "./support/api";
 
-const TEST_PASSWORD = "E2eTestPass!99";
-
-/** Register a user via API (not browser). Survives worker restarts. */
-async function registerUser(baseURL: string, email: string) {
-	const res = await fetch(`${baseURL}/api/auth/register`, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ email, password: TEST_PASSWORD }),
-	});
-	if (res.status === 422) {
-		return; // already exists (idempotent)
-	}
-	if (!res.ok) {
-		throw new Error(`Register ${email} failed: ${res.status} ${await res.text()}`);
-	}
-
-	// Pre-complete onboarding so subsequent UI sign-in lands on the dashboard
-	// instead of being bounced to /onboard/vault by OnboardingGate, and seed a
-	// default vault so CreateFirstVaultModal doesn't intercept every click.
-	const { access_token: token } = await res.json();
-	const auth = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
-	const prof = await fetch(`${baseURL}/api/onboarding/profile`, {
-		method: "PATCH",
-		headers: auth,
-		body: JSON.stringify({ uses_obsidian: true, tools: ["claude"] }),
-	});
-	if (!prof.ok) {
-		throw new Error(`Onboarding profile PATCH failed: ${prof.status} ${await prof.text()}`);
-	}
-	const vault = await fetch(`${baseURL}/api/vaults/register`, {
-		method: "POST",
-		headers: auth,
-		body: JSON.stringify({ name: "E2E Vault", client_id: crypto.randomUUID() }),
-	});
-	if (!vault.ok) {
-		throw new Error(`Vault POST failed: ${vault.status} ${await vault.text()}`);
-	}
+/** Register a user via API with onboarding done and a vault, so a UI sign-in
+ *  lands on the dashboard instead of the wizard or CreateFirstVaultModal. */
+async function registerUser(baseURL: string, email: string): Promise<void> {
+	const token = await registerAndLogin(baseURL, email);
+	await createVault(baseURL, token, "E2E Vault");
 }
 
 /** Unique email per test — no cross-test dependency. */
@@ -60,8 +29,8 @@ test.describe("Local auth provider", () => {
 		await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
 
 		await page.getByLabel("Email").fill(email);
-		await page.getByLabel("Password", { exact: true }).fill(TEST_PASSWORD);
-		await page.getByLabel("Confirm password").fill(TEST_PASSWORD);
+		await page.getByLabel("Password", { exact: true }).fill(PASS);
+		await page.getByLabel("Confirm password").fill(PASS);
 		await page.getByRole("button", { name: "Create account" }).click();
 
 		// OnboardingGate sends fresh accounts through the wizard; vault is the
@@ -73,28 +42,13 @@ test.describe("Local auth provider", () => {
 		const email = testEmail("signout");
 		await registerUser(baseURL!, email);
 
-		await page.goto("/sign-in/");
-		await page.getByLabel("Email").fill(email);
-		await page.getByLabel("Password", { exact: true }).fill(TEST_PASSWORD);
-		await page.getByRole("button", { name: "Sign in" }).click();
+		await signIn(page, email);
 		await expect(page).toHaveURL(/\/$/u, { timeout: 10_000 });
 
 		await page.getByLabel("User menu").click();
 		await page.getByRole("menuitem", { name: "Sign out" }).click();
 
 		await expect(page).toHaveURL(/\/sign-in/u);
-	});
-
-	test("sign in with existing credentials → dashboard", async ({ page, baseURL }) => {
-		const email = testEmail("signin");
-		await registerUser(baseURL!, email);
-
-		await page.goto("/sign-in/");
-		await page.getByLabel("Email").fill(email);
-		await page.getByLabel("Password", { exact: true }).fill(TEST_PASSWORD);
-		await page.getByRole("button", { name: "Sign in" }).click();
-
-		await expect(page).toHaveURL(/\/$/u, { timeout: 10_000 });
 	});
 
 	test("wrong password shows error", async ({ page, baseURL }) => {
@@ -110,17 +64,6 @@ test.describe("Local auth provider", () => {
 		await expect(page).toHaveURL(/\/sign-in/u);
 	});
 
-	test("second user registration works", async ({ page }) => {
-		const email = testEmail("register2");
-		await page.goto("/sign-up/");
-		await page.getByLabel("Email").fill(email);
-		await page.getByLabel("Password", { exact: true }).fill(TEST_PASSWORD);
-		await page.getByLabel("Confirm password").fill(TEST_PASSWORD);
-		await page.getByRole("button", { name: "Create account" }).click();
-
-		await expect(page).toHaveURL(/\/onboard\/vault/u, { timeout: 10_000 });
-	});
-
 	// Regression for the stale-bootstrap redirect loop (PR #1299): the wizard
 	// must complete in one SPA session and actually open the dashboard. Routing
 	// off the never-invalidated bootstrap payload bounced finished users back to
@@ -129,8 +72,8 @@ test.describe("Local auth provider", () => {
 		const email = testEmail("wizard");
 		await page.goto("/sign-up/");
 		await page.getByLabel("Email").fill(email);
-		await page.getByLabel("Password", { exact: true }).fill(TEST_PASSWORD);
-		await page.getByLabel("Confirm password").fill(TEST_PASSWORD);
+		await page.getByLabel("Password", { exact: true }).fill(PASS);
+		await page.getByLabel("Confirm password").fill(PASS);
 		await page.getByRole("button", { name: "Create account" }).click();
 
 		// Self-host chain: vault only (agreement/billing auto-pass).

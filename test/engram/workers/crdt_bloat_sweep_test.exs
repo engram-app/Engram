@@ -12,6 +12,7 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
   use Oban.Testing, repo: Engram.Repo
 
   import Ecto.Query
+  import Engram.RlsCase, only: [as_prod_role: 1]
 
   alias Engram.{Crypto, Notes, Repo, Vaults}
   alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, Note}
@@ -250,23 +251,12 @@ defmodule Engram.Workers.CrdtBloatSweepTest do
   # expire — the lying oracle the guard exists to prevent, reached through the
   # documented entry point. Both routes must refuse identically.
   test "measure_and_emit/0 carries the same refusal as perform/1" do
-    # `ensure_loaded?` first: `function_exported?/3` answers false for a module
-    # that simply has not been loaded yet, so without this the assertion passes
-    # or fails on test ORDER rather than on the property. It went red only when
-    # this file ran alongside test/engram/repo/, which is how it surfaced.
-    assert Code.ensure_loaded?(CrdtBloatSweep)
-    assert function_exported?(CrdtBloatSweep, :measure_and_emit, 0)
+    # As the RLS-subject role with no maintenance pool, both routes must
+    # refuse rather than emit zeroes.
+    assert {:returned, {:error, :tenancy_unsafe}} =
+             as_prod_role(fn -> CrdtBloatSweep.measure_and_emit() end)
 
-    # Both call sites must read the guard, not just the Oban one. Asserting on
-    # the source is crude, but the alternative is a stubbing layer for a
-    # two-line predicate, and this is the property that actually regressed.
-    source = File.read!("lib/engram/workers/crdt_bloat_sweep.ex")
-
-    [_, after_def] = String.split(source, "def measure_and_emit do", parts: 2)
-    guarded = after_def |> String.split("end", parts: 2) |> hd()
-
-    assert guarded =~ "tenancy_unsafe?",
-           "measure_and_emit/0 must check the tenancy guard itself — perform/1 is not the " <>
-             "only caller, and the @doc invites the other one"
+    assert {:returned, {:error, :tenancy_unsafe}} =
+             as_prod_role(fn -> perform_job(CrdtBloatSweep, %{}) end)
   end
 end

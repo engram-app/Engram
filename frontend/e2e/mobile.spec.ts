@@ -1,81 +1,33 @@
 import { expect, test } from "@playwright/test";
-
-const TEST_PASSWORD = "E2eTestPass!99";
-
-async function registerUser(baseURL: string, email: string) {
-	const res = await fetch(`${baseURL}/api/auth/register`, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ email, password: TEST_PASSWORD }),
-	});
-	if (res.status === 422) {
-		return;
-	}
-	if (!res.ok) {
-		throw new Error(`Register failed: ${res.status} ${await res.text()}`);
-	}
-	const { access_token: token } = await res.json();
-	const auth = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
-	const prof = await fetch(`${baseURL}/api/onboarding/profile`, {
-		method: "PATCH",
-		headers: auth,
-		body: JSON.stringify({ uses_obsidian: true, tools: ["claude"] }),
-	});
-	if (!prof.ok) {
-		throw new Error(`onboarding PATCH failed: ${prof.status} ${await prof.text()}`);
-	}
-	const vault = await fetch(`${baseURL}/api/vaults/register`, {
-		method: "POST",
-		headers: auth,
-		body: JSON.stringify({ name: "E2E Vault", client_id: crypto.randomUUID() }),
-	});
-	if (!vault.ok) {
-		throw new Error(`vault POST failed: ${vault.status} ${await vault.text()}`);
-	}
-}
-
-function testEmail(label: string) {
-	return `e2e-mobile-${Date.now()}-${label}@test.com`;
-}
-
-async function signIn(page: import("@playwright/test").Page, email: string) {
-	await page.goto("/sign-in/");
-	await page.getByLabel("Email").fill(email);
-	await page.getByLabel("Password", { exact: true }).fill(TEST_PASSWORD);
-	await page.getByRole("button", { name: /sign in/iu }).click();
-	await expect(page).toHaveURL("/");
-}
+import { createVault, registerAndLogin, signIn } from "./support/api";
 
 test.describe("Mobile layout", () => {
 	test.use({ viewport: { width: 390, height: 844 } });
 
-	test("header shows hamburger; tapping opens files drawer", async ({ page, baseURL }) => {
-		const email = testEmail("files");
-		await registerUser(baseURL!, email);
+	// One sign-in for all three checks: each is a read of the same signed-in
+	// mobile shell, so separate tests only paid for extra registrations.
+	test("hamburger opens the files drawer, no resize handles, drawers reset on navigation", async ({
+		page,
+		baseURL,
+	}) => {
+		const base = baseURL as string;
+		const email = `e2e-mobile-${Date.now()}@test.com`;
+		const token = await registerAndLogin(base, email);
+		await createVault(base, token, "E2E Vault");
 		await signIn(page, email);
+		await expect(page).toHaveURL("/");
 
+		// Desktop resize handles are not rendered on mobile.
+		await expect(page.locator("[data-panel-resize-handle-id]")).toHaveCount(0);
+
+		// Header shows the hamburger; tapping it opens the files drawer.
 		const filesTrigger = page.getByRole("button", { name: "Open files" });
 		await expect(filesTrigger).toBeVisible();
 		await filesTrigger.click();
 		await expect(page.getByRole("dialog")).toBeVisible();
 		await expect(page.getByRole("heading", { name: "Files" })).toBeVisible();
-	});
 
-	test("desktop resize handles are not rendered on mobile", async ({ page, baseURL }) => {
-		const email = testEmail("handles");
-		await registerUser(baseURL!, email);
-		await signIn(page, email);
-
-		await expect(page.locator("[data-panel-resize-handle-id]")).toHaveCount(0);
-	});
-
-	test("drawers start closed on every navigation", async ({ page, baseURL }) => {
-		const email = testEmail("reset");
-		await registerUser(baseURL!, email);
-		await signIn(page, email);
-
-		await page.getByRole("button", { name: "Open files" }).click();
-		await expect(page.getByRole("dialog")).toBeVisible();
+		// Drawers start closed on every navigation.
 		await page.goto("/settings");
 		await expect(page.getByRole("dialog")).toHaveCount(0);
 	});

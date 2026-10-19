@@ -24,8 +24,7 @@ a post-D3 plugin with a broken handshake path times out on content.
 
 from __future__ import annotations
 
-import os
-import time
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -34,11 +33,6 @@ from helpers.backend_rpc import backend_rpc
 from helpers.latency import DELIVERY_TIMEOUT
 from helpers.log_oracle import wait_for_client_log
 from helpers.vault import read_note, wait_for_content
-
-pytestmark = pytest.mark.skipif(
-    os.environ.get("E2E_ENABLE_CRDT") != "true",
-    reason="CRDT-only suite — set E2E_ENABLE_CRDT=true with a CRDT_ENABLED backend",
-)
 
 CRDT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound, not a latency assert
 
@@ -189,8 +183,8 @@ async def test_deaf_live_bound_note_converges_via_socket_replay(vault_b, cdp_b, 
     # `> :25.3`, oracle timed out with the line present). Separate the epochs
     # by 2s, then floor the baseline and back off one whole second: pre-wedge
     # lines are now strictly older than the baseline second, post-wedge lines
-    # strictly newer.
-    time.sleep(2)
+    # strictly newer. (Clock-epoch separation, not a wait for system state.)
+    await asyncio.sleep(2)
     post_wedge = (
         datetime.now(timezone.utc).replace(microsecond=0) - timedelta(seconds=1)
     ).isoformat()
@@ -304,9 +298,11 @@ async def test_deaf_note_survives_handshake_rate_limit_and_heals_on_restore(
         wait_for_content(vault_b, path_y, "TRIGGER-EDIT-Y-1", timeout=CRDT_TIMEOUT)
 
         # Bounded behavior: give the (blocked) heal attempt a full window, then
-        # assert X did NOT converge — the deafness is real while the budget is
-        # zero, not a false "eventually consistent" success.
-        time.sleep(8)
+        # assert X did NOT converge: the deafness is real while the budget is
+        # zero, not a false "eventually consistent" success. Timed on purpose:
+        # B's seq replay is billed to the same zeroed budget and is refused, so
+        # no catch-up cursor or log line advances to wait on.
+        await asyncio.sleep(8)
         stuck = read_note(vault_b, path_x)
         assert "EDIT-WHILE-B-DEAF-RATE-LIMITED" not in stuck, (
             f"X converged despite a zeroed handshake budget (false success): {stuck!r}"

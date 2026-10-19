@@ -22,14 +22,13 @@ is delivered device→device over the y-protocols handshake and only flushed to
 `notes.content` on the debounced checkpoint (~5s). So these tests poll the
 **vault file on disk** (`helpers.vault.wait_for_content`) and REST content with
 generous timeouts — **never an immediate read-after-write**. Asserting immediate
-REST consistency (the legacy suite's pattern) fails under CRDT by design, which
-is why the legacy tests must NOT run with CRDT enabled.
+REST consistency fails under CRDT by design.
 
 ## Running locally
 
-Requires the CI stack (backend CRDT is unconditional — the old
-`CRDT_ENABLED` stack flag was dead config) and the plugin opted in via
-`E2E_ENABLE_CRDT=true`:
+Requires the CI stack. CRDT is the only sync path on both sides (the backend
+always advertises the `crdt:` topic; the plugin retired `enableCrdt`), so there
+is no opt-in flag:
 
 ```bash
 # Attachments go to the central FastRaid MinIO, not a per-stack sidecar, so
@@ -43,18 +42,14 @@ export CI_MINIO_ACCESS_KEY=... CI_MINIO_SECRET_KEY=...   # ask an operator
 docker compose -f ci/compose.yml -f ci/compose.local.yml -p engram-crdt up -d --build --wait
 
 cd e2e
-E2E_ENABLE_CRDT=true \
 ENGRAM_API_URL=http://localhost:8100/api \
 CI_POSTGRES_CONTAINER=engram-crdt-postgres-1 \
 python3 -m pytest tests/crdt/ -v
 ```
 
-The suite **skips entirely** unless `E2E_ENABLE_CRDT=true` (a `pytestmark`
-skipif), so it is a no-op in the legacy e2e jobs.
-
 ## CI
 
 `tests/crdt/` runs in the `e2e-crdt` job in `.github/workflows/verify.yml`
-(`AUTH_PROVIDER=local` + `E2E_ENABLE_CRDT=true`), which also runs
+(`AUTH_PROVIDER=local`), which also runs
 `tests/api_only/` on the same local-auth stack (absorbed from the old
 `e2e-local` job).

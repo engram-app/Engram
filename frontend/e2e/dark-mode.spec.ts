@@ -1,49 +1,13 @@
 import { expect, test } from "@playwright/test";
-
-const TEST_PASSWORD = "E2eTestPass!99";
-
-async function registerUser(baseURL: string, email: string) {
-	const res = await fetch(`${baseURL}/api/auth/register`, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ email, password: TEST_PASSWORD }),
-	});
-	if (res.status === 422) {
-		return;
-	}
-	if (!res.ok) {
-		throw new Error(`Register failed: ${res.status} ${await res.text()}`);
-	}
-	const { access_token: token } = await res.json();
-	const auth = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
-	const prof = await fetch(`${baseURL}/api/onboarding/profile`, {
-		method: "PATCH",
-		headers: auth,
-		body: JSON.stringify({ uses_obsidian: true, tools: ["claude"] }),
-	});
-	if (!prof.ok) {
-		throw new Error(`onboarding PATCH failed: ${prof.status} ${await prof.text()}`);
-	}
-	const vault = await fetch(`${baseURL}/api/vaults/register`, {
-		method: "POST",
-		headers: auth,
-		body: JSON.stringify({ name: "E2E Vault", client_id: crypto.randomUUID() }),
-	});
-	if (!vault.ok) {
-		throw new Error(`vault POST failed: ${vault.status} ${await vault.text()}`);
-	}
-}
+import { createVault, registerAndLogin, signIn } from "./support/api";
 
 function testEmail(label: string) {
 	return `e2e-theme-${Date.now()}-${label}@test.com`;
 }
 
-async function signIn(page: import("@playwright/test").Page, email: string) {
-	await page.goto("/sign-in/");
-	await page.getByLabel("Email").fill(email);
-	await page.getByLabel("Password", { exact: true }).fill(TEST_PASSWORD);
-	await page.getByRole("button", { name: /sign in/iu }).click();
-	await expect(page).toHaveURL("/");
+async function registerUser(baseURL: string, email: string): Promise<void> {
+	const token = await registerAndLogin(baseURL, email);
+	await createVault(baseURL, token, "E2E Vault");
 }
 
 test.describe("Dark mode", () => {
@@ -51,6 +15,7 @@ test.describe("Dark mode", () => {
 		const email = testEmail("menu");
 		await registerUser(baseURL!, email);
 		await signIn(page, email);
+		await expect(page).toHaveURL("/");
 
 		// ThemeToggle now lives inside the rail's account popover (UserMenu).
 		// Trigger = avatar button labelled "User menu". The three theme options
@@ -96,6 +61,7 @@ test.describe("Dark mode", () => {
 		const ctx = await browser.newContext({ colorScheme: "dark" });
 		const page = await ctx.newPage();
 		await signIn(page, email);
+		await expect(page).toHaveURL("/");
 
 		// First-paint check: with empty storage (system) + colorScheme dark, html should have .dark.
 		await expect(page.locator("html")).toHaveClass(/dark/u);

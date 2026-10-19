@@ -116,26 +116,15 @@ defmodule EngramWeb.SpaControllerTest do
       assert conn.status in [302, 400]
     end
 
-    test "GET /api/does-not-exist returns 404, not SPA HTML", %{conn: conn} do
-      conn = get(conn, "/api/does-not-exist")
-      assert conn.status == 404
-      refute response(conn, 404) =~ "<div id=\"root\">"
-    end
-
-    test "GET /oauth/does-not-exist returns 404, not SPA HTML", %{conn: conn} do
-      conn = get(conn, "/oauth/does-not-exist")
-      assert conn.status == 404
-      refute response(conn, 404) =~ "<div id=\"root\">"
-    end
-
-    test "GET /assets/missing.js returns 404, not SPA HTML", %{conn: conn} do
-      # Plug.Static mounts /assets from priv/static/app/assets; a missing
-      # file must fall through to Phoenix's default 404, not the SPA shell.
-      # Otherwise the browser receives text/html for a <script src=...>
-      # request and silently fails with a MIME-type error.
-      conn = get(conn, "/assets/this-file-does-not-exist.js")
-      assert conn.status == 404
-      refute response(conn, 404) =~ "<div id=\"root\">"
+    # /assets is Plug.Static, mounted from priv/static/app/assets; a missing
+    # file must fall through to Phoenix's default 404, not the SPA shell, or
+    # the browser gets text/html for a <script src=...> and fails on MIME type.
+    for path <- ~w(/api/does-not-exist /oauth/does-not-exist /assets/this-file-does-not-exist.js) do
+      test "GET #{path} returns 404, not SPA HTML", %{conn: conn} do
+        conn = get(conn, unquote(path))
+        assert conn.status == 404
+        refute response(conn, 404) =~ "<div id=\"root\">"
+      end
     end
   end
 
@@ -197,46 +186,18 @@ defmodule EngramWeb.SpaControllerTest do
     # would not catch a regression where not_found/2 started returning
     # text/html with a 404 status, which is exactly the "masked as success"
     # failure mode this guard exists to prevent.
-    test "a typo'd API path 404s instead of serving HTML", %{conn: conn} do
-      conn |> get("/api/notez") |> assert_not_found_not_html()
-    end
-
-    test "a typo'd webhooks path 404s", %{conn: conn} do
-      conn |> get("/webhooks/bogus") |> assert_not_found_not_html()
-    end
-
-    test "a typo'd well-known path 404s", %{conn: conn} do
-      conn |> get("/.well-known/bogus") |> assert_not_found_not_html()
-    end
-
-    test "a typo'd oauth path 404s", %{conn: conn} do
-      conn |> get("/oauth/bogus") |> assert_not_found_not_html()
-    end
-
-    test "a missing asset path 404s (fifth prefix: /assets is Plug.Static, not a router scope)",
-         %{conn: conn} do
-      # Plug.Static only intercepts requests for files that exist; a
-      # mistyped/missing asset path falls through to the router and needs
-      # its own deny-list entry or it would match /:slug/:id.
-      conn |> get("/assets/bogus.js") |> assert_not_found_not_html()
-    end
-
-    test "a missing email asset path 404s and is not HTML (sixth prefix: /email)",
-         %{conn: conn} do
-      # /email is also Plug.Static-served via static_paths() (lib/engram_web.ex)
-      # and referenced from outbound email HTML. A masked HTML 200 there can
-      # get cached by a third-party mail proxy, so content-type matters even
-      # more here than for /assets.
-      conn |> get("/email/missing.png") |> assert_not_found_not_html()
-    end
-
-    test "a bare /socket path 404s (seventh prefix: socket dispatch only claims /socket/websocket)",
-         %{conn: conn} do
-      conn |> get("/socket") |> assert_not_found_not_html()
-    end
-
-    test "a typo'd /socket path 404s", %{conn: conn} do
-      conn |> get("/socket/bogus") |> assert_not_found_not_html()
+    #
+    # /assets and /email are Plug.Static (static_paths() in lib/engram_web.ex),
+    # not router scopes: Plug.Static only intercepts files that exist, so a
+    # miss falls through to the router. /email is referenced from outbound
+    # email HTML, where a masked HTML 200 can be cached by a mail proxy.
+    # socket_dispatch only claims /socket/websocket, so bare /socket and
+    # /socket/bogus reach the router too.
+    for path <- ~w(/api/notez /webhooks/bogus /.well-known/bogus /oauth/bogus
+                   /assets/bogus.js /email/missing.png /socket /socket/bogus) do
+      test "GET #{path} 404s and is not HTML", %{conn: conn} do
+        conn |> get(unquote(path)) |> assert_not_found_not_html()
+      end
     end
 
     test "but /oauth/consent still serves the SPA", %{conn: conn} do
@@ -267,36 +228,14 @@ defmodule EngramWeb.SpaControllerTest do
     # (priv/static/), so Plug.Static (mounted ahead of the router in the
     # endpoint) always wins for these requests. The tests below prove that is
     # still true, and that a MISS is a clean 404 rather than an HTML 200.
-    test "GET /favicon.ico still serves the real file, not the SPA", %{conn: conn} do
-      conn = get(conn, "/favicon.ico")
-      assert conn.status == 200
-      [content_type] = get_resp_header(conn, "content-type")
-      refute content_type =~ "text/html"
-      refute response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
-    end
-
-    test "GET /favicon.svg still serves the real file, not the SPA", %{conn: conn} do
-      conn = get(conn, "/favicon.svg")
-      assert conn.status == 200
-      [content_type] = get_resp_header(conn, "content-type")
-      refute content_type =~ "text/html"
-      refute response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
-    end
-
-    test "GET /engram-mark.svg still serves the real file, not the SPA", %{conn: conn} do
-      conn = get(conn, "/engram-mark.svg")
-      assert conn.status == 200
-      [content_type] = get_resp_header(conn, "content-type")
-      refute content_type =~ "text/html"
-      refute response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
-    end
-
-    test "GET /robots.txt still serves the real file, not the SPA", %{conn: conn} do
-      conn = get(conn, "/robots.txt")
-      assert conn.status == 200
-      [content_type] = get_resp_header(conn, "content-type")
-      refute content_type =~ "text/html"
-      refute response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+    for path <- ~w(/favicon.ico /favicon.svg /engram-mark.svg /robots.txt) do
+      test "GET #{path} still serves the real file, not the SPA", %{conn: conn} do
+        conn = get(conn, unquote(path))
+        assert conn.status == 200
+        [content_type] = get_resp_header(conn, "content-type")
+        refute content_type =~ "text/html"
+        refute response(conn, 200) =~ "window.__ENGRAM_CONFIG__="
+      end
     end
 
     test "a bogus sibling single-segment path 404s (root is no longer a wildcard)", %{conn: conn} do

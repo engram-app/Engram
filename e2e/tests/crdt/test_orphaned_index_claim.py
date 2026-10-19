@@ -30,7 +30,6 @@ Refs engram-app/engram#1550, engram-app/Engram-obsidian#497.
 
 from __future__ import annotations
 
-import os
 import time
 import uuid
 
@@ -39,11 +38,6 @@ import pytest
 from helpers.backend_rpc import backend_rpc
 from helpers.latency import DELIVERY_TIMEOUT
 from helpers.vault import write_note
-
-pytestmark = pytest.mark.skipif(
-    os.environ.get("E2E_ENABLE_CRDT") != "true",
-    reason="CRDT-only suite — set E2E_ENABLE_CRDT=true with a CRDT_ENABLED backend",
-)
 
 CRDT_TIMEOUT = DELIVERY_TIMEOUT
 FILEMETA = "filemeta_v0"

@@ -30,7 +30,7 @@ Coverage map, deliberately both directions and both bindings:
 
 from __future__ import annotations
 
-import os
+import asyncio
 import time
 
 import pytest
@@ -38,11 +38,6 @@ from playwright.async_api import expect
 
 from helpers.latency import DELIVERY_TIMEOUT
 from helpers.vault import read_note, wait_for_content, write_note
-
-pytestmark = pytest.mark.skipif(
-    os.environ.get("E2E_ENABLE_CRDT") != "true",
-    reason="CRDT-only suite — set E2E_ENABLE_CRDT=true with a CRDT_ENABLED backend",
-)
 
 CRDT_TIMEOUT = DELIVERY_TIMEOUT
 MS = CRDT_TIMEOUT * 1_000
@@ -301,6 +296,8 @@ async def test_typed_frontmatter_survives_close_and_reopen(
         "published", timeout=MS
     )
 
+    await _close_all_in_obsidian(cdp_a)
+
     # Assert while CLOSED. This is the reported state, and it is the strict one:
     # reopening first runs attach() -> enroll -> room rejoin, and any update
     # delivered on that rejoin flushes the FULL projection back to disk, which
@@ -315,7 +312,7 @@ async def test_typed_frontmatter_survives_close_and_reopen(
             "frontmatter vanished from disk after the note was closed; "
             f"file is now:\n{disk!r}"
         )
-        time.sleep(0.5)
+        await asyncio.sleep(0.5)
 
     # Reopening must not resurrect the problem either, and the server should
     # still agree -- so this was never a delete the user made.

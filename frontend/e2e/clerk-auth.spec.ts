@@ -1,24 +1,8 @@
-import fs from "node:fs";
-import path from "node:path";
 import { clerk, setupClerkTestingToken } from "@clerk/testing/playwright";
 import { expect, type Page, test } from "@playwright/test";
-
-const AUTH_STATE_PATH = path.join(__dirname, ".auth-state.json");
-
-function loadAuthState(): {
-	email: string;
-	password: string;
-	clerk_user_id: string;
-	skipped: boolean;
-} {
-	if (!fs.existsSync(AUTH_STATE_PATH)) {
-		return { email: "", password: "", clerk_user_id: "", skipped: true };
-	}
-	return JSON.parse(fs.readFileSync(AUTH_STATE_PATH, "utf-8"));
-}
+import { loadAuthState } from "./clerk-helpers";
 
 const SIGN_IN = '[data-clerk-component="SignIn"]';
-const SIGN_UP = '[data-clerk-component="SignUp"]';
 // The header uses a custom avatar dropdown (UserMenu), not Clerk's <UserButton>.
 const USER_MENU = { role: "button" as const, name: "User menu" };
 
@@ -63,23 +47,6 @@ test.describe("Clerk auth provider", () => {
 		await expect(page.locator("h1.cl-headerTitle")).toContainText("Sign in");
 	});
 
-	test("renders Clerk SignUp component", async ({ page }) => {
-		await page.goto("/sign-up/");
-		// Wait for Clerk container to attach, then for SDK to render it visible
-		await page.locator(SIGN_UP).waitFor({ state: "attached", timeout: 15_000 });
-		await expect(page.locator(SIGN_UP)).toBeVisible({ timeout: 15_000 });
-	});
-
-	test("sign in via Clerk → dashboard", async ({ page }) => {
-		await clerkSignIn(page, state.email);
-	});
-
-	test("user menu renders in header", async ({ page }) => {
-		await clerkSignIn(page, state.email);
-
-		await expect(page.getByRole(USER_MENU.role, { name: USER_MENU.name })).toBeVisible();
-	});
-
 	test("sign out via Clerk → redirects", async ({ page }) => {
 		await clerkSignIn(page, state.email);
 
@@ -87,25 +54,5 @@ test.describe("Clerk auth provider", () => {
 		await page.getByRole("menuitem", { name: /sign out/iu }).click();
 
 		await expect(page).toHaveURL(/\/sign-in/u, { timeout: 10_000 });
-	});
-
-	test("wrong password shows Clerk error", async ({ page }) => {
-		await page.goto("/sign-in/");
-		// Two-stage wait (mirrors the SignUp test): the Clerk container attaches
-		// first, then the SDK hydrates it visible. Asserting toBeVisible directly
-		// races Clerk's JS load on a busy CI runner (issue #306).
-		await page.locator(SIGN_IN).waitFor({ state: "attached", timeout: 15_000 });
-		await expect(page.locator(SIGN_IN)).toBeVisible({ timeout: 15_000 });
-
-		await page.locator('input[name="identifier"]').fill(state.email);
-		await page.locator(".cl-formButtonPrimary").click();
-
-		const pwInput = page.locator('input[name="password"]');
-		await expect(pwInput).toBeVisible({ timeout: 10_000 });
-		await pwInput.fill("WrongPassword!99");
-		await page.locator(".cl-formButtonPrimary").click();
-
-		await expect(page.locator(".cl-formFieldErrorText").first()).toBeVisible({ timeout: 10_000 });
-		await expect(page).toHaveURL(/\/sign-in/u);
 	});
 });

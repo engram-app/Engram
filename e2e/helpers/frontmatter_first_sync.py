@@ -1,10 +1,12 @@
 """First-sync a set of frontmatter shapes and report what the sync did to them.
 
-Shared by test_101 (no conflict copies) and test_102 (disk bytes untouched).
+Used by test_101 (no conflict copies). The red test_102 (disk bytes untouched)
+lives on branch `test/frontmatter-fidelity-repro` until #1928 fix 2 lands.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -81,7 +83,7 @@ async def first_sync_shapes(
         )
         if isinstance(indexed, int) and indexed >= expected:
             break
-        time.sleep(1)
+        await asyncio.sleep(1)
     else:
         raise TimeoutError(f"Obsidian indexed only {indexed}/{expected} files")
 
@@ -99,13 +101,18 @@ async def first_sync_shapes(
         )
         if landed >= expected:
             break
-        time.sleep(2)
+        await asyncio.sleep(2)
     assert landed >= expected, f"sync landed only {landed}/{expected}"
 
+    # Deliberately a timed window, not a barrier: The drift branch can fire on a
+    # catch-up that follows the backend's debounced checkpoint, and nothing
+    # observable says that checkpoint has run, so "cursor past the last seq"
+    # could stop before the row that triggers it exists. Swap for a barrier
+    # once the checkpoint exposes a signal (e.g. a manifest field).
     settle_end = time.monotonic() + CATCH_UP_SETTLE_S
     while time.monotonic() < settle_end:
         await cdp.trigger_full_sync()
-        time.sleep(4)
+        await asyncio.sleep(4)
 
     created = await cdp.evaluate(
         "JSON.stringify(window.__fmCreates); app.vault.offref(window.__fmCreatesRef);"

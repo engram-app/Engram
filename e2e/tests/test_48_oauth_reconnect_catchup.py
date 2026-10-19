@@ -3,7 +3,7 @@
 When an OAuth-authenticated client's WebSocket channel drops, changes made
 while disconnected should be delivered via catch-up pull on reconnect.
 
-This combines the reconnect pattern (test_23) with OAuth authentication to
+This combines the reconnect pattern (test_30) with OAuth authentication to
 ensure token refresh and channel re-join work correctly after disconnection.
 
 Requires E2E_CLERK_SECRET_KEY env var for device flow provisioning.

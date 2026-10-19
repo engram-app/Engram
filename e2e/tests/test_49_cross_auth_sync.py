@@ -9,7 +9,6 @@ Requires E2E_CLERK_SECRET_KEY env var.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import time
@@ -62,7 +61,10 @@ async def test_apikey_push_oauth_receives(
     pushes it, and A should receive the broadcast.
     """
     tokens = await provision_oauth_for_existing_user(
-        clerk_client, API_URL, sync_user[1], label="cross",
+        clerk_client,
+        API_URL,
+        sync_user[1],
+        label="cross",
         api_key=sync_user[2],
     )
     original_settings = None
@@ -106,7 +108,10 @@ async def test_oauth_push_apikey_receives(
     A is swapped to OAuth. A writes a file, syncs, B should get it.
     """
     tokens = await provision_oauth_for_existing_user(
-        clerk_client, API_URL, sync_user[1], label="cross",
+        clerk_client,
+        API_URL,
+        sync_user[1],
+        label="cross",
         api_key=sync_user[2],
     )
     original_settings = None
@@ -170,41 +175,7 @@ async def test_rapid_api_edits_final_content_arrives(vault_b, cdp_b, api_sync):
 
     final = read_note(vault_b, path)
     assert "Version 5 of 5" in final, f"Expected final version, got: {final[:200]}"
-
-
-@pytest.mark.asyncio
-async def test_rapid_api_edits_content_not_stale(vault_b, cdp_b, api_sync):
-    """After rapid edits settle, content should be the LATEST version, not an earlier one.
-
-    Stronger assertion: verifies no stale intermediate version persists after
-    the dust settles. Waits extra time to ensure no late broadcast overwrites
-    the final content with an earlier version.
-    """
-    connected = await cdp_b.check_stream_connected()
-    assert connected, "B's WebSocket channel is not connected"
-
-    # Unique path per run for rerun-safety (shared sync_user; see
-    # test_apikey_push_oauth_receives).
-    path = f"E2E/RapidEditsStale-{uuid.uuid4().hex[:12]}.md"
-
-    # Rapid-fire edits
-    for i in range(1, 8):
-        api_sync.create_note(path, f"# Stale Check\nIteration {i}")
-
-    # Wait for final version to land
-    wait_for_content(vault_b, path, "Iteration 7", timeout=RT_TIMEOUT)
-
-    # Wait extra to ensure no stale version overwrites the final one.
-    # 1.5s is 3x the plugin's 500ms debounce — enough for any in-flight writes to settle.
-    await asyncio.sleep(1.5)
-
-    final = read_note(vault_b, path)
-    assert "Iteration 7" in final, (
-        f"Content should be latest iteration (7), got: {final[:200]}"
-    )
-    # Verify the file contains ONLY the final iteration's content line
-    # (earlier iterations should have been overwritten, not appended)
-    assert final.count("Iteration") == 1, (
-        f"Expected exactly one 'Iteration' line (the final one), "
-        f"but found {final.count('Iteration')}: {final[:300]}"
+    # Earlier versions must have been overwritten, not appended.
+    assert final.count("Version") == 1, (
+        f"Expected only the final version line: {final[:300]}"
     )

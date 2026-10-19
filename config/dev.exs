@@ -8,28 +8,13 @@ import Config
 # build the same exports; only the release build drops them.
 config :engram, Engram.Native, features: ["test-hooks"]
 
-# Configure your database
-repo_opts =
-  case System.get_env("DATABASE_URL") do
-    nil ->
-      [
-        username: "engram",
-        password: "engram",
-        hostname: "localhost",
-        database: "engram_dev"
-      ]
-
-    url ->
-      [url: url]
-  end
-
+# Configure your database. The connection (DATABASE_URL) is env-derived, so
+# it lives in config/runtime.exs; see the comment there.
 config :engram,
        Engram.Repo,
-       Keyword.merge(repo_opts,
-         stacktrace: true,
-         show_sensitive_data_on_connection_error: true,
-         pool_size: 10
-       )
+       stacktrace: true,
+       show_sensitive_data_on_connection_error: true,
+       pool_size: 10
 
 # For development, we disable any cache and enable
 # debugging and code reloading.
@@ -38,10 +23,8 @@ config :engram,
 # watchers to your application. For example, we can use it
 # to bundle .js and .css sources.
 config :engram, EngramWeb.Endpoint,
-  # Binding to loopback ipv4 address prevents access from other machines.
-  # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
-  # PORT defaults to 4000 (saas-dev contract); honor env override only.
-  http: [ip: {0, 0, 0, 0}, port: String.to_integer(System.get_env("PORT", "4000"))],
+  # PORT (default 4000, the saas-dev contract) is read in config/runtime.exs.
+  http: [ip: {0, 0, 0, 0}],
   check_origin: false,
   code_reloader: true,
   debug_errors: true,
@@ -97,8 +80,7 @@ config :engram, :spa_cache_enabled?, false
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"
 
-# Default :debug; the Playwright e2e servers set LOG_LEVEL=info in CI.
-config :logger, level: String.to_existing_atom(System.get_env("LOG_LEVEL", "debug"))
+# Logger level (LOG_LEVEL, default :debug) is read in config/runtime.exs.
 
 # Set a higher stacktrace during development. Avoid configuring such
 # in production as building large stacktraces may be expensive.

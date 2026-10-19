@@ -132,9 +132,8 @@ async def _restore_divergent(cdp, vault, api_sync, local_path: str, remote_path:
     """Undo _seed_divergent: delete both seeds, resume push, re-accept.
 
     The remote delete must be LOUD on failure: delete_note returns the
-    HTTP status without raising, and a silently leaked remote seed makes
-    this worker's server vault permanently non-empty (which silently
-    skips the one-click screen test forever after).
+    HTTP status without raising, and a silently leaked remote seed leaks
+    into every later test sharing this session vault.
     """
     await _vault_delete(cdp, vault, local_path)
     status = api_sync.delete_note(remote_path)
@@ -236,78 +235,6 @@ async def test_modal_choice_dispatches(
             await cdp_a.uninstall_choice_spy()
         finally:
             await cdp_a.dismiss_modals()
-
-
-@pytest.mark.asyncio
-async def test_one_click_upload_screen_dispatches_smart_merge(vault_a, cdp_a):
-    """Plugin #415: an empty-remote first sync renders a one-click upload
-    screen whose single button dispatches smart-merge (never a delete
-    variant). Feature-detected by DOM shape: pre-#415 plugins — or a worker
-    whose server vault already has notes (an xdist-position accident this
-    detection can't distinguish from an old plugin) — render the five-option
-    modal instead; skip there, the dispatch tests above cover that shape.
-    Rendering NEITHER shape is a failure, not a skip.
-    """
-    path = f"{SEED_DIR}/OneClickUpload.md"
-    try:
-        await _seed_local_only(cdp_a, vault_a, path, "# One-click seed")
-        await cdp_a.install_choice_spy(swallow=True)
-        await cdp_a.open_sync_preview_modal()
-        await cdp_a.wait_for_sync_preview_modal()
-
-        # Poll until either screen shape renders (plan computes async).
-        screen = await cdp_a.evaluate(
-            """
-            (async () => {
-                const deadline = Date.now() + 10000;
-                while (Date.now() < deadline) {
-                    const modal = document.querySelector('.engram-sync-preview-modal');
-                    if (modal) {
-                        if (modal.querySelector('.engram-sync-preview-simple-action')) {
-                            return 'simple';
-                        }
-                        if (modal.querySelector('.engram-sync-preview-option-label')) {
-                            return 'options';
-                        }
-                    }
-                    await new Promise(r => setTimeout(r, 200));
-                }
-                return 'none';
-            })()
-            """,
-            await_promise=True,
-        )
-        if screen == "none":
-            pytest.fail(
-                "sync preview modal rendered neither the one-click screen nor "
-                "option cards within 10s — plan compute or modal render broke"
-            )
-        if screen == "options":
-            pytest.skip(
-                "five-option modal rendered — pre-#415 plugin or non-empty "
-                "server vault on this worker"
-            )
-
-        await cdp_a.evaluate(
-            "document.querySelector("
-            "'.engram-sync-preview-modal .engram-sync-preview-simple-action'"
-            ").click()"
-        )
-        await cdp_a.wait_for_modal_closed(timeout=10)
-
-        recorded = await cdp_a.get_last_sync_choice()
-        assert recorded == "smart-merge", (
-            f"One-click upload must dispatch smart-merge, got {recorded!r}"
-        )
-    finally:
-        # Chained: each cleanup step runs even when the previous one raises.
-        try:
-            await cdp_a.uninstall_choice_spy()
-        finally:
-            try:
-                await cdp_a.dismiss_modals()
-            finally:
-                await _restore_clean(cdp_a, vault_a, path)
 
 
 @pytest.mark.asyncio

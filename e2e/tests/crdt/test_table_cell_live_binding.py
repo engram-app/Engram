@@ -25,18 +25,12 @@ The oracles, weakest to strongest:
 
 from __future__ import annotations
 
-import os
-import time
+import asyncio
 
 import pytest
 
 from helpers.latency import DELIVERY_TIMEOUT
 from helpers.vault import read_note, write_note
-
-pytestmark = pytest.mark.skipif(
-    os.environ.get("E2E_ENABLE_CRDT") != "true",
-    reason="CRDT-only suite — set E2E_ENABLE_CRDT=true with a CRDT_ENABLED backend",
-)
 
 CRDT_TIMEOUT = DELIVERY_TIMEOUT
 
@@ -85,7 +79,7 @@ async def _stage_clicked_cell(cdp, vault, api, cell_text: str) -> tuple[str, dic
     baseline = await cdp.live_viewer_count(PATH)
     assert baseline == 1, (
         f"expected exactly 1 live-bound view for the open note, got {baseline} "
-        "(-1 means the CRDT layer never wired up — check E2E_ENABLE_CRDT)"
+        "(-1 means the CRDT layer never wired up)"
     )
 
     result = await cdp.enter_table_cell(cell_text)
@@ -126,7 +120,9 @@ async def test_table_cell_click_does_not_duplicate_the_document(
     # The corruption was immediate (the reconcile runs on attach), but the 3s
     # drift backstop is the other writer that could produce it. Wait past it so a
     # green result covers both, then let any push settle.
-    time.sleep(6)
+    # Deliberately a timed window: The backstop timer logs nothing when it finds no
+    # drift, so there is no positive signal that it ran.
+    await asyncio.sleep(6)
 
     cell = await cdp_a.table_cell_text()
     for marker in CORRUPTION_MARKERS:

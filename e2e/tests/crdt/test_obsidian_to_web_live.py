@@ -20,18 +20,12 @@ test_web_to_obsidian_live.py.
 
 from __future__ import annotations
 
-import os
 
 import pytest
 from playwright.async_api import expect
 
 from helpers.vault import write_note
 from helpers.latency import DELIVERY_TIMEOUT
-
-pytestmark = pytest.mark.skipif(
-    os.environ.get("E2E_ENABLE_CRDT") != "true",
-    reason="CRDT-only suite — set E2E_ENABLE_CRDT=true with a CRDT_ENABLED backend",
-)
 
 RT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound, not a latency assert
 

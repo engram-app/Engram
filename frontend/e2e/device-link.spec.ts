@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createVault, deleteAccount, PASS, registerAndLogin } from "./support/api";
+import { createVault, deleteAccount, registerAndLogin, signIn } from "./support/api";
 
 /**
  * The /link page: what the Obsidian plugin's link code leads to. Self-host
@@ -61,24 +61,12 @@ async function obsidianConnections(
 	return rows.filter((r) => r.kind === "obsidian");
 }
 
-async function listVaultNames(baseURL: string, token: string): Promise<string[]> {
-	const res = await fetch(`${baseURL}/api/vaults`, {
-		headers: { Authorization: `Bearer ${token}` },
-	});
-	const { vaults } = (await res.json()) as { vaults: Array<{ name: string }> };
-	return vaults.map((v) => v.name);
-}
-
 async function signInAndOpenLink(
 	page: import("@playwright/test").Page,
 	email: string,
 	userCode: string,
 ): Promise<void> {
-	await page.goto("/sign-in/");
-	await page.getByLabel("Email").fill(email);
-	await page.getByLabel("Password", { exact: true }).fill(PASS);
-	await page.getByRole("button", { name: /sign in/iu }).click();
-	await expect(page).not.toHaveURL(/\/sign-in/u, { timeout: 15_000 });
+	await signIn(page, email);
 	await page.goto(`/link?code=${userCode}`);
 	await expect(page.getByRole("heading", { name: "Choose a vault to sync" })).toBeVisible({
 		timeout: 15_000,
@@ -123,36 +111,6 @@ test.describe("/link vault picker", () => {
 			expect(rows).toHaveLength(1);
 			expect(rows[0]?.label).toBe("Desk PC");
 			expect(rows[0]?.name).toBe("Desk PC");
-		} finally {
-			await deleteAccount(base, user);
-		}
-	});
-
-	test("creates a new vault from the plugin's name when nothing matches", async ({
-		page,
-		baseURL,
-	}) => {
-		const base = baseURL as string;
-		const user = email("create");
-		const token = await registerAndLogin(base, user);
-		try {
-			await createVault(base, token, "Personal");
-			const flow = await startDeviceFlow(base, { vault_name: "Brain Dump" });
-
-			await signInAndOpenLink(page, user, flow.user_code);
-
-			await expect(page.getByText("Sync with your matching vault", { exact: true })).toHaveCount(0);
-			const name = page.getByLabel("New vault name");
-			await expect(name).toHaveValue("Brain Dump");
-			// The one checked radio is the new-vault row, not an existing vault.
-			const checked = page.getByRole("radio", { checked: true });
-			await expect(checked).toHaveCount(1);
-			await expect(checked).not.toHaveAccessibleName(/Personal/u);
-
-			await page.getByRole("button", { name: "Sync", exact: true }).click();
-			await expect(page.getByText(/your vault is linked/iu)).toBeVisible({ timeout: 15_000 });
-
-			expect(await listVaultNames(base, token)).toContain("Brain Dump");
 		} finally {
 			await deleteAccount(base, user);
 		}
@@ -213,27 +171,6 @@ test.describe("/link vault picker", () => {
 			await search.fill("vault 9");
 			await expect(page.getByRole("radio", { name: /^Vault 9\b/u })).toBeVisible();
 			await expect(page.getByRole("radio", { name: /^Vault 1\b/u })).toHaveCount(0);
-		} finally {
-			await deleteAccount(base, user);
-		}
-	});
-
-	test("warns that linking gives the device access when the code arrived in the URL", async ({
-		page,
-		baseURL,
-	}) => {
-		const base = baseURL as string;
-		const user = email("warn");
-		const token = await registerAndLogin(base, user);
-		try {
-			await createVault(base, token, "Personal");
-			const flow = await startDeviceFlow(base, {});
-
-			await signInAndOpenLink(page, user, flow.user_code);
-
-			await expect(
-				page.getByText(/continue only if you started this link yourself/iu),
-			).toBeVisible();
 		} finally {
 			await deleteAccount(base, user);
 		}

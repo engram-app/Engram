@@ -268,14 +268,9 @@ class ObsidianInstance:
             # legacy diagnostics flags into it).
             "diagnosticsEnabled": True,
         }
-        # Explicitly pin the file-level CRDT sync path (spec §12a) for the
-        # dedicated CRDT job. NOTE: since plugin #148 enableCrdt DEFAULTS to
-        # true, so even without this key the general suite runs CRDT — the
-        # backend always advertises the `crdt:` topic (CRDT is unconditional;
-        # the old CRDT_ENABLED stack flag was dead config). Omitting this key
-        # does NOT pin the legacy REST path.
-        if os.environ.get("E2E_ENABLE_CRDT") == "true":
-            settings["enableCrdt"] = True
+        # No enableCrdt key: CRDT is the only sync path. The plugin retired the
+        # setting (settings-migrate strips it) and the backend always
+        # advertises the `crdt:` topic.
         if self.client_id:
             settings["clientId"] = self.client_id
         data = {
