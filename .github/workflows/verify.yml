@@ -4644,7 +4644,12 @@ jobs:
     # The GATE is unchanged — the loop below still treats `skipped` as
     # non-failing, because a content-addressed marker hit is a sound reason not
     # to re-run. Only the reporting is new.
-    if: always()
+    #
+    # `!cancelled()`, not `always()`: always() also ran after a newer push
+    # superseded the run, read its cancelled gates and exited 1, so 25 PR runs
+    # in 14 days showed a red `ci` instead of cancelled. A gate cancelled by its
+    # own timeout still lands here (the run itself is not cancelled) and fails.
+    if: ${{ !cancelled() }}
     # e2e-clerk / e2e-crdt / e2e-browser are deliberately NOT here. They are
     # report-only (they post their own PR checks), and waiting on them made the
     # 16-28 min e2e-browser the PR's wall-clock even though `ci` ignored its
