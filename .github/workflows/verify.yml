@@ -609,6 +609,13 @@ jobs:
           # the job (issue #334, upstream docker/buildx bug). Plain writer = no
           # such goroutine.
           BUILDKIT_PROGRESS: plain
+          # Pin the daemon's own docker-driver builder. The Dockerfile FROMs the
+          # LOCAL tag engram-deps:<hash>; a non-default buildx builder (e.g. a
+          # docker-container one left active on a runner) has its own image
+          # store, cannot see that tag, and falls back to docker.io: "pull
+          # access denied" 3/3 on run 39219496355 (runner-2) right after the
+          # tag was created. A no-op wherever `default` is already active.
+          BUILDX_BUILDER: default
           # `ci/compose.yml` declares these with the `:?` (required) form, which
           # docker compose enforces while PARSING the file — so even
           # `docker compose build engram`, which needs no object storage at all,
