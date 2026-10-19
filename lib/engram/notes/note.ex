@@ -46,6 +46,9 @@ defmodule Engram.Notes.Note do
     field :chunker_version, :integer
     field :keyword_version, :integer
     field :embed_model, :string
+    # Hash of the note-level Qdrant payload last written to this note's
+    # points; see `Engram.Indexing.commit_index/2`. NULL = unknown, refresh.
+    field :payload_hash, :binary
     # Poison-loop guard: when a note exhausts its EmbedNote attempts, the worker
     # stamps a cooldown timestamp here. ReconcileEmbeddings skips notes whose
     # cooldown hasn't elapsed, so a permanently-failing note re-bills Voyage at

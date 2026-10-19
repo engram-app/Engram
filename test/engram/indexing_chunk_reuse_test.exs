@@ -40,8 +40,7 @@ defmodule Engram.IndexingChunkReuseTest do
 
   setup do
     bypass = Bypass.open()
-    Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
-    on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+    Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
 
     user = insert(:user)
     vault = insert(:vault, user: user)
@@ -100,6 +99,16 @@ defmodule Engram.IndexingChunkReuseTest do
 
   defp deleted_ids(recorder) do
     recorder |> deletes() |> Enum.flat_map(&Map.get(&1.body, "points", []))
+  end
+
+  # The stored row, decrypted: what EmbedNote hands to `index_note/2`.
+  defp fresh(note, user) do
+    {:ok, note} =
+      note
+      |> Repo.reload!(skip_tenant_check: true)
+      |> Engram.Crypto.maybe_decrypt_note_fields(Repo.reload!(user, skip_tenant_check: true))
+
+    note
   end
 
   defp chunk_rows(note) do
@@ -248,6 +257,37 @@ defmodule Engram.IndexingChunkReuseTest do
 
       assert Enum.sort(payload["tags_hmac"]) == Enum.sort(expected),
              "reused points would otherwise answer tag filters with the pre-edit tags"
+    end
+
+    # Qdrant 1.18 copies every set_payload target into a new segment, so a
+    # no-op refresh on every pass rewrites the collection (rollout review F1).
+    test "re-indexing an unchanged note issues no set_payload", ctx do
+      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
+      stub_embedder(self())
+
+      assert {:ok, _} = Indexing.index_note(note, ctx.vault)
+      reset(ctx.recorder)
+
+      assert {:ok, count} = Indexing.index_note(fresh(note, ctx.user), ctx.vault)
+      assert count > 2, "the pass must reuse chunks, not take the no-chunks path"
+      assert set_payloads(ctx.recorder) == []
+    end
+
+    test "a note-level payload change refreshes every reused point", ctx do
+      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
+      stub_embedder(self())
+
+      assert {:ok, _} = Indexing.index_note(note, ctx.vault)
+      reset(ctx.recorder)
+
+      # Same content, so every chunk is reused; only a note-level input moved.
+      moved = %{fresh(note, ctx.user) | fm_timestamp: ~U[2026-01-02 03:04:05Z]}
+      assert {:ok, _} = Indexing.index_note(moved, ctx.vault)
+
+      assert upserts(ctx.recorder) == []
+      all_ids = note |> chunk_rows() |> Enum.map(& &1.qdrant_point_id)
+      assert [%{body: %{"points" => points}}] = set_payloads(ctx.recorder)
+      assert Enum.sort(points) == Enum.sort(all_ids)
     end
   end
 

@@ -295,10 +295,16 @@ defmodule Engram.Indexing do
           qdrant_points: qdrant_points,
           reused_point_ids: reused_point_ids,
           stale_point_ids: stale_point_ids,
-          note_payload: note_payload
+          note_payload: note_payload,
+          payload_hash: payload_hash
         },
         in_commit
       ) do
+    # Skip the PATCH when the note-level payload is what was last written:
+    # on Qdrant 1.18 every set_payload target is copied into a new segment,
+    # so an unconditional refresh rewrote the whole collection on each pass.
+    refresh_ids = if payload_hash == note.payload_hash, do: [], else: reused_point_ids
+
     # Ordered so that every failure leaves STRAY points (which OrphanSweep
     # reaps) rather than a chunk row naming a point that is already gone —
     # which nothing self-heals and which reads as silently missing content.
@@ -314,7 +320,7 @@ defmodule Engram.Indexing do
          # other point still answers tag filters with the pre-edit tags. One
          # PATCH refreshes the lot — the values are identical across a note's
          # points, which is why `chunk_index` no longer lives in the payload.
-         :ok <- Qdrant.set_payload(collection(), reused_point_ids, note_payload) do
+         :ok <- Qdrant.set_payload(collection(), refresh_ids, note_payload) do
       # Wholesale rewrite rather than a row-level diff: the rows are local and
       # cheap, and replacing them all sidesteps every ordering problem with
       # `chunks_note_id_position_index` when positions shift. One transaction
@@ -342,6 +348,7 @@ defmodule Engram.Indexing do
           |> Enum.chunk_every(@insert_batch)
           |> Enum.each(&Repo.insert_all(Chunk, &1, skip_tenant_check: true))
 
+          stamp_payload_hash(note, payload_hash)
           in_commit.(length(chunk_rows))
         end)
 
@@ -349,6 +356,20 @@ defmodule Engram.Indexing do
 
       {:ok, length(chunk_rows)}
     end
+  end
+
+  # Every point of the note now carries `note_payload`: upserted ones were
+  # built from it, reused ones were just PATCHed (or already held it).
+  defp stamp_payload_hash(%Note{payload_hash: hash}, hash), do: :ok
+
+  defp stamp_payload_hash(note, hash) do
+    {_, _} =
+      Repo.update_all(
+        from(n in Note, where: n.kind == "note" and n.id == ^note.id),
+        set: [payload_hash: hash]
+      )
+
+    :ok
   end
 
   # Bounded upsert bodies: thousands of 1024-dim float vectors as one JSON PUT
@@ -1375,7 +1396,8 @@ defmodule Engram.Indexing do
          # is either a stray or a row pointing at nothing.
          reused_point_ids: plan.reused_point_ids,
          stale_point_ids: plan.stale_point_ids,
-         note_payload: note_payload
+         note_payload: note_payload,
+         payload_hash: payload_hash(note_payload)
        }}
     end
   end
@@ -1480,6 +1502,13 @@ defmodule Engram.Indexing do
       fm_created: note.fm_created && DateTime.to_unix(note.fm_created)
     }
   end
+
+  # Plaintext inputs, not the stored payload: nothing here is encrypted, but
+  # comparing what we would write against a stamp avoids reading Qdrant back.
+  # `:deterministic` so equal maps hash equal; an OTP change that alters the
+  # encoding costs one extra refresh per note, nothing worse.
+  defp payload_hash(note_payload),
+    do: :crypto.hash(:sha256, :erlang.term_to_binary(note_payload, [:deterministic]))
 
   # Encodes a Phase B HMAC binary as base64 for JSON-safe Qdrant payload.
   # Returns nil for nil — leaves the field absent so legacy/un-backfilled
