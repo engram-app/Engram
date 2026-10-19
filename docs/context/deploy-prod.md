@@ -101,6 +101,38 @@ git push origin release-v0.5.235
 
 The workflow opens an engram-infra PR bumping the var to that older `sha-<7>`. Merge it immediately — the promotion gate above is a manual merge, not a review requirement, so nothing queues behind another person during an incident. On merge, TF registers a fresh revision pinning the old image and the service rolls back. Task def history in ECS becomes the deploy log — `aws ecs list-task-definitions --family-prefix engram-saas-prod` shows every revision in order.
 
+### Rolling back past link resolve-on-read (PR #2030)
+
+Releases from #2030 on resolve link targets when read. They still write
+`note_links.target_note_id`/`target_attachment_id` when a note's own links
+are extracted, but no longer re-resolve OTHER notes' edges when a note is
+created, renamed or deleted. Releases before it read those columns directly.
+After rolling back past #2030, links written while it ran can show as
+dangling, or point at a renamed or deleted note, until their source note is
+saved again. Nothing on the old release heals them by itself.
+
+Heal it once, in a remote console on the rolled-back release. This queues
+the old per-basename rebind for every linked name, at background priority:
+
+```elixir
+import Ecto.Query
+repo = Engram.Repo.maintenance()
+
+from(l in Engram.Links.NoteLink,
+  where: not is_nil(l.target_basename_hmac),
+  distinct: true,
+  select: {l.user_id, l.vault_id, l.target_basename_hmac}
+)
+|> repo.all()
+|> Enum.map(fn {u, v, h} -> Engram.Workers.RebindNoteLinks.new_for(u, v, h) end)
+|> Enum.chunk_every(500)
+|> Enum.each(&Oban.insert_all/1)
+```
+
+This is the fan-out #2030 removed (one job per basename; a hub name re-reads
+every edge on it), so expect `indexing` queue load until it drains. Rolling
+forward again needs nothing: reads ignore the stored ids.
+
 ## Inspect deploy state
 
 ```bash
