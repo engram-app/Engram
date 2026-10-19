@@ -20,7 +20,9 @@ defmodule Engram.Parsers.Markdown do
   # 3 — CommonMark headings (none inside code; setext counts), only the first
   #     H1 is the title, heading-only and blank chunks dropped, whitespace
   #     normalised, content-anchored splits (#1594), `embed_text` (#1621).
-  @chunker_version 3
+  # 4 — wrapped base64 and hex blobs stripped, and a per-chunk `kind`: a
+  #     frontmatter chunk is keyword-only, so it no longer holds a dense vector.
+  @chunker_version 4
 
   @doc """
   Version of the chunking algorithm in this build (#1620).
@@ -46,10 +48,13 @@ defmodule Engram.Parsers.Markdown do
   - `:heading_path` — e.g. "Title > H1 > H2"
   - `:char_start`   — byte offset in post-frontmatter body
   - `:char_end`     — byte offset end
+  - `:kind`         — "prose" | "data" | "frontmatter" | "drawing"; only
+                      prose gets a dense vector, the rest are keyword-only
 
   Exception: when frontmatter is present, a synthetic chunk carrying the raw
   frontmatter block is appended last, with `heading_path` fixed to
-  `"frontmatter"` and `char_start`/`char_end` both fixed to `0`.
+  `"frontmatter"`, `kind` `"frontmatter"` and `char_start`/`char_end` both
+  fixed to `0`.
   """
   def parse("", _path), do: []
 
@@ -63,7 +68,8 @@ defmodule Engram.Parsers.Markdown do
 
     content
     |> Engram.Native.chunk(folder, title)
-    |> Enum.with_index(fn {text, context_text, embed_text, heading_path, char_start, char_end},
+    |> Enum.with_index(fn {text, context_text, embed_text, heading_path, char_start, char_end,
+                           kind},
                           position ->
       %{
         position: position,
@@ -72,7 +78,8 @@ defmodule Engram.Parsers.Markdown do
         embed_text: embed_text,
         heading_path: heading_path,
         char_start: char_start,
-        char_end: char_end
+        char_end: char_end,
+        kind: kind
       }
     end)
   end

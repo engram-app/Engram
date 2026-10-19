@@ -1,4 +1,4 @@
-//! `Engram.Parsers.Markdown.parse/2` in Rust (chunker version 3): the
+//! `Engram.Parsers.Markdown.parse/2` in Rust (chunker version 4): the
 //! frontmatter split, heading sections, base64 blob stripping, splitting and
 //! the size caps. The Elixir side keeps CRLF normalisation, the folder and
 //! the title, and assigns positions.
@@ -33,9 +33,10 @@ const WINDOW: usize = 1024;
 const RUNT: usize = 512;
 
 /// One chunk: (text, context_text, embed_text, heading_path, char_start,
-/// char_end). context_text carries the folder for keyword search (#1615);
-/// embed_text, the dense input, drops it (#1621).
-pub type Chunk = (String, String, String, String, usize, usize);
+/// char_end, kind). context_text carries the folder for keyword search
+/// (#1615); embed_text, the dense input, drops it (#1621). kind is `prose`,
+/// `data`, `frontmatter` or `drawing`: only prose gets a dense vector.
+pub type Chunk = (String, String, String, String, usize, usize, &'static str);
 
 struct Heading {
     level: usize,
@@ -85,7 +86,7 @@ pub fn each_chunk(content: &str, folder: &str, title: &str, mut emit: impl FnMut
         let rest = strip_blobs(body);
         if !markup_only(&rest) {
             for t in split(&normalize("", &rest)) {
-                emit(make(folder, title, title, t, 0, body.len()));
+                emit(make(folder, title, title, t, 0, body.len(), PROSE));
             }
         }
     }
@@ -96,7 +97,7 @@ pub fn each_chunk(content: &str, folder: &str, title: &str, mut emit: impl FnMut
             .into_iter()
             .filter(|t| !t.is_empty())
         {
-            emit(make(folder, &path, "frontmatter", t, 0, 0));
+            emit(make(folder, &path, "frontmatter", t, 0, 0, "frontmatter"));
         }
     }
 }
@@ -180,7 +181,7 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
         }
         self.flush();
         for t in split(&text) {
-            (self.emit)(make(self.folder, &path, &path, t, self.start, end));
+            (self.emit)(make(self.folder, &path, &path, t, self.start, end, PROSE));
             self.emitted = true;
         }
     }
@@ -200,13 +201,23 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
 
     fn flush(&mut self) {
         if let Some((text, path, from, to)) = self.pending.take() {
-            (self.emit)(make(self.folder, &path, &path, &text, from, to));
+            (self.emit)(make(self.folder, &path, &path, &text, from, to, PROSE));
             self.emitted = true;
         }
     }
 }
 
-fn make(folder: &str, path: &str, heading_path: &str, text: &str, s: usize, e: usize) -> Chunk {
+const PROSE: &str = "prose";
+
+fn make(
+    folder: &str,
+    path: &str,
+    heading_path: &str,
+    text: &str,
+    s: usize,
+    e: usize,
+    kind: &'static str,
+) -> Chunk {
     let emb = cap(path);
     let ctx = if folder.is_empty() {
         emb.to_string()
@@ -220,6 +231,7 @@ fn make(folder: &str, path: &str, heading_path: &str, text: &str, s: usize, e: u
         heading_path.to_string(),
         s,
         e,
+        kind,
     )
 }
 
@@ -710,6 +722,20 @@ mod tests {
         assert!(cs
             .windows(2)
             .all(|w| w[0].4 <= w[1].4 && w[1].5 <= note.len()));
+    }
+
+    #[test]
+    fn frontmatter_chunks_are_their_own_kind() {
+        let cs = chunk("---\ntags: [a]\n---\n# T\n\nbody\n\n## S\n\nmore", "", "T");
+        let kinds: Vec<_> = cs.iter().map(|c| (c.3.as_str(), c.6)).collect();
+        assert_eq!(
+            kinds,
+            [
+                ("T", "prose"),
+                ("T > S", "prose"),
+                ("frontmatter", "frontmatter")
+            ]
+        );
     }
 
     #[test]

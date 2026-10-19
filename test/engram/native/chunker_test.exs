@@ -4,7 +4,7 @@ defmodule Engram.Native.ChunkerTest do
 
   alias Engram.Parsers.Markdown
 
-  # Pins the chunker's output (809 notes, 2,654 chunks: code, setext, quotes,
+  # Pins the chunker's output (809 notes, 2,649 chunks: code, setext, quotes,
   # tables, blobs, long sections). A change here re-chunks notes nobody
   # edits only if @chunker_version is bumped too (#1620): bump it, then rerun
   # test/support/fixtures/chunker_golden.gen.exs.
@@ -26,8 +26,8 @@ defmodule Engram.Native.ChunkerTest do
     end
   end
 
-  test "chunker_version is 3: the boundary fixes below re-chunk the notes they touch" do
-    assert Markdown.chunker_version() == 3
+  test "chunker_version is 4: the boundary fixes below re-chunk the notes they touch" do
+    assert Markdown.chunker_version() == 4
   end
 
   # #1616: the four section bugs, fixed under one version bump (each bump is a

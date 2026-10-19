@@ -1040,7 +1040,7 @@ defmodule Engram.Indexing do
   # the second chunk silently adopts the first one's point.
   defp plan_chunks(note, chunks, content_key, dense?) do
     chunks =
-      Enum.zip_with(chunks, fingerprints(content_key, chunks, dense?), fn chunk, hmac ->
+      Enum.zip_with(chunks, plan_fingerprints(content_key, chunks, dense?), fn chunk, hmac ->
         Map.put(chunk, :context_hmac, hmac)
       end)
 
@@ -1084,6 +1084,7 @@ defmodule Engram.Indexing do
 
     %{
       entries: entries,
+      dense?: dense?,
       reused_point_ids: reused,
       stale_point_ids: Enum.map(existing, fn {_h, id, _t} -> id end) -- reused
     }
@@ -1098,6 +1099,27 @@ defmodule Engram.Indexing do
   # One NIF call for the whole note (`Engram.Native.hmac_hex_many/3`): the same
   # hex HMAC as `Crypto.hmac_content_hash/2` over `prefix <> context_text`,
   # without building each prefixed copy or hex-encoding in Elixir.
+  #
+  # Per chunk on a dense pass: only prose gets a dense vector, so the rest are
+  # fingerprinted as the sparse-only points they become, and a chunk whose kind
+  # changes never reuses a point of the other shape.
+  defp plan_fingerprints(content_key, chunks, dense?) do
+    {dense, sparse} = Enum.split_with(chunks, &dense_chunk?(&1, dense?))
+
+    {hmacs, {[], []}} =
+      Enum.map_reduce(
+        chunks,
+        {fingerprints(content_key, dense, true), fingerprints(content_key, sparse, false)},
+        fn chunk, {d, s} ->
+          if dense_chunk?(chunk, dense?), do: {hd(d), {tl(d), s}}, else: {hd(s), {d, tl(s)}}
+        end
+      )
+
+    hmacs
+  end
+
+  defp dense_chunk?(chunk, dense?), do: dense? and chunk.kind == "prose"
+
   defp fingerprints(content_key, chunks, dense?) do
     Engram.Native.hmac_hex_many(
       content_key,
@@ -1124,7 +1146,32 @@ defmodule Engram.Indexing do
 
   # `embed_text`, not `context_text`: no folder, which is a filter key, not
   # meaning (#1621). The reuse fingerprint covers both (`fingerprint_input/1`).
-  defp embed_texts(plan), do: for({:embed, chunk} <- plan.entries, do: chunk.embed_text)
+  # Only the chunks that get a dense vector: this list is what is reserved,
+  # metered and sent to Voyage.
+  defp embed_texts(plan),
+    do:
+      for(
+        {:embed, chunk} <- plan.entries,
+        dense_chunk?(chunk, plan.dense?),
+        do: chunk.embed_text
+      )
+
+  # One vector per :embed entry, in entry order: the embedder's in turn, nil
+  # for a chunk that is sparse-only.
+  defp entry_vectors(plan, vectors) do
+    {spread, []} =
+      Enum.flat_map_reduce(plan.entries, vectors, fn
+        {:reuse, _chunk, _point_id, _tokens}, left ->
+          {[], left}
+
+        {:embed, chunk}, left ->
+          if dense_chunk?(chunk, plan.dense?),
+            do: {[hd(left)], tl(left)},
+            else: {[nil], left}
+      end)
+
+    spread
+  end
 
   defp note_language(chunks) do
     chunks
@@ -1361,9 +1408,9 @@ defmodule Engram.Indexing do
 
     # The whole note in one call so the encoder can share per-note work (the
     # token -> dim memo) across chunks. One sparse vector per :embed entry, in
-    # the same order as `vectors`. `context_text`, not `text`: the folder, title
-    # and heading path live only in the prefix, and a note with no H1 is
-    # otherwise unfindable by its own name on the keyword leg (#1615).
+    # the same order as `entry_vectors/2`. `context_text`, not `text`: the
+    # folder, title and heading path live only in the prefix, and a note with
+    # no H1 is otherwise unfindable by its own name on the keyword leg (#1615).
     # `resparse_note/2` must encode the same string.
     sparse =
       KeywordIndex.module().encode_documents(
@@ -1374,13 +1421,17 @@ defmodule Engram.Indexing do
       )
 
     prepared =
-      Enum.reduce_while(plan.entries, {:ok, [], Enum.zip(vectors, sparse)}, fn
-        entry, {:ok, acc, pending} ->
-          case build_entry(entry, ctx, pending) do
-            {:ok, built, rest} -> {:cont, {:ok, [built | acc], rest}}
-            {:error, _reason} = err -> {:halt, err}
-          end
-      end)
+      Enum.reduce_while(
+        plan.entries,
+        {:ok, [], Enum.zip(entry_vectors(plan, vectors), sparse)},
+        fn
+          entry, {:ok, acc, pending} ->
+            case build_entry(entry, ctx, pending) do
+              {:ok, built, rest} -> {:cont, {:ok, [built | acc], rest}}
+              {:error, _reason} = err -> {:halt, err}
+            end
+        end
+      )
 
     with {:ok, reversed, _spent} <- prepared do
       built = Enum.reverse(reversed)

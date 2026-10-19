@@ -309,7 +309,8 @@ defmodule Engram.IndexingChunkReuseTest do
       reset(ctx.recorder)
       assert {:ok, ^count} = Indexing.index_note(note, ctx.vault)
 
-      assert length(embedded_texts()) == count, "every chunk must be rebuilt"
+      # Every chunk but the frontmatter one, which is sparse-only.
+      assert length(embedded_texts()) == count - 1, "every chunk must be rebuilt"
       assert length(upserts(ctx.recorder)) == count
       assert set_payloads(ctx.recorder) == []
     end
@@ -333,7 +334,8 @@ defmodule Engram.IndexingChunkReuseTest do
       reset(ctx.recorder)
       assert {:ok, ^count} = Indexing.index_note(note, ctx.vault)
 
-      assert length(embedded_texts()) == count
+      # Every chunk but the frontmatter one, which is sparse-only.
+      assert length(embedded_texts()) == count - 1
     end
   end
 
@@ -369,7 +371,8 @@ defmodule Engram.IndexingChunkReuseTest do
 
       reset(ctx.recorder)
       assert {:ok, ^count} = Indexing.index_note(note, ctx.vault)
-      assert length(embedded_texts()) == count
+      # Every chunk but the frontmatter one, which is sparse-only.
+      assert length(embedded_texts()) == count - 1
     end
   end
 
@@ -494,8 +497,10 @@ defmodule Engram.IndexingChunkReuseTest do
 
       assert {:ok, ^count} = Indexing.index_note(note, vault)
 
-      assert length(embedded_texts()) == count
-      assert length(upserts(ctx.recorder)) == count
+      # The frontmatter chunk is sparse-only on any pass, so its point is
+      # already the right shape and is kept.
+      assert length(embedded_texts()) == count - 1
+      assert length(upserts(ctx.recorder)) == count - 1
     end
 
     # DOC_EMBED_MODEL is optional: unset, the embedder falls back to
@@ -517,7 +522,8 @@ defmodule Engram.IndexingChunkReuseTest do
       Application.put_env(:engram, :embed_model, "voyage-4-lite")
       assert {:ok, ^count} = Indexing.index_note(note, ctx.vault)
 
-      assert length(embedded_texts()) == count,
+      # The sparse-only frontmatter point holds no model's vector and is kept.
+      assert length(embedded_texts()) == count - 1,
              "a model change must re-embed every chunk, not reuse the old model's vectors"
     end
 
@@ -532,8 +538,9 @@ defmodule Engram.IndexingChunkReuseTest do
       assert {:ok, ^count, 0, false} =
                Indexing.index_note_with_usage(note, ctx.vault, nil, dense: false)
 
+      # The frontmatter point was sparse-only already and is kept.
       points = upserts(ctx.recorder)
-      assert length(points) == count
+      assert length(points) == count - 1
       refute Enum.any?(points, &Map.has_key?(&1["vector"], "dense"))
     end
   end
