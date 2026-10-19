@@ -39,7 +39,7 @@ export async function createVault(
 	baseURL: string,
 	token: string,
 	name: string,
-): Promise<{ id: number; name: string }> {
+): Promise<{ id: number; name: string; slug: string }> {
 	const res = await fetch(`${baseURL}/api/vaults/register`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -49,7 +49,7 @@ export async function createVault(
 		throw new Error(`vault create failed: ${res.status} ${await res.text()}`);
 	}
 	// /vaults/register answers with the vault flat, not wrapped in { vault }.
-	return (await res.json()) as { id: number; name: string };
+	return (await res.json()) as { id: number; name: string; slug: string };
 }
 
 export async function upsertNote(

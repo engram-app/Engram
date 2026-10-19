@@ -66,8 +66,8 @@ test.describe("web tree ops sync (web to web)", () => {
 			"just body\n",
 		);
 
-		await openNote(pageA, vault.id, noteId);
-		await openNote(pageB, vault.id, noteId);
+		await openNote(pageA, vault, noteId);
+		await openNote(pageB, vault, noteId);
 
 		await expect(row(pageA, "rename-me")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "rename-me")).toBeVisible({ timeout: 10_000 });
@@ -109,8 +109,8 @@ test.describe("web tree ops sync (web to web)", () => {
 
 		// Anchor both tabs on the note that survives, so neither navigates to a
 		// deleted route.
-		await openNote(pageA, vault.id, keepId);
-		await openNote(pageB, vault.id, keepId);
+		await openNote(pageA, vault, keepId);
+		await openNote(pageB, vault, keepId);
 
 		await expect(row(pageA, "trash")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "trash")).toBeVisible({ timeout: 10_000 });
@@ -151,8 +151,8 @@ test.describe("web tree ops sync (web to web)", () => {
 		pageB.on("pageerror", (err) => pageErrorsB.push(err));
 
 		// Both tabs are anchored ON the note that is about to be deleted.
-		await openNote(pageA, vault.id, doomedId);
-		await openNote(pageB, vault.id, doomedId);
+		await openNote(pageA, vault, doomedId);
+		await openNote(pageB, vault, doomedId);
 
 		await expect(row(pageA, "doomed")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "doomed")).toBeVisible({ timeout: 10_000 });
@@ -220,8 +220,8 @@ test.describe("web tree ops sync (web to web)", () => {
 			"movable body\n",
 		);
 
-		await openNote(pageA, vault.id, noteId);
-		await openNote(pageB, vault.id, noteId);
+		await openNote(pageA, vault, noteId);
+		await openNote(pageB, vault, noteId);
 
 		// Reveal children in both tabs.
 		await expandFolder(pageA, "Source");
@@ -281,8 +281,8 @@ test.describe("web tree ops sync (web to web)", () => {
 			"child body\n",
 		);
 
-		await openNote(pageA, vault.id, childId);
-		await openNote(pageB, vault.id, childId);
+		await openNote(pageA, vault, childId);
+		await openNote(pageB, vault, childId);
 
 		await expect(row(pageA, "OldName")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "OldName")).toBeVisible({ timeout: 10_000 });
@@ -334,8 +334,8 @@ test.describe("web tree ops sync (web to web)", () => {
 			"leaf body\n",
 		);
 
-		await openNote(pageA, vault.id, childId);
-		await openNote(pageB, vault.id, childId);
+		await openNote(pageA, vault, childId);
+		await openNote(pageB, vault, childId);
 
 		await expect(row(pageA, "Movable")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "Parent")).toBeVisible({ timeout: 10_000 });
@@ -381,8 +381,8 @@ test.describe("web tree ops sync (web to web)", () => {
 		// A surviving root note to anchor both tabs.
 		const { id: anchorId } = await upsertNote(baseURL!, token, vault.id, "anchor.md", "anchor\n");
 
-		await openNote(pageA, vault.id, anchorId);
-		await openNote(pageB, vault.id, anchorId);
+		await openNote(pageA, vault, anchorId);
+		await openNote(pageB, vault, anchorId);
 
 		await expect(row(pageA, "Doomed")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "Doomed")).toBeVisible({ timeout: 10_000 });
@@ -414,8 +414,8 @@ test.describe("web tree ops sync (web to web)", () => {
 		await upsertNote(baseURL!, token, vault.id, "Derived/inside.md", "inside body\n");
 		const { id: anchorId } = await upsertNote(baseURL!, token, vault.id, "anchor.md", "anchor\n");
 
-		await openNote(pageA, vault.id, anchorId);
-		await openNote(pageB, vault.id, anchorId);
+		await openNote(pageA, vault, anchorId);
+		await openNote(pageB, vault, anchorId);
 
 		await expect(row(pageA, "Derived")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "Derived")).toBeVisible({ timeout: 10_000 });
@@ -447,8 +447,8 @@ test.describe("web tree ops sync (web to web)", () => {
 		await createFolder(baseURL!, token, vault.id, "Empty");
 		const { id: anchorId } = await upsertNote(baseURL!, token, vault.id, "anchor.md", "anchor\n");
 
-		await openNote(pageA, vault.id, anchorId);
-		await openNote(pageB, vault.id, anchorId);
+		await openNote(pageA, vault, anchorId);
+		await openNote(pageB, vault, anchorId);
 
 		await expect(row(pageA, "Empty")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "Empty")).toBeVisible({ timeout: 10_000 });
@@ -493,8 +493,8 @@ test.describe("web tree ops sync (web to web)", () => {
 		const { id: anchorId } = await upsertNote(baseURL!, token, vault.id, "anchor.md", "anchor\n");
 
 		const gate = await installSocketGate(pageB);
-		await openNote(pageA, vault.id, anchorId);
-		await openNote(pageB, vault.id, anchorId);
+		await openNote(pageA, vault, anchorId);
+		await openNote(pageB, vault, anchorId);
 
 		await expect(row(pageA, "OfflineEmpty")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "OfflineEmpty")).toBeVisible({ timeout: 10_000 });
@@ -541,8 +541,8 @@ test.describe("web tree ops sync (web to web)", () => {
 		);
 
 		const gate = await installSocketGate(pageB);
-		await openNote(pageA, vault.id, childId);
-		await openNote(pageB, vault.id, childId);
+		await openNote(pageA, vault, childId);
+		await openNote(pageB, vault, childId);
 
 		await expect(row(pageA, "OfflineOldName")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "OfflineOldName")).toBeVisible({ timeout: 10_000 });

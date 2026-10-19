@@ -10,6 +10,11 @@ import { createVault, noteUrlRe, PASS, registerAndLogin } from "./api";
 // rotate with reuse detection, so two contexts replaying one cookie would
 // revoke the whole family.
 
+interface Vault {
+	id: number;
+	slug: string;
+}
+
 interface Account {
 	email: string;
 	token: string;
@@ -22,7 +27,7 @@ interface WorkerFixtures {
 }
 interface TestFixtures {
 	token: string;
-	vault: { id: number; name: string };
+	vault: Vault;
 	pageA: Page;
 	pageB: Page;
 }
@@ -84,12 +89,14 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 	},
 });
 
-// Opens a note in an already signed-in tab. activeVaultId is seeded before any
-// app script runs so NotePage's first query targets this test's vault.
-export async function openNote(page: Page, vaultId: number, noteId: number): Promise<void> {
+// Opens a note in an already signed-in tab at its canonical /v/:slug/:id URL.
+// Going through the legacy /note/:id redirect added a hop that, on a loaded
+// runner, outran the 10s URL wait. activeVaultId is seeded before any app
+// script runs so the vault switcher agrees with the URL from the first render.
+export async function openNote(page: Page, vault: Vault, noteId: number): Promise<void> {
 	await page.addInitScript((id) => {
 		localStorage.setItem("engram.activeVaultId", id);
-	}, String(vaultId));
-	await page.goto(`/note/${noteId}`);
+	}, String(vault.id));
+	await page.goto(`/v/${vault.slug}/${noteId}`);
 	await expect(page).toHaveURL(noteUrlRe(noteId), { timeout: 10_000 });
 }
