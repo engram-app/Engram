@@ -85,8 +85,8 @@ pub fn each_chunk(content: &str, folder: &str, title: &str, mut emit: impl FnMut
     if !emitted {
         let rest = strip_blobs(body);
         if !markup_only(&rest) {
-            for t in split(&normalize("", &rest)) {
-                emit(make(folder, title, title, t, 0, body.len(), PROSE));
+            for (t, kind) in classified(split(&normalize("", &rest))) {
+                emit(make(folder, title, title, t, 0, body.len(), kind));
             }
         }
     }
@@ -180,8 +180,8 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
             return;
         }
         self.flush();
-        for t in split(&text) {
-            (self.emit)(make(self.folder, &path, &path, t, self.start, end, PROSE));
+        for (t, kind) in classified(split(&text)) {
+            (self.emit)(make(self.folder, &path, &path, t, self.start, end, kind));
             self.emitted = true;
         }
     }
@@ -201,13 +201,82 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
 
     fn flush(&mut self) {
         if let Some((text, path, from, to)) = self.pending.take() {
-            (self.emit)(make(self.folder, &path, &path, &text, from, to, PROSE));
+            let kind = classify(&text, false).0;
+            (self.emit)(make(self.folder, &path, &path, &text, from, to, kind));
             self.emitted = true;
         }
     }
 }
 
 const PROSE: &str = "prose";
+
+/// `data` for a body chunk that is mostly not words (minified JSON, CSV of
+/// numbers, log dumps, number tables): it is keyword-only, as a dense vector
+/// of it means nothing. Under 200 bytes, mostly inside a code fence (code is
+/// searched by meaning), or written in a script without spaces (CJK: letters
+/// are most of the text) it stays `prose`. Otherwise `data` when under 35%
+/// of its tokens are words. Tokens with no letter or digit (`|`, `---`, `-`)
+/// are markup and not counted, so a table of words is prose. Linear time.
+/// `open`: the chunk starts inside a code fence. Returns whether it ends in
+/// one.
+fn classify(text: &str, mut open: bool) -> (&'static str, bool) {
+    let mut fenced = 0;
+    for line in text.split_inclusive('\n') {
+        let t = line.trim_start();
+        let fence = t.starts_with("```") || t.starts_with("~~~");
+        if open || fence {
+            fenced += line.len();
+        }
+        open ^= fence;
+    }
+    if text.len() < 200 || fenced * 2 >= text.len() {
+        return (PROSE, open);
+    }
+    let (mut wide, mut other) = (0, 0);
+    let (mut words, mut tokens) = (0, 0);
+    for tok in text.split_whitespace() {
+        for c in tok.chars() {
+            if c.is_alphabetic() && !c.is_ascii() {
+                wide += 1;
+            } else {
+                other += 1;
+            }
+        }
+        if tok.chars().any(char::is_alphanumeric) {
+            tokens += 1;
+            words += word(tok) as usize;
+        }
+    }
+    // Non-ASCII letters only: string-heavy minified JSON is over half ASCII
+    // letters, and the word rule is what catches it.
+    if wide >= other || words * 100 >= tokens * 35 {
+        (PROSE, open)
+    } else {
+        ("data", open)
+    }
+}
+
+/// The pieces of one section with their kinds. A code block longer than a
+/// chunk leaves pieces with no fence of their own, so the fence state
+/// carries from piece to piece.
+fn classified(pieces: Vec<&str>) -> impl Iterator<Item = (&str, &'static str)> {
+    let mut open = false;
+    pieces.into_iter().map(move |t| {
+        let (kind, after) = classify(t, open);
+        open = after;
+        (t, kind)
+    })
+}
+
+/// 2+ letters, letters only (an inner `'` or `-` allowed), optional
+/// trailing punctuation.
+fn word(tok: &str) -> bool {
+    let w = tok.trim_end_matches(|c: char| !c.is_alphanumeric());
+    w.chars().filter(|c| c.is_alphabetic()).count() >= 2
+        && w.chars()
+            .all(|c| c.is_alphabetic() || matches!(c, '\'' | '’' | '-'))
+        && w.starts_with(char::is_alphabetic)
+}
 
 fn make(
     folder: &str,
@@ -915,5 +984,128 @@ mod tests {
     fn empty_body_and_blank_note() {
         assert!(chunk("", "", "T").is_empty());
         assert!(chunk("   \n\n", "", "T").is_empty());
+    }
+
+    fn kinds(note: &str) -> Vec<&'static str> {
+        chunk(note, "", "T").into_iter().map(|c| c.6).collect()
+    }
+
+    fn all(note: &str, kind: &str) {
+        let ks = kinds(note);
+        assert!(!ks.is_empty() && ks.iter().all(|k| *k == kind), "{ks:?}");
+    }
+
+    #[test]
+    fn minified_json_is_data() {
+        let rec = r#"{"id":4821,"name":"Alice Smith","role":"admin","tags":["work","home"],"score":12.5,"ok":true}"#;
+        let json = format!("[{}]", vec![rec; 21].join(","));
+        assert!(json.len() > 1900 && json.len() < MAX_CHUNK);
+        all(&json, "data");
+    }
+
+    #[test]
+    fn numeric_csv_is_data() {
+        let rows: Vec<String> = (0..40)
+            .map(|i| format!("{i},{}.25,{},2026-10-{:02}", i * 7, i * 31 % 97, i % 28 + 1))
+            .collect();
+        all(&format!("id,value,count,date\n{}", rows.join("\n")), "data");
+    }
+
+    #[test]
+    fn log_dump_is_data() {
+        let lines: Vec<String> = (0..30)
+            .map(|i| format!("2026-10-19T05:14:{i:02}.0863647Z id=7f3c{i:04x}e2 status=200"))
+            .collect();
+        all(&lines.join("\n"), "data");
+    }
+
+    #[test]
+    fn number_table_is_data() {
+        let rows: Vec<String> = (0..30)
+            .map(|i| format!("| {i} | {} | {}.5 |", i * 3, i * 11))
+            .collect();
+        all(
+            &format!("| a | b | c |\n|---|---|---|\n{}", rows.join("\n")),
+            "data",
+        );
+    }
+
+    #[test]
+    fn prose_with_dates_and_figures_is_prose() {
+        let p = "On 2026-10-19 revenue grew 12.5% to $3.4M, up from $2.9M in Q3 2025. \
+                 We shipped v0.54.0 at 05:14 UTC and 1,204 of 1,310 users (91.9%) synced \
+                 within 30 s. Costs fell 18% after the 2026-09-26 migration to 2 nodes.";
+        assert!(p.len() >= 200);
+        all(p, "prose");
+    }
+
+    #[test]
+    fn german_and_cyrillic_paragraphs_are_prose() {
+        all(
+            "Der Hund und die Katze spielen im Garten. Über die Brücke gehen täglich \
+             viele Menschen zur Arbeit, während die Sonne über der Stadt aufgeht und \
+             die Straßen sich langsam füllen.",
+            "prose",
+        );
+        all(
+            "Собака и кошка играют в саду. Каждый день много людей идут через мост на \
+             работу, пока солнце встаёт над городом и улицы медленно наполняются.",
+            "prose",
+        );
+    }
+
+    #[test]
+    fn cjk_paragraphs_are_prose() {
+        all(
+            "東京は日本の首都であり、世界で最も人口の多い都市圏の一つです。毎日多くの人々が電車で通勤し、\
+             街は朝から夜まで活気にあふれています。春には桜が咲き、多くの観光客が訪れます。",
+            "prose",
+        );
+        all(
+            "北京是中国的首都，也是一座历史悠久的城市。每天都有很多人乘坐地铁上班，\
+             城市从早到晚都充满活力。春天的时候，公园里开满了鲜花，吸引了许多游客。",
+            "prose",
+        );
+    }
+
+    #[test]
+    fn fenced_code_is_prose() {
+        let code = "```elixir\ndefmodule Foo do\n  def bar(%{id: id} = m, opts \\\\ []) do\n    \
+                    {:ok, Map.put(m, :n, id * 2 + Keyword.get(opts, :k, 0))}\n  end\n\n  \
+                    def baz([h | t]), do: {h, length(t), Enum.sum(t) / 3}\n  \
+                    def qux(<<n::32, r::binary>>), do: {n + 1, byte_size(r) * 8}\nend\n```";
+        assert!(code.len() >= 200);
+        all(code, "prose");
+    }
+
+    // A code block longer than a chunk is cut into pieces with no fence of
+    // their own: the fence state carries from the section start.
+    #[test]
+    fn every_piece_of_a_long_code_block_is_prose() {
+        let line = "    let (ct, n) = seal(&K, b\"x\", 7)?;\n";
+        let note = format!("```rust\n{}```\n", line.repeat(200));
+        assert!(chunk(&note, "", "T").len() >= 3);
+        all(&note, "prose");
+    }
+
+    #[test]
+    fn table_of_words_is_prose() {
+        let rows: Vec<&str> = vec![
+            "| Alice | engineer | Berlin |",
+            "| Bob | designer | Lisbon |",
+        ]
+        .into_iter()
+        .cycle()
+        .take(20)
+        .collect();
+        all(
+            &format!("| Name | Role | City |\n|---|---|---|\n{}", rows.join("\n")),
+            "prose",
+        );
+    }
+
+    #[test]
+    fn short_chunks_are_prose() {
+        all("id=1 status=200 2026-10-19", "prose");
     }
 }

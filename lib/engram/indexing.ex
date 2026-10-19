@@ -1175,7 +1175,7 @@ defmodule Engram.Indexing do
 
   defp note_language(chunks) do
     chunks
-    |> Enum.reject(&(&1.heading_path == "frontmatter"))
+    |> Enum.filter(&(&1.kind == "prose"))
     |> Enum.take(3)
     |> Enum.map_join("\n\n", & &1.text)
     |> detect_language()
@@ -1395,12 +1395,13 @@ defmodule Engram.Indexing do
     #
     # Bounded to a few chunks so a large note doesn't build a large throwaway
     # binary just to have detect/1 slice the front off it.
-    # Reject by heading_path rather than trusting position: the frontmatter chunk
-    # is appended last today, but a short note can have so few body chunks that a
-    # positional take swallows it anyway (a one-section note has exactly two).
-    # A note that is ONLY frontmatter then yields no sample and falls back to raw
-    # token indexing, which is the right answer — YAML keys should not pick a
-    # stemmer for prose that doesn't exist.
+    # Keep prose chunks only, rather than trusting position: the frontmatter
+    # chunk is appended last today, but a short note can have so few body chunks
+    # that a positional take swallows it anyway (a one-section note has exactly
+    # two), and data chunks (logs, number tables) can lead the note. A note with
+    # no prose then yields no sample and falls back to raw token indexing, which
+    # is the right answer: YAML keys or numbers should not pick a stemmer for
+    # prose that doesn't exist.
     language = note_language(Enum.map(plan.entries, &entry_chunk/1))
 
     note_payload = note_payload(note)

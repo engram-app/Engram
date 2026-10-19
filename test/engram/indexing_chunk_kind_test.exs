@@ -208,4 +208,25 @@ defmodule Engram.IndexingChunkKindTest do
     assert {n1.qdrant_point_id, n2.qdrant_point_id} == {r1.qdrant_point_id, r2.qdrant_point_id}
     assert n3.qdrant_point_id != fm_row.qdrant_point_id
   end
+
+  @log_lines Enum.map_join(0..29, "\n", fn i ->
+               "2026-10-19T05:14:#{String.pad_leading("#{i}", 2, "0")}.0863647Z id=zq98#{i} status=200"
+             end)
+
+  @with_data "# Plan\n\nThe first section talks about the launch.\n\n## Logs\n\n" <> @log_lines
+
+  test "a log dump is a data chunk: sparse-only, its exact tokens still found", ctx do
+    assert [{"Plan", "prose"}, {"Plan > Logs", "data"}] =
+             @with_data |> Markdown.parse("Plan.md") |> Enum.map(&{&1.heading_path, &1.kind})
+
+    note = put_note(ctx, @with_data)
+    assert {:ok, prepared} = Indexing.prepare_index(note, ctx.vault, ctx.user)
+
+    assert [sent] = drain(:embedded)
+    assert sent =~ "launch"
+    assert [prose, data] = prepared.qdrant_points
+    assert Map.has_key?(prose.vector, "dense")
+    refute Map.has_key?(data.vector, "dense")
+    assert has_dim?(data, ctx.user, "zq987"), "keyword search must find an id inside data"
+  end
 end
