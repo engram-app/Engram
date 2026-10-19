@@ -268,10 +268,14 @@ fn classified(pieces: Vec<&str>) -> impl Iterator<Item = (&str, &'static str)> {
     })
 }
 
-/// 2+ letters, letters only (an inner `'` or `-` allowed), optional
-/// trailing punctuation.
+/// 2+ letters, letters only (an inner `'` or `-` allowed), with markup and
+/// punctuation trimmed from both ends: `[[Inbox]]`, `**Owner:**` and `"so"`
+/// are words. `[Why Rust](https://...)`: the title counts, the url does not.
 fn word(tok: &str) -> bool {
-    let w = tok.trim_end_matches(|c: char| !c.is_alphanumeric());
+    let tok = tok.split("](").next().unwrap_or(tok);
+    let w = tok
+        .trim_start_matches(['[', '(', '*', '_', '`', '"', '\'', '#', '>', '~'])
+        .trim_end_matches(|c: char| !c.is_alphanumeric());
     w.chars().filter(|c| c.is_alphabetic()).count() >= 2
         && w.chars()
             .all(|c| c.is_alphabetic() || matches!(c, '\'' | '’' | '-'))
@@ -881,6 +885,7 @@ mod tests {
             fill("a line of text\n") + "#tag\n",
             fill("-\n"),
             fill("h\n=\n"),
+            fill(r#"{"id":4821,"ok":true},"#),
         ] {
             let ((), peak) = crate::memory::measured(|| each_chunk(&content, "f", "T", |_| {}));
             assert!(peak <= 10 * content.len(), "{peak} for {:?}", &content[..8]);
@@ -1102,6 +1107,35 @@ mod tests {
             &format!("| Name | Role | City |\n|---|---|---|\n{}", rows.join("\n")),
             "prose",
         );
+    }
+
+    #[test]
+    fn link_lists_and_bold_keys_are_prose() {
+        let wikis = [
+            "Inbox",
+            "Project Alpha",
+            "Weekly Review",
+            "Reading",
+            "Ideas",
+        ];
+        let note: Vec<String> = (0..4)
+            .flat_map(|_| wikis.iter().map(|w| format!("- [[{w}]]")))
+            .collect();
+        all(&note.join("\n"), "prose");
+        let reads = ["Why Rust", "Elixir", "On Writing Well", "Ownership"];
+        let note: Vec<String> = (0..3)
+            .flat_map(|_| {
+                reads
+                    .iter()
+                    .map(|r| format!("- [{r}](https://example.com/a/b-{})", r.len()))
+            })
+            .collect();
+        all(&note.join("\n"), "prose");
+        let keys = ["Owner", "Status", "Due", "Team", "Budget", "Region"];
+        let note: Vec<String> = (0..3)
+            .flat_map(|_| keys.iter().map(|k| format!("- **{k}:** Alice")))
+            .collect();
+        all(&note.join("\n"), "prose");
     }
 
     #[test]
