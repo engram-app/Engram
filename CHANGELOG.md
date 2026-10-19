@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.55.0](https://github.com/engram-app/Engram/compare/0.54.0...0.55.0) (2026-10-19)
+
+
+### Features
+
+* **i18n:** add Czech and Ukrainian ([#2010](https://github.com/engram-app/Engram/issues/2010)) ([c3888cc](https://github.com/engram-app/Engram/commit/c3888cc924bc7b0ce02558c7d0177b58acbea079))
+
+
+### Bug Fixes
+
+* **ci:** pipefail grep flakes + stranded image builds ([#2024](https://github.com/engram-app/Engram/issues/2024)) ([09bbf51](https://github.com/engram-app/Engram/commit/09bbf510cf995cc2e1007828b97f5b8691c29fc9))
+* **ci:** retry restore, local deps tag, frontend fingerprint ([#2019](https://github.com/engram-app/Engram/issues/2019)) ([fc49fc2](https://github.com/engram-app/Engram/commit/fc49fc23be1fa87e90cd112ee28f17c52d3b436d))
+* **links:** resolve shared basenames in linear time ([#2011](https://github.com/engram-app/Engram/issues/2011)) ([b003ff4](https://github.com/engram-app/Engram/commit/b003ff4d762ba25ca1c7ae53ca71cae0164d2ae0))
+* **mcp:** stop append_to_note overwrites, echo stored paths; uk Monthly ([#2033](https://github.com/engram-app/Engram/issues/2033)) ([0ce524b](https://github.com/engram-app/Engram/commit/0ce524ba735fac998c1524851385fc498981793e))
+* **test:** grep here-strings, not pipes, under pipefail ([#2023](https://github.com/engram-app/Engram/issues/2023)) ([0356b5d](https://github.com/engram-app/Engram/commit/0356b5dd76b7906255c018b9547ec5a7c9e2e4f8))
+* **test:** preload all modules before the suite ([#2021](https://github.com/engram-app/Engram/issues/2021)) ([1544c08](https://github.com/engram-app/Engram/commit/1544c086d6835cc62ac1d91c50c629174bfb17e6))
+
+
+### Performance Improvements
+
+* **ci:** cancel superseded runs, partition unit tests ([#2015](https://github.com/engram-app/Engram/issues/2015)) ([bd59732](https://github.com/engram-app/Engram/commit/bd59732c4a5f2519125892933aa8d9f99e2f948c))
+* **ci:** stop PR ci waiting on report-only e2e ([#2013](https://github.com/engram-app/Engram/issues/2013)) ([d89ace8](https://github.com/engram-app/Engram/commit/d89ace80ebe682a0dcc7b7511d980fdf8c108e28))
+* cut web CPU during first syncs ([#2020](https://github.com/engram-app/Engram/issues/2020)) ([f5bb607](https://github.com/engram-app/Engram/commit/f5bb6075a2e01a2b56922eb661e16ed7208c6026))
+* **docker:** prebuilt deps image, compile app only ([#2014](https://github.com/engram-app/Engram/issues/2014)) ([7127315](https://github.com/engram-app/Engram/commit/712731560c987e6e0e97f416f19b6b6c938595b6))
+
 ## [0.54.0](https://github.com/engram-app/Engram/compare/0.53.1...0.54.0) (2026-10-18)
 
 
