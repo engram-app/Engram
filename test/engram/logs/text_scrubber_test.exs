@@ -105,8 +105,10 @@ defmodule Engram.Logs.TextScrubberTest do
       assert out =~ ~r/\AError\n/
     end
 
-    # Growth, not wall-clock: CI runners are shared and loaded, so an absolute
-    # budget flakes. Quadratic growth from n to 4n is ~16x; linear is ~4x.
+    # Reductions, not wall-clock: a loaded CI runner slowed all three timed
+    # runs ~7x (1.5ms -> 44ms, 2026-10-19). Reductions count the work done,
+    # regex backtracking included, so load cannot move them. Quadratic growth
+    # from n to 4n is ~16x; linear is ~4x (measured 3-4x).
     test "is linear on adversarial spaces, slashes and quotes" do
       generators = [
         spaces: &String.duplicate(" ", &1),
@@ -116,14 +118,17 @@ defmodule Engram.Logs.TextScrubberTest do
         quoted_slashes: &String.duplicate(~s("a/b ), div(&1, 5))
       ]
 
-      best = fn input ->
-        Enum.min(for _ <- 1..3, do: elem(:timer.tc(fn -> TextScrubber.scrub(input) end), 0))
+      work = fn input ->
+        {:reductions, before} = Process.info(self(), :reductions)
+        TextScrubber.scrub(input)
+        {:reductions, after_scrub} = Process.info(self(), :reductions)
+        after_scrub - before
       end
 
       for {name, gen} <- generators do
-        small = best.(gen.(10_000))
-        large = best.(gen.(40_000))
-        assert large <= 10 * small + 20_000, "#{name}: #{small}us -> #{large}us"
+        small = work.(gen.(10_000))
+        large = work.(gen.(40_000))
+        assert large <= 8 * small, "#{name}: #{small} -> #{large} reductions"
       end
     end
 
