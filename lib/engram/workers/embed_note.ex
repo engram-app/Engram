@@ -18,8 +18,8 @@ defmodule Engram.Workers.EmbedNote do
 
   That skip is also gated on `chunker_version` (#1620): content being unchanged
   is not enough if the chunks were built by an older chunker, so a note stamped
-  with anything other than the current `Markdown.chunker_version/0` is rebuilt
-  rather than skipped. Version-stale notes are re-embedded by the
+  below the current `Markdown.chunker_version/0` (or not at all) is rebuilt
+  rather than skipped. A newer stamp is current, so a rollback rebuilds nothing. Version-stale notes are re-embedded by the
   `IndexVersions` data migration (`Engram.DataMigrations`).
 
   A chunker bump alone does not re-normalize BM25 against a drifted `avgdl`:
@@ -330,8 +330,13 @@ defmodule Engram.Workers.EmbedNote do
   cannot name its model (nil).
   """
   def version_stale?(%Note{} = note) do
-    note.chunker_version != @chunker_version or model_stale?(note, Indexing.embed_model())
+    chunker_stale?(note.chunker_version) or model_stale?(note, Indexing.embed_model())
   end
+
+  # Explicit nil: Erlang orders numbers below atoms, so `nil < 3` is false.
+  # A newer chunker counts as current (see `IndexVersions.stale_dynamic/0`).
+  defp chunker_stale?(nil), do: true
+  defp chunker_stale?(version), do: version < @chunker_version
 
   defp model_stale?(_note, nil), do: false
 

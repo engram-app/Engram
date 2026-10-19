@@ -9,6 +9,7 @@ defmodule Engram.DataMigrations.IndexVersionsTest do
   alias Engram.KeywordIndex
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
+  alias Engram.Workers.EmbedNote
 
   setup do
     DataMigrations.reset_cache()
@@ -96,5 +97,54 @@ defmodule Engram.DataMigrations.IndexVersionsTest do
     )
 
     assert IndexVersions.run_pass() == :done
+  end
+
+  # Rollout review F3: rolling back to an older release must not treat every
+  # note a newer release stamped as stale, or each rollback re-indexes all.
+  describe "a version stamped by a newer release" do
+    defp selected(dynamic),
+      do: Repo.all(from(n in Note, where: ^dynamic, select: n.id), skip_tenant_check: true)
+
+    test "a newer chunker counts as current, an older one as stale", %{user: u, vault: v} do
+      newer = insert(:note, user: u, vault: v)
+      older = insert(:note, user: u, vault: v)
+      current!(newer)
+      current!(older)
+      set!(newer, chunker_version: Markdown.chunker_version() + 1)
+      set!(older, chunker_version: Markdown.chunker_version() - 1)
+
+      assert selected(IndexVersions.stale_dynamic()) == [older.id]
+    end
+
+    test "a newer keyword version counts as current, an older one as stale", %{user: u, vault: v} do
+      newer = insert(:note, user: u, vault: v)
+      older = insert(:note, user: u, vault: v)
+      current!(newer)
+      current!(older)
+      set!(newer, keyword_version: KeywordIndex.version() + 1)
+      set!(older, keyword_version: KeywordIndex.version() - 1)
+
+      assert selected(IndexVersions.keyword_stale_dynamic()) == [older.id]
+    end
+
+    test "every note newer than this build: done", %{user: u, vault: v} do
+      note = insert(:note, user: u, vault: v)
+      current!(note)
+
+      set!(note,
+        chunker_version: Markdown.chunker_version() + 1,
+        keyword_version: KeywordIndex.version() + 1
+      )
+
+      assert IndexVersions.run_pass() == :done
+    end
+
+    test "EmbedNote.version_stale?/1 agrees" do
+      stale? = &EmbedNote.version_stale?(%Note{chunker_version: &1})
+      refute stale?.(Markdown.chunker_version() + 1)
+      refute stale?.(Markdown.chunker_version())
+      assert stale?.(Markdown.chunker_version() - 1)
+      assert stale?.(nil)
+    end
   end
 end

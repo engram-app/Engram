@@ -63,10 +63,16 @@ defmodule Engram.DataMigrations.IndexVersions do
     where(live_notes(), [n], n.embed_hash == n.content_hash)
   end
 
-  @doc "Notes on an older chunker, or with dense vectors from another embed model."
+  @doc """
+  Notes on an older chunker, or with dense vectors from another embed model.
+  A chunker newer than this build counts as current (forward compatible).
+  """
   def stale_dynamic do
     chunker = Markdown.chunker_version()
-    chunker_stale = dynamic([n], is_nil(n.chunker_version) or n.chunker_version != ^chunker)
+    # `<`, not `!=`: a stamp from a NEWER release is current. A rollback would
+    # otherwise rebuild every note a newer chunker indexed, and the roll
+    # forward would rebuild them all again.
+    chunker_stale = dynamic([n], is_nil(n.chunker_version) or n.chunker_version < ^chunker)
 
     case Indexing.embed_model() do
       # The build cannot name its model: model tracking is off.
@@ -87,9 +93,12 @@ defmodule Engram.DataMigrations.IndexVersions do
     end
   end
 
-  @doc "Notes whose keyword vectors predate `KeywordIndex.version/0`."
+  @doc """
+  Notes whose keyword vectors predate `KeywordIndex.version/0`. A newer stamp
+  counts as current, for the same rollback reason as the chunker.
+  """
   def keyword_stale_dynamic do
     version = KeywordIndex.version()
-    dynamic([n], is_nil(n.keyword_version) or n.keyword_version != ^version)
+    dynamic([n], is_nil(n.keyword_version) or n.keyword_version < ^version)
   end
 end
