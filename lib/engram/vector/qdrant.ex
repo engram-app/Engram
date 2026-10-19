@@ -451,10 +451,10 @@ defmodule Engram.Vector.Qdrant do
 
   The rewrite needs scratch space for the segment being rebuilt. On a prod
   clone (1.18.2, 447k points, 6 segments, one optimizer thread) it peaked at
-  +0.26x the collection's `disk_bytes`; the gate budgets 0.5x. With volume
-  stats (Qdrant Cloud `/sys_metrics`) it applies only when free disk covers
-  that budget AND used + budget stays under 80% of capacity, below strict
-  mode's 85% write cap. Without them (self-host) it applies only to a
+  +0.26x the collection's `disk_bytes`. With volume stats (Qdrant Cloud
+  `/sys_metrics`) it applies only when free disk is at least 0.5x the
+  collection AND the projected peak, used + 0.35x (the measurement plus ~35%
+  margin), stays under 80% of capacity, below strict mode's 85% write cap. Without them (self-host) it applies only to a
   collection under 1 GiB. An unknown collection size (no `/memory` before
   Qdrant 1.18) always defers.
   """
@@ -463,10 +463,10 @@ defmodule Engram.Vector.Qdrant do
   def headroom(size, nil) when size < @self_host_on_disk_limit, do: {:apply, :self_host_rule, nil}
   def headroom(_size, nil), do: {:defer, :self_host_rule, nil}
 
-  # Integer form of `free >= 0.5 * size` and `(used + 0.5 * size) / cap < 0.8`.
+  # Integer form of `free >= 0.5 * size` and `(used + 0.35 * size) / cap < 0.8`.
   def headroom(size, %{used: used, capacity: cap} = volume) do
     free = free_of(volume)
-    decision = if 2 * free >= size and 10 * used + 5 * size < 8 * cap, do: :apply, else: :defer
+    decision = if 2 * free >= size and 100 * used + 35 * size < 80 * cap, do: :apply, else: :defer
     {decision, :sys_metrics, free}
   end
 

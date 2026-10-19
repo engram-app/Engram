@@ -125,15 +125,37 @@ defmodule Engram.Vector.QdrantReconcileTest do
     "sparse_vectors" => %{"keyword" => %{"modifier" => "idf", "index" => %{"on_disk" => true}}}
   }
 
-  test "today's prod numbers: strict + optimizers apply, on-disk is deferred", %{bypass: bypass} do
+  test "today's prod numbers: all three groups apply", %{bypass: bypass} do
     attach([:engram, :qdrant, :headroom_gate])
     stub_version(bypass, "1.18.2")
     fake_collection(bypass, "engram_notes", @prod_info)
     # Measured 2026-10-18: volume 8.37 GB, 4.35 GB used, collection 4.89 GB.
-    # Free 4.02 GB clears half the collection, but used + half the collection
-    # is 81% of the volume: over the 80% ceiling, so the rewrite is deferred.
+    # Free 4.02 GB >= half the collection; projected peak 4.35 + 0.35 * 4.89
+    # = 6.06 GB = 72.4% of the volume, under the 80% ceiling.
     stub_memory(bypass, "engram_notes", 4_890_000_000)
     stub_sys_metrics(bypass, 8_370_000_000, 4_350_000_000)
+
+    assert {:ok, changed} = Qdrant.reconcile_config("engram_notes")
+    assert Enum.sort(changed) == ~w(optimizers_config sparse_vectors strict_mode_config vectors)
+
+    assert_receive {:patch, @strict}
+    assert_receive {:patch, @optimizers}
+    assert_receive {:patch, @on_disk}
+
+    free = 8_370_000_000 - 4_350_000_000
+
+    assert_receive {[:engram, :qdrant, :headroom_gate],
+                    %{free_bytes: ^free, collection_bytes: 4_890_000_000},
+                    %{decision: :apply, source: :sys_metrics}}
+  end
+
+  test "a tight volume: strict + optimizers apply, on-disk is deferred", %{bypass: bypass} do
+    attach([:engram, :qdrant, :headroom_gate])
+    stub_version(bypass, "1.18.2")
+    fake_collection(bypass, "engram_notes", @prod_info)
+    # Projected peak 6.0 + 0.35 * 4.89 = 7.71 GB = 92% of 8.37 GB.
+    stub_memory(bypass, "engram_notes", 4_890_000_000)
+    stub_sys_metrics(bypass, 8_370_000_000, 6_000_000_000)
 
     assert {:ok, changed} = Qdrant.reconcile_config("engram_notes")
     assert Enum.sort(changed) == ~w(optimizers_config strict_mode_config)
@@ -142,10 +164,7 @@ defmodule Engram.Vector.QdrantReconcileTest do
     assert_receive {:patch, @optimizers}
     refute_receive {:patch, _}
 
-    free = 8_370_000_000 - 4_350_000_000
-
-    assert_receive {[:engram, :qdrant, :headroom_gate],
-                    %{free_bytes: ^free, collection_bytes: 4_890_000_000},
+    assert_receive {[:engram, :qdrant, :headroom_gate], _,
                     %{decision: :defer, source: :sys_metrics}}
 
     # Second boot: nothing to PATCH; the deferred group stays deferred.
@@ -205,23 +224,24 @@ defmodule Engram.Vector.QdrantReconcileTest do
 
   describe "headroom/2" do
     # Rehearsal on a prod clone: the on-disk rewrite peaked at +0.26x the
-    # collection's bytes. The gate budgets 0.5x and keeps the peak under 80%
-    # of the volume, below strict mode's 85% write cap.
-    test "apply needs free >= half the collection AND peak under 80%" do
+    # collection's bytes. The gate needs free >= 0.5x and projects the peak as
+    # used + 0.35x (~35% margin), which must stay under 80% of the volume,
+    # below strict mode's 85% write cap.
+    test "apply needs free >= half the collection AND projected peak under 80%" do
       vol = fn used, cap -> %{used: used, capacity: cap} end
 
-      # peak (40 + 10) / 100 = 0.50, free 60 >= 10
+      # projected (40 + 7) / 100 = 0.47, free 60 >= 10
       assert {:apply, :sys_metrics, 60} = Qdrant.headroom(20, vol.(40, 100))
-      # peak exactly 0.80 is not under the ceiling
-      assert {:defer, :sys_metrics, 30} = Qdrant.headroom(20, vol.(70, 100))
-      # peak (70 + 9) / 100 = 0.79
-      assert {:apply, :sys_metrics, 30} = Qdrant.headroom(18, vol.(70, 100))
-      # free 8 < half of 20 (and the peak is over 100%)
-      assert {:defer, :sys_metrics, 8} = Qdrant.headroom(20, vol.(92, 100))
+      # projected (72 + 7) / 100 = 0.79
+      assert {:apply, :sys_metrics, 28} = Qdrant.headroom(20, vol.(72, 100))
+      # projected exactly 0.80 is not under the ceiling
+      assert {:defer, :sys_metrics, 27} = Qdrant.headroom(20, vol.(73, 100))
+      # projected (5 + 70) / 100 = 0.75 passes, but free 95 < half of 200
+      assert {:defer, :sys_metrics, 95} = Qdrant.headroom(200, vol.(5, 100))
     end
 
-    test "today's prod numbers defer" do
-      assert {:defer, :sys_metrics, 4_020_000_000} =
+    test "today's prod numbers apply (72.4%)" do
+      assert {:apply, :sys_metrics, 4_020_000_000} =
                Qdrant.headroom(4_890_000_000, %{used: 4_350_000_000, capacity: 8_370_000_000})
     end
 
