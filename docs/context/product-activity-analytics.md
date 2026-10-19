@@ -35,6 +35,16 @@ Call seams: `EngramWeb.Plugs.WebActivity` (web; in `:authed_api` and the user
 scope), `crdt_channel.ex` `note_sync_activity/1` (edits only), `mcp_controller.ex`
 `emit_tool_analytics/3` and `emit_client_connected/2`.
 
+## Customer-success funnel
+
+`engram-usage` panel "Customer success funnel (signups, 30d)" (id 13): signed
+up, accepted terms, connected (Obsidian or AI tool), first use (Obsidian push,
+MCP tool call, or a non-welcome `note_created`), came back (`surface_active` on
+2+ days), paid. The `engram-business` Activated tile uses the same "first use"
+rule; DAU/MAU count `surface_active`. `user_signed_in` has never fired: the
+Clerk endpoint is not subscribed to `session.created`, and `surface_active{web}`
+already covers sign-in activity.
+
 ## Person properties (daily, `Engram.Workers.PostHogPersonSync`)
 
 Since privacy policy 2026-10-12, PostHog persons are identified. A daily job
