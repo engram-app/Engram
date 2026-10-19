@@ -224,7 +224,7 @@ defmodule Engram.Vector.QdrantReconcileTest do
     assert_receive {_, _, %{decision: :defer, source: :self_host_rule}}
   end
 
-  test "on 1.17.1 (self-host pin) strict mode is never sent and on-disk defers", %{bypass: bypass} do
+  test "on 1.17.1 (CI pin) strict mode is never sent and on-disk defers", %{bypass: bypass} do
     stub_version(bypass, "1.17.1")
     fake_collection(bypass, "obsidian_notes", @prod_info)
     stub_no_memory(bypass, "obsidian_notes")

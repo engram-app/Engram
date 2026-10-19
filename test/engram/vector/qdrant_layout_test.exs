@@ -137,7 +137,7 @@ defmodule Engram.Vector.QdrantLayoutTest do
              }
     end
 
-    test "strict mode is omitted entirely on 1.17.1 (self-host pin) and unknown versions" do
+    test "strict mode is omitted entirely on 1.17.1 (CI pin) and unknown versions" do
       refute Map.has_key?(QdrantLayout.desired(@v1171), "strict_mode_config")
       refute Map.has_key?(QdrantLayout.desired(nil), "strict_mode_config")
     end

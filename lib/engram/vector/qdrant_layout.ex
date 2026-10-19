@@ -28,7 +28,7 @@ defmodule Engram.Vector.QdrantLayout do
   #     node-wide `/quotas`. 1.19 answers a PATCH carrying it with 200 and
   #     drops it, so sending it there never converges.
   # Outside its range a field is never sent, so `diff/2` never compares it.
-  # Self-host CI pins 1.17.1, which has neither.
+  # CI pins 1.17.1, which has neither; self-host compose pins 1.18.3 (both).
   #
   # From 1.19.0 both guards also live in the node-wide `PUT /quotas`
   # (`QuotaConfig`, openapi v1.19.2), see `desired_quotas/2`. The strict
