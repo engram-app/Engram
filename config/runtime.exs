@@ -265,6 +265,25 @@ if config_env() != :test do
     config :engram, :qdrant_api_key, qdrant_api_key
   end
 
+  # Qdrant container memory limit (bytes), for the heap half of the embed
+  # preflight (Qdrant.pressure/0). Unset = heap pressure is not checked.
+  if limit = System.get_env("QDRANT_MEMORY_LIMIT_BYTES") do
+    config :engram, :qdrant_memory_limit_bytes, String.to_integer(limit)
+  end
+
+  # Backpressure thresholds, whole percent. Strict mode REFUSES writes at the
+  # strict values (applied to the collection on boot); EmbedNote snoozes before
+  # paying Voyage at the lower preflight values.
+  for {env, key} <- [
+        {"QDRANT_STRICT_DISK_PERCENT", :qdrant_strict_disk_percent},
+        {"QDRANT_STRICT_MEMORY_PERCENT", :qdrant_strict_memory_percent},
+        {"QDRANT_PREFLIGHT_DISK_PERCENT", :qdrant_preflight_disk_percent},
+        {"QDRANT_PREFLIGHT_HEAP_PERCENT", :qdrant_preflight_heap_percent}
+      ],
+      value = System.get_env(env) do
+    config :engram, key, String.to_integer(value)
+  end
+
   # Binary quantization — requires AVX2+ CPU. Disable on older hardware.
   if System.get_env("QDRANT_BINARY_QUANTIZATION") == "false" do
     config :engram, :qdrant_binary_quantization, false

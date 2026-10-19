@@ -119,9 +119,18 @@ defmodule Engram.Indexing do
         end
 
       {:ok, prepared} ->
-        with {:ok, count} <-
-               commit_index(prepared, &run_in_commit(note, opts, &1, prepared.dense?)),
-             do: {:ok, count, prepared.embedded_bytes, prepared.dense?}
+        case commit_index(prepared, &run_in_commit(note, opts, &1, prepared.dense?)) do
+          {:ok, count} ->
+            forget_retained(prepared.retain)
+            {:ok, count, prepared.embedded_bytes, prepared.dense?}
+
+          {:error, :qdrant_backpressure} = refused ->
+            retain(prepared.retain)
+            refused
+
+          {:error, _} = err ->
+            err
+        end
 
       {:error, _} = err ->
         err
@@ -163,7 +172,7 @@ defmodule Engram.Indexing do
       with :ok <- Qdrant.ensure_collection(collection(), dims),
            {:ok, filter_key} <- Crypto.dek_filter_key(user),
            {:ok, content_key} <- Crypto.dek_content_hash_key(user),
-           {dense?, plan} =
+           {dense?, plan, retained} =
              plan_within_budget(
                note,
                chunks,
@@ -172,16 +181,21 @@ defmodule Engram.Indexing do
                opts
              ),
            texts = embed_texts(plan),
-           {:ok, vectors} <- embed_or_release(dense?, texts, opts),
+           {:ok, vectors} <- retained_or_embed(retained, dense?, texts, opts),
            :ok <- ensure_one_vector_per_text(vectors, texts, note),
            avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id),
            {:ok, prepared} <-
              build_prepared(note, user, plan, vectors, filter_key, avgdl) do
         # What the embedder was actually sent (#1618): reused chunks and
         # sparse-only passes cost nothing, so the meter must not bill them.
-        embedded_bytes = if dense?, do: text_bytes(texts), else: 0
+        # Retained vectors were paid for by the attempt that kept them.
+        embedded_bytes = if dense? and is_nil(retained), do: text_bytes(texts), else: 0
 
-        {:ok, prepared |> Map.put(:embedded_bytes, embedded_bytes) |> Map.put(:dense?, dense?)}
+        {:ok,
+         prepared
+         |> Map.put(:embedded_bytes, embedded_bytes)
+         |> Map.put(:dense?, dense?)
+         |> Map.put(:retain, if(dense? and texts != [], do: {retained_key(note, texts), vectors}))}
       else
         {:error, :no_dek} = err ->
           emit_no_dek_telemetry(note)
@@ -746,23 +760,50 @@ defmodule Engram.Indexing do
   # Plans a dense pass, then asks the caller's budget for exactly what that
   # pass would send (reused chunks cost nothing). Refused → re-plan sparse:
   # the fingerprints differ, so a dense plan cannot be reused for a sparse pass.
+  #
+  # Third element: dense vectors an earlier attempt already paid for and Qdrant
+  # refused to store (`retain/1`). A hit skips the reservation AND the embed,
+  # so a backpressure retry is charged once.
   defp plan_within_budget(note, chunks, content_key, false, _opts),
-    do: {false, plan_chunks(note, chunks, content_key, false)}
+    do: {false, plan_chunks(note, chunks, content_key, false), nil}
 
   defp plan_within_budget(note, chunks, content_key, true, opts) do
     plan = plan_chunks(note, chunks, content_key, true)
+    texts = embed_texts(plan)
     reserve = Keyword.get(opts, :reserve_tokens, fn _tokens -> true end)
 
-    case plan |> embed_texts() |> text_bytes() |> UsageMeters.estimate_tokens() do
-      0 ->
-        {true, plan}
+    case {retained(note, texts), texts |> text_bytes() |> UsageMeters.estimate_tokens()} do
+      {{:ok, vectors}, _tokens} ->
+        {true, plan, vectors}
 
-      tokens ->
+      {:miss, 0} ->
+        {true, plan, nil}
+
+      {:miss, tokens} ->
         if reserve.(tokens),
-          do: {true, plan},
-          else: {false, plan_chunks(note, chunks, content_key, false)}
+          do: {true, plan, nil},
+          else: {false, plan_chunks(note, chunks, content_key, false), nil}
     end
   end
+
+  defp retained_or_embed(nil, dense?, texts, opts), do: embed_or_release(dense?, texts, opts)
+  defp retained_or_embed(vectors, _dense?, _texts, _opts), do: {:ok, vectors}
+
+  # ponytail: node-local, 30 min TTL, no size cap. A retry on another node, or
+  # after the TTL, re-pays Voyage for that note; the bytes held are one note's
+  # vectors per refused job, and EmbedNote's preflight snoozes most jobs before
+  # Qdrant gets to refusing. Persist them (chunks table) if refusals get common.
+  defp retained_key(note, texts),
+    do: {note.id, :crypto.hash(:sha256, :erlang.term_to_binary({embed_model(), texts}))}
+
+  defp retained(_note, []), do: :miss
+  defp retained(note, texts), do: Engram.Cache.get(:retained_vectors, retained_key(note, texts))
+
+  defp retain(nil), do: :ok
+  defp retain({key, vectors}), do: Engram.Cache.put(:retained_vectors, key, vectors)
+
+  defp forget_retained(nil), do: :ok
+  defp forget_retained({key, _vectors}), do: Engram.Cache.evict_local(:retained_vectors, key)
 
   # Anything but a successful embed gives its reservation back, exactly once:
   # an `{:error, _}`, a raise, a throw or an exit. The `catch` re-raises with

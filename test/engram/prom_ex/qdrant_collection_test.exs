@@ -18,19 +18,22 @@ defmodule Engram.PromEx.QdrantCollectionTest do
   @collection_event [:engram, :qdrant, :collection]
   @ram_event [:engram, :qdrant, :memory]
   @disk_event [:engram, :qdrant, :disk]
+  @pressure_event [:engram, :qdrant, :pressure]
 
   setup do
     bypass = Bypass.open()
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
     ServiceConfig.put_override(:qdrant_collection_metrics, true)
     :global.unregister_name({Plugin, :collection_poller})
+    Engram.Vector.Qdrant.forget_pressure()
+    on_exit(&Engram.Vector.Qdrant.forget_pressure/0)
 
     test_pid = self()
     ref = make_ref()
 
     :telemetry.attach_many(
       {__MODULE__, ref},
-      [@collection_event, @ram_event, @disk_event],
+      [@collection_event, @ram_event, @disk_event, @pressure_event],
       fn e, m, meta, _ -> send(test_pid, {e, m, meta}) end,
       nil
     )
@@ -46,6 +49,9 @@ defmodule Engram.PromEx.QdrantCollectionTest do
   end
 
   defp stub_info(bypass, info \\ @info) do
+    Bypass.stub(bypass, "GET", "/sys_metrics", &Plug.Conn.send_resp(&1, 404, ""))
+    Bypass.stub(bypass, "GET", "/metrics", &Plug.Conn.send_resp(&1, 404, ""))
+
     Bypass.stub(bypass, "GET", "/collections/engram_notes", fn conn ->
       json(conn, 200, %{result: info, status: "ok"})
     end)
@@ -62,12 +68,51 @@ defmodule Engram.PromEx.QdrantCollectionTest do
           [:engram, :prom_ex, :qdrant, :optimizer, :ok],
           [:engram, :prom_ex, :qdrant, :points],
           [:engram, :prom_ex, :qdrant, :disk, :bytes],
-          [:engram, :prom_ex, :qdrant, :ram, :bytes]
+          [:engram, :prom_ex, :qdrant, :ram, :bytes],
+          [:engram, :prom_ex, :qdrant, :pressure, :percent]
         ] do
       assert n in names
     end
 
-    assert Enum.flat_map(metrics, & &1.tags) |> Enum.uniq() == [:component]
+    assert Enum.flat_map(metrics, & &1.tags) |> Enum.uniq() |> Enum.sort() == [:component, :kind]
+  end
+
+  test "declares the backpressure counter tagged by reason only" do
+    metrics =
+      Plugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+
+    counter =
+      Enum.find(metrics, &(&1.name == [:engram, :prom_ex, :qdrant, :backpressure, :total]))
+
+    assert %Telemetry.Metrics.Counter{tags: [:reason]} = counter
+    assert counter.event_name == [:engram, :qdrant, :backpressure]
+  end
+
+  test "publishes disk pressure percent from /sys_metrics", %{bypass: bypass} do
+    Bypass.stub(bypass, "GET", "/collections/engram_notes", fn conn ->
+      json(conn, 200, %{result: @info})
+    end)
+
+    Bypass.stub(
+      bypass,
+      "GET",
+      "/collections/engram_notes/memory",
+      &Plug.Conn.send_resp(&1, 404, "")
+    )
+
+    Bypass.stub(bypass, "GET", "/metrics", &Plug.Conn.send_resp(&1, 404, ""))
+
+    Bypass.stub(bypass, "GET", "/sys_metrics", fn conn ->
+      Plug.Conn.send_resp(conn, 200, """
+      kubelet_volume_stats_capacity_bytes{persistentvolumeclaim="qdrant-storage-qdrant-0"} 8.37e+09
+      kubelet_volume_stats_used_bytes{persistentvolumeclaim="qdrant-storage-qdrant-0"} 4.35e+09
+      """)
+    end)
+
+    Plugin.execute_collection_metrics()
+    assert_receive {@pressure_event, %{percent: 51}, %{kind: "disk"}}
+    # Heap is unknown without QDRANT_MEMORY_LIMIT_BYTES: no sample, not a 0.
+    refute_receive {@pressure_event, _, %{kind: "heap"}}
   end
 
   test "sets collection + memory gauges from the 1.18 responses", %{bypass: bypass} do

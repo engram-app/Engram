@@ -51,8 +51,10 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
   alias Engram.Repo
+  alias Engram.ServiceConfig
   alias Engram.UsageMeters
   alias Engram.Vaults.Vault
+  alias Engram.Vector.Qdrant
   alias Engram.Workers.BackgroundPriority
   alias Engram.Workers.EmbedNote.CrashGuard
 
@@ -225,7 +227,12 @@ defmodule Engram.Workers.EmbedNote do
         # old behaviour) left the note with no BM25 index either, so it
         # vanished from keyword search too. The meter is charged inside
         # the pass, by the reservation (see `reserve_embed_tokens/2`).
-        case CrashGuard.check(note, job) do
+        case CrashGuard.check(note, job) |> preflight() do
+          # Qdrant is near strict mode's write refusal: wait BEFORE reserving
+          # tokens or paying Voyage for vectors it may refuse to store.
+          :over_pressure ->
+            backpressure_snooze(:preflight)
+
           :run ->
             case guarded_embed(note, user, vault, old_path_hmac_b64, opts) do
               :ok ->
@@ -240,6 +247,24 @@ defmodule Engram.Workers.EmbedNote do
             other
         end
     end
+  end
+
+  # Fails open: an unknown reading (self-host, Qdrant unreachable, no memory
+  # limit configured) is never over pressure.
+  defp preflight(:run) do
+    if ServiceConfig.get(:qdrant_backpressure_preflight, true) and
+         Qdrant.over_pressure?(Qdrant.pressure()),
+       do: :over_pressure,
+       else: :run
+  end
+
+  defp preflight(other), do: other
+
+  # A snooze does not consume an attempt. Jittered so a fleet of parked jobs
+  # does not return to a recovering Qdrant in one wave.
+  defp backpressure_snooze(reason) do
+    :telemetry.execute([:engram, :qdrant, :backpressure], %{count: 1}, %{reason: reason})
+    {:snooze, 30 + :rand.uniform(60)}
   end
 
   # The dead-man stamp brackets the embed: written before, cleared however the
@@ -543,6 +568,12 @@ defmodule Engram.Workers.EmbedNote do
             )
 
             {:snooze, snooze_seconds_on_429()}
+
+          # Strict mode refused the upsert (disk or memory). The vectors were
+          # paid for and are retained by Indexing, so the retry reuses them
+          # and the reservation stays charged: it was spent.
+          {:error, :qdrant_backpressure} ->
+            backpressure_snooze(:refused)
 
           {:error, reason} ->
             # Per-attempt failure (Voyage non-429 / Qdrant). Previously

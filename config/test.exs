@@ -245,3 +245,6 @@ config :sentry, test_mode: true
 # `ServiceConfig.put_override/2`.
 config :engram, :qdrant_reconcile_config, false
 config :engram, :qdrant_collection_metrics, false
+# EmbedNote's Qdrant pressure preflight: off for the same reason (it GETs
+# /sys_metrics and /metrics); its tests opt in per-process.
+config :engram, :qdrant_backpressure_preflight, false

@@ -29,7 +29,14 @@ defmodule Engram.PromEx.Qdrant do
       `total`, `dense` (storage + HNSW), `sparse_index`, `payload_index`,
       `payload`, `quantized`, `id_tracker`.
 
+    * `engram_prom_ex_qdrant_pressure_percent{kind="disk"|"heap"}`: what the
+      EmbedNote preflight reads (`Qdrant.pressure/0`); unknown kinds are absent.
+
   Only the polling node publishes these; aggregate with `max`, never `sum`.
+
+  Counter `engram_prom_ex_qdrant_backpressure_total{reason="preflight"|"refused"}`:
+  embed jobs snoozed because Qdrant was near (preflight) or at (strict-mode
+  refusal) its write limits.
 
   Cardinality contract: only `:op` (closed enum) + `:status`, and the closed
   `:component` enum above. NEVER add user_id, vault_id, point ids, or
@@ -47,6 +54,7 @@ defmodule Engram.PromEx.Qdrant do
   @collection_event [:engram, :qdrant, :collection]
   @disk_event [:engram, :qdrant, :disk]
   @ram_event [:engram, :qdrant, :memory]
+  @pressure_event [:engram, :qdrant, :pressure]
   @poller_name {__MODULE__, :collection_poller}
 
   @impl true
@@ -90,6 +98,13 @@ defmodule Engram.PromEx.Qdrant do
           measurement: :ram_bytes,
           tags: [:component],
           description: "Non-evictable RAM the Qdrant collection holds, by component."
+        ),
+        last_value(prefix ++ [:pressure, :percent],
+          event_name: @pressure_event,
+          measurement: :percent,
+          tags: [:kind],
+          description:
+            "Qdrant fullness the embed preflight reads: disk (storage volume) or heap (resident vs QDRANT_MEMORY_LIMIT_BYTES)."
         )
       ]
     )
@@ -102,6 +117,7 @@ defmodule Engram.PromEx.Qdrant do
   def execute_collection_metrics do
     if ServiceConfig.get(:qdrant_collection_metrics, true) and poller?() do
       poll(Qdrant.collection_name())
+      poll_pressure()
     end
 
     :ok
@@ -135,6 +151,13 @@ defmodule Engram.PromEx.Qdrant do
 
       {:error, reason} ->
         Logger.warning("qdrant collection poll skipped: #{Metadata.safe_reason(reason)}")
+    end
+  end
+
+  # An unknown kind publishes nothing (absent, not a misleading 0).
+  defp poll_pressure do
+    for {kind, pct} <- Qdrant.read_pressure(), is_integer(pct) do
+      :telemetry.execute(@pressure_event, %{percent: pct}, %{kind: Atom.to_string(kind)})
     end
   end
 
@@ -214,6 +237,13 @@ defmodule Engram.PromEx.Qdrant do
           event_name: @stop_event,
           description: "Qdrant requests by operation + status.",
           tags: [:op, :status]
+        ),
+        counter(
+          metric_prefix ++ [:backpressure, :total],
+          event_name: [:engram, :qdrant, :backpressure],
+          description:
+            "Embed jobs snoozed for Qdrant pressure: preflight (before Voyage) or refused (strict mode).",
+          tags: [:reason]
         )
       ]
     )

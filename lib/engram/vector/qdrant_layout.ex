@@ -24,9 +24,11 @@ defmodule Engram.Vector.QdrantLayout do
   # (openapi.json per tag: resident memory 1.18.1, disk 1.18.2). Self-host CI
   # pins 1.17.1, which has neither.
   @strict_guards [
-    {"max_resident_memory_percent", 85, "1.18.1"},
-    {"max_disk_usage_percent", 85, "1.18.2"}
+    {"max_resident_memory_percent", :memory, "1.18.1"},
+    {"max_disk_usage_percent", :disk, "1.18.2"}
   ]
+
+  @default_thresholds %{disk: 85, memory: 85}
 
   @storage %{
     "vectors" => %{"dense" => %{"on_disk" => true}},
@@ -43,24 +45,25 @@ defmodule Engram.Vector.QdrantLayout do
   }
 
   @doc """
-  The desired PATCH sub-objects for a server at `version` (`nil` = unknown).
+  The desired PATCH sub-objects for a server at `version` (`nil` = unknown),
+  with strict mode refusing writes at `thresholds` percent (default 85/85).
   Strict mode is included only with at least one guard the server supports:
   enabling it with no guard adds risk for no protection.
   """
-  @spec desired(Version.t() | nil) :: map()
-  def desired(version) do
-    case supported_guards(version) do
+  @spec desired(Version.t() | nil, %{disk: 1..100, memory: 1..100}) :: map()
+  def desired(version, thresholds \\ @default_thresholds) do
+    case supported_guards(version, thresholds) do
       [] -> @storage
       guards -> Map.put(@storage, "strict_mode_config", Map.new([{"enabled", true} | guards]))
     end
   end
 
-  defp supported_guards(nil), do: []
+  defp supported_guards(nil, _thresholds), do: []
 
-  defp supported_guards(version) do
-    for {field, value, since} <- @strict_guards,
+  defp supported_guards(version, thresholds) do
+    for {field, kind, since} <- @strict_guards,
         Version.compare(version, since) != :lt,
-        do: {field, value}
+        do: {field, Map.fetch!(thresholds, kind)}
   end
 
   @doc "PATCH keys that move data on disk (headroom-gated by the caller)."

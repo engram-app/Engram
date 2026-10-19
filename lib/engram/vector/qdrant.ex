@@ -394,7 +394,12 @@ defmodule Engram.Vector.Qdrant do
     col = col || collection()
 
     with {:ok, info} <- collection_info(col) do
-      diff = QdrantLayout.diff(info["config"] || %{}, QdrantLayout.desired(server_version()))
+      diff =
+        QdrantLayout.diff(
+          info["config"] || %{},
+          QdrantLayout.desired(server_version(), strict_thresholds())
+        )
+
       {strict, rest} = Map.split(diff, ["strict_mode_config"])
       {on_disk, optimizers} = Map.split(rest, QdrantLayout.on_disk_keys())
 
@@ -411,6 +416,15 @@ defmodule Engram.Vector.Qdrant do
       end
     end
     |> tap(&log_reconcile_failure/1)
+  end
+
+  # Strict mode's refusal thresholds (`QDRANT_STRICT_DISK_PERCENT` /
+  # `QDRANT_STRICT_MEMORY_PERCENT`). A change reaches Qdrant on the next boot.
+  defp strict_thresholds do
+    %{
+      disk: ServiceConfig.get(:qdrant_strict_disk_percent, 85),
+      memory: ServiceConfig.get(:qdrant_strict_memory_percent, 85)
+    }
   end
 
   defp log_reconcile_failure({:error, reason}),
@@ -476,7 +490,7 @@ defmodule Engram.Vector.Qdrant do
   # Qdrant Cloud exposes the volume's kubelet stats on `/sys_metrics`
   # (Prometheus text). Self-host has no such endpoint: nil.
   defp volume_stats do
-    case Req.get(base_url() <> "/sys_metrics", req_opts(:search)) do
+    case Req.get(base_url() <> "/sys_metrics", [decode_body: false] ++ req_opts(:search)) do
       {:ok, %{status: 200, body: body}} when is_binary(body) -> parse_volume_stats(body)
       _ -> nil
     end
@@ -534,6 +548,67 @@ defmodule Engram.Vector.Qdrant do
     end
   end
 
+  # Strict mode refusing a write for disk or memory (Qdrant >= 1.18.1):
+  # `CollectionError::StrictMode` -> `StorageError::BadRequest`, HTTP 400,
+  # message from `check_disk_usage` / the resident-memory check in
+  # lib/collection/src/operations/verification/mod.rs. Searches and deletes
+  # are never refused, so only the write ops map it.
+  @backpressure ~r/(Disk usage|Resident memory usage) is at \d+% of total/
+
+  defp write_error(400, %{"status" => %{"error" => message}} = body) when is_binary(message) do
+    if message =~ @backpressure, do: {:error, :qdrant_backpressure}, else: {:error, {400, body}}
+  end
+
+  defp write_error(status, body), do: {:error, {status, body}}
+
+  @doc """
+  How full Qdrant is, in whole percent: `%{disk: pct | nil, heap: pct | nil}`.
+  Disk is the storage volume from Qdrant Cloud `/sys_metrics`; heap is
+  `memory_resident_bytes` from `/metrics` (the jemalloc figure strict mode
+  checks) over `QDRANT_MEMORY_LIMIT_BYTES`. nil = unknown (self-host has no
+  `/sys_metrics`; no limit configured), which callers treat as "not full".
+  Node-cached for 60s, so the age of a reading is bounded by the TTL.
+  """
+  def pressure, do: Engram.Cache.fetch(:qdrant_pressure, base_url(), &read_pressure/0)
+
+  @doc "Drop this node's cached `pressure/0` reading."
+  def forget_pressure, do: Engram.Cache.evict_local(:qdrant_pressure, base_url())
+
+  @doc "A fresh `pressure/0` reading (the poller), refreshing the cache."
+  def read_pressure do
+    reading = %{disk: disk_percent(volume_stats()), heap: heap_percent()}
+    Engram.Cache.put(:qdrant_pressure, base_url(), reading)
+    reading
+  end
+
+  @doc """
+  True when disk or heap is at or past its preflight threshold
+  (`QDRANT_PREFLIGHT_DISK_PERCENT` / `QDRANT_PREFLIGHT_HEAP_PERCENT`, default
+  80, below strict mode's refusal at 85). Unknown is never over.
+  """
+  def over_pressure?(%{disk: disk, heap: heap}) do
+    at_or_over?(disk, ServiceConfig.get(:qdrant_preflight_disk_percent, 80)) or
+      at_or_over?(heap, ServiceConfig.get(:qdrant_preflight_heap_percent, 80))
+  end
+
+  defp at_or_over?(pct, limit), do: is_integer(pct) and pct >= limit
+
+  defp disk_percent(%{used: used, capacity: cap}) when cap > 0, do: div(used * 100, cap)
+  defp disk_percent(_), do: nil
+
+  defp heap_percent do
+    with limit when is_integer(limit) and limit > 0 <-
+           ServiceConfig.get(:qdrant_memory_limit_bytes),
+         {:ok, %{status: 200, body: text}} when is_binary(text) <-
+           Req.get(base_url() <> "/metrics", [decode_body: false] ++ req_opts(:search)),
+         [_, value] <- Regex.run(~r/^memory_resident_bytes\s+(\S+)/m, text),
+         {resident, _} <- Float.parse(value) do
+      div(trunc(resident) * 100, limit)
+    else
+      _ -> nil
+    end
+  end
+
   @doc """
   Upsert a batch of points. Each point: %{id: uuid_string, vector: [float], payload: map}.
   """
@@ -546,7 +621,7 @@ defmodule Engram.Vector.Qdrant do
     instrument(:upsert, fn ->
       case Req.put("#{base_url()}/collections/#{col}/points", opts) do
         {:ok, %{status: 200}} -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
@@ -564,7 +639,7 @@ defmodule Engram.Vector.Qdrant do
     instrument(:update_vectors, fn ->
       case Req.put("#{base_url()}/collections/#{col}/points/vectors", opts) do
         {:ok, %{status: 200}} -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
@@ -585,7 +660,7 @@ defmodule Engram.Vector.Qdrant do
     instrument(:set_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
         {:ok, %{status: 200}} -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
