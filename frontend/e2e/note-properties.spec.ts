@@ -51,7 +51,7 @@ async function registerAndLogin(baseURL: string, email: string): Promise<string>
 }
 
 interface Vault {
-	id: number;
+	id: string;
 	name: string;
 }
 
@@ -71,11 +71,11 @@ async function createVault(baseURL: string, token: string, name: string): Promis
 async function upsertNote(
 	baseURL: string,
 	token: string,
-	vaultId: number,
+	vaultId: string,
 	path: string,
 	content: string,
 	version?: number,
-): Promise<{ id: number }> {
+): Promise<{ id: string }> {
 	const res = await fetch(`${baseURL}/api/notes`, {
 		method: "POST",
 		headers: {
@@ -88,7 +88,7 @@ async function upsertNote(
 	if (!res.ok) {
 		throw new Error(`note upsert failed: ${res.status} ${await res.text()}`);
 	}
-	const { note } = (await res.json()) as { note: { id: number } };
+	const { note } = (await res.json()) as { note: { id: string } };
 	return { id: note.id };
 }
 
@@ -101,8 +101,8 @@ async function upsertNote(
 async function signInForNote(
 	page: Page,
 	email: string,
-	vaultId: number,
-	noteId: number,
+	vaultId: string,
+	noteId: string,
 ): Promise<void> {
 	await page.goto(`/note/${noteId}`);
 	await expect(page).toHaveURL(/\/sign-in/, { timeout: 10_000 });

@@ -11,13 +11,12 @@ import { createVault, noteUrlRe, PASS, registerAndLogin } from "./api";
 // revoke the whole family.
 
 interface Vault {
-	id: number;
+	id: string;
 	slug: string;
 }
 
 interface Account {
 	email: string;
-	token: string;
 }
 
 interface WorkerFixtures {
@@ -53,7 +52,8 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 		async ({ browser: _browser }, use, workerInfo) => {
 			const baseURL = workerInfo.project.use.baseURL!;
 			const email = `e2e-twotab-${Date.now()}-${workerInfo.workerIndex}@test.com`;
-			await use({ email, token: await registerAndLogin(baseURL, email) });
+			await registerAndLogin(baseURL, email);
+			await use({ email });
 		},
 		{ scope: "worker" },
 	],
@@ -73,9 +73,11 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 		},
 		{ scope: "worker" },
 	],
-	token: async ({ account }, use) => use(account.token),
-	vault: async ({ account, baseURL }, use) => {
-		await use(await createVault(baseURL!, account.token, `tt-${Date.now()}`));
+	// Fresh per test: access tokens live 15 min (lib/engram/token.ex), a worker
+	// can outlast that. registerAndLogin is idempotent (a 422 re-register is fine).
+	token: async ({ account, baseURL }, use) => use(await registerAndLogin(baseURL!, account.email)),
+	vault: async ({ token, baseURL }, use) => {
+		await use(await createVault(baseURL!, token, `tt-${Date.now()}`));
 	},
 	pageA: async ({ ctxA }, use) => {
 		const page = await ctxA.newPage();
@@ -93,7 +95,7 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 // Going through the legacy /note/:id redirect added a hop that, on a loaded
 // runner, outran the 10s URL wait. activeVaultId is seeded before any app
 // script runs so the vault switcher agrees with the URL from the first render.
-export async function openNote(page: Page, vault: Vault, noteId: number): Promise<void> {
+export async function openNote(page: Page, vault: Vault, noteId: string): Promise<void> {
 	await page.addInitScript((id) => {
 		localStorage.setItem("engram.activeVaultId", id);
 	}, String(vault.id));
