@@ -65,6 +65,17 @@ defmodule Engram.IndexingFloorTest do
     avg
   end
 
+  # The pass compare-and-sets the tier it was planned from, so the row must
+  # carry the tier the struct does.
+  defp with_tier(note, tier) do
+    {:ok, _} =
+      Engram.Repo.with_tenant(note.user_id, fn ->
+        Engram.Repo.update_all(from(n in Note, where: n.id == ^note.id), set: [index_tier: tier])
+      end)
+
+    %{note | index_tier: tier}
+  end
+
   defp reload(note) do
     {:ok, row} = Repo.with_tenant(note.user_id, fn -> Repo.get!(Note, note.id) end)
     row
@@ -130,7 +141,7 @@ defmodule Engram.IndexingFloorTest do
       vault: vault
     } do
       note = floor_note(user, vault)
-      note = %{note | index_tier: "floor_paid"}
+      note = with_tier(note, "floor_paid")
 
       assert {:ok, 1, 0, false} = Indexing.index_note_with_usage(note, vault, user)
       assert reload(note).index_tier == "floor_paid"
@@ -266,7 +277,7 @@ defmodule Engram.IndexingFloorTest do
       vault: vault
     } do
       note = floor_note(user, vault, "One.md", "# One\n\nA single section.")
-      note = %{note | index_tier: "floor"}
+      note = with_tier(note, "floor")
       {:ok, 1, 0, false} = Indexing.index_note_with_usage(note, vault, user)
 
       assert {:ok, 1, 0} = Indexing.resparse_note(note, user)
