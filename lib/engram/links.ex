@@ -1054,7 +1054,7 @@ defmodule Engram.Links do
     rows =
       Repo.all(
         from(n in Note,
-          where: n.user_id == ^user.id and n.id in ^ids,
+          where: n.user_id == ^user.id and n.kind == "note" and n.id in ^ids,
           select: map(n, [:id, :path_ciphertext, :path_nonce, :dek_version])
         ),
         skip_tenant_check: true
