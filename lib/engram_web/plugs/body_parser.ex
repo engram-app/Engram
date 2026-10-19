@@ -11,7 +11,9 @@ defmodule EngramWeb.Plugs.BodyParser do
 
   This logs one warning (route, method, declared size, content type) and tags
   the request span, then re-raises the same exception, so the status and body
-  the client sees are unchanged.
+  the client sees are unchanged. A parseable body whose declared
+  content-length is already over the ceiling gets that same exception before
+  any of it is read.
   """
 
   alias EngramWeb.RequestMeta
@@ -22,14 +24,51 @@ defmodule EngramWeb.Plugs.BodyParser do
   # Client-controlled; RedactFilter neither scrubs nor bounds it.
   @content_type_log_limit 100
 
-  def init(opts), do: Plug.Parsers.init(opts)
+  def init(opts), do: {Plug.Parsers.init(opts), Keyword.fetch!(opts, :length)}
 
-  def call(conn, parsers) do
+  def call(conn, {parsers, length}) do
+    if refuse_unread?(conn, length) do
+      record_too_large(conn)
+      raise Plug.Parsers.RequestTooLargeError
+    end
+
     Plug.Parsers.call(conn, parsers)
   rescue
     e in Plug.Parsers.RequestTooLargeError ->
-      record_too_large(conn)
+      unless refuse_unread?(conn, length), do: record_too_large(conn)
       reraise e, __STACKTRACE__
+  end
+
+  # A body the parser WOULD read, declared over its length, gets the parser's
+  # own refusal without the read: an honest content-length cannot shrink.
+  # Chunked / undeclared bodies, and types the parser passes through
+  # (octet-stream: the raw attachment upload has its own early refusal), keep
+  # the read-then-refuse path. A body an earlier parser already fetched
+  # (`McpBodyParser`) is left alone.
+  defp refuse_unread?(%Plug.Conn{body_params: %Plug.Conn.Unfetched{}} = conn, length) do
+    case RequestMeta.declared_length(conn) do
+      n when is_integer(n) and n > length -> parsed_type?(conn)
+      _ -> false
+    end
+  end
+
+  defp refuse_unread?(_conn, _length), do: false
+
+  # Mirrors the parsers in the endpoint's @parser_opts: :json, :urlencoded,
+  # :multipart.
+  defp parsed_type?(conn) do
+    with [header | _] <- Plug.Conn.get_req_header(conn, "content-type"),
+         {:ok, type, subtype, _} <- Plug.Conn.Utils.media_type(header) do
+      case {type, subtype} do
+        {"application", "json"} -> true
+        {"application", "x-www-form-urlencoded"} -> true
+        {"multipart", _} -> true
+        {"application", sub} -> String.ends_with?(sub, "+json")
+        _ -> false
+      end
+    else
+      _ -> false
+    end
   end
 
   defp record_too_large(conn) do
