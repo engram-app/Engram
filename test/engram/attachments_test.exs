@@ -85,16 +85,33 @@ defmodule Engram.AttachmentsTest do
     # may have an id that doesn't match the AAD baked into the blob → next
     # GET decrypt fails with `:decrypt_failed`. Fix: serialize same-path
     # upserts via `pg_advisory_xact_lock` keyed on (user_id, path_hmac).
-    test "upsert_attachment/3 wraps allocation + write in Repo.transaction with advisory lock" do
-      src = File.read!("lib/engram/attachments.ex")
+    test "upsert_attachment/3 takes the advisory lock inside the transaction that writes the row",
+         %{user: user, vault: vault} do
+      # Real cross-connection concurrency is untestable under the sandbox, so
+      # assert the executed statements instead: the lock and the row write
+      # must share one transaction, or the lock does not serialize the write
+      # and does not auto-release on commit/rollback.
+      Mox.stub(Engram.MockStorage, :put, fn _key, _bin, _opts -> :ok end)
 
-      assert src =~ ~r/pg_advisory_xact_lock/,
-             "upsert_attachment must take a per-(user, path_hmac) advisory lock " <>
-               "to serialize concurrent same-path uploads (T3-audit H1)"
+      {{:ok, _}, queries} =
+        Engram.QueryRecorder.record(fn ->
+          Attachments.upsert_attachment(user, vault, %{
+            "path" => @path,
+            "content_base64" => @valid_content
+          })
+        end)
 
-      assert src =~ ~r/Repo\.transaction/,
-             "upsert_attachment must wrap the allocation + insert in a transaction so " <>
-               "the advisory lock auto-releases on commit/rollback (T3-audit H1)"
+      locked =
+        queries
+        |> Engram.QueryRecorder.transactions()
+        |> Enum.filter(fn txn -> Enum.any?(txn, &(&1 =~ "pg_advisory_xact_lock")) end)
+
+      assert [txn] = locked,
+             "expected exactly one transaction holding the per-path advisory lock " <>
+               "(T3-audit H1)\n" <> Engram.QueryRecorder.format(queries)
+
+      assert Enum.any?(txn, &(&1 =~ ~r/^INSERT INTO "attachments"|^UPDATE "attachments"/)),
+             "the attachment row write must run inside the locked transaction"
     end
   end
 

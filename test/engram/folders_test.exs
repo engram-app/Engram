@@ -269,29 +269,37 @@ defmodule Engram.FoldersTest do
       assert note_path(user, vault, note.id) == "Docs/n.md"
     end
 
-    test "batch_delete/3 wraps both legs in one transaction (atomic across tables)" do
+    test "batch_delete/3 runs both legs in one transaction (atomic across tables)", %{
+      user: user,
+      vault: vault
+    } do
       # Bug 6: batch_delete deleted notes (committed) then attachments; an
-      # attachment-leg failure left notes gone, skipped idempotency+broadcast, and
-      # a retry 404'd (masked data loss). Runtime injection isn't feasible (the
-      # attachment soft-delete leg doesn't error on the happy path), so assert the
-      # structural guarantee: the coordinator function body runs inside a single
-      # Repo.transaction wrapping BOTH legs with a Repo.rollback on any error.
-      src = File.read!("lib/engram/folders.ex")
+      # attachment-leg failure left notes gone and a retry 404'd. The
+      # attachment leg cannot be made to fail on demand, so assert the
+      # executed statements: both legs' writes share one transaction. The
+      # rollback half of atomic/1 is exercised by the batch_move/4 conflict
+      # test above, which goes through the same wrapper.
+      {:ok, marker} = Notes.create_folder_marker(user, vault, "Docs")
 
-      [_, body | _] = String.split(src, "def batch_delete(user, vault, marker_ids) do")
-      body = body |> String.split(~r/\n  (def|defp) /) |> hd()
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Docs/n.md", "content" => "hi"}, actor: "api")
 
-      assert body =~ "atomic(",
-             "batch_delete must run both legs through the atomic/1 wrapper (Bug 6)"
+      put_att(user, vault, "Docs/a.png")
 
-      [_, atomic_body | _] = String.split(src, "defp atomic(fun) do")
-      atomic_body = atomic_body |> String.split(~r/\n  (def|defp) /) |> hd()
+      {{:ok, %{attachments: 1}}, queries} =
+        Engram.QueryRecorder.record(fn -> Folders.batch_delete(user, vault, [marker.id]) end)
 
-      assert atomic_body =~ "Repo.transaction",
-             "atomic/1 must wrap both legs in one Repo.transaction"
+      writes_to = fn txn, table ->
+        # The attachment leg is raw SQL, so the table name may be unquoted.
+        Enum.any?(txn, &(&1 =~ ~r/^(UPDATE|DELETE FROM) "?#{table}\b/))
+      end
 
-      assert atomic_body =~ "Repo.rollback",
-             "atomic/1 must Repo.rollback on a leg error so notes don't half-delete"
+      assert Enum.any?(
+               Engram.QueryRecorder.transactions(queries),
+               &(writes_to.(&1, "notes") and writes_to.(&1, "attachments"))
+             ),
+             "the notes and attachments legs must commit in one transaction (Bug 6)\n" <>
+               Engram.QueryRecorder.format(queries)
     end
   end
 

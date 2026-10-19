@@ -194,52 +194,37 @@ defmodule Engram.LinksTest do
     # connection per test) — this source-string assertion is the accepted
     # substitute already used for the identical problem in
     # attachments_test.exs:88-98 (T3-audit H1).
-    test "replace_links/4 takes a per-source-note advisory lock inside its transaction" do
-      src = File.read!("lib/engram/links.ex")
+    test "replace_links/4 takes a per-source-note advisory lock inside its transaction", %{
+      user: user,
+      vault: vault
+    } do
+      # Asserted on the executed statements: the lock, the DELETE and the
+      # INSERT must share one transaction so the lock serializes the pair and
+      # auto-releases on commit/rollback.
+      source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source.md"})
 
-      # Scoped to the exact call site, not just "the SQL exists somewhere in
-      # the file" — the negative lookbehind excludes the `defp
-      # lock_source_note!(source_note_id) do` definition line itself (same
-      # substring), so this only matches an actual *call*. Deleting the call
-      # inside replace_links's transaction fails this test even if the
-      # lock_source_note! helper is left behind as dead code.
-      assert src =~ ~r/(?<!defp )lock_source_note!\(source_note_id\)/,
-             "replace_links must call lock_source_note!(source_note_id) to serialize " <>
-               "concurrent writers (Task 2)"
+      {:ok, queries} =
+        Engram.QueryRecorder.record(fn ->
+          Links.replace_links(user, vault, source.id, [
+            %{target: "Elsewhere", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
+          ])
+        end)
 
-      # #1409 review round 3: the raw `pg_advisory_xact_lock` SQL moved out of
-      # this file into the shared `Repo.advisory_lock!/1` (so this call site
-      # and CrdtChannel/CrdtPersistence's #1409 lock can never key-drift
-      # against each other). `lock_source_note!/1` now just delegates —
-      # assert THAT delegation, plus that the shared helper itself still
-      # issues the real SQL (in repo.ex, not mocked away).
-      assert src =~ ~r/Repo\.advisory_lock!\(/,
-             "lock_source_note! must delegate to Repo.advisory_lock!/1 (Task 2 / #1409)"
+      locked =
+        queries
+        |> Engram.QueryRecorder.transactions()
+        |> Enum.filter(fn txn -> Enum.any?(txn, &(&1 =~ "pg_advisory_xact_lock")) end)
 
-      repo_src = File.read!("lib/engram/repo.ex")
+      assert [txn] = locked,
+             "replace_links must take its advisory lock inside one transaction (Task 2)\n" <>
+               Engram.QueryRecorder.format(queries)
 
-      assert repo_src =~ ~r/pg_advisory_xact_lock/,
-             "Repo.advisory_lock!/1 must issue pg_advisory_xact_lock (Task 2 / #1409)"
+      lock_at = Enum.find_index(txn, &(&1 =~ "pg_advisory_xact_lock"))
+      delete_at = Enum.find_index(txn, &(&1 =~ ~r/^DELETE FROM "note_links"/))
+      insert_at = Enum.find_index(txn, &(&1 =~ ~r/^INSERT INTO "note_links"/))
 
-      # The wrapper is now `Repo.with_tenant/2` rather than a bare
-      # `Repo.transaction`: `note_links` carries FORCE ROW LEVEL SECURITY, so
-      # the write has to set `app.current_tenant` as well as hold the lock.
-      #
-      # What this assertion actually cares about is unchanged — the
-      # delete+insert must sit inside a transaction so `pg_advisory_xact_lock`
-      # auto-releases on commit/rollback — so it accepts either wrapper instead
-      # of pinning one spelling.
-      assert src =~ ~r/Repo\.(transaction|with_tenant)\(/,
-             "replace_links must wrap delete+insert in a transaction so the advisory " <>
-               "lock auto-releases on commit/rollback (Task 2)"
-
-      # And pin the property that makes `with_tenant/2` an acceptable wrapper.
-      # Without this, the assertion above would accept a future `with_tenant/2`
-      # that had stopped opening a transaction, which would silently leave the
-      # advisory lock held for the rest of the connection's session.
-      assert repo_src =~ ~r/defp run_with_tenant.*?transaction\(/s,
-             "Repo.with_tenant/2 must itself open a transaction, otherwise the advisory " <>
-               "lock taken in replace_links would outlive its intended scope"
+      assert delete_at && insert_at, "the delete+insert must run in the locked transaction"
+      assert lock_at < delete_at and lock_at < insert_at, "the lock must precede the writes"
     end
   end
 

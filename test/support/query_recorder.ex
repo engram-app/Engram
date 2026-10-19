@@ -51,6 +51,25 @@ defmodule Engram.QueryRecorder do
     end
   end
 
+  @doc """
+  The top-level transactions `pid` ran, each as the list of SQL statements
+  between its `begin` and `commit`. A nested `Repo.transaction` logs no
+  begin/commit of its own, so its statements fold into the outer one.
+  Statements outside any transaction are dropped.
+  """
+  def transactions(queries, pid \\ self()) do
+    queries
+    |> Enum.filter(&(&1.pid == pid))
+    |> Enum.reduce({[], nil}, fn
+      %{sql: "begin"}, {done, nil} -> {done, []}
+      %{sql: "commit"}, {done, open} when is_list(open) -> {[Enum.reverse(open) | done], nil}
+      %{sql: sql}, {done, open} when is_list(open) -> {done, [sql | open]}
+      _outside, acc -> acc
+    end)
+    |> elem(0)
+    |> Enum.reverse()
+  end
+
   def format(queries) do
     queries
     |> Enum.with_index(1)

@@ -80,15 +80,34 @@ defmodule Engram.Repo.TenancyGuardTest do
       # `chunks`, not `notes`, so the blind spot sat directly over the
       # destructive path.
       #
-      # Asserted by source rather than by mutating RLS state mid-test: the
-      # sandbox cannot ALTER TABLE without leaking out of the transaction.
-      source = File.read!("lib/engram/repo/tenancy_guard.ex")
+      # Asserted on the executed probe queries rather than by mutating RLS
+      # state mid-test: the sandbox cannot ALTER TABLE without leaking out of
+      # the transaction. As the RLS-subject role no table leaks, so nothing
+      # short-circuits the walk and every table must be read.
+      {verdict, queries} =
+        Engram.QueryRecorder.record(fn ->
+          {:error, verdict} =
+            Repo.transaction(fn ->
+              Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_app")
+              Repo.rollback(TenancyGuard.observed_enforcement())
+            end)
 
-      assert source =~ "Engram.Repo.tenant_tables()",
-             "the probe must enumerate tenant_tables/0, not a hardcoded table"
+          verdict
+        end)
 
-      refute source =~ ~r/FROM notes LIMIT 1/,
-             "a hardcoded `FROM notes` means the per-table blind spot is back"
+      assert verdict == :unknown
+
+      probed =
+        for %{pid: pid, sql: sql} <- queries,
+            pid == self(),
+            [_, table] <- [Regex.run(~r/FROM "(\w+)"/, sql)],
+            into: MapSet.new(),
+            do: table
+
+      for table <- Engram.Repo.tenant_tables() do
+        assert to_string(table) in probed,
+               "the probe never read #{table}: the per-table blind spot is back"
+      end
     end
 
     test "leaves the caller's tenant untouched" do
