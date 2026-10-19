@@ -1,12 +1,5 @@
-import { expect, type Page, test } from "@playwright/test";
-import {
-	anyNoteUrlRe,
-	createFolder,
-	createVault,
-	registerAndLogin,
-	signInForNote,
-	upsertNote,
-} from "./support/api";
+import { expect, type Page } from "@playwright/test";
+import { anyNoteUrlRe, createFolder, upsertNote } from "./support/api";
 import {
 	collapseFolder,
 	commitRename,
@@ -17,6 +10,7 @@ import {
 	pickMoveTarget,
 	row,
 } from "./support/tree";
+import { openNote, test } from "./support/two-tabs";
 
 type WSRoute = Parameters<Parameters<Page["routeWebSocket"]>[1]>[0];
 
@@ -56,10 +50,13 @@ async function installSocketGate(
 }
 
 test.describe("web tree ops sync (web to web)", () => {
-	test("rename note propagates to a second tab", async ({ browser, baseURL }) => {
-		const email = `e2e-tree-rn-${Date.now()}@test.com`;
-		const token = await registerAndLogin(baseURL!, email);
-		const vault = await createVault(baseURL!, token, `treern-${Date.now()}`);
+	test("rename note propagates to a second tab", async ({
+		baseURL,
+		token,
+		vault,
+		pageA,
+		pageB,
+	}) => {
 		// Body only, no heading: tree label is the filename without extension.
 		const { id: noteId } = await upsertNote(
 			baseURL!,
@@ -69,12 +66,8 @@ test.describe("web tree ops sync (web to web)", () => {
 			"just body\n",
 		);
 
-		const ctxA = await browser.newContext();
-		const pageA = await ctxA.newPage();
-		const ctxB = await browser.newContext();
-		const pageB = await ctxB.newPage();
-		await signInForNote(pageA, email, vault.id, noteId);
-		await signInForNote(pageB, email, vault.id, noteId);
+		await openNote(pageA, vault.id, noteId);
+		await openNote(pageB, vault.id, noteId);
 
 		await expect(row(pageA, "rename-me")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "rename-me")).toBeVisible({ timeout: 10_000 });
@@ -102,26 +95,22 @@ test.describe("web tree ops sync (web to web)", () => {
 		await pageA.keyboard.press("Control+End");
 		await pageA.keyboard.type(" EDIT-AFTER-RENAME");
 		await expect(edB).toContainText("EDIT-AFTER-RENAME", { timeout: 10_000 });
-
-		await ctxA.close();
-		await ctxB.close();
 	});
 
-	test("delete note propagates to a second tab", async ({ browser, baseURL }) => {
-		const email = `e2e-tree-del-${Date.now()}@test.com`;
-		const token = await registerAndLogin(baseURL!, email);
-		const vault = await createVault(baseURL!, token, `treedel-${Date.now()}`);
+	test("delete note propagates to a second tab", async ({
+		baseURL,
+		token,
+		vault,
+		pageA,
+		pageB,
+	}) => {
 		const { id: keepId } = await upsertNote(baseURL!, token, vault.id, "keep.md", "keep body\n");
 		await upsertNote(baseURL!, token, vault.id, "trash.md", "trash body\n");
 
-		const ctxA = await browser.newContext();
-		const pageA = await ctxA.newPage();
-		const ctxB = await browser.newContext();
-		const pageB = await ctxB.newPage();
 		// Anchor both tabs on the note that survives, so neither navigates to a
 		// deleted route.
-		await signInForNote(pageA, email, vault.id, keepId);
-		await signInForNote(pageB, email, vault.id, keepId);
+		await openNote(pageA, vault.id, keepId);
+		await openNote(pageB, vault.id, keepId);
 
 		await expect(row(pageA, "trash")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "trash")).toBeVisible({ timeout: 10_000 });
@@ -132,9 +121,6 @@ test.describe("web tree ops sync (web to web)", () => {
 
 		await expect(row(pageA, "trash")).toHaveCount(0, { timeout: 10_000 });
 		await expect(row(pageB, "trash")).toHaveCount(0, { timeout: 10_000 });
-
-		await ctxA.close();
-		await ctxB.close();
 	});
 
 	// The two tests above always anchor both tabs on a SURVIVING note, so
@@ -143,12 +129,12 @@ test.describe("web tree ops sync (web to web)", () => {
 	// when you (the acting tab) delete it and when another tab (the observer)
 	// deletes it out from under you.
 	test("deleting the open note converges gracefully for both the acting and observer tab", async ({
-		browser,
 		baseURL,
+		token,
+		vault,
+		pageA,
+		pageB,
 	}) => {
-		const email = `e2e-tree-delopen-${Date.now()}@test.com`;
-		const token = await registerAndLogin(baseURL!, email);
-		const vault = await createVault(baseURL!, token, `treedelopen-${Date.now()}`);
 		const { id: doomedId } = await upsertNote(
 			baseURL!,
 			token,
@@ -159,19 +145,14 @@ test.describe("web tree ops sync (web to web)", () => {
 		// A surviving note. Not navigated to, just proof the vault isn't empty.
 		await upsertNote(baseURL!, token, vault.id, "survivor.md", "survivor body\n");
 
-		const ctxA = await browser.newContext();
-		const pageA = await ctxA.newPage();
-		const ctxB = await browser.newContext();
-		const pageB = await ctxB.newPage();
-
 		const pageErrorsA: Error[] = [];
 		const pageErrorsB: Error[] = [];
 		pageA.on("pageerror", (err) => pageErrorsA.push(err));
 		pageB.on("pageerror", (err) => pageErrorsB.push(err));
 
 		// Both tabs are anchored ON the note that is about to be deleted.
-		await signInForNote(pageA, email, vault.id, doomedId);
-		await signInForNote(pageB, email, vault.id, doomedId);
+		await openNote(pageA, vault.id, doomedId);
+		await openNote(pageB, vault.id, doomedId);
 
 		await expect(row(pageA, "doomed")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "doomed")).toBeVisible({ timeout: 10_000 });
@@ -226,15 +207,9 @@ test.describe("web tree ops sync (web to web)", () => {
 		// `path` goes to null) must not throw an uncaught error.
 		expect(pageErrorsA).toEqual([]);
 		expect(pageErrorsB).toEqual([]);
-
-		await ctxA.close();
-		await ctxB.close();
 	});
 
-	test("move note propagates to a second tab", async ({ browser, baseURL }) => {
-		const email = `e2e-tree-mv-${Date.now()}@test.com`;
-		const token = await registerAndLogin(baseURL!, email);
-		const vault = await createVault(baseURL!, token, `treemv-${Date.now()}`);
+	test("move note propagates to a second tab", async ({ baseURL, token, vault, pageA, pageB }) => {
 		await createFolder(baseURL!, token, vault.id, "Source");
 		await createFolder(baseURL!, token, vault.id, "Dest");
 		const { id: noteId } = await upsertNote(
@@ -245,12 +220,8 @@ test.describe("web tree ops sync (web to web)", () => {
 			"movable body\n",
 		);
 
-		const ctxA = await browser.newContext();
-		const pageA = await ctxA.newPage();
-		const ctxB = await browser.newContext();
-		const pageB = await ctxB.newPage();
-		await signInForNote(pageA, email, vault.id, noteId);
-		await signInForNote(pageB, email, vault.id, noteId);
+		await openNote(pageA, vault.id, noteId);
+		await openNote(pageB, vault.id, noteId);
 
 		// Reveal children in both tabs.
 		await expandFolder(pageA, "Source");
@@ -292,15 +263,15 @@ test.describe("web tree ops sync (web to web)", () => {
 		await pageA.keyboard.press("Control+End");
 		await pageA.keyboard.type(" EDIT-AFTER-MOVE");
 		await expect(edB).toContainText("EDIT-AFTER-MOVE", { timeout: 10_000 });
-
-		await ctxA.close();
-		await ctxB.close();
 	});
 
-	test("rename folder propagates to a second tab, child re-paths", async ({ browser, baseURL }) => {
-		const email = `e2e-tree-rnf-${Date.now()}@test.com`;
-		const token = await registerAndLogin(baseURL!, email);
-		const vault = await createVault(baseURL!, token, `treernf-${Date.now()}`);
+	test("rename folder propagates to a second tab, child re-paths", async ({
+		baseURL,
+		token,
+		vault,
+		pageA,
+		pageB,
+	}) => {
 		await createFolder(baseURL!, token, vault.id, "OldName");
 		const { id: childId } = await upsertNote(
 			baseURL!,
@@ -310,12 +281,8 @@ test.describe("web tree ops sync (web to web)", () => {
 			"child body\n",
 		);
 
-		const ctxA = await browser.newContext();
-		const pageA = await ctxA.newPage();
-		const ctxB = await browser.newContext();
-		const pageB = await ctxB.newPage();
-		await signInForNote(pageA, email, vault.id, childId);
-		await signInForNote(pageB, email, vault.id, childId);
+		await openNote(pageA, vault.id, childId);
+		await openNote(pageB, vault.id, childId);
 
 		await expect(row(pageA, "OldName")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "OldName")).toBeVisible({ timeout: 10_000 });
@@ -348,15 +315,15 @@ test.describe("web tree ops sync (web to web)", () => {
 		await pageA.keyboard.press("Control+End");
 		await pageA.keyboard.type(" EDIT-AFTER-FOLDER-RENAME");
 		await expect(edB).toContainText("EDIT-AFTER-FOLDER-RENAME", { timeout: 10_000 });
-
-		await ctxA.close();
-		await ctxB.close();
 	});
 
-	test("move folder propagates to a second tab with its child", async ({ browser, baseURL }) => {
-		const email = `e2e-tree-mvf-${Date.now()}@test.com`;
-		const token = await registerAndLogin(baseURL!, email);
-		const vault = await createVault(baseURL!, token, `treemvf-${Date.now()}`);
+	test("move folder propagates to a second tab with its child", async ({
+		baseURL,
+		token,
+		vault,
+		pageA,
+		pageB,
+	}) => {
 		await createFolder(baseURL!, token, vault.id, "Parent");
 		await createFolder(baseURL!, token, vault.id, "Movable");
 		const { id: childId } = await upsertNote(
@@ -367,12 +334,8 @@ test.describe("web tree ops sync (web to web)", () => {
 			"leaf body\n",
 		);
 
-		const ctxA = await browser.newContext();
-		const pageA = await ctxA.newPage();
-		const ctxB = await browser.newContext();
-		const pageB = await ctxB.newPage();
-		await signInForNote(pageA, email, vault.id, childId);
-		await signInForNote(pageB, email, vault.id, childId);
+		await openNote(pageA, vault.id, childId);
+		await openNote(pageB, vault.id, childId);
 
 		await expect(row(pageA, "Movable")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "Parent")).toBeVisible({ timeout: 10_000 });
@@ -404,26 +367,22 @@ test.describe("web tree ops sync (web to web)", () => {
 		await pageA.keyboard.press("Control+End");
 		await pageA.keyboard.type(" EDIT-AFTER-FOLDER-MOVE");
 		await expect(edB).toContainText("EDIT-AFTER-FOLDER-MOVE", { timeout: 10_000 });
-
-		await ctxA.close();
-		await ctxB.close();
 	});
 
-	test("delete non-empty folder propagates to a second tab", async ({ browser, baseURL }) => {
-		const email = `e2e-tree-delf-${Date.now()}@test.com`;
-		const token = await registerAndLogin(baseURL!, email);
-		const vault = await createVault(baseURL!, token, `treedelf-${Date.now()}`);
+	test("delete non-empty folder propagates to a second tab", async ({
+		baseURL,
+		token,
+		vault,
+		pageA,
+		pageB,
+	}) => {
 		await createFolder(baseURL!, token, vault.id, "Doomed");
 		await upsertNote(baseURL!, token, vault.id, "Doomed/inside.md", "inside body\n");
 		// A surviving root note to anchor both tabs.
 		const { id: anchorId } = await upsertNote(baseURL!, token, vault.id, "anchor.md", "anchor\n");
 
-		const ctxA = await browser.newContext();
-		const pageA = await ctxA.newPage();
-		const ctxB = await browser.newContext();
-		const pageB = await ctxB.newPage();
-		await signInForNote(pageA, email, vault.id, anchorId);
-		await signInForNote(pageB, email, vault.id, anchorId);
+		await openNote(pageA, vault.id, anchorId);
+		await openNote(pageB, vault.id, anchorId);
 
 		await expect(row(pageA, "Doomed")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "Doomed")).toBeVisible({ timeout: 10_000 });
@@ -434,9 +393,6 @@ test.describe("web tree ops sync (web to web)", () => {
 
 		await expect(row(pageA, "Doomed")).toHaveCount(0, { timeout: 10_000 });
 		await expect(row(pageB, "Doomed")).toHaveCount(0, { timeout: 10_000 });
-
-		await ctxA.close();
-		await ctxB.close();
 	});
 
 	// Regression (web delete of a populated folder reverted after ~1s): a folder
@@ -448,22 +404,18 @@ test.describe("web tree ops sync (web to web)", () => {
 	// The marker-only delete removed nothing, so the folder re-derived from the
 	// note still inside it on the next refetch and came straight back.
 	test("delete DERIVED (marker-less) non-empty folder stays deleted", async ({
-		browser,
 		baseURL,
+		token,
+		vault,
+		pageA,
+		pageB,
 	}) => {
-		const email = `e2e-tree-delderiv-${Date.now()}@test.com`;
-		const token = await registerAndLogin(baseURL!, email);
-		const vault = await createVault(baseURL!, token, `treedelderiv-${Date.now()}`);
 		// No createFolder — "Derived" exists only as a prefix of this note's path.
 		await upsertNote(baseURL!, token, vault.id, "Derived/inside.md", "inside body\n");
 		const { id: anchorId } = await upsertNote(baseURL!, token, vault.id, "anchor.md", "anchor\n");
 
-		const ctxA = await browser.newContext();
-		const pageA = await ctxA.newPage();
-		const ctxB = await browser.newContext();
-		const pageB = await ctxB.newPage();
-		await signInForNote(pageA, email, vault.id, anchorId);
-		await signInForNote(pageB, email, vault.id, anchorId);
+		await openNote(pageA, vault.id, anchorId);
+		await openNote(pageB, vault.id, anchorId);
 
 		await expect(row(pageA, "Derived")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "Derived")).toBeVisible({ timeout: 10_000 });
@@ -483,24 +435,20 @@ test.describe("web tree ops sync (web to web)", () => {
 		await pageA.reload();
 		await expect(row(pageA, "anchor")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageA, "Derived")).toHaveCount(0);
-
-		await ctxA.close();
-		await ctxB.close();
 	});
 
-	test("delete EMPTY folder propagates to a second tab", async ({ browser, baseURL }) => {
-		const email = `e2e-tree-delef-${Date.now()}@test.com`;
-		const token = await registerAndLogin(baseURL!, email);
-		const vault = await createVault(baseURL!, token, `treedelef-${Date.now()}`);
+	test("delete EMPTY folder propagates to a second tab", async ({
+		baseURL,
+		token,
+		vault,
+		pageA,
+		pageB,
+	}) => {
 		await createFolder(baseURL!, token, vault.id, "Empty");
 		const { id: anchorId } = await upsertNote(baseURL!, token, vault.id, "anchor.md", "anchor\n");
 
-		const ctxA = await browser.newContext();
-		const pageA = await ctxA.newPage();
-		const ctxB = await browser.newContext();
-		const pageB = await ctxB.newPage();
-		await signInForNote(pageA, email, vault.id, anchorId);
-		await signInForNote(pageB, email, vault.id, anchorId);
+		await openNote(pageA, vault.id, anchorId);
+		await openNote(pageB, vault.id, anchorId);
 
 		await expect(row(pageA, "Empty")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "Empty")).toBeVisible({ timeout: 10_000 });
@@ -513,9 +461,6 @@ test.describe("web tree ops sync (web to web)", () => {
 		// Predicted red: with no descendant notes, the backend may emit no
 		// broadcast, so tab B never invalidates and the folder lingers.
 		await expect(row(pageB, "Empty")).toHaveCount(0, { timeout: 10_000 });
-
-		await ctxA.close();
-		await ctxB.close();
 	});
 
 	// Reconnect catch-up: tab B's socket is cut while the op happens in tab A,
@@ -536,21 +481,20 @@ test.describe("web tree ops sync (web to web)", () => {
 	// Fixed by priv/repo/migrations/20260705120000_grant_vault_device_cursors_
 	// expand.exs. This test now asserts real convergence through the fixed
 	// catch-up path.
-	test("offline empty-folder delete catches up on reconnect", async ({ browser, baseURL }) => {
+	test("offline empty-folder delete catches up on reconnect", async ({
+		baseURL,
+		token,
+		vault,
+		pageA,
+		pageB,
+	}) => {
 		test.setTimeout(60_000);
-		const email = `e2e-tree-offdel-${Date.now()}@test.com`;
-		const token = await registerAndLogin(baseURL!, email);
-		const vault = await createVault(baseURL!, token, `treeoffdel-${Date.now()}`);
 		await createFolder(baseURL!, token, vault.id, "OfflineEmpty");
 		const { id: anchorId } = await upsertNote(baseURL!, token, vault.id, "anchor.md", "anchor\n");
 
-		const ctxA = await browser.newContext();
-		const pageA = await ctxA.newPage();
-		const ctxB = await browser.newContext();
-		const pageB = await ctxB.newPage();
 		const gate = await installSocketGate(pageB);
-		await signInForNote(pageA, email, vault.id, anchorId);
-		await signInForNote(pageB, email, vault.id, anchorId);
+		await openNote(pageA, vault.id, anchorId);
+		await openNote(pageB, vault.id, anchorId);
 
 		await expect(row(pageA, "OfflineEmpty")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "OfflineEmpty")).toBeVisible({ timeout: 10_000 });
@@ -575,18 +519,18 @@ test.describe("web tree ops sync (web to web)", () => {
 		// (no descendant notes) is the sharpest case for a feed that skips
 		// folder markers.
 		await expect(row(pageB, "OfflineEmpty")).toHaveCount(0, { timeout: 20_000 });
-
-		await ctxA.close();
-		await ctxB.close();
 	});
 
 	// See the fixed-bug note above the previous test: same catch-up path,
 	// same grant fix.
-	test("offline folder rename catches up on reconnect", async ({ browser, baseURL }) => {
+	test("offline folder rename catches up on reconnect", async ({
+		baseURL,
+		token,
+		vault,
+		pageA,
+		pageB,
+	}) => {
 		test.setTimeout(60_000);
-		const email = `e2e-tree-offrnf-${Date.now()}@test.com`;
-		const token = await registerAndLogin(baseURL!, email);
-		const vault = await createVault(baseURL!, token, `treeoffrnf-${Date.now()}`);
 		await createFolder(baseURL!, token, vault.id, "OfflineOldName");
 		const { id: childId } = await upsertNote(
 			baseURL!,
@@ -596,13 +540,9 @@ test.describe("web tree ops sync (web to web)", () => {
 			"child body\n",
 		);
 
-		const ctxA = await browser.newContext();
-		const pageA = await ctxA.newPage();
-		const ctxB = await browser.newContext();
-		const pageB = await ctxB.newPage();
 		const gate = await installSocketGate(pageB);
-		await signInForNote(pageA, email, vault.id, childId);
-		await signInForNote(pageB, email, vault.id, childId);
+		await openNote(pageA, vault.id, childId);
+		await openNote(pageB, vault.id, childId);
 
 		await expect(row(pageA, "OfflineOldName")).toBeVisible({ timeout: 10_000 });
 		await expect(row(pageB, "OfflineOldName")).toBeVisible({ timeout: 10_000 });
@@ -626,8 +566,5 @@ test.describe("web tree ops sync (web to web)", () => {
 		await expect(row(pageB, "OfflineOldName")).toHaveCount(0, { timeout: 20_000 });
 		await expandFolder(pageB, "OfflineNewName");
 		await expect(row(pageB, "child")).toBeVisible({ timeout: 20_000 });
-
-		await ctxA.close();
-		await ctxB.close();
 	});
 });
