@@ -109,15 +109,22 @@ jobs:
           # completed dispatch run on this SHA whose three e2e jobs are all green.
           # Fence on THIS workflow run's created_at (stable across re-runs), so a
           # rollback tag on an old SHA never reuses last release's run.
-          FENCE=$(gh api "repos/${GH_REPO}/actions/runs/${GITHUB_RUN_ID}" -q '.created_at | fromdateiso8601')
-          candidates=$(gh run list --repo "$GH_REPO" --workflow=verify.yml \
-            --event=workflow_dispatch --status completed --json databaseId,headSha,createdAt \
-            -q "[.[] | select(.headSha==\"${HEAD_SHA}\") | select((.createdAt|fromdateiso8601) > ${FENCE})] | sort_by(.createdAt) | reverse | .[].databaseId")
+          # Best-effort: any lookup error falls through to a fresh dispatch.
+          FENCE=$(gh api "repos/${GH_REPO}/actions/runs/${GITHUB_RUN_ID}" -q '.created_at | fromdateiso8601' 2>/dev/null || echo "")
+          candidates=""
+          [ -n "$FENCE" ] && candidates=$(gh run list --repo "$GH_REPO" --workflow=verify.yml \
+            --event=workflow_dispatch --status completed --json databaseId,headSha,headBranch,createdAt \
+            -q "[.[] | select(.headSha==\"${HEAD_SHA}\") | select(.headBranch==\"${TAG}\") | select((.createdAt|fromdateiso8601) > ${FENCE})] | sort_by(.createdAt) | reverse | .[].databaseId" 2>/dev/null || echo "")
           for id in $candidates; do
+            # Only runs this gate dispatched (bot actor; a human re-run keeps it)
+            # are known force_full against plugin main. A human dispatch with
+            # -f plugin_branch=... on the same SHA must not count.
+            actor=$(gh api "repos/${GH_REPO}/actions/runs/${id}" -q '.actor.login' 2>/dev/null || echo "")
+            [ "$actor" = "github-actions[bot]" ] || continue
             green=$(gh run view "$id" --repo "$GH_REPO" --json jobs \
-              -q '[.jobs[] | select(.name|test("^e2e-(clerk|crdt|browser)$")) | select(.conclusion=="success")] | length')
+              -q '[.jobs[] | select(.name|test("^e2e-(clerk|crdt|browser)$")) | select(.conclusion=="success")] | length' 2>/dev/null || echo "")
             if [ "$green" = "3" ]; then
-              echo "Reusing green verify.yml run ${id} for ${HEAD_SHA}"
+              echo "Reusing green verify.yml run ${id} (${TAG}, dispatched by ${actor}) for ${HEAD_SHA}"
               echo "run_id=$id" >> "$GITHUB_OUTPUT"
               exit 0
             fi
