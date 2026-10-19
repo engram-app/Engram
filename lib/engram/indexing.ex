@@ -239,9 +239,10 @@ defmodule Engram.Indexing do
   # a full pass would actually write.
   defp plan_index(note, user, chunks, content_key, opts) do
     forced = floor_tier(note, opts)
-    capped = if forced, do: chunks, else: cap_chunks(chunks, note_points_cap(user))
+    cap = note_points_cap(user)
+    capped = if forced, do: chunks, else: cap_chunks(chunks, cap, content_key)
 
-    case forced || oversized_group_tier(note, capped) ||
+    case forced || over_note_cap_tier(note, capped, cap) ||
            over_points_budget_tier(note, user, capped) do
       nil ->
         dense_opt = Keyword.get(opts, :dense, true)
@@ -261,16 +262,20 @@ defmodule Engram.Indexing do
     unless points_budget_ok?(user, note.id, length(chunks)), do: demoted_tier(note)
   end
 
-  # ponytail: 30,000 estimated tokens per merged point, under Voyage's 32,000
-  # input limit (the estimate is bytes / 4, as the reservation counts). Past
-  # it the note would need more points than its cap, so it floors instead.
-  # Only a note over ~15 MB reaches it at a 128 cap; raise the cap for that
-  # tier if real notes ever do.
-  @max_merged_tokens 30_000
+  # ponytail: 10,000 estimated tokens per merged point. The estimate is
+  # bytes / 4, as the reservation counts, and dense text runs ~3x that
+  # (1.39 bytes/token measured), so 3 x 10,000 stays under Voyage's 32,000
+  # input limit. A group closes before it would pass this, so a note only
+  # floors when it needs more than its cap of such groups: over ~5 MB at a
+  # 128 cap. Raise the cap for that tier if real notes ever do.
+  @max_merged_tokens 10_000
 
-  defp oversized_group_tier(note, chunks) do
-    if Enum.any?(chunks, &(UsageMeters.estimate_tokens(&1.embed_text) > @max_merged_tokens)),
-      do: demoted_tier(note)
+  # Still over the cap after merging (every group at the ceiling), or a
+  # single chunk over the ceiling: the note floors.
+  defp over_note_cap_tier(note, chunks, cap) do
+    if (is_integer(cap) and length(chunks) > cap) or
+         Enum.any?(chunks, &(UsageMeters.estimate_tokens(&1.embed_text) > @max_merged_tokens)),
+       do: demoted_tier(note)
   end
 
   # A note that never had dense vectors floors as "floor"; one that carries
@@ -287,70 +292,106 @@ defmodule Engram.Indexing do
   end
 
   @doc """
-  Merges ADJACENT chunks so a note holds at most `cap` points. Over the cap
-  the result is exactly `cap` contiguous groups, in order, balanced by
-  estimated tokens (`UsageMeters.estimate_tokens/1` of each member's text, or
-  its `:token_count` if it has one); no text is dropped. A merged chunk:
+  Merges ADJACENT chunks so a note holds at most `cap` points, with
+  content-defined group boundaries so an edit moves only the groups around
+  it. `key` is the user's content hash key (`Crypto.dek_content_hash_key/1`).
+
+  Over the cap: `g = ceil(n / cap)`, and a group closes after each chunk
+  whose keyed hash is `0 mod g` (an HMAC under `key` of the same input the
+  reuse fingerprint covers, under its own prefix), or before a chunk that
+  would take it past the merged-point ceiling. More than `cap` groups doubles
+  `g` and redoes it. If the ceiling alone forces more than `cap` groups the
+  result stays over the cap and the caller floors the note. Contiguous, in
+  order, no text dropped. Every chunk of a capped note is a merged chunk:
 
     * `text`: the members' `text` joined with "\n\n"
     * `context_text` / `embed_text`: its first member's prefix + that text,
-      exactly what the chunker gives a single chunk with that text, so its
-      fingerprint is over the merged text and an unchanged note reuses it
+      exactly what the chunker gives a single chunk with that text
     * `heading_path`: its first member's
     * `char_start` of its first member to the largest `char_end` (the
       trailing frontmatter chunk has `char_end` 0)
-    * `token_count`: the members' sum
+    * `token_count`: the members' `UsageMeters.estimate_tokens/1` sum
+    * `merged: true`: its row stays out of `avgdl` and its keyword vector
+      uses length `min(len, avgdl)`, as a floor point's does
 
-  A group of one is the member itself, plus `token_count`. Positions are renumbered `0..cap-1`.
-  At or under the cap (or with a nil cap) the list comes back unchanged.
+  Positions are renumbered from 0. At or under the cap (or with a nil cap)
+  the list comes back unchanged.
   """
-  @spec cap_chunks([map()], pos_integer() | nil) :: [map()]
-  def cap_chunks(chunks, cap) when is_integer(cap) and cap > 0 and length(chunks) > cap do
-    weights =
-      Enum.map(chunks, &max(1, Map.get(&1, :token_count) || UsageMeters.estimate_tokens(&1.text)))
+  @spec cap_chunks([map()], pos_integer() | nil, binary()) :: [map()]
+  def cap_chunks(chunks, cap, key) when is_integer(cap) and cap > 0 and length(chunks) > cap do
+    hashes =
+      key
+      |> Engram.Native.hmac_hex_many("merge-group\n", Enum.map(chunks, &fingerprint_input/1))
+      |> Enum.map(&(&1 |> binary_part(0, 12) |> String.to_integer(16)))
 
-    total = Enum.sum(weights)
-    n = length(chunks)
-
-    # Group of chunk i: the one its token midpoint falls in, held to at most
-    # one step past the previous chunk's group, and never so far behind that
-    # the chunks left cannot reach the last group.
-    {groups, _} =
-      chunks
-      |> Enum.zip(weights)
-      |> Enum.with_index()
-      |> Enum.map_reduce({0, 0}, fn {{chunk, w}, i}, {seen, prev} ->
-        ideal = div((seen * 2 + w) * cap, total * 2)
-        g = ideal |> max(prev) |> max(cap - n + i) |> min(prev + 1) |> min(i)
-        {{g, {chunk, w}}, {seen + w, g}}
-      end)
-
-    groups
-    |> Enum.chunk_by(&elem(&1, 0))
-    |> Enum.with_index(fn members, position ->
-      %{merge_group(Enum.map(members, &elem(&1, 1))) | position: position}
-    end)
+    chunks
+    |> Enum.zip(hashes)
+    |> content_groups(cap, div(length(chunks) + cap - 1, cap))
+    |> Enum.with_index(fn members, position -> %{merge_group(members) | position: position} end)
   end
 
-  def cap_chunks(chunks, _cap), do: chunks
+  def cap_chunks(chunks, _cap, _key), do: chunks
 
-  defp merge_group([{chunk, w}]), do: Map.put(chunk, :token_count, w)
+  # 48-bit hashes: past this `g` no hash but 0 closes a group, so stop.
+  @group_hash_space 0x1000000000000
 
-  defp merge_group([{first, _w} | _] = members) do
-    chunks = Enum.map(members, &elem(&1, 0))
-    text = Enum.map_join(chunks, "\n\n", & &1.text)
+  defp content_groups(pairs, cap, g) do
+    groups = close_groups(pairs, g)
+
+    if length(groups) > cap and g < @group_hash_space,
+      do: content_groups(pairs, cap, g * 2),
+      else: groups
+  end
+
+  # Bytes of the members' `embed_text`s bound the merged one's from above
+  # (each carries its own prefix plus "\n\n"), so a group that fits by this
+  # sum fits the ceiling.
+  defp close_groups(pairs, g) do
+    Enum.chunk_while(
+      pairs,
+      {[], 0},
+      fn {chunk, hash}, {acc, bytes} ->
+        size = byte_size(chunk.embed_text)
+
+        {emit, acc, bytes} =
+          if acc != [] and UsageMeters.estimate_tokens(bytes + size) > @max_merged_tokens,
+            do: {Enum.reverse(acc), [chunk], size},
+            else: {nil, [chunk | acc], bytes + size}
+
+        cond do
+          rem(hash, g) == 0 and emit -> {:cont, [emit, Enum.reverse(acc)], {[], 0}}
+          rem(hash, g) == 0 -> {:cont, [Enum.reverse(acc)], {[], 0}}
+          emit -> {:cont, [emit], {acc, bytes}}
+          true -> {:cont, {acc, bytes}}
+        end
+      end,
+      fn
+        {[], _} -> {:cont, []}
+        {acc, _} -> {:cont, [Enum.reverse(acc)], {[], 0}}
+      end
+    )
+    |> Enum.concat()
+  end
+
+  defp merge_group([first | _] = members) do
+    text = Enum.map_join(members, "\n\n", & &1.text)
 
     Map.merge(first, %{
       text: text,
       context_text: prefix(first.context_text, first.text) <> text,
       embed_text: prefix(first.embed_text, first.text) <> text,
-      char_end: chunks |> Enum.map(& &1.char_end) |> Enum.max(),
-      token_count: members |> Enum.map(&elem(&1, 1)) |> Enum.sum()
+      char_end: members |> Enum.map(& &1.char_end) |> Enum.max(),
+      token_count: members |> Enum.map(&UsageMeters.estimate_tokens(&1.text)) |> Enum.sum(),
+      merged: true
     })
   end
 
   # The chunker builds each input as `prefix <> "\n\n" <> text`.
   defp prefix(input, text), do: binary_part(input, 0, byte_size(input) - byte_size(text))
+
+  # A floor point and a merged one both keep their length out of `avgdl`
+  # (NULL `token_count`) and encode with `cap_doc_len`.
+  defp capped_length?(chunk), do: Map.get(chunk, :floor, false) or Map.get(chunk, :merged, false)
 
   @doc """
   Whether a full index of `planned_points` points for `note_id` fits the
@@ -1400,12 +1441,13 @@ defmodule Engram.Indexing do
 
   defp dense_chunk?(chunk, dense?), do: dense? and chunk.kind == "prose"
 
+  # A merged chunk's point holds a length-capped keyword vector and no
+  # `avgdl` length, so it never matches an unmerged one with the same text (a
+  # group of one) or the reverse: `merged/` in front.
   defp fingerprints(content_key, chunks, dense?) do
-    Engram.Native.hmac_hex_many(
-      content_key,
-      fingerprint_prefix(dense?),
-      Enum.map(chunks, &fingerprint_input/1)
-    )
+    prefix = fingerprint_prefix(dense?)
+    prefix = if Enum.any?(chunks, &Map.get(&1, :merged)), do: "merged/" <> prefix, else: prefix
+    Engram.Native.hmac_hex_many(content_key, prefix, Enum.map(chunks, &fingerprint_input/1))
   end
 
   # Both inputs: `context_text` (keyword vector, payload) and `embed_text`
@@ -1496,23 +1538,30 @@ defmodule Engram.Indexing do
          do: {:ok, count, 0}
   end
 
+  # A capped note is matched and encoded as its merged chunks, the way its
+  # points were built: length-capped, and no lengths written back.
   defp resparse(note, user, chunks) do
     with {:ok, content_key} <- Crypto.dek_content_hash_key(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+      chunks = cap_chunks(chunks, note_points_cap(user), content_key)
+      merged? = Enum.any?(chunks, &capped_length?/1)
+
       case match_stored_points(note, chunks, content_key) do
         {[], unmatched} ->
           {:ok, 0, unmatched}
 
         {matched, unmatched} ->
           avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id)
+          texts = Enum.map(matched, fn {chunk, _point_id} -> chunk.context_text end)
+          language = note_language(chunks)
 
           sparse =
-            KeywordIndex.module().encode_documents(
-              Enum.map(matched, fn {chunk, _point_id} -> chunk.context_text end),
-              filter_key,
-              avgdl,
-              note_language(chunks)
-            )
+            if merged?,
+              do:
+                KeywordIndex.module().encode_documents(texts, filter_key, avgdl, language,
+                  cap_doc_len: true
+                ),
+              else: KeywordIndex.module().encode_documents(texts, filter_key, avgdl, language)
 
           {points, lengths} =
             Enum.zip_with(matched, sparse, fn {_chunk, point_id}, {vector, doc_len} ->
@@ -1521,7 +1570,7 @@ defmodule Engram.Indexing do
             |> Enum.unzip()
 
           with :ok <- update_vectors_batched(points),
-               :ok <- persist_token_counts(note, lengths),
+               :ok <- if(merged?, do: :ok, else: persist_token_counts(note, lengths)),
                do: {:ok, length(points), unmatched}
       end
     end
@@ -1664,8 +1713,6 @@ defmodule Engram.Indexing do
     end
   end
 
-  defp floor_plan?(plan), do: match?([{:embed, %{floor: true}}], plan.entries)
-
   defp entry_chunk({:reuse, chunk, _point_id, _tokens}), do: chunk
   defp entry_chunk({:embed, chunk}), do: chunk
 
@@ -1723,7 +1770,7 @@ defmodule Engram.Indexing do
     texts = for({:embed, chunk} <- plan.entries, do: chunk.context_text)
 
     sparse =
-      if floor_plan?(plan),
+      if Enum.any?(plan.entries, &capped_length?(entry_chunk(&1))),
         do:
           KeywordIndex.module().encode_documents(texts, filter_key, avgdl, language,
             cap_doc_len: true
@@ -1799,8 +1846,9 @@ defmodule Engram.Indexing do
             v -> %{"dense" => v, "keyword" => sparse}
           end
 
-        # A floor row's length stays out of `avgdl` (see `floor_plan/2`).
-        token_count = if Map.get(chunk, :floor), do: nil, else: doc_len
+        # A floor or merged row's length stays out of `avgdl` (see
+        # `floor_plan/2`, `cap_chunks/3`).
+        token_count = if capped_length?(chunk), do: nil, else: doc_len
 
         built = %{
           row: chunk_row(note, chunk, point_id, token_count, now),
