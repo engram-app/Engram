@@ -57,6 +57,15 @@ defmodule Engram.IndexingNoteCapTest do
     rows
   end
 
+  # Merged rows (several chunks, `member_hmacs` set) keep NULL lengths;
+  # groups of one are ordinary chunks with theirs.
+  defp assert_merged_lengths_null(rows) do
+    {merged, singles} = Enum.split_with(rows, &(&1.member_hmacs != nil))
+    assert merged != []
+    assert Enum.all?(merged, &is_nil(&1.token_count))
+    assert Enum.all?(singles, &(&1.token_count != nil))
+  end
+
   defp reload(note) do
     {:ok, row} = Repo.with_tenant(note.user_id, fn -> Repo.get!(Note, note.id) end)
     row
@@ -120,7 +129,9 @@ defmodule Engram.IndexingNoteCapTest do
 
       assert length(capped) <= 128
       assert Enum.map(capped, & &1.position) == Enum.to_list(0..(length(capped) - 1))
-      assert Enum.all?(capped, & &1.merged)
+      # A group of one is its chunk unchanged; every other group is merged.
+      assert Enum.all?(capped, &(Map.get(&1, :merged, false) == Map.has_key?(&1, :members)))
+      assert Enum.all?(capped, &(not Map.has_key?(&1, :members) or length(&1.members) > 1))
       assert hd(capped).char_start == hd(chunks).char_start
       assert List.last(capped).char_end == List.last(chunks).char_end
 
@@ -128,7 +139,12 @@ defmodule Engram.IndexingNoteCapTest do
       # so the whole note reads back identically, in order.
       assert Enum.map_join(capped, "\n\n", & &1.text) == Enum.map_join(chunks, "\n\n", & &1.text)
 
-      assert Enum.sum(Enum.map(capped, & &1.token_count)) ==
+      assert Enum.sum(
+               Enum.map(
+                 capped,
+                 &(Map.get(&1, :token_count) || UsageMeters.estimate_tokens(&1.text))
+               )
+             ) ==
                Enum.sum(Enum.map(chunks, &UsageMeters.estimate_tokens(&1.text)))
 
       # Contiguous and ordered: each group starts after the previous one.
@@ -303,7 +319,7 @@ defmodule Engram.IndexingNoteCapTest do
       assert {:ok, count, _, true} = Indexing.index_note_with_usage(note, vault, user)
 
       assert {:ok, ^count, 0} = Indexing.resparse_note(note, user)
-      assert Enum.all?(rows_for(note), &is_nil(&1.token_count))
+      assert_merged_lengths_null(rows_for(note))
     end
 
     # ~50 single-chunk edits, one after another: only crossing the cap (which
@@ -394,7 +410,7 @@ defmodule Engram.IndexingNoteCapTest do
       Engram.Billing.OverrideCache.evict(user.id)
 
       assert {:ok, ^count, 0} = Indexing.resparse_note(note, user)
-      assert Enum.all?(rows_for(note), &is_nil(&1.token_count))
+      assert_merged_lengths_null(rows_for(note))
     end
 
     test "a capped note leaves the vault's avgdl alone", %{user: user, vault: vault} do
@@ -419,11 +435,28 @@ defmodule Engram.IndexingNoteCapTest do
       before = avgdl.()
       assert before
 
+      # The plain note's lengths plus `extra` rows'.
+      avgdl_with = fn extra ->
+        {:ok, plain_rows} =
+          Repo.with_tenant(user.id, fn ->
+            Repo.all(from(c in Chunk, where: c.note_id == ^plain.id, select: c.token_count))
+          end)
+
+        lengths = plain_rows ++ Enum.map(extra, & &1.token_count)
+        Decimal.div(Enum.sum(lengths), length(lengths))
+      end
+
+      assert Decimal.equal?(before, avgdl_with.([]))
+
       note = insert_note(user, vault, sections(500))
       assert {:ok, _, _, true} = Indexing.index_note_with_usage(note, vault, user)
 
-      assert Enum.all?(rows_for(note), &is_nil(&1.token_count))
-      assert avgdl.() == before
+      # Merged rows stay out; a group of one is an ordinary chunk and counts.
+      {merged, singles} = Enum.split_with(rows_for(note), &(&1.member_hmacs != nil))
+      assert merged != []
+      assert Enum.all?(merged, &is_nil(&1.token_count))
+      assert Enum.all?(singles, &(&1.token_count != nil))
+      assert Decimal.equal?(avgdl.(), avgdl_with.(singles))
     end
 
     # One section, ~2 MB: hash-only groups would pass the 7,500-token
@@ -482,6 +515,86 @@ defmodule Engram.IndexingNoteCapTest do
     end
   end
 
+  # Hysteresis (adversarial V2): merge only past the cap, un-merge only at
+  # or below 0.75 x cap, so an edit that moves the chunk count back and
+  # forth across the cap never regroups the whole note more than once.
+  describe "oscillating across the cap" do
+    @tag timeout: :timer.minutes(5)
+    test "20 alternating edits across 128/129 chunks: at most 1 full re-embed", %{
+      user: user,
+      vault: vault
+    } do
+      note = insert_note(user, vault, sections(128))
+      stub_embedder()
+      assert {:ok, 128, _, true} = Indexing.index_note_with_usage(note, vault, user)
+      _ = embedded_texts()
+
+      calls =
+        for i <- 1..20 do
+          content = if rem(i, 2) == 1, do: sections(129), else: sections(128)
+
+          {:ok, _count, _, true} =
+            Indexing.index_note_with_usage(%{note | content: content}, vault, user)
+
+          length(embedded_texts())
+        end
+
+      # A local change re-embeds the last group or two; a regroup most of them.
+      assert Enum.count(calls, &(&1 > 3)) <= 1, inspect(calls)
+    end
+
+    test "a merged note stays merged at the cap, un-merges at 0.75 x cap", %{
+      user: user,
+      vault: vault
+    } do
+      note = insert_note(user, vault, sections(129))
+      stub_embedder()
+      assert {:ok, merged, _, true} = Indexing.index_note_with_usage(note, vault, user)
+      assert merged < 129
+
+      assert {:ok, still, _, true} =
+               Indexing.index_note_with_usage(%{note | content: sections(97)}, vault, user)
+
+      assert still < 97
+
+      assert {:ok, 96, _, true} =
+               Indexing.index_note_with_usage(%{note | content: sections(96)}, vault, user)
+    end
+
+    test "a never-merged note at the cap stays unmerged", %{user: user, vault: vault} do
+      note = insert_note(user, vault, sections(100))
+      stub_embedder()
+      assert {:ok, 100, _, true} = Indexing.index_note_with_usage(note, vault, user)
+
+      assert {:ok, 128, _, true} =
+               Indexing.index_note_with_usage(%{note | content: sections(128)}, vault, user)
+    end
+
+    # A group of one is an ordinary chunk: same fingerprint, same point.
+    test "crossing the cap reuses every single-member group's point", %{
+      user: user,
+      vault: vault
+    } do
+      note = insert_note(user, vault, sections(128))
+      stub_embedder()
+      assert {:ok, 128, _, true} = Indexing.index_note_with_usage(note, vault, user)
+      old_ids = MapSet.new(rows_for(note), & &1.qdrant_point_id)
+      _ = embedded_texts()
+
+      assert {:ok, _, _, true} =
+               Indexing.index_note_with_usage(%{note | content: sections(129)}, vault, user)
+
+      rows = rows_for(note)
+      singles = Enum.filter(rows, &is_nil(&1.member_hmacs))
+      reused? = &MapSet.member?(old_ids, &1.qdrant_point_id)
+
+      # Only the merged groups and the new 129th chunk embed.
+      assert length(singles) > 1
+      assert Enum.count(singles, reused?) >= length(singles) - 1
+      assert length(embedded_texts()) == Enum.count(rows, &(not reused?.(&1)))
+    end
+  end
+
   describe "reconcile self-heal" do
     # Indexed uncapped (billing off), then the cap applies.
     defp index_uncapped(note) do
@@ -512,7 +625,8 @@ defmodule Engram.IndexingNoteCapTest do
       assert :ok = perform_job(RebuildStaleNote, job.args)
       rows = rows_for(note)
       assert length(rows) in 1..128
-      assert length(embedded_texts()) == length(rows)
+      # Groups of one reuse the unmerged points; only merged groups embed.
+      assert length(embedded_texts()) == Enum.count(rows, &(&1.member_hmacs != nil))
       assert UsageMeters.lifetime_embed_tokens(user.id) == before
 
       indexed = reload(note)

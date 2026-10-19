@@ -494,6 +494,24 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
       assert job.args["note_id"] == merged
     end
 
+    # Hysteresis: a merged note un-merges only at or below 0.75 x its cap, so
+    # one of 100 chunks under Free's 128 stays merged and is never queued
+    # (a recap would keep it merged, every day).
+    test "a merged note above 0.75 x its cap is not queued to un-merge", %{
+      user: user,
+      vault: vault
+    } do
+      [merged] = full_notes(user, vault, 1, 0)
+      seed_rows!(user, vault, [merged], 60, token_count: nil, context_hmac: "h", char_end: 100)
+      stamp!(user, [merged], chunk_count: 100)
+
+      assert {:ok, %{promoted: 0}} = ReconcileEmbeddings.budget_sweep(20)
+      assert [] = budget_jobs(key: "recap", value: true)
+
+      stamp!(user, [merged], chunk_count: 96)
+      assert {:ok, %{promoted: 1}} = ReconcileEmbeddings.budget_sweep(20)
+    end
+
     test "a chunker version bump keeps floor notes on floor, unmetered", %{
       user: user,
       vault: vault
