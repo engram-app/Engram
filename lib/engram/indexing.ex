@@ -262,13 +262,15 @@ defmodule Engram.Indexing do
     unless points_budget_ok?(user, note.id, length(chunks)), do: demoted_tier(note)
   end
 
-  # ponytail: 10,000 estimated tokens per merged point. The estimate is
-  # bytes / 4, as the reservation counts, and dense text runs ~3x that
-  # (1.39 bytes/token measured), so 3 x 10,000 stays under Voyage's 32,000
-  # input limit. A group closes before it would pass this, so a note only
-  # floors when it needs more than its cap of such groups: over ~5 MB at a
-  # 128 cap. Raise the cap for that tier if real notes ever do.
-  @max_merged_tokens 10_000
+  # ponytail: 7,500 estimated tokens (bytes / 4, as the reservation counts)
+  # per merged point, so ~30 KB. At the densest content measured, 1.39
+  # bytes/token, that is ~21,600 real tokens: under Voyage's 32,000 input
+  # limit with room for the prefix. Not a density guess: even at one byte
+  # per token 30 KB stays under 32,000. A group closes before it would pass
+  # this, so a note only floors when it needs more than its cap of such
+  # groups: over ~3.8 MB at a 128 cap. Raise the cap for that tier if real
+  # notes ever do.
+  @max_merged_tokens 7_500
 
   # Still over the cap after merging (every group at the ceiling), or a
   # single chunk over the ceiling: the note floors.
@@ -296,14 +298,16 @@ defmodule Engram.Indexing do
   content-defined group boundaries so an edit moves only the groups around
   it. `key` is the user's content hash key (`Crypto.dek_content_hash_key/1`).
 
-  Over the cap: `g = ceil(1.25 * n / cap)`, aiming at ~0.8 x cap groups. A
-  group closes after each chunk whose keyed hash is `0 mod g` (an HMAC under
-  `key` of the same input the reuse fingerprint covers, under its own
-  prefix), or before a chunk that would take it past the merged-point
-  ceiling. More than `cap` groups doubles `g` and redoes it; that regroups
-  the whole note (a full re-embed), which the headroom keeps rare. If the
-  ceiling alone forces more than `cap` groups the result stays over the cap
-  and the caller floors the note. Contiguous, in order, no text dropped. Every chunk of a capped note is a merged chunk:
+  Over the cap: `g` is the smallest power of two >= `1.25 * n / cap`,
+  aiming at 0.4 to 0.8 x cap groups. A group closes after each chunk whose
+  keyed hash is `0 mod g` (an HMAC under `key` of the same input the reuse
+  fingerprint covers, under its own prefix), or before a chunk that would
+  take it past the merged-point ceiling. Powers of two nest (`0 mod 2g`
+  implies `0 mod g`), so growth regroups the whole note only when `g`
+  steps, i.e. when `n` doubles. More than `cap` groups doubles `g` and
+  redoes it, up to `g >= n`; still over the cap there (the ceiling alone
+  forces more groups) and the caller floors the note. Contiguous, in order,
+  no text dropped. Every chunk of a capped note is a merged chunk:
 
     * `text`: the members' `text` joined with "\n\n"
     * `context_text` / `embed_text`: its first member's prefix + that text,
@@ -320,28 +324,58 @@ defmodule Engram.Indexing do
   """
   @spec cap_chunks([map()], pos_integer() | nil, binary()) :: [map()]
   def cap_chunks(chunks, cap, key) when is_integer(cap) and cap > 0 and length(chunks) > cap do
+    pairs = hashed(chunks, key)
+    n = length(chunks)
+
+    pairs
+    |> content_groups(cap, pow2_at_least(div(5 * n + 4 * cap - 1, 4 * cap)), n)
+    |> merge_groups()
+  end
+
+  def cap_chunks(chunks, _cap, _key), do: chunks
+
+  defp hashed(chunks, key) do
     hashes =
       key
       |> Engram.Native.hmac_hex_many("merge-group\n", Enum.map(chunks, &fingerprint_input/1))
       |> Enum.map(&(&1 |> binary_part(0, 12) |> String.to_integer(16)))
 
-    chunks
-    |> Enum.zip(hashes)
-    |> content_groups(cap, div(5 * length(chunks) + 4 * cap - 1, 4 * cap))
-    |> Enum.with_index(fn members, position -> %{merge_group(members) | position: position} end)
+    Enum.zip(chunks, hashes)
   end
 
-  def cap_chunks(chunks, _cap, _key), do: chunks
+  defp merge_groups(groups),
+    do:
+      Enum.with_index(groups, fn members, position ->
+        %{merge_group(members) | position: position}
+      end)
 
-  # 48-bit hashes: past this `g` no hash but 0 closes a group, so stop.
-  @group_hash_space 0x1000000000000
+  defp pow2_at_least(x, g \\ 1), do: if(g >= x, do: g, else: pow2_at_least(x, g * 2))
 
-  defp content_groups(pairs, cap, g) do
+  # Past `g >= n` doubling cannot lower the count: what is left is forced by
+  # the ceiling.
+  defp content_groups(pairs, cap, g, n) do
     groups = close_groups(pairs, g)
 
-    if length(groups) > cap and g < @group_hash_space,
-      do: content_groups(pairs, cap, g * 2),
+    if length(groups) > cap and g < n,
+      do: content_groups(pairs, cap, g * 2, n),
       else: groups
+  end
+
+  # The merged chunks a note's stored points were built from, whatever cap
+  # built them: `m` points from `n` chunks can only come from a power-of-two
+  # `g` whose groups number `m`. nil if none does (not a merged note).
+  defp merged_like(chunks, key, m) do
+    pairs = hashed(chunks, key)
+    n = length(chunks)
+
+    Stream.iterate(1, &(&1 * 2))
+    |> Stream.take_while(&(&1 <= 2 * n))
+    |> Stream.map(&close_groups(pairs, &1))
+    |> Enum.find(&(length(&1) == m))
+    |> case do
+      nil -> nil
+      groups -> merge_groups(groups)
+    end
   end
 
   # Bytes of the members' `embed_text`s bound the merged one's from above
@@ -1539,15 +1573,23 @@ defmodule Engram.Indexing do
          do: {:ok, count, 0}
   end
 
-  # A capped note is matched and encoded as its merged chunks, the way its
-  # points were built: length-capped, and no lengths written back.
+  # A merged note is matched and encoded as the merged chunks its points
+  # were built from, length-capped, with no lengths written back. Which
+  # merge comes from the stored row count, not today's cap: the cap may have
+  # moved since (an upgrade or an override), and until the next full pass the
+  # points are still the old merge.
   defp resparse(note, user, chunks) do
     with {:ok, content_key} <- Crypto.dek_content_hash_key(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user) do
-      chunks = cap_chunks(chunks, note_points_cap(user), content_key)
+      rows = stored_rows(note)
+
+      chunks =
+        (length(rows) < length(chunks) and merged_like(chunks, content_key, length(rows))) ||
+          chunks
+
       merged? = Enum.any?(chunks, &capped_length?/1)
 
-      case match_stored_points(note, chunks, content_key) do
+      case match_stored_points(rows, chunks, content_key) do
         {[], unmatched} ->
           {:ok, 0, unmatched}
 
@@ -1617,7 +1659,7 @@ defmodule Engram.Indexing do
     :ok
   end
 
-  defp match_stored_points(note, chunks, content_key) do
+  defp stored_rows(note) do
     {:ok, rows} =
       Repo.with_tenant(note.user_id, fn ->
         Chunk
@@ -1629,6 +1671,10 @@ defmodule Engram.Indexing do
         |> Repo.all()
       end)
 
+    rows
+  end
+
+  defp match_stored_points(rows, chunks, content_key) do
     by_hmac =
       for({hmac, id, _} <- rows, hmac != nil, do: {hmac, id})
       |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))

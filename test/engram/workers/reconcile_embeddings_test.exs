@@ -523,15 +523,18 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
         )
       end
 
-      txns = count_tenant_txns(fn -> assert :ok = perform_job(ReconcileEmbeddings, %{}) end)
+      # Off the re-verify hour, so the daily per-note cap sweep stays out.
+      txns =
+        count_tenant_txns(fn ->
+          assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[03:57:00]))
+        end)
 
       assert length(all_enqueued(worker: EmbedNote)) == 1_205
 
-      # One tenant transaction PER PAGE (embed sweep: 2 pages, per-note cap
-      # sweep: 1, keyword sweep: 1), not one per user: a transaction holding a
-      # whole backlog runs past the 15 s checkout deadline, rolls back, and
-      # stalls every later user.
-      assert txns == 4
+      # One tenant transaction PER PAGE (embed sweep: 2 pages, keyword sweep:
+      # 1), not one per user: a transaction holding a whole backlog runs past
+      # the 15 s checkout deadline, rolls back, and stalls every later user.
+      assert txns == 3
     end
 
     # The keyword sweep pages to the end too, never "the first page".
@@ -541,17 +544,19 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
 
       txns =
         count_tenant_txns(fn ->
-          assert :ok = perform_job(ReconcileEmbeddings, %{"page" => 2})
+          assert :ok =
+                   perform_job(ReconcileEmbeddings, %{"page" => 2},
+                     scheduled_at: tick(~T[03:57:00])
+                   )
         end)
 
       assert length(all_enqueued(worker: RefreshKeywordVectors)) == 5
-      # Embed sweep: one empty page. Per-note cap sweep: one. Keyword sweep:
-      # 2, 2, then 1.
-      assert txns == 5
+      # Embed sweep: one empty page. Keyword sweep: 2, 2, then 1.
+      assert txns == 4
     end
 
-    # One notes query per SWEEP per tenant (the embed sweep, the per-note cap
-    # sweep and the keyword sweep), never one per vault.
+    # One notes query per SWEEP per tenant (the embed sweep and the keyword
+    # sweep), never one per vault.
     test "runs one notes query per sweep regardless of vault count" do
       user = insert(:user)
 
@@ -579,13 +584,13 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       )
 
       try do
-        assert :ok = perform_job(ReconcileEmbeddings, %{})
+        assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick(~T[03:57:00]))
       after
         :telemetry.detach(handler_id)
       end
 
       queries = collect_queries()
-      assert Enum.count(queries, &(&1 == "notes")) == 3
+      assert Enum.count(queries, &(&1 == "notes")) == 2
       refute Enum.any?(queries, &(&1 == "vaults"))
     end
 

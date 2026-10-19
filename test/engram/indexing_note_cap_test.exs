@@ -93,6 +93,9 @@ defmodule Engram.IndexingNoteCapTest do
     end)
   end
 
+  # The per-note cap sweep runs in the daily re-verify hour only.
+  defp reverify_tick, do: DateTime.new!(Date.utc_today(), ~T[04:02:00])
+
   defp lapse_cooldown(note) do
     {:ok, _} =
       Repo.with_tenant(note.user_id, fn ->
@@ -135,16 +138,17 @@ defmodule Engram.IndexingNoteCapTest do
              |> Enum.all?(fn [a, b] -> a < b end)
     end
 
-    # Headroom: the first `g` aims at ~0.8 x cap, so the doubling fallback
-    # (which regroups the whole note) is rare. Fixed keys: deterministic.
+    # Headroom: the first `g` (a power of two >= 1.25 n / cap) aims at 0.4 to
+    # 0.8 x cap groups, so the doubling fallback (which regroups the whole
+    # note) is rare. Fixed keys: deterministic. 500 chunks: g = 8, ~62 groups.
     test "the first g fits without doubling", %{chunks: chunks} do
       counts =
         for i <- 1..10 do
           chunks |> Indexing.cap_chunks(128, :crypto.hash(:sha256, "key #{i}")) |> length()
         end
 
-      # Doubled from g = 5 would land near 50.
-      assert Enum.all?(counts, &(&1 in 80..128)), inspect(counts, charlists: :as_lists)
+      # Doubled to g = 16 would land near 31.
+      assert Enum.all?(counts, &(&1 in 45..128)), inspect(counts, charlists: :as_lists)
     end
 
     test "the same chunks and key give the same groups", %{chunks: chunks, key: key} do
@@ -153,13 +157,13 @@ defmodule Engram.IndexingNoteCapTest do
 
     # ~200 KB of ~1 KB sections, cap 3: no 3 groups fit under the ceiling, so
     # it closes groups early and the result stays over the cap.
-    test "a group closes before passing 10,000 estimated tokens", %{key: key} do
+    test "a group closes before passing 7,500 estimated tokens", %{key: key} do
       filler = String.duplicate("lorem ipsum dolor ", 55)
       content = "# Big\n\n" <> Enum.map_join(1..200, "\n\n", &"## S#{&1}\n\n#{filler}#{&1}")
       capped = Indexing.cap_chunks(Markdown.parse(content, "Big.md"), 3, key)
 
       assert length(capped) > 3
-      assert Enum.all?(capped, &(UsageMeters.estimate_tokens(&1.embed_text) <= 10_000))
+      assert Enum.all?(capped, &(UsageMeters.estimate_tokens(&1.embed_text) <= 7_500))
     end
 
     test "a merged chunk's inputs are what a single chunk with its text gets", %{
@@ -332,6 +336,67 @@ defmodule Engram.IndexingNoteCapTest do
       assert Enum.count(results, fn {_count, calls} -> calls > 3 end) <= 1
     end
 
+    # Power-of-two `g`: boundary sets nest, so growth regroups the note only
+    # when `g` steps (n doubling past 0.8 x cap x g), not every ~100 chunks.
+    # Driven through `cap_chunks/3` (500 real index passes outlive the
+    # sandbox): a pass embeds exactly the merged chunks whose inputs no
+    # stored point has (reuse matches by fingerprint over those inputs, by
+    # multiplicity), so that is the embedder-call count per step.
+    test "growing 500 -> 1,000 chunks one at a time regroups at most once" do
+      key = :crypto.hash(:sha256, "growth")
+
+      inputs = fn n ->
+        sections(n)
+        |> Markdown.parse("Big.md")
+        |> Indexing.cap_chunks(128, key)
+        |> Enum.map(&{&1.context_text, &1.embed_text})
+      end
+
+      {steps, _last} =
+        Enum.map_reduce(501..1_000, inputs.(500), fn n, previous ->
+          current = inputs.(n)
+          {{length(current), length(current -- previous)}, current}
+        end)
+
+      assert Enum.all?(steps, fn {count, _calls} -> count <= 128 end)
+      # An append changes the last group or adds one; a regroup re-embeds most.
+      assert Enum.count(steps, fn {_count, calls} -> calls > 3 end) <= 1
+    end
+
+    test "appending one chunk to a capped note embeds at most 2 groups", %{
+      user: user,
+      vault: vault
+    } do
+      note = insert_note(user, vault, sections(600))
+      stub_embedder()
+      assert {:ok, _, _, true} = Indexing.index_note_with_usage(note, vault, user)
+      _ = embedded_texts()
+
+      assert {:ok, count, _, true} =
+               Indexing.index_note_with_usage(%{note | content: sections(601)}, vault, user)
+
+      assert count <= 128
+      assert length(embedded_texts()) in 1..2
+    end
+
+    # Merged under Free, then the cap is raised (an override): a keyword
+    # version bump still refreshes every merged point.
+    test "resparse refreshes a merged note's points after its cap is raised", %{
+      user: user,
+      vault: vault
+    } do
+      note = insert_note(user, vault, sections(500))
+      stub_embedder()
+      assert {:ok, count, _, true} = Indexing.index_note_with_usage(note, vault, user)
+      assert count < 500
+
+      insert(:user_limit_override, user: user, key: "note_points_cap", value: %{"v" => 10_000})
+      Engram.Billing.OverrideCache.evict(user.id)
+
+      assert {:ok, ^count, 0} = Indexing.resparse_note(note, user)
+      assert Enum.all?(rows_for(note), &is_nil(&1.token_count))
+    end
+
     test "a capped note leaves the vault's avgdl alone", %{user: user, vault: vault} do
       stub_embedder()
       plain = insert_note(user, vault, "# Plain\n\nA short ordinary note.", "Plain.md")
@@ -361,7 +426,7 @@ defmodule Engram.IndexingNoteCapTest do
       assert avgdl.() == before
     end
 
-    # One section, ~2 MB: hash-only groups would pass the 10,000-token
+    # One section, ~2 MB: hash-only groups would pass the 7,500-token
     # ceiling and floor the note; closing groups at the ceiling merges it.
     @tag timeout: :timer.minutes(5)
     test "a 2 MB single-section note merges under the ceiling, no floor", %{
@@ -376,10 +441,10 @@ defmodule Engram.IndexingNoteCapTest do
       assert {:ok, count, _, true} = Indexing.index_note_with_usage(note, vault, user)
       assert count <= 128
       assert reload(note).index_tier == nil
-      assert Enum.all?(embedded_texts(), &(UsageMeters.estimate_tokens(&1) <= 10_000))
+      assert Enum.all?(embedded_texts(), &(UsageMeters.estimate_tokens(&1) <= 7_500))
     end
 
-    # Over 128 x 40 KB: no 128 groups fit under the ceiling. No embedder
+    # Over 128 x 30 KB: no 128 groups fit under the ceiling. No embedder
     # stub: any Voyage call fails the test.
     @tag timeout: :timer.minutes(5)
     test "a note needing more than 128 ceiling-sized groups floors", %{
@@ -388,16 +453,16 @@ defmodule Engram.IndexingNoteCapTest do
     } do
       body = Enum.map_join(1..30_000, "\n\n", &"Paragraph #{&1} #{String.duplicate("word ", 38)}")
       note = insert_note(user, vault, "# Huger\n\n" <> body, "Huger.md")
-      assert byte_size(note.content) > 128 * 40_000
+      assert byte_size(note.content) > 128 * 30_000
 
       assert {:ok, 1, 0, false} = Indexing.index_note_with_usage(note, vault, user)
       assert reload(note).index_tier == "floor"
     end
 
-    # Cap 1, ~150 KB of text: one group would estimate far over 10,000
+    # Cap 1, ~150 KB of text: one group would estimate far over 7,500
     # tokens, so the ceiling needs more groups than the cap allows. No
     # embedder stub: any Voyage call fails the test.
-    test "a note needing more than its cap of 10,000-token groups floors", %{
+    test "a note needing more than its cap of 7,500-token groups floors", %{
       user: user,
       vault: vault
     } do
@@ -435,7 +500,7 @@ defmodule Engram.IndexingNoteCapTest do
       note = insert_note(user, vault, sections(500))
       index_uncapped(note)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
       refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
 
       assert [job] =
@@ -455,7 +520,7 @@ defmodule Engram.IndexingNoteCapTest do
 
       # Healed: the next tick leaves it alone.
       lapse_cooldown(note)
-      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
 
       assert [_only_the_first] =
                all_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
@@ -466,7 +531,7 @@ defmodule Engram.IndexingNoteCapTest do
       note = insert_note(user, vault, sections(500))
       index_uncapped(note)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
       refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
       refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
     end
@@ -477,7 +542,7 @@ defmodule Engram.IndexingNoteCapTest do
       note = insert_note(user, vault, sections(500))
       index_uncapped(note)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
       refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
     end
 
@@ -487,8 +552,21 @@ defmodule Engram.IndexingNoteCapTest do
       note = insert_note(user, vault, sections(500))
       index_uncapped(note)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
       assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id, "recap" => true})
+    end
+
+    # Outside the daily re-verify hour the probe does not run at all.
+    test "a 5-minute tick outside the re-verify hour selects nothing", %{
+      user: user,
+      vault: vault
+    } do
+      note = insert_note(user, vault, sections(500))
+      index_uncapped(note)
+
+      tick = DateTime.new!(Date.utc_today(), ~T[03:57:00])
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: tick)
+      refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
     end
 
     test "billing disabled: never selected", %{user: user, vault: vault} do
@@ -496,7 +574,7 @@ defmodule Engram.IndexingNoteCapTest do
       index_uncapped(note)
       Application.put_env(:engram, :limits_enforced, false)
 
-      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
       refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
     end
   end
