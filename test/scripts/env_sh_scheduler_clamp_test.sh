@@ -59,9 +59,9 @@ got=$(run_clamp v1 "true")
 # --- 3: THE REGRESSION. No readable quota must WARN, not bail silently ---
 got=$(run_clamp nolimit "true")
 [ -z "$got" ] || fail "3: expected no flags without a quota, got '$got'"
-stderr_of | grep -q "WARNING" \
+grep -q "WARNING" <<<"$(stderr_of)" \
   || fail "3: silent bail — the exact defect this test exists for. stderr: $(stderr_of)"
-stderr_of | grep -q "BEAM_SCHEDULERS" \
+grep -q "BEAM_SCHEDULERS" <<<"$(stderr_of)" \
   || fail "3: warning must name the remedy. stderr: $(stderr_of)"
 
 # --- 4: explicit BEAM_SCHEDULERS works where detection cannot (Fargate) ---
@@ -77,7 +77,7 @@ for junk in abc 0 -2 "1 2"; do
   got=$(run_clamp v2 "BEAM_SCHEDULERS='$junk'; export BEAM_SCHEDULERS")
   [ "$got" = "+S 1:1 +SDcpu 1:1" ] \
     || fail "6: BEAM_SCHEDULERS='$junk' should fall back to cgroup, got '$got'"
-  stderr_of | grep -q "ignoring BEAM_SCHEDULERS" \
+  grep -q "ignoring BEAM_SCHEDULERS" <<<"$(stderr_of)" \
     || fail "6: rejecting '$junk' must say so. stderr: $(stderr_of)"
 done
 
@@ -111,13 +111,13 @@ got=$(run_clamp nolimit "BEAM_BUSY_WAIT=none; export BEAM_BUSY_WAIT")
 # --- 12: an unrecognised value is rejected loudly, changing nothing ---
 got=$(run_clamp v2 "BEAM_BUSY_WAIT=medium; export BEAM_BUSY_WAIT")
 [ "$got" = "+S 1:1 +SDcpu 1:1" ] || fail "12: bad BEAM_BUSY_WAIT altered flags, got '$got'"
-stderr_of | grep -q "ignoring BEAM_BUSY_WAIT" \
+grep -q "ignoring BEAM_BUSY_WAIT" <<<"$(stderr_of)" \
   || fail "12: rejecting a bad value must say so. stderr: $(stderr_of)"
 
 # --- 13: 'default' is explicitly accepted and is a no-op ---
 got=$(run_clamp v2 "BEAM_BUSY_WAIT=default; export BEAM_BUSY_WAIT")
 [ "$got" = "+S 1:1 +SDcpu 1:1" ] || fail "13: 'default' should add nothing, got '$got'"
-stderr_of | grep -q "ignoring BEAM_BUSY_WAIT" \
+grep -q "ignoring BEAM_BUSY_WAIT" <<<"$(stderr_of)" \
   && fail "13: 'default' is valid and must not warn. stderr: $(stderr_of)"
 
 echo "PASS: env.sh scheduler clamp + busy-wait (13 cases)"

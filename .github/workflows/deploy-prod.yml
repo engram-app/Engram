@@ -91,7 +91,7 @@ jobs:
           if [ "$obj_type" = "tag" ] && [ -n "$obj_sha" ]; then
             msg=$(gh api "repos/${GH_REPO}/git/tags/${obj_sha}" -q '.message' 2>/dev/null || echo "")
           fi
-          if printf '%s' "$msg" | grep -qiF '[skip-release-e2e]'; then
+          if grep -qiF '[skip-release-e2e]' <<<"$msg"; then
             echo "::warning::[skip-release-e2e] found in tag ${TAG} annotation — BYPASSING the full-Obsidian e2e gate. Deploy proceeds WITHOUT real-app proof."
             echo "bypass=true" >> "$GITHUB_OUTPUT"
           else

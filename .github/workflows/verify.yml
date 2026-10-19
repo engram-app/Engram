@@ -403,7 +403,7 @@ jobs:
           # the workflow_dispatch force_full input, bypasses the fingerprint so a
           # CI-config change can be validated against the full suite even when the
           # backend tree is unchanged (which would otherwise skip every test job).
-          if [ "${{ github.event.inputs.force_full }}" = "true" ] || git log -1 --pretty=%B | grep -qiF '[ci-full]'; then
+          if [ "${{ github.event.inputs.force_full }}" = "true" ] || grep -qiF '[ci-full]' <<<"$(git log -1 --pretty=%B)"; then
             echo "::notice::force-full requested ([ci-full] tag or workflow_dispatch): bypassing backend fingerprint"
             echo "cache-hit=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -429,7 +429,7 @@ jobs:
         run: |
           # Force-full override (see backend-lookup): [ci-full] tag or the
           # force_full dispatch input bypasses the e2e fingerprint too.
-          if [ "${{ github.event.inputs.force_full }}" = "true" ] || git log -1 --pretty=%B | grep -qiF '[ci-full]'; then
+          if [ "${{ github.event.inputs.force_full }}" = "true" ] || grep -qiF '[ci-full]' <<<"$(git log -1 --pretty=%B)"; then
             echo "::notice::force-full requested: bypassing e2e fingerprint"
             echo "cache-hit=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -479,7 +479,7 @@ jobs:
           # everything with no skips. The schedule clause is belt-and-suspenders
           # — GitHub always fires `schedule` against the default branch — but it
           # documents intent and survives a future default-branch change.
-          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.force_full }}" = "true" ] || git log -1 --pretty=%B | grep -qiF '[ci-full]'; then
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.force_full }}" = "true" ] || grep -qiF '[ci-full]' <<<"$(git log -1 --pretty=%B)"; then
             echo "is-full=true" >> "$GITHUB_OUTPUT"
             export IS_FULL_RUN=true
           else
@@ -1041,7 +1041,7 @@ jobs:
         # extra-files updater.
         run: |
           BRANCH_VERSION=$(grep 'version:' mix.exs | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          if ! echo "$BRANCH_VERSION" | grep -qP '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          if ! grep -qP '^[0-9]+\.[0-9]+\.[0-9]+$' <<<"$BRANCH_VERSION"; then
             echo "::error::mix.exs version ($BRANCH_VERSION) is not valid semver (X.Y.Z)."
             exit 1
           fi
@@ -2684,7 +2684,7 @@ jobs:
           LOCK="$HOME/.cache/.engram-wasi-sdk.lock"
           # A fresh cargo fingerprint skips the compile, so check the target
           # is really installed for the pinned toolchain.
-          rustup target list --installed | grep -qx wasm32-unknown-unknown
+          grep -qx wasm32-unknown-unknown <<<"$(rustup target list --installed)"
           # Exclusive lock: install + prune. Shared lock: the build, so a job
           # pinned to another version cannot prune this SDK mid-build. flock
           # cannot downgrade, so there is a gap between the two; if the SDK
@@ -2984,7 +2984,7 @@ jobs:
               IO.puts("STORAGE_DATABASE_ROUNDTRIP_OK")
             ')
           echo "$OUT"
-          echo "$OUT" | grep -q STORAGE_DATABASE_ROUNDTRIP_OK
+          grep -q STORAGE_DATABASE_ROUNDTRIP_OK <<<"$OUT"
 
       # Piggybacks on this job purely because it already has a booted RELEASE
       # container — the check costs ~2s here versus minutes for a job that
@@ -3033,7 +3033,7 @@ jobs:
               IO.puts("RELEASE_ENTRYPOINTS_OK")
             ')
           echo "$OUT"
-          echo "$OUT" | grep -q RELEASE_ENTRYPOINTS_OK
+          grep -q RELEASE_ENTRYPOINTS_OK <<<"$OUT"
 
       - name: Collect logs on failure
         if: failure()
@@ -3425,7 +3425,7 @@ jobs:
         # mode it guards only shows up on release/failure paths, i.e. exactly
         # when you cannot afford it.
         run: |
-          python3 scripts/lint_workflow_run_blocks.py .github/workflows/*.yml
+          python3 scripts/lint_workflow_run_blocks.py .github/workflows/*.yml scripts/*.sh test/scripts/*.sh
           bash test/scripts/lint_workflow_run_blocks_test.sh
 
       - name: Discord release-notes formatter self-check
@@ -3511,7 +3511,7 @@ jobs:
           # Genuine emergency bypass: PR carries the 'allow-migration-edit' label.
           # Use only when fixing a migration that has NOT reached any deployed
           # environment (rare; deliberately friction-y).
-          if echo "$PR_LABELS" | grep -q '"allow-migration-edit"'; then
+          if grep -q '"allow-migration-edit"' <<<"$PR_LABELS"; then
             echo "::notice::Bypass label 'allow-migration-edit' present — skipping immutable-migrations check."
             exit 0
           fi
@@ -3520,7 +3520,7 @@ jobs:
           # above is dead on most runs (github.event.pull_request is null).
           # Fallback bypass via [allow-migration-edit] tag in the head
           # commit message — same friction-y semantic, push-compatible.
-          if git log -1 --format=%B | grep -qF '[allow-migration-edit]'; then
+          if grep -qF '[allow-migration-edit]' <<<"$(git log -1 --format=%B)"; then
             echo "::notice::Bypass tag '[allow-migration-edit]' in HEAD commit message — skipping immutable-migrations check."
             exit 0
           fi
@@ -5122,7 +5122,7 @@ jobs:
           CACHE_HIT_BOTH: ${{ needs.fingerprint.outputs.backend-cache-hit == 'true' && needs.fingerprint.outputs.e2e-cache-hit == 'true' }}
         run: |
           VERSION=$(grep 'version:' mix.exs | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          if ! grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' <<<"$VERSION"; then
             echo "ERROR: Invalid semver in mix.exs: '$VERSION'" >&2
             exit 1
           fi
