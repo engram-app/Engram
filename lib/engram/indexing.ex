@@ -194,8 +194,10 @@ defmodule Engram.Indexing do
     # The points-budget count and the plan's chunk read share ONE tenant
     # transaction (both `with_tenant` calls nest into it), so the check costs
     # a query, not a transaction. ponytail: the token reservation's one-row
-    # upsert runs inside it too, holding the meter row until this short
-    # transaction commits; split the plan read out if that ever contends.
+    # upsert runs inside it too and locks the meter row even when it refuses.
+    # Nothing after it queries but a refusal's meter read for its log line;
+    # the sparse re-plan reuses the rows already read (`plan_within_budget/5`).
+    # Move the reservation past the commit if that ever contends.
     with :ok <- Qdrant.ensure_collection(collection(), dims),
          {:ok, filter_key} <- Crypto.dek_filter_key(user),
          {:ok, content_key} <- Crypto.dek_content_hash_key(user),
@@ -364,17 +366,24 @@ defmodule Engram.Indexing do
   def points_budget_ok?(user, note_id, planned_points) do
     case Engram.Billing.effective_limit(user, :index_points_cap) do
       cap when is_integer(cap) and cap >= 0 ->
-        {:ok, used} =
+        # All the user's rows minus this note's, not one `note_id !=` count:
+        # that filter is not in `idx_chunks_user`, so it read every row from
+        # the heap. The user count can be index-only on `idx_chunks_user`; the
+        # note count reads only the note's own rows (at most its point cap).
+        {:ok, [all, own]} =
           Repo.with_tenant(user.id, fn ->
             Repo.one(
               from(c in Chunk,
-                where: c.user_id == ^user.id and c.note_id != ^note_id,
-                select: count()
+                where: c.user_id == ^user.id,
+                select: [
+                  count(),
+                  subquery(from(o in Chunk, where: o.note_id == ^note_id, select: count()))
+                ]
               )
             )
           end)
 
-        used + planned_points <= cap
+        all - own + planned_points <= cap
 
       # nil / :unlimited / a negative sentinel: no ceiling.
       _ ->
@@ -616,7 +625,9 @@ defmodule Engram.Indexing do
   defp stamp_index_tier(note, tier) do
     Repo.update_all(
       from(n in Note,
-        where: n.id == ^note.id and fragment("? IS DISTINCT FROM ?", n.index_tier, ^tier)
+        where:
+          n.id == ^note.id and n.kind == "note" and
+            fragment("? IS DISTINCT FROM ?", n.index_tier, ^tier)
       ),
       set: [index_tier: tier]
     )
@@ -1057,15 +1068,20 @@ defmodule Engram.Indexing do
   # pass would send (reused chunks cost nothing). Refused → re-plan sparse:
   # the fingerprints differ, so a dense plan cannot be reused for a sparse pass.
   #
+  # The re-plan reuses the rows the dense plan read: a reservation, refused or
+  # not, holds the meter row until the planning transaction commits, so on a
+  # refusal nothing after it but CPU (fingerprints) may run under that lock.
+  #
   # Third element: dense vectors an earlier attempt already paid for but did
   # not commit (`retain/1`, held across the commit). A hit skips the
   # reservation AND the embed, so a retry after any post-embed failure is
   # charged once.
   defp plan_within_budget(note, chunks, content_key, false, _opts),
-    do: {false, plan_chunks(note, chunks, content_key, false), nil}
+    do: {false, plan_chunks(chunks, indexed_rows(note), content_key, false), nil}
 
   defp plan_within_budget(note, chunks, content_key, true, opts) do
-    plan = plan_chunks(note, chunks, content_key, true)
+    rows = indexed_rows(note)
+    plan = plan_chunks(chunks, rows, content_key, true)
     texts = embed_texts(plan)
     reserve = Keyword.get(opts, :reserve_tokens, fn _tokens -> true end)
 
@@ -1079,7 +1095,7 @@ defmodule Engram.Indexing do
       {:miss, tokens} ->
         if reserve.(tokens),
           do: {true, plan, nil},
-          else: {false, plan_chunks(note, chunks, content_key, false), nil}
+          else: {false, plan_chunks(chunks, rows, content_key, false), nil}
     end
   end
 
@@ -1298,22 +1314,10 @@ defmodule Engram.Indexing do
   # Matched by multiplicity, not by set membership: a note with two identical
   # sections has two rows under one hmac and must consume one point each, or
   # the second chunk silently adopts the first one's point.
-  defp plan_chunks(note, chunks, content_key, dense?) do
+  defp plan_chunks(chunks, rows, content_key, dense?) do
     chunks =
       Enum.zip_with(chunks, plan_fingerprints(content_key, chunks, dense?), fn chunk, hmac ->
         Map.put(chunk, :context_hmac, hmac)
-      end)
-
-    # Tenant-scoped: unscoped this read is filtered to [], so reuse never
-    # matches. That is not a correctness break but a cost one — every index
-    # pays a full re-embed, and the prior pass's points are left orphaned in
-    # Qdrant rather than being reused or replaced.
-    {:ok, rows} =
-      Repo.with_tenant(note.user_id, fn ->
-        Chunk
-        |> where([c], c.note_id == ^note.id)
-        |> select([c], {c.context_hmac, c.qdrant_point_id, c.token_count})
-        |> Repo.all()
       end)
 
     existing = Enum.reject(rows, fn {_hmac, point_id, _tokens} -> is_nil(point_id) end)
@@ -1348,6 +1352,22 @@ defmodule Engram.Indexing do
       reused_point_ids: reused,
       stale_point_ids: Enum.map(existing, fn {_h, id, _t} -> id end) -- reused
     }
+  end
+
+  # Tenant-scoped: unscoped this read is filtered to [], so reuse never
+  # matches. That is not a correctness break but a cost one: every index
+  # pays a full re-embed, and the prior pass's points are left orphaned in
+  # Qdrant rather than being reused or replaced.
+  defp indexed_rows(note) do
+    {:ok, rows} =
+      Repo.with_tenant(note.user_id, fn ->
+        Chunk
+        |> where([c], c.note_id == ^note.id)
+        |> select([c], {c.context_hmac, c.qdrant_point_id, c.token_count})
+        |> Repo.all()
+      end)
+
+    rows
   end
 
   # What a point HOLDS is part of the fingerprint, not just its text (#1606).

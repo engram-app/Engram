@@ -17,7 +17,7 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
   alias Engram.Repo
   alias Engram.ServiceConfig
   alias Engram.UsageMeters
-  alias Engram.Workers.EmbedNote
+  alias Engram.Workers.{EmbedNote, RebuildStaleNote, ReconcileEmbeddings}
 
   @endpoint EngramWeb.Endpoint
 
@@ -168,6 +168,46 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
 
       refute_received {:reserved, _}
       refute_received {:released, _}
+    end
+
+    test "boundary: other rows + planned == cap is a full index", %{
+      user: user,
+      vault: vault,
+      note: note
+    } do
+      seed_points(user, vault, 9_995)
+      stub_embedder()
+
+      assert :ok = embed(note)
+      assert length(rows_for(note)) == 5
+      assert reload(note).index_tier == nil
+    end
+
+    # Zero other rows, and the note alone is over the account cap: it floors
+    # once and stays floored, nothing re-selects it.
+    test "a note over the cap on its own floors, no loop", %{user: user, note: note} do
+      insert(:user_limit_override, user: user, key: "index_points_cap", value: %{"v" => 3})
+
+      assert :ok = embed(note)
+      assert [%{qdrant_point_id: point_id, token_count: nil}] = rows_for(note)
+      assert reload(note).index_tier == "floor"
+
+      for _tick <- 1..2 do
+        assert :ok = perform_job(ReconcileEmbeddings, %{})
+        refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+        refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
+
+        {:ok, _} =
+          Repo.with_tenant(user.id, fn ->
+            Repo.update_all(from(n in Note, where: n.id == ^note.id),
+              set: [embed_retry_after: DateTime.add(DateTime.utc_now(), -1, :second)]
+            )
+          end)
+      end
+
+      # A re-delivered job is a no-op: same point.
+      assert :ok = embed(note)
+      assert [%{qdrant_point_id: ^point_id}] = rows_for(note)
     end
 
     test "the note's own chunks do not count against it", %{user: user, vault: vault, note: note} do
