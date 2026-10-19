@@ -297,7 +297,7 @@ defmodule Engram.Indexing do
           stale_point_ids: stale_point_ids,
           note_payload: note_payload,
           payload_hash: payload_hash
-        },
+        } = prepared,
         in_commit
       ) do
     # Skip the PATCH when the note-level payload is what was last written:
@@ -313,6 +313,7 @@ defmodule Engram.Indexing do
     # next attempt happily "reusing" ids that no longer exist in Qdrant.
     with :ok <- purge_before_rebuild(note, reused_point_ids, stale_point_ids),
          :ok <- upsert_points_batched(qdrant_points),
+         :ok <- emit_points_written(prepared),
          # Reused points keep their vectors AND their ciphertext (every
          # encrypted field is inside `context_text`, so an equal hmac means an
          # identical payload), but the note-level filter keys on them are
@@ -368,6 +369,20 @@ defmodule Engram.Indexing do
         from(n in Note, where: n.kind == "note" and n.id == ^note.id),
         set: [payload_hash: hash]
       )
+
+    :ok
+  end
+
+  # One event per (kind, dense) pair, never per point. Only points written in
+  # this commit: reused points have no `:point_kinds` entry.
+  defp emit_points_written(%{point_kinds: point_kinds}) do
+    for {{kind, dense?}, count} <- Enum.frequencies(point_kinds) do
+      :telemetry.execute(
+        [:engram, :indexing, :points_written],
+        %{count: count},
+        %{kind: kind, dense: to_string(dense?)}
+      )
+    end
 
     :ok
   end
@@ -1442,6 +1457,7 @@ defmodule Engram.Indexing do
          note: note,
          chunk_rows: Enum.map(built, & &1.row),
          qdrant_points: for(%{point: p} <- built, p != nil, do: p),
+         point_kinds: for(%{kind: k, dense?: d} <- built, do: {k, d}),
          # Straight from the plan, not re-derived from `built`. Two independent
          # derivations of the same list is how "reused" and "not deleted" drift
          # apart, and the drift is silent: an id in one list but not the other
@@ -1491,7 +1507,9 @@ defmodule Engram.Indexing do
 
         built = %{
           row: chunk_row(note, chunk, point_id, doc_len, now),
-          point: %{id: point_id, vector: named_vectors, payload: payload}
+          point: %{id: point_id, vector: named_vectors, payload: payload},
+          kind: metric_kind(note.path, chunk.kind),
+          dense?: vector != nil
         }
 
         {:ok, built, rest}
@@ -1509,6 +1527,17 @@ defmodule Engram.Indexing do
         )
 
         err
+    end
+  end
+
+  # Canvas and base chunks are "data" to the chunker; the metric wants them
+  # apart so each embed-less lever can be sized on its own. Closed enum.
+  defp metric_kind(path, kind) do
+    case Path.extname(path) do
+      ".canvas" -> "canvas"
+      ".base" -> "base"
+      _ when kind in ~w(prose data frontmatter drawing) -> kind
+      _ -> "prose"
     end
   end
 
