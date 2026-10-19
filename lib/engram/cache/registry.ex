@@ -150,6 +150,10 @@ defmodule Engram.Cache.Registry do
     # Qdrant base URL => `%{disk:, heap:}` percent (Qdrant.pressure/0). The
     # TTL is the freshness: EmbedNote's preflight reads it per job.
     %{name: :qdrant_pressure, ttl: 60_000, cache_nil: false, evict_match: :key, pg_channel: nil},
+    # Qdrant base URL => server Version (Qdrant.cached_server_version/0). It
+    # moves only on a Qdrant upgrade; the TTL bounds how long a tick after one
+    # gates guards on the old version.
+    %{name: :qdrant_version, ttl: 600_000, cache_nil: false, evict_match: :key, pg_channel: nil},
     # {note_id, embed key} => dense vectors Voyage was paid for, held across
     # the commit so a retry after any failure (backpressure, a raise) reuses
     # them instead of paying again. Evicted on a successful commit. Byte cap

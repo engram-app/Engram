@@ -30,6 +30,30 @@ defmodule Engram.Vector.QdrantLayoutTest do
     })
   end
 
+  describe "applied_limits/2" do
+    test "reads the limits Qdrant enforces, only for guards the version honours" do
+      strict = %{
+        "enabled" => true,
+        "max_disk_usage_percent" => 81,
+        "max_resident_memory_percent" => 83
+      }
+
+      config = %{"strict_mode_config" => strict}
+
+      assert QdrantLayout.applied_limits(config, @v1182) == %{disk: 81, heap: 83}
+      # 1.19 keeps a stored disk field from an older server but ignores it.
+      assert QdrantLayout.applied_limits(config, @v1192) == %{heap: 83}
+      assert QdrantLayout.applied_limits(config, nil) == %{}
+    end
+
+    test "nothing when strict mode is off or a field is unset" do
+      off = %{"strict_mode_config" => %{"enabled" => false, "max_disk_usage_percent" => 81}}
+      assert QdrantLayout.applied_limits(off, @v1182) == %{}
+      assert QdrantLayout.applied_limits(@prod_info["config"], @v1182) == %{}
+      assert QdrantLayout.applied_limits(nil, @v1182) == %{}
+    end
+  end
+
   describe "desired/1" do
     test "PATCH body shape per sub-object on 1.18.2" do
       assert QdrantLayout.desired(@v1182) == %{
