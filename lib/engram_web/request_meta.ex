@@ -38,4 +38,19 @@ defmodule EngramWeb.RequestMeta do
       ua -> String.byte_slice(ua, 0, @user_agent_log_limit)
     end
   end
+
+  @doc """
+  The request's `content-length` as an integer, or nil when absent. Bandit
+  rejects a malformed header before any plug runs, so an unparseable value
+  only reaches here from tests; it reads as undeclared.
+  """
+  @spec declared_length(Plug.Conn.t()) :: non_neg_integer() | nil
+  def declared_length(conn) do
+    with [value | _] <- Plug.Conn.get_req_header(conn, "content-length"),
+         {n, ""} <- Integer.parse(value) do
+      n
+    else
+      _ -> nil
+    end
+  end
 end

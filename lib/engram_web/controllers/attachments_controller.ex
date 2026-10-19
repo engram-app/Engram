@@ -2,13 +2,21 @@ defmodule EngramWeb.AttachmentsController do
   use EngramWeb, :controller
   use OpenApiSpex.ControllerSpecs
   alias EngramWeb.Plugs.SettleUnreadBody
+  alias EngramWeb.RequestMeta
   alias EngramWeb.Schemas
 
   alias Engram.Attachments
   alias Engram.Billing
   alias Engram.Storage.MimeWhitelist
 
+  require OpenTelemetry.Tracer
+
   action_fallback EngramWeb.FallbackController
+
+  # A controller plug, not a line in the action: the fallback (422 changeset)
+  # renders with the conn the action was CALLED with, so a before_send
+  # registered inside the action would miss it.
+  plug :tag_refusal when action == :upload
 
   operation(:upload,
     operation_id: "attachments-upload",
@@ -211,20 +219,9 @@ defmodule EngramWeb.AttachmentsController do
     do: conn |> put_status(413) |> json(%{error: "request_too_large"})
 
   defp check_declared_length(conn, limit) do
-    case declared_length(conn) do
+    case RequestMeta.declared_length(conn) do
       n when is_integer(n) and n > limit -> :too_large
       _ -> :ok
-    end
-  end
-
-  # Bandit rejects a malformed content-length before the plug runs, so an
-  # unparseable header only reaches here from tests; treat it as undeclared.
-  defp declared_length(conn) do
-    with [value | _] <- get_req_header(conn, "content-length"),
-         {n, ""} <- Integer.parse(value) do
-      n
-    else
-      _ -> nil
     end
   end
 
@@ -770,6 +767,69 @@ defmodule EngramWeb.AttachmentsController do
   # One 402 body for `attachments_enabled`, shared by upload/rename/batch_move.
   # Written out three times before, which is three chances for the reason string
   # or the limit key to drift between endpoints that mean the same thing.
+  # Every refused upload says why, on the request span and on the request's
+  # one log line (`EngramWeb.RequestLogger` reads these assigns), so a refusal
+  # storm is attributable from telemetry alone: before this, a device's 250
+  # 402s could not be split into text-only / file_too_large / quota, and the
+  # plan, size and body shape were unknowable (2026-10-19).
+  defp tag_refusal(conn, _opts), do: register_before_send(conn, &refusal_telemetry/1)
+
+  defp refusal_telemetry(%Plug.Conn{status: status} = conn) when status in 200..299, do: conn
+
+  defp refusal_telemetry(conn) do
+    reason = sent_reason(conn)
+
+    meta = [
+      plan: plan(conn.assigns[:current_user]),
+      declared_bytes: RequestMeta.declared_length(conn),
+      body_kind: if(raw_body?(conn), do: "raw", else: "json"),
+      plugin_version: log_plugin_version(conn.assigns[:plugin_version])
+    ]
+
+    OpenTelemetry.Tracer.set_attributes(
+      for {k, v} <- [
+            {"engram.plan", meta[:plan]},
+            {"engram.attachment.reject_reason", reason},
+            {"engram.attachment.declared_bytes", meta[:declared_bytes]},
+            {"engram.attachment.body_kind", meta[:body_kind]},
+            {"engram.plugin_version", meta[:plugin_version]}
+          ],
+          v != nil,
+          do: {k, v}
+    )
+
+    conn
+    |> assign(:reject_reason, reason)
+    |> assign(:reject_meta, meta)
+  end
+
+  # The reason the client was actually sent: a LimitResponse 402 names it in
+  # `reason` (its `error` is the generic "limit_exceeded"), every other refusal
+  # in `error`. Both are server-chosen constants, never client input.
+  defp sent_reason(conn) do
+    case Jason.decode(IO.iodata_to_binary(conn.resp_body || "")) do
+      {:ok, %{"reason" => r}} when is_binary(r) -> r
+      {:ok, %{"error" => e}} when is_binary(e) -> e
+      _ -> "http_#{conn.status}"
+    end
+  end
+
+  defp plan(%Engram.Accounts.User{} = user), do: user |> Billing.tier() |> Atom.to_string()
+  defp plan(_), do: nil
+
+  # The header is client-controlled and `RequirePluginVersion` passes anything
+  # it cannot parse, so only a real version is echoed into telemetry.
+  defp log_plugin_version(nil), do: nil
+
+  defp log_plugin_version(v) when is_binary(v) and byte_size(v) <= 32 do
+    case Version.parse(v) do
+      {:ok, _} -> v
+      :error -> "unparsed"
+    end
+  end
+
+  defp log_plugin_version(_), do: "unparsed"
+
   defp attachments_disabled(conn) do
     EngramWeb.LimitResponse.halt(conn, "attachments_disabled", :attachments_enabled, false, nil)
   end
