@@ -1242,7 +1242,13 @@ defmodule Engram.Vector.Qdrant do
   user's filter key. Qdrant payloads carry `path_hmac` as a plaintext-safe
   filter key alongside the encrypted `source_path` (Phase B.2.4).
   """
-  def delete_by_note(col \\ nil, user_id, vault_id, path_hmac) do
+  def delete_by_note(col \\ nil, user_id, vault_id, path_hmac),
+    do: delete_by_note_except(col, user_id, vault_id, path_hmac, [])
+
+  @doc """
+  `delete_by_note/4`, keeping the points in `keep_ids`.
+  """
+  def delete_by_note_except(col, user_id, vault_id, path_hmac, keep_ids) do
     col = col || collection()
 
     filter = %{
@@ -1253,7 +1259,10 @@ defmodule Engram.Vector.Qdrant do
       ]
     }
 
-    opts = write_opts(%{filter: filter})
+    filter =
+      if keep_ids == [], do: filter, else: Map.put(filter, :must_not, [%{has_id: keep_ids}])
+
+    opts = [json: %{filter: filter}] ++ req_opts()
 
     instrument(:delete, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do

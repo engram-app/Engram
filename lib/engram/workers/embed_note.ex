@@ -626,6 +626,11 @@ defmodule Engram.Workers.EmbedNote do
           # and the reservation stays charged: it was spent.
           {:error, :qdrant_backpressure} ->
             Qdrant.backpressure_snooze(:refused)
+          # The index budget moved the note's tier while this pass was
+          # planned or ran: not an embed failure. Rerun from the new tier,
+          # without spending an attempt or counting toward poison parking.
+          {:error, :index_tier_changed} ->
+            {:snooze, 5}
 
           # The write is queued but not applied within its wait (Qdrant 200
           # with status "wait_timeout"), so the note is not stamped. Same as a

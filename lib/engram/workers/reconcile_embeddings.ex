@@ -227,7 +227,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     _ =
       if daily_reverify?(scheduled_at) do
         :ok = sweep_over_note_cap(now)
-        {:ok, _} = budget_sweep(@budget_users)
+        {:ok, _} = budget_sweep(@budget_users, now)
       end
 
     if versions_done, do: :ok, else: sweep_keyword_stale(now, paid, page_size)
@@ -331,12 +331,12 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # is not counted.
   @unmetered_points_per_day 2_000
 
-  # ponytail: a floored or merged note's full point count is unknown without
-  # re-chunking it, so it is estimated as its span over 1,024 characters (half
-  # the chunker's 2 KB MAX_CHUNK), capped at the per-note cap. An estimate
-  # that runs short is caught by the pass itself: `Indexing.points_budget_ok?/3`
-  # floors a promotion that would pass 100%, and 90% to 100% is the gap that
-  # keeps that from flapping.
+  # A promotion costs the note's `chunk_count` (stamped by the pass that
+  # floored or merged it), at most its per-note cap: exact for a note under
+  # the cap, an upper bound for one that merges. A note with no stamp falls
+  # back to its span over 1,024 characters (half the chunker's 2 KB
+  # MAX_CHUNK). Either way a pass that would pass 100% is floored by
+  # `Indexing.points_budget_ok?/3`, and 90% to 100% keeps that from flapping.
   @chars_per_point 1_024
 
   @doc """
@@ -357,14 +357,12 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   refuses to commit (`Indexing.commit_index/2`). Does nothing while the
   collection is red.
   """
-  @spec budget_sweep(pos_integer()) ::
+  @spec budget_sweep(pos_integer(), DateTime.t()) ::
           {:ok, %{demoted: non_neg_integer(), promoted: non_neg_integer()}}
-  def budget_sweep(limit_users) do
+  def budget_sweep(limit_users, now \\ DateTime.utc_now()) do
     with caps when caps != :off <- budget_caps(),
-         [_ | _] = users <- budget_users(caps, limit_users),
+         [_ | _] = users <- budget_users(caps, limit_users, now),
          false <- collection_red?() do
-      now = DateTime.utc_now()
-
       totals =
         Enum.reduce(users, %{demoted: 0, promoted: 0}, fn user, acc ->
           Map.merge(acc, budget_user(user, now), fn _k, a, b -> a + b end)
@@ -408,53 +406,76 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     end
   end
 
-  # Cross-tenant on the maintenance pool: users over their cap, then users
-  # with floor or merged rows (token_count NULL) and room below 90%.
-  # ponytail: a candidate with nothing to promote still takes one of the
-  # `limit_users` slots; rotate the order if that many ever crowd the tick.
-  defp budget_users(caps, limit) do
+  # Cross-tenant on the maintenance pool: users over their cap first, then
+  # users with something that can promote under today's caps: a floor note
+  # that fits below 90%, or a merged note whose chunks now fit its per-note
+  # cap. The second group is ordered by a hash of the user and the 5-minute
+  # tick, so a user whose promotion keeps not fitting (the ledger, a large
+  # note) cannot hold a slot on every tick.
+  #
+  # ponytail: one `IN ^ids` subscriptions read over every chunk-owning user;
+  # batch it past tens of thousands of users.
+  defp budget_users(caps, limit, now) do
     repo = Repo.maintenance()
+    tick = div(DateTime.to_unix(now), 300)
+    per_user = fn query -> Repo.cross_tenant(fn -> repo.all(query) end) end
 
-    counts =
-      Repo.cross_tenant(fn ->
-        repo.all(
-          from(c in Chunk,
-            group_by: c.user_id,
-            select: {c.user_id, count(), filter(count(), is_nil(c.token_count))}
-          )
-        )
-      end)
+    counts = per_user.(from(c in Chunk, group_by: c.user_id, select: {c.user_id, count()}))
 
+    # A floor note's promotion cost, and a merged note's natural chunk count
+    # (`chunk_count` is set on a full-tier note only when it merged): the
+    # smallest per user is the one that could promote first.
+    smallest = fn where ->
+      from(n in Note,
+        where: n.kind == "note" and is_nil(n.deleted_at),
+        group_by: n.user_id,
+        select: {n.user_id, min(coalesce(n.chunk_count, 1))}
+      )
+      |> where(^where)
+      |> per_user.()
+      |> Map.new()
+    end
+
+    floors = smallest.(dynamic([n], n.index_tier in ["floor", "floor_paid"]))
+    merged = smallest.(dynamic([n], is_nil(n.index_tier) and not is_nil(n.chunk_count)))
     ids = Enum.map(counts, &elem(&1, 0))
 
     # `Billing.tier/1` in SQL: an entitled Pro, else Starter, else Free.
     tiers =
-      Repo.cross_tenant(fn ->
-        repo.all(
-          from(s in Subscription,
-            where:
-              s.user_id in ^ids and s.status in ^Billing.entitled_statuses() and
-                s.tier in ["starter", "pro"],
-            select: {s.user_id, s.tier}
-          )
-        )
-      end)
+      from(s in Subscription,
+        where:
+          s.user_id in ^ids and s.status in ^Billing.entitled_statuses() and
+            s.tier in ["starter", "pro"],
+        select: {s.user_id, s.tier}
+      )
+      |> per_user.()
       |> Enum.sort_by(&(elem(&1, 1) == "pro"))
       |> Map.new(fn {id, tier} -> {id, String.to_existing_atom(tier)} end)
 
     counts
-    |> Enum.flat_map(fn {id, points, unsized} ->
+    |> Enum.flat_map(fn {id, points} ->
       tier = Map.get(tiers, id, :free)
       cap = user_cap(caps.index, id, tier, 0)
-      user = %{id: id, cap: cap, note_cap: user_cap(caps.note, id, tier, 1)}
+      note_cap = user_cap(caps.note, id, tier, 1)
+      user = %{id: id, cap: cap, note_cap: note_cap}
+      fits? = &(is_nil(cap) or 10 * (points + &1) < 9 * cap)
+      under_note_cap? = &(is_nil(note_cap) or &1 <= note_cap)
+      floor = Map.get(floors, id)
+      unmerge = Map.get(merged, id)
 
       cond do
-        cap && points > cap -> [{0, cap - points, user}]
-        unsized > 0 and (is_nil(cap) or 10 * points < 9 * cap) -> [{1, 0, user}]
-        true -> []
+        cap && points > cap ->
+          [{0, cap - points, user}]
+
+        (floor && fits?.(min(floor, note_cap || floor))) ||
+            (unmerge && under_note_cap?.(unmerge) && fits?.(unmerge)) ->
+          [{1, :erlang.phash2({id, tick}), user}]
+
+        true ->
+          []
       end
     end)
-    |> Enum.sort()
+    |> Enum.sort_by(fn {group, rank, _user} -> {group, rank} end)
     |> Enum.take(limit)
     |> Enum.map(&elem(&1, 2))
   end
@@ -473,7 +494,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
   defp budget_user(user, now) do
     Repo.with_tenant!(user.id, fn ->
-      notes = budget_notes(now)
+      notes = budget_notes(user.id, now)
       jobs = budget_jobs(user.id, now)
       pending = for j <- jobs, j.pending, into: %{}, do: {j.note_id, j.points}
 
@@ -490,15 +511,32 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         end) + Enum.sum(Map.values(pending))
 
       if user.cap && projected > user.cap,
-        do: %{demoted: demote(user, notes, projected), promoted: 0},
+        do: %{demoted: demote(user, notes, projected, now), promoted: 0},
         else: %{demoted: 0, promoted: promote(user, notes, projected, pending, jobs, now)}
     end)
   end
 
-  defp budget_notes(now) do
+  defp budget_notes(user_id, now) do
+    # A crash-guard stamp older than EmbedNote's timeout belongs to no live
+    # attempt (CrashGuard clears it on the note's next pass).
+    stale_before = DateTime.add(now, -div(EmbedNote.timeout(nil), 1_000), :second)
+
+    # One pass over the user's rows (`idx_chunks_user`), then one join per
+    # note, rather than a per-note probe the planner may turn into a scan.
+    per_note =
+      from(c in Chunk,
+        where: c.user_id == ^user_id,
+        group_by: c.note_id,
+        select: %{
+          note_id: c.note_id,
+          rows: count(),
+          unsized: filter(count(), is_nil(c.token_count)),
+          span: max(c.char_end)
+        }
+      )
+
     IndexVersions.live_notes()
-    |> join(:inner, [n], c in Chunk, on: c.note_id == n.id)
-    |> group_by([n], n.id)
+    |> join(:inner, [n], c in subquery(per_note), on: c.note_id == n.id)
     |> select([n, _v, c], %{
       id: n.id,
       tier: n.index_tier,
@@ -506,11 +544,12 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       dense: n.dense_indexed_hash == n.embed_hash,
       # A pass is running, or the note sits out a cooldown: left alone.
       busy:
-        not is_nil(n.embed_started_at) or
-          (not is_nil(n.embed_retry_after) and n.embed_retry_after > ^now),
-      rows: count(c.id),
-      unsized: filter(count(c.id), is_nil(c.token_count)),
-      span: max(c.char_end)
+        coalesce(n.embed_started_at > ^stale_before, false) or
+          coalesce(n.embed_retry_after > ^now, false),
+      rows: c.rows,
+      unsized: c.unsized,
+      span: c.span,
+      chunk_count: n.chunk_count
     })
     |> order_by([n], desc: n.updated_at, desc: n.id)
     |> Repo.all()
@@ -542,7 +581,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # Newest first, every full note kept while the account, with every note
   # after it at one floor point, stays within the cap. The rest demote,
   # oldest first.
-  defp demote(user, notes, projected) do
+  defp demote(user, notes, projected, now) do
     full = Enum.filter(notes, &is_nil(&1.tier))
     cost = &min(&1.rows, user.note_cap || &1.rows)
     fixed = projected - Enum.sum(Enum.map(full, cost)) + length(full)
@@ -562,7 +601,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       from(n in Note,
         where:
           n.id in ^Enum.take(ids, @budget_notes) and n.kind == "note" and is_nil(n.index_tier) and
-            is_nil(n.embed_started_at),
+            (is_nil(n.embed_started_at) or
+               n.embed_started_at <=
+                 ^DateTime.add(now, -div(EmbedNote.timeout(nil), 1_000), :second)),
         select: n.id,
         update: [
           set: [
@@ -634,12 +675,10 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   end
 
   # A floor note (fully floored: one keyword row), or a merged note whose
-  # per-note cap has risen. Merged rows also have NULL token_count; at an
-  # unchanged cap a merge holds 0.4 to 0.8 of it (`Indexing.cap_chunks/3`),
-  # so under a fifth means the cap rose (Free 128 to 1,024 on upgrade), and
-  # the rebuilt note is either unmerged or over a fifth of the new cap.
+  # natural chunk count now fits its per-note cap (an upgrade or a raised
+  # override), which a recap pass unmerges.
   defp promotion(n, note_cap) do
-    est = max(div(n.span + @chars_per_point - 1, @chars_per_point), 1)
+    est = n.chunk_count || max(div(n.span + @chars_per_point - 1, @chars_per_point), 1)
     est = if note_cap, do: min(est, note_cap), else: est
 
     cond do
@@ -647,8 +686,8 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         unmetered = n.tier == "floor_paid"
         [{n, %{index_budget: "promote", budget_points: est, unmetered: unmetered}}]
 
-      is_nil(n.tier) and n.dense == true and n.unsized > 0 and
-          (is_nil(note_cap) or 5 * n.rows < note_cap) ->
+      is_nil(n.tier) and n.dense == true and n.chunk_count != nil and
+          (is_nil(note_cap) or n.chunk_count <= note_cap) ->
         [{n, %{recap: true, budget_points: est, unmetered: true}}]
 
       true ->

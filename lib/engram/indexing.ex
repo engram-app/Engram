@@ -124,9 +124,11 @@ defmodule Engram.Indexing do
                 {_, _} =
                   Repo.update_all(
                     from(n in Note,
-                      where: n.id == ^note.id and n.kind == "note" and not is_nil(n.index_tier)
+                      where:
+                        n.id == ^note.id and n.kind == "note" and
+                          (not is_nil(n.index_tier) or not is_nil(n.chunk_count))
                     ),
-                    set: [index_tier: nil]
+                    set: [index_tier: nil, chunk_count: nil]
                   )
 
                 run_in_commit(note, opts, 0, true, nil)
@@ -214,9 +216,10 @@ defmodule Engram.Indexing do
     with :ok <- Qdrant.ensure_collection(collection(), dims),
          {:ok, filter_key} <- Crypto.dek_filter_key(user),
          {:ok, content_key} <- Crypto.dek_content_hash_key(user),
-         {tier, dense?, plan, retained} =
+         {tier, dense?, plan, retained} <-
            Repo.with_tenant!(note.user_id, fn ->
-             plan_index(note, user, chunks, content_key, opts)
+             with :ok <- tier_unchanged(note),
+                  do: plan_index(note, user, chunks, content_key, opts)
            end),
          texts = embed_texts(plan),
          {:ok, vectors} <- retained_or_embed(retained, dense?, texts, opts),
@@ -229,12 +232,18 @@ defmodule Engram.Indexing do
       # Retained vectors were paid for by the attempt that kept them.
       embedded_bytes = if dense? and is_nil(retained), do: text_bytes(texts), else: 0
 
+      # A note holding fewer points than its chunks (floored or merged)
+      # records how many a full pass would write: the index budget sweep
+      # promotes from it.
+      chunk_count = if tier != nil or merged?(plan), do: length(chunks)
+
       {:ok,
        Map.merge(prepared, %{
          embedded_bytes: embedded_bytes,
          dense?: dense?,
          index_tier: tier,
-         retain: if(dense? and texts != [], do: {retained_key(note, texts), vectors})
+         retain: if(dense? and texts != [], do: {retained_key(note, texts), vectors}),
+         chunk_count: chunk_count
        })}
     else
       {:error, :no_dek} = err ->
@@ -247,6 +256,23 @@ defmodule Engram.Indexing do
   end
 
   @floor_tiers ["floor", "floor_paid"]
+
+  defp merged?(plan), do: Enum.any?(plan.entries, &Map.get(entry_chunk(&1), :merged, false))
+
+  # The index budget sweep may have demoted or promoted the note since it was
+  # loaded. Checked inside the planning transaction, before any Voyage call
+  # or Qdrant write, so a lost race spends nothing; `stamp_index_tier/3`
+  # re-checks at commit.
+  defp tier_unchanged(note) do
+    expected = Map.get(note, :index_tier)
+
+    case Repo.one(
+           from(n in Note, where: n.id == ^note.id and n.kind == "note", select: {n.index_tier})
+         ) do
+      {tier} when tier != expected -> {:error, :index_tier_changed}
+      _ -> :ok
+    end
+  end
 
   # The per-note cap runs first, so the points budget below counts the points
   # a full pass would actually write.
@@ -636,7 +662,18 @@ defmodule Engram.Indexing do
     # That means the stale delete goes LAST, after the rows stop naming those
     # points. Deleting first and crashing before the row write would leave the
     # next attempt happily "reusing" ids that no longer exist in Qdrant.
-    with :ok <- purge_before_rebuild(note, reused_point_ids, stale_point_ids),
+    #
+    # A floor plan reuses nothing, yet it skips the purge: its one point is
+    # written first and the dense points deleted only after the rows name it
+    # (`drop_replaced_points/3`). A refused write (strict mode) then leaves the
+    # old index whole, and a refused delete leaves both, still searchable.
+    floor? = Map.get(prepared, :index_tier) != nil
+
+    with :ok <-
+           if(floor?,
+             do: :ok,
+             else: purge_before_rebuild(note, reused_point_ids, stale_point_ids)
+           ),
          :ok <- upsert_points_batched(qdrant_points),
          # Reused points keep their vectors AND their ciphertext (every
          # encrypted field is inside `context_text`, so an equal hmac means an
@@ -667,7 +704,7 @@ defmodule Engram.Indexing do
       committed =
         Repo.with_tenant(note.user_id, fn ->
           with {:ok, tier} <- Map.fetch(prepared, :index_tier),
-               do: stamp_index_tier(note, tier)
+               do: stamp_index_tier(note, tier, Map.get(prepared, :chunk_count))
 
           Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
           # Batched inside the same transaction: one statement for a big note
@@ -680,9 +717,12 @@ defmodule Engram.Indexing do
           in_commit.(length(chunk_rows))
         end)
 
-      with {:ok, _} <- committed do
-        drop_stale_points(reused_point_ids, stale_point_ids, note)
-
+      with {:ok, _} <- committed,
+           :ok <-
+             if(floor?,
+               do: drop_replaced_points(note, stale_point_ids, qdrant_points),
+               else: drop_stale_points(reused_point_ids, stale_point_ids, note)
+             ) do
         # Only once the rows are committed: a failed attempt is retried, and
         # counting its upsert too would count the same points twice.
         emit_points_written(prepared)
@@ -724,37 +764,51 @@ defmodule Engram.Indexing do
   # budget demoted or promoted the note meanwhile (`ReconcileEmbeddings`), the
   # pass rolls back with `{:error, :index_tier_changed}` instead of
   # re-stamping it, and its retry plans from the new tier. The row lock holds
-  # off a sweep stamp until commit. `IS DISTINCT FROM` keeps the common
-  # NULL-to-NULL case from writing a tuple.
+  # off a sweep stamp until commit. Writes only on a change.
   #
-  # ponytail: checked at commit, after the Qdrant writes. A pass with no
-  # reused points has already purged the old ones, so losing this race leaves
-  # rows naming deleted points until the retry rewrites them. The sweep skips
-  # notes with a pass running (`embed_started_at`), which leaves only the
-  # window between a job's load and its crash-guard stamp.
-  defp stamp_index_tier(note, tier) do
+  # `tier_unchanged/1` already refused a race lost before planning; this one
+  # can only lose to a sweep stamp landing during the Voyage and Qdrant
+  # calls, which the sweep avoids for a note with a pass running.
+  defp stamp_index_tier(note, tier, chunk_count) do
     expected = Map.get(note, :index_tier)
 
     case Repo.one(
            from(n in Note,
              where: n.id == ^note.id and n.kind == "note",
-             select: {n.index_tier},
+             select: {n.index_tier, n.chunk_count},
              lock: "FOR UPDATE"
            )
          ) do
-      {^expected} when expected == tier ->
+      {^tier, ^chunk_count} when expected == tier ->
         :ok
 
-      {^expected} ->
+      {^expected, _} ->
         Repo.update_all(from(n in Note, where: n.id == ^note.id and n.kind == "note"),
-          set: [index_tier: tier]
+          set: [index_tier: tier, chunk_count: chunk_count]
         )
 
       nil ->
         :ok
 
-      {_changed} ->
+      {_changed, _} ->
         Repo.rollback(:index_tier_changed)
+    end
+  end
+
+  # After a floor plan committed: the points its rows no longer name, then
+  # anything else under the note's path but the new floor point (strays a
+  # refused delete left behind). Returns an error so the job retries: the
+  # rows already name the floor point, and an `index_budget: "demote"`
+  # retry (or the next edit) re-floors and finishes the delete.
+  defp drop_replaced_points(note, stale, points) do
+    with :ok <- Qdrant.delete_points(collection(), stale) do
+      Qdrant.delete_by_note_except(
+        collection(),
+        to_string(note.user_id),
+        to_string(note.vault_id),
+        encode_hmac(note.path_hmac),
+        Enum.map(points, & &1.id)
+      )
     end
   end
 
