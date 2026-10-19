@@ -32,7 +32,8 @@ defmodule Engram.PromEx.Qdrant do
     * `engram_prom_ex_qdrant_strict_limit_percent{kind="disk"|"heap"}` and
       `engram_prom_ex_qdrant_reserve_bytes{kind}`: the strict-mode limits the
       poller keeps applied (`QdrantLayout.strict_limits/2`), recomputed and
-      re-PATCHed on change every tick.
+      re-PATCHed on change every tick. `strict_limit_percent` exists only for
+      a guard the server honours (no disk guard on Qdrant 1.19+).
     * `engram_prom_ex_qdrant_pressure_percent{kind="disk"|"heap"}`: what the
       EmbedNote preflight reads (`Qdrant.pressure/0`); unknown kinds are absent.
 
@@ -52,6 +53,7 @@ defmodule Engram.PromEx.Qdrant do
   alias Engram.Logger.Metadata
   alias Engram.ServiceConfig
   alias Engram.Vector.Qdrant
+  alias Engram.Vector.QdrantLayout
 
   require Logger
 
@@ -137,8 +139,9 @@ defmodule Engram.PromEx.Qdrant do
   def execute_collection_metrics do
     if ServiceConfig.get(:qdrant_collection_metrics, true) and poller?() do
       col = Qdrant.collection_name()
-      reading = poll_pressure()
-      poll(col, reading.limits)
+      version = Qdrant.server_version()
+      reading = poll_pressure(QdrantLayout.guard_kinds(version))
+      poll(col, reading.limits, version)
     end
 
     :ok
@@ -164,12 +167,12 @@ defmodule Engram.PromEx.Qdrant do
     end
   end
 
-  defp poll(col, limits) do
+  defp poll(col, limits, version) do
     case Qdrant.collection_info(col, :search) do
       {:ok, info} ->
         :telemetry.execute(@collection_event, collection_measurements(info), %{})
         poll_memory(col)
-        _ = Qdrant.reconcile_strict_mode(col, info, limits)
+        _ = Qdrant.reconcile_strict_mode(col, info, limits, version)
 
       {:error, reason} ->
         Logger.warning("qdrant collection poll skipped: #{Metadata.safe_reason(reason)}")
@@ -177,7 +180,10 @@ defmodule Engram.PromEx.Qdrant do
   end
 
   # An unknown kind publishes nothing (absent, not a misleading 0).
-  defp poll_pressure do
+  # `guards`: the strict-mode guards this server honours. A limit is exported
+  # only for those: on Qdrant 1.19+ there is no per-collection disk guard, and
+  # a gauge would claim one.
+  defp poll_pressure(guards) do
     reading = Qdrant.read_pressure()
 
     for kind <- [:disk, :heap] do
@@ -187,7 +193,7 @@ defmodule Engram.PromEx.Qdrant do
       if is_integer(reading[kind]),
         do: :telemetry.execute(@pressure_event, %{percent: reading[kind]}, tags)
 
-      :telemetry.execute(@limit_event, %{percent: limit.percent}, tags)
+      if kind in guards, do: :telemetry.execute(@limit_event, %{percent: limit.percent}, tags)
 
       if is_integer(limit.reserve),
         do: :telemetry.execute(@reserve_event, %{bytes: limit.reserve}, tags)

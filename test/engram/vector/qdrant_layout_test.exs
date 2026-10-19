@@ -11,6 +11,8 @@ defmodule Engram.Vector.QdrantLayoutTest do
   @v1182 Version.parse!("1.18.2")
   @v1181 Version.parse!("1.18.1")
   @v1171 Version.parse!("1.17.1")
+  @v1192 Version.parse!("1.19.2")
+  @v1210 Version.parse!("1.21.0")
 
   # What `config` reads back once the desired params are applied: Qdrant
   # echoes the merged values under its GET field names (`optimizer_config`,
@@ -72,6 +74,39 @@ defmodule Engram.Vector.QdrantLayoutTest do
 
       refute Map.has_key?(QdrantLayout.desired(@v1171, nil, false), "strict_mode_config")
       refute Map.has_key?(QdrantLayout.desired(nil, nil, false), "strict_mode_config")
+    end
+
+    # Qdrant 1.19 moved max_disk_usage_percent to the node-wide /quotas
+    # (absent from 1.19.0's StrictModeConfig); max_resident_memory_percent is
+    # deprecated there, "Scheduled for removal in 1.21".
+    test "the disk guard is 1.18.2 <= v < 1.19.0; memory 1.18.1 <= v < 1.21.0" do
+      assert QdrantLayout.desired(@v1192)["strict_mode_config"] == %{
+               "enabled" => true,
+               "max_resident_memory_percent" => 85
+             }
+
+      refute Map.has_key?(QdrantLayout.desired(@v1210), "strict_mode_config")
+      refute Map.has_key?(QdrantLayout.desired(@v1210, nil, false), "strict_mode_config")
+
+      assert QdrantLayout.guard_kinds(@v1182) == [:heap, :disk]
+      assert QdrantLayout.guard_kinds(Version.parse!("1.18.3")) == [:heap, :disk]
+      assert QdrantLayout.guard_kinds(@v1192) == [:heap]
+      assert QdrantLayout.guard_kinds(@v1210) == []
+      assert QdrantLayout.guard_kinds(nil) == []
+    end
+
+    test "1.19.2: a strict config without the disk field is already applied" do
+      config =
+        @prod_info["config"]
+        |> put_in(["params", "vectors", "dense", "on_disk"], true)
+        |> put_in(["params", "sparse_vectors", "keyword", "index"], %{"on_disk" => true})
+        |> put_in(["optimizer_config", "max_optimization_threads"], 1)
+        |> put_in(["strict_mode_config"], %{
+          "enabled" => true,
+          "max_resident_memory_percent" => 85
+        })
+
+      assert QdrantLayout.diff(config, QdrantLayout.desired(@v1192)) == %{}
     end
 
     test "never changes size, distance or datatype" do

@@ -20,12 +20,23 @@ defmodule Engram.Vector.QdrantLayout do
   partial body never resets an unrelated setting.
   """
 
-  # Strict-mode fields by the first Qdrant release that accepts them
-  # (openapi.json per tag: resident memory 1.18.1, disk 1.18.2). Self-host CI
-  # pins 1.17.1, which has neither.
+  # Strict-mode fields by the Qdrant versions that honour them, `since <= v <
+  # until`, from each tag's docs/redoc/master/openapi.json `StrictModeConfig`:
+  #   * memory: added 1.18.1; 1.19.0 marks it "Deprecated: use the node-wide
+  #     quota config (`PUT /quotas`) ... Scheduled for removal in 1.21."
+  #   * disk: added 1.18.2 (still in 1.18.3); GONE from 1.19.0, moved to the
+  #     node-wide `/quotas`. 1.19 answers a PATCH carrying it with 200 and
+  #     drops it, so sending it there never converges.
+  # Outside its range a field is never sent, so `diff/2` never compares it.
+  # Self-host CI pins 1.17.1, which has neither.
+  #
+  # ponytail: no `/quotas` management. It is node-wide, and staging, Cloud and
+  # shared self-host servers carry other collections. Add it for single-tenant
+  # self-host when needed; until then the app-side preflight is the only disk
+  # guard on 1.19+.
   @strict_guards [
-    {"max_resident_memory_percent", :heap, "1.18.1"},
-    {"max_disk_usage_percent", :disk, "1.18.2"}
+    {"max_resident_memory_percent", :heap, "1.18.1", "1.21.0"},
+    {"max_disk_usage_percent", :disk, "1.18.2", "1.19.0"}
   ]
 
   @default_limits %{disk: %{percent: 85, reserve: nil}, heap: %{percent: 85, reserve: nil}}
@@ -77,12 +88,22 @@ defmodule Engram.Vector.QdrantLayout do
     end
   end
 
-  defp supported_guards(nil, _limits), do: []
-
   defp supported_guards(version, limits) do
-    for {field, kind, since} <- @strict_guards,
-        Version.compare(version, since) != :lt,
+    kinds = guard_kinds(version)
+
+    for {field, kind, _since, _until} <- @strict_guards,
+        kind in kinds,
         do: {field, limits[kind].percent}
+  end
+
+  @doc "The strict-mode guards (`:heap`, `:disk`) `version` honours; `[]` when unknown."
+  @spec guard_kinds(Version.t() | nil) :: [:heap | :disk]
+  def guard_kinds(nil), do: []
+
+  def guard_kinds(version) do
+    for {_field, kind, since, until} <- @strict_guards,
+        Version.compare(version, since) != :lt and Version.compare(version, until) == :lt,
+        do: kind
   end
 
   @doc """

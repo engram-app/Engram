@@ -30,7 +30,9 @@ defmodule Engram.Vector.QdrantReconcileTest do
 
   # A stateful fake: GET returns `info`, PATCH merges the body into it the way
   # Qdrant does (see collection_meta_ops.rs update_collection) and records it.
-  defp fake_collection(bypass, col, info) do
+  # `dropped`: strict-mode fields the fake server accepts with 200 and then
+  # discards, the way Qdrant 1.19 treats `max_disk_usage_percent`.
+  defp fake_collection(bypass, col, info, dropped \\ []) do
     test_pid = self()
     {:ok, agent} = Agent.start_link(fn -> info end)
 
@@ -42,12 +44,14 @@ defmodule Engram.Vector.QdrantReconcileTest do
       {:ok, raw, conn} = Plug.Conn.read_body(conn)
       body = Jason.decode!(raw)
       send(test_pid, {:patch, body})
-      Agent.update(agent, &apply_patch(&1, body))
+      Agent.update(agent, &apply_patch(&1, body, dropped))
       json(conn, 200, %{result: true, status: "ok"})
     end)
   end
 
-  defp apply_patch(info, body) do
+  defp apply_patch(info, body, dropped) do
+    body = update_in(body, [Access.key("strict_mode_config", %{})], &Map.drop(&1, dropped))
+
     Enum.reduce(body, info, fn
       {"vectors", v}, acc ->
         update_in(acc, ["config", "params", "vectors"], &deep_merge(&1, v))
@@ -275,6 +279,56 @@ defmodule Engram.Vector.QdrantReconcileTest do
       assert Qdrant.parse_volume_stats(
                ~s|kubelet_volume_stats_used_bytes{persistentvolumeclaim="qdrant-storage-0"} 4\n|
              ) == nil
+    end
+  end
+
+  describe "Qdrant 1.19+ (disk guard moved to node-wide /quotas)" do
+    test "1.19.2: never sends the disk field, converges after one PATCH", %{bypass: bypass} do
+      stub_version(bypass, "1.19.2")
+      # 1.19 answers 200 to a PATCH carrying max_disk_usage_percent and drops it.
+      fake_collection(bypass, "engram_notes", @prod_info, ["max_disk_usage_percent"])
+      stub_memory(bypass, "engram_notes", 100)
+      stub_no_sys_metrics(bypass)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, changed} = Qdrant.reconcile_config("engram_notes")
+          assert "strict_mode_config" in changed
+        end)
+
+      assert log =~ "qdrant disk write guard unavailable on 1.19.2"
+
+      assert_receive {:patch, %{"strict_mode_config" => strict}}
+      assert strict == %{"enabled" => true, "max_resident_memory_percent" => 85}
+
+      assert {:ok, []} = Qdrant.reconcile_config("engram_notes")
+      refute_receive {:patch, %{"strict_mode_config" => _}}
+    end
+
+    test "1.21: sends neither guard", %{bypass: bypass} do
+      stub_version(bypass, "1.21.0")
+      fake_collection(bypass, "engram_notes", @prod_info)
+      stub_memory(bypass, "engram_notes", 100)
+      stub_no_sys_metrics(bypass)
+
+      assert {:ok, changed} = Qdrant.reconcile_config("engram_notes")
+      refute "strict_mode_config" in changed
+    end
+
+    test "1.19.2 with QDRANT_STRICT_MODE=false converges too", %{bypass: bypass} do
+      ServiceConfig.put_override(:qdrant_strict_mode, false)
+      stub_version(bypass, "1.19.2")
+      fake_collection(bypass, "engram_notes", @prod_info, ["max_disk_usage_percent"])
+      stub_memory(bypass, "engram_notes", 100)
+      stub_no_sys_metrics(bypass)
+
+      assert {:ok, _} = Qdrant.reconcile_config("engram_notes")
+
+      assert_receive {:patch,
+                      %{"strict_mode_config" => %{"max_resident_memory_percent" => 100} = strict}}
+
+      assert map_size(strict) == 1
+      assert {:ok, []} = Qdrant.reconcile_config("engram_notes")
     end
   end
 

@@ -292,4 +292,53 @@ defmodule Engram.PromEx.QdrantCollectionTest do
     assert_receive {@collection_event, _, _}
     refute_receive :patched
   end
+
+  test "1.19.2: one PATCH, then quiet; no disk strict-limit gauge", %{bypass: bypass} do
+    test_pid = self()
+    ServiceConfig.put_override(:qdrant_reconcile_config, true)
+    {:ok, info} = Agent.start_link(fn -> @info end)
+
+    Bypass.stub(bypass, "GET", "/", &json(&1, 200, %{version: "1.19.2"}))
+    Bypass.stub(bypass, "GET", "/metrics", &Plug.Conn.send_resp(&1, 404, ""))
+
+    Bypass.stub(bypass, "GET", "/sys_metrics", fn conn ->
+      Plug.Conn.send_resp(conn, 200, """
+      kubelet_volume_stats_capacity_bytes{persistentvolumeclaim="qdrant-storage-qdrant-0"} 8.37e+09
+      kubelet_volume_stats_used_bytes{persistentvolumeclaim="qdrant-storage-qdrant-0"} 4.35e+09
+      """)
+    end)
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes", fn conn ->
+      json(conn, 200, %{result: Agent.get(info, & &1)})
+    end)
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes/memory", fn conn ->
+      json(conn, 200, %{result: @memory})
+    end)
+
+    # 1.19 accepts max_disk_usage_percent with a 200 and discards it.
+    Bypass.stub(bypass, "PATCH", "/collections/engram_notes", fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      strict = Jason.decode!(raw)["strict_mode_config"]
+      send(test_pid, {:patch, strict})
+      kept = Map.drop(strict, ["max_disk_usage_percent"])
+
+      Agent.update(info, fn i ->
+        update_in(i, ["config", "strict_mode_config"], &Map.merge(&1, kept))
+      end)
+
+      json(conn, 200, %{result: true})
+    end)
+
+    Plugin.execute_collection_metrics()
+    assert_receive {:patch, %{"enabled" => true, "max_resident_memory_percent" => 85}}
+    assert_receive {@limit_event, %{percent: 85}, %{kind: "heap"}}
+    refute_received {@limit_event, _, %{kind: "disk"}}
+    # The app-side disk reading still feeds the preflight.
+    assert_received {@pressure_event, %{percent: 51}, %{kind: "disk"}}
+
+    Engram.Vector.Qdrant.forget_pressure()
+    Plugin.execute_collection_metrics()
+    refute_receive {:patch, _}
+  end
 end

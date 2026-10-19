@@ -409,16 +409,30 @@ defmodule Engram.Vector.Qdrant do
 
   defp strict_mode?, do: ServiceConfig.get(:qdrant_strict_mode, true)
 
+  # Boot only (this runs once per node). A guard the server does not honour
+  # is not applied, so say which, rather than imply a write cap that is not
+  # there. The app-side preflight still reads disk pressure where it can.
+  defp log_missing_guards(nil), do: :ok
+
+  defp log_missing_guards(version) do
+    supported = QdrantLayout.guard_kinds(version)
+
+    for {kind, name} <- [disk: "disk", heap: "memory"], kind not in supported do
+      Logger.warning("qdrant #{name} write guard unavailable on #{version}")
+    end
+
+    :ok
+  end
+
   defp do_reconcile_config(col) do
     with {:ok, info} <- collection_info(col) do
+      version = server_version()
+      log_missing_guards(version)
+
       diff =
         QdrantLayout.diff(
           info["config"] || %{},
-          QdrantLayout.desired(
-            server_version(),
-            strict_limits(col, volume_stats()),
-            strict_mode?()
-          )
+          QdrantLayout.desired(version, strict_limits(col, volume_stats()), strict_mode?())
         )
 
       {strict, rest} = Map.split(diff, ["strict_mode_config"])
@@ -474,15 +488,15 @@ defmodule Engram.Vector.Qdrant do
   PATCHes only when a percent moved (whole points, so >= 1), then logs and
   emits `[:engram, :qdrant, :strict_limits_changed]`.
   """
-  def reconcile_strict_mode(col, info, limits) do
+  def reconcile_strict_mode(col, info, limits, version \\ :fetch) do
     if ServiceConfig.get(:qdrant_reconcile_config, true),
-      do: do_reconcile_strict_mode(col, info, limits),
+      do: do_reconcile_strict_mode(col, info, limits, version),
       else: :ok
   end
 
-  defp do_reconcile_strict_mode(col, info, limits) do
+  defp do_reconcile_strict_mode(col, info, limits, version) do
     want =
-      server_version()
+      if(version == :fetch, do: server_version(), else: version)
       |> QdrantLayout.desired(limits, strict_mode?())
       |> Map.take(["strict_mode_config"])
 
@@ -626,9 +640,11 @@ defmodule Engram.Vector.Qdrant do
     end)
   end
 
-  # `GET /` -> `%{"version" => "1.18.2"}`. nil when unreadable: strict mode is
-  # then skipped (not guessed), and the next boot tries again.
-  defp server_version do
+  @doc """
+  `GET /` -> the server's `Version`, or nil when unreadable: strict mode is
+  then skipped (not guessed), and the next call tries again.
+  """
+  def server_version do
     with {:ok, %{status: 200, body: %{"version" => v}}} <-
            Req.get(base_url() <> "/", req_opts(:search)),
          {:ok, version} <- Version.parse(v) do
