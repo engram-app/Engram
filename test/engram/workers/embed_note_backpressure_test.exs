@@ -167,4 +167,75 @@ defmodule Engram.Workers.EmbedNoteBackpressureTest do
     assert reloaded(note).dense_indexed_hash == note.content_hash
     assert UsageMeters.lifetime_embed_tokens(note.user_id) == charged
   end
+
+  # 2026-10-19 prod: a commit that failed AFTER the embed (the chunk insert
+  # overflowed the bind cap) re-embedded and re-charged the whole note on every
+  # retry. Retention now spans the commit, so any post-embed failure is paid once.
+  test "a commit error after the embed: the retry neither re-embeds nor re-charges",
+       %{bypass: bypass, note: note} do
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    upserts = fn ->
+      case Agent.get_and_update(calls, &{&1, &1 + 1}) do
+        0 -> {400, ~s({"status":{"error":"Wrong input: boom"}})}
+        _ -> {200, ~s({"result":true})}
+      end
+    end
+
+    fake_qdrant(bypass, upserts: upserts)
+    before = UsageMeters.lifetime_embed_tokens(note.user_id)
+    embeds_ok(1)
+
+    assert {:error, _} = perform_job(EmbedNote, %{note_id: note.id, user_id: note.user_id})
+    charged = UsageMeters.lifetime_embed_tokens(note.user_id)
+    assert charged > before, "Voyage was paid, so the reservation stays charged"
+
+    assert :ok = perform_job(EmbedNote, %{note_id: note.id, user_id: note.user_id})
+    assert reloaded(note).dense_indexed_hash == note.content_hash
+    assert UsageMeters.lifetime_embed_tokens(note.user_id) == charged
+  end
+
+  test "a raise inside the commit: the retry neither re-embeds nor re-reserves",
+       %{bypass: bypass, note: note} do
+    fake_qdrant(bypass, [])
+    embeds_ok(1)
+
+    user = Engram.Accounts.get_user_with_subscription!(note.user_id)
+    vault = Repo.get!(Engram.Vaults.Vault, note.vault_id, skip_tenant_check: true)
+    {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
+    test_pid = self()
+
+    opts = fn in_commit ->
+      [
+        reserve_tokens: fn tokens ->
+          send(test_pid, {:reserved, tokens})
+          true
+        end,
+        release_tokens: fn tokens -> send(test_pid, {:released, tokens}) end,
+        in_commit: in_commit
+      ]
+    end
+
+    assert_raise RuntimeError, "chunk insert blew up", fn ->
+      Engram.Indexing.index_note_with_usage(
+        note,
+        vault,
+        user,
+        opts.(fn _count, _dense? -> raise "chunk insert blew up" end)
+      )
+    end
+
+    assert_received {:reserved, _}
+
+    assert {:ok, _count, 0, true} =
+             Engram.Indexing.index_note_with_usage(
+               note,
+               vault,
+               user,
+               opts.(fn _count, _dense? -> :ok end)
+             )
+
+    refute_received {:reserved, _}
+    refute_received {:released, _}
+  end
 end

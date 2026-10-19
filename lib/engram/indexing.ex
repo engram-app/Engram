@@ -119,14 +119,17 @@ defmodule Engram.Indexing do
         end
 
       {:ok, prepared} ->
+        # Retained BEFORE the commit, not on a refusal: any failure after the
+        # embed (Qdrant backpressure, a Qdrant error, a raise in the chunk
+        # write) must not make the retry pay Voyage and the meter again.
+        # 2026-10-19: a 7,304-chunk note crashed the row insert 5 times and
+        # each attempt re-embedded the whole note (3-4 full paid passes).
+        retain(prepared.retain)
+
         case commit_index(prepared, &run_in_commit(note, opts, &1, prepared.dense?)) do
           {:ok, count} ->
             forget_retained(prepared.retain)
             {:ok, count, prepared.embedded_bytes, prepared.dense?}
-
-          {:error, :qdrant_backpressure} = refused ->
-            retain(prepared.retain)
-            refused
 
           {:error, _} = err ->
             err
@@ -254,6 +257,12 @@ defmodule Engram.Indexing do
     )
   end
 
+  # Rows per chunk `insert_all`. A row binds 10 parameters (chunk_row/5) against
+  # the protocol's 65535 cap, which leaves room for 6553; 3000 is a deliberate
+  # half-margin (as Links' @insert_chunk) so a new column cannot silently
+  # re-arm the overflow. Prod hit it at 73040 params (7,304 chunks, one note).
+  @insert_batch 3000
+
   @doc """
   Phase 2 of the indexing pipeline. Applies the prepared structure: upserts the
   points for chunks that changed, PATCHes the note-level payload onto the ones
@@ -326,7 +335,12 @@ defmodule Engram.Indexing do
       {:ok, _} =
         Repo.with_tenant(note.user_id, fn ->
           Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
-          {_, _} = Repo.insert_all(Chunk, chunk_rows, skip_tenant_check: true)
+          # Batched inside the same transaction: one statement for a big note
+          # overflows the protocol's bind cap and kills the connection.
+          chunk_rows
+          |> Enum.chunk_every(@insert_batch)
+          |> Enum.each(&Repo.insert_all(Chunk, &1, skip_tenant_check: true))
+
           in_commit.(length(chunk_rows))
         end)
 
@@ -761,9 +775,10 @@ defmodule Engram.Indexing do
   # pass would send (reused chunks cost nothing). Refused → re-plan sparse:
   # the fingerprints differ, so a dense plan cannot be reused for a sparse pass.
   #
-  # Third element: dense vectors an earlier attempt already paid for and Qdrant
-  # refused to store (`retain/1`). A hit skips the reservation AND the embed,
-  # so a backpressure retry is charged once.
+  # Third element: dense vectors an earlier attempt already paid for but did
+  # not commit (`retain/1`, held across the commit). A hit skips the
+  # reservation AND the embed, so a retry after any post-embed failure is
+  # charged once.
   defp plan_within_budget(note, chunks, content_key, false, _opts),
     do: {false, plan_chunks(note, chunks, content_key, false), nil}
 
@@ -791,8 +806,9 @@ defmodule Engram.Indexing do
 
   # ponytail: node-local, 30 min TTL, no size cap. A retry on another node, or
   # after the TTL, re-pays Voyage for that note; the bytes held are one note's
-  # vectors per refused job, and EmbedNote's preflight snoozes most jobs before
-  # Qdrant gets to refusing. Persist them (chunks table) if refusals get common.
+  # packed vectors per in-flight or failed commit (~30 MB for 7k chunks at
+  # 1024d f32), evicted on success. Oban's default backoff puts all five
+  # attempts inside the TTL. Persist them (chunks table) if failures get common.
   defp retained_key(note, texts),
     do: {note.id, :crypto.hash(:sha256, :erlang.term_to_binary({embed_model(), texts}))}
 
