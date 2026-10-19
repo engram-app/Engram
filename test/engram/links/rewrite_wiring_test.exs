@@ -202,7 +202,7 @@ defmodule Engram.Links.RewriteWiringTest do
   end
 
   describe "folder rename fan-out (Phase 3, #648/#1231)" do
-    test "enqueues one rewrite per moved note + one rebind per DISTINCT basename", %{
+    test "enqueues one rewrite per moved note and no rebind", %{
       user: user,
       vault: vault
     } do
@@ -216,10 +216,6 @@ defmodule Engram.Links.RewriteWiringTest do
 
       {:ok, c} =
         Notes.upsert_note(user, vault, %{"path" => "docs/Two.md", "content" => "2"}, actor: "api")
-
-      # upsert_note-on-CREATE enqueues its own RebindNoteLinks jobs — count
-      # the rename's delta, not absolutes.
-      rebinds_before = length(all_enqueued(worker: RebindNoteLinks))
 
       {:ok, 3} = Notes.rename_folder(user, vault, "docs", "archive")
 
@@ -237,8 +233,8 @@ defmodule Engram.Links.RewriteWiringTest do
         refute Map.has_key?(job.args, "old_path_ciphertext")
       end
 
-      # 3 moved notes, 2 distinct basenames (One.md ×2, Two.md) ⇒ delta 2.
-      assert length(all_enqueued(worker: RebindNoteLinks)) - rebinds_before == 2
+      # Targets resolve on read: nothing re-resolves edges after a move.
+      assert all_enqueued(worker: RebindNoteLinks) == []
     end
 
     test "no-op folder rename (same folder) enqueues no rewrite jobs", %{

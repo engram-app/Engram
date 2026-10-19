@@ -234,75 +234,32 @@ defmodule Engram.Links.LinksRlsTest do
              """
     end
 
-    test "bind_danglers_for_hmac/3 actually binds the dangler",
+    test "links_for_note/2 resolves against candidates it can see",
          %{user: user, vault: vault, source: source} do
-      # Replace the seeded edge set with a single DANGLING edge, then create its
-      # target. This is the state the rebind worker exists to resolve.
+      # A target created AFTER the link: only the read-time candidate query can
+      # resolve it, so a filtered candidate read leaves it dangling.
       :ok = Links.replace_links(user, vault, source.id, Parser.extract("See [[Later]]."))
       later = Engram.Fixtures.insert_note!(user, vault, %{path: "deep/Later.md"})
 
-      hmac = Links.basename_hmac(user, Links.basename_key("deep/Later.md"))
+      assert {:returned, [%{target_note_id: id}]} =
+               as_prod_role(fn -> Links.links_for_note(user, source.id) end)
 
-      # Committing harness: the assertion is about the edge being bound
-      # afterwards, which a rollback would discard.
-      _ = as_prod_role_committing(fn -> Links.bind_danglers_for_hmac(user, vault, hmac) end)
-
-      bound =
-        Repo.one(
-          from(l in NoteLink, where: l.source_note_id == ^source.id, select: l.target_note_id),
-          skip_tenant_check: true
-        )
-
-      assert bound == later.id,
-             "the dangler never bound — the edge read returned empty under RLS, the `edges != []` " <>
-               "guard short-circuited, and the worker reported :ok. Notes created after a link " <>
-               "is written stay permanently unlinked"
+      assert id == later.id,
+             "the link read as dangling: the candidate query was filtered by RLS, so a " <>
+               "note created after the link never shows as its target"
     end
 
-    test "on_attachments_soft_deleted/2 actually clears the attachment edge",
+    test "backlinks_for_note/2 resolves an attachment-first target to the note",
          %{user: user, vault: vault, source: source} do
-      att = Engram.Fixtures.insert_attachment!(user, vault, %{path: "img.png"})
-      :ok = Links.replace_links(user, vault, source.id, Parser.extract("See [[img.png]]."))
+      # `[[Node.js]]` prefers attachments; with none visible it falls back to
+      # the note. A filtered note read would answer no backlinks at all.
+      :ok = Links.replace_links(user, vault, source.id, Parser.extract("See [[Node.js]]."))
+      node = Engram.Fixtures.insert_note!(user, vault, %{path: "Node.js.md"})
 
-      # Force the edge to point at the attachment rather than relying on
-      # resolution, so a miss here cannot make the test vacuous.
-      {1, _} =
-        from(l in NoteLink, where: l.source_note_id == ^source.id)
-        |> Repo.update_all(
-          [set: [target_attachment_id: att.id, target_note_id: nil]],
-          skip_tenant_check: true
-        )
+      assert {:returned, [%{source_note_id: src}]} =
+               as_prod_role(fn -> Links.backlinks_for_note(user, node.id) end)
 
-      _ =
-        as_prod_role_committing(fn -> Links.on_attachments_soft_deleted(user.id, [att.id]) end)
-
-      # Row count FIRST. `Repo.one(select: col)` returns nil for zero rows just
-      # as it does for one row with a nil column, so the nil assertion below
-      # would also pass if the edge had been DELETED. The contract is
-      # flip-to-dangling and KEEP the row, so it can re-bind if an attachment
-      # reappears at that path.
-      assert Repo.one(
-               from(l in NoteLink,
-                 where: l.source_note_id == ^source.id,
-                 select: count(l.id)
-               ),
-               skip_tenant_check: true
-             ) == 1,
-             "the edge row itself is gone — on_attachments_soft_deleted/2 must flip the edge to " <>
-               "dangling, not delete it, or a re-uploaded attachment never regains its backlinks"
-
-      still_pointing =
-        Repo.one(
-          from(l in NoteLink,
-            where: l.source_note_id == ^source.id,
-            select: l.target_attachment_id
-          ),
-          skip_tenant_check: true
-        )
-
-      assert is_nil(still_pointing),
-             "the edge still points at a deleted attachment — the UPDATE was filtered, reported " <>
-               "{0, nil} and returned :ok, so embeds render against a dead attachment id"
+      assert src == source.id
     end
 
     # NOTE: a cross-tenant read test was removed from here rather than kept.

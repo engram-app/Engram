@@ -228,8 +228,8 @@ defmodule Engram.LinksTest do
     end
   end
 
-  describe "bind_danglers_for_hmac/3" do
-    test "binds a dangler when its target is created", %{user: user, vault: vault} do
+  describe "resolve on read" do
+    test "a dangler resolves once its target is created", %{user: user, vault: vault} do
       source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source.md"})
 
       :ok =
@@ -239,15 +239,8 @@ defmodule Engram.LinksTest do
 
       target = Engram.Fixtures.insert_note!(user, vault, %{path: "deep/Later.md"})
 
-      :ok =
-        Links.bind_danglers_for_hmac(
-          user,
-          vault,
-          Links.basename_hmac(user, Links.basename_key("deep/Later.md"))
-        )
-
-      {:ok, [link]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
-      assert link.target_note_id == target.id
+      assert [%{target_note_id: id}] = Links.links_for_note(user, source.id)
+      assert id == target.id
     end
 
     test "a shorter-path newcomer steals the binding", %{user: user, vault: vault} do
@@ -259,14 +252,13 @@ defmodule Engram.LinksTest do
           %{target: "Win", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
         ])
 
-      {:ok, [l0]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
-      assert l0.target_note_id == old.id
+      assert [%{target_note_id: id0}] = Links.links_for_note(user, source.id)
+      assert id0 == old.id
 
       new = Engram.Fixtures.insert_note!(user, vault, %{path: "Win.md"})
-      :ok = Links.bind_danglers_for_hmac(user, vault, Links.basename_hmac(user, "win"))
 
-      {:ok, [l1]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
-      assert l1.target_note_id == new.id
+      assert [%{target_note_id: id1}] = Links.links_for_note(user, source.id)
+      assert id1 == new.id
     end
 
     # replace_links skips the rewrite when the stored edges equal the new
@@ -295,7 +287,7 @@ defmodule Engram.LinksTest do
       assert is_nil(new.alias_ciphertext)
     end
 
-    test "a corrupt edge is skipped and logged; other edges still process", %{
+    test "a corrupt edge reads as dangling and logged; other edges still resolve", %{
       user: user,
       vault: vault
     } do
@@ -328,26 +320,24 @@ defmodule Engram.LinksTest do
 
       target = Engram.Fixtures.insert_note!(user, vault, %{path: "Later.md"})
 
-      assert :ok =
-               Links.bind_danglers_for_hmac(user, vault, Links.basename_hmac(user, "later"))
+      log =
+        capture_log(fn ->
+          # source2's healthy edge resolves; the corrupt one crashes nothing.
+          [l2] = Links.links_for_note(user, source2.id)
+          assert l2.target_note_id == target.id
 
-      # source2's healthy edge bound normally — the corrupt edge didn't
-      # crash the whole job.
-      [l2] = Links.links_for_note(user, source2.id)
-      assert l2.target_note_id == target.id
+          assert [%{source_note_id: src}] = Links.backlinks_for_note(user, target.id)
+          assert src == source2.id
 
-      # source1's corrupt edge is untouched (still dangling), not crashed.
-      {:ok, [l1]} =
-        Repo.with_tenant(user.id, fn ->
-          Repo.all(from(l in NoteLink, where: l.id == ^edge1.id))
+          assert [%{dangling: true, target_text: nil}] = Links.links_for_note(user, source1.id)
         end)
 
-      assert is_nil(l1.target_note_id)
+      assert log =~ "links_decrypt_failed"
     end
   end
 
   describe "on_note_soft_deleted/2" do
-    test "drops outgoing and flips incoming to dangling", %{user: user, vault: vault} do
+    test "drops outgoing edges", %{user: user, vault: vault} do
       a = Engram.Fixtures.insert_note!(user, vault, %{path: "A.md"})
       b = Engram.Fixtures.insert_note!(user, vault, %{path: "B.md"})
 
@@ -364,8 +354,8 @@ defmodule Engram.LinksTest do
       :ok = Links.on_note_soft_deleted(user.id, b.id)
 
       {:ok, links} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
-      # b's outgoing edge is gone; a's edge to b is dangling again
-      assert [%{source_note_id: source_id, target_note_id: nil}] = links
+      # b's outgoing edge is gone; a's edge to b stays (b may come back)
+      assert [%{source_note_id: source_id}] = links
       assert source_id == a.id
     end
   end
