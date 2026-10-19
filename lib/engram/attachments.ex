@@ -1357,6 +1357,46 @@ defmodule Engram.Attachments do
     |> unwrap_tenant()
   end
 
+  @doc """
+  The lifetime-quota check for an upload whose size is known before its bytes
+  are, so a raw upload over quota is refused without reading the body. The
+  authoritative check inside `upsert_attachment/3` still runs; this only
+  answers early, and only when that check is certain to refuse:
+
+    * the same arithmetic (`validate_storage_cap/3`, net of the live file at
+      `path`), so it is never stricter;
+    * never when the file at `path` has the same size: those may be the same
+      bytes, which the upsert answers as a no-op 200 even over quota.
+
+  The common case costs one usage query; the existing-file lookup runs only
+  when the upload would not fit on top of current usage.
+  """
+  @spec check_storage_cap(map(), map(), String.t(), non_neg_integer()) ::
+          :ok | {:error, {:storage_cap_reached, integer(), integer()}}
+  def check_storage_cap(user, vault, path, size) do
+    with n when is_integer(n) and n >= 0 <- Billing.effective_limit(user, :attachment_bytes_cap),
+         {:ok, %{used_bytes: used}} when used + size > n <- storage_usage(user),
+         {:ok, existing} <- existing_at(user, vault, path),
+         false <- same_size?(existing, size) do
+      validate_storage_cap(user, existing, size)
+    else
+      _ -> :ok
+    end
+  end
+
+  # A key error stands the early check down rather than guessing "no file to
+  # net out", which is the stricter answer.
+  defp existing_at(user, vault, path) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+      path_hmac = Crypto.hmac_field(filter_key, PathSanitizer.sanitize(path))
+      {:ok, fetch_existing(user, vault.id, path_hmac)}
+    end
+  end
+
+  defp same_size?(%Attachment{size_bytes: size}, size), do: true
+  defp same_size?(_existing, _size), do: false
+
   # -- Private helpers --
 
   # Pricing v2 §G — per-plan max_file_bytes via `Engram.Billing`. When

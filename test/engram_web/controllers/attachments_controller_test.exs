@@ -529,6 +529,70 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert get_resp_header(conn, "connection") == ["close"]
     end
 
+    # The body below is 5 bytes: read, it would fit the quota. Only the
+    # declared length can make this a 402, so a 402 proves no read happened.
+    test "a declared content-length over the remaining quota is 402 before reading", %{
+      conn: conn,
+      user: user
+    } do
+      insert(:user_limit_override, user: user, key: "attachment_bytes_cap", value: %{"v" => 2000})
+      assert json_response(raw_post(conn, %{path: "first.png"}, :binary.copy("a", 1500)), 200)
+
+      conn =
+        conn
+        |> put_req_header("content-length", "1000")
+        |> raw_post(%{path: "second.png", mtime: "1.0"}, "small")
+
+      body = json_response(conn, 402)
+      assert body["reason"] == "attachments_quota_exceeded"
+      assert body["limit"] == 2000
+      assert body["current"] == 1500
+    end
+
+    test "the early quota check nets out the file being replaced", %{conn: conn, user: user} do
+      insert(:user_limit_override, user: user, key: "attachment_bytes_cap", value: %{"v" => 2000})
+      assert json_response(raw_post(conn, %{path: "f.png"}, :binary.copy("a", 1500)), 200)
+
+      # 1500 used + 1000 declared > 2000, but it replaces the 1500.
+      conn = raw_post(conn, %{path: "f.png", mtime: "2.0"}, :binary.copy("b", 1000))
+      assert json_response(conn, 200)["attachment"]["size_bytes"] == 1000
+    end
+
+    # Same size as the stored file may be the same bytes, which the upload
+    # answers as a no-op 200 even over quota; only a read can tell.
+    test "the early quota check never refuses a same-size re-upload", %{conn: conn, user: user} do
+      assert json_response(raw_post(conn, %{path: "f.png"}, :binary.copy("a", 1500)), 200)
+      # Quota drops below what is already stored (e.g. a downgrade).
+      insert(:user_limit_override, user: user, key: "attachment_bytes_cap", value: %{"v" => 1000})
+
+      conn = raw_post(conn, %{path: "f.png", mtime: "2.0"}, :binary.copy("a", 1500))
+      assert json_response(conn, 200)["attachment"]["size_bytes"] == 1500
+    end
+
+    test "a text-only plan's non-text upload is 402 without reading the body", %{
+      conn: conn,
+      user: user
+    } do
+      insert(:user_limit_override,
+        user: user,
+        key: "attachments_all_types",
+        value: %{"v" => false},
+        reason: "revoke for test",
+        set_by: "test"
+      )
+
+      declared = Integer.to_string(EngramWeb.Endpoint.max_body_bytes() + 1)
+
+      conn =
+        conn
+        |> put_req_header("content-length", declared)
+        |> raw_post(%{path: "photo.png", mtime: "1.0"}, "PNG")
+
+      assert json_response(conn, 402)["reason"] == "attachment_must_be_text"
+      {Plug.Adapters.Test.Conn, state} = conn.adapter
+      assert state.req_body == "PNG"
+    end
+
     for bad <- ["NaN", "1,5", "", "inf", "1e400"] do
       test "422 for mtime #{inspect(bad)} and nothing is stored", %{conn: conn} do
         conn1 = raw_post(conn, %{path: "m.png", mtime: unquote(bad)}, @sample_content)
