@@ -386,21 +386,20 @@ defmodule EngramWeb.CrdtChannel do
       user = socket.assigns.current_user
       vault = socket.assigns.vault
 
-      case Notes.genesis_crdt_note(user, vault, note_id, path,
-             origin: socket.assigns[:client_type]
-           ) do
-        {:ok, note} ->
-          genesis =
-            user
-            |> maybe_seed_detached(vault, note, b64)
-            |> reconcile_with_row(note)
+      # The seed runs inside the row's own transaction when the row is new, so
+      # the vault's other devices are never told about a note before its body
+      # exists (#1409; see Notes.genesis_crdt_note/5 `:seed`).
+      seed = fn note -> maybe_seed_detached(user, vault, note, b64) end
 
-          # `seeded` is retained for older plugins, but it is a LOSSY view of
-          # `genesis` and must never again be the only thing on the wire (#476).
-          {:reply,
-           {:ok,
-            %{doc_id: note.id, seeded: genesis == :stored, genesis: Atom.to_string(genesis)}},
-           socket}
+      case Notes.genesis_crdt_note(user, vault, note_id, path,
+             origin: socket.assigns[:client_type],
+             seed: seed
+           ) do
+        {:seeded, note, outcome} ->
+          reply_created(note, reconcile_with_row(outcome, note), socket)
+
+        {:ok, note} ->
+          reply_created(note, note |> seed.() |> reconcile_with_row(note), socket)
 
         {:adopted, note} ->
           # Unchanged behaviour for the single create: the client's crdtCreate
@@ -458,6 +457,14 @@ defmodule EngramWeb.CrdtChannel do
       {:error, :bad_doc_id} -> {:reply, {:error, %{reason: "bad_doc_id"}}, socket}
       {:error, :bad_path} -> {:reply, {:error, %{reason: "bad_path"}}, socket}
     end
+  end
+
+  # `seeded` is retained for older plugins, but it is a LOSSY view of `genesis`
+  # and must never again be the only thing on the wire (#476).
+  defp reply_created(note, genesis, socket) do
+    {:reply,
+     {:ok, %{doc_id: note.id, seeded: genesis == :stored, genesis: Atom.to_string(genesis)}},
+     socket}
   end
 
   # Room-FREE full-state read for a cold note (#1409).
@@ -1153,7 +1160,10 @@ defmodule EngramWeb.CrdtChannel do
     # exactly when a racing room can be stale and the fan-out has something true
     # to say.
     if wrote? and row_state == :stored do
-      evict_racing_room(note_id)
+      # Both act on the row other processes read, and the seed can now run
+      # inside the genesis row transaction (Notes.genesis_crdt_note/5 `:seed`),
+      # so they wait for its commit.
+      Repo.after_commit(fn -> evict_racing_room(note_id) end)
 
       # The other half of removing the room (#1409, found by the first paired
       # e2e run: device B created the file at 0 bytes and never filled it).
@@ -1171,7 +1181,7 @@ defmodule EngramWeb.CrdtChannel do
       #
       # Fed the row the read-back just loaded: re-reading it (and the user)
       # inside fanout_idle/3 cost a tenant transaction per create (#1877).
-      CrdtDeliver.fanout_idle(user, vault.id, row)
+      Repo.after_commit(fn -> CrdtDeliver.fanout_idle(user, vault.id, row) end)
     end
 
     # #476: the caller needs to know WHICH kind of "not stored" this was, because

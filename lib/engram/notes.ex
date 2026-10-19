@@ -1109,9 +1109,15 @@ defmodule Engram.Notes do
   when `crdt_create` carried a `b64` frame (#1409, the import path — no room), or
   as a later `crdt_msg` through the note's live room (the editor path). See docs
   spec 2026-07-15-crdt-create-genesis-bare-row-design.
+
+  `seed: fun/1` runs that detached seed INSIDE the row transaction when this
+  call creates or resurrects the row, and the result is
+  `{:seeded, note, fun_result}`. Other legs return their usual shapes and leave
+  the seeding to the caller. See `seed_in_txn/2`.
   """
   @spec genesis_crdt_note(map(), map(), String.t(), String.t(), keyword()) ::
           {:ok, Note.t()}
+          | {:seeded, Note.t(), term()}
           | {:adopted, Note.t()}
           | {:error, :invalid_id}
           | {:error, :recently_deleted}
@@ -1144,71 +1150,77 @@ defmodule Engram.Notes do
            path: sanitized_path,
            folder: folder,
            origin: origin,
-           recording: recording
+           recording: recording,
+           seed: Keyword.get(opts, :seed)
          },
          {:ran, result, claimed?} <- run_genesis(genesis, initial_claim(opts)) do
-      case finalize_moved_revision(result, user) do
-        # Only genesis_resurrect/genesis_insert_bare tag their success with
-        # :announce (a REAL create/resurrect). The idempotent same-path and
-        # adopt-existing-live-note branches change nothing, so they return a
-        # plain {:ok, note} and fall through to the catch-all below — no
-        # announce. Fired post-commit (outside the transaction fn, after
-        # Repo.with_tenant returns) so a client that pulls on crdt_doc_ready
-        # never races the row's own commit — same discipline as the other
-        # CrdtDeliver call sites in this module.
-        {:ok, {:ok, note, :announce}} ->
-          :ok = CrdtDeliver.announce_ready(user.id, vault.id, note.path, note.id)
-          # crdt_doc_ready never reaches the sync topic the name index reads.
-          :ok = Engram.Notes.NameIndex.announce(vault.id, note.id, note.path, note.title)
+      {result, seed_outcome} = take_seed(result)
 
-          # vault_populated was probed inside the row transaction
-          # (probe_vault_populated/2) and its broadcast already ran on commit.
-          {:ok, note}
+      announced =
+        case finalize_moved_revision(result, user) do
+          # Only genesis_resurrect/genesis_insert_bare tag their success with
+          # :announce (a REAL create/resurrect). The idempotent same-path and
+          # adopt-existing-live-note branches change nothing, so they return a
+          # plain {:ok, note} and fall through to the catch-all below — no
+          # announce. Fired post-commit (outside the transaction fn, after
+          # Repo.with_tenant returns) so a client that pulls on crdt_doc_ready
+          # never races the row's own commit — same discipline as the other
+          # CrdtDeliver call sites in this module.
+          {:ok, {:ok, note, :announce}} ->
+            :ok = CrdtDeliver.announce_ready(user.id, vault.id, note.path, note.id)
+            # crdt_doc_ready never reaches the sync topic the name index reads.
+            :ok = Engram.Notes.NameIndex.announce(vault.id, note.id, note.path, note.title)
 
-        {:ok, {:ok, note, {:announce_moved, old_path}}} ->
-          # A rename-as-move (live relocate or resurrect-rename) must fan BOTH the
-          # new-path upsert AND the old-path delete to peers — exactly like the
-          # REST rename delete leg (do_rewrite_note). broadcast_change's "upsert"
-          # also deliver_outs the CRDT state (announces the doc), so no separate
-          # announce_ready is needed. Upsert BEFORE delete: a receiver relocates
-          # the note's id to the new path first, so it treats the delete as a
-          # relocation leg (id now lives elsewhere) instead of tearing the note's
-          # CRDT room down by id. Without the old-path delete a web receiver (no
-          # local mirror) keeps the note in its old folder forever. Fired
-          # post-commit, same as the :announce leg above.
-          :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, [])
+            # vault_populated was probed inside the row transaction
+            # (probe_vault_populated/2) and its broadcast already ran on commit.
+            {:ok, note}
 
-          _ =
-            if old_path != note.path do
-              :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
+          {:ok, {:ok, note, {:announce_moved, old_path}}} ->
+            # A rename-as-move (live relocate or resurrect-rename) must fan BOTH the
+            # new-path upsert AND the old-path delete to peers — exactly like the
+            # REST rename delete leg (do_rewrite_note). broadcast_change's "upsert"
+            # also deliver_outs the CRDT state (announces the doc), so no separate
+            # announce_ready is needed. Upsert BEFORE delete: a receiver relocates
+            # the note's id to the new path first, so it treats the delete as a
+            # relocation leg (id now lives elsewhere) instead of tearing the note's
+            # CRDT room down by id. Without the old-path delete a web receiver (no
+            # local mirror) keeps the note in its old folder forever. Fired
+            # post-commit, same as the :announce leg above.
+            :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, [])
 
-              # #1612 — same repath rename_note enqueues (#746). Without it the
-              # points keep the old path/folder hmacs and folder-filtered search
-              # misses the moved note. A resurrect-rename usually has no points, so it
-              # re-embeds; if it beat DeleteNoteIndex (#1610), they are patched instead.
-              _ =
-                Enqueue.enqueue(
-                  RepathNoteIndex.new_debounced(note.id, user.id,
-                    old_path_hmac: old_path_hmac_b64!(user, old_path)
-                  ),
-                  "repath_note_index"
-                )
-            end
+            _ =
+              if old_path != note.path do
+                :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
 
-          {:ok, note}
+                # #1612 — same repath rename_note enqueues (#746). Without it the
+                # points keep the old path/folder hmacs and folder-filtered search
+                # misses the moved note. A resurrect-rename usually has no points, so it
+                # re-embeds; if it beat DeleteNoteIndex (#1610), they are patched instead.
+                _ =
+                  Enqueue.enqueue(
+                    RepathNoteIndex.new_debounced(note.id, user.id,
+                      old_path_hmac: old_path_hmac_b64!(user, old_path)
+                    ),
+                    "repath_note_index"
+                  )
+              end
 
-        {:ok, {:ok, note, :adopted}} ->
-          # Surfaced, not flattened to {:ok, note}: the batch create leg has to
-          # tell "we made this row" from "a different note already owned the
-          # path", because only the former means the caller's frame was applied.
-          {:adopted, note}
+            {:ok, note}
 
-        {:ok, inner} ->
-          report_genesis_orphan(inner, user, vault, claimed?)
+          {:ok, {:ok, note, :adopted}} ->
+            # Surfaced, not flattened to {:ok, note}: the batch create leg has to
+            # tell "we made this row" from "a different note already owned the
+            # path", because only the former means the caller's frame was applied.
+            {:adopted, note}
 
-        {:error, _} = err ->
-          report_genesis_orphan(err, user, vault, claimed?)
-      end
+          {:ok, inner} ->
+            report_genesis_orphan(inner, user, vault, claimed?)
+
+          {:error, _} = err ->
+            report_genesis_orphan(err, user, vault, claimed?)
+        end
+
+      with_seed(announced, seed_outcome)
     else
       :error -> {:error, :invalid_id}
       {:error, _} = err -> err
@@ -1241,7 +1253,9 @@ defmodule Engram.Notes do
   # classifies afresh, so a row that changed in between is handled exactly as
   # the old claim-then-transaction order handled it.
   defp run_genesis(g, claim) do
-    case Repo.with_tenant(g.user.id, fn -> g |> genesis_txn(claim) |> probe_vault_populated(g) end) do
+    case Repo.with_tenant(g.user.id, fn ->
+           g |> genesis_txn(claim) |> probe_vault_populated(g) |> seed_in_txn(g)
+         end) do
       {:ok, {:claim_first, live}} ->
         case claim_crdt_relocate(g, live) do
           {:ok, claimed?} -> run_genesis(g, {:done, claimed?})
@@ -1270,6 +1284,32 @@ defmodule Engram.Notes do
     do: tap(result, fn _ -> :ok = maybe_broadcast_vault_populated(g.user, g.vault) end)
 
   defp probe_vault_populated(result, _g), do: result
+
+  # #1409's open half: an `opts[:seed]` fun writes the genesis body INSIDE the
+  # row transaction, on the two legs that announce (a fresh insert or a
+  # resurrect). Committed apart, the bare row's post-commit `crdt_doc_ready`
+  # reached the vault's other devices before the body existed; each wrote the
+  # note at 0 bytes and then paid a room to fill it (test_77: 948 handshake
+  # rooms per 1000 notes on a loaded host). The seed's own fan-out queues on
+  # `Repo.after_commit/1`, so it too fires only once the body is durable.
+  #
+  # Every other leg (idempotent retry, adopt, relocate) announces nothing, so
+  # the caller seeds after the fact exactly as before.
+  defp seed_in_txn({:ok, note, :announce} = result, %{seed: seed}) when is_function(seed, 1),
+    do: {:seeded, result, seed.(note)}
+
+  defp seed_in_txn({:ok, note, :announce, _finalize?} = result, %{seed: seed})
+       when is_function(seed, 1),
+       do: {:seeded, result, seed.(note)}
+
+  defp seed_in_txn(result, _g), do: result
+
+  defp take_seed({:ok, {:seeded, inner, outcome}}), do: {{:ok, inner}, outcome}
+  defp take_seed(result), do: {result, nil}
+
+  defp with_seed(result, nil), do: result
+  defp with_seed({:ok, note}, outcome), do: {:seeded, note, outcome}
+  defp with_seed(result, _outcome), do: result
 
   defp claimed_flag({:done, claimed?}), do: claimed?
   defp claimed_flag(:pending), do: false

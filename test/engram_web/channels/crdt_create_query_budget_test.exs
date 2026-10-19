@@ -18,8 +18,11 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
   # transaction to classify the id; a create that claims nothing classifies once.
   # 46 -> 42, 6 -> 5: the vault_populated probe runs inside the row
   # transaction instead of opening its own after commit.
-  @statements 42
-  @tenant_txns 5
+  # 42 -> 26, 5 -> 1: the genesis seed runs inside the row transaction
+  # (#1409 open half), so its with_tenant legs join it instead of opening
+  # their own.
+  @statements 26
+  @tenant_txns 1
   @subscription_reads 0
 
   defp frame_for_content(content) do
