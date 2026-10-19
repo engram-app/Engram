@@ -17,6 +17,16 @@ defmodule Engram.Billing.LimitKeys do
     # The upgrade levers are `ai_searches_per_day` and `vaults_cap`, not search
     # coverage: the separate `indexed_notes_cap` was removed.
     notes_cap: %{type: :integer, defaults: %{free: 3_000, starter: 50_000, pro: nil}},
+    # Free index budget (spec: Engram vault `50 Engineering/_Superpowers Specs/
+    # 2026-10-18-qdrant-storage-and-free-index-budget-design.md`). Bounds the
+    # Qdrant points one account may hold, counted in `chunks` rows. Past the cap
+    # notes are demoted to a floor point; sync and writes never fail on it.
+    # Pro is finite on purpose: `notes_cap` is nil there, so this is the only
+    # bound on its vector footprint.
+    index_points_cap: %{
+      type: :integer,
+      defaults: %{free: 10_000, starter: 100_000, pro: 250_000}
+    },
     # PACKAGING, NOT A RESOURCE (pricing v3.1, 2026-09-03). An earlier draft
     # justified a Pro ceiling on per-vault CRDT index-room memory. That was
     # wrong three ways and is recorded so it is not re-derived:
