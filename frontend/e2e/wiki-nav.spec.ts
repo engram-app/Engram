@@ -45,7 +45,7 @@ function navLog(page: Page): Promise<string[]> {
 async function renameNote(
 	baseURL: string,
 	token: string,
-	vaultId: number,
+	vaultId: string,
 	oldPath: string,
 	newPath: string,
 ): Promise<void> {
@@ -66,7 +66,7 @@ async function renameNote(
 async function manifestIdFor(
 	baseURL: string,
 	token: string,
-	vaultId: number,
+	vaultId: string,
 	path: string,
 ): Promise<string> {
 	const res = await fetch(`${baseURL}/api/sync/manifest`, {

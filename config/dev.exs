@@ -26,7 +26,12 @@ config :engram, EngramWeb.Endpoint,
   # PORT (default 4000, the saas-dev contract) is read in config/runtime.exs.
   http: [ip: {0, 0, 0, 0}],
   check_origin: false,
-  code_reloader: true,
+  # Off in CI. The reloader and Phoenix.Ecto.CheckRepoStatus run on EVERY
+  # request, before the request logger, under a global lock: Playwright saw
+  # ~1s per API call that the server logged as 1-7ms. CI never edits code
+  # mid-run. Compile-time (the Endpoint reads it via code_reloading?), so
+  # prebuild-mix must compile with the same CI value (`run_mix -e CI`).
+  code_reloader: System.get_env("CI") != "true",
   debug_errors: true,
   secret_key_base: "hZXoe4bVk7sJkF6CT/1jG+/4X03lcdTECjUFOWwKSlF0KAecv1CROWuFYqrtzY3k",
   # No Vite watcher here — Phoenix spawns watchers as Port children that

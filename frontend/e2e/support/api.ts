@@ -39,7 +39,7 @@ export async function createVault(
 	baseURL: string,
 	token: string,
 	name: string,
-): Promise<{ id: number; name: string }> {
+): Promise<{ id: string; name: string; slug: string }> {
 	const res = await fetch(`${baseURL}/api/vaults/register`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -49,17 +49,17 @@ export async function createVault(
 		throw new Error(`vault create failed: ${res.status} ${await res.text()}`);
 	}
 	// /vaults/register answers with the vault flat, not wrapped in { vault }.
-	return (await res.json()) as { id: number; name: string };
+	return (await res.json()) as { id: string; name: string; slug: string };
 }
 
 export async function upsertNote(
 	baseURL: string,
 	token: string,
-	vaultId: number,
+	vaultId: string,
 	path: string,
 	content: string,
 	version?: number,
-): Promise<{ id: number }> {
+): Promise<{ id: string }> {
 	const res = await fetch(`${baseURL}/api/notes`, {
 		method: "POST",
 		headers: {
@@ -72,14 +72,14 @@ export async function upsertNote(
 	if (!res.ok) {
 		throw new Error(`note upsert failed: ${res.status} ${await res.text()}`);
 	}
-	const { note } = (await res.json()) as { note: { id: number } };
+	const { note } = (await res.json()) as { note: { id: string } };
 	return { id: note.id };
 }
 
 export async function createFolder(
 	baseURL: string,
 	token: string,
-	vaultId: number,
+	vaultId: string,
 	folder: string,
 ): Promise<void> {
 	const res = await fetch(`${baseURL}/api/folders`, {
@@ -105,7 +105,7 @@ export async function createFolder(
 // so a half-migrated frontend would have shipped green. Pinning the prefix is
 // the only assertion at ANY layer that runs against real Phoenix and proves
 // the deployed URL shape.
-export function noteUrlRe(noteId: number | string): RegExp {
+export function noteUrlRe(noteId: string | string): RegExp {
 	return new RegExp(`/v/[^/]+/${noteId}(?:[?#]|$)`, "u");
 }
 
@@ -114,7 +114,7 @@ export function noteUrlRe(noteId: number | string): RegExp {
 // negative assertion EASIER to satisfy, so a regression stranding the browser
 // on the legacy /note/<id> shape -- which noteHref(undefined, id) still
 // emits -- would pass green. This stays loose on purpose.
-export function anyNoteUrlRe(noteId: number | string): RegExp {
+export function anyNoteUrlRe(noteId: string | string): RegExp {
 	return new RegExp(`/${noteId}(?:[?#]|$)`, "u");
 }
 
@@ -138,8 +138,8 @@ export async function signIn(page: Page, email: string, password = PASS): Promis
 export async function signInForNote(
 	page: Page,
 	email: string,
-	vaultId: number,
-	noteId: number,
+	vaultId: string,
+	noteId: string,
 ): Promise<void> {
 	await page.goto(`/note/${noteId}`);
 	await expect(page).toHaveURL(/\/sign-in/u, { timeout: 10_000 });
