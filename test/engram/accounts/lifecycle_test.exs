@@ -99,6 +99,31 @@ defmodule Engram.Accounts.LifecycleTest do
       assert %DateTime{} = Repo.reload!(user).deleted_at
     end
 
+    # The inactivity sweep is a background job: no request to hold, and nothing
+    # retries a swallowed failure, so it keeps the patient indexing retries.
+    test "inactivity soft-delete retries a failed Qdrant drop" do
+      bypass = Bypass.open()
+      Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+      Engram.ServiceConfig.put_override(:qdrant_retry, :transient)
+      {:ok, attempts} = Agent.start_link(fn -> 0 end)
+
+      Bypass.stub(bypass, "POST", "/collections/:col/points/delete", fn conn ->
+        case Agent.get_and_update(attempts, &{&1 + 1, &1 + 1}) do
+          1 -> Plug.Conn.send_resp(conn, 503, ~s({"status":"overloaded"}))
+          _ -> Plug.Conn.send_resp(conn, 200, ~s({"status":"ok","result":{}}))
+        end
+      end)
+
+      stub(Engram.Email.ProviderMock, :send, fn _to, _subject, _html, _opts -> :ok end)
+      user = insert(:user)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok = Lifecycle.soft_delete(user, :inactivity)
+      end)
+
+      assert Agent.get(attempts, & &1) == 2
+    end
+
     test "sets users.deleted_at, revokes refresh tokens, emits telemetry" do
       user = insert(:user)
       attach_refresh_token!(user)

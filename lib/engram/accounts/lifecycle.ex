@@ -51,7 +51,7 @@ defmodule Engram.Accounts.Lifecycle do
   end
 
   def soft_delete(%User{} = user, reason) do
-    _ = drop_qdrant_for_user(user)
+    _ = drop_qdrant_for_user(user, reason)
 
     user
     |> Ecto.Changeset.change(%{deleted_at: DateTime.utc_now()})
@@ -163,7 +163,7 @@ defmodule Engram.Accounts.Lifecycle do
     paddle_retry = cancel_paddle_subscription(user, sub)
 
     # Step 2: Qdrant vectors (best-effort).
-    _ = drop_qdrant_for_user(user)
+    _ = drop_qdrant_for_user(user, reason)
 
     # Step 3: S3 prefixes — user blobs + exports. Retry once on failure.
     _ = wipe_storage_prefix(user, "#{user.id}/")
@@ -386,7 +386,7 @@ defmodule Engram.Accounts.Lifecycle do
     Application.get_env(:engram, :clerk_api, Engram.Auth.Clerk.HttpApi)
   end
 
-  defp drop_qdrant_for_user(user) do
+  defp drop_qdrant_for_user(user, reason) do
     # Unconditionally, before the outcome is known: the chunk rows survive this
     # call (the hard-delete sweep collects them later), and a row whose point is
     # gone but whose `context_hmac` is intact makes a later re-index "reuse" an
@@ -394,11 +394,15 @@ defmodule Engram.Accounts.Lifecycle do
     # A partial Qdrant delete is exactly the case that must not keep markers.
     _ = Indexing.forget_chunk_reuse_for_user(user.id)
 
-    # Fail fast (the synchronous `:search` profile): this runs inside the
-    # user's delete request, and a failure is already best-effort, collected
-    # by OrphanSweep once the user row is gone. The patient indexing retries
-    # held the request ~7s per call during a Qdrant outage.
-    case Qdrant.delete_by_user(nil, user.id, :search) do
+    # A user or Clerk delete runs inside a request: fail fast (the `:search`
+    # profile), since the patient indexing retries held it ~7s per call during
+    # a Qdrant outage. The inactivity sweep is a background job with no request
+    # to hold, and nothing retries a swallowed failure, so it keeps them.
+    # Whatever a failure leaves is collected by OrphanSweep once the user row
+    # is gone (after the hard delete).
+    purpose = if reason == :inactivity, do: :indexing, else: :search
+
+    case Qdrant.delete_by_user(nil, user.id, purpose) do
       :ok ->
         :ok
 
