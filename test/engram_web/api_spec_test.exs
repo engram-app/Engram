@@ -6,15 +6,11 @@ defmodule EngramWeb.ApiSpecTest do
   # full suite. Serializing this module removes the race.
   use ExUnit.Case, async: false
 
-  describe "HealthStatus schema" do
-    test "is a valid OpenApiSpex schema struct with the expected fields" do
-      schema = EngramWeb.Schemas.HealthStatus.schema()
-
-      assert %OpenApiSpex.Schema{type: :object} = schema
-      assert Map.has_key?(schema.properties, :status)
-      assert Map.has_key?(schema.properties, :version)
-    end
-  end
+  # Per-endpoint shape (tags, params, response codes) is NOT asserted here: the
+  # verify.yml "OpenAPI spec drift gate" regenerates the spec and diffs it
+  # against the committed openapi.json, so any annotation change already needs
+  # a reviewed regen. This file keeps only spec-wide invariants the diff cannot
+  # judge: version decoupling, the auth scheme, and operationId hygiene.
 
   describe "ApiSpec.spec/0" do
     test "builds a valid OpenAPI 3.0 document" do
@@ -47,17 +43,7 @@ defmodule EngramWeb.ApiSpecTest do
     end
   end
 
-  describe "annotated paths" do
-    test "/api/health is present with a 200 HealthStatus response" do
-      spec = EngramWeb.ApiSpec.spec()
-
-      assert %{} = op = spec.paths["/api/health"].get
-      assert op.summary
-      assert Map.has_key?(op.responses, 200)
-    end
-  end
-
-  describe "foundation" do
+  describe "security defaults" do
     test "global security defaults to bearerAuth" do
       spec = EngramWeb.ApiSpec.spec()
       assert spec.security == [%{"bearerAuth" => []}]
@@ -66,80 +52,6 @@ defmodule EngramWeb.ApiSpecTest do
     test "health operations opt out of global security (public)" do
       spec = EngramWeb.ApiSpec.spec()
       assert spec.paths["/api/health"].get.security == []
-    end
-
-    test "declares Notes/Folders/Search/Tags tags" do
-      spec = EngramWeb.ApiSpec.spec()
-      names = Enum.map(spec.tags, & &1.name)
-      assert "Notes" in names and "Folders" in names
-      assert "Search" in names and "Tags" in names
-    end
-
-    test "shared schemas resolve" do
-      assert %OpenApiSpex.Schema{type: :object} = EngramWeb.Schemas.Note.schema()
-      assert %OpenApiSpex.Schema{type: :object} = EngramWeb.Schemas.Error.schema()
-    end
-  end
-
-  describe "Notes paths" do
-    setup do: %{spec: EngramWeb.ApiSpec.spec()}
-
-    test "POST /api/notes documents request + 201/409/422/413", %{spec: spec} do
-      op = spec.paths["/api/notes"].post
-      assert op.tags == ["Notes"]
-      assert op.requestBody
-      assert Enum.sort(Map.keys(op.responses)) == [201, 409, 413, 422]
-    end
-
-    test "GET /api/notes/changes is documented as retired (deprecated, 410 only)", %{spec: spec} do
-      op = spec.paths["/api/notes/changes"].get
-      assert op.deprecated == true
-      assert Map.keys(op.responses) == [410]
-    end
-
-    test "by-id show documents id path param + 404", %{spec: spec} do
-      op = spec.paths["/api/notes/by-id/{id}"].get
-      assert Enum.any?(op.parameters, &(&1.name == :id and &1.in == :path))
-      assert Map.has_key?(op.responses, 404)
-    end
-  end
-
-  describe "Folders paths" do
-    setup do: %{spec: EngramWeb.ApiSpec.spec()}
-
-    test "GET /api/folders/list documents required folder query param", %{spec: spec} do
-      op = spec.paths["/api/folders/list"].get
-      assert op.tags == ["Folders"]
-      assert Enum.any?(op.parameters, &(&1.name == :folder and &1.in == :query and &1.required))
-      assert Map.has_key?(op.responses, 400)
-    end
-
-    test "POST /api/folders documents request + 201/422", %{spec: spec} do
-      op = spec.paths["/api/folders"].post
-      assert op.requestBody
-      assert Map.has_key?(op.responses, 201) and Map.has_key?(op.responses, 422)
-    end
-
-    test "DELETE /api/folders/*path is 204", %{spec: spec} do
-      op = spec.paths["/api/folders/*path"].delete
-      assert Map.has_key?(op.responses, 204)
-    end
-  end
-
-  describe "Search + Tags paths" do
-    setup do: %{spec: EngramWeb.ApiSpec.spec()}
-
-    test "POST /api/search documents request + 200/403/422", %{spec: spec} do
-      op = spec.paths["/api/search"].post
-      assert op.tags == ["Search"]
-      assert op.requestBody
-      assert Enum.sort(Map.keys(op.responses)) == [200, 403, 422]
-    end
-
-    test "GET /api/tags returns tag names", %{spec: spec} do
-      op = spec.paths["/api/tags"].get
-      assert op.tags == ["Tags"]
-      assert Map.has_key?(op.responses, 200)
     end
   end
 
@@ -173,207 +85,6 @@ defmodule EngramWeb.ApiSpecTest do
       assert spec.paths["/api/vaults/{id}/restore"].post.operationId == "vaults-restore"
       assert spec.paths["/api/me"].get.operationId == "account-me"
       assert spec.paths["/api/search"].post.operationId == "search"
-    end
-  end
-
-  describe "Vaults paths" do
-    setup do: %{spec: EngramWeb.ApiSpec.spec()}
-
-    test "declares Vaults + Account tags", %{spec: spec} do
-      names = Enum.map(spec.tags, & &1.name)
-      assert "Vaults" in names and "Account" in names
-    end
-
-    test "GET /api/vaults documents deleted + user_code query params", %{spec: spec} do
-      op = spec.paths["/api/vaults"].get
-      assert op.tags == ["Vaults"]
-      names = Enum.map(op.parameters, & &1.name)
-      assert :deleted in names and :user_code in names
-      assert Map.has_key?(op.responses, 200)
-    end
-
-    test "POST /api/vaults is gone — register is the only create endpoint", %{spec: spec} do
-      refute spec.paths["/api/vaults"].post
-    end
-
-    test "POST /api/vaults/register documents request + 200/201/400/402/403/422", %{spec: spec} do
-      op = spec.paths["/api/vaults/register"].post
-      assert op.tags == ["Vaults"]
-      assert op.requestBody
-      # 422 joins the set with the blank-name fix: a name that is present but
-      # blank clears the is_nil guard and fails the changeset, which the
-      # controller now surfaces instead of falling out of the case. 403 joins
-      # with #1869: a vault-restricted credential can neither read back an
-      # out-of-scope vault nor create one.
-      assert Enum.sort(Map.keys(op.responses)) == [200, 201, 400, 402, 403, 422]
-    end
-
-    test "GET /api/vaults/{id} documents id path param + 404", %{spec: spec} do
-      op = spec.paths["/api/vaults/{id}"].get
-      assert Enum.any?(op.parameters, &(&1.name == :id and &1.in == :path and &1.required))
-      assert Map.has_key?(op.responses, 200) and Map.has_key?(op.responses, 404)
-    end
-
-    test "DELETE /api/vaults/{id} documents 200/404", %{spec: spec} do
-      op = spec.paths["/api/vaults/{id}"].delete
-      assert Map.has_key?(op.responses, 200) and Map.has_key?(op.responses, 404)
-    end
-
-    # 403 joins with #174/#332: restore needs write on the vault, so a
-    # read-level or out-of-scope credential is refused.
-    test "POST /api/vaults/{id}/restore documents 200/402/403/404", %{spec: spec} do
-      op = spec.paths["/api/vaults/{id}/restore"].post
-      assert Enum.sort(Map.keys(op.responses)) == [200, 402, 403, 404]
-    end
-
-    test "POST /api/vaults/{id}/purge documents 200/404", %{spec: spec} do
-      op = spec.paths["/api/vaults/{id}/purge"].post
-      assert Enum.sort(Map.keys(op.responses)) == [200, 404]
-    end
-  end
-
-  describe "Account paths" do
-    setup do: %{spec: EngramWeb.ApiSpec.spec()}
-
-    test "GET /api/me returns the current user", %{spec: spec} do
-      op = spec.paths["/api/me"].get
-      assert op.tags == ["Account"]
-      assert Map.has_key?(op.responses, 200)
-    end
-
-    test "PATCH /api/me documents request + 200/422", %{spec: spec} do
-      op = spec.paths["/api/me"].patch
-      assert op.requestBody
-      assert Enum.sort(Map.keys(op.responses)) == [200, 422]
-    end
-
-    test "DELETE /api/me documents request + 200/400/403/409/422", %{spec: spec} do
-      op = spec.paths["/api/me"].delete
-      assert op.requestBody
-      assert Enum.sort(Map.keys(op.responses)) == [200, 400, 403, 409, 422]
-    end
-
-    test "GET /api/user/storage documents 200", %{spec: spec} do
-      op = spec.paths["/api/user/storage"].get
-      assert op.tags == ["Account"]
-      assert Map.has_key?(op.responses, 200)
-    end
-  end
-
-  describe "Attachments / Sync / Embedding / Logs paths" do
-    setup do: %{spec: EngramWeb.ApiSpec.spec()}
-
-    test "declares Attachments/Sync/Embedding/Logs tags", %{spec: spec} do
-      names = Enum.map(spec.tags, & &1.name)
-      assert "Attachments" in names and "Sync" in names
-      assert "Embedding" in names and "Logs" in names
-    end
-
-    test "POST /api/attachments documents raw + JSON bodies and 200/400/402/408/413/415/422/502",
-         %{spec: spec} do
-      op = spec.paths["/api/attachments"].post
-      assert op.tags == ["Attachments"]
-
-      assert Enum.sort(Map.keys(op.requestBody.content)) ==
-               ["application/json", "application/octet-stream"]
-
-      assert Enum.map(op.parameters, & &1.name) == [:path, :mtime, :mime_type]
-      assert Enum.sort(Map.keys(op.responses)) == [200, 400, 402, 408, 413, 415, 422, 502]
-    end
-
-    test "GET /api/attachments/*path documents raw query param + 404", %{spec: spec} do
-      op = spec.paths["/api/attachments/*path"].get
-      names = Enum.map(op.parameters, & &1.name)
-      assert :path in names and :raw in names
-      assert Map.has_key?(op.responses, 404)
-    end
-
-    test "GET /api/attachments/changes is documented as retired (deprecated, 410 only)", %{
-      spec: spec
-    } do
-      op = spec.paths["/api/attachments/changes"].get
-      assert op.deprecated == true
-      assert Map.keys(op.responses) == [410]
-    end
-
-    test "GET /api/sync/manifest documents 200", %{spec: spec} do
-      op = spec.paths["/api/sync/manifest"].get
-      assert op.tags == ["Sync"]
-      assert Map.has_key?(op.responses, 200)
-    end
-
-    test "GET /api/embed-status documents 200", %{spec: spec} do
-      op = spec.paths["/api/embed-status"].get
-      assert op.tags == ["Embedding"]
-      assert Map.has_key?(op.responses, 200)
-    end
-
-    test "POST /api/logs documents request + 200", %{spec: spec} do
-      op = spec.paths["/api/logs"].post
-      assert op.tags == ["Logs"]
-      assert op.requestBody
-      assert Map.has_key?(op.responses, 200)
-    end
-
-    test "GET /api/logs documents level/category/since/limit query params", %{spec: spec} do
-      op = spec.paths["/api/logs"].get
-      names = Enum.map(op.parameters, & &1.name)
-      assert :level in names and :category in names and :since in names and :limit in names
-    end
-  end
-
-  describe "API Keys / Connections paths" do
-    setup do: %{spec: EngramWeb.ApiSpec.spec()}
-
-    test "declares API Keys + Connections tags", %{spec: spec} do
-      names = Enum.map(spec.tags, & &1.name)
-      assert "API Keys" in names and "Connections" in names
-    end
-
-    test "GET /api/api-keys documents 200", %{spec: spec} do
-      op = spec.paths["/api/api-keys"].get
-      assert op.tags == ["API Keys"]
-      assert Map.has_key?(op.responses, 200)
-    end
-
-    test "POST /api/api-keys documents request + 200/422", %{spec: spec} do
-      op = spec.paths["/api/api-keys"].post
-      assert op.requestBody
-      assert Enum.sort(Map.keys(op.responses)) == [200, 422]
-    end
-
-    test "DELETE /api/api-keys/{id} documents id param + 200/400/404", %{spec: spec} do
-      op = spec.paths["/api/api-keys/{id}"].delete
-      assert Enum.any?(op.parameters, &(&1.name == :id and &1.in == :path))
-      assert Enum.sort(Map.keys(op.responses)) == [200, 400, 404]
-    end
-
-    test "GET /api/connections documents 200", %{spec: spec} do
-      op = spec.paths["/api/connections"].get
-      assert op.tags == ["Connections"]
-      assert Map.has_key?(op.responses, 200)
-    end
-
-    test "DELETE /api/connections/oauth/{client_id} documents client_id + vault_id + 204/404", %{
-      spec: spec
-    } do
-      op = spec.paths["/api/connections/oauth/{client_id}"].delete
-      names = Enum.map(op.parameters, & &1.name)
-      assert :client_id in names and :vault_id in names
-      assert Enum.sort(Map.keys(op.responses)) == [204, 404]
-    end
-
-    test "POST /api/connections/pat documents request + 201/422", %{spec: spec} do
-      op = spec.paths["/api/connections/pat"].post
-      assert op.requestBody
-      assert Enum.sort(Map.keys(op.responses)) == [201, 422]
-    end
-
-    test "DELETE /api/connections/pat/{id} + device/{family_id} are 204/404", %{spec: spec} do
-      pat = spec.paths["/api/connections/pat/{id}"].delete
-      dev = spec.paths["/api/connections/device/{family_id}"].delete
-      assert Enum.sort(Map.keys(pat.responses)) == [204, 404]
-      assert Enum.sort(Map.keys(dev.responses)) == [204, 404]
     end
   end
 end
