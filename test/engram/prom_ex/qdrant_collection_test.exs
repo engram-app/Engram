@@ -268,14 +268,20 @@ defmodule Engram.PromEx.QdrantCollectionTest do
   test "QDRANT_RECONCILE_CONFIG=false: the poller never PATCHes", %{bypass: bypass} do
     test_pid = self()
     ServiceConfig.put_override(:qdrant_reconcile_config, false)
-    stub_info(bypass)
 
-    Bypass.stub(
-      bypass,
-      "GET",
-      "/collections/engram_notes/memory",
-      &Plug.Conn.send_resp(&1, 404, "")
-    )
+    # 1.18.2 + a fixture whose strict mode lacks our guards: without the
+    # switch this tick WOULD PATCH (see the "keeps strict-mode limits" test).
+    Bypass.stub(bypass, "GET", "/", &json(&1, 200, %{version: "1.18.2"}))
+    Bypass.stub(bypass, "GET", "/sys_metrics", &Plug.Conn.send_resp(&1, 404, ""))
+    Bypass.stub(bypass, "GET", "/metrics", &Plug.Conn.send_resp(&1, 404, ""))
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes", fn conn ->
+      json(conn, 200, %{result: @info})
+    end)
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes/memory", fn conn ->
+      json(conn, 200, %{result: @memory})
+    end)
 
     Bypass.stub(bypass, "PATCH", "/collections/engram_notes", fn conn ->
       send(test_pid, :patched)
