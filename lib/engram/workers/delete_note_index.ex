@@ -17,6 +17,7 @@ defmodule Engram.Workers.DeleteNoteIndex do
   alias Engram.Notes.Enqueue
   alias Engram.Notes.Note
   alias Engram.Repo
+  alias Engram.Vector.Qdrant
   alias Engram.Workers.RebindNoteLinks
 
   @impl Oban.Worker
@@ -94,7 +95,12 @@ defmodule Engram.Workers.DeleteNoteIndex do
     # never plaintext, same T3.2/H3 invariant as `path_hmac` above.
     _ = maybe_enqueue_rebind(user_id, vault_id, Map.get(args, "basename_hmac"))
 
-    Indexing.delete_note_index(note)
+    # Strict mode never refuses a delete; mapped anyway so a refusal is a
+    # snooze here like on every other Qdrant writer.
+    case Indexing.delete_note_index(note) do
+      {:error, :qdrant_backpressure} -> Qdrant.backpressure_snooze(:refused)
+      other -> other
+    end
   end
 
   defp live?(user_id, note_id) do

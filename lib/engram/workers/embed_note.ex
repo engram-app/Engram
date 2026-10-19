@@ -231,7 +231,7 @@ defmodule Engram.Workers.EmbedNote do
           # Qdrant is near strict mode's write refusal: wait BEFORE reserving
           # tokens or paying Voyage for vectors it may refuse to store.
           :over_pressure ->
-            backpressure_snooze(:preflight)
+            Qdrant.backpressure_snooze(:preflight)
 
           :run ->
             case guarded_embed(note, user, vault, old_path_hmac_b64, opts) do
@@ -259,13 +259,6 @@ defmodule Engram.Workers.EmbedNote do
   end
 
   defp preflight(other), do: other
-
-  # A snooze does not consume an attempt. Jittered so a fleet of parked jobs
-  # does not return to a recovering Qdrant in one wave.
-  defp backpressure_snooze(reason) do
-    :telemetry.execute([:engram, :qdrant, :backpressure], %{count: 1}, %{reason: reason})
-    {:snooze, 30 + :rand.uniform(60)}
-  end
 
   # The dead-man stamp brackets the embed: written before, cleared however the
   # attempt returns, raise and exit included. Only a killed node leaves it.
@@ -573,7 +566,7 @@ defmodule Engram.Workers.EmbedNote do
           # paid for and are retained by Indexing, so the retry reuses them
           # and the reservation stays charged: it was spent.
           {:error, :qdrant_backpressure} ->
-            backpressure_snooze(:refused)
+            Qdrant.backpressure_snooze(:refused)
 
           {:error, reason} ->
             # Per-attempt failure (Voyage non-429 / Qdrant). Previously

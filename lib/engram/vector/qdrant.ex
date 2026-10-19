@@ -12,9 +12,10 @@ defmodule Engram.Vector.Qdrant do
   - QDRANT_RECONCILE_CONFIG: false = never PATCH the collection config (boot
     reconcile and the 60s poller's strict-mode sync).
   - QDRANT_RECONCILE_ON_DISK: false = skip only the on-disk group.
-  - QDRANT_STRICT_MODE: false = the reconcile sets
-    `strict_mode_config.enabled=false` (no write refusals; on Qdrant Cloud this
-    also lifts its unindexed-filter guard).
+  - QDRANT_STRICT_MODE: false = the reconcile sets our two strict-mode
+    guards (`max_disk_usage_percent`, `max_resident_memory_percent`) to 100;
+    `enabled` and every other strict field (Qdrant Cloud's unindexed-filter
+    guard) are left as they are.
   - QDRANT_BACKPRESSURE_PREFLIGHT: false = EmbedNote never pauses for pressure.
   """
 
@@ -641,7 +642,8 @@ defmodule Engram.Vector.Qdrant do
   # `CollectionError::StrictMode` -> `StorageError::BadRequest`, HTTP 400,
   # message from `check_disk_usage` / the resident-memory check in
   # lib/collection/src/operations/verification/mod.rs. Searches and deletes
-  # are never refused, so only the write ops map it.
+  # are never refused (delete ops are not "disk/memory-consuming"); deletes
+  # map it anyway so a future Qdrant that does refuse them is handled alike.
   @backpressure ~r/(Disk usage|Resident memory usage) is at \d+% of total/
 
   defp write_error(400, %{"status" => %{"error" => message}} = body) when is_binary(message) do
@@ -682,6 +684,16 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @static_limits %{disk: %{percent: 85, reserve: nil}, heap: %{percent: 85, reserve: nil}}
+
+  @doc """
+  The worker response to `{:error, :qdrant_backpressure}`: an Oban snooze
+  (no attempt consumed), jittered 31..90s so parked jobs do not return to a
+  recovering Qdrant in one wave. Emits `[:engram, :qdrant, :backpressure]`.
+  """
+  def backpressure_snooze(reason) when reason in [:preflight, :refused] do
+    :telemetry.execute([:engram, :qdrant, :backpressure], %{count: 1}, %{reason: reason})
+    {:snooze, 30 + :rand.uniform(60)}
+  end
 
   @doc """
   True when disk or heap is within `QDRANT_PREFLIGHT_MARGIN_POINTS` (default
@@ -794,7 +806,7 @@ defmodule Engram.Vector.Qdrant do
     instrument(:set_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
         {:ok, %{status: 200}} -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
@@ -834,7 +846,7 @@ defmodule Engram.Vector.Qdrant do
     instrument(:delete_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload/delete", opts) do
         {:ok, %{status: 200}} -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
@@ -862,7 +874,7 @@ defmodule Engram.Vector.Qdrant do
         # (#1608, which retries now rather than swallowing) burn its attempts
         # on a stack that has never indexed anything.
         {:ok, %{status: status}} when status in [200, 404] -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
@@ -892,7 +904,7 @@ defmodule Engram.Vector.Qdrant do
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
         # Missing collection: nothing to delete. See `delete_points/2`.
         {:ok, %{status: status}} when status in [200, 404] -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
@@ -940,7 +952,7 @@ defmodule Engram.Vector.Qdrant do
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
         # Missing collection: nothing to delete. See `delete_points/2`.
         {:ok, %{status: status}} when status in [200, 404] -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
@@ -965,7 +977,7 @@ defmodule Engram.Vector.Qdrant do
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
         # Missing collection: nothing to delete. See `delete_points/2`.
         {:ok, %{status: status}} when status in [200, 404] -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
