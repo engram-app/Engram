@@ -1349,13 +1349,13 @@ jobs:
 
           # --- Playwright install (background) ---
           (
-            if python3 -c "from playwright.sync_api import sync_playwright" 2>/dev/null && \
-               ls -d "$HOME/.cache/ms-playwright/chromium-"* > /dev/null 2>&1; then
-              echo "Playwright + Chromium already installed, skipping"
-            else
+            python3 -c "from playwright.sync_api import sync_playwright" 2>/dev/null || \
               pip install 'playwright>=1.48'
-              python3 -m playwright install chromium
-            fi
+            # Always run: a no-op when this package's browser build is present.
+            # Skipping on "any chromium-* dir exists" broke after the package
+            # moved past the cached build (run 39216894235: 9 errors,
+            # chromium_headless_shell-1248 missing on runner-4).
+            python3 -m playwright install chromium
             touch "${MARKER_PREFIX}-playwright.marker"
           ) > "${MARKER_PREFIX}-playwright.log" 2>&1 &
           echo "Playwright install started (PID $!)"
@@ -1992,13 +1992,13 @@ jobs:
 
           # --- Playwright install (background) ---
           (
-            if python3 -c "from playwright.sync_api import sync_playwright" 2>/dev/null && \
-               ls -d "$HOME/.cache/ms-playwright/chromium-"* > /dev/null 2>&1; then
-              echo "Playwright + Chromium already installed, skipping"
-            else
+            python3 -c "from playwright.sync_api import sync_playwright" 2>/dev/null || \
               pip install 'playwright>=1.48'
-              python3 -m playwright install chromium
-            fi
+            # Always run: a no-op when this package's browser build is present.
+            # Skipping on "any chromium-* dir exists" broke after the package
+            # moved past the cached build (run 39216894235: 9 errors,
+            # chromium_headless_shell-1248 missing on runner-4).
+            python3 -m playwright install chromium
             touch "${MARKER_PREFIX}-playwright.marker"
           ) > "${MARKER_PREFIX}-playwright.log" 2>&1 &
           echo "Playwright install started (PID $!)"
