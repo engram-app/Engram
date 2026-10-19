@@ -10,5 +10,8 @@ defmodule Engram.Workers.RebindNoteLinks do
   use Oban.Worker, queue: :indexing, max_attempts: 1
 
   @impl Oban.Worker
+  def timeout(_job), do: :timer.seconds(5)
+
+  @impl Oban.Worker
   def perform(_job), do: :ok
 end

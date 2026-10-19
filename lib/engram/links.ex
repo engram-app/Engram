@@ -928,55 +928,66 @@ defmodule Engram.Links do
   defp variant_keys(filter_key, target),
     do: Enum.map(["" | @note_exts], &target_key_hmac(filter_key, target <> &1))
 
-  # Raw SQL for the conditional window: the shortest length is taken over
-  # rows whose keys are current only (a stale length could hide the real
-  # winner), and rows with stale or missing keys come back to be decrypted.
-  # Runs inside the caller's tenant transaction; RLS scopes it, and the
-  # user/vault filters are belt and braces as elsewhere in this module.
+  # The shortest length is taken over rows whose keys are current only (a
+  # stale length could hide the real winner), and rows with stale or missing
+  # keys come back to be decrypted. Runs inside the caller's tenant
+  # transaction.
   defp keyed_candidates(user, vault_id, keys, table, dek) do
-    {source, kind} =
-      if table == :notes, do: {"notes", "AND c.kind = 'note'"}, else: {"attachments", ""}
+    schema = if table == :notes, do: Note, else: Attachment
+    version = @link_keys_version
 
-    %{rows: rows} =
-      Repo.query!(
-        """
-        SELECT s.id, s.basename_hmac, s.path_ciphertext, s.path_nonce, s.dek_version
-        FROM (
-          SELECT c.id, c.basename_hmac, c.path_ciphertext, c.path_nonce, c.dek_version,
-                 c.path_ci_hmac, c.path_length, k.current,
-                 min(CASE WHEN k.current THEN c.path_length END)
-                   OVER (PARTITION BY c.basename_hmac) AS shortest
-          FROM #{source} AS c
-          CROSS JOIN LATERAL (
-            SELECT coalesce(c.link_keys_stamp = (c.path_nonce || $6::bytea), false) AS current
-          ) AS k
-          WHERE c.user_id = $1 AND c.vault_id = $2 AND c.basename_hmac = ANY($3)
-            AND c.deleted_at IS NULL #{kind}
-        ) AS s
-        WHERE NOT s.current
-           OR s.path_ci_hmac = ANY($4)
-           OR (s.basename_hmac = ANY($5) AND s.path_length = s.shortest)
-        """,
-        [
-          Ecto.UUID.dump!(user.id),
-          Ecto.UUID.dump!(vault_id),
-          keys.hmacs,
-          keys.path_keys,
-          keys.bare_hmacs,
-          @link_keys_version
-        ]
+    same_name =
+      from(c in schema,
+        where:
+          c.user_id == ^user.id and c.vault_id == ^vault_id and
+            c.basename_hmac in ^keys.hmacs and is_nil(c.deleted_at),
+        windows: [same_name: [partition_by: c.basename_hmac]],
+        select: %{
+          id: c.id,
+          basename_hmac: c.basename_hmac,
+          path_ciphertext: c.path_ciphertext,
+          path_nonce: c.path_nonce,
+          dek_version: c.dek_version,
+          path_ci_hmac: c.path_ci_hmac,
+          path_length: c.path_length,
+          current:
+            fragment(
+              "coalesce(? = (? || ?::bytea), false)",
+              c.link_keys_stamp,
+              c.path_nonce,
+              ^version
+            ),
+          shortest:
+            over(
+              min(
+                fragment(
+                  "CASE WHEN coalesce(? = (? || ?::bytea), false) THEN ? END",
+                  c.link_keys_stamp,
+                  c.path_nonce,
+                  ^version,
+                  c.path_length
+                )
+              ),
+              :same_name
+            )
+        }
       )
 
-    rows
-    |> Enum.map(fn [id, hmac, ct, nonce, version] ->
-      %{
-        id: Ecto.UUID.load!(id),
-        basename_hmac: hmac,
-        path_ciphertext: ct,
-        path_nonce: nonce,
-        dek_version: version
+    same_name = if table == :notes, do: where(same_name, [c], c.kind == "note"), else: same_name
+
+    from(c in subquery(same_name),
+      where:
+        not c.current or c.path_ci_hmac in ^keys.path_keys or
+          (c.basename_hmac in ^keys.bare_hmacs and c.path_length == c.shortest),
+      select: %{
+        id: type(c.id, Ecto.UUID),
+        basename_hmac: c.basename_hmac,
+        path_ciphertext: c.path_ciphertext,
+        path_nonce: c.path_nonce,
+        dek_version: c.dek_version
       }
-    end)
+    )
+    |> Repo.all(skip_tenant_check: true)
     |> decrypt_and_group(dek, table)
   end
 

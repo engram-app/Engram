@@ -13,9 +13,10 @@ defmodule Engram.Workers.BackfillLinkKeys do
   (`docs/context/data-migrations-ledger.md`).
   """
   # One chain per user, as `ReencodeEnvelopes`: `:executing` is not a unique
-  # state, so a job can insert its own successor.
+  # state, so a job can insert its own successor. On the hourly-backfill lane,
+  # off crypto_backfill so it never holds a rotation's slot.
   use Oban.Worker,
-    queue: :crypto_backfill,
+    queue: :crdt_backfill,
     priority: 3,
     max_attempts: 5,
     unique: [keys: [:user_id], period: :infinity, states: [:available, :scheduled, :retryable]]
