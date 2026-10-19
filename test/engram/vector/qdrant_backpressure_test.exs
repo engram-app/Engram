@@ -93,6 +93,49 @@ defmodule Engram.Vector.QdrantBackpressureTest do
     end
   end
 
+  # Qdrant 1.19 node-wide quota refusals: StorageError::InsufficientStorage
+  # -> HTTP 507 (src/actix/helpers.rs), message from
+  # lib/shard/src/quota/check.rs `rejected/3` (v1.19.2). The second form is
+  # the release-margin hold: usage is back under the limit but not yet
+  # `release_margin_percent` below it.
+  @quota_disk_refusal ~S|{"status":{"error":"Disk usage is at 95% of total capacity, exceeding the configured limit of 90%. Help: Reduce disk usage (e.g. delete points or drop collections), or raise `max_disk_usage_percent` in the global quota config."},"time":0.0001}|
+  @quota_margin_refusal ~S|{"status":{"error":"Resident memory usage is at 87% of total memory. It reached the configured limit of 90% and has to fall below 85% before this node takes writes again. Help: Reduce memory usage (e.g. delete points or drop collections), or raise `max_resident_memory_percent` in the global quota config."},"time":0.0001}|
+
+  describe "quota refusal (Qdrant 1.19+, HTTP 507)" do
+    test "upsert, set_payload and update_vectors are :qdrant_backpressure", %{bypass: bypass} do
+      Bypass.expect_once(
+        bypass,
+        "PUT",
+        "/collections/c1/points",
+        &respond(&1, 507, @quota_disk_refusal)
+      )
+
+      Bypass.expect_once(
+        bypass,
+        "POST",
+        "/collections/c1/points/payload",
+        &respond(&1, 507, @quota_margin_refusal)
+      )
+
+      Bypass.expect_once(
+        bypass,
+        "PUT",
+        "/collections/c1/points/vectors",
+        &respond(&1, 507, @quota_disk_refusal)
+      )
+
+      assert {:error, :qdrant_backpressure} = Qdrant.upsert_points("c1", [@point])
+      assert {:error, :qdrant_backpressure} = Qdrant.set_payload("c1", [@point.id], %{"a" => 1})
+      assert {:error, :qdrant_backpressure} = Qdrant.update_vectors("c1", [@point])
+    end
+
+    test "a 507 with an unexpected body is still backpressure", %{bypass: bypass} do
+      # 507 is only InsufficientStorage; the body wording is not the contract.
+      Bypass.expect_once(bypass, "PUT", "/collections/c1/points", &respond(&1, 507, "{}"))
+      assert {:error, :qdrant_backpressure} = Qdrant.upsert_points("c1", [@point])
+    end
+  end
+
   describe "pressure/0" do
     test "disk from /sys_metrics, heap from /metrics vs the configured limit", %{bypass: bypass} do
       ServiceConfig.put_override(:qdrant_memory_limit_bytes, 2_000_000_000)

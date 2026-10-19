@@ -391,11 +391,13 @@ defmodule Engram.Vector.Qdrant do
   what differs. Returns the PATCH keys applied (`[]` when already in shape, so
   a normal boot sends no PATCH).
 
-  Three groups, each its own PATCH so one refusal cannot block another, in
+  Four groups, each its own request so one refusal cannot block another, in
   this order:
 
     1. strict mode (version-gated in `QdrantLayout`), so the disk guard is
-       live before anything rebuilds;
+       live before anything rebuilds; on Qdrant 1.19+ with
+       `QDRANT_MANAGE_QUOTAS=true`, the node-wide `PUT /quotas` too (reported
+       as `"quotas"`), since 1.19 moved the disk guard there;
     2. optimizers, always (one optimization thread serialises the rebuild);
     3. on-disk (dense + sparse index), ONLY past `headroom/2`: Qdrant rewrites
        every segment for it, and no optimizer splits an existing segment, so
@@ -415,7 +417,7 @@ defmodule Engram.Vector.Qdrant do
   defp log_missing_guards(nil), do: :ok
 
   defp log_missing_guards(version) do
-    supported = QdrantLayout.guard_kinds(version)
+    supported = QdrantLayout.guard_kinds(version) ++ managed_quota_kinds(version)
 
     for {kind, name} <- [disk: "disk", heap: "memory"], kind not in supported do
       Logger.warning("qdrant #{name} write guard unavailable on #{version}")
@@ -429,18 +431,24 @@ defmodule Engram.Vector.Qdrant do
       version = server_version()
       log_missing_guards(version)
 
+      limits = strict_limits(col, volume_stats())
+
       diff =
         QdrantLayout.diff(
           info["config"] || %{},
-          QdrantLayout.desired(version, strict_limits(col, volume_stats()), strict_mode?())
+          QdrantLayout.desired(version, limits, strict_mode?())
         )
 
       {strict, rest} = Map.split(diff, ["strict_mode_config"])
       {on_disk, optimizers} = Map.split(rest, QdrantLayout.on_disk_keys())
 
-      results =
-        [strict, optimizers, gate_on_disk(col, on_disk)]
-        |> Enum.map(&{&1, patch_collection(col, &1)})
+      # Strict mode first, so the guards are live before anything rebuilds.
+      results = [
+        {strict, patch_collection(col, strict)},
+        quotas_group(reconcile_quotas(version, limits)),
+        {optimizers, patch_collection(col, optimizers)},
+        on_disk_group(col, on_disk)
+      ]
 
       applied = for {body, :ok} <- results, key <- Map.keys(body), do: key
       if applied != [], do: report_reconciled(applied)
@@ -486,7 +494,11 @@ defmodule Engram.Vector.Qdrant do
 
   @doc """
   Keep the collection's strict-mode limits at `limits` (the poller, every
-  tick), so they follow data growth and volume resizes without a deploy.
+  tick), so they follow data growth and volume resizes without a deploy. On
+  Qdrant 1.19+ with `QDRANT_MANAGE_QUOTAS=true`, `/quotas` is kept at the
+  same limits. `version` is the caller's (cached) view, so mid-upgrade nodes
+  may disagree; the two paths touch disjoint fields (the strict heap percent
+  is the same on both), so they converge instead of fighting.
   PATCHes only when a percent moved (whole points, so >= 1), then logs and
   emits `[:engram, :qdrant, :strict_limits_changed]`.
   """
@@ -497,8 +509,18 @@ defmodule Engram.Vector.Qdrant do
   end
 
   defp do_reconcile_strict_mode(col, info, limits, version) do
+    version = if version == :fetch, do: server_version(), else: version
+    strict = reconcile_strict_fields(col, info, limits, version)
+
+    case reconcile_quotas(version, limits) do
+      {:error, _} = error -> error
+      _ -> strict
+    end
+  end
+
+  defp reconcile_strict_fields(col, info, limits, version) do
     want =
-      if(version == :fetch, do: server_version(), else: version)
+      version
       |> QdrantLayout.desired(limits, strict_mode?())
       |> Map.take(["strict_mode_config"])
 
@@ -522,6 +544,74 @@ defmodule Engram.Vector.Qdrant do
           )
         end
     end
+  end
+
+  @doc """
+  `GET /quotas` (Qdrant 1.19+): `{:ok, %{"config" => QuotaConfig, "usage" => ...}}`.
+  Node-wide, not per collection.
+  """
+  def quotas, do: instrument(:quotas, fn -> get_result("/quotas", :search) end)
+
+  # `/quotas` is node-wide: it caps every collection on the server, so it is
+  # managed only with QDRANT_MANAGE_QUOTAS=true, on a server that holds this
+  # app's collection alone (Qdrant Cloud prod). Shared servers (staging, a
+  # self-host Qdrant used by other apps) keep the strict-mode heap guard and
+  # the app-side preflight.
+  defp managed_quota_kinds(version) do
+    if ServiceConfig.get(:qdrant_manage_quotas, false),
+      do: QdrantLayout.quota_kinds(version),
+      else: []
+  end
+
+  # Keep `/quotas` at `limits` (Qdrant 1.19+). PUTs only on drift (PUT
+  # replaces the whole config, so the body is all of it), and waits for
+  # consensus so the next tick reads back what it wrote.
+  # `{:ok, :changed | :unchanged}` or `{:error, _}`.
+  defp reconcile_quotas(version, limits) do
+    if managed_quota_kinds(version) == [] do
+      {:ok, :unchanged}
+    else
+      want = QdrantLayout.desired_quotas(limits, strict_mode?())
+
+      with {:ok, current} <- quotas() do
+        if QdrantLayout.quotas_drift?(current["config"], want),
+          do: put_quotas(want),
+          else: {:ok, :unchanged}
+      end
+    end
+  end
+
+  defp put_quotas(want) do
+    instrument(:update_quotas, fn ->
+      case Req.put(base_url() <> "/quotas?wait=true", [json: want] ++ req_opts()) do
+        {:ok, %{status: 200}} ->
+          disk = want["max_disk_usage_percent"]
+          heap = want["max_resident_memory_percent"]
+          Logger.info("qdrant quota limits changed: disk=#{disk} memory=#{heap}")
+
+          :telemetry.execute([:engram, :qdrant, :strict_limits_changed], %{count: 1}, %{
+            disk: disk,
+            heap: heap
+          })
+
+          {:ok, :changed}
+
+        {:ok, %{status: status, body: body}} ->
+          {:error, {status, body}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end)
+  end
+
+  defp quotas_group({:ok, :changed}), do: {%{"quotas" => true}, :ok}
+  defp quotas_group({:ok, :unchanged}), do: {%{}, :ok}
+  defp quotas_group(error), do: {%{}, error}
+
+  defp on_disk_group(col, on_disk) do
+    body = gate_on_disk(col, on_disk)
+    {body, patch_collection(col, body)}
   end
 
   defp log_reconcile_failure({:error, reason}),
@@ -670,6 +760,13 @@ defmodule Engram.Vector.Qdrant do
   # are never refused (delete ops are not "disk/memory-consuming"); deletes
   # map it anyway so a future Qdrant that does refuse them is handled alike.
   @backpressure ~r/(Disk usage|Resident memory usage) is at \d+% of total/
+
+  # Qdrant 1.19+ node-wide quota (`/quotas`) refusing a write: HTTP 507, whose
+  # only producer is StorageError::InsufficientStorage (src/actix/helpers.rs),
+  # so the status alone is the signal, whatever the wording
+  # (lib/shard/src/quota/check.rs). Point deletes are never refused; payload
+  # key and vector deletes are (they rewrite the point).
+  defp write_error(507, _body), do: {:error, :qdrant_backpressure}
 
   defp write_error(400, %{"status" => %{"error" => message}} = body) when is_binary(message) do
     if message =~ @backpressure, do: {:error, :qdrant_backpressure}, else: {:error, {400, body}}

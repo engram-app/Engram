@@ -316,6 +316,14 @@ case qdrant_switch.("QDRANT_STRICT_MODE") do
   on? -> config :engram, :qdrant_strict_mode, on?
 end
 
+# true = on Qdrant 1.19+ the reconcile also manages the node-wide `/quotas`
+# (disk + memory write guards). Node-wide: set it only where the Qdrant server
+# holds this app's collection alone (Qdrant Cloud prod). Default false.
+case qdrant_switch.("QDRANT_MANAGE_QUOTAS") do
+  nil -> :ok
+  on? -> config :engram, :qdrant_manage_quotas, on?
+end
+
 # false = EmbedNote never pauses for Qdrant pressure before paying Voyage.
 case qdrant_switch.("QDRANT_BACKPRESSURE_PREFLIGHT") do
   nil -> :ok

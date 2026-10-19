@@ -54,6 +54,66 @@ defmodule Engram.Vector.QdrantLayoutTest do
     end
   end
 
+  describe "quotas (Qdrant 1.19+ node-wide guards)" do
+    @limits %{disk: %{percent: 79, reserve: 1}, heap: %{percent: 87, reserve: 1}}
+
+    test "quota_kinds: both guards from 1.19.0, none before or when unknown" do
+      assert QdrantLayout.quota_kinds(@v1192) == [:disk, :heap]
+      assert QdrantLayout.quota_kinds(Version.parse!("1.19.0")) == [:disk, :heap]
+      assert QdrantLayout.quota_kinds(@v1210) == [:disk, :heap]
+      assert QdrantLayout.quota_kinds(Version.parse!("1.18.3")) == []
+      assert QdrantLayout.quota_kinds(@v1171) == []
+      assert QdrantLayout.quota_kinds(nil) == []
+    end
+
+    test "desired_quotas: the full PUT body (PUT replaces), 100/100 when strict is off" do
+      assert QdrantLayout.desired_quotas(@limits, true) == %{
+               "enabled" => true,
+               "max_disk_usage_percent" => 79,
+               "max_resident_memory_percent" => 87
+             }
+
+      assert QdrantLayout.desired_quotas(nil, true) == %{
+               "enabled" => true,
+               "max_disk_usage_percent" => 85,
+               "max_resident_memory_percent" => 85
+             }
+
+      assert QdrantLayout.desired_quotas(@limits, false) == %{
+               "enabled" => true,
+               "max_disk_usage_percent" => 100,
+               "max_resident_memory_percent" => 100
+             }
+    end
+
+    test "quotas_drift?: applied is no drift; a server default margin is not drift" do
+      want = QdrantLayout.desired_quotas(@limits, true)
+      refute QdrantLayout.quotas_drift?(Map.put(want, "release_margin_percent", nil), want)
+      assert QdrantLayout.quotas_drift?(%{"enabled" => false}, want)
+      assert QdrantLayout.quotas_drift?(%{want | "max_disk_usage_percent" => 80}, want)
+      assert QdrantLayout.quotas_drift?(nil, want)
+    end
+
+    test "applied_limits/3 reports quota limits on 1.19, the stricter one when both apply" do
+      strict = %{
+        "strict_mode_config" => %{"enabled" => true, "max_resident_memory_percent" => 83}
+      }
+
+      quotas = %{
+        "enabled" => true,
+        "max_disk_usage_percent" => 79,
+        "max_resident_memory_percent" => 87
+      }
+
+      assert QdrantLayout.applied_limits(strict, @v1192, quotas) == %{disk: 79, heap: 83}
+      assert QdrantLayout.applied_limits(%{}, @v1192, quotas) == %{disk: 79, heap: 87}
+      # Disabled quotas enforce nothing; a pre-1.19 server has no quotas.
+      assert QdrantLayout.applied_limits(%{}, @v1192, %{quotas | "enabled" => false}) == %{}
+      assert QdrantLayout.applied_limits(%{}, @v1182, quotas) == %{}
+      assert QdrantLayout.applied_limits(strict, @v1192, nil) == %{heap: 83}
+    end
+  end
+
   describe "desired/1" do
     test "PATCH body shape per sub-object on 1.18.2" do
       assert QdrantLayout.desired(@v1182) == %{

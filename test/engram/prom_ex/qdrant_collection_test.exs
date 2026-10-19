@@ -360,6 +360,8 @@ defmodule Engram.PromEx.QdrantCollectionTest do
 
     Bypass.stub(bypass, "GET", "/", &json(&1, 200, %{version: "1.19.2"}))
     Bypass.stub(bypass, "GET", "/metrics", &Plug.Conn.send_resp(&1, 404, ""))
+    # Quotas unset (disabled): 1.19 enforces no disk limit at all.
+    Bypass.stub(bypass, "GET", "/quotas", &json(&1, 200, %{result: %{config: %{enabled: false}}}))
 
     Bypass.stub(bypass, "GET", "/sys_metrics", fn conn ->
       Plug.Conn.send_resp(conn, 200, """
@@ -400,6 +402,75 @@ defmodule Engram.PromEx.QdrantCollectionTest do
     refute_receive {:patch, _}
     assert_received {@limit_event, %{percent: 85}, %{kind: "heap"}}
     refute_received {@limit_event, _, %{kind: "disk"}}
+  end
+
+  test "1.19.2 with /quotas: gauges report the quota limits, poller keeps them in step",
+       %{bypass: bypass} do
+    test_pid = self()
+    ServiceConfig.put_override(:qdrant_reconcile_config, true)
+    ServiceConfig.put_override(:qdrant_manage_quotas, true)
+    ServiceConfig.put_override(:qdrant_memory_limit_bytes, 2 * 1024 * 1024 * 1024)
+    {:ok, quotas} = Agent.start_link(fn -> %{"enabled" => false} end)
+
+    # Strict heap already applied at the computed 87: no strict PATCH.
+    applied =
+      put_in(@info, ["config", "strict_mode_config"], %{
+        "enabled" => true,
+        "max_resident_memory_percent" => 87
+      })
+
+    Bypass.stub(bypass, "GET", "/", &json(&1, 200, %{version: "1.19.2"}))
+    Bypass.stub(bypass, "GET", "/metrics", &Plug.Conn.send_resp(&1, 404, ""))
+
+    Bypass.stub(bypass, "GET", "/sys_metrics", fn conn ->
+      Plug.Conn.send_resp(conn, 200, """
+      kubelet_volume_stats_capacity_bytes{persistentvolumeclaim="qdrant-storage-qdrant-0"} 8.37e+09
+      kubelet_volume_stats_used_bytes{persistentvolumeclaim="qdrant-storage-qdrant-0"} 4.35e+09
+      """)
+    end)
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes", &json(&1, 200, %{result: applied}))
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes/memory", fn conn ->
+      json(conn, 200, %{result: @memory})
+    end)
+
+    Bypass.stub(bypass, "PATCH", "/collections/engram_notes", fn conn ->
+      send(test_pid, :patched)
+      json(conn, 200, %{result: true})
+    end)
+
+    Bypass.stub(bypass, "GET", "/quotas", fn conn ->
+      json(conn, 200, %{result: %{config: Agent.get(quotas, & &1)}})
+    end)
+
+    Bypass.stub(bypass, "PUT", "/quotas", fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      body = Jason.decode!(raw)
+      send(test_pid, {:put_quotas, body})
+      Agent.update(quotas, fn _ -> body end)
+      json(conn, 200, %{result: true})
+    end)
+
+    Plugin.execute_collection_metrics()
+
+    assert_receive {:put_quotas,
+                    %{
+                      "enabled" => true,
+                      "max_disk_usage_percent" => 79,
+                      "max_resident_memory_percent" => 87
+                    }}
+
+    # Before the PUT lands, only the strict heap limit is enforced.
+    assert_received {@limit_event, %{percent: 87}, %{kind: "heap"}}
+    refute_received {@limit_event, _, %{kind: "disk"}}
+
+    Engram.Vector.Qdrant.forget_pressure()
+    Plugin.execute_collection_metrics()
+    refute_receive {:put_quotas, _}
+    refute_received :patched
+    assert_received {@limit_event, %{percent: 79}, %{kind: "disk"}}
+    assert_received {@limit_event, %{percent: 87}, %{kind: "heap"}}
   end
 
   # The freshness signal infra filters on: a node whose health GET fails must
