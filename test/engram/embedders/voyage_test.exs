@@ -172,6 +172,20 @@ defmodule Engram.Embedders.VoyageTest do
       assert {:ok, [^packed]} = Voyage.embed_texts(["hello"])
     end
 
+    test "a malformed base64 vector raises and the span reports it", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/embeddings", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{"data" => [%{"embedding" => "not base64!"}]}))
+      end)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [[:engram, :voyage, :embed, :exception]])
+
+      assert_raise ArgumentError, ~r/11 bytes/, fn -> Voyage.embed_texts(["hello"]) end
+      assert_received {[:engram, :voyage, :embed, :exception], ^ref, _, %{kind: :error}}
+    end
+
     test "search sends input_type query", %{bypass: bypass} do
       expect_body(bypass)
 
