@@ -56,6 +56,21 @@ defmodule Engram.Jobs do
     Enum.reject(note_ids, &MapSet.member?(pending, to_string(&1)))
   end
 
+  @doc """
+  How many `worker` jobs whose args carry `vault_id` are not finished yet
+  (scheduled, available, executing or retryable).
+  """
+  @spec pending_for_vault(module(), String.t()) :: non_neg_integer()
+  def pending_for_vault(worker, vault_id) do
+    from(j in Oban.Job,
+      where: j.worker == ^inspect(worker),
+      where: j.state in ~w(scheduled available executing retryable),
+      where: fragment("? ->> 'vault_id'", j.args) == ^to_string(vault_id),
+      select: count()
+    )
+    |> Repo.one()
+  end
+
   @doc false
   def pending_query_for_test(worker, wanted, executing?),
     do: pending_query(worker, wanted, executing?)

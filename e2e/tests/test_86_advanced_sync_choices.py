@@ -36,20 +36,19 @@ than the modal DOM, which test_55 already covers.
 Settle re-asserts: WS echoes of the wipe arrive asynchronously; a state that
 looks correct the instant the sync promise resolves can still be destroyed a
 few seconds later (that is precisely how the incident unfolded). Destructive
-tests therefore re-assert after SETTLE_S seconds.
+tests therefore re-assert once sync has settled (helpers/quiescence.py).
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import uuid
 
 import pytest
 
+from helpers.quiescence import await_quiescent
 from helpers.vault import read_note, wait_for_content, wait_for_file, wait_for_file_gone
 
-SETTLE_S = 8
 
 
 def _content(tag: str, unique: str) -> str:
@@ -210,11 +209,11 @@ async def test_push_all_delete_remote_preserves_local(vault_a, cdp_a, vault_b, c
         )
 
         # The wipe's delete broadcasts fan out asynchronously — the vault can
-        # be destroyed AFTER the sync promise resolves. Hold the line.
-        # Deliberately a timed window: A sentinel broadcast would order after the
-        # wipe's own deletes, but not after B's echo-pushed deletes (the other
-        # late writer this guards), which have no observable completion.
-        await asyncio.sleep(SETTLE_S)
+        # be destroyed AFTER the sync promise resolves. Hold the line until
+        # both late writers are done: B owes nothing (its echo-pushed deletes
+        # are sent) and A has caught up past everything the server holds.
+        await await_quiescent(cdp_b, api_sync)
+        await await_quiescent(cdp_a, api_sync)
         assert (vault_a / s.local_only).exists() and (vault_a / s.synced).exists(), (
             "late WS echo of wipeRemote deleted local files after the sync "
             "completed (2026-07-08 incident signature)"
@@ -279,10 +278,9 @@ async def test_pull_all_delete_local_preserves_remote(vault_a, cdp_a, api_sync):
         wait_for_file(vault_a, s.synced)
 
         # Mirror invariant of the incident: the local wipe must not echo-push
-        # deletions up to the server (suppressed vault delete events).
-        # Deliberately a timed window: A leaked delete may go out over REST or the
-        # socket, so no sentinel write is ordered after it.
-        await asyncio.sleep(SETTLE_S)
+        # deletions up to the server (suppressed vault delete events). Once A
+        # owes nothing outbound, a leaked delete (REST or socket) has been sent.
+        await await_quiescent(cdp_a, api_sync)
         assert api_sync.get_note(s.remote_only) is not None, (
             "local wipe echoed a delete to the server (RemoteOnly.md gone)"
         )

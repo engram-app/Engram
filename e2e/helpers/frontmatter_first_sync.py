@@ -13,12 +13,12 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from helpers.quiescence import await_quiescent
 from helpers.vault import write_note
 
 CONVERGE_BOUND_S = 90
 # Catch-up after the push is what fires the drift branch. Prod drift-copied
 # within ~20s of the push sweep; give a few manual syncs room to run it.
-CATCH_UP_SETTLE_S = 20
 
 
 SET_BLOCKED = "app.plugins.plugins['engram-vault-sync'].syncEngine.setSyncBlocked({})"
@@ -104,15 +104,10 @@ async def first_sync_shapes(
         await asyncio.sleep(2)
     assert landed >= expected, f"sync landed only {landed}/{expected}"
 
-    # Deliberately a timed window, not a barrier: The drift branch can fire on a
-    # catch-up that follows the backend's debounced checkpoint, and nothing
-    # observable says that checkpoint has run, so "cursor past the last seq"
-    # could stop before the row that triggers it exists. Swap for a barrier
-    # once the checkpoint exposes a signal (e.g. a manifest field).
-    settle_end = time.monotonic() + CATCH_UP_SETTLE_S
-    while time.monotonic() < settle_end:
-        await cdp.trigger_full_sync()
-        await asyncio.sleep(4)
+    # The drift branch can fire on a catch-up that follows the backend's
+    # debounced checkpoint. The barrier waits for that checkpoint (no job
+    # pending) AND for this device's catch-up cursor to pass the seq it bumps.
+    await await_quiescent(cdp, api_sync)
 
     created = await cdp.evaluate(
         "JSON.stringify(window.__fmCreates); app.vault.offref(window.__fmCreatesRef);"

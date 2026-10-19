@@ -78,3 +78,26 @@ defmodule EngramWeb.Schemas.EmbedStatusResponse do
     required: [:total, :indexed, :pending]
   })
 end
+
+defmodule EngramWeb.Schemas.SyncQuiescenceResponse do
+  @moduledoc "Whether the server still owes this vault any sync work."
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "SyncQuiescenceResponse",
+    type: :object,
+    properties: %{
+      change_seq: %Schema{type: :integer, description: "Current per-vault sequence watermark."},
+      pending_crdt_updates: %Schema{
+        type: :integer,
+        description: "CRDT updates stored but not yet folded into their note by a checkpoint."
+      },
+      pending_checkpoints: %Schema{
+        type: :integer,
+        description: "Scheduled or running checkpoint jobs for this vault's notes."
+      }
+    },
+    required: [:change_seq, :pending_crdt_updates, :pending_checkpoints]
+  })
+end
