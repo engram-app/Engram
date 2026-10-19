@@ -288,14 +288,16 @@ defmodule EngramWeb.Plugs.AuthTest do
           %{build_conn() | request_path: "/api/mcp"} |> Auth.call([])
         end)
 
-      assert Enum.find(events, &match?({:string, "auth rejected"}, &1.msg)).meta[:surface] == "mcp"
+      assert Enum.find(events, &match?({:string, "auth rejected"}, &1.msg)).meta[:surface] ==
+               "mcp"
 
       {_conn, events} =
         LogCapture.with_events(fn ->
           %{build_conn() | request_path: "/api/folders"} |> Auth.call([])
         end)
 
-      assert Enum.find(events, &match?({:string, "auth rejected"}, &1.msg)).meta[:surface] == "api"
+      assert Enum.find(events, &match?({:string, "auth rejected"}, &1.msg)).meta[:surface] ==
+               "api"
     end
 
     test "auth rejection ships to Loki with category :auth at :warning" do
