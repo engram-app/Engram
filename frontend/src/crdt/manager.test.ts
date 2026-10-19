@@ -96,12 +96,10 @@ describe("CrdtManager", () => {
 		expect(m.hasDoc("notes/x.md")).toBe(false); // must NOT have been resurrected
 	});
 
-	// Builds a deliberately bloated Y.Doc, so this test is multi-second CPU
-	// work even solo (~4s); under shared-runner contention the 30s default
-	// flakes (job 87493354565: env setup alone took 368s). Timeout sized to
-	// measured cost x ~20 contention, asserts untouched.
 	it("flattenIfBloated preserves frontmatter maps (#814)", async () => {
-		const m = new CrdtManager({ onUpdate: () => {} });
+		// Small injected thresholds: the defaults (500 KB, 1000 client-IDs) took
+		// ~1100 full-doc rebuilds and 20+ s to cross. The flatten path is the same.
+		const m = new CrdtManager({ onUpdate: () => {}, maxContentBytes: 5000, maxClientIds: 10 });
 		const path = "notes/fm.md";
 		const doc = await m.getDoc(path);
 		const maps = frontmatterMaps(doc);
@@ -111,11 +109,10 @@ describe("CrdtManager", () => {
 			maps.types.set("type", "text");
 		});
 
-		// Cross both flatten thresholds (>500 KB AND >1000 distinct client-IDs)
-		// the same way the plugin's equivalent test does: apply an update
-		// authored by a fresh Y.Doc per iteration so each carries a unique
-		// client-ID, and pad content past the byte threshold.
-		for (let i = 0; i < 1100; i++) {
+		// Cross both flatten thresholds the same way the plugin's equivalent test
+		// does: apply an update authored by a fresh Y.Doc per iteration so each
+		// carries a unique client-ID, and pad content past the byte threshold.
+		for (let i = 0; i < 11; i++) {
 			const author = new Y.Doc();
 			Y.applyUpdate(author, Y.encodeStateAsUpdate(doc));
 			author.getText("content").insert(author.getText("content").length, "x".repeat(500));
@@ -130,5 +127,5 @@ describe("CrdtManager", () => {
 		expect(after.values.get("type")).toBe(JSON.stringify("Playbook"));
 		expect(after.order.toArray()).toEqual(["type"]);
 		expect(after.types.get("type")).toBe("text");
-	}, 90_000);
+	});
 });

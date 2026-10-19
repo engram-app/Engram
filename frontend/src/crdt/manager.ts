@@ -29,17 +29,23 @@ export interface CrdtManagerOptions {
 	onUpdate: (docId: string, update: Uint8Array, origin: unknown) => void;
 	/** IndexedDB persistence failure (e.g. quota). Sync continues over the WS. */
 	onPersistError?: (noteId: string, err: unknown) => void;
+	/** flattenIfBloated byte threshold. Default 500_000; injectable for tests. */
+	maxContentBytes?: number;
+	/** flattenIfBloated client-ID threshold. Default 1000; injectable for tests. */
+	maxClientIds?: number;
 }
 
 export class CrdtManager {
 	private readonly opts: CrdtManagerOptions;
 	private readonly docs = new Map<string, Entry>();
 
-	private static readonly MAX_CONTENT_BYTES = 500_000;
-	private static readonly MAX_CLIENT_IDS = 1000;
+	private readonly maxContentBytes: number;
+	private readonly maxClientIds: number;
 
 	constructor(opts: CrdtManagerOptions) {
 		this.opts = opts;
+		this.maxContentBytes = opts.maxContentBytes ?? 500_000;
+		this.maxClientIds = opts.maxClientIds ?? 1000;
 	}
 
 	/** The doc id — identity over the note's stable note_id. Used as both the
@@ -113,7 +119,7 @@ export class CrdtManager {
 		const e = await this.entry(noteId);
 		const encoded = Y.encodeStateAsUpdate(e.doc);
 		const clientIds = Y.decodeStateVector(Y.encodeStateVector(e.doc)).size;
-		if (encoded.length < CrdtManager.MAX_CONTENT_BYTES || clientIds < CrdtManager.MAX_CLIENT_IDS) {
+		if (encoded.length < this.maxContentBytes || clientIds < this.maxClientIds) {
 			return false;
 		}
 		const plaintext = e.text.toJSON();
