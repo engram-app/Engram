@@ -268,6 +268,11 @@ defmodule Engram.Notes do
 
   @max_batch_folders 500
 
+  # Rows per folder-marker `insert_all`. A marker row binds 14 parameters
+  # (upsert_folder_markers/6), so 65535 allows 4681; 2000 is the same
+  # half-margin Links uses so a new column cannot re-arm the overflow.
+  @folder_insert_chunk 2000
+
   @doc """
   Batch `create_folder_marker/3`: one tenant transaction and at most one
   shared `seq` for the whole batch. Each folder goes through
@@ -418,7 +423,11 @@ defmodule Engram.Notes do
         # DO NOTHING (no conflict_target) for the same reason as
         # `insert_folder_marker/6`: a concurrent create of the same folder must
         # not abort the transaction. The re-find below collapses to the winner.
-        _ = Repo.insert_all(Note, rows, on_conflict: :nothing)
+        # Batched so the protocol bind cap does not depend on the caller's
+        # batch limit staying where it is today.
+        rows
+        |> Enum.chunk_every(@folder_insert_chunk)
+        |> Enum.each(&Repo.insert_all(Note, &1, on_conflict: :nothing))
 
         user
         |> folder_markers_by_hmac_query(vault, Enum.map(missing, &elem(&1, 1)))
@@ -3946,6 +3955,11 @@ defmodule Engram.Notes do
     end
   end
 
+  # Jobs per `Oban.insert_all` in batch_delete_notes/3. Oban's Basic engine
+  # binds up to 17 parameters per job (Oban.Job's permitted params), so 65535
+  # allows 3855; 2000 is the same half-margin. The id list is caller-sized.
+  @job_insert_chunk 2000
+
   @doc """
   Atomically soft-deletes a list of notes by id, scoped to the caller's
   user + vault. All-or-nothing: if any id fails to resolve to a live note
@@ -4034,7 +4048,10 @@ defmodule Engram.Notes do
               # delete though — it's enqueued directly post-commit below,
               # once plaintext paths exist (reusing the broadcast's decrypt).
               jobs = Enum.map(notes, &delete_note_index_job/1)
-              _ = if jobs != [], do: Oban.insert_all(jobs)
+
+              jobs
+              |> Enum.chunk_every(@job_insert_chunk)
+              |> Enum.each(&Oban.insert_all/1)
 
               {:ok, %{deleted: updated, notes: notes}}
 
@@ -5755,6 +5772,11 @@ defmodule Engram.Notes do
   # well under Postgres's 65535-bind-param protocol limit.
   @rename_update_chunk 500
 
+  # Rows per tombstone `insert_all` in rename_folder/4. A tombstone binds 24
+  # parameters (9 base columns + 15 from full_aad_bound_kw/7), so 65535 allows
+  # 2730; 1000 is a half-margin so a new column cannot re-arm the overflow.
+  @tombstone_insert_chunk 1000
+
   defp do_rename_folder(user, vault, old_folder, old_prefix, new_folder, rows) do
     # :meta scan (#863 review): the v2 branch below never reads content —
     # a folder rename preserves the basename so the title can't change and
@@ -5935,10 +5957,11 @@ defmodule Engram.Notes do
                     Map.merge(base, Map.new(full_kw))
                   end)
 
-                # Bind the insert_all return; it's no longer the block's tail
-                # expression (the block returns `seq`), so discard explicitly to
-                # satisfy Dialyzer's unmatched_return.
-                _ = Repo.insert_all(Note, tombstones, on_conflict: :nothing)
+                # Batched: one tombstone per note under the folder, so a big
+                # folder overflows the protocol's 65535 bind cap in one statement.
+                tombstones
+                |> Enum.chunk_every(@tombstone_insert_chunk)
+                |> Enum.each(&Repo.insert_all(Note, &1, on_conflict: :nothing))
 
                 seq
               end)
