@@ -4463,8 +4463,16 @@ jobs:
             PG_IMAGE="postgres:18.4"
           fi
           # Retry on ephemeral-port race with sibling runners (see unit-tests).
+          # Private network: Phoenix runs in the mix builder container (ci/bin/mix)
+          # and reaches postgres as `pg` here; the host (db-cleanup.ts) keeps
+          # using the published port.
+          docker network rm "$PG_CONTAINER-net" 2>/dev/null || true
+          docker network create "$PG_CONTAINER-net" >/dev/null
+          echo "MIXW_NETWORK=$PG_CONTAINER-net" >> "$GITHUB_ENV"
+          echo "MIXW_DATABASE_URL=postgresql://engram:engram@pg:5432/engram_dev" >> "$GITHUB_ENV"
           for attempt in 1 2 3 4 5; do
             if docker run -d --name "$PG_CONTAINER" \
+                --network "$PG_CONTAINER-net" --network-alias pg \
                 -e POSTGRES_USER=engram \
                 -e POSTGRES_PASSWORD=engram \
                 -e POSTGRES_DB=engram_dev \
@@ -4488,20 +4496,13 @@ jobs:
           echo "pg_port=$PG_PORT" >> "$GITHUB_OUTPUT"
           echo "Postgres on port $PG_PORT"
 
-      - name: Rust toolchain (native/ NIFs)
-        # rustup into the runner user's home, once per VM, at the version
-        # native/rust-toolchain.toml pins. Under flock: the
-        # runners on one VM share ~/.rustup, and rustup is not safe to run
-        # concurrently.
-        run: |
-          mkdir -p "$HOME/.cargo"
-          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' native/rust-toolchain.toml)
-          flock "$HOME/.cargo/.engram-rustup.lock" sh -c '
-            [ -x "$HOME/.cargo/bin/rustup" ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
-            "$HOME/.cargo/bin/rustup" toolchain install "$0" --profile minimal --component rustfmt --component clippy --no-self-update
-          ' "$RUST_VERSION"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Containerized mix (reuse the prebuilt _build)
+        # Same as unit-tests/lint: mix (including Playwright's `mix phx.server`
+        # webServers) runs in the prebuild-mix image at /app, so the restored
+        # _build is used instead of recompiled. MIXW_NETWORK (set above) makes
+        # ci/bin/mix publish $PORT, which a host-network container can't do
+        # under rootless docker. See docs/context/ci-mix-compile-cache-runner-path.md.
+        run: bash ci/mix-builder/setup.sh "${{ needs.prebuild-mix.outputs.builder-image }}"
 
       - name: Fetch deps (if missing or lockfile changed)
         # Don't gate on `[ -d deps ]` — actions/cache's `restore-keys`
@@ -4600,7 +4601,11 @@ jobs:
       - name: Tear down
         if: always()
         run: |
+          # Phoenix containers Playwright failed to stop (a SIGKILLed docker CLI
+          # leaves its container running).
+          docker ps -aq --filter "label=engram-mixw=${{ github.run_id }}-${{ github.job }}" | xargs -r docker rm -f >/dev/null 2>&1 || true
           docker rm -fv "$PG_CONTAINER" 2>/dev/null || true
+          docker network rm "$PG_CONTAINER-net" 2>/dev/null || true
           find /tmp -maxdepth 1 -name '.ff*.node' -mmin +60 -delete 2>/dev/null || true
 
 

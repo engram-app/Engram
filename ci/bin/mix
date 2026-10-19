@@ -12,6 +12,12 @@
 # rootless runner VM). Inbound connections into it do NOT work under rootless
 # docker, so this wrapper cannot serve a port to the host.
 #
+# To serve a port (e2e-browser's `mix phx.server`), set MIXW_NETWORK to a
+# docker network the job's postgres is attached to. The container then joins
+# that network instead of the host's, publishes $PORT on 127.0.0.1, and gets
+# DATABASE_URL from MIXW_DATABASE_URL (postgres by container name), since
+# localhost no longer reaches the published postgres port from inside it.
+#
 # The repo is also mounted at its host path, and /tmp + RUNNER_TEMP at theirs,
 # so absolute paths that steps pass to mix resolve the same in both places.
 set -euo pipefail
@@ -30,6 +36,8 @@ while IFS= read -r name; do
     PATH|HOME|HOSTNAME|PWD|OLDPWD|SHLVL|_|USER|LOGNAME|SHELL|TERM|TMPDIR|LANG|LANGUAGE|LC_*) ;;
     XDG_*|DOCKER_*|MIX_HOME|MIX_ARCHIVES|HEX_HOME|REBAR_*|ASDF_*|MISE_*|CARGO_HOME|RUSTUP_HOME) ;;
     BASH_*|DBUS_*|SSH_*|INVOCATION_ID|JOURNAL_STREAM|SYSTEMD_*|MANAGERPID|ERL_LIBS) ;;
+    DATABASE_URL) [ -n "${MIXW_DATABASE_URL:-}" ] || env_args+=(-e "$name") ;;
+    MIXW_*) ;;
     *) env_args+=(-e "$name") ;;
   esac
 done < <(compgen -e)
@@ -37,8 +45,15 @@ done < <(compgen -e)
 mounts=(-v "$root:/app" -v "$root:$root" -v /tmp:/tmp)
 if [ -n "${RUNNER_TEMP:-}" ]; then mounts+=(-v "$RUNNER_TEMP:$RUNNER_TEMP"); fi
 
-exec docker run --rm -i --init --network host \
-  --label "engram-mixw=${GITHUB_RUN_ID:-local}" \
+net_args=(--network host)
+if [ -n "${MIXW_NETWORK:-}" ]; then
+  net_args=(--network "$MIXW_NETWORK")
+  if [ -n "${PORT:-}" ]; then net_args+=(-p "127.0.0.1:$PORT:$PORT"); fi
+  if [ -n "${MIXW_DATABASE_URL:-}" ]; then net_args+=(-e "DATABASE_URL=$MIXW_DATABASE_URL"); fi
+fi
+
+exec docker run --rm -i --init "${net_args[@]}" \
+  --label "engram-mixw=${GITHUB_RUN_ID:-local}-${GITHUB_JOB:-local}" \
   "${mounts[@]}" -w "/app$rel" \
   "${env_args[@]}" \
   engram-mix-builder:ci mix "$@"
