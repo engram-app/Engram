@@ -186,12 +186,21 @@ defmodule Engram.Workers.EmbedNote do
         {:discard, :user_deleted}
 
       %User{} = user ->
-        case Repo.with_tenant!(note.user_id, fn -> Repo.get(Vault, note.vault_id) end) do
-          nil ->
+        # The embed-cap rank rides the vault read's tenant transaction
+        # (`with_tenant` is re-entrant), so it costs no extra round trips.
+        # Past Free's cap the pass is keyword-only, and the stamp parks it
+        # like a spent embed budget.
+        case Repo.with_tenant!(note.user_id, fn ->
+               {Repo.get(Vault, note.vault_id), IndexCap.within_cap?(note, user)}
+             end) do
+          {nil, _} ->
             {:discard, "vault #{note.vault_id} not found for note #{note.id}"}
 
-          %Vault{} = vault ->
+          {%Vault{} = vault, true} ->
             {:run, note, user, vault, opts}
+
+          {%Vault{} = vault, false} ->
+            {:run, note, user, vault, Keyword.put(opts, :dense, false)}
         end
     end
   end
@@ -551,7 +560,9 @@ defmodule Engram.Workers.EmbedNote do
         # budget here: a second read can land a DIFFERENT answer, and
         # the stamp would then disagree with the index. The stamp runs
         # inside the chunk-row transaction (`:in_commit`).
-        index_opts = budget ++ [in_commit: &stamp_embed_hash(note, &2, &1)]
+        index_opts =
+          budget ++
+            Keyword.take(opts, [:dense]) ++ [in_commit: &stamp_embed_hash(note, &2, &1)]
 
         case Indexing.index_note_with_usage(decrypted_note, vault, user, index_opts) do
           {:ok, _count, _embedded_bytes, _dense?} ->

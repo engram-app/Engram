@@ -157,7 +157,7 @@ defmodule Engram.Indexing.IndexCap do
   default rather than to unlimited: the conservative direction for a cost
   cap.
   """
-  @spec resolve_cap(map()) :: {:cap, non_neg_integer()} | :unlimited
+  @spec resolve_cap(Engram.Accounts.User.t()) :: {:cap, non_neg_integer()} | :unlimited
   def resolve_cap(user) do
     if Billing.tier(user) == :free do
       case Billing.effective_limit(user, :notes_cap) do
