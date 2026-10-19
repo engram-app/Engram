@@ -207,3 +207,24 @@ Evidence: `engram-workspace/reports/2026-10-18-qdrant-eval/large-notes-audit.md`
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** the new file plus `test/engram/indexing*`, `test/engram/workers/reconcile*`, `test/engram/workers/embed_note*`. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(indexing): cap dense points per note by merging chunks`.
+
+---
+
+### Task 9: Free embed budget as a refilling bucket (added 2026-10-19, user approved)
+
+Replaces Free's one-time `lifetime_embed_token_cap` (20M, worst case $2.40 per signup, silent keyword-only forever once spent) with a continuously refilling bucket on the existing `Engram.Usage.DailyCap` token-bucket mechanism (capacity = allowance, continuous per-second refill, no cron).
+
+**Files:**
+- Modify: `lib/engram/billing/limit_keys.ex` (new key `embed_token_bucket` with capacity 6_000_000 and refill 6_000_000 per 365 days for Free; nil for Starter and Pro; retire `lifetime_embed_token_cap` via the repo's limit-key removal pattern), the token reservation path (`reserve_tokens` / `budget_opts` in `lib/engram/workers/embed_note.ex` and `lib/engram/indexing.ex`), `lib/engram/usage/` (reuse DailyCap; do not write a second bucket)
+- Test: `test/engram/usage/embed_bucket_test.exs`, embed_note budget tests
+
+**Interfaces:**
+- Reservation draws from the bucket; a pass that cannot reserve indexes keyword-only (today's sparse-only path) and the note stays dense-missing, so ReconcileEmbeddings re-embeds it automatically once the bucket refills, newest first. Nothing is permanent.
+- Existing Free users: bucket starts full (6M) on deploy, regardless of lifetime tokens already used. No operator step.
+- Usage API: `embed_tokens: %{available, capacity, refill_per_day}`; empty-bucket banner copy goes in Task 5: "New edits are searchable by keyword now. Full search catches up as your indexing budget refills." plus an expected catch-up time.
+
+- [ ] Step 1: Failing tests: reserve beyond capacity -> keyword-only pass, zero Voyage calls; after simulated refill the reconcile pass embeds the note; refill is continuous (half a day restores ~8.2k tokens); paid tiers never limited; self-host never limited; existing user with 19M lifetime tokens used starts with a full bucket.
+- [ ] Step 2: Run. Expected FAIL.
+- [ ] Step 3: Implement.
+- [ ] Step 4: Run new + embed_note* + usage* + limit_enforcement tests. Expected PASS.
+- [ ] Step 5: Commit `feat(billing): refilling embed token bucket for free`.
