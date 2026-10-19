@@ -372,14 +372,11 @@ fn normalize(head: &str, rest: &str) -> String {
 /// same character class survives.
 fn strip_blobs(text: &str) -> std::borrow::Cow<'_, str> {
     let text = strip_wrapped(text);
-    let out = re!(r"(?:data:[A-Za-z0-9_/+.-]+;base64,)?([A-Za-z0-9+/=_-]{64,})").replace_all(
+    let out = re!(r"(?:data:[A-Za-z0-9_/+.-]+;base64,)?([A-Za-z0-9+/=_-]{100,})").replace_all(
         &text,
         |c: &regex::Captures| {
             let body = &c[1];
-            // Hex needs no encoded() look: 64+ hex chars is a digest or a
-            // dump. A pure-decimal run that long carries no meaning either.
-            let blob =
-                (body.len() >= 100 && encoded(body)) || body.bytes().all(|b| b.is_ascii_hexdigit());
+            let blob = encoded(body) || random_hex(body);
             if blob {
                 String::new()
             } else {
@@ -467,6 +464,18 @@ fn strip_wrapped(text: &str) -> std::borrow::Cow<'_, str> {
     }
     out.push_str(&text[from..]);
     out.into()
+}
+
+/// A hex dump: 256+ hex chars that also look random (digits AND letters),
+/// so sha256/sha512 hashes stay searchable and "aaaa..." is plain text.
+fn random_hex(run: &str) -> bool {
+    if run.len() < 256 || !run.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return false;
+    }
+    let sample = &run.as_bytes()[..run.len().min(4096)];
+    let d = sample.iter().filter(|b| b.is_ascii_digit()).count();
+    let len = sample.len() as f64;
+    d as f64 >= len * 0.2 && (sample.len() - d) as f64 >= len * 0.2
 }
 
 /// Random base64 is ~41% upper, ~41% lower, ~16% digits. Counted over the
@@ -869,17 +878,21 @@ mod tests {
     }
 
     #[test]
-    fn long_hex_is_stripped_short_hex_kept() {
-        let sha = "0123456789abcdef".repeat(8);
-        assert_eq!(indexed(&format!("sum {sha} end")), "sum  end");
-        let keep = "commit 2fc980c3a1b0d5e7f9a1b2c3d4e5f60718293a4b and deadbeef";
-        assert_eq!(indexed(keep), keep);
+    fn random_hex_dump_is_stripped_hashes_and_repeats_kept() {
+        let dump = "0123456789abcdef".repeat(32);
+        assert_eq!(indexed(&format!("sum {dump} end")), "sum  end");
+        let sha512 = "0123456789abcdef".repeat(8);
+        let keep = format!("sha {sha512} commit 2fc980c3a1b0d5e7f9a1b2c3d4e5f60718293a4b deadbeef");
+        assert_eq!(indexed(&keep), keep);
+        for same in ["a".repeat(300), "A".repeat(10_000), "7".repeat(300)] {
+            assert_eq!(indexed(&same), same);
+        }
     }
 
     #[test]
     fn urls_paths_and_tables_are_kept() {
         let url = format!("https://example.com/{}", "segment/".repeat(20));
-        let path = format!("/home/user/{}", "dir/".repeat(12));
+        let path = format!("/home/user/{}", "dir42/".repeat(20));
         let table = "| a | b |\n|---|---|\n| one | two |\n| three | four |\n";
         for s in [url.as_str(), path.as_str(), table] {
             assert_eq!(indexed(s), s);
@@ -887,6 +900,15 @@ mod tests {
         // Two wrapped lines are below the 3-line threshold.
         let two = b64_lines(2, 64);
         assert_eq!(indexed(&two), two);
+    }
+
+    #[test]
+    fn multibyte_text_next_to_a_pem_block_survives() {
+        let note = format!(
+            "Привет мир\n-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\nПока мир",
+            b64_lines(5, 64)
+        );
+        assert_eq!(indexed(&note), "Привет мир\nПока мир");
     }
 
     #[test]
