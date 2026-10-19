@@ -4,7 +4,7 @@ defmodule Engram.Native.ChunkerTest do
 
   alias Engram.Parsers.Markdown
 
-  # Pins the chunker's output (809 notes, 2,649 chunks: code, setext, quotes,
+  # Pins the chunker's output (809 notes, 2,654 chunks: code, setext, quotes,
   # tables, blobs, long sections). A change here re-chunks notes nobody
   # edits only if @chunker_version is bumped too (#1620): bump it, then rerun
   # test/support/fixtures/chunker_golden.gen.exs.
