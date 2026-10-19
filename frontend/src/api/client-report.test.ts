@@ -26,11 +26,16 @@ describe("api client reports broken requests to the log pipe", () => {
 
 	it("reports a network/CORS failure and rethrows the original error", async () => {
 		const err = new TypeError("Failed to fetch");
-		globalThis.fetch = vi.fn().mockRejectedValue(err);
+		// The request fails but the reachability probe gets through: the network
+		// is up, so this route is broken (the CORS-blocked batch-delete shape).
+		globalThis.fetch = vi
+			.fn()
+			.mockRejectedValueOnce(err)
+			.mockResolvedValueOnce(new Response(null, { status: 200 }));
 
 		await expect(api.post("/folders/batch-delete", { ids: [] })).rejects.toBe(err);
 
-		expect(mockError).toHaveBeenCalledTimes(1);
+		await vi.waitFor(() => expect(mockError).toHaveBeenCalledTimes(1));
 		expect(mockError.mock.calls[0]?.[0]).toBe("api_request");
 		const reported = String(mockError.mock.calls[0]?.[1]);
 		// URL goes through scrubUrl: note paths travel in URLs, so only the
@@ -69,6 +74,32 @@ describe("api client reports broken requests to the log pipe", () => {
 
 		await expect(api.get("/folders")).rejects.toThrow("Failed to fetch");
 
+		expect(mockError).not.toHaveBeenCalled();
+	});
+
+	// navigator.onLine stays true through a laptop wake or a dead Wi-Fi: the
+	// browser still thinks it has a link. 2026-10-19 one user's wake fired six
+	// network_errors (/me, /vaults, /tags, ...) in the same millisecond and paged.
+	it("does not report a network failure when the API is unreachable too", async () => {
+		globalThis.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+
+		await expect(api.get("/me")).rejects.toThrow("Failed to fetch");
+
+		await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
+		await new Promise((r) => setTimeout(r, 0));
+		expect(mockError).not.toHaveBeenCalled();
+	});
+
+	// A wake fails every in-flight request at once. One probe answers for all
+	// of them; one per failure hammers a host that may really be down.
+	it("shares one reachability probe across concurrent failures", async () => {
+		globalThis.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+
+		await Promise.allSettled([api.get("/me"), api.get("/vaults"), api.get("/tags")]);
+
+		await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(4));
+		await new Promise((r) => setTimeout(r, 0));
+		expect(globalThis.fetch).toHaveBeenCalledTimes(4);
 		expect(mockError).not.toHaveBeenCalled();
 	});
 });

@@ -279,6 +279,27 @@ defmodule EngramWeb.Plugs.AuthTest do
              "expected an auth-rejected event with reason=no_auth, got: #{inspect(events)}"
     end
 
+    # request_path is redacted, so without this Loki cannot tell an MCP
+    # client's protocol-normal 401 (Codex retrying before login, directory
+    # bots) from a wedged plugin; the no-auth-storm alert fired 56x/week on it.
+    test "tags the rejection surface so MCP 401s are separable" do
+      {_conn, events} =
+        LogCapture.with_events(fn ->
+          %{build_conn() | request_path: "/api/mcp"} |> Auth.call([])
+        end)
+
+      assert Enum.find(events, &match?({:string, "auth rejected"}, &1.msg)).meta[:surface] ==
+               "mcp"
+
+      {_conn, events} =
+        LogCapture.with_events(fn ->
+          %{build_conn() | request_path: "/api/folders"} |> Auth.call([])
+        end)
+
+      assert Enum.find(events, &match?({:string, "auth rejected"}, &1.msg)).meta[:surface] ==
+               "api"
+    end
+
     test "auth rejection ships to Loki with category :auth at :warning" do
       {_conn, events} =
         LogCapture.with_events(fn ->

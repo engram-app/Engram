@@ -46,6 +46,34 @@ function reportFailure(kind: string, method: string, url: string) {
 	rlog().error("api_request", `${kind} ${method} ${scrubUrl(url)}`);
 }
 
+/** navigator.onLine stays true through a laptop wake or a dead Wi-Fi, so a
+ *  failed fetch alone cannot tell "offline" from "this route is broken". Probe
+ *  the API host: if it answers, the network is fine and the failure is ours
+ *  (CORS, a bad route). `no-cors` so the probe itself can never be CORS-blocked. */
+let inFlightProbe: Promise<boolean> | null = null;
+
+/** One probe answers for every failure in flight: a wake fails them all at once. */
+function probeApi(): Promise<boolean> {
+	inFlightProbe ??= fetch(joinApiUrl(getApiBase(), "/api/health"), {
+		mode: "no-cors",
+		cache: "no-store",
+	})
+		.then(
+			() => true,
+			() => false,
+		)
+		.finally(() => {
+			inFlightProbe = null;
+		});
+	return inFlightProbe;
+}
+
+async function reportIfApiReachable(method: string, url: string) {
+	if (await probeApi()) {
+		reportFailure("network_error", method, url);
+	}
+}
+
 async function authFetch(path: string, options: RequestInit = {}): Promise<Response> {
 	const token = await getAuthToken();
 
@@ -80,7 +108,7 @@ async function authFetch(path: string, options: RequestInit = {}): Promise<Respo
 		// the browser deliberately leaves vague.
 		const aborted = err instanceof Error && err.name === "AbortError";
 		if (!aborted && navigator.onLine) {
-			reportFailure("network_error", method, url);
+			reportIfApiReachable(method, url);
 		}
 		throw err;
 	}

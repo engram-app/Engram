@@ -54,7 +54,8 @@ defmodule Engram.RuntimeConfigTest do
                {"RATE_LIMIT_AUTH_OVERRIDE", :rate_limit_auth_override},
                {"PRE_AUTH_RATE_LIMIT_OVERRIDE", :pre_auth_rate_limit_override},
                {"CRDT_MSG_RATE_LIMIT_OVERRIDE", :crdt_msg_rate_limit_override},
-               {"CRDT_HS_RATE_LIMIT_OVERRIDE", :crdt_hs_rate_limit_override}
+               {"CRDT_HS_RATE_LIMIT_OVERRIDE", :crdt_hs_rate_limit_override},
+               {"CLIENT_LOG_LINE_BUDGET_OVERRIDE", :client_log_line_budget_override}
              ]
     end
   end

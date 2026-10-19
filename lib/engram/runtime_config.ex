@@ -20,6 +20,7 @@ defmodule Engram.RuntimeConfig do
   #     pushes ~1000 notes through the default 600 req/60s bucket.
   #   * CRDT_MSG_RATE_LIMIT_OVERRIDE  — CrdtChannel per-message budget
   #   * CRDT_HS_RATE_LIMIT_OVERRIDE   — CrdtChannel handshake (STEP1/STEP2) budget
+  #   * CLIENT_LOG_LINE_BUDGET_OVERRIDE — /api/logs per-device line budget
   #
   # The e2e harness's compressed workload (rapid edits, resumed-device rejoins)
   # legitimately exceeds budgets a real single user wouldn't, and the release
@@ -28,7 +29,8 @@ defmodule Engram.RuntimeConfig do
     {"RATE_LIMIT_AUTH_OVERRIDE", :rate_limit_auth_override},
     {"PRE_AUTH_RATE_LIMIT_OVERRIDE", :pre_auth_rate_limit_override},
     {"CRDT_MSG_RATE_LIMIT_OVERRIDE", :crdt_msg_rate_limit_override},
-    {"CRDT_HS_RATE_LIMIT_OVERRIDE", :crdt_hs_rate_limit_override}
+    {"CRDT_HS_RATE_LIMIT_OVERRIDE", :crdt_hs_rate_limit_override},
+    {"CLIENT_LOG_LINE_BUDGET_OVERRIDE", :client_log_line_budget_override}
   ]
 
   @doc """

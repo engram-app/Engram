@@ -53,7 +53,11 @@ defmodule EngramWeb.Plugs.Auth do
           "auth rejected",
           Engram.Logger.Metadata.with_category(:warning, :auth,
             reason: format_reason(reason),
-            request_path: conn.request_path
+            request_path: conn.request_path,
+            # request_path is redacted in Loki; this bounded tag is what lets
+            # the no-auth-storm alert drop protocol-normal MCP 401s.
+            surface:
+              if(String.starts_with?(conn.request_path, "/api/mcp"), do: "mcp", else: "api")
           )
         )
 
