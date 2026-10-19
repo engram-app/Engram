@@ -36,7 +36,8 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   import Ecto.Query
 
   alias Engram.Backfill.TenantScan
-  alias Engram.Billing.LimitKeys
+  alias Engram.Billing
+  alias Engram.Billing.Subscription
   alias Engram.DataMigrations.IndexVersions
   alias Engram.Logger.Metadata
   alias Engram.Notes.{Chunk, Note}
@@ -209,7 +210,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       )
     )
 
-    :ok = sweep_over_note_cap(now, paid)
+    :ok = sweep_over_note_cap(now)
     if versions_done, do: :ok, else: sweep_keyword_stale(now, paid, page_size)
   end
 
@@ -226,36 +227,28 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # are unique per note and start at 0, so a note over the cap always has one,
   # and the (note_id, position) index answers it per note.
   #
-  # ponytail: tier defaults only. A per-user or plan-env override of
-  # `note_points_cap` is invisible here: a raised cap reselects its notes once
-  # per backoff window for a no-op pass (every point reused), a lowered one
-  # caps on the next edit. Join the overrides if either ever matters.
+  # The cap is each user's effective one, resolved in SQL the way
+  # `Billing.effective_limit/2` resolves it: a per-user override, else the
+  # tier's (plan env override, else default). A note under a raised override
+  # is never selected; a non-integer or non-positive cap selects nothing, as
+  # `Indexing` then applies no cap.
   #
   # Dense notes only: a sparse-only note reaches the dense backfill (term 2 of
   # the main sweep), whose pass caps it.
-  defp sweep_over_note_cap(now, paid) do
-    # The flag `Billing.effective_limit/2` reads: off (self-host), no cap.
-    if Application.get_env(:engram, :limits_enforced, true) do
-      free_cap = LimitKeys.default_for(:note_points_cap, :free)
-      paid_cap = LimitKeys.default_for(:note_points_cap, :starter)
-      backoff_until = DateTime.add(now, reconcile_backoff_seconds(), :second)
+  defp sweep_over_note_cap(now) do
+    tier_caps = Map.new([:free, :starter, :pro], &{&1, Billing.tier_limit(&1, :note_points_cap)})
 
-      over = fn cap ->
-        from(c in Chunk,
-          where: c.note_id == parent_as(:note).id and c.position >= ^cap,
-          select: 1
-        )
-      end
+    # Every tier `:unlimited` is enforcement off (self-host): nothing to do.
+    unless Enum.all?(Map.values(tier_caps), &(&1 == :unlimited)) do
+      backoff_until = DateTime.add(now, reconcile_backoff_seconds(), :second)
+      over_cap = over_note_cap_dynamic(tier_caps, Billing.active_overrides(:note_points_cap))
 
       page = fn repo, limit ->
         eligible =
           IndexVersions.content_current_notes()
           |> where([n], n.dense_indexed_hash == n.content_hash and is_nil(n.index_tier))
           |> where([n], is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now)
-          |> where(
-            [n],
-            exists(over.(free_cap)) and (not exists(paid) or exists(over.(paid_cap)))
-          )
+          |> where(^over_cap)
           |> order_by([n], asc: n.updated_at)
           |> limit(^limit)
           |> select([n], n.id)
@@ -308,6 +301,49 @@ defmodule Engram.Workers.ReconcileEmbeddings do
 
     :ok
   end
+
+  # Over its user's cap: an override's cap for users who have one, else the
+  # tier's. `tier/1` order: an entitled Starter or Pro subscription, else Free.
+  defp over_note_cap_dynamic(tier_caps, overrides) do
+    entitled = fn tiers ->
+      from(s in Subscription,
+        where:
+          s.user_id == parent_as(:note).user_id and
+            s.status in ^Billing.entitled_statuses() and s.tier in ^tiers,
+        select: 1
+      )
+    end
+
+    overridden = Enum.map(overrides, &elem(&1, 0))
+
+    by_tier =
+      dynamic(
+        [n],
+        n.user_id not in ^overridden and
+          ((exists(entitled.(["pro"])) and ^over(tier_caps.pro)) or
+             (exists(entitled.(["starter"])) and ^over(tier_caps.starter)) or
+             (not exists(entitled.(["starter", "pro"])) and ^over(tier_caps.free)))
+      )
+
+    overrides
+    |> Enum.group_by(&elem(&1, 1), &elem(&1, 0))
+    |> Enum.reduce(by_tier, fn {cap, user_ids}, acc ->
+      dynamic([n], ^acc or (n.user_id in ^user_ids and ^over(cap)))
+    end)
+  end
+
+  defp over(cap) when is_integer(cap) and cap > 0 do
+    dynamic(
+      exists(
+        from(c in Chunk,
+          where: c.note_id == parent_as(:note).id and c.position >= ^cap,
+          select: 1
+        )
+      )
+    )
+  end
+
+  defp over(_no_cap), do: dynamic(false)
 
   # The hour a day (04:00-04:59 UTC, twelve "2-59/5" ticks) that re-checks
   # index versions after IndexVersions is done. A whole hour, not one tick: the

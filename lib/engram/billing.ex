@@ -64,6 +64,43 @@ defmodule Engram.Billing do
 
   def effective_limit(_user, key), do: raise(UnknownLimitKeyError, key: key)
 
+  @doc """
+  What `effective_limit/2` gives every `tier` user with no per-user
+  override: the plan env override, else the catalog default, and
+  `:unlimited` with enforcement off. For sweeps that apply a limit to many
+  users in one query; pair it with `active_overrides/1`. Skips the
+  `plan_id` step, which only tests write.
+  """
+  def tier_limit(tier, key) when is_atom(key) do
+    unless LimitKeys.defined?(key), do: raise(UnknownLimitKeyError, key: key)
+
+    if enforced?() do
+      case env_override_lookup(tier, key) do
+        {:hit, v} -> v
+        :miss -> LimitKeys.default_for(key, tier)
+      end
+    else
+      :unlimited
+    end
+  end
+
+  @doc """
+  The per-user overrides of `key` that `effective_limit/2` reads right now:
+  `[{user_id, value}]`, unexpired, null values left out (a null override is
+  a miss there too).
+  """
+  def active_overrides(key) when is_atom(key) do
+    now = DateTime.utc_now()
+
+    from(o in UserLimitOverride,
+      where: o.key == ^to_string(key) and (is_nil(o.expires_at) or o.expires_at > ^now),
+      select: {o.user_id, fragment("?->'v'", o.value)}
+    )
+    # `user_limit_overrides` has no RLS: no tenant to set, no guard to skip.
+    |> Repo.all()
+    |> Enum.reject(&is_nil(elem(&1, 1)))
+  end
+
   defp enforced?, do: Application.get_env(:engram, :limits_enforced, true)
 
   defp do_effective_limit(user, key) do

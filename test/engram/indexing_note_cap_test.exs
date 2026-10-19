@@ -102,18 +102,22 @@ defmodule Engram.IndexingNoteCapTest do
       end)
   end
 
-  describe "cap_chunks/2" do
+  describe "cap_chunks/3" do
     setup do
       chunks = Markdown.parse(sections(500), "Big.md")
       assert length(chunks) == 500
-      %{chunks: chunks}
+      %{chunks: chunks, key: :crypto.strong_rand_bytes(32)}
     end
 
-    test "500 chunks to 128 contiguous groups, nothing dropped", %{chunks: chunks} do
-      capped = Indexing.cap_chunks(chunks, 128)
+    test "500 chunks to at most 128 contiguous groups, nothing dropped", %{
+      chunks: chunks,
+      key: key
+    } do
+      capped = Indexing.cap_chunks(chunks, 128, key)
 
-      assert length(capped) == 128
-      assert Enum.map(capped, & &1.position) == Enum.to_list(0..127)
+      assert length(capped) <= 128
+      assert Enum.map(capped, & &1.position) == Enum.to_list(0..(length(capped) - 1))
+      assert Enum.all?(capped, & &1.merged)
       assert hd(capped).char_start == hd(chunks).char_start
       assert List.last(capped).char_end == List.last(chunks).char_end
 
@@ -129,14 +133,28 @@ defmodule Engram.IndexingNoteCapTest do
              |> Enum.map(& &1.char_start)
              |> Enum.chunk_every(2, 1, :discard)
              |> Enum.all?(fn [a, b] -> a < b end)
-
-      # Balanced: no group is far over the mean.
-      mean = Enum.sum(Enum.map(capped, & &1.token_count)) / 128
-      assert Enum.max(Enum.map(capped, & &1.token_count)) <= 2 * mean
     end
 
-    test "a merged chunk's inputs are what a single chunk with its text gets", %{chunks: chunks} do
-      [first_group | _] = Indexing.cap_chunks(chunks, 128)
+    test "the same chunks and key give the same groups", %{chunks: chunks, key: key} do
+      assert Indexing.cap_chunks(chunks, 128, key) == Indexing.cap_chunks(chunks, 128, key)
+    end
+
+    # ~200 KB of ~1 KB sections, cap 3: no 3 groups fit under the ceiling, so
+    # it closes groups early and the result stays over the cap.
+    test "a group closes before passing 10,000 estimated tokens", %{key: key} do
+      filler = String.duplicate("lorem ipsum dolor ", 55)
+      content = "# Big\n\n" <> Enum.map_join(1..200, "\n\n", &"## S#{&1}\n\n#{filler}#{&1}")
+      capped = Indexing.cap_chunks(Markdown.parse(content, "Big.md"), 3, key)
+
+      assert length(capped) > 3
+      assert Enum.all?(capped, &(UsageMeters.estimate_tokens(&1.embed_text) <= 10_000))
+    end
+
+    test "a merged chunk's inputs are what a single chunk with its text gets", %{
+      chunks: chunks,
+      key: key
+    } do
+      [first_group | _] = Indexing.cap_chunks(chunks, 128, key)
       first = hd(chunks)
       prefix = fn full, text -> binary_part(full, 0, byte_size(full) - byte_size(text)) end
 
@@ -148,24 +166,28 @@ defmodule Engram.IndexingNoteCapTest do
       assert first_group.embed_text == prefix.(first.embed_text, first.text) <> first_group.text
     end
 
-    test "under the cap the list is returned unchanged" do
+    test "under the cap the list is returned unchanged", %{key: key} do
       chunks = Markdown.parse(sections(100), "Big.md")
       assert length(chunks) == 100
-      assert Indexing.cap_chunks(chunks, 128) === chunks
-      assert Indexing.cap_chunks(chunks, nil) === chunks
+      assert Indexing.cap_chunks(chunks, 128, key) === chunks
+      assert Indexing.cap_chunks(chunks, nil, key) === chunks
     end
   end
 
   describe "indexing a 500-chunk note" do
-    test "Free indexes 128 points, metered on its first embed", %{user: user, vault: vault} do
+    test "Free indexes at most 128 points, metered on its first embed", %{
+      user: user,
+      vault: vault
+    } do
       note = insert_note(user, vault, sections(500))
       stub_embedder()
       before = UsageMeters.lifetime_embed_tokens(user.id)
 
       assert :ok = embed(note)
-      assert length(rows_for(note)) == 128
+      rows = rows_for(note)
+      assert length(rows) in 1..128
       texts = embedded_texts()
-      assert length(texts) == 128
+      assert length(texts) == length(rows)
 
       assert UsageMeters.lifetime_embed_tokens(user.id) - before ==
                texts |> Enum.map(&byte_size/1) |> Enum.sum() |> UsageMeters.estimate_tokens()
@@ -200,7 +222,7 @@ defmodule Engram.IndexingNoteCapTest do
       stub_embedder()
 
       {:ok, prepared} = Indexing.prepare_index(note, vault, user)
-      assert length(prepared.qdrant_points) == 128
+      assert length(prepared.qdrant_points) <= 128
 
       assert Enum.any?(embedded_texts(), &String.contains?(&1, "quixotic"))
 
@@ -219,18 +241,88 @@ defmodule Engram.IndexingNoteCapTest do
       note = insert_note(user, vault, sections(500))
       stub_embedder()
 
-      assert {:ok, 128, _, true} = Indexing.index_note_with_usage(note, vault, user)
+      assert {:ok, count, _, true} = Indexing.index_note_with_usage(note, vault, user)
+      assert count <= 128
       ids = Enum.map(rows_for(note), & &1.qdrant_point_id)
-      assert length(embedded_texts()) == 128
+      assert length(embedded_texts()) == count
 
-      assert {:ok, 128, 0, true} = Indexing.index_note_with_usage(note, vault, user)
+      assert {:ok, ^count, 0, true} = Indexing.index_note_with_usage(note, vault, user)
       assert embedded_texts() == []
       assert Enum.map(rows_for(note), & &1.qdrant_point_id) == ids
     end
 
-    # One group holds the whole note (cap 1): ~150 KB of text estimates over
-    # 30,000 tokens. No embedder stub: any Voyage call fails the test.
-    test "a merged group over 30,000 estimated tokens floors the note", %{
+    test "editing one middle chunk re-embeds at most 3 groups", %{user: user, vault: vault} do
+      content = sections(500)
+      note = insert_note(user, vault, content)
+      stub_embedder()
+      assert {:ok, _, _, true} = Indexing.index_note_with_usage(note, vault, user)
+      _ = embedded_texts()
+
+      # An edit that tips the group count over the cap doubles `g` and
+      # regroups the whole note (a known cost, see the Task 7 report), so pick
+      # a middle chunk whose edit keeps `g`: the count moves by at most one.
+      {:ok, key} = Crypto.dek_content_hash_key(user)
+      groups = &(&1 |> Markdown.parse("Big.md") |> Indexing.cap_chunks(128, key) |> length())
+
+      edited =
+        Enum.find_value(240..260, fn i ->
+          e = String.replace(content, "section#{i} body", "section#{i} edited body")
+          if abs(groups.(e) - groups.(content)) <= 1, do: e
+        end)
+
+      assert edited
+
+      assert {:ok, count, _, true} =
+               Indexing.index_note_with_usage(%{note | content: edited}, vault, user)
+
+      assert count <= 128
+      assert length(embedded_texts()) in 1..3
+    end
+
+    # A keyword-version resparse matches the merged chunks, not the raw ones,
+    # and writes no lengths back.
+    test "resparse rewrites every merged point, lengths stay NULL", %{user: user, vault: vault} do
+      note = insert_note(user, vault, sections(500))
+      stub_embedder()
+      assert {:ok, count, _, true} = Indexing.index_note_with_usage(note, vault, user)
+
+      assert {:ok, ^count, 0} = Indexing.resparse_note(note, user)
+      assert Enum.all?(rows_for(note), &is_nil(&1.token_count))
+    end
+
+    test "a capped note leaves the vault's avgdl alone", %{user: user, vault: vault} do
+      stub_embedder()
+      plain = insert_note(user, vault, "# Plain\n\nA short ordinary note.", "Plain.md")
+      assert {:ok, 1, _, true} = Indexing.index_note_with_usage(plain, vault, user)
+      # The rows `Stats.avgdl/2` averages, read directly (it caches).
+      avgdl = fn ->
+        {:ok, avg} =
+          Repo.with_tenant(user.id, fn ->
+            Repo.one(
+              from(c in Chunk,
+                where: c.vault_id == ^vault.id and not is_nil(c.token_count),
+                select: avg(c.token_count)
+              )
+            )
+          end)
+
+        avg
+      end
+
+      before = avgdl.()
+      assert before
+
+      note = insert_note(user, vault, sections(500))
+      assert {:ok, _, _, true} = Indexing.index_note_with_usage(note, vault, user)
+
+      assert Enum.all?(rows_for(note), &is_nil(&1.token_count))
+      assert avgdl.() == before
+    end
+
+    # Cap 1, ~150 KB of text: one group would estimate far over 10,000
+    # tokens, so the ceiling needs more groups than the cap allows. No
+    # embedder stub: any Voyage call fails the test.
+    test "a note needing more than its cap of 10,000-token groups floors", %{
       user: user,
       vault: vault
     } do
@@ -261,7 +353,7 @@ defmodule Engram.IndexingNoteCapTest do
       Application.put_env(:engram, :limits_enforced, true)
     end
 
-    test "a Free note of 500 live chunks is rebuilt to 128, unmetered", %{
+    test "a Free note of 500 live chunks is rebuilt to at most 128, unmetered", %{
       user: user,
       vault: vault
     } do
@@ -278,8 +370,9 @@ defmodule Engram.IndexingNoteCapTest do
 
       before = UsageMeters.lifetime_embed_tokens(user.id)
       assert :ok = perform_job(RebuildStaleNote, job.args)
-      assert length(rows_for(note)) == 128
-      assert length(embedded_texts()) == 128
+      rows = rows_for(note)
+      assert length(rows) in 1..128
+      assert length(embedded_texts()) == length(rows)
       assert UsageMeters.lifetime_embed_tokens(user.id) == before
 
       indexed = reload(note)
@@ -301,6 +394,26 @@ defmodule Engram.IndexingNoteCapTest do
       assert :ok = perform_job(ReconcileEmbeddings, %{})
       refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
       refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+    end
+
+    # The sweep resolves each user's cap the way indexing does.
+    test "a Free note under a raised override is not selected", %{user: user, vault: vault} do
+      insert(:user_limit_override, user: user, key: "note_points_cap", value: %{"v" => 1_000})
+      note = insert_note(user, vault, sections(500))
+      index_uncapped(note)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
+    end
+
+    test "a Starter note over a lowered override is selected", %{user: user, vault: vault} do
+      insert(:subscription, user: user, tier: "starter", status: "active")
+      insert(:user_limit_override, user: user, key: "note_points_cap", value: %{"v" => 100})
+      note = insert_note(user, vault, sections(500))
+      index_uncapped(note)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id, "recap" => true})
     end
 
     test "billing disabled: never selected", %{user: user, vault: vault} do
