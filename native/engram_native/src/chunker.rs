@@ -355,20 +355,106 @@ fn normalize(head: &str, rest: &str) -> String {
     out
 }
 
-/// Base64 runs (data URIs, Excalidraw, encrypted blocks) are removed from the
-/// indexed text; the note keeps every byte. A run must also LOOK encoded, so
-/// a long URL or path in the same character class survives.
+/// Base64 and hex blobs are removed from the indexed text; the note keeps
+/// every byte. A run must also LOOK encoded, so a long URL or path in the
+/// same character class survives.
 fn strip_blobs(text: &str) -> std::borrow::Cow<'_, str> {
-    re!(r"(?:data:[A-Za-z0-9_/+.-]+;base64,)?[A-Za-z0-9+/=_-]{100,}").replace_all(
-        text,
+    let text = strip_wrapped(text);
+    let out = re!(r"(?:data:[A-Za-z0-9_/+.-]+;base64,)?([A-Za-z0-9+/=_-]{64,})").replace_all(
+        &text,
         |c: &regex::Captures| {
-            if encoded(&c[0]) {
+            let body = &c[1];
+            // Hex needs no encoded() look: 64+ hex chars is a digest or a
+            // dump. A pure-decimal run that long carries no meaning either.
+            let blob =
+                (body.len() >= 100 && encoded(body)) || body.bytes().all(|b| b.is_ascii_hexdigit());
+            if blob {
                 String::new()
             } else {
                 c[0].to_string()
             }
         },
-    )
+    );
+    match out {
+        std::borrow::Cow::Borrowed(_) => text,
+        std::borrow::Cow::Owned(s) => s.into(),
+    }
+}
+
+fn b64_line(line: &str) -> bool {
+    let l = line.trim();
+    (40..=120).contains(&l.len())
+        && l.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/' | b'='))
+}
+
+fn pem_armour(line: &str, word: &str) -> bool {
+    let l = line.trim();
+    l.starts_with("-----") && l.ends_with("-----") && l[5..].starts_with(word)
+}
+
+/// Runs of 3+ lines of 40-120 base64 chars (PEM bodies, MIME parts) that
+/// together look encoded, plus the PEM armour lines around them. One linear
+/// line scan, no regex.
+fn strip_wrapped(text: &str) -> std::borrow::Cow<'_, str> {
+    // Byte ranges to drop; a note with no wrapped blob allocates nothing.
+    let mut cut: Vec<(usize, usize)> = Vec::new();
+    let mut prev: Option<(usize, &str)> = None;
+    let mut run: Option<(usize, usize, usize)> = None; // start, end, lines
+    let mut sample = String::new(); // first 4 KB of the run, what encoded() reads
+    let mut pos = 0;
+    let mut close = |run: &mut Option<(usize, usize, usize)>,
+                     sample: &mut String,
+                     prev: Option<(usize, &str)>,
+                     next: Option<(usize, usize, &str)>| {
+        if let Some((s, e, n)) = run.take() {
+            if n >= 3 && encoded(sample) {
+                let s = match prev {
+                    Some((ps, l)) if pem_armour(l, "BEGIN") => ps,
+                    _ => s,
+                };
+                let e = match next {
+                    Some((_, ne, l)) if pem_armour(l, "END") => ne,
+                    _ => e,
+                };
+                cut.push((s, e));
+            }
+        }
+        sample.clear();
+    };
+    for line in text.split_inclusive('\n') {
+        let end = pos + line.len();
+        if b64_line(line) {
+            match &mut run {
+                Some((_, e, n)) => {
+                    *e = end;
+                    *n += 1;
+                }
+                None => run = Some((pos, end, 1)),
+            }
+            if sample.len() < 4096 {
+                sample.push_str(line.trim());
+            }
+        } else {
+            close(&mut run, &mut sample, prev, Some((pos, end, line)));
+            prev = Some((pos, line));
+        }
+        pos = end;
+    }
+    close(&mut run, &mut sample, prev, None);
+    if cut.is_empty() {
+        return text.into();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut from = 0;
+    for (s, e) in cut {
+        // An END armour line already swallowed by the previous cut cannot
+        // overlap: it is not a base64 line, so no later run starts inside it.
+        out.push_str(&text[from..s]);
+        from = e;
+    }
+    out.push_str(&text[from..]);
+    out.into()
 }
 
 /// Random base64 is ~41% upper, ~41% lower, ~16% digits. Counted over the
@@ -723,6 +809,58 @@ mod tests {
     #[test]
     fn an_empty_heading_does_not_split() {
         assert_eq!(paths("a\n\n#\n\nb"), ["T"]);
+    }
+
+    fn indexed(s: &str) -> String {
+        strip_blobs(s).into_owned()
+    }
+
+    fn b64_lines(n: usize, w: usize) -> String {
+        let alpha = b"AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/aBcDeFgHiJkLmNoPqRsTuVwXyZ";
+        (0..n)
+            .map(|r| {
+                (0..w)
+                    .map(|i| alpha[(i * 7 + r * 13) % 64] as char)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn pem_block_is_stripped_prose_kept() {
+        let note = format!(
+            "before text\n-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\nafter text",
+            b64_lines(5, 64)
+        );
+        assert_eq!(indexed(&note), "before text\nafter text");
+    }
+
+    #[test]
+    fn mime_attachment_is_stripped() {
+        let note = format!("hello\n\n{}\n\nbye", b64_lines(8, 76));
+        assert_eq!(indexed(&note), "hello\n\n\nbye");
+    }
+
+    #[test]
+    fn long_hex_is_stripped_short_hex_kept() {
+        let sha = "0123456789abcdef".repeat(8);
+        assert_eq!(indexed(&format!("sum {sha} end")), "sum  end");
+        let keep = "commit 2fc980c3a1b0d5e7f9a1b2c3d4e5f60718293a4b and deadbeef";
+        assert_eq!(indexed(keep), keep);
+    }
+
+    #[test]
+    fn urls_paths_and_tables_are_kept() {
+        let url = format!("https://example.com/{}", "segment/".repeat(20));
+        let path = format!("/home/user/{}", "dir/".repeat(12));
+        let table = "| a | b |\n|---|---|\n| one | two |\n| three | four |\n";
+        for s in [url.as_str(), path.as_str(), table] {
+            assert_eq!(indexed(s), s);
+        }
+        // Two wrapped lines are below the 3-line threshold.
+        let two = b64_lines(2, 64);
+        assert_eq!(indexed(&two), two);
     }
 
     #[test]
