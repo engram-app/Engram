@@ -89,4 +89,17 @@ describe("api client reports broken requests to the log pipe", () => {
 		await new Promise((r) => setTimeout(r, 0));
 		expect(mockError).not.toHaveBeenCalled();
 	});
+
+	// A wake fails every in-flight request at once. One probe answers for all
+	// of them; one per failure hammers a host that may really be down.
+	it("shares one reachability probe across concurrent failures", async () => {
+		globalThis.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+
+		await Promise.allSettled([api.get("/me"), api.get("/vaults"), api.get("/tags")]);
+
+		await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(4));
+		await new Promise((r) => setTimeout(r, 0));
+		expect(globalThis.fetch).toHaveBeenCalledTimes(4);
+		expect(mockError).not.toHaveBeenCalled();
+	});
 });
