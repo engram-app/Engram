@@ -24,6 +24,8 @@ defmodule Engram.Parsers.Markdown do
   #     frontmatter chunk is keyword-only, so it no longer holds a dense vector.
   @chunker_version 4
 
+  @data_exts [".canvas", ".base"]
+
   @doc """
   Version of the chunking algorithm in this build (#1620).
 
@@ -51,6 +53,9 @@ defmodule Engram.Parsers.Markdown do
   - `:kind`         — "prose" | "data" | "frontmatter" | "drawing"; only
                       prose gets a dense vector, the rest are keyword-only
 
+  A `.canvas` or `.base` note has no `"prose"` chunks: they are all `"data"`.
+  An Excalidraw note (frontmatter `excalidraw-plugin`) loses its drawing JSON.
+
   Exception: when frontmatter is present, a synthetic chunk carrying the raw
   frontmatter block is appended last, with `heading_path` fixed to
   `"frontmatter"`, `kind` `"frontmatter"` and `char_start`/`char_end` both
@@ -65,6 +70,8 @@ defmodule Engram.Parsers.Markdown do
     content = content |> Helpers.scrub_utf8() |> String.replace("\r\n", "\n")
     folder = extract_folder(path)
     title = Helpers.extract_title(content, path)
+    # Structured files (JSON canvas, Obsidian bases) are keyword-only whole.
+    data? = Path.extname(path) in @data_exts
 
     content
     |> Engram.Native.chunk(folder, title)
@@ -79,7 +86,7 @@ defmodule Engram.Parsers.Markdown do
         heading_path: heading_path,
         char_start: char_start,
         char_end: char_end,
-        kind: kind
+        kind: if(data? and kind == "prose", do: "data", else: kind)
       }
     end)
   end

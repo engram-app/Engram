@@ -74,6 +74,7 @@ const COUNT_FROM: usize = 16 * 1024;
 /// `budget` is chunked again with its small sections coalesced.
 pub fn each_chunk(content: &str, folder: &str, title: &str, mut emit: impl FnMut(Chunk)) {
     let (block, body) = crate::frontmatter::parts(content);
+    let body = &*excalidraw(block.as_deref(), body);
     let coalesce = body.len() >= COUNT_FROM && {
         let mut n = 0;
         chunk_body(body, folder, title, false, &mut |_| n += 1);
@@ -210,6 +211,24 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
 
 const PROSE: &str = "prose";
 
+/// An Excalidraw note (frontmatter key `excalidraw-plugin`) is indexed by its
+/// text elements: the ```json / ```compressed-json drawing fences after
+/// `## Drawing` leave the indexed text, and so do the ` ^id` block refs that
+/// end the element lines. The note keeps every byte. Chunk offsets count the
+/// edited body.
+fn excalidraw<'a>(block: Option<&str>, body: &'a str) -> std::borrow::Cow<'a, str> {
+    if !block.is_some_and(|b| b.contains("excalidraw-plugin")) {
+        return body.into();
+    }
+    let (head, tail) = match body.find("\n## Drawing") {
+        Some(i) => body.split_at(i),
+        None => (body, ""),
+    };
+    let head = re!(r"(?m)[ \t]+\^[A-Za-z0-9]{6,}[ \t]*$").replace_all(head, "");
+    let tail = re!(r"(?ms)^```(?:compressed-)?json[^\n]*\n.*?^```[ \t]*$").replace_all(tail, "");
+    format!("{head}{tail}").into()
+}
+
 /// `data` for a body chunk that is mostly not words (minified JSON, CSV of
 /// numbers, log dumps, number tables): it is keyword-only, as a dense vector
 /// of it means nothing. Under 200 bytes, mostly inside a code fence (code is
@@ -242,7 +261,13 @@ fn classify(text: &str, mut open: bool) -> (&'static str, bool) {
                 other += 1;
             }
         }
-        if tok.chars().any(char::is_alphanumeric) {
+        // `[[Note|Alias]]`: both sides are words.
+        let parts = if tok.contains("[[") {
+            tok.split('|')
+        } else {
+            tok.split('\u{0}')
+        };
+        for tok in parts.filter(|t| t.chars().any(char::is_alphanumeric)) {
             tokens += 1;
             words += word(tok) as usize;
         }
@@ -1136,6 +1161,46 @@ mod tests {
             .flat_map(|_| keys.iter().map(|k| format!("- **{k}:** Alice")))
             .collect();
         all(&note.join("\n"), "prose");
+    }
+
+    #[test]
+    fn aliased_wikilinks_are_prose() {
+        let note: Vec<&str> = std::iter::repeat("- [[Inbox|In]]").take(20).collect();
+        all(&note.join("\n"), "prose");
+    }
+
+    const DRAWING: &str = "---\nexcalidraw-plugin: parsed\n---\n\n# Excalidraw Data\n\n## Text Elements\nLaunch plan zanzibar ^abc12345\n\nShip it ^Zz9Yy8Xx\n\n%%\n## Drawing\n```compressed-json\nN4IgLgngDgpiBcIBeA7AHABgOgIwG8AaGmAJwIC2AlgIYAmQAXGAGzBMNwHtqAnAF8D7VkRH0AIgCEAlAAIAKwAUYAXUkBjAGZQAbmwD6mgFYAGAIyWAnAF4A8hCDEAIgGEAEsQDWAMQCkAQVoAVQAIAIgCEfTwBFQKdIgGEfQIBlAAsAdVJALAAEnQBVAH5\n```\n%%\n";
+
+    #[test]
+    fn excalidraw_drawing_data_is_dropped_text_kept() {
+        let text: String = chunk(DRAWING, "", "T")
+            .iter()
+            .map(|c| c.0.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("N4IgLgng"), "{text}");
+        assert!(
+            text.contains("Launch plan zanzibar") && text.contains("Ship it"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("^abc12345") && !text.contains("^Zz9Yy8Xx"),
+            "{text}"
+        );
+        assert!(text.contains("excalidraw-plugin"), "{text}");
+        let raw = DRAWING.replace(
+            "compressed-json\nN4IgLgngDgpiBcIBeA7AHABgOgIwG8AaGm",
+            "json\n{\"type\": \"rectangle\", \"x\": 1, \"id\": \"qq\"}\nN4",
+        );
+        let text: String = chunk(&raw, "", "T").iter().map(|c| c.0.clone()).collect();
+        assert!(!text.contains("rectangle"), "{text}");
+    }
+
+    #[test]
+    fn json_fences_outside_excalidraw_are_kept() {
+        let note = "# T\n\n## Drawing\n```json\n{\"keep\": \"me\"}\n```\n";
+        let text: String = chunk(note, "", "T").iter().map(|c| c.0.clone()).collect();
+        assert!(text.contains("keep"), "{text}");
     }
 
     #[test]
