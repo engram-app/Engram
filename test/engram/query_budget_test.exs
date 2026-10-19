@@ -83,12 +83,12 @@ defmodule Engram.QueryBudgetTest do
     "GET notes/*path" => 5,
     # As "mcp write_note update" (1-13), plus the response's note_links read.
     "POST notes update" => 15,
-    # Write target 12; floor 19: rotation lock, begin, enter, path lookup,
+    # Write target 12; floor 17: rotation lock, begin, enter, path lookup,
     # notes cap (usage_meters), path-collision probe, seq bump, INSERT, the
     # inserted row's re-read, usage_meters increment, EmbedNote and
-    # ExtractNoteLinks unique check + insert (4), RebindNoteLinks insert +
-    # pg_notify, the vault_populated probe, the response's links read, commit.
-    "POST notes create" => 19,
+    # ExtractNoteLinks unique check + insert (4), the vault_populated probe,
+    # the response's links read, commit.
+    "POST notes create" => 17,
     # As "mcp append_to_note" (1-13), plus the response's note_links read.
     "POST notes/append" => 15,
     # Not consolidated in Task 10b (no query-classify item; a rename claims its
@@ -96,10 +96,10 @@ defmodule Engram.QueryBudgetTest do
     #  1 rotation lock. 2-5 claim validation txn (note ids at the paths).
     #  6 the claim's own fresh rotation lock (a socket's user is stale).
     #  7-13 index room fold (snapshot, tail, tail ids, snapshot upsert).
-    #  14-25 rename txn (2 note reads, seq, UPDATE, tombstone INSERT, two job
-    #  inserts + pg_notify). 26-31 post-commit jobs (one unique, own txn).
-    #  32-36 idle-room fanout (fresh users row + note read). 37-40 links txn.
-    "POST notes/rename" => 40,
+    #  14-21 rename txn (2 note reads, seq, UPDATE, tombstone INSERT).
+    #  22-27 post-commit jobs (one unique, own txn). 28-32 idle-room fanout
+    #  (fresh users row + note read). 33-36 links txn.
+    "POST notes/rename" => 36,
     # rotation lock, begin, enter, the note row, seq bump, tombstone,
     # usage_meters, two job inserts + their pg_notify, commit.
     "DELETE notes/*path" => 12,

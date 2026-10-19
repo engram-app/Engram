@@ -6,7 +6,6 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
   alias Engram.Links
   alias Engram.Links.Parser
   alias Engram.Notes
-  alias Engram.Workers.RebindNoteLinks
   alias Engram.Workers.RewriteNoteLinks
 
   setup do
@@ -67,16 +66,13 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
     text
   end
 
-  # Drain every enqueued rewrite + rebind job, including cursor successors a
+  # Drain every enqueued rewrite job, including cursor successors a
   # rewrite job enqueues mid-run AND the delayed sweep job a terminating
   # chain now enqueues (schedule_in: 60 -> state "scheduled", not
   # "available" — must be swept up here too or this loop never quiesces).
   # Loops until the queues are quiet.
   defp drain_link_jobs! do
-    jobs =
-      all_enqueued(worker: RewriteNoteLinks) ++ all_enqueued(worker: RebindNoteLinks)
-
-    case jobs do
+    case all_enqueued(worker: RewriteNoteLinks) do
       [] ->
         :ok
 
@@ -89,7 +85,7 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
         Repo.delete_all(
           from(j in Oban.Job,
             where:
-              j.worker in ^["Engram.Workers.RewriteNoteLinks", "Engram.Workers.RebindNoteLinks"] and
+              j.worker == "Engram.Workers.RewriteNoteLinks" and
                 j.state in ["available", "scheduled"]
           )
         )
@@ -99,7 +95,7 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
   end
 
   describe "folder rename round trip (Phase 3, #1231)" do
-    test "rewrites qualified links, preserves bare links, rebinds edges + danglers", %{
+    test "rewrites qualified links, preserves bare links, edges + danglers resolve", %{
       user: user,
       vault: vault
     } do
@@ -115,8 +111,8 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
       # moves in the same cascade; the rewrite must still land on its doc.
       index = seed_source!(user, vault, "docs/Index.md", "sibling [[docs/Guide]]")
 
-      # Pre-typed dangler on the FUTURE path — must BIND after the move via
-      # the rebind fan-out, with NO text change.
+      # Pre-typed dangler on the FUTURE path — must resolve after the move,
+      # with NO text change.
       future = seed_source!(user, vault, "Future.md", "soon [[archive/Guide]]")
 
       {:ok, %{notes: 2, attachments: 0}} = Folders.rename(user, vault, "docs", "archive")
@@ -126,21 +122,15 @@ defmodule Engram.Workers.RewriteNoteLinksTest do
       assert authoritative!(user, index.id) == "sibling [[archive/Guide]]"
       assert authoritative!(user, future.id) == "soon [[archive/Guide]]"
 
-      # #1231: every edge now binds to the moved note — including the
+      # #1231: every edge now resolves to the moved note — including the
       # previously-dangling Future.md edge.
-      edges =
-        Repo.all(
-          from(l in Engram.Links.NoteLink,
-            where:
-              l.user_id == ^user.id and l.vault_id == ^vault.id and
-                l.source_note_id in ^[refs.id, index.id, future.id],
-            select: {l.source_note_id, l.target_note_id}
-          ),
-          skip_tenant_check: true
-        )
+      targets =
+        for src <- [refs, index, future],
+            link <- Engram.Links.links_for_note(user, src.id),
+            do: link.target_note_id
 
-      assert length(edges) == 4
-      assert Enum.all?(edges, fn {_src, target} -> target == guide.id end)
+      assert length(targets) == 4
+      assert Enum.all?(targets, &(&1 == guide.id))
     end
   end
 

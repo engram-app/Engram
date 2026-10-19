@@ -14,11 +14,9 @@ defmodule Engram.Workers.DeleteNoteIndex do
 
   alias Engram.Indexing
   alias Engram.Links
-  alias Engram.Notes.Enqueue
   alias Engram.Notes.Note
   alias Engram.Repo
   alias Engram.Vector.Qdrant
-  alias Engram.Workers.RebindNoteLinks
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
@@ -26,17 +24,18 @@ defmodule Engram.Workers.DeleteNoteIndex do
   # T3.7 — NO rotation gate needed here. `Indexing.delete_note_index/1` only
   # uses `path_hmac` as a filter key to delete Qdrant points and DB chunk rows;
   # `Links.on_note_soft_deleted/2` is raw SQL (no decrypt). Neither touches
-  # the DEK. The chained `RebindNoteLinks` job (below) DOES need the DEK, so
-  # IT carries its own rotation gate rather than this worker gating for it.
+  # the DEK.
+  #
+  # Jobs enqueued before resolve-on-read may still carry a `basename_hmac`
+  # arg; it is ignored.
   @impl Oban.Worker
   def perform(%Oban.Job{
-        args:
-          %{
-            "note_id" => note_id,
-            "user_id" => user_id,
-            "vault_id" => vault_id,
-            "path_hmac" => path_hmac_b64
-          } = args
+        args: %{
+          "note_id" => note_id,
+          "user_id" => user_id,
+          "vault_id" => vault_id,
+          "path_hmac" => path_hmac_b64
+        }
       }) do
     # `Indexing.delete_note_index/1` reads `note.path_hmac` directly. We
     # decode the base64 arg back into the raw HMAC bytes the function
@@ -54,7 +53,7 @@ defmodule Engram.Workers.DeleteNoteIndex do
         # EmbedNote landing between this check and the Qdrant delete still get
         # wiped, with embed_hash stamped. Closing it means holding a row lock
         # across a Qdrant call; do that only if this is ever seen in prod.
-        if live?(user_id, note_id), do: :ok, else: unlink_then_delete_index(note, args)
+        if live?(user_id, note_id), do: :ok, else: unlink_then_delete_index(note)
 
       :error ->
         {:discard, "invalid path_hmac base64 for note_id=#{note_id}"}
@@ -81,19 +80,9 @@ defmodule Engram.Workers.DeleteNoteIndex do
   # delete, a brief Qdrant 5xx would burn all three attempts and the note would
   # keep its outgoing edges forever, since nothing re-enqueues this job. Each
   # step here is idempotent, so a retry repeating them is free.
-  defp unlink_then_delete_index(%{id: note_id, user_id: user_id, vault_id: vault_id} = note, args) do
-    # #591 — the note is gone: drop its outgoing edges and flip any
-    # incoming edges back to dangling.
+  defp unlink_then_delete_index(%{id: note_id, user_id: user_id} = note) do
+    # #591 — the note is gone: drop its outgoing edges.
     :ok = Links.on_note_soft_deleted(user_id, note_id)
-
-    # Chain a rebind for the deleted note's OWN basename — a same-
-    # basename sibling elsewhere may now win the shortest-path tiebreak
-    # and should inherit the edges this note is vacating. Only possible
-    # when the enqueueing caller had plaintext in scope to compute the
-    # hmac (see `Notes.delete_note_index_job/2`); otherwise skip — the
-    # edge-flip above already ran regardless. `basename_hmac` (base64) —
-    # never plaintext, same T3.2/H3 invariant as `path_hmac` above.
-    _ = maybe_enqueue_rebind(user_id, vault_id, Map.get(args, "basename_hmac"))
 
     # Strict mode never refuses a delete; mapped anyway so a refusal is a
     # snooze here like on every other Qdrant writer.
@@ -112,20 +101,5 @@ defmodule Engram.Workers.DeleteNoteIndex do
       end)
 
     live?
-  end
-
-  defp maybe_enqueue_rebind(_user_id, _vault_id, nil), do: :ok
-
-  defp maybe_enqueue_rebind(user_id, vault_id, basename_hmac_b64) do
-    case Base.decode64(basename_hmac_b64) do
-      {:ok, basename_hmac} ->
-        Enqueue.enqueue(
-          RebindNoteLinks.new_for(user_id, vault_id, basename_hmac),
-          "rebind_note_links"
-        )
-
-      :error ->
-        :ok
-    end
   end
 end

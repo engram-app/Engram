@@ -15,6 +15,10 @@ defmodule Engram.Attachments.Attachment do
     # Links foundation (Task 1/4) — HMAC of the lowercased basename (no
     # extension stripping for non-note files). Nullable until backfilled.
     field :basename_hmac, :binary
+    # Link resolution keys (`Engram.Links.path_keys/3`), trusted only while the stamp matches.
+    field :path_ci_hmac, :binary
+    field :path_length, :integer
+    field :link_keys_stamp, :binary
     # Decoded plaintext is materialized into this virtual field by the read
     # path (`Engram.Attachments.get_attachment/3`). It never persists; the
     # actual ciphertext lives in S3-compatible object storage.
@@ -51,6 +55,9 @@ defmodule Engram.Attachments.Attachment do
       :path_nonce,
       :path_hmac,
       :basename_hmac,
+      :path_ci_hmac,
+      :path_length,
+      :link_keys_stamp,
       :content_hash,
       :mime_type,
       :size_bytes,

@@ -82,5 +82,6 @@ defmodule Engram.Notes.BulkRename do
 
   defp sql_type(:tags_hmac), do: "bytea[]"
   defp sql_type(:dek_version), do: "integer"
+  defp sql_type(:path_length), do: "integer"
   defp sql_type(_col), do: "bytea"
 end

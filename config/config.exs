@@ -136,8 +136,8 @@ config :engram, Oban,
     # `maintenance` so its vendor fetches never hold a backstop's slot. Ships
     # with the worker itself, so a rollback strands nothing that existed before.
     cimd_refresh: 1,
-    # Hourly CRDT representation backfills (BackfillCrdtState, BackfillCrdtHead),
-    # off crypto_backfill so they never hold a rotation's slot.
+    # Hourly representation backfills (BackfillCrdtState, BackfillCrdtHead,
+    # BackfillLinkKeys), off crypto_backfill so they never hold a rotation's slot.
     crdt_backfill: 1,
     export: 1,
     cleanup: 1,

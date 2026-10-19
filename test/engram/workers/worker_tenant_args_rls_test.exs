@@ -48,7 +48,6 @@ defmodule Engram.Workers.WorkerTenantArgsRlsTest do
   alias Engram.Vaults.Vault
   alias Engram.Workers.EmbedNote
   alias Engram.Workers.ExtractNoteLinks
-  alias Engram.Workers.RebindNoteLinks
   alias Engram.Workers.RepathNoteIndex
 
   setup do
@@ -186,22 +185,6 @@ defmodule Engram.Workers.WorkerTenantArgsRlsTest do
                  })
                end),
              "ExtractNoteLinks discarded or errored under enforced RLS"
-    end
-
-    test "RebindNoteLinks finds its vault", %{user: user, vault: vault, basename_hmac: hmac} do
-      assert {:returned, :ok} =
-               as_prod_role(fn ->
-                 RebindNoteLinks.perform(%Oban.Job{
-                   args: %{
-                     "user_id" => user.id,
-                     "vault_id" => vault.id,
-                     "basename_hmac" => Base.encode64(hmac)
-                   },
-                   attempt: 1,
-                   max_attempts: 3
-                 })
-               end),
-             "RebindNoteLinks discarded with \"vault not found\" for a vault that exists"
     end
 
     test "EmbedNote reaches its already-indexed early return instead of discarding",
