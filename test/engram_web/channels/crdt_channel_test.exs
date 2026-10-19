@@ -286,6 +286,47 @@ defmodule EngramWeb.CrdtChannelTest do
       assert CrdtRegistry.lookup(id) == nil
     end
 
+    test "peers hear of the note only after its body is written", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      # #1409's open half. The bare insert used to announce `crdt_doc_ready` on
+      # its own commit, before the seed wrote the body. A second device that
+      # acted on it in that gap materialized the note at 0 bytes, then paid a
+      # room per note to fill it (test_77: 948 handshake rooms for 1000 notes
+      # on a loaded host). Insert and seed now commit together, so the announce
+      # cannot precede the body.
+      EngramWeb.Endpoint.subscribe("crdt:#{user.id}:#{vault.id}")
+      id = Ecto.UUID.generate()
+
+      on_exit(CheckpointInterleave.arm(:genesis_seed_before_write))
+
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/announced.md",
+          "b64" => frame_for_content("body before announce")
+        })
+
+      parked = CheckpointInterleave.await_parked(:genesis_seed_before_write, socket.channel_pid)
+
+      # Parked between the bare insert and the seed write: nobody may know yet.
+      refute_received %Phoenix.Socket.Broadcast{event: "crdt_doc_ready"}
+
+      CheckpointInterleave.release(:genesis_seed_before_write, parked)
+
+      assert_reply ref, :ok, %{doc_id: ^id, seeded: true}
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "crdt_doc_ready",
+                       payload: %{"doc_id" => ^id}
+                     },
+                     2_000
+
+      assert_note_content_eventually(user, vault, id, "body before announce")
+    end
+
     test "fans the genesis body out to the vault's other devices", %{
       socket: socket,
       user: user,
@@ -793,9 +834,17 @@ defmodule EngramWeb.CrdtChannelTest do
       # Reproduced deterministically by parking the seed at its pre-write seam
       # and landing a different body in exactly that window — the same race the
       # `seed_against/7` catch-all comment describes ("a concurrent write landed
-      # between genesis and here"), which real imports hit more often on large
-      # notes because a bigger frame means a longer decode/apply.
+      # between genesis and here").
+      #
+      # A FRESH create can no longer hit it: its seed runs inside the insert's
+      # own transaction (Notes.genesis_crdt_note/5 `:seed`), so a concurrent
+      # write to that path waits for the commit. The window survives on the legs
+      # that seed after the fact, so drive one: a bodyless create leaves an
+      # empty row, and the retry carrying the body takes the idempotent leg.
       id = Ecto.UUID.generate()
+
+      ref0 = push(socket, "crdt_create", %{"doc_id" => id, "path" => "Notes/declined.md"})
+      assert_reply ref0, :ok, %{doc_id: ^id, genesis: "absent"}
 
       on_exit(CheckpointInterleave.arm(:genesis_seed_before_write))
 

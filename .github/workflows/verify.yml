@@ -609,6 +609,13 @@ jobs:
           # the job (issue #334, upstream docker/buildx bug). Plain writer = no
           # such goroutine.
           BUILDKIT_PROGRESS: plain
+          # Pin the daemon's own docker-driver builder. The Dockerfile FROMs the
+          # LOCAL tag engram-deps:<hash>; a non-default buildx builder (e.g. a
+          # docker-container one left active on a runner) has its own image
+          # store, cannot see that tag, and falls back to docker.io: "pull
+          # access denied" 3/3 on run 39219496355 (runner-2) right after the
+          # tag was created. A no-op wherever `default` is already active.
+          BUILDX_BUILDER: default
           # `ci/compose.yml` declares these with the `:?` (required) form, which
           # docker compose enforces while PARSING the file — so even
           # `docker compose build engram`, which needs no object storage at all,
@@ -1072,11 +1079,13 @@ jobs:
     # content already passed full on main; forced false on full runs.
     # !cancelled(): prebuild-mix SKIPS on repository_dispatch (the plugin e2e
     # trigger — the one event that MUST run this suite), and a skipped need
-    # would otherwise auto-skip this job. Trade-off: a failed prebuild no
-    # longer auto-skips this job either; it fails at image pull instead.
+    # would otherwise auto-skip this job. A FAILED prebuild is excluded
+    # explicitly (here, e2e-crdt and headless-protocol): with no image the
+    # suite only timed out on the stack and reported "INFRA DEAD" (run
+    # 39219496355). The red prebuild-ci-image is the real signal.
     # bot-pr: release-please + Dependabot refs, defined once on the fingerprint
     # job (see its `outputs:` for why each is excluded). Same guard on all e2e-*.
-    if: ${{ !cancelled() && needs.fingerprint.outputs.bot-pr != 'true' && needs.fingerprint.outputs.skip-e2e-clerk != 'true' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'clerk') }}
+    if: ${{ !cancelled() && needs.prebuild-ci-image.result != 'failure' && needs.fingerprint.outputs.bot-pr != 'true' && needs.fingerprint.outputs.skip-e2e-clerk != 'true' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'clerk') }}
     # `heavy` restricts placement to the 2 heavy-labeled runners per VM
     # (fastraid-1/2, slowraid runner-1/2): at most two heavy e2e suites can
     # co-tenant a 14-core VM, which is within budget — the #355 starvation
@@ -1302,11 +1311,24 @@ jobs:
             # built it. Explicit pull (vs relying on compose's pull-on-missing)
             # keeps the failure legible: a registry miss fails here with the
             # real ref instead of a confusing Docker Hub denial during `up`.
-            docker pull "$ENGRAM_CI_IMAGE"
             # ENGRAM_CI_IMAGE pins ci/compose.yml's `image:` to that
             # exact tag. `--no-build` keeps startup honest — never a silent
-            # rebuild; the image must already exist (now pulled above).
-            docker compose -f ci/compose.yml -p "$CI_PROJECT" up -d --no-build --wait
+            # rebuild; the image must already exist (pulled here).
+            #
+            # Two attempts, re-pulling each time: another job's teardown on
+            # this shared daemon keeps only the 3 newest engram-ci tags, and
+            # once deleted this run's image between the pull and `up` ("No such
+            # image", run 39203319892). On failure, dump container health so a
+            # stuck `--wait` is diagnosable instead of a bare timeout.
+            for attempt in 1 2; do
+              docker pull "$ENGRAM_CI_IMAGE" \
+                && docker compose -f ci/compose.yml -p "$CI_PROJECT" up -d --no-build --wait \
+                && break
+              echo "stack attempt $attempt failed; container state:"
+              docker ps -aq --filter "label=com.docker.compose.project=$CI_PROJECT" \
+                | xargs -r docker inspect --format '{{.Name}} {{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{end}}' || true
+              [ "$attempt" = 2 ] || docker compose -f ci/compose.yml -p "$CI_PROJECT" down -v --remove-orphans || true
+            done
 
             # Quick verification — compose --wait already confirmed healthcheck,
             # this just confirms the port mapping is reachable from the host
@@ -1413,6 +1435,7 @@ jobs:
       # the Obsidian suite) finish in the background — the absorbed e2e-api
       # suite costs ~0 extra wall-clock on this job (same pattern as e2e-crdt).
       - name: Wait for CI stack + Ollama + Qdrant
+        id: stack
         run: |
           echo "Waiting for CI stack..."
           for i in $(seq 1 300); do
@@ -1525,7 +1548,10 @@ jobs:
       # Obsidian E2E tests
       # ------------------------------------------------------------------
       - name: "Run Obsidian E2E tests"
-        if: always()
+        # Not plain always(): with no backend every test errors and the suite
+        # blames the first one ("INFRA DEAD ... first seen in test_51"). The
+        # failed stack step is the real signal (9 such jobs in 14 days).
+        if: always() && steps.stack.outcome == 'success'
         working-directory: e2e
         # -n 1 --dist=loadfile: SINGLE worker (default). Under -n 2, two workers
         # each drive their own Obsidian instance doing live Clerk auth + CRDT
@@ -1749,7 +1775,7 @@ jobs:
     # !cancelled(): same repository_dispatch rationale as e2e-clerk —
     # prebuild-mix skips there and must not auto-skip this suite.
     # bot-pr guard: see the fingerprint job's `bot-pr` output.
-    if: ${{ !cancelled() && needs.fingerprint.outputs.bot-pr != 'true' && needs.fingerprint.outputs.skip-e2e-crdt != 'true' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt' || needs.fingerprint.outputs.e2e-target-suite == 'local') }}
+    if: ${{ !cancelled() && needs.prebuild-ci-image.result != 'failure' && needs.fingerprint.outputs.bot-pr != 'true' && needs.fingerprint.outputs.skip-e2e-crdt != 'true' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt' || needs.fingerprint.outputs.e2e-target-suite == 'local') }}
     runs-on: [self-hosted, linux, x64, isolated, heavy]
 
     env:
@@ -1943,13 +1969,26 @@ jobs:
             # built it. Explicit pull (vs relying on compose's pull-on-missing)
             # keeps the failure legible: a registry miss fails here with the
             # real ref instead of a confusing Docker Hub denial during `up`.
-            docker pull "$ENGRAM_CI_IMAGE"
             # ENGRAM_CI_IMAGE pins ci/compose.yml's `image:` to that
             # exact tag. `--no-build` keeps startup honest — never a silent
-            # rebuild; the image must already exist (now pulled above).
+            # rebuild; the image must already exist (pulled here).
             # ci/compose.local.yml overlays local auth. (Backend CRDT is
             # unconditional — the old CRDT_ENABLED opt-in was dead config.)
-            docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" up -d --no-build --wait
+            #
+            # Two attempts, re-pulling each time: another job's teardown on
+            # this shared daemon keeps only the 3 newest engram-ci tags, and
+            # once deleted this run's image between the pull and `up` ("No such
+            # image", run 39203319892). On failure, dump container health so a
+            # stuck `--wait` is diagnosable instead of a bare timeout.
+            for attempt in 1 2; do
+              docker pull "$ENGRAM_CI_IMAGE" \
+                && docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" up -d --no-build --wait \
+                && break
+              echo "stack attempt $attempt failed; container state:"
+              docker ps -aq --filter "label=com.docker.compose.project=$CI_PROJECT" \
+                | xargs -r docker inspect --format '{{.Name}} {{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{end}}' || true
+              [ "$attempt" = 2 ] || docker compose -f ci/compose.yml -f ci/compose.local.yml -p "$CI_PROJECT" down -v --remove-orphans || true
+            done
 
             # Quick verification — compose --wait already confirmed healthcheck,
             # this just confirms the port mapping is reachable from the host
@@ -2056,6 +2095,7 @@ jobs:
       # the Obsidian-driven tests/crdt/ suite) finish in the background — the
       # absorbed e2e-local suite costs ~0 extra wall-clock on this job.
       - name: Wait for CI stack + Ollama + Qdrant
+        id: stack
         run: |
           echo "Waiting for CI stack..."
           for i in $(seq 1 300); do
@@ -2161,7 +2201,8 @@ jobs:
       # CRDT E2E tests (local auth stack)
       # ------------------------------------------------------------------
       - name: "Run CRDT E2E tests"
-        if: always() && needs.fingerprint.outputs.e2e-target-suite != 'local'
+        # Requires the stack: see "Run Obsidian E2E tests".
+        if: always() && steps.stack.outcome == 'success' && needs.fingerprint.outputs.e2e-target-suite != 'local'
         working-directory: e2e
         # Single-process (no -n): the CRDT suite runs serially. It stays green
         # this way, and is the stability reference the e2e-clerk suite above now
@@ -2314,7 +2355,7 @@ jobs:
     # the skip-e2e-crdt fingerprint signal. Minutes-bounded (each scenario < 1s).
     needs: [fingerprint, prebuild-ci-image]
     # bot-pr guard: see the fingerprint job's `bot-pr` output.
-    if: ${{ !cancelled() && needs.fingerprint.outputs.bot-pr != 'true' && needs.fingerprint.outputs.skip-e2e-crdt != 'true' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt' || needs.fingerprint.outputs.e2e-target-suite == 'local') }}
+    if: ${{ !cancelled() && needs.prebuild-ci-image.result != 'failure' && needs.fingerprint.outputs.bot-pr != 'true' && needs.fingerprint.outputs.skip-e2e-crdt != 'true' && (needs.fingerprint.outputs.e2e-target-suite == '' || needs.fingerprint.outputs.e2e-target-suite == 'crdt' || needs.fingerprint.outputs.e2e-target-suite == 'local') }}
     runs-on: [self-hosted, linux, x64, isolated]
     timeout-minutes: 8
     env:
@@ -4644,7 +4685,12 @@ jobs:
     # The GATE is unchanged — the loop below still treats `skipped` as
     # non-failing, because a content-addressed marker hit is a sound reason not
     # to re-run. Only the reporting is new.
-    if: always()
+    #
+    # `!cancelled()`, not `always()`: always() also ran after a newer push
+    # superseded the run, read its cancelled gates and exited 1, so 25 PR runs
+    # in 14 days showed a red `ci` instead of cancelled. A gate cancelled by its
+    # own timeout still lands here (the run itself is not cancelled) and fails.
+    if: ${{ !cancelled() }}
     # e2e-clerk / e2e-crdt / e2e-browser are deliberately NOT here. They are
     # report-only (they post their own PR checks), and waiting on them made the
     # 16-28 min e2e-browser the PR's wall-clock even though `ci` ignored its

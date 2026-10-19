@@ -378,7 +378,15 @@ defmodule Engram.Notes.CrdtCheckpoint do
   # reach do_checkpoint's rescue and report :skipped (the room would keep
   # refusing acks for a durable state). Logged as a post-commit failure; the
   # outcome stays written. The reconcile sweeps backstop a lost enqueue.
+  # Deferred through Repo.after_commit/1: the checkpoint can run INSIDE an
+  # enclosing transaction (the genesis seed runs in its row's transaction,
+  # Notes.genesis_crdt_note/5 `:seed`), and its announce must not reach peers
+  # before that commit. Outside one it runs now, as before.
   defp post_commit(note_id, fun) do
+    Repo.after_commit(fn -> run_post_commit(note_id, fun) end)
+  end
+
+  defp run_post_commit(note_id, fun) do
     _ = fun.()
     :ok
   rescue

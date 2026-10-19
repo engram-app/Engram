@@ -15,6 +15,7 @@ defmodule Engram.Notes do
   alias Engram.Logger.Metadata
 
   alias Engram.Notes.{
+    BulkRename,
     Chunk,
     ContentCommit,
     CrdtBridge,
@@ -28,7 +29,8 @@ defmodule Engram.Notes do
     Note,
     OkfFields,
     PathSanitizer,
-    Revisions
+    Revisions,
+    TagsTerm
   }
 
   alias Engram.Repo
@@ -1107,9 +1109,15 @@ defmodule Engram.Notes do
   when `crdt_create` carried a `b64` frame (#1409, the import path — no room), or
   as a later `crdt_msg` through the note's live room (the editor path). See docs
   spec 2026-07-15-crdt-create-genesis-bare-row-design.
+
+  `seed: fun/1` runs that detached seed INSIDE the row transaction when this
+  call creates or resurrects the row, and the result is
+  `{:seeded, note, fun_result}`. Other legs return their usual shapes and leave
+  the seeding to the caller. See `seed_in_txn/2`.
   """
   @spec genesis_crdt_note(map(), map(), String.t(), String.t(), keyword()) ::
           {:ok, Note.t()}
+          | {:seeded, Note.t(), term()}
           | {:adopted, Note.t()}
           | {:error, :invalid_id}
           | {:error, :recently_deleted}
@@ -1142,71 +1150,77 @@ defmodule Engram.Notes do
            path: sanitized_path,
            folder: folder,
            origin: origin,
-           recording: recording
+           recording: recording,
+           seed: Keyword.get(opts, :seed)
          },
          {:ran, result, claimed?} <- run_genesis(genesis, initial_claim(opts)) do
-      case finalize_moved_revision(result, user) do
-        # Only genesis_resurrect/genesis_insert_bare tag their success with
-        # :announce (a REAL create/resurrect). The idempotent same-path and
-        # adopt-existing-live-note branches change nothing, so they return a
-        # plain {:ok, note} and fall through to the catch-all below — no
-        # announce. Fired post-commit (outside the transaction fn, after
-        # Repo.with_tenant returns) so a client that pulls on crdt_doc_ready
-        # never races the row's own commit — same discipline as the other
-        # CrdtDeliver call sites in this module.
-        {:ok, {:ok, note, :announce}} ->
-          :ok = CrdtDeliver.announce_ready(user.id, vault.id, note.path, note.id)
-          # crdt_doc_ready never reaches the sync topic the name index reads.
-          :ok = Engram.Notes.NameIndex.announce(vault.id, note.id, note.path, note.title)
+      {result, seed_outcome} = take_seed(result)
 
-          # vault_populated was probed inside the row transaction
-          # (probe_vault_populated/2) and its broadcast already ran on commit.
-          {:ok, note}
+      announced =
+        case finalize_moved_revision(result, user) do
+          # Only genesis_resurrect/genesis_insert_bare tag their success with
+          # :announce (a REAL create/resurrect). The idempotent same-path and
+          # adopt-existing-live-note branches change nothing, so they return a
+          # plain {:ok, note} and fall through to the catch-all below — no
+          # announce. Fired post-commit (outside the transaction fn, after
+          # Repo.with_tenant returns) so a client that pulls on crdt_doc_ready
+          # never races the row's own commit — same discipline as the other
+          # CrdtDeliver call sites in this module.
+          {:ok, {:ok, note, :announce}} ->
+            :ok = CrdtDeliver.announce_ready(user.id, vault.id, note.path, note.id)
+            # crdt_doc_ready never reaches the sync topic the name index reads.
+            :ok = Engram.Notes.NameIndex.announce(vault.id, note.id, note.path, note.title)
 
-        {:ok, {:ok, note, {:announce_moved, old_path}}} ->
-          # A rename-as-move (live relocate or resurrect-rename) must fan BOTH the
-          # new-path upsert AND the old-path delete to peers — exactly like the
-          # REST rename delete leg (do_rewrite_note). broadcast_change's "upsert"
-          # also deliver_outs the CRDT state (announces the doc), so no separate
-          # announce_ready is needed. Upsert BEFORE delete: a receiver relocates
-          # the note's id to the new path first, so it treats the delete as a
-          # relocation leg (id now lives elsewhere) instead of tearing the note's
-          # CRDT room down by id. Without the old-path delete a web receiver (no
-          # local mirror) keeps the note in its old folder forever. Fired
-          # post-commit, same as the :announce leg above.
-          :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, [])
+            # vault_populated was probed inside the row transaction
+            # (probe_vault_populated/2) and its broadcast already ran on commit.
+            {:ok, note}
 
-          _ =
-            if old_path != note.path do
-              :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
+          {:ok, {:ok, note, {:announce_moved, old_path}}} ->
+            # A rename-as-move (live relocate or resurrect-rename) must fan BOTH the
+            # new-path upsert AND the old-path delete to peers — exactly like the
+            # REST rename delete leg (do_rewrite_note). broadcast_change's "upsert"
+            # also deliver_outs the CRDT state (announces the doc), so no separate
+            # announce_ready is needed. Upsert BEFORE delete: a receiver relocates
+            # the note's id to the new path first, so it treats the delete as a
+            # relocation leg (id now lives elsewhere) instead of tearing the note's
+            # CRDT room down by id. Without the old-path delete a web receiver (no
+            # local mirror) keeps the note in its old folder forever. Fired
+            # post-commit, same as the :announce leg above.
+            :ok = broadcast_change(user.id, vault.id, "upsert", note.path, note, [])
 
-              # #1612 — same repath rename_note enqueues (#746). Without it the
-              # points keep the old path/folder hmacs and folder-filtered search
-              # misses the moved note. A resurrect-rename usually has no points, so it
-              # re-embeds; if it beat DeleteNoteIndex (#1610), they are patched instead.
-              _ =
-                Enqueue.enqueue(
-                  RepathNoteIndex.new_debounced(note.id, user.id,
-                    old_path_hmac: old_path_hmac_b64!(user, old_path)
-                  ),
-                  "repath_note_index"
-                )
-            end
+            _ =
+              if old_path != note.path do
+                :ok = broadcast_change(user.id, vault.id, "delete", old_path, note.id, [])
 
-          {:ok, note}
+                # #1612 — same repath rename_note enqueues (#746). Without it the
+                # points keep the old path/folder hmacs and folder-filtered search
+                # misses the moved note. A resurrect-rename usually has no points, so it
+                # re-embeds; if it beat DeleteNoteIndex (#1610), they are patched instead.
+                _ =
+                  Enqueue.enqueue(
+                    RepathNoteIndex.new_debounced(note.id, user.id,
+                      old_path_hmac: old_path_hmac_b64!(user, old_path)
+                    ),
+                    "repath_note_index"
+                  )
+              end
 
-        {:ok, {:ok, note, :adopted}} ->
-          # Surfaced, not flattened to {:ok, note}: the batch create leg has to
-          # tell "we made this row" from "a different note already owned the
-          # path", because only the former means the caller's frame was applied.
-          {:adopted, note}
+            {:ok, note}
 
-        {:ok, inner} ->
-          report_genesis_orphan(inner, user, vault, claimed?)
+          {:ok, {:ok, note, :adopted}} ->
+            # Surfaced, not flattened to {:ok, note}: the batch create leg has to
+            # tell "we made this row" from "a different note already owned the
+            # path", because only the former means the caller's frame was applied.
+            {:adopted, note}
 
-        {:error, _} = err ->
-          report_genesis_orphan(err, user, vault, claimed?)
-      end
+          {:ok, inner} ->
+            report_genesis_orphan(inner, user, vault, claimed?)
+
+          {:error, _} = err ->
+            report_genesis_orphan(err, user, vault, claimed?)
+        end
+
+      with_seed(announced, seed_outcome)
     else
       :error -> {:error, :invalid_id}
       {:error, _} = err -> err
@@ -1239,7 +1253,9 @@ defmodule Engram.Notes do
   # classifies afresh, so a row that changed in between is handled exactly as
   # the old claim-then-transaction order handled it.
   defp run_genesis(g, claim) do
-    case Repo.with_tenant(g.user.id, fn -> g |> genesis_txn(claim) |> probe_vault_populated(g) end) do
+    case Repo.with_tenant(g.user.id, fn ->
+           g |> genesis_txn(claim) |> probe_vault_populated(g) |> seed_in_txn(g)
+         end) do
       {:ok, {:claim_first, live}} ->
         case claim_crdt_relocate(g, live) do
           {:ok, claimed?} -> run_genesis(g, {:done, claimed?})
@@ -1268,6 +1284,32 @@ defmodule Engram.Notes do
     do: tap(result, fn _ -> :ok = maybe_broadcast_vault_populated(g.user, g.vault) end)
 
   defp probe_vault_populated(result, _g), do: result
+
+  # #1409's open half: an `opts[:seed]` fun writes the genesis body INSIDE the
+  # row transaction, on the two legs that announce (a fresh insert or a
+  # resurrect). Committed apart, the bare row's post-commit `crdt_doc_ready`
+  # reached the vault's other devices before the body existed; each wrote the
+  # note at 0 bytes and then paid a room to fill it (test_77: 948 handshake
+  # rooms per 1000 notes on a loaded host). The seed's own fan-out queues on
+  # `Repo.after_commit/1`, so it too fires only once the body is durable.
+  #
+  # Every other leg (idempotent retry, adopt, relocate) announces nothing, so
+  # the caller seeds after the fact exactly as before.
+  defp seed_in_txn({:ok, note, :announce} = result, %{seed: seed}) when is_function(seed, 1),
+    do: {:seeded, result, seed.(note)}
+
+  defp seed_in_txn({:ok, note, :announce, _finalize?} = result, %{seed: seed})
+       when is_function(seed, 1),
+       do: {:seeded, result, seed.(note)}
+
+  defp seed_in_txn(result, _g), do: result
+
+  defp take_seed({:ok, {:seeded, inner, outcome}}), do: {{:ok, inner}, outcome}
+  defp take_seed(result), do: {result, nil}
+
+  defp with_seed(result, nil), do: result
+  defp with_seed({:ok, note}, outcome), do: {:seeded, note, outcome}
+  defp with_seed(result, _outcome), do: result
 
   defp claimed_flag({:done, claimed?}), do: claimed?
   defp claimed_flag(:pending), do: false
@@ -5013,7 +5055,7 @@ defmodule Engram.Notes do
           rows
           |> Enum.flat_map(fn {id, dv, ct, nonce} ->
             decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :tags, id, dv))
-            |> :erlang.binary_to_term([:safe])
+            |> TagsTerm.decode!()
           end)
           |> Enum.uniq()
           |> Enum.sort()
@@ -5402,7 +5444,7 @@ defmodule Engram.Notes do
           rows
           |> Enum.flat_map(fn {id, dv, ct, nonce} ->
             decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :tags, id, dv))
-            |> :erlang.binary_to_term([:safe])
+            |> TagsTerm.decode!()
           end)
           |> Enum.frequencies()
           |> Enum.map(fn {name, count} -> %{name: name, count: count} end)
@@ -5663,7 +5705,7 @@ defmodule Engram.Notes do
   # resolves each cascade target against the rows before claiming, so a nested
   # collision returns `{:error, :conflict}` instead of the
   # `Postgrex.Error{unique_violation}` it used to raise from
-  # `bulk_rename_update!`. That check is O(moved notes) rather than O(vault),
+  # `BulkRename.update!`. That check is O(moved notes) rather than O(vault),
   # and it had to exist anyway: the claim commits before the rows move, so a
   # raise below it would leave the cascade claimed at paths the rows never took.
   # This check stays because it is the cheaper one and it short-circuits first.
@@ -5863,7 +5905,7 @@ defmodule Engram.Notes do
       # in the map, and until a client populates it the rows are where
       # collisions live. This also closes the NESTED-COLLISION GAP documented at
       # `folder_target_exists?` — a nested collision surfaces as a raised
-      # Postgrex unique_violation from `bulk_rename_update!` BELOW the claim,
+      # Postgrex unique_violation from `BulkRename.update!` BELOW the claim,
       # which would leave the whole cascade claimed at paths the rows never
       # took, and projection would then apply whichever of them do not collide:
       # a partial folder rename executing asynchronously after a 500.
@@ -5875,7 +5917,7 @@ defmodule Engram.Notes do
 
         :ok ->
           # Everything below runs with the cascade's claim ALREADY COMMITTED, so
-          # a raise here (bulk_rename_update! can still surface a Postgrex
+          # a raise here (BulkRename.update! can still surface a Postgrex
           # unique_violation for a shape the row validation cannot see) leaves
           # the map claiming N paths the rows never took. Report it before it
           # propagates — projection is what converges the divergence, and
@@ -5917,9 +5959,9 @@ defmodule Engram.Notes do
                 v2_rows = stamp_rename_rows(grouped[:v2] || [], now)
                 v1_rows = stamp_rename_rows(grouped[:v1] || [], now)
 
-                bulk_rename_update!(marker_rows, @marker_rename_cols, seq)
-                bulk_rename_update!(v2_rows, @v2_rename_cols, seq)
-                bulk_rename_update!(v1_rows, @v1_rename_cols, seq)
+                BulkRename.update!(marker_rows, @marker_rename_cols, seq)
+                BulkRename.update!(v2_rows, @v2_rename_cols, seq)
+                BulkRename.update!(v1_rows, @v1_rename_cols, seq)
 
                 # Insert soft-deleted tombstones for old paths so the seq feed
                 # (list_changes_by_seq — no deleted_at filter) carries delete
@@ -7114,79 +7156,16 @@ defmodule Engram.Notes do
       ]
   end
 
-  # Marker-only rename helper. Re-encrypts JUST the folder envelope under the
-  # row-id-bound AAD and recomputes the folder_hmac. Returns
-  # `{ciphertext, nonce, hmac}` — caller splices into Repo.update_all `set:`.
-  # No content/title/path/tags work because markers have none of those.
-  defp rename_col_sql_type(:tags_hmac), do: "bytea[]"
-  defp rename_col_sql_type(:dek_version), do: "integer"
-  defp rename_col_sql_type(_col), do: "bytea"
-
   # Attaches the cascade's shared timestamp to each {id, kw} rename row,
-  # producing the [{id, stamp, kw}] shape bulk_rename_update! consumes.
+  # producing the [{id, stamp, kw}] shape BulkRename.update!/3 consumes.
   defp stamp_rename_rows(rows, now) do
     Enum.map(rows, fn {id, kw} -> {id, now, kw} end)
   end
 
-  # One `UPDATE notes ... FROM (VALUES ...)` per ≤500-row chunk. Every row in a
-  # class gets DISTINCT ciphertexts, so this can't be a single update_all — but
-  # it must not be one UPDATE per note either (the N+1 this replaces). Runs
-  # inside the caller's with_tenant transaction: the RLS role restricts the raw
-  # UPDATE to the tenant's rows, and the shared `seq` keeps the #614
-  # one-op-one-seq contract. `rows` is [{note_id, stamp, kw}] where `kw`
-  # holds a value for every column in `cols`. A nested-collision unique
-  # violation raises Postgrex.Error exactly like the per-note update_all did.
-  defp bulk_rename_update!([], _cols, _seq), do: :ok
-
-  defp bulk_rename_update!(rows, cols, seq) do
-    set_sql =
-      Enum.map_join(cols, ", ", &"#{&1} = v.#{&1}") <> ", updated_at = v.updated_at, seq = $1"
-
-    # id + updated_at + the class's columns, per VALUES row.
-    ncols = length(cols) + 2
-
-    rows
-    |> Enum.chunk_every(@rename_update_chunk)
-    |> Enum.each(fn chunk ->
-      values_sql =
-        chunk
-        |> Enum.with_index()
-        |> Enum.map_join(", ", fn {_row, i} ->
-          base = 2 + i * ncols
-
-          col_placeholders =
-            cols
-            |> Enum.with_index(2)
-            |> Enum.map_join(", ", fn {col, j} ->
-              "$#{base + j}::#{rename_col_sql_type(col)}"
-            end)
-
-          "($#{base}::uuid, $#{base + 1}::timestamp, #{col_placeholders})"
-        end)
-
-      params =
-        [seq] ++
-          Enum.flat_map(chunk, fn {id, stamp, kw} ->
-            [
-              Ecto.UUID.dump!(id),
-              DateTime.to_naive(stamp) | Enum.map(cols, &Keyword.fetch!(kw, &1))
-            ]
-          end)
-
-      _ =
-        Repo.query!(
-          """
-          UPDATE notes AS n
-          SET #{set_sql}
-          FROM (VALUES #{values_sql}) AS v(id, updated_at, #{Enum.join(cols, ", ")})
-          WHERE n.id = v.id
-          """,
-          params
-        )
-    end)
-
-    :ok
-  end
+  # Marker-only rename helper. Re-encrypts JUST the folder envelope under the
+  # row-id-bound AAD and recomputes the folder_hmac. Returns
+  # `{ciphertext, nonce, hmac}` — caller splices into Repo.update_all `set:`.
+  # No content/title/path/tags work because markers have none of those.
 
   defp folder_only_aad_bound(user, row_id, folder, _dek_version) do
     {:ok, dek} = Crypto.get_dek(user)

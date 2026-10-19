@@ -1,6 +1,6 @@
 # Sobelow was a silent no-op, and the fingerprint skips that hid it
 
-_Last verified: 2026-10-03 (sobelow 0.15.0, 18 entries in `.sobelow-skips`)_
+_Last verified: 2026-10-19 (sobelow 0.16.0, 17 entries in `.sobelow-skips`)_
 
 ## The one idea
 
@@ -29,15 +29,16 @@ invocation, config, or version changes.
 Recorded so nobody re-derives the triage, and so the invariants each skip rests
 on are written down. Line numbers live in `.sobelow-skips`, not here.
 
-### `Misc.BinToTerm` x4
+### `Misc.BinToTerm` x3
 
-`crypto.ex`, `crypto/user_dek_rotation.ex`, `notes.ex` (x2).
+`crypto.ex`, `crypto/user_dek_rotation.ex`, `notes/tags_term.ex` (both of
+`notes.ex`'s tag decodes call it).
 
 All pass `[:safe]`, and all only decode bytes that just passed AES-GCM
 authentication under a per-user DEK with row-bound AAD (the
 `notes.tags_ciphertext` column, which holds `:erlang.term_to_binary(tags)`). An
 attacker-substituted byte string fails the GCM tag check and returns `:error`
-before `binary_to_term` is reached. These four are the **only** `binary_to_term`
+before `binary_to_term` is reached. These three are the **only** `binary_to_term`
 call sites in `lib/`.
 
 ### `XSS.ContentType` + `XSS.SendResp` x3
@@ -71,14 +72,14 @@ filenames from `File.ls!` filtered by an anchored `^\d{14}_.+\.exs$` regex.
 
 ### `SQL.Query` x2
 
-`attachments.ex`, `notes.ex`.
+`attachments.ex`, `notes/bulk_rename.ex`.
 
 Interpolation builds query **shape** only: `$N` placeholder tuples from
 `Enum.with_index`, column names from the compile-time module attributes
 `@marker_rename_cols` / `@v2_rename_cols` / `@v1_rename_cols`, and a whitelisted
 `rename_col_sql_type/1`. Every actual value is a Postgrex bind parameter.
 
-> **Forward-looking trap.** `bulk_rename_update!/3` is safe **because** `cols` is
+> **Forward-looking trap.** `BulkRename.update!/3` is safe **because** `cols` is
 > currently unreachable from runtime data. If someone later passes a
 > caller-derived column list, the `set_sql` interpolation becomes a genuine
 > injection point, and the fingerprint skip will not catch it. Guard it at review
@@ -131,6 +132,16 @@ flagged shape, do that instead. Three original findings were removed this way:
   Split into `:unsupported_transport_get` / `:unsupported_transport_delete`. Both
   still answer 405 + `allow: POST`, pinned by
   `test/engram_web/controllers/mcp_transport_test.exs`.
+
+## Keep pinned calls out of high-churn files
+
+A fingerprint includes the line number, so every pinned call inside a file that
+most PRs edit breaks the gate whenever lines above it move. `notes.ex` (7k
+lines) caused 28 lint failures in 14 days and was re-pinned in 21 PRs. The fix
+was structural, not a looser gate: the two `binary_to_term` decodes moved to
+`Engram.Notes.TagsTerm` and the batch rename `UPDATE` to `Engram.Notes.BulkRename`,
+small files that rarely change. When a new finding lands in a large, busy file,
+move the flagged call into a small module before pinning it.
 
 ### What a fingerprint does NOT protect
 

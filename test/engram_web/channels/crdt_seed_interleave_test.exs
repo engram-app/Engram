@@ -88,6 +88,41 @@ defmodule EngramWeb.CrdtSeedInterleaveTest do
     %{user: user, vault: vault, socket: socket}
   end
 
+  test "a fresh create's seed is atomic with its insert: a concurrent writer cannot land between them",
+       ctx do
+    %{socket: socket, user: user, vault: vault} = ctx
+
+    # #1409's open half. Insert and seed used to commit apart, so a peer (or a
+    # REST writer) could act on the bare row in between. Now the seed runs in
+    # the insert's transaction: a concurrent writer meets the uncommitted row
+    # and is refused, and the create's body is what lands.
+    id = Ecto.UUID.generate()
+    on_exit(CheckpointInterleave.arm(:genesis_seed_before_write))
+
+    ref =
+      push(socket, "crdt_create", %{
+        "doc_id" => id,
+        "path" => "Notes/atomic.md",
+        "b64" => frame_for_content("client body")
+      })
+
+    parked = CheckpointInterleave.await_parked(:genesis_seed_before_write, socket.channel_pid)
+
+    assert {:error, :version_conflict, _} =
+             Notes.upsert_note(
+               user,
+               vault,
+               %{"path" => "Notes/atomic.md", "content" => "an interloper"},
+               actor: "api"
+             )
+
+    CheckpointInterleave.release(:genesis_seed_before_write, parked)
+
+    assert_reply ref, :ok, %{doc_id: ^id, seeded: true, genesis: "stored"}, 15_000
+    {:ok, stored} = Notes.get_note_by_id(user, vault, id)
+    assert stored.content == "client body"
+  end
+
   test "a write ABORTED by a concurrent one reports occupied, not absent", ctx do
     %{socket: socket, user: user, vault: vault} = ctx
 
@@ -101,7 +136,18 @@ defmodule EngramWeb.CrdtSeedInterleaveTest do
     # opposite of true. The write aborted precisely BECAUSE the row had just
     # been filled, and the client then pushed a body into a history-less doc,
     # minting the rival lineage this path exists to prevent.
+    #
+    # A FRESH create's seed now runs inside its insert's transaction
+    # (Notes.genesis_crdt_note/5 `:seed`), so a concurrent writer meets the
+    # uncommitted row and gets `:version_conflict` instead of landing in this
+    # gap. The gap survives on the legs that seed after the fact: a bodyless
+    # create leaves an empty row, and the retry carrying the body takes the
+    # idempotent leg.
     id = Ecto.UUID.generate()
+
+    ref0 = push(socket, "crdt_create", %{"doc_id" => id, "path" => "Notes/aborted.md"})
+    assert_reply ref0, :ok, %{doc_id: ^id, genesis: "absent"}, 15_000
+
     on_exit(CheckpointInterleave.arm(:after_row_read))
 
     ref =
