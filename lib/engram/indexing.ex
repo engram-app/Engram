@@ -206,7 +206,7 @@ defmodule Engram.Indexing do
                   do: plan_index(note, user, chunks, content_key, opts)
            end),
          texts = embed_texts(plan),
-         {:ok, vectors} <- embed_or_release(dense?, texts, opts),
+         {:ok, vectors} <- embed_or_release(dense?, plan, texts, opts),
          :ok <- ensure_one_vector_per_text(vectors, texts, note),
          avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id),
          {:ok, prepared} <-
@@ -1199,20 +1199,61 @@ defmodule Engram.Indexing do
   defp plan_within_budget(rows, chunks, content_key, false, _opts),
     do: {false, plan_chunks(chunks, rows, content_key, false)}
 
+  #
+  # The user is charged for the chunks whose content changed, not for how we
+  # grouped them (adversarial V3): a re-embedded merged group meters only its
+  # members whose own fingerprint no stored row or member has. The rest of
+  # what Voyage is sent is our maintenance, `[:engram, :embed, :maintenance]`.
   defp plan_within_budget(rows, chunks, content_key, true, opts) do
     plan = plan_chunks(chunks, rows, content_key, true)
     reserve = Keyword.get(opts, :reserve_tokens, fn _tokens -> true end)
+    total = plan |> embed_texts() |> text_bytes() |> UsageMeters.estimate_tokens()
+    charged = min(changed_tokens(plan, rows), total)
+    plan = Map.put(plan, :charge, {charged, total - charged})
 
-    case plan |> embed_texts() |> text_bytes() |> UsageMeters.estimate_tokens() do
-      0 ->
-        {true, plan}
-
-      tokens ->
-        if reserve.(tokens),
-          do: {true, plan},
-          else: {false, plan_chunks(chunks, rows, content_key, false)}
+    if charged > 0 and not reserve.(charged) do
+      {false, plan_chunks(chunks, rows, content_key, false)}
+    else
+      maintenance_tokens(total - charged)
+      {true, plan}
     end
   end
+
+  # Estimated tokens of the embed entries' chunks, or of a merged one's
+  # members, whose fingerprint (leading 16 hex chars) the stored rows do
+  # not hold, as a point's own or among a merged point's members.
+  defp changed_tokens(plan, rows) do
+    known =
+      MapSet.new(
+        for {hmac, _point_id, _tokens, members} <- rows,
+            h <- [hmac && short_hmac(hmac) | members || []],
+            h != nil,
+            do: h
+      )
+
+    new? = &(not MapSet.member?(known, &1))
+
+    plan.entries
+    |> Enum.flat_map(fn
+      {:embed, %{merged: true, members: members, member_hmacs: hmacs}} ->
+        for {m, h} <- Enum.zip(members, hmacs), new?.(h), do: byte_size(m.embed_text)
+
+      {:embed, chunk} ->
+        if new?.(short_hmac(chunk.context_hmac)), do: [byte_size(chunk.embed_text)], else: []
+
+      {:reuse, _chunk, _point_id, _tokens} ->
+        []
+    end)
+    |> Enum.sum()
+    |> UsageMeters.estimate_tokens()
+  end
+
+  defp short_hmac(hmac), do: binary_part(hmac, 0, min(16, byte_size(hmac)))
+
+  defp maintenance_tokens(0), do: :ok
+
+  defp maintenance_tokens(tokens),
+    do: :telemetry.execute([:engram, :embed, :maintenance], %{tokens: tokens}, %{})
 
   # Anything but a successful embed gives its reservation back, exactly once:
   # an `{:error, _}`, a raise, a throw or an exit. The `catch` re-raises with
@@ -1223,16 +1264,14 @@ defmodule Engram.Indexing do
   # Oban timeout) between the reservation and the embed returning — no code
   # runs, so that pass's tokens stay charged. Accepted: rare, and bounded to one
   # note's worth of tokens per kill.
-  defp embed_or_release(false, texts, _opts), do: maybe_embed(false, texts)
+  defp embed_or_release(false, _plan, texts, _opts), do: maybe_embed(false, texts)
 
-  defp embed_or_release(true, texts, opts) do
+  defp embed_or_release(true, plan, texts, opts) do
+    {charged, maintenance} = Map.get(plan, :charge, {0, 0})
+
     release = fn ->
-      _ =
-        Keyword.get(opts, :release_tokens, fn _tokens -> :ok end).(
-          texts
-          |> text_bytes()
-          |> UsageMeters.estimate_tokens()
-        )
+      if charged > 0, do: Keyword.get(opts, :release_tokens, fn _tokens -> :ok end).(charged)
+      maintenance_tokens(-maintenance)
     end
 
     result =
@@ -1510,7 +1549,7 @@ defmodule Engram.Indexing do
         fn
           %{merged: true, members: ms} = chunk, hmacs ->
             {mine, rest} = Enum.split(hmacs, length(ms))
-            {Map.put(chunk, :member_hmacs, Enum.map(mine, &binary_part(&1, 0, 16))), rest}
+            {Map.put(chunk, :member_hmacs, Enum.map(mine, &short_hmac/1)), rest}
 
           chunk, hmacs ->
             {chunk, hmacs}

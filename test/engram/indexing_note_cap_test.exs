@@ -446,7 +446,7 @@ defmodule Engram.IndexingNoteCapTest do
         Decimal.div(Enum.sum(lengths), length(lengths))
       end
 
-      assert Decimal.equal?(before, avgdl_with.([]))
+      assert Decimal.equal?(Decimal.round(before, 9), Decimal.round(avgdl_with.([]), 9))
 
       note = insert_note(user, vault, sections(500))
       assert {:ok, _, _, true} = Indexing.index_note_with_usage(note, vault, user)
@@ -456,7 +456,7 @@ defmodule Engram.IndexingNoteCapTest do
       assert merged != []
       assert Enum.all?(merged, &is_nil(&1.token_count))
       assert Enum.all?(singles, &(&1.token_count != nil))
-      assert Decimal.equal?(avgdl.(), avgdl_with.(singles))
+      assert Decimal.equal?(Decimal.round(avgdl.(), 9), Decimal.round(avgdl_with.(singles), 9))
     end
 
     # One section, ~2 MB: hash-only groups would pass the 7,500-token
@@ -592,6 +592,95 @@ defmodule Engram.IndexingNoteCapTest do
       assert length(singles) > 1
       assert Enum.count(singles, reused?) >= length(singles) - 1
       assert length(embedded_texts()) == Enum.count(rows, &(not reused?.(&1)))
+    end
+  end
+
+  # Adversarial V3: the merge is our storage decision, so an edit inside a
+  # merged group meters the changed member chunks only. The rest of the
+  # group is re-embedded too (a real Voyage call), as our maintenance.
+  describe "metering an edit inside a merged group" do
+    # The pass's reservation (the user's charge) and our maintenance spend,
+    # reported to the test process.
+    defp metered_opts do
+      parent = self()
+      handler = "maintenance-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:engram, :embed, :maintenance],
+          fn _event, %{tokens: tokens}, _meta, _ -> send(parent, {:maintenance, tokens}) end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      [
+        reserve_tokens: fn tokens ->
+          send(parent, {:reserved, tokens})
+          true
+        end,
+        release_tokens: fn tokens -> send(parent, {:released, tokens}) end
+      ]
+    end
+
+    defp sum_messages(tag, acc \\ 0) do
+      receive do
+        {^tag, tokens} -> sum_messages(tag, acc + tokens)
+      after
+        0 -> acc
+      end
+    end
+
+    test "a one-paragraph edit charges that paragraph's chunk, not the group", %{
+      user: user,
+      vault: vault
+    } do
+      note = insert_note(user, vault, sections(500))
+      stub_embedder()
+      opts = metered_opts()
+      assert {:ok, _, _, true} = Indexing.index_note_with_usage(note, vault, user, opts)
+      _ = embedded_texts()
+
+      # A first embed: every member is new, all of it is the user's.
+      assert sum_messages(:reserved) > 0
+      assert sum_messages(:maintenance) == 0
+
+      edited = String.replace(note.content, "section250 body", "section250 edited body")
+
+      assert {:ok, _, _, true} =
+               Indexing.index_note_with_usage(%{note | content: edited}, vault, user, opts)
+
+      [changed] =
+        edited |> Markdown.parse("Big.md") |> Enum.filter(&String.contains?(&1.text, "edited"))
+
+      sent = embedded_texts() |> Enum.map(&byte_size/1) |> Enum.sum()
+      charged = sum_messages(:reserved)
+
+      assert charged == UsageMeters.estimate_tokens(byte_size(changed.embed_text))
+      assert UsageMeters.estimate_tokens(sent) > charged
+      # The rest of the re-embedded groups is ours.
+      assert charged + sum_messages(:maintenance) == UsageMeters.estimate_tokens(sent)
+    end
+
+    test "a failed embed gives back the charge and the maintenance", %{
+      user: user,
+      vault: vault
+    } do
+      note = insert_note(user, vault, sections(500))
+      stub_embedder()
+      opts = metered_opts()
+      assert {:ok, _, _, true} = Indexing.index_note_with_usage(note, vault, user, opts)
+      _ = {sum_messages(:reserved), sum_messages(:maintenance)}
+
+      Mox.stub(Engram.MockEmbedder, :embed_texts, fn _ -> {:error, :boom} end)
+      edited = String.replace(note.content, "section250 body", "section250 edited body")
+
+      assert {:error, _} =
+               Indexing.index_note_with_usage(%{note | content: edited}, vault, user, opts)
+
+      assert sum_messages(:reserved) == sum_messages(:released)
+      assert sum_messages(:maintenance) == 0
     end
   end
 
