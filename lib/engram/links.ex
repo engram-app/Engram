@@ -74,6 +74,7 @@ defmodule Engram.Links do
     :anchor_nonce,
     :dek_version
   ]
+  @backlink_read_fields [:link_keys_stamp | @edge_read_fields]
   @backlinks_limit 200
 
   # Rows per `insert_all` statement. See replace_links/4: 17 binds per row
@@ -85,6 +86,24 @@ defmodule Engram.Links do
   # Unicode decides `String.length/1` (graphemes) and `String.downcase/1`,
   # so keys computed under another Unicode version are not trusted.
   @link_keys_version String.Unicode.version() |> Tuple.to_list() |> Enum.join(".")
+
+  # The stamp test as SQL, the version inlined as a literal rather than a
+  # bind: the partial `*_link_keys_stale_index`es carry this same predicate,
+  # and Postgres can only prove a query uses one when the text matches. A
+  # Unicode upgrade changes the literal, so those indexes stop matching (the
+  # reads stay correct, they scan the basename index) until a migration
+  # rebuilds them; `link_keys_index_test.exs` fails until it does.
+  @link_keys_literal "'\\x" <> Base.encode16(@link_keys_version, case: :lower) <> "'::bytea"
+  @keys_stale_sql "? IS DISTINCT FROM (? || " <> @link_keys_literal <> ")"
+  @keys_current_sql "? IS NOT DISTINCT FROM (? || " <> @link_keys_literal <> ")"
+
+  defmacrop keys_stale(stamp, nonce) do
+    quote do: fragment(unquote(@keys_stale_sql), unquote(stamp), unquote(nonce))
+  end
+
+  defmacrop keys_current(stamp, nonce) do
+    quote do: fragment(unquote(@keys_current_sql), unquote(stamp), unquote(nonce))
+  end
 
   @doc """
   The link resolution keys a note or attachment row stores for `path`:
@@ -917,10 +936,22 @@ defmodule Engram.Links do
         pathed |> Enum.flat_map(fn {_h, t} -> variant_keys(filter_key, t) end) |> Enum.uniq()
     }
 
-    %{
-      notes: user |> keyed_candidates(vault_id, keys, :notes, dek) |> index_by_hmac(),
-      attachments: user |> keyed_candidates(vault_id, keys, :attachments, dek) |> index_by_hmac()
-    }
+    rows =
+      [:notes, :attachments]
+      |> Enum.flat_map(&candidate_queries(user.id, vault_id, keys, &1))
+      |> Enum.reduce(fn part, acc -> union_all(acc, ^part) end)
+      |> Repo.all(skip_tenant_check: true)
+      |> Enum.uniq_by(&{&1.table, &1.id})
+
+    for {table, tag} <- [notes: 1, attachments: 2], into: %{} do
+      group =
+        rows
+        |> Enum.filter(&(&1.table == tag))
+        |> decrypt_and_group(dek, table)
+        |> index_by_hmac()
+
+      {table, group}
+    end
   end
 
   # The `path_ci_hmac`s a folder-qualified `target` can match: the target as
@@ -928,67 +959,79 @@ defmodule Engram.Links do
   defp variant_keys(filter_key, target),
     do: Enum.map(["" | @note_exts], &target_key_hmac(filter_key, target <> &1))
 
-  # The shortest length is taken over rows whose keys are current only (a
-  # stale length could hide the real winner), and rows with stale or missing
-  # keys come back to be decrypted. Runs inside the caller's tenant
-  # transaction.
-  defp keyed_candidates(user, vault_id, keys, table, dek) do
-    schema = if table == :notes, do: Note, else: Attachment
-    version = @link_keys_version
+  # Three parts per table, each on its own index, so a hub basename (733
+  # `index.md` rows in the 2026-10-18 incident) costs a few index probes,
+  # not a pass over every same-name row:
+  #
+  #   * stale: keys missing or stale, decrypted and resolved like any row
+  #     (`*_link_keys_stale_index`, empty once the backfill has run);
+  #   * pathed: current rows whose lowercased path a folder-qualified link
+  #     names (`path_ci_hmac`);
+  #   * shortest: per bare basename, the current rows of the shortest
+  #     length (`basename_hmac, path_length`). The minimum is over current
+  #     rows only: a stale length could hide the real winner, and stale rows
+  #     come back through the first part anyway.
+  #
+  # `table` tags the row (1 notes, 2 attachments). Runs inside the caller's
+  # tenant transaction.
+  defp candidate_queries(user_id, vault_id, keys, table) do
+    {schema, tag} = if table == :notes, do: {Note, 1}, else: {Attachment, 2}
 
-    same_name =
+    live =
       from(c in schema,
-        where:
-          c.user_id == ^user.id and c.vault_id == ^vault_id and
-            c.basename_hmac in ^keys.hmacs and is_nil(c.deleted_at),
-        windows: [same_name: [partition_by: c.basename_hmac]],
+        where: c.user_id == ^user_id and c.vault_id == ^vault_id and is_nil(c.deleted_at),
         select: %{
+          table: fragment("?::integer", ^tag),
           id: c.id,
           basename_hmac: c.basename_hmac,
           path_ciphertext: c.path_ciphertext,
           path_nonce: c.path_nonce,
-          dek_version: c.dek_version,
-          path_ci_hmac: c.path_ci_hmac,
-          path_length: c.path_length,
-          current:
-            fragment(
-              "coalesce(? = (? || ?::bytea), false)",
-              c.link_keys_stamp,
-              c.path_nonce,
-              ^version
-            ),
-          shortest:
-            over(
-              min(
-                fragment(
-                  "CASE WHEN coalesce(? = (? || ?::bytea), false) THEN ? END",
-                  c.link_keys_stamp,
-                  c.path_nonce,
-                  ^version,
-                  c.path_length
-                )
-              ),
-              :same_name
-            )
+          dek_version: c.dek_version
         }
       )
 
-    same_name = if table == :notes, do: where(same_name, [c], c.kind == "note"), else: same_name
+    live = if table == :notes, do: where(live, [c], c.kind == "note"), else: live
 
-    from(c in subquery(same_name),
-      where:
-        not c.current or c.path_ci_hmac in ^keys.path_keys or
-          (c.basename_hmac in ^keys.bare_hmacs and c.path_length == c.shortest),
-      select: %{
-        id: type(c.id, Ecto.UUID),
-        basename_hmac: c.basename_hmac,
-        path_ciphertext: c.path_ciphertext,
-        path_nonce: c.path_nonce,
-        dek_version: c.dek_version
-      }
-    )
-    |> Repo.all(skip_tenant_check: true)
-    |> decrypt_and_group(dek, table)
+    stale =
+      where(
+        live,
+        [c],
+        c.basename_hmac in ^keys.hmacs and not is_nil(c.basename_hmac) and
+          keys_stale(c.link_keys_stamp, c.path_nonce)
+      )
+
+    pathed =
+      where(
+        live,
+        [c],
+        c.path_ci_hmac in ^keys.path_keys and c.basename_hmac in ^keys.hmacs and
+          keys_current(c.link_keys_stamp, c.path_nonce)
+      )
+
+    # Grouped, not LATERAL per basename: Postgres's generic plan for a
+    # cached statement re-ran a correlated minimum once per row (650 ms on
+    # the hub fixture against 10 ms custom).
+    shortest_len =
+      from(m in schema,
+        where:
+          m.user_id == ^user_id and m.vault_id == ^vault_id and
+            m.basename_hmac in ^keys.bare_hmacs and is_nil(m.deleted_at) and
+            keys_current(m.link_keys_stamp, m.path_nonce),
+        group_by: m.basename_hmac,
+        select: %{basename_hmac: m.basename_hmac, len: min(m.path_length)}
+      )
+
+    shortest_len =
+      if table == :notes, do: where(shortest_len, [m], m.kind == "note"), else: shortest_len
+
+    shortest =
+      join(live, :inner, [c], s in subquery(shortest_len),
+        on:
+          c.basename_hmac == s.basename_hmac and c.path_length == s.len and
+            keys_current(c.link_keys_stamp, c.path_nonce)
+      )
+
+    [stale, pathed, shortest]
   end
 
   defp target_ids({:note, id}), do: {id, nil}
@@ -1087,14 +1130,9 @@ defmodule Engram.Links do
         targets = winning_targets(user, vault_id, hmac, path, note_id, dek)
         keys = Enum.map(targets, &target_key_hmac(filter_key, &1))
 
-        # Unkeyed first: a backfill committing between the two reads then
-        # makes an edge show up twice (deduped), never zero times.
-        unkeyed = unkeyed_backlinks(user, vault_id, hmac, MapSet.new(targets), dek)
-
         user
-        |> keyed_backlinks(vault_id, hmac, keys, limit, distinct_sources?)
-        |> Kernel.++(unkeyed)
-        |> Enum.uniq_by(& &1.id)
+        |> incoming_edges(vault_id, hmac, keys, limit, distinct_sources?)
+        |> matching_edges(MapSet.new(targets), dek)
         |> Enum.sort_by(&{&1.position, &1.id})
         |> pick_backlinks(limit, distinct_sources?)
         |> render_backlinks(user, dek)
@@ -1165,23 +1203,34 @@ defmodule Engram.Links do
         do: target
   end
 
-  defp keyed_backlinks(_user, _vault_id, _hmac, [], _limit, _distinct?), do: []
+  # One statement, so one snapshot: the edges whose current key names this
+  # note (top `limit`, by the order the caller picks on) plus every edge on
+  # its basename whose key is missing or stale, which `matching_edges/3`
+  # decrypts. A concurrent re-extract or backfill cannot make an edge count
+  # twice or not at all.
+  defp incoming_edges(user, vault_id, hmac, keys, limit, distinct?) do
+    unkeyed =
+      from(l in NoteLink,
+        where:
+          l.user_id == ^user.id and l.vault_id == ^vault_id and
+            l.target_basename_hmac == ^hmac and
+            keys_stale(l.link_keys_stamp, l.target_text_nonce),
+        select: map(l, ^@backlink_read_fields)
+      )
 
-  defp keyed_backlinks(user, vault_id, hmac, keys, limit, distinct?) do
-    from(l in NoteLink,
-      where:
-        l.user_id == ^user.id and l.vault_id == ^vault_id and l.target_basename_hmac == ^hmac and
-          l.target_key_hmac in ^keys and
-          fragment(
-            "? = (? || ?::bytea)",
-            l.link_keys_stamp,
-            l.target_text_nonce,
-            ^@link_keys_version
-          ),
-      limit: ^limit,
-      select: map(l, ^@edge_read_fields)
-    )
-    |> backlinks_order(distinct?)
+    keyed =
+      from(l in NoteLink,
+        where:
+          l.user_id == ^user.id and l.vault_id == ^vault_id and
+            l.target_basename_hmac == ^hmac and l.target_key_hmac in ^keys and
+            keys_current(l.link_keys_stamp, l.target_text_nonce),
+        limit: ^limit,
+        select: map(l, ^@backlink_read_fields)
+      )
+      |> backlinks_order(distinct?)
+
+    unkeyed
+    |> union_all(^from(k in subquery(keyed), select: map(k, ^@backlink_read_fields)))
     |> Repo.all(skip_tenant_check: true)
   end
 
@@ -1195,30 +1244,19 @@ defmodule Engram.Links do
     |> order_by([l], asc: l.source_note_id, asc: l.position, asc: l.id)
   end
 
-  # Edges whose key is missing or stale (written before the keys existed, or
-  # re-encrypted by a writer that does not know them): decrypt and match by
-  # text. The `LinkResolutionKeys` data migration empties this set.
-  defp unkeyed_backlinks(user, vault_id, hmac, targets, dek) do
-    edges =
-      Repo.all(
-        from(l in NoteLink,
-          where:
-            l.user_id == ^user.id and l.vault_id == ^vault_id and
-              l.target_basename_hmac == ^hmac and
-              fragment(
-                "? IS DISTINCT FROM (? || ?::bytea)",
-                l.link_keys_stamp,
-                l.target_text_nonce,
-                ^@link_keys_version
-              ),
-          select: map(l, ^@edge_read_fields)
-        ),
-        skip_tenant_check: true
-      )
+  # Keyed edges matched in SQL. The rest (written before the keys existed,
+  # or re-encrypted by a writer that does not know them) match by their
+  # decrypted text. The `LinkResolutionKeys` data migration empties that set.
+  defp matching_edges(edges, targets, dek) do
+    {keyed, unkeyed} =
+      Enum.split_with(edges, &keys_current?(&1.link_keys_stamp, &1.target_text_nonce))
 
-    for {edge, text} <- Enum.zip(edges, target_texts(edges, dek)),
-        is_binary(text) and MapSet.member?(targets, String.downcase(text)),
-        do: edge
+    matched =
+      for {edge, text} <- Enum.zip(unkeyed, target_texts(unkeyed, dek)),
+          is_binary(text) and MapSet.member?(targets, String.downcase(text)),
+          do: edge
+
+    keyed ++ matched
   end
 
   # Default: one row per edge, first `limit` by (position, id).

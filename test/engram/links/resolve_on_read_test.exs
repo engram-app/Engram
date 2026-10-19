@@ -148,6 +148,26 @@ defmodule Engram.Links.ResolveOnReadTest do
     assert s == src.id
   end
 
+  test "a stale key's length cannot hide the shortest current note", ctx do
+    winner = Fixtures.insert_note!(ctx.user, ctx.vault, %{path: "a/Hub.md"})
+    stale = Fixtures.insert_note!(ctx.user, ctx.vault, %{path: "bb/hub.md"})
+    :ok = Links.replace_links(ctx.user, ctx.vault, ctx.source.id, [edge("Hub")])
+
+    # A writer that re-encrypted without restamping left a length shorter
+    # than any real path.
+    {:ok, _} =
+      Repo.with_tenant(ctx.user.id, fn ->
+        Repo.update_all(from(n in Engram.Notes.Note, where: n.id == ^stale.id),
+          set: [path_length: 1, link_keys_stamp: "junk"]
+        )
+      end)
+
+    assert [%{target_note_id: id}] = Links.links_for_note(ctx.user, ctx.source.id)
+    assert id == winner.id
+    assert [%{source_note_id: src}] = Links.backlinks_for_note(ctx.user, winner.id)
+    assert src == ctx.source.id
+  end
+
   defp edge(target),
     do: %{target: target, alias: nil, anchor: nil, link_type: "wikilink", position: 0}
 end

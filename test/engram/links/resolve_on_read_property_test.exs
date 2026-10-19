@@ -38,28 +38,43 @@ defmodule Engram.Links.ResolveOnReadPropertyTest do
   # :missing = written before the keys existed. :stale = keys a writer left
   # behind when it re-encrypted without recomputing them: garbage values whose
   # stamp no longer matches, which readers must ignore, never trust.
+  # :mixed = each row its own state, so one basename holds current rows
+  # beside missing and stale ones (a backfill or rolling deploy midway).
   defp damage_keys(_user, :fresh), do: :ok
 
-  defp damage_keys(user, state) do
-    {path_set, link_set} =
-      case state do
-        :missing ->
-          {[path_ci_hmac: nil, path_length: nil, link_keys_stamp: nil],
-           [target_key_hmac: nil, link_keys_stamp: nil]}
-
-        :stale ->
-          junk = :crypto.strong_rand_bytes(32)
-
-          {[path_ci_hmac: junk, path_length: 1, link_keys_stamp: junk],
-           [target_key_hmac: junk, link_keys_stamp: junk]}
-      end
-
+  defp damage_keys(user, :mixed) do
     {:ok, _} =
       Repo.with_tenant(user.id, fn ->
-        Repo.update_all(Engram.Notes.Note, set: path_set)
-        Repo.update_all(Engram.Attachments.Attachment, set: path_set)
-        Repo.update_all(Engram.Links.NoteLink, set: link_set)
+        for schema <- [Engram.Notes.Note, Engram.Attachments.Attachment, Engram.Links.NoteLink],
+            id <- Repo.all(from(r in schema, select: r.id)) do
+          case Enum.at([:fresh, :missing, :stale], :erlang.phash2(id, 3)) do
+            :fresh -> :ok
+            state -> damage(schema, from(r in schema, where: r.id == ^id), state)
+          end
+        end
       end)
+  end
+
+  defp damage_keys(user, state) do
+    {:ok, _} =
+      Repo.with_tenant(user.id, fn ->
+        for schema <- [Engram.Notes.Note, Engram.Attachments.Attachment, Engram.Links.NoteLink],
+            do: damage(schema, schema, state)
+      end)
+  end
+
+  defp damage(schema, query, state) do
+    junk = :crypto.strong_rand_bytes(32)
+
+    set =
+      case {schema, state} do
+        {Engram.Links.NoteLink, :missing} -> [target_key_hmac: nil, link_keys_stamp: nil]
+        {Engram.Links.NoteLink, :stale} -> [target_key_hmac: junk, link_keys_stamp: junk]
+        {_, :missing} -> [path_ci_hmac: nil, path_length: nil, link_keys_stamp: nil]
+        {_, :stale} -> [path_ci_hmac: junk, path_length: 1, link_keys_stamp: junk]
+      end
+
+    Repo.update_all(query, set: set)
   end
 
   property "links and backlinks agree with resolve_target/4" do
@@ -67,8 +82,8 @@ defmodule Engram.Links.ResolveOnReadPropertyTest do
             notes <- uniq_list_of(note_path(), min_length: 1, max_length: 8),
             atts <- uniq_list_of(att_path(), max_length: 3),
             targets <- list_of(target(), min_length: 1, max_length: 8),
-            keys <- member_of([:fresh, :missing, :stale]),
-            max_runs: 40
+            keys <- member_of([:fresh, :missing, :stale, :mixed]),
+            max_runs: 80
           ) do
       {:ok, user} = Fixtures.user_with_dek_fixture()
       vault = insert(:vault, user: user)
