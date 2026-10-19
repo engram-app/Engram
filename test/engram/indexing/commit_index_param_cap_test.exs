@@ -70,7 +70,8 @@ defmodule Engram.Indexing.CommitIndexParamCapTest do
       qdrant_points: [],
       reused_point_ids: [],
       stale_point_ids: [],
-      note_payload: %{}
+      note_payload: %{},
+      payload_hash: :crypto.hash(:sha256, "fixture")
     }
 
     assert {:ok, @rows} = Indexing.commit_index(prepared)

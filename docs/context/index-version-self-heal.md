@@ -93,6 +93,16 @@ chunking before it is expensive: bundle boundary changes into one bump.
   `reconcile_embeddings: queueing keyword-stale notes` debug line carries
   `eligible_count` / `total_count`.
 
+## A newer stamp is current
+
+`chunker_version` and `keyword_version` are compared with `<`, not `!=`
+(`IndexVersions.stale_dynamic/0`, `keyword_stale_dynamic/0`,
+`EmbedNote.version_stale?/1`). A release that meets a note stamped by a NEWER
+release leaves it alone, so rolling back rebuilds nothing, and the roll
+forward finds those notes still current. Before this, a rollback from a
+chunker bump re-indexed every note twice. `embed_model` is a string with no
+order, so a model rollback still rebuilds.
+
 ## The completion ledger stops the version scans
 
 Once `Engram.DataMigrations.IndexVersions` is done, `ReconcileEmbeddings` drops
@@ -104,8 +114,8 @@ both scans. No operator step is involved; see
 **Daily re-verify.** Done does not stay true by itself. Three things put
 version-stale notes back after the migration closed, and none renames it:
 
-- a rollback then roll-forward (the old release re-stamps old versions, then
-  the new name is already done);
+- a rollback then roll-forward (the old release re-stamps old versions on the
+  notes it re-indexes for an edit, then the new name is already done);
 - restoring a soft-deleted vault (its notes were excluded while deleted);
 - a rolling deploy, where an old-release node stamps an old version after a
   new node marked the new name done.
