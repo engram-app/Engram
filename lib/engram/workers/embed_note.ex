@@ -114,6 +114,12 @@ defmodule Engram.Workers.EmbedNote do
           version_stale?(note) ->
             load_for_run(note, maintenance: note.dense_indexed_hash == hash)
 
+          # Holds more chunks than its tier's per-note cap (ReconcileEmbeddings
+          # found it): re-merge it, unmetered. It already has dense vectors, so
+          # this is our maintenance, never a second charge.
+          args["recap"] == true and note.dense_indexed_hash == hash ->
+            load_for_run(note, maintenance: true)
+
           # Current content, chunker and model, with dense vectors: skip.
           note.dense_indexed_hash == hash ->
             :ok

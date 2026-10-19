@@ -4,9 +4,9 @@ defmodule Engram.Billing.LimitKeysTest do
   alias Engram.Billing.LimitKeys
 
   describe "all/0" do
-    test "returns the 25 catalog keys" do
+    test "returns the 26 catalog keys" do
       keys = LimitKeys.all()
-      assert length(keys) == 25
+      assert length(keys) == 26
       assert :notes_cap in keys
       assert :vaults_cap in keys
       assert :reranker_enabled in keys
@@ -229,5 +229,13 @@ defmodule Engram.Billing.LimitKeysTest do
     assert LimitKeys.default_for(:index_points_cap, :free) == 10_000
     assert LimitKeys.default_for(:index_points_cap, :starter) == 100_000
     assert LimitKeys.default_for(:index_points_cap, :pro) == 250_000
+  end
+
+  test "note_points_cap bounds dense points per note" do
+    assert LimitKeys.defined?(:note_points_cap)
+    assert LimitKeys.type(:note_points_cap) == :integer
+    assert LimitKeys.default_for(:note_points_cap, :free) == 128
+    assert LimitKeys.default_for(:note_points_cap, :starter) == 1_024
+    assert LimitKeys.default_for(:note_points_cap, :pro) == 1_024
   end
 end
