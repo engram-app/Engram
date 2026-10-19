@@ -72,9 +72,11 @@ defmodule Engram.Indexing.RetainedVectors do
     :ok
   end
 
+  @spec entries() :: [{{Ecto.UUID.t(), binary()}, integer(), non_neg_integer()}]
   defp entries do
     :ets.select(Registry.table(@cache), [
-      {{:"$1", {:"$2", :"$3", :_}, :_}, [{:is_integer, :"$2"}], [{{:"$1", :"$2", :"$3"}}]}
+      {{:"$1", {:"$2", :"$3", :_}, :_}, [{:is_integer, :"$2"}, {:is_integer, :"$3"}],
+       [{{:"$1", :"$2", :"$3"}}]}
     ])
   rescue
     ArgumentError -> []
