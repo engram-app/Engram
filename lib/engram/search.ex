@@ -210,6 +210,7 @@ defmodule Engram.Search do
         do_search(user, vault, query, opts)
       end
       |> scrub_result_utf8()
+      |> window_texts(query)
 
     emit_search_performed(user, result, started_at, cross_vault)
 
@@ -259,6 +260,105 @@ defmodule Engram.Search do
 
       _ ->
         result
+    end
+  end
+
+  defp window_texts({:ok, results}, query) when is_list(results),
+    do: {:ok, Enum.map(results, &window_text(&1, query))}
+
+  defp window_texts(other, _query), do: other
+
+  defp window_text(%{text: text} = result, query) when is_binary(text),
+    do: %{result | text: snippet(text, query)}
+
+  defp window_text(result, _query), do: result
+
+  # The chunker caps a chunk's text at 2,048 bytes, so a longer hit text is a
+  # merged chunk (several chunks in one point under the per-note cap, up to
+  # ~30 KB). Reranking saw all of it; what leaves Search is a window.
+  @chunk_text_max 2_048
+  @snippet_chars 1_500
+  # Context kept ahead of the first match.
+  @snippet_lead 200
+
+  @doc """
+  A hit's display text. An ordinary chunk's comes back whole. A merged
+  chunk's (over 2,048 bytes) is a window of at most 1,500 characters: from
+  just before the run of query-word matches (case-insensitive) that holds
+  the most distinct query words, or with no match, or a non-text query (a
+  similar-notes search), its first 1,500 characters.
+  """
+  def snippet(text, query) when byte_size(text) > @chunk_text_max do
+    case best_match(text, query) do
+      nil ->
+        String.slice(text, 0, @snippet_chars)
+
+      byte ->
+        at = text |> binary_part(0, byte) |> String.length()
+        start = max(0, min(at - @snippet_lead, String.length(text) - @snippet_chars))
+        String.slice(text, start, @snippet_chars)
+    end
+  end
+
+  def snippet(text, _query), do: text
+
+  # Byte offset of the first match in the window (`@snippet_chars -
+  # @snippet_lead` bytes) holding the most distinct query words; nil when
+  # none occurs. One pass over the sorted matches with a trailing pointer, so
+  # a common word matching thousands of times stays linear. Byte widths stand
+  # in for character widths, which only skews the choice on multi-byte text.
+  defp best_match(text, query) when is_binary(query) do
+    hits =
+      query
+      |> String.downcase()
+      |> String.split(~r/[^\p{L}\p{N}]+/u, trim: true)
+      |> Enum.uniq()
+      |> Enum.flat_map(fn word ->
+        for [{at, _len}] <-
+              Regex.scan(Regex.compile!(Regex.escape(word), "iu"), text, return: :index),
+            do: {at, word}
+      end)
+      |> Enum.sort()
+
+    case hits do
+      [] -> nil
+      _ -> densest_window(List.to_tuple(hits), @snippet_chars - @snippet_lead)
+    end
+  end
+
+  defp best_match(_text, _query), do: nil
+
+  # Window [hits[i], hits[i] + width): `j` is one past its last hit, `counts`
+  # its words. Returns the offset of the best window's first hit.
+  defp densest_window(hits, width) do
+    n = tuple_size(hits)
+
+    {_j, _counts, {_best, at}} =
+      Enum.reduce(0..(n - 1), {0, %{}, {0, nil}}, fn i, {j, counts, best} ->
+        {start, _} = elem(hits, i)
+        {j, counts} = extend(hits, n, j, counts, start + width)
+        best = if map_size(counts) > elem(best, 0), do: {map_size(counts), start}, else: best
+        {_, word} = elem(hits, i)
+        {j, drop_word(counts, word), best}
+      end)
+
+    at
+  end
+
+  defp extend(hits, n, j, counts, limit) do
+    case j < n and elem(hits, j) do
+      {at, word} when at < limit ->
+        extend(hits, n, j + 1, Map.update(counts, word, 1, &(&1 + 1)), limit)
+
+      _ ->
+        {j, counts}
+    end
+  end
+
+  defp drop_word(counts, word) do
+    case Map.fetch!(counts, word) do
+      1 -> Map.delete(counts, word)
+      c -> Map.put(counts, word, c - 1)
     end
   end
 
