@@ -16,8 +16,8 @@ defmodule Engram.Workers.RewriteNoteLinks do
   preserving the exactly-one-rewriter invariant.
 
   Chunked cursor chain over distinct source notes (batch #{100}), keyed on
-  the OLD basename hmac of `note_links.target_basename_hmac` — stable
-  under the concurrent `RebindNoteLinks` jobs the same rename enqueues.
+  the OLD basename hmac of `note_links.target_basename_hmac`, which a
+  rename never rewrites.
   Per-source-note error isolation: one failing note logs (ids only) +
   counts `[:engram, :links, :rewrite, :failed]` and the rest proceed.
   A rewrite failure never fails or rolls back the rename.

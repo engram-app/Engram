@@ -34,7 +34,7 @@ defmodule Engram.Links do
   decisions.
 
   `with_tenant/2` is re-entrant for the same tenant, so the private helpers
-  (`rebind_edge/6`, `decrypt_note_paths/3`, the candidate fetches) need no
+  (`resolve_edges/4`, the candidate fetches) need no
   wrapping of their own, and a caller that already holds the tenant — e.g.
   `RewriteNoteLinks` — pays nothing.
   """
@@ -48,7 +48,6 @@ defmodule Engram.Links do
   alias Engram.Logger.DecryptFailure
   alias Engram.Notes.Note
   alias Engram.Repo
-  alias Engram.Vaults.Vault
 
   @typedoc "A candidate set indexed by `index_candidates/1`."
   @type candidate_index :: %{
@@ -57,6 +56,24 @@ defmodule Engram.Links do
         }
 
   @note_exts ~w(.md .canvas)
+
+  # What the read paths need of an edge; the full row (17 columns, 5 uuids)
+  # cost 28 us per edge to load against 7 for the decrypt.
+  @edge_read_fields [
+    :id,
+    :vault_id,
+    :source_note_id,
+    :position,
+    :link_type,
+    :target_basename_hmac,
+    :target_text_ciphertext,
+    :target_text_nonce,
+    :alias_ciphertext,
+    :alias_nonce,
+    :anchor_ciphertext,
+    :anchor_nonce,
+    :dek_version
+  ]
   @backlinks_limit 200
 
   # Rows per `insert_all` statement. See replace_links/4: 17 binds per row
@@ -363,8 +380,9 @@ defmodule Engram.Links do
   end
 
   # Extension-preference + cross-table-fallback rule, shared by the
-  # single-shot `resolve_target/4` path and the batch `rebind_edge/6` path
-  # (#591 finding — was forked into two copies of this same if/else before).
+  # single-shot `resolve_target/4` path and the batch `resolve_prefetched/3`
+  # path (#591 finding — was forked into two copies of this same if/else
+  # before).
   # `note_resolver`/`attachment_resolver` are zero-arg thunks so the
   # single-shot caller keeps its lazy short-circuit (never queries the
   # second table unless the first came back dangling) while the batch
@@ -392,8 +410,7 @@ defmodule Engram.Links do
   end
 
   # Query + decrypt only (no target-dependent filtering) — the part that's
-  # IDENTICAL for every edge sharing an hmac, so `bind_danglers_for_hmac/3`
-  # can call this once per table instead of once per edge.
+  # IDENTICAL for every target sharing an hmac.
   defp fetch_decrypted_candidates(user, vault, hmac, table, dek) do
     user
     |> fetch_candidates_by_hmac(vault, [hmac], table, dek)
@@ -454,19 +471,16 @@ defmodule Engram.Links do
   defp decrypt_and_group([], _dek, _table), do: %{}
 
   defp decrypt_and_group(rows, dek, table) do
-    Enum.reduce(rows, %{}, fn row, acc ->
-      case decrypt_field(
-             row.path_ciphertext,
-             row.path_nonce,
-             dek,
-             row.dek_version,
-             table,
-             :path,
-             row.id
-           ) do
-        nil -> acc
-        path -> Map.update(acc, row.basename_hmac, [{row.id, path}], &[{row.id, path} | &1])
-      end
+    paths = decrypt_column(rows, dek, table, :path, &{&1.path_ciphertext, &1.path_nonce})
+
+    rows
+    |> Enum.zip(paths)
+    |> Enum.reduce(%{}, fn
+      {_row, nil}, acc ->
+        acc
+
+      {row, path}, acc ->
+        Map.update(acc, row.basename_hmac, [{row.id, path}], &[{row.id, path} | &1])
     end)
   end
 
@@ -484,7 +498,7 @@ defmodule Engram.Links do
 
   # The tiebreak order and the case-insensitive path lookup, built ONCE per
   # candidate set. Callers that resolve many targets against one shared set
-  # (`bind_danglers_for_hmac/3`, `replace_links/4`'s prefetch) index it once
+  # (`resolve_edges/4`, `replace_links/4`'s prefetch) index it once
   # and then pay O(1) per target. Re-sorting per target made a rebind over a
   # basename shared by C notes with E inbound edges O(E * C log C): 733
   # `index.md` notes x 1,787 edges pinned the prod worker (2026-10-18).
@@ -589,8 +603,7 @@ defmodule Engram.Links do
   walk (the hmac comes from `old_path`, not from any occurrence), so
   callers fetch ONCE per job batch — `Rewriter.build_target/5` stashes the
   result on the target map — and thread it through
-  `pre_rename_winner?/4` per occurrence, mirroring
-  `bind_danglers_for_hmac/3`'s prefetch shape.
+  `pre_rename_winner?/4` per occurrence.
 
   Snapshot semantics: candidate-table changes AFTER the fetch (a concurrent
   rename/create sharing the basename) aren't seen for the rest of the
@@ -642,9 +655,7 @@ defmodule Engram.Links do
   across every occurrence; only the per-occurrence `target` varies the
   resolution (extension routing, path filter, tiebreak), applied via the
   same `route_resolution/3` + `resolve_from_candidates/3` rules
-  `resolve_target/4` uses. Order-independent w.r.t. the RebindNoteLinks
-  jobs a rename enqueues — those rewrite edge target ids but never the
-  candidate tables the prefetch consulted.
+  `resolve_target/4` uses.
   """
   @spec pre_rename_winner?(String.t(), String.t(), binary(), %{
           notes: [{binary(), String.t()}] | candidate_index(),
@@ -692,10 +703,9 @@ defmodule Engram.Links do
 
   @doc """
   Computes the HMAC for a `basename_key/1` result under `user`'s filter key.
-  Callers that need to enqueue a rebind job (`RebindNoteLinks.new_for/3`)
-  compute this from plaintext they already have in scope, so the job's
-  `oban_jobs.args` carries only the opaque HMAC — never the plaintext
-  basename (T3.2/H3 invariant).
+  Callers that put it in a job (`RewriteNoteLinks`) compute it from
+  plaintext they already have in scope, so `oban_jobs.args` carries only the
+  opaque HMAC — never the plaintext basename (T3.2/H3 invariant).
   """
   # KNOWN GAP, not fixed here. This derives the filter key itself, so it
   # reaches `Crypto.get_dek/1` and — on a DekCache miss under
@@ -717,198 +727,21 @@ defmodule Engram.Links do
   end
 
   @doc """
-  Re-resolves every edge (dangling or currently bound) in the vault whose
-  `target_basename_hmac` matches `hmac` (see `basename_hmac/2`). Called after
-  a note or attachment is created/renamed/deleted so danglers can bind, and
-  so an existing binding can be stolen by a shorter-path newcomer (see
-  resolution rules on `resolve_target/4`).
-  """
-  @spec bind_danglers_for_hmac(map(), map(), binary()) :: :ok
-  def bind_danglers_for_hmac(user, vault, hmac) do
-    # Outside the scope and threaded down: see `resolve_target/4` above. This
-    # one's transaction already spans a per-edge decrypt/update loop, so a
-    # provider round trip inside it would hold row locks for the KMS latency
-    # on top of the loop.
-    {:ok, dek} = Crypto.get_dek(user)
-
-    {:ok, result} =
-      Repo.with_tenant(user.id, fn -> do_bind_danglers_for_hmac(user, vault, hmac, dek) end)
-
-    result
-  end
-
-  @doc """
-  `bind_danglers_for_hmac/3` for a vault id: the vault is read inside the
-  same tenant transaction as the rebind instead of one of its own.
-  `:vault_not_found` when it is gone.
-  """
-  @spec bind_danglers_in_vault(map(), binary(), binary()) :: :ok | :vault_not_found
-  def bind_danglers_in_vault(user, vault_id, hmac) do
-    # Outside the scope, as in `bind_danglers_for_hmac/3`.
-    {:ok, dek} = Crypto.get_dek(user)
-
-    Repo.with_tenant!(user.id, fn ->
-      case Repo.get(Vault, vault_id) do
-        nil -> :vault_not_found
-        %Vault{} = vault -> do_bind_danglers_for_hmac(user, vault, hmac, dek)
-      end
-    end)
-  end
-
-  defp do_bind_danglers_for_hmac(user, vault, hmac, dek) do
-    edges =
-      Repo.all(
-        from(l in NoteLink,
-          where:
-            l.user_id == ^user.id and l.vault_id == ^vault.id and l.target_basename_hmac == ^hmac
-        ),
-        skip_tenant_check: true
-      )
-
-    if edges != [] do
-      # Every edge here shares `hmac` (the WHERE clause above), so the
-      # candidate query + decrypt below is IDENTICAL for all of them —
-      # fetch once instead of once per edge (was N Repo.all + N decrypt
-      # passes per table). Only the per-edge target text varies the
-      # resolution (extension routing, path filter, tiebreak), which
-      # `rebind_edge/6` applies in memory against these shared indexes via
-      # the same `route_resolution/3` + `resolve_from_candidates/3` rules
-      # `resolve_target/4` uses.
-      note_candidates =
-        user |> fetch_decrypted_candidates(vault, hmac, :notes, dek) |> index_candidates()
-
-      attachment_candidates =
-        user |> fetch_decrypted_candidates(vault, hmac, :attachments, dek) |> index_candidates()
-
-      Enum.each(edges, fn edge ->
-        target_text =
-          decrypt_field(
-            edge.target_text_ciphertext,
-            edge.target_text_nonce,
-            dek,
-            edge.dek_version,
-            :note_links,
-            :target_text,
-            edge.id
-          )
-
-        # A decrypt failure (corrupt ciphertext, AAD-bind mismatch) yields
-        # nil here — `rebind_edge/6` calls `Path.basename/1` on it, which
-        # requires a binary and would crash the whole rebind job over one
-        # bad row. Skip it (it stays exactly as-is, still eligible to
-        # re-bind on a future pass) rather than let it take every other
-        # edge down with it.
-        if is_binary(target_text) do
-          rebind_edge(user, vault, edge, target_text, note_candidates, attachment_candidates)
-        else
-          DecryptFailure.log(
-            "bind_danglers_for_hmac: skipping undecryptable edge",
-            :decrypt_failed,
-            edge_id: edge.id
-          )
-        end
-      end)
-    end
-
-    :ok
-  end
-
-  defp rebind_edge(user, vault, edge, target_text, note_candidates, attachment_candidates) do
-    ext = target_text |> Path.basename() |> Path.extname() |> String.downcase()
-
-    {target_note_id, target_attachment_id} =
-      case route_resolution(
-             ext,
-             fn -> resolve_from_candidates(note_candidates, target_text, :note) end,
-             fn -> resolve_from_candidates(attachment_candidates, target_text, :attachment) end
-           ) do
-        {:note, id} -> {id, nil}
-        {:attachment, id} -> {nil, id}
-        :dangling -> {nil, nil}
-      end
-
-    if {target_note_id, target_attachment_id} !=
-         {edge.target_note_id, edge.target_attachment_id} do
-      Repo.update_all(
-        from(l in NoteLink,
-          where: l.id == ^edge.id and l.user_id == ^user.id and l.vault_id == ^vault.id
-        ),
-        [set: [target_note_id: target_note_id, target_attachment_id: target_attachment_id]],
-        skip_tenant_check: true
-      )
-    end
-  end
-
-  @doc """
   A note was soft-deleted: drop its outgoing edges (they're meaningless
-  once the source is gone) and flip any incoming edges back to dangling
-  (the target no longer exists, but the edge — and its encrypted target
-  text — stays so it can re-bind if the note comes back).
+  once the source is gone). Incoming edges need nothing: targets resolve on
+  read, and a deleted note is no candidate.
   """
   @spec on_note_soft_deleted(binary(), binary()) :: :ok
   def on_note_soft_deleted(user_id, note_id) do
-    # Both statements are filtered rather than rejected without a tenant (only
-    # INSERTs raise), so unscoped this returns :ok having dropped no outgoing
-    # edges and flipped no incoming ones — the deleted note keeps its backlinks
-    # pointing at it, with no error anywhere.
+    # A DELETE is filtered rather than rejected without a tenant (only INSERTs
+    # raise), so unscoped this would return :ok having dropped nothing.
     {:ok, _} =
       Repo.with_tenant(user_id, fn ->
         Repo.delete_all(
           from(l in NoteLink, where: l.user_id == ^user_id and l.source_note_id == ^note_id),
           skip_tenant_check: true
         )
-
-        Repo.update_all(
-          from(l in NoteLink, where: l.user_id == ^user_id and l.target_note_id == ^note_id),
-          [set: [target_note_id: nil]],
-          skip_tenant_check: true
-        )
       end)
-
-    :ok
-  end
-
-  @doc """
-  An attachment was soft-deleted: attachments carry no outgoing edges (only
-  notes originate links, per `replace_links/4`), so there's nothing to drop
-  there — only flip any incoming edges back to dangling (the target no
-  longer exists, but the edge — and its encrypted target text — stays so it
-  can re-bind if the attachment reappears at the same path, or a
-  same-basename sibling can inherit it via the caller's paired
-  `RebindNoteLinks` enqueue).
-  """
-  @spec on_attachment_soft_deleted(binary(), binary()) :: :ok
-  def on_attachment_soft_deleted(user_id, attachment_id) do
-    on_attachments_soft_deleted(user_id, [attachment_id])
-  end
-
-  @doc """
-  Batched form of `on_attachment_soft_deleted/2` — same semantics (flip
-  incoming edges to dangling, nothing to drop), one `UPDATE` for the whole
-  list instead of one per attachment. Used by `Attachments.batch_delete/3`
-  (#1194) to keep the N+1 the single-delete path can afford off the batch
-  path.
-  """
-  @spec on_attachments_soft_deleted(binary(), [binary()]) :: :ok
-  def on_attachments_soft_deleted(_user_id, []), do: :ok
-
-  def on_attachments_soft_deleted(user_id, attachment_ids) when is_list(attachment_ids) do
-    {:ok, result} =
-      Repo.with_tenant(user_id, fn ->
-        do_on_attachments_soft_deleted(user_id, attachment_ids)
-      end)
-
-    result
-  end
-
-  defp do_on_attachments_soft_deleted(user_id, attachment_ids) do
-    Repo.update_all(
-      from(l in NoteLink,
-        where: l.user_id == ^user_id and l.target_attachment_id in ^attachment_ids
-      ),
-      [set: [target_attachment_id: nil]],
-      skip_tenant_check: true
-    )
 
     :ok
   end
@@ -934,33 +767,24 @@ defmodule Engram.Links do
       Repo.all(
         from(l in NoteLink,
           where: l.user_id == ^user.id and l.source_note_id == ^note_id,
-          order_by: l.position
+          order_by: l.position,
+          select: map(l, ^@edge_read_fields)
         ),
         skip_tenant_check: true
       )
 
-    target_paths =
-      decrypt_note_paths(
-        user,
-        dek,
-        edges |> Enum.map(& &1.target_note_id) |> Enum.reject(&is_nil/1)
-      )
+    texts = target_texts(edges, dek)
+    {resolved, candidates} = resolve_edges(user, edges, texts, dek)
+    note_paths = candidate_paths(candidates.notes)
 
-    Enum.map(edges, fn edge ->
+    Enum.zip_with([edges, texts, resolved], fn [edge, text, resolution] ->
+      {target_note_id, target_attachment_id} = target_ids(resolution)
+
       %{
-        target_text:
-          decrypt_field(
-            edge.target_text_ciphertext,
-            edge.target_text_nonce,
-            dek,
-            edge.dek_version,
-            :note_links,
-            :target_text,
-            edge.id
-          ),
-        target_note_id: edge.target_note_id,
-        target_attachment_id: edge.target_attachment_id,
-        target_path: edge.target_note_id && Map.get(target_paths, edge.target_note_id),
+        target_text: text,
+        target_note_id: target_note_id,
+        target_attachment_id: target_attachment_id,
+        target_path: target_note_id && Map.get(note_paths, target_note_id),
         alias:
           decrypt_field(
             edge.alias_ciphertext,
@@ -982,9 +806,87 @@ defmodule Engram.Links do
             edge.id
           ),
         link_type: edge.link_type,
-        dangling: is_nil(edge.target_note_id) and is_nil(edge.target_attachment_id)
+        dangling: resolution == :dangling
       }
     end)
+  end
+
+  # Link targets are resolved on read, never stored-and-maintained: an edge
+  # keeps its target's NAME (`target_basename_hmac` + `target_text`), and the
+  # vault's live notes and attachments decide what it points at right now.
+  # Creating, renaming, deleting or restoring a note therefore rewrites no
+  # other note's edges (that fan-out pinned the prod worker on 2026-10-18:
+  # 733 `index.md` notes, 1,787 edges to `index`).
+  #
+  # One candidate query per table for every hmac in `edges`; edges with the
+  # same target text resolve once. All `edges` must share one vault.
+  defp resolve_edges(_user, [], _texts, _dek), do: {[], %{notes: %{}, attachments: %{}}}
+
+  defp resolve_edges(user, [first | _] = edges, texts, dek) do
+    hmacs = Enum.map(edges, & &1.target_basename_hmac)
+    candidates = prefetch_candidates(user, %{id: first.vault_id}, hmacs, dek)
+
+    {resolved, _memo} =
+      hmacs
+      |> Enum.zip(texts)
+      |> Enum.map_reduce(%{}, fn
+        {_hmac, nil}, memo ->
+          {:dangling, memo}
+
+        key, memo ->
+          case memo do
+            %{^key => hit} ->
+              {hit, memo}
+
+            _ ->
+              {hmac, text} = key
+              hit = resolve_prefetched(candidates, hmac, text)
+              {hit, Map.put(memo, key, hit)}
+          end
+      end)
+
+    {resolved, candidates}
+  end
+
+  defp target_ids({:note, id}), do: {id, nil}
+  defp target_ids({:attachment, id}), do: {nil, id}
+  defp target_ids(:dangling), do: {nil, nil}
+
+  defp candidate_paths(indexed) do
+    for {_hmac, %{sorted: sorted}} <- indexed, {id, path} <- sorted, into: %{}, do: {id, path}
+  end
+
+  defp target_texts(edges, dek) do
+    decrypt_column(edges, dek, :note_links, :target_text, fn e ->
+      {e.target_text_ciphertext, e.target_text_nonce}
+    end)
+  end
+
+  # One column across `rows` in one native call (rows carry `id` and
+  # `dek_version`; `field` returns `{ciphertext, nonce}`). A batch with a bad
+  # row falls back to per-row decrypts, which log it and yield nil for it
+  # alone. ponytail: one bad row costs that read the per-row path; split the
+  # batch around it if it ever shows in the decrypt metrics.
+  defp decrypt_column([], _dek, _table, _column, _field), do: []
+
+  defp decrypt_column(rows, dek, table, column, field) do
+    fields =
+      Enum.map(rows, fn row ->
+        {ct, nonce} = field.(row)
+        {Ecto.UUID.dump!(row.id), Crypto.aad_bound?(row.dek_version), ct, nonce}
+      end)
+
+    case is_list(fields) and Enum.all?(fields, &is_binary(elem(&1, 2))) &&
+           Envelope.decrypt_many(dek, Crypto.aad_prefix(table, column), fields) do
+      {:ok, plain} ->
+        plain
+
+      _ ->
+        Enum.map(rows, fn row ->
+          {ct, nonce} = field.(row)
+          decrypt_field(ct, nonce, dek, row.dek_version, table, column, row.id)
+        end)
+    end
   end
 
   @doc """
@@ -1033,11 +935,64 @@ defmodule Engram.Links do
   end
 
   defp do_backlinks_for_note(user, note_id, dek, limit, distinct_sources?) do
-    edges =
-      Repo.all(backlinks_edges_query(user.id, note_id, limit, distinct_sources?),
+    user
+    |> backlink_edges(note_id, dek)
+    |> Enum.sort_by(&{&1.position, &1.id})
+    |> pick_backlinks(limit, distinct_sources?)
+    |> render_backlinks(user, dek)
+  end
+
+  # The edges that resolve to `note_id`: every edge in its vault naming its
+  # basename, resolved against the same candidates `links_for_note/2` uses.
+  # A deleted note is no candidate, so it has no backlinks.
+  defp backlink_edges(user, note_id, dek) do
+    live_note =
+      Repo.one(
+        from(n in Note,
+          where:
+            n.user_id == ^user.id and n.id == ^note_id and n.kind == "note" and
+              is_nil(n.deleted_at),
+          select: {n.vault_id, n.basename_hmac}
+        ),
         skip_tenant_check: true
       )
 
+    case live_note do
+      nil ->
+        []
+
+      {vault_id, hmac} ->
+        edges =
+          Repo.all(
+            from(l in NoteLink,
+              where:
+                l.user_id == ^user.id and l.vault_id == ^vault_id and
+                  l.target_basename_hmac == ^hmac,
+              select: map(l, ^@edge_read_fields)
+            ),
+            skip_tenant_check: true
+          )
+
+        texts = target_texts(edges, dek)
+        {resolved, _candidates} = resolve_edges(user, edges, texts, dek)
+        for {edge, {:note, ^note_id}} <- Enum.zip(edges, resolved), do: edge
+    end
+  end
+
+  # Default: one row per edge, first `limit` by (position, id).
+  defp pick_backlinks(sorted, limit, false), do: Enum.take(sorted, limit)
+
+  # One row per linking note (its first edge by position, id), ordered by
+  # source id, so `limit + 1` counts distinct linking notes, not link
+  # occurrences.
+  defp pick_backlinks(sorted, limit, true) do
+    sorted
+    |> Enum.uniq_by(& &1.source_note_id)
+    |> Enum.sort_by(& &1.source_note_id)
+    |> Enum.take(limit)
+  end
+
+  defp render_backlinks(edges, user, dek) do
     source_ids = edges |> Enum.map(& &1.source_note_id) |> Enum.uniq()
 
     sources =
@@ -1116,29 +1071,6 @@ defmodule Engram.Links do
     end)
   end
 
-  # Default: one row per edge, same where/order/limit as before this option
-  # existed, so every caller that omits `distinct_sources` is byte-identical.
-  defp backlinks_edges_query(user_id, note_id, limit, false) do
-    from(l in NoteLink,
-      where: l.user_id == ^user_id and l.target_note_id == ^note_id,
-      order_by: [asc: l.position, asc: l.id],
-      limit: ^limit
-    )
-  end
-
-  # DISTINCT ON collapses multiple edges from the same source note to its
-  # first (by position, id), so `limit + 1` here counts distinct linking
-  # notes, not link occurrences. Postgres requires the leading ORDER BY
-  # column to match the DISTINCT ON column.
-  defp backlinks_edges_query(user_id, note_id, limit, true) do
-    from(l in NoteLink,
-      where: l.user_id == ^user_id and l.target_note_id == ^note_id,
-      distinct: l.source_note_id,
-      order_by: [asc: l.source_note_id, asc: l.position, asc: l.id],
-      limit: ^limit
-    )
-  end
-
   # Read paths (called straight from controllers with `conn.assigns.current_user`)
   # can't trust that struct to carry a DEK: a same-request note write lazily
   # provisions the DEK via `Crypto.ensure_user_dek/1` deep inside `Notes`, but
@@ -1150,27 +1082,6 @@ defmodule Engram.Links do
   # current blob itself on a DekCache miss, so a pre-rotation struct is safe.
   defp reload_for_dek(%{encrypted_dek: blob} = user) when is_binary(blob), do: user
   defp reload_for_dek(%{id: id}), do: Engram.Accounts.get_user!(id)
-
-  defp decrypt_note_paths(_user, _dek, []), do: %{}
-
-  defp decrypt_note_paths(user, dek, note_ids) do
-    Repo.all(
-      from(n in Note,
-        where: n.user_id == ^user.id and n.kind == "note" and n.id in ^note_ids,
-        select: %{
-          id: n.id,
-          path_ciphertext: n.path_ciphertext,
-          path_nonce: n.path_nonce,
-          dek_version: n.dek_version
-        }
-      ),
-      skip_tenant_check: true
-    )
-    |> Map.new(fn n ->
-      {n.id,
-       decrypt_field(n.path_ciphertext, n.path_nonce, dek, n.dek_version, :notes, :path, n.id)}
-    end)
-  end
 
   # Mirrors `Engram.Crypto`'s private dek_version dispatch (legacy rows =
   # empty AAD, AAD-bound rows reconstruct the bind string from row

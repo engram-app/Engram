@@ -41,9 +41,8 @@ defmodule Engram.Links.Rewriter do
 
   Occurrence membership is decided by `Links.pre_rename_winner?/4`
   (pre-rename candidate reconstruction, prefetched once per walk via
-  `Links.pre_rename_candidates/5` on the `build_target/5` map), NOT by
-  current edge target ids — the `RebindNoteLinks` jobs the same rename
-  enqueues race this worker and flip those ids.
+  `Links.pre_rename_candidates/5` on the `build_target/5` map): edges store
+  no target ids, and reads already see the post-rename vault.
   """
 
   import Ecto.Query
@@ -267,10 +266,8 @@ defmodule Engram.Links.Rewriter do
 
   @doc """
   Distinct source-note ids with an edge whose `target_basename_hmac`
-  matches the renamed row's OLD basename. Keyed on the hmac (indexed), not
-  on current edge target ids — `RebindNoteLinks` flips ids concurrently
-  but never rewrites the stored hmac/text, so this set is stable however
-  the rename-enqueued jobs interleave.
+  matches the renamed row's OLD basename. Keyed on the hmac (indexed),
+  which a rename never rewrites, so this set is stable.
   """
   @spec source_note_ids(map(), map(), binary(), binary(), pos_integer()) :: [binary()]
   def source_note_ids(user, vault, old_basename_hmac, cursor, limit) do
