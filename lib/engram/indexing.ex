@@ -279,14 +279,19 @@ defmodule Engram.Indexing do
   defp plan_index(note, user, chunks, content_key, opts) do
     forced = floor_tier(note, opts)
     cap = note_points_cap(user)
-    capped = if forced, do: chunks, else: cap_chunks(chunks, cap, content_key)
+    rows = if forced, do: [], else: indexed_rows(note)
+
+    capped =
+      if forced,
+        do: chunks,
+        else: cap_chunks(chunks, cap, content_key, Enum.any?(rows, &(elem(&1, 3) != nil)))
 
     case forced || over_note_cap_tier(note, capped, cap) ||
            over_points_budget_tier(note, user, capped) do
       nil ->
         dense_opt = Keyword.get(opts, :dense, true)
         {dense?, plan, retained} =
-          plan_within_budget(note, capped, content_key, dense_opt, opts)
+          plan_within_budget(note, rows, capped, content_key, dense_opt, opts)
 
         {nil, dense?, plan, retained}
 
@@ -344,7 +349,12 @@ defmodule Engram.Indexing do
   content-defined group boundaries so an edit moves only the groups around
   it. `key` is the user's content hash key (`Crypto.dek_content_hash_key/1`).
 
-  Over the cap: `g` is the smallest power of two >= `1.25 * n / cap`,
+  Merges when `n > cap`, or when `merged?` (the note's stored points are
+  already merged) and `n > 0.75 * cap`: hysteresis, so an edit moving `n`
+  back and forth across the cap regroups the note once, not on every
+  crossing. A note un-merges only at or below 0.75 x cap.
+
+  `g` is the smallest power of two >= `1.25 * n / cap`, and at least 2,
   aiming at 0.4 to 0.8 x cap groups. A group closes after each chunk whose
   keyed hash is `0 mod g` (an HMAC under `key` of the same input the reuse
   fingerprint covers, under its own prefix), or before a chunk that would
@@ -353,7 +363,8 @@ defmodule Engram.Indexing do
   steps, i.e. when `n` doubles. More than `cap` groups doubles `g` and
   redoes it, up to `g >= n`; still over the cap there (the ceiling alone
   forces more groups) and the caller floors the note. Contiguous, in order,
-  no text dropped. Every chunk of a capped note is a merged chunk:
+  no text dropped. A group of one is its chunk unchanged (same fingerprint,
+  so it reuses the unmerged point). Every other group is a merged chunk:
 
     * `text`: the members' `text` joined with "\n\n"
     * `context_text` / `embed_text`: its first member's prefix + that text,
@@ -364,21 +375,35 @@ defmodule Engram.Indexing do
     * `token_count`: the members' `UsageMeters.estimate_tokens/1` sum
     * `merged: true`: its row stays out of `avgdl` and its keyword vector
       uses length `min(len, avgdl)`, as a floor point's does
+    * `members`: the chunks it was merged from
 
-  Positions are renumbered from 0. At or under the cap (or with a nil cap)
-  the list comes back unchanged.
+  Positions are renumbered from 0. Not merging (or with a nil cap) the list
+  comes back unchanged.
   """
-  @spec cap_chunks([map()], pos_integer() | nil, binary()) :: [map()]
-  def cap_chunks(chunks, cap, key) when is_integer(cap) and cap > 0 and length(chunks) > cap do
-    pairs = hashed(chunks, key)
+  @spec cap_chunks([map()], pos_integer() | nil, binary(), boolean()) :: [map()]
+  def cap_chunks(chunks, cap, key, merged? \\ false)
+
+  def cap_chunks(chunks, cap, key, merged?) when is_integer(cap) and cap > 0 do
     n = length(chunks)
 
-    pairs
-    |> content_groups(cap, pow2_at_least(div(5 * n + 4 * cap - 1, 4 * cap)), n)
-    |> merge_groups()
+    if merges?(n, cap, merged?) do
+      chunks
+      |> hashed(key)
+      |> content_groups(cap, pow2_at_least(max(2, div(5 * n + 4 * cap - 1, 4 * cap))), n)
+      |> merge_groups()
+    else
+      chunks
+    end
   end
 
-  def cap_chunks(chunks, _cap, _key), do: chunks
+  def cap_chunks(chunks, _cap, _key, _merged?), do: chunks
+
+  @doc """
+  Whether a note of `n` chunks merges under a per-note `cap`, given whether
+  its stored points are merged now. `ReconcileEmbeddings` unmerges a note
+  (an upgrade, a raised override) only where this says false.
+  """
+  def merges?(n, cap, merged?), do: n > cap or (merged? and 4 * n > 3 * cap)
 
   defp hashed(chunks, key) do
     hashes =
@@ -454,6 +479,8 @@ defmodule Engram.Indexing do
     |> Enum.concat()
   end
 
+  defp merge_group([single]), do: single
+
   defp merge_group([first | _] = members) do
     text = Enum.map_join(members, "\n\n", & &1.text)
 
@@ -463,7 +490,8 @@ defmodule Engram.Indexing do
       embed_text: prefix(first.embed_text, first.text) <> text,
       char_end: members |> Enum.map(& &1.char_end) |> Enum.max(),
       token_count: members |> Enum.map(&UsageMeters.estimate_tokens(&1.text)) |> Enum.sum(),
-      merged: true
+      merged: true,
+      members: members
     })
   end
 
@@ -1255,11 +1283,10 @@ defmodule Engram.Indexing do
   # not commit (`retain/1`, held across the commit). A hit skips the
   # reservation AND the embed, so a retry after any post-embed failure is
   # charged once.
-  defp plan_within_budget(note, chunks, content_key, false, _opts),
-    do: {false, plan_chunks(chunks, indexed_rows(note), content_key, false), nil}
+  defp plan_within_budget(_note, rows, chunks, content_key, false, _opts),
+    do: {false, plan_chunks(chunks, rows, content_key, false), nil}
 
-  defp plan_within_budget(note, chunks, content_key, true, opts) do
-    rows = indexed_rows(note)
+  defp plan_within_budget(note, rows, chunks, content_key, true, opts) do
     plan = plan_chunks(chunks, rows, content_key, true)
     texts = embed_texts(plan)
     reserve = Keyword.get(opts, :reserve_tokens, fn _tokens -> true end)
@@ -1498,8 +1525,12 @@ defmodule Engram.Indexing do
       Enum.zip_with(chunks, plan_fingerprints(content_key, chunks, dense?), fn chunk, hmac ->
         Map.put(chunk, :context_hmac, hmac)
       end)
+      |> with_member_hmacs(content_key, dense?)
 
-    existing = Enum.reject(rows, fn {_hmac, point_id, _tokens} -> is_nil(point_id) end)
+    existing =
+      for {hmac, point_id, tokens, _members} <- rows,
+          point_id != nil,
+          do: {hmac, point_id, tokens}
 
     # A nil hmac is a row written before the column existed, or one whose key
     # a DEK rotation invalidated. It names a real point that still has to be
@@ -1542,7 +1573,7 @@ defmodule Engram.Indexing do
       Repo.with_tenant(note.user_id, fn ->
         Chunk
         |> where([c], c.note_id == ^note.id)
-        |> select([c], {c.context_hmac, c.qdrant_point_id, c.token_count})
+        |> select([c], {c.context_hmac, c.qdrant_point_id, c.token_count, c.member_hmacs})
         |> Repo.all()
       end)
 
@@ -1580,12 +1611,75 @@ defmodule Engram.Indexing do
   defp dense_chunk?(chunk, dense?), do: dense? and chunk.kind == "prose"
 
   # A merged chunk's point holds a length-capped keyword vector and no
-  # `avgdl` length, so it never matches an unmerged one with the same text (a
-  # group of one) or the reverse: `merged/` in front.
+  # `avgdl` length, so it never matches an unmerged chunk with the same
+  # text, or the reverse: `merged/` in front, decided per chunk. A group of
+  # one is an unmerged chunk and keeps the plain fingerprint, so it reuses.
   defp fingerprints(content_key, chunks, dense?) do
     prefix = fingerprint_prefix(dense?)
-    prefix = if Enum.any?(chunks, &Map.get(&1, :merged)), do: "merged/" <> prefix, else: prefix
-    Engram.Native.hmac_hex_many(content_key, prefix, Enum.map(chunks, &fingerprint_input/1))
+    merged? = &Map.get(&1, :merged, false)
+    {merged, plain} = Enum.split_with(chunks, merged?)
+
+    hmacs =
+      &Engram.Native.hmac_hex_many(
+        content_key,
+        &1,
+        Enum.map(&2, fn c -> fingerprint_input(c) end)
+      )
+
+    restitch(chunks, merged?, hmacs.("merged/" <> prefix, merged), hmacs.(prefix, plain))
+  end
+
+  # Each merged chunk's members' own fingerprints (the ones they would have
+  # unmerged), leading 16 hex chars: what `chunks.member_hmacs` stores.
+  defp with_member_hmacs(chunks, content_key, dense?) do
+    members = for %{merged: true, members: ms} <- chunks, m <- ms, do: fingerprint_input(m)
+
+    {chunks, []} =
+      Enum.map_reduce(
+        chunks,
+        Engram.Native.hmac_hex_many(content_key, fingerprint_prefix(dense?), members),
+        fn
+          %{merged: true, members: ms} = chunk, hmacs ->
+            {mine, rest} = Enum.split(hmacs, length(ms))
+            {Map.put(chunk, :member_hmacs, Enum.map(mine, &binary_part(&1, 0, 16))), rest}
+
+          chunk, hmacs ->
+            {chunk, hmacs}
+        end
+      )
+
+    chunks
+  end
+
+  # Results computed separately for the chunks `pred` holds for (`yes`) and
+  # the rest (`no`), each in `chunks` order, merged back into that order.
+  defp restitch(chunks, pred, yes, no) do
+    {out, {[], []}} =
+      Enum.map_reduce(chunks, {yes, no}, fn chunk, {y, n} ->
+        if pred.(chunk), do: {hd(y), {tl(y), n}}, else: {hd(n), {y, tl(n)}}
+      end)
+
+    out
+  end
+
+  # Floor and merged chunks encode length-capped (`cap_doc_len`), the rest
+  # as usual: one call each, results in `chunks` order.
+  defp encode_sparse(chunks, filter_key, avgdl, language) do
+    {capped, plain} = Enum.split_with(chunks, &capped_length?/1)
+    texts = &Enum.map(&1, fn chunk -> chunk.context_text end)
+
+    capped_vectors =
+      if capped == [],
+        do: [],
+        else:
+          KeywordIndex.module().encode_documents(texts.(capped), filter_key, avgdl, language,
+            cap_doc_len: true
+          )
+
+    plain_vectors =
+      KeywordIndex.module().encode_documents(texts.(plain), filter_key, avgdl, language)
+
+    restitch(chunks, &capped_length?/1, capped_vectors, plain_vectors)
   end
 
   # Both inputs: `context_text` (keyword vector, payload) and `embed_text`
@@ -1690,33 +1784,27 @@ defmodule Engram.Indexing do
         (length(rows) < length(chunks) and merged_like(chunks, content_key, length(rows))) ||
           chunks
 
-      merged? = Enum.any?(chunks, &capped_length?/1)
-
       case match_stored_points(rows, chunks, content_key) do
         {[], unmatched} ->
           {:ok, 0, unmatched}
 
         {matched, unmatched} ->
           avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id)
-          texts = Enum.map(matched, fn {chunk, _point_id} -> chunk.context_text end)
           language = note_language(chunks)
-
-          sparse =
-            if merged?,
-              do:
-                KeywordIndex.module().encode_documents(texts, filter_key, avgdl, language,
-                  cap_doc_len: true
-                ),
-              else: KeywordIndex.module().encode_documents(texts, filter_key, avgdl, language)
+          sparse = encode_sparse(Enum.map(matched, &elem(&1, 0)), filter_key, avgdl, language)
 
           {points, lengths} =
-            Enum.zip_with(matched, sparse, fn {_chunk, point_id}, {vector, doc_len} ->
-              {%{id: point_id, vector: %{"keyword" => vector}}, {point_id, doc_len}}
+            Enum.zip_with(matched, sparse, fn {chunk, point_id}, {vector, doc_len} ->
+              {%{id: point_id, vector: %{"keyword" => vector}},
+               {point_id, if(capped_length?(chunk), do: nil, else: doc_len)}}
             end)
             |> Enum.unzip()
 
+          # A merged point's length stays NULL; only unmerged rows write theirs.
+          lengths = Enum.reject(lengths, &is_nil(elem(&1, 1)))
+
           with :ok <- update_vectors_batched(points),
-               :ok <- if(merged?, do: :ok, else: persist_token_counts(note, lengths)),
+               :ok <- if(lengths == [], do: :ok, else: persist_token_counts(note, lengths)),
                do: {:ok, length(points), unmatched}
       end
     end
@@ -1917,15 +2005,8 @@ defmodule Engram.Indexing do
     # (dirty CPU scheduler) tokenizes all of it, unbounded by `@docs_per_call`.
     # Fine for notes of a few MB; split the text and merge term counts if a
     # floor encode ever shows up as a long dirty-scheduler hold.
-    texts = for({:embed, chunk} <- plan.entries, do: chunk.context_text)
-
     sparse =
-      if Enum.any?(plan.entries, &capped_length?(entry_chunk(&1))),
-        do:
-          KeywordIndex.module().encode_documents(texts, filter_key, avgdl, language,
-            cap_doc_len: true
-          ),
-        else: KeywordIndex.module().encode_documents(texts, filter_key, avgdl, language)
+      encode_sparse(for({:embed, chunk} <- plan.entries, do: chunk), filter_key, avgdl, language)
 
     prepared =
       Enum.reduce_while(
@@ -2051,6 +2132,7 @@ defmodule Engram.Indexing do
       token_count: token_count,
       qdrant_point_id: point_id,
       context_hmac: chunk.context_hmac,
+      member_hmacs: Map.get(chunk, :member_hmacs),
       created_at: now
     }
   end

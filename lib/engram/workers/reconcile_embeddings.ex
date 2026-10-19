@@ -39,6 +39,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   alias Engram.Billing
   alias Engram.Billing.Subscription
   alias Engram.DataMigrations.IndexVersions
+  alias Engram.Indexing
   alias Engram.Logger.Metadata
   alias Engram.Notes.{Chunk, Note}
   alias Engram.Repo
@@ -459,7 +460,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       note_cap = user_cap(caps.note, id, tier, 1)
       user = %{id: id, cap: cap, note_cap: note_cap}
       fits? = &(is_nil(cap) or 10 * (points + &1) < 9 * cap)
-      under_note_cap? = &(is_nil(note_cap) or &1 <= note_cap)
+      unmerges? = &(is_nil(note_cap) or not Indexing.merges?(&1, note_cap, true))
       floor = Map.get(floors, id)
       unmerge = Map.get(merged, id)
 
@@ -468,7 +469,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
           [{0, cap - points, user}]
 
         (floor && fits?.(min(floor, note_cap || floor))) ||
-            (unmerge && under_note_cap?.(unmerge) && fits?.(unmerge)) ->
+            (unmerge && unmerges?.(unmerge) && fits?.(unmerge)) ->
           [{1, :erlang.phash2({id, tick}), user}]
 
         true ->
@@ -675,8 +676,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   end
 
   # A floor note (fully floored: one keyword row), or a merged note whose
-  # natural chunk count now fits its per-note cap (an upgrade or a raised
-  # override), which a recap pass unmerges.
+  # natural chunk count now un-merges under its per-note cap (an upgrade or
+  # a raised override; at or below 0.75 x cap, `Indexing.merges?/3`), which a
+  # recap pass unmerges.
   defp promotion(n, note_cap) do
     est = n.chunk_count || max(div(n.span + @chars_per_point - 1, @chars_per_point), 1)
     est = if note_cap, do: min(est, note_cap), else: est
@@ -687,7 +689,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         [{n, %{index_budget: "promote", budget_points: est, unmetered: unmetered}}]
 
       is_nil(n.tier) and n.dense == true and n.chunk_count != nil and
-          (is_nil(note_cap) or n.chunk_count <= note_cap) ->
+          (is_nil(note_cap) or not Indexing.merges?(n.chunk_count, note_cap, true)) ->
         [{n, %{recap: true, budget_points: est, unmetered: true}}]
 
       true ->
