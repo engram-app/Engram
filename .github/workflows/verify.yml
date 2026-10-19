@@ -609,6 +609,12 @@ jobs:
           # the job (issue #334, upstream docker/buildx bug). Plain writer = no
           # such goroutine.
           BUILDKIT_PROGRESS: plain
+          # The build FROMs a LOCAL tag (engram-deps:<hash>, see below). Only the
+          # docker-driver builder shares the daemon's image store; a runner whose
+          # current builder is docker-container resolves that tag against
+          # docker.io and fails "pull access denied" on every retry (#2044,
+          # runner-5). `default` is always the docker driver for the context.
+          BUILDX_BUILDER: default
           # `ci/compose.yml` declares these with the `:?` (required) form, which
           # docker compose enforces while PARSING the file — so even
           # `docker compose build engram`, which needs no object storage at all,
