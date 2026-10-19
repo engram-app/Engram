@@ -571,6 +571,12 @@ defmodule Engram.Workers.EmbedNote do
 
             {:snooze, snooze_seconds_on_429()}
 
+          # The index budget moved the note's tier while this pass was
+          # planned or ran: not an embed failure. Rerun from the new tier,
+          # without spending an attempt or counting toward poison parking.
+          {:error, :index_tier_changed} ->
+            {:snooze, 5}
+
           {:error, reason} ->
             # Per-attempt failure (Voyage non-429 / Qdrant). Previously
             # silent until the terminal discard after 5 retries — log it now

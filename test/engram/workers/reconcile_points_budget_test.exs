@@ -44,26 +44,49 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
   Echo section text.
   """
 
+  # Fake Qdrant: `status` is the collection status, `refuse` (:upsert or
+  # :delete) answers that write 403 as strict mode would, and every write is
+  # recorded in `writes` as {kind, body}.
   setup do
-    {:ok, status} = Agent.start_link(fn -> "green" end)
+    {:ok, qdrant} = Agent.start_link(fn -> %{status: "green", refuse: nil, writes: []} end)
     bypass = Bypass.open()
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
 
     Bypass.stub(bypass, :any, :any, fn conn ->
-      body =
-        if conn.method == "GET",
-          do: ~s({"result": {"status": "#{Agent.get(status, & &1)}"}}),
-          else: ~s({"result": true})
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+
+      kind =
+        cond do
+          conn.method == "GET" -> :read
+          conn.method == "PUT" and String.ends_with?(conn.request_path, "/points") -> :upsert
+          String.ends_with?(conn.request_path, "/points/delete") -> :delete
+          true -> :other
+        end
+
+      state = Agent.get(qdrant, & &1)
+      if kind != :read, do: Agent.update(qdrant, &%{&1 | writes: &1.writes ++ [{kind, raw}]})
+
+      {code, body} =
+        cond do
+          kind == :read -> {200, ~s({"result": {"status": "#{state.status}"}})}
+          state.refuse == kind -> {403, ~s({"status": {"error": "strict mode"}})}
+          true -> {200, ~s({"result": true})}
+        end
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, body)
+      |> Plug.Conn.send_resp(code, body)
     end)
 
     {:ok, user} = Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user, is_default: true)
-    %{user: user, vault: vault, status: status}
+    %{user: user, vault: vault, qdrant: qdrant}
   end
+
+  defp qdrant_set(qdrant, changes), do: Agent.update(qdrant, &Map.merge(&1, Map.new(changes)))
+
+  defp writes(qdrant, kind),
+    do: for({^kind, body} <- Agent.get(qdrant, & &1.writes), do: Jason.decode!(body))
 
   defp cap, do: LimitKeys.default_for(:index_points_cap, :free)
 
@@ -144,7 +167,7 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
   # `span` characters, newest last.
   defp floor_notes(user, vault, n, tier, span, opts \\ []) do
     ids = full_notes(user, vault, n, 0, Keyword.put(opts, :dense, false))
-    stamp!(user, ids, index_tier: tier)
+    stamp!(user, ids, index_tier: tier, chunk_count: Keyword.get(opts, :chunk_count))
     seed_rows!(user, vault, ids, 1, token_count: nil, context_hmac: nil, char_end: span)
     ids
   end
@@ -285,6 +308,7 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
     assert :ok = perform_job(EmbedNote, %{"note_id" => note.id, "user_id" => user.id})
     assert [%{token_count: nil}] = rows_for(note)
     assert reload(note).index_tier == tier
+    assert reload(note).chunk_count == 5
     reload(note)
   end
 
@@ -324,7 +348,7 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
     test "1,000 over-cap notes demote 200 per tick across five ticks; red pauses", %{
       user: user,
       vault: vault,
-      status: status
+      qdrant: qdrant
     } do
       # An override keeps the fixture small (and covers overrides): 1,000 old
       # 2-row notes, then 10 notes of 100 rows, so that keeping any old note
@@ -333,10 +357,10 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
       old = full_notes(user, vault, 1_000, 2, offset: 10_000)
       _new = full_notes(user, vault, 10, 100)
 
-      Agent.update(status, fn _ -> "red" end)
+      qdrant_set(qdrant, status: "red")
       assert {:ok, %{demoted: 0, promoted: 0}} = ReconcileEmbeddings.budget_sweep(20)
       assert Enum.all?(Map.values(tiers(user, old)), &is_nil/1)
-      Agent.update(status, fn _ -> "green" end)
+      qdrant_set(qdrant, status: "green")
 
       for _tick <- 1..5 do
         assert {:ok, %{demoted: 200}} = ReconcileEmbeddings.budget_sweep(20)
@@ -373,9 +397,10 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
       user: user,
       vault: vault
     } do
-      # Each floor note spans 100 KiB: about 100 points once promoted.
+      # Each floor note's stamped chunk count is 100: what it costs once
+      # promoted (its 1-character span would estimate 1).
       filler(user, vault, div(cap() * 85, 100) - 10)
-      floors = floor_notes(user, vault, 10, "floor", 100 * 1024)
+      floors = floor_notes(user, vault, 10, "floor", 1, chunk_count: 100)
       assert points(user) == div(cap() * 85, 100)
 
       assert {:ok, %{demoted: 0, promoted: promoted}} = ReconcileEmbeddings.budget_sweep(20)
@@ -409,6 +434,7 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
       assert promoted.index_tier == nil
       assert promoted.dense_indexed_hash == promoted.content_hash
       assert length(rows_for(note)) == 5
+      assert promoted.chunk_count == nil
       assert UsageMeters.lifetime_embed_tokens(user.id) == before
     end
 
@@ -457,7 +483,9 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
         char_end: 300 * 1024
       )
 
-      # On Free (cap 128) 60 merged points are what the cap built: left alone.
+      stamp!(user, [merged], chunk_count: 300)
+
+      # 300 chunks do not fit Free's per-note cap of 128: left merged.
       assert {:ok, %{promoted: 0}} = ReconcileEmbeddings.budget_sweep(20)
 
       insert(:subscription, user: user, tier: "pro", status: "active")
@@ -492,11 +520,13 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
   describe "tier writes compare-and-set" do
     test "a floor pass started before a promotion cannot re-stamp it floor", %{
       user: user,
-      vault: vault
+      vault: vault,
+      qdrant: qdrant
     } do
       note = floored_note(user, vault, "floor")
       {:ok, stale} = Crypto.maybe_decrypt_note_fields(note, user)
       [floor_row] = rows_for(note)
+      qdrant_set(qdrant, writes: [])
 
       # The promotion lands while the floor pass runs.
       Repo.with_tenant(user.id, fn ->
@@ -508,17 +538,43 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
 
       assert reload(note).index_tier == nil
       assert [^floor_row] = rows_for(note)
+      assert writes(qdrant, :upsert) == [] and writes(qdrant, :delete) == []
     end
 
-    test "a full pass started before a demotion cannot clear it", %{user: user, vault: vault} do
+    # Lost before planning: no Voyage call, no Qdrant write.
+    test "a full pass started before a demotion cannot clear it", %{
+      user: user,
+      vault: vault,
+      qdrant: qdrant
+    } do
       note = Engram.Fixtures.insert_note!(user, vault, %{path: "Five.md", content: @content})
       {:ok, stale} = Crypto.maybe_decrypt_note_fields(note, user)
-      stub_embedder()
+      Mox.expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("embedded") end)
 
       stamp!(user, [note.id], index_tier: "floor")
 
       assert {:error, :index_tier_changed} =
                Indexing.index_note_with_usage(stale, vault, user, [])
+
+      assert reload(note).index_tier == "floor"
+      assert rows_for(note) == []
+      assert writes(qdrant, :upsert) == [] and writes(qdrant, :delete) == []
+    end
+
+    # Lost during the pass (the demotion lands while it reserves tokens):
+    # refused at commit, rows untouched.
+    test "a demotion landing mid-pass is refused at commit", %{user: user, vault: vault} do
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "Five.md", content: @content})
+      {:ok, decrypted} = Crypto.maybe_decrypt_note_fields(note, user)
+      stub_embedder()
+
+      demote = fn _tokens ->
+        stamp!(user, [note.id], index_tier: "floor")
+        true
+      end
+
+      assert {:error, :index_tier_changed} =
+               Indexing.index_note_with_usage(decrypted, vault, user, reserve_tokens: demote)
 
       assert reload(note).index_tier == "floor"
       assert rows_for(note) == []
@@ -602,4 +658,97 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
       assert reload(note).index_tier == "floor_paid"
     end
   end
+
+  describe "review fixes" do
+    test "users with nothing promotable never crowd out one that can promote", %{vault: vault} do
+      # 24 Free users whose merged notes still exceed the 128 per-note cap,
+      # and the user ranked last by id with a floor note: one tick.
+      users =
+        for _ <- 1..25 do
+          {:ok, u} = Crypto.ensure_user_dek(insert(:user))
+          {u, insert(:vault, user: u, is_default: true)}
+        end
+        |> Enum.sort_by(fn {u, _} -> u.id end)
+
+      _ = vault
+      {stuck, [{last, last_vault}]} = Enum.split(users, 24)
+
+      for {u, v} <- stuck do
+        [merged] = full_notes(u, v, 1, 0)
+        seed_rows!(u, v, [merged], 60, token_count: nil, context_hmac: "h", char_end: 1)
+        stamp!(u, [merged], chunk_count: 500)
+      end
+
+      [floor] = floor_notes(last, last_vault, 1, "floor", 1, chunk_count: 3)
+
+      assert {:ok, %{promoted: 1}} = ReconcileEmbeddings.budget_sweep(20)
+      assert [job] = budget_jobs(key: "index_budget", value: "promote")
+      assert job.args["note_id"] == floor
+    end
+
+    test "a refused floor write leaves the old index and tier", %{
+      user: user,
+      vault: vault,
+      qdrant: qdrant
+    } do
+      note = dense_note(user, vault)
+      old_rows = rows_for(note)
+      stamp!(user, [note.id], index_tier: "floor_paid")
+      qdrant_set(qdrant, refuse: :upsert, writes: [])
+
+      assert {:error, _} = perform_job(RebuildStaleNote, demote_args(note))
+      assert rows_for(note) == old_rows
+      assert reload(note).index_tier == "floor_paid"
+      assert writes(qdrant, :delete) == []
+    end
+
+    test "a refused delete leaves floor and old points; the retry finishes", %{
+      user: user,
+      vault: vault,
+      qdrant: qdrant
+    } do
+      note = dense_note(user, vault)
+      old_ids = Enum.map(rows_for(note), & &1.qdrant_point_id)
+      stamp!(user, [note.id], index_tier: "floor_paid")
+      qdrant_set(qdrant, refuse: :delete, writes: [])
+
+      assert {:error, _} = perform_job(RebuildStaleNote, demote_args(note))
+      assert [%{token_count: nil, qdrant_point_id: floor_id}] = rows_for(note)
+      # The floor point was written before any delete was asked for.
+      assert [:upsert, :delete] =
+               for({kind, _} <- Agent.get(qdrant, & &1.writes), kind != :other, do: kind)
+
+      qdrant_set(qdrant, refuse: nil, writes: [])
+      assert :ok = perform_job(RebuildStaleNote, demote_args(note))
+      assert [%{token_count: nil, qdrant_point_id: new_floor}] = rows_for(note)
+
+      [by_id, by_path] = writes(qdrant, :delete)
+      assert by_id["points"] == [floor_id]
+      assert by_path["filter"]["must_not"] == [%{"has_id" => [new_floor]}]
+      refute new_floor in old_ids
+    end
+
+    test "only a recent pass stamp keeps a note from demotion", %{user: user, vault: vault} do
+      insert(:user_limit_override, user: user, key: "index_points_cap", value: %{"v" => 3})
+      [old, _new] = full_notes(user, vault, 2, 2)
+
+      stamp!(user, [old], embed_started_at: DateTime.utc_now())
+      assert {:ok, %{demoted: 0}} = ReconcileEmbeddings.budget_sweep(20)
+
+      stamp!(user, [old], embed_started_at: DateTime.add(DateTime.utc_now(), -3_600, :second))
+      assert {:ok, %{demoted: 1}} = ReconcileEmbeddings.budget_sweep(20)
+      assert tiers(user, [old]) == %{old => "floor_paid"}
+    end
+  end
+
+  defp dense_note(user, vault) do
+    stub_embedder()
+    note = Engram.Fixtures.insert_note!(user, vault, %{path: "Five.md", content: @content})
+    assert :ok = perform_job(EmbedNote, %{"note_id" => note.id, "user_id" => user.id})
+    assert length(rows_for(note)) == 5
+    reload(note)
+  end
+
+  defp demote_args(note),
+    do: %{"note_id" => note.id, "user_id" => note.user_id, "index_budget" => "demote"}
 end
