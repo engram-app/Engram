@@ -2119,7 +2119,13 @@ jobs:
           # template-interpolated into this script — no command-injection surface.
           E2E_K="${E2E_PATTERN:-}"
           K_ARGS=(); [ -n "$E2E_K" ] && K_ARGS=(-k "$E2E_K")
-          python3 -m pytest tests/api_only/ "${K_ARGS[@]}" -v --timeout=600 -p no:cacheprovider --no-header
+          # Only the local-auth-specific tests. The rest of tests/api_only/ is
+          # auth-agnostic and already runs in e2e-clerk; re-running it here cost
+          # ~130s of this job's critical path (embedding waits in test_50, 67,
+          # 76, 77) for zero extra coverage. test_61 is the explicit
+          # "same behavior under either provider" check, so it stays.
+          python3 -m pytest tests/api_only/local/ tests/api_only/test_61_auth_agnostic.py \
+            "${K_ARGS[@]}" -v --timeout=600 -p no:cacheprovider --no-header
 
       # always(): a local-auth API failure above must not mask the CRDT suite's
       # signal (the job still fails on the failed step).
