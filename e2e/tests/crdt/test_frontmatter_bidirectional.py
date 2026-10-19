@@ -30,7 +30,6 @@ Coverage map, deliberately both directions and both bindings:
 
 from __future__ import annotations
 
-import os
 import time
 
 import pytest
@@ -38,11 +37,6 @@ from playwright.async_api import expect
 
 from helpers.latency import DELIVERY_TIMEOUT
 from helpers.vault import read_note, wait_for_content, write_note
-
-pytestmark = pytest.mark.skipif(
-    os.environ.get("E2E_ENABLE_CRDT") != "true",
-    reason="CRDT-only suite — set E2E_ENABLE_CRDT=true with a CRDT_ENABLED backend",
-)
 
 CRDT_TIMEOUT = DELIVERY_TIMEOUT
 MS = CRDT_TIMEOUT * 1_000

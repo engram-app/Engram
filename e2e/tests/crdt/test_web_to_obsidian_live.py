@@ -21,7 +21,6 @@ one specific delivery leg.
 from __future__ import annotations
 
 import logging
-import os
 import time
 
 import pytest
@@ -30,11 +29,6 @@ from helpers.vault import wait_for_content
 from helpers.latency import DELIVERY_TIMEOUT
 
 logger = logging.getLogger(__name__)
-
-pytestmark = pytest.mark.skipif(
-    os.environ.get("E2E_ENABLE_CRDT") != "true",
-    reason="CRDT-only suite — set E2E_ENABLE_CRDT=true with a CRDT_ENABLED backend",
-)
 
 CRDT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound, not a latency assert
 

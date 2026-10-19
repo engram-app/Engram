@@ -24,7 +24,6 @@ a post-D3 plugin with a broken handshake path times out on content.
 
 from __future__ import annotations
 
-import os
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -34,11 +33,6 @@ from helpers.backend_rpc import backend_rpc
 from helpers.latency import DELIVERY_TIMEOUT
 from helpers.log_oracle import wait_for_client_log
 from helpers.vault import read_note, wait_for_content
-
-pytestmark = pytest.mark.skipif(
-    os.environ.get("E2E_ENABLE_CRDT") != "true",
-    reason="CRDT-only suite — set E2E_ENABLE_CRDT=true with a CRDT_ENABLED backend",
-)
 
 CRDT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound, not a latency assert
 

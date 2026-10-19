@@ -1,9 +1,9 @@
 """CRDT file-level sync e2e (spec §12a).
 
 These tests exercise behaviours that are UNIQUE to the CRDT sync path and the
-regressions that broke it. They run only when the harness opted the plugin into
-CRDT (``E2E_ENABLE_CRDT=true``) against a backend that advertises the ``crdt:``
-topic (``CRDT_ENABLED=true``); otherwise they skip.
+regressions that broke it. CRDT is the only sync path (the plugin retired its
+``enableCrdt`` setting and the backend always advertises the ``crdt:`` topic),
+so they run unconditionally.
 
 CRDT-aware assertions: unlike the legacy REST path, a CRDT note is
 eventually-consistent. The body is delivered device->device over the
@@ -15,18 +15,12 @@ immediate read-after-write.
 
 from __future__ import annotations
 
-import os
 
 import pytest
 
 from helpers.log_oracle import wait_for_delivery
 from helpers.vault import delete_note, wait_for_content, wait_for_file_gone, write_note
 from helpers.latency import DELIVERY_TIMEOUT
-
-pytestmark = pytest.mark.skipif(
-    os.environ.get("E2E_ENABLE_CRDT") != "true",
-    reason="CRDT-only suite — set E2E_ENABLE_CRDT=true with a CRDT_ENABLED backend",
-)
 
 # CRDT delivery = server checkpoint debounce (~5s) + handshake; be generous.
 CRDT_TIMEOUT = DELIVERY_TIMEOUT  # true-breakage bound, not a latency assert

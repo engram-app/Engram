@@ -15,16 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 
 import pytest
 
 from helpers.vault import wait_for_content, write_note
-
-pytestmark = pytest.mark.skipif(
-    os.environ.get("E2E_ENABLE_CRDT") != "true",
-    reason="CRDT-only suite — set E2E_ENABLE_CRDT=true with a CRDT_ENABLED backend",
-)
 
 CRDT_TIMEOUT = 30
 DRIFT_ATTEMPTS = 5

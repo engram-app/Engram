@@ -1,6 +1,7 @@
 """First-sync a set of frontmatter shapes and report what the sync did to them.
 
-Shared by test_101 (no conflict copies) and test_102 (disk bytes untouched).
+Used by test_101 (no conflict copies). The red test_102 (disk bytes untouched)
+lives on branch `test/frontmatter-fidelity-repro` until #1928 fix 2 lands.
 """
 
 from __future__ import annotations

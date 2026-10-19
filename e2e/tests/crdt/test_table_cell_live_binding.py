@@ -25,18 +25,12 @@ The oracles, weakest to strongest:
 
 from __future__ import annotations
 
-import os
 import time
 
 import pytest
 
 from helpers.latency import DELIVERY_TIMEOUT
 from helpers.vault import read_note, write_note
-
-pytestmark = pytest.mark.skipif(
-    os.environ.get("E2E_ENABLE_CRDT") != "true",
-    reason="CRDT-only suite — set E2E_ENABLE_CRDT=true with a CRDT_ENABLED backend",
-)
 
 CRDT_TIMEOUT = DELIVERY_TIMEOUT
 
@@ -85,7 +79,7 @@ async def _stage_clicked_cell(cdp, vault, api, cell_text: str) -> tuple[str, dic
     baseline = await cdp.live_viewer_count(PATH)
     assert baseline == 1, (
         f"expected exactly 1 live-bound view for the open note, got {baseline} "
-        "(-1 means the CRDT layer never wired up — check E2E_ENABLE_CRDT)"
+        "(-1 means the CRDT layer never wired up)"
     )
 
     result = await cdp.enter_table_cell(cell_text)
