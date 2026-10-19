@@ -118,6 +118,16 @@ export function anyNoteUrlRe(noteId: number | string): RegExp {
 	return new RegExp(`/${noteId}(?:[?#]|$)`, "u");
 }
 
+// Signs in through the local-auth form and waits until the page has left
+// /sign-in. Callers assert where they expect to land.
+export async function signIn(page: Page, email: string, password = PASS): Promise<void> {
+	await page.goto("/sign-in/");
+	await page.getByLabel("Email").fill(email);
+	await page.getByLabel("Password", { exact: true }).fill(password);
+	await page.getByRole("button", { name: /sign in/iu }).click();
+	await expect(page).not.toHaveURL(/\/sign-in/u, { timeout: 15_000 });
+}
+
 // Navigates straight to the legacy /note/:id, which the AuthGuard redirects to
 // /sign-in. Seeds localStorage["engram.activeVaultId"] on the sign-in page
 // BEFORE completing sign-in, not after, so the value survives the

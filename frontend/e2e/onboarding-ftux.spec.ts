@@ -1,57 +1,6 @@
-import fs from "node:fs";
-import path from "node:path";
-import { clerk, setupClerkTestingToken } from "@clerk/testing/playwright";
-import { expect, type Page, test } from "@playwright/test";
-
-// Mirrors clerk-auth.spec.ts — same auth-state file, same sign-in retry pattern.
-// Kept in this file (not extracted) so the FTUX spec stands alone and the auth
-// spec stays the canonical example for new authors. If a third Clerk spec lands,
-// promote both copies into e2e/clerk-helpers.ts.
-
-const AUTH_STATE_PATH = path.join(__dirname, ".auth-state.json");
-
-function loadAuthState(): {
-	email: string;
-	password: string;
-	clerk_user_id: string;
-	skipped: boolean;
-} {
-	if (!fs.existsSync(AUTH_STATE_PATH)) {
-		return { email: "", password: "", clerk_user_id: "", skipped: true };
-	}
-	return JSON.parse(fs.readFileSync(AUTH_STATE_PATH, "utf-8"));
-}
-
-async function clerkSignIn(page: Page, email: string) {
-	await page.goto("/sign-in/");
-	// global-setup's waitUntilEmailResolvable confirms the email resolves on ONE
-	// Clerk replica, but a later clerk.signIn can hit a lagging replica and still
-	// 'No user found' (#455) — cross-replica eventual consistency, not a logic
-	// bug, so riding it out is the correct handling. The old flat 5×1s=5s budget
-	// was too tight under CI load; back off to a ~20s budget. Any error that is
-	// NOT 'No user found' is a real failure and rethrows immediately.
-	const deadline = Date.now() + 20_000;
-	let backoff = 500;
-	let lastErr: unknown;
-	while (Date.now() < deadline) {
-		try {
-			await clerk.signIn({ page, emailAddress: email });
-			lastErr = undefined;
-			break;
-		} catch (err) {
-			if (!/No user found/iu.test(String(err))) {
-				throw err;
-			}
-			lastErr = err;
-			await page.waitForTimeout(Math.min(backoff, Math.max(0, deadline - Date.now())));
-			backoff = Math.min(backoff * 2, 4000);
-		}
-	}
-	if (lastErr) {
-		throw lastErr;
-	}
-	await page.goto("/");
-}
+import { setupClerkTestingToken } from "@clerk/testing/playwright";
+import { expect, test } from "@playwright/test";
+import { clerkSignIn, loadAuthState } from "./clerk-helpers";
 
 test.describe("FTUX happy path", () => {
 	const state = loadAuthState();

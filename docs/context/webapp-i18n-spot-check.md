@@ -78,7 +78,7 @@ App is at http://127.0.0.1:5173 through the SSH tunnel (see `local-browser-cdp-t
 
 See "Validation (browser level)" in `docs/context/webapp-i18n.md`:
 
-- `e2e/i18n-detection.spec.ts`: each browser locale lands on the right `<html lang>` and catalog heading; fallbacks; stored pick wins; picker switch.
+- `e2e/i18n-detection.spec.ts`: picker switch. Detection and fallbacks are unit-tested (`src/i18n/locales.test.ts`, `storage.test.ts`, `locale-provider.test.tsx`).
 - `e2e/i18n-onboarding.spec.ts` (self-host) and `e2e/i18n-onboarding-clerk.spec.ts` (SaaS): per-step leak detector (`e2e/support/i18n-leaks.ts`).
 - `src/i18n/keys.test.ts`: parity, orphans, placeholders, hidden translator calls.
 
