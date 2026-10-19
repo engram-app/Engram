@@ -357,6 +357,7 @@ config :logger, :default_formatter,
     :queue,
     :reason,
     :reason_label,
+    :rejected_type,
     # Engram.Logs re-emit: identical client lines in one batch, written once.
     :repeat,
     :replacement,
