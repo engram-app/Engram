@@ -96,6 +96,25 @@ defmodule Engram.Vector.QdrantLayout do
         do: {field, limits[kind].percent}
   end
 
+  @doc """
+  The strict-mode limits `config` (a GET `result.config`) says Qdrant
+  enforces, `%{kind => percent}`, only for guards `version` honours (a 1.19
+  server may keep a stored disk field it ignores). `%{}` when strict mode is
+  off or nothing is set.
+  """
+  @spec applied_limits(map() | nil, Version.t() | nil) :: %{optional(:heap | :disk) => integer()}
+  def applied_limits(config, version) do
+    strict = (config || %{})["strict_mode_config"] || %{}
+    kinds = guard_kinds(version)
+
+    for {field, kind, _since, _until} <- @strict_guards,
+        strict["enabled"] == true,
+        kind in kinds,
+        is_integer(strict[field]),
+        into: %{},
+        do: {kind, strict[field]}
+  end
+
   @doc "The strict-mode guards (`:heap`, `:disk`) `version` honours; `[]` when unknown."
   @spec guard_kinds(Version.t() | nil) :: [:heap | :disk]
   def guard_kinds(nil), do: []

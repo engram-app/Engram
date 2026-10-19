@@ -17,32 +17,41 @@ defmodule Engram.PromEx.Qdrant do
     * `engram_prom_ex_qdrant_request_total` — counter for ops/sec by op +
       status (error-rate derivable).
 
-  Polled every 60s on EVERY node, from `GET /collections/{name}` and
-  `GET /collections/{name}/memory` (Qdrant 1.18+; a 404 on older servers just
-  skips the memory gauges). Cost: ~2 small GETs per node per minute, plus the
-  pressure reads. Every node publishing keeps every series live: a node that
-  stopped polling would hold its PromEx `last_value` forever, and a frozen
-  `optimizer_ok=1` masks a `max() < 1` alert.
+  Polled every 60s on EVERY node. Each tick makes 4 GETs per node:
+  `/collections/{name}`, `/collections/{name}/memory` (Qdrant 1.18+; a 404 on
+  older servers skips the memory gauges), `/sys_metrics` and `/metrics` (only
+  with `QDRANT_MEMORY_LIMIT_BYTES`). `/memory` is fetched once and shared by
+  the gauges and the strict limits; `GET /` (version) is node-cached for 10m.
+  Three stages (health, memory, pressure + reconcile) fail independently, so
+  a pressure read that raises cannot skip the health gauges.
 
     * `engram_prom_ex_qdrant_collection_green` (1/0),
       `engram_prom_ex_qdrant_optimizer_ok` (1/0),
       `engram_prom_ex_qdrant_points`, `engram_prom_ex_qdrant_segments`
+    * `engram_prom_ex_qdrant_last_poll_timestamp_seconds`: unix time of this
+      node's last successful `GET /collections/{name}`, set with the health
+      gauges. A failed GET leaves every gauge at its old value (PromEx
+      `last_value`), so alerts MUST drop a node whose timestamp is older than
+      a few ticks, and alert when no node is fresh.
     * `engram_prom_ex_qdrant_disk_bytes`
     * `engram_prom_ex_qdrant_ram_bytes{component}`: non-evictable RAM for
       `total`, `dense` (storage + HNSW), `sparse_index`, `payload_index`,
       `payload`, `quantized`, `id_tracker`.
 
-    * `engram_prom_ex_qdrant_strict_limit_percent{kind="disk"|"heap"}` and
-      `engram_prom_ex_qdrant_reserve_bytes{kind}`: the strict-mode limits
-      (`QdrantLayout.strict_limits/2`), recomputed locally on every node each
-      tick. Only ONE process in the cluster (a `:global` name) re-PATCHes them
-      on change. `strict_limit_percent` exists only for
-      a guard the server honours (no disk guard on Qdrant 1.19+).
+    * `engram_prom_ex_qdrant_strict_limit_percent{kind="disk"|"heap"}`: the
+      limit Qdrant ENFORCES, read from the collection's `strict_mode_config`
+      (`QdrantLayout.applied_limits/2`), so every node reports the same value
+      whatever its own reads computed. Absent for a guard the server does not
+      honour (no disk guard on Qdrant 1.19+) or before strict mode is set.
+    * `engram_prom_ex_qdrant_reserve_bytes{kind}`: the headroom the desired
+      limits keep (`QdrantLayout.strict_limits/2`, computed on each node).
+      Only ONE process in the cluster (a `:global` name) PATCHes the desired
+      limits, and only when they differ from the applied ones.
     * `engram_prom_ex_qdrant_pressure_percent{kind="disk"|"heap"}`: what the
       EmbedNote preflight reads (`Qdrant.pressure/0`); unknown kinds are absent.
 
-  Every node publishes the same cluster-wide values; aggregate with `max`/`min`,
-  never `sum`.
+  Every node publishes the same cluster-wide values; aggregate across nodes
+  (`min` for health, so any fresh node seeing a fault fires), never `sum`.
 
   Counter `engram_prom_ex_qdrant_backpressure_total{reason="preflight"|"refused"}`:
   embed jobs snoozed because Qdrant was near (preflight) or at (strict-mode
@@ -91,6 +100,12 @@ defmodule Engram.PromEx.Qdrant do
           measurement: :optimizer_ok,
           description: "1 when the Qdrant optimizer reports ok (0 = optimizer error)."
         ),
+        last_value(prefix ++ [:last_poll, :timestamp, :seconds],
+          event_name: @collection_event,
+          measurement: :polled_at,
+          description:
+            "Unix time of this node's last successful Qdrant collection poll (staleness filter)."
+        ),
         last_value(prefix ++ [:points],
           event_name: @collection_event,
           measurement: :points,
@@ -117,7 +132,7 @@ defmodule Engram.PromEx.Qdrant do
           measurement: :percent,
           tags: [:kind],
           description:
-            "Strict-mode write-refusal limit applied to the collection, derived from the reserve."
+            "Strict-mode write-refusal limit Qdrant applies to the collection (its strict_mode_config)."
         ),
         last_value(prefix ++ [:reserve, :bytes],
           event_name: @reserve_event,
@@ -139,21 +154,47 @@ defmodule Engram.PromEx.Qdrant do
 
   @doc false
   # telemetry_poller PERMANENTLY drops a measurement that raises, so every
-  # failure here is caught and the tick skipped; the next tick retries.
+  # failure here is caught and the stage skipped; the next tick retries.
   @spec execute_collection_metrics() :: :ok
   def execute_collection_metrics do
     if ServiceConfig.get(:qdrant_collection_metrics, true) do
       col = Qdrant.collection_name()
-      version = Qdrant.server_version()
-      reading = poll_pressure(QdrantLayout.guard_kinds(version))
-      poll(col, reading.limits, version)
+      version = Qdrant.cached_server_version()
+      memory = Qdrant.collection_memory(col)
+      info = stage("collection", fn -> poll(col, version) end)
+      stage("memory", fn -> poll_memory(memory) end)
+
+      stage("pressure", fn ->
+        reading = poll_pressure(memory)
+
+        if is_map(info) and poller?(),
+          do: Qdrant.reconcile_strict_mode(col, info, reading.limits, version)
+      end)
     end
 
     :ok
   rescue
-    e -> Logger.warning("qdrant collection poll skipped: #{inspect(e.__struct__)}")
+    e ->
+      _ = skipped("collection", inspect(e.__struct__))
+      :ok
   catch
-    :exit, _ -> Logger.warning("qdrant collection poll skipped: exit")
+    kind, _ when kind in [:exit, :throw] ->
+      _ = skipped("collection", Atom.to_string(kind))
+      :ok
+  end
+
+  # One stage's raise/exit/throw skips only that stage (returns nil).
+  defp stage(name, fun) do
+    fun.()
+  rescue
+    e -> skipped(name, inspect(e.__struct__))
+  catch
+    kind, _ when kind in [:exit, :throw] -> skipped(name, Atom.to_string(kind))
+  end
+
+  defp skipped(name, why) do
+    Logger.warning("qdrant #{name} poll skipped: #{why}")
+    nil
   end
 
   # One strict-mode reconciler per cluster. The name is released when its process dies, and
@@ -172,36 +213,36 @@ defmodule Engram.PromEx.Qdrant do
     end
   end
 
-  defp poll(col, limits, version) do
+  # The health gauges, the last-poll timestamp and the applied strict limits,
+  # all from one `GET /collections/{name}`. Returns the info, or nil.
+  defp poll(col, version) do
     case Qdrant.collection_info(col, :search) do
       {:ok, info} ->
         :telemetry.execute(@collection_event, collection_measurements(info), %{})
-        _ = poll_memory(col)
-        if poller?(), do: Qdrant.reconcile_strict_mode(col, info, limits, version)
+
+        for {kind, percent} <- QdrantLayout.applied_limits(info["config"], version) do
+          :telemetry.execute(@limit_event, %{percent: percent}, %{kind: Atom.to_string(kind)})
+        end
+
+        info
 
       {:error, reason} ->
-        Logger.warning("qdrant collection poll skipped: #{Metadata.safe_reason(reason)}")
+        skipped("collection", Metadata.safe_reason(reason))
     end
   end
 
   # An unknown kind publishes nothing (absent, not a misleading 0).
-  # `guards`: the strict-mode guards this server honours. A limit is exported
-  # only for those: on Qdrant 1.19+ there is no per-collection disk guard, and
-  # a gauge would claim one.
-  defp poll_pressure(guards) do
-    reading = Qdrant.read_pressure()
+  defp poll_pressure(memory) do
+    reading = Qdrant.read_pressure(memory)
 
     for kind <- [:disk, :heap] do
       tags = %{kind: Atom.to_string(kind)}
-      limit = reading.limits[kind]
+      reserve = reading.limits[kind].reserve
 
       if is_integer(reading[kind]),
         do: :telemetry.execute(@pressure_event, %{percent: reading[kind]}, tags)
 
-      if kind in guards, do: :telemetry.execute(@limit_event, %{percent: limit.percent}, tags)
-
-      if is_integer(limit.reserve),
-        do: :telemetry.execute(@reserve_event, %{bytes: limit.reserve}, tags)
+      if is_integer(reserve), do: :telemetry.execute(@reserve_event, %{bytes: reserve}, tags)
     end
 
     reading
@@ -212,12 +253,13 @@ defmodule Engram.PromEx.Qdrant do
       green: if(info["status"] == "green", do: 1, else: 0),
       optimizer_ok: if(info["optimizer_status"] == "ok", do: 1, else: 0),
       points: info["points_count"] || 0,
-      segments: info["segments_count"] || 0
+      segments: info["segments_count"] || 0,
+      polled_at: System.os_time(:second)
     }
   end
 
-  defp poll_memory(col) do
-    case Qdrant.collection_memory(col) do
+  defp poll_memory(memory) do
+    case memory do
       {:ok, report} ->
         :telemetry.execute(
           @disk_event,

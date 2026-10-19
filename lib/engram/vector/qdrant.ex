@@ -458,10 +458,12 @@ defmodule Engram.Vector.Qdrant do
   volume from `/sys_metrics`, the collection's `/memory` disk_bytes and
   `QDRANT_MEMORY_LIMIT_BYTES`. Unknown sizes fall back to
   `QDRANT_STRICT_DISK_PERCENT` / `QDRANT_STRICT_MEMORY_PERCENT` (85).
+  `memory`: a `collection_memory/1` result already in hand (the poller
+  shares one per tick), or `:fetch`.
   """
-  def strict_limits(col, volume) do
+  def strict_limits(col, volume, memory \\ :fetch) do
     collection_bytes =
-      case collection_memory(col) do
+      case if(memory == :fetch, do: collection_memory(col), else: memory) do
         {:ok, %{"total" => %{"disk_bytes" => b}}} when is_integer(b) -> b
         _ -> nil
       end
@@ -654,6 +656,13 @@ defmodule Engram.Vector.Qdrant do
     end
   end
 
+  @doc """
+  `server_version/0`, node-cached for 10 minutes (it changes only on a Qdrant
+  upgrade; nil is not cached, so an unreadable server is retried next call).
+  """
+  def cached_server_version,
+    do: Engram.Cache.fetch(:qdrant_version, base_url(), &server_version/0)
+
   # Strict mode refusing a write for disk or memory (Qdrant >= 1.18.1):
   # `CollectionError::StrictMode` -> `StorageError::BadRequest`, HTTP 400,
   # message from `check_disk_usage` / the resident-memory check in
@@ -682,17 +691,20 @@ defmodule Engram.Vector.Qdrant do
   @doc "Drop this node's cached `pressure/0` reading."
   def forget_pressure, do: Engram.Cache.evict_local(:qdrant_pressure, base_url())
 
-  @doc "A fresh `pressure/0` reading (the poller), refreshing the cache."
+  @doc """
+  A fresh `pressure/0` reading (the poller), refreshing the cache. `memory`:
+  a `collection_memory/1` result to reuse, or `:fetch`.
+  """
   # ponytail: every node reads /sys_metrics, /metrics and /memory once a
   # minute. Cheap at a handful of nodes; share the poller's reading over
   # PubSub if the fleet grows.
-  def read_pressure do
+  def read_pressure(memory \\ :fetch) do
     volume = volume_stats()
 
     reading = %{
       disk: disk_percent(volume),
       heap: heap_percent(),
-      limits: strict_limits(collection(), volume)
+      limits: strict_limits(collection(), volume, memory)
     }
 
     Engram.Cache.put(:qdrant_pressure, base_url(), reading)
