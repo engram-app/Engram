@@ -7,25 +7,28 @@ defmodule Engram.Billing.LimitKeys do
 
     LimitKeys.defined?(:notes_cap)            #=> true
     LimitKeys.type(:notes_cap)                #=> :integer
-    LimitKeys.default_for(:notes_cap, :free)  #=> 3_000
+    LimitKeys.default_for(:notes_cap, :free)  #=> 2_000
     LimitKeys.env_var_names()                 #=> one tuple per key per tier
   """
 
   @catalog %{
     # Pricing v2 spec §9.2 — 17 keys
-    # Free: 3,000 notes stored, and every stored note is searchable (2026-10-17).
-    # The upgrade levers are `ai_searches_per_day` and `vaults_cap`, not search
-    # coverage: the separate `indexed_notes_cap` was removed.
-    notes_cap: %{type: :integer, defaults: %{free: 3_000, starter: 50_000, pro: nil}},
+    # 2,000 / 20,000 / 40,000 notes stored (owner decision 2026-10-19; Pro
+    # was unlimited). Every stored note is searchable: the upgrade levers are
+    # `ai_searches_per_day` and `vaults_cap`, not search coverage, and the
+    # separate `indexed_notes_cap` was removed.
+    notes_cap: %{type: :integer, defaults: %{free: 2_000, starter: 20_000, pro: 40_000}},
     # Free index budget (spec: Engram vault `50 Engineering/_Superpowers Specs/
     # 2026-10-18-qdrant-storage-and-free-index-budget-design.md`). Bounds the
     # Qdrant points one account may hold, counted in `chunks` rows. Past the cap
     # notes are demoted to a floor point; sync and writes never fail on it.
-    # Pro is finite on purpose: `notes_cap` is nil there, so this is the only
-    # bound on its vector footprint.
+    #
+    # GOLDEN RULE: points cap = `notes_cap` x 8.5, the median points per
+    # indexed note in prod (owner decision 2026-10-19). A full account of
+    # median notes fits; change both together.
     index_points_cap: %{
       type: :integer,
-      defaults: %{free: 10_000, starter: 100_000, pro: 250_000}
+      defaults: %{free: 17_000, starter: 170_000, pro: 340_000}
     },
     # Dense points one note may hold. A note chunked past it has adjacent
     # chunks merged into exactly this many points, so the whole note stays
