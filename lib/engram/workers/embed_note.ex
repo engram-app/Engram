@@ -70,6 +70,30 @@ defmodule Engram.Workers.EmbedNote do
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(10)
 
+  # An unavailable upstream (Qdrant restart, Voyage 5xx) waits 60s, 120s, 240s,
+  # 480s (capped at 600s, +10% jitter): ~15 min before the terminal attempt.
+  # Oban's default (15s + 2^attempt) spent all 5 attempts in ~90s, so a 3 min
+  # Qdrant resize on 2026-10-19 poisoned 11 notes. A sustained outage still
+  # reaches the terminal attempt and the short transient poison cooldown.
+  # Paid vectors survive the wait: Indexing retains them across the commit.
+  @impl Oban.Worker
+  def backoff(
+        %Oban.Job{
+          attempt: attempt,
+          unsaved_error: %{reason: %Oban.PerformError{reason: {:error, reason}}}
+        } = job
+      ) do
+    if transient_embed_error?(reason) do
+      (60 * Integer.pow(2, attempt - 1))
+      |> min(600)
+      |> Oban.Backoff.jitter(mode: :inc)
+    else
+      Oban.Worker.backoff(job)
+    end
+  end
+
+  def backoff(job), do: Oban.Worker.backoff(job)
+
   @impl Oban.Worker
   def perform(%Oban.Job{args: args} = job) do
     :ok = BackgroundPriority.demote()

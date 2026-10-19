@@ -238,4 +238,70 @@ defmodule Engram.Workers.EmbedNoteBackpressureTest do
     refute_received {:reserved, _}
     refute_received {:released, _}
   end
+
+  # 2026-10-19 prod: a ~3 min Qdrant restart poisoned 11 notes. Oban's default
+  # backoff (15s + 2^attempt) spends all 5 attempts in ~90s, so the terminal
+  # attempt landed inside the outage.
+  describe "backoff/1 on an unavailable upstream" do
+    defp failed_job(attempt, reason) do
+      %Oban.Job{
+        attempt: attempt,
+        max_attempts: 5,
+        unsaved_error: %{
+          kind: :error,
+          reason: Oban.PerformError.exception({EmbedNote, {:error, reason}}),
+          stacktrace: []
+        }
+      }
+    end
+
+    defp total_wait(reason),
+      do: Enum.sum(for a <- 1..4, do: EmbedNote.backoff(failed_job(a, reason)))
+
+    test "a Qdrant 5xx or transport error outlasts a multi-minute restart, capped at ~10 min" do
+      for reason <- [{503, "unavailable"}, {502, ""}, %Req.TransportError{reason: :econnrefused}] do
+        assert total_wait(reason) >= 600, "4 retries must span more than a 3 min restart"
+
+        for a <- 1..4 do
+          assert EmbedNote.backoff(failed_job(a, reason)) <= 660
+        end
+      end
+    end
+
+    test "a persistent error keeps the default quick backoff" do
+      assert total_wait({400, "bad input"}) < 200
+      assert total_wait(:no_dek) < 200
+    end
+
+    test "a crash (no PerformError) keeps the default backoff" do
+      job = %Oban.Job{
+        attempt: 1,
+        max_attempts: 5,
+        unsaved_error: %{kind: :error, reason: %RuntimeError{message: "boom"}, stacktrace: []}
+      }
+
+      assert EmbedNote.backoff(job) < 60
+    end
+  end
+
+  test "a Qdrant 503 on upsert: no poison yet, and the retry reuses the paid vectors",
+       %{bypass: bypass, note: note} do
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    upserts = fn ->
+      case Agent.get_and_update(calls, &{&1, &1 + 1}) do
+        0 -> {503, ~s({"status":{"error":"Service Unavailable"}})}
+        _ -> {200, ~s({"result":true})}
+      end
+    end
+
+    fake_qdrant(bypass, upserts: upserts)
+    embeds_ok(1)
+
+    assert {:error, {503, _}} = perform_job(EmbedNote, %{note_id: note.id, user_id: note.user_id})
+    assert reloaded(note).embed_retry_after == nil
+
+    assert :ok = perform_job(EmbedNote, %{note_id: note.id, user_id: note.user_id})
+    assert reloaded(note).dense_indexed_hash == note.content_hash
+  end
 end
