@@ -970,6 +970,7 @@ jobs:
               -v "$PWD:/app" -w /app \
               ${3:-} \
               -e MIX_ENV="$1" \
+              -e CI="${CI:-}" \
               -e HEX_MIRROR="${HEX_MIRROR:-}" \
               engram-mix-builder:ci \
               sh -c "$2"
