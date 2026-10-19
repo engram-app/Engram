@@ -346,15 +346,108 @@ defmodule Engram.Notes do
     end
   end
 
+  # Set-based `upsert_folder_marker/6`: a fixed handful of statements for the
+  # whole batch (find, undelete, insert, re-find) instead of ~3 round trips per
+  # folder. Returns hydrated markers in `folders` order. `seq_fun` is first
+  # called right before the first write, as the lock-ordering note on
+  # `upsert_folder_batch/3` requires. The batch is capped at
+  # #{@max_batch_folders}, so one insert_all stays far below Postgres'
+  # 65,535-parameter limit.
   defp upsert_folder_markers(user, vault, dek, filter_key, folders, seq_fun) do
-    Enum.map(folders, fn folder ->
-      folder_hmac = Crypto.hmac_field(filter_key, folder)
+    hmacs = Enum.map(folders, &Crypto.hmac_field(filter_key, &1))
 
-      case upsert_folder_marker(user, vault, dek, folder, folder_hmac, seq_fun) do
-        {:ok, marker} -> marker
-        {:error, reason} -> Repo.rollback(reason)
+    # Live markers sort last, so they win the Map.new/2 collapse over a
+    # soft-deleted twin of the same folder.
+    existing =
+      user
+      |> folder_markers_by_hmac_query(vault, hmacs)
+      |> Repo.all()
+      |> Enum.sort_by(&(&1.deleted_at == nil))
+      |> Map.new(&{&1.folder_hmac, &1})
+
+    dead_ids = for {_, %Note{deleted_at: %DateTime{}, id: id}} <- existing, do: id
+
+    revived =
+      if dead_ids == [] do
+        []
+      else
+        {_, rows} =
+          from(n in scoped(user, vault), where: n.id in ^dead_ids, select: n)
+          |> Repo.update_all(
+            set: [deleted_at: nil, updated_at: DateTime.utc_now(), seq: seq_fun.()]
+          )
+
+        rows
+      end
+
+    missing =
+      for {folder, hmac} <- Enum.zip(folders, hmacs), not Map.has_key?(existing, hmac) do
+        {folder, hmac}
+      end
+
+    inserted =
+      if missing == [] do
+        []
+      else
+        now = DateTime.utc_now()
+        seq = seq_fun.()
+
+        rows =
+          for {folder, hmac} <- missing do
+            id = mint_id()
+            {ct, nonce} = Envelope.encrypt(folder, dek, Crypto.aad_for_row(:notes, :folder, id))
+
+            %{
+              id: id,
+              kind: "folder",
+              user_id: user.id,
+              vault_id: vault.id,
+              version: 1,
+              dek_version: Crypto.row_version_aad_bound(),
+              mtime: DateTime.to_unix(now) + 0.0,
+              folder_ciphertext: ct,
+              folder_nonce: nonce,
+              folder_hmac: hmac,
+              tags_hmac: [],
+              seq: seq,
+              created_at: now,
+              updated_at: now
+            }
+          end
+
+        # DO NOTHING (no conflict_target) for the same reason as
+        # `insert_folder_marker/6`: a concurrent create of the same folder must
+        # not abort the transaction. The re-find below collapses to the winner.
+        _ = Repo.insert_all(Note, rows, on_conflict: :nothing)
+
+        user
+        |> folder_markers_by_hmac_query(vault, Enum.map(missing, &elem(&1, 1)))
+        |> where([n], is_nil(n.deleted_at))
+        |> Repo.all()
+      end
+
+    live = for {_, %Note{deleted_at: nil} = m} <- existing, do: m
+    by_hmac = Map.new(live ++ revived ++ inserted, &{&1.folder_hmac, &1})
+
+    Enum.map(hmacs, fn hmac ->
+      case by_hmac do
+        %{^hmac => marker} ->
+          hydrate_folder_marker(marker, dek)
+
+        _ ->
+          Repo.rollback(
+            Ecto.Changeset.add_error(
+              Note.changeset(%Note{}, %{}),
+              :folder,
+              "insert raced and vanished"
+            )
+          )
       end
     end)
+  end
+
+  defp folder_markers_by_hmac_query(user, vault, hmacs) do
+    from(n in scoped(user, vault), where: n.kind == "folder" and n.folder_hmac in ^hmacs)
   end
 
   # Shared by the single and batch creates. `seq_fun` is only called when a

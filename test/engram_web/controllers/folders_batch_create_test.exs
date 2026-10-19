@@ -115,6 +115,21 @@ defmodule EngramWeb.FoldersBatchCreateTest do
       assert length(body["folders"]) == 500
     end
 
+    test "500 folders issue a bounded number of queries", %{user: user, vault: vault} do
+      folders = Enum.map(1..500, &"Q#{&1}")
+
+      {{:ok, %{folders: out}}, queries} =
+        Engram.QueryRecorder.record(fn ->
+          Engram.Notes.create_folder_markers(user, vault, folders)
+        end)
+
+      mine = Enum.filter(queries, &(&1.pid == self()))
+      assert length(out) == 500
+
+      assert length(mine) < 20,
+             "expected a set-based batch:\n" <> Engram.QueryRecorder.format(Enum.take(mine, 30))
+    end
+
     test "non-string entries or missing param are 422", %{conn: conn} do
       assert conn |> post(~p"/api/folders/batch", %{folders: ["ok", 1]}) |> json_response(422)
       assert conn |> post(~p"/api/folders/batch", %{}) |> json_response(422)
