@@ -68,79 +68,35 @@ config :engram, :admin_bootstrap_lock_enabled, false
 # role — the interesting case a boot-time call could never reach.
 config :engram, :tenancy_guard_enabled, false
 
-# Configure your database
-#
-# The MIX_TEST_PARTITION environment variable can be used
-# to provide built-in test partitioning in CI environment.
-# Run `mix help test` for more information.
-repo_opts =
-  case System.get_env("DATABASE_URL") do
-    nil ->
-      [
-        username: "engram",
-        password: "engram",
-        hostname: "localhost",
-        database: "engram_test#{System.get_env("MIX_TEST_PARTITION")}"
-      ]
-
-    # Same partition suffix for CI's DATABASE_URL (`.../engram_test` ->
-    # `.../engram_test2`), so `mix test --partitions N` gets one DB each.
-    url ->
-      uri = URI.parse(url)
-
-      [
-        url:
-          URI.to_string(%{uri | path: uri.path <> (System.get_env("MIX_TEST_PARTITION") || "")})
-      ]
-  end
-
+# Configure your database. The connection (DATABASE_URL, MIX_TEST_PARTITION)
+# and pool_size are env-derived, so they live in config/runtime.exs; see the
+# comment there for why they must stay out of this file.
 config :engram,
        Engram.Repo,
-       Keyword.merge(repo_opts,
-         pool: Ecto.Adapters.SQL.Sandbox,
-         # Headroom over ExUnit's concurrency limit is deliberate and load-bearing.
-         #
-         # ExUnit's default `max_cases` is ALSO `System.schedulers_online() * 2`, so
-         # sizing the pool to exactly that leaves zero spare connections: with every
-         # async slot holding a checkout, any additional connection queues on an
-         # empty pool and waits out the 15s timeout. That is #1158 — a whole module
-         # failing in `setup` with "connection not available and request was dropped
-         # from queue", which looks like a defect in whichever module lost the race
-         # rather than the resource shape it actually is.
-         #
-         # Two things need that spare capacity: a sync (`async: false`) module's own
-         # checkout, and any process a test spawns that does its own DB work (the
-         # `:global` CRDT rooms in Engram.Notes.CrdtTransportTest are the case that
-         # surfaced this).
-         #
-         # Raising the checkout timeout instead would only lengthen the queue wait —
-         # it hides the contention rather than removing it.
-         pool_size: System.schedulers_online() * 2 + 10,
-
-         # A DIFFERENT mechanism from the pool sizing above, and the pool_size
-         # knob cannot help it: processes a test spawns do not take their own
-         # connection, they share the OWNER's single checked-out one. So a batch
-         # that fans out to N processes (any Task.async_stream over per-entry
-         # transactions) serializes all N through one connection, and
-         # queueing there is the designed behaviour rather than a shortage.
-         #
-         # DBConnection's defaults (queue_target 50ms / queue_interval 1000ms)
-         # are a PRODUCTION backpressure heuristic: once waits exceed the target
-         # it shirks requests instead of queueing them, so an overloaded pool
-         # sheds load rather than stalling. Against a shared sandbox connection
-         # that heuristic has nothing useful to shed — under full-suite load the
-         # honest serialization wait crosses 50ms and entries fail with
-         # "connection not available and request was dropped from queue after
-         # ~101ms", which surfaces as a flaky assertion about batch results.
-         #
-         # Verified as the mechanism, not a guess: forcing queue_target: 8
-         # reproduces that exact error with no load at all.
-         #
-         # Deliberately still bounded — the 15s checkout timeout is untouched, so
-         # a genuine deadlock or a leaked connection still fails the run.
-         queue_target: 5_000,
-         queue_interval: 30_000
-       )
+       pool: Ecto.Adapters.SQL.Sandbox,
+       # A DIFFERENT mechanism from pool_size (config/runtime.exs), and the pool_size
+       # knob cannot help it: processes a test spawns do not take their own
+       # connection, they share the OWNER's single checked-out one. So a batch
+       # that fans out to N processes (any Task.async_stream over per-entry
+       # transactions) serializes all N through one connection, and
+       # queueing there is the designed behaviour rather than a shortage.
+       #
+       # DBConnection's defaults (queue_target 50ms / queue_interval 1000ms)
+       # are a PRODUCTION backpressure heuristic: once waits exceed the target
+       # it shirks requests instead of queueing them, so an overloaded pool
+       # sheds load rather than stalling. Against a shared sandbox connection
+       # that heuristic has nothing useful to shed — under full-suite load the
+       # honest serialization wait crosses 50ms and entries fail with
+       # "connection not available and request was dropped from queue after
+       # ~101ms", which surfaces as a flaky assertion about batch results.
+       #
+       # Verified as the mechanism, not a guess: forcing queue_target: 8
+       # reproduces that exact error with no load at all.
+       #
+       # Deliberately still bounded — the 15s checkout timeout is untouched, so
+       # a genuine deadlock or a leaked connection still fails the run.
+       queue_target: 5_000,
+       queue_interval: 30_000
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.

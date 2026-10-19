@@ -13,7 +13,11 @@ defmodule Mix.Tasks.Engram.PrepareDatabase do
   use Mix.Task
 
   @impl Mix.Task
-  def run(_args) do
+  def run(args) do
+    # app.config (not app.start) loads config/runtime.exs, where dev/test take
+    # DATABASE_URL, without starting the app; the Ecto tasks do the same.
+    Mix.Task.run("app.config", args)
+
     # Don't ensure_all_started — that boots Phoenix/Oban/etc, which
     # `mix test` and ecto aliases do not want. Engram.Release uses
     # `Ecto.Migrator.with_repo/2` to start just the Repo for the
