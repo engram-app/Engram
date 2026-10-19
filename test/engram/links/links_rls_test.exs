@@ -122,6 +122,30 @@ defmodule Engram.Links.LinksRlsTest do
                "backlinks panel renders empty for a note that has one"
     end
 
+    test "dangling_basenames/4 sees the target, so a resolving name is no dangler",
+         %{user: user, vault: vault} do
+      parsed = Parser.extract("See [[Target]] and [[Nowhere]].")
+      target = Links.basename_hmac(user, "target")
+      nowhere = Links.basename_hmac(user, "nowhere")
+
+      assert {:returned, [^nowhere]} =
+               as_prod_role(fn ->
+                 Links.dangling_basenames(user, vault, parsed, [target, nowhere])
+               end),
+             "dangling_basenames reported a live target as dangling — its candidate read " <>
+               "was filtered by RLS, so every rename-repair probe would enqueue for nothing"
+    end
+
+    test "batched reads return the same edges", %{user: user, source: source, target: target} do
+      assert {:returned, links} = as_prod_role(fn -> Links.links_for_notes(user, [source.id]) end)
+      assert [_] = Map.fetch!(links, source.id)
+
+      assert {:returned, backlinks} =
+               as_prod_role(fn -> Links.backlinks_for_notes(user, [target.id]) end)
+
+      assert [_] = Map.fetch!(backlinks, target.id)
+    end
+
     test "live_basename_count/3 counts the live note", %{user: user, vault: vault} do
       assert {:returned, count} =
                as_prod_role(fn -> Links.live_basename_count(user, vault, "target") end)

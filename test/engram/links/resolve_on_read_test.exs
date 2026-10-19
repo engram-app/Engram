@@ -168,13 +168,15 @@ defmodule Engram.Links.ResolveOnReadTest do
     assert src == ctx.source.id
   end
 
-  # No stored target to fall back to: a name that will not decrypt resolves
-  # to nothing.
   test "batched reads answer exactly what per-note reads do", ctx do
-    # Two notes share a basename, a third is unrelated, one id has no row.
+    # Two notes share a basename, a third is unrelated, a fourth with the
+    # same basename lives in another vault, one id has no row.
     a = Fixtures.insert_note!(ctx.user, ctx.vault, %{path: "a/index.md"})
     b = Fixtures.insert_note!(ctx.user, ctx.vault, %{path: "bb/index.md"})
     c = Fixtures.insert_note!(ctx.user, ctx.vault, %{path: "Later.md"})
+    other_vault = insert(:vault, user: ctx.user)
+    d = Fixtures.insert_note!(ctx.user, other_vault, %{path: "index.md"})
+    d_src = Fixtures.insert_note!(ctx.user, other_vault, %{path: "Src.md"})
     missing = Ecto.UUID.generate()
 
     :ok =
@@ -186,8 +188,17 @@ defmodule Engram.Links.ResolveOnReadTest do
       ])
 
     :ok = Links.replace_links(ctx.user, ctx.vault, c.id, [edge("bb/index")])
+    :ok = Links.replace_links(ctx.user, other_vault, d_src.id, [edge("index")])
 
-    ids = [ctx.source.id, a.id, b.id, c.id, missing]
+    # c's edge predates the resolution keys, so it matches by decrypted text.
+    corrupt(
+      ctx.user,
+      from(l in Engram.Links.NoteLink, where: l.source_note_id == ^c.id),
+      target_key_hmac: nil,
+      link_keys_stamp: nil
+    )
+
+    ids = [ctx.source.id, a.id, b.id, c.id, d.id, d_src.id, missing]
 
     for opts <- [[], [limit: 1], [distinct_sources: true]] do
       assert Links.backlinks_for_notes(ctx.user, ids, opts) ==
@@ -197,9 +208,16 @@ defmodule Engram.Links.ResolveOnReadTest do
     assert Links.links_for_notes(ctx.user, ids) ==
              Map.new(ids, &{&1, Links.links_for_note(ctx.user, &1)})
 
-    assert [_] = Links.backlinks_for_note(ctx.user, a.id)
-    assert [_, _] = Links.backlinks_for_note(ctx.user, b.id)
+    sources =
+      &(ctx.user |> Links.backlinks_for_note(&1) |> Enum.map(fn l -> l.source_note_id end))
+
+    assert sources.(a.id) == [ctx.source.id]
+    assert Enum.sort(sources.(b.id)) == Enum.sort([ctx.source.id, c.id])
+    assert sources.(d.id) == [d_src.id]
   end
+
+  # No stored target to fall back to: a name that will not decrypt resolves
+  # to nothing.
 
   describe "undecryptable rows resolve to nothing" do
     import ExUnit.CaptureLog
