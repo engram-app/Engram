@@ -9,12 +9,14 @@ defmodule Engram.Native.MmrSelectTest do
     {vectors, scores}
   end
 
+  defp groups(scores), do: Enum.to_list(0..(length(scores) - 1))
+
   describe "memory standard" do
     # The pool is bounded by the search's candidate_pool; the NIF holds it as
     # f64s once and normalizes in place.
     test "native peak stays within a small multiple of the pool's f64 size" do
       {vectors, scores} = pool(400, 1024)
-      {picked, peak} = Engram.Native.mmr_select_nif(vectors, scores, 100, 0.3)
+      {picked, peak} = Engram.Native.mmr_select_nif(vectors, scores, groups(scores), 100, 0.3)
       assert length(picked) == 100
       assert peak <= 2 * (400 * 1024 * 8) + 65_536
     end
@@ -23,13 +25,13 @@ defmodule Engram.Native.MmrSelectTest do
       {vectors, scores} = pool(20, 64)
 
       Engram.NativeLeak.assert_no_leak(fn ->
-        Engram.Native.mmr_select_nif(vectors, scores, 5, 0.3)
+        Engram.Native.mmr_select_nif(vectors, scores, groups(scores), 5, 0.3)
       end)
     end
 
     test "every call emits [:engram, :nif, :call, :stop]" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
-      Engram.Native.mmr_select([[1.0, 0.0], nil], [0.9, 0.8], 2, 0.5)
+      Engram.Native.mmr_select([[1.0, 0.0], nil], [0.9, 0.8], [0, 1], 2, 0.5)
 
       assert_received {[:engram, :nif, :call, :stop], ^ref, %{input_bytes: 48},
                        %{nif: :mmr_select}}
@@ -38,7 +40,7 @@ defmodule Engram.Native.MmrSelectTest do
 
   test "mismatched vector and score counts are refused" do
     assert_raise ArgumentError, fn ->
-      Engram.Native.mmr_select_nif([[1.0]], [0.9, 0.8], 2, 0.5)
+      Engram.Native.mmr_select_nif([[1.0]], [0.9, 0.8], [0, 1], 2, 0.5)
     end
   end
 
@@ -48,7 +50,7 @@ defmodule Engram.Native.MmrSelectTest do
     {vectors, scores} = pool(200, 1024)
 
     {us, {picked, _}} =
-      :timer.tc(fn -> Engram.Native.mmr_select_nif(vectors, scores, 50, 0.3) end)
+      :timer.tc(fn -> Engram.Native.mmr_select_nif(vectors, scores, groups(scores), 50, 0.3) end)
 
     assert length(picked) == 50
     assert us < 500_000, "mmr_select took #{div(us, 1000)} ms"

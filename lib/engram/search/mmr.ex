@@ -9,12 +9,17 @@ defmodule Engram.Search.MMR do
 
   `d == 0.0` short-circuits to the relevance order (no vectors required).
 
-  The selection runs in Rust (`Engram.Native.mmr_select/4`, #1798): O(pool ×
+  The selection runs in Rust (`Engram.Native.mmr_select/5`, #1798): O(pool ×
   limit) dot products over unit vectors, each candidate carrying its running
   max similarity to the picked set (#1617). In Elixir every multiply-add
   allocated a boxed float, ~2.5 s for a limit-50 rerank over a 200 × 1024
-  pool. A nil or zero vector has no direction: similarity 0.0, no penalty.
-  Ties resolve in pool order.
+  pool. Ties resolve in pool order.
+
+  A nil or zero vector (a sparse-only chunk: frontmatter, data, canvas) is
+  similarity 1.0 to every chunk of its own note (`{vault_id, source_path}`)
+  and otherwise takes the direction of that note's best dense chunk in the
+  pool. Scored 0.0, it dodged every penalty and outranked the note's prose.
+  With no dense sibling it has no direction: 0.0.
   """
 
   @spec rerank([map()], pos_integer(), float()) :: [map()]
@@ -31,7 +36,26 @@ defmodule Engram.Search.MMR do
 
     candidates
     |> Enum.map(&Map.get(&1, :vector))
-    |> Engram.Native.mmr_select(Enum.map(candidates, & &1.score), limit, diversity)
+    |> Engram.Native.mmr_select(
+      Enum.map(candidates, & &1.score),
+      note_groups(candidates),
+      limit,
+      diversity
+    )
     |> Enum.map(&elem(pool, &1))
+  end
+
+  # One integer per note. A candidate without a source_path is its own group.
+  defp note_groups(candidates) do
+    keys =
+      candidates
+      |> Enum.with_index()
+      |> Enum.map(fn
+        {%{source_path: path} = c, _i} when is_binary(path) -> {Map.get(c, :vault_id), path}
+        {_c, i} -> {:solo, i}
+      end)
+
+    ids = keys |> Enum.uniq() |> Enum.with_index() |> Map.new()
+    Enum.map(keys, &Map.fetch!(ids, &1))
   end
 end

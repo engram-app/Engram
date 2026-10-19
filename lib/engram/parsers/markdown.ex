@@ -20,7 +20,7 @@ defmodule Engram.Parsers.Markdown do
   # 3 — CommonMark headings (none inside code; setext counts), only the first
   #     H1 is the title, heading-only and blank chunks dropped, whitespace
   #     normalised, content-anchored splits (#1594), `embed_text` (#1621).
-  # 4 — wrapped base64 and hex blobs stripped, and a per-chunk `kind`: a
+  # 4: wrapped base64 and hex blobs stripped, and a per-chunk `kind`: a
   #     frontmatter chunk is keyword-only, so it no longer holds a dense vector.
   @chunker_version 4
 
@@ -50,7 +50,7 @@ defmodule Engram.Parsers.Markdown do
   - `:heading_path` — e.g. "Title > H1 > H2"
   - `:char_start`   — byte offset in post-frontmatter body
   - `:char_end`     — byte offset end
-  - `:kind`         — "prose" | "data" | "frontmatter" | "drawing"; only
+  - `:kind`:         "prose" | "data" | "frontmatter" | "drawing"; only
                       prose gets a dense vector, the rest are keyword-only
 
   A `.canvas` or `.base` note has no `"prose"` chunks: they are all `"data"`.

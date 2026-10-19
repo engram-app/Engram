@@ -211,17 +211,17 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
 
 const PROSE: &str = "prose";
 
-/// An Excalidraw note (frontmatter key `excalidraw-plugin`) is indexed by its
-/// text elements: the ```json / ```compressed-json drawing fences after
-/// `## Drawing` leave the indexed text, and so do the ` ^id` block refs that
+/// An Excalidraw note (a frontmatter line starting `excalidraw-plugin:`) is
+/// indexed by its text elements: the ```json / ```compressed-json drawing
+/// fences after `## Drawing` (`# Drawing` in the old format) leave the indexed text, and so do the ` ^id` block refs that
 /// end the element lines. The note keeps every byte. Chunk offsets count the
 /// edited body.
 fn excalidraw<'a>(block: Option<&str>, body: &'a str) -> std::borrow::Cow<'a, str> {
-    if !block.is_some_and(|b| b.contains("excalidraw-plugin")) {
+    if !block.is_some_and(|b| b.lines().any(|l| l.starts_with("excalidraw-plugin:"))) {
         return body.into();
     }
-    let (head, tail) = match body.find("\n## Drawing") {
-        Some(i) => body.split_at(i),
+    let (head, tail) = match re!(r"(?m)^##? Drawing[ \t]*$").find(body) {
+        Some(m) => body.split_at(m.start()),
         None => (body, ""),
     };
     let head = re!(r"(?m)[ \t]+\^[A-Za-z0-9]{6,}[ \t]*$").replace_all(head, "");
@@ -231,29 +231,45 @@ fn excalidraw<'a>(block: Option<&str>, body: &'a str) -> std::borrow::Cow<'a, st
 
 /// `data` for a body chunk that is mostly not words (minified JSON, CSV of
 /// numbers, log dumps, number tables): it is keyword-only, as a dense vector
-/// of it means nothing. Under 200 bytes, mostly inside a code fence (code is
-/// searched by meaning), or written in a script without spaces (CJK: letters
-/// are most of the text) it stays `prose`. Otherwise `data` when under 35%
-/// of its tokens are words. Tokens with no letter or digit (`|`, `---`, `-`)
-/// are markup and not counted, so a table of words is prose. Linear time.
-/// `open`: the chunk starts inside a code fence. Returns whether it ends in
-/// one.
+/// of it means nothing. Judged per paragraph (blank-line runs), so a table
+/// does not take the dense leg off the analysis above it: the chunk is
+/// `data` only when 80% or more of its bytes sit in data-shaped paragraphs.
+/// Code fence lines count as prose (code is searched by meaning), and so
+/// does any chunk under 200 bytes. Linear time. `open`: the chunk starts
+/// inside a code fence. Returns whether it ends in one.
 fn classify(text: &str, mut open: bool) -> (&'static str, bool) {
-    let mut fenced = 0;
+    let mut data = 0;
+    let mut para: Option<(usize, usize)> = None;
+    let mut pos = 0;
     for line in text.split_inclusive('\n') {
+        let end = pos + line.len();
         let t = line.trim_start();
         let fence = t.starts_with("```") || t.starts_with("~~~");
-        if open || fence {
-            fenced += line.len();
+        if open || fence || t.is_empty() {
+            data += para.take().map_or(0, |(s, e)| data_bytes(&text[s..e]));
+        } else {
+            para = Some((para.map_or(pos, |(s, _)| s), end));
         }
         open ^= fence;
+        pos = end;
     }
-    if text.len() < 200 || fenced * 2 >= text.len() {
-        return (PROSE, open);
+    data += para.map_or(0, |(s, e)| data_bytes(&text[s..e]));
+    if text.len() >= 200 && data * 100 >= text.len() * 80 {
+        ("data", open)
+    } else {
+        (PROSE, open)
     }
+}
+
+/// `p.len()` when the paragraph is data-shaped, else 0. Data-shaped: under
+/// 35% of its tokens are words, unless it is written in a script without
+/// spaces (CJK: non-ASCII letters are most of the text). Tokens with no
+/// letter or digit (`|`, `---`, `-`) are markup and not counted, so a
+/// table of words is prose.
+fn data_bytes(p: &str) -> usize {
     let (mut wide, mut other) = (0, 0);
     let (mut words, mut tokens) = (0, 0);
-    for tok in text.split_whitespace() {
+    for tok in p.split_whitespace() {
         for c in tok.chars() {
             if c.is_alphabetic() && !c.is_ascii() {
                 wide += 1;
@@ -274,10 +290,11 @@ fn classify(text: &str, mut open: bool) -> (&'static str, bool) {
     }
     // Non-ASCII letters only: string-heavy minified JSON is over half ASCII
     // letters, and the word rule is what catches it.
-    if wide >= other || words * 100 >= tokens * 35 {
-        (PROSE, open)
+    let prose = tokens == 0 || wide >= other || words * 100 >= tokens * 35;
+    if prose {
+        0
     } else {
-        ("data", open)
+        p.len()
     }
 }
 
@@ -500,9 +517,16 @@ fn strip_blobs(text: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// 60-120 base64 chars: PEM wraps at 64, MIME and `base64 -w` at 76. Under
+/// 60 sit identifiers that must stay searchable (ETH addresses 42, Solana
+/// 32-44, IPFS CIDv0 46).
 fn b64_line(line: &str) -> bool {
+    (60..=120).contains(&line.trim().len()) && b64_chars(line)
+}
+
+fn b64_chars(line: &str) -> bool {
     let l = line.trim();
-    (40..=120).contains(&l.len())
+    !l.is_empty()
         && l.bytes()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/' | b'='))
 }
@@ -512,15 +536,17 @@ fn pem_armour(line: &str, word: &str) -> bool {
     l.starts_with("-----") && l.ends_with("-----") && l[5..].starts_with(word)
 }
 
-/// Runs of 3+ lines of 40-120 base64 chars (PEM bodies, MIME parts) that
-/// together look encoded, plus the PEM armour lines around them. One linear
-/// line scan, no regex.
+/// Runs of 3+ lines of 60-120 base64 chars (PEM bodies, MIME parts) that
+/// together look encoded, plus the PEM armour lines around them. After a
+/// BEGIN line the run also takes the short last line, so the END line is
+/// next and goes too. One linear line scan, no regex.
 fn strip_wrapped(text: &str) -> std::borrow::Cow<'_, str> {
     // Byte ranges to drop; a note with no wrapped blob allocates nothing.
     let mut cut: Vec<(usize, usize)> = Vec::new();
     let mut prev: Option<(usize, &str)> = None;
     let mut run: Option<(usize, usize, usize)> = None; // start, end, lines
     let mut sample = String::new(); // first 4 KB of the run, what encoded() reads
+    let mut pem = false; // the run follows a BEGIN armour line
     let mut pos = 0;
     let mut close = |run: &mut Option<(usize, usize, usize)>,
                      sample: &mut String,
@@ -543,19 +569,23 @@ fn strip_wrapped(text: &str) -> std::borrow::Cow<'_, str> {
     };
     for line in text.split_inclusive('\n') {
         let end = pos + line.len();
-        if b64_line(line) {
+        if b64_line(line) || (pem && run.is_some() && b64_chars(line)) {
             match &mut run {
                 Some((_, e, n)) => {
                     *e = end;
                     *n += 1;
                 }
-                None => run = Some((pos, end, 1)),
+                None => {
+                    run = Some((pos, end, 1));
+                    pem = prev.is_some_and(|(_, l)| pem_armour(l, "BEGIN"));
+                }
             }
             if sample.len() < 4096 {
                 sample.push_str(line.trim());
             }
         } else {
             close(&mut run, &mut sample, prev, Some((pos, end, line)));
+            pem = false;
             prev = Some((pos, line));
         }
         pos = end;
@@ -1014,6 +1044,41 @@ mod tests {
     }
 
     #[test]
+    fn wallet_addresses_and_cids_stay_in_the_index() {
+        let notes = [
+            "## Wallets\n7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV\n\
+             9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin\n\
+             4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R\n",
+            "## Wallets\n0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed\n\
+             0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359\n\
+             0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB\n",
+            "## Pins\nQmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG\n\
+             QmT78zSuBmuS4z925WZfrqQ1qHaJ56DQaTfyMUF7F8ff5o\n\
+             QmPZ9gcCEpqKTo6aq61g2nXGUhM4iCL3ewB6LDXZCtioEB\n",
+        ];
+        for note in notes {
+            assert_eq!(indexed(note), note);
+        }
+    }
+
+    /// Self-signed certs (RSA 1024-4096, P-256, Ed25519): their last base64
+    /// line runs from 4 to 64 chars.
+    const CERTS: &str = include_str!("testdata/certs.pem");
+
+    #[test]
+    fn real_certificates_leave_no_base64_or_armour() {
+        let certs: Vec<String> = CERTS
+            .split_inclusive("-----END CERTIFICATE-----\n")
+            .map(str::to_string)
+            .collect();
+        assert_eq!(certs.len(), 6);
+        for cert in certs {
+            let out = indexed(&format!("The staging cert:\n{cert}Rotate it yearly.\n"));
+            assert_eq!(out, "The staging cert:\nRotate it yearly.\n");
+        }
+    }
+
+    #[test]
     fn multibyte_text_next_to_a_pem_block_survives() {
         let note = format!(
             "Привет мир\n-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\nПока мир",
@@ -1140,6 +1205,37 @@ mod tests {
         all(&json, "data");
     }
 
+    fn metrics_table(rows: usize) -> String {
+        let rows: Vec<String> = (0..rows)
+            .map(|i| {
+                format!(
+                    "| {i} | {} | {} | {}.{} | {} |",
+                    4810 + i * 37,
+                    i * 3,
+                    i % 4,
+                    i % 10,
+                    900 + i
+                )
+            })
+            .collect();
+        format!(
+            "| wk | mrr | new | churn | dau |\n|---|---|---|---|---|\n{}",
+            rows.join("\n")
+        )
+    }
+
+    #[test]
+    fn analysis_paragraph_above_a_metrics_table_is_prose() {
+        let para = "Revenue grew faster than expected because the annual plan landed in week \
+                    three, but churn stayed high among teams that never finished setup. The \
+                    onboarding funnel is the next thing to fix, starting with the invite step \
+                    that most new admins skip.";
+        assert!(para.len() >= 230);
+        let note = format!("## Q3 results\n\n{para}\n\n{}", metrics_table(20));
+        all(&note, "prose");
+        all(&format!("## Q3 results\n\n{}", metrics_table(20)), "data");
+    }
+
     #[test]
     fn fenced_code_is_prose() {
         let code = "```elixir\ndefmodule Foo do\n  def bar(%{id: id} = m, opts \\\\ []) do\n    \
@@ -1236,6 +1332,29 @@ mod tests {
         );
         let text: String = chunk(&raw, "", "T").iter().map(|c| c.0.clone()).collect();
         assert!(!text.contains("rectangle"), "{text}");
+    }
+
+    #[test]
+    fn excalidraw_needs_the_frontmatter_key() {
+        let clipped = "---\nsource: https://github.com/zsviczian/obsidian-excalidraw-plugin\n---\n\
+                       # Notes\n\n## Drawing\n\nThe API:\n\n```json\n{\"keep\": \"me\"}\n```\n";
+        let text: String = chunk(clipped, "", "T")
+            .iter()
+            .map(|c| c.0.clone())
+            .collect();
+        assert!(text.contains("keep"), "{text}");
+    }
+
+    #[test]
+    fn old_format_h1_drawing_is_dropped() {
+        let old = DRAWING.replace(
+            "## Drawing\n```compressed-json\nN4IgLgngDgpiBcIBeA7AHABgOgIwG8AaGm",
+            "# Drawing\n```json\n{\"type\": \"rectangle\", \"x\": 1, \"id\": \"qq\"}\nN4",
+        );
+        assert!(old.contains("# Drawing\n```json"));
+        let text: String = chunk(&old, "", "T").iter().map(|c| c.0.clone()).collect();
+        assert!(!text.contains("rectangle"), "{text}");
+        assert!(text.contains("Launch plan zanzibar"), "{text}");
     }
 
     #[test]

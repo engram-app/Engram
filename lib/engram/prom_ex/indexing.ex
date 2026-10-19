@@ -36,7 +36,7 @@ defmodule Engram.PromEx.Indexing do
       content). That spend is ours, never charged to a user's embed cap, so
       this is the only place it is counted. Untagged.
 
-    * `engram_prom_ex_indexing_points_written_total` — Qdrant points written
+    * `engram_prom_ex_indexing_points_written_total`: Qdrant points written
       by a commit (reused points excluded), tagged by `:kind` (`prose | data |
       frontmatter | drawing | canvas | base`) and `:dense` (`"true" | "false"`).
       Sizes each embed-less lever. `drawing` stays 0 while drawing data is
