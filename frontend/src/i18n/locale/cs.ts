@@ -785,7 +785,7 @@ export default {
 	daily: "denně",
 	Weekly: "Týdně",
 	weekly: "týdně",
-	monthly: "Měsíčně",
+	monthly: "měsíčně",
 	Annually: "Ročně",
 	annual: "roční",
 	"Charge prorated amount now": "Zaúčtovat poměrnou částku nyní",

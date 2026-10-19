@@ -783,7 +783,7 @@ export default {
 	daily: "codziennie",
 	Weekly: "Cotygodniowo",
 	weekly: "cotygodniowo",
-	monthly: "Miesięcznie",
+	monthly: "miesięcznie",
 	Annually: "Rocznie",
 	annual: "roczny",
 	"Charge prorated amount now": "Pobierz proporcjonalną kwotę teraz",

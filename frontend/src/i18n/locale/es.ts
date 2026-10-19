@@ -774,7 +774,7 @@ export default {
 	daily: "diario",
 	Weekly: "Semanal",
 	weekly: "semanal",
-	monthly: "Mensual",
+	monthly: "mensual",
 	Annually: "Anual",
 	annual: "anual",
 	"Charge prorated amount now": "Cobrar el importe prorrateado ahora",

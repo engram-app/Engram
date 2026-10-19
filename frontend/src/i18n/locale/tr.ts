@@ -740,7 +740,7 @@ export default {
 	daily: "günlük",
 	Weekly: "Haftalık",
 	weekly: "haftalık",
-	monthly: "Aylık",
+	monthly: "aylık",
 	Annually: "Yıllık",
 	annual: "yıllık",
 	"Charge prorated amount now": "Tutarı şimdi tahsil et",

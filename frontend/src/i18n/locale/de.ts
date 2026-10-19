@@ -752,7 +752,7 @@ export default {
 	daily: "täglich",
 	Weekly: "Wöchentlich",
 	weekly: "wöchentlich",
-	monthly: "Monatlich",
+	monthly: "monatlich",
 	Annually: "Jährlich",
 	annual: "jährlich",
 	"Charge prorated amount now": "Betrag anteilig jetzt berechnen",

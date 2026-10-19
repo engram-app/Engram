@@ -737,7 +737,7 @@ export default {
 	daily: "hàng ngày",
 	Weekly: "Hàng tuần",
 	weekly: "hàng tuần",
-	monthly: "Hàng tháng",
+	monthly: "hàng tháng",
 	Annually: "Hàng năm",
 	annual: "hàng năm",
 	"Charge prorated amount now": "Tính phí số tiền tương ứng ngay bây giờ",

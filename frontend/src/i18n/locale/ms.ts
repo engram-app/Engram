@@ -740,7 +740,7 @@ export default {
 	daily: "harian",
 	Weekly: "Mingguan",
 	weekly: "mingguan",
-	monthly: "Bulanan",
+	monthly: "bulanan",
 	Annually: "Tahunan",
 	annual: "tahunan",
 	"Charge prorated amount now": "Bayar jumlah yang dikira sekarang",
