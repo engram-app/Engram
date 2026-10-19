@@ -3,7 +3,12 @@ defmodule EngramWeb.LogsController do
   use OpenApiSpex.ControllerSpecs
   alias EngramWeb.Schemas
 
+  alias Engram.Logger.Metadata
   alias Engram.Logs
+  alias EngramWeb.OriginDevice
+  alias EngramWeb.RateLimiter
+
+  require Logger
 
   operation(:ingest,
     operation_id: "logs-ingest",
@@ -14,13 +19,55 @@ defmodule EngramWeb.LogsController do
     responses: [ok: {"Persisted count", "application/json", Schemas.LogIngestResponse}]
   )
 
-  def ingest(conn, %{"logs" => logs}) when is_list(logs) do
+  def ingest(conn, %{"logs" => [_ | _] = logs}) do
     user = conn.assigns.current_user
-    {:ok, count} = Logs.insert_logs(user, logs, conn.assigns.current_vault.id)
+
+    count =
+      if within_line_budget?(conn, user, length(logs)) do
+        {:ok, count} = Logs.insert_logs(user, logs, conn.assigns.current_vault.id)
+        count
+      else
+        0
+      end
+
     json(conn, %{ok: true, count: count})
   end
 
   def ingest(conn, _params), do: json(conn, %{ok: true, count: 0})
+
+  # Per-device line budget (2026-10-17 prod CPU alert: ingest jumped 296 -> 8,332
+  # lines per 10m). The per-request limiters bound request count, not lines,
+  # and one request can carry 1,000 lines, each scrubbed, inserted and maybe
+  # re-emitted.
+  #
+  # Over budget we answer 200 and drop the batch rather than 429: the plugin's
+  # remote logger re-buffers a failed batch and logs the failure into the same
+  # buffer, so a 429 would turn into a retry storm of the lines we refused.
+  #
+  # The key is scoped under the user, so a spoofed X-Device-Id can only split
+  # the caller's own budget; requests without one share a per-user bucket.
+  # ponytail: a batch that crosses the budget is dropped whole (Hammer's deny
+  # carries no count to accept a partial batch); partial accept if it matters.
+  @line_budget 5_000
+  @line_window_ms :timer.minutes(10)
+
+  defp within_line_budget?(conn, user, lines) do
+    device = OriginDevice.from_conn(conn) || "user"
+    key = "client_logs:#{user.id}:#{device}"
+
+    case RateLimiter.hit(key, @line_window_ms, @line_budget, :client_logs, lines) do
+      {:allow, _} ->
+        true
+
+      {:deny, _} ->
+        Logger.warning(
+          "client log budget exceeded: dropped #{lines} lines",
+          Metadata.with_category(:warning, :client, dropped: lines)
+        )
+
+        false
+    end
+  end
 
   operation(:index,
     operation_id: "logs-list",
