@@ -72,7 +72,7 @@ defmodule Engram.Indexing do
       hashes here, so the stamp shares the index write's transaction instead
       of opening its own. `index_tier` is the tier this pass used: `floor_tier/2`,
       or a floor tier when a full pass would overrun `points_budget_ok?/3`.
-    * `:index_tier` — overrides the note's own `index_tier` (see
+    * `:index_tier`: overrides the note's own `index_tier` (see
       `floor_tier/2`). `"floor"` / `"floor_paid"` take the floor path
       (`floor_plan/2`); an explicit `nil` asks for a full pass, which still
       floors if it would overrun `points_budget_ok?/3`. Either way the
