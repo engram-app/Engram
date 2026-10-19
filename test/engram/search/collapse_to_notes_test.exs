@@ -45,7 +45,10 @@ defmodule Engram.Search.CollapseToNotesTest do
       chunk("a.md", "v1", 0.7, [1.0, 0.0])
     ]
 
-    assert [%{text: "frontmatter", vector: [1.0, 0.0]}] = Search.collapse_to_notes(chunks)
+    assert [%{text: "frontmatter", vector: vector}] = Search.collapse_to_notes(chunks)
+    # Compared, not pattern-matched: matching on 0.0 warns on OTP 27 (it no
+    # longer matches -0.0), and the suite runs with --warnings-as-errors.
+    assert vector == [1.0, 0.0]
   end
 
   test "same source_path in different vaults stays distinct" do
