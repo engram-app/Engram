@@ -30,6 +30,11 @@ So there are two checks here, and the structural one is the important one:
      line ends in `\`. Detected structurally, because bash cannot.
   2. `bash -n` — catches the things that ARE syntax errors (unterminated
      quotes, unclosed here-docs, dangling `fi`).
+  3. pipe-into-grep-q — `producer | grep -q`. Actions runs bash with
+     `-eo pipefail`; grep -q exits on the first match, the producer's next
+     write hits EPIPE, and pipefail fails the pipeline. It flakes by timing
+     (it blocked a staging image once). Use `grep -q PAT <<<"$x"` instead.
+     Also applied to `.sh` paths passed on the command line.
 """
 
 import re
@@ -67,11 +72,38 @@ def comment_after_continuation(script: str) -> list[tuple[int, str]]:
     return bad
 
 
+PIPE_GREP_Q = re.compile(r"(?<!\|)\|(?!\|)\s*grep\s+-[a-zA-Z]*q")
+
+
+def pipe_into_grep_q(script: str) -> list[tuple[int, str]]:
+    return [
+        (lineno, raw.strip())
+        for lineno, raw in enumerate(script.splitlines(), 1)
+        if PIPE_GREP_Q.search(raw)
+    ]
+
+
+def report_pipe_grep(label: str, script: str) -> int:
+    hits = pipe_into_grep_q(script)
+    for lineno, text in hits:
+        print(f"::error::{label}")
+        print(
+            f"    line {lineno}: pipe into grep -q flakes under pipefail "
+            f'(EPIPE); use grep -q PAT <<<"$x": {text}'
+        )
+    return len(hits)
+
+
 def main(paths: list[str]) -> int:
     failures = 0
     checked = 0
 
     for path in paths:
+        if path.endswith(".sh"):
+            with open(path) as fh:
+                failures += report_pipe_grep(path, fh.read())
+            continue
+
         with open(path) as fh:
             doc = yaml.safe_load(fh)
         if not doc:
@@ -94,6 +126,8 @@ def main(paths: list[str]) -> int:
                         f"    line {lineno}: comment follows a line-continuation, "
                         f"orphaning the rest of the command: {text}"
                     )
+
+                failures += report_pipe_grep(f"{path} {job_name} / step[{idx}] {name}", probe)
 
                 proc = subprocess.run(
                     ["bash", "-n"], input=probe, text=True, capture_output=True

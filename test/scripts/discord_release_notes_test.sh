@@ -68,7 +68,7 @@ grep -q 'release-v0.14.0' <<<"$out"            || fail "Test 1: missing tag"
 grep -q 'Obsidian-style note header' <<<"$out" || fail "Test 1: missing feature bullet"
 grep -q 'link-extract fast path' <<<"$out"     || fail "Test 1: missing second feature bullet"
 grep -q 'frontmatter boundary' <<<"$out"       || fail "Test 1: missing fix bullet"
-grep -q "$URL" <<<"$out"                       || fail "Test 1: missing full-notes link"
+grep -qF "$URL" <<<"$out"                       || fail "Test 1: missing full-notes link"
 
 # The whole point: self-host upgrade choreography must NOT be the announcement.
 grep -q 'docker compose down' <<<"$out" && fail "Test 1: leaked self-host upgrade steps" || true
@@ -127,14 +127,14 @@ out_big=$(printf '%s' "$big_body" | bash "$SCRIPT" "Engram Cloud" "release-v9.9.
 len=${#out_big}
 [ "$len" -le 2000 ] || fail "Test 6: output ${len} chars exceeds Discord's 2000 cap"
 # Truncation must drop whole bullets and still land the link — never cut mid-URL.
-grep -q "$URL" <<<"$out_big" || fail "Test 6: full-notes link lost to truncation"
-grep -qE 'more' <<<"$out_big" || fail "Test 6: no indication that changes were omitted"
+grep -qF "$URL" <<<"$out_big" || fail "Test 6: full-notes link lost to truncation"
+grep -qE '…and [0-9]+ more' <<<"$out_big" || fail "Test 6: no indication that changes were omitted"
 
 # --- Test 7: empty / unparseable body still produces a valid announcement ---
 out_empty=$(printf '%s' "" | bash "$SCRIPT" "Engram Cloud" "release-v0.0.1" "$URL")
 [ -n "$out_empty" ] || fail "Test 7: empty output on empty notes"
 grep -q 'release-v0.0.1' <<<"$out_empty" || fail "Test 7: missing tag on empty notes"
-grep -q "$URL" <<<"$out_empty"           || fail "Test 7: missing link on empty notes"
+grep -qF "$URL" <<<"$out_empty"           || fail "Test 7: missing link on empty notes"
 
 # --- Test 8: no unescaped backticks/quotes break the JSON the caller builds ---
 TRICKY='### Bug Fixes

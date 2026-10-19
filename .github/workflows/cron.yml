@@ -548,7 +548,7 @@ jobs:
       - name: ABRT presence + config
         run: |
           echo "=== ABRT installed? ==="
-          if command -v abrtd >/dev/null 2>&1 || systemctl list-unit-files 'abrt*' 2>/dev/null | grep -q abrt; then
+          if command -v abrtd >/dev/null 2>&1 || grep -q abrt <<<"$(systemctl list-unit-files 'abrt*' 2>/dev/null)"; then
             echo "ABRT is installed."
             systemctl list-unit-files 'abrt*' --no-pager 2>/dev/null | head -20
             for f in /etc/abrt/abrt.conf /etc/abrt/plugins/CCpp.conf; do
@@ -1056,7 +1056,7 @@ jobs:
           # file is excluded, so any `excluded` in the summary means no signal.
           summary=$(grep -E '^[0-9]+ (test|tests), ' vendor-conformance.log | tail -1)
           echo "Summary line: ${summary:-<none found>}"
-          if [ -z "$summary" ] || printf '%s' "$summary" | grep -q 'excluded'; then
+          if [ -z "$summary" ] || grep -q 'excluded' <<<"$summary"; then
             echo "::error::vendor conformance graded NOTHING (tag excluded, or the suite never ran)"
             rc=1
           fi

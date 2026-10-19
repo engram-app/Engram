@@ -107,4 +107,28 @@ jobs:
 YML
 python3 "$LINTER" "$TMP/good.yml" >/dev/null 2>&1 || fail "Test 6: false positive on a clean block"
 
-echo "All tests passed (6)."
+# --- Test 7: piping into grep -q under pipefail (Actions bash is -eo pipefail) ---
+# grep -q exits on the first match; the producer's next write hits EPIPE and
+# pipefail fails the pipeline. Timing-dependent, so it flakes rather than fails.
+cat > "$TMP/pipegrep.yml" <<'YML'
+name: pipegrep
+on: push
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          if printf '%s' "$msg" PIPE grep -qiF 'x'; then echo hit; fi
+YML
+sed -i 's/PIPE/|/' "$TMP/pipegrep.yml"
+python3 "$LINTER" "$TMP/pipegrep.yml" >/dev/null 2>&1 && fail "Test 7: linter passed a pipe into grep -q"
+
+# --- Test 8: same check on plain shell scripts ---
+printf '%s\n' 'set -euo pipefail' 'echo "$out" PIPE grep -q foo' | sed 's/PIPE/|/' > "$TMP/bad.sh"
+python3 "$LINTER" "$TMP/bad.sh" >/dev/null 2>&1 && fail "Test 8: linter passed a pipe into grep -q in a .sh"
+
+# --- Test 9: the here-string form and a non-quiet grep pipe both pass ---
+printf '%s\n' 'set -euo pipefail' 'grep -q foo <<<"$out"' 'echo "$out" PIPE grep -c foo' 'true || grep -q foo /dev/null' | sed 's/PIPE/|/' > "$TMP/good.sh"
+python3 "$LINTER" "$TMP/good.sh" >/dev/null 2>&1 || fail "Test 9: false positive on here-string / grep -c / ||"
+
+echo "All tests passed (9)."
