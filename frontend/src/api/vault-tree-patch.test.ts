@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { VaultTree } from "./queries";
 import {
 	applyAttachmentEvents,
+	applyFolderMarkers,
 	applyNoteEvents,
 	isUnder,
 	moveFolders,
@@ -310,5 +311,48 @@ describe("immutability", () => {
 		removeFolders(TREE, ["Archive"]);
 		upsertNote(TREE, note("n9", "z.md"));
 		expect(JSON.stringify(TREE)).toBe(before);
+	});
+});
+
+describe("applyFolderMarkers", () => {
+	it("adds an empty marker folder with its id and parent", () => {
+		const t = applyFolderMarkers(TREE, [{ id: "m-new", name: "Archive/New" }]);
+		expect(t.folders.find((f) => f.name === "Archive/New")).toEqual({
+			id: "m-new",
+			name: "Archive/New",
+			count: 0,
+			parent_id: "m-arch",
+		});
+	});
+
+	it("takes over a derived row and re-parents its direct children only", () => {
+		// A derived row exists only while a note is filed in it.
+		const t = applyFolderMarkers(
+			{
+				...TREE,
+				folders: [
+					...TREE.folders,
+					{ id: null, name: "Archive/2023/q1", count: 1, parent_id: null },
+				],
+				notes: [...TREE.notes, note("n5", "Archive/2023/q1/x.md")],
+			},
+			[{ id: "m-2023", name: "Archive/2023" }],
+		);
+		expect(t.folders.find((f) => f.name === "Archive/2023")?.id).toBe("m-2023");
+		expect(t.folders.find((f) => f.name === "Archive/2023")?.count).toBe(1);
+		expect(t.folders.find((f) => f.name === "Archive/2023/q1")?.parent_id).toBe("m-2023");
+		expect(t.folders.find((f) => f.name === "Archive2024")?.parent_id).toBeNull();
+	});
+
+	it("returns the SAME tree for markers it already holds, an empty list, or the root", () => {
+		expect(applyFolderMarkers(TREE, [{ id: "m-empty", name: "Empty" }])).toBe(TREE);
+		expect(applyFolderMarkers(TREE, [])).toBe(TREE);
+		expect(applyFolderMarkers(TREE, [{ id: "m-root", name: "" }])).toBe(TREE);
+	});
+
+	it("does not mutate its input", () => {
+		const before = structuredClone(TREE);
+		applyFolderMarkers(TREE, [{ id: "m-new", name: "New" }]);
+		expect(TREE).toEqual(before);
 	});
 });

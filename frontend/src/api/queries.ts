@@ -32,8 +32,10 @@ import { CrdtOpError, isPermanentJoinRefusal, toastJoinRefused } from "./crdt-op
 import {
 	type AttachmentEvent,
 	applyAttachmentEvents,
+	applyFolderMarkers,
 	applyNoteEvents,
 	baseOf,
+	type FolderMarkerEvent,
 	// Path → parent folder, the same rule the backend uses when computing
 	// `folder` on a NoteSummary. One definition, shared with the tree patches
 	// so a path can't mean two things on the two sides of a mutation.
@@ -233,13 +235,110 @@ async function fetchVaultTreeFresh({
 	// invalidation) abort its request instead of running a whole-vault
 	// server-side decrypt for nobody. An abort rejects, which also ends the
 	// retry loop below rather than chaining a re-fetch nobody will read.
-	let seen = treeInvalidationGen;
-	let tree = await api.get<VaultTree>("/vault/tree", { signal });
-	for (let i = 0; treeInvalidationGen !== seen && i < MAX_STALE_TREE_REFETCHES; i++) {
-		seen = treeInvalidationGen;
-		tree = await api.get<VaultTree>("/vault/tree", { signal });
+	const [, key] = queryKey;
+	const vaultId = typeof key === "string" || key === null ? key : undefined;
+	// Sync events that arrive while a request is out are buffered here by
+	// `applyVaultTreeEvents` and replayed onto its response. Each request gets a
+	// fresh buffer: events seen before it was issued are already in its answer.
+	let buffer = openTreeEventBuffer(vaultId);
+	let landed = false;
+	try {
+		let seen = treeInvalidationGen;
+		let tree = await api.get<VaultTree>("/vault/tree", { signal });
+		let patched = replayTreeEvents(tree, buffer);
+		for (
+			let i = 0;
+			(treeInvalidationGen !== seen || patched === null) && i < MAX_STALE_TREE_REFETCHES;
+			i++
+		) {
+			seen = treeInvalidationGen;
+			buffer = openTreeEventBuffer(vaultId);
+			tree = await api.get<VaultTree>("/vault/tree", { signal });
+			patched = replayTreeEvents(tree, buffer);
+		}
+		if (patched === null) {
+			// Out of retries with an event that still needs the server (see
+			// `replayTreeEvents`). Owe one refetch rather than drop it. A timer, not a
+			// direct call: invalidating before this fetch settles would be
+			// coalesced into it and cleared by its success.
+			setTimeout(() => invalidateVaultTree(client, vaultId), 0);
+		}
+		landed = true;
+		return rebasePendingTreeWrites(client, vaultId, patched ?? tree);
+	} finally {
+		if (treeEventBuffers.get(vaultId) === buffer) {
+			treeEventBuffers.delete(vaultId);
+			// A cancel drops events nothing else holds: it reverts to data that may
+			// be marked fresh. Owe a refetch, on a timer for the same reason as
+			// above. A failure needs none: the query is in `error`, so the next
+			// event re-fetches (`applyVaultTreeEvents`), with no loop and no backoff
+			// to bypass while the server keeps failing.
+			if (signal.aborted && !(landed || isEmptyBuffer(buffer))) {
+				setTimeout(() => invalidateVaultTree(client, vaultId), 0);
+			}
+		}
 	}
-	return rebasePendingTreeWrites(client, queryKey[1], tree);
+}
+
+interface TreeEventBuffer {
+	events: NoteEvent[];
+	attachmentEvents: AttachmentEvent[];
+	markers: FolderMarkerEvent[];
+}
+
+// The buffer of the tree request currently in flight, per vault. Keyed by
+// vault so a vault switch never replays one vault's events onto another's tree.
+const treeEventBuffers = new Map<unknown, TreeEventBuffer>();
+
+function openTreeEventBuffer(vaultId: unknown): TreeEventBuffer {
+	const buffer: TreeEventBuffer = { events: [], attachmentEvents: [], markers: [] };
+	treeEventBuffers.set(vaultId, buffer);
+	return buffer;
+}
+
+/**
+ * Replay events that arrived during a request onto its response, or null when
+ * one needs a request issued after it (the same rules as `applyVaultTreeEvents`).
+ *
+ * No seq says which events the response already reflects (see the `VaultTree`
+ * note), so ALL of them are replayed, in arrival order within each kind (notes,
+ * attachments, markers are separate rows). That is safe because
+ * every patch is last-writer-wins per note or attachment: an event the snapshot
+ * already contains re-applies the same value, and any later change to that row
+ * has its own later event, here or still to come over the socket.
+ */
+function isEmptyBuffer(buffer: TreeEventBuffer): boolean {
+	return (
+		buffer.events.length === 0 &&
+		buffer.attachmentEvents.length === 0 &&
+		buffer.markers.length === 0
+	);
+}
+
+function replayTreeEvents(tree: VaultTree, buffer: TreeEventBuffer): VaultTree | null {
+	if (isEmptyBuffer(buffer)) {
+		return tree;
+	}
+	return applySyncEvents(tree, buffer.events, buffer.attachmentEvents, buffer.markers);
+}
+
+// Every event kind the tree can absorb without the server, in one pass, or null
+// when one of them needs a fresh fetch. Shared by the live patch and the replay
+// onto an in-flight response, so the two can never disagree on what needs one.
+function applySyncEvents(
+	tree: VaultTree,
+	events: readonly NoteEvent[],
+	attachmentEvents: readonly AttachmentEvent[],
+	markers: readonly FolderMarkerEvent[],
+): VaultTree | null {
+	// A move between folders can hide a folder rename, which the events do not
+	// describe (see `movesAcrossFolders`). Only the server knows the markers.
+	if (movesAcrossFolders(tree, events)) {
+		return null;
+	}
+	// Null: an attachment row the events can't build (a new path, no id).
+	const next = applyAttachmentEvents(applyNoteEvents(tree, events), attachmentEvents);
+	return next && applyFolderMarkers(next, markers);
 }
 
 /**
@@ -622,18 +721,33 @@ export const ROOT_FOLDER_ID = "root";
  * - a note moved to a different folder: it may be part of a folder rename,
  *   and the events never say what happened to the folder marker;
  * - an attachment appeared at a path the tree lacks: the broadcast has no id;
- * - a tree fetch is IN FLIGHT: its response may predate these events and would
- *   land on top of the patch, silently undoing it. Invalidating instead bumps
- *   the generation `fetchVaultTreeFresh` checks, so that fetch re-runs.
+ *
+ * While a tree fetch is IN FLIGHT the events are not patched (the older
+ * response would land on top and undo them) but buffered, and
+ * `fetchVaultTreeFresh` replays them onto the response; this returns true.
  */
 export function applyVaultTreeEvents(
 	qc: QueryClient,
 	vaultId: string | null | undefined,
 	events: readonly NoteEvent[],
 	attachmentEvents: readonly AttachmentEvent[] = [],
+	markers: readonly FolderMarkerEvent[] = [],
 ): boolean {
 	const state = qc.getQueryState<VaultTree>(["vault-tree", vaultId]);
-	if (!state?.data || state.fetchStatus === "fetching") {
+	if (state?.fetchStatus === "fetching") {
+		// Hand the events to the in-flight request instead of restarting it. During
+		// a bulk sync events never stop, so restarting meant one whole-vault fetch
+		// after another for the length of the sync.
+		const buffer = treeEventBuffers.get(vaultId);
+		if (!buffer) {
+			return false;
+		}
+		buffer.events.push(...events);
+		buffer.attachmentEvents.push(...attachmentEvents);
+		buffer.markers.push(...markers);
+		return true;
+	}
+	if (!state?.data) {
 		return false;
 	}
 	// A refetch is still OWED: an earlier fallback invalidated the tree and the
@@ -643,13 +757,7 @@ export function applyVaultTreeEvents(
 	if (state.isInvalidated || state.status === "error") {
 		return false;
 	}
-	// A move between folders can hide a folder rename, which the events do not
-	// describe (see `movesAcrossFolders`). Only the server knows the markers.
-	if (movesAcrossFolders(state.data, events)) {
-		return false;
-	}
-	// Null: an attachment row the events can't build (a new path, no id).
-	const next = applyAttachmentEvents(applyNoteEvents(state.data, events), attachmentEvents);
+	const next = applySyncEvents(state.data, events, attachmentEvents, markers);
 	if (next === null) {
 		return false;
 	}

@@ -56,6 +56,36 @@ defmodule EngramWeb.FoldersBatchCreateTest do
       refute_receive %Phoenix.Socket.Broadcast{event: "folders.batch"}
     end
 
+    test "the broadcast names each created marker's id, as the vault tree lists it", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      # The web app patches these into its tree instead of re-fetching the
+      # whole vault once per batch (a first sync seeds every empty folder here).
+      post(conn, ~p"/api/folders/batch", %{folders: ["Old"]})
+      EngramWeb.Endpoint.subscribe("sync:#{user.id}:#{vault.id}")
+      post(conn, ~p"/api/folders/batch", %{folders: ["Old", "X", "Y/Z", "../X"]})
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        event: "folders.batch",
+        payload: %{op: "create", markers: markers}
+      }
+
+      tree_ids =
+        for %{"id" => id, "name" => name} <-
+              json_response(get(conn, ~p"/api/vault/tree"), 200)["folders"],
+            into: %{},
+            do: {name, id}
+
+      assert Enum.sort_by(markers, & &1.name) == [
+               %{id: tree_ids["X"], name: "X"},
+               %{id: tree_ids["Y/Z"], name: "Y/Z"}
+             ]
+
+      assert Enum.all?(markers, &is_binary(&1.id))
+    end
+
     test "sanitizes traversal and drops entries that sanitize to empty", %{
       conn: conn,
       user: user,

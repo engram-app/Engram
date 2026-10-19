@@ -303,8 +303,8 @@ export function movesAcrossFolders(tree: VaultTree, events: readonly NoteEvent[]
 
 /**
  * An attachment change as the sync channel reports it (`kind: "attachment"`).
- * Rows are addressed by PATH: the broadcast carries no id. `id`/`updated_at`
- * are only present when the caller holds a full row (an upload's response).
+ * Rows are addressed by PATH. `id`/`updated_at` come with an upload's response
+ * and with a current server's upsert broadcast; an older server's carries none.
  */
 export type AttachmentEvent =
 	| {
@@ -322,8 +322,8 @@ export type AttachmentEvent =
  * Apply attachment events by path, returning the SAME tree when nothing
  * changes. Null when an upsert names a path the tree lacks and carries no id:
  * the sidebar and the attachment page address rows by id, so the row can't be
- * built and the caller must re-fetch. A rename (delete old + upsert new) lands
- * there too, which is correct: the new row's id is the server's to tell.
+ * built and the caller must re-fetch (an older server's broadcast). A current
+ * server's move upsert carries the row's id, so it patches in place.
  *
  * An in-place update keeps the row's `updated_at` when the event has none; the
  * tree sorts attachments by `mtime`, which the event does carry.
@@ -366,4 +366,42 @@ export function applyAttachmentEvents(
 		changed = true;
 	}
 	return changed ? { ...tree, attachments: [...byPath.values()] } : tree;
+}
+
+/** A folder marker the server just created, as `folders.batch` reports it. */
+export interface FolderMarkerEvent {
+	id: string;
+	name: string;
+}
+
+/**
+ * Add created folder markers, returning the SAME tree when all are known.
+ *
+ * Mirrors `combine_folders_payload/2`: a marker row carries its id, and every
+ * row's `parent_id` is the marker id of its parent path. So a marker that lands
+ * on a DERIVED row (same name, null id) takes it over, and the direct children
+ * of a new marker are re-parented onto it.
+ */
+export function applyFolderMarkers(
+	tree: VaultTree,
+	markers: readonly FolderMarkerEvent[],
+): VaultTree {
+	const ids = new Map(tree.folders.filter((f) => f.id !== null).map((f) => [f.name, f.id]));
+	const fresh = markers.filter((m) => m.name !== "" && ids.get(m.name) !== m.id);
+	if (fresh.length === 0) {
+		return tree;
+	}
+	for (const m of fresh) {
+		ids.set(m.name, m.id);
+	}
+	const names = new Set(tree.folders.map((f) => f.name));
+	const added = fresh
+		.filter((m) => !names.has(m.name))
+		.map((m) => ({ id: m.id, name: m.name, count: 0, parent_id: null }));
+	const folders = [...tree.folders, ...added].map((f) => {
+		const id = ids.get(f.name) ?? null;
+		const parent_id = f.name.includes("/") ? (ids.get(dirOf(f.name)) ?? null) : null;
+		return f.id === id && f.parent_id === parent_id ? f : { ...f, id, parent_id };
+	});
+	return rebuild(tree.notes, folders, tree.attachments);
 }

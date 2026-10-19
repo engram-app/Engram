@@ -189,8 +189,10 @@ defmodule Engram.MCP.HandlersBroadcastTest do
 
     assert_receive %Phoenix.Socket.Broadcast{
       event: "folders.batch",
-      payload: %{op: "create", folder: "mcp/new"}
+      payload: %{op: "create", folder: "mcp/new", markers: [%{id: id, name: "mcp/new"}]}
     }
+
+    assert is_binary(id)
   end
 
   test "delete_folder of an empty folder broadcasts folders.batch", %{user: user, vault: vault} do

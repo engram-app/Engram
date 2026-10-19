@@ -61,7 +61,7 @@ defmodule Engram.LogsReemitTest do
   # `diagnostic` is a client-controlled boolean off the request body. Before the
   # paired routing rule existed it was a flag nothing read, so an unbounded
   # batch was absorbed silently; it is a live Loki-ingest lever now. Entries
-  # past the cap still reach CloudWatch and the DB — only the Loki copy drops.
+  # past the cap are info lines Loki would drop, so they stay in the DB only.
   test "only the first @max_diagnostic_ships entries of a batch force a Loki ship" do
     user = insert(:user)
     parent = self()
@@ -242,6 +242,120 @@ defmodule Engram.LogsReemitTest do
     refute row.stack =~ "canary-3b"
     refute row.stack =~ "alice"
     assert row.stack =~ "at push (app.js:1:2)"
+  end
+
+  describe "what reaches stdout" do
+    # Shaped like one prod batch from a syncing device (2026-10-17): mostly an
+    # info trace line, plus one warning repeated per refused frame.
+    defp prod_batch do
+      now = DateTime.utc_now() |> DateTime.to_iso8601()
+
+      entry = fn level, msg ->
+        %{
+          "ts" => now,
+          "level" => level,
+          "category" => "pull",
+          "message" => msg,
+          "conn_id" => "c2"
+        }
+      end
+
+      List.duplicate(entry.("info", "rename-trace 2/3 SKIPPED (map already at target)"), 11) ++
+        List.duplicate(entry.("warn", "Index frame refused by server (rate_limited)"), 6) ++
+        [
+          entry.("warn", "crdt_create failed, enqueued for durable retry"),
+          entry.("warn", "crdt_create dropped (overflow) without deliver"),
+          entry.("error", "pull failed: timeout")
+        ]
+    end
+
+    defp emitted_lines(fun) do
+      parent = self()
+      ref = make_ref()
+      handler_id = :logs_reemit_lines_handler
+      previous_level = Logger.level()
+      Logger.configure(level: :info)
+      :logger.add_handler(handler_id, __MODULE__.Lines, %{config: %{parent: parent, ref: ref}})
+
+      try do
+        fun.()
+      after
+        :logger.remove_handler(handler_id)
+        Logger.configure(level: previous_level)
+      end
+
+      collect_lines(ref, [])
+    end
+
+    defp collect_lines(ref, acc) do
+      receive do
+        {^ref, line} -> collect_lines(ref, [line | acc])
+      after
+        200 -> Enum.reverse(acc)
+      end
+    end
+
+    test "info lines that Loki drops are not written; identical lines collapse with a count" do
+      user = insert(:user)
+      lines = emitted_lines(fn -> assert {:ok, 20} = Logs.insert_logs(user, prod_batch()) end)
+
+      IO.puts("[reemit-bench] stdout lines for the 20-entry prod batch: #{length(lines)}")
+      assert length(lines) == 4
+      refute Enum.any?(lines, &(&1.msg =~ "rename-trace"))
+
+      refused = Enum.find(lines, &(&1.msg =~ "Index frame refused"))
+      assert refused.meta[:repeat] == 6
+      assert refused.meta[:loki_ship] == true
+      assert Enum.all?(lines -- [refused], &(&1.meta[:repeat] == nil))
+    end
+
+    test "every entry is still persisted, including the ones not written to stdout" do
+      user = insert(:user)
+      _ = emitted_lines(fn -> {:ok, 20} = Logs.insert_logs(user, prod_batch()) end)
+
+      count =
+        Engram.Repo.aggregate(
+          from(l in Engram.Logs.ClientLog, where: l.user_id == ^user.id),
+          :count,
+          skip_tenant_check: true
+        )
+
+      assert count == 20
+    end
+
+    test "a diagnostic info entry is still written, and repeats of it collapse" do
+      user = insert(:user)
+      now = DateTime.utc_now() |> DateTime.to_iso8601()
+
+      diag = %{
+        "ts" => now,
+        "level" => "info",
+        "category" => "vault",
+        "message" => "modify",
+        "diagnostic" => true,
+        "conn_id" => "c2"
+      }
+
+      lines = emitted_lines(fn -> {:ok, 3} = Logs.insert_logs(user, List.duplicate(diag, 3)) end)
+
+      assert [%{meta: meta}] = lines
+      assert meta[:ship] == "loki"
+      assert meta[:repeat] == 3
+    end
+  end
+
+  defmodule Lines do
+    def log(%{msg: msg, meta: meta}, %{config: %{parent: parent, ref: ref}}) do
+      if meta[:category] == :client and meta[:conn_id] == "c2" do
+        send(parent, {ref, %{msg: render(msg), meta: meta}})
+      end
+
+      :ok
+    end
+
+    defp render({:string, s}), do: IO.iodata_to_binary(s)
+    defp render({:report, r}), do: inspect(r)
+    defp render({fmt, args}), do: :io_lib.format(fmt, args) |> IO.iodata_to_binary()
   end
 
   # Scrub BEFORE truncating: a quoted path that straddles the length cap would

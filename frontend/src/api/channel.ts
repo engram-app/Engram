@@ -32,7 +32,7 @@ import {
 	toastJoinRefused,
 } from "./crdt-ops";
 import { applyVaultTreeEvents, invalidateVaultTree } from "./queries";
-import type { AttachmentEvent, NoteEvent } from "./vault-tree-patch";
+import type { AttachmentEvent, FolderMarkerEvent, NoteEvent } from "./vault-tree-patch";
 
 // phoenix.js's own default reconnect steps — kept for the 2nd+ attempt. Only
 // the FIRST reconnect is full-jittered, to de-sync a drained fleet so the
@@ -179,16 +179,41 @@ function toAttachmentEvent(p: NoteChangedPayload): AttachmentEvent | null {
 	if (p.event_type === "delete") {
 		return { kind: "delete", path: p.path };
 	}
-	const { mime_type, size_bytes, mtime } = p;
+	const { mime_type, size_bytes, mtime, id, updated_at } = p;
 	if (
 		p.event_type === "upsert" &&
 		typeof mime_type === "string" &&
 		typeof size_bytes === "number" &&
 		typeof mtime === "number"
 	) {
-		return { kind: "upsert", path: p.path, mime_type, size_bytes, mtime };
+		// `id` lets a row at a path the tree has never seen be built here instead
+		// of re-fetching the whole tree (one re-fetch per upload in a first sync).
+		return {
+			kind: "upsert",
+			path: p.path,
+			mime_type,
+			size_bytes,
+			mtime,
+			...(typeof id === "string" ? { id } : {}),
+			...(typeof updated_at === "string" ? { updated_at } : {}),
+		};
 	}
 	return null;
+}
+
+// The markers a create event names, or null when it names none we can trust.
+function toFolderMarkers(p: FoldersBatchPayload): FolderMarkerEvent[] | null {
+	if (p.op !== "create" || !Array.isArray(p.markers) || p.markers.length === 0) {
+		return null;
+	}
+	const out: FolderMarkerEvent[] = [];
+	for (const m of p.markers) {
+		if (typeof m?.id !== "string" || typeof m?.name !== "string") {
+			return null;
+		}
+		out.push({ id: m.id, name: m.name });
+	}
+	return out;
 }
 
 // What a note event means to the vault tree, or null when the tree can't
@@ -471,18 +496,30 @@ export function handleNotesBatch(
 	}
 }
 
+export interface FoldersBatchPayload {
+	op?: string;
+	folder?: string;
+	folders?: string[];
+	// Creates only: the stored name and id of each marker this write created.
+	markers?: Array<{ id?: unknown; name?: unknown }>;
+}
+
 /** A folder marker was created/deleted/moved on the server (from the web app or
- *  the plugin). The sidebar renders from the ["vault-tree", vaultId] query, so a
- *  single invalidation refetches it — the created folder appears, the deleted
- *  one drops — instead of waiting for a full reload. The event is already
+ *  the plugin). A create names its markers' ids, so it patches the tree like a
+ *  note event does: the plugin seeds every empty folder of a first sync this
+ *  way, and re-fetching the whole tree per batch was a per-folder full fetch.
+ *  Deletes and moves change rows the event does not describe, so those (and a
+ *  create from a server that sends no ids) invalidate. The event is already
  *  vault-scoped by the sync topic, so the payload carries no vault_id to check. */
 export function handleFoldersBatch(
-	_payload: { op?: string; folder?: string },
+	payload: FoldersBatchPayload,
 	queryClient: QueryClient,
 	vaultId: string,
 ): void {
-	// The folders view is a `select` of the vault tree, so this is the refetch.
-	invalidateVaultTree(queryClient, vaultId);
+	const markers = toFolderMarkers(payload);
+	if (!(markers && applyVaultTreeEvents(queryClient, vaultId, [], [], markers))) {
+		invalidateVaultTree(queryClient, vaultId);
+	}
 }
 
 export async function connectChannel({
@@ -542,7 +579,7 @@ export async function connectChannel({
 		handleNotesBatch(payload, queryClient, vaultId);
 	});
 
-	channel.on("folders.batch", (payload: { op?: string; folder?: string }) => {
+	channel.on("folders.batch", (payload: FoldersBatchPayload) => {
 		handleFoldersBatch(payload, queryClient, vaultId);
 	});
 

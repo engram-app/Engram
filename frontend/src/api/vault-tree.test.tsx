@@ -2,11 +2,16 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import type React from "react";
 import { MemoryRouter } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FolderTreeProvider } from "../layout/folder-tree-context";
 import FolderTree from "../viewer/folder-tree";
 import { syntheticFolderId } from "../viewer/tree/synthesize-folders";
-import { backfillStructural } from "./channel";
+import {
+	__resetNoteChangeBatch,
+	backfillStructural,
+	handleFoldersBatch,
+	handleNoteChanged,
+} from "./channel";
 import { type NoteSummary, useAttachments, useFolders, useVaultNotes } from "./queries";
 import { dirOf } from "./vault-tree-patch";
 
@@ -392,4 +397,384 @@ describe("FolderTree renders from a real /vault/tree payload", () => {
 		// the sidebar's data. Everything the tree renders came from ONE request.
 		expect(urls().filter((u) => u !== "/vaults")).toEqual(["/vault/tree"]);
 	});
+});
+
+// A large first sync streams note events continuously. Each batch that landed
+// while a tree fetch was in flight used to invalidate, which re-ran the fetch,
+// during which the next batch landed: back-to-back whole-vault fetches for the
+// whole sync (prod: 161 in 20 min, ~0.55 CPU-s each). Events seen mid-flight
+// are now buffered and replayed onto the response instead.
+describe("sync events during an in-flight tree fetch", () => {
+	afterEach(() => {
+		__resetNoteChangeBatch();
+	});
+
+	// Load the tree, then hold its NEXT fetch open until `release` is called.
+	async function loadThenHoldRefetch() {
+		const qc = newQc();
+		let treeCalls = 0;
+		let release: (t: Tree) => void = () => {};
+		let fail: (e: Error) => void = () => {};
+		get.mockImplementation((url: string) => {
+			if (url !== "/vault/tree") {
+				return Promise.resolve(legacyFrozen(url));
+			}
+			treeCalls++;
+			if (treeCalls === 2) {
+				return new Promise<Tree>((resolve, reject) => {
+					release = resolve;
+					fail = reject;
+				});
+			}
+			return Promise.resolve(current);
+		});
+		const { result } = renderHook(() => useVaultNotes(), { wrapper: wrapperFor(qc) });
+		await waitFor(() => expect(result.current.data).toBeDefined());
+		backfillStructural(qc, "42");
+		await waitFor(() => expect(treeCalls).toBe(2));
+		return {
+			qc,
+			result,
+			calls: () => treeCalls,
+			bump: () => treeCalls++,
+			release: (t: Tree) => release(t),
+			fail: (e: Error) => fail(e),
+		};
+	}
+
+	const upsert = (id: string, path: string, updated_at: string) => ({
+		event_type: "upsert" as const,
+		id,
+		path,
+		updated_at,
+		vault_id: "42",
+	});
+	// Past the channel's 250 ms coalescing window.
+	const flushBatch = () => new Promise((r) => setTimeout(r, 300));
+
+	it("does not re-fetch, and applies the events once the fetch lands", async () => {
+		const h = await loadThenHoldRefetch();
+		handleNoteChanged(upsert("n9", "Projects/new.md", "u9"), h.qc, "42");
+		await flushBatch();
+		handleNoteChanged(upsert("n2", "root.md", "u2"), h.qc, "42");
+		await flushBatch();
+
+		// The held response was snapshotted before either write.
+		h.release(BASE_TREE);
+
+		await waitFor(() =>
+			expect(h.result.current.data?.find((n) => n.id === "n9")?.path).toBe("Projects/new.md"),
+		);
+		expect(h.result.current.data?.find((n) => n.id === "n2")?.updated_at).toBe("u2");
+		expect(h.calls()).toBe(2);
+	});
+
+	it("does not duplicate a buffered event the response already contains", async () => {
+		const h = await loadThenHoldRefetch();
+		handleNoteChanged(upsert("n9", "Projects/new.md", "u9"), h.qc, "42");
+		await flushBatch();
+
+		const n9 = { id: "n9", path: "Projects/new.md", created_at: "u9", updated_at: "u9" };
+		h.release({ ...BASE_TREE, notes: [...BASE_TREE.notes, n9] });
+
+		await waitFor(() => expect(h.result.current.data?.some((n) => n.id === "n9")).toBe(true));
+		expect(h.result.current.data?.filter((n) => n.id === "n9")).toHaveLength(1);
+		expect(h.calls()).toBe(2);
+	});
+
+	// The events live with the request that failed. Replaying them onto a LATER
+	// response, issued after they happened, could resurrect a stale state.
+	it("drops the buffer when the fetch fails", async () => {
+		const h = await loadThenHoldRefetch();
+		handleNoteChanged(upsert("n2", "root.md", "stale"), h.qc, "42");
+		await flushBatch();
+		h.fail(new Error("boom"));
+		await waitFor(() => expect(h.qc.getQueryState(["vault-tree", "42"])?.status).toBe("error"));
+
+		// Server truth since then: n2 is gone.
+		current = { ...BASE_TREE, notes: BASE_TREE.notes.filter((n) => n.id !== "n2") };
+		backfillStructural(h.qc, "42");
+
+		await waitFor(() => expect(h.calls()).toBe(3));
+		await waitFor(() => expect(h.result.current.data?.some((n) => n.id === "n2")).toBe(false));
+	});
+
+	it("re-fetches after a cancelled fetch drops buffered events", async () => {
+		const h = await loadThenHoldRefetch();
+		h.release(BASE_TREE);
+		await waitFor(() => expect(h.qc.getQueryState(["vault-tree", "42"])?.fetchStatus).toBe("idle"));
+		let held = true;
+		// Like `api.get`: an abort rejects the request.
+		get.mockImplementation((url: string, opts?: { signal?: AbortSignal }) => {
+			if (url !== "/vault/tree") {
+				return Promise.resolve(legacyFrozen(url));
+			}
+			h.bump();
+			if (!held) {
+				return Promise.resolve(current);
+			}
+			return new Promise<Tree>((_, reject) =>
+				opts?.signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+			);
+		});
+		const refetching = h.qc.refetchQueries({ queryKey: ["vault-tree", "42"] });
+		await waitFor(() =>
+			expect(h.qc.getQueryState(["vault-tree", "42"])?.fetchStatus).toBe("fetching"),
+		);
+		const n9 = { id: "n9", path: "Projects/new.md", created_at: "u9", updated_at: "u9" };
+		current = { ...BASE_TREE, notes: [...BASE_TREE.notes, n9] };
+		handleNoteChanged(upsert("n9", "Projects/new.md", "u9"), h.qc, "42");
+		await flushBatch();
+
+		held = false;
+		await h.qc.cancelQueries({ queryKey: ["vault-tree", "42"] });
+		await refetching;
+
+		await waitFor(() => expect(h.result.current.data?.some((n) => n.id === "n9")).toBe(true));
+	});
+
+	it("keeps another vault's events out of this vault's buffer", async () => {
+		const h = await loadThenHoldRefetch();
+		handleNoteChanged({ ...upsert("x1", "other.md", "u"), vault_id: "43" }, h.qc, "43");
+		await flushBatch();
+		h.release(BASE_TREE);
+
+		await waitFor(() => expect(h.qc.getQueryState(["vault-tree", "42"])?.fetchStatus).toBe("idle"));
+		expect(h.result.current.data?.some((n) => n.id === "x1")).toBe(false);
+	});
+
+	// A move between folders may be a folder rename; the events say nothing
+	// about the marker, so a request issued after the move is still required.
+	it("re-fetches once when a buffered event moves a note across folders", async () => {
+		const h = await loadThenHoldRefetch();
+		handleNoteChanged(upsert("n1", "spec.md", "u2"), h.qc, "42");
+		await flushBatch();
+		const moved = {
+			...BASE_TREE,
+			notes: BASE_TREE.notes.map((n) => (n.id === "n1" ? { ...n, path: "spec.md" } : n)),
+		};
+		current = moved;
+		h.release(BASE_TREE);
+
+		await waitFor(() =>
+			expect(h.result.current.data?.find((n) => n.id === "n1")?.path).toBe("spec.md"),
+		);
+		expect(h.calls()).toBe(3);
+	});
+});
+
+// The other two full-tree re-fetch triggers of a first sync: the plugin seeding
+// empty folders (`folders.batch` create) and attachment uploads at new paths.
+// Both now carry the ids the tree needs, so they patch like note events do.
+describe("folder creates and new attachments patch the tree", () => {
+	afterEach(() => {
+		__resetNoteChangeBatch();
+	});
+
+	const treeCalls = () => urls().filter((u) => u === "/vault/tree").length;
+	const flushBatch = () => new Promise((r) => setTimeout(r, 300));
+
+	async function loaded() {
+		const qc = newQc();
+		const { result } = renderHook(
+			() => ({ folders: useFolders(), attachments: useAttachments(), notes: useVaultNotes() }),
+			{ wrapper: wrapperFor(qc) },
+		);
+		await waitFor(() => expect(result.current.folders.data).toBeDefined());
+		return { qc, result };
+	}
+
+	const attachmentUpsert = (id: string | undefined, path: string) => ({
+		event_type: "upsert" as const,
+		kind: "attachment",
+		path,
+		vault_id: "42",
+		mime_type: "image/png",
+		size_bytes: 5,
+		mtime: 1_709_234_999,
+		...(id === undefined ? {} : { id, updated_at: "2024-07-01T00:00:00Z" }),
+	});
+
+	it("adds created folder markers without a re-fetch", async () => {
+		const { qc, result } = await loaded();
+		handleFoldersBatch(
+			{
+				op: "create",
+				folders: ["Projects/Sub", "Inbox"],
+				markers: [
+					{ id: "m1", name: "Projects/Sub" },
+					{ id: "m2", name: "Inbox" },
+				],
+			},
+			qc,
+			"42",
+		);
+
+		await waitFor(() =>
+			expect(result.current.folders.data?.find((f) => f.name === "Inbox")?.id).toBe("m2"),
+		);
+		const sub = result.current.folders.data?.find((f) => f.name === "Projects/Sub");
+		expect(sub?.id).toBe("m1");
+		expect(sub?.parent_id).toBe("f1");
+		expect(treeCalls()).toBe(1);
+	});
+
+	it("gives a derived folder its marker id and re-parents its children", async () => {
+		const { qc, result } = await loaded();
+		handleNoteChanged(
+			{ event_type: "upsert", id: "n7", path: "Derived/Kid/x.md", updated_at: "u", vault_id: "42" },
+			qc,
+			"42",
+		);
+		await flushBatch();
+		handleFoldersBatch({ op: "create", markers: [{ id: "m3", name: "Derived" }] }, qc, "42");
+
+		await waitFor(() =>
+			expect(result.current.folders.data?.find((f) => f.name === "Derived")?.id).toBe("m3"),
+		);
+		expect(result.current.folders.data?.find((f) => f.name === "Derived/Kid")?.parent_id).toBe(
+			"m3",
+		);
+		expect(treeCalls()).toBe(1);
+	});
+
+	it("still re-fetches a create that names no marker ids (older server)", async () => {
+		const { qc } = await loaded();
+		handleFoldersBatch({ op: "create", folders: ["Inbox"] }, qc, "42");
+		await waitFor(() => expect(treeCalls()).toBe(2));
+	});
+
+	it("still re-fetches a folder delete", async () => {
+		const { qc } = await loaded();
+		handleFoldersBatch({ op: "delete", folder: "Projects" }, qc, "42");
+		await waitFor(() => expect(treeCalls()).toBe(2));
+	});
+
+	it("adds an attachment at a new path from the broadcast id, without a re-fetch", async () => {
+		const { qc, result } = await loaded();
+		handleNoteChanged(attachmentUpsert("a9", "Projects/new.png"), qc, "42");
+		await flushBatch();
+
+		await waitFor(() =>
+			expect(result.current.attachments.data?.find((a) => a.path === "Projects/new.png")?.id).toBe(
+				"a9",
+			),
+		);
+		expect(treeCalls()).toBe(1);
+	});
+
+	it("still re-fetches a new-path attachment the broadcast gives no id", async () => {
+		const { qc } = await loaded();
+		handleNoteChanged(attachmentUpsert(undefined, "Projects/new.png"), qc, "42");
+		await flushBatch();
+		await waitFor(() => expect(treeCalls()).toBe(2));
+	});
+
+	it("buffers a folder create that lands during an in-flight fetch", async () => {
+		const { qc, result } = await loaded();
+		let release: (t: Tree) => void = () => {};
+		get.mockImplementation((url: string) =>
+			url === "/vault/tree"
+				? new Promise<Tree>((resolve) => {
+						release = resolve;
+					})
+				: Promise.resolve(legacyFrozen(url)),
+		);
+		backfillStructural(qc, "42");
+		await waitFor(() => expect(treeCalls()).toBe(2));
+		handleFoldersBatch({ op: "create", markers: [{ id: "m2", name: "Inbox" }] }, qc, "42");
+		release(BASE_TREE);
+
+		await waitFor(() =>
+			expect(result.current.folders.data?.find((f) => f.name === "Inbox")?.id).toBe("m2"),
+		);
+		expect(treeCalls()).toBe(2);
+	});
+
+	// The before/after number for the PR: a 1,000-note first sync that also seeds
+	// 40 empty folders and uploads 50 attachments, streamed in 25-event batches.
+	// One reconnect backfill lands mid-sync, so one re-fetch is expected. Each
+	// tree fetch takes 700 ms, so events keep arriving while one is in flight.
+	it("a simulated 1,000-note first sync costs at most two tree fetches", async () => {
+		const { qc, result } = await loaded();
+		// The server holds every write the moment it is broadcast, so a re-fetch
+		// returns the sync so far, as it would in prod.
+		const server = (patch: (t: Tree) => Tree) => {
+			current = patch(current);
+		};
+		// A whole-vault fetch is slow (seconds at 10k notes in prod): answer with
+		// the server state as of the request, 700 ms later, so events keep landing
+		// while it is in flight.
+		get.mockImplementation((url: string) => {
+			if (url !== "/vault/tree") {
+				return Promise.resolve(legacyFrozen(url));
+			}
+			const snapshot = current;
+			return new Promise((r) => setTimeout(() => r(snapshot), 700));
+		});
+		for (let b = 0; b < 40; b++) {
+			for (let i = 0; i < 25; i++) {
+				const n = b * 25 + i;
+				const note = {
+					id: `s${n}`,
+					path: `F${n % 10}/note-${n}.md`,
+					created_at: `u${n}`,
+					updated_at: `u${n}`,
+				};
+				server((t) => ({ ...t, notes: [...t.notes, note] }));
+				handleNoteChanged(
+					{
+						event_type: "upsert",
+						id: note.id,
+						path: note.path,
+						updated_at: note.updated_at,
+						vault_id: "42",
+					},
+					qc,
+					"42",
+				);
+			}
+			server((t) => ({
+				...t,
+				folders: [...t.folders, { id: `mk${b}`, name: `Empty/${b}`, count: 0, parent_id: null }],
+			}));
+			handleFoldersBatch(
+				{ op: "create", markers: [{ id: `mk${b}`, name: `Empty/${b}` }] },
+				qc,
+				"42",
+			);
+			if (b % 4 === 0) {
+				for (let a = 0; a < 5; a++) {
+					const ev = attachmentUpsert(`at${b}-${a}`, `F${a}/img-${b}-${a}.png`);
+					server((t) => ({
+						...t,
+						attachments: [
+							...t.attachments,
+							{
+								id: `at${b}-${a}`,
+								path: ev.path,
+								mime_type: ev.mime_type,
+								size_bytes: ev.size_bytes,
+								mtime: ev.mtime,
+								updated_at: "2024-07-01T00:00:00Z",
+							},
+						],
+					}));
+					handleNoteChanged(ev, qc, "42");
+				}
+			}
+			if (b === 20) {
+				backfillStructural(qc, "42");
+			}
+			await flushBatch();
+		}
+
+		console.info(`[first-sync-bench] /vault/tree fetches: ${treeCalls()}`);
+		await waitFor(() => expect(result.current.notes.data?.length).toBe(1003), { timeout: 5000 });
+		expect(result.current.attachments.data?.length).toBe(51);
+		expect(result.current.folders.data?.filter((f) => f.name.startsWith("Empty/"))).toHaveLength(
+			40,
+		);
+		expect(treeCalls()).toBeLessThanOrEqual(2);
+	}, 30_000);
 });

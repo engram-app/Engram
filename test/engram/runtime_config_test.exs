@@ -5,6 +5,27 @@ defmodule Engram.RuntimeConfigTest do
 
   defp getenv(map), do: fn key -> Map.get(map, key) end
 
+  describe "http_compression/1" do
+    # Cloudflare compresses at the edge, so origin compression in SaaS is pure
+    # CPU (9% of web CPU in the 2026-10-17 profile, all :zlib.gzip/1).
+    test "SaaS behind the edge sends responses uncompressed" do
+      assert RuntimeConfig.http_compression(getenv(%{"ENGRAM_SAAS_ONLY" => "true"})) ==
+               [compress: false]
+    end
+
+    # No edge in front of a self-host, so it keeps compressing, but with
+    # deflate at level 1: Bandit's gzip has no level knob (:zlib.gzip/1).
+    test "self-host prefers deflate at level 1, gzip as the fallback" do
+      for env <- [%{}, %{"ENGRAM_SAAS_ONLY" => "false"}] do
+        assert RuntimeConfig.http_compression(getenv(env)) == [
+                 compress: true,
+                 response_encodings: ~w(deflate gzip x-gzip),
+                 deflate_options: [level: 1]
+               ]
+      end
+    end
+  end
+
   describe "envelope_compression/1" do
     test "unset leaves the config.exs default alone" do
       assert RuntimeConfig.envelope_compression(getenv(%{})) == :unset

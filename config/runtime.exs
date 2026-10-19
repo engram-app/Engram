@@ -32,7 +32,11 @@ if System.get_env("PHX_SERVER") do
 end
 
 config :engram, EngramWeb.Endpoint,
-  http: [port: String.to_integer(System.get_env("PORT", "4000"))]
+  http: [
+    port: String.to_integer(System.get_env("PORT", "4000")),
+    # Merges into config.exs's http_options. See RuntimeConfig.http_compression/1.
+    http_options: Engram.RuntimeConfig.http_compression(&System.get_env/1)
+  ]
 
 if config_env() != :test do
   # Storage backend. Default "s3" is the SaaS/prod path (AWS S3) and the

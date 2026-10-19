@@ -331,6 +331,8 @@ config :logger, :default_formatter,
     :queue,
     :reason,
     :reason_label,
+    # Engram.Logs re-emit: identical client lines in one batch, written once.
+    :repeat,
     :replacement,
     :request_id,
     :request_path,
