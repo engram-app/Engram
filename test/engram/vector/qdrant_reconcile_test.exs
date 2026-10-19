@@ -86,8 +86,10 @@ defmodule Engram.Vector.QdrantReconcileTest do
     Bypass.stub(bypass, "GET", "/sys_metrics", fn conn ->
       Plug.Conn.send_resp(conn, 200, """
       # TYPE kubelet_volume_stats_capacity_bytes gauge
-      kubelet_volume_stats_capacity_bytes{persistentvolumeclaim="qdrant-storage-qdrant-0"} #{capacity}
-      kubelet_volume_stats_used_bytes{persistentvolumeclaim="qdrant-storage-qdrant-0"} #{used}
+      kubelet_volume_stats_capacity_bytes{namespace="q",persistentvolumeclaim="qdrant-storage-qdrant-0"} #{capacity}
+      kubelet_volume_stats_used_bytes{namespace="q",persistentvolumeclaim="qdrant-storage-qdrant-0"} #{used}
+      kubelet_volume_stats_capacity_bytes{namespace="q",persistentvolumeclaim="qdrant-snapshots-qdrant-0"} 1
+      kubelet_volume_stats_used_bytes{namespace="q",persistentvolumeclaim="qdrant-snapshots-qdrant-0"} 1
       """)
     end)
   end
@@ -127,9 +129,11 @@ defmodule Engram.Vector.QdrantReconcileTest do
     attach([:engram, :qdrant, :headroom_gate])
     stub_version(bypass, "1.18.2")
     fake_collection(bypass, "engram_notes", @prod_info)
-    # Measured 2026-10-18: 4.89 GB used of an 8 GiB volume, ~3.7 GB free.
+    # Measured 2026-10-18: volume 8.37 GB, 4.35 GB used, collection 4.89 GB.
+    # Free 4.02 GB clears half the collection, but used + half the collection
+    # is 81% of the volume: over the 80% ceiling, so the rewrite is deferred.
     stub_memory(bypass, "engram_notes", 4_890_000_000)
-    stub_sys_metrics(bypass, 8 * @gib, 4_890_000_000)
+    stub_sys_metrics(bypass, 8_370_000_000, 4_350_000_000)
 
     assert {:ok, changed} = Qdrant.reconcile_config("engram_notes")
     assert Enum.sort(changed) == ~w(optimizers_config strict_mode_config)
@@ -138,7 +142,7 @@ defmodule Engram.Vector.QdrantReconcileTest do
     assert_receive {:patch, @optimizers}
     refute_receive {:patch, _}
 
-    free = 8 * @gib - 4_890_000_000
+    free = 8_370_000_000 - 4_350_000_000
 
     assert_receive {[:engram, :qdrant, :headroom_gate],
                     %{free_bytes: ^free, collection_bytes: 4_890_000_000},
@@ -200,23 +204,48 @@ defmodule Engram.Vector.QdrantReconcileTest do
   end
 
   describe "headroom/2" do
-    test "decisions" do
-      assert {:apply, :sys_metrics, 10} = Qdrant.headroom(5, 10)
-      assert {:defer, :sys_metrics, 5} = Qdrant.headroom(5, 5)
-      assert {:apply, :self_host_rule, nil} = Qdrant.headroom(@gib - 1, nil)
-      assert {:defer, :self_host_rule, nil} = Qdrant.headroom(@gib, nil)
-      assert {:defer, :unknown_size, 99} = Qdrant.headroom(nil, 99)
+    # Rehearsal on a prod clone: the on-disk rewrite peaked at +0.26x the
+    # collection's bytes. The gate budgets 0.5x and keeps the peak under 80%
+    # of the volume, below strict mode's 85% write cap.
+    test "apply needs free >= half the collection AND peak under 80%" do
+      vol = fn used, cap -> %{used: used, capacity: cap} end
+
+      # peak (40 + 10) / 100 = 0.50, free 60 >= 10
+      assert {:apply, :sys_metrics, 60} = Qdrant.headroom(20, vol.(40, 100))
+      # peak exactly 0.80 is not under the ceiling
+      assert {:defer, :sys_metrics, 30} = Qdrant.headroom(20, vol.(70, 100))
+      # peak (70 + 9) / 100 = 0.79
+      assert {:apply, :sys_metrics, 30} = Qdrant.headroom(18, vol.(70, 100))
+      # free 8 < half of 20 (and the peak is over 100%)
+      assert {:defer, :sys_metrics, 8} = Qdrant.headroom(20, vol.(92, 100))
     end
 
-    test "parse_free_bytes prefers available, else capacity - used" do
-      assert Qdrant.parse_free_bytes("kubelet_volume_stats_available_bytes{a=\"b\"} 3.7e+09\n") ==
-               3_700_000_000
+    test "today's prod numbers defer" do
+      assert {:defer, :sys_metrics, 4_020_000_000} =
+               Qdrant.headroom(4_890_000_000, %{used: 4_350_000_000, capacity: 8_370_000_000})
+    end
 
-      assert Qdrant.parse_free_bytes(
-               "kubelet_volume_stats_capacity_bytes 100\nkubelet_volume_stats_used_bytes 40\n"
-             ) == 60
+    test "self-host and unknown-size rules" do
+      assert {:apply, :self_host_rule, nil} = Qdrant.headroom(@gib - 1, nil)
+      assert {:defer, :self_host_rule, nil} = Qdrant.headroom(@gib, nil)
+      assert {:defer, :unknown_size, 99} = Qdrant.headroom(nil, %{used: 1, capacity: 100})
+    end
 
-      assert Qdrant.parse_free_bytes("# nothing here\n") == nil
+    test "parse_volume_stats picks the qdrant-storage PVC" do
+      text = """
+      # TYPE kubelet_volume_stats_capacity_bytes gauge
+      kubelet_volume_stats_capacity_bytes{persistentvolumeclaim="qdrant-snapshots-qdrant-0"} 5e+09
+      kubelet_volume_stats_capacity_bytes{namespace="x",persistentvolumeclaim="qdrant-storage-qdrant-0"} 8.37e+09
+      kubelet_volume_stats_used_bytes{persistentvolumeclaim="qdrant-storage-qdrant-0"} 4.35e+09
+      kubelet_volume_stats_used_bytes{persistentvolumeclaim="qdrant-snapshots-qdrant-0"} 1
+      """
+
+      assert Qdrant.parse_volume_stats(text) == %{used: 4_350_000_000, capacity: 8_370_000_000}
+      assert Qdrant.parse_volume_stats("# nothing here\n") == nil
+
+      assert Qdrant.parse_volume_stats(
+               ~s|kubelet_volume_stats_used_bytes{persistentvolumeclaim="qdrant-storage-0"} 4\n|
+             ) == nil
     end
   end
 

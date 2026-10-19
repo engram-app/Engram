@@ -432,7 +432,7 @@ defmodule Engram.Vector.Qdrant do
         _ -> nil
       end
 
-    {decision, source, free} = headroom(collection_bytes, free_disk_bytes())
+    {decision, source, free} = headroom(collection_bytes, volume_stats())
 
     meta = %{decision: decision, source: source}
     measurements = %{free_bytes: free, collection_bytes: collection_bytes}
@@ -449,48 +449,59 @@ defmodule Engram.Vector.Qdrant do
   @doc """
   The on-disk headroom decision: `{:apply | :defer, source, free_bytes}`.
 
-  With a known free-disk figure (Qdrant Cloud `/sys_metrics`), apply only when
-  free disk exceeds the whole collection's `disk_bytes`. Without one
-  (self-host), apply only to a collection under 1 GiB. An unknown collection
-  size (no `/memory` before Qdrant 1.18) always defers.
+  The rewrite needs scratch space for the segment being rebuilt. On a prod
+  clone (1.18.2, 447k points, 6 segments, one optimizer thread) it peaked at
+  +0.26x the collection's `disk_bytes`; the gate budgets 0.5x. With volume
+  stats (Qdrant Cloud `/sys_metrics`) it applies only when free disk covers
+  that budget AND used + budget stays under 80% of capacity, below strict
+  mode's 85% write cap. Without them (self-host) it applies only to a
+  collection under 1 GiB. An unknown collection size (no `/memory` before
+  Qdrant 1.18) always defers.
   """
-  def headroom(nil, free), do: {:defer, :unknown_size, free}
-  def headroom(size, free) when is_integer(free) and free > size, do: {:apply, :sys_metrics, free}
-  def headroom(_size, free) when is_integer(free), do: {:defer, :sys_metrics, free}
+  def headroom(nil, volume), do: {:defer, :unknown_size, free_of(volume)}
+
   def headroom(size, nil) when size < @self_host_on_disk_limit, do: {:apply, :self_host_rule, nil}
   def headroom(_size, nil), do: {:defer, :self_host_rule, nil}
 
+  # Integer form of `free >= 0.5 * size` and `(used + 0.5 * size) / cap < 0.8`.
+  def headroom(size, %{used: used, capacity: cap} = volume) do
+    free = free_of(volume)
+    decision = if 2 * free >= size and 10 * used + 5 * size < 8 * cap, do: :apply, else: :defer
+    {decision, :sys_metrics, free}
+  end
+
+  defp free_of(%{used: used, capacity: cap}), do: cap - used
+  defp free_of(nil), do: nil
+
   # Qdrant Cloud exposes the volume's kubelet stats on `/sys_metrics`
   # (Prometheus text). Self-host has no such endpoint: nil.
-  defp free_disk_bytes do
+  defp volume_stats do
     case Req.get(base_url() <> "/sys_metrics", req_opts(:search)) do
-      {:ok, %{status: 200, body: body}} when is_binary(body) -> parse_free_bytes(body)
+      {:ok, %{status: 200, body: body}} when is_binary(body) -> parse_volume_stats(body)
       _ -> nil
     end
   end
 
   @doc false
-  def parse_free_bytes(text) do
+  # `%{used:, capacity:}` from the `qdrant-storage-*` PVC's kubelet lines (the
+  # pod also mounts other volumes, e.g. snapshots), or nil if either is absent.
+  def parse_volume_stats(text) do
     stats =
       for line <- String.split(text, "\n"),
-          [name, value] <- [
-            Regex.run(~r/^(kubelet_volume_stats_\w+_bytes)(?:\{[^}]*\})?\s+(\S+)/, line,
-              capture: :all_but_first
-            ) || []
-          ],
+          line =~ ~s(persistentvolumeclaim="qdrant-storage-),
+          [name, value] <-
+            [
+              Regex.run(~r/^kubelet_volume_stats_(used|capacity)_bytes\{[^}]*\}\s+(\S+)/, line,
+                capture: :all_but_first
+              ) || []
+            ],
           {num, _} <- [Float.parse(value)],
           into: %{},
-          do: {name, trunc(num)}
+          do: {String.to_existing_atom(name), trunc(num)}
 
     case stats do
-      %{"kubelet_volume_stats_available_bytes" => free} ->
-        free
-
-      %{"kubelet_volume_stats_capacity_bytes" => cap, "kubelet_volume_stats_used_bytes" => used} ->
-        cap - used
-
-      _ ->
-        nil
+      %{used: _, capacity: _} -> stats
+      _ -> nil
     end
   end
 
