@@ -164,4 +164,53 @@ defmodule EngramWeb.AttachmentsRefusalTelemetryTest do
     # A 2xx request line is info, under the suite's :warning level.
     refute meta[:reason]
   end
+
+  # Plug.Parsers refuses an over-ceiling JSON body in the endpoint, before the
+  # router: no route, no controller, and no request log line. The incident's
+  # 47 parser 413s took 15-26 s each and left nothing but a routeless span.
+  test "a JSON body over the parser ceiling is logged with route, size and type", %{conn: conn} do
+    body =
+      ~s({"path":"a.png","content_base64":") <>
+        String.duplicate("a", EngramWeb.Endpoint.max_body_bytes()) <> ~s("})
+
+    declared = byte_size(body)
+
+    {result, events} =
+      LogCapture.with_events(fn ->
+        OpenTelemetry.Tracer.with_span "test.request" do
+          assert_error_sent(413, fn ->
+            conn
+            |> put_req_header("content-type", "application/json")
+            |> put_req_header("content-length", Integer.to_string(declared))
+            |> post("/api/attachments", body)
+          end)
+        end
+      end)
+
+    # Response unchanged: Phoenix's default 413.
+    assert {413, _, resp_body} = result
+    assert %{"errors" => %{"detail" => _}} = Jason.decode!(resp_body)
+
+    assert_receive {:span, span(name: "test.request", attributes: attrs)}, 2_000
+    attrs = :otel_attributes.map(attrs)
+    assert attrs["http.route"] == "/api/attachments"
+    assert attrs["engram.request.reject_reason"] == "request_too_large"
+    assert attrs["engram.request.declared_bytes"] == declared
+    assert attrs["engram.request.content_type"] == "application/json"
+
+    event =
+      Enum.find(events, fn e ->
+        match?({:string, _}, e.msg) and
+          IO.iodata_to_binary(elem(e.msg, 1)) == "request body too large"
+      end)
+
+    assert event, "expected a 'request body too large' log line"
+    assert event.level == :warning
+    assert event.meta.reason == "request_too_large"
+    assert event.meta.status == 413
+    assert event.meta.method == "POST"
+    assert event.meta.route == "EngramWeb.AttachmentsController#upload"
+    assert event.meta.declared_bytes == declared
+    assert event.meta.content_type == "application/json"
+  end
 end
