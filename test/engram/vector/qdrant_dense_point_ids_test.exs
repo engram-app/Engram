@@ -1,9 +1,8 @@
 defmodule Engram.Vector.QdrantDensePointIdsTest do
   @moduledoc """
   Embed less: a note's frontmatter and data points carry only the `keyword`
-  vector. A dense recommend that names one as a positive is refused for the
-  whole request, so `similar_to` must pass only the ids `has_vector: "dense"`
-  keeps. Bypass answers 200 to anything, so only a real Qdrant proves either.
+  vector, so `similar_to` passes only the ids `has_vector: "dense"` keeps.
+  Bypass answers 200 to anything, so only a real Qdrant proves the filter.
   """
   use ExUnit.Case, async: false
 
@@ -45,20 +44,17 @@ defmodule Engram.Vector.QdrantDensePointIdsTest do
     assert Qdrant.dense_point_ids(col, []) == {:ok, []}
   end
 
-  # Why `similar_to` pre-filters: one sparse-only positive loses the dense
-  # point's neighbours. How depends on the server version: 1.19.2 (dev)
-  # refuses the request with a 4xx, 1.17.1 (CI, compose) answers 200 with
-  # no results. Only the dense ids find the neighbour on both.
-  test "a recommend naming a sparse-only point finds nothing", ctx do
+  # Our contract: the dense ids `dense_point_ids/2` returns are a valid
+  # recommend on their own. What a server does with a sparse-only positive
+  # differs by version (1.19.2 refuses it with a 4xx; 1.17.1, CI's pin, has
+  # answered both 200 with no hits and 200 with the neighbour), so nothing
+  # here depends on it. `similar_to` never sends one (handlers_similar_test).
+  test "the dense ids alone recommend the note's neighbour", ctx do
     opts = [user_id: @user_id, vault_id: @vault_id, limit: 1]
+    {:ok, ids} = Qdrant.dense_point_ids(ctx.col, [ctx.dense, ctx.sparse])
 
-    assert {:ok, [%{qdrant_id: id}]} = Qdrant.recommend(ctx.col, [ctx.dense], opts)
+    assert {:ok, [%{qdrant_id: id}]} = Qdrant.recommend(ctx.col, ids, opts)
     assert id == ctx.neighbour
-
-    case Qdrant.recommend(ctx.col, [ctx.dense, ctx.sparse], opts) do
-      {:error, {status, _}} -> assert status in 400..404
-      other -> assert other == {:ok, []}
-    end
   end
 
   defp point(id, vector),
