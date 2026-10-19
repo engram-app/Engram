@@ -22,7 +22,10 @@ defmodule Engram.Parsers.Markdown do
   #     normalised, content-anchored splits (#1594), `embed_text` (#1621).
   # 4: wrapped base64 and hex blobs stripped, and a per-chunk `kind`: a
   #     frontmatter chunk is keyword-only, so it no longer holds a dense vector.
-  @chunker_version 4
+  #     NOT stamped yet: held at 3 so prod rebuilds once, when the bundled
+  #     re-chunk lands (embed-less, merge cap, storage move). Until then the
+  #     v4 chunker applies to new and edited notes only.
+  @chunker_version 3
 
   @data_exts [".canvas", ".base"]
 

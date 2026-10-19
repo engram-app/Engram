@@ -26,8 +26,9 @@ defmodule Engram.Native.ChunkerTest do
     end
   end
 
-  test "chunker_version is 4: the boundary fixes below re-chunk the notes they touch" do
-    assert Markdown.chunker_version() == 4
+  # Held at 3 until the bundled one-time re-chunk ships; see markdown.ex.
+  test "chunker_version is 3: prod rebuilds once, with the bundled re-chunk" do
+    assert Markdown.chunker_version() == 3
   end
 
   # #1616: the four section bugs, fixed under one version bump (each bump is a
