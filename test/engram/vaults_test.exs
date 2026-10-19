@@ -519,16 +519,22 @@ defmodule Engram.VaultsTest do
     test "returns vaults ordered by inserted_at ascending", %{user: user} do
       insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => 10})
 
-      {:ok, v1, _} = Vaults.register_vault(user, "Alpha", Ecto.UUID.generate())
-      # 1.1s gap ensures distinct second-precision `created_at` timestamps so the
-      # secondary `v.id` ordering doesn't race with UUIDv7 sub-millisecond
-      # tiebreaker randomness.
-      Process.sleep(1100)
-      {:ok, v2, _} = Vaults.register_vault(user, "Beta", Ecto.UUID.generate())
+      {:ok, alpha, _} = Vaults.register_vault(user, "Alpha", Ecto.UUID.generate())
+      {:ok, beta, _} = Vaults.register_vault(user, "Beta", Ecto.UUID.generate())
+
+      # Backdate the LATER-registered vault instead of sleeping for distinct
+      # second-precision timestamps. Beta's UUIDv7 id sorts after Alpha's, so
+      # Beta coming first proves the order is created_at, not the id tiebreak.
+      {1, _} =
+        Engram.Repo.update_all(
+          from(v in Engram.Vaults.Vault, where: v.id == ^beta.id),
+          [set: [created_at: DateTime.add(alpha.created_at, -60, :second)]],
+          skip_tenant_check: true
+        )
 
       [first, second | _] = Vaults.list_vaults(user)
-      assert first.id == v1.id
-      assert second.id == v2.id
+      assert first.id == beta.id
+      assert second.id == alpha.id
     end
   end
 
