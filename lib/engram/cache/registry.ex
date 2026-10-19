@@ -152,12 +152,14 @@ defmodule Engram.Cache.Registry do
     %{name: :qdrant_pressure, ttl: 60_000, cache_nil: false, evict_match: :key, pg_channel: nil},
     # {note_id, embed key} => dense vectors Voyage was paid for, held across
     # the commit so a retry after any failure (backpressure, a raise) reuses
-    # them instead of paying again. Evicted on a successful commit.
+    # them instead of paying again. Evicted on a successful commit. Byte cap
+    # and one-per-note live in Indexing.RetainedVectors; `:first_elem` lets it
+    # evict by note_id.
     %{
       name: :retained_vectors,
       ttl: 1_800_000,
       cache_nil: false,
-      evict_match: :key,
+      evict_match: :first_elem,
       pg_channel: nil
     }
   ]

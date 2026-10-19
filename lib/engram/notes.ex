@@ -268,6 +268,11 @@ defmodule Engram.Notes do
 
   @max_batch_folders 500
 
+  # Rows per folder-marker `insert_all`. A marker row binds 14 parameters
+  # (upsert_folder_markers/6), so 65535 allows 4681; 2000 is the same
+  # half-margin Links uses so a new column cannot re-arm the overflow.
+  @folder_insert_chunk 2000
+
   @doc """
   Batch `create_folder_marker/3`: one tenant transaction and at most one
   shared `seq` for the whole batch. Each folder goes through
@@ -418,7 +423,11 @@ defmodule Engram.Notes do
         # DO NOTHING (no conflict_target) for the same reason as
         # `insert_folder_marker/6`: a concurrent create of the same folder must
         # not abort the transaction. The re-find below collapses to the winner.
-        _ = Repo.insert_all(Note, rows, on_conflict: :nothing)
+        # Batched so the protocol bind cap does not depend on the caller's
+        # batch limit staying where it is today.
+        rows
+        |> Enum.chunk_every(@folder_insert_chunk)
+        |> Enum.each(&Repo.insert_all(Note, &1, on_conflict: :nothing))
 
         user
         |> folder_markers_by_hmac_query(vault, Enum.map(missing, &elem(&1, 1)))

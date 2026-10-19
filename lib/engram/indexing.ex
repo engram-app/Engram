@@ -9,6 +9,7 @@ defmodule Engram.Indexing do
   import Ecto.Query
 
   alias Engram.Crypto
+  alias Engram.Indexing.RetainedVectors
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Chunk
@@ -804,22 +805,21 @@ defmodule Engram.Indexing do
   defp retained_or_embed(nil, dense?, texts, opts), do: embed_or_release(dense?, texts, opts)
   defp retained_or_embed(vectors, _dense?, _texts, _opts), do: {:ok, vectors}
 
-  # ponytail: node-local, 30 min TTL, no size cap. A retry on another node, or
-  # after the TTL, re-pays Voyage for that note; the bytes held are one note's
-  # packed vectors per in-flight or failed commit (~30 MB for 7k chunks at
-  # 1024d f32), evicted on success. Oban's default backoff puts all five
-  # attempts inside the TTL. Persist them (chunks table) if failures get common.
+  # ponytail: node-local, 30 min TTL, byte-capped (RetainedVectors). A retry on
+  # another node, after the TTL, or after a cap eviction re-pays Voyage for that
+  # note. Oban's default backoff puts all five attempts inside the TTL. Persist
+  # them (chunks table) if failures get common.
   defp retained_key(note, texts),
     do: {note.id, :crypto.hash(:sha256, :erlang.term_to_binary({embed_model(), texts}))}
 
   defp retained(_note, []), do: :miss
-  defp retained(note, texts), do: Engram.Cache.get(:retained_vectors, retained_key(note, texts))
+  defp retained(note, texts), do: RetainedVectors.get(retained_key(note, texts))
 
   defp retain(nil), do: :ok
-  defp retain({key, vectors}), do: Engram.Cache.put(:retained_vectors, key, vectors)
+  defp retain({key, vectors}), do: RetainedVectors.put(key, vectors)
 
   defp forget_retained(nil), do: :ok
-  defp forget_retained({key, _vectors}), do: Engram.Cache.evict_local(:retained_vectors, key)
+  defp forget_retained({key, _vectors}), do: RetainedVectors.forget(key)
 
   # Anything but a successful embed gives its reservation back, exactly once:
   # an `{:error, _}`, a raise, a throw or an exit. The `catch` re-raises with
