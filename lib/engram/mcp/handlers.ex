@@ -396,9 +396,12 @@ defmodule Engram.MCP.Handlers do
     # at its derived path. Upsert sanitizes the path, so check the same form.
     # ponytail: check-then-write, two concurrent creates of one title can still
     # race; a create-only mode on upsert_note closes it if that ever matters.
-    if Notes.note_exists?(user, vault, Notes.PathSanitizer.sanitize(path)) do
+    # Replies name where the note lands, not the raw argument.
+    stored = Notes.PathSanitizer.sanitize(path)
+
+    if Notes.note_exists?(user, vault, stored) do
       {:error,
-       "A note already exists at #{path}. Use get_notes to read it, or write_note " <>
+       "A note already exists at #{stored}. Use get_notes to read it, or write_note " <>
          "to replace it, or pick a different title."}
     else
       Notes.upsert_note(
@@ -409,12 +412,12 @@ defmodule Engram.MCP.Handlers do
       )
       |> upsert_reply(
         [
-          ok: "Note created: #{path}",
-          conflict: "Note changed on the server, retry: #{path}",
-          deleted: "Note was deleted: #{path}",
-          error: "Failed to create note: #{path}"
+          ok: "Note created: #{stored}",
+          conflict: "Note changed on the server, retry: #{stored}",
+          deleted: "Note was deleted: #{stored}",
+          error: "Failed to create note: #{stored}"
         ],
-        %{"path" => path}
+        %{"path" => stored}
       )
     end
   end
@@ -431,6 +434,8 @@ defmodule Engram.MCP.Handlers do
     if byte_size(content) > Notes.max_note_bytes() do
       {:error, "note exceeds maximum size of 10MB"}
     else
+      stored = Notes.PathSanitizer.sanitize(path)
+
       Notes.upsert_note(
         user,
         vault,
@@ -439,12 +444,12 @@ defmodule Engram.MCP.Handlers do
       )
       |> upsert_reply(
         [
-          ok: "Note saved: #{path}",
-          conflict: "Note changed on the server, retry: #{path}",
-          deleted: "Note was deleted: #{path}",
-          error: "Failed to save note: #{path}"
+          ok: "Note saved: #{stored}",
+          conflict: "Note changed on the server, retry: #{stored}",
+          deleted: "Note was deleted: #{stored}",
+          error: "Failed to save note: #{stored}"
         ],
-        %{"path" => path}
+        %{"path" => stored}
       )
     end
   end
@@ -511,8 +516,10 @@ defmodule Engram.MCP.Handlers do
 
     case Notes.rename_note(user, vault, old_path, new_path) do
       {:ok, _note} ->
-        {:ok, "Note renamed: #{old_path} -> #{new_path}",
-         %{"old_path" => old_path, "new_path" => new_path}}
+        stored = Notes.PathSanitizer.sanitize(new_path)
+
+        {:ok, "Note renamed: #{old_path} -> #{stored}",
+         %{"old_path" => old_path, "new_path" => stored}}
 
       {:error, :not_found} ->
         {:error, "Note not found: #{old_path}"}
@@ -536,12 +543,15 @@ defmodule Engram.MCP.Handlers do
 
     case Engram.Folders.rename(user, vault, old_folder, new_folder) do
       {:ok, %{notes: n, attachments: a}} ->
+        # Same sanitizer Folders.rename stored with; it succeeded there, so :ok.
+        {:ok, stored} = Notes.PathSanitizer.sanitize_target(new_folder)
+
         {:ok,
-         "Folder renamed: #{old_folder} -> #{new_folder} " <>
+         "Folder renamed: #{old_folder} -> #{stored} " <>
            "(#{n} notes, #{a} attachments updated)",
          %{
            "old_folder" => old_folder,
-           "new_folder" => new_folder,
+           "new_folder" => stored,
            "notes" => n,
            "attachments" => a
          }}
