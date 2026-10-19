@@ -27,14 +27,16 @@ defmodule Engram.Vector.QdrantDensePointIdsTest do
 
     dense = Ecto.UUID.generate()
     sparse = Ecto.UUID.generate()
+    neighbour = Ecto.UUID.generate()
 
     :ok =
       Qdrant.upsert_points(col, [
         point(dense, %{"dense" => List.duplicate(0.1, @dims), "keyword" => keyword()}),
-        point(sparse, %{"keyword" => keyword()})
+        point(sparse, %{"keyword" => keyword()}),
+        point(neighbour, %{"dense" => List.duplicate(0.2, @dims)})
       ])
 
-    %{col: col, dense: dense, sparse: sparse}
+    %{col: col, dense: dense, sparse: sparse, neighbour: neighbour}
   end
 
   test "keeps only the points that hold a dense vector", %{col: col, dense: d, sparse: s} do
@@ -43,13 +45,20 @@ defmodule Engram.Vector.QdrantDensePointIdsTest do
     assert Qdrant.dense_point_ids(col, []) == {:ok, []}
   end
 
-  # Guards the premise: if Qdrant skipped a positive with no dense vector,
-  # the pre-filter would be unneeded.
-  test "a recommend naming a sparse-only point is refused", %{col: col, dense: d, sparse: s} do
+  # Why `similar_to` pre-filters: one sparse-only positive loses the dense
+  # point's neighbours. How depends on the server version: 1.19.2 (dev)
+  # refuses the request with a 4xx, 1.17.1 (CI, compose) answers 200 with
+  # no results. Only the dense ids find the neighbour on both.
+  test "a recommend naming a sparse-only point finds nothing", ctx do
     opts = [user_id: @user_id, vault_id: @vault_id, limit: 1]
-    assert {:error, {status, _}} = Qdrant.recommend(col, [d, s], opts)
-    assert status in 400..404
-    assert {:ok, _} = Qdrant.recommend(col, [d], opts)
+
+    assert {:ok, [%{qdrant_id: id}]} = Qdrant.recommend(ctx.col, [ctx.dense], opts)
+    assert id == ctx.neighbour
+
+    case Qdrant.recommend(ctx.col, [ctx.dense, ctx.sparse], opts) do
+      {:error, {status, _}} -> assert status in 400..404
+      other -> assert other == {:ok, []}
+    end
   end
 
   defp point(id, vector),
