@@ -161,7 +161,7 @@ defmodule Engram.Embedders.Voyage do
 
   # A list still decodes as a list: a proxy or stub that ignores
   # `encoding_format` keeps working, and Indexing packs lists itself.
-  defp decode_embedding(b64) when is_binary(b64), do: Base.decode64!(b64)
+  defp decode_embedding(b64) when is_binary(b64), do: Engram.Native.decode64!(b64)
   defp decode_embedding(list) when is_list(list), do: list
 
   defp input_type(:query), do: "query"

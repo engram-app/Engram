@@ -438,9 +438,10 @@ defmodule Engram.Native do
     end
   end
 
-  # Base64 for the CRDT channel's frames, a drop-in for `Base.decode64/1` and
-  # `Base.encode64/1` (standard alphabet, padding required; same answers, an
-  # invalid string is `:error`). Like the envelope pair, an inline call (up to
+  # Shared base64 for any hot path (CRDT channel frames, Voyage index vectors):
+  # a drop-in for `Base.decode64/1`, `Base.decode64!/1` and `Base.encode64/1`
+  # (standard alphabet, padding required; same answers, an invalid string is
+  # `:error` or `ArgumentError`). Like the envelope pair, an inline call (up to
   # @inline_max bytes of input) skips call/4: the per-call event with PromEx
   # attached costs more than the decode. Larger frames run dirty and emit.
 
@@ -449,6 +450,14 @@ defmodule Engram.Native do
     if byte_size(b64) <= @inline_max,
       do: elem(b64_decode_nif(b64), 0),
       else: sized(:b64_decode, b64, [b64])
+  end
+
+  @doc "`Base.decode64!/1`, natively: the bytes, or `ArgumentError`."
+  def decode64!(b64) when is_binary(b64) do
+    case decode64(b64) do
+      {:ok, bytes} -> bytes
+      :error -> raise ArgumentError, "non-alphabet character or bad padding in base64 input"
+    end
   end
 
   @doc "`Base.encode64/1`, natively."

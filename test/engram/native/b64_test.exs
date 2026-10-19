@@ -54,6 +54,17 @@ defmodule Engram.Native.B64Test do
     end
   end
 
+  test "decode64! returns the bytes, and raises ArgumentError like Base.decode64!" do
+    bin = :crypto.strong_rand_bytes(4_096)
+    assert Native.decode64!(Base.encode64(bin)) == bin
+    assert Native.decode64!("") == ""
+
+    for bad <- ["QQ", "QUJ!", "Q==="] do
+      assert_raise ArgumentError, fn -> Base.decode64!(bad) end
+      assert_raise ArgumentError, fn -> Native.decode64!(bad) end
+    end
+  end
+
   test "large payloads on both sides of the dirty boundary" do
     for n <- [12_288, 12_289, 16_384, 16_385, 1_000_000] do
       bin = :crypto.strong_rand_bytes(n)
