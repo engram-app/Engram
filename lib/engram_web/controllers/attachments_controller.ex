@@ -781,9 +781,6 @@ defmodule EngramWeb.AttachmentsController do
   # one thing: whether the bytes they hold are the bytes we hold. Exposing it
   # is what lets a client stop re-sending attachments the server already has
   # (see Engram.Attachments.identical_or_changed/4).
-  # One 402 body for `attachments_enabled`, shared by upload/rename/batch_move.
-  # Written out three times before, which is three chances for the reason string
-  # or the limit key to drift between endpoints that mean the same thing.
   # Every refused upload says why, on the request span and on the request's
   # one log line (`EngramWeb.RequestLogger` reads these assigns), so a refusal
   # storm is attributable from telemetry alone: before this, a device's 250
@@ -794,10 +791,12 @@ defmodule EngramWeb.AttachmentsController do
   defp refusal_telemetry(%Plug.Conn{status: status} = conn) when status in 200..299, do: conn
 
   defp refusal_telemetry(conn) do
-    reason = sent_reason(conn)
+    body = sent_body(conn)
+    reason = sent_reason(body, conn.status)
 
     meta = [
       plan: plan(conn.assigns[:current_user]),
+      rejected_type: rejected_type(body),
       declared_bytes: RequestMeta.declared_length(conn),
       body_kind: if(raw_body?(conn), do: "raw", else: "json"),
       plugin_version: log_plugin_version(conn.assigns[:plugin_version])
@@ -807,6 +806,7 @@ defmodule EngramWeb.AttachmentsController do
       for {k, v} <- [
             {"engram.plan", meta[:plan]},
             {"engram.attachment.reject_reason", reason},
+            {"engram.attachment.rejected_type", meta[:rejected_type]},
             {"engram.attachment.declared_bytes", meta[:declared_bytes]},
             {"engram.attachment.body_kind", meta[:body_kind]},
             {"engram.plugin_version", meta[:plugin_version]}
@@ -823,13 +823,25 @@ defmodule EngramWeb.AttachmentsController do
   # The reason the client was actually sent: a LimitResponse 402 names it in
   # `reason` (its `error` is the generic "limit_exceeded"), every other refusal
   # in `error`. Both are server-chosen constants, never client input.
-  defp sent_reason(conn) do
+  defp sent_body(conn) do
     case Jason.decode(IO.iodata_to_binary(conn.resp_body || "")) do
-      {:ok, %{"reason" => r}} when is_binary(r) -> r
-      {:ok, %{"error" => e}} when is_binary(e) -> e
-      _ -> "http_#{conn.status}"
+      {:ok, %{} = body} -> body
+      _ -> %{}
     end
   end
+
+  defp sent_reason(%{"reason" => r}, _status) when is_binary(r), do: r
+  defp sent_reason(%{"error" => e}, _status) when is_binary(e), do: e
+  defp sent_reason(_body, status), do: "http_#{status}"
+
+  # Which type a 415 refused, so a refusal storm names the file type a client
+  # keeps sending. The MIME is client-sent, so it is capped like the parser
+  # 413's content_type.
+  defp rejected_type(%{"mime_type" => m}) when is_binary(m),
+    do: binary_part(m, 0, min(byte_size(m), 100))
+
+  defp rejected_type(%{"extension" => e}) when is_binary(e), do: e
+  defp rejected_type(_body), do: nil
 
   defp plan(%Engram.Accounts.User{} = user), do: user |> Billing.tier() |> Atom.to_string()
   defp plan(_), do: nil
@@ -847,6 +859,9 @@ defmodule EngramWeb.AttachmentsController do
 
   defp log_plugin_version(_), do: "unparsed"
 
+  # One 402 body for `attachments_enabled`, shared by upload/rename/batch_move.
+  # Written out three times before, which is three chances for the reason string
+  # or the limit key to drift between endpoints that mean the same thing.
   defp attachments_disabled(conn) do
     EngramWeb.LimitResponse.halt(conn, "attachments_disabled", :attachments_enabled, false, nil)
   end

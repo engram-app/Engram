@@ -138,6 +138,37 @@ defmodule EngramWeb.AttachmentsRefusalTelemetryTest do
     assert meta.plan == "pro"
   end
 
+  # The 415 body names the refused type; without it on the log line a 415
+  # storm cannot say WHICH file type a client keeps sending (2026-10-19: one
+  # vault, ~1000 415s in 14h, cause unknowable from telemetry).
+  test "a MIME 415 names the refused type", %{conn: conn} do
+    {conn, attrs, meta} =
+      observe(fn -> raw_post(conn, %{path: "a.zip", mime_type: "application/zip"}, "PK") end)
+
+    assert json_response(conn, 415)["error"] == "mime_not_allowed"
+    assert attrs["engram.attachment.rejected_type"] == "application/zip"
+    assert meta.rejected_type == "application/zip"
+  end
+
+  test "an extension 415 names the refused extension", %{conn: conn} do
+    {conn, attrs, meta} =
+      observe(fn -> raw_post(conn, %{path: "run.sh", mime_type: "text/plain"}, "x") end)
+
+    assert json_response(conn, 415)["error"] == "extension_not_allowed"
+    assert attrs["engram.attachment.rejected_type"] == ".sh"
+    assert meta.rejected_type == ".sh"
+  end
+
+  test "a client-sent refused type is capped", %{conn: conn} do
+    mime = "application/" <> String.duplicate("x", 500)
+
+    {conn, _attrs, meta} =
+      observe(fn -> raw_post(conn, %{path: "a.bin", mime_type: mime}, "x") end)
+
+    assert json_response(conn, 415)
+    assert byte_size(meta.rejected_type) == 100
+  end
+
   test "a 422 carries the error string from its body", %{conn: conn} do
     {conn, attrs, _meta} = observe(fn -> raw_post(conn, %{mtime: "1"}, "x") end)
 
