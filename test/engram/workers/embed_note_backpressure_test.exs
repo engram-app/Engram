@@ -107,6 +107,17 @@ defmodule Engram.Workers.EmbedNoteBackpressureTest do
     assert_received {[:engram, :qdrant, :backpressure], ^ref, %{count: 1}, %{reason: :preflight}}
   end
 
+  test "QDRANT_BACKPRESSURE_PREFLIGHT=false embeds even over the limit", %{
+    bypass: bypass,
+    note: note
+  } do
+    ServiceConfig.put_override(:qdrant_backpressure_preflight, false)
+    fake_qdrant(bypass, sys_metrics: volume(99))
+    embeds_ok()
+
+    assert :ok = perform_job(EmbedNote, %{note_id: note.id, user_id: note.user_id})
+  end
+
   test "unknown pressure fails open and embeds", %{bypass: bypass, note: note} do
     fake_qdrant(bypass, [])
     embeds_ok()

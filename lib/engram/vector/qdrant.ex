@@ -6,6 +6,16 @@ defmodule Engram.Vector.Qdrant do
   Config:
   - :qdrant_url — base URL (default http://localhost:6333)
   - QDRANT_API_KEY env var — API key for Qdrant Cloud (optional for local)
+
+  Ops kill switches (env, read at boot in every environment; all default on;
+  `false`/`0` to turn off, then restart):
+  - QDRANT_RECONCILE_CONFIG: false = never PATCH the collection config (boot
+    reconcile and the 60s poller's strict-mode sync).
+  - QDRANT_RECONCILE_ON_DISK: false = skip only the on-disk group.
+  - QDRANT_STRICT_MODE: false = the reconcile sets
+    `strict_mode_config.enabled=false` (no write refusals; on Qdrant Cloud this
+    also lifts its unindexed-filter guard).
+  - QDRANT_BACKPRESSURE_PREFLIGHT: false = EmbedNote never pauses for pressure.
   """
 
   alias Engram.Logger.Metadata
@@ -229,7 +239,7 @@ defmodule Engram.Vector.Qdrant do
   # retried next boot, never a reason to stop indexing. Only the payload
   # indexes above gate `:verified`, because strict mode 400s without them.
   defp reconciled(col) do
-    if ServiceConfig.get(:qdrant_reconcile_config, true), do: reconcile_config(col)
+    _ = reconcile_config(col)
     {:ok, :verified}
   end
 
@@ -391,13 +401,23 @@ defmodule Engram.Vector.Qdrant do
        the worst case is a rewrite of the whole collection at once.
   """
   def reconcile_config(col \\ nil) do
-    col = col || collection()
+    if ServiceConfig.get(:qdrant_reconcile_config, true),
+      do: do_reconcile_config(col || collection()),
+      else: {:ok, []}
+  end
 
+  defp strict_mode?, do: ServiceConfig.get(:qdrant_strict_mode, true)
+
+  defp do_reconcile_config(col) do
     with {:ok, info} <- collection_info(col) do
       diff =
         QdrantLayout.diff(
           info["config"] || %{},
-          QdrantLayout.desired(server_version(), strict_limits(col, volume_stats()))
+          QdrantLayout.desired(
+            server_version(),
+            strict_limits(col, volume_stats()),
+            strict_mode?()
+          )
         )
 
       {strict, rest} = Map.split(diff, ["strict_mode_config"])
@@ -454,7 +474,16 @@ defmodule Engram.Vector.Qdrant do
   emits `[:engram, :qdrant, :strict_limits_changed]`.
   """
   def reconcile_strict_mode(col, info, limits) do
-    want = server_version() |> QdrantLayout.desired(limits) |> Map.take(["strict_mode_config"])
+    if ServiceConfig.get(:qdrant_reconcile_config, true),
+      do: do_reconcile_strict_mode(col, info, limits),
+      else: :ok
+  end
+
+  defp do_reconcile_strict_mode(col, info, limits) do
+    want =
+      server_version()
+      |> QdrantLayout.desired(limits, strict_mode?())
+      |> Map.take(["strict_mode_config"])
 
     case QdrantLayout.diff(info["config"] || %{}, want) do
       diff when map_size(diff) == 0 ->
@@ -472,7 +501,7 @@ defmodule Engram.Vector.Qdrant do
           :telemetry.execute(
             [:engram, :qdrant, :strict_limits_changed],
             %{count: 1},
-            %{disk: limits.disk.percent, heap: limits.heap.percent}
+            %{disk: strict["max_disk_usage_percent"], heap: strict["max_resident_memory_percent"]}
           )
         end
     end
@@ -491,6 +520,15 @@ defmodule Engram.Vector.Qdrant do
   defp gate_on_disk(_col, on_disk) when map_size(on_disk) == 0, do: on_disk
 
   defp gate_on_disk(col, on_disk) do
+    if ServiceConfig.get(:qdrant_reconcile_on_disk, true) do
+      headroom_gate(col, on_disk)
+    else
+      Logger.info("qdrant_reconcile_deferred source=QDRANT_RECONCILE_ON_DISK")
+      %{}
+    end
+  end
+
+  defp headroom_gate(col, on_disk) do
     collection_bytes =
       case collection_memory(col) do
         {:ok, %{"total" => %{"disk_bytes" => b}}} -> b

@@ -265,25 +265,6 @@ if config_env() != :test do
     config :engram, :qdrant_api_key, qdrant_api_key
   end
 
-  # Qdrant container memory limit (bytes), for the heap half of the embed
-  # preflight (Qdrant.pressure/0). Unset = heap pressure is not checked.
-  if limit = System.get_env("QDRANT_MEMORY_LIMIT_BYTES") do
-    config :engram, :qdrant_memory_limit_bytes, String.to_integer(limit)
-  end
-
-  # Backpressure. Strict-mode limits derive from absolute reserves
-  # (QdrantLayout.strict_limits/2); the static percents apply only when a size
-  # is unknown. EmbedNote pauses MARGIN points below each limit.
-  for {env, key} <- [
-        {"QDRANT_MEMORY_RESERVE_BYTES", :qdrant_memory_reserve_bytes},
-        {"QDRANT_STRICT_DISK_PERCENT", :qdrant_strict_disk_percent},
-        {"QDRANT_STRICT_MEMORY_PERCENT", :qdrant_strict_memory_percent},
-        {"QDRANT_PREFLIGHT_MARGIN_POINTS", :qdrant_preflight_margin_points}
-      ],
-      value = System.get_env(env) do
-    config :engram, key, String.to_integer(value)
-  end
-
   # Binary quantization — requires AVX2+ CPU. Disable on older hardware.
   if System.get_env("QDRANT_BINARY_QUANTIZATION") == "false" do
     config :engram, :qdrant_binary_quantization, false
@@ -303,6 +284,63 @@ if config_env() != :test do
       config :engram, :reranker, Engram.Rerankers.None
   end
 end
+
+# Qdrant backpressure + ops kill switches. Outside the non-test block on
+# purpose: read in every environment (prod and self-host), and only set when
+# the env var is present, so code defaults (all switches ON) stay in force.
+qdrant_switch = fn var ->
+  case System.get_env(var) do
+    nil -> nil
+    v when v in ["true", "1"] -> true
+    v when v in ["false", "0"] -> false
+    _ -> raise "#{var} must be true or false"
+  end
+end
+
+# false = never PATCH the collection config (boot reconcile and the poller).
+case qdrant_switch.("QDRANT_RECONCILE_CONFIG") do
+  nil -> :ok
+  on? -> config :engram, :qdrant_reconcile_config, on?
+end
+
+# false = skip only the on-disk group (dense + sparse index on disk).
+case qdrant_switch.("QDRANT_RECONCILE_ON_DISK") do
+  nil -> :ok
+  on? -> config :engram, :qdrant_reconcile_on_disk, on?
+end
+
+# false = the reconcile actively sets strict_mode_config.enabled=false, so
+# write refusals can be turned off with an env change + restart.
+case qdrant_switch.("QDRANT_STRICT_MODE") do
+  nil -> :ok
+  on? -> config :engram, :qdrant_strict_mode, on?
+end
+
+# false = EmbedNote never pauses for Qdrant pressure before paying Voyage.
+case qdrant_switch.("QDRANT_BACKPRESSURE_PREFLIGHT") do
+  nil -> :ok
+  on? -> config :engram, :qdrant_backpressure_preflight, on?
+end
+
+# Qdrant container memory limit (bytes): the heap pressure reading and the
+# strict-mode memory limit. Unset = heap is not checked, limit stays static.
+if v = System.get_env("QDRANT_MEMORY_LIMIT_BYTES"),
+  do: config(:engram, :qdrant_memory_limit_bytes, String.to_integer(v))
+
+# Heap kept free below that limit (floor 256 MiB).
+if v = System.get_env("QDRANT_MEMORY_RESERVE_BYTES"),
+  do: config(:engram, :qdrant_memory_reserve_bytes, String.to_integer(v))
+
+# Static strict-mode percents, used only when a size is unknown.
+if v = System.get_env("QDRANT_STRICT_DISK_PERCENT"),
+  do: config(:engram, :qdrant_strict_disk_percent, String.to_integer(v))
+
+if v = System.get_env("QDRANT_STRICT_MEMORY_PERCENT"),
+  do: config(:engram, :qdrant_strict_memory_percent, String.to_integer(v))
+
+# EmbedNote pauses this many points below each strict-mode limit.
+if v = System.get_env("QDRANT_PREFLIGHT_MARGIN_POINTS"),
+  do: config(:engram, :qdrant_preflight_margin_points, String.to_integer(v))
 
 # Auth provider selection: "local" (built-in email/password) or "clerk" (SaaS JWKS)
 # Default: local — self-hosters get working auth with zero third-party config.

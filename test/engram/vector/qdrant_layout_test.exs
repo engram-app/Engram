@@ -56,6 +56,14 @@ defmodule Engram.Vector.QdrantLayoutTest do
       refute Map.has_key?(QdrantLayout.desired(nil), "strict_mode_config")
     end
 
+    test "strict mode off: only enabled=false, on any known version" do
+      for v <- [@v1171, @v1182] do
+        assert QdrantLayout.desired(v, nil, false)["strict_mode_config"] == %{"enabled" => false}
+      end
+
+      refute Map.has_key?(QdrantLayout.desired(nil, nil, false), "strict_mode_config")
+    end
+
     test "never changes size, distance or datatype" do
       dense = QdrantLayout.desired(@v1182)["vectors"]["dense"]
       refute Map.has_key?(dense, "size")

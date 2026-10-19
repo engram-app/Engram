@@ -211,6 +211,7 @@ defmodule Engram.PromEx.QdrantCollectionTest do
        %{bypass: bypass} do
     test_pid = self()
     ServiceConfig.put_override(:qdrant_memory_limit_bytes, 2 * 1024 * 1024 * 1024)
+    ServiceConfig.put_override(:qdrant_reconcile_config, true)
     {:ok, info} = Agent.start_link(fn -> @info end)
 
     Bypass.stub(bypass, "GET", "/", &json(&1, 200, %{version: "1.18.2"}))
@@ -262,5 +263,27 @@ defmodule Engram.PromEx.QdrantCollectionTest do
     Engram.Vector.Qdrant.forget_pressure()
     Plugin.execute_collection_metrics()
     refute_receive {:patch, _}
+  end
+
+  test "QDRANT_RECONCILE_CONFIG=false: the poller never PATCHes", %{bypass: bypass} do
+    test_pid = self()
+    ServiceConfig.put_override(:qdrant_reconcile_config, false)
+    stub_info(bypass)
+
+    Bypass.stub(
+      bypass,
+      "GET",
+      "/collections/engram_notes/memory",
+      &Plug.Conn.send_resp(&1, 404, "")
+    )
+
+    Bypass.stub(bypass, "PATCH", "/collections/engram_notes", fn conn ->
+      send(test_pid, :patched)
+      json(conn, 200, %{result: true})
+    end)
+
+    Plugin.execute_collection_metrics()
+    assert_receive {@collection_event, _, _}
+    refute_receive :patched
   end
 end

@@ -278,6 +278,41 @@ defmodule Engram.Vector.QdrantReconcileTest do
     end
   end
 
+  describe "kill switches" do
+    test "QDRANT_RECONCILE_CONFIG=false: no request, no PATCH", %{bypass: bypass} do
+      ServiceConfig.put_override(:qdrant_reconcile_config, false)
+      Bypass.down(bypass)
+      assert {:ok, []} = Qdrant.reconcile_config("engram_notes")
+      assert :ok = Qdrant.reconcile_strict_mode("engram_notes", @prod_info, nil)
+    end
+
+    test "QDRANT_RECONCILE_ON_DISK=false skips only the on-disk group", %{bypass: bypass} do
+      ServiceConfig.put_override(:qdrant_reconcile_on_disk, false)
+      stub_version(bypass, "1.18.2")
+      fake_collection(bypass, "engram_notes", @prod_info)
+      stub_memory(bypass, "engram_notes", 100)
+      stub_no_sys_metrics(bypass)
+
+      assert {:ok, changed} = Qdrant.reconcile_config("engram_notes")
+      assert Enum.sort(changed) == ~w(optimizers_config strict_mode_config)
+    end
+
+    test "QDRANT_STRICT_MODE=false actively disables strict mode", %{bypass: bypass} do
+      ServiceConfig.put_override(:qdrant_strict_mode, false)
+      stub_version(bypass, "1.18.2")
+      fake_collection(bypass, "engram_notes", @prod_info)
+      stub_memory(bypass, "engram_notes", 100)
+      stub_no_sys_metrics(bypass)
+
+      assert {:ok, _} = Qdrant.reconcile_config("engram_notes")
+      assert_receive {:patch, %{"strict_mode_config" => %{"enabled" => false}} = body}
+      assert map_size(body["strict_mode_config"]) == 1
+
+      # Applied: the next run leaves it alone.
+      assert {:ok, []} = Qdrant.reconcile_config("engram_notes")
+    end
+  end
+
   test "an unreadable version skips strict mode instead of failing", %{bypass: bypass} do
     Bypass.stub(bypass, "GET", "/", fn conn -> Plug.Conn.send_resp(conn, 500, "boom") end)
     fake_collection(bypass, "engram_notes", @prod_info)

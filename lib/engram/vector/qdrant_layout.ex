@@ -50,13 +50,22 @@ defmodule Engram.Vector.QdrantLayout do
   @doc """
   The desired PATCH sub-objects for a server at `version` (`nil` = unknown),
   with strict mode refusing writes at `limits` (see `strict_limits/2`;
-  default 85/85).
+  default 85/85), or switched off when `strict?` is false.
   Strict mode is included only with at least one guard the server supports:
   enabling it with no guard adds risk for no protection.
   """
-  @spec desired(Version.t() | nil, map()) :: map()
-  def desired(version, limits \\ @default_limits) do
-    case supported_guards(version, limits) do
+  @spec desired(Version.t() | nil, map() | nil, boolean()) :: map()
+  def desired(version, limits \\ @default_limits, strict? \\ true)
+
+  # Ops kill switch (QDRANT_STRICT_MODE=false): actively turn refusals off on
+  # any server whose version is known.
+  def desired(nil, _limits, false), do: @storage
+
+  def desired(_version, _limits, false),
+    do: Map.put(@storage, "strict_mode_config", %{"enabled" => false})
+
+  def desired(version, limits, true) do
+    case supported_guards(version, limits || @default_limits) do
       [] -> @storage
       guards -> Map.put(@storage, "strict_mode_config", Map.new([{"enabled", true} | guards]))
     end
