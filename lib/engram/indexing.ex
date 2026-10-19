@@ -114,8 +114,21 @@ defmodule Engram.Indexing do
             # the dense vectors it ever will, so `true`: leaving it `false`
             # keeps `dense_indexed_hash` nil and ReconcileEmbeddings re-selects
             # it every tick.
+            #
+            # An emptied note has no floor point either, so its tier clears.
             with :ok <- purge_stale_index(note) do
-              run_in_commit(note, opts, 0, true, floor_tier(note, opts))
+              Repo.with_tenant!(note.user_id, fn ->
+                {_, _} =
+                  Repo.update_all(
+                    from(n in Note,
+                      where: n.id == ^note.id and n.kind == "note" and not is_nil(n.index_tier)
+                    ),
+                    set: [index_tier: nil]
+                  )
+
+                run_in_commit(note, opts, 0, true, nil)
+              end)
+
               {:ok, 0, 0, true}
             end
 
@@ -256,10 +269,17 @@ defmodule Engram.Indexing do
        do: demoted_tier(note)
   end
 
-  # A note that never had dense vectors floors as "floor"; one that carries
-  # "floor_paid" keeps it.
-  defp demoted_tier(note),
-    do: if(Map.get(note, :index_tier) == "floor_paid", do: "floor_paid", else: "floor")
+  # "floor_paid" when the floor takes dense vectors away (the note's indexed
+  # content has them) or the note already carries it, so its promotion is
+  # never charged again; else "floor".
+  defp demoted_tier(note) do
+    dense = Map.get(note, :dense_indexed_hash)
+
+    if Map.get(note, :index_tier) == "floor_paid" or
+         (dense != nil and dense == Map.get(note, :embed_hash)),
+       do: "floor_paid",
+       else: "floor"
+  end
 
   # nil: no cap (billing disabled, or a non-positive override).
   defp note_points_cap(user) do
@@ -606,34 +626,60 @@ defmodule Engram.Indexing do
       # `with_tenant/2` opens the transaction itself and is re-entrant for the
       # same tenant, so a tenant-scoped caller pays nothing and the atomicity
       # the comment above depends on is unchanged.
-      {:ok, _} =
+      committed =
         Repo.with_tenant(note.user_id, fn ->
+          with {:ok, tier} <- Map.fetch(prepared, :index_tier),
+               do: stamp_index_tier(note, tier)
+
           Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id), skip_tenant_check: true)
           {_, _} = Repo.insert_all(Chunk, chunk_rows, skip_tenant_check: true)
-          with {:ok, tier} <- Map.fetch(prepared, :index_tier), do: stamp_index_tier(note, tier)
           in_commit.(length(chunk_rows))
         end)
 
-      drop_stale_points(reused_point_ids, stale_point_ids, note)
-
-      {:ok, length(chunk_rows)}
+      with {:ok, _} <- committed do
+        drop_stale_points(reused_point_ids, stale_point_ids, note)
+        {:ok, length(chunk_rows)}
+      end
     end
   end
 
-  # With the chunk rows, so the tier always names the rows that exist.
-  # Unconditional rather than trusting `note.index_tier`: the struct can be
-  # older than the row (a demotion landed while this pass ran), and the rows
-  # this pass wrote are what the tier must describe. `IS DISTINCT FROM`
-  # keeps the common NULL-to-NULL case from writing a tuple.
+  # With the chunk rows, so the tier always names the rows that exist, and
+  # compare-and-set on the tier this pass was planned from: if the index
+  # budget demoted or promoted the note meanwhile (`ReconcileEmbeddings`), the
+  # pass rolls back with `{:error, :index_tier_changed}` instead of
+  # re-stamping it, and its retry plans from the new tier. The row lock holds
+  # off a sweep stamp until commit. `IS DISTINCT FROM` keeps the common
+  # NULL-to-NULL case from writing a tuple.
+  #
+  # ponytail: checked at commit, after the Qdrant writes. A pass with no
+  # reused points has already purged the old ones, so losing this race leaves
+  # rows naming deleted points until the retry rewrites them. The sweep skips
+  # notes with a pass running (`embed_started_at`), which leaves only the
+  # window between a job's load and its crash-guard stamp.
   defp stamp_index_tier(note, tier) do
-    Repo.update_all(
-      from(n in Note,
-        where:
-          n.id == ^note.id and n.kind == "note" and
-            fragment("? IS DISTINCT FROM ?", n.index_tier, ^tier)
-      ),
-      set: [index_tier: tier]
-    )
+    expected = Map.get(note, :index_tier)
+
+    case Repo.one(
+           from(n in Note,
+             where: n.id == ^note.id and n.kind == "note",
+             select: {n.index_tier},
+             lock: "FOR UPDATE"
+           )
+         ) do
+      {^expected} when expected == tier ->
+        :ok
+
+      {^expected} ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id and n.kind == "note"),
+          set: [index_tier: tier]
+        )
+
+      nil ->
+        :ok
+
+      {_changed} ->
+        Repo.rollback(:index_tier_changed)
+    end
   end
 
   # Bounded upsert bodies: thousands of 1024-dim float vectors as one JSON PUT

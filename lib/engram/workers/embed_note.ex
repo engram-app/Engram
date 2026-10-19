@@ -104,6 +104,19 @@ defmodule Engram.Workers.EmbedNote do
       {:ok, %Note{content_hash: hash, embed_hash: hash} = note}
       when hash != nil and is_nil(old_path_hmac_b64) ->
         cond do
+          # The index points budget (`ReconcileEmbeddings.budget_sweep/1`)
+          # stamped this note "floor"/"floor_paid": rebuild it as one keyword
+          # point. Never metered (a floor plan reserves nothing).
+          args["index_budget"] == "demote" and Indexing.floor_tier(note) != nil ->
+            load_for_run(note, maintenance: true)
+
+          # The budget has room again: a full pass. A "floor_paid" note had
+          # dense vectors we deleted, so its are rebuilt unmetered; a
+          # "floor" one never had them and is metered as a first embed. The
+          # pass refuses to commit if the tier moved meanwhile.
+          args["index_budget"] == "promote" and Indexing.floor_tier(note) != nil ->
+            load_for_run(note, index_tier: nil, maintenance: note.index_tier == "floor_paid")
+
           # Indexed by an older chunker (#1620; NULL predates the stamp) or
           # another embed model. Content unchanged, so this is OUR maintenance,
           # not the user's usage: a note that has dense vectors gets them
@@ -126,7 +139,7 @@ defmodule Engram.Workers.EmbedNote do
 
           # Floor-indexed at its current content: a floor note has no dense
           # leg to backfill. Promoting it back to a full index is the index
-          # budget's call (it clears `index_tier`), not this job's.
+          # budget's call (an `index_budget: "promote"` job), not this job's.
           Indexing.floor_tier(note) ->
             :ok
 
@@ -538,7 +551,9 @@ defmodule Engram.Workers.EmbedNote do
         # budget here: a second read can land a DIFFERENT answer, and
         # the stamp would then disagree with the index. The stamp runs
         # inside the chunk-row transaction (`:in_commit`).
-        index_opts = budget ++ [in_commit: &stamp_embed_hash(note, &2, &1, &3)]
+        index_opts =
+          budget ++
+            Keyword.take(opts, [:index_tier]) ++ [in_commit: &stamp_embed_hash(note, &2, &1, &3)]
 
         case Indexing.index_note_with_usage(decrypted_note, vault, user, index_opts) do
           {:ok, _count, _embedded_bytes, _dense?} ->

@@ -42,6 +42,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   alias Engram.Logger.Metadata
   alias Engram.Notes.{Chunk, Note}
   alias Engram.Repo
+  alias Engram.Vector.Qdrant
   alias Engram.Workers.{EmbedNote, ExtractNoteLinks, RebuildStaleNote, RefreshKeywordVectors}
 
   require Logger
@@ -50,6 +51,11 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # page's query (the stamp), so a loop of pages walks the whole backlog.
   # Tests pass a smaller `"page"` arg to exercise the loop.
   @page 1_000
+
+  # The index points budget (`index_points_cap`): users per tick, and notes
+  # per user per tick.
+  @budget_users 20
+  @budget_notes 200
 
   @doc """
   Queues a sweep now. Called where notes are marked for re-indexing (index
@@ -210,7 +216,15 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       )
     )
 
-    if daily_reverify?(scheduled_at), do: :ok = sweep_over_note_cap(now)
+    # Both daily: the backlog is a one-off, new notes are capped and
+    # budget-checked as they are indexed (`Indexing`), and a promotion after
+    # deletes can wait a day.
+    _ =
+      if daily_reverify?(scheduled_at) do
+        :ok = sweep_over_note_cap(now)
+        {:ok, _} = budget_sweep(@budget_users)
+      end
+
     if versions_done, do: :ok, else: sweep_keyword_stale(now, paid, page_size)
   end
 
@@ -301,6 +315,363 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         )
       )
     end
+
+    :ok
+  end
+
+  # ponytail: at most 2,000 unmetered promoted points per user per rolling
+  # day, read back from the jobs this sweep enqueued (`budget_points`, kept
+  # by Oban's 7-day pruner), so delete-and-promote cycles cannot spend
+  # unbounded Voyage. A metered promotion spends the user's own budget and
+  # is not counted.
+  @unmetered_points_per_day 2_000
+
+  # ponytail: a floored or merged note's full point count is unknown without
+  # re-chunking it, so it is estimated as its span over 1,024 characters (half
+  # the chunker's 2 KB MAX_CHUNK), capped at the per-note cap. An estimate
+  # that runs short is caught by the pass itself: `Indexing.points_budget_ok?/3`
+  # floors a promotion that would pass 100%, and 90% to 100% is the gap that
+  # keeps that from flapping.
+  @chars_per_point 1_024
+
+  @doc """
+  Keeps every account within its `index_points_cap`: the cap resolved per
+  user, overrides included, and never applied with billing disabled.
+
+  Over 100% of the cap, the oldest full notes are demoted to the floor (one
+  keyword point each, `Indexing.floor_plan/2`): `"floor_paid"` if they had
+  dense vectors, else `"floor"`. Below 90%, floor notes are promoted back,
+  newest first, while the projected count stays under 90%, and merged notes
+  whose per-note cap has since risen are rebuilt at it. A `"floor_paid"` or
+  merged note promotes unmetered (we never charge twice), a `"floor"` one on
+  the user's embed budget.
+
+  Users are selected on `Repo.maintenance/0` (at most `limit_users`); each is
+  counted and written inside its own tenant. The tier is written here with a
+  compare-and-set and the rows by a job; a pass that read the old tier
+  refuses to commit (`Indexing.commit_index/2`). Does nothing while the
+  collection is red.
+  """
+  @spec budget_sweep(pos_integer()) ::
+          {:ok, %{demoted: non_neg_integer(), promoted: non_neg_integer()}}
+  def budget_sweep(limit_users) do
+    with caps when caps != :off <- budget_caps(),
+         [_ | _] = users <- budget_users(caps, limit_users),
+         false <- collection_red?() do
+      now = DateTime.utc_now()
+
+      totals =
+        Enum.reduce(users, %{demoted: 0, promoted: 0}, fn user, acc ->
+          Map.merge(acc, budget_user(user, now), fn _k, a, b -> a + b end)
+        end)
+
+      Logger.info(
+        "reconcile_embeddings: swept index points budget",
+        Metadata.with_category(:info, :search,
+          user_count: length(users),
+          demoted_count: totals.demoted,
+          promoted_count: totals.promoted
+        )
+      )
+
+      {:ok, totals}
+    else
+      _ -> {:ok, %{demoted: 0, promoted: 0}}
+    end
+  end
+
+  defp budget_caps do
+    by_tier = fn key -> Map.new([:free, :starter, :pro], &{&1, Billing.tier_limit(&1, key)}) end
+    index = by_tier.(:index_points_cap)
+
+    if Enum.all?(Map.values(index), &(&1 == :unlimited)),
+      do: :off,
+      else: %{
+        index: {index, Map.new(Billing.active_overrides(:index_points_cap))},
+        note: {by_tier.(:note_points_cap), Map.new(Billing.active_overrides(:note_points_cap))}
+      }
+  end
+
+  # `effective_limit/2`'s chain, from `Billing.tier_limit/2` and
+  # `Billing.active_overrides/1`. nil: no cap. A
+  # zero index cap is a ceiling (as in `points_budget_ok?/3`), a zero note
+  # cap none (as in `Indexing`).
+  defp user_cap({by_tier, overrides}, user_id, tier, min) do
+    case Map.get(overrides, user_id, by_tier[tier]) do
+      cap when is_integer(cap) and cap >= min -> cap
+      _ -> nil
+    end
+  end
+
+  # Cross-tenant on the maintenance pool: users over their cap, then users
+  # with floor or merged rows (token_count NULL) and room below 90%.
+  # ponytail: a candidate with nothing to promote still takes one of the
+  # `limit_users` slots; rotate the order if that many ever crowd the tick.
+  defp budget_users(caps, limit) do
+    repo = Repo.maintenance()
+
+    counts =
+      Repo.cross_tenant(fn ->
+        repo.all(
+          from(c in Chunk,
+            group_by: c.user_id,
+            select: {c.user_id, count(), filter(count(), is_nil(c.token_count))}
+          )
+        )
+      end)
+
+    ids = Enum.map(counts, &elem(&1, 0))
+
+    # `Billing.tier/1` in SQL: an entitled Pro, else Starter, else Free.
+    tiers =
+      Repo.cross_tenant(fn ->
+        repo.all(
+          from(s in Subscription,
+            where:
+              s.user_id in ^ids and s.status in ^Billing.entitled_statuses() and
+                s.tier in ["starter", "pro"],
+            select: {s.user_id, s.tier}
+          )
+        )
+      end)
+      |> Enum.sort_by(&(elem(&1, 1) == "pro"))
+      |> Map.new(fn {id, tier} -> {id, String.to_existing_atom(tier)} end)
+
+    counts
+    |> Enum.flat_map(fn {id, points, unsized} ->
+      tier = Map.get(tiers, id, :free)
+      cap = user_cap(caps.index, id, tier, 0)
+      user = %{id: id, cap: cap, note_cap: user_cap(caps.note, id, tier, 1)}
+
+      cond do
+        cap && points > cap -> [{0, cap - points, user}]
+        unsized > 0 and (is_nil(cap) or 10 * points < 9 * cap) -> [{1, 0, user}]
+        true -> []
+      end
+    end)
+    |> Enum.sort()
+    |> Enum.take(limit)
+    |> Enum.map(&elem(&1, 2))
+  end
+
+  # The collection status the Qdrant health poller reads. Unreachable counts as red: nothing
+  # this sweep queues could write.
+  defp collection_red? do
+    case Qdrant.collection_info(
+           Application.get_env(:engram, :qdrant_collection, "obsidian_notes")
+         ) do
+      {:ok, %{"status" => "red"}} -> true
+      {:ok, _} -> false
+      {:error, _} -> true
+    end
+  end
+
+  defp budget_user(user, now) do
+    Repo.with_tenant!(user.id, fn ->
+      notes = budget_notes(now)
+      jobs = budget_jobs(user.id, now)
+      pending = for j <- jobs, j.pending, into: %{}, do: {j.note_id, j.points}
+
+      # `Indexing.points_budget_ok?/3`'s count (every chunk row), with each note at what it will
+      # hold: a floor note one point, a full note at most its per-note cap,
+      # and a queued promotion at its estimate.
+      projected =
+        Enum.reduce(notes, Repo.aggregate(Chunk, :count), fn n, acc ->
+          cond do
+            n.tier != nil -> acc - (n.rows - 1)
+            user.note_cap -> acc - max(n.rows - user.note_cap, 0)
+            true -> acc
+          end
+        end) + Enum.sum(Map.values(pending))
+
+      if user.cap && projected > user.cap,
+        do: %{demoted: demote(user, notes, projected), promoted: 0},
+        else: %{demoted: 0, promoted: promote(user, notes, projected, pending, jobs, now)}
+    end)
+  end
+
+  defp budget_notes(now) do
+    IndexVersions.live_notes()
+    |> join(:inner, [n], c in Chunk, on: c.note_id == n.id)
+    |> group_by([n], n.id)
+    |> select([n, _v, c], %{
+      id: n.id,
+      tier: n.index_tier,
+      updated_at: n.updated_at,
+      dense: n.dense_indexed_hash == n.embed_hash,
+      # A pass is running, or the note sits out a cooldown: left alone.
+      busy:
+        not is_nil(n.embed_started_at) or
+          (not is_nil(n.embed_retry_after) and n.embed_retry_after > ^now),
+      rows: count(c.id),
+      unsized: filter(count(c.id), is_nil(c.token_count)),
+      span: max(c.char_end)
+    })
+    |> order_by([n], desc: n.updated_at, desc: n.id)
+    |> Repo.all()
+  end
+
+  # This sweep's jobs for the user: queued ones (their points are not in
+  # `chunks` yet) and the last day's unmetered ones (the daily ceiling).
+  defp budget_jobs(user_id, now) do
+    day_ago = DateTime.add(now, -86_400, :second)
+    pending = ~w(scheduled available executing retryable)
+
+    from(j in Oban.Job,
+      where:
+        j.worker == ^inspect(RebuildStaleNote) and
+          fragment("? @> ?", j.args, type(^%{"user_id" => user_id}, :map)) and
+          not is_nil(j.args["budget_points"]) and
+          (j.inserted_at > ^day_ago or j.state in ^pending),
+      select: %{
+        note_id: j.args["note_id"],
+        points: j.args["budget_points"],
+        unmetered: j.args["unmetered"] == true,
+        inserted_at: j.inserted_at,
+        pending: j.state in ^pending
+      }
+    )
+    |> Repo.all()
+  end
+
+  # Newest first, every full note kept while the account, with every note
+  # after it at one floor point, stays within the cap. The rest demote,
+  # oldest first.
+  defp demote(user, notes, projected) do
+    full = Enum.filter(notes, &is_nil(&1.tier))
+    cost = &min(&1.rows, user.note_cap || &1.rows)
+    fixed = projected - Enum.sum(Enum.map(full, cost)) + length(full)
+
+    {_kept, over} =
+      Enum.reduce(full, {fixed, []}, fn n, {acc, over} ->
+        if over == [] and acc + cost.(n) - 1 <= user.cap,
+          do: {acc + cost.(n) - 1, over},
+          else: {acc, [n | over]}
+      end)
+
+    ids = for n <- over, not n.busy, do: n.id
+
+    # Compare-and-set: only a note still full, with no pass running, is
+    # stamped. "floor_paid" when it had dense vectors.
+    {_count, stamped} =
+      from(n in Note,
+        where:
+          n.id in ^Enum.take(ids, @budget_notes) and n.kind == "note" and is_nil(n.index_tier) and
+            is_nil(n.embed_started_at),
+        select: n.id,
+        update: [
+          set: [
+            index_tier:
+              fragment(
+                "CASE WHEN ? = ? THEN 'floor_paid' ELSE 'floor' END",
+                n.dense_indexed_hash,
+                n.embed_hash
+              )
+          ]
+        ]
+      )
+      |> Repo.update_all([])
+
+    # Floor-tier notes still holding full rows: this tick's, and any whose
+    # job was lost.
+    unfloored =
+      for n <- notes,
+          n.tier != nil and not n.busy and (n.rows > 1 or n.unsized == 0),
+          do: n.id
+
+    (stamped ++ unfloored)
+    |> Enum.uniq()
+    |> Enum.take(@budget_notes)
+    |> then(&Engram.Jobs.reject_pending(RebuildStaleNote, &1))
+    |> enqueue_budget(user.id, fn id -> %{note_id: id, index_budget: "demote"} end)
+
+    length(stamped)
+  end
+
+  # Newest first while the projection stays under 90% of the cap.
+  defp promote(user, notes, projected, pending, jobs, now) do
+    day_ago = DateTime.add(now, -86_400, :second)
+
+    spent =
+      for j <- jobs,
+          j.unmetered,
+          DateTime.compare(j.inserted_at, day_ago) == :gt,
+          reduce: 0,
+          do: (acc -> acc + j.points)
+
+    {_acc, _spent, picked} =
+      notes
+      |> Enum.reject(&(&1.busy or Map.has_key?(pending, to_string(&1.id))))
+      |> Enum.flat_map(&promotion(&1, user.note_cap))
+      |> Enum.reduce_while({projected, spent, []}, fn {n, args}, {acc, spent, picked} ->
+        cond do
+          length(picked) == @budget_notes ->
+            {:halt, {acc, spent, picked}}
+
+          user.cap && 10 * (acc + args.budget_points) >= 9 * user.cap ->
+            {:halt, {acc, spent, picked}}
+
+          args.unmetered and spent + args.budget_points > @unmetered_points_per_day ->
+            {:cont, {acc, spent, picked}}
+
+          true ->
+            {:cont,
+             {acc + args.budget_points,
+              spent + if(args.unmetered, do: args.budget_points, else: 0),
+              [{n.id, args} | picked]}}
+        end
+      end)
+
+    args = Map.new(picked)
+    fresh = Engram.Jobs.reject_pending(RebuildStaleNote, Map.keys(args))
+    enqueue_budget(fresh, user.id, &Map.put(args[&1], :note_id, &1))
+    length(fresh)
+  end
+
+  # A floor note (fully floored: one keyword row), or a merged note whose
+  # per-note cap has risen. Merged rows also have NULL token_count; at an
+  # unchanged cap a merge holds 0.4 to 0.8 of it (`Indexing.cap_chunks/3`),
+  # so under a fifth means the cap rose (Free 128 to 1,024 on upgrade), and
+  # the rebuilt note is either unmerged or over a fifth of the new cap.
+  defp promotion(n, note_cap) do
+    est = max(div(n.span + @chars_per_point - 1, @chars_per_point), 1)
+    est = if note_cap, do: min(est, note_cap), else: est
+
+    cond do
+      n.tier != nil and n.rows == 1 and n.unsized == 1 ->
+        unmetered = n.tier == "floor_paid"
+        [{n, %{index_budget: "promote", budget_points: est, unmetered: unmetered}}]
+
+      is_nil(n.tier) and n.dense == true and n.unsized > 0 and
+          (is_nil(note_cap) or 5 * n.rows < note_cap) ->
+        [{n, %{recap: true, budget_points: est, unmetered: true}}]
+
+      true ->
+        []
+    end
+  end
+
+  # Same #897 backoff stamp as every sweep: a job that dies mid-pass is not
+  # re-queued every tick.
+  defp enqueue_budget([], _user_id, _args), do: :ok
+
+  defp enqueue_budget(ids, user_id, args) do
+    backoff_until = DateTime.add(DateTime.utc_now(), reconcile_backoff_seconds(), :second)
+
+    {_, _} =
+      Repo.update_all(from(n in Note, where: n.id in ^ids and n.kind == "note"),
+        set: [embed_retry_after: backoff_until]
+      )
+
+    _ =
+      Oban.insert_all(
+        Enum.map(ids, fn id ->
+          id
+          |> args.()
+          |> Map.merge(%{note_id: to_string(id), user_id: user_id})
+          |> RebuildStaleNote.new(priority: EmbedNote.backfill_priority())
+        end)
+      )
 
     :ok
   end
