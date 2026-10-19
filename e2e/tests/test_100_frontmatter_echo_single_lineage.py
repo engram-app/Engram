@@ -41,6 +41,7 @@ this test can never drive to zero. See `helpers/lineage_probe`.
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from pathlib import Path
@@ -112,7 +113,7 @@ async def test_frontmatter_echo_forks_no_lineage(
         )
         if isinstance(indexed, int) and indexed >= expected:
             break
-        time.sleep(1)
+        await asyncio.sleep(1)
     else:
         raise TimeoutError(f"Obsidian indexed only {indexed}/{expected} files")
 
@@ -127,7 +128,7 @@ async def test_frontmatter_echo_forks_no_lineage(
         landed = sum(1 for n in manifest["notes"] if n["path"].startswith(prefix))
         if landed >= expected:
             break
-        time.sleep(2)
+        await asyncio.sleep(2)
     assert landed >= expected, f"sync landed only {landed}/{expected}"
 
     # Second echo shape: rewrite one file with its OWN bytes. Nothing for the
@@ -137,7 +138,11 @@ async def test_frontmatter_echo_forks_no_lineage(
     Path(vault_a, identical_rel).write_text(written[identical_rel], encoding="utf-8")
 
     # Give both write-backs and the modify events they trigger time to land.
-    time.sleep(10)
+    # Deliberately a timed window: A forked lineage ships as a cold crdt_msg with
+    # no client-visible ack or log line to wait on, and driving a fullSync here
+    # would route the echo through the mtime sweep instead of the modify event
+    # this test fences. Swap for a barrier if applyLocalEdit grows a signal.
+    await asyncio.sleep(10)
 
     rewritten = {
         rel: Path(vault_a, rel).read_text(encoding="utf-8")

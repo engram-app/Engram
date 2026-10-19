@@ -30,6 +30,7 @@ Coverage map, deliberately both directions and both bindings:
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 import pytest
@@ -309,7 +310,7 @@ async def test_typed_frontmatter_survives_close_and_reopen(
             "frontmatter vanished from disk after the note was closed; "
             f"file is now:\n{disk!r}"
         )
-        time.sleep(0.5)
+        await asyncio.sleep(0.5)
 
     # Reopening must not resurrect the problem either, and the server should
     # still agree -- so this was never a delete the user made.

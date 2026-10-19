@@ -18,6 +18,8 @@ deleted, which is the failure worth a test.
 """
 
 import asyncio
+import json
+import uuid
 
 import pytest
 
@@ -52,7 +54,15 @@ async def test_offline_create_then_delete_does_not_resurrect(vault_a, cdp_a, api
             pytest.fail(f"precondition: the offline create was never held, queue={ops}")
 
         delete_note(vault_a, path)
-        await asyncio.sleep(1.0)
+        # Barrier: Obsidian's index has seen the delete, so the plugin's delete
+        # handler ran while the channel was still down.
+        deadline = asyncio.get_event_loop().time() + 20
+        while await cdp_a.evaluate(
+            f"app.vault.getAbstractFileByPath({json.dumps(path)}) !== null"
+        ):
+            if asyncio.get_event_loop().time() >= deadline:
+                pytest.fail(f"precondition: Obsidian never saw the delete of {path}")
+            await asyncio.sleep(0.2)
     finally:
         await cdp_a.reconnect_stream()
 
@@ -60,9 +70,17 @@ async def test_offline_create_then_delete_does_not_resurrect(vault_a, cdp_a, api
 
     # The note must not exist on the server. A queue that flushed the create
     # after the delete had superseded it would recreate a note the user removed.
-    # Settle briefly: the assertion is a NEGATIVE, so checking it the instant
-    # the queue empties would pass before a late create could even land.
-    await asyncio.sleep(2)
+    # The assertion is a NEGATIVE, so checking it the instant the queue empties
+    # could pass before a late create lands. Barrier: push a sentinel over the
+    # same CRDT channel and wait for it on the server; the channel processes
+    # frames in order, so any create flushed before it has landed too.
+    sentinel = f"E2E/CrdtQueueDedup95-sentinel-{uuid.uuid4().hex[:12]}.md"
+    try:
+        await cdp_a.push_file_now(sentinel, "# sentinel")
+        api_sync.wait_for_note(sentinel)
+    finally:
+        api_sync.delete_note(sentinel)
+        delete_note(vault_a, sentinel)
     assert api_sync.get_note(path) is None, (
         "a create superseded by an offline delete resurrected the note on flush"
     )

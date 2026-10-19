@@ -24,7 +24,7 @@ a post-D3 plugin with a broken handshake path times out on content.
 
 from __future__ import annotations
 
-import time
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -43,6 +43,13 @@ def _note_id(api_sync, path: str) -> str:
     nid = inner.get("id") or inner.get("note_id") or inner.get("uuid")
     assert nid, f"no note id in GET /notes/{path}: {note}"
     return str(nid)
+
+
+def _manifest_seq(api_sync, path: str) -> int:
+    for n in api_sync.get_manifest()["notes"]:
+        if n["path"] == path:
+            return int(n["seq"])
+    raise AssertionError(f"{path} not in the server manifest")
 
 
 @pytest.mark.asyncio
@@ -183,8 +190,8 @@ async def test_deaf_live_bound_note_converges_via_socket_replay(vault_b, cdp_b, 
     # `> :25.3`, oracle timed out with the line present). Separate the epochs
     # by 2s, then floor the baseline and back off one whole second: pre-wedge
     # lines are now strictly older than the baseline second, post-wedge lines
-    # strictly newer.
-    time.sleep(2)
+    # strictly newer. (Clock-epoch separation, not a wait for system state.)
+    await asyncio.sleep(2)
     post_wedge = (
         datetime.now(timezone.utc).replace(microsecond=0) - timedelta(seconds=1)
     ).isoformat()
@@ -292,15 +299,18 @@ async def test_deaf_note_survives_handshake_rate_limit_and_heals_on_restore(
         api_sync.wait_for_note_content(
             path_x, "EDIT-WHILE-B-DEAF-RATE-LIMITED", timeout=CRDT_TIMEOUT
         )
+        x_seq = _manifest_seq(api_sync, path_x)
         # Trigger: Y's fan-out delivers a later seq, B detects it is behind and
         # attempts a heal — which must be rejected while the budget is zero.
         api_sync.append_note(path_y, "\nTRIGGER-EDIT-Y-1\n")
         wait_for_content(vault_b, path_y, "TRIGGER-EDIT-Y-1", timeout=CRDT_TIMEOUT)
 
-        # Bounded behavior: give the (blocked) heal attempt a full window, then
-        # assert X did NOT converge — the deafness is real while the budget is
-        # zero, not a false "eventually consistent" success.
-        time.sleep(8)
+        # Positive barrier, then assert X did NOT converge: the deafness is real
+        # while the budget is zero, not a false "eventually consistent" success.
+        # Only B's seq replay (the heal Y's later seq triggers) moves this
+        # cursor, so reaching X's seq proves the heal served X's row and its
+        # STEP1 attempt was made against the zeroed budget.
+        await cdp_b.wait_for_catchup_past(x_seq, timeout=CRDT_TIMEOUT)
         stuck = read_note(vault_b, path_x)
         assert "EDIT-WHILE-B-DEAF-RATE-LIMITED" not in stuck, (
             f"X converged despite a zeroed handshake budget (false success): {stuck!r}"

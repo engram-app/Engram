@@ -25,7 +25,7 @@ The oracles, weakest to strongest:
 
 from __future__ import annotations
 
-import time
+import asyncio
 
 import pytest
 
@@ -120,7 +120,9 @@ async def test_table_cell_click_does_not_duplicate_the_document(
     # The corruption was immediate (the reconcile runs on attach), but the 3s
     # drift backstop is the other writer that could produce it. Wait past it so a
     # green result covers both, then let any push settle.
-    time.sleep(6)
+    # Deliberately a timed window: The backstop timer logs nothing when it finds no
+    # drift, so there is no positive signal that it ran.
+    await asyncio.sleep(6)
 
     cell = await cdp_a.table_cell_text()
     for marker in CORRUPTION_MARKERS:

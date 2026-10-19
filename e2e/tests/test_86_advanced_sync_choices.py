@@ -211,6 +211,9 @@ async def test_push_all_delete_remote_preserves_local(vault_a, cdp_a, vault_b, c
 
         # The wipe's delete broadcasts fan out asynchronously — the vault can
         # be destroyed AFTER the sync promise resolves. Hold the line.
+        # Deliberately a timed window: A sentinel broadcast would order after the
+        # wipe's own deletes, but not after B's echo-pushed deletes (the other
+        # late writer this guards), which have no observable completion.
         await asyncio.sleep(SETTLE_S)
         assert (vault_a / s.local_only).exists() and (vault_a / s.synced).exists(), (
             "late WS echo of wipeRemote deleted local files after the sync "
@@ -277,6 +280,8 @@ async def test_pull_all_delete_local_preserves_remote(vault_a, cdp_a, api_sync):
 
         # Mirror invariant of the incident: the local wipe must not echo-push
         # deletions up to the server (suppressed vault delete events).
+        # Deliberately a timed window: A leaked delete may go out over REST or the
+        # socket, so no sentinel write is ordered after it.
         await asyncio.sleep(SETTLE_S)
         assert api_sync.get_note(s.remote_only) is not None, (
             "local wipe echoed a delete to the server (RemoteOnly.md gone)"

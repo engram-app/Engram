@@ -14,8 +14,8 @@ suite cannot check, because only a real filesystem has inodes.
 Fixed in plugin PR #441; see plugin docs/context/remote-rename-identity-vs-file.md.
 """
 
+import asyncio
 import os
-import time
 import uuid
 
 import pytest
@@ -71,6 +71,8 @@ async def test_remote_rename_moves_the_file(vault_a, vault_b, cdp_a, cdp_b, api_
     # And the move must not echo back as a fresh rename from B, which would have
     # the two devices trading renames. Give the echo a chance to land, then
     # confirm the server still agrees with A.
-    time.sleep(2)
+    # Deliberately a timed window: B's echo would leave via handleRename with no
+    # completion signal, so nothing positive orders after it.
+    await asyncio.sleep(2)
     api_sync.wait_for_note(new_path)
     api_sync.wait_for_note_gone(old_path)
