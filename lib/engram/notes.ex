@@ -15,6 +15,7 @@ defmodule Engram.Notes do
   alias Engram.Logger.Metadata
 
   alias Engram.Notes.{
+    BulkRename,
     Chunk,
     ContentCommit,
     CrdtBridge,
@@ -28,7 +29,8 @@ defmodule Engram.Notes do
     Note,
     OkfFields,
     PathSanitizer,
-    Revisions
+    Revisions,
+    TagsTerm
   }
 
   alias Engram.Repo
@@ -5013,7 +5015,7 @@ defmodule Engram.Notes do
           rows
           |> Enum.flat_map(fn {id, dv, ct, nonce} ->
             decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :tags, id, dv))
-            |> :erlang.binary_to_term([:safe])
+            |> TagsTerm.decode!()
           end)
           |> Enum.uniq()
           |> Enum.sort()
@@ -5402,7 +5404,7 @@ defmodule Engram.Notes do
           rows
           |> Enum.flat_map(fn {id, dv, ct, nonce} ->
             decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :tags, id, dv))
-            |> :erlang.binary_to_term([:safe])
+            |> TagsTerm.decode!()
           end)
           |> Enum.frequencies()
           |> Enum.map(fn {name, count} -> %{name: name, count: count} end)
@@ -5917,9 +5919,9 @@ defmodule Engram.Notes do
                 v2_rows = stamp_rename_rows(grouped[:v2] || [], now)
                 v1_rows = stamp_rename_rows(grouped[:v1] || [], now)
 
-                bulk_rename_update!(marker_rows, @marker_rename_cols, seq)
-                bulk_rename_update!(v2_rows, @v2_rename_cols, seq)
-                bulk_rename_update!(v1_rows, @v1_rename_cols, seq)
+                BulkRename.update!(marker_rows, @marker_rename_cols, seq)
+                BulkRename.update!(v2_rows, @v2_rename_cols, seq)
+                BulkRename.update!(v1_rows, @v1_rename_cols, seq)
 
                 # Insert soft-deleted tombstones for old paths so the seq feed
                 # (list_changes_by_seq — no deleted_at filter) carries delete
@@ -7114,79 +7116,16 @@ defmodule Engram.Notes do
       ]
   end
 
-  # Marker-only rename helper. Re-encrypts JUST the folder envelope under the
-  # row-id-bound AAD and recomputes the folder_hmac. Returns
-  # `{ciphertext, nonce, hmac}` — caller splices into Repo.update_all `set:`.
-  # No content/title/path/tags work because markers have none of those.
-  defp rename_col_sql_type(:tags_hmac), do: "bytea[]"
-  defp rename_col_sql_type(:dek_version), do: "integer"
-  defp rename_col_sql_type(_col), do: "bytea"
-
   # Attaches the cascade's shared timestamp to each {id, kw} rename row,
-  # producing the [{id, stamp, kw}] shape bulk_rename_update! consumes.
+  # producing the [{id, stamp, kw}] shape BulkRename.update!/3 consumes.
   defp stamp_rename_rows(rows, now) do
     Enum.map(rows, fn {id, kw} -> {id, now, kw} end)
   end
 
-  # One `UPDATE notes ... FROM (VALUES ...)` per ≤500-row chunk. Every row in a
-  # class gets DISTINCT ciphertexts, so this can't be a single update_all — but
-  # it must not be one UPDATE per note either (the N+1 this replaces). Runs
-  # inside the caller's with_tenant transaction: the RLS role restricts the raw
-  # UPDATE to the tenant's rows, and the shared `seq` keeps the #614
-  # one-op-one-seq contract. `rows` is [{note_id, stamp, kw}] where `kw`
-  # holds a value for every column in `cols`. A nested-collision unique
-  # violation raises Postgrex.Error exactly like the per-note update_all did.
-  defp bulk_rename_update!([], _cols, _seq), do: :ok
-
-  defp bulk_rename_update!(rows, cols, seq) do
-    set_sql =
-      Enum.map_join(cols, ", ", &"#{&1} = v.#{&1}") <> ", updated_at = v.updated_at, seq = $1"
-
-    # id + updated_at + the class's columns, per VALUES row.
-    ncols = length(cols) + 2
-
-    rows
-    |> Enum.chunk_every(@rename_update_chunk)
-    |> Enum.each(fn chunk ->
-      values_sql =
-        chunk
-        |> Enum.with_index()
-        |> Enum.map_join(", ", fn {_row, i} ->
-          base = 2 + i * ncols
-
-          col_placeholders =
-            cols
-            |> Enum.with_index(2)
-            |> Enum.map_join(", ", fn {col, j} ->
-              "$#{base + j}::#{rename_col_sql_type(col)}"
-            end)
-
-          "($#{base}::uuid, $#{base + 1}::timestamp, #{col_placeholders})"
-        end)
-
-      params =
-        [seq] ++
-          Enum.flat_map(chunk, fn {id, stamp, kw} ->
-            [
-              Ecto.UUID.dump!(id),
-              DateTime.to_naive(stamp) | Enum.map(cols, &Keyword.fetch!(kw, &1))
-            ]
-          end)
-
-      _ =
-        Repo.query!(
-          """
-          UPDATE notes AS n
-          SET #{set_sql}
-          FROM (VALUES #{values_sql}) AS v(id, updated_at, #{Enum.join(cols, ", ")})
-          WHERE n.id = v.id
-          """,
-          params
-        )
-    end)
-
-    :ok
-  end
+  # Marker-only rename helper. Re-encrypts JUST the folder envelope under the
+  # row-id-bound AAD and recomputes the folder_hmac. Returns
+  # `{ciphertext, nonce, hmac}` — caller splices into Repo.update_all `set:`.
+  # No content/title/path/tags work because markers have none of those.
 
   defp folder_only_aad_bound(user, row_id, folder, _dek_version) do
     {:ok, dek} = Crypto.get_dek(user)
