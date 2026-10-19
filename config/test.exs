@@ -237,3 +237,14 @@ config :engram, :ensure_collection_memo, false
 # Sentry.Test (setup_sentry/1, pop_sentry_reports/0) needs its registry,
 # which the SDK starts only in test mode. No DSN in test, so nothing is sent.
 config :sentry, test_mode: true
+
+# `Qdrant.ensure_collection/2` PATCHes storage/strict-mode drift on every
+# existing collection, and `Engram.PromEx.Qdrant` polls the collection every
+# 60s. Off for the suite so unrelated Bypass tests see no extra requests and
+# nothing polls localhost:6333; their own tests opt back in per-process via
+# `ServiceConfig.put_override/2`.
+config :engram, :qdrant_reconcile_config, false
+config :engram, :qdrant_collection_metrics, false
+# EmbedNote's Qdrant pressure preflight: off for the same reason (it GETs
+# /sys_metrics and /metrics); its tests opt in per-process.
+config :engram, :qdrant_backpressure_preflight, false

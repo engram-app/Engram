@@ -33,6 +33,7 @@ defmodule Engram.Workers.RepathNoteIndex do
   alias Engram.Indexing
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
+  alias Engram.Vector.Qdrant
   alias Engram.Workers.EmbedNote
 
   require Logger
@@ -112,6 +113,11 @@ defmodule Engram.Workers.RepathNoteIndex do
   # On the final attempt, fall back to EmbedNote (with old_path_hmac so it
   # deletes old-path points AND re-embeds under the new path). This ensures no
   # points ever strand under a stale path_hmac after all retries are exhausted.
+  # Strict mode refused the write: wait without consuming an attempt (so it
+  # never counts toward the EmbedNote fallback below either).
+  defp maybe_fallback(_job, _note, _old_path_hmac, {:error, :qdrant_backpressure}),
+    do: Qdrant.backpressure_snooze(:refused)
+
   defp maybe_fallback(%Oban.Job{attempt: a, max_attempts: m} = _job, note, old_path_hmac, _err)
        when a >= m do
     _ = EmbedNote.insert_debounced(note.id, note.user_id, old_path_hmac: old_path_hmac)

@@ -112,6 +112,15 @@ Live. Covers every var `config/runtime.exs` reads (`Engram.EnvVarDocsTest` fails
 | `QDRANT_COLLECTION` | env-driven; fallback `obsidian_notes` (module) / `engram_notes` (dev+test+prod) | Collection name. See nuance above. |
 | `QDRANT_API_KEY` | unset | Qdrant Cloud key. |
 | `QDRANT_BINARY_QUANTIZATION` | on | Set `false` to disable BQ on non-AVX2 hardware. |
+| `QDRANT_RECONCILE_CONFIG` | `true` | Kill switch: `false` = never PATCH the collection config (boot reconcile + poller strict-mode sync). |
+| `QDRANT_RECONCILE_ON_DISK` | `true` | Kill switch: `false` = skip only the on-disk group (dense + sparse index on disk). |
+| `QDRANT_STRICT_MODE` | `true` | Kill switch: `false` = reconcile sets `strict_mode_config.enabled=false` (no write refusals). |
+| `QDRANT_BACKPRESSURE_PREFLIGHT` | `true` | Kill switch: `false` = EmbedNote never pauses for Qdrant pressure. |
+| `QDRANT_MEMORY_LIMIT_BYTES` | unset | Qdrant container memory limit. Enables the heap pressure reading and the reserve-derived strict-mode memory limit. |
+| `QDRANT_MEMORY_RESERVE_BYTES` | 268435456 (256 MiB) | Heap kept free below the memory limit (floor 256 MiB). |
+| `QDRANT_STRICT_DISK_PERCENT` | 85 | Static strict-mode disk limit, used only when volume or collection size is unknown. |
+| `QDRANT_STRICT_MEMORY_PERCENT` | 85 | Static strict-mode memory limit, used only when `QDRANT_MEMORY_LIMIT_BYTES` is unset. |
+| `QDRANT_PREFLIGHT_MARGIN_POINTS` | 5 | EmbedNote pauses this many points below each strict-mode limit. |
 
 ## Search / Reranker
 

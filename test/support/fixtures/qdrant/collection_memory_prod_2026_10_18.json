@@ -1,0 +1,26 @@
+{
+  "total": {"disk_bytes": 4890000000, "ram_bytes": 657000000, "cached_bytes": 520000000, "expected_cache_bytes": 4100000000},
+  "vectors": [
+    {
+      "name": "dense",
+      "storage": {"disk_bytes": 1830000000, "ram_bytes": 0, "cached_bytes": 396000000, "expected_cache_bytes": 1830000000},
+      "index": {"disk_bytes": 240000000, "ram_bytes": 1000000, "cached_bytes": 90000000, "expected_cache_bytes": 240000000},
+      "quantized": {"disk_bytes": 59000000, "ram_bytes": 59000000, "cached_bytes": 0, "expected_cache_bytes": 0}
+    }
+  ],
+  "sparse_vectors": [
+    {
+      "name": "keyword",
+      "storage": {"disk_bytes": 900000000, "ram_bytes": 0, "cached_bytes": 30000000, "expected_cache_bytes": 900000000},
+      "index": {"disk_bytes": 419000000, "ram_bytes": 419000000, "cached_bytes": 0, "expected_cache_bytes": 0}
+    }
+  ],
+  "payload": {"disk_bytes": 1200000000, "ram_bytes": 0, "cached_bytes": 4000000, "expected_cache_bytes": 0},
+  "payload_index": [
+    {"name": "user_id", "usage": {"disk_bytes": 30000000, "ram_bytes": 30000000, "cached_bytes": 0, "expected_cache_bytes": 0}},
+    {"name": "vault_id", "usage": {"disk_bytes": 30000000, "ram_bytes": 30000000, "cached_bytes": 0, "expected_cache_bytes": 0}},
+    {"name": "path_hmac", "usage": {"disk_bytes": 40000000, "ram_bytes": 40000000, "cached_bytes": 0, "expected_cache_bytes": 0}},
+    {"name": "note_id", "usage": {"disk_bytes": 40000000, "ram_bytes": 40000000, "cached_bytes": 0, "expected_cache_bytes": 0}}
+  ],
+  "other": {"id_tracker": {"disk_bytes": 19000000, "ram_bytes": 19000000, "cached_bytes": 0, "expected_cache_bytes": 0}}
+}

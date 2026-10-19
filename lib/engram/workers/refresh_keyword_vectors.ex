@@ -37,6 +37,7 @@ defmodule Engram.Workers.RefreshKeywordVectors do
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
   alias Engram.Repo
+  alias Engram.Vector.Qdrant
   alias Engram.Workers.BackgroundPriority
 
   require Logger
@@ -74,6 +75,7 @@ defmodule Engram.Workers.RefreshKeywordVectors do
     else
       {:discard, _} = discard -> discard
       {:error, :rotation_in_progress} -> {:snooze, 60}
+      {:error, :qdrant_backpressure} -> Qdrant.backpressure_snooze(:refused)
       {:error, :user_not_found} -> {:discard, :user_deleted}
       {:error, _} = err -> err
     end

@@ -6,10 +6,24 @@ defmodule Engram.Vector.Qdrant do
   Config:
   - :qdrant_url — base URL (default http://localhost:6333)
   - QDRANT_API_KEY env var — API key for Qdrant Cloud (optional for local)
+
+  Ops kill switches (env, read at boot in every environment; all default on;
+  `false`/`0` to turn off, then restart):
+  - QDRANT_RECONCILE_CONFIG: false = never PATCH the collection config (boot
+    reconcile and the 60s poller's strict-mode sync).
+  - QDRANT_RECONCILE_ON_DISK: false = skip only the on-disk group.
+  - QDRANT_STRICT_MODE: false = the reconcile sets our two strict-mode
+    guards (`max_disk_usage_percent`, `max_resident_memory_percent`) to 100;
+    `enabled` and every other strict field (Qdrant Cloud's unindexed-filter
+    guard) are left as they are.
+  - QDRANT_BACKPRESSURE_PREFLIGHT: false = EmbedNote never pauses for pressure.
   """
 
+  alias Engram.Logger.Metadata
   alias Engram.ServiceConfig
+  alias Engram.Vector.QdrantLayout
 
+  require Logger
   require OpenTelemetry.Tracer, as: Tracer
 
   @default_url "http://localhost:6333"
@@ -209,30 +223,34 @@ defmodule Engram.Vector.Qdrant do
   defp do_ensure_collection(col, dims) do
     case create_collection(col, dims) do
       {:ok, :created} ->
-        with :ok <- ensure_payload_indexes(col, MapSet.new()), do: {:ok, :verified}
+        with :ok <- ensure_payload_indexes(col, MapSet.new()), do: reconciled(col)
 
       {:ok, {:exists, :unknown}} ->
         {:ok, :unverified}
 
       {:ok, {:exists, indexed}} ->
-        with :ok <- ensure_payload_indexes(col, indexed), do: {:ok, :verified}
+        with :ok <- ensure_payload_indexes(col, indexed), do: reconciled(col)
 
       {:error, _} = error ->
         error
     end
   end
 
-  defp create_collection(col, dims) do
-    dense = %{size: dims, distance: "Cosine"}
+  # Storage/safety params are best-effort: a failed reconcile is logged and
+  # retried next boot, never a reason to stop indexing. Only the payload
+  # indexes above gate `:verified`, because strict mode 400s without them.
+  defp reconciled(col) do
+    _ = reconcile_config(col)
+    {:ok, :verified}
+  end
 
+  defp create_collection(col, dims) do
     body =
-      %{
-        vectors: %{"dense" => dense},
-        sparse_vectors: %{"keyword" => %{modifier: "idf"}}
-      }
+      dims
+      |> QdrantLayout.create_params()
       |> then(fn b ->
         if binary_quantization_enabled?() do
-          Map.put(b, :quantization_config, %{binary: %{always_ram: true}})
+          Map.put(b, "quantization_config", %{"binary" => %{"always_ram" => true}})
         else
           b
         end
@@ -340,18 +358,387 @@ defmodule Engram.Vector.Qdrant do
 
   @doc """
   Get collection info. Returns the raw `result` map from Qdrant
-  (includes config, point count, etc.).
+  (includes config, point count, etc.). `purpose` picks the Req opts
+  (`:search` = 5s fail-fast, for pollers).
   """
-  def collection_info(col) do
-    opts = req_opts()
+  def collection_info(col, purpose \\ :indexing) do
+    instrument(:collection_info, fn -> get_result("/collections/#{col}", purpose) end)
+  end
 
-    instrument(:collection_info, fn ->
-      case Req.get("#{base_url()}/collections/#{col}", opts) do
-        {:ok, %{status: 200, body: %{"result" => result}}} -> {:ok, result}
+  @doc """
+  `GET /collections/{col}/memory` (Qdrant >= 1.18): disk/RAM/page-cache bytes
+  per component. Older servers answer 404 -> `{:error, :unsupported}`.
+  """
+  def collection_memory(col) do
+    instrument(:collection_memory, fn ->
+      case get_result("/collections/#{col}/memory", :search) do
+        {:error, {404, _}} -> {:error, :unsupported}
+        other -> other
+      end
+    end)
+  end
+
+  defp get_result(path, purpose) do
+    case Req.get(base_url() <> path, req_opts(purpose)) do
+      {:ok, %{status: 200, body: %{"result" => result}}} -> {:ok, result}
+      {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Bring the collection's params to `QdrantLayout.desired/1`, PATCHing only
+  what differs. Returns the PATCH keys applied (`[]` when already in shape, so
+  a normal boot sends no PATCH).
+
+  Three groups, each its own PATCH so one refusal cannot block another, in
+  this order:
+
+    1. strict mode (version-gated in `QdrantLayout`), so the disk guard is
+       live before anything rebuilds;
+    2. optimizers, always (one optimization thread serialises the rebuild);
+    3. on-disk (dense + sparse index), ONLY past `headroom/2`: Qdrant rewrites
+       every segment for it, and no optimizer splits an existing segment, so
+       the worst case is a rewrite of the whole collection at once.
+  """
+  def reconcile_config(col \\ nil) do
+    if ServiceConfig.get(:qdrant_reconcile_config, true),
+      do: do_reconcile_config(col || collection()),
+      else: {:ok, []}
+  end
+
+  defp strict_mode?, do: ServiceConfig.get(:qdrant_strict_mode, true)
+
+  # Boot only (this runs once per node). A guard the server does not honour
+  # is not applied, so say which, rather than imply a write cap that is not
+  # there. The app-side preflight still reads disk pressure where it can.
+  defp log_missing_guards(nil), do: :ok
+
+  defp log_missing_guards(version) do
+    supported = QdrantLayout.guard_kinds(version)
+
+    for {kind, name} <- [disk: "disk", heap: "memory"], kind not in supported do
+      Logger.warning("qdrant #{name} write guard unavailable on #{version}")
+    end
+
+    :ok
+  end
+
+  defp do_reconcile_config(col) do
+    with {:ok, info} <- collection_info(col) do
+      version = server_version()
+      log_missing_guards(version)
+
+      diff =
+        QdrantLayout.diff(
+          info["config"] || %{},
+          QdrantLayout.desired(version, strict_limits(col, volume_stats()), strict_mode?())
+        )
+
+      {strict, rest} = Map.split(diff, ["strict_mode_config"])
+      {on_disk, optimizers} = Map.split(rest, QdrantLayout.on_disk_keys())
+
+      results =
+        [strict, optimizers, gate_on_disk(col, on_disk)]
+        |> Enum.map(&{&1, patch_collection(col, &1)})
+
+      applied = for {body, :ok} <- results, key <- Map.keys(body), do: key
+      if applied != [], do: report_reconciled(applied)
+
+      case for({_body, {:error, _} = e} <- results, do: e) do
+        [] -> {:ok, applied}
+        [error | _] -> error
+      end
+    end
+    |> tap(&log_reconcile_failure/1)
+  end
+
+  @doc """
+  Strict-mode limits for `col` now (`QdrantLayout.strict_limits/2`): the
+  volume from `/sys_metrics`, the collection's `/memory` disk_bytes and
+  `QDRANT_MEMORY_LIMIT_BYTES`. Unknown sizes fall back to
+  `QDRANT_STRICT_DISK_PERCENT` / `QDRANT_STRICT_MEMORY_PERCENT` (85).
+  """
+  def strict_limits(col, volume) do
+    collection_bytes =
+      case collection_memory(col) do
+        {:ok, %{"total" => %{"disk_bytes" => b}}} when is_integer(b) -> b
+        _ -> nil
+      end
+
+    QdrantLayout.strict_limits(
+      %{
+        capacity: volume && volume.capacity,
+        collection: collection_bytes,
+        memory_limit: ServiceConfig.get(:qdrant_memory_limit_bytes)
+      },
+      %{
+        memory_reserve: ServiceConfig.get(:qdrant_memory_reserve_bytes, 256 * 1024 * 1024),
+        static: %{
+          disk: ServiceConfig.get(:qdrant_strict_disk_percent, 85),
+          heap: ServiceConfig.get(:qdrant_strict_memory_percent, 85)
+        }
+      }
+    )
+  end
+
+  @doc """
+  Keep the collection's strict-mode limits at `limits` (the poller, every
+  tick), so they follow data growth and volume resizes without a deploy.
+  PATCHes only when a percent moved (whole points, so >= 1), then logs and
+  emits `[:engram, :qdrant, :strict_limits_changed]`.
+  """
+  def reconcile_strict_mode(col, info, limits, version \\ :fetch) do
+    if ServiceConfig.get(:qdrant_reconcile_config, true),
+      do: do_reconcile_strict_mode(col, info, limits, version),
+      else: :ok
+  end
+
+  defp do_reconcile_strict_mode(col, info, limits, version) do
+    want =
+      if(version == :fetch, do: server_version(), else: version)
+      |> QdrantLayout.desired(limits, strict_mode?())
+      |> Map.take(["strict_mode_config"])
+
+    case QdrantLayout.diff(info["config"] || %{}, want) do
+      diff when map_size(diff) == 0 ->
+        :ok
+
+      diff ->
+        with :ok <- patch_collection(col, diff) do
+          strict = diff["strict_mode_config"]
+
+          Logger.info(
+            "qdrant strict-mode limits changed: disk=#{inspect(strict["max_disk_usage_percent"])} " <>
+              "memory=#{inspect(strict["max_resident_memory_percent"])}"
+          )
+
+          :telemetry.execute(
+            [:engram, :qdrant, :strict_limits_changed],
+            %{count: 1},
+            %{disk: strict["max_disk_usage_percent"], heap: strict["max_resident_memory_percent"]}
+          )
+        end
+    end
+  end
+
+  defp log_reconcile_failure({:error, reason}),
+    do: Logger.warning("qdrant config reconcile failed: #{Metadata.safe_reason(reason)}")
+
+  defp log_reconcile_failure(_ok), do: :ok
+
+  @self_host_on_disk_limit 1024 * 1024 * 1024
+
+  # The on-disk group, or `%{}` when the headroom gate defers it. Only
+  # evaluated when there is something to apply, so a steady-state boot makes
+  # no /memory or /sys_metrics request.
+  defp gate_on_disk(_col, on_disk) when map_size(on_disk) == 0, do: on_disk
+
+  defp gate_on_disk(col, on_disk) do
+    if ServiceConfig.get(:qdrant_reconcile_on_disk, true) do
+      headroom_gate(col, on_disk)
+    else
+      Logger.info("qdrant_reconcile_deferred source=QDRANT_RECONCILE_ON_DISK")
+      %{}
+    end
+  end
+
+  defp headroom_gate(col, on_disk) do
+    collection_bytes =
+      case collection_memory(col) do
+        {:ok, %{"total" => %{"disk_bytes" => b}}} -> b
+        _ -> nil
+      end
+
+    {decision, source, free} = headroom(collection_bytes, volume_stats())
+
+    meta = %{decision: decision, source: source}
+    measurements = %{free_bytes: free, collection_bytes: collection_bytes}
+
+    Logger.info(
+      "qdrant_reconcile_#{if decision == :apply, do: "on_disk_applied", else: "deferred"} " <>
+        "source=#{source} free_bytes=#{inspect(free)} collection_bytes=#{inspect(collection_bytes)}"
+    )
+
+    :telemetry.execute([:engram, :qdrant, :headroom_gate], measurements, meta)
+    if decision == :apply, do: on_disk, else: %{}
+  end
+
+  @doc """
+  The on-disk headroom decision: `{:apply | :defer, source, free_bytes}`.
+
+  The rewrite needs scratch space for the segment being rebuilt. On a prod
+  clone (1.18.2, 447k points, 6 segments, one optimizer thread) it peaked at
+  +0.26x the collection's `disk_bytes`. With volume stats (Qdrant Cloud
+  `/sys_metrics`) it applies only when free disk is at least 0.5x the
+  collection AND the projected peak, used + 0.35x (the measurement plus ~35%
+  margin), stays under 80% of capacity, below strict mode's 85% write cap. Without them (self-host) it applies only to a
+  collection under 1 GiB. An unknown collection size (no `/memory` before
+  Qdrant 1.18) always defers.
+  """
+  def headroom(nil, volume), do: {:defer, :unknown_size, free_of(volume)}
+
+  def headroom(size, nil) when size < @self_host_on_disk_limit, do: {:apply, :self_host_rule, nil}
+  def headroom(_size, nil), do: {:defer, :self_host_rule, nil}
+
+  # Integer form of `free >= 0.5 * size` and `(used + 0.35 * size) / cap < 0.8`.
+  def headroom(size, %{used: used, capacity: cap} = volume) do
+    free = free_of(volume)
+    decision = if 2 * free >= size and 100 * used + 35 * size < 80 * cap, do: :apply, else: :defer
+    {decision, :sys_metrics, free}
+  end
+
+  defp free_of(%{used: used, capacity: cap}), do: cap - used
+  defp free_of(nil), do: nil
+
+  # Qdrant Cloud exposes the volume's kubelet stats on `/sys_metrics`
+  # (Prometheus text). Self-host has no such endpoint: nil.
+  defp volume_stats do
+    case Req.get(base_url() <> "/sys_metrics", [decode_body: false] ++ req_opts(:search)) do
+      {:ok, %{status: 200, body: body}} when is_binary(body) -> parse_volume_stats(body)
+      _ -> nil
+    end
+  end
+
+  @doc false
+  # `%{used:, capacity:}` from the `qdrant-storage-*` PVC's kubelet lines (the
+  # pod also mounts other volumes, e.g. snapshots), or nil if either is absent.
+  def parse_volume_stats(text) do
+    stats =
+      for line <- String.split(text, "\n"),
+          line =~ ~s(persistentvolumeclaim="qdrant-storage-),
+          [name, value] <-
+            [
+              Regex.run(~r/^kubelet_volume_stats_(used|capacity)_bytes\{[^}]*\}\s+(\S+)/, line,
+                capture: :all_but_first
+              ) || []
+            ],
+          {num, _} <- [Float.parse(value)],
+          into: %{},
+          do: {String.to_existing_atom(name), trunc(num)}
+
+    case stats do
+      %{used: _, capacity: _} -> stats
+      _ -> nil
+    end
+  end
+
+  defp report_reconciled(changed) do
+    Logger.info("qdrant config reconciled: #{Enum.join(changed, ", ")}")
+    :telemetry.execute([:engram, :qdrant, :config_reconciled], %{count: 1}, %{changed: changed})
+  end
+
+  defp patch_collection(_col, body) when map_size(body) == 0, do: :ok
+
+  defp patch_collection(col, body) do
+    instrument(:update_collection, fn ->
+      case Req.patch("#{base_url()}/collections/#{col}", [json: body] ++ req_opts()) do
+        {:ok, %{status: 200}} -> :ok
         {:ok, %{status: status, body: body}} -> {:error, {status, body}}
         {:error, reason} -> {:error, reason}
       end
     end)
+  end
+
+  @doc """
+  `GET /` -> the server's `Version`, or nil when unreadable: strict mode is
+  then skipped (not guessed), and the next call tries again.
+  """
+  def server_version do
+    with {:ok, %{status: 200, body: %{"version" => v}}} <-
+           Req.get(base_url() <> "/", req_opts(:search)),
+         {:ok, version} <- Version.parse(v) do
+      version
+    else
+      _ -> nil
+    end
+  end
+
+  # Strict mode refusing a write for disk or memory (Qdrant >= 1.18.1):
+  # `CollectionError::StrictMode` -> `StorageError::BadRequest`, HTTP 400,
+  # message from `check_disk_usage` / the resident-memory check in
+  # lib/collection/src/operations/verification/mod.rs. Searches and deletes
+  # are never refused (delete ops are not "disk/memory-consuming"); deletes
+  # map it anyway so a future Qdrant that does refuse them is handled alike.
+  @backpressure ~r/(Disk usage|Resident memory usage) is at \d+% of total/
+
+  defp write_error(400, %{"status" => %{"error" => message}} = body) when is_binary(message) do
+    if message =~ @backpressure, do: {:error, :qdrant_backpressure}, else: {:error, {400, body}}
+  end
+
+  defp write_error(status, body), do: {:error, {status, body}}
+
+  @doc """
+  How full Qdrant is, in whole percent, with the strict-mode limits it is
+  measured against: `%{disk: pct | nil, heap: pct | nil, limits: limits}`.
+  Disk is the storage volume from Qdrant Cloud `/sys_metrics`; heap is
+  `memory_resident_bytes` from `/metrics` (the jemalloc figure strict mode
+  checks) over `QDRANT_MEMORY_LIMIT_BYTES`. nil = unknown (self-host has no
+  `/sys_metrics`; no limit configured), which callers treat as "not full".
+  Node-cached for 60s, so the age of a reading is bounded by the TTL.
+  """
+  def pressure, do: Engram.Cache.fetch(:qdrant_pressure, base_url(), &read_pressure/0)
+
+  @doc "Drop this node's cached `pressure/0` reading."
+  def forget_pressure, do: Engram.Cache.evict_local(:qdrant_pressure, base_url())
+
+  @doc "A fresh `pressure/0` reading (the poller), refreshing the cache."
+  # ponytail: every node reads /sys_metrics, /metrics and /memory once a
+  # minute. Cheap at a handful of nodes; share the poller's reading over
+  # PubSub if the fleet grows.
+  def read_pressure do
+    volume = volume_stats()
+
+    reading = %{
+      disk: disk_percent(volume),
+      heap: heap_percent(),
+      limits: strict_limits(collection(), volume)
+    }
+
+    Engram.Cache.put(:qdrant_pressure, base_url(), reading)
+    reading
+  end
+
+  @static_limits %{disk: %{percent: 85, reserve: nil}, heap: %{percent: 85, reserve: nil}}
+
+  @doc """
+  The worker response to `{:error, :qdrant_backpressure}`: an Oban snooze
+  (no attempt consumed), jittered 31..90s so parked jobs do not return to a
+  recovering Qdrant in one wave. Emits `[:engram, :qdrant, :backpressure]`.
+  """
+  def backpressure_snooze(reason) when reason in [:preflight, :refused] do
+    :telemetry.execute([:engram, :qdrant, :backpressure], %{count: 1}, %{reason: reason})
+    {:snooze, 30 + :rand.uniform(60)}
+  end
+
+  @doc """
+  True when disk or heap is within `QDRANT_PREFLIGHT_MARGIN_POINTS` (default
+  5) of its strict-mode limit, i.e. about to be refused. Unknown is never over.
+  """
+  def over_pressure?(%{disk: disk, heap: heap} = reading) do
+    limits = Map.get(reading, :limits, @static_limits)
+    margin = ServiceConfig.get(:qdrant_preflight_margin_points, 5)
+
+    at_or_over?(disk, limits.disk.percent - margin) or
+      at_or_over?(heap, limits.heap.percent - margin)
+  end
+
+  defp at_or_over?(pct, limit), do: is_integer(pct) and pct >= limit
+
+  defp disk_percent(%{used: used, capacity: cap}) when cap > 0, do: div(used * 100, cap)
+  defp disk_percent(_), do: nil
+
+  defp heap_percent do
+    with limit when is_integer(limit) and limit > 0 <-
+           ServiceConfig.get(:qdrant_memory_limit_bytes),
+         {:ok, %{status: 200, body: text}} when is_binary(text) <-
+           Req.get(base_url() <> "/metrics", [decode_body: false] ++ req_opts(:search)),
+         [_, value] <- Regex.run(~r/^memory_resident_bytes\s+(\S+)/m, text),
+         {resident, _} <- Float.parse(value) do
+      div(trunc(resident) * 100, limit)
+    else
+      _ -> nil
+    end
   end
 
   @doc """
@@ -366,7 +753,7 @@ defmodule Engram.Vector.Qdrant do
     instrument(:upsert, fn ->
       case Req.put("#{base_url()}/collections/#{col}/points", opts) do
         {:ok, %{status: 200}} -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
@@ -384,7 +771,7 @@ defmodule Engram.Vector.Qdrant do
     instrument(:update_vectors, fn ->
       case Req.put("#{base_url()}/collections/#{col}/points/vectors", opts) do
         {:ok, %{status: 200}} -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
@@ -405,7 +792,7 @@ defmodule Engram.Vector.Qdrant do
     instrument(:set_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
         {:ok, %{status: 200}} -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
@@ -435,7 +822,7 @@ defmodule Engram.Vector.Qdrant do
     instrument(:set_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
         {:ok, %{status: 200}} -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
@@ -475,7 +862,7 @@ defmodule Engram.Vector.Qdrant do
     instrument(:delete_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload/delete", opts) do
         {:ok, %{status: 200}} -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
@@ -503,7 +890,7 @@ defmodule Engram.Vector.Qdrant do
         # (#1608, which retries now rather than swallowing) burn its attempts
         # on a stack that has never indexed anything.
         {:ok, %{status: status}} when status in [200, 404] -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
@@ -533,7 +920,7 @@ defmodule Engram.Vector.Qdrant do
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
         # Missing collection: nothing to delete. See `delete_points/2`.
         {:ok, %{status: status}} when status in [200, 404] -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
@@ -581,7 +968,7 @@ defmodule Engram.Vector.Qdrant do
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
         # Missing collection: nothing to delete. See `delete_points/2`.
         {:ok, %{status: status}} when status in [200, 404] -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
@@ -606,7 +993,7 @@ defmodule Engram.Vector.Qdrant do
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
         # Missing collection: nothing to delete. See `delete_points/2`.
         {:ok, %{status: status}} when status in [200, 404] -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
