@@ -3435,7 +3435,9 @@ jobs:
         # invisible until a release posted a broken or over-cap message —
         # and an over-cap message 400s, which the announce step only warns
         # about. Cheap to run here, expensive to discover later.
-        run: bash test/scripts/discord_release_notes_test.sh
+        run: |
+          bash test/scripts/discord_release_notes_test.sh
+          bash test/scripts/deployable_paths_test.sh
 
       - name: BEAM scheduler clamp self-check
         # Guards rel/env.sh's scheduler sizing. It ran in prod for an unknown
@@ -5190,11 +5192,13 @@ jobs:
           # the existing tag IS correct and rebuilding would be a no-op, so
           # we still skip in that case. We only note (not error) when a
           # DEPLOYABLE path actually changed in this merge (the workflow-level
-          # DEPLOYABLE_PATHS, the same set the CI image tag hashes);
-          # HEAD~1..HEAD = the squash-merge just landed on main (checkout is
-          # fetch-depth: 0).
-          DEPLOYABLE=$(git diff --name-only HEAD~1 HEAD -- $DEPLOYABLE_PATHS)
+          # DEPLOYABLE_PATHS, the same set the CI image tag hashes; checkout
+          # is fetch-depth: 0).
+          # Base is the nearest ancestor WITH an image, not HEAD~1: a deployable
+          # merge whose CI died pre-build was otherwise stranded by the next
+          # CI-only merge (f5bb607 / #2020, 2026-10-18).
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin > /dev/null
+          DEPLOYABLE=$(bash scripts/deployable_paths.sh "$GHCR_IMAGE")
           IMAGE_EXISTS=false
           if docker manifest inspect "${GHCR_IMAGE}:${VERSION}" > /dev/null 2>&1; then
             # NOTE: deliberately does NOT consult CACHE_HIT_BOTH. It used to,
@@ -5216,7 +5220,7 @@ jobs:
             # merge still skips, because DEPLOYABLE is empty for it.
             if [ "${{ github.run_attempt }}" = "1" ] && [ -n "$DEPLOYABLE" ]; then
               echo "::notice::Version ${VERSION} already exists in GHCR and deployable paths changed in this merge. mix.exs versions are sticky between release-please cuts (only release-please bumps it), so this is expected — building anyway, keyed on sha-${SHA_SHORT}."
-              echo "::group::Deployable paths changed (HEAD~1..HEAD)"; echo "$DEPLOYABLE"; echo "::endgroup::"
+              echo "::group::Deployable paths changed since last imaged ancestor"; echo "$DEPLOYABLE"; echo "::endgroup::"
             else
               DEP_NOTE=$([ -n "$DEPLOYABLE" ] && echo "deployable changed" || echo "CI/docs-only, image unchanged")
               echo "::notice::Image ${GHCR_IMAGE}:${VERSION} already in GHCR (run_attempt=${{ github.run_attempt }}, cache_hit_both=${CACHE_HIT_BOTH}, ${DEP_NOTE}); skipping build, jumping to deploy."
