@@ -98,11 +98,31 @@ jobs:
             echo "bypass=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Dispatch verify.yml (force_full) on the tagged commit
+      - name: Reuse a green verify.yml run, else dispatch one (force_full)
         if: steps.override.outputs.bypass != 'true'
         id: dispatch
         run: |
           set -euo pipefail
+          # Re-running this gate after an e2e flake used to dispatch a FRESH full
+          # run every time, so a re-run of the flaked e2e job could never count
+          # and each retry rolled the dice on every e2e job again. Reuse a
+          # completed dispatch run on this SHA whose three e2e jobs are all green.
+          # Fence on THIS workflow run's created_at (stable across re-runs), so a
+          # rollback tag on an old SHA never reuses last release's run.
+          FENCE=$(gh api "repos/${GH_REPO}/actions/runs/${GITHUB_RUN_ID}" -q '.created_at | fromdateiso8601')
+          candidates=$(gh run list --repo "$GH_REPO" --workflow=verify.yml \
+            --event=workflow_dispatch --status completed --json databaseId,headSha,createdAt \
+            -q "[.[] | select(.headSha==\"${HEAD_SHA}\") | select((.createdAt|fromdateiso8601) > ${FENCE})] | sort_by(.createdAt) | reverse | .[].databaseId")
+          for id in $candidates; do
+            green=$(gh run view "$id" --repo "$GH_REPO" --json jobs \
+              -q '[.jobs[] | select(.name|test("^e2e-(clerk|crdt|browser)$")) | select(.conclusion=="success")] | length')
+            if [ "$green" = "3" ]; then
+              echo "Reusing green verify.yml run ${id} for ${HEAD_SHA}"
+              echo "run_id=$id" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
           echo "Dispatching verify.yml with force_full=true on ${TAG} (${HEAD_SHA})"
           # Timestamp BEFORE dispatch. On the rollback recipe the tag re-points a
           # PREVIOUSLY-released SHA that already has a completed workflow_dispatch
