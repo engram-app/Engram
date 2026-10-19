@@ -2579,10 +2579,10 @@ jobs:
           docker rm -f "$QDRANT_CONTAINER" 2>/dev/null || true
 
           if [ -n "${LOCAL_REGISTRY:-}" ]; then
-            QDRANT_IMAGE="${LOCAL_REGISTRY}/qdrant/qdrant:v1.17.1"
-            docker pull "$QDRANT_IMAGE" 2>/dev/null || QDRANT_IMAGE="qdrant/qdrant:v1.17.1"
+            QDRANT_IMAGE="${LOCAL_REGISTRY}/qdrant/qdrant:v1.19.2"
+            docker pull "$QDRANT_IMAGE" 2>/dev/null || QDRANT_IMAGE="qdrant/qdrant:v1.19.2"
           else
-            QDRANT_IMAGE="qdrant/qdrant:v1.17.1"
+            QDRANT_IMAGE="qdrant/qdrant:v1.19.2"
           fi
 
           # Bind IPv4 explicitly. With a bare `-p 0:6333` docker publishes on
