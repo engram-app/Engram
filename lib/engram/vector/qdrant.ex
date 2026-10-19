@@ -967,14 +967,15 @@ defmodule Engram.Vector.Qdrant do
 
   @doc """
   Delete every point owned by `user_id` across all of their vaults. Used by
-  the §C inactivity soft-delete path — single Qdrant call regardless of
-  vault count.
+  account delete (soft and hard) and by OrphanSweep — single Qdrant call
+  regardless of vault count. `purpose` picks the `req_opts/1` profile: a user
+  or Clerk delete runs in a request and passes `:search` to fail fast.
   """
-  def delete_by_user(col \\ nil, user_id) do
+  def delete_by_user(col \\ nil, user_id, purpose \\ :indexing) do
     col = col || collection()
 
     filter = %{must: [%{key: "user_id", match: %{value: user_id}}]}
-    opts = [json: %{filter: filter}] ++ req_opts()
+    opts = [json: %{filter: filter}] ++ req_opts(purpose)
 
     instrument(:delete, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
