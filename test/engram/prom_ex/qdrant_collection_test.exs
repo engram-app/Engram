@@ -185,11 +185,38 @@ defmodule Engram.PromEx.QdrantCollectionTest do
     refute_receive {@collection_event, _, _}
   end
 
-  test "only one process in the cluster polls", %{bypass: bypass} do
-    stub_info(bypass)
+  # Every node publishes the read-only gauges (a frozen boot value on a
+  # non-poller masks max()/min() alerts); only the :global poller PATCHes.
+  test "a non-poller node publishes live gauges but never PATCHes", %{bypass: bypass} do
+    test_pid = self()
+    ServiceConfig.put_override(:qdrant_memory_limit_bytes, 2 * 1024 * 1024 * 1024)
+    ServiceConfig.put_override(:qdrant_reconcile_config, true)
+
+    # 1.18.2 + a fixture lacking our guards: the poller WOULD PATCH here.
+    Bypass.stub(bypass, "GET", "/", &json(&1, 200, %{version: "1.18.2"}))
+    Bypass.stub(bypass, "GET", "/metrics", &Plug.Conn.send_resp(&1, 404, ""))
+
+    Bypass.stub(bypass, "GET", "/sys_metrics", fn conn ->
+      Plug.Conn.send_resp(conn, 200, """
+      kubelet_volume_stats_capacity_bytes{persistentvolumeclaim="qdrant-storage-qdrant-0"} 8.37e+09
+      kubelet_volume_stats_used_bytes{persistentvolumeclaim="qdrant-storage-qdrant-0"} 4.35e+09
+      """)
+    end)
+
+    Bypass.stub(bypass, "GET", "/collections/engram_notes", fn conn ->
+      json(conn, 200, %{result: @info})
+    end)
 
     Bypass.stub(bypass, "GET", "/collections/engram_notes/memory", fn conn ->
-      Plug.Conn.send_resp(conn, 404, "")
+      json(conn, 200, %{result: @memory})
+    end)
+
+    {:ok, patches} = Agent.start_link(fn -> 0 end)
+
+    Bypass.stub(bypass, "PATCH", "/collections/engram_notes", fn conn ->
+      Agent.update(patches, &(&1 + 1))
+      send(test_pid, :patched)
+      json(conn, 200, %{result: true})
     end)
 
     other =
@@ -202,7 +229,17 @@ defmodule Engram.PromEx.QdrantCollectionTest do
     Process.sleep(20)
 
     assert :ok = Plugin.execute_collection_metrics()
-    refute_receive {@collection_event, _, _}
+
+    assert_receive {@collection_event, %{green: 1, optimizer_ok: 1, points: 447_012, segments: 6},
+                    %{}}
+
+    assert_receive {@disk_event, %{bytes: 4_890_000_000}, %{}}
+    assert_receive {@ram_event, %{ram_bytes: 657_000_000}, %{component: "total"}}
+    assert_receive {@pressure_event, %{percent: 51}, %{kind: "disk"}}
+    assert_receive {@limit_event, %{percent: 79}, %{kind: "disk"}}
+    assert_receive {@reserve_event, %{bytes: 268_435_456}, %{kind: "heap"}}
+    refute_receive :patched
+    assert Agent.get(patches, & &1) == 0
   end
 
   # Limits follow growth and resizes without a deploy: each tick recomputes

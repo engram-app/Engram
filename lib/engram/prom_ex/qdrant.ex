@@ -17,9 +17,12 @@ defmodule Engram.PromEx.Qdrant do
     * `engram_prom_ex_qdrant_request_total` — counter for ops/sec by op +
       status (error-rate derivable).
 
-  Polled every 60s by ONE process in the cluster (a `:global` name), from
-  `GET /collections/{name}` and `GET /collections/{name}/memory` (Qdrant
-  1.18+; a 404 on older servers just skips the memory gauges):
+  Polled every 60s on EVERY node, from `GET /collections/{name}` and
+  `GET /collections/{name}/memory` (Qdrant 1.18+; a 404 on older servers just
+  skips the memory gauges). Cost: ~2 small GETs per node per minute, plus the
+  pressure reads. Every node publishing keeps every series live: a node that
+  stopped polling would hold its PromEx `last_value` forever, and a frozen
+  `optimizer_ok=1` masks a `max() < 1` alert.
 
     * `engram_prom_ex_qdrant_collection_green` (1/0),
       `engram_prom_ex_qdrant_optimizer_ok` (1/0),
@@ -30,14 +33,16 @@ defmodule Engram.PromEx.Qdrant do
       `payload`, `quantized`, `id_tracker`.
 
     * `engram_prom_ex_qdrant_strict_limit_percent{kind="disk"|"heap"}` and
-      `engram_prom_ex_qdrant_reserve_bytes{kind}`: the strict-mode limits the
-      poller keeps applied (`QdrantLayout.strict_limits/2`), recomputed and
-      re-PATCHed on change every tick. `strict_limit_percent` exists only for
+      `engram_prom_ex_qdrant_reserve_bytes{kind}`: the strict-mode limits
+      (`QdrantLayout.strict_limits/2`), recomputed locally on every node each
+      tick. Only ONE process in the cluster (a `:global` name) re-PATCHes them
+      on change. `strict_limit_percent` exists only for
       a guard the server honours (no disk guard on Qdrant 1.19+).
     * `engram_prom_ex_qdrant_pressure_percent{kind="disk"|"heap"}`: what the
       EmbedNote preflight reads (`Qdrant.pressure/0`); unknown kinds are absent.
 
-  Only the polling node publishes these; aggregate with `max`, never `sum`.
+  Every node publishes the same cluster-wide values; aggregate with `max`/`min`,
+  never `sum`.
 
   Counter `engram_prom_ex_qdrant_backpressure_total{reason="preflight"|"refused"}`:
   embed jobs snoozed because Qdrant was near (preflight) or at (strict-mode
@@ -137,7 +142,7 @@ defmodule Engram.PromEx.Qdrant do
   # failure here is caught and the tick skipped; the next tick retries.
   @spec execute_collection_metrics() :: :ok
   def execute_collection_metrics do
-    if ServiceConfig.get(:qdrant_collection_metrics, true) and poller?() do
+    if ServiceConfig.get(:qdrant_collection_metrics, true) do
       col = Qdrant.collection_name()
       version = Qdrant.server_version()
       reading = poll_pressure(QdrantLayout.guard_kinds(version))
@@ -151,7 +156,7 @@ defmodule Engram.PromEx.Qdrant do
     :exit, _ -> Logger.warning("qdrant collection poll skipped: exit")
   end
 
-  # One poller per cluster. The name is released when its process dies, and
+  # One strict-mode reconciler per cluster. The name is released when its process dies, and
   # the next tick on another node takes it. `random_notify_name` resolves a
   # netsplit by unregistering, never by killing the PromEx poller.
   defp poller? do
@@ -172,7 +177,7 @@ defmodule Engram.PromEx.Qdrant do
       {:ok, info} ->
         :telemetry.execute(@collection_event, collection_measurements(info), %{})
         _ = poll_memory(col)
-        _ = Qdrant.reconcile_strict_mode(col, info, limits, version)
+        if poller?(), do: Qdrant.reconcile_strict_mode(col, info, limits, version)
 
       {:error, reason} ->
         Logger.warning("qdrant collection poll skipped: #{Metadata.safe_reason(reason)}")
