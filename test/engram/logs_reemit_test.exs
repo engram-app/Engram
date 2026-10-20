@@ -156,6 +156,85 @@ defmodule Engram.LogsReemitTest do
     assert meta[:platform] == "web"
   end
 
+  # A web network_error says only "Failed to fetch"; the context the SPA sends
+  # beside it (browser, timing, attempt) is what tells causes apart, and it is
+  # only useful as Loki metadata (`| metadata_browser="Chrome 155"`).
+  describe "network context" do
+    defp reemit_context(context) do
+      user = insert(:user)
+      parent = self()
+      ref = make_ref()
+      handler_id = :logs_reemit_context_handler
+
+      :logger.add_handler(handler_id, __MODULE__, %{config: %{parent: parent, ref: ref}})
+      on_exit(fn -> :logger.remove_handler(handler_id) end)
+
+      {:ok, 1} =
+        Logs.insert_logs(user, [
+          %{
+            "ts" => DateTime.utc_now() |> DateTime.to_iso8601(),
+            "level" => "error",
+            "category" => "api_request",
+            "message" => "network_error GET https://api.engram.page/me",
+            "platform" => "web",
+            "conn_id" => "c1",
+            "context" => context
+          }
+        ])
+
+      assert_receive {^ref, _level, meta}, 1000
+      meta
+    end
+
+    test "allowlisted fields reach the re-emit metadata" do
+      meta =
+        reemit_context(%{
+          "browser" => "Chrome 155",
+          "online" => true,
+          "attempt" => 2,
+          "elapsed_ms" => 812,
+          "error_name" => "TypeError",
+          "error_message" => "Failed to fetch",
+          "visibility" => "visible",
+          "effective_type" => "4g"
+        })
+
+      assert meta[:browser] == "Chrome 155"
+      assert meta[:online] == true
+      assert meta[:attempt] == 2
+      assert meta[:elapsed_ms] == 812
+      assert meta[:error_name] == "TypeError"
+      assert meta[:error_message] == "Failed to fetch"
+      assert meta[:visibility] == "visible"
+      assert meta[:effective_type] == "4g"
+    end
+
+    test "unknown keys and out-of-shape values are dropped" do
+      meta =
+        reemit_context(%{
+          "url" => "https://api.engram.page/notes/Medical/x.md",
+          "browser" => String.duplicate("Chrome ", 50) <> "155",
+          "online" => "yes",
+          "attempt" => 10_000,
+          "elapsed_ms" => -1,
+          "error_name" => "Medical/x.md",
+          "error_message" => "net::ERR at https://api.engram.page/notes/Medical/x.md",
+          "visibility" => "<script>",
+          "effective_type" => "5g"
+        })
+
+      for key <-
+            ~w(url browser online attempt elapsed_ms error_name error_message visibility effective_type)a do
+        refute Map.has_key?(meta, key), "#{key} passed through"
+      end
+    end
+
+    test "a context that is not a map is ignored" do
+      meta = reemit_context("browser=Chrome")
+      refute Map.has_key?(meta, :browser)
+    end
+  end
+
   # The re-emit is the surface that is greppable in ONE Loki query without the
   # read-only DB bastion, so it is where "does this signal cover the whole
   # fleet, or only opted-in users?" actually gets asked. Persisting `forced` to
