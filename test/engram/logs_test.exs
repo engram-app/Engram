@@ -22,6 +22,46 @@ defmodule Engram.LogsTest do
     assert row.device_id == "d1"
   end
 
+  describe "since filter at the stored resolution" do
+    # Rows store `ts` truncated to the second. A sub-second `since` taken just
+    # before an entry was logged lands in the SAME second as that row, and a
+    # strict `ts > since` silently dropped it (e2e test_66 flaked on this).
+    test "a row logged in the same second as a sub-second since is returned" do
+      user = insert(:user)
+      base = ~U[2026-10-20 05:49:44Z]
+
+      {:ok, 1} =
+        Logs.insert_logs(user, [
+          %{
+            "ts" => DateTime.to_iso8601(DateTime.add(base, 340, :millisecond)),
+            "level" => "info",
+            "category" => "push",
+            "message" => "same-second"
+          }
+        ])
+
+      since = DateTime.add(base, 249, :millisecond)
+      assert {:ok, [row]} = Logs.list_logs(user, since: since)
+      assert row.message == "same-second"
+    end
+
+    test "a row from the previous second is still excluded" do
+      user = insert(:user)
+
+      {:ok, 1} =
+        Logs.insert_logs(user, [
+          %{
+            "ts" => "2026-10-20T05:49:43.900Z",
+            "level" => "info",
+            "category" => "push",
+            "message" => "earlier"
+          }
+        ])
+
+      assert {:ok, []} = Logs.list_logs(user, since: ~U[2026-10-20 05:49:44.249Z])
+    end
+  end
+
   describe "forced provenance" do
     # `forced` records that an entry bypassed the CLIENT's diagnostics gate.
     # The plugin's RemoteLogger.anomaly/3 ships with force: true on purpose, so
