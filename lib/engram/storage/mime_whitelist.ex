@@ -7,7 +7,8 @@ defmodule Engram.Storage.MimeWhitelist do
   is refused outright (`:invalid_mime`) because it is stored verbatim and would
   500 on every read.
 
-  Self-host operators can bypass the gate entirely (`ATTACHMENT_MIME_BYPASS=true`).
+  Self-host operators can bypass the extension blocklist (`ATTACHMENT_MIME_BYPASS=true`);
+  a header-illegal `mime_type` is refused even then.
   See `docs/context/attachment-mime-whitelist.md`.
   """
 
@@ -33,8 +34,9 @@ defmodule Engram.Storage.MimeWhitelist do
           :ok | {:error, :invalid_mime} | {:error, {:extension_not_allowed, String.t()}}
   def check(mime, filename) do
     cond do
-      bypass?() -> :ok
+      # First: the bypass waives the blocklist, never header safety.
       invalid_mime?(mime) -> {:error, :invalid_mime}
+      bypass?() -> :ok
       ext = blocked_extension(filename) -> {:error, {:extension_not_allowed, ext}}
       true -> :ok
     end

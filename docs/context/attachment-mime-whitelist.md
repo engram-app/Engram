@@ -24,7 +24,7 @@ Double-click executables only: source languages (`.js`, `.py`) are NOT blocked. 
 
 ### Self-host operator knob
 
-- `ATTACHMENT_MIME_BYPASS=true` - disables the gate entirely. Use case: internal tool distribution from a self-hosted vault. Default off; SaaS does not set it. (`ATTACHMENT_MIME_ALLOWLIST_EXTRA` no longer exists.)
+- `ATTACHMENT_MIME_BYPASS=true` - disables the extension blocklist. A `mime_type` with CR, LF or NUL is still refused (422 `invalid_mime_type`). Use case: internal tool distribution from a self-hosted vault. Default off; SaaS does not set it. (`ATTACHMENT_MIME_ALLOWLIST_EXTRA` no longer exists.)
 
 ## Phase 2 - deferred
 

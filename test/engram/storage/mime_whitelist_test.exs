@@ -82,6 +82,14 @@ defmodule Engram.Storage.MimeWhitelistTest do
       assert :ok = MimeWhitelist.check("application/x-msdownload", "tool.exe")
     end
 
+    test "the bypass still refuses a header-illegal mime" do
+      Application.put_env(:engram, :attachment_mime_bypass, true)
+
+      # The bypass is about the blocklist; a mime with CR/LF is stored
+      # verbatim and would inject into (or 500) every response header.
+      assert {:error, :invalid_mime} = MimeWhitelist.check("image/png\r\nx-evil: 1", "a.png")
+    end
+
     test "bypass disabled by default" do
       Application.delete_env(:engram, :attachment_mime_bypass)
 
