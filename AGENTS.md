@@ -597,6 +597,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - A Radix menu item that opens an inline editor (use `modal={false}`, or the blur-committing input fights the menu) → `docs/context/radix-modal-menu-vs-blur-committing-input.md`
 - An e2e locator or screen reader stopped seeing a string after you swapped text for an input/icon → `docs/context/text-to-control-breaks-locators-and-a11y.md`
 - Who is using Engram: activity events, the PostHog surfaces, real DAU → `docs/context/product-activity-analytics.md`
+- Customer insights: our own event log (`analytics_events`), daily snapshots, the operator role and `/api/operator/insights` reports → `docs/context/customer-insights.md`
 - Touching `frontend/src/analytics/`, the `/ph` proxy, or bumping `posthog-js` (SDK-added `$current_url` leaks vault slugs; `sanitize_properties` is deprecated and fails open) → `docs/context/posthog-instrumentation-traps.md`
 - Web app 404s every vault-scoped call (folders/attachments/notes), or a client-only fixture id poisoned persisted `activeVaultId` → `docs/context/stale-active-vault-404s.md`
 - `window.__ENGRAM_CONFIG__` first-paint state injection pattern → `docs/context/spa-state-injection.md`

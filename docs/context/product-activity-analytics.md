@@ -16,6 +16,10 @@ an opt-out or email change. `Engram.Observability.PostHog` is the vendor
 adapter; `test/lint/analytics_boundary_test.exs` fails if anything else calls
 it. Replacing PostHog means rewriting that one adapter.
 
+Every event is also stored in our own `analytics_events` table (same opt-out
+and throttling, free text dropped), whether or not PostHog is configured. See
+`customer-insights.md`.
+
 ## What is emitted (server-side, via `Engram.Analytics`)
 
 | Event | When | Throttle | Props |
