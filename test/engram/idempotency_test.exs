@@ -99,6 +99,17 @@ defmodule Engram.IdempotencyTest do
     assert {:ok, _} = Idempotency.lookup(user, alive, @scope)
   end
 
+  # Each row holds a full response body; a backlog went in one unbounded
+  # DELETE. Bounded batches, each its own statement, until none is full.
+  test "prune_expired/1 deletes in batches of the given size", %{user: user} do
+    for _ <- 1..5,
+        do: :ok = Idempotency.remember(user, key(), @scope, %{status: 200, body: %{}}, ttl_ms: -1)
+
+    {result, queries} = Engram.QueryRecorder.record(fn -> Idempotency.prune_expired(2) end)
+    assert result == {:ok, 5}
+    assert length(for %{sql: "DELETE" <> _} <- queries, do: 1) == 3
+  end
+
   # #1869: the key alone matched, so a credential scoped to vault B could
   # replay vault A's cached batch response (plaintext note paths).
   test "lookup is vault-scoped — another vault cannot replay the key", %{user: user} do
