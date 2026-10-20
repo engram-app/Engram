@@ -388,7 +388,7 @@ defmodule Engram.Billing do
     %{
       tier: tier(user),
       attachments_all_types: all_types?,
-      blocked_extensions: Engram.Storage.MimeWhitelist.blocked_extensions(),
+      blocked_extensions: advertised_blocked_extensions(),
       max_file_bytes: numeric_limit(user, :max_file_bytes),
       attachment_bytes_cap: numeric_limit(user, :attachment_bytes_cap),
       # COMPAT SHIM, remove in a later contract PR. The search-coverage cap was
@@ -397,6 +397,14 @@ defmodule Engram.Billing do
       # there, which is now always true.
       indexed_notes_cap: nil
     }
+  end
+
+  # Under ATTACHMENT_MIME_BYPASS the server accepts executables, so clients
+  # must not be told to refuse them.
+  defp advertised_blocked_extensions do
+    if Engram.Storage.MimeWhitelist.bypass?(),
+      do: [],
+      else: Engram.Storage.MimeWhitelist.blocked_extensions()
   end
 
   defp numeric_limit(user, key) do
@@ -1160,7 +1168,7 @@ defmodule Engram.Billing do
         _ ->
           %{
             attachments_all_types: nil,
-            blocked_extensions: Engram.Storage.MimeWhitelist.blocked_extensions(),
+            blocked_extensions: advertised_blocked_extensions(),
             max_file_bytes: nil,
             attachment_bytes_cap: nil,
             indexed_notes_cap: nil

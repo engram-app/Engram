@@ -231,6 +231,19 @@ defmodule Engram.BillingTest do
       assert ".exe" in Billing.plan_state(build(:user)).blocked_extensions
     end
 
+    test "advertises no blocked extensions under ATTACHMENT_MIME_BYPASS" do
+      prev = Application.get_env(:engram, :attachment_mime_bypass)
+
+      on_exit(fn ->
+        if prev == nil,
+          do: Application.delete_env(:engram, :attachment_mime_bypass),
+          else: Application.put_env(:engram, :attachment_mime_bypass, prev)
+      end)
+
+      Application.put_env(:engram, :attachment_mime_bypass, true)
+      assert Billing.plan_state(build(:user)).blocked_extensions == []
+    end
+
     test "free user: all MIME types allowed, numeric caps present" do
       user = build(:user, free_tier_accepted_at: nil)
       state = Billing.plan_state(user)

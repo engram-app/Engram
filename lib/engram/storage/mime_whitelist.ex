@@ -47,7 +47,9 @@ defmodule Engram.Storage.MimeWhitelist do
   @spec blocked_extensions() :: [String.t()]
   def blocked_extensions, do: @blocked_extensions
 
-  defp bypass?, do: Application.get_env(:engram, :attachment_mime_bypass, false) == true
+  @doc "True when ATTACHMENT_MIME_BYPASS waives the extension blocklist."
+  @spec bypass?() :: boolean()
+  def bypass?, do: Application.get_env(:engram, :attachment_mime_bypass, false) == true
 
   @doc """
   Canonical form of a `mime_type` value, for DECISIONS only.
