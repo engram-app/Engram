@@ -567,8 +567,7 @@ defmodule Engram.OAuth do
   so the consent screen can refuse to continue when the server stored more
   than the user picked (a server that predates levels echoes nothing).
 
-  Also returns the code's `grant_id/1`, the analytics join key. An optional
-  `validated.device` (`Engram.Analytics.Device`) is stored on the code.
+  Also returns the code's `grant_id/1`, the analytics join key.
   """
   def mint_authorization_code_granted(user, validated, vault_selection, label) do
     with {:ok, %{vault_ids: vault_ids} = access} <-
@@ -590,7 +589,6 @@ defmodule Engram.OAuth do
         default_access: access.default_access,
         label: label,
         state: validated.state,
-        device: Map.get(validated, :device),
         expires_at: expires_in(@code_ttl_seconds)
       }
 
@@ -1605,7 +1603,6 @@ defmodule Engram.OAuth do
           id: ac.id,
           user_id: ac.user_id,
           client_id: ac.client_id,
-          device: ac.device,
           consumed_at: ac.consumed_at
         }
       )
@@ -1655,16 +1652,13 @@ defmodule Engram.OAuth do
 
     Enum.each(codes, fn code ->
       client = Map.get(families, code.client_id, "other")
-      device = code.device || "unknown"
 
-      :telemetry.execute([:engram, :oauth, :code_expired], %{count: 1}, %{
-        client: client,
-        device: device
-      })
+      :telemetry.execute([:engram, :oauth, :code_expired], %{count: 1}, %{client: client})
 
+      # No device: it is not stored. PostHog joins it from `mcp_oauth_granted`
+      # by `grant_id`.
       Engram.Analytics.track(%Accounts.User{id: code.user_id}, "mcp_oauth_code_expired", %{
         client: client,
-        device: device,
         grant_id: grant_id(code.id)
       })
     end)

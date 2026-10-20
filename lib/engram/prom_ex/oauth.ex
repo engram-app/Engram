@@ -14,7 +14,7 @@ defmodule Engram.PromEx.OAuth do
       client shows as mints with no exchanges.
 
     * `[:engram, :oauth, :code_expired]` →
-      `engram_prom_ex_oauth_code_expired_total`, tags `[:client, :device]`, one
+      `engram_prom_ex_oauth_code_expired_total`, tag `[:client]`, one
       per code reaped unredeemed by `Engram.OAuth.cleanup_expired/0` (hourly,
       so it lags expiry by up to two hours).
 
@@ -77,7 +77,7 @@ defmodule Engram.PromEx.OAuth do
           metric_prefix ++ [:code_expired, :total],
           event_name: [:engram, :oauth, :code_expired],
           description: "Authorization codes that expired without being exchanged.",
-          tags: [:client, :device]
+          tags: [:client]
         ),
         counter(
           cimd_prefix ++ [:fetch, :total],

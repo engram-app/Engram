@@ -34,11 +34,11 @@ defmodule Engram.PromEx.OAuthTest do
   end
 
   # The direct unredeemed signal: a code the client never exchanged.
-  test "declares engram_prom_ex_oauth_code_expired_total by client and device" do
+  test "declares engram_prom_ex_oauth_code_expired_total by client" do
     assert m = Enum.find(metrics(), &(&1.event_name == [:engram, :oauth, :code_expired]))
     assert %Telemetry.Metrics.Counter{} = m
     assert m.name == [:engram, :prom_ex, :oauth, :code_expired, :total]
-    assert m.tags == [:client, :device]
+    assert m.tags == [:client]
   end
 
   test "declares engram_prom_ex_cimd_fetch_total and no duration histogram" do

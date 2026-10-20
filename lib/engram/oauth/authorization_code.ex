@@ -33,9 +33,6 @@ defmodule Engram.OAuth.AuthorizationCode do
     # list. NULL falls back to the OAuth client's own identity.
     field :label, :string
     field :state, :string
-    # The consent browser's `Engram.Analytics.Device` bucket, for counting a
-    # code that expires unredeemed by device. NULL on pre-column rows.
-    field :device, :string
     field :expires_at, :utc_datetime
     field :consumed_at, :utc_datetime
 
@@ -44,7 +41,7 @@ defmodule Engram.OAuth.AuthorizationCode do
 
   @cast_fields ~w(code_hash client_id user_id redirect_uri code_challenge
                   code_challenge_method scope vault_id vault_ids vault_access default_access label state
-                  device expires_at)a
+                  expires_at)a
   @required ~w(code_hash client_id user_id redirect_uri code_challenge
                code_challenge_method expires_at)a
 

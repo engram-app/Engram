@@ -61,12 +61,12 @@ defmodule EngramWeb.OAuthAuthorizeController do
       {:ok, validated} ->
         validated = OAuth.apply_read_only_choice(validated, params["read_only"])
         # The consent page's own browser: the handoff back to the client is
-        # what fails on mobile, so codes are counted by device.
+        # what fails on mobile, so consents are counted by device.
         device = Device.from_user_agent(RequestMeta.get_user_agent(conn))
 
         case OAuth.mint_authorization_code_granted(
                user,
-               validated |> Map.put(:iss, iss) |> Map.put(:device, device),
+               Map.put(validated, :iss, iss),
                OAuth.parse_vault_selection(params),
                params["label"]
              ) do

@@ -3,8 +3,9 @@ defmodule Engram.OAuthCodeExpiredTest do
   A minted code the client never exchanged is the direct "handoff broke"
   signal (#2003: the consent tab never redirected on mobile). The hourly
   cleanup that deletes expired codes counts each unredeemed one, by client
-  family and the consent browser's device, as
-  `engram_prom_ex_oauth_code_expired_total` and `mcp_oauth_code_expired`.
+  family, as `engram_prom_ex_oauth_code_expired_total` and
+  `mcp_oauth_code_expired`. Device is not stored: PostHog joins it from
+  `mcp_oauth_granted` by `grant_id`.
   Global app env (PostHog), so not async.
   """
   use Engram.DataCase, async: false
@@ -56,7 +57,7 @@ defmodule Engram.OAuthCodeExpiredTest do
     %{client: client, user: insert(:user)}
   end
 
-  defp mint(user, client, device) do
+  defp mint(user, client) do
     {verifier, challenge} = pkce_pair()
 
     {:ok, validated} =
@@ -71,7 +72,7 @@ defmodule Engram.OAuthCodeExpiredTest do
       })
 
     {:ok, url, _granted, grant_id} =
-      OAuth.mint_authorization_code_granted(user, Map.put(validated, :device, device), :all, nil)
+      OAuth.mint_authorization_code_granted(user, validated, :all, nil)
 
     {code_from_redirect(url), verifier, grant_id}
   end
@@ -90,17 +91,18 @@ defmodule Engram.OAuthCodeExpiredTest do
   end
 
   test "an unredeemed code is counted once when it is reaped", %{client: client, user: user} do
-    {_code, _verifier, grant_id} = mint(user, client, "mobile")
+    {_code, _verifier, grant_id} = mint(user, client)
     age_all_codes()
 
     OAuth.cleanup_expired()
 
-    assert_received {:code_expired, %{count: 1}, %{client: "claude", device: "mobile"}}
+    assert_received {:code_expired, %{count: 1}, meta}
+    assert meta == %{client: "claude"}
     refute_received {:code_expired, _, _}
 
     e = Enum.find(drain(), &(&1["event"] == "mcp_oauth_code_expired"))
     assert e["properties"]["client"] == "claude"
-    assert e["properties"]["device"] == "mobile"
+    refute Map.has_key?(e["properties"], "device")
     assert e["properties"]["grant_id"] == grant_id
 
     # Reaped: a second sweep counts nothing.
@@ -109,7 +111,7 @@ defmodule Engram.OAuthCodeExpiredTest do
   end
 
   test "a redeemed code is not counted", %{client: client, user: user} do
-    {code, verifier, _} = mint(user, client, "desktop")
+    {code, verifier, _} = mint(user, client)
 
     {:ok, _} =
       OAuth.exchange_authorization_code(%{
@@ -124,16 +126,5 @@ defmodule Engram.OAuthCodeExpiredTest do
     OAuth.cleanup_expired()
 
     refute_received {:code_expired, _, _}
-  end
-
-  test "a code minted before the device was stored counts as unknown", %{
-    client: client,
-    user: user
-  } do
-    mint(user, client, nil)
-    age_all_codes()
-    OAuth.cleanup_expired()
-
-    assert_received {:code_expired, _, %{client: "claude", device: "unknown"}}
   end
 end
