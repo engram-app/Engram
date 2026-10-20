@@ -129,7 +129,13 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     for id <- point_ids(ctx.stale),
         do: Agent.update(ctx.store, &put_in(&1.points[id], %{"u" => "x", "y" => "b2xk"}))
 
+    ref =
+      :telemetry_test.attach_event_handlers(self(), [[:engram, :indexing, :payload_reconcile]])
+
     assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+    assert_receive {[:engram, :indexing, :payload_reconcile], ^ref, %{count: 1},
+                    %{outcome: :skipped_v5}}
 
     assert Agent.get(ctx.store, & &1.set_payloads) == []
     assert reload(ctx.stale).payload_hash == nil
@@ -198,6 +204,33 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert Agent.get(ctx.store, & &1.set_payloads) == []
   end
 
+  # A crashed rotation keeps its lock on purpose; the heal must not write
+  # under it, but an hour of it is an operator problem worth one line.
+  test "an hour behind a rotation lock warns once and keeps snoozing", ctx do
+    {1, _} =
+      Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^ctx.user.id),
+        [set: [dek_rotation_locked_at: DateTime.utc_now()]],
+        skip_tenant_check: true
+      )
+
+    args = %{"user_id" => ctx.user.id}
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:snooze, 60} = perform_job(ReconcileNotePayloads, args, meta: %{"snoozed" => 59})
+      end)
+
+    refute log =~ "rotation lock held"
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:snooze, 60} = perform_job(ReconcileNotePayloads, args, meta: %{"snoozed" => 60})
+      end)
+
+    assert log =~ "rotation lock held"
+  end
+
   test "a user with nothing unstamped is done", ctx do
     assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
     Agent.update(ctx.store, &%{&1 | set_payloads: []})
@@ -226,6 +259,18 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
       else: fake_reply(conn, store, body)
   end
 
+  defp filter?(id, payload, filter) do
+    Enum.all?(filter["must"] || [], &condition?(id, payload, &1)) and
+      (Map.get(filter, "should", []) == [] or
+         Enum.any?(filter["should"], &condition?(id, payload, &1))) and
+      not Enum.any?(filter["must_not"] || [], &condition?(id, payload, &1))
+  end
+
+  defp condition?(id, _payload, %{"has_id" => ids}), do: id in ids
+  defp condition?(_id, payload, %{"key" => k, "match" => %{"value" => v}}), do: payload[k] == v
+  defp condition?(_id, payload, %{"is_empty" => %{"key" => k}}), do: payload[k] in [nil, []]
+  defp condition?(id, payload, nested), do: filter?(id, payload, nested)
+
   defp fake_reply(conn, store, body) do
     result =
       case {conn.method, conn.request_path} do
@@ -252,17 +297,17 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
         {"POST", "/collections/engram_notes/points/scroll"} ->
           if hook = Agent.get(store, & &1.on_scroll), do: hook.()
 
-          ids =
-            for %{"has_id" => ids} <- get_in(body, ["filter", "must"]) || [], id <- ids, do: id
-
-          points = Agent.get(store, & &1.points)
+          # The whole filter is evaluated, as Qdrant would: a heal whose
+          # filter hides a point layout must not pass here by accident.
+          filter = body["filter"]
+          assert Enum.any?(filter["must"] || [], &Map.has_key?(&1, "has_id"))
 
           %{
             "points" =>
               for(
-                id <- ids,
-                Map.has_key?(points, id),
-                do: %{"id" => id, "payload" => Map.take(points[id], body["with_payload"])}
+                {id, payload} <- Agent.get(store, & &1.points),
+                filter?(id, payload, filter),
+                do: %{"id" => id, "payload" => Map.take(payload, body["with_payload"])}
               ),
             "next_page_offset" => nil
           }
