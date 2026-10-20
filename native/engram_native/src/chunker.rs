@@ -64,7 +64,7 @@ struct Heading {
 #[cfg(test)]
 pub fn chunk(content: &str, folder: &str, title: &str) -> Vec<Chunk> {
     let mut out = Vec::new();
-    each_chunk(content, folder, title, &[], |c| out.push(c));
+    each_chunk(content, folder, title, &[], None, |c| out.push(c));
     out
 }
 
@@ -86,14 +86,26 @@ const COUNT_FROM: usize = 16 * 1024;
 /// segment, so they are not all held either. A body that would pass
 /// `budget` is chunked again with its small sections coalesced.
 /// `aliases` (from the frontmatter, cleaned by the caller) follow the title
-/// in every prefix: `Title (aka A, B) > H1`.
+/// in every prefix: `Title (aka A, B) > H1`. `lead` (`Type: description`,
+/// one line, built by the caller) is a line after the prefix of the first
+/// chunk only, in its dense and keyword inputs; it is not note text and
+/// does not count toward MAX_CHUNK.
 pub fn each_chunk(
     content: &str,
     folder: &str,
     title: &str,
     aliases: &[String],
+    lead: Option<&str>,
     mut emit: impl FnMut(Chunk),
 ) {
+    let mut lead = lead.filter(|l| !l.is_empty());
+    let mut emit = move |mut c: Chunk| {
+        if let Some(l) = lead.take() {
+            c.1 = with_lead(&c.1, l);
+            c.2 = with_lead(&c.2, l);
+        }
+        emit(c)
+    };
     let (block, body) = crate::frontmatter::parts(content);
     let body = &*excalidraw(block.as_deref(), body);
     let note = Note::new(folder, title, aliases);
@@ -165,6 +177,15 @@ impl<'a> Note<'a> {
             title,
             head,
         }
+    }
+}
+
+/// `prefix\nlead\n\nrest`: the prefix is one line (no heading, title or
+/// alias holds a line break).
+fn with_lead(input: &str, lead: &str) -> String {
+    match input.split_once("\n\n") {
+        Some((prefix, rest)) => format!("{prefix}\n{lead}\n\n{rest}"),
+        None => format!("{input}\n{lead}"),
     }
 }
 
@@ -1246,7 +1267,7 @@ mod tests {
             fill(r#"{"id":4821,"ok":true},"#),
         ] {
             let ((), peak) =
-                crate::memory::measured(|| each_chunk(&content, "f", "T", &[], |_| {}));
+                crate::memory::measured(|| each_chunk(&content, "f", "T", &[], None, |_| {}));
             assert!(peak <= 10 * content.len(), "{peak} for {:?}", &content[..8]);
         }
     }
@@ -1749,7 +1770,7 @@ mod tests {
     fn aka(content: &str, aliases: &[&str]) -> Vec<Chunk> {
         let aliases: Vec<String> = aliases.iter().map(|a| a.to_string()).collect();
         let mut out = Vec::new();
-        each_chunk(content, "", "T", &aliases, |c| out.push(c));
+        each_chunk(content, "", "T", &aliases, None, |c| out.push(c));
         out
     }
 
@@ -1889,5 +1910,42 @@ mod tests {
             kinds("---\nproject: z\n---\nbody"),
             ["prose", "frontmatter"]
         );
+    }
+
+    fn led(content: &str, lead: &str) -> Vec<Chunk> {
+        let mut out = Vec::new();
+        each_chunk(content, "", "T", &[], Some(lead), |c| out.push(c));
+        out
+    }
+
+    #[test]
+    fn the_lead_is_on_the_first_chunk_only() {
+        let note = format!("## A\n{}\n## B\n{}", sized(600), sized(600));
+        let cs = led(&note, "Playbook: Restore a backup");
+        assert!(
+            cs[0]
+                .2
+                .starts_with("T > A\nPlaybook: Restore a backup\n\n## A"),
+            "{}",
+            cs[0].2
+        );
+        assert!(cs[0]
+            .1
+            .starts_with("T > A\nPlaybook: Restore a backup\n\n## A"));
+        assert!(cs[1].2.starts_with("T > B\n\n## B"));
+        assert!(!cs[0].0.contains("Playbook"), "the lead is not note text");
+    }
+
+    #[test]
+    fn the_lead_does_not_count_toward_the_body_cap() {
+        let body = "word ".repeat(MAX_CHUNK / 5);
+        assert!(body.trim().len() <= MAX_CHUNK);
+        assert_eq!(led(body.trim(), "Playbook: x").len(), 1);
+    }
+
+    #[test]
+    fn a_property_only_note_carries_the_lead() {
+        let cs = led("---\nproject: zanzibar\n---\n", "Restore a backup");
+        assert_eq!(cs[0].2, "T\nRestore a backup\n\nzanzibar");
     }
 }

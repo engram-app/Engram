@@ -409,17 +409,18 @@ fn chunk<'a>(
     folder: &str,
     title: &str,
     aliases: Vec<String>,
+    lead: Option<String>,
 ) -> (Vec<Term<'a>>, usize) {
     memory::measured(|| {
         let mut out = Vec::new();
-        chunker::each_chunk(content, folder, title, &aliases, |c| {
+        chunker::each_chunk(content, folder, title, &aliases, lead.as_deref(), |c| {
             out.push(c.encode(env))
         });
         out
     })
 }
 
-sized_nif!(chunk, chunk_nif, chunk_dirty_nif, <'a>(env, content: &str, folder: &str, title: &str, aliases: Vec<String>) [content, folder, title, aliases] -> (Vec<Term<'a>>, usize));
+sized_nif!(chunk, chunk_nif, chunk_dirty_nif, <'a>(env, content: &str, folder: &str, title: &str, aliases: Vec<String>, lead: Option<String>) [content, folder, title, aliases, lead] -> (Vec<Term<'a>>, usize));
 
 /// `Frontmatter.split/1` as offsets: nil, or {block_start, block_end,
 /// body_start, add_newline}, with the native peak. Takes raw bytes: invalid

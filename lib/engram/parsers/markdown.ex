@@ -89,8 +89,10 @@ defmodule Engram.Parsers.Markdown do
     # Structured files (JSON canvas, Obsidian bases) are keyword-only whole.
     data? = Path.extname(path) in @data_exts
 
+    fm = frontmatter(content)
+
     content
-    |> Engram.Native.chunk(folder, title, aliases(frontmatter(content), title))
+    |> Engram.Native.chunk(folder, title, aliases(fm, title), lead(fm))
     |> canvas_cards(path, content)
     |> Enum.with_index(fn {text, context_text, embed_text, headings, char_start, char_end, kind},
                           position ->
@@ -166,7 +168,7 @@ defmodule Engram.Parsers.Markdown do
     ["aliases", "alias"]
     |> Enum.flat_map(&List.wrap(values[&1]))
     |> Enum.flat_map(fn
-      v when is_binary(v) -> [String.trim(v)]
+      v when is_binary(v) -> [one_line(v)]
       v when is_number(v) -> [to_string(v)]
       _ -> []
     end)
@@ -174,6 +176,29 @@ defmodule Engram.Parsers.Markdown do
     |> Enum.uniq_by(&String.downcase/1)
     |> Enum.reject(&(String.downcase(&1) == String.downcase(title)))
   end
+
+  @max_lead 200
+
+  @doc """
+  The line after the first chunk's prefix: `"Type: description"`, or the
+  description alone; nil without a description (a `type` alone adds
+  nothing). The description is one line, cut at 200 B. Note content: never
+  log it.
+  """
+  @spec lead(map()) :: String.t() | nil
+  def lead(values) do
+    with d when is_binary(d) <- values["description"],
+         d when d != "" <- d |> one_line() |> cut_bytes(@max_lead) do
+      case values["type"] do
+        t when is_binary(t) and t != "" -> one_line(t) <> ": " <> d
+        _ -> d
+      end
+    else
+      _ -> nil
+    end
+  end
+
+  defp one_line(s), do: s |> String.split() |> Enum.join(" ")
 
   defp extract_folder(path) do
     case String.split(path, "/") do

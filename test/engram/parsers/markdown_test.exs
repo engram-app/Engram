@@ -132,6 +132,57 @@ defmodule Engram.Parsers.MarkdownTest do
     end
   end
 
+  describe "parse/2 description lead" do
+    @two_sections "## A\n#{String.duplicate("alpha ", 100)}\n## B\n#{String.duplicate("beta ", 120)}"
+
+    test "type and description lead the first chunk only" do
+      fm = "---\ntype: Playbook\ndescription: Restore a backup\n---\n"
+      [c0, c1, %{kind: "frontmatter"}] = Markdown.parse(fm <> @two_sections, "T.md")
+      assert String.starts_with?(c0.embed_text, "T > A\nPlaybook: Restore a backup\n\n## A")
+      assert String.starts_with?(c0.context_text, "T > A\nPlaybook: Restore a backup\n\n")
+      assert String.starts_with?(c1.embed_text, "T > B\n\n## B")
+    end
+
+    test "a long description is one line cut at 200 bytes" do
+      desc = String.duplicate("é long words ", 100)
+      lead = Markdown.lead(%{"description" => "line one\n" <> desc})
+      assert byte_size(lead) <= 200 and String.valid?(lead)
+      assert String.starts_with?(lead, "line one é long")
+    end
+
+    test "a type alone adds nothing" do
+      assert Markdown.lead(%{"type" => "Playbook"}) == nil
+      [c0 | _] = Markdown.parse("---\ntype: Playbook\n---\n" <> @two_sections, "T.md")
+      assert String.starts_with?(c0.embed_text, "T > A\n\n## A")
+    end
+
+    test "trust, lifecycle, filter keys and dates never reach a dense input" do
+      fm = """
+      ---
+      tags: [tagzz]
+      resource: reszz
+      generated: {by: "human:genzz", at: "2026-08-21T10:00:00Z"}
+      verified: verzz
+      status: statzz
+      stale_after: 2027-01-01
+      sources: [srczz]
+      created: 2026-01-02
+      ---
+      """
+
+      for content <- [fm <> @two_sections, fm] do
+        embeds =
+          content
+          |> Markdown.parse("T.md")
+          |> Enum.filter(&Markdown.dense_kind?(&1.kind))
+          |> Enum.map_join("\n", & &1.embed_text)
+
+        assert embeds != ""
+        refute embeds =~ ~r/zz|2026|2027/, embeds
+      end
+    end
+  end
+
   describe "parse/2 basic structure" do
     test "returns list of chunks" do
       chunks = Markdown.parse(@simple_note, "Test/Hello World.md")

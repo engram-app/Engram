@@ -55,7 +55,7 @@ defmodule Engram.Native do
     {:link_extract, :link_extract_nif, :link_extract_dirty_nif, 2},
     {:note_title, :note_title_nif, :note_title_dirty_nif, 1},
     {:note_meta, :note_meta_nif, :note_meta_dirty_nif, 1},
-    {:chunk, :chunk_nif, :chunk_dirty_nif, 4},
+    {:chunk, :chunk_nif, :chunk_dirty_nif, 5},
     {:frontmatter_split, :frontmatter_split_nif, :frontmatter_split_dirty_nif, 1},
     {:frontmatter_parse, :frontmatter_parse_nif, :frontmatter_parse_dirty_nif, 1},
     {:text_diff, :text_diff_nif, :text_diff_dirty_nif, 2},
@@ -122,8 +122,8 @@ defmodule Engram.Native do
   `headings` is a list, title first. Splits
   frontmatter itself. Valid UTF-8 only.
   """
-  def chunk(content, folder, title, aliases \\ []),
-    do: sized(:chunk, content, [content, folder, title, aliases])
+  def chunk(content, folder, title, aliases \\ [], lead \\ nil),
+    do: sized(:chunk, content, [content, folder, title, aliases, lead])
 
   @doc """
   Frontmatter fence offsets for `Engram.Notes.Frontmatter.split/1`:
