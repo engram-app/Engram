@@ -105,6 +105,25 @@ defmodule Engram.Vector.Qdrant do
     )
   end
 
+  # Point writes wait until APPLIED (`wait=true`): an ack alone let a worker
+  # stamp a note indexed while its points were still invisible to search.
+  # `timeout` makes Qdrant give up before the client does (`req_opts/1`), so a
+  # slow write ends as a server timeout, not a hang-up that leaves it running.
+  defp write_opts(body, purpose \\ :indexing) do
+    [json: body, params: [wait: true, timeout: server_timeout_s(purpose)]] ++ req_opts(purpose)
+  end
+
+  @doc """
+  Qdrant-side `timeout` (whole seconds) for a request profile, below that
+  profile's client `receive_timeout`. Floored at 1: Qdrant reads 0 as no limit.
+  """
+  @spec server_timeout_s(:search | :indexing) :: pos_integer()
+  def server_timeout_s(:search),
+    do: max(div(ServiceConfig.get(:qdrant_search_timeout, 5_000), 1000) - 1, 1)
+
+  # 5s under the 30s indexing `receive_timeout`.
+  def server_timeout_s(:indexing), do: 25
+
   defp put_api_key(base) do
     case ServiceConfig.get(:qdrant_api_key) do
       nil -> base
@@ -857,7 +876,7 @@ defmodule Engram.Vector.Qdrant do
     col = col || collection()
 
     serialized = Enum.map(points, fn p -> %{id: p.id, vector: p.vector, payload: p.payload} end)
-    opts = [json: %{points: serialized}] ++ req_opts()
+    opts = write_opts(%{points: serialized})
 
     instrument(:upsert, fn ->
       case Req.put("#{base_url()}/collections/#{col}/points", opts) do
@@ -875,7 +894,7 @@ defmodule Engram.Vector.Qdrant do
   def update_vectors(col \\ nil, points) do
     col = col || collection()
     serialized = Enum.map(points, fn p -> %{id: p.id, vector: p.vector} end)
-    opts = [json: %{points: serialized}] ++ req_opts()
+    opts = write_opts(%{points: serialized})
 
     instrument(:update_vectors, fn ->
       case Req.put("#{base_url()}/collections/#{col}/points/vectors", opts) do
@@ -896,7 +915,7 @@ defmodule Engram.Vector.Qdrant do
 
   def set_payload(col, point_ids, payload) when is_list(point_ids) and is_map(payload) do
     col = col || collection()
-    opts = [json: %{points: point_ids, payload: payload}] ++ req_opts()
+    opts = write_opts(%{points: point_ids, payload: payload})
 
     instrument(:set_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
@@ -926,7 +945,7 @@ defmodule Engram.Vector.Qdrant do
       ]
     }
 
-    opts = [json: %{filter: filter, payload: payload}] ++ req_opts()
+    opts = write_opts(%{filter: filter, payload: payload})
 
     instrument(:set_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
@@ -966,7 +985,7 @@ defmodule Engram.Vector.Qdrant do
 
   def delete_payload_keys(col, keys) when is_list(keys) do
     col = col || collection()
-    opts = [json: %{keys: keys, filter: %{must: []}}] ++ req_opts()
+    opts = write_opts(%{keys: keys, filter: %{must: []}})
 
     instrument(:delete_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload/delete", opts) do
@@ -990,7 +1009,7 @@ defmodule Engram.Vector.Qdrant do
 
   def delete_points(col, point_ids) when is_list(point_ids) do
     col = col || collection()
-    opts = [json: %{points: point_ids}] ++ req_opts()
+    opts = write_opts(%{points: point_ids})
 
     instrument(:delete, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
@@ -1023,7 +1042,7 @@ defmodule Engram.Vector.Qdrant do
       ]
     }
 
-    opts = [json: %{filter: filter}] ++ req_opts()
+    opts = write_opts(%{filter: filter})
 
     instrument(:delete, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
@@ -1072,7 +1091,7 @@ defmodule Engram.Vector.Qdrant do
     col = col || collection()
 
     filter = %{must: [%{key: "user_id", match: %{value: user_id}}]}
-    opts = [json: %{filter: filter}] ++ req_opts(purpose)
+    opts = write_opts(%{filter: filter}, purpose)
 
     instrument(:delete, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
@@ -1097,7 +1116,7 @@ defmodule Engram.Vector.Qdrant do
       ]
     }
 
-    opts = [json: %{filter: filter}] ++ req_opts()
+    opts = write_opts(%{filter: filter})
 
     instrument(:delete, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
@@ -1395,7 +1414,10 @@ defmodule Engram.Vector.Qdrant do
   defp do_search(col, opts) do
     resp =
       Tracer.with_span "qdrant.query" do
-        Req.post("#{base_url()}/collections/#{col}/points/query", opts ++ [decode_body: false])
+        Req.post(
+          "#{base_url()}/collections/#{col}/points/query",
+          opts ++ [params: [timeout: server_timeout_s(:search)], decode_body: false]
+        )
         |> Engram.Observability.Otel.mark_http_result()
       end
 
