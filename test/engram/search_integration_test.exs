@@ -74,9 +74,8 @@ defmodule Engram.SearchIntegrationTest do
     assert {:ok, chunk_count} = Engram.Indexing.index_note(decrypted, vault)
     assert chunk_count > 0, "the note must produce chunks, or nothing below is exercised"
 
-    # `upsert_points` does not pass `?wait=true`: Qdrant acknowledges and
-    # applies the write asynchronously, so a count read straight after can
-    # still be 0. Poll, bounded.
+    # `upsert_points` waits for the write to apply, so this should read >= 1
+    # at once; the bounded poll only guards the count endpoint's own lag.
     assert await_points(col) >= 1
 
     # Not a hardcoded port: CI runs Qdrant on an ephemeral one (see
