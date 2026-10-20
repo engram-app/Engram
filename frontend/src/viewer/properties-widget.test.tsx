@@ -586,6 +586,13 @@ describe("the Properties help panel", () => {
 		expect(panel).toHaveTextContent("updated");
 	});
 
+	test("marks the filterable keys and says who can write a nested alias", async () => {
+		const panel = await openHelp();
+		const filterable = OKF_FIELD_HELP.filter((f) => f.filterable).length;
+		expect(within(panel).getAllByText("filterable")).toHaveLength(filterable);
+		expect(panel).toHaveTextContent("only a raw edit, MCP or an AI");
+	});
+
 	// NOT asserted here: that clicking the `?` leaves the block expanded.
 	// happy-dom toggles a <details> for a click on a <button> inside its
 	// <summary>; no real browser does, because the button is the innermost

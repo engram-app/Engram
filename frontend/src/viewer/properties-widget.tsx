@@ -161,7 +161,7 @@ function PropertiesHelp() {
 				/>
 			</p>
 			<dl className="mt-2 space-y-1">
-				{OKF_FIELD_HELP.map(({ key, aliases, expectsLabel, what }) => (
+				{OKF_FIELD_HELP.map(({ key, aliases, expectsLabel, what, filterable }) => (
 					<div key={key} className="flex gap-2">
 						<dt className="w-24 shrink-0 font-mono text-foreground">{key}</dt>
 						<dd className="flex-1 text-muted-foreground">
@@ -169,6 +169,9 @@ function PropertiesHelp() {
 								what: t(what),
 								expectsLabel: t(expectsLabel),
 							})}
+							{filterable ? (
+								<strong className="ml-1 text-primary-ink">{t("filterable")}</strong>
+							) : null}
 							{aliases.length > 0 ? (
 								<span className="block opacity-80">
 									{t("also accepts {aliases}", {
@@ -180,6 +183,12 @@ function PropertiesHelp() {
 					</div>
 				))}
 			</dl>
+			<p className="mt-2">
+				{t(
+					"A filterable field is one search can narrow results by. A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.",
+					{ example: "generated.at" },
+				)}
+			</p>
 			<p className="mt-2">
 				<Trans
 					text="These field names come from the {okf}, an open standard that Engram follows. Using them keeps your notes portable to any other app that reads OKF. Any other name is yours to invent; it syncs like everything else."
