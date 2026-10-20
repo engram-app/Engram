@@ -112,6 +112,8 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram_web/attachment_raw_response.ex",
     # Reads the refusal body and the request's declared size; logs nothing.
     "lib/engram_web/attachment_refusal_telemetry.ex",
+    # Chunked uploads: a part body is attachment bytes.
+    "lib/engram_web/controllers/attachment_uploads_controller.ex",
     "lib/engram/backfill/",
     "lib/engram/mcp/",
     "lib/engram/vaults.ex",

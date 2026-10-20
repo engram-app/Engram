@@ -711,6 +711,13 @@ defmodule EngramWeb.Router do
     get "/attachments/changes", AttachmentsController, :changes
     # rename must come before *path wildcard so it is not swallowed
     post "/attachments/rename", AttachmentsController, :rename
+    # Chunked uploads. Before the *path wildcards; status/abort fall through to
+    # show/delete for a vault path under `uploads/` (see the controller).
+    post "/attachments/uploads", AttachmentUploadsController, :start
+    get "/attachments/uploads/:id", AttachmentUploadsController, :status
+    put "/attachments/uploads/:id/parts/:n", AttachmentUploadsController, :put_part
+    post "/attachments/uploads/:id/complete", AttachmentUploadsController, :complete
+    delete "/attachments/uploads/:id", AttachmentUploadsController, :abort
     get "/attachments/*path", AttachmentsController, :show
     delete "/attachments/*path", AttachmentsController, :delete
 

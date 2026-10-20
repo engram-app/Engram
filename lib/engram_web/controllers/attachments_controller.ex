@@ -220,7 +220,8 @@ defmodule EngramWeb.AttachmentsController do
   # client that stops sending is a client condition, answered with the same
   # 408 as the HTTP/2 `:more` case rather than surfacing as a crash. Any other
   # Bandit error (a malformed chunk, a client that hung up) still raises.
-  defp read_raw_body(conn, length) do
+  @doc false
+  def read_raw_body(conn, length) do
     read_body(conn, [length: length] ++ EngramWeb.Endpoint.body_read_opts())
   rescue
     e in Bandit.HTTPError ->
@@ -275,16 +276,18 @@ defmodule EngramWeb.AttachmentsController do
   # plugin pre-gates on (they did disagree: see Billing.attachments_all_types?/1).
   # The 402 body still names `attachments_text_only` — that is a client-facing
   # wire identifier, not a catalog lookup, and it changes in the contract step.
-  defp text_only?(user), do: not Billing.attachments_all_types?(user)
+  @doc false
+  def text_only?(user), do: not Billing.attachments_all_types?(user)
 
-  defp text_mime?(nil), do: false
+  @doc false
+  def text_mime?(nil), do: false
 
   # Same normalizer as the upload gate and `inline_safe?/1`. This was the third
   # MIME decision site and it was missed when the other two were unified, which
   # left the exact bug that unification existed to remove: a Free-tier user
   # uploading `" text/plain"` got 402 `attachment_must_be_text` while
   # `MimeWhitelist.check/2` considered the same string text.
-  defp text_mime?(mime) when is_binary(mime),
+  def text_mime?(mime) when is_binary(mime),
     do: String.starts_with?(MimeWhitelist.normalize(mime), "text/")
 
   defp do_upload(conn, user, vault, params) do
@@ -764,7 +767,8 @@ defmodule EngramWeb.AttachmentsController do
   # One 402 body for `attachments_enabled`, shared by upload/rename/batch_move.
   # Written out three times before, which is three chances for the reason string
   # or the limit key to drift between endpoints that mean the same thing.
-  defp attachments_disabled(conn) do
+  @doc false
+  def attachments_disabled(conn) do
     EngramWeb.LimitResponse.halt(conn, "attachments_disabled", :attachments_enabled, false, nil)
   end
 
@@ -787,7 +791,8 @@ defmodule EngramWeb.AttachmentsController do
     end)
   end
 
-  defp serialize_metadata(att) do
+  @doc false
+  def serialize_metadata(att) do
     %{
       id: att.id,
       path: att.path,

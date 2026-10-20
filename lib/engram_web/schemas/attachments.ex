@@ -206,3 +206,88 @@ defmodule EngramWeb.Schemas.BatchItemError do
     required: [:error]
   })
 end
+
+defmodule EngramWeb.Schemas.AttachmentUploadStartRequest do
+  @moduledoc "Opens a chunked attachment upload."
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "AttachmentUploadStartRequest",
+    type: :object,
+    properties: %{
+      path: %Schema{type: :string, example: "videos/clip.mp4"},
+      size_bytes: %Schema{type: :integer, minimum: 1, description: "Total file size."},
+      mtime: %Schema{type: :number, format: :float, nullable: true},
+      mime_type: %Schema{
+        type: :string,
+        nullable: true,
+        description: "Detected from path if omitted."
+      }
+    },
+    required: [:path, :size_bytes]
+  })
+end
+
+defmodule EngramWeb.Schemas.AttachmentUploadSession do
+  @moduledoc "A started chunked upload: send `part_count` parts of `part_size` bytes."
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "AttachmentUploadSession",
+    type: :object,
+    properties: %{
+      upload_id: %Schema{type: :string, format: :uuid},
+      part_size: %Schema{type: :integer, example: 8_388_608},
+      part_count: %Schema{type: :integer}
+    },
+    required: [:upload_id, :part_size, :part_count]
+  })
+end
+
+defmodule EngramWeb.Schemas.AttachmentUploadPart do
+  @moduledoc false
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "AttachmentUploadPart",
+    type: :object,
+    properties: %{part: %Schema{type: :integer}},
+    required: [:part]
+  })
+end
+
+defmodule EngramWeb.Schemas.AttachmentUploadStatus do
+  @moduledoc "Which parts of a chunked upload the server holds."
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "AttachmentUploadStatus",
+    type: :object,
+    properties: %{
+      done: %Schema{type: :array, items: %Schema{type: :integer}},
+      part_count: %Schema{type: :integer},
+      part_size: %Schema{type: :integer}
+    },
+    required: [:done, :part_count, :part_size]
+  })
+end
+
+defmodule EngramWeb.Schemas.AttachmentUploadMissingParts do
+  @moduledoc "409 body - complete called before every part was stored."
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "AttachmentUploadMissingParts",
+    type: :object,
+    properties: %{
+      error: %Schema{type: :string, example: "missing_parts"},
+      missing: %Schema{type: :array, items: %Schema{type: :integer}}
+    },
+    required: [:error, :missing]
+  })
+end
