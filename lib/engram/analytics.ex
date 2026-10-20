@@ -82,6 +82,17 @@ defmodule Engram.Analytics do
     end)
   end
 
+  @doc """
+  Record that a sync request from `user` was refused as `kind` (a 409, 413,
+  426, or a CRDT refusal). At most one `sync_error` per user and kind per hour,
+  so a retry loop costs one event.
+  """
+  @spec track_sync_error(map(), atom() | String.t(), map()) :: :ok
+  def track_sync_error(user, kind, props \\ %{}) do
+    kind = to_string(kind)
+    track_throttled(user, "sync_error", kind, @limit_window_ms, Map.put(props, :kind, kind))
+  end
+
   defp tier(%User{} = user), do: user |> Engram.Billing.tier() |> Atom.to_string()
   defp tier(_user), do: nil
 

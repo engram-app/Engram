@@ -3543,6 +3543,30 @@ defmodule EngramWeb.CrdtChannelTest do
       assert body["properties"]["tier"] == "free"
     end
 
+    test "a create refused as id_conflict reports sync_error", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/idc.md", "content" => "x"},
+          actor: "api"
+        )
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/idc-taken.md", "content" => "y"},
+          actor: "api"
+        )
+
+      ref = push(socket, "crdt_create", %{"doc_id" => note.id, "path" => "Notes/idc-taken.md"})
+      assert_reply ref, :error, %{reason: "id_conflict"}, 3000
+
+      Process.sleep(400)
+      assert [body] = Enum.filter(drain_posthog([]), &(&1["event"] == "sync_error"))
+      assert body["properties"]["kind"] == "id_conflict"
+      assert body["properties"]["surface"] == "obsidian_sync"
+    end
+
     defp drain_posthog(acc) do
       receive do
         {:posthog_body, b} -> drain_posthog([b | acc])

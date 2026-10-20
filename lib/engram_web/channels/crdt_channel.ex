@@ -421,9 +421,11 @@ defmodule EngramWeb.CrdtChannel do
           {:reply, {:ok, %{doc_id: note.id, seeded: false, genesis: "occupied"}}, socket}
 
         {:error, :id_conflict, note} ->
+          sync_error(socket, :id_conflict)
           {:reply, {:error, %{reason: "id_conflict", doc_id: note.id}}, socket}
 
         {:error, :version_conflict, note} ->
+          sync_error(socket, :version_conflict)
           {:reply, {:error, %{reason: "version_conflict", doc_id: note.id}}, socket}
 
         {:error, {:notes_cap_reached, limit, _count}} ->
@@ -434,6 +436,8 @@ defmodule EngramWeb.CrdtChannel do
           {:reply, {:error, %{reason: "notes_cap_reached", limit: limit}}, socket}
 
         {:error, :recently_deleted} ->
+          sync_error(socket, :recently_deleted)
+
           # Delete-wins (#970): a stale device tried to un-delete a note within
           # the delete window. The delete stands; the client trashes its local
           # copy on this reply instead of wedging on a resurrect forever.
@@ -2003,6 +2007,12 @@ defmodule EngramWeb.CrdtChannel do
       props,
       opts
     )
+  end
+
+  defp sync_error(socket, kind) do
+    Engram.Analytics.track_sync_error(socket.assigns.current_user, kind, %{
+      surface: Atom.to_string(activity_surface(socket.assigns[:client_type]))
+    })
   end
 
   # The SPA's editor joins this channel too (client_type "web"). An untagged
