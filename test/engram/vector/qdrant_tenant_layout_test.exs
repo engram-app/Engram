@@ -23,23 +23,28 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
     ServiceConfig.put_override(:qdrant_url, qdrant_url())
     ServiceConfig.put_override(:qdrant_reconcile_config, true)
     ServiceConfig.put_override(:v5_payload_format, true)
+    %{version: Qdrant.server_version()}
+  end
 
+  # Each test makes only its own collection: every one costs ~2 MB per
+  # payload index per segment on CI's 2 GB tmpfs Qdrant.
+  defp collection!(prefix, dims) do
     col =
-      "engram_tenant_#{System.get_env("MIX_TEST_PARTITION")}_#{System.unique_integer([:positive])}"
+      "#{prefix}_#{System.get_env("MIX_TEST_PARTITION")}_#{System.unique_integer([:positive])}"
 
     # Before the create, so a half-made collection is dropped too.
     Engram.QdrantIntegration.drop_on_exit(col)
-    version = Qdrant.server_version()
-    :ok = Qdrant.ensure_collection(col, @dims)
-
-    %{col: col, version: version}
+    :ok = Qdrant.ensure_collection(col, dims)
+    col
   end
 
   test "created with the desired layout, the GET round-trips: no drift, no PATCH", ctx do
+    col = collection!("engram_tenant", @dims)
+
     assert QdrantLayout.tenant_layout?(ctx.version),
            "CI pins Qdrant 1.19.2; got #{inspect(ctx.version)}"
 
-    {:ok, info} = Qdrant.collection_info(ctx.col)
+    {:ok, info} = Qdrant.collection_info(col)
 
     want = QdrantLayout.desired(ctx.version)
     assert Map.drop(QdrantLayout.diff(info["config"], want), ["strict_mode_config"]) == %{}
@@ -56,7 +61,7 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
     assert QdrantLayout.tenant_graph?(info, ctx.version, true)
 
     # The boot after creation (strict mode applied by the first) is a no-op.
-    assert {:ok, []} = Qdrant.reconcile_config(ctx.col)
+    assert {:ok, []} = Qdrant.reconcile_config(col)
   end
 
   # One user's points in BOTH formats during the pass (legacy `user_id`, v5
@@ -64,9 +69,18 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
   # graph rather than scanning the payload index. With the global graph
   # (m 16) the tenant filter's `should` over both formats must find exactly
   # what an exact search finds.
+  #
+  # Thresholds are per segment and in KB of vectors (Qdrant default segment
+  # count is the CPU count), so the vectors must be wide enough that each
+  # segment's share of 3000 points clears both: 256 dims at f16 is 0.5 KB a
+  # point, about 190 KB per segment on 8 segments, against 10 KB.
   @n 3000
+  @wide 256
 
-  test "mixed-format tenant search over the graph equals exact search", %{col: col} do
+  @tag timeout: 120_000
+  test "mixed-format tenant search over the graph equals exact search" do
+    col = collection!("engram_tenant_graph", @wide)
+
     patch!(col, %{
       hnsw_config: %{full_scan_threshold: 10},
       optimizers_config: %{indexing_threshold: 10}
@@ -85,7 +99,7 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
     wait_indexed!(col, @n)
 
     filter = Qdrant.build_tenant_filter(user_id: @user, vault_id: @vault)
-    query = vector()
+    query = vector(@wide)
 
     approx = top(col, query, filter, %{hnsw_ef: 128, quantization: %{ignore: true}})
     exact = top(col, query, filter, %{exact: true, quantization: %{ignore: true}})
@@ -105,11 +119,11 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
           do: %{"user_id" => @user, "vault_id" => @vault},
           else: %{"u" => FilterId.uuid(@user), "v" => FilterId.uuid(@vault)}
 
-      %{id: i, vector: %{"dense" => vector()}, payload: payload}
+      %{id: i, vector: %{"dense" => vector(@wide)}, payload: payload}
     end
   end
 
-  defp vector, do: for(_ <- 1..@dims, do: :rand.uniform() - 0.5)
+  defp vector(dims), do: for(_ <- 1..dims, do: :rand.uniform() - 0.5)
 
   defp top(col, query, filter, params) do
     {:ok, %{status: 200, body: %{"result" => %{"points" => hits}}}} =
@@ -126,7 +140,7 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
 
   # The optimizer builds the graph in the background; wait until every
   # vector sits in an indexed segment.
-  defp wait_indexed!(col, n, tries \\ 120) do
+  defp wait_indexed!(col, n, tries \\ 180) do
     {:ok, info} = Qdrant.collection_info(col)
 
     cond do
