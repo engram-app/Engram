@@ -131,6 +131,26 @@ defmodule Engram.Native.ChunkerTest do
   describe "splitting" do
     defp para(i), do: "Paragraph #{i} " <> String.duplicate("word#{i} ", 60)
 
+    # A run with no space or newline (a CSV line, minified text, comma-joined
+    # tags) used to be cut at the byte cap, mid-word: both halves are other
+    # tokens, so the word was no longer keyword-findable.
+    test "a run with no space is cut between words, not inside one" do
+      words = for i <- 1..3_000, do: "word" <> Integer.to_string(i)
+
+      for content <- [
+            Enum.join(words, ","),
+            "---\nlist: " <> Enum.join(words, ",") <> "\n---\nbody"
+          ] do
+        found =
+          content
+          |> Markdown.parse("x.md")
+          |> Enum.flat_map(&String.split(&1.text, ~r/[^a-z0-9]+/))
+          |> MapSet.new()
+
+        assert Enum.reject(words, &MapSet.member?(found, &1)) == []
+      end
+    end
+
     test "a long section splits at paragraph boundaries" do
       content = Enum.map_join(1..12, "\n\n", &para/1)
       chunks = Markdown.parse(content, "x.md")

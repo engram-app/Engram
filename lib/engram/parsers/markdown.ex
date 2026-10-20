@@ -20,6 +20,8 @@ defmodule Engram.Parsers.Markdown do
   # 3 — CommonMark headings (none inside code; setext counts), only the first
   #     H1 is the title, heading-only and blank chunks dropped, whitespace
   #     normalised, content-anchored splits (#1594), `embed_text` (#1621).
+  # Unstamped, rides the next bump (the bundled v5 rebuild): a run with no
+  # space is cut between words, never inside one (`word_split` in Rust).
   @chunker_version 3
 
   @doc """
