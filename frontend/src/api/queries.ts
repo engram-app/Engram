@@ -684,14 +684,21 @@ export function useUploadAttachment() {
 	return useMutation<
 		{ attachment: AttachmentSummary },
 		Error,
-		{ path: string; file: File; signal?: AbortSignal }
+		{
+			path: string;
+			file: File;
+			signal?: AbortSignal;
+			/** Parts uploads only; a single-request upload has no progress to report. */
+			onProgress?: (done: number, total: number) => void;
+			onRetry?: (err: unknown) => void;
+		}
 	>({
 		// Raw bytes, not base64 JSON. Parts only when the server offers them and the
 		// file is bigger than one part; otherwise one request up to its size limit.
-		mutationFn: ({ path, file, signal }) => {
+		mutationFn: ({ path, file, signal, onProgress, onRetry }) => {
 			const partSize = attachmentPartSize();
 			if (partSize !== null && file.size > partSize) {
-				return uploadInParts(file, path, { signal });
+				return uploadInParts(file, path, { signal, onProgress, onRetry });
 			}
 			return api.postRaw<{ attachment: AttachmentSummary }>(
 				"/attachments",

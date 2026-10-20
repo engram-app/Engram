@@ -5,6 +5,8 @@ const MAX_RETRIES = 3;
 
 interface Opts {
 	onProgress?: (done: number, total: number) => void;
+	/** Called before each wait-and-retry, with the failure being retried. */
+	onRetry?: (err: unknown) => void;
 	signal?: AbortSignal;
 	/** First retry delay; doubles per attempt. A 503 `retry-after` wins. */
 	backoffMs?: number;
@@ -68,7 +70,7 @@ export async function uploadInParts(
 	path: string,
 	opts: Opts = {},
 ): Promise<{ attachment: AttachmentSummary }> {
-	const { onProgress, signal, backoffMs = 500 } = opts;
+	const { onProgress, onRetry, signal, backoffMs = 500 } = opts;
 	const { upload_id, part_size, part_count } = await start();
 	const base = `/attachment-uploads/${upload_id}`;
 	let completeOutcomeUnknown = false;
@@ -78,6 +80,7 @@ export async function uploadInParts(
 		if (terminal(err) || attempt >= MAX_RETRIES) {
 			throw err;
 		}
+		onRetry?.(err);
 		await sleep(delayFor(err, attempt, backoffMs), signal);
 	}
 

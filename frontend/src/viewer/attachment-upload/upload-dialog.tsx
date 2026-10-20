@@ -1,18 +1,22 @@
 import { useRef, useState } from "react";
-import { ApiError, LimitExceededError } from "@/api/client";
 import { useUploadAttachment } from "@/api/queries";
+import { useUpgradeDialog } from "@/billing/upgrade-dialog-provider";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useConfig } from "@/config-context";
 import { useT } from "@/i18n/locale-provider";
-import type { Translate } from "@/i18n/translate";
 import { FolderPicker } from "./folder-picker";
+import { type UploadFailure, uploadFailure } from "./upload-failure";
 
-type RowStatus = "pending" | "uploading" | "done" | "error";
+// "waiting" = the upload layer is backing off before a retry; not a failure.
+type RowStatus = "pending" | "uploading" | "waiting" | "done" | "error";
 interface Row {
 	file: File;
 	status: RowStatus;
-	error?: string;
+	error?: UploadFailure;
+	/** 0-100 for a parts upload; undefined = indeterminate (single request). */
+	pct?: number;
 }
 
 interface Props {
@@ -33,40 +37,6 @@ function humanSize(bytes: number): string {
 	return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function isLimitExceededError(err: unknown): err is LimitExceededError {
-	return (
-		err instanceof LimitExceededError || (err instanceof Error && err.name === "LimitExceededError")
-	);
-}
-
-function isApiError(err: unknown): err is ApiError {
-	return err instanceof ApiError || (err instanceof Error && err.name === "ApiError");
-}
-
-function messageFor(err: unknown, t: Translate): string {
-	if (isLimitExceededError(err)) {
-		switch (err.reason) {
-			case "attachments_disabled":
-				return t("Upgrade to upload attachments");
-			case "attachment_must_be_text":
-				return t("Free tier: text files only");
-			case "file_too_large":
-				return t("File exceeds your plan's size limit");
-			case "attachments_quota_exceeded":
-				return t("Storage quota reached");
-			default:
-				return t("Upgrade required");
-		}
-	}
-	if (isApiError(err)) {
-		if (err.status === 415) {
-			return t("Executable files can't be uploaded");
-		}
-		return t("Upload failed");
-	}
-	return t("Upload failed");
-}
-
 const patch = (rows: Row[], i: number, next: Partial<Row>): Row[] =>
 	rows.map((row, idx) => (idx === i ? { ...row, ...next } : row));
 
@@ -79,27 +49,53 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 	const [busy, setBusy] = useState(false);
 	const addRef = useRef<HTMLInputElement>(null);
 	const upload = useUploadAttachment();
+	const { billingEnabled } = useConfig();
+	const { showUpgrade } = useUpgradeDialog();
+
+	async function uploadRow(i: number) {
+		const row = rows[i];
+		if (!row || row.status === "done") {
+			return;
+		}
+		setRows((r) => patch(r, i, { status: "uploading", error: undefined, pct: undefined }));
+		try {
+			const path = folder ? `${folder}/${row.file.name}` : row.file.name;
+			await upload.mutateAsync({
+				path,
+				file: row.file,
+				onProgress: (done, total) =>
+					setRows((r) =>
+						patch(r, i, { status: "uploading", pct: Math.floor((done / total) * 100) }),
+					),
+				onRetry: () => setRows((r) => patch(r, i, { status: "waiting" })),
+			});
+			setRows((r) => patch(r, i, { status: "done", pct: undefined }));
+		} catch (err) {
+			setRows((r) =>
+				patch(r, i, { status: "error", error: uploadFailure(err, t), pct: undefined }),
+			);
+		}
+	}
 
 	async function commit() {
 		setBusy(true);
 		// Each file uploads independently so one failure never aborts the rest
 		// (partial success is first-class).
 		try {
-			for (const [i, row] of rows.entries()) {
-				if (row.status === "done") {
-					continue;
-				}
-				setRows((r) => patch(r, i, { status: "uploading", error: undefined }));
-				try {
-					const path = folder ? `${folder}/${row.file.name}` : row.file.name;
-					await upload.mutateAsync({ path, file: row.file });
-					setRows((r) => patch(r, i, { status: "done" }));
-				} catch (err) {
-					setRows((r) => patch(r, i, { status: "error", error: messageFor(err, t) }));
-				}
+			for (const i of rows.keys()) {
+				await uploadRow(i);
 			}
 		} finally {
 			// setBusy in finally so it always runs even if a mid-loop upload throws.
+			setBusy(false);
+		}
+	}
+
+	async function retryRow(i: number) {
+		setBusy(true);
+		try {
+			await uploadRow(i);
+		} finally {
 			setBusy(false);
 		}
 	}
@@ -143,17 +139,47 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 
 				<ScrollArea className="shrink-0 border-border border-t" viewportClassName="max-h-40">
 					<ul className="px-4">
-						{rows.map((row) => (
+						{rows.map((row, i) => (
 							<li
 								key={`${row.file.name}-${row.file.size}-${row.file.lastModified}`}
 								className="flex items-center justify-between border-border/50 border-b py-1.5 text-sm last:border-b-0"
 							>
 								<span className="truncate">{row.file.name}</span>
-								<span className="ml-2 shrink-0 text-muted-foreground text-xs">
-									{row.status === "error" ? (
-										<span className="text-destructive">{row.error}</span>
+								<output className="ml-2 flex shrink-0 items-center gap-2 text-muted-foreground text-xs">
+									{row.status === "error" && row.error ? (
+										<>
+											<span className="text-destructive">{row.error.text}</span>
+											{row.error.upgradeReason !== undefined && billingEnabled ? (
+												<Button
+													variant="link"
+													size="sm"
+													onClick={() => showUpgrade(row.error?.upgradeReason ?? "")}
+												>
+													{t("Upgrade")}
+												</Button>
+											) : null}
+											{row.error.retry ? (
+												<Button
+													variant="link"
+													size="sm"
+													disabled={busy}
+													onClick={() => retryRow(i)}
+												>
+													{t("Try again")}
+												</Button>
+											) : null}
+										</>
 									) : row.status === "uploading" ? (
-										t("Uploading…")
+										<>
+											<progress
+												aria-label={t("Uploading {name}", { name: row.file.name })}
+												value={row.pct}
+												max={100}
+											/>
+											{row.pct === undefined ? null : t("{pct}%", { pct: row.pct })}
+										</>
+									) : row.status === "waiting" ? (
+										t("Waiting to retry")
 									) : row.status === "done" ? (
 										t("Done")
 									) : (
@@ -162,7 +188,7 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 											type: row.file.type || t("unknown"),
 										})
 									)}
-								</span>
+								</output>
 							</li>
 						))}
 					</ul>

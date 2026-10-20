@@ -137,6 +137,27 @@ describe("uploadInParts", () => {
 		expect(putRaw).toHaveBeenCalledTimes(2);
 	});
 
+	it("reports each retry through onRetry, with the error that caused it", async () => {
+		session(1);
+		const err = new ApiError(503, "rotation_in_progress", 0);
+		putRaw.mockRejectedValueOnce(err).mockResolvedValue({});
+		get.mockResolvedValue({ done: [], part_count: 1, part_size: PART });
+		const onRetry = vi.fn();
+		await uploadInParts(bigFile(PART + 1), "big.bin", { backoffMs: 0, onRetry });
+		expect(onRetry).toHaveBeenCalledTimes(1);
+		expect(onRetry).toHaveBeenCalledWith(err);
+	});
+
+	it("does not call onRetry for a terminal failure", async () => {
+		session(1);
+		putRaw.mockRejectedValue(new ApiError(403, "forbidden"));
+		const onRetry = vi.fn();
+		await expect(
+			uploadInParts(bigFile(PART + 1), "big.bin", { backoffMs: 0, onRetry }),
+		).rejects.toThrow();
+		expect(onRetry).not.toHaveBeenCalled();
+	});
+
 	it("retries a start refused 429 too_many_uploads, using retry-after", async () => {
 		session(1);
 		post.mockRejectedValueOnce(new ApiError(429, "too_many_uploads", 0));

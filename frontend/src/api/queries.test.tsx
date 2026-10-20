@@ -2440,6 +2440,26 @@ describe("useUploadAttachment", () => {
 		expect(postRaw).toHaveBeenCalledTimes(1);
 	});
 
+	it("hands progress and retry callbacks to the parts upload", async () => {
+		captureServerFeatures({
+			features: { chunked_attachment_upload: true, attachment_part_size: 4 },
+		});
+		uploadInParts.mockResolvedValue({ attachment: { id: "b", path: "big.bin" } });
+		const { Wrapper } = wrapper();
+		const { result } = renderHook(() => useUploadAttachment(), { wrapper: Wrapper });
+		const onProgress = vi.fn();
+		const onRetry = vi.fn();
+		await act(async () => {
+			await result.current.mutateAsync({
+				path: "big.bin",
+				file: new File(["12345"], "big.bin"),
+				onProgress,
+				onRetry,
+			});
+		});
+		expect(uploadInParts.mock.calls[0]![2]).toMatchObject({ onProgress, onRetry });
+	});
+
 	it("sends a big file raw when the server has no parts", async () => {
 		captureServerFeatures({ features: { chunked_attachment_upload: false } });
 		postRaw.mockResolvedValue({ attachment: { id: "b", path: "big.bin" } });
