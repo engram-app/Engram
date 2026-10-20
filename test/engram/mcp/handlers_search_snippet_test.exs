@@ -7,6 +7,7 @@ defmodule Engram.MCP.HandlersSearchSnippetTest do
   import Mox
 
   alias Engram.MCP.Handlers
+  alias Engram.QdrantStub
 
   setup :verify_on_exit!
 
@@ -14,6 +15,7 @@ defmodule Engram.MCP.HandlersSearchSnippetTest do
     bypass = Bypass.open()
     Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+    QdrantStub.stub_retrieve(bypass)
 
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
     vault = insert(:vault, user: user)
@@ -61,10 +63,13 @@ defmodule Engram.MCP.HandlersSearchSnippetTest do
         i -> "Paragraph #{i} of ordinary filler text."
       end)
 
-    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => [hit(user, vault, text)]}))
+      |> Plug.Conn.send_resp(
+        200,
+        Jason.encode!(QdrantStub.batch(conn, %{"result" => [hit(user, vault, text)]}))
+      )
     end)
 
     assert {:ok, markdown, %{"results" => [r]}} =
