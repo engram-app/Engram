@@ -7,12 +7,14 @@ defmodule Engram.IndexingVectorCacheTest do
   several passes instead of going keyword-only.
   """
   use Engram.DataCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   import Mox
 
   alias Engram.Indexing
   alias Engram.Indexing.RetainedVectors
   alias Engram.Notes
+  alias Engram.UsageMeters
 
   setup :verify_on_exit!
 
@@ -55,7 +57,8 @@ defmodule Engram.IndexingVectorCacheTest do
     note
   end
 
-  # Records every text sent; `fail` decides per call (1-based) whether to 429.
+  # Records every call's text count and bytes. `fail` decides per call
+  # (1-based): `false` embeds, `true` is a 429, anything else is returned.
   defp stub_embedder(fail \\ fn _call -> false end) do
     test = self()
     {:ok, calls} = Agent.start_link(fn -> 0 end)
@@ -63,21 +66,77 @@ defmodule Engram.IndexingVectorCacheTest do
     stub(Engram.MockEmbedder, :embed_texts, fn texts ->
       call = Agent.get_and_update(calls, &{&1 + 1, &1 + 1})
 
-      if fail.(call) do
-        {:error, {429, "rate limited"}}
-      else
-        send(test, {:embedded, length(texts)})
-        {:ok, Enum.map(texts, fn _ -> [0.5, 0.25, -0.125] end)}
+      case fail.(call) do
+        false ->
+          send(test, {:embedded, length(texts), texts |> Enum.map(&byte_size/1) |> Enum.sum()})
+          {:ok, Enum.map(texts, fn _ -> [0.5, 0.25, -0.125] end)}
+
+        true ->
+          {:error, {429, "rate limited"}}
+
+        error ->
+          error
       end
     end)
   end
 
-  defp embedded do
+  defp embedded, do: calls() |> Enum.map(&elem(&1, 0)) |> Enum.sum()
+
+  # `{texts, bytes}` per successful embed call since the last drain.
+  defp calls do
     receive do
-      {:embedded, n} -> n + embedded()
+      {:embedded, n, bytes} -> [{n, bytes} | calls()]
+    after
+      0 -> []
+    end
+  end
+
+  defp tokens(calls),
+    do: calls |> Enum.map(&elem(&1, 1)) |> Enum.sum() |> UsageMeters.estimate_tokens()
+
+  defp meter_opts(user) do
+    test = self()
+
+    [
+      reserve_tokens: fn t ->
+        send(test, {:reserved, t})
+        UsageMeters.reserve_embed_tokens(user.id, t, 1_000_000_000)
+      end,
+      release_tokens: fn t ->
+        send(test, {:released, t})
+        UsageMeters.release_embed_tokens(user.id, t)
+      end
+    ]
+  end
+
+  defp drained(tag) do
+    receive do
+      {^tag, t} -> t + drained(tag)
     after
       0 -> 0
     end
+  end
+
+  defp enable(key) do
+    Application.put_env(:engram, key, true)
+    on_exit(fn -> Application.delete_env(:engram, key) end)
+  end
+
+  defp small_pass_budget do
+    Application.put_env(:engram, :max_pass_embed_bytes, 3_000)
+    on_exit(fn -> Application.delete_env(:engram, :max_pass_embed_bytes) end)
+  end
+
+  # Every chunk's fingerprint stays KNOWN (moved into `member_hmacs`) but no
+  # row can be reused (no `context_hmac`), and the cache is empty: the next
+  # pass re-embeds them all and `changed_tokens/2` counts none of them.
+  defp known_but_unreusable(note) do
+    Repo.query!(
+      "UPDATE chunks SET member_hmacs = ARRAY[left(context_hmac, 16)], context_hmac = NULL WHERE note_id = $1",
+      [Ecto.UUID.dump!(note.id)]
+    )
+
+    Repo.query!("DELETE FROM embedding_cache")
   end
 
   defp cache_rows,
@@ -169,5 +228,87 @@ defmodule Engram.IndexingVectorCacheTest do
 
     assert embedded() == 2 * n
     assert cache_rows() == 0
+  end
+
+  test "meter: a mid-note 429 keeps the paid batch charged; the retry charges the rest; total = sent, once",
+       ctx do
+    stub_embedder(&(&1 == 2))
+    note = put_note(ctx.user, ctx.vault, "Meter.md", body(300))
+    opts = meter_opts(ctx.user)
+
+    assert {:error, {429, _}} = Indexing.index_note_with_usage(note, ctx.vault, nil, opts)
+    first = calls()
+    assert [_one_batch] = first
+    reserved = drained(:reserved)
+    released = drained(:released)
+    assert reserved - released == tokens(first), "the cached batch must stay charged"
+    assert UsageMeters.lifetime_embed_tokens(ctx.user.id) == tokens(first)
+
+    RetainedVectors.forget({note.id, nil})
+    assert {:ok, count, _bytes, true} = Indexing.index_note_with_usage(note, ctx.vault, nil, opts)
+    retry = calls()
+    assert drained(:reserved) == tokens(retry)
+    assert drained(:released) == 0
+
+    assert UsageMeters.lifetime_embed_tokens(ctx.user.id) == tokens(first) + tokens(retry)
+    assert (first ++ retry) |> Enum.map(&elem(&1, 0)) |> Enum.sum() == count
+  end
+
+  test "budget on: a changed chunk that is a cache hit is never charged", ctx do
+    enable(:index_budget_enabled)
+    stub_embedder()
+    s3 = "## Fresh\n\nBrand new prose. #{String.duplicate("never seen before here ", 40)}\n\n"
+
+    a = put_note(ctx.user, ctx.vault, "Work/Plan.md", body(2))
+    assert {:ok, _} = Indexing.index_note(a, ctx.vault)
+    # Its two chunks stay KNOWN but must re-embed and miss the cache: our
+    # maintenance, not the user's change.
+    known_but_unreusable(a)
+    # The one changed chunk is already cached, through another note.
+    c = put_note(ctx.user, ctx.vault, "Home/Plan.md", s3)
+    assert {:ok, _} = Indexing.index_note(c, ctx.vault)
+    _ = calls()
+
+    a = put_note(ctx.user, ctx.vault, "Work/Plan.md", body(2) <> s3)
+
+    assert {:ok, _, _, true} =
+             Indexing.index_note_with_usage(a, ctx.vault, nil, meter_opts(ctx.user))
+
+    assert [{2, _}] = calls(), "only the two maintenance misses go to Voyage"
+    refute_received {:reserved, _}
+  end
+
+  test "flag off with the budget on: the pass budget still truncates to keyword-only", ctx do
+    Application.put_env(:engram, :vector_cache_enabled, false)
+    enable(:index_budget_enabled)
+    small_pass_budget()
+    stub_embedder()
+    note = put_note(ctx.user, ctx.vault, "Off.md", body(8))
+
+    assert {:ok, count} = Indexing.index_note(note, ctx.vault)
+    sent = embedded()
+    assert sent > 0 and sent < count
+    assert cache_rows() == 0
+  end
+
+  test "EmbedNote: the keyword-only fallback snoozes on :embed_continues, burning no attempt",
+       ctx do
+    enable(:index_budget_enabled)
+    small_pass_budget()
+    stub_embedder()
+    note = put_note(ctx.user, ctx.vault, "TooLong.md", body(8))
+
+    # Fully indexed, then every chunk known-but-pointless and uncached, so a
+    # refused reservation (charge 0) still runs dense and runs past the budget.
+    passes =
+      Stream.repeatedly(fn -> Indexing.index_note(note, ctx.vault) end)
+      |> Enum.find(&match?({:ok, _}, &1))
+
+    assert {:ok, _} = passes
+    known_but_unreusable(note)
+    stub_embedder(&(&1 == 1 && {:error, {:permanent, :input_too_long}}))
+
+    assert {:snooze, 1} =
+             perform_job(Engram.Workers.EmbedNote, %{note_id: note.id, user_id: ctx.user.id})
   end
 end

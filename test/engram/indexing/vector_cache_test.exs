@@ -149,27 +149,88 @@ defmodule Engram.Indexing.VectorCacheTest do
       assert rows(user.id) == []
     end
 
-    test "prune drops rows unused for 30 days and bounds each user to the newest rows" do
+    test "prune deletes rows inserted more than 72 h ago and keeps younger ones" do
       {user, dek} = user_and_dek()
       stale = put(user, dek, "stale", vector(1))
-      old = put(user, dek, "old", vector(1))
-      new = put(user, dek, "new", vector(1))
+      edge = put(user, dek, "edge", vector(1))
+      fresh = put(user, dek, "fresh", vector(1))
+      age(stale, 73)
+      age(edge, 71)
 
-      age = fn key, days ->
-        Repo.query!(
-          "UPDATE embedding_cache SET last_used_at = now() - make_interval(days => $2) WHERE key = $1",
-          [key, days]
-        )
-      end
+      assert VectorCache.prune(Repo) == 1
+      assert rows(user.id) |> Enum.map(&hd/1) |> Enum.sort() == Enum.sort([edge, fresh])
+    end
 
-      age.(stale, 31)
-      age.(old, 2)
+    test "prune works in batches until nothing old is left" do
+      {user, dek} = user_and_dek()
 
-      Application.put_env(:engram, :vector_cache_max_rows_per_user, 1)
-      on_exit(fn -> Application.delete_env(:engram, :vector_cache_max_rows_per_user) end)
+      entries =
+        for i <- 1..10_050 do
+          digest = VectorCache.digest("old #{i}", @opts)
+          {VectorCache.key_for_digest(@ck, digest), digest, vector(1, 4)}
+        end
 
-      assert VectorCache.prune(Repo) == 2
-      assert [[^new, _]] = rows(user.id)
+      :ok = VectorCache.put_many(user.id, nil, dek, entries)
+      Repo.query!("UPDATE embedding_cache SET inserted_at = now() - interval '80 hours'")
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :repo, :query]])
+
+      assert VectorCache.prune(Repo) == 10_050
+      assert rows(user.id) == []
+
+      deletes =
+        for {[:engram, :repo, :query], ^ref, _, %{query: "DELETE FROM embedding_cache" <> _}} <-
+              collect(ref),
+            do: :delete
+
+      assert length(deletes) == 2, "expected two batched DELETEs, got #{length(deletes)}"
+    end
+  end
+
+  describe "writes refused (never raised)" do
+    test "while the user's DEK rotation holds its lock" do
+      {user, dek} = user_and_dek()
+
+      Repo.query!("UPDATE users SET dek_rotation_locked_at = now() WHERE id = $1", [
+        Ecto.UUID.dump!(user.id)
+      ])
+
+      put(user, dek, "mid-rotation", vector(1))
+
+      assert rows(user.id) == []
+    end
+
+    test "after the DEK version moved past the one the pass read" do
+      {user, dek} = user_and_dek()
+      version = user.dek_version || 1
+      digest = VectorCache.digest("stale dek", @opts)
+      key = VectorCache.key_for_digest(@ck, digest)
+
+      :ok = VectorCache.put_many(user.id, nil, dek, [{key, digest, vector(1)}], version + 1)
+      assert rows(user.id) == []
+
+      :ok = VectorCache.put_many(user.id, nil, dek, [{key, digest, vector(1)}], version)
+      assert [[^key, _]] = rows(user.id)
+    end
+
+    test "when the note was deleted mid-embed: the batch is skipped, the call returns :ok" do
+      {user, dek} = user_and_dek()
+      gone = Ecto.UUID.generate()
+      digest = VectorCache.digest("orphan", @opts)
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :vector_cache, :skipped]])
+
+      assert :ok =
+               VectorCache.put_many(user.id, gone, dek, [
+                 {VectorCache.key_for_digest(@ck, digest), digest, vector(1)}
+               ])
+
+      assert rows(user.id) == []
+
+      assert_receive {[:engram, :vector_cache, :skipped], ^ref, %{rows: 1},
+                      %{reason: :note_deleted}}
+
+      # The connection is still usable: the savepoint rolled back only that insert.
+      put(user, dek, "after", vector(1))
+      assert [_] = rows(user.id)
     end
   end
 
@@ -247,6 +308,21 @@ defmodule Engram.Indexing.VectorCacheTest do
       {^ref, :q} -> drain(ref, n + 1)
     after
       0 -> n
+    end
+  end
+
+  defp age(key, hours) do
+    Repo.query!(
+      "UPDATE embedding_cache SET inserted_at = now() - make_interval(hours => $2) WHERE key = $1",
+      [key, hours]
+    )
+  end
+
+  defp collect(ref) do
+    receive do
+      {event, ^ref, m, meta} -> [{event, ref, m, meta} | collect(ref)]
+    after
+      0 -> []
     end
   end
 end

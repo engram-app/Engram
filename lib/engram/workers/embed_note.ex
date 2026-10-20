@@ -724,6 +724,10 @@ defmodule Engram.Workers.EmbedNote do
 
     case Indexing.index_note_with_usage(decrypted_note, vault, user, opts) do
       {:ok, _count, _bytes, _dense?} -> :ok
+      # A refused reservation still runs dense when it would charge nothing
+      # (index budget on, every changed chunk already known). Past the pass
+      # embed budget that pass continues like any other: snooze, no attempt.
+      {:error, :embed_continues} -> {:snooze, 1}
       {:error, reason} -> {:error, reason}
     end
   end

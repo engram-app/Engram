@@ -15,7 +15,8 @@ defmodule Engram.Repo.Migrations.CreateEmbeddingCacheExpand do
   # One row is one dense vector: `key` is HMAC-SHA256 under the user's
   # content-hash subkey, `vector_ciphertext` is the AES-GCM envelope (format 0,
   # never compressed) of a 32-byte input digest followed by the f16 vector.
-  # About 2.3 KB a row with its index entry; see the module doc for the sizing.
+  # About 2.8 KB a row with its index entries; see the module doc for the
+  # sizing. Short-lived: rows expire 72 h after insert, no touch on hit.
   #
   # `note_id` names the note that last wrote the row, so a hard-deleted note
   # takes its rows with it. Rows shared by two notes go with either; it is a
@@ -35,12 +36,14 @@ defmodule Engram.Repo.Migrations.CreateEmbeddingCacheExpand do
       add :vector_ciphertext, :binary, null: false
       add :vector_nonce, :binary, null: false
       add :inserted_at, :timestamptz, null: false, default: fragment("now()")
-      add :last_used_at, :timestamptz, null: false, default: fragment("now()")
     end
 
     # The notes FK cascade scans it. Partial: a row whose note is gone is
     # already deleted, and NULL is only a row written without one.
     create index(:embedding_cache, [:note_id], where: "note_id IS NOT NULL")
+
+    # The 72 h expiry (`VectorCache.prune/1`) deletes in batches driven by it.
+    create index(:embedding_cache, [:inserted_at])
 
     # A row is ~2.1 KB, past the ~2 KB TOAST threshold, and AES-GCM output never
     # compresses: TOAST would try pglz, fail, then move the value out of line,

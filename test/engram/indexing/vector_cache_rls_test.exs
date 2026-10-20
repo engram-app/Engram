@@ -59,13 +59,29 @@ defmodule Engram.Indexing.VectorCacheRlsTest do
              as_prod_role(fn -> VectorCache.get_many(user.id, dek, [key]) end)
   end
 
-  test "another user's lookup with the owner's key gets nothing", ctx do
+  test "RLS itself, not the WHERE clause: another tenant sees none of the owner's rows", ctx do
     seed(ctx)
     {:ok, other} = Engram.Fixtures.user_with_dek_fixture()
-    %{dek: dek, key: key} = ctx
 
-    assert {:returned, hits} = as_prod_role(fn -> VectorCache.get_many(other.id, dek, [key]) end)
-    assert hits == %{}
+    # A bare count carries no `user_id` filter and no AAD: only the policy can
+    # make it 0. The owner's tenant sees the row, so the drop engaged.
+    assert {:returned, {1, 0}} =
+             as_prod_role(fn ->
+               {Repo.with_tenant!(ctx.user.id, &count_rows/0),
+                Repo.with_tenant!(other.id, &count_rows/0)}
+             end)
+  end
+
+  test "an INSERT with no tenant set is rejected with 42501", ctx do
+    %{user: user, key: key} = ctx
+
+    assert {:raised, %Postgrex.Error{postgres: %{code: :insufficient_privilege}}} =
+             as_prod_role(fn ->
+               Repo.query!(
+                 "INSERT INTO embedding_cache (user_id, key, vector_ciphertext, vector_nonce) VALUES ($1, $2, $3, $4)",
+                 [Ecto.UUID.dump!(user.id), key, "ct", "nonce"]
+               )
+             end)
   end
 
   test "rotate re-keys the owner's rows (persisted effect, committed)", ctx do

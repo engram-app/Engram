@@ -16,6 +16,5 @@ defmodule Engram.Indexing.VectorCache.Entry do
     field :vector_ciphertext, :binary
     field :vector_nonce, :binary
     field :inserted_at, :utc_datetime_usec, read_after_writes: true
-    field :last_used_at, :utc_datetime_usec, read_after_writes: true
   end
 end

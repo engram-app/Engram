@@ -1,14 +1,14 @@
 defmodule Engram.Workers.VectorCachePrune do
   @moduledoc """
-  Daily retention for `embedding_cache` (`Engram.Indexing.VectorCache.prune/1`):
-  rows unused for 30 days, then each user's least recently used rows past the
-  per-user bound. Spans tenants, so it runs on `Repo.maintenance/0` and
-  refuses (same gate as `ExportExpirySweep`) where only the RLS-filtered app
-  pool is available, which would delete nothing and report success.
+  Retention for `embedding_cache` (`Engram.Indexing.VectorCache.prune/1`):
+  rows inserted more than 72 h ago, deleted in batches. Spans tenants, so it
+  runs on `Repo.maintenance/0`. A no-op when the cache is off, and where only
+  the RLS-filtered app pool exists (a self-host without a maintenance pool),
+  which would delete nothing; there it logs at info, never an error.
   """
   use Oban.Worker, queue: :maintenance, max_attempts: 3
 
-  alias Engram.Logger.Metadata
+  alias Engram.Indexing.VectorCache
   alias Engram.Repo
 
   require Logger
@@ -18,17 +18,21 @@ defmodule Engram.Workers.VectorCachePrune do
 
   @impl Oban.Worker
   def perform(_job) do
-    if Repo.maintenance() == Repo and Engram.Repo.TenancyGuard.enforced?() do
-      Logger.error(
-        "vector_cache_prune refusing to run: RLS is enforced and no maintenance pool is configured",
-        Metadata.with_category(:error, :oban, [])
-      )
+    cond do
+      # Off: the table is never written, so there is nothing to expire.
+      not VectorCache.enabled?() ->
+        :ok
 
-      {:error, :tenancy_unsafe}
-    else
-      deleted = Engram.Indexing.VectorCache.prune(Repo.maintenance())
-      if deleted > 0, do: Logger.info("vector_cache_prune deleted=#{deleted}")
-      :ok
+      # A single-pool install that enforces RLS cannot see across tenants;
+      # the delete would match zero rows. Skip quietly rather than fail daily.
+      Repo.maintenance() == Repo and Engram.Repo.TenancyGuard.enforced?() ->
+        Logger.info("vector_cache_prune skipped: no maintenance pool")
+        :ok
+
+      true ->
+        deleted = VectorCache.prune(Repo.maintenance())
+        if deleted > 0, do: Logger.info("vector_cache_prune deleted=#{deleted}")
+        :ok
     end
   end
 end

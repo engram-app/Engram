@@ -220,8 +220,8 @@ config :engram, Oban,
         # publishes a version announces it within the hour.
         {"18 * * * *", Engram.Workers.LegalNoticeDispatch},
         {"38 * * * *", Engram.Workers.IdempotencyPrune},
-        # Vector cache retention: 30 days unused, and a per-user row bound.
-        {"58 3 * * *", Engram.Workers.VectorCachePrune},
+        # Vector cache expiry: rows 72 h after insert, hourly in small batches.
+        {"58 * * * *", Engram.Workers.VectorCachePrune},
         # Note-version outbox copies whose FinalizeRevision job was lost
         # between commit and enqueue (#1710).
         {"43 * * * *", Engram.Workers.FinalizeRevisionSweep},
