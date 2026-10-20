@@ -65,6 +65,29 @@ defmodule Engram.Notes.OkfFields do
     type |> String.normalize(:nfkc) |> String.downcase()
   end
 
+  @doc """
+  The decoded top-level frontmatter values of a `Frontmatter.parse/1` result
+  (`%{}` for no frontmatter or a parse error). Shared with `FlatFields`, so
+  the v5 fields read the same terms as the OKF ones.
+  """
+  @spec values(Frontmatter.parse_result() | nil) :: %{String.t() => term()}
+  def values({:ok, _order, values, _degraded}), do: decode_values(values)
+  def values(_none_or_error), do: %{}
+
+  @doc """
+  The first alias path holding a valid date, as a UTC `DateTime`. `:strict`
+  needs a full datetime with an offset (the nested OKF aliases); `:lenient`
+  also takes a bare date as midnight UTC.
+  """
+  @spec first_date(map(), [{[String.t()], :strict | :lenient}]) :: DateTime.t() | nil
+  def first_date(decoded, aliases) do
+    Enum.find_value(aliases, fn {path, mode} -> path |> dig(decoded) |> parse_datetime(mode) end)
+  end
+
+  @doc "One date value under `mode` (see `first_date/2`)."
+  @spec parse_date_value(term(), :strict | :lenient) :: DateTime.t() | nil
+  def parse_date_value(value, mode), do: parse_datetime(value, mode)
+
   # Frontmatter.parse values are JSON-encoded strings; decode back to terms.
   defp decode_values(values) do
     Map.new(values, fn {k, json} ->
@@ -77,10 +100,6 @@ defmodule Engram.Notes.OkfFields do
 
   defp string_field(v) when is_binary(v) and v != "", do: v
   defp string_field(_), do: nil
-
-  defp first_date(decoded, aliases) do
-    Enum.find_value(aliases, fn {path, mode} -> path |> dig(decoded) |> parse_datetime(mode) end)
-  end
 
   # A non-map at an intermediate key (`generated: "text"`) reads as absent.
   defp dig([], value), do: value
