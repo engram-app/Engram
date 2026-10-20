@@ -132,15 +132,21 @@ defmodule Engram.Search do
   defp too_many?(tags, max) when is_list(tags), do: length(tags) > max
   defp too_many?(_tags, _max), do: false
 
-  @doc "The caller-facing message for a `validate_input/2` refusal, `nil` for any other reason."
-  @spec input_error_message(term()) :: String.t() | nil
-  def input_error_message(:query_too_long),
-    do: "query: at most #{@max_query_bytes} bytes; search with a shorter query"
+  @doc """
+  The caller-facing message for a `validate_input/2` refusal, `nil` for any
+  other reason. `param` names the caller's field the query came from
+  (MCP `suggest_folder` passes its `description`).
+  """
+  @spec input_error_message(term(), String.t()) :: String.t() | nil
+  def input_error_message(reason, param \\ "query")
 
-  def input_error_message(:too_many_tags),
+  def input_error_message(:query_too_long, param),
+    do: "#{param}: at most #{@max_query_bytes} bytes; use a shorter #{param}"
+
+  def input_error_message(:too_many_tags, _param),
     do: "tags: at most #{Engram.Vector.Qdrant.max_ids()} per search"
 
-  def input_error_message(_reason), do: nil
+  def input_error_message(_reason, _param), do: nil
 
   # Fail closed: an explicit empty `vault_ids` means the credential's accessible
   # set is empty, so refuse rather than let it fall through to unfiltered

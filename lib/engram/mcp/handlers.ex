@@ -300,7 +300,7 @@ defmodule Engram.MCP.Handlers do
       # found. The vault may be empty." — an outage rendered as a fact about
       # the vault, which tells the caller to give up rather than retry.
       {:error, reason} ->
-        case Search.input_error_message(reason) do
+        case Search.input_error_message(reason, "description") do
           nil -> log_and_error("suggest_folder", reason, "Folder suggestion unavailable.")
           message -> {:error, message}
         end

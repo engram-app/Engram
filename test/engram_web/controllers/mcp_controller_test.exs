@@ -379,13 +379,15 @@ defmodule EngramWeb.McpControllerTest do
          %{conn: conn} do
       long = String.duplicate("a", Engram.Search.max_query_bytes() + 1)
 
-      for {tool, args} <- [
-            {"search_notes", %{"query" => long}},
-            {"suggest_folder", %{"description" => long}}
+      # Each names its own parameter (re-review N6).
+      for {tool, args, param} <- [
+            {"search_notes", %{"query" => long}, "query:"},
+            {"suggest_folder", %{"description" => long}, "description:"}
           ] do
         resp = call_tool(conn, tool, args)
         assert_tool_error(json_response(resp, 200))
         assert tool_text(resp) =~ "bytes", tool
+        assert tool_text(resp) =~ param, tool
       end
     end
 
