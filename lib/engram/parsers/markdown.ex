@@ -8,6 +8,7 @@ defmodule Engram.Parsers.Markdown do
   The chunking runs in Rust: native/engram_native/src/chunker.rs.
   """
 
+  alias Engram.Notes.Frontmatter
   alias Engram.Notes.Helpers
 
   # #1620 — bump when a change alters the chunks `parse/2` emits for input it
@@ -55,7 +56,9 @@ defmodule Engram.Parsers.Markdown do
   - `:context_text` — "folder > title > heading\\n\\ntext" for keyword search
   - `:embed_text`   — "title > heading\\n\\ntext" for dense embedding: no
                       folder, which is a filter key, not meaning (#1621)
-  - `:heading_path` — e.g. "Title > H1 > H2"
+  - `:heading_path` — e.g. "Title > H1 > H2" (`:headings` joined)
+  - `:headings`     — the same path as a list, title first: a heading
+                      may itself contain " > " (chunker v5)
   - `:char_start`   — byte offset in post-frontmatter body
   - `:char_end`     — byte offset end
   - `:kind`:         "prose" | "data" | "frontmatter" | "drawing"; only
@@ -82,21 +85,52 @@ defmodule Engram.Parsers.Markdown do
     data? = Path.extname(path) in @data_exts
 
     content
-    |> Engram.Native.chunk(folder, title)
-    |> Enum.with_index(fn {text, context_text, embed_text, heading_path, char_start, char_end,
-                           kind},
+    |> Engram.Native.chunk(folder, title, aliases(frontmatter(content), title))
+    |> Enum.with_index(fn {text, context_text, embed_text, headings, char_start, char_end, kind},
                           position ->
       %{
         position: position,
         text: text,
         context_text: context_text,
         embed_text: embed_text,
-        heading_path: heading_path,
+        heading_path: Enum.join(headings, " > "),
+        headings: headings,
         char_start: char_start,
         char_end: char_end,
         kind: if(data? and kind == "prose", do: "data", else: kind)
       }
     end)
+  end
+
+  # The decoded top-level frontmatter values; %{} when there is none or it
+  # is not YAML.
+  defp frontmatter(content) do
+    with {block, _body} when is_binary(block) <- Frontmatter.split(content),
+         {:ok, _order, values, _degraded} <- Frontmatter.parse(block) do
+      Map.new(values, fn {k, v} -> {k, Jason.decode!(v)} end)
+    else
+      _ -> %{}
+    end
+  end
+
+  @doc """
+  The note's aliases for the chunk prefix: `aliases` (a list or one
+  scalar) then the legacy `alias`, strings and numbers only, trimmed, empty
+  ones dropped, deduplicated case-insensitively against each other and the
+  title. The chunker joins them and caps the part at 200 chars.
+  """
+  @spec aliases(map(), String.t()) :: [String.t()]
+  def aliases(values, title) do
+    ["aliases", "alias"]
+    |> Enum.flat_map(&List.wrap(values[&1]))
+    |> Enum.flat_map(fn
+      v when is_binary(v) -> [String.trim(v)]
+      v when is_number(v) -> [to_string(v)]
+      _ -> []
+    end)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq_by(&String.downcase/1)
+    |> Enum.reject(&(String.downcase(&1) == String.downcase(title)))
   end
 
   defp extract_folder(path) do

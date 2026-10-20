@@ -403,15 +403,23 @@ sized_nif!(b64_encode, b64_encode_nif, b64_encode_dirty_nif, <'a>(env, bytes: Bi
 
 /// `Engram.Parsers.Markdown.parse/2`'s chunks (positions are assigned in
 /// Elixir), and the call's native peak.
-fn chunk<'a>(env: Env<'a>, content: &str, folder: &str, title: &str) -> (Vec<Term<'a>>, usize) {
+fn chunk<'a>(
+    env: Env<'a>,
+    content: &str,
+    folder: &str,
+    title: &str,
+    aliases: Vec<String>,
+) -> (Vec<Term<'a>>, usize) {
     memory::measured(|| {
         let mut out = Vec::new();
-        chunker::each_chunk(content, folder, title, |c| out.push(c.encode(env)));
+        chunker::each_chunk(content, folder, title, &aliases, |c| {
+            out.push(c.encode(env))
+        });
         out
     })
 }
 
-sized_nif!(chunk, chunk_nif, chunk_dirty_nif, <'a>(env, content: &str, folder: &str, title: &str) [content, folder, title] -> (Vec<Term<'a>>, usize));
+sized_nif!(chunk, chunk_nif, chunk_dirty_nif, <'a>(env, content: &str, folder: &str, title: &str, aliases: Vec<String>) [content, folder, title, aliases] -> (Vec<Term<'a>>, usize));
 
 /// `Frontmatter.split/1` as offsets: nil, or {block_start, block_end,
 /// body_start, add_newline}, with the native peak. Takes raw bytes: invalid

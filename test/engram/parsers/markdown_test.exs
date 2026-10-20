@@ -35,6 +35,69 @@ defmodule Engram.Parsers.MarkdownTest do
   # parse/2 — basic structure
   # ---------------------------------------------------------------------------
 
+  describe "parse/2 v5 structure" do
+    test "the heading path is a list too, and a heading may hold the separator" do
+      body = String.duplicate("word ", 120)
+      [chunk] = Markdown.parse("# X\n## A > B\n#{body}", "X.md")
+      assert chunk.headings == ["X", "A > B"]
+      assert chunk.heading_path == "X > A > B"
+    end
+
+    test "small sections join into one chunk" do
+      assert [_one] = Markdown.parse("## A\nalpha\n## B\nbeta\n", "T.md")
+    end
+  end
+
+  describe "parse/2 aliases in the prefix" do
+    defp embed_prefix(%{embed_text: e, text: t}),
+      do: binary_part(e, 0, byte_size(e) - byte_size(t) - 2)
+
+    defp first_prefix(content, path \\ "T.md"),
+      do: content |> Markdown.parse(path) |> hd() |> embed_prefix()
+
+    # B3
+    test "every alias form reaches the prefix" do
+      for fm <- [
+            "aliases: [A, B]",
+            "aliases:\n  - A\n  - B",
+            "aliases: A\nalias: B",
+            "alias: [A, B]"
+          ] do
+        assert first_prefix("---\n#{fm}\n---\nbody") == "T (aka A, B)", fm
+      end
+    end
+
+    # B4
+    test "a comma scalar is one alias" do
+      assert first_prefix("---\naliases: a, b\n---\nbody") == "T (aka a, b)"
+    end
+
+    # B5
+    test "numbers count, nulls maps and blanks do not" do
+      assert Markdown.aliases(%{"aliases" => [2024, nil, %{"a" => "b"}, ""]}, "T") == ["2024"]
+    end
+
+    # B7
+    test "aliases equal to the title or each other are dropped" do
+      assert Markdown.aliases(%{"aliases" => ["T", "t", " T "]}, "T") == []
+      assert Markdown.aliases(%{"aliases" => ["Ab", "aB", "c"]}, "T") == ["Ab", "c"]
+    end
+
+    # B9
+    test "a BOM before the fence still reads the aliases" do
+      chunks = Markdown.parse("\uFEFF---\naliases: [x]\n---\nbody", "T.md")
+      assert embed_prefix(hd(chunks)) == "T (aka x)"
+      assert Enum.map(chunks, & &1.heading_path) == ["T", "frontmatter"]
+    end
+
+    # B1
+    test "bad YAML still chunks, with no aliases" do
+      chunks = Markdown.parse("---\naliases: [x\n  bad: : :\n---\nbody", "T.md")
+      assert [%{text: "body"} = c | _] = chunks
+      assert embed_prefix(c) == "T"
+    end
+  end
+
   describe "parse/2 basic structure" do
     test "returns list of chunks" do
       chunks = Markdown.parse(@simple_note, "Test/Hello World.md")
@@ -90,7 +153,18 @@ defmodule Engram.Parsers.MarkdownTest do
     end
 
     test "subsections include parent headings" do
-      chunks = Markdown.parse(@simple_note, "Test/Hello World.md")
+      # Sections of 512 B and over stay apart (min512), so each has its path.
+      filler = String.duplicate("word ", 110)
+
+      note =
+        String.replace(
+          @simple_note,
+          "Content of section one.",
+          "Content of section one. #{filler}"
+        )
+
+      note = String.replace(note, "This is the intro paragraph.", "Intro. #{filler}")
+      chunks = Markdown.parse(note, "Test/Hello World.md")
       section_one = Enum.find(chunks, &String.contains?(&1.text, "Content of section one"))
       assert section_one.heading_path == "Hello World > Section One"
     end
