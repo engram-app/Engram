@@ -25,6 +25,8 @@ defmodule Engram.Parsers.Markdown do
   #     NOT stamped yet: held at 3 so prod rebuilds once, when the bundled
   #     re-chunk lands (embed-less, merge cap, storage move). Until then the
   #     v4 chunker applies to new and edited notes only.
+  # Unstamped, rides the next bump (the bundled v5 rebuild): a run with no
+  # space is cut between words, never inside one (`word_split` in Rust).
   @chunker_version 3
 
   @data_exts [".canvas", ".base"]

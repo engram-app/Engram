@@ -94,7 +94,7 @@ pub fn each_chunk(content: &str, folder: &str, title: &str, mut emit: impl FnMut
     if let Some(block) = block.filter(|b| !b.is_empty()) {
         let text = normalize("", &strip_blobs(&block));
         let path = format!("{title} > frontmatter");
-        for t in hard_split(&text, MAX_CHUNK)
+        for t in word_split(&text, MAX_CHUNK)
             .into_iter()
             .filter(|t| !t.is_empty())
         {
@@ -681,14 +681,14 @@ impl Packer<'_> {
                 // it at a word break, so neither piece is a runt.
                 let mid = floor_boundary(text, (self.from + e) / 2);
                 let lo = floor_boundary(text, e - MAX_CHUNK);
-                text[lo..mid].rfind([' ', '\n']).map_or(mid, |i| lo + i + 1)
+                word_break(text, lo, mid).unwrap_or(mid)
             } else if self.to - self.from >= RUNT {
                 self.to
             } else {
                 // A runt (a heading before a long run) rides with the unit,
                 // cut at its last word break that fits.
                 let at = floor_boundary(text, self.from + MAX_CHUNK);
-                text[s..at].rfind([' ', '\n']).map_or(at, |i| s + i + 1)
+                word_break(text, s, at).unwrap_or(at)
             };
             self.out.push(&text[self.from..at]);
             self.from = at;
@@ -801,7 +801,7 @@ fn units(text: &str, base: usize, level: usize, unit: &mut impl FnMut(usize, usi
             }
         }
         None => {
-            for piece in hard_split(text, MAX_CHUNK) {
+            for piece in word_split(text, MAX_CHUNK) {
                 unit(at, at + piece.len());
                 at += piece.len();
             }
@@ -814,6 +814,35 @@ fn floor_boundary(text: &str, mut i: usize) -> usize {
         i -= 1;
     }
     i
+}
+
+/// The last cut in `text[lo..hi]` that leaves every word whole: after a
+/// space or newline, else after any other char that is not alphanumeric
+/// (`a,b`, `a;b`, `a|b`). None when the range is all one word.
+fn word_break(text: &str, lo: usize, hi: usize) -> Option<usize> {
+    let s = &text[lo..hi];
+    s.rfind([' ', '\n'])
+        .or_else(|| s.rfind(|c: char| !c.is_alphanumeric()))
+        .map(|i| lo + i + s[i..].chars().next().map_or(1, char::len_utf8))
+}
+
+/// `hard_split`, but each cut moves back to a `word_break` in the piece's
+/// second half, so a run without spaces (CSV, minified text, a YAML list on
+/// one line) keeps its words whole: a word cut in two is two other tokens,
+/// and keyword search can no longer find it. One word longer than half of
+/// `max` is still cut at a char boundary.
+fn word_split(text: &str, max: usize) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while rest.len() > max {
+        let hi = floor_boundary(rest, max);
+        let lo = floor_boundary(rest, max / 2);
+        let cut = word_break(rest, lo, hi).unwrap_or(hi);
+        out.push(&rest[..cut]);
+        rest = &rest[cut..];
+    }
+    out.push(rest);
+    out
 }
 
 /// Pieces of at most `max` bytes, cut at char boundaries.
@@ -892,6 +921,27 @@ mod tests {
         // A few hundred small sections: one chunk each, unchanged.
         let note = "## s\n\nbody text\n\n".repeat(300);
         assert_eq!(chunk(&note, "", "T").len(), 300);
+    }
+
+    // A cut inside a word leaves two other tokens; keyword search loses it.
+    #[test]
+    fn a_run_with_no_space_keeps_its_words_whole() {
+        let words: Vec<String> = (0..3_000).map(|i| format!("word{i}")).collect();
+        let line = words.join(",");
+        for content in [line.clone(), format!("---\nlist: {line}\n---\nbody")] {
+            let found: std::collections::HashSet<String> = chunk(&content, "", "T")
+                .iter()
+                .flat_map(|c| {
+                    c.0.split(|ch: char| !ch.is_alphanumeric())
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            assert!(words.iter().all(|w| found.contains(w)));
+            assert!(chunk(&content, "", "T")
+                .iter()
+                .all(|c| c.0.len() <= MAX_CHUNK));
+        }
     }
 
     #[test]
