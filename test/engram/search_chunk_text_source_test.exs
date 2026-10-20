@@ -90,6 +90,8 @@ defmodule Engram.SearchChunkTextSourceTest do
   defp v5_point(ctx, id, score),
     do: %{"id" => id, "score" => score, "payload" => %{"u" => to_string(ctx.user.id)}}
 
+  # The ranked query answers `points` whole; a retrieve (Task 15.8: the
+  # payload fallback, or MMR's vectors) answers the keys it asks for.
   defp answer(ctx, points) do
     test_pid = self()
 
@@ -100,6 +102,22 @@ defmodule Engram.SearchChunkTextSourceTest do
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => points}}))
+    end)
+
+    Bypass.stub(ctx.bypass, "POST", "/collections/engram_notes/points", fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      %{"ids" => ids, "with_payload" => keys} = body = Jason.decode!(raw)
+      send(test_pid, {:retrieve_body, body})
+
+      # MMR's vector retrieve asks for no payload.
+      found =
+        for id <- ids, p <- points, p["id"] == id do
+          %{"id" => id, "payload" => Map.take(p["payload"], keys || [])}
+        end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => found}))
     end)
   end
 
@@ -403,7 +421,9 @@ defmodule Engram.SearchChunkTextSourceTest do
              )
 
     assert Enum.sort(Enum.map(hits, & &1.text)) == ["T0", "T1", "T2"]
-    refute "vault_id" in Engram.QdrantStub.last_retrieve(ctx.bypass)["with_payload"]
+    # The only retrieve is MMR's: its pool's vectors, no payload.
+    assert %{"with_payload" => false, "with_vector" => ["dense"]} =
+             Engram.QdrantStub.last_retrieve(ctx.bypass)
   end
 
   test "the reranker receives the Postgres text", ctx do
@@ -439,14 +459,30 @@ defmodule Engram.SearchChunkTextSourceTest do
     assert Enum.count(events, fn {_m, meta} -> meta[:source] == "chunks" end) == 1
   end
 
-  test "Qdrant is asked for named payload keys, without vault_id", ctx do
+  test "the ranked query asks for no payload; a row with text needs no retrieve", ctx do
     id = Ecto.UUID.generate()
     insert_chunk!(ctx, id, 0, "Ferritin.")
     answer(ctx, [v5_point(ctx, id, 0.9)])
 
     assert {:ok, [_]} = search(ctx)
-    assert_received {:query_body, %{"with_payload" => keys}}
-    assert is_list(keys)
+    assert_received {:query_body, %{"with_payload" => false}}
+    refute_received {:retrieve_body, _}
+  end
+
+  test "a row without text: its point alone is retrieved, for the text keys only", ctx do
+    with_text = Ecto.UUID.generate()
+    without = Ecto.UUID.generate()
+    insert_chunk!(ctx, with_text, 0, "Ferritin.")
+    insert_chunk!(ctx, without, 1)
+
+    answer(ctx, [
+      v5_point(ctx, with_text, 0.9),
+      legacy_point(ctx, without, "Ferritin from the payload.", 0.8)
+    ])
+
+    assert {:ok, [_, _]} = search(ctx)
+    assert_received {:retrieve_body, %{"ids" => [^without], "with_payload" => keys}}
+    assert keys == Engram.Vector.Qdrant.result_payload(:fallback)
     refute "vault_id" in keys
     refute Engram.Vector.PayloadKeys.short(:vault_id) in keys
     assert "text_nonce" in keys

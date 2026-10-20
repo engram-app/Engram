@@ -23,6 +23,17 @@ defmodule Engram.MCP.HandlersSimilarTest do
       flunk("similar_to must not embed")
     end)
 
+    # MMR's vector retrieve for a pool of 2+ notes (Task 15.8): the points
+    # here hold no vectors, as the recommend answers carry none.
+    Bypass.stub(bypass, "POST", "/collections/engram_notes/points", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      ids = Jason.decode!(body)["ids"]
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => Enum.map(ids, &%{"id" => &1})}))
+    end)
+
     %{bypass: bypass, user: user, vault: vault}
   end
 
