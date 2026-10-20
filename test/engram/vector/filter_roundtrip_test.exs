@@ -20,7 +20,11 @@ defmodule Engram.Vector.FilterRoundtripTest do
   @dims 8
   @vector List.duplicate(0.1, @dims)
 
-  setup do
+  # ONE collection for the module: each collection with the 20 v5 indexes
+  # costs CI's 2 GB tmpfs Qdrant hundreds of MB (a second one SIGBUSed it),
+  # which is the footprint question `:v5_payload_format` waits on. Tests use
+  # fresh random tenants, so they never see each other's points.
+  setup_all do
     ServiceConfig.put_override(:qdrant_url, qdrant_url())
     ServiceConfig.put_override(:v5_payload_format, true)
 
@@ -34,8 +38,18 @@ defmodule Engram.Vector.FilterRoundtripTest do
         json: %{strict_mode_config: %{enabled: true, unindexed_filtering_retrieve: false}}
       )
 
-    on_exit(fn -> Qdrant.delete_collection(col) end)
+    on_exit(fn ->
+      ServiceConfig.put_override(:qdrant_url, qdrant_url())
+      Qdrant.delete_collection(col)
+    end)
+
     %{col: col}
+  end
+
+  setup do
+    ServiceConfig.put_override(:qdrant_url, qdrant_url())
+    ServiceConfig.put_override(:v5_payload_format, true)
+    :ok
   end
 
   defp tenant do
