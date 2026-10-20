@@ -74,20 +74,60 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
   # The pre-NIF Elixir encoder math, verbatim (HMAC + BM25 in Elixir over the
   # shared tokenizer), holding the Rust HMAC and BM25 to it: one HMAC and one full BM25 weight per
   # (chunk, distinct token). The bar the optimized code must match exactly.
-  defp reference_encode(text, key, avgdl, lang) do
+  defp reference_encode(text, key, avgdl, lang, b \\ 0.75, max_len \\ nil) do
     {tokens, doc_len} = Tokenizer.tokens_with_len(text, lang)
+    len = if max_len, do: min(doc_len, max_len), else: doc_len
 
     {indices, values} =
       tokens
       |> Enum.frequencies()
       |> Enum.reduce(%{}, fn {token, tf}, acc ->
-        w = Engram.KeywordIndex.Bm25.tf_weight(tf, doc_len, avgdl)
+        w = Engram.KeywordIndex.Bm25.tf_weight(tf, len, avgdl, b: b)
         Map.update(acc, QdrantSparse.dim(key, token), w, &(&1 + w))
       end)
       |> Map.to_list()
       |> Enum.unzip()
 
     {%{indices: indices, values: values}, doc_len}
+  end
+
+  # The NIF hard-codes b = 0.75; `b:` re-encodes with an avgdl that makes
+  # its norm equal BM25's at that b, so the weights must match the reference.
+  describe "b: (merged v5 groups, plan Task 14.1)" do
+    @long String.duplicate("alpha beta gamma delta ", 200) <> "omega"
+
+    test "matches the reference BM25 at that b", %{key_a: key} do
+      for b <- [0.0, 0.25, 0.5], text <- [@long, "alpha alpha beta"] do
+        [{packed, len}] = QdrantSparse.encode_documents([text], key, 7.5, :en, b: b)
+        assert_close({QdrantSparse.unpack(packed), len}, reference_encode(text, key, 7.5, :en, b))
+      end
+    end
+
+    test "b: 0.75 is the plain encoding", %{key_a: key} do
+      assert QdrantSparse.encode_documents([@long], key, 7.5, :en, b: 0.75) ==
+               QdrantSparse.encode_documents([@long], key, 7.5, :en)
+    end
+
+    test "composes with cap_doc_len: length min(len, 3 x avgdl) at that b", %{key_a: key} do
+      [{packed, len}] =
+        QdrantSparse.encode_documents([@long], key, 7.5, :en, b: 0.25, cap_doc_len: true)
+
+      assert len > 3 * 7.5
+      expected = reference_encode(@long, key, 7.5, :en, 0.25, 3 * 7.5)
+      assert_close({QdrantSparse.unpack(packed), len}, expected)
+    end
+
+    test "an empty document stays empty", %{key_a: key} do
+      [{packed, 0}] = QdrantSparse.encode_documents([""], key, 7.5, :en, b: 0.0)
+      assert QdrantSparse.unpack(packed) == %{indices: [], values: []}
+    end
+  end
+
+  defp assert_close(actual, expected) do
+    {got, len} = canonical(actual)
+    {want, ^len} = canonical(expected)
+    assert Map.keys(got) == Map.keys(want)
+    for {d, w} <- want, do: assert_in_delta(got[d], w, 1.0e-9)
   end
 
   test "encode_documents of no texts is empty", %{key_a: key} do
