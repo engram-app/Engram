@@ -94,16 +94,21 @@ defmodule Engram.Workers.PostHogPersonSyncTest do
     assert set["plan"] == "pro"
     assert set["subscription_status"] == "active"
     assert set["vault_count"] == 2
-    assert set["attachment_bytes"] == 1_500
-    assert set["notes_count"] == 2
+    assert set["total_attachment_bytes"] == 1_500
+    assert set["total_notes"] == 2
     assert is_binary(set["signed_up_at"])
 
     f = person(batch, "free@example.com")["properties"]["$set"]
     assert f["plan"] == "free"
     assert f["subscription_status"] == nil
     assert f["vault_count"] == 0
-    assert f["attachment_bytes"] == 0
-    assert f["notes_count"] == 0
+    assert f["total_attachment_bytes"] == 0
+    assert f["total_notes"] == 0
+    assert f["obsidian_devices"] == 0
+    assert f["mcp_clients"] == []
+    assert f["api_keys_count"] == 0
+    assert f["embed_tokens_used"] == 0
+    assert f["first_vault_at"] == nil
   end
 
   test "counts only live notes and attachments in live vaults" do
@@ -124,9 +129,30 @@ defmodule Engram.Workers.PostHogPersonSyncTest do
     assert_receive {:batch, batch}, 1_000
 
     set = person(batch, "counts@example.com")["properties"]["$set"]
-    assert set["notes_count"] == 1
-    assert set["attachment_bytes"] == 10
+    assert set["total_notes"] == 1
+    assert set["total_attachment_bytes"] == 10
     assert set["vault_count"] == 1
+  end
+
+  test "sizes the largest live vault by notes and by bytes" do
+    bypass = enable_posthog()
+    capture_batch(bypass)
+
+    u = insert(:user, email: "sizes@example.com")
+    many = insert(:vault, user: u)
+    heavy = insert(:vault, user: u)
+    for _ <- 1..3, do: insert(:note, user: u, vault: many, content_ciphertext: "ab")
+    insert(:note, user: u, vault: heavy, content_ciphertext: "abcdef")
+    insert(:attachment, user: u, vault: heavy, size_bytes: 100)
+
+    assert :ok = perform_job(PostHogPersonSync, %{})
+    assert_receive {:batch, batch}, 1_000
+
+    set = person(batch, "sizes@example.com")["properties"]["$set"]
+    assert set["total_notes"] == 4
+    assert set["total_note_bytes"] == 12
+    assert set["largest_vault_notes"] == 3
+    assert set["largest_vault_bytes"] == 106
   end
 
   test "a lapsed paid subscription reads as free" do
@@ -162,7 +188,85 @@ defmodule Engram.Workers.PostHogPersonSyncTest do
     keys = person(batch, "live@example.com")["properties"]["$set"] |> Map.keys() |> Enum.sort()
 
     assert keys ==
-             ~w(attachment_bytes email name notes_count plan signed_up_at subscription_status vault_count)
+             ~w(ai_connected_at api_keys_count email embed_tokens_used first_vault_at
+                largest_vault_bytes largest_vault_notes last_active_at mcp_client_count mcp_clients
+                name obsidian_devices obsidian_last_seen_at plan plugin_connected_at signed_up_at
+                subscription_status total_attachment_bytes total_attachments total_note_bytes
+                total_notes vault_count)
+  end
+
+  test "sets connection, usage and milestone properties" do
+    bypass = enable_posthog()
+    capture_batch(bypass)
+
+    u = insert(:user, email: "rich@example.com")
+    vault = insert(:vault, user: u, created_at: ~U[2026-09-01 10:00:00Z])
+    insert(:vault, user: u, created_at: ~U[2026-09-05 10:00:00Z])
+    insert(:note, user: u, vault: vault, content_ciphertext: :binary.copy("x", 40))
+    insert(:attachment, user: u, vault: vault, size_bytes: 1)
+    insert(:attachment, user: u, vault: vault, size_bytes: 1)
+
+    insert(:api_key, user: u)
+
+    # Two live device families (one rotated twice) and one revoked.
+    family = Ecto.UUID.generate()
+    insert(:device_refresh_token, user: u, vault: vault, family_id: family)
+    insert(:device_refresh_token, user: u, vault: vault, family_id: family)
+    insert(:device_refresh_token, user: u, vault: vault)
+    insert(:device_refresh_token, user: u, vault: vault, revoked_at: DateTime.utc_now(:second))
+
+    # MCP grants bucket to their client family; a revoked one does not count.
+    claude = insert(:oauth_client, client_name: "Claude Desktop")
+    cursor = insert(:oauth_client, client_name: "Cursor")
+    gone = insert(:oauth_client, client_name: "ChatGPT")
+    insert(:oauth_refresh_token, user_id: u.id, client_id: claude.client_id)
+    insert(:oauth_refresh_token, user_id: u.id, client_id: cursor.client_id)
+
+    insert(:oauth_refresh_token,
+      user_id: u.id,
+      client_id: gone.client_id,
+      revoked_at: DateTime.utc_now(:second)
+    )
+
+    Repo.insert_all(
+      "usage_meters",
+      [
+        %{
+          user_id: Ecto.UUID.dump!(u.id),
+          lifetime_embed_tokens: 1234,
+          notes_count: 1,
+          last_active_at: ~U[2026-10-01 12:00:00.000000Z],
+          updated_at: DateTime.utc_now()
+        }
+      ],
+      skip_tenant_check: true
+    )
+
+    for {action, at} <- [
+          {"plugin_connected", ~U[2026-09-02 10:00:00.000000Z]},
+          {"ai_connected", ~U[2026-09-03 10:00:00.000000Z]}
+        ] do
+      Repo.insert!(%Engram.Onboarding.Action{user_id: u.id, action: action, inserted_at: at},
+        skip_tenant_check: true
+      )
+    end
+
+    assert :ok = perform_job(PostHogPersonSync, %{})
+    assert_receive {:batch, batch}, 1_000
+
+    set = person(batch, "rich@example.com")["properties"]["$set"]
+    assert set["total_attachments"] == 2
+    assert set["total_note_bytes"] == 40
+    assert set["api_keys_count"] == 1
+    assert set["obsidian_devices"] == 2
+    assert set["mcp_clients"] == ["claude", "cursor"]
+    assert set["mcp_client_count"] == 2
+    assert is_binary(set["obsidian_last_seen_at"])
+    assert set["embed_tokens_used"] == 1234
+    assert set["last_active_at"] =~ "2026-10-01T12:00:00"
+    assert set["first_vault_at"] =~ "2026-09-01T10:00:00"
+    assert set["plugin_connected_at"] =~ "2026-09-02T10:00:00"
+    assert set["ai_connected_at"] =~ "2026-09-03T10:00:00"
   end
 
   test "a rejected batch fails the job so Oban retries" do
