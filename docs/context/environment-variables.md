@@ -201,8 +201,7 @@ Paddle is the Merchant-of-Record. Server keys gate API calls; the client token f
 | `TENANT_IDF_MIN_POINTS` | `1000` | Points a user needs before `TENANT_IDF` computes keyword IDF over that user's own points (`Search`). A non-negative integer. |
 | `LEGACY_FILTER_FIELDS` | `true` | `true`: every Qdrant filter also matches the v3 `*_hmac` payload fields, so points from before the v5 pass still filter. Set `false` only after the pass has rewritten every point (PR-18). |
 | `VECTOR_CACHE_ENABLED` | `false` | `true` turns on the short-lived encrypted per-user vector cache (`Engram.Indexing.VectorCache`, table `embedding_cache`): a dense text is paid to Voyage once across retries, crashes and the v5 rebuild window, and cache hits are never charged to the embed meter. Off, the embed path never reads or writes the table. Rows expire 72 h after insert (hourly batched prune). |
-| `ATTACHMENT_MIME_BYPASS` | off (gate ON) | `true` disables the MIME/extension whitelist. |
-| `ATTACHMENT_MIME_ALLOWLIST_EXTRA` | unset | Comma-sep extra allowed MIMEs without disabling the gate. |
+| `ATTACHMENT_MIME_BYPASS` | off (gate ON) | `true` disables the executable-extension blocklist. |
 | `RATE_LIMIT_AUTH_OVERRIDE` | ignored unless `CI=true` | Auth-limiter override for CI/E2E only. |
 | `PRE_AUTH_RATE_LIMIT_OVERRIDE` | ignored unless `CI=true` | Pre-auth (vault-pipeline) limiter override for CI/E2E only. |
 | `CRDT_MSG_RATE_LIMIT_OVERRIDE` | ignored unless `CI=true` | `CrdtChannel` per-message budget override for CI/E2E only. |

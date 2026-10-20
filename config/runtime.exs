@@ -616,24 +616,11 @@ if auth_provider == :clerk do
   config :engram, :clerk_authorized_parties, clerk_authorized_parties
 end
 
-# Pricing v2 §H — attachment MIME / extension whitelist self-host knobs.
-# Default: gate is ON. Operators who want to allow executables (e.g.
-# distributing an internal tool from a self-hosted vault) set
-# ATTACHMENT_MIME_BYPASS=true. To extend the allowlist with a couple of
-# extra MIMEs without disabling the gate, use
-# ATTACHMENT_MIME_ALLOWLIST_EXTRA=mime1,mime2.
+# Attachment executable blocklist self-host knob. Default: gate is ON.
+# Operators who want to allow executables (e.g. distributing an internal tool
+# from a self-hosted vault) set ATTACHMENT_MIME_BYPASS=true.
 if System.get_env("ATTACHMENT_MIME_BYPASS") in ["1", "true"] do
   config :engram, :attachment_mime_bypass, true
-end
-
-if extras = System.get_env("ATTACHMENT_MIME_ALLOWLIST_EXTRA") do
-  list =
-    extras
-    |> String.split(",", trim: true)
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
-
-  if list != [], do: config(:engram, :attachment_mime_allowlist_extra, list)
 end
 
 # Vault-channel CRDT fan-out pacer (engram-app/Engram#1002) rollback knob.

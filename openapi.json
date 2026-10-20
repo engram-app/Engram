@@ -808,26 +808,21 @@
       "MimeRejected": {
         "properties": {
           "error": {
-            "example": "mime_not_allowed",
+            "example": "extension_not_allowed",
             "type": "string",
             "x-struct": null,
             "x-validate": null
           },
           "extension": {
-            "nullable": true,
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "mime_type": {
-            "nullable": true,
+            "example": ".exe",
             "type": "string",
             "x-struct": null,
             "x-validate": null
           }
         },
         "required": [
-          "error"
+          "error",
+          "extension"
         ],
         "title": "MimeRejected",
         "type": "object",
@@ -5362,7 +5357,7 @@
       },
       "post": {
         "callbacks": {},
-        "description": "Uploads an attachment to the vault's storage backend. Send the raw bytes as `application/octet-stream` with `path`, `mtime` and optional `mime_type` in the query string, or (legacy) base64 JSON. Attachments are a paid-tier feature (402 on Free, which is also limited to text MIME types), the MIME type and extension must pass the whitelist (415), the file must be within the per-plan size and total-quota limits (402), a raw body over the request ceiling returns 413, a raw body that stalls returns 408, a non-numeric `mtime` or `mime_type` returns 422, and a storage backend failure returns 502.",
+        "description": "Uploads an attachment to the vault's storage backend. Send the raw bytes as `application/octet-stream` with `path`, `mtime` and optional `mime_type` in the query string, or (legacy) base64 JSON. Attachments are a paid-tier feature (402 on Free, which is also limited to text MIME types), any file type is accepted except executables, whose extension returns 415 (`extension_not_allowed`), the file must be within the per-plan size and total-quota limits (402), a raw body over the request ceiling returns 413, a raw body that stalls returns 408, a non-numeric `mtime`, or a `mime_type` with illegal bytes (`invalid_mime_type`), returns 422, and a storage backend failure returns 502.",
         "operationId": "attachments-upload",
         "parameters": [
           {
@@ -5477,7 +5472,7 @@
                 }
               }
             },
-            "description": "MIME or extension not allowed"
+            "description": "Executable extension not allowed"
           },
           "422": {
             "content": {
@@ -5487,7 +5482,7 @@
                 }
               }
             },
-            "description": "Missing/invalid content"
+            "description": "Missing/invalid content, or invalid mime_type"
           },
           "502": {
             "content": {

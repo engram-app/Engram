@@ -1,8 +1,7 @@
-"""Test 70: Pricing v2 §H — MIME / extension whitelist on attachment upload.
+"""Test 70: executable-extension blocklist on attachment upload.
 
-API-only. Verifies that the launch-day Phase 1 gate rejects executable
-MIME types and dangerous extensions, while accepting legitimate file
-formats.
+API-only. Verifies that executable extensions are refused (415) and every
+other file type is accepted.
 """
 
 import pytest
@@ -20,24 +19,24 @@ async def test_rejects_exe_extension_via_belt_and_braces(api_sync):
 
 
 @pytest.mark.asyncio
-async def test_rejects_dosexec_mime(api_sync):
-    """Explicit application/x-dosexec MIME is rejected even with safe extension."""
+async def test_accepts_zip(api_sync):
+    """Archives are not executables; they sync."""
     status = api_sync.upload_attachment(
-        "E2E/attachments/installer",
-        b"\x00" * 64,
-        mime_type="application/x-dosexec",
+        "E2E/attachments/archive70.zip",
+        b"PK\x03\x04",
+        mime_type="application/zip",
     )
-    assert status == 415, f"Expected 415 for x-dosexec, got {status}"
+    assert status in (200, 201), f"Expected 2xx for .zip, got {status}"
 
 
 @pytest.mark.asyncio
-async def test_rejects_octet_stream_default(api_sync):
-    """Unknown extension → detected as octet-stream → rejected."""
+async def test_accepts_unknown_extension(api_sync):
+    """Unknown extension -> octet-stream -> accepted (only executables are blocked)."""
     status = api_sync.upload_attachment(
-        "E2E/attachments/mystery.xyz",
+        "E2E/attachments/mystery70.xyz",
         b"opaque",
     )
-    assert status == 415, f"Expected 415 for unknown .xyz, got {status}"
+    assert status in (200, 201), f"Expected 2xx for unknown .xyz, got {status}"
 
 
 @pytest.mark.asyncio

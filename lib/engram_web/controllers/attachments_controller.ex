@@ -26,10 +26,10 @@ defmodule EngramWeb.AttachmentsController do
       "Uploads an attachment to the vault's storage backend. Send the raw bytes as " <>
         "`application/octet-stream` with `path`, `mtime` and optional `mime_type` in the query " <>
         "string, or (legacy) base64 JSON. Attachments are a paid-tier feature (402 on Free, which " <>
-        "is also limited to text MIME types), the MIME type and extension must pass the whitelist " <>
-        "(415), the file must be within the per-plan size and total-quota limits (402), a raw body " <>
+        "is also limited to text MIME types), any file type is accepted except executables, whose extension returns 415 " <>
+        "(`extension_not_allowed`), the file must be within the per-plan size and total-quota limits (402), a raw body " <>
         "over the request ceiling returns 413, a raw body that stalls returns 408, a non-numeric " <>
-        "`mtime` or `mime_type` returns 422, and a storage backend failure returns 502.",
+        "`mtime`, or a `mime_type` with illegal bytes (`invalid_mime_type`), returns 422, and a storage backend failure returns 502.",
     tags: ["Attachments"],
     parameters: [
       path: [
@@ -71,8 +71,10 @@ defmodule EngramWeb.AttachmentsController do
       request_entity_too_large:
         {"Raw body over the request ceiling", "application/json", Schemas.MessageError},
       unsupported_media_type:
-        {"MIME or extension not allowed", "application/json", Schemas.MimeRejected},
-      unprocessable_entity: {"Missing/invalid content", "application/json", Schemas.MessageError},
+        {"Executable extension not allowed", "application/json", Schemas.MimeRejected},
+      unprocessable_entity:
+        {"Missing/invalid content, or invalid mime_type", "application/json",
+         Schemas.MessageError},
       bad_gateway: {"Storage backend failure", "application/json", Schemas.MessageError}
     ]
   )
@@ -125,10 +127,8 @@ defmodule EngramWeb.AttachmentsController do
       )
     else
       case MimeWhitelist.check(effective_mime, path) do
-        {:error, {:mime_not_allowed, mime}} ->
-          conn
-          |> put_status(415)
-          |> json(%{error: "mime_not_allowed", mime_type: mime})
+        {:error, :invalid_mime} ->
+          conn |> put_status(422) |> json(%{error: "invalid_mime_type"})
 
         {:error, {:extension_not_allowed, ext}} ->
           conn
@@ -322,11 +322,11 @@ defmodule EngramWeb.AttachmentsController do
       {:error, {:storage, _reason}} ->
         conn |> put_status(502) |> json(%{error: "failed to upload to storage backend"})
 
-      # Defense in depth: the context now enforces the whitelist too. The
-      # pre-check above answers first on the HTTP path; these keep a context
-      # rejection from falling into the changeset clause below.
-      {:error, {:mime_not_allowed, mime}} ->
-        conn |> put_status(415) |> json(%{error: "mime_not_allowed", mime_type: mime})
+      # Defense in depth: the context enforces the gate too. The pre-check
+      # above answers first on the HTTP path; these keep a context rejection
+      # from falling into the changeset clause below.
+      {:error, :invalid_mime} ->
+        conn |> put_status(422) |> json(%{error: "invalid_mime_type"})
 
       {:error, {:extension_not_allowed, ext}} ->
         conn |> put_status(415) |> json(%{error: "extension_not_allowed", extension: ext})
@@ -822,12 +822,9 @@ defmodule EngramWeb.AttachmentsController do
   defp sent_reason(%{"error" => e}, _status) when is_binary(e), do: e
   defp sent_reason(_body, status), do: "http_#{status}"
 
-  # Which type a 415 refused, so a refusal storm names the file type a client
-  # keeps sending. The MIME is client-sent, so it is capped like the parser
-  # 413's content_type.
-  defp rejected_type(%{"mime_type" => m}) when is_binary(m),
-    do: binary_part(m, 0, min(byte_size(m), 100))
-
+  # Which extension a 415 refused, so a refusal storm names the file type a
+  # client keeps sending. The gate is extension-only, so the 415 body carries
+  # the (blocklisted, hence short) extension and never a client-sent MIME.
   defp rejected_type(%{"extension" => e}) when is_binary(e), do: e
   defp rejected_type(_body), do: nil
 

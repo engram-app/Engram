@@ -92,9 +92,7 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert att["mime_type"] == "application/pdf"
     end
 
-    test "rejects unknown extension with 415 (defaults to non-allowlisted octet-stream)", %{
-      conn: conn
-    } do
+    test "accepts an unknown extension (detected as octet-stream)", %{conn: conn} do
       conn =
         post(conn, "/api/attachments", %{
           path: "files/data.xyz",
@@ -102,10 +100,8 @@ defmodule EngramWeb.AttachmentsControllerTest do
           mtime: 1_000.0
         })
 
-      assert json_response(conn, 415) == %{
-               "error" => "mime_not_allowed",
-               "mime_type" => "application/octet-stream"
-             }
+      assert %{"attachment" => %{"mime_type" => "application/octet-stream"}} =
+               json_response(conn, 200)
     end
 
     test "rejects .exe extension even with whitelisted MIME claim (belt-and-braces)", %{
@@ -125,16 +121,28 @@ defmodule EngramWeb.AttachmentsControllerTest do
              }
     end
 
-    test "rejects application/x-msdownload MIME", %{conn: conn} do
+    test "rejects a mime_type with header-illegal bytes with 422", %{conn: conn} do
       conn =
         post(conn, "/api/attachments", %{
-          path: "tools/installer",
+          path: "files/a.txt",
           content_base64: @sample_base64,
-          mime_type: "application/x-msdownload",
+          mime_type: "text/plain\r\nx: y",
           mtime: 1_000.0
         })
 
-      assert %{"error" => "mime_not_allowed"} = json_response(conn, 415)
+      assert json_response(conn, 422) == %{"error" => "invalid_mime_type"}
+    end
+
+    test "accepts a zip", %{conn: conn} do
+      conn =
+        post(conn, "/api/attachments", %{
+          path: "files/a.zip",
+          content_base64: @sample_base64,
+          mime_type: "application/zip",
+          mtime: 1_000.0
+        })
+
+      assert json_response(conn, 200)["attachment"]["mime_type"] == "application/zip"
     end
 
     test "allows explicit MIME type override", %{conn: conn} do
@@ -457,8 +465,11 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
     test "415 for a disallowed extension", %{conn: conn} do
       conn = raw_post(conn, %{path: "evil.exe", mtime: "1.0"}, "MZ")
-      # .exe detects as application/octet-stream, which the MIME list refuses first.
-      assert json_response(conn, 415)["error"] == "mime_not_allowed"
+
+      assert json_response(conn, 415) == %{
+               "error" => "extension_not_allowed",
+               "extension" => ".exe"
+             }
     end
 
     test "402 attachment_must_be_text when an override revokes the surface", %{

@@ -42,10 +42,10 @@ defmodule Engram.AttachmentsTest do
     metas |> Enum.map(& &1.path) |> Enum.sort()
   end
 
-  describe "MIME whitelist enforcement at the context boundary" do
-    # The whitelist used to be enforced only in AttachmentsController — any
+  describe "executable blocklist enforcement at the context boundary" do
+    # The gate used to be enforced only in AttachmentsController — any
     # non-HTTP caller (MCP tool, Oban job, console) bypassed it entirely.
-    test "rejects a blocklisted extension even with an allowlisted MIME", %{
+    test "rejects a blocklisted extension whatever the claimed MIME", %{
       user: user,
       vault: vault
     } do
@@ -57,14 +57,12 @@ defmodule Engram.AttachmentsTest do
                })
     end
 
-    test "rejects a disallowed MIME when no explicit mime_type is sent", %{
-      user: user,
-      vault: vault
-    } do
-      assert {:error, {:mime_not_allowed, "application/octet-stream"}} =
+    test "rejects a header-illegal mime_type", %{user: user, vault: vault} do
+      assert {:error, :invalid_mime} =
                Attachments.upsert_attachment(user, vault, %{
-                 "path" => "data/blob.bin",
-                 "content_base64" => @valid_content
+                 "path" => "data/blob.txt",
+                 "content_base64" => @valid_content,
+                 "mime_type" => "text/plain\r\nx: y"
                })
     end
   end

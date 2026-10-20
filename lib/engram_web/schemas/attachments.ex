@@ -176,7 +176,7 @@ defmodule EngramWeb.Schemas.AttachmentBatchDeleteRequest do
 end
 
 defmodule EngramWeb.Schemas.MimeRejected do
-  @moduledoc "415 body — file type/extension not allowed by the MIME whitelist."
+  @moduledoc "415 body - executable file extension not allowed."
   alias OpenApiSpex.Schema
   require OpenApiSpex
 
@@ -184,11 +184,10 @@ defmodule EngramWeb.Schemas.MimeRejected do
     title: "MimeRejected",
     type: :object,
     properties: %{
-      error: %Schema{type: :string, example: "mime_not_allowed"},
-      mime_type: %Schema{type: :string, nullable: true},
-      extension: %Schema{type: :string, nullable: true}
+      error: %Schema{type: :string, example: "extension_not_allowed"},
+      extension: %Schema{type: :string, example: ".exe"}
     },
-    required: [:error]
+    required: [:error, :extension]
   })
 end
 

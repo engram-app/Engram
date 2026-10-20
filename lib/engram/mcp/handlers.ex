@@ -698,7 +698,7 @@ defmodule Engram.MCP.Handlers do
 
     types =
       if Engram.Billing.attachments_all_types?(user),
-        do: "images, PDFs, audio, video and other whitelisted binary types",
+        do: "any file type except executables (.exe, .sh, .dmg and similar)",
         else: "text/* only on this plan; images, PDFs, audio and video need a paid plan"
 
     {:ok,
