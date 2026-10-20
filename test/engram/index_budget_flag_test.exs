@@ -42,8 +42,14 @@ defmodule Engram.IndexBudgetFlagTest do
     %{user: user, vault: vault}
   end
 
+  # Over 512 B: the chunker's min512 merge (v5) leaves each section alone,
+  # so every section is still its own chunk.
+  @pad String.duplicate("filler words here ", 30)
+
   defp sections(n),
-    do: "# Big\n\n" <> Enum.map_join(1..n, "\n\n", &"## S#{&1}\n\nsection#{&1} body text.")
+    do:
+      "# Big\n\n" <>
+        Enum.map_join(1..n, "\n\n", &"## S#{&1}\n\nsection#{&1} body text. #{@pad}")
 
   defp insert_note(user, vault, content) do
     note = Engram.Fixtures.insert_note!(user, vault, %{path: "Big.md", content: content})

@@ -34,6 +34,10 @@ defmodule Engram.IndexingKeywordContextTest do
   setup :set_mox_global
   setup :verify_on_exit!
 
+  # Over 512 B: the chunker's min512 merge (v5) leaves each section alone,
+  # so every section is still its own chunk.
+  @pad String.duplicate("filler words here ", 30)
+
   setup do
     bypass = Bypass.open()
     Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
@@ -58,11 +62,11 @@ defmodule Engram.IndexingKeywordContextTest do
     # different lengths, so per-chunk values cannot line up by accident.
     note =
       note!(user, vault, "Ops/Kubernetes Upgrade.md", """
-      Drain each node before bumping the control plane.
+      Drain each node before bumping the control plane. #{@pad}
 
       ## Rollback
 
-      Restore the etcd snapshot first, then restart every kubelet in the pool one at a time.
+      Restore the etcd snapshot first, then restart every kubelet in the pool one at a time. #{@pad} #{@pad}
       """)
 
     %{user: user, vault: vault, note: note}

@@ -19,6 +19,10 @@ defmodule Engram.IndexingChunkReuseTest do
 
   @path "Health/Iron Panel.md"
 
+  # Over 512 B: the chunker's min512 merge (v5) leaves each section alone,
+  # so every section is still its own chunk.
+  @pad String.duplicate("filler words here ", 30)
+
   defp content(ferritin_body, tags) do
     """
     ---
@@ -26,15 +30,17 @@ defmodule Engram.IndexingChunkReuseTest do
     ---
     # Iron Panel
 
-    Intro paragraph.
+    Intro paragraph. #{@pad}
 
     ## Ferritin
 
     #{ferritin_body}
 
+    #{@pad}
+
     ## Transferrin
 
-    Transferrin saturation is normal.
+    Transferrin saturation is normal. #{@pad}
     """
   end
 
@@ -485,8 +491,8 @@ defmodule Engram.IndexingChunkReuseTest do
 
   describe "a note that loses a section" do
     test "the removed chunk's point is deleted and the survivors are reused", ctx do
-      full = "# Panel\n\n## Ferritin\n\nlow\n\n## Transferrin\n\nnormal\n"
-      trimmed = "# Panel\n\n## Ferritin\n\nlow\n"
+      full = "# Panel\n\n## Ferritin\n\nlow #{@pad}\n\n## Transferrin\n\nnormal #{@pad}\n"
+      trimmed = "# Panel\n\n## Ferritin\n\nlow #{@pad}\n"
 
       note = put_raw(ctx.user, ctx.vault, "Health/Shrink.md", full)
       stub_embedder(self())
