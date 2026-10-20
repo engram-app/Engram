@@ -104,7 +104,17 @@ function reportUnlessRetried(err: object, failure: Failure) {
 	}, 0);
 }
 
-async function authFetch(path: string, options: RequestInit = {}): Promise<Response> {
+/** Methods safe to send twice, so a network error gets one more try here.
+ *  Not GET: React Query already retries queries. Not POST/PATCH: not
+ *  idempotent. Every DELETE route was checked for a safe repeat (see api.del). */
+const RETRY_ONCE_METHODS = new Set(["PUT", "DELETE"]);
+const RETRY_DELAY_MS = 300;
+
+async function authFetch(
+	path: string,
+	options: RequestInit = {},
+	{ retryNetworkError = true } = {},
+): Promise<Response> {
 	const token = await getAuthToken();
 
 	const headers = new Headers(options.headers);
@@ -129,24 +139,41 @@ async function authFetch(path: string, options: RequestInit = {}): Promise<Respo
 	// this composes to `/api${path}` identically to the pre-eject shape.
 	const url = joinApiUrl(getApiBase(), `/api${path}`);
 	const method = options.method ?? "GET";
-	let response: Response;
-	const startedAt = performance.now();
-	try {
-		response = await fetch(url, { ...options, headers });
-	} catch (err) {
-		// Aborts are the caller's choice and offline is the user's network, not
-		// ours. Everything else (CORS, DNS, TLS, connection reset) is a TypeError
-		// the browser deliberately leaves vague.
-		const aborted = err instanceof Error && err.name === "AbortError";
-		if (!aborted && navigator.onLine && err instanceof Error) {
-			reportUnlessRetried(err, {
-				kind: "network_error",
-				method,
-				url,
-				context: networkContext(err, 1, performance.now() - startedAt),
-			});
+	const retriesOnce = retryNetworkError && RETRY_ONCE_METHODS.has(method);
+	const attemptFetch = async (
+		tryNumber: number,
+	): Promise<{ response: Response; attempt: number }> => {
+		const startedAt = performance.now();
+		try {
+			return { response: await fetch(url, { ...options, headers }), attempt: tryNumber };
+		} catch (err) {
+			// A TypeError is the browser's network failure; an AbortError (a
+			// DOMException) is the caller's choice and is never retried.
+			if (retriesOnce && tryNumber === 1 && err instanceof TypeError) {
+				await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+				return attemptFetch(2);
+			}
+			// Aborts are the caller's choice and offline is the user's network, not
+			// ours. Everything else (CORS, DNS, TLS, connection reset) is a TypeError
+			// the browser deliberately leaves vague.
+			const aborted = err instanceof Error && err.name === "AbortError";
+			if (!aborted && navigator.onLine && err instanceof Error) {
+				reportUnlessRetried(err, {
+					kind: "network_error",
+					method,
+					url,
+					context: networkContext(err, tryNumber, performance.now() - startedAt),
+				});
+			}
+			throw err;
 		}
-		throw err;
+	};
+	const { response, attempt } = await attemptFetch(1);
+
+	// The first attempt may have reached the server and deleted the resource
+	// before the connection failed: a 404 on the repeat means it is gone.
+	if (attempt === 2 && method === "DELETE" && response.status === 404) {
+		return new Response(null, { status: 204 });
 	}
 
 	if (!response.ok) {
@@ -287,11 +314,23 @@ export const api = {
 	// needs to send a password, and a credential in a query string is written
 	// to every access log between the browser and Phoenix — plus Sentry's fetch
 	// breadcrumbs, which capture the URL.
+	//
+	// A network error is retried once (authFetch). Every DELETE route called
+	// here repeats safely: connections (oauth, device, pat), admin invites
+	// and users re-revoke or re-stamp, folders answer 204 when already gone,
+	// and vaults' 404 on a repeat is read as success. Except DELETE /me: it
+	// re-sends the password, and a repeat after a success we never saw answers
+	// 401 for an account that is already gone, which the UI would show as a
+	// failed deletion.
 	async del<T>(path: string, body?: unknown): Promise<T | undefined> {
-		const res = await authFetch(path, {
-			method: "DELETE",
-			body: body === undefined ? undefined : JSON.stringify(body),
-		});
+		const res = await authFetch(
+			path,
+			{
+				method: "DELETE",
+				body: body === undefined ? undefined : JSON.stringify(body),
+			},
+			{ retryNetworkError: path !== "/me" },
+		);
 		// 204 No Content is the conventional REST response for DELETE; tolerate
 		// empty bodies so callers don't have to differentiate.
 		if (res.status === 204 || res.headers.get("content-length") === "0") {

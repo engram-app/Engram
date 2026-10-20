@@ -264,3 +264,88 @@ describe("network_error reports carry diagnostic context", () => {
 		});
 	});
 });
+
+// The same glitch that loses a first GET (which React Query retries) loses a
+// write. A DELETE is safe to repeat, so the client repeats it once itself.
+describe("idempotent writes retry once on a network error", () => {
+	const isProbe = (url: RequestInfo | URL) => String(url).endsWith("/api/health");
+	const requests = () =>
+		vi.mocked(globalThis.fetch).mock.calls.filter(([url]) => !isProbe(url)).length;
+
+	beforeEach(() => {
+		mockError.mockClear();
+		vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
+	});
+
+	/** Request outcomes in order; the reachability probe always answers. */
+	function outcomes(...results: Array<Error | Response>) {
+		const queue = [...results];
+		globalThis.fetch = vi.fn((url: RequestInfo | URL) => {
+			if (isProbe(url)) {
+				return Promise.resolve(new Response(null, { status: 200 }));
+			}
+			const next = queue.shift();
+			return next instanceof Error ? Promise.reject(next) : Promise.resolve(next ?? new Response());
+		});
+	}
+
+	it("a DELETE that fails once then succeeds resolves, and reports nothing", async () => {
+		outcomes(new TypeError("Failed to fetch"), new Response(null, { status: 204 }));
+
+		await expect(api.del("/vaults/v1")).resolves.toBeUndefined();
+
+		expect(requests()).toBe(2);
+		await new Promise((r) => setTimeout(r, 10));
+		expect(mockError).not.toHaveBeenCalled();
+	});
+
+	it("a DELETE that fails twice rejects and reports once, as attempt 2", async () => {
+		outcomes(new TypeError("Failed to fetch"), new TypeError("Failed to fetch"));
+
+		await expect(api.del("/vaults/v1")).rejects.toThrow("Failed to fetch");
+
+		expect(requests()).toBe(2);
+		await vi.waitFor(() => expect(mockError).toHaveBeenCalledTimes(1));
+		expect(mockError.mock.calls[0]?.[1]).toMatch(/^network_error DELETE /);
+		expect(mockError.mock.calls[0]?.[2]).toMatchObject({ attempt: 2 });
+	});
+
+	// The first attempt may have reached the server and deleted it.
+	it("a 404 on the retry of a DELETE means it is gone: success", async () => {
+		outcomes(
+			new TypeError("Failed to fetch"),
+			new Response(JSON.stringify({ error: "not_found" }), { status: 404 }),
+		);
+
+		await expect(api.del("/vaults/v1")).resolves.toBeUndefined();
+	});
+
+	it("a 404 on a first DELETE is still an error", async () => {
+		outcomes(new Response(JSON.stringify({ error: "not_found" }), { status: 404 }));
+		await expect(api.del("/vaults/v1")).rejects.toBeInstanceOf(ApiError);
+	});
+
+	it("does not retry a POST", async () => {
+		outcomes(new TypeError("Failed to fetch"), new Response("{}", { status: 200 }));
+
+		await expect(api.post("/folders/batch-delete", { ids: [] })).rejects.toThrow();
+
+		expect(requests()).toBe(1);
+		await vi.waitFor(() => expect(mockError).toHaveBeenCalledTimes(1));
+		expect(mockError.mock.calls[0]?.[2]).toMatchObject({ attempt: 1 });
+	});
+
+	it("does not retry an aborted DELETE", async () => {
+		outcomes(new DOMException("aborted", "AbortError"), new Response(null, { status: 204 }));
+		await expect(api.del("/vaults/v1")).rejects.toThrow("aborted");
+		expect(requests()).toBe(1);
+	});
+
+	// Account deletion re-sends the password, and its repeat after a success
+	// that never reached us answers 401 for an account that is already gone.
+	it("does not retry deleting the account", async () => {
+		outcomes(new TypeError("Failed to fetch"), new Response("{}", { status: 200 }));
+		await expect(api.del("/me", { password: "pw" })).rejects.toThrow();
+		expect(requests()).toBe(1);
+	});
+});
