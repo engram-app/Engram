@@ -10,6 +10,7 @@ defmodule Engram.Indexing do
 
   alias Engram.Crypto
   alias Engram.Indexing.RetainedVectors
+  alias Engram.Indexing.VectorCache
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Chunk
@@ -222,6 +223,7 @@ defmodule Engram.Indexing do
     with :ok <- Qdrant.ensure_collection(collection(), dims),
          {:ok, filter_key} <- Crypto.dek_filter_key(user),
          {:ok, content_key} <- Crypto.dek_content_hash_key(user),
+         {:ok, opts} <- with_vector_cache(user, note, content_key, dims, opts),
          {tier, dense?, plan, retained} <-
            Repo.with_tenant!(note.user_id, fn ->
              with :ok <- tier_unchanged(note),
@@ -238,7 +240,11 @@ defmodule Engram.Indexing do
       # What the embedder was actually sent (#1618): reused chunks and
       # sparse-only passes cost nothing, so the meter must not bill them.
       # Retained vectors were paid for by the attempt that kept them.
-      embedded_bytes = if dense? and is_nil(retained), do: text_bytes(texts), else: 0
+      # With the vector cache on, only its misses were sent (`:embed_bytes`).
+      embedded_bytes =
+        if dense? and is_nil(retained),
+          do: Map.get_lazy(plan, :embed_bytes, fn -> text_bytes(texts) end),
+          else: 0
 
       # A note holding fewer points than its chunks (floored or merged)
       # records how many a full pass would write: the index budget sweep
@@ -398,7 +404,7 @@ defmodule Engram.Indexing do
           chunks
           |> cap_chunks(cap, merged_rows?(rows))
           |> fit_positions(merged_rows?(rows))
-          |> within_pass_embed_budget()
+          |> within_pass_embed_budget(opts)
 
     case forced || over_note_cap_tier(note, capped, cap) ||
            over_points_budget_tier(note, user, capped) do
@@ -443,8 +449,21 @@ defmodule Engram.Indexing do
   # cover the rest densely.
   @max_pass_embed_bytes 12 * 1024 * 1024
 
+  defp max_pass_embed_bytes,
+    do: Application.get_env(:engram, :max_pass_embed_bytes, @max_pass_embed_bytes)
+
+  # With the vector cache on the budget binds on cache MISSES instead
+  # (`with_cache_lookup/3`): a pass embeds up to the budget, caches it and
+  # snoozes, and the next pass finds those as hits. So every prose byte goes
+  # dense, over as many passes as it takes.
+  defp within_pass_embed_budget(chunks, opts) do
+    if Keyword.has_key?(opts, :vector_cache),
+      do: chunks,
+      else: within_pass_embed_budget(chunks)
+  end
+
   defp within_pass_embed_budget(chunks) do
-    budget = Application.get_env(:engram, :max_pass_embed_bytes, @max_pass_embed_bytes)
+    budget = max_pass_embed_bytes()
 
     {chunks, _used} =
       Enum.map_reduce(chunks, 0, fn chunk, used ->
@@ -1716,15 +1735,19 @@ defmodule Engram.Indexing do
     plan = plan_chunks(chunks, rows, content_key, true)
     texts = embed_texts(plan)
     reserve = Keyword.get(opts, :reserve_tokens, fn _tokens -> true end)
-    total = texts |> text_bytes() |> UsageMeters.estimate_tokens()
-    charged = if budget_enabled?(), do: min(changed_tokens(plan, rows), total), else: total
-    plan = Map.put(plan, :charge, {charged, total - charged})
 
     case retained(note, texts) do
       {:ok, vectors} ->
         {true, plan, vectors}
 
       :miss ->
+        # Cache hits are free: only what Voyage will be sent is reserved.
+        plan = with_cache_lookup(plan, texts, Keyword.get(opts, :vector_cache))
+        sent = Map.get_lazy(plan, :embed_bytes, fn -> text_bytes(texts) end)
+        total = UsageMeters.estimate_tokens(sent)
+        charged = if budget_enabled?(), do: min(changed_tokens(plan, rows), total), else: total
+        plan = Map.put(plan, :charge, {charged, total - charged})
+
         if charged > 0 and not reserve.(charged) do
           {false, plan_chunks(chunks, rows, content_key, false), nil}
         else
@@ -1820,16 +1843,113 @@ defmodule Engram.Indexing do
 
     result =
       try do
-        maybe_embed(true, texts)
+        embed_dense(plan, texts)
       catch
         kind, reason ->
           release.()
           :erlang.raise(kind, reason, __STACKTRACE__)
       end
 
-    with {:error, _} <- result, do: release.()
+    # `:embed_continues` embedded (and cached) exactly what it reserved.
+    with {:error, reason} when reason != :embed_continues <- result, do: release.()
     result
   end
+
+  # ---------------------------------------------------------------------------
+  # Vector cache (chunker v5 Task 12, `Engram.Indexing.VectorCache`)
+  # ---------------------------------------------------------------------------
+
+  # Off: `opts` unchanged, and nothing below runs, so the pass is the
+  # pre-cache one byte for byte.
+  defp with_vector_cache(user, note, content_key, dims, opts) do
+    if VectorCache.enabled?() and Keyword.get(opts, :dense, true) do
+      with {:ok, dek} <- Crypto.get_dek(user) do
+        cache = %{
+          user_id: note.user_id,
+          note_id: note.id,
+          dek: dek,
+          content_key: content_key,
+          key_opts: [model: embed_model(), dims: dims, dtype: "float", input_type: "document"]
+        }
+
+        {:ok, Keyword.put(opts, :vector_cache, cache)}
+      end
+    else
+      {:ok, opts}
+    end
+  end
+
+  # ONE query for every dense text of the pass. Misses are deduplicated by
+  # key (a note repeating a section embeds it once) and taken in note order up
+  # to the pass byte budget; any left over make the pass `:continues`.
+  defp with_cache_lookup(plan, _texts, nil), do: plan
+
+  defp with_cache_lookup(plan, texts, cache) do
+    pairs =
+      Enum.map(texts, fn text ->
+        digest = VectorCache.digest(text, cache.key_opts)
+        {VectorCache.key_for_digest(cache.content_key, digest), digest, text}
+      end)
+
+    keys = Enum.map(pairs, &elem(&1, 0))
+    hits = VectorCache.get_many(cache.user_id, cache.dek, keys)
+    budget = max_pass_embed_bytes()
+
+    {send, deferred?, bytes} =
+      pairs
+      |> Enum.reject(fn {key, _d, _t} -> Map.has_key?(hits, key) end)
+      |> Enum.uniq_by(&elem(&1, 0))
+      |> Enum.reduce({[], false, 0}, fn {_k, _d, text} = miss, {acc, deferred?, used} ->
+        size = IO.iodata_length(text)
+
+        if acc != [] and used + size > budget,
+          do: {acc, true, used},
+          else: {[miss | acc], deferred?, used + size}
+      end)
+
+    Map.merge(plan, %{
+      cache:
+        Map.merge(cache, %{keys: keys, hits: hits, send: Enum.reverse(send), continues: deferred?}),
+      embed_bytes: bytes
+    })
+  end
+
+  defp embed_dense(%{cache: cache}, _texts) do
+    with {:ok, fresh} <- embed_misses(cache) do
+      if cache.continues,
+        do: {:error, :embed_continues},
+        else: {:ok, Enum.map(cache.keys, &(Map.get(cache.hits, &1) || Map.fetch!(fresh, &1)))}
+    end
+  end
+
+  defp embed_dense(_plan, texts), do: maybe_embed(true, texts)
+
+  # Each Voyage batch is cached the moment it returns, before Qdrant or the
+  # chunk rows: a 429 on batch 3, a crash before commit or a retry on another
+  # node pays only for the batches not yet cached.
+  defp embed_misses(cache) do
+    cache.send
+    |> batch_texts(fn {_key, _digest, text} -> IO.iodata_length(text) end)
+    |> Enum.reduce_while({:ok, %{}}, fn batch, {:ok, acc} ->
+      with {:ok, vectors} <- do_embed_batch(Enum.map(batch, &elem(&1, 2))),
+           :ok <- same_count(vectors, batch) do
+        entries =
+          Enum.zip_with(batch, vectors, fn {key, digest, _text}, v ->
+            {key, digest, pack_vector(v)}
+          end)
+
+        :ok = VectorCache.put_many(cache.user_id, cache.note_id, cache.dek, entries)
+        {:cont, {:ok, Enum.into(entries, acc, fn {key, _digest, v} -> {key, v} end)}}
+      else
+        other -> {:halt, other}
+      end
+    end)
+  end
+
+  defp same_count(vectors, batch) when length(vectors) == length(batch), do: :ok
+
+  defp same_count(vectors, batch),
+    do: {:error, {:embed_count_mismatch, length(vectors), length(batch)}}
 
   defp text_bytes(texts), do: texts |> Enum.map(&IO.iodata_length/1) |> Enum.sum()
 
@@ -1954,12 +2074,12 @@ defmodule Engram.Indexing do
   # prefix rode straight past this ceiling, one oversized batch per chunk. If
   # that cap ever loosens, this line stops being a safety valve and becomes the
   # bypass.
-  defp batch_texts(texts) do
+  defp batch_texts(texts, size_of \\ &IO.iodata_length/1) do
     Enum.chunk_while(
       texts,
       {[], 0, 0},
       fn text, {batch, count, bytes} ->
-        size = IO.iodata_length(text)
+        size = size_of.(text)
 
         if batch != [] and
              (count + 1 > @embed_batch_size or bytes + size > @embed_batch_bytes) do

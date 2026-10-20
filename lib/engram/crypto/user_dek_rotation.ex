@@ -184,6 +184,7 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- sweep_note_links(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_qdrant(user, old_dek, new_dek),
          :ok <- clear_chunk_context_hmacs(user),
+         :ok <- Engram.Indexing.VectorCache.rotate(user_id, old_dek, new_dek),
          :ok <- final_flip(user, new_dek_version, new_wrapped) do
       Logger.info(
         "T3.7 per-user DEK rotation complete",
