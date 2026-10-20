@@ -14,7 +14,7 @@ defmodule Engram.Notes.FrontmatterAttrs do
   logged.
   """
 
-  alias Engram.Notes.OkfFields
+  alias Engram.Notes.FrontmatterDate
   alias Engram.Vector.FilterId
 
   # First-class keys, their aliases (top-level heads of the nested ones) and
@@ -36,7 +36,7 @@ defmodule Engram.Notes.FrontmatterAttrs do
   def extract(values, filter_key) do
     entries =
       values
-      |> Enum.reject(fn {key, _} -> MapSet.member?(@skip, key) end)
+      |> Enum.reject(fn {key, _} -> MapSet.member?(@skip, String.downcase(key)) end)
       |> Enum.sort_by(&elem(&1, 0))
       |> Enum.flat_map(fn {key, value} -> entries(key, value) end)
 
@@ -59,7 +59,13 @@ defmodule Engram.Notes.FrontmatterAttrs do
   defp entries(key, value), do: scalar(key, value)
 
   defp scalar(key, b) when is_boolean(b), do: [{key, :attr, to_string(b)}]
-  defp scalar(key, n) when is_number(n), do: [{key, :num, n / 1}]
+
+  defp scalar(key, n) when is_number(n) do
+    case number(n) do
+      nil -> scalar(key, Integer.to_string(n))
+      f -> [{key, :num, f}]
+    end
+  end
 
   defp scalar(key, s) when is_binary(s) and s != "" and byte_size(s) <= @max_string do
     case iso_date(s) do
@@ -72,11 +78,22 @@ defmodule Engram.Notes.FrontmatterAttrs do
 
   # Only strings that look like a date pay the parse.
   defp iso_date(<<_y::binary-size(4), ?-, _m::binary-size(2), ?-, _rest::binary>> = s) do
-    case OkfFields.parse_date_value(s, :lenient) do
+    case FrontmatterDate.parse(s, :lenient) do
       nil -> nil
-      dt -> DateTime.to_unix(dt)
+      {unix, _date} -> unix
     end
   end
 
   defp iso_date(_s), do: nil
+
+  @doc """
+  A frontmatter number as a float, or nil. An integer outside the float
+  range (a YAML bignum such as a 400-digit id) is not a number here: `/ 1`
+  would raise and crash the indexing pass. YAML `.inf`/`.nan` arrive as
+  strings and are not numbers either.
+  """
+  @spec number(term()) :: float() | nil
+  def number(n) when is_float(n), do: n
+  def number(n) when is_integer(n) and abs(n) < 1.0e308, do: n / 1
+  def number(_), do: nil
 end

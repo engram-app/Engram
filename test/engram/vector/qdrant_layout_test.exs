@@ -339,12 +339,14 @@ defmodule Engram.Vector.QdrantLayoutTest do
     test "a fresh collection is created with the storage params directly" do
       body = QdrantLayout.create_params(1024)
 
+      # float32 (no datatype) until the v5 payload format is on.
       assert body["vectors"]["dense"] == %{
                "size" => 1024,
                "distance" => "Cosine",
-               "on_disk" => true,
-               "datatype" => "float16"
+               "on_disk" => true
              }
+
+      assert QdrantLayout.create_params(1024, true)["vectors"]["dense"]["datatype"] == "float16"
 
       assert body["sparse_vectors"]["keyword"] == %{
                "modifier" => "idf",

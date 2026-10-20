@@ -9,9 +9,11 @@ defmodule Engram.Notes.FlatFields do
   flat key wins when a note has both. `type` and `tags` are not here: their
   blind indexes already live on the note row (`type_hmac`, `tags_hmac`).
 
-  Dates are ISO dates or datetimes. A bare date is midnight UTC for the flat
-  keys; the nested aliases (`generated.at`, `verified[].at`, `stale_after`)
-  need a full datetime with an offset, as OKF requires. Nothing here writes
+  Dates are parsed by `FrontmatterDate` (ISO and Obsidian forms). A bare date
+  is midnight UTC for the flat keys; the nested aliases (`generated.at`,
+  `verified[].at`, `stale_after`) need a datetime with an offset, as OKF
+  requires. `due`/`expires` keep the day as written. Keys match
+  case-insensitively. Nothing here writes
   back into the user's frontmatter. Values are never logged.
 
   `fm_updated` uses the v5 precedence (`updated` first). The older
@@ -23,6 +25,7 @@ defmodule Engram.Notes.FlatFields do
   alias Engram.Crypto.Envelope
   alias Engram.Notes.Frontmatter
   alias Engram.Notes.FrontmatterAttrs
+  alias Engram.Notes.FrontmatterDate
   alias Engram.Notes.OkfFields
   alias Engram.Vector.FilterId
 
@@ -102,7 +105,8 @@ defmodule Engram.Notes.FlatFields do
 
   defp from_values(values, _filter_key) when values == %{}, do: @empty
 
-  defp from_values(v, fk) do
+  defp from_values(values, fk) do
+    v = lower_keys(values)
     {verified_by, verified_at} = latest_verified(v["verified"])
 
     status = str(v["status"])
@@ -122,12 +126,12 @@ defmodule Engram.Notes.FlatFields do
       rev_by_hmac: hmac(fk, reviewed_by),
       proj_hmac: hmac(fk, project),
       src_hmac: Enum.map(source, &FilterId.value_hmac(fk, &1)),
-      fm_updated: unix(OkfFields.first_date(v, @updated)),
-      fm_created: unix(OkfFields.first_date(v, @created)),
-      fm_reviewed: unix(OkfFields.parse_date_value(v["reviewed"], :lenient)) || verified_at,
-      fm_expires: unix(OkfFields.first_date(v, @expires)),
-      fm_due: unix(OkfFields.parse_date_value(v["due"], :lenient)),
-      fm_priority: if(is_number(v["priority"]), do: v["priority"] / 1)
+      fm_updated: instant(first_date(v, @updated)),
+      fm_created: instant(first_date(v, @created)),
+      fm_reviewed: instant(FrontmatterDate.parse(v["reviewed"], :lenient)) || verified_at,
+      fm_expires: written_day(first_date(v, @expires)),
+      fm_due: written_day(FrontmatterDate.parse(v["due"], :lenient)),
+      fm_priority: FrontmatterAttrs.number(v["priority"])
     })
   end
 
@@ -197,7 +201,7 @@ defmodule Engram.Notes.FlatFields do
   # valid strict `at` answers both aliases, else the last entry's `by`.
   defp latest_verified(list) when is_list(list) do
     entries =
-      for %{} = e <- list, do: {str(e["by"]), unix(OkfFields.parse_date_value(e["at"], :strict))}
+      for %{} = e <- list, do: {str(e["by"]), instant(FrontmatterDate.parse(e["at"], :strict))}
 
     case Enum.filter(entries, &elem(&1, 1)) do
       [] -> {entries |> List.last() |> then(&(&1 && elem(&1, 0))), nil}
@@ -224,6 +228,32 @@ defmodule Engram.Notes.FlatFields do
   defp hmac(_fk, nil), do: nil
   defp hmac(fk, s), do: FilterId.value_hmac(fk, s)
 
-  defp unix(nil), do: nil
-  defp unix(%DateTime{} = dt), do: DateTime.to_unix(dt)
+  defp first_date(v, aliases),
+    do:
+      Enum.find_value(aliases, fn {path, mode} ->
+        FrontmatterDate.parse(dig_path(v, path), mode)
+      end)
+
+  defp dig_path(v, [key]), do: v[key]
+  defp dig_path(v, [a, b]), do: dig(v, [a, b])
+
+  defp instant(nil), do: nil
+  defp instant({unix, _date}), do: unix
+
+  # Date-only fields keep the day as WRITTEN, stored as that day's midnight
+  # UTC so `div(fm_due, 86_400)` is the payload's day number.
+  defp written_day(nil), do: nil
+  defp written_day({_unix, date}), do: FrontmatterDate.day(date) * 86_400
+
+  # Keys match case-insensitively (`Status:` is `status`), at every level so
+  # the nested aliases (`Generated: {By: x}`) match too. When two keys fold
+  # together, the one already written in lowercase wins.
+  defp lower_keys(%{} = map) do
+    map
+    |> Enum.sort_by(fn {k, _} -> k == String.downcase(k) end)
+    |> Map.new(fn {k, val} -> {String.downcase(k), lower_keys(val)} end)
+  end
+
+  defp lower_keys(list) when is_list(list), do: Enum.map(list, &lower_keys/1)
+  defp lower_keys(other), do: other
 end

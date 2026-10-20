@@ -125,4 +125,53 @@ defmodule Engram.Notes.FlatFieldsTest do
     got = extract("mood: calm\nstatus: draft\n")
     assert got.attrs == [%{k: FilterId.key_hmac(@fk, "mood"), v: v("calm")}]
   end
+
+  describe "review round 1" do
+    test "a 400-digit integer never raises and is not numeric" do
+      big = String.duplicate("9", 400)
+      got = extract("priority: #{big}\nid: #{big}\nsmall: 7\n")
+      assert got.fm_priority == nil
+      assert got.nums == [%{k: FilterId.key_hmac(@fk, "small"), n: 7.0}]
+    end
+
+    test ".inf and .nan never raise and are not numeric" do
+      got = extract("priority: .inf\nratio: .nan\nneg: -.inf\n")
+      assert got.fm_priority == nil
+      assert got.nums == []
+    end
+
+    test "Obsidian datetimes parse; du and ex use the written day" do
+      got =
+        extract(
+          "due: 2026-11-01T23:00-08:00\nexpires: 2026-11-02 10:00\nreviewed: 2026-11-03T09:30\n"
+        )
+
+      assert got.fm_due == unix(~U[2026-11-01 00:00:00Z])
+      assert got.fm_expires == unix(~U[2026-11-02 00:00:00Z])
+      assert got.fm_reviewed == unix(~U[2026-11-03 09:30:00Z])
+    end
+
+    test "a long-tail Obsidian datetime is a date, not a string" do
+      got = extract("launch: 2026-11-01T10:00\n")
+
+      assert got.dates == [
+               %{k: FilterId.key_hmac(@fk, "launch"), t: unix(~U[2026-11-01 10:00:00Z])}
+             ]
+
+      assert got.attrs == []
+    end
+
+    test "keys match case-insensitively; the exact lowercase key wins" do
+      got = extract("Status: draft\nPROJECT: apollo\n")
+      assert got.status == "draft"
+      assert got.project == "apollo"
+      assert got.attrs == []
+
+      assert extract("Status: draft\nstatus: stable\n").status == "stable"
+    end
+
+    test "nested alias keys match case-insensitively too" do
+      assert extract("Generated:\n  By: agent\n").author == "agent"
+    end
+  end
 end

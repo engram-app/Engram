@@ -277,17 +277,16 @@ defmodule Engram.Vector.QdrantLayout do
   def on_disk_keys, do: ["vectors", "sparse_vectors"]
 
   @doc "Create-collection body: the desired storage params plus shape."
-  @spec create_params(pos_integer()) :: map()
-  def create_params(dims) do
-    # float16 halves dense storage (Task 15.1). Only a NEW collection gets it:
-    # `diff/2` never compares the datatype, so an existing float32 collection
-    # is not drift and boot never PATCHes it (Qdrant cannot convert in place).
-    put_in(@storage, ["vectors", "dense"], %{
-      "size" => dims,
-      "distance" => "Cosine",
-      "on_disk" => true,
-      "datatype" => "float16"
-    })
+  @spec create_params(pos_integer(), boolean()) :: map()
+  def create_params(dims, float16? \\ false) do
+    dense = %{"size" => dims, "distance" => "Cosine", "on_disk" => true}
+
+    # float16 halves dense storage (Task 15.1), only with the v5 payload
+    # format on. Only a NEW collection gets it: `diff/2` never compares the
+    # datatype, so an existing float32 collection is not drift and boot never
+    # PATCHes it (Qdrant cannot convert in place).
+    dense = if float16?, do: Map.put(dense, "datatype", "float16"), else: dense
+    put_in(@storage, ["vectors", "dense"], dense)
   end
 
   @doc """

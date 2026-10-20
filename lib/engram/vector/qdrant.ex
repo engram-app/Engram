@@ -44,6 +44,9 @@ defmodule Engram.Vector.Qdrant do
   # `PayloadKeys.index_fields/0`, and both sets live until the pass drops the
   # legacy fields (Task 18.1).
   @payload_index_fields ~w(user_id vault_id path_hmac type_hmac folder_hmac tags_hmac)
+  # Created only while the v5 format is off, so a new collection is exactly
+  # what main creates until the flag flips.
+  @legacy_only_index_fields ~w(note_id)
 
   # OKF frontmatter dates are stored plaintext (see build_prepared/6) so
   # Qdrant can range-filter on them; they need an integer payload index
@@ -300,7 +303,7 @@ defmodule Engram.Vector.Qdrant do
   defp create_collection(col, dims) do
     body =
       dims
-      |> QdrantLayout.create_params()
+      |> QdrantLayout.create_params(v5_payload_format?())
       |> then(fn b ->
         if binary_quantization_enabled?() do
           Map.put(b, "quantization_config", %{"binary" => %{"always_ram" => true}})
@@ -339,7 +342,8 @@ defmodule Engram.Vector.Qdrant do
   # strict mode 400'd every folder, tag, type and date filter.
   #
   defp ensure_payload_indexes(col, indexed) do
-    keyword = Enum.map(@payload_index_fields, &{&1, "keyword"})
+    legacy_only = if v5_payload_format?(), do: [], else: @legacy_only_index_fields
+    keyword = Enum.map(@payload_index_fields ++ legacy_only, &{&1, "keyword"})
     integer = Enum.map(@integer_payload_index_fields, &{&1, "integer"})
     v5 = if v5_payload_format?(), do: PayloadKeys.index_fields(), else: []
 
@@ -1060,6 +1064,28 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
+  REPLACE the whole payload of the listed points (`PUT /points/payload`).
+  The v5 refresh path: a v5 payload omits absent and default keys, so a
+  merge (`set_payload/3`) would leave a removed key on the point forever.
+  Empty `point_ids` is a no-op.
+  """
+  def overwrite_payload(col \\ nil, point_ids, payload)
+  def overwrite_payload(_col, [], _payload), do: :ok
+
+  def overwrite_payload(col, point_ids, payload) when is_list(point_ids) and is_map(payload) do
+    col = col || collection()
+    opts = write_opts(%{points: point_ids, payload: payload})
+
+    instrument(:set_payload, fn ->
+      case Req.put("#{base_url()}/collections/#{col}/points/payload", opts) do
+        {:ok, %{status: 200, body: body}} -> applied(body)
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
+  @doc """
   A different payload per point (`[{id, payload}]`), merged like
   `set_payload/3`, in two requests whatever the count: one `/points/batch`
   of set_payload ops without `wait`, then one waited barrier. Qdrant runs a
@@ -1545,7 +1571,9 @@ defmodule Engram.Vector.Qdrant do
   # filters. It gates the indexes because their disk footprint is unmeasured:
   # 20 more payload indexes per collection SIGBUSed CI's 2 GB tmpfs Qdrant,
   # and prod's disk is tight. Measure on dev 1.19.2, then flip the default.
-  defp v5_payload_format?, do: ServiceConfig.get(:v5_payload_format, false)
+  @doc "Whether the v5 payload format is on (see the comment above)."
+  @spec v5_payload_format?() :: boolean()
+  def v5_payload_format?, do: ServiceConfig.get(:v5_payload_format, false) == true
   defp legacy_filter_fields?, do: ServiceConfig.get(:legacy_filter_fields, true)
 
   @doc """

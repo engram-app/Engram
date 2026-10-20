@@ -11,11 +11,13 @@ defmodule Engram.Vector.QdrantCollectionTest do
     %{bypass: bypass}
   end
 
-  test "with the v5 format off, no v5 index is created", %{bypass: bypass} do
+  test "with the v5 format off, a new collection is exactly main's", %{bypass: bypass} do
     ServiceConfig.put_override(:v5_payload_format, false)
     test_pid = self()
 
     Bypass.expect_once(bypass, "PUT", "/collections/c1", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      refute Map.has_key?(Jason.decode!(body)["vectors"]["dense"], "datatype")
       Plug.Conn.send_resp(conn, 200, "{}")
     end)
 
@@ -27,11 +29,15 @@ defmodule Engram.Vector.QdrantCollectionTest do
 
     assert :ok = Qdrant.ensure_collection("c1", 1024)
 
-    # The 6 legacy keyword + 2 integer indexes (attributes are defined below).
-    for _ <- 1..8,
-        do: assert_receive({:index, _})
+    # The 6 legacy keyword, note_id and 2 integer indexes (main's set).
+    fields =
+      for _ <- 1..9 do
+        assert_receive {:index, field}
+        field
+      end
 
     refute_receive {:index, _}
+    assert "note_id" in fields
   end
 
   # All tenant-scoped filters target payload fields that Qdrant Cloud
