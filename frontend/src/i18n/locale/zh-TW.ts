@@ -914,6 +914,10 @@ export default {
 	"Why {tool} can't be connected": "為什麼 {tool} 無法連接",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"並非完整清單，如果您的工具不在這裡，請選擇 {client}。",
+	"Customer insights": "客戶洞察",
+	"User ID": "用戶 ID",
+	"Show timeline": "顯示時間軸",
+	"Failed to load the report.": "載入報告失敗。",
 	Account: "帳戶",
 	"Manage your profile, password, and account.": "管理你的個人資料、密碼與帳號。",
 	"Manage your profile, security, and active sessions.": "管理您的個人資料、安全設定和活躍會話。",

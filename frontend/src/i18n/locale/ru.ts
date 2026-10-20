@@ -1037,6 +1037,10 @@ export default {
 	"Why {tool} can't be connected": "Почему {tool} не может быть подключено",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Это не полный список, выберите {client}, если вашего инструмента здесь нет.",
+	"Customer insights": "Информация о клиентах",
+	"User ID": "Идентификатор пользователя",
+	"Show timeline": "Показать временную шкалу",
+	"Failed to load the report.": "Не удалось загрузить отчёт.",
 	Account: "Учётная запись",
 	"Manage your profile, password, and account.": "Управляйте профилем, паролем и учётной записью.",
 	"Manage your profile, security, and active sessions.":

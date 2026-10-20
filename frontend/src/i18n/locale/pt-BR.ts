@@ -992,6 +992,10 @@ export default {
 	"Why {tool} can't be connected": "Por que {tool} não pode ser conectado",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Lista não exaustiva, escolha {client} se a sua não estiver aqui.",
+	"Customer insights": "Insights do cliente",
+	"User ID": "ID do usuário",
+	"Show timeline": "Mostrar linha do tempo",
+	"Failed to load the report.": "Falha ao carregar o relatório.",
 	Account: "Conta",
 	"Manage your profile, password, and account.": "Gerencie seu perfil, sua senha e sua conta.",
 	"Manage your profile, security, and active sessions.":

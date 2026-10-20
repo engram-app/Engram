@@ -940,6 +940,10 @@ export default {
 	"Why {tool} can't be connected": "{tool} 연결이 안 되는 이유",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"완전한 목록은 아니지만, 목록에 없으면 {client}을(를) 선택하세요.",
+	"Customer insights": "고객 인사이트",
+	"User ID": "사용자 ID",
+	"Show timeline": "타임라인 보기",
+	"Failed to load the report.": "보고서 로드 실패.",
 	Account: "계정",
 	"Manage your profile, password, and account.": "프로필, 비밀번호, 계정을 관리하세요.",
 	"Manage your profile, security, and active sessions.": "프로필, 보안 및 활성 세션을 관리하세요.",

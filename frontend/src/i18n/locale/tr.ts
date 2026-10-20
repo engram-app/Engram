@@ -958,6 +958,10 @@ export default {
 	"Why {tool} can't be connected": "{tool}'nin neden bağlanamadığı",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Kapsamlı bir liste değil, listenizde yoksa {client} seçin.",
+	"Customer insights": "Müşteri bilgileri",
+	"User ID": "Kullanıcı kimliği",
+	"Show timeline": "Zaman çizelgesini göster",
+	"Failed to load the report.": "Rapor yüklenemedi.",
 	Account: "Hesap",
 	"Manage your profile, password, and account.": "Profilinizi, şifrenizi ve hesabınızı yönetin.",
 	"Manage your profile, security, and active sessions.":
