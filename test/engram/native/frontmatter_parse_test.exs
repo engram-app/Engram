@@ -323,11 +323,64 @@ defmodule Engram.Native.FrontmatterParseTest do
   # Where the NIF declines, parse/1 IS parse_yaml/1, so only the blocks it
   # answers need the (slow) oracle. Returns the mismatches.
   defp mismatches(blocks) do
-    for b <- blocks,
-        Engram.Native.frontmatter_parse(b) != nil,
-        Frontmatter.parse(b) != Frontmatter.parse_yaml(b) or
-          Frontmatter.parse_for_ingest(b) != Frontmatter.parse_for_ingest_yaml(b),
-        do: b
+    report_if_stalled(fn ->
+      for b <- blocks,
+          Engram.Native.frontmatter_parse(b) != nil,
+          Frontmatter.parse(b) != Frontmatter.parse_yaml(b) or
+            Frontmatter.parse_for_ingest(b) != Frontmatter.parse_for_ingest_yaml(b),
+          do: b
+    end)
+  end
+
+  # The golden-corpus test usually takes 7-10 s. One CI run (2026-10-19,
+  # unit-tests job 118031199807) timed out at 60 s with the test blocked in
+  # :application_controller: YamlElixir calls Application.start(:yamerl) on
+  # every read, so each oracle parse is two calls into that VM-wide process.
+  # What held it is unknown. If a run passes 45 s, print the controller's own
+  # state and who is queued on it, so the next stall names its cause.
+  defp report_if_stalled(fun) do
+    test = self()
+
+    watchdog =
+      spawn(fn ->
+        receive do
+          :done -> :ok
+        after
+          45_000 -> IO.puts(:stderr, "YAML oracle stall report: " <> stall_report(test))
+        end
+      end)
+
+    try do
+      fun.()
+    after
+      send(watchdog, :done)
+    end
+  end
+
+  defp stall_report(test) do
+    info = [:registered_name, :status, :message_queue_len, :current_stacktrace]
+    controller = Process.whereis(:application_controller)
+
+    longest_queues =
+      Process.list()
+      |> Enum.map(&Process.info(&1, info))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.sort_by(& &1[:message_queue_len], :desc)
+      |> Enum.take(5)
+
+    inspect(
+      %{
+        run_queue_lengths: :erlang.statistics(:run_queue_lengths),
+        controller: Process.info(controller, info),
+        controller_first_messages:
+          controller |> Process.info(:messages) |> elem(1) |> Enum.take(5),
+        test: Process.info(test, [:current_stacktrace]),
+        longest_queues: longest_queues
+      },
+      pretty: true,
+      limit: 100,
+      printable_limit: 300
+    )
   end
 
   @tag timeout: :infinity
