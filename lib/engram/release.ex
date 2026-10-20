@@ -332,6 +332,8 @@ defmodule Engram.Release do
     _ = load_app()
 
     for repo <- repos() do
+      # It replays every migration when it fires: same session as migrate/0.
+      :ok = use_migrator_session(repo)
       {:ok, _, _} = Ecto.Migrator.with_repo(repo, &do_reset_baseline/1)
     end
 
