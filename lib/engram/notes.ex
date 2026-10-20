@@ -30,7 +30,8 @@ defmodule Engram.Notes do
     OkfFields,
     PathSanitizer,
     Revisions,
-    TagsTerm
+    TagsTerm,
+    VaultScanCache
   }
 
   alias Engram.Repo
@@ -4931,40 +4932,12 @@ defmodule Engram.Notes do
   @doc """
   Returns unique tags across all non-deleted notes for a user.
 
-  Phase B.3: tags live only in `tags_ciphertext` (envelope-encrypted JSON list).
-  Each note's tags are decrypted Elixir-side and then deduplicated. Filters
-  out notes with no tags via `tags_hmac != []` so we skip the decrypt round.
+  The names of `list_tags_with_counts/2`, which it shares a cache entry with.
   """
   @spec list_tags(map(), map()) :: {:ok, [String.t()]}
   def list_tags(user, vault) do
-    case Crypto.dek_filter_key(user) do
-      {:ok, _filter_key} ->
-        {:ok, dek} = Crypto.get_dek(user)
-
-        {:ok, rows} =
-          Repo.with_tenant(user.id, fn ->
-            Repo.all(
-              from(n in scoped_live(user, vault),
-                where: not is_nil(n.tags_ciphertext) and n.tags_hmac != ^[],
-                select: {n.id, n.dek_version, n.tags_ciphertext, n.tags_nonce}
-              )
-            )
-          end)
-
-        tags =
-          rows
-          |> Enum.flat_map(fn {id, dv, ct, nonce} ->
-            decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :tags, id, dv))
-            |> TagsTerm.decode!()
-          end)
-          |> Enum.uniq()
-          |> Enum.sort()
-
-        {:ok, tags}
-
-      {:error, :no_dek} ->
-        {:ok, []}
-    end
+    {:ok, counts} = list_tags_with_counts(user, vault)
+    {:ok, Enum.map(counts, & &1.name)}
   end
 
   @doc """
@@ -4985,8 +4958,8 @@ defmodule Engram.Notes do
   distinct types — `DISTINCT ON` collapses to one representative row per type
   in the database (riding the existing `{user_id, vault_id, type_hmac}` index)
   and only those get decrypted. A 10k-note vault with a dozen types costs a
-  dozen decrypts, not ten thousand. Tags cannot do this: `tags_hmac` is a
-  list, so there is no one-row-per-value to collapse to.
+  dozen decrypts, not ten thousand. The DISTINCT ON still reads every live
+  row, so the answer is cached per vault seq (`VaultScanCache`).
   """
   @spec list_types(map(), map()) :: {:ok, [String.t()]}
   def list_types(user, vault) do
@@ -4994,23 +4967,22 @@ defmodule Engram.Notes do
       {:ok, _filter_key} ->
         {:ok, dek} = Crypto.get_dek(user)
 
-        {:ok, rows} =
-          Repo.with_tenant(user.id, fn ->
-            Repo.all(
-              from(n in scoped_live(user, vault),
-                where: not is_nil(n.type_hmac) and not is_nil(n.type_ciphertext),
-                distinct: [asc: n.type_hmac],
-                select: {n.id, n.dek_version, n.type_ciphertext, n.type_nonce}
-              )
+        raw = fn ->
+          Repo.all(
+            from(n in scoped_live(user, vault),
+              where: not is_nil(n.type_hmac) and not is_nil(n.type_ciphertext),
+              distinct: [asc: n.type_hmac],
+              select: {n.id, n.dek_version, n.type_ciphertext, n.type_nonce}
             )
-          end)
+          )
+        end
 
         # Enum.uniq/1 is NOT redundant after the DISTINCT ON. The hmac is keyed
         # by the user's filter key, so rows written either side of a filter-key
         # rotation carry different hmacs for the same logical type and survive
         # the database dedup as separate rows. Normalising and uniq'ing the
         # plaintext collapses them.
-        types =
+        finish = fn rows ->
           rows
           |> Enum.map(fn {id, dv, ct, nonce} ->
             decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :type, id, dv))
@@ -5018,8 +4990,9 @@ defmodule Engram.Notes do
           end)
           |> Enum.uniq()
           |> Enum.sort()
+        end
 
-        {:ok, types}
+        {:ok, VaultScanCache.read(user, vault, :types, raw, finish)}
 
       {:error, :no_dek} ->
         {:ok, []}
@@ -5164,13 +5137,14 @@ defmodule Engram.Notes do
     # across CPU work). No DEK means no notes, as in list_folders_with_counts/2.
     case Crypto.get_dek(user) do
       {:ok, dek} ->
-        {counts, markers} =
+        {seq, counts, markers} =
           Repo.with_tenant!(user.id, fn ->
-            {raw_folder_count_rows(user, vault), raw_folder_marker_rows(user, vault)}
+            seq = Engram.Vaults.raw_current_seq(vault.id)
+            {seq, raw_folder_counts_at(user, vault, seq), raw_folder_marker_rows(user, vault)}
           end)
 
         combine_folders_payload(
-          decrypt_folder_count_rows(counts, dek),
+          folder_counts_at(vault, seq, counts, dek),
           decrypt_folder_marker_rows(markers, dek)
         )
 
@@ -5320,9 +5294,12 @@ defmodule Engram.Notes do
   @doc """
   Returns tags with counts across all non-deleted notes for a user.
 
-  Phase B.3: tags are envelope-encrypted per note. Decrypts each note's
-  tags Elixir-side, then aggregates counts. The Postgres `unnest()` /
-  `GROUP BY tag` shortcut is gone with the plaintext column.
+  Tags are envelope-encrypted per note, so the counting happens here, not in
+  SQL. But `tags_hmac` is the note's tag list hashed in order, so notes with
+  the same hmac list hold the same tags: Postgres groups by it, and one
+  representative per distinct tag set is decrypted, weighted by how many
+  notes share it. A vault where most notes repeat a few tag sets costs a few
+  decrypts, not one per note. Cached per vault seq (`VaultScanCache`).
   """
   @spec list_tags_with_counts(map(), map()) :: {:ok, [%{name: String.t(), count: integer()}]}
   def list_tags_with_counts(user, vault) do
@@ -5330,31 +5307,54 @@ defmodule Engram.Notes do
       {:ok, _filter_key} ->
         {:ok, dek} = Crypto.get_dek(user)
 
-        {:ok, rows} =
-          Repo.with_tenant(user.id, fn ->
-            Repo.all(
-              from(n in scoped_live(user, vault),
-                where: not is_nil(n.tags_ciphertext) and n.tags_hmac != ^[],
-                select: {n.id, n.dek_version, n.tags_ciphertext, n.tags_nonce}
-              )
-            )
-          end)
-
         counts =
-          rows
-          |> Enum.flat_map(fn {id, dv, ct, nonce} ->
-            decrypt_envelope!(ct, nonce, dek, row_aad(:notes, :tags, id, dv))
-            |> TagsTerm.decode!()
-          end)
-          |> Enum.frequencies()
-          |> Enum.map(fn {name, count} -> %{name: name, count: count} end)
-          |> Enum.sort_by(& &1.name)
+          VaultScanCache.read(
+            user,
+            vault,
+            :tag_counts,
+            fn ->
+              Repo.all(
+                from(n in scoped_live(user, vault),
+                  where: not is_nil(n.tags_ciphertext) and n.tags_hmac != ^[],
+                  group_by: n.tags_hmac,
+                  select: {
+                    fragment(
+                      "any_value(ROW(?, ?, ?, ?))",
+                      n.id,
+                      n.dek_version,
+                      n.tags_ciphertext,
+                      n.tags_nonce
+                    ),
+                    count()
+                  }
+                )
+              )
+            end,
+            &tag_counts_from_sets(&1, dek)
+          )
 
         {:ok, counts}
 
       {:error, :no_dek} ->
         {:ok, []}
     end
+  end
+
+  # One `{representative row, notes sharing its tag set}` per distinct
+  # tags_hmac. Two hmac lists can still hold the same tags (written either
+  # side of a filter-key rotation), so the sum is over plaintext names.
+  defp tag_counts_from_sets(sets, dek) do
+    sets
+    |> Enum.reduce(%{}, fn {{id, dv, ct, nonce}, notes}, acc ->
+      # A record's fields skip Ecto's type casting, so the uuid is raw bytes.
+      aad = row_aad(:notes, :tags, Ecto.UUID.load!(id), dv)
+
+      decrypt_envelope!(ct, nonce, dek, aad)
+      |> TagsTerm.decode!()
+      |> Enum.reduce(acc, fn name, acc -> Map.update(acc, name, notes, &(&1 + notes)) end)
+    end)
+    |> Enum.map(fn {name, count} -> %{name: name, count: count} end)
+    |> Enum.sort_by(& &1.name)
   end
 
   @doc """
@@ -5366,8 +5366,17 @@ defmodule Engram.Notes do
     case Crypto.dek_filter_key(user) do
       {:ok, _filter_key} ->
         {:ok, dek} = Crypto.get_dek(user)
-        rows = Repo.with_tenant!(user.id, fn -> raw_folder_count_rows(user, vault) end)
-        {:ok, decrypt_folder_count_rows(rows, dek)}
+
+        counts =
+          VaultScanCache.read(
+            user,
+            vault,
+            :folder_counts,
+            fn -> raw_folder_count_rows(user, vault) end,
+            &decrypt_folder_count_rows(&1, dek)
+          )
+
+        {:ok, counts}
 
       {:error, :no_dek} ->
         {:ok, []}
@@ -5421,6 +5430,30 @@ defmodule Engram.Notes do
       # A record's fields skip Ecto's type casting, so the uuid is raw bytes.
       %{id: Ecto.UUID.load!(id), dv: dv, ct: ct, nonce: nonce, count: count}
     end)
+  end
+
+  @doc """
+  The folder counts at `seq` (read by the caller in the same transaction):
+  `{:cached, counts}` from `VaultScanCache`, else `{:rows, raw rows}` for
+  `folder_counts_at/4`. MUST run inside the caller's `Repo.with_tenant/2`.
+  """
+  @spec raw_folder_counts_at(map(), map(), integer()) :: {:cached, [map()]} | {:rows, [map()]}
+  def raw_folder_counts_at(user, vault, seq) do
+    case VaultScanCache.get(vault.id, seq, :folder_counts) do
+      {:ok, counts} -> {:cached, counts}
+      :miss -> {:rows, raw_folder_count_rows(user, vault)}
+    end
+  end
+
+  @doc "Decrypts (and caches) what `raw_folder_counts_at/3` returned. No DB access."
+  @spec folder_counts_at(map(), integer(), {:cached, [map()]} | {:rows, [map()]}, binary()) ::
+          [%{folder: String.t(), count: integer()}]
+  def folder_counts_at(_vault, _seq, {:cached, counts}, _dek), do: counts
+
+  def folder_counts_at(vault, seq, {:rows, rows}, dek) do
+    counts = decrypt_folder_count_rows(rows, dek)
+    VaultScanCache.put(vault.id, seq, :folder_counts, counts)
+    counts
   end
 
   @doc "Decrypts `raw_folder_count_rows/2`'s rows. Pure — no DB access."
@@ -5628,27 +5661,70 @@ defmodule Engram.Notes do
     exists?
   end
 
-  # Fetch + decrypt every live row in the vault for a folder-cascade scan
-  # (Phase B.3: plaintext `folder` is gone, so prefix filtering happens in
-  # Elixir over decrypted rows). Markers hydrate their single folder
-  # envelope; real notes go through the parallel batch decryptor instead
-  # of one-at-a-time. `:meta` skips the content column entirely for flows
-  # that never rewrite content (delete cascades).
-  # Always meta-projected (#863): both callers (folder rename + folder-delete
-  # cascade) only need path/folder/kind; content decrypt is targeted per-id
-  # where actually required (fetch_v1_contents).
-  defp fetch_decrypted_live_rows(user, vault) do
-    query = from(n in scoped_live(user, vault), select: struct(n, @note_meta_fields))
-
-    rows = Repo.with_tenant!(user.id, fn -> Repo.all(query) end)
+  # Fetch + decrypt the live rows in `folders` or under them, at any depth,
+  # for a folder cascade (rename, move, delete). Plaintext `folder` is gone
+  # (Phase B.3), so the prefix match runs on decrypted folders: but on ONE
+  # row per distinct folder_hmac (grouped in Postgres), and then only the
+  # rows in the matching folders are fetched, by the folder_hmac index. A
+  # rename used to fetch and decrypt every row of the vault.
+  # Markers hydrate their single folder envelope; real notes go through the
+  # parallel batch decryptor. Always meta-projected (#863): callers only need
+  # path/folder/kind; content decrypt is targeted per-id where actually
+  # required (fetch_v1_contents).
+  defp fetch_decrypted_live_rows(user, vault, folders) do
     {:ok, dek} = Crypto.get_dek(user)
+
+    hmacs = folder_hmacs_under(user, vault, folders, dek)
+
+    rows =
+      Repo.with_tenant!(user.id, fn ->
+        Repo.all(
+          from(n in scoped_live(user, vault),
+            where: n.folder_hmac in ^hmacs,
+            select: struct(n, @note_meta_fields)
+          )
+        )
+      end)
 
     # Marker rows have nil path_ciphertext, so the standard decrypt path
     # short-circuits before unwrapping the folder envelope — they go
     # through the dedicated hydrate path instead.
     {markers, real} = Enum.split_with(rows, &(&1.kind == "folder"))
-    Enum.map(markers, &hydrate_folder_marker(&1, dek)) ++ decrypt_or_raise!(real, user)
+
+    (Enum.map(markers, &hydrate_folder_marker(&1, dek)) ++ decrypt_or_raise!(real, user))
+    |> Enum.filter(&folder_in?(&1.folder || "", folders))
   end
+
+  # The folder_hmacs of the vault's live rows whose folder is one of
+  # `folders` or under one. Every folder_hmac, not just this filter key's: a
+  # filter-key rotation leaves rows with another hmac for the same folder.
+  defp folder_hmacs_under(user, vault, folders, dek) do
+    Repo.with_tenant!(user.id, fn ->
+      Repo.all(
+        from(n in scoped_live(user, vault),
+          group_by: n.folder_hmac,
+          select:
+            {n.folder_hmac,
+             fragment(
+               "any_value(ROW(?, ?, ?, ?))",
+               n.id,
+               n.dek_version,
+               n.folder_ciphertext,
+               n.folder_nonce
+             )}
+        )
+      )
+    end)
+    |> Enum.filter(fn {_hmac, {id, dv, ct, nonce}} ->
+      # A record's fields skip Ecto's type casting, so the uuid is raw bytes.
+      aad = row_aad(:notes, :folder, Ecto.UUID.load!(id), dv)
+      folder_in?(decrypt_envelope!(ct, nonce, dek, aad), folders)
+    end)
+    |> Enum.map(&elem(&1, 0))
+  end
+
+  defp folder_in?(folder, folders),
+    do: folder in folders or Enum.any?(folders, &String.starts_with?(folder, &1 <> "/"))
 
   # Targeted content fetch for legacy (pre-AAD) rows in a folder rename —
   # the only rows whose rename path re-encrypts content. Returns
@@ -5733,7 +5809,7 @@ defmodule Engram.Notes do
     # (full AAD rebind, needs content + recomputed title) fetch content,
     # targeted by id below. `rows` (batch-move path) reuses a scan the caller
     # already holds instead of re-scanning per marker.
-    decrypted = rows || fetch_decrypted_live_rows(user, vault)
+    decrypted = rows || fetch_decrypted_live_rows(user, vault, [old_folder])
 
     notes =
       Enum.filter(decrypted, fn n ->
@@ -6123,14 +6199,7 @@ defmodule Engram.Notes do
 
     case Crypto.get_dek(user) do
       {:ok, _dek} ->
-        prefixes = Enum.map(folders, &(&1 <> "/"))
-
-        {:ok,
-         fetch_decrypted_live_rows(user, vault)
-         |> Enum.filter(fn r ->
-           f = r.folder || ""
-           f in folders or Enum.any?(prefixes, &String.starts_with?(f, &1))
-         end)}
+        {:ok, fetch_decrypted_live_rows(user, vault, folders)}
 
       {:error, :no_dek} ->
         {:ok, []}
@@ -6454,14 +6523,14 @@ defmodule Engram.Notes do
   # `target_folder` (a path), rolling the whole batch back on the first failure.
   #
   # ONE shared vault scan for the whole batch (mirrors do_delete_folders/3) —
-  # the old shape re-ran fetch_decrypted_live_rows (full-vault fetch + decrypt)
+  # the old shape re-ran fetch_decrypted_live_rows (a vault fetch + decrypt)
   # inside EVERY marker's rename cascade. The scan is advanced IN MEMORY after
   # each successful rename so a batch containing a parent and its own
   # descendant still filters against post-move state (the per-marker re-scan
   # got that for free by re-reading the DB inside the same transaction).
   defp reduce_move_folders(user, vault, marker_ids, target_folder, dek) do
-    with :ok <- resolve_move_folders(user, vault, marker_ids, target_folder, dek) do
-      do_reduce_move_folders(user, vault, marker_ids, target_folder, dek)
+    with {:ok, sources} <- resolve_move_folders(user, vault, marker_ids, target_folder, dek) do
+      do_reduce_move_folders(user, vault, marker_ids, target_folder, dek, sources)
     end
   end
 
@@ -6479,8 +6548,9 @@ defmodule Engram.Notes do
   # detected here, with nothing moved. What genuinely cannot be pre-checked is a
   # path collision that only exists once earlier folders in the batch have
   # moved; that still halts mid-batch, and the folders already moved stay moved.
+  # Returns the markers' folders, which bound the batch's shared scan.
   defp resolve_move_folders(user, vault, marker_ids, target_folder, dek) do
-    Enum.reduce_while(marker_ids, :ok, fn id, :ok ->
+    Enum.reduce_while(marker_ids, {:ok, []}, fn id, {:ok, sources} ->
       case get_folder_marker_by_id(user, vault, id) do
         {:ok, marker} ->
           source = hydrate_folder_marker(marker, dek).folder
@@ -6488,7 +6558,7 @@ defmodule Engram.Notes do
           if target_folder == source or String.starts_with?(target_folder, source <> "/") do
             {:halt, {:error, {:cycle, id}}}
           else
-            {:cont, :ok}
+            {:cont, {:ok, [source | sources]}}
           end
 
         {:error, :not_found} ->
@@ -6497,8 +6567,12 @@ defmodule Engram.Notes do
     end)
   end
 
-  defp do_reduce_move_folders(user, vault, marker_ids, target_folder, dek) do
-    rows = fetch_decrypted_live_rows(user, vault)
+  # The scan holds every row under any marker's folder as resolved. A marker
+  # that sits under an earlier one in the batch moves with it in memory
+  # (advance_renamed_rows/3), and its rows were already under the earlier
+  # folder, so later lookups by its current folder still find them.
+  defp do_reduce_move_folders(user, vault, marker_ids, target_folder, dek, sources) do
+    rows = fetch_decrypted_live_rows(user, vault, sources)
 
     marker_ids
     |> Enum.reduce_while({%{moved: 0, pairs: []}, rows}, fn id, {acc, rows} ->

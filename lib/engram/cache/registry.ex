@@ -129,6 +129,12 @@ defmodule Engram.Cache.Registry do
       evict_match: :first_elem,
       pg_channel: "note_counts_changed"
     },
+    # {vault_id, change_seq, what} => a decrypted whole-vault aggregate (tags,
+    # types, folder counts; Engram.Notes.VaultScanCache). Never evicted: every
+    # write to a note row takes a new change_seq, so a write moves readers to
+    # a new key instead of invalidating this one, on every node at once. The
+    # TTL only reaps the keys a write left behind.
+    %{name: :vault_scan, ttl: 600_000, cache_nil: false, evict_match: :key, pg_channel: nil},
     # Legal floor / current version / hash per document; evicted on publish.
     %{
       name: :legal_version,

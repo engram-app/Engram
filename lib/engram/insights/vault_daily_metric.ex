@@ -16,6 +16,10 @@ defmodule Engram.Insights.VaultDailyMetric do
     field :folders, :integer, default: 0
     field :links, :integer, default: 0
     field :tags, :integer, default: 0
+    # The vault's seq when the sizes were read, and the day they last were:
+    # an unchanged vault is copied from the day before (Insights.Snapshot).
+    field :change_seq, :integer
+    field :scanned_on, :date
     timestamps(type: :utc_datetime_usec)
   end
 end

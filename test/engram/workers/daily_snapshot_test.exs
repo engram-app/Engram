@@ -159,6 +159,60 @@ defmodule Engram.Workers.DailySnapshotTest do
     for v <- vaults, do: assert(Repo.get_by(VaultDailyMetric, vault_id: v.id, date: yesterday()))
   end
 
+  defp vault_row(vault, date), do: Repo.get_by(VaultDailyMetric, vault_id: vault.id, date: date)
+
+  # The vault sizes read every note row. A vault whose change_seq has not
+  # moved since yesterday's row holds the same notes, so the row is copied.
+  # The factory's inserts do not take a seq, so a copied row is visible as
+  # one that missed them.
+  describe "an unchanged vault" do
+    alias Engram.Insights.Snapshot
+
+    setup do
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      note = insert(:note, user: user, vault: vault)
+      %{user: user, vault: vault, note: note}
+    end
+
+    test "copies yesterday's sizes; a write moves the seq and rescans", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+      Snapshot.run(day: days_ago(2))
+      insert(:note, user: user, vault: vault)
+      # Links are written after the note's commit (ExtractNoteLinks), so a
+      # copied row would miss late ones: they are always recounted.
+      link!(user, vault, note, 0)
+
+      Snapshot.run(day: yesterday())
+      assert %{notes: 1, links: 1} = vault_row(vault, yesterday())
+
+      Repo.with_tenant!(user.id, fn -> Engram.Vaults.next_seq!(vault.id) end)
+      Snapshot.run(day: Date.utc_today())
+      assert %{notes: 2, links: 1} = vault_row(vault, Date.utc_today())
+    end
+
+    test "is rescanned a week after its last scan anyway", %{user: user, vault: vault} do
+      # A re-encode (DEK rotation, envelope format) changes stored bytes
+      # without a seq; the weekly rescan bounds how long a copy can lag it.
+      Snapshot.run(day: days_ago(8))
+      insert(:note, user: user, vault: vault)
+
+      for n <- 7..2//-1, do: Snapshot.run(day: days_ago(n))
+      assert vault_row(vault, days_ago(2)).notes == 1
+
+      Snapshot.run(day: yesterday())
+      assert vault_row(vault, yesterday()).notes == 2
+    end
+
+    test "with no row for the day before is scanned", %{user: user, vault: vault} do
+      Snapshot.run(day: days_ago(3))
+      insert(:note, user: user, vault: vault)
+
+      Snapshot.run(day: yesterday())
+      assert vault_row(vault, yesterday()).notes == 2
+    end
+  end
+
   # A retry of a job that timed out half way keeps the chunks it already
   # wrote and does the rest, so the day is not lost to a timeout.
   test "a retry resumes: vaults this job already wrote are not redone" do

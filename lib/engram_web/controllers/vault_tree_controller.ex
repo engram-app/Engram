@@ -70,7 +70,7 @@ defmodule EngramWeb.VaultTreeController do
               seq: seq,
               etag: etag,
               note_rows: Notes.raw_tree_note_rows(user, vault),
-              folder_count_rows: Notes.raw_folder_count_rows(user, vault),
+              folder_counts: Notes.raw_folder_counts_at(user, vault, seq),
               folder_marker_rows: Notes.raw_folder_marker_rows(user, vault),
               attachment_rows: Attachments.raw_tree_rows(user, vault)
             }
@@ -145,7 +145,10 @@ defmodule EngramWeb.VaultTreeController do
 
   defp render_tree(conn, raw, dek, user) do
     notes = Notes.decrypt_tree_note_rows(raw.note_rows, dek)
-    folder_counts = Notes.decrypt_folder_count_rows(raw.folder_count_rows, dek)
+
+    folder_counts =
+      Notes.folder_counts_at(conn.assigns.current_vault, raw.seq, raw.folder_counts, dek)
+
     folder_markers = Notes.decrypt_folder_marker_rows(raw.folder_marker_rows, dek)
     folders = Notes.combine_folders_payload(folder_counts, folder_markers)
     attachments = Attachments.decrypt_tree_rows(raw.attachment_rows, user)
