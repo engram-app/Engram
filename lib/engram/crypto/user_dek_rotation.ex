@@ -1040,18 +1040,20 @@ defmodule Engram.Crypto.UserDekRotation do
     end)
   end
 
-  # Task 11.1: chunk display text and heading, encrypted on the `chunks` row
-  # and bound to `qdrant_point_id` (not the row id: rows are rewritten every
-  # pass, points are reused). The AAD does not change across a rotation, only
-  # the key. Old-then-new via `try_rewrap/7`, so a resumed rotation skips rows
-  # it already re-wrapped. A row unreadable under both keys is NULLed rather
-  # than aborting the rotation: the text is derived from the note, search
-  # shows the hit without it, and the next index pass writes it again.
+  # Task 11.1: a chunk's display envelope (`display_ct`, notes over the
+  # display threshold only), bound to `qdrant_point_id` (not the row id: rows
+  # are rewritten every pass, points are reused). Only the envelope is
+  # rewrapped: `text_sum` and the offsets hold no plaintext and no key. The
+  # AAD does not change across a rotation, only the key. Old-then-new, so a
+  # resumed rotation skips rows it already re-wrapped. A row unreadable under
+  # both keys is NULLed rather than aborting the rotation: search then
+  # re-derives the text from the note content, and the next index pass
+  # writes the envelope again.
   defp sweep_chunk_texts(%User{id: user_id}, old_dek, new_dek) do
     TenantSweep.each_batch(user_id, Engram.Notes.Chunk, fn batch_ids ->
       Repo.transaction(fn ->
         from(c in Engram.Notes.Chunk,
-          where: c.id in ^batch_ids and not is_nil(c.text_ciphertext),
+          where: c.id in ^batch_ids and not is_nil(c.display_ct),
           lock: "FOR UPDATE"
         )
         |> Repo.all(skip_tenant_check: true)
@@ -1092,9 +1094,7 @@ defmodule Engram.Crypto.UserDekRotation do
     sets =
       case Crypto.decrypt_chunk_text(chunk, old_dek, chunk.qdrant_point_id) do
         {:ok, {text, heading}} ->
-          chunk_text_sets(
-            Crypto.encrypt_chunk_text(text, heading, new_dek, chunk.qdrant_point_id)
-          )
+          Map.to_list(Crypto.encrypt_chunk_text(text, heading, new_dek, chunk.qdrant_point_id))
 
         :error ->
           case Crypto.decrypt_chunk_text(chunk, new_dek, chunk.qdrant_point_id) do
@@ -1111,12 +1111,7 @@ defmodule Engram.Crypto.UserDekRotation do
                   on_both_failed: {:error, :both_deks_failed}
                 )
 
-              chunk_text_sets(%{
-                text_ciphertext: nil,
-                text_nonce: nil,
-                heading_ciphertext: nil,
-                heading_nonce: nil
-              })
+              [display_ct: nil]
           end
       end
 
@@ -1132,9 +1127,6 @@ defmodule Engram.Crypto.UserDekRotation do
 
     :ok
   end
-
-  defp chunk_text_sets(map),
-    do: Enum.map(~w(text_ciphertext text_nonce heading_ciphertext heading_nonce)a, &{&1, map[&1]})
 
   defp clear_chunk_context_hmacs(%User{id: user_id}) do
     # `chunks` carries FORCE ROW LEVEL SECURITY. Unscoped, this matches zero

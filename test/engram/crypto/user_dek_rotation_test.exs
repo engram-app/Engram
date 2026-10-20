@@ -478,6 +478,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
               char_start: 0,
               char_end: 1,
               qdrant_point_id: point_id,
+              text_sum: 42 + pos,
               created_at: DateTime.utc_now(:second)
             },
             Crypto.encrypt_chunk_text(text, "H#{pos}", old_dek, point_id)
@@ -516,6 +517,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
                stored,
                &(Crypto.decrypt_chunk_text(&1, old_dek, &1.qdrant_point_id) == :error)
              )
+
+      # Only the envelope is rewrapped: the checksum holds no key.
+      assert Enum.map(stored, & &1.text_sum) == [42, 43, 44]
     end
   end
 

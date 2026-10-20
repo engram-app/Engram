@@ -97,7 +97,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   alias Engram.Crypto
   alias Engram.Crypto.{Envelope, RotationGate, TenantSweep}
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{Chunk, CrdtUpdateLog, Note, VaultIndexState, VaultIndexUpdateLog}
+  alias Engram.Notes.{CrdtUpdateLog, Note, VaultIndexState, VaultIndexUpdateLog}
   alias Engram.Repo
   alias Engram.Workers.BackfillCrdtHead
 
@@ -155,24 +155,9 @@ defmodule Engram.Workers.ReencodeEnvelopes do
       ct: :update_ciphertext,
       nonce: :update_nonce,
       aad: {:vault_index_update_log, :update, :id}
-    },
-    # Task 11.1: bound to the point id, not the row id.
-    %{
-      label: :chunks_text,
-      schema: Chunk,
-      key: :id,
-      ct: :text_ciphertext,
-      nonce: :text_nonce,
-      aad: {:chunks, :text, :qdrant_point_id}
-    },
-    %{
-      label: :chunks_heading,
-      schema: Chunk,
-      key: :id,
-      ct: :heading_ciphertext,
-      nonce: :heading_nonce,
-      aad: {:chunks, :heading, :qdrant_point_id}
     }
+    # No chunk display envelope: it is written per index pass under the
+    # policy in force, and only for notes over the display threshold.
   ]
 
   @impl Oban.Worker
@@ -362,10 +347,6 @@ defmodule Engram.Workers.ReencodeEnvelopes do
 
   defp body_with_bound_aad(query, :notes_content),
     do: where(query, [n], n.dek_version >= ^Crypto.row_version_aad_bound())
-
-  # Chunk text probes stay on the partial index (rows that hold text only).
-  defp body_with_bound_aad(query, name) when name in [:chunks_text, :chunks_heading],
-    do: where(query, [c], not is_nil(c.text_ciphertext))
 
   defp body_with_bound_aad(query, _name), do: query
 

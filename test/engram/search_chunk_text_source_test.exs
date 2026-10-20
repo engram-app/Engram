@@ -64,6 +64,26 @@ defmodule Engram.SearchChunkTextSourceTest do
       end)
   end
 
+  # A small note's row: a checksum, no envelope (Task 11.2 hybrid). Search
+  # re-derives the chunk at `pos` from the note's current content.
+  defp insert_sum_chunk!(ctx, point_id, pos, text) do
+    {:ok, _} =
+      Repo.with_tenant(ctx.user.id, fn ->
+        %Chunk{}
+        |> Chunk.changeset(%{
+          note_id: ctx.note.id,
+          user_id: ctx.user.id,
+          vault_id: ctx.vault.id,
+          position: pos,
+          char_start: 0,
+          char_end: byte_size(text),
+          qdrant_point_id: point_id
+        })
+        |> Ecto.Changeset.change(text_sum: Engram.Indexing.text_sum(text))
+        |> Repo.insert!()
+      end)
+  end
+
   # A v3/v4 point: encrypted payload text, AAD-bound.
   defp legacy_point(ctx, id, text, score) do
     {:ok, enc} =
@@ -172,6 +192,56 @@ defmodule Engram.SearchChunkTextSourceTest do
     assert hit.vault_id == to_string(ctx.vault.id)
   end
 
+  test "a small note displays its chunk from the note content (no display_ct)", ctx do
+    id = Ecto.UUID.generate()
+    [chunk] = Engram.Parsers.Markdown.parse("# Iron\n\nFerritin.", "Health/Iron.md")
+    insert_sum_chunk!(ctx, id, 0, chunk.text)
+    answer(ctx, [v5_point(ctx, id, 0.9)])
+
+    {result, events} = with_event([:engram, :search, :text_stale], fn -> search(ctx) end)
+
+    assert {:ok, [hit]} = result
+    assert hit.text == chunk.text
+    assert hit.heading_path == chunk.heading_path
+    assert events == []
+  end
+
+  test "a note edited since its index shows the current text and counts it", ctx do
+    id = Ecto.UUID.generate()
+    insert_sum_chunk!(ctx, id, 0, "# Iron\n\nFerritin.")
+
+    {:ok, _} =
+      Notes.upsert_note(
+        ctx.user,
+        ctx.vault,
+        %{"path" => "Health/Iron.md", "content" => "# Iron\n\nFerritin is 90.", "mtime" => 2.0},
+        actor: "api"
+      )
+
+    answer(ctx, [v5_point(ctx, id, 0.9)])
+
+    {result, events} = with_event([:engram, :search, :text_stale], fn -> search(ctx) end)
+
+    assert {:ok, [hit]} = result
+    assert hit.text =~ "Ferritin is 90."
+    assert [{%{count: 1}, _}] = events
+  end
+
+  test "small-note hits: one notes content query for every hit note", ctx do
+    [chunk] = Engram.Parsers.Markdown.parse("# Iron\n\nFerritin.", "Health/Iron.md")
+    ids = for _ <- 1..3, do: Ecto.UUID.generate()
+    # Three points at position 0 of one note (only one row per position is
+    # allowed, so the others use 1 and 2, gone from the content).
+    for {id, pos} <- Enum.with_index(ids), do: insert_sum_chunk!(ctx, id, pos, chunk.text)
+    answer(ctx, for({id, i} <- Enum.with_index(ids), do: v5_point(ctx, id, 1.0 - i / 10)))
+
+    {result, events} = with_event([:engram, :repo, :query], fn -> search(ctx) end)
+
+    assert {:ok, [_ | _]} = result
+    assert Enum.count(events, fn {_m, meta} -> meta[:source] == "chunks" end) == 1
+    assert Enum.count(events, fn {_m, meta} -> meta[:source] == "notes" end) <= 2
+  end
+
   test "a row with no ciphertext falls back to the payload", ctx do
     id = Ecto.UUID.generate()
     insert_chunk!(ctx, id, 0)
@@ -243,7 +313,7 @@ defmodule Engram.SearchChunkTextSourceTest do
     {:ok, _} =
       Repo.with_tenant(ctx.user.id, fn ->
         Repo.update_all(from(c in Chunk, where: c.qdrant_point_id == ^bad),
-          set: [text_ciphertext: :crypto.strong_rand_bytes(40)]
+          set: [display_ct: <<12, :crypto.strong_rand_bytes(40)::binary>>]
         )
       end)
 
@@ -292,7 +362,7 @@ defmodule Engram.SearchChunkTextSourceTest do
     {:ok, _} =
       Repo.with_tenant(ctx.user.id, fn ->
         Repo.update_all(from(c in Chunk, where: c.qdrant_point_id == ^point_id),
-          set: [text_ciphertext: :crypto.strong_rand_bytes(40)]
+          set: [display_ct: <<12, :crypto.strong_rand_bytes(40)::binary>>]
         )
       end)
   end

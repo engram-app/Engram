@@ -838,64 +838,46 @@ defmodule Engram.Crypto do
   end
 
   @doc """
-  Encrypts a chunk's display text and heading for its `chunks` row (Task
-  11.1). AAD binds the column and the point id (`aad_for_row(:chunks, :text,
-  point_id)`); the DEK binds the user. The point id, not the row id, because
-  a row is rewritten on every pass while a reused point keeps its id. The
-  heading is stored as JSON so both today's `"A > B"` string and the v5
-  heading list round trip exactly.
+  Seals a chunk's display text and heading for its `chunks` row as ONE
+  envelope, `display_ct` (Task 11.1, hybrid design: only notes over
+  `Engram.Indexing.display_ct_threshold/0` store one; smaller notes slice
+  their text from the note content). Layout: `<<nonce_len::8, nonce,
+  ciphertext>>`, the plaintext JSON `{"h": heading, "t": text}`, zstd per the
+  envelope policy. AAD binds the column and the point id
+  (`aad_for_row(:chunks, :display, point_id)`), the DEK binds the user; the
+  point id, not the row id, because a reused point keeps its id across passes.
   """
   @spec encrypt_chunk_text(binary(), String.t() | [String.t()] | nil, <<_::256>>, binary()) ::
-          %{
-            text_ciphertext: binary(),
-            text_nonce: binary(),
-            heading_ciphertext: binary(),
-            heading_nonce: binary()
-          }
+          %{display_ct: binary()}
   def encrypt_chunk_text(text, heading, <<_::256>> = dek, point_id) when is_binary(text) do
-    {text_ct, text_nonce} = Envelope.encrypt(text, dek, aad_for_row(:chunks, :text, point_id))
-
-    {hd_ct, hd_nonce} =
-      Envelope.encrypt(Jason.encode!(heading), dek, aad_for_row(:chunks, :heading, point_id))
-
-    %{
-      text_ciphertext: text_ct,
-      text_nonce: text_nonce,
-      heading_ciphertext: hd_ct,
-      heading_nonce: hd_nonce
-    }
+    plaintext = Jason.encode!(%{"h" => heading, "t" => text})
+    {ct, nonce} = Envelope.encrypt(plaintext, dek, aad_for_row(:chunks, :display, point_id))
+    %{display_ct: <<byte_size(nonce)::8, nonce::binary, ct::binary>>}
   end
 
   @doc """
-  Inverse of `encrypt_chunk_text/4` for one row. `:none` when the row has no
-  ciphertext (written with the write flag off), `:error` when it does not
-  decrypt under this DEK and point id.
+  Inverse of `encrypt_chunk_text/4` for one row: `:none` when the row has no
+  envelope, `:error` when it does not open under this DEK and point id.
   """
   @spec decrypt_chunk_text(map(), <<_::256>>, binary()) ::
           {:ok, {String.t(), String.t() | [String.t()] | nil}} | :none | :error
-  def decrypt_chunk_text(%{text_ciphertext: nil}, _dek, _point_id), do: :none
+  def decrypt_chunk_text(%{display_ct: nil}, _dek, _point_id), do: :none
 
-  def decrypt_chunk_text(row, <<_::256>> = dek, point_id) do
-    with {:ok, text} <-
-           Envelope.decrypt(
-             row.text_ciphertext,
-             row.text_nonce,
-             dek,
-             aad_for_row(:chunks, :text, point_id)
-           ),
-         {:ok, heading_json} <-
-           Envelope.decrypt(
-             row.heading_ciphertext,
-             row.heading_nonce,
-             dek,
-             aad_for_row(:chunks, :heading, point_id)
-           ),
-         {:ok, heading} <- Jason.decode(heading_json) do
+  def decrypt_chunk_text(
+        %{display_ct: <<n::8, nonce::binary-size(n), ct::binary>>},
+        <<_::256>> = dek,
+        point_id
+      ) do
+    with {:ok, json} <-
+           Envelope.decrypt(ct, nonce, dek, aad_for_row(:chunks, :display, point_id)),
+         {:ok, %{"h" => heading, "t" => text}} when is_binary(text) <- Jason.decode(json) do
       {:ok, {text, heading}}
     else
       _ -> :error
     end
   end
+
+  def decrypt_chunk_text(_row, _dek, _point_id), do: :error
 
   @doc """
   Decrypts a list of Qdrant search candidates in-place. Phase B.4:

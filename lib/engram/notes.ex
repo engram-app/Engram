@@ -206,17 +206,28 @@ defmodule Engram.Notes do
   end
 
   @doc """
-  Task 11.3: everything a search hit shows, from Postgres, in ONE
-  tenant-scoped query keyed by the hits' point ids: the chunk row's vault and
-  encrypted text and heading, and the note's display fields.
+  Task 11.3: everything a search hit shows, from Postgres, keyed by the hits'
+  point ids: the chunk row's vault, its display text and heading, and the
+  note's display fields. ONE chunks query for the hits, plus ONE notes query
+  for the content of the hit notes that slice their text (below).
+
+  Display text (hybrid, notes-chunks-hyperopt 2.4b):
+    * a row with `display_ct` (a note over the display threshold) opens it;
+    * a row with only `text_sum` re-derives its chunk from the note content,
+      decrypted once per note, chunked once per note
+      (`Engram.Indexing.display_chunks/3`), at the row's position. The
+      heading comes from the same re-derivation (rows store none). A chunk
+      whose checksum differs (the note was edited since its index) still
+      shows the current chunk at that position, counted
+      `[:engram, :search, :text_stale]`;
+    * a row with neither was written with the write flag off: `text` and
+      `heading_path` are nil and the caller falls back to the payload.
 
   `{:ok, map}`: a point id with no chunk row is absent (a stale point the
   caller drops); a soft-deleted note maps to `:deleted`; a row whose text
   does not decrypt maps to `:text_undecryptable`, one whose note row does not
-  to `:note_undecryptable`. `text`/`heading_path` are nil when the row was
-  written without them (the caller falls back to the payload).
-  `{:error, :decrypt_failed}` when the user's DEK cannot be loaded (a key
-  outage fails the search, it does not empty it).
+  to `:note_undecryptable`. `{:error, :decrypt_failed}` when the user's DEK
+  cannot be loaded (a key outage fails the search, it does not empty it).
   """
   @spec search_hits_by_qdrant_points(Engram.Accounts.User.t(), [String.t()]) ::
           {:ok, %{String.t() => map() | :deleted | :text_undecryptable | :note_undecryptable}}
@@ -235,35 +246,31 @@ defmodule Engram.Notes do
             on: n.id == c.note_id,
             where: c.qdrant_point_id in ^uuids,
             select:
-              {map(c, [
-                 :qdrant_point_id,
-                 :vault_id,
-                 :text_ciphertext,
-                 :text_nonce,
-                 :heading_ciphertext,
-                 :heading_nonce
-               ]), struct(n, @note_meta_fields)}
+              {map(c, [:qdrant_point_id, :vault_id, :note_id, :position, :text_sum, :display_ct]),
+               struct(n, @note_meta_fields)}
           )
         )
       end)
 
     with {:ok, dek} <- hits_dek(user, rows) do
       {chunks, notes} = Enum.unzip(rows)
+      decrypted = Crypto.decrypt_notes_batch(notes, user)
+      derived = derived_chunks(user, Enum.zip(chunks, decrypted))
 
       {:ok,
-       notes
-       |> Crypto.decrypt_notes_batch(user)
+       decrypted
        |> Enum.zip(chunks)
-       |> Map.new(fn {decrypted, chunk} ->
+       |> Map.new(fn {note, chunk} ->
          qid = to_string(chunk.qdrant_point_id)
-         {qid, search_hit(decrypted, chunk, dek, qid)}
-       end)}
+         {qid, search_hit(note, chunk, {dek, derived})}
+       end)
+       |> tap(&emit_text_stale/1)}
     end
   end
 
-  # The DEK only when a row holds text; a failed load is the search's error.
+  # The DEK only when a row holds an envelope; a failed load is the search's error.
   defp hits_dek(user, rows) do
-    if Enum.any?(rows, fn {c, _n} -> c.text_ciphertext end) do
+    if Enum.any?(rows, fn {c, _n} -> c.display_ct end) do
       case Crypto.get_dek(user) do
         {:ok, dek} -> {:ok, dek}
         {:error, _} -> {:error, :decrypt_failed}
@@ -273,10 +280,67 @@ defmodule Engram.Notes do
     end
   end
 
-  defp search_hit({:ok, %{deleted_at: %DateTime{}}}, _chunk, _dek, _qid), do: :deleted
-  defp search_hit({:error, _}, _chunk, _dek, _qid), do: :note_undecryptable
+  # Rows that slice their text: a checksum, no envelope, not a floor point
+  # (its display text is "" by construction, see `Indexing.floor_plan/2`).
+  defp slices?(%{display_ct: nil, text_sum: sum}),
+    do: is_integer(sum) and sum != Engram.Indexing.text_sum("")
 
-  defp search_hit({:ok, note}, chunk, dek, qid) do
+  defp slices?(_chunk), do: false
+
+  # note_id => %{position => chunk} | :error, for the hit notes whose rows
+  # slice. One query: each note's content and its chunk-row count (the merge
+  # the rows were built with, as `Indexing.resparse_note/2` reads it).
+  defp derived_chunks(user, pairs) do
+    paths =
+      for {%{note_id: id} = c, {:ok, %{deleted_at: nil, path: path}}} <- pairs,
+          slices?(c),
+          into: %{},
+          do: {id, path}
+
+    if paths == %{} do
+      %{}
+    else
+      ids = Map.keys(paths)
+
+      {:ok, notes} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(
+            from(n in Note,
+              where: n.id in ^ids,
+              select:
+                {struct(n, [
+                   :id,
+                   :kind,
+                   :user_id,
+                   :dek_version,
+                   :content_ciphertext,
+                   :content_nonce
+                 ]), fragment("(SELECT count(*) FROM chunks c WHERE c.note_id = ?)", n.id)}
+            )
+          )
+        end)
+
+      {structs, counts} = Enum.unzip(notes)
+
+      structs
+      |> Crypto.decrypt_notes_batch(user)
+      |> Enum.zip_with(Enum.zip(structs, counts), fn decrypted, {n, count} ->
+        case decrypted do
+          {:ok, %{content: content}} ->
+            {n.id, Engram.Indexing.display_chunks(content || "", paths[n.id], count)}
+
+          {:error, _} ->
+            {n.id, :error}
+        end
+      end)
+      |> Map.new()
+    end
+  end
+
+  defp search_hit({:ok, %{deleted_at: %DateTime{}}}, _chunk, _keys), do: :deleted
+  defp search_hit({:error, _}, _chunk, _keys), do: :note_undecryptable
+
+  defp search_hit({:ok, note}, chunk, {dek, derived}) do
     hit = %{
       vault_id: to_string(chunk.vault_id),
       source_path: note.path,
@@ -286,10 +350,54 @@ defmodule Engram.Notes do
       heading_path: nil
     }
 
-    case Crypto.decrypt_chunk_text(chunk, dek, qid) do
-      {:ok, {text, heading}} -> %{hit | text: text, heading_path: heading}
-      :none -> hit
-      :error -> :text_undecryptable
+    case display_text(chunk, dek, derived) do
+      {:ok, {text, heading}} ->
+        %{hit | text: text, heading_path: heading}
+
+      {:stale, {text, heading}} ->
+        Map.merge(hit, %{text: text, heading_path: heading, stale: true})
+
+      :none ->
+        hit
+
+      :error ->
+        :text_undecryptable
+    end
+  end
+
+  defp display_text(%{display_ct: ct} = chunk, dek, _derived) when is_binary(ct),
+    do: Crypto.decrypt_chunk_text(chunk, dek, to_string(chunk.qdrant_point_id))
+
+  defp display_text(%{text_sum: nil}, _dek, _derived), do: :none
+
+  defp display_text(chunk, _dek, derived) do
+    if slices?(chunk) do
+      case Map.fetch!(derived, chunk.note_id) do
+        :error ->
+          :error
+
+        by_position ->
+          case Map.get(by_position, chunk.position) do
+            %{text: text, heading_path: heading} ->
+              tag = if Engram.Indexing.text_sum(text) == chunk.text_sum, do: :ok, else: :stale
+              {tag, {text, heading}}
+
+            # The note lost this position since its index: nothing to show
+            # but the payload, if it has text.
+            nil ->
+              :none
+          end
+      end
+    else
+      {:ok, {"", nil}}
+    end
+  end
+
+  # One event per search, the edited-since-index hits it showed current text for.
+  defp emit_text_stale(hits) do
+    case Enum.count(hits, fn {_qid, hit} -> is_map(hit) and Map.get(hit, :stale, false) end) do
+      0 -> :ok
+      n -> :telemetry.execute([:engram, :search, :text_stale], %{count: n}, %{})
     end
   end
 

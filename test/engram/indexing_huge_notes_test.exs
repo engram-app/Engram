@@ -172,7 +172,8 @@ defmodule Engram.IndexingHugeNotesTest do
       Repo.all(from(c in Chunk, where: c.user_id == ^ctx.user.id), skip_tenant_check: true)
 
     assert length(rows) > 4_369, "fixture must overflow one statement (got #{length(rows)})"
-    assert Enum.all?(rows, &is_binary(&1.text_ciphertext))
+    # Over the display threshold: every row holds its envelope.
+    assert Enum.all?(rows, &is_binary(&1.display_ct))
     {:ok, dek} = Crypto.get_dek(ctx.user)
     assert {:ok, {_text, _heading}} = Crypto.decrypt_chunk_text(row, dek, row.qdrant_point_id)
   end
