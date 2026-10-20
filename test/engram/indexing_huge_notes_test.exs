@@ -582,18 +582,23 @@ defmodule Engram.IndexingHugeNotesTest do
   defp size_bytes(size), do: size * @mib
 
   # Exactly `bytes`: a shape fills to at least its target, so the target
-  # shrinks by the overshoot until the body fits, and newlines pad the rest.
-  # The same seed regenerates the same units, so the shrunk body is a
-  # prefix of the first one. At the cap, one byte more would be refused.
-  def generate(shape, bytes, headings, seed), do: generate(shape, bytes, headings, seed, bytes)
+  # shrinks until the body fits, and newlines pad the rest. The step
+  # doubles: a body only shrinks once the target falls below the start of
+  # its last unit, which a one-byte overshoot would take ~1 KB of
+  # regenerations to reach. The same seed regenerates the same units, so
+  # the shrunk body is a prefix of the first one. At the cap, one byte more
+  # would be refused.
+  def generate(shape, bytes, headings, seed),
+    do: generate(shape, bytes, headings, seed, bytes, nil)
 
-  defp generate(shape, bytes, headings, seed, target) do
+  defp generate(shape, bytes, headings, seed, target, step) do
     :rand.seed(:exsss, {seed, 7, 13})
     {body, sentinels} = body(shape, target, headings)
 
     case IO.iodata_length(body) do
       size when size > bytes ->
-        generate(shape, bytes, headings, seed, target - (size - bytes))
+        step = if step, do: step * 2, else: size - bytes
+        generate(shape, bytes, headings, seed, target - step, step)
 
       size ->
         {IO.iodata_to_binary([body, :binary.copy("\n", bytes - size)]), sentinels}
