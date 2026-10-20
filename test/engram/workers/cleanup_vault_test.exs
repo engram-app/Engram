@@ -2,6 +2,7 @@ defmodule Engram.Workers.CleanupVaultTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
+  import Ecto.Query
   import ExUnit.CaptureLog
   import Mox
 
@@ -566,6 +567,72 @@ defmodule Engram.Workers.CleanupVaultTest do
       refute Repo.get(Note, note.id, skip_tenant_check: true)
       refute Repo.get(Attachment, attachment.id, skip_tenant_check: true)
       refute Repo.get(Vault, vault.id, skip_tenant_check: true)
+    end
+  end
+
+  describe "perform_cleanup/2 — chunked upload sessions" do
+    alias Engram.Attachments.{Upload, Uploads}
+    alias Engram.Storage.InMemory
+
+    setup do
+      bypass = Bypass.open()
+      Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
+      on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+
+      Bypass.expect(bypass, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": {"status": "acknowledged"}}))
+      end)
+
+      {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
+      vault = insert(:vault, user: user)
+      %{user: user, vault: vault}
+    end
+
+    # A session's blob has no attachment row until complete commits, so the
+    # attachment key pass never saw it, and the FK cascade dropped the
+    # session row with the only pointer to it.
+    test "drops an assembled session's object and aborts an open multipart upload", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, open} = Uploads.start(user, vault, %{path: "open.bin", size_bytes: 10})
+      {:ok, _} = Uploads.put_part(user, vault, open.id, 1, "0123456789")
+
+      {:ok, built} = Uploads.start(user, vault, %{path: "built.bin", size_bytes: 10})
+      {:ok, _} = Uploads.put_part(user, vault, built.id, 1, "0123456789")
+      built = Repo.get!(Upload, built.id, skip_tenant_check: true)
+      [{"1", etag}] = Map.to_list(built.parts)
+
+      :ok =
+        InMemory.complete_multipart_upload(built.storage_key, built.s3_upload_id, [
+          %{part_number: 1, etag: etag}
+        ])
+
+      Repo.update_all(
+        from(u in Upload, where: u.id == ^built.id),
+        [set: [assembled_at: DateTime.utc_now(:second)]],
+        skip_tenant_check: true
+      )
+
+      assert InMemory.exists?(built.storage_key)
+
+      {1, _} =
+        Repo.update_all(
+          from(v in Vault, where: v.id == ^vault.id),
+          [set: [deleted_at: DateTime.add(DateTime.utc_now(:second), -31, :day)]],
+          skip_tenant_check: true
+        )
+
+      assert :ok = CleanupVault.perform_cleanup(vault.id, user.id)
+
+      refute InMemory.exists?(built.storage_key)
+
+      assert {:error, :no_such_upload} =
+               InMemory.upload_part(open.storage_key, open.s3_upload_id, 1, "x")
+
+      assert Repo.aggregate(Upload, :count, skip_tenant_check: true) == 0
     end
   end
 

@@ -14,7 +14,8 @@ defmodule Engram.Workers.CleanupVault do
   4. One transaction for the remainder: chunks, notes, attachments, keys,
      grants, api_key_vaults, the vault row
   5. Remaining storage blobs (post-commit, best-effort), only after the DB is
-     authoritative
+     authoritative, chunked upload sessions included (open multipart uploads
+     aborted)
   """
 
   # Deliberately NO Oban `unique` key: a restore-then-re-delete cycle needs a
@@ -29,6 +30,7 @@ defmodule Engram.Workers.CleanupVault do
 
   alias Engram.Accounts.ApiKey
   alias Engram.Attachments.Attachment
+  alias Engram.Attachments.Upload
   alias Engram.Logger.Metadata
   alias Engram.Notes.{Chunk, Note}
   alias Engram.Permissions
@@ -269,8 +271,10 @@ defmodule Engram.Workers.CleanupVault do
   end
 
   defp purge_remainder(vault) do
-    # Collect storage keys BEFORE deleting the remaining DB rows
-    storage_keys = collect_storage_keys(vault)
+    # Collect storage keys BEFORE deleting the remaining DB rows. Upload
+    # sessions are not batch-deleted: the vault row's FK cascade drops them
+    # in the final transaction, so they are all still here.
+    {storage_keys, multipart_uploads} = collect_storage_keys(vault)
 
     # DB transaction: delete all rows, making DB authoritative.
     #
@@ -290,7 +294,7 @@ defmodule Engram.Workers.CleanupVault do
         log_restored_mid_purge(vault)
 
       {:ok, {revoked_keys, revoked_grants}} ->
-        finish_purge(vault, storage_keys, revoked_keys, revoked_grants)
+        finish_purge(vault, {storage_keys, multipart_uploads}, revoked_keys, revoked_grants)
     end
   end
 
@@ -359,12 +363,13 @@ defmodule Engram.Workers.CleanupVault do
     {revoked, revoked_grants}
   end
 
-  defp finish_purge(vault, storage_keys, revoked_keys, revoked_grants) do
+  defp finish_purge(vault, {storage_keys, multipart_uploads}, revoked_keys, revoked_grants) do
     # An open socket authenticated with a revoked key or grant must not
     # outlive it: `drop_vault_from_grants/3` kicked the owner once, above.
 
     # Post-commit: delete storage blobs (best-effort)
     # If this fails, we have orphan blobs but no ghost rows — safe to retry
+    Enum.each(multipart_uploads, &abort_multipart/1)
     delete_storage_blobs(storage_keys)
 
     # Actual user-facing lifecycle event: the vault and all its data are gone.
@@ -445,14 +450,54 @@ defmodule Engram.Workers.CleanupVault do
   # returned `[]`, and the blobs for every attachment in the vault were left
   # in S3 with no row pointing at them — unreachable by any other cleanup path
   # except the weekly orphan sweep.
+  #
+  # Chunked upload sessions too: a session's blob has no attachment row until
+  # complete commits, and the vault FK cascade drops the session row, the only
+  # pointer to it. An assembled session holds an object; an unassembled one an
+  # open multipart upload, aborted here (the bucket lifecycle rule is only the
+  # 7-day backstop).
   defp collect_storage_keys(vault) do
     Repo.with_tenant!(vault.user_id, fn ->
-      Attachment
-      |> where(vault_id: ^vault.id)
-      |> where([a], not is_nil(a.storage_key))
-      |> select([a], a.storage_key)
-      |> Repo.all()
+      attachment_keys =
+        Attachment
+        |> where(vault_id: ^vault.id)
+        |> where([a], not is_nil(a.storage_key))
+        |> select([a], a.storage_key)
+        |> Repo.all()
+
+      sessions =
+        Upload
+        |> where(vault_id: ^vault.id)
+        |> select([u], {u.storage_key, u.s3_upload_id, not is_nil(u.assembled_at)})
+        |> Repo.all()
+
+      # A completed session shares its key with the attachment row.
+      keys = Enum.uniq(attachment_keys ++ Enum.map(sessions, &elem(&1, 0)))
+      multipart = for {key, s3_id, false} <- sessions, do: {key, s3_id}
+      {keys, multipart}
     end)
+  end
+
+  defp abort_multipart({key, s3_upload_id}) do
+    case Engram.Storage.adapter().abort_multipart_upload(key, s3_upload_id) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "CleanupVault: multipart abort failed",
+          Metadata.with_category(:warning, :oban,
+            storage_key: key,
+            reason: Metadata.safe_reason(reason)
+          )
+        )
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "CleanupVault: multipart abort raised",
+        Metadata.with_category(:warning, :oban, storage_key: key, reason: Metadata.safe_reason(e))
+      )
   end
 
   defp delete_qdrant_points(vault) do
