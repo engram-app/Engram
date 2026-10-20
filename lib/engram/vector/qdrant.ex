@@ -1179,8 +1179,10 @@ defmodule Engram.Vector.Qdrant do
       end
 
     Enum.reduce_while(legacy ++ v5, :ok, fn {filter, set, unset}, :ok ->
-      with :ok <- post_payload(col, filter, set),
-           :ok <- delete_payload_keys(col, filter, unset) do
+      # Delete first: the set rewrites `p`, after which the old-path filter
+      # matches nothing.
+      with :ok <- delete_payload_keys(col, filter, unset),
+           :ok <- post_payload(col, filter, set) do
         {:cont, :ok}
       else
         err -> {:halt, err}
