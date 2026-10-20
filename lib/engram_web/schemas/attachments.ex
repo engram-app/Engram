@@ -225,7 +225,13 @@ defmodule EngramWeb.Schemas.AttachmentUploadStartRequest do
         description: "Detected from path if omitted."
       }
     },
-    required: [:path, :size_bytes]
+    required: [:path, :size_bytes],
+    example: %{
+      "path" => "videos/clip.mp4",
+      "size_bytes" => 52_428_800,
+      "mtime" => 1_709_234_567.0,
+      "mime_type" => "video/mp4"
+    }
   })
 end
 
