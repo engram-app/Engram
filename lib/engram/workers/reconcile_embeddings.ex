@@ -302,12 +302,13 @@ defmodule Engram.Workers.ReconcileEmbeddings do
             page.(maintenance, @recap_batch)
         end
 
-      fresh = reject_pending(rows, RebuildStaleNote)
+      fresh = rows |> reject_pending(RebuildStaleNote) |> within_ceilings(now)
 
       _ =
         Oban.insert_all(
-          Enum.map(fresh, fn {note_id, user_id} ->
-            RebuildStaleNote.new(%{note_id: to_string(note_id), user_id: user_id, recap: true},
+          Enum.map(fresh, fn {note_id, user_id, args} ->
+            RebuildStaleNote.new(
+              Map.merge(args, %{note_id: to_string(note_id), user_id: user_id, recap: true}),
               priority: EmbedNote.backfill_priority()
             )
           end)
@@ -331,6 +332,88 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # unbounded Voyage. A metered promotion spends the user's own budget and
   # is not counted.
   @unmetered_points_per_day 2_000
+
+  # Recaps are unmetered maintenance (review L3): each job carries its
+  # `budget_points` (the note's per-note cap, what it re-embeds into) and
+  # `budget_tokens`, so it counts against the user's daily ceiling below and
+  # the global one. A note past either waits for a later day (its backoff
+  # stamp is already set).
+  defp within_ceilings(rows, now) do
+    room = maintenance_token_room(now)
+
+    {kept, _room} =
+      rows
+      |> Enum.group_by(&elem(&1, 1), &elem(&1, 0))
+      |> Enum.flat_map_reduce(room, fn {user_id, note_ids}, room ->
+        user = Engram.Accounts.get_user_with_subscription!(user_id)
+        cap = Billing.effective_limit(user, :note_points_cap)
+        tokens = Repo.with_tenant!(user_id, fn -> chunk_tokens(note_ids) end)
+
+        spent =
+          for j <- budget_jobs(user_id, now), j.unmetered, reduce: 0, do: (acc -> acc + j.points)
+
+        {picked, {_spent, room}} =
+          Enum.flat_map_reduce(note_ids, {spent, room}, fn id, {spent, room} ->
+            # `shrink`: this recap merges, so its points are not added to a
+            # projection the way a queued promotion's are (`budget_user/2`).
+            args = %{
+              budget_points: cap,
+              budget_tokens: Map.get(tokens, id, 0),
+              unmetered: true,
+              shrink: true
+            }
+
+            if is_integer(cap) and spent + cap <= @unmetered_points_per_day and
+                 args.budget_tokens <= room,
+               do: {[{id, user_id, args}], {spent + cap, room - args.budget_tokens}},
+               else: {[], {spent, room}}
+          end)
+
+        {picked, room}
+      end)
+
+    kept
+  end
+
+  # Estimated Voyage tokens a full re-embed of each note costs: its rows at
+  # half a 2 KB chunk's bytes / 4 (an upper bound for most text).
+  @tokens_per_chunk 512
+
+  defp chunk_tokens(note_ids) do
+    from(c in Chunk,
+      where: c.note_id in ^note_ids,
+      group_by: c.note_id,
+      select: {c.note_id, count()}
+    )
+    |> Repo.all()
+    |> Map.new(fn {id, rows} -> {id, rows * @tokens_per_chunk} end)
+  end
+
+  # Review M4: both 04:00 sweeps together enqueue at most this many
+  # estimated unmetered Voyage tokens a rolling day: 150k a minute over the
+  # hour, the maintenance bucket the v5 pass uses, so they cannot saturate
+  # Voyage's TPM and starve query embeds. Read back from the jobs' own
+  # `budget_tokens` (Oban prunes after 7 days).
+  @maintenance_tokens_per_day 9_000_000
+
+  defp maintenance_token_room(now) do
+    day_ago = DateTime.add(now, -86_400, :second)
+
+    ceiling =
+      Application.get_env(:engram, :maintenance_tokens_per_day, @maintenance_tokens_per_day)
+
+    used =
+      from(j in Oban.Job,
+        where:
+          j.worker == ^inspect(RebuildStaleNote) and j.inserted_at > ^day_ago and
+            not is_nil(j.args["budget_tokens"]) and j.args["unmetered"] == true,
+        select: coalesce(sum(type(j.args["budget_tokens"], :integer)), 0)
+      )
+      |> Repo.one()
+
+    # `sum` over a cast comes back as a Decimal.
+    max(ceiling - Decimal.to_integer(Decimal.new(used)), 0)
+  end
 
   # A promotion costs the note's `chunk_count` (stamped by the pass that
   # floored or merged it), at most its per-note cap: exact for a note under
@@ -497,7 +580,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     Repo.with_tenant!(user.id, fn ->
       notes = budget_notes(user.id, now)
       jobs = budget_jobs(user.id, now)
-      pending = for j <- jobs, j.pending, into: %{}, do: {j.note_id, j.points}
+      pending = for j <- jobs, j.pending, not j.shrink, into: %{}, do: {j.note_id, j.points}
 
       # `Indexing.points_budget_ok?/3`'s count (every chunk row), with each note at what it will
       # hold: a floor note its floor points (one per MiB, `floor_points/1`), a
@@ -576,6 +659,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         note_id: j.args["note_id"],
         points: j.args["budget_points"],
         unmetered: j.args["unmetered"] == true,
+        shrink: j.args["shrink"] == true,
         inserted_at: j.inserted_at,
         pending: j.state in ^pending
       }
@@ -649,12 +733,19 @@ defmodule Engram.Workers.ReconcileEmbeddings do
           reduce: 0,
           do: (acc -> acc + j.points)
 
+    room = maintenance_token_room(now)
+
     {_acc, _spent, picked} =
       notes
       |> Enum.reject(&(&1.busy or Map.has_key?(pending, to_string(&1.id))))
       |> Enum.flat_map(&promotion(&1, user.note_cap))
       |> Enum.reduce_while({projected, spent, []}, fn {n, args}, {acc, spent, picked} ->
+        tokens = for({_id, a} <- picked, a.unmetered, reduce: 0, do: (t -> t + a.budget_tokens))
+
         cond do
+          args.unmetered and tokens + args.budget_tokens > room ->
+            {:cont, {acc, spent, picked}}
+
           length(picked) == @budget_notes ->
             {:halt, {acc, spent, picked}}
 
@@ -689,15 +780,26 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   defp promotion(n, note_cap) do
     est = n.chunk_count || max(div(n.span + @chars_per_point - 1, @chars_per_point), 1)
     est = if note_cap, do: min(est, note_cap), else: est
+    # A promotion re-embeds the note's whole text: its byte span / 4.
+    tok = Engram.UsageMeters.estimate_tokens(n.span)
 
     cond do
       floored?(n) ->
         unmetered = n.tier == "floor_paid"
-        [{n, %{index_budget: "promote", budget_points: est, unmetered: unmetered}}]
+
+        [
+          {n,
+           %{
+             index_budget: "promote",
+             budget_points: est,
+             unmetered: unmetered,
+             budget_tokens: tok
+           }}
+        ]
 
       is_nil(n.tier) and n.dense == true and n.chunk_count != nil and
           (is_nil(note_cap) or not Indexing.merges?(n.chunk_count, note_cap, true)) ->
-        [{n, %{recap: true, budget_points: est, unmetered: true}}]
+        [{n, %{recap: true, budget_points: est, unmetered: true, budget_tokens: tok}}]
 
       true ->
         []

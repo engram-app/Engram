@@ -716,6 +716,47 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
     end
   end
 
+  # Review L3 and M4: a recap is unmetered maintenance, so its jobs carry
+  # `budget_points` and count against the user's 2,000-a-day ceiling, and
+  # both 04:00 sweeps stop at a global maintenance-token ceiling a day.
+  describe "maintenance ceilings" do
+    defp reverify_tick, do: DateTime.new!(Date.utc_today(), ~T[04:02:00])
+
+    defp recap_jobs, do: for(j <- all_enqueued(worker: RebuildStaleNote), j.args["recap"], do: j)
+
+    test "recap jobs carry budget_points and stop at the daily ceiling", %{
+      user: user,
+      vault: vault
+    } do
+      # 20 dense notes of 200 chunks: over the 128 cap, 128 points each.
+      full_notes(user, vault, 20, 200)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
+      jobs = recap_jobs()
+      assert jobs != []
+      assert Enum.all?(jobs, &(&1.args["budget_points"] == 128 and &1.args["unmetered"]))
+      assert jobs |> Enum.map(& &1.args["budget_points"]) |> Enum.sum() <= 2_000
+    end
+
+    test "nothing is queued past the global maintenance-token ceiling", %{
+      user: user,
+      vault: vault
+    } do
+      prev = Application.get_env(:engram, :maintenance_tokens_per_day)
+      Application.put_env(:engram, :maintenance_tokens_per_day, 0)
+
+      on_exit(fn ->
+        if is_nil(prev),
+          do: Application.delete_env(:engram, :maintenance_tokens_per_day),
+          else: Application.put_env(:engram, :maintenance_tokens_per_day, prev)
+      end)
+
+      full_notes(user, vault, 3, 200)
+      assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: reverify_tick())
+      assert recap_jobs() == []
+    end
+  end
+
   describe "review fixes" do
     test "users with nothing promotable never crowd out one that can promote", %{vault: vault} do
       # 24 Free users whose merged notes still exceed the 128 per-note cap,
