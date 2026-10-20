@@ -99,6 +99,36 @@ defmodule Engram.Vector.QdrantCollectionTest do
     end
   end
 
+  # Each waited index create is a fsync'd round trip; nine in a row on a
+  # fresh collection spent the 60s CI test budget on a busy disk (the #2064
+  # stall). Index ops apply in order on each shard, so waiting on the LAST
+  # one means all are built (checked on 1.19.2: 9 fields over 3000 points on
+  # 2 shards, all indexed when the last create returned).
+  test "only the last payload index create waits", %{bypass: bypass} do
+    test_pid = self()
+
+    Bypass.expect_once(bypass, "PUT", "/collections/c1", fn conn ->
+      Plug.Conn.send_resp(conn, 200, "{}")
+    end)
+
+    Bypass.expect(bypass, "PUT", "/collections/c1/index", fn conn ->
+      send(test_pid, {:wait, URI.decode_query(conn.query_string)["wait"]})
+      Plug.Conn.send_resp(conn, 200, ~s({"status":"ok"}))
+    end)
+
+    assert :ok = Qdrant.ensure_collection("c1", 1024)
+
+    waits =
+      for _ <- 1..(length(@indexed_fields) + length(@integer_indexed_fields)) do
+        assert_receive {:wait, wait}
+        wait
+      end
+
+    assert List.last(waits) == "true"
+    assert Enum.all?(Enum.drop(waits, -1), &(&1 == "false"))
+    refute_received {:wait, _}
+  end
+
   test "does NOT re-create payload indexes an existing collection already has",
        %{bypass: bypass} do
     test_pid = self()

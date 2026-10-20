@@ -337,26 +337,38 @@ defmodule Engram.Vector.Qdrant do
     keyword = Enum.map(@payload_index_fields, &{&1, "keyword"})
     integer = Enum.map(@integer_payload_index_fields, &{&1, "integer"})
 
-    (keyword ++ integer)
-    |> Enum.reject(fn {field, _schema} -> MapSet.member?(indexed, field) end)
-    |> Enum.reduce_while(:ok, fn {field, schema}, :ok ->
-      case create_payload_index(col, field, schema) do
+    missing = Enum.reject(keyword ++ integer, fn {field, _} -> MapSet.member?(indexed, field) end)
+    last = length(missing) - 1
+
+    # Only the last create waits. Index ops apply in order on each shard, so
+    # once the last is built every earlier one is too, and nine waited
+    # fsync-bound builds in a row became one (the #2064 CI stall; verified on
+    # 1.19.2 over 3000 points on 2 shards).
+    missing
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {{field, schema}, i}, :ok ->
+      case create_payload_index(col, field, schema, i == last) do
         :ok -> {:cont, :ok}
         error -> {:halt, error}
       end
     end)
   end
 
-  defp create_payload_index(col, field, schema) do
-    # `?wait=true` blocks until the index is built over every existing point,
-    # which on a large collection outlasts the default indexing budget. A
-    # timeout here fails `ensure_collection` (deliberately not memoised), so
-    # every retrying job would re-issue the same build. Give it its own.
+  defp create_payload_index(col, field, schema, wait?) do
+    # A waited create blocks until the index is built over every existing
+    # point, which on a large collection outlasts the default indexing
+    # budget. A timeout here fails `ensure_collection` (deliberately not
+    # memoised), so every retrying job would re-issue the same build. Give it
+    # its own.
     opts =
-      [json: %{field_name: field, field_schema: schema}, receive_timeout: 120_000] ++ req_opts()
+      [
+        json: %{field_name: field, field_schema: schema},
+        params: [wait: wait?],
+        receive_timeout: 120_000
+      ] ++ req_opts()
 
     instrument(:create_payload_index, fn ->
-      case Req.put("#{base_url()}/collections/#{col}/index?wait=true", opts) do
+      case Req.put("#{base_url()}/collections/#{col}/index", opts) do
         {:ok, %{status: status}} when status in [200, 201] -> :ok
         {:ok, %{status: status, body: body}} -> {:error, {status, body}}
         {:error, reason} -> {:error, reason}
