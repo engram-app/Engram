@@ -22,6 +22,13 @@ defmodule EngramWeb.Schemas.UpsertNoteRequest do
       path: %Schema{type: :string},
       content: %Schema{type: :string},
       mtime: %Schema{type: :number, format: :float},
+      ctime: %Schema{
+        type: :number,
+        format: :float,
+        nullable: true,
+        description:
+          "Client file creation time (epoch seconds). Optional; omitted by older plugins."
+      },
       version: %Schema{type: :integer, nullable: true},
       base_hash: %Schema{
         type: :string,

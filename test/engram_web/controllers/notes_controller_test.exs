@@ -24,6 +24,14 @@ defmodule EngramWeb.NotesControllerTest do
       assert note["version"] == 1
     end
 
+    test "accepts ctime and returns it", %{conn: conn} do
+      conn =
+        post(conn, "/api/notes", %{path: "Test/C.md", content: "# c", mtime: 2.0, ctime: 1.5})
+
+      assert %{"note" => note} = json_response(conn, 200)
+      assert note["ctime"] == 1.5
+    end
+
     test "upserts an existing note and increments version", %{conn: conn} do
       post(conn, "/api/notes", %{path: "Test/File.md", content: "# v1", mtime: 1_000.0})
 

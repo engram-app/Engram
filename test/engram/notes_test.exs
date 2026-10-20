@@ -28,6 +28,31 @@ defmodule Engram.NotesTest do
   # class; every reject/rewrite/conflict must leave a queryable server trace.
   # ---------------------------------------------------------------------------
 
+  describe "client ctime" do
+    test "is stored on create and kept when a later push omits it", %{user: user, vault: vault} do
+      attrs = %{"path" => "ct.md", "content" => "one", "mtime" => 1.0, "ctime" => 500.0}
+      {:ok, note} = Notes.upsert_note(user, vault, attrs, actor: "api")
+      assert note.ctime == 500.0
+
+      # older plugin: no ctime key, must not null it
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "ct.md", "content" => "two", "mtime" => 2.0},
+          actor: "api"
+        )
+
+      assert note.ctime == 500.0
+    end
+
+    test "is nil when never sent", %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "ct2.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
+
+      assert note.ctime == nil
+    end
+  end
+
   describe "write-rejection logging" do
     import ExUnit.CaptureLog
 

@@ -1501,6 +1501,14 @@
             "x-struct": null,
             "x-validate": null
           },
+          "ctime": {
+            "description": "Client file creation time (epoch seconds). Optional; omitted by older plugins.",
+            "format": "float",
+            "nullable": true,
+            "type": "number",
+            "x-struct": null,
+            "x-validate": null
+          },
           "folder": {
             "nullable": true,
             "type": "string",
@@ -1602,6 +1610,14 @@
           "content_hash": {
             "nullable": true,
             "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "ctime": {
+            "description": "Client file creation time (epoch seconds)",
+            "format": "float",
+            "nullable": true,
+            "type": "number",
             "x-struct": null,
             "x-validate": null
           },
@@ -2721,6 +2737,13 @@
           "content_hash": {
             "nullable": true,
             "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "ctime": {
+            "format": "float",
+            "nullable": true,
+            "type": "number",
             "x-struct": null,
             "x-validate": null
           },

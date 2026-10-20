@@ -77,6 +77,7 @@ defmodule Engram.Notes do
     :content_hash,
     :embed_hash,
     :mtime,
+    :ctime,
     :deleted_at,
     :title_ciphertext,
     :title_nonce,
@@ -694,6 +695,8 @@ defmodule Engram.Notes do
         updated_at: now
       }
 
+      base_attrs = put_client_ctime(base_attrs, attrs)
+
       {:ok, lookup_query} = note_by_path_query(user, vault, sanitized_path)
       opts = prepare_expected(opts, base_attrs, user, sanitized_path, folder)
 
@@ -856,6 +859,15 @@ defmodule Engram.Notes do
         {:error, _} = err ->
           err
       end
+    end
+  end
+
+  # Only carry ctime when sent: the key's absence leaves a stored value
+  # untouched on update (older plugins must not null it).
+  defp put_client_ctime(base_attrs, attrs) do
+    case attrs["ctime"] || attrs[:ctime] do
+      nil -> base_attrs
+      ctime -> Map.put(base_attrs, :ctime, ctime)
     end
   end
 
