@@ -867,8 +867,11 @@ defmodule Engram.BillingTest do
         }
       }
 
-      assert {:ok, %Subscription{status: "past_due", tier: "pro"}} =
+      assert {:ok, %Subscription{status: "past_due", tier: "pro"} = sub} =
                Billing.upsert_from_paddle_event(event)
+
+      # The forwarder reads the pre-update state to name the change.
+      assert sub.previous == %{tier: "starter", status: "trialing"}
 
       # An upgrade can lift the index cap: the backfill starts now.
       assert_enqueued(worker: Engram.Workers.ReconcileEmbeddings)
@@ -889,7 +892,10 @@ defmodule Engram.BillingTest do
         }
       }
 
-      assert {:ok, %Subscription{status: "canceled"}} = Billing.upsert_from_paddle_event(event)
+      assert {:ok, %Subscription{status: "canceled"} = sub} =
+               Billing.upsert_from_paddle_event(event)
+
+      assert sub.previous == %{tier: "starter", status: "active"}
     end
 
     # The Free stamp failing (`:not_found`) must not roll back the cancel:
@@ -936,6 +942,32 @@ defmodule Engram.BillingTest do
     test "unknown event types return {:ok, :ignored}" do
       event = %{"event_type" => "transaction.completed", "data" => %{}}
       assert {:ok, :ignored} = Billing.upsert_from_paddle_event(event)
+    end
+
+    # Adjustments carry no custom_data, so the owner is found through the
+    # subscription they belong to. Nothing is written.
+    test "adjustment.* resolves the owner's subscription and changes nothing" do
+      user = insert(:user)
+      sub = insert(:subscription, user: user, paddle_subscription_id: "sub_adj_1")
+
+      for type <- ~w(adjustment.created adjustment.updated) do
+        event = %{
+          "event_type" => type,
+          "data" => %{"subscription_id" => "sub_adj_1", "action" => "refund"}
+        }
+
+        assert {:ok, %Subscription{id: id, status: "active"}} =
+                 Billing.upsert_from_paddle_event(event)
+
+        assert id == sub.id
+      end
+    end
+
+    test "adjustment.* with no known subscription is ignored" do
+      for data <- [%{"subscription_id" => "sub_nope"}, %{"subscription_id" => nil}] do
+        event = %{"event_type" => "adjustment.created", "data" => data}
+        assert {:ok, :ignored} = Billing.upsert_from_paddle_event(event)
+      end
     end
   end
 

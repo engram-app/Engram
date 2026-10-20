@@ -958,6 +958,10 @@ export default {
 	"Why {tool} can't be connected": "Mengapa {tool} tidak dapat disambungkan",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Senarai ini tidak lengkap, pilih {client} jika alat anda tidak ada di sini.",
+	"Customer insights": "Cerapan pelanggan",
+	"User ID": "ID pengguna",
+	"Show timeline": "Tunjukkan baris masa",
+	"Failed to load the report.": "Gagal memuatkan laporan.",
 	Account: "Akaun",
 	"Manage your profile, password, and account.": "Urus profil, kata laluan dan akaun anda.",
 	"Manage your profile, security, and active sessions.":

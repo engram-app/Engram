@@ -44,12 +44,13 @@ defmodule EngramWeb.NotesController do
       user = conn.assigns.current_user
       vault = conn.assigns.current_vault
       actor = EngramWeb.WriteActor.for_conn(conn)
+      surface = EngramWeb.WriteActor.surface(conn)
 
       # One transaction: the write, its job inserts and the response's links
       # read. Rendered inside it, sent after it commits.
       result =
         in_write_txn(user, fn user ->
-          case Notes.upsert_note(user, vault, params, actor: actor) do
+          case Notes.upsert_note(user, vault, params, actor: actor, surface: surface) do
             {:ok, note} -> {:ok, note_json(note, user)}
             {:error, :version_conflict, server} -> {:conflict, note_json(server, user)}
             other -> other
@@ -171,7 +172,8 @@ defmodule EngramWeb.NotesController do
                  "content" => "# #{filename}\n\n#{text}",
                  "mtime" => System.os_time(:second) * 1.0
                },
-               actor: actor
+               actor: actor,
+               surface: EngramWeb.WriteActor.surface(conn)
              )
              |> render_in_txn(user)}
 

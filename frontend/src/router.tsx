@@ -73,6 +73,8 @@ const AgreementPage = lazy(() => whenLoaded(import("./onboarding/agreement-page"
 const HeardPage = lazy(() => whenLoaded(import("./onboarding/heard-page")));
 const OnboardBillingPage = lazy(() => whenLoaded(import("./onboarding/onboard-billing-page")));
 const OnboardVaultPage = lazy(() => whenLoaded(import("./onboarding/onboard-vault-page")));
+// Operator-only; renders the 404 page for everyone else.
+const OperatorInsightsPage = lazy(() => whenLoaded(import("./operator/insights-page")));
 
 const routeFallback = <LoadingPane />;
 
@@ -200,6 +202,9 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 								// Claude Desktop) initiating a connection during signup can complete
 								// the OAuth dance without being bounced to /onboard.
 								{ path: ROUTES.OAUTH_CONSENT, element: suspended(<OAuthAuthorizePage />) },
+
+								// Operator insights: outside the onboarding gate and the app shell.
+								{ path: ROUTES.OPERATOR_INSIGHTS, element: suspended(<OperatorInsightsPage />) },
 
 								// Dashboard tree — gated by OnboardingGate.
 								{

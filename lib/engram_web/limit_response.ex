@@ -39,6 +39,12 @@ defmodule EngramWeb.LimitResponse do
       "upgrade_url" => upgrade_url
     }
 
+    if user = conn.assigns[:current_user] do
+      Engram.Analytics.track_limit_hit(user, limit_key || reason, %{
+        surface: EngramWeb.Plugs.WebActivity.surface(conn.assigns)
+      })
+    end
+
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(402, Jason.encode!(body))

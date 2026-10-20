@@ -1023,6 +1023,10 @@ export default {
 	"Why {tool} can't be connected": "Proč {tool} nelze připojit",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Není to úplný seznam, vyberte {client}, pokud váš není uveden.",
+	"Customer insights": "Získávání informací o zákaznících",
+	"User ID": "ID uživatele",
+	"Show timeline": "Zobrazit časovou osu",
+	"Failed to load the report.": "Nepodařilo se načíst zprávu.",
 	Account: "Účet",
 	"Manage your profile, password, and account.": "Spravujte svůj profil heslo a účet.",
 	"Manage your profile, security, and active sessions.":

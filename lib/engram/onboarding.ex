@@ -594,8 +594,13 @@ defmodule Engram.Onboarding do
   :invalid_tools_prefilled | :invalid_signup_source | :nothing_to_set`.
   """
   def set_profile(user, attrs) when is_map(attrs) do
+    attrs = normalize_attribution(attrs)
+
     with :ok <- validate_profile_attrs(attrs) do
       existing = fresh_profile(user) || %{}
+
+      # First touch wins: attribution describes how the account arrived.
+      attrs = if existing["attribution"], do: Map.delete(attrs, :attribution), else: attrs
 
       merged =
         existing
@@ -603,6 +608,7 @@ defmodule Engram.Onboarding do
         |> maybe_put_field(attrs, :tools_prefilled, "tools_prefilled")
         |> maybe_put_field(attrs, :uses_obsidian, "uses_obsidian")
         |> maybe_put_field(attrs, :signup_source, "signup_source")
+        |> maybe_put_field(attrs, :attribution, "attribution")
         |> maybe_stamp_completed_at()
 
       user
@@ -630,11 +636,59 @@ defmodule Engram.Onboarding do
           :ok
       end)
       |> tap(fn
-        {:ok, saved} -> track_signup_source(saved, attrs, existing)
-        _ -> :ok
+        {:ok, saved} ->
+          track_signup_source(saved, attrs, existing)
+          track_attribution(saved, attrs)
+
+        _ ->
+          :ok
       end)
     end
   end
+
+  # Signup attribution the SPA carried from the marketing site (`?via=`,
+  # `utm_*`) plus the referring domain. Client-supplied, so only allowlisted
+  # keys survive, each clamped to 64 characters of a URL-token charset: a
+  # value that could carry a note title or a path never reaches PostHog.
+  @attribution_keys ~w(utm_source utm_medium utm_campaign utm_content via referrer_domain)
+  @attribution_max 64
+
+  defp normalize_attribution(%{attribution: raw} = attrs) when is_map(raw) do
+    clean =
+      for {k, v} when k in @attribution_keys and is_binary(v) <- raw,
+          v = attribution_value(k, String.slice(v, 0, @attribution_max)),
+          v != nil,
+          into: %{},
+          do: {k, v}
+
+    Map.put(attrs, :attribution, if(clean == %{}, do: :invalid, else: clean))
+  end
+
+  defp normalize_attribution(%{attribution: _} = attrs),
+    do: Map.put(attrs, :attribution, :invalid)
+
+  defp normalize_attribution(attrs), do: attrs
+
+  defp attribution_value("referrer_domain", v) do
+    v = String.downcase(v)
+    if v =~ ~r/\A[a-z0-9.-]+\z/, do: v
+  end
+
+  defp attribution_value(_key, v), do: if(v =~ ~r/\A[A-Za-z0-9._~-]+\z/, do: v)
+
+  defp track_attribution(user, %{attribution: fields}) when is_map(fields) do
+    profile = user.onboarding_profile || %{}
+
+    # Only a signup with no plugin or connector origin started on the website.
+    set_once =
+      if is_nil(profile["signup_source"]) and not tools_prefilled?(profile),
+        do: Map.put(fields, "signup_source", "website"),
+        else: fields
+
+    Engram.Analytics.track(user, "signup_attributed", Map.put(fields, "$set_once", set_once))
+  end
+
+  defp track_attribution(_user, _attrs), do: :ok
 
   # Fields that qualify another, never standalone facts, sent without it.
   # `tools_prefilled` alone would let a stray POST turn an ordinary signup
@@ -651,10 +705,15 @@ defmodule Engram.Onboarding do
     has_source = Map.has_key?(attrs, :uses_obsidian)
     has_prefilled = Map.has_key?(attrs, :tools_prefilled)
     has_signup_source = Map.has_key?(attrs, :signup_source)
+    has_attribution = Map.has_key?(attrs, :attribution)
 
     cond do
-      not has_tools and not has_source and not has_prefilled and not has_signup_source ->
+      not has_tools and not has_source and not has_prefilled and not has_signup_source and
+          not has_attribution ->
         {:error, :nothing_to_set}
+
+      Map.get(attrs, :attribution) == :invalid ->
+        {:error, :invalid_attribution}
 
       has_signup_source and Map.get(attrs, :signup_source) not in @signup_sources ->
         {:error, :invalid_signup_source}
@@ -763,6 +822,7 @@ defmodule Engram.Onboarding do
           end
 
         Vaults.WelcomeNote.seed(user, vault)
+        Vaults.track_created(user, vault, "mcp")
         _ = record_action(user.id, @connector_vault_action)
 
       {:ok, _vault, :existing} ->

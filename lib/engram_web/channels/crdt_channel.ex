@@ -395,10 +395,14 @@ defmodule EngramWeb.CrdtChannel do
              origin: socket.assigns[:client_type],
              seed: seed
            ) do
+        # A bulk import creates notes without ever sending an edit frame, so
+        # count the create itself or an import-only user never shows as active.
         {:seeded, note, outcome} ->
+          note_created_activity(socket)
           reply_created(note, reconcile_with_row(outcome, note), socket)
 
         {:ok, note} ->
+          note_created_activity(socket)
           reply_created(note, note |> seed.() |> reconcile_with_row(note), socket)
 
         {:adopted, note} ->
@@ -417,15 +421,23 @@ defmodule EngramWeb.CrdtChannel do
           {:reply, {:ok, %{doc_id: note.id, seeded: false, genesis: "occupied"}}, socket}
 
         {:error, :id_conflict, note} ->
+          sync_error(socket, :id_conflict)
           {:reply, {:error, %{reason: "id_conflict", doc_id: note.id}}, socket}
 
         {:error, :version_conflict, note} ->
+          sync_error(socket, :version_conflict)
           {:reply, {:error, %{reason: "version_conflict", doc_id: note.id}}, socket}
 
         {:error, {:notes_cap_reached, limit, _count}} ->
+          Engram.Analytics.track_limit_hit(socket.assigns.current_user, :notes_cap, %{
+            surface: Atom.to_string(activity_surface(socket.assigns[:client_type]))
+          })
+
           {:reply, {:error, %{reason: "notes_cap_reached", limit: limit}}, socket}
 
         {:error, :recently_deleted} ->
+          sync_error(socket, :recently_deleted)
+
           # Delete-wins (#970): a stale device tried to un-delete a note within
           # the delete window. The delete stands; the client trashes its local
           # copy on this reply instead of wedging on a resurrect forever.
@@ -1953,28 +1965,61 @@ defmodule EngramWeb.CrdtChannel do
   # STEP2 and mutate at 10x the intended cap.
   @hs_step2_max_b64 4096
 
-  # Product analytics: the user pushed a real edit, not merely connected. Join
-  # and handshake frames are deliberately excluded (an idle plugin reconnects
-  # and handshakes every note without the user doing anything).
+  # Product analytics: the user pushed a real edit or created a note, not merely
+  # connected. Join and handshake frames are deliberately excluded (an idle
+  # plugin reconnects and handshakes every note without the user doing anything).
   #
   # `plugin_version` and `client_type` are already length-bounded at the socket /
   # join boundary (user_socket.ex bounded_version/1, client_type/1 above), so
   # they are safe to forward. They give plugin-version adoption for free.
+  # The web editor creates one note per click, so it gets `note_created` like a
+  # REST create. Obsidian creates arrive as a bulk import: no per-note event,
+  # one request per note would flood PostHog.
+  defp note_created_activity(%{assigns: %{client_type: "web"}} = socket) do
+    note_sync_activity(socket)
+
+    Engram.Analytics.track(socket.assigns.current_user, "note_created", %{
+      vault_id: socket.assigns.vault.id,
+      surface: "web"
+    })
+  end
+
+  defp note_created_activity(socket), do: note_sync_activity(socket)
+
   defp note_sync_activity(socket) do
     props =
       %{
         plugin_version: socket.assigns[:plugin_version],
-        client_type: socket.assigns[:client_type]
+        client_type: socket.assigns[:client_type],
+        platform: socket.assigns[:platform]
       }
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new()
 
+    client_type = socket.assigns[:client_type]
+
+    # The web editor shares surface "web" with browsing; its own window keeps
+    # an edit from being throttled away by a page load a minute earlier.
+    opts = if client_type == "web", do: [dedupe: "web_editor"], else: []
+
     Engram.Analytics.track_activity(
       socket.assigns.current_user,
-      :obsidian_sync,
-      props
+      activity_surface(client_type),
+      props,
+      opts
     )
   end
+
+  defp sync_error(socket, kind) do
+    Engram.Analytics.track_sync_error(socket.assigns.current_user, kind, %{
+      surface: Atom.to_string(activity_surface(socket.assigns[:client_type]))
+    })
+  end
+
+  # The SPA's editor joins this channel too (client_type "web"). An untagged
+  # client is an older plugin, so only an explicit "web" leaves obsidian_sync.
+  defp activity_surface("web"), do: :web
+  defp activity_surface(_client_type), do: :obsidian_sync
 
   defp frame_class_b64(<<prefix::binary-size(4), _::binary>> = b64) do
     case Base.decode64(prefix) do

@@ -974,6 +974,10 @@ export default {
 	"Why {tool} can't be connected": "Warum {tool} nicht verbunden werden kann",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Keine vollständige Liste, wähle {client}, wenn deins nicht dabei ist.",
+	"Customer insights": "Kundeninformationen",
+	"User ID": "Benutzer-ID",
+	"Show timeline": "Zeitleiste anzeigen",
+	"Failed to load the report.": "Fehler beim Laden des Berichts.",
 	Account: "Konto",
 	"Manage your profile, password, and account.":
 		"Verwalte dein Profil, dein Passwort und dein Konto.",

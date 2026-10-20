@@ -283,6 +283,30 @@ defmodule Engram.Vaults do
     end
   end
 
+  @doc """
+  Product analytics for a vault a caller just created: `vault_created` with
+  the user's live vault count as `vault_number` and the `surface` it came
+  from. Ids and counts only, never the name.
+  """
+  @spec track_created(map(), Vault.t(), String.t()) :: :ok
+  def track_created(user, %Vault{id: id}, surface) do
+    Engram.Analytics.track(user, "vault_created", %{
+      vault_id: id,
+      vault_number: length(list_vaults(user)),
+      surface: surface
+    })
+  end
+
+  @doc "`vault_deleted` for a vault a caller just deleted, with the live vaults left."
+  @spec track_deleted(map(), Vault.t(), String.t()) :: :ok
+  def track_deleted(user, %Vault{id: id}, surface) do
+    Engram.Analytics.track(user, "vault_deleted", %{
+      vault_id: id,
+      vaults_left: length(list_vaults(user)),
+      surface: surface
+    })
+  end
+
   # ── List ────────────────────────────────────────────────────────────────────
 
   @doc """

@@ -953,6 +953,10 @@ export default {
 	"Why {tool} can't be connected": "なぜ{tool}に接続できないのか",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"完全なリストではありません。こちらにない場合は{client}を選択してください。",
+	"Customer insights": "顧客インサイト",
+	"User ID": "ユーザーID",
+	"Show timeline": "タイムラインを表示",
+	"Failed to load the report.": "レポートの読み込みに失敗しました。",
 	Account: "アカウント",
 	"Manage your profile, password, and account.":
 		"プロフィール、パスワード、アカウントを管理します。",

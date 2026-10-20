@@ -960,6 +960,10 @@ export default {
 	"Why {tool} can't be connected": "Mengapa {tool} tidak dapat terhubung",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Daftar ini tidak lengkap, pilih {client} jika milik Anda tidak ada di sini.",
+	"Customer insights": "Wawasan pelanggan",
+	"User ID": "ID pengguna",
+	"Show timeline": "Tampilkan linimasa",
+	"Failed to load the report.": "Gagal memuat laporan.",
 	Account: "Akun",
 	"Manage your profile, password, and account.": "Kelola profil kata sandi dan akun Anda.",
 	"Manage your profile, security, and active sessions.":

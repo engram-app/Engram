@@ -273,7 +273,9 @@ defmodule Engram.Accounts do
   operator handling a privacy@ request runs it from a release shell:
   `{:ok, u} = find_by_normalized_email(EmailNormalizer.normalize(email))`, then
   `set_analytics_opt_out(u)`. A repeat keeps the original time and queues
-  erasure again. The stamp and the erasure jobs commit together or not at all.
+  erasure again. Our own copy (`analytics_events` and the daily snapshots) is
+  deleted with it, so withdrawing the objection later brings nothing back. The
+  stamp, the deletes and the erasure jobs commit together or not at all.
   """
   @spec set_analytics_opt_out(User.t()) :: {:ok, User.t()} | {:error, term()}
   def set_analytics_opt_out(%User{} = user) do
@@ -285,9 +287,25 @@ defmodule Engram.Accounts do
              )
              |> Repo.update(skip_tenant_check: true),
            :ok <- Engram.Analytics.erase(user) do
+        :ok = delete_analytics_history(user.id)
+        Repo.after_commit(fn -> Engram.Analytics.EventLog.discard(user.id) end)
         {:ok, updated}
       end
     end)
+  end
+
+  # Our own copy goes with the PostHog person: the event log and the daily
+  # snapshots. Not tenant tables (no RLS), so no tenant scope applies.
+  defp delete_analytics_history(user_id) do
+    for schema <- [
+          Engram.Analytics.Event,
+          Engram.Insights.UserDailyMetric,
+          Engram.Insights.VaultDailyMetric
+        ] do
+      Repo.delete_all(from(r in schema, where: r.user_id == ^user_id))
+    end
+
+    :ok
   end
 
   @doc """

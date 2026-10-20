@@ -131,7 +131,10 @@ defmodule EngramWeb.UserSocket do
       conn_id: conn_id,
       device_id: device_id,
       vault_id_param: vault_id,
-      plugin_version: plugin_version
+      plugin_version: plugin_version,
+      # Product analytics only (forwarded on surface_active). An enum, so a
+      # client can never put free text into an event.
+      platform: if(params["platform"] in ~w(desktop mobile), do: params["platform"])
     })
   end
 

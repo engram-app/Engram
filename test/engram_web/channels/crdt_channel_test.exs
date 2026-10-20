@@ -3378,6 +3378,7 @@ defmodule EngramWeb.CrdtChannelTest do
       {:ok, _, joined} =
         user_socket(user)
         |> Phoenix.Socket.assign(:plugin_version, "1.36.0")
+        |> Phoenix.Socket.assign(:platform, "mobile")
         |> subscribe_and_join(EngramWeb.CrdtChannel, "crdt:#{user.id}:#{vault.id}", %{
           "crdt_proto" => 2,
           "client_type" => "obsidian"
@@ -3393,6 +3394,179 @@ defmodule EngramWeb.CrdtChannelTest do
       [body] = Enum.filter(drain_posthog([]), &(&1["event"] == "surface_active"))
       assert body["properties"]["plugin_version"] == "1.36.0"
       assert body["properties"]["client_type"] == "obsidian"
+      assert body["properties"]["platform"] == "mobile"
+    end
+
+    test "an edit from the web editor counts as web, not obsidian_sync", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/w.md", "content" => "base"},
+          actor: "api"
+        )
+
+      {:ok, _, joined} =
+        subscribe_and_join(
+          user_socket(user),
+          EngramWeb.CrdtChannel,
+          "crdt:#{user.id}:#{vault.id}",
+          %{
+            "crdt_proto" => 2,
+            "client_type" => "web"
+          }
+        )
+
+      Sandbox.allow(Repo, self(), joined.channel_pid)
+
+      frame = client_sync_update(joined, note.id, "WEB-")
+      ref = push(joined, "crdt_doc_update", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
+      assert_reply ref, :ok, %{doc_id: _}, 3000
+
+      Process.sleep(400)
+      [body] = Enum.filter(drain_posthog([]), &(&1["event"] == "surface_active"))
+      assert body["properties"]["surface"] == "web"
+    end
+
+    # Browsing (the Clerk plug) and editing share surface "web"; a shared
+    # throttle let whichever came first in the window hide the other.
+    test "web editor activity is not masked by web browsing in the same window", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/m.md", "content" => "base"},
+          actor: "api"
+        )
+
+      Engram.Analytics.track_activity(user, :web)
+
+      {:ok, _, joined} =
+        subscribe_and_join(
+          user_socket(user),
+          EngramWeb.CrdtChannel,
+          "crdt:#{user.id}:#{vault.id}",
+          %{
+            "crdt_proto" => 2,
+            "client_type" => "web"
+          }
+        )
+
+      Sandbox.allow(Repo, self(), joined.channel_pid)
+
+      frame = client_sync_update(joined, note.id, "MASK-")
+      ref = push(joined, "crdt_doc_update", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
+      assert_reply ref, :ok, %{doc_id: _}, 3000
+
+      Process.sleep(400)
+      active = Enum.filter(drain_posthog([]), &(&1["event"] == "surface_active"))
+      assert length(active) == 2
+      assert Enum.any?(active, &(&1["properties"]["client_type"] == "web"))
+    end
+
+    test "creating a note over crdt_create is obsidian_sync activity", %{socket: socket} do
+      ref =
+        push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "Notes/new.md"})
+
+      assert_reply ref, :ok, %{doc_id: _}, 3000
+
+      Process.sleep(400)
+      [body] = Enum.filter(drain_posthog([]), &(&1["event"] == "surface_active"))
+      assert body["properties"]["surface"] == "obsidian_sync"
+    end
+
+    test "a create that carries its body is still obsidian_sync activity", %{socket: socket} do
+      ref =
+        push(socket, "crdt_create", %{
+          "doc_id" => Ecto.UUID.generate(),
+          "path" => "Notes/seeded.md",
+          "b64" => frame_for_content("body")
+        })
+
+      assert_reply ref, :ok, %{genesis: "stored"}, 3000
+
+      Process.sleep(400)
+      [body] = Enum.filter(drain_posthog([]), &(&1["event"] == "surface_active"))
+      assert body["properties"]["surface"] == "obsidian_sync"
+    end
+
+    test "a note created in the web editor fires note_created with surface web", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _, joined} =
+        subscribe_and_join(
+          user_socket(user),
+          EngramWeb.CrdtChannel,
+          "crdt:#{user.id}:#{vault.id}",
+          %{"crdt_proto" => 2, "client_type" => "web"}
+        )
+
+      Sandbox.allow(Repo, self(), joined.channel_pid)
+
+      ref =
+        push(joined, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "Notes/web.md"})
+
+      assert_reply ref, :ok, %{doc_id: _}, 3000
+
+      Process.sleep(400)
+      [body] = Enum.filter(drain_posthog([]), &(&1["event"] == "note_created"))
+      assert body["properties"]["surface"] == "web"
+      assert body["properties"]["vault_id"] == vault.id
+    end
+
+    test "an Obsidian crdt_create does not fire note_created (bulk import)", %{socket: socket} do
+      ref =
+        push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "Notes/o.md"})
+
+      assert_reply ref, :ok, %{doc_id: _}, 3000
+
+      Process.sleep(400)
+      assert [] == Enum.filter(drain_posthog([]), &(&1["event"] == "note_created"))
+    end
+
+    test "a create refused by notes_cap fires one throttled limit_hit", %{
+      socket: socket,
+      user: user
+    } do
+      insert(:user_limit_override, user: user, key: "notes_cap", value: %{"v" => 0})
+      # The join already resolved this user's limits into the read-through cache.
+      :ok = Engram.Billing.OverrideCache.evict(user.id)
+
+      for path <- ["Notes/c1.md", "Notes/c2.md"] do
+        ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => path})
+        assert_reply ref, :error, %{reason: "notes_cap_reached"}, 3000
+      end
+
+      Process.sleep(400)
+      assert [body] = Enum.filter(drain_posthog([]), &(&1["event"] == "limit_hit"))
+      assert body["properties"]["limit_key"] == "notes_cap"
+      assert body["properties"]["surface"] == "obsidian_sync"
+      assert body["properties"]["tier"] == "free"
+    end
+
+    test "a create refused as id_conflict reports sync_error", %{
+      socket: socket,
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/idc.md", "content" => "x"},
+          actor: "api"
+        )
+
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/idc-taken.md", "content" => "y"},
+          actor: "api"
+        )
+
+      ref = push(socket, "crdt_create", %{"doc_id" => note.id, "path" => "Notes/idc-taken.md"})
+      assert_reply ref, :error, %{reason: "id_conflict"}, 3000
+
+      Process.sleep(400)
+      assert [body] = Enum.filter(drain_posthog([]), &(&1["event"] == "sync_error"))
+      assert body["properties"]["kind"] == "id_conflict"
+      assert body["properties"]["surface"] == "obsidian_sync"
     end
 
     defp drain_posthog(acc) do

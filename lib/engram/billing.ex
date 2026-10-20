@@ -171,6 +171,23 @@ defmodule Engram.Billing do
     end
   end
 
+  @doc """
+  `cap/2` for a whole tier, ignoring per-user overrides: the env override,
+  else the catalog default. nil means no ceiling. For reports over many users
+  that read the overrides in one query instead of one lookup per user.
+  """
+  @spec tier_cap(:free | :starter | :pro, atom()) :: integer() | nil
+  def tier_cap(tier, key) do
+    limit =
+      case {enforced?(), env_override_lookup(tier, key)} do
+        {false, _} -> nil
+        {true, {:hit, v}} -> v
+        {true, :miss} -> LimitKeys.default_for(key, tier)
+      end
+
+    if is_integer(limit) and limit >= 0, do: limit
+  end
+
   @spec granted?(term(), atom()) :: boolean()
   def granted?(user, key), do: check_feature(user, key) == :ok
 
@@ -779,7 +796,7 @@ defmodule Engram.Billing do
               )
             end
 
-            {:ok, updated}
+            {:ok, %{updated | previous: %{tier: sub.tier, status: sub.status}}}
 
           {:error, reason} ->
             {:error, reason}
@@ -826,7 +843,7 @@ defmodule Engram.Billing do
               Engram.Auth.SessionInvalidator.disconnect_user(updated.user_id)
             end
 
-            {:ok, updated}
+            {:ok, %{updated | previous: %{tier: prev_tier, status: prev_status}}}
 
           err ->
             err
@@ -879,6 +896,19 @@ defmodule Engram.Billing do
     )
 
     {:ok, :ignored}
+  end
+
+  # Refunds and chargebacks. An adjustment carries no custom_data, so the owner
+  # is found through its subscription and handed to the analytics forwarder.
+  # Nothing is written: Paddle's subscription events carry any state change.
+  def upsert_from_paddle_event(%{"event_type" => type, "data" => data})
+      when type in ~w(adjustment.created adjustment.updated) do
+    with id when is_binary(id) <- data["subscription_id"],
+         %Subscription{} = sub <- get_subscription_by_paddle_id(id) do
+      {:ok, sub}
+    else
+      _ -> {:ok, :ignored}
+    end
   end
 
   def upsert_from_paddle_event(%{"event_type" => type}) do

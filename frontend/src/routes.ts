@@ -9,6 +9,7 @@ export const ROUTES = {
 	DEVICE_LINK: "/link",
 	RESET_PASSWORD: "/reset-password",
 	OAUTH_CONSENT: "/oauth/consent",
+	OPERATOR_INSIGHTS: "/operator",
 } as const;
 
 // Every vault-scoped URL sits under this one segment. Vault slugs are

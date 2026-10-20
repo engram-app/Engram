@@ -56,6 +56,8 @@ defmodule Engram.Release do
   "prod moved" — check the infra PR, not this workflow's status.
   """
 
+  import Ecto.Query, only: [from: 2]
+
   alias Engram.Logger.Metadata
 
   require Logger
@@ -208,6 +210,77 @@ defmodule Engram.Release do
 
     for repo <- repos() do
       {:ok, _, _} = Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :up, all: true))
+    end
+  end
+
+  @doc """
+  Grant the platform `operator` role (the operator insights page) to the
+  live account with `email`, from the release console:
+
+      /app/bin/engram eval 'Engram.Release.grant_operator("you@example.com")'
+
+  The ONLY way to grant it: no API, plug or changeset casts `role`
+  (`Engram.Insights.OperatorRoleTest`). Only a `member` can be granted, so a
+  self-host admin is never demoted by it. Logged in `role_change_log` with
+  no actor (the console has no acting user). Returns `:ok` or
+  `{:error, :not_found | {:role_is, role}}`.
+  """
+  @spec grant_operator(String.t()) :: :ok | {:error, term()}
+  def grant_operator(email), do: change_platform_role(email, "member", "operator")
+
+  @doc "Revoke the `operator` role (back to `member`). Logged like a grant."
+  @spec revoke_operator(String.t()) :: :ok | {:error, term()}
+  def revoke_operator(email), do: change_platform_role(email, "operator", "member")
+
+  defp change_platform_role(email, from, to) do
+    _ = load_app()
+    action = if to == "operator", do: "grant_operator", else: "revoke_operator"
+
+    {:ok, result, _} =
+      Ecto.Migrator.with_repo(Engram.Repo, fn repo ->
+        repo.transaction(fn -> set_platform_role(repo, email, from, to, action) end)
+      end)
+
+    case result do
+      {:ok, user_id} ->
+        Logger.info(
+          "#{action} user_id=#{user_id}",
+          Metadata.with_category(:info, :lifecycle, [])
+        )
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp set_platform_role(repo, email, from, to, action) do
+    email = email |> String.trim() |> String.downcase()
+
+    user =
+      repo.one(
+        from(u in Engram.Accounts.User,
+          where: fragment("lower(?)", u.email) == ^email and is_nil(u.deleted_at),
+          lock: "FOR UPDATE"
+        )
+      )
+
+    cond do
+      is_nil(user) ->
+        repo.rollback(:not_found)
+
+      user.role != from ->
+        repo.rollback({:role_is, user.role})
+
+      true ->
+        repo.update!(Ecto.Changeset.change(user, role: to))
+
+        repo.insert!(%Engram.Insights.RoleChange{
+          target_user_id: user.id,
+          action: action,
+          scope: "platform"
+        })
+
+        user.id
     end
   end
 

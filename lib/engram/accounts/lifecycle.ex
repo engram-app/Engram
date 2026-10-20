@@ -176,6 +176,10 @@ defmodule Engram.Accounts.Lifecycle do
         skip_tenant_check: true
       )
 
+    # Same reason: erasure takes the user's PostHog history with it, so who
+    # left is read now and sent, person-less, once the delete commits.
+    summary = deletion_summary(user, sub, reason)
+
     # Step 4: COMMIT POINT — Postgres cascade, wrapped in a transaction so
     # the two writes (vault delete + user delete) either both land or both
     # roll back. Without the txn, a failure between them would leave the
@@ -237,6 +241,10 @@ defmodule Engram.Accounts.Lifecycle do
 
         _ = Engram.Feedback.capture_delete_reason(profile)
 
+        _ =
+          unless Analytics.opted_out?(user),
+            do: Analytics.track_anonymous("account_deleted", summary)
+
         # Analytics erasure, only once the delete has committed: queued before
         # Step 4, a rolled-back delete would still wipe a live user's analytics
         # (the Step 1 Paddle-retry rule). Covers the analytics-id person and the
@@ -261,6 +269,50 @@ defmodule Engram.Accounts.Lifecycle do
   # Returns `:ok` (nothing to cancel, or Paddle confirmed it) or
   # `{:retry, sub_id}` — the caller enqueues the async retry only once the
   # hard-delete transaction actually commits.
+  # Coarse buckets only: an anonymous event must not single anyone out.
+  defp deletion_summary(user, sub, reason) do
+    tenure_days = DateTime.diff(DateTime.utc_now(), user.created_at, :day)
+
+    # Scoped: both are tenant tables, so an unscoped read under enforced RLS
+    # finds nothing and every summary would report no surfaces.
+    {connected, api?} =
+      Repo.with_tenant!(user.id, fn ->
+        {Repo.all(
+           from(a in Engram.Onboarding.Action,
+             where: a.user_id == ^user.id and a.action in ["plugin_connected", "ai_connected"],
+             select: a.action
+           )
+         ), Repo.exists?(from(k in Engram.Accounts.ApiKey, where: k.user_id == ^user.id))}
+      end)
+
+    used =
+      [
+        {"obsidian", "plugin_connected" in connected},
+        {"mcp", "ai_connected" in connected},
+        {"api", api?}
+      ]
+      |> Enum.flat_map(fn {name, used?} -> if used?, do: [name], else: [] end)
+      |> Enum.sort()
+
+    %{
+      tenure_bucket:
+        bucket(tenure_days, [{1, "0_1"}, {7, "1_7"}, {30, "7_30"}, {90, "30_90"}], "90_plus"),
+      plan: Engram.Analytics.PersonProperties.plan(sub && sub.tier, sub && sub.status),
+      notes_bucket:
+        bucket(
+          Engram.UsageMeters.notes_count(user.id),
+          [{1, "0"}, {10, "1_10"}, {100, "10_100"}, {1000, "100_1000"}],
+          "1000_plus"
+        ),
+      surfaces_used: used,
+      trigger: Atom.to_string(reason)
+    }
+  end
+
+  defp bucket(n, bounds, top) do
+    Enum.find_value(bounds, top, fn {below, label} -> if n < below, do: label end)
+  end
+
   defp cancel_paddle_subscription(_user, nil), do: :ok
   defp cancel_paddle_subscription(_user, %Subscription{paddle_subscription_id: nil}), do: :ok
 

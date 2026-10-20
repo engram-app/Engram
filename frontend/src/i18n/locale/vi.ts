@@ -955,6 +955,10 @@ export default {
 	"Why {tool} can't be connected": "Tại sao {tool} không thể kết nối",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Danh sách này chưa đầy đủ, chọn {client} nếu công cụ của bạn không có trong đây.",
+	"Customer insights": "Thông tin khách hàng",
+	"User ID": "ID người dùng",
+	"Show timeline": "Hiển thị dòng thời gian",
+	"Failed to load the report.": "Không tải được báo cáo.",
 	Account: "Tài khoản",
 	"Manage your profile, password, and account.": "Quản lý hồ sơ mật khẩu và tài khoản của bạn.",
 	"Manage your profile, security, and active sessions.":

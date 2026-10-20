@@ -560,14 +560,40 @@ defmodule EngramWeb.Router do
     scope "/" do
       pipe_through :require_session_allow_plugin
       post "/feedback", FeedbackController, :create
+      # The plugin's first-sync summary (counts only), for product analytics.
+      post "/analytics/sync-summary", AnalyticsController, :sync_summary
     end
 
     post "/onboarding/actions", OnboardingController, :record
+
+    # The web app's funnel events into our event log (never PostHog). Here,
+    # not the vault scope: onboarding steps are sent mid-wizard. Browser
+    # session only: no API key, plugin token or OAuth grant sends them.
+    scope "/" do
+      pipe_through EngramWeb.Plugs.RequireSession
+      post "/analytics/events", AnalyticsController, :events
+    end
 
     # Client trace beacon ingest. Must work before onboarding completes (the
     # SPA emits render/sync spans from the very first screen), so it lives in
     # this scope rather than the vault-scoped/RequireOnboarding pipeline.
     post "/telemetry/spans", TelemetryController, :create
+  end
+
+  # Operator insights: every tenant's analytics, read-only. Its own scope
+  # and plug (role "operator" on a browser session, else 404), never a role
+  # switch on another route. See Engram.Insights.
+  scope "/api/operator/insights", EngramWeb.Operator, as: :operator do
+    pipe_through [
+      :api,
+      EngramWeb.Plugs.Auth,
+      EngramWeb.Plugs.OAuthScopeEnforce,
+      EngramWeb.Plugs.RequireOperator
+    ]
+
+    get "/", InsightsController, :index
+    get "/users/:user_id", InsightsController, :timeline
+    get "/:report", InsightsController, :show
   end
 
   # Self-host admin scope. 404 under Clerk (RequireAdmin gates on local auth);
@@ -788,6 +814,8 @@ defmodule EngramWeb.Router do
     get "/settings/*path", SpaController, :index
     get "/note/*path", SpaController, :index
     get "/oauth/consent", SpaController, :index
+    # Operator insights page; the SPA shows a 404 to anyone else.
+    get "/operator", SpaController, :index
 
     # Vault-scoped SPA routes. These mirror the React subtree under
     # `/v/:slug` EXACTLY -- index and `:itemId` -- rather than a single greedy

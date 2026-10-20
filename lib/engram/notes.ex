@@ -611,6 +611,9 @@ defmodule Engram.Notes do
       `"api:<key_id>"`, `"link_rewrite"`, `"maintenance"` or `"system"`. No
       default, so a new caller cannot silently file its edits under another
       writer's version.
+    * `surface:` the analytics surface of a `"sync"` write (`"web"` or
+      `"obsidian_sync"`, from `EngramWeb.WriteActor.surface/1`). Other actors
+      imply it; see `created_surface/1`.
     * `announce_vault_populated: false` — suppress the `vault_populated`
       broadcast for a write the SERVER originated. See the call site; the
       welcome-note seed is the only caller that passes it.
@@ -748,7 +751,8 @@ defmodule Engram.Notes do
             :ok =
               Repo.after_commit(fn ->
                 Engram.Analytics.track(user, "note_created", %{
-                  vault_id: vault.id
+                  vault_id: vault.id,
+                  surface: created_surface(opts)
                 })
               end)
           end
@@ -6684,6 +6688,18 @@ defmodule Engram.Notes do
   # to 1 notes (see `populating_notes/2` for what counts). Subsequent inserts skip the broadcast; the FTUX listener
   # is one-shot anyway, but avoiding extra channel traffic keeps the
   # invariant readable from the server side too.
+  # `note_created`'s `surface`: where the note came from. "welcome" is our own
+  # seed note, so activation queries can tell it apart from a user's first note.
+  defp created_surface(opts) do
+    case Keyword.get(opts, :actor) do
+      "mcp" -> "mcp"
+      "system" -> "welcome"
+      "api" <> _ -> "api"
+      "sync" -> Keyword.get(opts, :surface, "other")
+      _ -> "other"
+    end
+  end
+
   defp maybe_broadcast_vault_populated(user, vault) do
     # "Exactly one row?" via LIMIT 2 instead of COUNT(*): the aggregate
     # visits every matching row, so a bulk first-sync paid an O(vault)
@@ -6725,7 +6741,13 @@ defmodule Engram.Notes do
     _ =
       if length(ids) == 1 do
         Repo.after_commit(fn ->
-          EngramWeb.Endpoint.broadcast("user:#{user.id}", "vault_populated", %{vault_id: vault.id})
+          _ =
+            EngramWeb.Endpoint.broadcast("user:#{user.id}", "vault_populated", %{
+              vault_id: vault.id
+            })
+
+          # The first-content timestamp, whether or not a page is open to see it.
+          Engram.Analytics.track(user, "vault_populated", %{vault_id: vault.id})
         end)
       end
 

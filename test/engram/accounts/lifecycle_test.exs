@@ -502,7 +502,8 @@ defmodule Engram.Accounts.LifecycleTest do
 
       parent = self()
 
-      Bypass.expect_once(bypass, "POST", "/capture/", fn conn ->
+      # account_deleted goes out too; this test is about the reason.
+      Bypass.stub(bypass, "POST", "/capture/", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         send(parent, {:posthog, Jason.decode!(body)})
         Plug.Conn.resp(conn, 200, "1")
@@ -516,6 +517,60 @@ defmodule Engram.Accounts.LifecycleTest do
                         "properties" => %{"reason" => "not_using"}
                       }},
                      1_000
+    end
+
+    # Erasure takes the churned user's history with it, so a person-less
+    # summary of who left is all that survives. Coarse buckets only.
+    test "hard_delete always sends an anonymous account_deleted summary", %{bypass: bypass} do
+      prev_capture_key = Application.get_env(:engram, :posthog_key)
+      Application.put_env(:engram, :posthog_key, "phc_test_token")
+      on_exit(fn -> Application.put_env(:engram, :posthog_key, prev_capture_key) end)
+
+      user =
+        insert(:user,
+          external_id: nil,
+          email: "churn@example.com",
+          created_at: DateTime.add(DateTime.utc_now(:second), -10, :day),
+          onboarding_profile: %{}
+        )
+
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      insert(:api_key, user: user)
+
+      Repo.insert!(%Engram.Onboarding.Action{user_id: user.id, action: "plugin_connected"},
+        skip_tenant_check: true
+      )
+
+      expect(Engram.Paddle.ClientMock, :cancel_subscription, fn _, _, _ -> {:ok, %{}} end)
+
+      Bypass.stub(bypass, "GET", "/api/projects/1/persons/", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"results":[]}))
+      end)
+
+      parent = self()
+
+      Bypass.stub(bypass, "POST", "/capture/", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:posthog, Jason.decode!(body)})
+        Plug.Conn.resp(conn, 200, "1")
+      end)
+
+      assert :ok = Lifecycle.hard_delete(user, :user)
+
+      assert_receive {:posthog, %{"event" => "account_deleted"} = body}, 1_000
+      props = body["properties"]
+      assert props["$process_person_profile"] == false
+      refute body["distinct_id"] == Engram.Observability.PostHog.analytics_id(user.email)
+      assert props["tenure_bucket"] == "7_30"
+      assert props["plan"] == "pro"
+      assert props["notes_bucket"] == "0"
+      assert props["surfaces_used"] == ["api", "obsidian"]
+      # With plan, tenure and notes it narrowed an anonymous row to a person.
+      refute Map.has_key?(props, "ever_paid")
+      assert props["trigger"] == "user"
+      refute_receive {:posthog, %{"event" => "account_delete_reason"}}, 200
     end
 
     # The HTTP side (lookup, delete, not-found tolerance, retry) is covered by

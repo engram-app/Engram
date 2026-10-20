@@ -581,7 +581,8 @@ export interface SearchResult {
 export interface User {
 	id: string;
 	email: string;
-	role: "admin" | "member";
+	// "operator" is granted only from the release console (Engram.Release).
+	role: "admin" | "member" | "operator";
 	display_name: string | null;
 	// UI language (BCP 47) as last reported by a client; null until one does.
 	locale: string | null;

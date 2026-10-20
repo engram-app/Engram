@@ -2,6 +2,7 @@ import type { PostHog } from "posthog-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setAnalyticsClient } from "./client";
 import { forgetUser, identifyUser, setPersonProperties, stopCapture } from "./identity";
+import { serverEvents } from "./server-sink";
 
 // A stand-in that tracks posthog-js's persisted opt-out.
 let optedOut = false;
@@ -63,5 +64,20 @@ describe("setPersonProperties", () => {
 
 		identifyUser("id-1");
 		expect(posthog.setPersonProperties).not.toHaveBeenCalled();
+	});
+});
+
+// The server event log follows the same consent as PostHog.
+describe("server event log consent", () => {
+	it("starts sending on identify, and stops on opt-out and sign-out", () => {
+		const enable = vi.spyOn(serverEvents, "enable");
+		const disable = vi.spyOn(serverEvents, "disable");
+
+		identifyUser("id-1");
+		expect(enable).toHaveBeenCalledOnce();
+
+		stopCapture();
+		forgetUser();
+		expect(disable).toHaveBeenCalledTimes(2);
 	});
 });

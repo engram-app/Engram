@@ -97,6 +97,7 @@ defmodule EngramWeb.AuthController do
       {:ok, uuid} ->
         case Accounts.revoke_api_key(user, uuid) do
           :ok ->
+            Engram.Analytics.track(user, "mcp_client_disconnected", %{via: "api_key"})
             json(conn, %{deleted: true})
 
           {:error, _} ->

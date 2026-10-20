@@ -2,6 +2,7 @@ import type { PostHog } from "posthog-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureError } from "../sentry";
 import { setAnalyticsClient } from "./client";
+import { serverEvents } from "./server-sink";
 import { track } from "./track";
 
 // Mirrors route-error-boundary.test.tsx's convention: assert WHAT gets
@@ -12,7 +13,10 @@ const mockCapture = vi.mocked(captureError);
 const posthog = { capture: vi.fn() };
 setAnalyticsClient(posthog as unknown as PostHog);
 
+const serverAdd = vi.spyOn(serverEvents, "add");
+
 afterEach(() => {
+	serverAdd.mockClear();
 	vi.unstubAllEnvs();
 	mockCapture.mockClear();
 	posthog.capture.mockClear();
@@ -148,5 +152,19 @@ describe("track onboarding interaction events", () => {
 		track(event, props);
 		expect(posthog.capture).not.toHaveBeenCalled();
 		expect(mockCapture).toHaveBeenCalledOnce();
+	});
+});
+
+// The funnel also lands in our own event log (server-sink.ts), with the same
+// validation: only an event PostHog would get is sent there.
+describe("track feeds the server event log", () => {
+	it("queues a valid event for the server too", () => {
+		track("paywall_shown", { limit_key: "notes_cap_exceeded" });
+		expect(serverAdd).toHaveBeenCalledWith("paywall_shown", { limit_key: "notes_cap_exceeded" });
+	});
+
+	it("never queues a rejected event", () => {
+		track("onboarding_step_viewed", { step: "vault", title: "My private journal" });
+		expect(serverAdd).not.toHaveBeenCalled();
 	});
 });

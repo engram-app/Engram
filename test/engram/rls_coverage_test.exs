@@ -15,7 +15,14 @@ defmodule Engram.RlsCoverageTest do
   # is DEK-encrypted + AAD-bound to (user_id, key) — cryptographic tenant
   # isolation even on a scoping bug — and the daily prune worker needs cheap
   # cross-tenant deletes (FORCE RLS would block the app-role sweep).
+  # analytics_events, user_daily_metrics, vault_daily_metrics: like
+  # usage_meters and client_origin_stats, a buffered writer inserts many users'
+  # rows at once and only system jobs and the operator insights context (via
+  # Repo.maintenance()) read them. No note content, titles, paths or names.
   @no_rls_allowlist ~w(
+    analytics_events
+    user_daily_metrics
+    vault_daily_metrics
     client_logs
     idempotency_keys
     client_origin_stats

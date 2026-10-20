@@ -210,6 +210,8 @@ config :engram, Oban,
         # census pings): hourly, so each run deletes an hour's worth.
         {"23 * * * *", Engram.Workers.ClientLogsPruner},
         {"28 * * * *", Engram.Workers.InstallPingsPruner},
+        # analytics_events: two-year retention.
+        {"58 * * * *", Engram.Workers.AnalyticsEventsPrune},
         # Self-healing data migrations (#1872): one pass of each one whose
         # ledger row is not done; a pass that finds no work closes it.
         # Also at boot, so an upgrade heals without waiting up to an hour. A boot
@@ -245,6 +247,8 @@ config :engram, Oban,
         # CIMD JWKS refresh (#1974): keeps the persisted key set fresh so the
         # token path never fetches. Schedules the sweep 1-30 s out.
         {"1-59/5 * * * *", Engram.Workers.CimdJwksSchedule},
+        # Yesterday's account and vault snapshots for the operator insights.
+        {"40 0 * * *", Engram.Workers.DailySnapshot},
         # Account facts onto PostHog persons; no-op unless PostHog is configured.
         {"25 6 * * *", Engram.Workers.PostHogPersonSync}
       ]

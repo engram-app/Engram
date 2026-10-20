@@ -26,6 +26,10 @@ defmodule Engram.I18n do
 
   @type locale :: String.t()
 
+  @doc "Every locale the app ships, as the web app names them."
+  @spec locales() :: [locale()]
+  def locales, do: @locales
+
   @doc "The supported locale for `user.locale` (a BCP 47 tag), or \"en\"."
   @spec locale_for(map()) :: locale()
   def locale_for(%{locale: tag}) when is_binary(tag), do: match(String.downcase(tag)) || "en"

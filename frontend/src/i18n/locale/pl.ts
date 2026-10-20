@@ -1022,6 +1022,10 @@ export default {
 	"Why {tool} can't be connected": "Dlaczego {tool} nie może być połączone",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"Nie jest to pełna lista, wybierz {client}, jeśli twoje narzędzie nie znajduje się tutaj.",
+	"Customer insights": "Wgląd w dane klientów",
+	"User ID": "ID użytkownika",
+	"Show timeline": "Pokaż oś czasu",
+	"Failed to load the report.": "Nie udało się załadować raportu.",
 	Account: "Konto",
 	"Manage your profile, password, and account.": "Zarządzaj swoim profilem, hasłem i kontem.",
 	"Manage your profile, security, and active sessions.":

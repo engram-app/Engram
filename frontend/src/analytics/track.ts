@@ -5,18 +5,21 @@ import { analyticsClient } from "./client";
 import {
 	CHECKLIST_ACTIONS,
 	CHECKLIST_ITEMS,
+	CHECKOUT_CADENCES,
 	CHECKOUT_METHODS,
 	CHECKOUT_TIERS,
 	type EngramEvent,
 	ERROR_CODES,
 	EVENT_SCHEMAS,
 	GATE_REASONS,
+	LIMIT_REASONS,
 	MCP_CLIENTS,
 	ONBOARDING_STEPS,
 	type PropKind,
 	UPGRADE_SOURCES,
 	VAULT_SOURCES,
 } from "./events";
+import { serverEvents } from "./server-sink";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // A BCP-47 language tag: language, then up to three script/region/variant
@@ -41,6 +44,10 @@ function isKind(kind: PropKind, value: unknown): boolean {
 			return isMember(MCP_CLIENTS, value);
 		case "upgrade_source":
 			return isMember(UPGRADE_SOURCES, value);
+		case "cadence":
+			return isMember(CHECKOUT_CADENCES, value);
+		case "limit_reason":
+			return isMember(LIMIT_REASONS, value);
 		case "checklist_item":
 			return isMember(CHECKLIST_ITEMS, value);
 		case "checklist_action":
@@ -113,4 +120,7 @@ export function track(event: EngramEvent, props: Record<string, unknown> = {}): 
 	}
 
 	analyticsClient()?.capture(event, props);
+	// Our own event log too (recorded there only, never re-sent to PostHog),
+	// under the same consent: see server-sink.ts.
+	serverEvents.add(event, props);
 }

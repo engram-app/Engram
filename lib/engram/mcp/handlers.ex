@@ -264,7 +264,7 @@ defmodule Engram.MCP.Handlers do
     description = args["description"] || ""
     limit = max(1, min(args["limit"] || 5, 10))
 
-    case Search.search(user, vault, description, limit: 10, diversity: 0) do
+    case Search.search(user, vault, description, limit: 10, diversity: 0, surface: "mcp") do
       # A spent budget is a plan limit, not an empty vault. Without this the
       # refusal fell into the catch-all and reported "No folders found", which
       # tells the caller to give up rather than to upgrade.
@@ -1110,7 +1110,7 @@ defmodule Engram.MCP.Handlers do
     limit = min(args["limit"] || 5, 20)
     tags = args["tags"]
 
-    opts = [limit: limit, mode: search_mode(args)]
+    opts = [limit: limit, mode: search_mode(args), surface: "mcp"]
     opts = if tags, do: Keyword.put(opts, :tags, tags), else: opts
     opts = if args["folder"], do: Keyword.put(opts, :folder, args["folder"]), else: opts
     opts = if args["type"], do: Keyword.put(opts, :type, args["type"]), else: opts
@@ -1735,7 +1735,7 @@ defmodule Engram.MCP.Handlers do
       # and leaving it free made the write path an unmetered search channel.
       # But auto-placement is incidental to creating a note, so a spent budget
       # drops the note in the default folder rather than refusing the create.
-      case Search.search(user, vault, query, limit: 10, diversity: 0) do
+      case Search.search(user, vault, query, limit: 10, diversity: 0, surface: "mcp") do
         {:ok, results} when results != [] ->
           case folder_counts(results) do
             [{folder, _} | _] -> folder

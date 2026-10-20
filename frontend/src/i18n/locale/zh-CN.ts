@@ -912,6 +912,10 @@ export default {
 	"Why {tool} can't be connected": "为什么无法连接 {tool}",
 	"Not a comprehensive list, pick {client} if yours isn't here.":
 		"并非完整列表，如果您的工具不在列表中，请选择 {client}。",
+	"Customer insights": "用户洞察",
+	"User ID": "用户ID",
+	"Show timeline": "显示时间线",
+	"Failed to load the report.": "报告加载失败。",
 	Account: "账户",
 	"Manage your profile, password, and account.": "管理你的资料、密码和账号。",
 	"Manage your profile, security, and active sessions.": "管理你的资料、安全设置和活动会话。",
