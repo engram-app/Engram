@@ -208,7 +208,7 @@ defmodule Engram.Mailer do
     link =
       &~s(<a href="#{app_url}/#settings/connections" style="color:#{Tokens.brand_purple()};">#{&1}</a>)
 
-    disconnect = link.(t(l, "Disconnect it in your connections"))
+    disconnect = link.(t(l, "disconnect it in your connections"))
 
     {subject, heading, can, ask, footer} =
       if is_binary(client_name) and client_name != "" do
@@ -218,14 +218,14 @@ defmodule Engram.Mailer do
          t(l, "{client} can now use the vaults you chose in your Engram account.", vars),
          t(l, "Ask {client} to save a note, and it shows up in your vault.", vars),
          with_link(
-           I18n.t(l, "Didn't connect {client}? {link}.", [{:link, @link_marker} | vars]),
+           I18n.t(l, "If you didn't connect {client}, {link}.", [{:link, @link_marker} | vars]),
            disconnect
          )}
       else
         {I18n.t(l, "Your AI tool is connected to Engram"), t(l, "Your AI tool is connected"),
          t(l, "Your AI tool can now use the vaults you chose in your Engram account."),
          t(l, "Ask your AI tool to save a note, and it shows up in your vault."),
-         with_link(I18n.t(l, "Didn't connect this tool? {link}.", link: @link_marker), disconnect)}
+         with_link(I18n.t(l, "If you didn't connect this tool, {link}.", link: @link_marker), disconnect)}
       end
 
     body = """

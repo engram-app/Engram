@@ -289,14 +289,14 @@ defmodule Engram.MailerTest do
     test "the disconnect line is below the card, with its link", %{user: user} do
       {_subject, html} = connected_html(user, "ChatGPT")
       [before_sign_off, after_sign_off] = String.split(html, "The Engram team", parts: 2)
-      refute before_sign_off =~ "Didn&#39;t connect"
-      assert after_sign_off =~ "Didn&#39;t connect ChatGPT?"
+      refute before_sign_off =~ "If you didn&#39;t connect"
+      assert after_sign_off =~ "If you didn&#39;t connect ChatGPT,"
 
       assert after_sign_off =~
-               ~r{<a href="https://app.example.test/#settings/connections" style="color:#7c3aed;">Disconnect it in your connections</a>\.}
+               ~r{<a href="https://app.example.test/#settings/connections" style="color:#7c3aed;">disconnect it in your connections</a>\.}
 
       [footer, _tagline] = String.split(after_sign_off, "Your notes are your AI", parts: 2)
-      assert footer =~ "Disconnect it in your connections"
+      assert footer =~ "disconnect it in your connections"
     end
 
     test "a client with no name reads as your AI tool", %{user: user} do
@@ -305,7 +305,7 @@ defmodule Engram.MailerTest do
       assert html =~ "Your AI tool is connected"
       assert html =~ "Your AI tool can now use the vaults you chose in your Engram account."
       assert html =~ "Ask your AI tool to save a note, and it shows up in your vault."
-      assert html =~ "Didn&#39;t connect this tool?"
+      assert html =~ "If you didn&#39;t connect this tool,"
     end
 
     # The link survives translation: `{link}` is a placeholder in the key.

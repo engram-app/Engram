@@ -150,6 +150,14 @@ const PINNED: Partial<Record<Target, readonly string[]>> = {
 // (on 2026-10-12 it turned ms "Light" into "lightweight"), so keep only notes
 // whose output you reviewed.
 const DESCRIPTIONS: Readonly<Record<string, string>> = {
+	// Email small print under a "you're connected" email. ja read it as "is not
+	// connected to {client}" and de capitalised the link mid-sentence (2026-10-19).
+	"If you didn't connect {client}, {link}.":
+		"Security note in an email: a condition, 'if it was not you who connected the app {client}', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+	"If you didn't connect this tool, {link}.":
+		"Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+	"disconnect it in your connections":
+		"Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
 	// cs read {folder} as a vault ("ve skladu", 2026-10-18).
 	"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 	// ja joined the items with 、 and dropped the separators (2026-10-18).
