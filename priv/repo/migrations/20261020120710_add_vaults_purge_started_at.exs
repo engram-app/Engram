@@ -13,7 +13,7 @@ defmodule Engram.Repo.Migrations.AddVaultsPurgeStartedAt do
 
   def change do
     alter table(:vaults) do
-      add :purge_started_at, :utc_datetime
+      add :purge_started_at, :timestamptz
     end
   end
 end
