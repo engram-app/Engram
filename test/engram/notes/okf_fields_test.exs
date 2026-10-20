@@ -110,6 +110,28 @@ defmodule Engram.Notes.OkfFieldsTest do
                ~U[2026-03-03 00:00:00Z]
     end
 
+    # v0.2 (amended 2026-08-21) rejects a date-only or offset-less
+    # generated.at. Read as absent, so it never shadows a valid timestamp:
+    # here midnight UTC would have stored 08-21T00:00Z for 08-22T06:30Z.
+    test "a date-only generated.at is rejected and never shadows a valid timestamp" do
+      content =
+        "---\ntimestamp: 2026-08-21T23:30:00-07:00\ngenerated:\n  at: 2026-08-21\n---\nx\n"
+
+      assert extract(content).fm_timestamp == ~U[2026-08-22 06:30:00Z]
+      assert extract("---\ngenerated:\n  at: 2026-08-21\n---\nx\n").fm_timestamp == nil
+    end
+
+    test "an offset-less generated.at is rejected too" do
+      assert extract("---\ngenerated:\n  at: 2026-08-21T10:00:00\n---\nx\n").fm_timestamp == nil
+    end
+
+    test "the deprecated aliases keep their date-only leniency" do
+      assert extract("---\nmodified: 2026-02-02\n---\nx\n").fm_timestamp ==
+               ~U[2026-02-02 00:00:00Z]
+
+      assert extract("---\ndate: 2026-02-03\n---\nx\n").fm_created == ~U[2026-02-03 00:00:00Z]
+    end
+
     test "a generated map without at falls back to timestamp" do
       content = "---\ngenerated:\n  by: agent\ntimestamp: 2026-01-01\n---\nx\n"
       assert extract(content).fm_timestamp == ~U[2026-01-01 00:00:00Z]
