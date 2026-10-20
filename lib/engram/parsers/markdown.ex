@@ -61,10 +61,15 @@ defmodule Engram.Parsers.Markdown do
                       may itself contain " > " (chunker v5)
   - `:char_start`   — byte offset in post-frontmatter body
   - `:char_end`     — byte offset end
-  - `:kind`:         "prose" | "data" | "frontmatter" | "drawing"; only
-                      prose gets a dense vector, the rest are keyword-only
+  - `:kind`:         "prose" | "data" | "frontmatter" | "drawing" |
+                      "frontmatter_dense" | "canvas_dense"; only the
+                      `dense_kind?/1` ones get a dense vector, the rest are
+                      keyword-only
 
-  A `.canvas` or `.base` note has no `"prose"` chunks: they are all `"data"`.
+  A `.canvas` or `.base` note has no `"prose"` chunks: they are all `"data"`,
+  except that a canvas's text cards (at most 2 KB) are the dense input of its
+  first chunk, `"canvas_dense"`. A note of properties alone has one
+  `"frontmatter_dense"` chunk: its dense input is the title and the values.
   An Excalidraw note (frontmatter `excalidraw-plugin`) loses its drawing JSON.
 
   Exception: when frontmatter is present, a synthetic chunk carrying the raw
@@ -86,6 +91,7 @@ defmodule Engram.Parsers.Markdown do
 
     content
     |> Engram.Native.chunk(folder, title, aliases(frontmatter(content), title))
+    |> canvas_cards(path, content)
     |> Enum.with_index(fn {text, context_text, embed_text, headings, char_start, char_end, kind},
                           position ->
       %{
@@ -101,6 +107,42 @@ defmodule Engram.Parsers.Markdown do
       }
     end)
   end
+
+  @doc "Whether chunks of `kind` get a dense vector."
+  @spec dense_kind?(String.t()) :: boolean()
+  def dense_kind?(kind), do: kind in ~w(prose frontmatter_dense canvas_dense)
+
+  @max_cards 2_048
+
+  # F12: the cards are a canvas's prose. The point count does not change:
+  # the first chunk carries them as its dense input.
+  defp canvas_cards([{text, ctx, embed, hs, s, e, _kind} | rest] = chunks, path, content) do
+    with ".canvas" <- Path.extname(path),
+         {:ok, %{"nodes" => nodes}} when is_list(nodes) <- Jason.decode(content),
+         cards when cards != "" <- card_text(nodes) do
+      prefix = binary_part(embed, 0, byte_size(embed) - byte_size(text) - 2)
+      [{text, ctx, prefix <> "\n\n" <> cards, hs, s, e, "canvas_dense"} | rest]
+    else
+      _ -> chunks
+    end
+  end
+
+  defp canvas_cards([], _path, _content), do: []
+
+  defp card_text(nodes) do
+    nodes
+    |> Enum.flat_map(fn
+      %{"type" => "text", "text" => t} when is_binary(t) -> [String.trim(t)]
+      _ -> []
+    end)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n\n")
+    |> cut_bytes(@max_cards)
+  end
+
+  # The longest valid UTF-8 prefix of at most `max` bytes.
+  defp cut_bytes(s, max) when byte_size(s) <= max, do: s
+  defp cut_bytes(s, max), do: s |> binary_part(0, max) |> String.chunk(:valid) |> hd()
 
   # The decoded top-level frontmatter values; %{} when there is none or it
   # is not YAML.

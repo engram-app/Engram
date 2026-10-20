@@ -98,6 +98,40 @@ defmodule Engram.Parsers.MarkdownTest do
     end
   end
 
+  describe "parse/2 canvas and property notes" do
+    # F12
+    test "a canvas's card text is the dense input of its first chunk" do
+      card = String.duplicate("launch plan review ", 50)
+      nodes = for i <- 1..3, do: %{"id" => "n#{i}", "type" => "text", "text" => "#{i} #{card}"}
+      nodes = nodes ++ [%{"id" => "f", "type" => "file", "file" => "Other.md"}]
+      json = Jason.encode!(%{"nodes" => nodes, "edges" => []})
+      assert byte_size(json) > 2_900
+
+      chunks = Markdown.parse(json, "Board.canvas")
+      assert [first | rest] = chunks
+      assert first.kind == "canvas_dense"
+      assert Enum.all?(rest, &(&1.kind == "data"))
+      assert length(chunks) == length(Engram.Native.chunk(json, "", "Board"))
+      cards = String.replace_prefix(first.embed_text, "Board\n\n", "")
+      assert byte_size(cards) <= 2_048
+      assert cards =~ "1 launch plan" and String.valid?(cards)
+      refute cards =~ "Other.md"
+    end
+
+    test "a canvas with no text cards stays keyword-only" do
+      json = Jason.encode!(%{"nodes" => [%{"id" => "f", "type" => "file", "file" => "a.md"}]})
+      assert Enum.all?(Markdown.parse(json, "B.canvas"), &(&1.kind == "data"))
+    end
+
+    # B8
+    test "a property-only note is one dense chunk" do
+      assert [%{kind: "frontmatter_dense", embed_text: e}] =
+               Markdown.parse("---\nproject: zanzibar\n---\n", "Plan.md")
+
+      assert e == "Plan\n\nzanzibar"
+    end
+  end
+
   describe "parse/2 basic structure" do
     test "returns list of chunks" do
       chunks = Markdown.parse(@simple_note, "Test/Hello World.md")

@@ -447,13 +447,13 @@ defmodule Engram.Indexing do
     budget = Application.get_env(:engram, :max_pass_embed_bytes, @max_pass_embed_bytes)
 
     {chunks, _used} =
-      Enum.map_reduce(chunks, 0, fn
-        %{kind: "prose"} = chunk, used ->
+      Enum.map_reduce(chunks, 0, fn chunk, used ->
+        if Markdown.dense_kind?(chunk.kind) do
           used = used + IO.iodata_length(chunk.embed_text)
           {if(used > budget, do: Map.put(chunk, :sparse_only, true), else: chunk), used}
-
-        chunk, used ->
+        else
           {chunk, used}
+        end
       end)
 
     chunks
@@ -661,7 +661,9 @@ defmodule Engram.Indexing do
     |> Enum.concat()
   end
 
-  defp frontmatter?(chunk), do: chunk.kind == "frontmatter"
+  # Never a group member: frontmatter, and the chunks whose dense input is
+  # not their text (property notes, canvas cards).
+  defp frontmatter?(chunk), do: chunk.kind in ~w(frontmatter frontmatter_dense canvas_dense)
 
   defp merge_group([single]), do: single
 
@@ -2051,7 +2053,7 @@ defmodule Engram.Indexing do
   end
 
   defp dense_chunk?(chunk, dense?),
-    do: dense? and chunk.kind == "prose" and not Map.get(chunk, :sparse_only, false)
+    do: dense? and Markdown.dense_kind?(chunk.kind) and not Map.get(chunk, :sparse_only, false)
 
   # A merged chunk's point holds a length-capped keyword vector and no
   # `avgdl` length, so it never matches an unmerged chunk with the same
@@ -2598,6 +2600,7 @@ defmodule Engram.Indexing do
     case Path.extname(path) do
       ".canvas" -> "canvas"
       ".base" -> "base"
+      _ when kind == "frontmatter_dense" -> "frontmatter"
       _ when kind in ~w(prose data frontmatter drawing) -> kind
       _ -> "prose"
     end

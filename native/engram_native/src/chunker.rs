@@ -102,7 +102,7 @@ pub fn each_chunk(
         chunk_body(body, &note, false, &mut |_| n += 1);
         n > budget(body.len())
     };
-    let emitted = chunk_body(body, &note, coalesce, &mut emit);
+    let mut emitted = chunk_body(body, &note, coalesce, &mut emit);
     // Every section was a bare heading (a stub, a daily-note template): keep
     // the headings as one chunk, or search could not find the note at all.
     if !emitted {
@@ -111,9 +111,14 @@ pub fn each_chunk(
             let path = [title.to_string()];
             for (t, kind) in classified(split(&normalize("", &rest))) {
                 emit(make(&note, &path, t, 0, body.len(), kind));
+                emitted = true;
             }
         }
     }
+    // A note of properties alone (B8): its first frontmatter chunk gets a
+    // small dense input, the head and the property values, or a search by
+    // meaning could never reach it. Its keyword input stays the raw block.
+    let mut dense = !emitted;
     if let Some(block) = block.filter(|b| !b.is_empty()) {
         let text = normalize("", &strip_blobs(&block));
         let path = [title.to_string(), "frontmatter".to_string()];
@@ -123,6 +128,13 @@ pub fn each_chunk(
         {
             let mut c = make(&note, &path, t, 0, 0, "frontmatter");
             c.3 = vec!["frontmatter".to_string()];
+            if std::mem::take(&mut dense) {
+                c.2 = match props(&block) {
+                    v if v.is_empty() => note.head.clone(),
+                    v => format!("{}\n\n{v}", note.head),
+                };
+                c.6 = "frontmatter_dense";
+            }
             emit(c);
         }
     }
@@ -154,6 +166,64 @@ impl<'a> Note<'a> {
             head,
         }
     }
+}
+
+/// Keys whose values never reach a dense input: in the prefix already, or
+/// filters, trust and lifecycle fields (spec C7).
+const NOT_MEANING: [&str; 15] = [
+    "title",
+    "aliases",
+    "alias",
+    "description",
+    "type",
+    "tags",
+    "tag",
+    "resource",
+    "generated",
+    "verified",
+    "status",
+    "stale_after",
+    "sources",
+    "cssclasses",
+    "publish",
+];
+
+/// The string and string-list values of a frontmatter block, one per line,
+/// each at most 200 chars, at most 1 KB in all; dates are skipped.
+/// ponytail: only the block shapes `yaml::parse` reads (most); any other
+/// block gives none, and the point is dense on its head alone.
+fn props(block: &str) -> String {
+    use serde_json::Value;
+    let mut out = String::new();
+    let date = re!(r"^\d{4}-\d{2}-\d{2}");
+    for (k, v) in crate::yaml::parse(block).unwrap_or_default() {
+        if NOT_MEANING.contains(&k.as_str()) {
+            continue;
+        }
+        let vals = match serde_json::from_str(&v).unwrap_or_default() {
+            Value::String(s) => vec![s],
+            Value::Array(a) => a
+                .into_iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect(),
+            _ => vec![],
+        };
+        for v in &vals {
+            let v = v.trim();
+            if v.is_empty() || date.is_match(v) {
+                continue;
+            }
+            let v = v.char_indices().nth(200).map_or(v, |(i, _)| &v[..i]);
+            if out.len() + 1 + v.len() > 1024 {
+                return out;
+            }
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(v);
+        }
+    }
+    out
 }
 
 /// The body's section chunks; true if any was emitted.
@@ -249,7 +319,7 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
     /// the one before it starts with a breadcrumb line, `A > B` (the path
     /// without the title), so a merged chunk keeps every member's parents.
     fn pend(&mut self, text: String, path: Vec<String>, end: usize) {
-        let kind = classify(&text, false).0;
+        let kind = classify(&text, Fence::Out).0;
         if let Some(p) = &mut self.pending {
             let crumb = (p.last != path).then(|| breadcrumb(&path)).flatten();
             let add = crumb.as_ref().map_or(0, |c| c.len() + 1) + text.len();
@@ -281,7 +351,7 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
     fn flush(&mut self) {
         if let Some(p) = self.pending.take() {
             // Members share a kind unless over budget; the whole decides.
-            let kind = classify(&p.text, false).0;
+            let kind = classify(&p.text, Fence::Out).0;
             (self.emit)(make(self.note, &p.path, &p.text, p.from, p.to, kind));
             self.emitted = true;
         }
@@ -308,36 +378,84 @@ fn excalidraw<'a>(block: Option<&str>, body: &'a str) -> std::borrow::Cow<'a, st
     format!("{head}{tail}").into()
 }
 
+/// Where a line sits: outside a code fence, in one, or in a query block
+/// (Dataview, Tasks, Obsidian query/base), which is not meaning either.
+#[derive(Clone, Copy, PartialEq)]
+enum Fence {
+    Out,
+    Code,
+    Query,
+}
+
 /// `data` for a body chunk that is mostly not words (minified JSON, CSV of
 /// numbers, log dumps, number tables): it is keyword-only, as a dense vector
 /// of it means nothing. Judged per paragraph (blank-line runs), so a table
 /// does not take the dense leg off the analysis above it: the chunk is
 /// `data` only when 80% or more of its bytes sit in data-shaped paragraphs.
-/// Code fence lines count as prose (code is searched by meaning), and so
-/// does any chunk under 200 bytes. Linear time. `open`: the chunk starts
-/// inside a code fence. Returns whether it ends in one.
-fn classify(text: &str, mut open: bool) -> (&'static str, bool) {
-    let mut data = 0;
+/// Inside a code fence a line is judged as code (`junk_line`): code is
+/// searched by meaning, minified JS and logs are not. A chunk is `data`
+/// when over 65% of it is query blocks (at any size), or, from 200 bytes,
+/// junk lines and query blocks. Linear time. `fence`: where the chunk
+/// starts. Returns where it ends.
+fn classify(text: &str, mut fence: Fence) -> (&'static str, Fence) {
+    let (mut data, mut junk, mut query) = (0, 0, 0);
     let mut para: Option<(usize, usize)> = None;
     let mut pos = 0;
     for line in text.split_inclusive('\n') {
         let end = pos + line.len();
         let t = line.trim_start();
-        let fence = t.starts_with("```") || t.starts_with("~~~");
-        if open || fence || t.is_empty() {
+        let is_fence = t.starts_with("```") || t.starts_with("~~~");
+        if fence != Fence::Out || is_fence || t.is_empty() {
             data += para.take().map_or(0, |(s, e)| data_bytes(&text[s..e]));
         } else {
             para = Some((para.map_or(pos, |(s, _)| s), end));
         }
-        open ^= fence;
+        let before = fence;
+        if is_fence {
+            fence = match fence {
+                Fence::Out if query_info(&t[3..]) => Fence::Query,
+                Fence::Out => Fence::Code,
+                _ => Fence::Out,
+            };
+        }
+        match (before, fence) {
+            (Fence::Query, _) | (_, Fence::Query) => query += line.len(),
+            (Fence::Code, Fence::Code) if junk_line(line) => junk += line.len(),
+            _ => {}
+        }
         pos = end;
     }
     data += para.map_or(0, |(s, e)| data_bytes(&text[s..e]));
-    if text.len() >= 200 && data * 100 >= text.len() * 80 {
-        ("data", open)
+    let n = text.len();
+    let mostly = |b: usize| b * 100 > n * 65;
+    if mostly(query) || (n >= 200 && (data * 100 >= n * 80 || mostly(junk + query))) {
+        ("data", fence)
     } else {
-        (PROSE, open)
+        (PROSE, fence)
     }
+}
+
+/// A fence info string naming a query block.
+fn query_info(info: &str) -> bool {
+    let word = info
+        .trim_start_matches(['`', '~'])
+        .split_whitespace()
+        .next();
+    matches!(
+        word,
+        Some("dataview" | "dataviewjs" | "tasks" | "query" | "base")
+    )
+}
+
+/// A code line that is not code to read: minified (over 400 bytes, under
+/// 5% whitespace) or number-heavy (a log or a dump: digits are a quarter of
+/// its non-space bytes, from 24 of them).
+fn junk_line(line: &str) -> bool {
+    let t = line.trim();
+    let ws = t.bytes().filter(u8::is_ascii_whitespace).count();
+    let solid = t.len() - ws;
+    let digits = t.bytes().filter(u8::is_ascii_digit).count();
+    (t.len() > 400 && ws * 20 < t.len()) || (solid >= 24 && digits * 4 >= solid)
 }
 
 /// `p.len()` when the paragraph is data-shaped, else 0. Data-shaped: under
@@ -381,10 +499,10 @@ fn data_bytes(p: &str) -> usize {
 /// chunk leaves pieces with no fence of their own, so the fence state
 /// carries from piece to piece.
 fn classified(pieces: Vec<&str>) -> impl Iterator<Item = (&str, &'static str)> {
-    let mut open = false;
+    let mut fence = Fence::Out;
     pieces.into_iter().map(move |t| {
-        let (kind, after) = classify(t, open);
-        open = after;
+        let (kind, after) = classify(t, fence);
+        fence = after;
         (t, kind)
     })
 }
@@ -1695,5 +1813,81 @@ mod tests {
         let paths: Vec<String> = cs.iter().map(|c| c.3.join(" > ")).collect();
         assert_eq!(paths, ["T", "frontmatter"]);
         assert_eq!(cs[0].0, "body");
+    }
+
+    // C7: a query block is not meaning, at any size.
+    #[test]
+    fn query_fences_are_data() {
+        for info in ["dataview", "dataviewjs", "tasks", "query", "base"] {
+            let note = format!("## Open\n```{info}\nTABLE file.mtime FROM \"Projects\"\n```");
+            assert_eq!(kinds(&note), ["data"], "{info}");
+        }
+    }
+
+    fn minified_js(bytes: usize) -> String {
+        let unit =
+            "function(e,t){var n=e.length;if(!n)return t;for(var r=0;r<n;r++)t=e[r](t);return t}";
+        format!("```js\n{}\n```", unit.repeat(bytes / unit.len()))
+    }
+
+    // C14
+    #[test]
+    fn minified_js_in_a_fence_gets_no_dense_vector() {
+        let cs = chunk(&minified_js(200_000), "", "T");
+        assert!(cs.len() > 50 && cs.len() <= budget(200_000));
+        assert!(cs.iter().all(|c| c.6 == "data"));
+    }
+
+    // C15
+    #[test]
+    fn a_fenced_log_is_data() {
+        let lines: Vec<String> = (0..30)
+            .map(|i| format!("2026-10-19T05:14:{i:02}.0863647Z id=7f3c{i:04x}e2 status=200"))
+            .collect();
+        all(&format!("```\n{}\n```", lines.join("\n")), "data");
+    }
+
+    // C13
+    #[test]
+    fn a_rust_function_stays_prose() {
+        let f =
+            "```rust\npub fn word_break(text: &str, lo: usize, hi: usize) -> Option<usize> {\n    \
+                 let s = &text[lo..hi];\n    s.rfind([' ', '\\n'])\n        \
+                 .or_else(|| s.rfind(|c: char| !c.is_alphanumeric()))\n        \
+                 .map(|i| lo + i + s[i..].chars().next().map_or(1, char::len_utf8))\n}\n```";
+        assert!(f.len() >= 200);
+        all(f, "prose");
+    }
+
+    // B8 and Q10 (unit): a note of properties alone gets one small dense point.
+    #[test]
+    fn a_property_only_note_is_dense() {
+        let note = "---\nproject: zanzibar\nowner: [Alice, Bob]\ntags: [secret]\ncreated: 2026-01-02\ncount: 3\n---\n";
+        let cs = aka(note, &["Z"]);
+        assert_eq!(cs.len(), 1);
+        assert_eq!(cs[0].6, "frontmatter_dense");
+        assert_eq!(cs[0].2, "T (aka Z)\n\nzanzibar\nAlice\nBob");
+        assert!(
+            cs[0].1.contains("tags: [secret]"),
+            "keyword input keeps the raw block"
+        );
+    }
+
+    #[test]
+    fn property_values_are_bounded() {
+        let long = "word ".repeat(100);
+        let block: String = (0..20).map(|i| format!("k{i}: {long}\n")).collect();
+        let cs = chunk(&format!("---\n{block}---\n"), "", "T");
+        let values = &cs[0].2["T\n\n".len()..];
+        assert!(values.len() <= 1024, "{}", values.len());
+        assert!(values.lines().all(|l| l.chars().count() <= 200));
+    }
+
+    #[test]
+    fn a_note_with_a_body_keeps_frontmatter_keyword_only() {
+        assert_eq!(
+            kinds("---\nproject: z\n---\nbody"),
+            ["prose", "frontmatter"]
+        );
     }
 }

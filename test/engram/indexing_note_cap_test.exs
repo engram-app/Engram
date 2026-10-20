@@ -25,10 +25,13 @@ defmodule Engram.IndexingNoteCapTest do
 
   setup :verify_on_exit!
 
-  # `n` one-line sections, one chunk each; `last` goes in the final section.
+  # Over 512 B, so the chunker's min512 merge leaves a section alone.
+  @pad String.duplicate("lorem ipsum dolor ", 30)
+
+  # `n` sections, one chunk each; `last` goes in the final section.
   defp sections(n, last \\ "") do
     "# Big\n\n" <>
-      Enum.map_join(1..n, "\n\n", fn i -> "## S#{i}\n\nsection#{i} body text here." end) <>
+      Enum.map_join(1..n, "\n\n", fn i -> "## S#{i}\n\nsection#{i} body text here. #{@pad}" end) <>
       last
   end
 
@@ -225,7 +228,7 @@ defmodule Engram.IndexingNoteCapTest do
 
   # A numeric table: the chunker calls it "data" (keyword-only, #2041).
   defp table(i) do
-    rows = for r <- 1..10, do: "| #{r} | #{4_810 + r * 37 + i} | #{r * 3} | #{rem(r, 4)}.#{i} |"
+    rows = for r <- 1..18, do: "| #{r} | #{4_810 + r * 37 + i} | #{r * 3} | #{rem(r, 4)}.#{i} |"
     Enum.join(["| id | value | count | rate |", "|---|---|---|---|" | rows], "\n")
   end
 
@@ -237,7 +240,7 @@ defmodule Engram.IndexingNoteCapTest do
           i = run * 1_000 + j
 
           if rem(run, 2) == 1,
-            do: "## P#{i}\n\nprose#{i} sentence about the topic here.",
+            do: "## P#{i}\n\nprose#{i} sentence about the topic here. #{@pad}",
             else: "## T#{i}\n\n#{table(i)}"
         end)
       end)
