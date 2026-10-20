@@ -46,12 +46,12 @@ defmodule Engram.Vector.QdrantCollectionTest do
     setup %{bypass: bypass} do
       ServiceConfig.put_override(:qdrant_reconcile_config, true)
       Bypass.stub(bypass, "PATCH", "/collections/c1", &Plug.Conn.send_resp(&1, 200, "{}"))
-      Bypass.stub(bypass, "GET", "/collections/c1", &Plug.Conn.send_resp(&1, 500, "{}"))
       :ok
     end
 
     defp create_on(bypass, version) do
       test_pid = self()
+      Bypass.stub(bypass, "GET", "/collections/c1", &Plug.Conn.send_resp(&1, 500, "{}"))
 
       Bypass.stub(bypass, "GET", "/", fn conn ->
         conn
@@ -89,11 +89,53 @@ defmodule Engram.Vector.QdrantCollectionTest do
          %{bypass: bypass} do
       {create, indexes} = create_on(bypass, "1.19.2")
 
-      assert create["hnsw_config"] == %{"m" => 0, "payload_m" => 16, "max_indexing_threads" => 1}
+      # The global graph stays until Task 18.1 flips :qdrant_tenant_graph.
+      refute Map.has_key?(create, "hnsw_config")
       assert create["optimizers_config"]["max_segment_size"] == 1_000_000
       assert indexes["u"] == %{"type" => "uuid", "is_tenant" => true, "on_disk" => true}
       assert indexes["vault_id"]["enable_hnsw"] == false
       refute Map.has_key?(indexes, "note_id")
+    end
+
+    test "version unknown: a missing collection is not created (next boot retries)",
+         %{bypass: bypass} do
+      Bypass.stub(bypass, "GET", "/", &Plug.Conn.send_resp(&1, 503, "{}"))
+      Bypass.stub(bypass, "GET", "/collections/c1", &Plug.Conn.send_resp(&1, 404, "{}"))
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, :qdrant_version_unknown} = Qdrant.ensure_collection("c1", 1024)
+        end)
+
+      assert log =~ "qdrant version unreadable"
+    end
+
+    test "version unknown: an existing collection is still verified", %{bypass: bypass} do
+      Bypass.stub(bypass, "GET", "/", &Plug.Conn.send_resp(&1, 503, "{}"))
+
+      Bypass.stub(bypass, "PUT", "/collections/c1", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(409, ~s({"status":{"error":"already exists"}}))
+      end)
+
+      Bypass.stub(bypass, "GET", "/collections/c1", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, existing_body(%{}))
+      end)
+
+      Bypass.stub(bypass, "PUT", "/collections/c1/index", fn conn ->
+        Plug.Conn.send_resp(conn, 200, ~s({"status":"ok"}))
+      end)
+
+      # The post-verify reconcile's reads; not under test here.
+      Bypass.stub(bypass, "GET", "/sys_metrics", &Plug.Conn.send_resp(&1, 404, ""))
+      Bypass.stub(bypass, "GET", "/collections/c1/memory", &Plug.Conn.send_resp(&1, 404, ""))
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok = Qdrant.ensure_collection("c1", 1024)
+      end)
     end
 
     test "1.18.2 (prod's old cluster): today's create body and indexes", %{bypass: bypass} do

@@ -4,19 +4,20 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
   the tenant layout reads back as no drift, so a boot sends no PATCH, and
   every payload index comes back with the schema it was created with. Bypass
   answers 200 to anything, so only a real server proves the 1.19.2 API takes
-  `is_tenant` on a `uuid` index, `enable_hnsw: false` and `m: 0`.
+  `is_tenant` on a `uuid` index and `enable_hnsw: false`.
   """
   use ExUnit.Case, async: false
 
   alias Engram.ServiceConfig
+  alias Engram.Vector.FilterId
   alias Engram.Vector.Qdrant
   alias Engram.Vector.QdrantLayout
 
   @moduletag :qdrant_integration
 
   @dims 8
-  @user "11111111111111111111111111111111"
-  @other "33333333333333333333333333333333"
+  @user "11111111-1111-1111-1111-111111111111"
+  @vault "22222222-2222-2222-2222-222222222222"
 
   setup do
     ServiceConfig.put_override(:qdrant_url, qdrant_url())
@@ -26,9 +27,10 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
     col =
       "engram_tenant_#{System.get_env("MIX_TEST_PARTITION")}_#{System.unique_integer([:positive])}"
 
+    # Before the create, so a half-made collection is dropped too.
+    Engram.QdrantIntegration.drop_on_exit(col)
     version = Qdrant.server_version()
     :ok = Qdrant.ensure_collection(col, @dims)
-    Engram.QdrantIntegration.drop_on_exit(col)
 
     %{col: col, version: version}
   end
@@ -41,7 +43,9 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
 
     want = QdrantLayout.desired(ctx.version)
     assert Map.drop(QdrantLayout.diff(info["config"], want), ["strict_mode_config"]) == %{}
-    assert info["config"]["hnsw_config"]["m"] == 0
+
+    # The global graph stays while legacy and v5 points coexist (Task 18.1).
+    assert info["config"]["hnsw_config"]["m"] == 16
 
     for {field, schema} <- QdrantLayout.payload_indexes(ctx.version, true) do
       have = info["payload_schema"][field]["params"]
@@ -49,32 +53,94 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
     end
 
     refute Map.has_key?(info["payload_schema"], "note_id")
+    assert QdrantLayout.tenant_graph?(info, ctx.version, true)
 
     # The boot after creation (strict mode applied by the first) is a no-op.
     assert {:ok, []} = Qdrant.reconcile_config(ctx.col)
   end
 
-  test "a tenant-filtered dense search finds only that tenant's points", %{col: col} do
-    :ok =
-      Qdrant.upsert_points(col, [
-        point(1, @user, 0.1),
-        point(2, @other, 0.1)
-      ])
+  # One user's points in BOTH formats during the pass (legacy `user_id`, v5
+  # `u`), more of them than full_scan_threshold, so Qdrant searches the HNSW
+  # graph rather than scanning the payload index. With the global graph
+  # (m 16) the tenant filter's `should` over both formats must find exactly
+  # what an exact search finds.
+  @n 3000
 
-    filter = %{"must" => [%{"key" => "u", "match" => %{"value" => @user}}]}
+  test "mixed-format tenant search over the graph equals exact search", %{col: col} do
+    patch!(col, %{
+      hnsw_config: %{full_scan_threshold: 10},
+      optimizers_config: %{indexing_threshold: 10}
+    })
 
-    {:ok, %{status: 200, body: %{"result" => %{"points" => hits}}}} =
-      Req.post("#{qdrant_url()}/collections/#{col}/points/query",
-        json: %{query: List.duplicate(0.1, @dims), using: "dense", filter: filter}
-      )
+    :rand.seed(:exsss, {1, 2, 3})
 
-    assert Enum.map(hits, & &1["id"]) == [uuid(1)]
+    @n
+    |> points()
+    |> Enum.chunk_every(500)
+    |> Enum.each(fn batch ->
+      {:ok, %{status: 200}} =
+        Req.put("#{qdrant_url()}/collections/#{col}/points?wait=true", json: %{points: batch})
+    end)
+
+    wait_indexed!(col, @n)
+
+    filter = Qdrant.build_tenant_filter(user_id: @user, vault_id: @vault)
+    query = vector()
+
+    approx = top(col, query, filter, %{hnsw_ef: 128, quantization: %{ignore: true}})
+    exact = top(col, query, filter, %{exact: true, quantization: %{ignore: true}})
+
+    assert length(exact) == 20
+    assert approx == exact
+
+    # Both formats are in the answer, or the test proves one subgraph only.
+    assert Enum.any?(exact, &(&1 <= div(@n, 2)))
+    assert Enum.any?(exact, &(&1 > div(@n, 2)))
   end
 
-  defp point(n, user, x),
-    do: %{id: uuid(n), vector: %{"dense" => List.duplicate(x, @dims)}, payload: %{"u" => user}}
+  defp points(n) do
+    for i <- 1..n do
+      payload =
+        if i <= div(n, 2),
+          do: %{"user_id" => @user, "vault_id" => @vault},
+          else: %{"u" => FilterId.uuid(@user), "v" => FilterId.uuid(@vault)}
 
-  defp uuid(n), do: "00000000-0000-0000-0000-00000000000#{n}"
+      %{id: i, vector: %{"dense" => vector()}, payload: payload}
+    end
+  end
+
+  defp vector, do: for(_ <- 1..@dims, do: :rand.uniform() - 0.5)
+
+  defp top(col, query, filter, params) do
+    {:ok, %{status: 200, body: %{"result" => %{"points" => hits}}}} =
+      Req.post("#{qdrant_url()}/collections/#{col}/points/query",
+        json: %{query: query, using: "dense", filter: filter, limit: 20, params: params}
+      )
+
+    Enum.map(hits, & &1["id"])
+  end
+
+  defp patch!(col, body) do
+    {:ok, %{status: 200}} = Req.patch("#{qdrant_url()}/collections/#{col}", json: body)
+  end
+
+  # The optimizer builds the graph in the background; wait until every
+  # vector sits in an indexed segment.
+  defp wait_indexed!(col, n, tries \\ 120) do
+    {:ok, info} = Qdrant.collection_info(col)
+
+    cond do
+      info["status"] == "green" and (info["indexed_vectors_count"] || 0) >= n ->
+        :ok
+
+      tries == 0 ->
+        flunk("graph never built: #{inspect(Map.take(info, ~w(status indexed_vectors_count)))}")
+
+      true ->
+        Process.sleep(500)
+        wait_indexed!(col, n, tries - 1)
+    end
+  end
 
   defp qdrant_url do
     System.get_env("QDRANT_URL") ||

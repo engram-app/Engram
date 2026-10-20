@@ -117,7 +117,6 @@ defmodule Engram.Vector.QdrantLayoutTest do
   # The Task 8.1 graph and segment params, as 1.19.2 reads them back.
   defp tenant_applied(config) do
     config
-    |> Map.put("hnsw_config", %{"m" => 0, "payload_m" => 16, "max_indexing_threads" => 1})
     |> update_in(["optimizer_config"], fn o ->
       Map.merge(o, %{"max_segment_size" => 1_000_000, "deleted_threshold" => 0.2})
     end)
@@ -397,10 +396,12 @@ defmodule Engram.Vector.QdrantLayoutTest do
       end
     end
 
-    test "1.19.2 adds the per-tenant graph and segment limits" do
+    @tenant_graph %{"m" => 0, "payload_m" => 16, "max_indexing_threads" => 1}
+
+    test "1.19.2 adds the segment limits; the global graph stays (m 16) by default" do
       want = QdrantLayout.desired(@v1192)
 
-      assert want["hnsw_config"] == %{"m" => 0, "payload_m" => 16, "max_indexing_threads" => 1}
+      refute Map.has_key?(want, "hnsw_config")
 
       assert want["optimizers_config"] == %{
                "max_optimization_threads" => 1,
@@ -409,23 +410,52 @@ defmodule Engram.Vector.QdrantLayoutTest do
              }
 
       body = QdrantLayout.create_params(1024, true, @v1192)
-      assert body["hnsw_config"] == want["hnsw_config"]
+      refute Map.has_key?(body, "hnsw_config")
       assert body["optimizers_config"] == want["optimizers_config"]
     end
 
-    test "a 1.19.2 collection created with the layout is no drift (no PATCH every boot)" do
+    test "the per-tenant graph only once tenant_graph? holds" do
+      want = QdrantLayout.desired(@v1192, nil, true, :self_host, true)
+      assert want["hnsw_config"] == @tenant_graph
+      assert "hnsw_config" in QdrantLayout.on_disk_keys()
+    end
+
+    test "deleted_threshold is sent as a float, so an integer config never drifts" do
+      Engram.ServiceConfig.put_override(:qdrant_deleted_threshold, 1)
+      assert QdrantLayout.desired(@v1192)["optimizers_config"]["deleted_threshold"] === 1.0
+    end
+
+    # The m 0 graph links a point only to points sharing its tenant value. While
+    # legacy `user_id` points and v5 `u` points coexist, one user is two
+    # disconnected subgraphs, so m 0 waits for Task 18.1's switch AND a
+    # collection whose `u` index really is the tenant index.
+    test "tenant_graph?: switch on, 1.19.2, and `u` indexed is_tenant" do
+      assert QdrantLayout.tenant_graph?(@tenant_info, @v1192, true)
+      refute QdrantLayout.tenant_graph?(@tenant_info, @v1192, false)
+      refute QdrantLayout.tenant_graph?(@tenant_info, @v1182, true)
+      refute QdrantLayout.tenant_graph?(@tenant_info, nil, true)
+
+      untenanted = put_in(@tenant_info, ["payload_schema", "u", "params", "is_tenant"], false)
+      refute QdrantLayout.tenant_graph?(untenanted, @v1192, true)
+
+      no_u = update_in(@tenant_info, ["payload_schema"], &Map.delete(&1, "u"))
+      refute QdrantLayout.tenant_graph?(no_u, @v1192, true)
+      refute QdrantLayout.tenant_graph?(@prod_info, @v1192, true)
+    end
+
+    # The fixture was captured with m 0 applied (the post-18.1 shape).
+    test "a 1.19.2 collection with the layout is no drift (no PATCH every boot)" do
       config = @tenant_info["config"]
 
-      for strict? <- [true, false], deployment <- [:self_host, :cloud] do
-        want = QdrantLayout.desired(@v1192, nil, strict?, deployment)
+      for strict? <- [true, false], deployment <- [:self_host, :cloud], graph? <- [true, false] do
+        want = QdrantLayout.desired(@v1192, nil, strict?, deployment, graph?)
         assert Map.drop(QdrantLayout.diff(config, want), ["strict_mode_config"]) == %{}
       end
     end
 
-    test "today's prod shape on 1.19.2 drifts on the graph (headroom-gated)" do
+    test "today's prod shape on 1.19.2 never drifts on the graph without tenant_graph?" do
       diff = QdrantLayout.diff(@prod_info["config"], QdrantLayout.desired(@v1192))
-      assert diff["hnsw_config"] == %{"m" => 0, "payload_m" => 16, "max_indexing_threads" => 1}
-      assert "hnsw_config" in QdrantLayout.on_disk_keys()
+      refute Map.has_key?(diff, "hnsw_config")
     end
 
     test "payload indexes below 1.19.2 are today's sets" do

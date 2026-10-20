@@ -291,6 +291,40 @@ defmodule Engram.Vector.QdrantReconcileTest do
     end
   end
 
+  describe "per-tenant graph (m 0), Task 18.1's :qdrant_tenant_graph switch" do
+    @tenant_u %{
+      "data_type" => "uuid",
+      "params" => %{"type" => "uuid", "is_tenant" => true, "on_disk" => true}
+    }
+
+    defp boot_1192(bypass, info) do
+      stub_version(bypass, "1.19.2")
+      fake_collection(bypass, "engram_notes", info, ["max_disk_usage_percent"])
+      stub_memory(bypass, "engram_notes", 100)
+      stub_no_sys_metrics(bypass)
+      assert {:ok, _} = Qdrant.reconcile_config("engram_notes")
+    end
+
+    test "switch off (default): never PATCHes the graph", %{bypass: bypass} do
+      boot_1192(bypass, put_in(@prod_info, ["payload_schema", "u"], @tenant_u))
+      refute_receive {:patch, %{"hnsw_config" => _}}
+    end
+
+    test "switch on, but `u` is not the tenant index: graph untouched", %{bypass: bypass} do
+      ServiceConfig.put_override(:qdrant_tenant_graph, true)
+      boot_1192(bypass, @prod_info)
+      refute_receive {:patch, %{"hnsw_config" => _}}
+    end
+
+    test "switch on and `u` is_tenant: m 0 once, then no drift", %{bypass: bypass} do
+      ServiceConfig.put_override(:qdrant_tenant_graph, true)
+      boot_1192(bypass, put_in(@prod_info, ["payload_schema", "u"], @tenant_u))
+
+      assert_receive {:patch, %{"hnsw_config" => %{"m" => 0, "payload_m" => 16}}}
+      assert {:ok, []} = Qdrant.reconcile_config("engram_notes")
+    end
+  end
+
   describe "Qdrant 1.19+ (disk guard moved to node-wide /quotas)" do
     test "1.19.2: never sends the disk field, converges after one PATCH", %{bypass: bypass} do
       stub_version(bypass, "1.19.2")
