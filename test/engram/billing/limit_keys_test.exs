@@ -227,14 +227,14 @@ defmodule Engram.Billing.LimitKeysTest do
   test "index_points_cap bounds Qdrant points per account" do
     assert LimitKeys.defined?(:index_points_cap)
     assert LimitKeys.type(:index_points_cap) == :integer
-    # notes_cap x 8.5, the median points per indexed note in prod.
-    assert LimitKeys.default_for(:index_points_cap, :free) == 17_000
-    assert LimitKeys.default_for(:index_points_cap, :starter) == 170_000
-    assert LimitKeys.default_for(:index_points_cap, :pro) == 340_000
+    # notes_cap x 6: the v5 median is ~5.2 points a note (approved 10-19).
+    assert LimitKeys.default_for(:index_points_cap, :free) == 12_000
+    assert LimitKeys.default_for(:index_points_cap, :starter) == 120_000
+    assert LimitKeys.default_for(:index_points_cap, :pro) == 240_000
 
     for tier <- [:free, :starter, :pro] do
       assert LimitKeys.default_for(:index_points_cap, tier) ==
-               div(LimitKeys.default_for(:notes_cap, tier) * 17, 2)
+               LimitKeys.default_for(:notes_cap, tier) * 6
     end
   end
 

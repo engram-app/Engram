@@ -139,9 +139,9 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
     end)
   end
 
-  describe "full vs floor on Free (cap 17,000)" do
-    test "at 16,990 a 5-chunk note gets a full index", %{user: user, vault: vault, note: note} do
-      seed_points(user, vault, 16_990)
+  describe "full vs floor on Free (cap 12,000)" do
+    test "at 11,990 a 5-chunk note gets a full index", %{user: user, vault: vault, note: note} do
+      seed_points(user, vault, 11_990)
       stub_embedder()
 
       assert :ok = embed(note)
@@ -152,8 +152,8 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
     end
 
     # No embedder stub: any Voyage call fails the test.
-    test "at 16,998 the same note is floored, unmetered", %{user: user, vault: vault, note: note} do
-      seed_points(user, vault, 16_998)
+    test "at 11,998 the same note is floored, unmetered", %{user: user, vault: vault, note: note} do
+      seed_points(user, vault, 11_998)
       before = UsageMeters.lifetime_embed_tokens(user.id)
 
       assert :ok = embed(note)
@@ -167,7 +167,7 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
       vault: vault,
       note: note
     } do
-      seed_points(user, vault, 16_998)
+      seed_points(user, vault, 11_998)
       {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
       parent = self()
 
@@ -186,7 +186,7 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
       vault: vault,
       note: note
     } do
-      seed_points(user, vault, 16_995)
+      seed_points(user, vault, 11_995)
       stub_embedder()
 
       assert :ok = embed(note)
@@ -224,9 +224,9 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
     test "the note's own chunks do not count against it", %{user: user, vault: vault, note: note} do
       stub_embedder()
       assert :ok = embed(note)
-      seed_points(user, vault, 16_995)
+      seed_points(user, vault, 11_995)
 
-      # 17,000 rows now, five of them this note's: a re-index replaces them.
+      # 12,000 rows now, five of them this note's: a re-index replaces them.
       {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
       assert {:ok, 5, _, true} = Indexing.index_note_with_usage(note, vault, user)
       assert reload(note).index_tier == nil
@@ -237,7 +237,7 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
       vault: vault,
       note: note
     } do
-      seed_points(user, vault, 17_000)
+      seed_points(user, vault, 12_000)
       {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
       note = with_tier(note, "floor_paid")
 
@@ -276,7 +276,7 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
       vault: vault,
       note: note
     } do
-      seed_points(user, vault, 17_000)
+      seed_points(user, vault, 12_000)
 
       # Control: the app role with no tenant sees zero rows.
       assert {:returned, 0} =
@@ -292,7 +292,7 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
 
   describe "writes over the cap still succeed" do
     setup %{user: user, vault: vault} do
-      seed_points(user, vault, 17_000)
+      seed_points(user, vault, 12_000)
       Engram.ApiEntitlementHelpers.lift_api_rps_cap!(user)
       :ok
     end

@@ -23,16 +23,18 @@ defmodule Engram.Billing.LimitKeys do
     # Qdrant points one account may hold, counted in `chunks` rows. Past the cap
     # notes are demoted to a floor point; sync and writes never fail on it.
     #
-    # GOLDEN RULE: points cap = `notes_cap` x 8.5, the median points per
-    # indexed note in prod (owner decision 2026-10-19). A full account of
-    # median notes fits; change both together.
+    # GOLDEN RULE: points cap = `notes_cap` x 6. The chunker v5 median is
+    # about 5.2 points per note (min512 coalesce, per-note merge cap), so a
+    # full account of median notes fits with headroom (owner approved
+    # 2026-10-19; re-derive only if the v5 dry-run median leaves 5.0 to 6.5).
+    # Change both together.
     index_points_cap: %{
       type: :integer,
-      defaults: %{free: 17_000, starter: 170_000, pro: 340_000}
+      defaults: %{free: 12_000, starter: 120_000, pro: 240_000}
     },
     # Dense points one note may hold. A note chunked past it has adjacent
     # chunks merged into exactly this many points, so the whole note stays
-    # covered (`Indexing.cap_chunks/2`). 641 prod notes over 128 chunks held
+    # covered (`Indexing.cap_chunks/3`). 641 prod notes over 128 chunks held
     # 62.6% of all points (2026-10-18 audit).
     note_points_cap: %{type: :integer, defaults: %{free: 128, starter: 1_024, pro: 1_024}},
     # PACKAGING, NOT A RESOURCE (pricing v3.1, 2026-09-03). An earlier draft
