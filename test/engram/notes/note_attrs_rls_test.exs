@@ -100,6 +100,26 @@ defmodule Engram.Notes.NoteAttrsRlsTest do
            ).rows == [[["engram_maintenance"]]]
   end
 
+  test "real users get different filter keys", %{a: a, b: b} do
+    refute a.fk == b.fk
+  end
+
+  # CONTROL: the maintenance role's access comes from the maintenance_all
+  # policy itself. Without it, the same role with no tenant sees nothing.
+  test "CONTROL: without maintenance_all, engram_maintenance sees zero rows" do
+    {:error, n} =
+      Repo.transaction(fn ->
+        Repo.query!("DROP POLICY maintenance_all ON note_attrs")
+        Repo.query!("SELECT set_config('app.current_tenant', '', true)")
+        Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_maintenance")
+        n = length(rows())
+        Repo.query!("RESET SESSION AUTHORIZATION")
+        Repo.rollback(n)
+      end)
+
+    assert n == 0
+  end
+
   test "maintenance_all sees every tenant's rows" do
     {:ok, n} =
       Repo.transaction(fn ->
