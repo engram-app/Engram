@@ -104,6 +104,45 @@ defmodule Engram.SearchIntegrationTest do
     end)
   end
 
+  test "updated_after finds an OKF v0.2 note dated only by generated.at",
+       %{user: user, vault: vault, collection: col} do
+    content = """
+    ---
+    generated:
+      by: "human:x"
+      at: 2026-08-21T10:00:00+02:00
+    ---
+    # Report
+
+    Quarterly freshness report body.
+    """
+
+    {:ok, note} =
+      Engram.Notes.upsert_note(user, vault, %{"path" => "okf/v02.md", "content" => content},
+        actor: "api"
+      )
+
+    {:ok, decrypted} = Engram.Crypto.maybe_decrypt_note_fields(note, user)
+    assert decrypted.fm_timestamp == ~U[2026-08-21 08:00:00Z]
+    assert {:ok, n} = Engram.Indexing.index_note(decrypted, vault)
+    assert n > 0
+    assert await_points(col) >= 1
+
+    {:ok, results} =
+      Engram.Search.search(user, vault, "freshness report",
+        updated_after: ~U[2026-08-01 00:00:00Z]
+      )
+
+    assert Enum.any?(results, &(&1.source_path == "okf/v02.md"))
+
+    {:ok, none} =
+      Engram.Search.search(user, vault, "freshness report",
+        updated_after: ~U[2026-09-01 00:00:00Z]
+      )
+
+    assert none == []
+  end
+
   defp await_points(col, tries \\ 50) do
     {:ok, info} = Engram.Vector.Qdrant.collection_info(col)
 

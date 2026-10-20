@@ -1,7 +1,9 @@
 defmodule Engram.Notes.OkfFields do
   @moduledoc """
-  Extraction of the OKF v0.1 standard frontmatter fields (plus the `created`
-  extension) from note content. Pure functions; extraction never errors, so a
+  Extraction of the OKF standard frontmatter fields (plus the `created`
+  extension) from note content. v0.2 dates a note by `generated.at`; the
+  deprecated v0.1 `timestamp` (and its `modified`/`updated` aliases) is the
+  fallback. Pure functions; extraction never errors, so a
   malformed note still syncs (all fields degrade to nil).
 
   Crypto line (spec-locked): only the two dates are stored plaintext; `type`
@@ -11,8 +13,9 @@ defmodule Engram.Notes.OkfFields do
 
   alias Engram.Notes.Frontmatter
 
-  @timestamp_aliases ~w(timestamp modified updated)
-  @created_aliases ~w(created date)
+  # Key paths into the decoded frontmatter, first present wins.
+  @timestamp_aliases [~w(generated at), ~w(timestamp), ~w(modified), ~w(updated)]
+  @created_aliases [~w(created), ~w(date)]
 
   @type t :: %{
           type: String.t() | nil,
@@ -68,8 +71,13 @@ defmodule Engram.Notes.OkfFields do
   defp string_field(_), do: nil
 
   defp first_date(decoded, aliases) do
-    Enum.find_value(aliases, fn key -> parse_datetime(decoded[key]) end)
+    Enum.find_value(aliases, fn path -> path |> dig(decoded) |> parse_datetime() end)
   end
+
+  # A non-map at an intermediate key (`generated: "text"`) reads as absent.
+  defp dig([], value), do: value
+  defp dig([key | rest], %{} = map), do: dig(rest, Map.get(map, key))
+  defp dig(_path, _not_a_map), do: nil
 
   defp parse_datetime(v) when is_binary(v) do
     case DateTime.from_iso8601(v) do
