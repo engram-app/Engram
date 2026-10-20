@@ -132,11 +132,17 @@ defmodule EngramWeb.DeviceAuthController do
     end
   end
 
-  def token(conn, %{"device_code" => device_code}) do
+  def token(conn, %{"device_code" => device_code} = params) do
     case DeviceFlow.exchange_device_code(device_code) do
       {:ok, result} ->
         # Activation milestone: the plugin actually holds credentials now.
         Engram.Analytics.track(result.user, "plugin_linked", %{})
+
+        # Connection churn, paired with device_disconnected. `platform` is an
+        # enum a newer plugin sends; anything else is dropped.
+        Engram.Analytics.track(result.user, "device_connected", %{
+          platform: if(params["platform"] in ~w(desktop mobile), do: params["platform"])
+        })
 
         json(conn, %{
           access_token: result.access_token,
