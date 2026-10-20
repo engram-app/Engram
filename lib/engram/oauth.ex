@@ -555,7 +555,7 @@ defmodule Engram.OAuth do
   """
   def mint_authorization_code(user, validated, vault_selection, label) do
     case mint_authorization_code_granted(user, validated, vault_selection, label) do
-      {:ok, redirect_url, _granted} -> {:ok, redirect_url}
+      {:ok, redirect_url, _granted, _grant_id} -> {:ok, redirect_url}
       other -> other
     end
   end
@@ -566,6 +566,9 @@ defmodule Engram.OAuth do
   of the stored grant, `mcp:read` cap applied). The consent endpoint echoes it
   so the consent screen can refuse to continue when the server stored more
   than the user picked (a server that predates levels echoes nothing).
+
+  Also returns the code's `grant_id/1`, the analytics join key. An optional
+  `validated.device` (`Engram.Analytics.Device`) is stored on the code.
   """
   def mint_authorization_code_granted(user, validated, vault_selection, label) do
     with {:ok, %{vault_ids: vault_ids} = access} <-
@@ -587,6 +590,7 @@ defmodule Engram.OAuth do
         default_access: access.default_access,
         label: label,
         state: validated.state,
+        device: Map.get(validated, :device),
         expires_at: expires_in(@code_ttl_seconds)
       }
 
@@ -602,7 +606,7 @@ defmodule Engram.OAuth do
             |> Map.put(:scope, row.scope)
 
           params = %{code: raw_code, state: validated.state, iss: Map.get(validated, :iss)}
-          {:ok, build_redirect(validated.redirect_uri, params), granted}
+          {:ok, build_redirect(validated.redirect_uri, params), granted, grant_id(row.id)}
 
         {:error, changeset} ->
           {:error, changeset}
@@ -1055,10 +1059,14 @@ defmodule Engram.OAuth do
   # controller's analytics reads it; `take_grant_user_id/0` clears it.
   @grant_user_key :engram_oauth_grant_user_id
 
+  @grant_id_key :engram_oauth_grant_id
+
   defp put_grant_user_id(user_id), do: Process.put(@grant_user_key, user_id)
 
-  defp put_code_user_id({:ok, %AuthorizationCode{user_id: user_id}}),
-    do: put_grant_user_id(user_id)
+  defp put_code_user_id({:ok, %AuthorizationCode{id: id, user_id: user_id}}) do
+    Process.put(@grant_id_key, grant_id(id))
+    put_grant_user_id(user_id)
+  end
 
   defp put_code_user_id(_), do: :ok
 
@@ -1068,6 +1076,27 @@ defmodule Engram.OAuth do
   """
   @spec take_grant_user_id() :: String.t() | nil
   def take_grant_user_id, do: Process.delete(@grant_user_key)
+
+  @doc """
+  The `grant_id/1` of the code the last code exchange in this process found,
+  if any, and forgets it. For `mcp_oauth_token_issued` / `_failed`.
+  """
+  @spec take_grant_id() :: String.t() | nil
+  def take_grant_id, do: Process.delete(@grant_id_key)
+
+  @doc """
+  A non-secret id for one authorization code, the same at consent
+  (`mcp_oauth_granted`), exchange (`mcp_oauth_token_issued` / `_failed`) and
+  expiry (`mcp_oauth_code_expired`), so redemption joins exactly. A hash of
+  the code ROW id, never of the code: it cannot be turned into either.
+  """
+  @spec grant_id(Ecto.UUID.t()) :: String.t()
+  def grant_id(code_row_id) do
+    :sha256
+    |> :crypto.hash("oauth_grant:" <> code_row_id)
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, 16)
+  end
 
   @spec grant_error(grant_reason()) :: {:error, {:invalid_grant, grant_reason()}}
   defp grant_error(reason), do: {:error, {:invalid_grant, reason}}
@@ -1545,9 +1574,20 @@ defmodule Engram.OAuth do
     code_cutoff = DateTime.utc_now(:second) |> DateTime.add(-3600, :second)
     revoked_cutoff = DateTime.utc_now(:second) |> DateTime.add(-7 * 24 * 3600, :second)
 
-    {codes, _} =
-      from(ac in AuthorizationCode, where: ac.expires_at < ^code_cutoff)
+    {codes, reaped} =
+      from(ac in AuthorizationCode,
+        where: ac.expires_at < ^code_cutoff,
+        select: %{
+          id: ac.id,
+          user_id: ac.user_id,
+          client_id: ac.client_id,
+          device: ac.device,
+          consumed_at: ac.consumed_at
+        }
+      )
       |> Repo.delete_all(skip_tenant_check: true)
+
+    report_unredeemed(Enum.filter(reaped, &is_nil(&1.consumed_at)))
 
     # Before the reap below, which keys on `superseded_at`.
     backfill_superseded()
@@ -1572,6 +1612,38 @@ defmodule Engram.OAuth do
       |> delete_tokens_locked()
 
     {codes + revoked_tokens + expired_tokens, nil}
+  end
+
+  # A code reaped without ever being exchanged: the client never came back
+  # for it (the #2003 mobile handoff failure). Counted here, at the one place
+  # every code ends, so it needs no extra job and no backfill. Lags expiry by
+  # the hour this sweep waits past `expires_at`. Bounded: at most one per
+  # minted code, and the clients are read in one query.
+  defp report_unredeemed([]), do: :ok
+
+  defp report_unredeemed(codes) do
+    client_ids = codes |> Enum.map(& &1.client_id) |> Enum.uniq()
+
+    families =
+      from(c in Client, where: c.client_id in ^client_ids)
+      |> Repo.all()
+      |> Map.new(&{&1.client_id, &1 |> McpClient.of_client() |> elem(0)})
+
+    Enum.each(codes, fn code ->
+      client = Map.get(families, code.client_id, "other")
+      device = code.device || "unknown"
+
+      :telemetry.execute([:engram, :oauth, :code_expired], %{count: 1}, %{
+        client: client,
+        device: device
+      })
+
+      Engram.Analytics.track(%Accounts.User{id: code.user_id}, "mcp_oauth_code_expired", %{
+        client: client,
+        device: device,
+        grant_id: grant_id(code.id)
+      })
+    end)
   end
 
   # A bare DELETE locks rows in heap order and takes no grant lock, so against

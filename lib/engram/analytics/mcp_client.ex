@@ -64,6 +64,17 @@ defmodule Engram.Analytics.McpClient do
 
   def host_family(_host), do: "other"
 
+  @doc """
+  The calling agent behind a token request, from its User-Agent. Codex and
+  ChatGPT share OpenAI's CIMD client document, so both are `"chatgpt"` by
+  client; their token requests are not alike. Prefix match only, so a UA
+  cannot claim an agent by mentioning it. Anything else is `family`.
+  """
+  @spec agent(String.t() | nil, String.t()) :: String.t()
+  def agent("codex-mcp-client/" <> _, _family), do: "codex"
+  def agent("openai-connectors-oauth/" <> _, _family), do: "chatgpt"
+  def agent(_user_agent, family), do: family
+
   @known_scopes ~w(mcp mcp:read offline_access openid profile email)
 
   @doc """

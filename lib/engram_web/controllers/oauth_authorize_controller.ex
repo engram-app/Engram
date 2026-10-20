@@ -21,9 +21,11 @@ defmodule EngramWeb.OAuthAuthorizeController do
 
   plug EngramWeb.Plugs.EnforceConnectionCap when action in [:consent]
 
+  alias Engram.Analytics.Device
   alias Engram.Analytics.McpClient
   alias Engram.OAuth
   alias EngramWeb.OAuthMetadata
+  alias EngramWeb.RequestMeta
 
   # Params we forward to the SPA consent route. RFC 8707 `resource` is checked
   # in `OAuth.validate_authorization_request/1` before anything is forwarded.
@@ -58,19 +60,25 @@ defmodule EngramWeb.OAuthAuthorizeController do
     case OAuth.validate_authorization_request(params) do
       {:ok, validated} ->
         validated = OAuth.apply_read_only_choice(validated, params["read_only"])
+        # The consent page's own browser: the handoff back to the client is
+        # what fails on mobile, so codes are counted by device.
+        device = Device.from_user_agent(RequestMeta.get_user_agent(conn))
 
         case OAuth.mint_authorization_code_granted(
                user,
-               Map.put(validated, :iss, iss),
+               validated |> Map.put(:iss, iss) |> Map.put(:device, device),
                OAuth.parse_vault_selection(params),
                params["label"]
              ) do
-          {:ok, redirect_url, granted} ->
-            props = funnel_props(validated)
+          {:ok, redirect_url, granted, grant_id} ->
+            props = Map.merge(funnel_props(validated), %{device: device, grant_id: grant_id})
             Engram.Analytics.track(user, "mcp_oauth_granted", props)
             # One per minted code; against the token counter's
             # `authorization_code` issues it is the redemption ratio per client.
-            :telemetry.execute([:engram, :oauth, :consent], %{count: 1}, %{client: props.client})
+            :telemetry.execute([:engram, :oauth, :consent], %{count: 1}, %{
+              client: props.client,
+              device: device
+            })
 
             # `granted` echoes what was stored (#174), so the consent screen
             # can refuse to redirect when it is wider than the user's pick.

@@ -342,7 +342,8 @@ defmodule EngramWeb.OAuthTokenRejectionLogTest do
                        result: :issued,
                        error: nil,
                        reason: :none,
-                       client: "claude"
+                       client: "claude",
+                       client_agent: "claude"
                      }}
   end
 
@@ -356,5 +357,16 @@ defmodule EngramWeb.OAuthTokenRejectionLogTest do
 
     post(build_conn(), "/oauth/token", %{"grant_type" => "password", "client_id" => "evil"})
     assert_received {:oauth_token, %{result: :rejected, client: "other"}}
+  end
+
+  test "the token request's User-Agent splits Codex from ChatGPT" do
+    params = code_params(register_client())
+
+    build_conn()
+    |> put_req_header("user-agent", "codex-mcp-client/0.46.0")
+    |> post("/oauth/token", params)
+    |> json_response(200)
+
+    assert_received {:oauth_token, %{result: :issued, client_agent: "codex"}}
   end
 end

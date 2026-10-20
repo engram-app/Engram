@@ -99,8 +99,8 @@ defmodule EngramWeb.OAuthTokenController do
   # The non-grant error is `insert_refresh_token/1`'s changeset. It was already
   # answered `invalid_grant`; that stays, under its own reason so it is visible.
   defp grant_result({:ok, response}, conn, grant_type, client_id) do
-    props = client_props(client_id)
-    emit(grant_type, :issued, nil, :none, props.client)
+    props = client_props(conn, client_id)
+    emit(grant_type, :issued, nil, :none, props)
     track_issued(conn, grant_type, props, response)
     json(conn, response)
   end
@@ -136,8 +136,8 @@ defmodule EngramWeb.OAuthTokenController do
       user_agent: RequestMeta.log_user_agent(conn)
     )
 
-    props = client_props(client_id)
-    emit(grant_type, :rejected, error, reason, props.client)
+    props = client_props(conn, client_id)
+    emit(grant_type, :rejected, error, reason, props)
     track_failed(conn, grant_type, props, error, reason)
 
     conn
@@ -150,14 +150,15 @@ defmodule EngramWeb.OAuthTokenController do
   # `engram_prom_ex_oauth_token_total` would silently drop the second. The
   # labels are closed sets: `client` is the `McpClient` family, never the raw
   # client id, so it pairs with `engram_prom_ex_oauth_consent_total` for the
-  # per-client redemption ratio.
-  defp emit(grant_type, result, error, reason, client) do
+  # per-client redemption ratio; `client_agent` is `McpClient.agent/2`.
+  defp emit(grant_type, result, error, reason, %{client: client, client_agent: agent}) do
     :telemetry.execute([:engram, :oauth, :token], %{count: 1}, %{
       grant_type: grant_type,
       result: result,
       error: error,
       reason: reason,
-      client: client
+      client: client,
+      client_agent: agent
     })
   end
 
@@ -170,7 +171,9 @@ defmodule EngramWeb.OAuthTokenController do
 
   defp track_issued(conn, grant_type, client_props, response) do
     props =
-      Map.merge(client_props, %{
+      client_props
+      |> with_grant_id(grant_type)
+      |> Map.merge(%{
         grant_type: Atom.to_string(grant_type),
         auth_method: auth_method(conn),
         jwks_source: jwks_source()
@@ -186,7 +189,9 @@ defmodule EngramWeb.OAuthTokenController do
   # (`OAuth.take_grant_user_id/0`); otherwise the event is anonymous.
   defp track_failed(conn, grant_type, client_props, error, reason) do
     props =
-      Map.merge(client_props, %{
+      client_props
+      |> with_grant_id(grant_type)
+      |> Map.merge(%{
         grant_type: Atom.to_string(grant_type),
         auth_method: auth_method(conn),
         error: error,
@@ -199,15 +204,28 @@ defmodule EngramWeb.OAuthTokenController do
     end
   end
 
-  defp client_props(client_id) do
+  # `client_agent` splits clients that share one registration (Codex and
+  # ChatGPT share OpenAI's CIMD document) by the token request's User-Agent.
+  defp client_props(conn, client_id) do
     client =
       case OAuth.get_client(client_id) do
         {:ok, client} -> client
         _ -> nil
       end
 
-    McpClient.client_props(client)
+    props = McpClient.client_props(client)
+    Map.put(props, :client_agent, McpClient.agent(RequestMeta.get_user_agent(conn), props.client))
   end
+
+  # The code's join key (`OAuth.grant_id/1`), when the exchange found one.
+  defp with_grant_id(props, :authorization_code) do
+    case OAuth.take_grant_id() do
+      nil -> props
+      grant_id -> Map.put(props, :grant_id, grant_id)
+    end
+  end
+
+  defp with_grant_id(props, _grant_type), do: props
 
   # The access token we just minted names its user; reading our own claim
   # back is cheaper than threading the user out of `Engram.OAuth`.
@@ -256,8 +274,8 @@ defmodule EngramWeb.OAuthTokenController do
   # RFC 6749 §5.2: failed client authentication is 401, and a request that used
   # the Authorization header gets a WWW-Authenticate challenge back.
   defp invalid_client(conn, grant_type) do
-    props = client_props(request_client_id(conn))
-    emit(grant_type, :rejected, "invalid_client", :client_auth_failed, props.client)
+    props = client_props(conn, request_client_id(conn))
+    emit(grant_type, :rejected, "invalid_client", :client_auth_failed, props)
     track_failed(conn, grant_type, props, "invalid_client", :client_auth_failed)
 
     conn
@@ -272,8 +290,8 @@ defmodule EngramWeb.OAuthTokenController do
   # retryable. Same split `Engram.OAuth.cimd_error/1` already makes on the
   # authorize path, and the same string it uses.
   defp temporarily_unavailable(conn, grant_type) do
-    props = client_props(request_client_id(conn))
-    emit(grant_type, :rejected, "temporarily_unavailable", :client_auth_unavailable, props.client)
+    props = client_props(conn, request_client_id(conn))
+    emit(grant_type, :rejected, "temporarily_unavailable", :client_auth_unavailable, props)
     track_failed(conn, grant_type, props, "temporarily_unavailable", :client_auth_unavailable)
 
     # A hint to retry soon (#1974): ChatGPT did not retry the 2026-10-13 503 at
