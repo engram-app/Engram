@@ -1318,11 +1318,10 @@ export default {
 	frontmatter: "frontmatter",
 	reads: "đọc",
 	"{what} Wants {expectsLabel}.": "{what} muốn {expectsLabel}.",
-	filterable: "có thể lọc",
 	"also accepts {aliases}": "cũng chấp nhận {aliases}",
 	or: "hoặc",
-	"A filterable field is one search can narrow results by. A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
-		"Một trường có thể lọc là một trường mà tìm kiếm có thể thu hẹp kết quả. Một tên lồng nhau như {example} không thể chỉnh sửa ở đây hoặc trong Obsidian; chỉ có thể chỉnh sửa trực tiếp, MCP hoặc AI viết.",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Một tên có cấu trúc như {example} không thể chỉnh sửa ở đây hoặc trong Obsidian; chỉ có thể chỉnh sửa trực tiếp, MCP, hoặc được viết bởi AI.",
 	Properties: "Thuộc tính",
 	"About properties": "Về thuộc tính",
 	"Property name": "Tên thuộc tính",

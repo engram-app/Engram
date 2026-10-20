@@ -1322,11 +1322,10 @@ export default {
 	frontmatter: "フロントマター",
 	reads: "閲覧数",
 	"{what} Wants {expectsLabel}.": "{what} は {expectsLabel} を希望",
-	filterable: "フィルタリング可能",
 	"also accepts {aliases}": "{aliases} も受け入れます",
 	or: "または",
-	"A filterable field is one search can narrow results by. A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
-		"フィルタリング可能な項目は、検索結果を絞り込むことができます。ネストされた名前（例：{example}）は、ここまたはObsidianでは編集できません。直接編集（MCP）またはAIによる作成のみ可能です。",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"{example} のようなネストされた名前は、ここまたは Obsidian では編集できません。編集は MCP または AI によるもののみです。",
 	Properties: "プロパティ",
 	"About properties": "プロパティについて",
 	"Property name": "プロパティ名",

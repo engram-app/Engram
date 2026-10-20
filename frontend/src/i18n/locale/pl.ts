@@ -1417,11 +1417,10 @@ export default {
 	frontmatter: "metadane",
 	reads: "odczytuje",
 	"{what} Wants {expectsLabel}.": "{what} potrzebuje {expectsLabel}.",
-	filterable: "filtrowalne",
 	"also accepts {aliases}": "akceptuje również {aliases}",
 	or: "lub",
-	"A filterable field is one search can narrow results by. A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
-		"Filtrowalne pole to takie, które można wykorzystać do zawężenia wyników wyszukiwania. Zagnieżdżona nazwa, taka jak {example}, nie może być edytowana tutaj ani w Obsidian; można dokonać tylko edycji bezpośredniej, MCP, lub notatkę generuje AI.",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Zagnieżdżona nazwa, taka jak {example}, nie może być edytowana tutaj ani w Obsidian; można ją edytować tylko bezpośrednio, MCP, lub AI ją napisze.",
 	Properties: "Atrybuty",
 	"About properties": "O właściwościach",
 	"Property name": "Nazwa właściwości",

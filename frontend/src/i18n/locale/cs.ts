@@ -1412,11 +1412,10 @@ export default {
 	frontmatter: "frontmatter",
 	reads: "čte",
 	"{what} Wants {expectsLabel}.": "{what} chce {expectsLabel}.",
-	filterable: "filtrovatelné",
 	"also accepts {aliases}": "také přijímá {aliases}",
 	or: "nebo",
-	"A filterable field is one search can narrow results by. A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
-		"Filtrovatelné pole je takové, které lze použít k zúžení výsledků vyhledávání. Vnořené jméno, jako {example}, nelze upravit zde ani v Obsidian; lze provést pouze základní úpravu, MCP, nebo ji vygeneruje AI.",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Vnořené jméno, jako je {example}, nelze upravit zde ani v Obsidian; lze jej upravit pouze přímo, pomocí MCP nebo pomocí AI.",
 	Properties: "Vlastnosti",
 	"About properties": "O vlastnostech",
 	"Property name": "Název vlastnosti",

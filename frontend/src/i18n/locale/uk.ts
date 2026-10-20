@@ -1428,11 +1428,10 @@ export default {
 	frontmatter: "frontmatter",
 	reads: "читає",
 	"{what} Wants {expectsLabel}.": "{what} хоче {expectsLabel}.",
-	filterable: "можна фільтрувати",
 	"also accepts {aliases}": "також приймає {aliases}",
 	or: "або",
-	"A filterable field is one search can narrow results by. A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
-		"Поле, яке можна фільтрувати, дозволяє звузити результати пошуку. Вкладене ім'я, таке як {example}, не можна редагувати тут або в Obsidian; можна лише внести правки безпосередньо, MCP, або ШІ створить його.",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Вкладене ім'я, таке як {example}, не можна редагувати тут або в Obsidian; редагування можливе лише вручну, MCP, або за допомогою ШІ.",
 	Properties: "Властивості",
 	"About properties": "Про властивості",
 	"Property name": "Назва властивості",

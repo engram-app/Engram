@@ -1264,11 +1264,10 @@ export default {
 	frontmatter: "前置資料",
 	reads: "讀取",
 	"{what} Wants {expectsLabel}.": "{what} 想要 {expectsLabel}.",
-	filterable: "可篩選的",
 	"also accepts {aliases}": "也接受 {aliases}",
 	or: "或",
-	"A filterable field is one search can narrow results by. A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
-		"可篩選的欄位是指搜尋時可以用來縮小結果的欄位。巢狀名稱，例如 {example}，不能在此處或在 Obsidian 中編輯；只能進行原始編輯，或由 AI 撰寫，即 MCP。",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"巢狀名稱，例如 {example}，無法在此或在 Obsidian 中編輯；只能進行原始編輯，或由 MCP 或 AI 撰寫。",
 	Properties: "屬性",
 	"About properties": "關於屬性",
 	"Property name": "屬性名稱",

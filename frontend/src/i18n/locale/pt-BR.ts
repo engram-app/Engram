@@ -1375,11 +1375,10 @@ export default {
 	frontmatter: "frontmatter",
 	reads: "lê",
 	"{what} Wants {expectsLabel}.": "{what} quer {expectsLabel}.",
-	filterable: "filtrável",
 	"also accepts {aliases}": "também aceita {aliases}",
 	or: "ou",
-	"A filterable field is one search can narrow results by. A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
-		"Um campo filtrável é aquele que pode refinar os resultados da busca. Um nome aninhado, como {example}, não pode ser editado aqui ou em Obsidian; apenas uma edição direta, MCP, ou uma IA o escreve.",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Um nome aninhado como {example} não pode ser editado aqui ou em Obsidian; apenas uma edição direta, MCP, ou uma IA o escreve.",
 	Properties: "Propriedades",
 	"About properties": "Sobre propriedades",
 	"Property name": "Nome da propriedade",

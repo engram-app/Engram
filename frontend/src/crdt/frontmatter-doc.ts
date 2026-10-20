@@ -53,7 +53,8 @@ export const OKF_FIELD_HELP: ReadonlyArray<{
 	expects: readonly PropertyType[];
 	expectsLabel: MsgKey;
 	what: MsgKey;
-	/** A typed search filter (spec 3.3b): indexed in Postgres and Qdrant. */
+	/** A typed search filter once the v5 payload format is on (spec 3.3b).
+	 *  Data only: the panel claims no filter until search has one (#2083). */
 	filterable?: true;
 }> = [
 	{

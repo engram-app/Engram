@@ -1359,11 +1359,10 @@ export default {
 	frontmatter: "Frontmatter",
 	reads: "liest",
 	"{what} Wants {expectsLabel}.": "{what} möchte {expectsLabel}.",
-	filterable: "filterbar",
 	"also accepts {aliases}": "akzeptiert auch {aliases}",
 	or: "oder",
-	"A filterable field is one search can narrow results by. A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
-		"Ein filterbares Feld ist eines, mit dem eine Suche die Ergebnisse verfeinern kann. Ein verschachtelter Name wie {example} kann hier oder in Obsidian nicht bearbeitet werden; nur eine direkte Bearbeitung, MCP, oder eine KI schreibt sie.",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Ein verschachtelter Name wie {example} kann hier oder in Obsidian nicht bearbeitet werden; nur eine direkte Bearbeitung, MCP, oder eine KI schreibt ihn.",
 	Properties: "Eigenschaften",
 	"About properties": "Über Eigenschaften",
 	"Property name": "Name der Eigenschaft",

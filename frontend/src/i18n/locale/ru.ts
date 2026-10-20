@@ -1436,11 +1436,10 @@ export default {
 	frontmatter: "метаданные",
 	reads: "читает",
 	"{what} Wants {expectsLabel}.": "{what} хочет {expectsLabel}.",
-	filterable: "фильтруемое",
 	"also accepts {aliases}": "также принимает {aliases}",
 	or: "или",
-	"A filterable field is one search can narrow results by. A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
-		"Фильтруемое поле – это поле, по которому можно сузить результаты поиска. Вложенное имя, такое как {example}, нельзя редактировать здесь или в Obsidian; можно только внести изменения напрямую, MCP, или ИИ создаст его.",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Вложенное имя, такое как {example}, нельзя редактировать здесь или в Obsidian; редактирование возможно только напрямую, MCP, или с помощью ИИ.",
 	Properties: "Свойства",
 	"About properties": "О свойствах",
 	"Property name": "Имя свойства",

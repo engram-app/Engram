@@ -1261,11 +1261,10 @@ export default {
 	frontmatter: "前置信息",
 	reads: "读取",
 	"{what} Wants {expectsLabel}.": "{what} 想要 {expectsLabel}.",
-	filterable: "可过滤的",
 	"also accepts {aliases}": "也接受 {aliases}",
 	or: "或者",
-	"A filterable field is one search can narrow results by. A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
-		"可过滤的字段是指搜索可以用来缩小结果的字段。嵌套名称，如 {example}，不能在此处或在 Obsidian 中编辑；只能进行原始编辑，MCP，或者由 AI 自动生成。",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"嵌套名称，如 {example}，不能在此处或 Obsidian 中编辑；只能进行原始编辑，或由 MCP 或 AI 自动生成。",
 	Properties: "属性",
 	"About properties": "关于属性",
 	"Property name": "属性名称",

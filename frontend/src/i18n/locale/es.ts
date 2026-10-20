@@ -1382,11 +1382,10 @@ export default {
 	frontmatter: "metadatos",
 	reads: "lecturas",
 	"{what} Wants {expectsLabel}.": "{what} quiere {expectsLabel}.",
-	filterable: "filtrable",
 	"also accepts {aliases}": "también acepta {aliases}",
 	or: "o",
-	"A filterable field is one search can narrow results by. A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
-		"Un campo filtrable es aquel por el que se puede refinar la búsqueda. Un nombre anidado como {example} no se puede editar aquí ni en Obsidian; solo se puede editar directamente, MCP, o una IA lo escribe.",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Un nombre anidado como {example} no se puede editar aquí ni en Obsidian; solo se puede editar directamente, MCP, o un asistente de IA lo escribe.",
 	Properties: "Propiedades",
 	"About properties": "Acerca de las propiedades",
 	"Property name": "Nombre de la propiedad",

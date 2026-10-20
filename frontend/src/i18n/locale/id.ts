@@ -1320,11 +1320,10 @@ export default {
 	frontmatter: "metadata awal",
 	reads: "membaca",
 	"{what} Wants {expectsLabel}.": "{what} menginginkan {expectsLabel}.",
-	filterable: "dapat difilter",
 	"also accepts {aliases}": "juga menerima {aliases}",
 	or: "atau",
-	"A filterable field is one search can narrow results by. A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
-		"Bidang yang dapat difilter adalah bidang yang dapat mempersempit hasil pencarian. Nama bertingkat seperti {example} tidak dapat diedit di sini atau di Obsidian; hanya pengeditan langsung, MCP, atau AI yang menuliskannya.",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Nama bertingkat seperti {example} tidak dapat diedit di sini atau di Obsidian; hanya pengeditan langsung, MCP, atau AI yang menuliskannya.",
 	Properties: "Properti",
 	"About properties": "Tentang properti",
 	"Property name": "Nama properti",

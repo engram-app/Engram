@@ -1302,11 +1302,10 @@ export default {
 	frontmatter: "프론트매터",
 	reads: "읽기",
 	"{what} Wants {expectsLabel}.": "{what}이(가) {expectsLabel}을(를) 원합니다.",
-	filterable: "필터 가능",
 	"also accepts {aliases}": "{aliases}도 지원합니다",
 	or: "또는",
-	"A filterable field is one search can narrow results by. A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
-		"필터 가능한 필드는 검색 결과를 좁히는 데 사용됩니다. 중첩된 이름 (예: {example})은 여기나 Obsidian에서 편집할 수 없습니다. 직접 수정 (MCP)하거나 AI가 작성합니다.",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"{example}과 같이 중첩된 이름은 여기나 Obsidian에서 편집할 수 없습니다. 직접 편집하거나, MCP를 사용하거나, AI가 작성해야 합니다.",
 	Properties: "속성",
 	"About properties": "속성에 대한 설명",
 	"Property name": "속성 이름",

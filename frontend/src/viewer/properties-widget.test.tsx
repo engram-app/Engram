@@ -586,10 +586,11 @@ describe("the Properties help panel", () => {
 		expect(panel).toHaveTextContent("updated");
 	});
 
-	test("marks the filterable keys and says who can write a nested alias", async () => {
+	// `filterable` is data only: no search or MCP filter exists for these
+	// fields until Engram#2083, so the panel must not claim one.
+	test("says who can write a nested alias and claims no filter yet", async () => {
 		const panel = await openHelp();
-		const filterable = OKF_FIELD_HELP.filter((f) => f.filterable).length;
-		expect(within(panel).getAllByText("filterable")).toHaveLength(filterable);
+		expect(within(panel).queryByText("filterable")).toBeNull();
 		expect(panel).toHaveTextContent("only a raw edit, MCP or an AI");
 	});
 

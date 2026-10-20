@@ -1322,11 +1322,10 @@ export default {
 	frontmatter: "frontmatter",
 	reads: "bacaan",
 	"{what} Wants {expectsLabel}.": "{what} mahu {expectsLabel}.",
-	filterable: "boleh difilter",
 	"also accepts {aliases}": "juga menerima {aliases}",
 	or: "atau",
-	"A filterable field is one search can narrow results by. A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
-		"Bidang yang boleh difilter ialah bidang yang boleh mempersempit hasil carian. Nama bersarang seperti {example} tidak boleh diedit di sini atau dalam Obsidian; hanya editan mentah, MCP atau ditulis oleh AI.",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Nama bersarang seperti {example} tidak boleh diedit di sini atau dalam Obsidian; hanya editan asas, MCP, atau AI yang menulisnya.",
 	Properties: "Sifat",
 	"About properties": "Mengenai sifat",
 	"Property name": "Nama sifat",

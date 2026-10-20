@@ -1329,11 +1329,10 @@ export default {
 	frontmatter: "ön bilgi",
 	reads: "okur",
 	"{what} Wants {expectsLabel}.": "{what}, {expectsLabel} istiyor.",
-	filterable: "filtrelenebilir",
 	"also accepts {aliases}": "aynı zamanda {aliases} kabul eder",
 	or: "veya",
-	"A filterable field is one search can narrow results by. A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
-		"Filtrelenebilir bir alan, arama sonuçlarını daraltmaya yarayan bir alandır. İç içe geçmiş bir isim gibi {example} burada veya Obsidian içinde düzenlenemez; yalnızca ham bir düzenleme, MCP veya bir yapay zeka tarafından yazılır.",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"{example} gibi iç içe geçmiş bir isim, burada veya Obsidian içinde düzenlenemez; yalnızca ham düzenleme, MCP veya bir yapay zeka tarafından yazılır.",
 	Properties: "Özellikler",
 	"About properties": "Hakkında özellikler",
 	"Property name": "Özellik adı",
