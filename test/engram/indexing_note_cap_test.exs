@@ -233,9 +233,23 @@ defmodule Engram.IndexingNoteCapTest do
       end)
   end
 
-  # Chunker v5 Task 9.1: a merged group never mixes kinds, so data,
-  # frontmatter and drawings never become dense and prose never loses its
-  # vector. Boundaries are unkeyed, so a DEK rotation keeps the groups.
+  # A prose section, then a table section, `n` times over: each its own
+  # chunk (sections big enough not to coalesce), so 2n kind runs.
+  defp interleaved(n) do
+    para = String.duplicate("a longer sentence about the topic at hand. ", 16)
+
+    "# Mixed\n\n" <>
+      Enum.map_join(1..n, "\n\n", fn i ->
+        "## P#{i}\n\nprose#{i} #{para}\n\n## T#{i}\n\n#{table(i)}"
+      end)
+  end
+
+  # Chunker v5 Task 9.1: a merged group's DENSE input holds only its prose
+  # members, its keyword input every member, so data, frontmatter and
+  # drawings never become dense and prose never loses its vector. Kinds do
+  # not split groups (review H1: a note with more kind runs than its cap
+  # would floor). Frontmatter never joins a body group. Boundaries are
+  # unkeyed, so a DEK rotation keeps the groups.
   describe "kind-aware groups" do
     setup do
       chunks = Markdown.parse(mixed(3, 50), "Mixed.md")
@@ -244,18 +258,50 @@ defmodule Engram.IndexingNoteCapTest do
       %{chunks: chunks}
     end
 
-    test "a mixed note groups by kind", %{chunks: chunks} do
+    test "a merged group embeds only its prose members", %{chunks: chunks} do
       capped = Indexing.cap_chunks(chunks, 128)
       assert length(capped) <= 128
       assert Enum.any?(capped, &Map.get(&1, :merged, false))
 
       for %{merged: true} = group <- capped do
-        assert group.members |> Enum.map(& &1.kind) |> Enum.uniq() == [group.kind]
+        kinds = group.members |> Enum.map(& &1.kind) |> MapSet.new()
+        embed = IO.iodata_to_binary(group.embed_text)
+        context = IO.iodata_to_binary(group.context_text)
+
+        if MapSet.member?(kinds, "prose"), do: assert(group.kind == "prose")
+
+        for m <- group.members do
+          assert context =~ m.text
+
+          # A group with no prose is keyword-only: its embed input is unused.
+          if group.kind == "prose",
+            do: assert(m.kind == "prose" == (embed =~ m.text))
+        end
       end
 
-      # Every chunk lands in a group of its own kind.
-      grouped = for g <- capped, m <- Map.get(g, :members, [g]), do: {m.text, g.kind}
-      assert grouped == Enum.map(chunks, &{&1.text, &1.kind})
+      # Every chunk lands in exactly one group, in order.
+      grouped = for g <- capped, m <- Map.get(g, :members, [g]), do: m.text
+      assert grouped == Enum.map(chunks, & &1.text)
+    end
+
+    test "150 alternating prose and table sections stay dense on Free", %{
+      user: user,
+      vault: vault
+    } do
+      chunks = Markdown.parse(interleaved(150), "Mixed.md")
+      runs = chunks |> Enum.chunk_by(& &1.kind) |> length()
+      assert runs > 128
+
+      note = insert_note(user, vault, interleaved(150), "Mixed.md")
+      stub_embedder()
+
+      assert {:ok, count, _, true} = Indexing.index_note_with_usage(note, vault, user)
+      assert count <= 128
+      assert reload(note).index_tier == nil
+      embedded = Enum.join(embedded_texts(), "\n")
+
+      for i <- 1..150, do: assert(embedded =~ "prose#{i} ", "prose #{i} has no dense vector")
+      refute embedded =~ "| 4"
     end
 
     test "frontmatter is never grouped with body chunks", %{chunks: chunks} do

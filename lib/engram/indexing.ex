@@ -501,8 +501,10 @@ defmodule Engram.Indexing do
 
   # Bytes of the members' `embed_text`s bound the merged one's from above
   # (each carries its own prefix plus "\n\n"), so a group that fits by this
-  # sum fits the ceiling. A chunk of another kind closes the group too: `acc`
-  # is reversed, so its head is the group's last chunk.
+  # sum fits the ceiling. Frontmatter never shares a group with the body:
+  # `acc` is reversed, so its head is the group's last chunk. Other kinds do
+  # share (review H1): closing on every kind change gave a note one group
+  # per kind run, so 129 prose/table runs floored a 55 KB Free note.
   defp close_groups(pairs, g) do
     Enum.chunk_while(
       pairs,
@@ -512,7 +514,7 @@ defmodule Engram.Indexing do
 
         {emit, acc, bytes} =
           if acc != [] and
-               (hd(acc).kind != chunk.kind or
+               (frontmatter?(hd(acc)) != frontmatter?(chunk) or
                   UsageMeters.estimate_tokens(bytes + size) > @max_merged_tokens),
              do: {Enum.reverse(acc), [chunk], size},
              else: {nil, [chunk | acc], bytes + size}
@@ -532,19 +534,32 @@ defmodule Engram.Indexing do
     |> Enum.concat()
   end
 
+  defp frontmatter?(chunk), do: chunk.kind == "frontmatter"
+
   defp merge_group([single]), do: single
 
+  # A group is "prose" if any member is (then it is dense), else its first
+  # member's kind. Its keyword input (`context_text`) and payload `text`
+  # hold every member; its dense input (`embed_text`) only the prose ones,
+  # so a table or a drawing inside a prose group never reaches Voyage.
   defp merge_group([first | _] = members) do
     text = Enum.map_join(members, "\n\n", & &1.text)
+    prose? = Enum.any?(members, &(&1.kind == "prose"))
+
+    embed =
+      if prose?,
+        do: members |> Enum.filter(&(&1.kind == "prose")) |> Enum.map_join("\n\n", & &1.text),
+        else: text
 
     # iodata, prefix + text: binaries, the two inputs were two more copies
     # of the merged text, ~2x the note on the job (Task 9.2). Each consumer
     # (fingerprint, keyword encode, Voyage batch) flattens one slice at a
     # time.
     Map.merge(first, %{
+      kind: if(prose?, do: "prose", else: first.kind),
       text: text,
       context_text: [prefix(first.context_text, first.text), text],
-      embed_text: [prefix(first.embed_text, first.text), text],
+      embed_text: [prefix(first.embed_text, first.text), embed],
       char_end: members |> Enum.map(& &1.char_end) |> Enum.max(),
       token_count: members |> Enum.map(&UsageMeters.estimate_tokens(&1.text)) |> Enum.sum(),
       merged: true,
@@ -1889,34 +1904,26 @@ defmodule Engram.Indexing do
 
   # Each merged chunk's members' own fingerprints (the ones they would have
   # unmerged), leading 16 hex chars: what `chunks.member_hmacs` stores. A
-  # group's members share its kind, so they share its dense-ness and prefix.
+  # member is dense (dense prefix) when its group is and it is prose: a
+  # table inside a prose group would be a keyword-only point on its own.
   defp with_member_hmacs(chunks, content_key, dense?) do
-    member_hmacs = fn dense ->
-      hmac_inputs(
-        content_key,
-        fingerprint_prefix(dense),
-        for(
-          %{merged: true, members: ms} = c <- chunks,
-          dense_chunk?(c, dense?) == dense,
+    members =
+      for %{merged: true, members: ms} = c <- chunks,
           m <- ms,
-          do: {:input, m}
-        )
-      )
-    end
+          do: {m, dense_chunk?(c, dense?) and m.kind == "prose"}
 
-    {chunks, {[], []}} =
-      Enum.map_reduce(chunks, {member_hmacs.(true), member_hmacs.(false)}, fn
-        %{merged: true, members: ms} = chunk, {d, s} ->
-          if dense_chunk?(chunk, dense?) do
-            {mine, rest} = Enum.split(d, length(ms))
-            {Map.put(chunk, :member_hmacs, Enum.map(mine, &short_hmac/1)), {rest, s}}
-          else
-            {mine, rest} = Enum.split(s, length(ms))
-            {Map.put(chunk, :member_hmacs, Enum.map(mine, &short_hmac/1)), {d, rest}}
-          end
+    {dense, sparse} = Enum.split_with(members, &elem(&1, 1))
+    hmacs = &hmac_inputs(content_key, fingerprint_prefix(&2), for({m, _} <- &1, do: {:input, m}))
+    all = restitch(members, &elem(&1, 1), hmacs.(dense, true), hmacs.(sparse, false))
 
-        chunk, acc ->
-          {chunk, acc}
+    {chunks, []} =
+      Enum.map_reduce(chunks, all, fn
+        %{merged: true, members: ms} = chunk, left ->
+          {mine, rest} = Enum.split(left, length(ms))
+          {Map.put(chunk, :member_hmacs, Enum.map(mine, &short_hmac/1)), rest}
+
+        chunk, left ->
+          {chunk, left}
       end)
 
     chunks
@@ -1929,10 +1936,14 @@ defmodule Engram.Indexing do
   defp drop_members(%{members: members} = chunk) do
     chunk
     |> Map.delete(:members)
-    |> Map.put(:member_bytes, Enum.map(members, &byte_size(&1.embed_text)))
+    |> Map.put(:member_bytes, Enum.map(members, &member_bytes/1))
   end
 
   defp drop_members(chunk), do: chunk
+
+  # What a member adds to its group's dense input: nothing unless prose.
+  defp member_bytes(%{kind: "prose", embed_text: e}), do: byte_size(e)
+  defp member_bytes(_member), do: 0
 
   # `hmac_hex_many/3` over each chunk's `fingerprint_input/1`, 256 at a time:
   # the inputs are copies (context + embed text), so building them for a
