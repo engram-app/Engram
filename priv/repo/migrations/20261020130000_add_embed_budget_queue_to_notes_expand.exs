@@ -12,7 +12,7 @@ defmodule Engram.Repo.Migrations.AddEmbedBudgetQueueToNotesExpand do
   def up do
     alter table(:notes) do
       add :embed_budget_parked_at, :timestamptz
-      add :embed_budget_need, :integer
+      add :embed_budget_need, :bigint
     end
   end
 
