@@ -106,6 +106,20 @@ function scrubExceptionValue(
 	return scrubLogText(value);
 }
 
+/** An unhandled rejection whose reason is not an Error is not ours: lint
+ *  (style/useThrowOnlyError, nursery/usePromiseRejectErrors) keeps our own
+ *  throws and rejections Error-only. The SDK files it as "Object captured as
+ *  promise rejection with keys: ..." with no stack, so there is nothing to act
+ *  on. ENGRAM-FRONTEND-7 was a crypto-wallet extension's EIP-1193
+ *  `{code: 4001, message}`. */
+function isForeignRejection(
+	event: { exception?: { values?: Array<{ mechanism?: { type?: string } }> } },
+	hint: { originalException?: unknown },
+): boolean {
+	const mechanism = event.exception?.values?.[0]?.mechanism?.type ?? "";
+	return mechanism.endsWith("onunhandledrejection") && !(hint.originalException instanceof Error);
+}
+
 export const sentryReady: Promise<SentrySdk | null> | null = sentryDsn
 	? whenLoaded(import("@sentry/react"))
 			.then((Sentry) => {
@@ -323,6 +337,18 @@ export function scrubEvent<
 	return event;
 }
 
+/** `beforeSend`: drop what is not ours, scrub the rest. */
+export function beforeSend<
+	T extends {
+		request?: { url?: string; headers?: Record<string, string> };
+		exception?: {
+			values?: Array<{ type?: string; value?: string; mechanism?: { type?: string } }>;
+		};
+	},
+>(event: T, hint: { originalException?: unknown }): T | null {
+	return isForeignRejection(event, hint) ? null : scrubEvent(event);
+}
+
 /** The exact options passed to `Sentry.init`. Exported so a test can assert the
  *  scrubbers are actually WIRED — with them inline, deleting the two hook lines
  *  left every test green while DOM breadcrumbs (which serialize title/alt/
@@ -345,6 +371,6 @@ export function sentryInitOptions(dsn: string) {
 		// object merges into, so this needs no extra integration to take effect.
 		ignoreErrors: IGNORED_ERROR_PATTERNS,
 		beforeBreadcrumb: scrubBreadcrumb,
-		beforeSend: scrubEvent,
+		beforeSend,
 	};
 }

@@ -14,7 +14,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { ROUTES } from "./routes";
-import { scrubBreadcrumb, scrubEvent, scrubUrl, sentryInitOptions } from "./sentry";
+import { beforeSend, scrubBreadcrumb, scrubEvent, scrubUrl, sentryInitOptions } from "./sentry";
 
 describe("scrubUrl", () => {
 	// Host and first segment survive so a breadcrumb can still say WHICH
@@ -223,8 +223,15 @@ describe("the scrubbers are actually wired into Sentry.init", () => {
 	it("passes beforeBreadcrumb and beforeSend", () => {
 		const opts = sentryInitOptions("https://key@example.ingest.sentry.io/1");
 		expect(opts.beforeBreadcrumb).toBe(scrubBreadcrumb);
-		expect(opts.beforeSend).toBe(scrubEvent);
+		expect(opts.beforeSend).toBe(beforeSend);
 		expect(opts.sendDefaultPii).toBe(false);
+	});
+
+	// beforeSend now also drops foreign rejections; what it keeps must still
+	// be scrubbed, or wiring it in place of scrubEvent shipped events raw.
+	it("beforeSend scrubs the events it keeps", () => {
+		const event = { request: { url: "https://app.engram.page/v/my-vault/Secret%20Note" } };
+		expect(beforeSend(event, {})?.request.url).not.toContain("Secret");
 	});
 });
 
