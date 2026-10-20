@@ -1046,13 +1046,17 @@ defmodule Engram.Vector.Qdrant do
   Patch (overwrite-or-add) the given payload keys on the listed point ids.
   Vectors are untouched — this is the cost-free path for re-shaping payloads
   without re-running the embedder. Empty `point_ids` is a no-op.
+
+  Ids that name no point are skipped, not an error: the ids come from
+  `chunks` rows, and an orphaned row must not fail a rotation or a refresh.
+  A `points` list answers 404 for a missing id; a `has_id` filter does not.
   """
   def set_payload(col \\ nil, point_ids, payload)
   def set_payload(_col, [], _payload), do: :ok
 
   def set_payload(col, point_ids, payload) when is_list(point_ids) and is_map(payload) do
     col = col || collection()
-    opts = write_opts(%{points: point_ids, payload: payload})
+    opts = write_opts(%{filter: ids_filter(point_ids), payload: payload})
 
     instrument(:set_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
@@ -1067,14 +1071,14 @@ defmodule Engram.Vector.Qdrant do
   REPLACE the whole payload of the listed points (`PUT /points/payload`).
   The v5 refresh path: a v5 payload omits absent and default keys, so a
   merge (`set_payload/3`) would leave a removed key on the point forever.
-  Empty `point_ids` is a no-op.
+  Empty `point_ids` is a no-op; missing ids are skipped (`set_payload/3`).
   """
   def overwrite_payload(col \\ nil, point_ids, payload)
   def overwrite_payload(_col, [], _payload), do: :ok
 
   def overwrite_payload(col, point_ids, payload) when is_list(point_ids) and is_map(payload) do
     col = col || collection()
-    opts = write_opts(%{points: point_ids, payload: payload})
+    opts = write_opts(%{filter: ids_filter(point_ids), payload: payload})
 
     instrument(:set_payload, fn ->
       case Req.put("#{base_url()}/collections/#{col}/points/payload", opts) do
@@ -1895,7 +1899,7 @@ defmodule Engram.Vector.Qdrant do
     %{
       query: %{recommend: %{positive: point_ids, strategy: "average_vector"}},
       using: "dense",
-      filter: Map.put(build_tenant_filter(search_opts), :must_not, exclude_ids(point_ids)),
+      filter: Map.put(build_tenant_filter(search_opts), :must_not, has_ids(point_ids)),
       limit: Keyword.get(search_opts, :limit, 5),
       with_payload: true
     }
@@ -1912,8 +1916,11 @@ defmodule Engram.Vector.Qdrant do
   # each condition stays under the Cloud `condition_max_size`.
   # ponytail: a note past ~110k points (64 filter conditions) still trips
   # `filter_max_conditions`; average a sample of its points if one appears.
-  defp exclude_ids(point_ids),
+  defp has_ids(point_ids),
     do: point_ids |> Enum.chunk_every(@max_ids) |> Enum.map(&%{has_id: &1})
+
+  # Any of the ids (`should` is OR), for a write that must skip missing ones.
+  defp ids_filter(point_ids), do: %{should: has_ids(point_ids)}
 
   # The body is decoded in Rust (`Engram.Native.json_decode/1`): with vectors
   # requested it is ~200 x 1024 floats, 2.3 MB of JSON that took Jason ~290 ms

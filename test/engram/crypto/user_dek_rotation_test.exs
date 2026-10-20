@@ -1058,7 +1058,12 @@ defmodule Engram.Crypto.UserDekRotationTest do
       raw =
         Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
 
-      assert_received {:set, %{"points" => [^point], "payload" => payload}}
+      assert_received {:set,
+                       %{
+                         "filter" => %{"should" => [%{"has_id" => [^point]}]},
+                         "payload" => payload
+                       }}
+
       # Exactly what a type / tag filter built after the rotation sends.
       assert payload["type_hmac"] == Base.encode64(Crypto.hmac_field(new_fk, "playbook"))
       assert payload["tags_hmac"] == [Base.encode64(Crypto.hmac_field(new_fk, "ops"))]
@@ -1074,8 +1079,11 @@ defmodule Engram.Crypto.UserDekRotationTest do
       Mox.verify!()
 
       {:ok, new_fk} = Crypto.dek_filter_key(Repo.get!(Engram.Accounts.User, user.id))
-      assert_received {:overwrite, %{"points" => [^point], "payload" => p}}
-      refute_received {:set, %{"points" => [^point]}}
+
+      assert_received {:overwrite,
+                       %{"filter" => %{"should" => [%{"has_id" => [^point]}]}, "payload" => p}}
+
+      refute_received {:set, %{"filter" => %{"should" => [%{"has_id" => [^point]}]}}}
       assert p["y"] == FilterId.from_hmac(Crypto.hmac_field(new_fk, "playbook"))
       assert p["s"] == FilterId.attr_value(new_fk, "draft")
 
