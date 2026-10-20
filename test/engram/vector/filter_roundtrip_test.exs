@@ -38,10 +38,7 @@ defmodule Engram.Vector.FilterRoundtripTest do
         json: %{strict_mode_config: %{enabled: true, unindexed_filtering_retrieve: false}}
       )
 
-    on_exit(fn ->
-      ServiceConfig.put_override(:qdrant_url, qdrant_url())
-      Qdrant.delete_collection(col)
-    end)
+    Engram.QdrantIntegration.drop_on_exit(col)
 
     %{col: col}
   end

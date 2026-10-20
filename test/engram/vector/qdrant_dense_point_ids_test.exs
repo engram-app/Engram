@@ -22,7 +22,7 @@ defmodule Engram.Vector.QdrantDensePointIdsTest do
       "engram_dense_ids_#{System.get_env("MIX_TEST_PARTITION")}_#{System.unique_integer([:positive])}"
 
     :ok = Qdrant.ensure_collection(col, @dims)
-    on_exit(fn -> Qdrant.delete_collection(col) end)
+    Engram.QdrantIntegration.drop_on_exit(col)
 
     dense = Ecto.UUID.generate()
     sparse = Ecto.UUID.generate()

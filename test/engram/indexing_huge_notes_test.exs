@@ -173,8 +173,7 @@ defmodule Engram.IndexingHugeNotesTest do
       old_col = Application.get_env(:engram, :qdrant_collection)
       Application.put_env(:engram, :qdrant_collection, col)
 
-      on_exit(fn ->
-        Engram.Vector.Qdrant.delete_collection(col)
+      Engram.QdrantIntegration.drop_on_exit(col, fn ->
         Application.put_env(:engram, :qdrant_collection, old_col)
       end)
 
