@@ -4079,6 +4079,7 @@ jobs:
                 -e POSTGRES_PASSWORD=engram \
                 -e POSTGRES_DB=engram_n1 \
                 -P \
+                --tmpfs /var/lib/postgresql \
                 postgres:18.4; then
               break
             fi
@@ -4523,6 +4524,7 @@ jobs:
                 --health-interval 3s \
                 --health-timeout 3s \
                 --health-retries 10 \
+                --tmpfs /var/lib/postgresql \
                 "$PG_IMAGE"; then
               break
             fi
