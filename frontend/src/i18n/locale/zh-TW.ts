@@ -146,10 +146,10 @@ export default {
 		"每日額滿 {perDay} 個 token。於 {date} 再次額滿。",
 	"All tokens are available.": "所有 Token 皆可用。",
 	"{count} notes have keyword search only, until {date}.": {
-		other: "{count} 筆記僅支援關鍵字搜尋，直到 {date}。",
+		other: "{count} 筆記僅支援關鍵字搜尋，至 {date} 為止。",
 	},
 	"{count} notes have keyword search only, until the budget refills.": {
-		other: "{count} 筆記僅支援關鍵字搜尋，直到預算恢復。",
+		other: "{count} 筆記僅支援關鍵字搜尋，直到索引預算恢復。",
 	},
 	"Loading current connection…": "正在載入連線…",
 	"Disconnected. Retry the new connection now.": "已斷線。立即重新連線。",

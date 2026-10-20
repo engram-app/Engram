@@ -154,15 +154,15 @@ export default {
 	Free: "無料",
 	"{count} days remaining in your free trial.": { other: "無料トライアルは残り{count}日です。" },
 	"Indexing budget": "インデックス作成の制限",
-	"{available} of {capacity} tokens left": "残り {available} / {capacity} トークン",
+	"{available} of {capacity} tokens left": "{available}トークン残 {capacity}トークン中",
 	"Refills {perDay} tokens a day. Full again on {date}.":
 		"1日に{perDay}トークンを補充します。{date}に上限まで補充されます。",
 	"All tokens are available.": "すべてのトークンが利用可能です。",
 	"{count} notes have keyword search only, until {date}.": {
-		other: "{count} ノートは、{date} までキーワード検索のみに対応します。",
+		other: "{count} のノートは、{date} までキーワード検索のみに対応します。",
 	},
 	"{count} notes have keyword search only, until the budget refills.": {
-		other: "{count} ノートは、予算が回復するまでキーワード検索のみが可能です。",
+		other: "{count} ノートは、インデックスの予算が回復するまで、キーワード検索のみが可能です。",
 	},
 	"Loading current connection…": "接続中です…",
 	"Disconnected. Retry the new connection now.": "接続解除されました。新しい接続を試してください。",
