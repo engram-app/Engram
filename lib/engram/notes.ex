@@ -6741,7 +6741,13 @@ defmodule Engram.Notes do
     _ =
       if length(ids) == 1 do
         Repo.after_commit(fn ->
-          EngramWeb.Endpoint.broadcast("user:#{user.id}", "vault_populated", %{vault_id: vault.id})
+          _ =
+            EngramWeb.Endpoint.broadcast("user:#{user.id}", "vault_populated", %{
+              vault_id: vault.id
+            })
+
+          # The first-content timestamp, whether or not a page is open to see it.
+          Engram.Analytics.track(user, "vault_populated", %{vault_id: vault.id})
         end)
       end
 

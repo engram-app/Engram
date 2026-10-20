@@ -85,7 +85,7 @@ defmodule Engram.Observability.EmittersTest do
     test "fires on new note insert with vault_id property", %{bypass: bypass} do
       user = user_with_clerk_id()
       {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
-      expect_capture(bypass)
+      expect_captures(bypass)
 
       assert {:ok, _note} =
                Notes.upsert_note(
@@ -99,8 +99,7 @@ defmodule Engram.Observability.EmittersTest do
                  actor: "api"
                )
 
-      assert_receive {:posthog_body, body}, 1_500
-      assert body["event"] == "note_created"
+      assert_receive {:posthog_body, %{"event" => "note_created"} = body}, 1_500
       assert body["distinct_id"] == PostHog.analytics_id(user.email)
       assert body["properties"]["vault_id"] == vault.id
       assert body["properties"]["surface"] == "api"
@@ -117,7 +116,7 @@ defmodule Engram.Observability.EmittersTest do
       test "surface is #{surface} for actor #{actor} #{inspect(opts)}", %{bypass: bypass} do
         user = user_with_clerk_id()
         {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
-        expect_capture(bypass)
+        expect_captures(bypass)
 
         {:ok, _} =
           Notes.upsert_note(
@@ -127,8 +126,7 @@ defmodule Engram.Observability.EmittersTest do
             [actor: unquote(actor)] ++ unquote(opts)
           )
 
-        assert_receive {:posthog_body, body}, 1_500
-        assert body["event"] == "note_created"
+        assert_receive {:posthog_body, %{"event" => "note_created"} = body}, 1_500
         assert body["properties"]["surface"] == unquote(surface)
       end
     end
@@ -138,9 +136,8 @@ defmodule Engram.Observability.EmittersTest do
       user = user_with_clerk_id()
       {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
 
-      # First insert — burn the single Bypass expectation so a second emit
-      # would fail the test (Bypass.expect_once raises on extra calls).
-      expect_capture(bypass)
+      # The first insert also sends vault_populated; only note_created matters.
+      expect_captures(bypass)
 
       {:ok, _} =
         Notes.upsert_note(
@@ -154,12 +151,9 @@ defmodule Engram.Observability.EmittersTest do
           actor: "api"
         )
 
-      assert_receive {:posthog_body, body}, 1_500
-      assert body["event"] == "note_created"
+      assert_receive {:posthog_body, %{"event" => "note_created"}}, 1_500
 
       # Second upsert at the same path — update branch (prev_hash != nil).
-      # If the emitter mis-fires we'd see a second POST → Bypass.expect_once
-      # raises "expected 1 request, got 2" on test exit.
       {:ok, _} =
         Notes.upsert_note(
           user,
@@ -173,7 +167,27 @@ defmodule Engram.Observability.EmittersTest do
         )
 
       # Give any errant fire-and-forget Task a beat to reach Bypass.
-      refute_receive {:posthog_body, _}, 200
+      refute_receive {:posthog_body, %{"event" => "note_created"}}, 200
+    end
+  end
+
+  describe "vault_populated" do
+    test "fires once, on the vault's first note", %{bypass: bypass} do
+      user = user_with_clerk_id()
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
+      expect_captures(bypass)
+
+      for path <- ["A.md", "B.md"] do
+        {:ok, _} =
+          Notes.upsert_note(user, vault, %{"path" => path, "content" => "x", "mtime" => 1.0},
+            actor: "api"
+          )
+      end
+
+      assert_receive {:posthog_body, %{"event" => "vault_populated"} = body}, 1_500
+      assert body["distinct_id"] == PostHog.analytics_id(user.email)
+      assert body["properties"]["vault_id"] == vault.id
+      refute_receive {:posthog_body, %{"event" => "vault_populated"}}, 300
     end
   end
 
