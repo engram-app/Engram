@@ -1,5 +1,5 @@
 import { setupClerkTestingToken } from "@clerk/testing/playwright";
-import { expect, test } from "@playwright/test";
+import { devices, expect, type Page, test } from "@playwright/test";
 import { clerkSignIn, loadAuthState } from "./clerk-helpers";
 
 /**
@@ -173,58 +173,85 @@ test.describe("MCP-first signup resumes consent after onboarding", () => {
 	});
 
 	test("consent → wizard → back to consent → approve", async ({ page }) => {
-		const clientId = await registerClient();
+		await approveThroughOnboarding(page, (pending as { email: string }).email);
+	});
 
-		await clerkSignIn(page, (pending as { email: string }).email, consentUrl(clientId));
+	test.describe("on a phone", () => {
+		// The device profile minus its browser type: Playwright refuses a
+		// per-describe browser switch, and the bug is in the page, not the engine.
+		const { defaultBrowserType: _engine, ...iPhone } = devices["iPhone 15"];
+		test.use(iPhone);
 
-		// 1. Bounced into the wizard rather than shown an Approve button that
-		//    would mint an unusable grant.
-		await page.waitForURL(/\/onboard/u, { timeout: 20_000 });
-		await expect(page.getByRole("button", { name: /^(?:review|approve)$/iu })).toHaveCount(0);
+		// #2003 opened the vault in a new tab on Approve, before redirecting the
+		// consent tab. On a phone the new tab takes the foreground and the
+		// consent tab is suspended, so the redirect never ran: the code was
+		// minted and never redeemed (mobile 2/30 on 2026-10-19). Desktop
+		// Playwright keeps a background tab running, so the test above stayed
+		// green. Approve must hand off in THIS tab and open no other.
+		test("approve opens no tab and hands off in the same tab", async ({ page }) => {
+			const opened: string[] = [];
+			page.context().on("page", (p) => opened.push(p.url()));
 
-		// 2. The detour can still be refused: the registered redirect gets a
-		//    "Stop connecting" control the waiting client will hear.
-		await expect(page.getByRole("button", { name: /stop connecting this app/iu })).toBeVisible({
-			timeout: 10_000,
+			await approveThroughOnboarding(page, (pending as { email: string }).email);
+
+			expect(opened).toEqual([]);
 		});
-
-		// 3. A connector signup's only step is the terms (SaaS). Accepting
-		//    them starts the account on Free and provisions its vault, so
-		//    there is no plan, tools, survey or vault step. With billing off
-		//    there is no terms step either and the wizard returns at once.
-		//    It is not asked how it heard about us: the client is the answer.
-		if (new URL(page.url()).pathname === "/onboard/agreement") {
-			await expect(page.getByRole("radio")).toHaveCount(0);
-			await page.getByLabel(/I have read and agree/iu).click();
-			await page.getByRole("button", { name: /^continue$/iu }).click();
-		}
-
-		// 4. Returned to the authorization, with the request intact. `state` is
-		//    the whole point: an OAuth client rejects a callback whose state
-		//    does not match what it sent.
-		await page.waitForURL(/\/oauth\/consent/u, { timeout: 25_000 });
-		expect(new URL(page.url()).searchParams.get("state")).toBe(STATE);
-		expect(new URL(page.url()).searchParams.get("client_id")).toBe(clientId);
-
-		// 5. Approving now yields a code, which is what was impossible before.
-		//
-		// Matched on PATHNAME, not a substring. The consent page's own URL
-		// carries `redirect_uri=...%2Foauth-callback-test`, so a loose regex
-		// matches before any navigation happens and the assertions below then
-		// read the consent URL's params instead of the callback's.
-		// A brand-new account's first app gets the short form: name the vault
-		// provisioned at signup, then Approve. No picker, no Review step.
-		await expect(page.getByLabel(/name your first vault/iu)).toBeVisible({ timeout: 10_000 });
-		await page.getByRole("button", { name: /^approve$/iu }).click();
-		await page.waitForURL((url) => new URL(url).pathname === CALLBACK_PATH, {
-			timeout: 25_000,
-		});
-
-		const callback = new URL(page.url());
-		// `error` first: when the grant is refused the callback carries a
-		// reason, and reporting that beats "expected truthy, got null".
-		expect(callback.searchParams.get("error")).toBeNull();
-		expect(callback.searchParams.get("code")).toBeTruthy();
-		expect(callback.searchParams.get("state")).toBe(STATE);
 	});
 });
+
+/** Sign in mid-authorization, finish onboarding, approve, and land on the callback. */
+async function approveThroughOnboarding(page: Page, email: string): Promise<void> {
+	const clientId = await registerClient();
+
+	await clerkSignIn(page, email, consentUrl(clientId));
+
+	// 1. Bounced into the wizard rather than shown an Approve button that
+	//    would mint an unusable grant.
+	await page.waitForURL(/\/onboard/u, { timeout: 20_000 });
+	await expect(page.getByRole("button", { name: /^(?:review|approve)$/iu })).toHaveCount(0);
+
+	// 2. The detour can still be refused: the registered redirect gets a
+	//    "Stop connecting" control the waiting client will hear.
+	await expect(page.getByRole("button", { name: /stop connecting this app/iu })).toBeVisible({
+		timeout: 10_000,
+	});
+
+	// 3. A connector signup's only step is the terms (SaaS). Accepting
+	//    them starts the account on Free and provisions its vault, so
+	//    there is no plan, tools, survey or vault step. With billing off
+	//    there is no terms step either and the wizard returns at once.
+	//    It is not asked how it heard about us: the client is the answer.
+	if (new URL(page.url()).pathname === "/onboard/agreement") {
+		await expect(page.getByRole("radio")).toHaveCount(0);
+		await page.getByLabel(/I have read and agree/iu).click();
+		await page.getByRole("button", { name: /^continue$/iu }).click();
+	}
+
+	// 4. Returned to the authorization, with the request intact. `state` is
+	//    the whole point: an OAuth client rejects a callback whose state
+	//    does not match what it sent.
+	await page.waitForURL(/\/oauth\/consent/u, { timeout: 25_000 });
+	expect(new URL(page.url()).searchParams.get("state")).toBe(STATE);
+	expect(new URL(page.url()).searchParams.get("client_id")).toBe(clientId);
+
+	// 5. Approving now yields a code, which is what was impossible before.
+	//
+	// Matched on PATHNAME, not a substring. The consent page's own URL
+	// carries `redirect_uri=...%2Foauth-callback-test`, so a loose regex
+	// matches before any navigation happens and the assertions below then
+	// read the consent URL's params instead of the callback's.
+	// A brand-new account's first app gets the short form: name the vault
+	// provisioned at signup, then Approve. No picker, no Review step.
+	await expect(page.getByLabel(/name your first vault/iu)).toBeVisible({ timeout: 10_000 });
+	await page.getByRole("button", { name: /^approve$/iu }).click();
+	await page.waitForURL((url) => new URL(url).pathname === CALLBACK_PATH, {
+		timeout: 25_000,
+	});
+
+	const callback = new URL(page.url());
+	// `error` first: when the grant is refused the callback carries a
+	// reason, and reporting that beats "expected truthy, got null".
+	expect(callback.searchParams.get("error")).toBeNull();
+	expect(callback.searchParams.get("code")).toBeTruthy();
+	expect(callback.searchParams.get("state")).toBe(STATE);
+}
