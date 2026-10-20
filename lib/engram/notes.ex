@@ -49,13 +49,16 @@ defmodule Engram.Notes do
 
   require Logger
 
-  # Every persisted Note column except the CRDT state: what a catch-up page
-  # (`list_changes_by_seq/4`, `fields: :all`) reads. Nothing on that path uses
-  # the page's crdt_state (change maps carry none; stale-facade resolution
-  # re-reads its own rows), and it is about half of a note's stored bytes, so
-  # selecting it detoasted and shipped bytes the byte budget never counted.
-  # Computed from the schema so a new column is fed by default.
-  @note_feed_fields Note.__schema__(:fields) -- [:crdt_state_ciphertext, :crdt_state_nonce]
+  # Every persisted Note column except the CRDT state, about half of a note's
+  # stored bytes. Read by a catch-up page (`list_changes_by_seq/4`,
+  # `fields: :all`; change maps carry no state, and stale-facade resolution
+  # re-reads its own rows, so selecting it shipped bytes the byte budget never
+  # counted) and by `fetch_note_for_worker/1,2` (the embed, repath and keyword
+  # workers use the facade; the link worker's legacy path re-reads through
+  # `authoritative_content/2`). Computed from the schema so a new column is
+  # fed by default.
+  @note_fields_without_crdt Note.__schema__(:fields) --
+                              [:crdt_state_ciphertext, :crdt_state_nonce]
 
   # Every persisted Note column except content_ciphertext/content_nonce —
   # the metadata projection for reads that never serialize content (changes
@@ -3135,9 +3138,13 @@ defmodule Engram.Notes do
   """
   @spec fetch_note_for_worker(String.t(), String.t()) :: {:ok, Note.t()} | {:discard, String.t()}
   def fetch_note_for_worker(note_id, user_id) when is_binary(user_id) do
-    result = Repo.with_tenant!(user_id, fn -> Repo.get(Note, note_id) end)
+    result = Repo.with_tenant!(user_id, fn -> Repo.one(worker_note_query(note_id)) end)
     classify_worker_note(note_id, result)
   end
+
+  # No CRDT state: see @note_fields_without_crdt.
+  defp worker_note_query(note_id),
+    do: from(n in Note, where: n.id == ^note_id, select: struct(n, @note_fields_without_crdt))
 
   @doc """
   `fetch_note_for_worker/2` plus the note's tail rows, from one statement (for
@@ -3180,7 +3187,7 @@ defmodule Engram.Notes do
   """
   @spec fetch_note_for_worker(String.t()) :: {:ok, Note.t()} | {:discard, String.t()}
   def fetch_note_for_worker(note_id) do
-    note = Repo.cross_tenant(fn -> Repo.get(Note, note_id) end)
+    note = Repo.cross_tenant(fn -> Repo.one(worker_note_query(note_id)) end)
     classify_worker_note(note_id, note)
   end
 
@@ -4399,7 +4406,7 @@ defmodule Engram.Notes do
     query =
       case fields do
         :meta -> from(n in base, select: struct(n, @note_meta_fields))
-        :all -> from(n in base, select: struct(n, @note_feed_fields))
+        :all -> from(n in base, select: struct(n, @note_fields_without_crdt))
       end
 
     # Byte budget. `limit` caps ROWS; nothing capped BYTES, and POST /notes
@@ -4413,7 +4420,7 @@ defmodule Engram.Notes do
     # memory goes. The probe selects sizes only — no content, no decrypt — so it
     # is a few KB regardless of how fat the page would have been.
     #
-    # The page reads no CRDT state (@note_feed_fields), so content is the only
+    # The page reads no CRDT state (@note_fields_without_crdt), so content is the only
     # large column it selects and this probe measures what is actually read.
     #
     # The probe bounds the STORED ciphertext read only. Stored size is NOT the
