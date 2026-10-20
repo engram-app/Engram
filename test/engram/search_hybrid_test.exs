@@ -80,6 +80,62 @@ defmodule Engram.SearchHybridTest do
     assert hit.score == QdrantStub.rrf(0)
   end
 
+  defp hit_point(user, vault, id, score) do
+    {:ok, enc} =
+      Engram.Crypto.encrypt_qdrant_payload(
+        %{text: "text #{id}", title: id, heading_path: id},
+        user,
+        "engram_notes",
+        id
+      )
+
+    %{
+      "id" => id,
+      "score" => score,
+      "payload" => %{
+        "text" => enc.text,
+        "title" => enc.title,
+        "heading_path" => enc.heading_path,
+        "text_nonce" => enc.text_nonce,
+        "title_nonce" => enc.title_nonce,
+        "heading_path_nonce" => enc.heading_path_nonce,
+        "aad_version" => enc.aad_version,
+        "source_path" => "#{id}.md",
+        "user_id" => to_string(user.id),
+        "vault_id" => to_string(vault.id)
+      }
+    }
+  end
+
+  # End to end through Search: a point in BOTH legs is returned once with the
+  # summed score, and a cross-leg tie (dense rank 1 vs keyword rank 1) breaks
+  # by id, never by the keyword leg's larger raw BM25 score.
+  test "a point in both legs fuses once; a cross-leg rank tie breaks by id",
+       %{bypass: bypass, user: user, vault: vault} do
+    Engram.MockEmbedder
+    |> expect(:embed_texts, fn ["iron"], _opts -> {:ok, [[0.1, 0.2, 0.3]]} end)
+
+    both_dense = hit_point(user, vault, "mm-both", 0.9)
+    dense = [both_dense, hit_point(user, vault, "aa-dense", 0.8)]
+    keyword = [%{both_dense | "score" => 12.0}, hit_point(user, vault, "zz-kw", 9.0)]
+
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(
+        200,
+        Jason.encode!(QdrantStub.batch(conn, %{"result" => dense}, keyword))
+      )
+    end)
+
+    assert {:ok, results} = Search.search(user, vault, "iron", mode: :hybrid, diversity: 0)
+    assert Enum.map(results, & &1.title) == ["mm-both", "aa-dense", "zz-kw"]
+    assert hd(results).score == QdrantStub.rrf(0) * 2
+
+    assert QdrantStub.last_retrieve(bypass)["ids"] |> Enum.sort() ==
+             ["aa-dense", "mm-both", "zz-kw"]
+  end
+
   # The default is what MCP's `suggest_folder` and note auto-placement get,
   # since they pass no mode. Dense-only there missed every note indexed
   # sparse-only (an owner whose embed budget ran out), so it is hybrid.
