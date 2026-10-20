@@ -9,10 +9,12 @@ defmodule Engram.Vector.QdrantLayout do
   vectors on disk, serialises optimizer rebuilds onto one thread, and turns on
   strict-mode upsert guards for memory and disk.
 
-  On Qdrant >= 1.19.2 (`tenant_layout?/1`, Task 8.1) the graph is per tenant:
-  `m: 0` drops the global HNSW graph, `payload_m: 16` builds one per value of
-  the `is_tenant` field, every other payload index sets `enable_hnsw: false`,
-  and every payload index is on disk. Below 1.19.2 (prod's old 1.18.2
+  On Qdrant >= 1.19.2 (`tenant_layout?/1`, Task 8.1) `u` is the `is_tenant`
+  index, every other payload index sets `enable_hnsw: false`, every payload
+  index is on disk, and segments are capped. The per-tenant graph (`m: 0`,
+  `payload_m: 16`, one graph per `u` value) waits for `tenant_graph?/3`:
+  while legacy `user_id` points and v5 `u` points coexist, m 0 would split
+  one user into two disconnected subgraphs. Below 1.19.2 (prod's old 1.18.2
   cluster, self-host compose) the layout is exactly the pre-8.1 one, so the
   reconcile never PATCHes those collections for it.
 
@@ -163,36 +165,43 @@ defmodule Engram.Vector.QdrantLayout do
   enabling it with no guard adds risk for no protection. On `:cloud` it also
   carries `desired_strict/1`, which the kill switch lifts to a ceiling.
   """
-  @spec desired(Version.t() | nil, map() | nil, boolean(), :cloud | :self_host) :: map()
-  def desired(version, limits \\ @default_limits, strict? \\ true, deployment \\ :self_host)
+  @spec desired(Version.t() | nil, map() | nil, boolean(), :cloud | :self_host, boolean()) ::
+          map()
+  def desired(
+        version,
+        limits \\ @default_limits,
+        strict? \\ true,
+        deployment \\ :self_host,
+        tenant_graph? \\ false
+      )
 
   # Ops kill switch (QDRANT_STRICT_MODE=false): our two guards at 100 (a
   # refusal only on a full disk/heap), never `enabled: false`, which would also
   # drop Qdrant Cloud's own strict-mode guards (unindexed filtering). 100, not
   # null: the strict-mode PATCH merge keeps the old value for a null field
   # (`x.or(self.x)` in lib/collection/src/operations/config_diff.rs, 1.18.2).
-  def desired(version, _limits, false, deployment) do
+  def desired(version, _limits, false, deployment, graph?) do
     case supported_guards(version, @off_limits) do
       [] ->
-        storage(version)
+        storage(version, graph?)
 
       guards ->
         Map.put(
-          storage(version),
+          storage(version, graph?),
           "strict_mode_config",
           Map.merge(lifted(deployment), Map.new(guards))
         )
     end
   end
 
-  def desired(version, limits, true, deployment) do
+  def desired(version, limits, true, deployment, graph?) do
     case supported_guards(version, limits || @default_limits) do
       [] ->
-        storage(version)
+        storage(version, graph?)
 
       guards ->
         strict = Map.merge(desired_strict(deployment), Map.new([{"enabled", true} | guards]))
-        Map.put(storage(version), "strict_mode_config", strict)
+        Map.put(storage(version, graph?), "strict_mode_config", strict)
     end
   end
 
@@ -201,14 +210,31 @@ defmodule Engram.Vector.QdrantLayout do
   def tenant_layout?(nil), do: false
   def tenant_layout?(version), do: Version.compare(version, @tenant_version) != :lt
 
-  defp storage(version) do
+  @doc """
+  True when the collection may drop its global graph for the per-tenant one
+  (`m: 0`): `switch?` (`:qdrant_tenant_graph`, flipped by Task 18.1 after
+  drop-legacy-fields, so no legacy `user_id` point is left), a 1.19.2+
+  server, and `info` (a GET `result`) proving `u` is the `is_tenant` index,
+  i.e. the collection was created with the tenant layout. Version alone is
+  not enough: an older collection on a 1.19.2 server has bare indexes, and m 0
+  would build an extra graph per value of every one of them.
+  """
+  @spec tenant_graph?(map() | nil, Version.t() | nil, boolean()) :: boolean()
+  def tenant_graph?(info, version, switch?) do
+    switch? and tenant_layout?(version) and
+      get_in(info || %{}, ["payload_schema", @tenant_field, "params", "is_tenant"]) == true
+  end
+
+  defp storage(version, graph?) do
     if tenant_layout?(version) do
       @storage
-      |> Map.put("hnsw_config", @tenant_hnsw)
+      |> then(&if graph?, do: Map.put(&1, "hnsw_config", @tenant_hnsw), else: &1)
       |> Map.update!("optimizers_config", fn o ->
         Map.merge(o, %{
           "max_segment_size" => @max_segment_size_kb,
-          "deleted_threshold" => ServiceConfig.get(:qdrant_deleted_threshold, 0.2)
+          # A float, as Qdrant echoes it: an integer config (1) would read
+          # back 1.0 and drift every boot.
+          "deleted_threshold" => ServiceConfig.get(:qdrant_deleted_threshold, 0.2) / 1
         })
       end)
     else
@@ -236,6 +262,9 @@ defmodule Engram.Vector.QdrantLayout do
     if tenant?, do: Enum.map(indexes, &tenant_schema/1), else: indexes
   end
 
+  # `on_disk` is deprecated from 1.19 in favour of `memory: "cold"` (same
+  # effect, and 1.19.2 still echoes `on_disk`). Kept because 1.18 has no
+  # `memory`; switch to `memory: "cold"` before 1.21 drops deprecated fields.
   defp tenant_schema({@legacy_tenant_field, "keyword"}),
     do: {@legacy_tenant_field, %{"type" => "keyword", "on_disk" => true}}
 
@@ -390,7 +419,7 @@ defmodule Engram.Vector.QdrantLayout do
     # datatype, so an existing float32 collection is not drift and boot never
     # PATCHes it (Qdrant cannot convert in place).
     dense = if float16?, do: Map.put(dense, "datatype", "float16"), else: dense
-    put_in(storage(version), ["vectors", "dense"], dense)
+    put_in(storage(version, false), ["vectors", "dense"], dense)
   end
 
   @doc """

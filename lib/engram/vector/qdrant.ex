@@ -260,8 +260,25 @@ defmodule Engram.Vector.Qdrant do
   end
 
   defp do_ensure_collection(col, dims) do
-    version = layout_version()
+    case layout_version() do
+      :unknown -> ensure_existing_only(col, dims)
+      version -> ensure_with_layout(col, dims, version)
+    end
+  end
 
+  # The app manages the layout but cannot read the server version: never
+  # create a collection with a guessed (pre-1.19.2) layout, which on a 1.19.2
+  # server would keep the wrong index params for good. An existing collection
+  # is still verified; a missing one is an error, retried on the next call.
+  defp ensure_existing_only(col, dims) do
+    case collection_info(col) do
+      {:ok, _} -> ensure_with_layout(col, dims, nil)
+      {:error, {404, _}} -> {:error, :qdrant_version_unknown}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp ensure_with_layout(col, dims, version) do
     case create_collection(col, dims, version) do
       {:ok, :created} ->
         with :ok <- ensure_payload_indexes(col, MapSet.new(), version), do: reconciled(col)
@@ -280,12 +297,13 @@ defmodule Engram.Vector.Qdrant do
   # The server version the layout is chosen for (`QdrantLayout.tenant_layout?/1`).
   # Only while the app manages the layout (`:qdrant_reconcile_config`, the
   # same switch as the PATCH reconcile; off in tests, so Bypass suites see no
-  # extra GET). nil = unknown, which keeps the pre-1.19.2 layout.
+  # extra GET, and nil keeps the pre-1.19.2 layout). `:unknown` when managed
+  # but unreadable.
   defp layout_version do
     if ServiceConfig.get(:qdrant_reconcile_config, true) do
       with nil <- server_version() do
-        Logger.warning("qdrant version unreadable, using the pre-1.19.2 collection layout")
-        nil
+        Logger.warning("qdrant version unreadable, not creating a collection this time")
+        :unknown
       end
     end
   end
@@ -536,7 +554,13 @@ defmodule Engram.Vector.Qdrant do
       diff =
         QdrantLayout.diff(
           info["config"] || %{},
-          QdrantLayout.desired(version, limits, strict_mode?(), deployment(base_url()))
+          QdrantLayout.desired(
+            version,
+            limits,
+            strict_mode?(),
+            deployment(base_url()),
+            tenant_graph?(info, version)
+          )
         )
 
       {strict, rest} = Map.split(diff, ["strict_mode_config"])
@@ -559,6 +583,19 @@ defmodule Engram.Vector.Qdrant do
       end
     end
     |> tap(&log_reconcile_failure/1)
+  end
+
+  # Task 18.1 flips `:qdrant_tenant_graph` once drop-legacy-fields leaves no
+  # legacy `user_id` point; until then the global graph stays (one user would
+  # otherwise be two disconnected subgraphs, legacy and v5).
+  defp tenant_graph?(info, version) do
+    switch? = ServiceConfig.get(:qdrant_tenant_graph, false)
+    graph? = QdrantLayout.tenant_graph?(info, version, switch?)
+
+    if switch? and not graph? and QdrantLayout.tenant_layout?(version),
+      do: Logger.warning("qdrant tenant graph skipped: the `u` index is not is_tenant")
+
+    graph?
   end
 
   @doc """
