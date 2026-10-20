@@ -8,6 +8,7 @@ defmodule EngramWeb.SyncController do
   alias Engram.Crypto
   alias Engram.Crypto.PathCrypto
   alias Engram.Logger.Metadata
+  alias Engram.Notes.CrdtUpdateLog
   alias Engram.Notes.Note
   alias Engram.Repo
   alias EngramWeb.Schemas
@@ -35,6 +36,36 @@ defmodule EngramWeb.SyncController do
     ],
     responses: [ok: {"Manifest", "application/json", Schemas.ManifestResponse}]
   )
+
+  operation(:quiescence,
+    operation_id: "sync-quiescence",
+    summary: "Check whether the server still owes this vault sync work",
+    tags: ["Sync"],
+    description:
+      "The vault's `change_seq` plus how many CRDT updates still await their " <>
+        "checkpoint. A client whose catch-up cursor has reached `change_seq` while " <>
+        "both counts are 0 has seen every change the server will make on its own.",
+    responses: [ok: {"Sync quiescence", "application/json", Schemas.SyncQuiescenceResponse}]
+  )
+
+  def quiescence(conn, _params) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    {current, pending_updates} =
+      Repo.with_tenant!(user.id, fn ->
+        pending =
+          Repo.one(from(l in CrdtUpdateLog, where: l.vault_id == ^vault.id, select: count()))
+
+        {Engram.Vaults.raw_current_seq(vault.id), pending}
+      end)
+
+    json(conn, %{
+      change_seq: current,
+      pending_crdt_updates: pending_updates,
+      pending_checkpoints: Engram.Jobs.pending_for_vault(Engram.Workers.CheckpointNote, vault.id)
+    })
+  end
 
   def manifest(conn, params) do
     user = conn.assigns.current_user

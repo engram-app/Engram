@@ -679,6 +679,37 @@
         "x-struct": "Elixir.EngramWeb.Schemas.ManifestResponse",
         "x-validate": null
       },
+      "SyncQuiescenceResponse": {
+        "properties": {
+          "change_seq": {
+            "description": "Current per-vault sequence watermark.",
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "pending_checkpoints": {
+            "description": "Scheduled or running checkpoint jobs for this vault's notes.",
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "pending_crdt_updates": {
+            "description": "CRDT updates stored but not yet folded into their note by a checkpoint.",
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "change_seq",
+          "pending_crdt_updates",
+          "pending_checkpoints"
+        ],
+        "title": "SyncQuiescenceResponse",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.SyncQuiescenceResponse",
+        "x-validate": null
+      },
       "AppendRequest": {
         "example": {
           "path": "Daily/2026-06-20.md",
@@ -4754,6 +4785,30 @@
         "summary": "Register or fetch a vault by client_id (idempotent)",
         "tags": [
           "Vaults"
+        ]
+      }
+    },
+    "/api/sync/quiescence": {
+      "get": {
+        "callbacks": {},
+        "description": "The vault's `change_seq` plus how many CRDT updates still await their checkpoint. A client whose catch-up cursor has reached `change_seq` while both counts are 0 has seen every change the server will make on its own.",
+        "operationId": "sync-quiescence",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncQuiescenceResponse"
+                }
+              }
+            },
+            "description": "Sync quiescence"
+          }
+        },
+        "summary": "Check whether the server still owes this vault sync work",
+        "tags": [
+          "Sync"
         ]
       }
     },

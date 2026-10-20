@@ -16,6 +16,57 @@ defmodule EngramWeb.SyncControllerTest do
     %{conn: authed, user: user, vault: vault}
   end
 
+  describe "GET /sync/quiescence" do
+    # The e2e harness waits on this instead of fixed sleeps: the vault is
+    # settled server-side once no CRDT update awaits its checkpoint. A sleep
+    # can pass while the work is still pending; this cannot.
+    test "an untouched vault is settled at seq 0", %{conn: conn} do
+      body = conn |> get("/api/sync/quiescence") |> json_response(200)
+
+      assert body == %{"change_seq" => 0, "pending_crdt_updates" => 0, "pending_checkpoints" => 0}
+    end
+
+    test "counts this vault's unfolded CRDT updates and pending checkpoints only", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      post(conn, "/api/notes", %{path: "Q/a.md", content: "# A", mtime: 1_000.0})
+
+      [%{"id" => note_id}] =
+        conn |> get("/api/sync/manifest") |> json_response(200) |> Map.get("notes")
+
+      other = insert(:vault, user: user)
+
+      {:ok, _} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          for vault_id <- [vault.id, vault.id, other.id] do
+            Engram.Repo.insert!(%Engram.Notes.CrdtUpdateLog{
+              note_id: note_id,
+              user_id: user.id,
+              vault_id: vault_id,
+              update_ciphertext: <<1>>,
+              update_nonce: <<2>>,
+              inserted_at: DateTime.utc_now()
+            })
+          end
+        end)
+
+      for vault_id <- [vault.id, other.id] do
+        {:ok, _} =
+          %{"user_id" => user.id, "vault_id" => vault_id, "note_id" => note_id}
+          |> Engram.Workers.CheckpointNote.new(schedule_in: 60)
+          |> Oban.insert()
+      end
+
+      body = conn |> get("/api/sync/quiescence") |> json_response(200)
+
+      assert body["pending_crdt_updates"] == 2
+      assert body["pending_checkpoints"] == 1
+      assert body["change_seq"] > 0
+    end
+  end
+
   describe "GET /sync/manifest" do
     test "returns empty manifest for new user", %{conn: conn} do
       conn = get(conn, "/api/sync/manifest")

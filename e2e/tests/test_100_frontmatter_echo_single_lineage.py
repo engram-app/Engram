@@ -49,6 +49,7 @@ from pathlib import Path
 import pytest
 
 from helpers.lineage_probe import read_lineages
+from helpers.quiescence import await_indexed_change, await_quiescent, indexed_mtime
 from helpers.room_probe import arm_room_starts, read_room_starts
 from helpers.vault import write_note
 
@@ -135,14 +136,14 @@ async def test_frontmatter_echo_forks_no_lineage(
     # codec to normalise, so anything this forks is a suppression gap rather
     # than a round-trip artefact.
     identical_rel = f"{prefix}/{IDENTICAL_ECHO}.md"
+    before = await indexed_mtime(cdp_a, identical_rel)
     Path(vault_a, identical_rel).write_text(written[identical_rel], encoding="utf-8")
 
-    # Give both write-backs and the modify events they trigger time to land.
-    # Deliberately a timed window: A forked lineage ships as a cold crdt_msg with
-    # no client-visible ack or log line to wait on, and driving a fullSync here
-    # would route the echo through the mtime sweep instead of the modify event
-    # this test fences. Swap for a barrier if applyLocalEdit grows a signal.
-    await asyncio.sleep(10)
+    # Wait for Obsidian to register the rewrite, then for every send it caused
+    # and the server's fold of it. No fullSync kick: that would route the echo
+    # through the mtime sweep instead of the modify event this test fences.
+    await await_indexed_change(cdp_a, identical_rel, before)
+    await await_quiescent(cdp_a, api_sync, kick=False, caught_up=False)
 
     rewritten = {
         rel: Path(vault_a, rel).read_text(encoding="utf-8")

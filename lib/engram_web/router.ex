@@ -673,6 +673,7 @@ defmodule EngramWeb.Router do
 
     # Sync
     get "/sync/manifest", SyncController, :manifest
+    get "/sync/quiescence", SyncController, :quiescence
 
     # Attachments
     # `token_surface: :mcp`: an MCP OAuth token may upload here, as the
