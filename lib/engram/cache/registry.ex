@@ -38,6 +38,11 @@ defmodule Engram.Cache.Registry do
     },
     # Per-vault avgdl (BM25 length normalizer); a soft value, TTL-only.
     %{name: :avgdl, ttl: 600_000, cache_nil: false, evict_match: :key, pg_channel: nil},
+    # The v5 rebuild's halt flag (`:halted`) and pinned avgdl per vault
+    # (`{:avgdl, vault_id}`, nil when unpinned), read only while
+    # INDEX_REBUILD is not off. A halt evicts cluster-wide; the TTL bounds a
+    # lost eviction, and `Rebuild.debit/1` refuses spend on its own anyway.
+    %{name: :rebuild, ttl: 30_000, cache_nil: true, evict_match: :key, pg_channel: nil},
     # CIMD client signing keys by jwks_uri; public keys, TTL-only. The TTL is
     # the 7-day STALE limit: freshness is judged by JwksCache from each entry's
     # own fetched_at, so a failing vendor keeps verifying on its last keys.

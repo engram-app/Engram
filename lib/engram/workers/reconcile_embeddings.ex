@@ -42,9 +42,17 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   alias Engram.Indexing
   alias Engram.Logger.Metadata
   alias Engram.Notes.{Chunk, Note}
+  alias Engram.Rebuild
   alias Engram.Repo
   alias Engram.Vector.Qdrant
-  alias Engram.Workers.{EmbedNote, ExtractNoteLinks, RebuildStaleNote, RefreshKeywordVectors}
+
+  alias Engram.Workers.{
+    EmbedNote,
+    ExtractNoteLinks,
+    RebuildDryRun,
+    RebuildStaleNote,
+    RefreshKeywordVectors
+  }
 
   require Logger
 
@@ -112,8 +120,14 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # which reopens both. Except in the daily re-verify hour: a rollback then
     # roll-forward, or a restored soft-deleted vault, puts version-stale notes
     # back after the migration closed, and nothing would reopen it.
+    #
+    # The versions are the rebuild switch's (`Rebuild.target_versions/0`):
+    # read once, so one tick never mixes two targets.
+    versions = Rebuild.target_versions()
     versions_done = IndexVersions.done?() and not daily_reverify?(scheduled_at)
-    version_stale = if versions_done, do: dynamic(false), else: IndexVersions.stale_dynamic()
+
+    version_stale =
+      if versions_done, do: dynamic(false), else: IndexVersions.stale_dynamic(versions)
 
     sweep_tenant = fn repo, remaining ->
       eligible =
@@ -231,7 +245,22 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         {:ok, _} = budget_sweep(@budget_users, now)
       end
 
-    if versions_done, do: :ok, else: sweep_keyword_stale(now, paid, page_size)
+    :ok = maybe_dry_run()
+    if versions_done, do: :ok, else: sweep_keyword_stale(now, paid, page_size, versions)
+  end
+
+  # `dry_run` plans the pass instead of running it. Unique while pending, so
+  # a tick during a long dry run queues nothing; a finished one re-runs each
+  # tick over notes not yet in the manifest, and re-seals the budget.
+  defp maybe_dry_run do
+    case Rebuild.mode() do
+      :dry_run ->
+        {:ok, _job} = Oban.insert(RebuildDryRun.new(%{}))
+        :ok
+
+      _mode ->
+        :ok
+    end
   end
 
   # Notes rebuilt per tick by `sweep_over_note_cap/1`: 1,200 a day over the
@@ -1022,16 +1051,16 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # notes every tick. Fine at thousands of notes per tenant; add a partial
   # index on (user_id) WHERE keyword_version IS DISTINCT FROM <current> if a
   # tenant reaches hundreds of thousands.
-  defp sweep_keyword_stale(now, paid, page_size) do
+  defp sweep_keyword_stale(now, paid, page_size, versions) do
     backoff_until = DateTime.add(now, reconcile_backoff_seconds(), :second)
 
     page = fn repo ->
       eligible =
         IndexVersions.content_current_notes()
-        |> where(^IndexVersions.keyword_stale_dynamic())
+        |> where(^IndexVersions.keyword_stale_dynamic(versions))
         # A version-stale note gets a full rebuild above, which stamps the
         # keyword version itself.
-        |> where(^dynamic([n], not (^IndexVersions.stale_dynamic())))
+        |> where(^dynamic([n], not (^IndexVersions.stale_dynamic(versions))))
         # A too-long park (`EmbedNote.parked_until_edited/0`) is keyword-only
         # by design, so its keyword vectors still refresh. ponytail: the stamp
         # below replaces the park with the backoff, so each keyword bump costs

@@ -1821,20 +1821,24 @@ defmodule Engram.Indexing do
   # user is charged for when that text is sent. Only what Voyage is sent
   # counts, so a keyword-only chunk or group has no entry.
   defp changed_bytes_per_text(plan, rows) do
-    known =
-      MapSet.new(
-        for {hmac, _point_id, _tokens, members} <- rows,
-            h <- [hmac && short_hmac(hmac) | members || []],
-            h != nil,
-            do: h
-      )
-
+    known = known_hmacs(rows)
     new? = &(not MapSet.member?(known, &1))
 
     for {:embed, chunk} <- plan.entries,
         dense_chunk?(chunk, plan.dense?),
         do: chunk |> changed_bytes(new?) |> Enum.sum()
   end
+
+  # Every short fingerprint the stored rows hold, a point's own or a merged
+  # point's members'.
+  defp known_hmacs(rows),
+    do:
+      MapSet.new(
+        for {hmac, _point_id, _tokens, members} <- rows,
+            h <- [hmac && short_hmac(hmac) | members || []],
+            h != nil,
+            do: h
+      )
 
   defp changed_bytes(%{merged: true, member_bytes: bytes, member_hmacs: hmacs}, new?),
     do: for({b, h} <- Enum.zip(bytes, hmacs), new?.(h), do: b)
@@ -2435,13 +2439,110 @@ defmodule Engram.Indexing do
   end
 
   @doc """
-  The vault's BM25 `avgdl`, the one source every keyword encode reads.
-  Today the cached `KeywordIndex.Stats.avgdl/2`.
+  The vault's BM25 `avgdl`, the one source every keyword encode reads: the
+  cached `KeywordIndex.Stats.avgdl/2`, except while the v5 rebuild is `on`,
+  when it is the value the dry run pinned (`rebuild_manifest_vaults`, spec
+  K2, H14), so a note indexed at the end of the pass is normalized like one
+  indexed at its start. A vault with no pin keeps the live value.
   """
-  # ponytail: Task 16 pins avgdl for the v5 pass here (spec K2, H14): the
-  # `rebuild_manifest_vaults.avgdl` row when one exists, else this value.
   @spec avgdl(Ecto.UUID.t(), Ecto.UUID.t()) :: float()
-  def avgdl(user_id, vault_id), do: Engram.KeywordIndex.Stats.avgdl(user_id, vault_id)
+  def avgdl(user_id, vault_id) do
+    pinned = if Engram.Rebuild.mode() == :on, do: Engram.Rebuild.pinned_avgdl(user_id, vault_id)
+
+    case pinned do
+      avgdl when is_float(avgdl) -> avgdl
+      nil -> Engram.KeywordIndex.Stats.avgdl(user_id, vault_id)
+    end
+  end
+
+  @doc """
+  The v5 rebuild dry run's estimate for one note: what a rebuild pass would
+  write and send Voyage, from the same parse, cap plan and reuse
+  fingerprints as `prepare_index/4`, with no Voyage and no Qdrant call.
+
+    * `est_tokens`: estimated tokens of the dense texts Voyage would be sent
+      (vector cache hits are not counted: an upper bound).
+    * `new_points`: points that need a new vector (or are keyword-only).
+    * `reused_points`: points whose fingerprint is unchanged (vector copied).
+    * `mean_pooled_points`: merged groups whose members all have a stored
+      vector (C13, the normalized mean): no tokens.
+    * `dl_sum`, `dl_count`: keyword lengths of the planned points that
+      count toward `avgdl` (not merged, not floor).
+
+  A sparse-only note (no dense vectors now) stays sparse and costs 0 tokens.
+  `note` is decrypted.
+  """
+  @spec rebuild_estimate(map(), map()) :: {:ok, %{atom() => non_neg_integer()}} | {:error, term()}
+  def rebuild_estimate(note, user) do
+    zero = %{
+      est_tokens: 0,
+      new_points: 0,
+      reused_points: 0,
+      mean_pooled_points: 0,
+      dl_sum: 0,
+      dl_count: 0
+    }
+
+    with {:ok, content_key} <- Crypto.dek_content_hash_key(user) do
+      case Markdown.parse(note.content || "", note.path) do
+        [] -> {:ok, zero}
+        chunks -> {:ok, estimate_chunks(note, user, chunks, content_key, zero)}
+      end
+    end
+  end
+
+  defp estimate_chunks(note, user, chunks, content_key, zero) do
+    rows = indexed_rows(note)
+    merged? = merged_rows?(rows)
+
+    capped =
+      if budget_enabled?(),
+        do: chunks |> cap_chunks(note_points_cap(user), merged?) |> fit_positions(merged?),
+        else: fit_positions(chunks, merged?)
+
+    dense? = not is_nil(Map.get(note, :dense_indexed_hash))
+    plan = plan_chunks(capped, rows, content_key, dense?)
+
+    known = known_hmacs(rows)
+
+    Enum.reduce(plan.entries, zero, fn entry, acc ->
+      chunk = entry_chunk(entry)
+      acc = count_length(acc, chunk)
+
+      case entry do
+        {:reuse, _chunk, _point_id, _tokens} ->
+          %{acc | reused_points: acc.reused_points + 1}
+
+        {:embed, %{merged: true, member_hmacs: hmacs}} when hmacs != [] ->
+          if dense_chunk?(chunk, dense?) and Enum.all?(hmacs, &MapSet.member?(known, &1)),
+            do: %{acc | mean_pooled_points: acc.mean_pooled_points + 1},
+            else: embed_estimate(acc, chunk, dense?)
+
+        {:embed, _chunk} ->
+          embed_estimate(acc, chunk, dense?)
+      end
+    end)
+  end
+
+  defp embed_estimate(acc, chunk, dense?) do
+    tokens =
+      if dense_chunk?(chunk, dense?),
+        do: UsageMeters.estimate_tokens(IO.iodata_length(chunk.embed_text)),
+        else: 0
+
+    %{acc | new_points: acc.new_points + 1, est_tokens: acc.est_tokens + tokens}
+  end
+
+  # The same raw keyword length `chunks.token_count` stores (`build_entry/3`).
+  defp count_length(acc, chunk) do
+    if capped_length?(chunk) do
+      acc
+    else
+      text = IO.iodata_to_binary(chunk.context_text)
+      {_tokens, len} = Engram.KeywordIndex.Tokenizer.tokens_with_len(text)
+      %{acc | dl_sum: acc.dl_sum + len, dl_count: acc.dl_count + 1}
+    end
+  end
 
   # Both inputs: `context_text` (keyword vector, payload) and `embed_text`
   # (dense vector). They are capped separately, so past 512 bytes of
