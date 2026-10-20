@@ -3378,6 +3378,7 @@ defmodule EngramWeb.CrdtChannelTest do
       {:ok, _, joined} =
         user_socket(user)
         |> Phoenix.Socket.assign(:plugin_version, "1.36.0")
+        |> Phoenix.Socket.assign(:platform, "mobile")
         |> subscribe_and_join(EngramWeb.CrdtChannel, "crdt:#{user.id}:#{vault.id}", %{
           "crdt_proto" => 2,
           "client_type" => "obsidian"
@@ -3393,6 +3394,7 @@ defmodule EngramWeb.CrdtChannelTest do
       [body] = Enum.filter(drain_posthog([]), &(&1["event"] == "surface_active"))
       assert body["properties"]["plugin_version"] == "1.36.0"
       assert body["properties"]["client_type"] == "obsidian"
+      assert body["properties"]["platform"] == "mobile"
     end
 
     test "an edit from the web editor counts as web, not obsidian_sync", %{

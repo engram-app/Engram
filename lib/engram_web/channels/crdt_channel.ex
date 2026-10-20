@@ -1990,7 +1990,8 @@ defmodule EngramWeb.CrdtChannel do
     props =
       %{
         plugin_version: socket.assigns[:plugin_version],
-        client_type: socket.assigns[:client_type]
+        client_type: socket.assigns[:client_type],
+        platform: socket.assigns[:platform]
       }
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new()

@@ -560,6 +560,8 @@ defmodule EngramWeb.Router do
     scope "/" do
       pipe_through :require_session_allow_plugin
       post "/feedback", FeedbackController, :create
+      # The plugin's first-sync summary (counts only), for product analytics.
+      post "/analytics/sync-summary", AnalyticsController, :sync_summary
     end
 
     post "/onboarding/actions", OnboardingController, :record
