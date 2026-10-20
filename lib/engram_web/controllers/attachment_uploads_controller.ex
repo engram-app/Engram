@@ -94,12 +94,17 @@ defmodule EngramWeb.AttachmentUploadsController do
   )
 
   def put_part(conn, %{"id" => id, "n" => n}) do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
     limit = Uploads.part_size()
 
+    # Everything that can refuse without the body goes first, so an unknown
+    # or foreign session is answered unread.
     with {:ok, n} <- part_number(n),
+         {:ok, _} <- Uploads.status(user, vault, id),
          :ok <- check_declared_length(conn, limit),
          {:ok, bytes, conn} <- read_part(conn, limit) do
-      case Uploads.put_part(conn.assigns.current_user, conn.assigns.current_vault, id, n, bytes) do
+      case Uploads.put_part(user, vault, id, n, bytes) do
         {:ok, part} -> json(conn, part)
         {:error, reason} -> refuse(conn, reason)
       end
@@ -209,8 +214,10 @@ defmodule EngramWeb.AttachmentUploadsController do
   # stalled client (408).
   defp read_part(conn, limit) do
     case AttachmentsController.read_raw_body(conn, limit + 1) do
-      {_, body, _conn} when byte_size(body) > limit ->
-        {:error, :bad_part_size}
+      # Answered on the post-read conn, as `read_raw/6` does: refusing on the
+      # pre-read one hands SettleUnreadBody a stale Bandit body state.
+      {_, body, conn} when byte_size(body) > limit ->
+        {:halt, refuse(conn, :bad_part_size)}
 
       {:ok, body, conn} ->
         {:ok, body, conn}

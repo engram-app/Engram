@@ -8,6 +8,7 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
   alias Engram.Attachments.Attachment
   alias Engram.Attachments.SegmentedCipher
   alias Engram.Attachments.Upload
+  alias Engram.Attachments.Uploads
   alias Engram.Crypto
   alias Engram.Repo
   alias Engram.Storage.InMemory
@@ -315,5 +316,137 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
     refute InMemory.exists?(key_b)
     assert conn |> get("/api/attachment-uploads/#{id_b}") |> json_response(404)
     assert used(user) == 600
+  end
+
+  # Review fix: tenant scoping at the HTTP layer. Every route answers 404 for
+  # a session the caller's user+vault does not own, and a foreign DELETE
+  # drops nothing.
+  describe "foreign sessions" do
+    setup %{user: user, vault: vault} do
+      bytes = :crypto.strong_rand_bytes(100)
+      {:ok, up} = Uploads.start(user, vault, %{path: "a.png", size_bytes: 100, mtime: 1.0})
+      %{bytes: bytes, up: up}
+    end
+
+    defp assert_all_404(conn, id, bytes) do
+      assert conn |> get("/api/attachment-uploads/#{id}") |> json_response(404)
+      assert conn |> put_part(id, 1, bytes) |> json_response(404)
+      assert conn |> complete(id) |> json_response(404)
+      assert conn |> delete("/api/attachment-uploads/#{id}") |> response(204)
+    end
+
+    defp assert_owner_completes(conn, up, bytes) do
+      assert %{"done" => []} =
+               conn |> get("/api/attachment-uploads/#{up.id}") |> json_response(200)
+
+      assert conn |> put_part(up.id, 1, bytes) |> json_response(200)
+      assert conn |> complete(up.id) |> json_response(200)
+    end
+
+    test "another user's upload id is 404 everywhere", %{conn: conn, up: up, bytes: bytes} do
+      other = insert(:user)
+      insert(:subscription, user: other, tier: "pro", status: "active")
+      insert(:vault, user: other, is_default: true)
+      {:ok, other_key, _} = Engram.Accounts.create_api_key(other, "other-key")
+      lift_api_rps_cap!(other)
+      other_conn = put_req_header(build_conn(), "authorization", "Bearer #{other_key}")
+
+      assert_all_404(other_conn, up.id, bytes)
+      assert_owner_completes(conn, up, bytes)
+    end
+
+    test "the same user's upload id under another vault is 404 everywhere", %{
+      conn: conn,
+      user: user,
+      up: up,
+      bytes: bytes
+    } do
+      other_vault = insert(:vault, user: user)
+
+      assert_all_404(put_req_header(conn, "x-vault-id", other_vault.id), up.id, bytes)
+      assert_owner_completes(conn, up, bytes)
+    end
+  end
+
+  # Over a real Bandit socket: Plug.Test never reaches Bandit's body state,
+  # which is what a refusal on a stale (pre-read) conn corrupts.
+  describe "part bodies over HTTP/1" do
+    @read_timeout 500
+
+    setup %{user: user, vault: vault} do
+      Application.put_env(:engram, :body_read_timeout, @read_timeout)
+      on_exit(fn -> Application.delete_env(:engram, :body_read_timeout) end)
+
+      {:ok, pid} =
+        start_supervised(
+          {Bandit, plug: EngramWeb.Endpoint, port: 0, ip: :loopback, startup_log: false}
+        )
+
+      {:ok, {_ip, port}} = ThousandIsland.listener_info(pid)
+      {:ok, sock} = :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false])
+      on_exit(fn -> :gen_tcp.close(sock) end)
+      {:ok, api_key, _} = Engram.Accounts.create_api_key(user, "socket-key")
+      {:ok, up} = Uploads.start(user, vault, %{path: "v.mp4", size_bytes: 20 * @mib, mtime: 1.0})
+      %{sock: sock, key: api_key, up: up}
+    end
+
+    defp head(method, path, key, extra),
+      do:
+        "#{method} #{path} HTTP/1.1\r\nhost: localhost\r\nauthorization: Bearer #{key}\r\n" <>
+          extra <> "\r\n"
+
+    defp recv_response(sock) do
+      {:ok, data} = :gen_tcp.recv(sock, 0, 5_000)
+      [status | _] = String.split(data, "\r\n")
+      {status, data}
+    end
+
+    test "an over-size chunked part is 422 and the connection stays usable", %{
+      sock: sock,
+      key: key,
+      up: up
+    } do
+      chunk = :binary.copy("x", @mib)
+
+      :ok =
+        :gen_tcp.send(sock, [
+          head(
+            "PUT",
+            "/api/attachment-uploads/#{up.id}/parts/1",
+            key,
+            "content-type: application/octet-stream\r\ntransfer-encoding: chunked\r\n"
+          ),
+          for(_ <- 1..9, do: ["100000\r\n", chunk, "\r\n"]),
+          "0\r\n\r\n"
+        ])
+
+      {status, data} = recv_response(sock)
+      assert status == "HTTP/1.1 422 Unprocessable Content", data
+      assert data =~ "bad_part_size"
+      refute data =~ ~r/connection: close/i
+
+      # Same keep-alive socket: the rest of the body was drained, not parsed
+      # as the next request.
+      :ok = :gen_tcp.send(sock, head("GET", "/api/attachment-uploads/#{up.id}", key, ""))
+      {status, data} = recv_response(sock)
+      assert status == "HTTP/1.1 200 OK", data
+    end
+
+    test "an unknown upload id is 404 before the body is read", %{sock: sock, key: key} do
+      # Headers only: a server that reads the body first stalls into a 408.
+      :ok =
+        :gen_tcp.send(
+          sock,
+          head(
+            "PUT",
+            "/api/attachment-uploads/#{Ecto.UUID.generate()}/parts/1",
+            key,
+            "content-type: application/octet-stream\r\ncontent-length: 1000\r\n"
+          )
+        )
+
+      {status, data} = recv_response(sock)
+      assert status == "HTTP/1.1 404 Not Found", data
+    end
   end
 end
