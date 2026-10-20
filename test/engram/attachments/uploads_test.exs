@@ -54,6 +54,14 @@ defmodule Engram.Attachments.UploadsTest do
                Uploads.start(user, vault, %{path: "a.exe", size_bytes: 10, mtime: 1.0})
     end
 
+    test "a blocked extension behind trailing dots or spaces", %{user: user, vault: vault} do
+      for path <- ["evil.exe.", "evil.exe ", "evil.exe. .", "EVIL.EXE."] do
+        assert {:error, {:extension_not_allowed, ".exe"}} =
+                 Uploads.start(user, vault, %{path: path, size_bytes: 10, mtime: 1.0}),
+               inspect(path)
+      end
+    end
+
     test "a declared size over max_file_bytes", %{user: user, vault: vault} do
       assert {:error, {:too_large, 10_485_760}} =
                Uploads.start(user, vault, %{path: "big.mp4", size_bytes: 10_485_761, mtime: 1.0})

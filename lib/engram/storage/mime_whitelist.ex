@@ -21,6 +21,7 @@ defmodule Engram.Storage.MimeWhitelist do
     .lnk .reg .hta .cpl .gadget
     .iso
     .msix .msixbundle .appx .appxbundle .appimage .run .xpi .crx
+    .pif .wsf .wsh .jse .msc .scf .url .application .appref-ms .settingcontent-ms .chm
   ) |> Enum.sort()
 
   @doc """
@@ -86,7 +87,13 @@ defmodule Engram.Storage.MimeWhitelist do
   defp blocked_extension(nil), do: nil
 
   defp blocked_extension(filename) when is_binary(filename) do
-    ext = filename |> Path.extname() |> String.downcase()
+    # Windows drops trailing dots and spaces on write ("evil.exe." is saved
+    # as "evil.exe"), and `Path.extname("evil.exe.")` is ".".
+    ext =
+      filename
+      |> String.replace(~r/[. ]+\z/, "")
+      |> Path.extname()
+      |> String.downcase()
 
     if ext in @blocked_extensions, do: ext, else: nil
   end

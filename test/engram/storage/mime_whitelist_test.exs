@@ -65,6 +65,25 @@ defmodule Engram.Storage.MimeWhitelistTest do
       end
     end
 
+    # Windows drops trailing dots and spaces when it writes a file, so
+    # "evil.exe." lands on disk as "evil.exe"; `Path.extname/1` says ".".
+    test "trailing dots and spaces do not hide the extension" do
+      for name <- ["evil.exe.", "evil.exe ", "evil.exe. .", "EVIL.EXE.", "d/evil.exe..."] do
+        assert {:error, {:extension_not_allowed, ".exe"}} = MimeWhitelist.check(nil, name),
+               "#{inspect(name)} was accepted"
+      end
+
+      assert :ok = MimeWhitelist.check(nil, "notes.txt. ")
+      assert :ok = MimeWhitelist.check(nil, "...")
+    end
+
+    test "Windows script and shortcut types are blocked" do
+      for ext <-
+            ~w(.pif .wsf .wsh .jse .msc .scf .url .application .appref-ms .settingcontent-ms .chm) do
+        assert {:error, {:extension_not_allowed, ^ext}} = MimeWhitelist.check(nil, "x#{ext}")
+      end
+    end
+
     test "blocked_extensions/0 is sorted, lowercase, dotted" do
       list = MimeWhitelist.blocked_extensions()
       assert ".exe" in list

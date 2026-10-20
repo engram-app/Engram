@@ -57,6 +57,20 @@ defmodule Engram.AttachmentsTest do
                })
     end
 
+    test "rejects a blocked extension hidden behind trailing dots or spaces", %{
+      user: user,
+      vault: vault
+    } do
+      for path <- ["evil.exe.", "evil.exe ", "evil.exe. .", "EVIL.EXE."] do
+        assert {:error, {:extension_not_allowed, ".exe"}} =
+                 Attachments.upsert_attachment(user, vault, %{
+                   "path" => path,
+                   "content_base64" => @valid_content
+                 }),
+               inspect(path)
+      end
+    end
+
     test "rejects a header-illegal mime_type", %{user: user, vault: vault} do
       assert {:error, :invalid_mime} =
                Attachments.upsert_attachment(user, vault, %{
