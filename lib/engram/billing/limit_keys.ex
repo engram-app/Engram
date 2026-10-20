@@ -209,6 +209,20 @@ defmodule Engram.Billing.LimitKeys do
   def default_for(key, tier) when key in @keys and tier in @tiers,
     do: @catalog |> Map.fetch!(key) |> Map.fetch!(:defaults) |> Map.fetch!(tier)
 
+  # Renamed keys whose existing `user_limit_overrides` rows must keep working:
+  # a row under the old name still applies to the new key (the new name wins
+  # when both exist) and can still be edited. `lifetime_embed_token_cap` became
+  # the refilling `embed_token_bucket`; a raised value or `-1` keeps its sense.
+  @legacy_keys %{embed_token_bucket: "lifetime_embed_token_cap"}
+
+  @doc "The old override key a renamed limit key still honours, or nil."
+  @spec legacy_key(atom()) :: String.t() | nil
+  def legacy_key(key), do: Map.get(@legacy_keys, key)
+
+  @doc "True for an old override key name kept readable after a rename."
+  @spec legacy_key?(term()) :: boolean()
+  def legacy_key?(name), do: name in Map.values(@legacy_keys)
+
   @spec env_var_names() :: [{atom(), atom(), String.t()}]
   def env_var_names do
     for tier <- @tiers, key <- @keys do

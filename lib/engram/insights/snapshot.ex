@@ -225,7 +225,10 @@ defmodule Engram.Insights.Snapshot do
 
   defp embed_cap_overrides(repo, ids, now) do
     from(o in UserLimitOverride,
-      where: o.key == "embed_token_bucket" and o.user_id in ^ids,
+      where: o.key in ["embed_token_bucket", "lifetime_embed_token_cap"] and o.user_id in ^ids,
+      # New key last, so `Map.new/1` keeps it over a legacy row
+      # (`LimitKeys.legacy_key/1`).
+      order_by: [asc: o.key == "embed_token_bucket"],
       where: is_nil(o.expires_at) or o.expires_at > ^now,
       select: {o.user_id, fragment("?->'v'", o.value)}
     )

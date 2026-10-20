@@ -30,7 +30,7 @@ defmodule Engram.Billing.UserLimitOverride do
     |> cast(attrs, @required ++ @optional)
     |> validate_required(@required)
     |> validate_change(:key, fn :key, k ->
-      if LimitKeys.defined?(safe_atom(k)) do
+      if LimitKeys.defined?(safe_atom(k)) or LimitKeys.legacy_key?(k) do
         []
       else
         [key: "not a known limit key"]
