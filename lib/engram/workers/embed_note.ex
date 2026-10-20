@@ -370,7 +370,7 @@ defmodule Engram.Workers.EmbedNote do
   defp reserve_embed_tokens(user, tokens) do
     case Billing.effective_limit(user, :lifetime_embed_token_cap) do
       cap when is_integer(cap) and cap >= 0 ->
-        UsageMeters.reserve_embed_tokens(user.id, tokens, cap) or budget_exhausted(user.id)
+        UsageMeters.reserve_embed_tokens(user.id, tokens, cap) or budget_exhausted(user)
 
       # nil / :unlimited / a negative sentinel: unmetered, still recorded.
       cap when is_nil(cap) or cap == :unlimited or is_integer(cap) ->
@@ -379,7 +379,7 @@ defmodule Engram.Workers.EmbedNote do
 
       # A malformed override fails CLOSED, as `check_limit/3` always did.
       _malformed ->
-        budget_exhausted(user.id)
+        budget_exhausted(user)
     end
   end
 
@@ -393,7 +393,16 @@ defmodule Engram.Workers.EmbedNote do
     end
   end
 
-  defp budget_exhausted(user_id) do
+  defp budget_exhausted(%{id: user_id} = user) do
+    # This cap degrades to sparse-only without telling the user, so product
+    # analytics hears it here or not at all. Once a day per user.
+    Engram.Analytics.track_limit_hit(
+      user,
+      :lifetime_embed_token_cap,
+      %{silent: true},
+      :timer.hours(24)
+    )
+
     :telemetry.execute(
       [:engram, :abuse, :embed_budget_exhausted],
       %{count: 1, lifetime_tokens: UsageMeters.lifetime_embed_tokens(user_id)},

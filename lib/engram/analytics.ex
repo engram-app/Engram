@@ -66,13 +66,14 @@ defmodule Engram.Analytics do
   Record that `user` was refused by plan limit `limit_key` (a 402, a refused
   create, a spent budget). At most one `limit_hit` per user and key per hour,
   so a bulk import past a cap costs one event. `props` (`surface`, `silent`)
-  can never override `limit_key` or `tier`.
+  can never override `limit_key` or `tier`. A limit hit on every job, rather
+  than on a user action, passes a longer `window_ms`.
   """
-  @spec track_limit_hit(map(), atom() | String.t(), map()) :: :ok
-  def track_limit_hit(user, limit_key, props \\ %{}) do
+  @spec track_limit_hit(map(), atom() | String.t(), map(), pos_integer()) :: :ok
+  def track_limit_hit(user, limit_key, props \\ %{}, window_ms \\ @limit_window_ms) do
     key = to_string(limit_key)
 
-    track_throttled(user, "limit_hit", key, @limit_window_ms, fn ->
+    track_throttled(user, "limit_hit", key, window_ms, fn ->
       Map.merge(props, %{limit_key: key, tier: tier(user)})
     end)
   end

@@ -1213,6 +1213,47 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert DateTime.compare(indexed.embed_retry_after, DateTime.utc_now()) == :gt
     end
 
+    # The cap degrades silently to sparse-only, so nothing else tells product
+    # analytics the user hit it.
+    test "an exhausted budget reports a silent limit_hit once",
+         %{bypass: bypass, user: user, vault: vault, note: note} do
+      ph = Bypass.open()
+
+      for k <- [:posthog_key, :posthog_host] do
+        prev = Application.get_env(:engram, k)
+        on_exit(fn -> Application.put_env(:engram, k, prev) end)
+      end
+
+      Application.put_env(:engram, :posthog_key, "phc_test_token")
+      Application.put_env(:engram, :posthog_host, "http://localhost:#{ph.port}")
+      EngramWeb.RateLimiter.reset_buckets!()
+      parent = self()
+
+      Bypass.stub(ph, "POST", "/capture/", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:captured, Jason.decode!(body)})
+        Plug.Conn.resp(conn, 200, "1")
+      end)
+
+      Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
+      stub_qdrant(bypass)
+
+      other =
+        Engram.Fixtures.insert_note!(user, vault, %{
+          path: "Test/Two.md",
+          content: "# Two\n\nMore."
+        })
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+      assert :ok = perform_job(EmbedNote, %{note_id: other.id})
+
+      assert_receive {:captured, body}, 1_000
+      assert body["event"] == "limit_hit"
+      assert body["properties"]["limit_key"] == "lifetime_embed_token_cap"
+      assert body["properties"]["silent"] == true
+      refute_receive {:captured, %{"event" => "limit_hit"}}, 300
+    end
+
     test "proceeds and increments the counter on success",
          %{bypass: bypass, user: user, note: note} do
       Engram.MockEmbedder
