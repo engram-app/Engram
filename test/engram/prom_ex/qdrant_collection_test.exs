@@ -6,6 +6,7 @@ defmodule Engram.PromEx.QdrantCollectionTest do
 
   alias Engram.PromEx.Qdrant, as: Plugin
   alias Engram.ServiceConfig
+  alias Engram.Test.PromExMetrics
 
   @info "test/support/fixtures/qdrant/collection_info_prod_2026_10_18.json"
         |> File.read!()
@@ -100,7 +101,7 @@ defmodule Engram.PromEx.QdrantCollectionTest do
 
   test "declares the backpressure counter tagged by reason only" do
     metrics =
-      Plugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+      PromExMetrics.of(Plugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
     counter =
       Enum.find(metrics, &(&1.name == [:engram, :prom_ex, :qdrant, :backpressure, :total]))

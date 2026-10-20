@@ -2,6 +2,7 @@ defmodule Engram.PromEx.NativeTest do
   use ExUnit.Case, async: true
 
   alias Engram.PromEx.Native
+  alias Engram.Test.PromExMetrics
   alias PromEx.MetricTypes.{Event, Polling}
 
   test "is a registered PromEx plugin" do
@@ -34,7 +35,7 @@ defmodule Engram.PromEx.NativeTest do
 
   test "metric definitions build" do
     opts = [otp_app: :engram]
-    assert %Event{metrics: metrics} = Native.event_metrics(opts)
+    assert %Event{metrics: metrics} = PromExMetrics.of(Native, opts)
     for m <- metrics, do: assert(m.tags == [:nif, :dirty])
 
     # Count + integer microsecond sum only: no per-call histograms, and no

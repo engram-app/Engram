@@ -13,6 +13,7 @@ defmodule Engram.PromEx.CrdtTest do
 
   alias Engram.Notes.CrdtRoomLru
   alias Engram.PromEx.Crdt, as: Plugin
+  alias Engram.Test.PromExMetrics
   alias PromEx.MetricTypes.Polling
 
   defp polling, do: Plugin.polling_metrics(otp_app: :engram) |> List.wrap()
@@ -69,7 +70,7 @@ defmodule Engram.PromEx.CrdtTest do
   test "checkpoint_doc bloat distributions are exported, untagged" do
     metrics =
       [otp_app: :engram]
-      |> Plugin.event_metrics()
+      |> then(&PromExMetrics.of(Plugin, &1))
       |> List.wrap()
       |> Enum.flat_map(& &1.metrics)
       |> Enum.filter(&(&1.event_name == [:engram, :crdt, :checkpoint_doc]))
@@ -91,7 +92,7 @@ defmodule Engram.PromEx.CrdtTest do
   test "state_sweep gauges are exported, untagged" do
     metrics =
       [otp_app: :engram]
-      |> Plugin.event_metrics()
+      |> then(&PromExMetrics.of(Plugin, &1))
       |> List.wrap()
       |> Enum.flat_map(& &1.metrics)
       |> Enum.filter(&(&1.event_name == [:engram, :crdt, :state_sweep]))

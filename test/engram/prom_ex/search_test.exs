@@ -9,11 +9,12 @@ defmodule Engram.PromEx.SearchTest do
   use ExUnit.Case, async: true
 
   alias Engram.PromEx.Search, as: SearchPlugin
+  alias Engram.Test.PromExMetrics
   alias PromEx.MetricTypes.Event
 
   describe "event_metrics/1" do
     test "returns Event struct(s) prefixed [:engram, :prom_ex, :search]" do
-      events = SearchPlugin.event_metrics(otp_app: :engram) |> List.wrap()
+      events = PromExMetrics.of(SearchPlugin) |> List.wrap()
       assert Enum.all?(events, &match?(%Event{}, &1))
       metrics = Enum.flat_map(events, & &1.metrics)
       assert Enum.any?(metrics, fn m -> Enum.at(m.name, 2) == :search end)
@@ -23,7 +24,7 @@ defmodule Engram.PromEx.SearchTest do
     # in Tempo. The request counter stays.
     test "declares only a counter on [:engram, :search, :request, :stop]" do
       metrics =
-        SearchPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+        PromExMetrics.of(SearchPlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
       assert [%Telemetry.Metrics.Counter{tags: [:status, :cross_vault, :rerank]}] =
                Enum.filter(metrics, &(&1.event_name == [:engram, :search, :request, :stop]))
@@ -31,7 +32,7 @@ defmodule Engram.PromEx.SearchTest do
 
     test "sums dropped hits from [:engram, :search, :hit_dropped]" do
       metrics =
-        SearchPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+        PromExMetrics.of(SearchPlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
       assert Enum.any?(metrics, fn m ->
                match?(%Telemetry.Metrics.Sum{}, m) and
@@ -42,7 +43,7 @@ defmodule Engram.PromEx.SearchTest do
 
     test "no per-tenant tags" do
       metrics =
-        SearchPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+        PromExMetrics.of(SearchPlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
       banned = [:user_id, :vault_id, :query, :tenant_id]
 

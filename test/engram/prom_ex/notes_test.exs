@@ -9,18 +9,19 @@ defmodule Engram.PromEx.NotesTest do
   use ExUnit.Case, async: true
 
   alias Engram.PromEx.Notes, as: NotesPlugin
+  alias Engram.Test.PromExMetrics
   alias PromEx.MetricTypes.Event
 
   describe "event_metrics/1" do
     setup do
       metrics =
-        NotesPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+        PromExMetrics.of(NotesPlugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
       %{metrics: metrics}
     end
 
     test "returns Event struct(s) prefixed [:engram, :prom_ex, :notes]" do
-      events = NotesPlugin.event_metrics(otp_app: :engram) |> List.wrap()
+      events = PromExMetrics.of(NotesPlugin) |> List.wrap()
       assert Enum.all?(events, &match?(%Event{}, &1))
       metrics = Enum.flat_map(events, & &1.metrics)
       assert Enum.any?(metrics, fn m -> Enum.at(m.name, 2) == :notes end)

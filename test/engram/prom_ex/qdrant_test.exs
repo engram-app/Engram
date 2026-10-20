@@ -7,13 +7,13 @@ defmodule Engram.PromEx.QdrantTest do
   """
   use ExUnit.Case, async: true
 
-  alias Engram.PromEx.Qdrant, as: QdrantPlugin
   alias Engram.ServiceConfig
+  alias Engram.Test.PromExMetrics
   alias PromEx.MetricTypes.Event
 
   describe "event_metrics/1" do
     test "returns Event struct(s) prefixed [:engram, :prom_ex, :qdrant]" do
-      result = QdrantPlugin.event_metrics(otp_app: :engram)
+      result = PromExMetrics.of(Engram.PromEx.Qdrant)
       events = List.wrap(result)
       assert Enum.all?(events, &match?(%Event{}, &1))
 
@@ -23,7 +23,7 @@ defmodule Engram.PromEx.QdrantTest do
 
     test "declares a latency distribution + counter on [:engram, :qdrant, :request, :stop]" do
       metrics =
-        QdrantPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+        PromExMetrics.of(Engram.PromEx.Qdrant) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
       target = [:engram, :qdrant, :request, :stop]
 
@@ -38,7 +38,7 @@ defmodule Engram.PromEx.QdrantTest do
 
     test "no high-cardinality tags" do
       metrics =
-        QdrantPlugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+        PromExMetrics.of(Engram.PromEx.Qdrant) |> List.wrap() |> Enum.flat_map(& &1.metrics)
 
       banned = [:user_id, :vault_id, :tenant_id, :collection, :point_id, :path]
 
