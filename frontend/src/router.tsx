@@ -204,7 +204,13 @@ export function createAppRouter(_config: EngramConfig): AppRouter {
 								{ path: ROUTES.OAUTH_CONSENT, element: suspended(<OAuthAuthorizePage />) },
 
 								// Operator insights: outside the onboarding gate and the app shell.
-								{ path: ROUTES.OPERATOR_INSIGHTS, element: suspended(<OperatorInsightsPage />) },
+								{
+									path: ROUTES.OPERATOR_INSIGHTS,
+									// The 404 is handed in, not imported by the lazy page: that
+									// import split the auth shell out of the entry chunk (+4 KB
+									// gzipped initial JS, over the bundle budget).
+									element: suspended(<OperatorInsightsPage notFound={<CatchAllRoute />} />),
+								},
 
 								// Dashboard tree — gated by OnboardingGate.
 								{

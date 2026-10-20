@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import NotFoundPage from "@/not-found";
 import OperatorInsightsPage from "./insights-page";
 
 let mockRole = "operator";
@@ -18,7 +19,7 @@ function renderAt(url: string) {
 	return render(
 		<QueryClientProvider client={client}>
 			<MemoryRouter initialEntries={[url]}>
-				<OperatorInsightsPage />
+				<OperatorInsightsPage notFound={<NotFoundPage />} />
 			</MemoryRouter>
 		</QueryClientProvider>,
 	);
