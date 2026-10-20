@@ -2,8 +2,8 @@ defmodule Engram.Workers.BackfillCrdtHeadMaintenanceTest do
   @moduledoc """
   `BackfillCrdtHead.enqueue_all/0` (hourly, via WarmCrdtHeads) discovers work
   in ONE query on the maintenance pool when one is configured, instead of one
-  tenant transaction per user (2026-10-20 audit, P1-7), and that query is
-  served by `notes_crdt_head_missing_index`.
+  tenant transaction per user (2026-10-20 audit, P1-7). The query has no
+  index on purpose: see NotesHotAppendTest.
 
   Same rig as ReconcileEmbeddingsMaintenanceTest: the app pool runs as
   `engram_app` with no tenant, where the notes policy hides every row, and a
@@ -18,8 +18,6 @@ defmodule Engram.Workers.BackfillCrdtHeadMaintenanceTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Engram.Notes.Note
-  alias Engram.QueryPlan
-  alias Engram.QueryRecorder
   alias Engram.Repo
   alias Engram.Repo.Maintenance
   alias Engram.Workers.BackfillCrdtHead
@@ -84,20 +82,6 @@ defmodule Engram.Workers.BackfillCrdtHeadMaintenanceTest do
         )
       end
     end
-  end
-
-  test "the discovery query uses notes_crdt_head_missing_index" do
-    user = insert(:user)
-    vault = insert(:vault, user: user)
-    # Most notes already have a head, as in prod; a few are waiting.
-    for _ <- 1..300, do: insert(:note, user: user, vault: vault, crdt_head: "h")
-    insert(:note, user: user, vault: vault, crdt_head: nil)
-
-    {_, queries} = QueryRecorder.record(fn -> BackfillCrdtHead.enqueue_all() end)
-    [sql | _] = QueryPlan.reading(queries, "notes")
-
-    plan = QueryPlan.generic_plan(sql, analyze: ["notes"])
-    assert plan =~ "notes_crdt_head_missing_index", "plan:\n#{plan}\n\nsql:\n#{sql}"
   end
 
   defp delete_committed! do

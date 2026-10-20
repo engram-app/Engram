@@ -60,8 +60,12 @@ defmodule Engram.Workers.BackfillCrdtHead do
   def enqueue_all do
     # Through TenantScan.all/1: one maintenance-pool query on SaaS, a
     # per-tenant loop elsewhere. Never one cross-tenant read on the app pool,
-    # which FORCE ROW LEVEL SECURITY turns into zero rows (#1349). Served by
-    # notes_crdt_head_missing_index.
+    # which FORCE ROW LEVEL SECURITY turns into zero rows (#1349).
+    # ponytail: an hourly scan of the live notes, deliberately unindexed. Any
+    # index on crdt_head makes every CRDT append (which clears it) a non-HOT
+    # update across all notes indexes (NotesHotAppendTest); one bounded scan
+    # an hour is the cheaper side. Moving crdt_head off `notes` (the v5-window
+    # body split) is the upgrade path.
     pairs =
       from(n in Note,
         join: v in Vault,
