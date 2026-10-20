@@ -76,7 +76,7 @@ defmodule Engram.Crypto.UserDekRotationRlsTest do
   # `set_config('role', 'none', true)`, which under the sandbox leaks forward
   # into the enclosing transaction and reverts the role to the superuser. So
   # only the FIRST sweep runs enforced; `sweep_vaults`, the vault-index sweeps,
-  # `sweep_attachments`, `sweep_note_links`, `clear_chunk_context_hmacs` and
+  # `sweep_attachments`, `sweep_note_links`, `resync_index_keys` and
   # `final_flip` all run unenforced here. Deleting the `with_tenant` from any
   # of those leaves these tests green. Driving the sweeps individually under
   # the harness is what would close it.

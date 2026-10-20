@@ -36,6 +36,7 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Crypto
   alias Engram.Crypto.{DekCache, Envelope, MigrationRunner, RotationLock, TenantSweep}
   alias Engram.Crypto.KeyProvider.Resolver
+  alias Engram.Indexing
   alias Engram.Logger.Metadata
   alias Engram.Notes.CrdtUpdateLog
   alias Engram.Repo
@@ -183,7 +184,7 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- sweep_attachments(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_note_links(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_qdrant(user, old_dek, new_dek),
-         :ok <- clear_chunk_context_hmacs(user),
+         :ok <- resync_index_keys(user, old_dek, new_dek),
          :ok <- final_flip(user, new_dek_version, new_wrapped) do
       Logger.info(
         "T3.7 per-user DEK rotation complete",
@@ -878,33 +879,133 @@ defmodule Engram.Crypto.UserDekRotation do
   # raise. If every field in a point is already under the new DEK, return
   # :unchanged and skip the set_payload call entirely.
 
-  # Housekeeping, NOT a correctness guard — do not read it as one.
+  # Every key the index matches on derives from the DEK, and nothing
+  # re-indexes after a rotation, so they are rekeyed here, from the rows
+  # `sweep_notes` already rewrapped (new HMACs) and the text decrypted under
+  # the new DEK. No embedder call: a rotation costs $0 in Voyage.
   #
-  # `chunks.context_hmac` is keyed on the old DEK's content-hash subkey. The
-  # rotation changes that key, so `Indexing.plan_chunks/3` recomputes every
-  # fingerprint under the new one and no stored value can match regardless of
-  # what this function does. The full re-embed is already guaranteed by the key
-  # change; unlike the other sweeps above, nothing breaks if this never runs.
+  # * Qdrant filters: `path/folder/tags/type_hmac` on every point come from
+  #   `Crypto.dek_filter_key/1`. Left alone, a type/tag/folder/path filter built
+  #   with the new key silently matches nothing. One `set_payload` per note
+  #   (`Indexing.rewrite_note_payload/2`), which also stamps `payload_hash`.
+  # * Chunk reuse: `chunks.context_hmac` is keyed on the content-hash subkey
+  #   (`Crypto.dek_content_hash_key/1`). Clearing it (the old behaviour) made
+  #   the next index of any note re-embed every chunk. It is remapped
+  #   old-key -> new-key through the fingerprints the note's current text
+  #   produces; a row that maps to nothing (text edited since its last index)
+  #   is cleared, as before, and re-embeds as it would have anyway.
+  # * `notes.content_hash` / `embed_hash` / `dense_indexed_hash`: same key.
+  #   Each is rekeyed only while it equals the old-key hash of the current
+  #   text, so a stale `embed_hash` stays stale and the note still re-embeds.
   #
-  # It exists because the alternative is carrying values that are known-dead
-  # until each note happens to be re-indexed, and because a column whose
-  # contents silently stopped meaning anything is worth zeroing at the moment it
-  # stops meaning anything.
+  # A crash part-way leaves some rows on this attempt's key; the retry mints
+  # another DEK, maps nothing from them, and they cost one re-embed (never a
+  # wrong match: the keys differ).
   #
-  # The paths where clearing IS load-bearing are the ones that delete points
-  # while leaving rows: `Indexing.delete_points_by_path_hmac/2` (rename) and
-  # `Indexing.forget_chunk_reuse_for_user/1` (account soft-delete). There the
-  # key is unchanged, so a surviving hmac matches and the reused id names a
-  # point that is gone.
-  defp clear_chunk_context_hmacs(%User{id: user_id}) do
-    # `chunks` carries FORCE ROW LEVEL SECURITY. Unscoped, this matches zero
-    # rows and still returns :ok — a silent no-op.
-    {:ok, {_count, _}} =
+  # Rows are not locked: the user is (`RotationLock`), so no writer races this.
+  defp resync_index_keys(%User{id: user_id}, old_dek, new_dek) do
+    keys =
+      {Crypto.dek_content_hash_key_from_bytes(old_dek),
+       Crypto.dek_content_hash_key_from_bytes(new_dek)}
+
+    TenantSweep.each_batch(
+      user_id,
+      Engram.Notes.Note,
+      &resync_batch(user_id, &1, new_dek, keys),
+      fun_in_tenant: false
+    )
+  end
+
+  defp resync_batch(user_id, batch_ids, new_dek, keys) do
+    {:ok, {notes, points}} =
       Repo.with_tenant(user_id, fn ->
-        from(c in Engram.Notes.Chunk,
-          where: c.user_id == ^user_id and not is_nil(c.context_hmac)
-        )
-        |> Repo.update_all([set: [context_hmac: nil]], skip_tenant_check: true)
+        notes = Repo.all(from(n in Engram.Notes.Note, where: n.id in ^batch_ids))
+
+        points =
+          from(c in Engram.Notes.Chunk,
+            where: c.note_id in ^batch_ids and not is_nil(c.qdrant_point_id),
+            select: {c.note_id, c.qdrant_point_id}
+          )
+          |> Repo.all()
+          |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+
+        {notes, points}
+      end)
+
+    Enum.reduce_while(notes, :ok, fn note, :ok ->
+      with :ok <- rekey_content_hashes(user_id, note, new_dek, keys),
+           :ok <- Indexing.rewrite_note_payload(note, Map.get(points, note.id, [])) do
+        {:cont, :ok}
+      else
+        {:error, reason} ->
+          Logger.error(
+            "T3.7 resync_index_keys: payload rewrite failed",
+            Metadata.with_category(:error, :crypto,
+              user_id: user_id,
+              row_id: note.id,
+              phase: :resync_index_keys,
+              reason_label: Metadata.safe_reason(reason)
+            )
+          )
+
+          {:halt, {:error, {:qdrant_set_payload_failed, reason}}}
+      end
+    end)
+  end
+
+  defp rekey_content_hashes(user_id, note, new_dek, {old_key, new_key}) do
+    {map, hashes} =
+      case Crypto.maybe_decrypt_note_fields_with_dek(note, new_dek) do
+        {:ok, %{content: content} = plain} when is_binary(content) ->
+          old_hash = Crypto.hmac_content_hash(old_key, content)
+          new_hash = Crypto.hmac_content_hash(new_key, content)
+
+          {Indexing.rekey_fingerprints(plain, old_key, new_key),
+           for(
+             f <- [:content_hash, :embed_hash, :dense_indexed_hash],
+             Map.fetch!(note, f) == old_hash,
+             do: {f, new_hash}
+           )}
+
+        # No body, or one that does not decrypt (`sweep_notes` already failed
+        # loudly on that): nothing to remap, its fingerprints are cleared.
+        _ ->
+          {%{}, []}
+      end
+
+    {olds, news} = Enum.unzip(map)
+
+    {:ok, _} =
+      Repo.with_tenant(user_id, fn ->
+        # `chunks` carries FORCE ROW LEVEL SECURITY: unscoped, these match
+        # zero rows and still return :ok, a silent no-op. Clear first, then
+        # remap, so a remapped value is never cleared.
+        {_, _} =
+          from(c in Engram.Notes.Chunk,
+            where:
+              c.note_id == ^note.id and not is_nil(c.context_hmac) and
+                c.context_hmac not in ^olds
+          )
+          |> Repo.update_all(set: [context_hmac: nil])
+
+        {_, _} =
+          from(c in Engram.Notes.Chunk,
+            join:
+              m in fragment(
+                "SELECT * FROM unnest(?::text[], ?::text[]) AS m(old, new)",
+                ^olds,
+                ^news
+              ),
+            on: c.context_hmac == m.old,
+            where: c.note_id == ^note.id,
+            update: [set: [context_hmac: m.new]]
+          )
+          |> Repo.update_all([])
+
+        if hashes != [] do
+          {1, _} =
+            Repo.update_all(from(n in Engram.Notes.Note, where: n.id == ^note.id), set: hashes)
+        end
       end)
 
     :ok

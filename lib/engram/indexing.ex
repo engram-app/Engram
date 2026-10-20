@@ -1614,6 +1614,70 @@ defmodule Engram.Indexing do
     }
   end
 
+  @doc """
+  Writes `note`'s note-level payload (`note_payload/1`: the filter HMACs and
+  dates, no ciphertext) onto `point_ids` and stamps `notes.payload_hash`. A
+  `set_payload` only: vectors and the encrypted text are untouched. For the
+  writers that move a row's filter HMACs without re-indexing it: DEK rotation
+  and `Engram.Workers.ReconcileNotePayloads`.
+  """
+  @spec rewrite_note_payload(Note.t(), [String.t()]) :: :ok | {:error, term()}
+  def rewrite_note_payload(_note, []), do: :ok
+
+  def rewrite_note_payload(note, point_ids) do
+    payload = note_payload(note)
+
+    with :ok <- Qdrant.set_payload(collection(), point_ids, payload) do
+      stamp_note_payload_hash(note, payload)
+    end
+  end
+
+  @doc """
+  Stamps `notes.payload_hash` for `payload` (the note's `note_payload/1`)
+  without writing Qdrant: for a note whose points were verified to already
+  hold it.
+  """
+  @spec stamp_note_payload_hash(Note.t(), map()) :: :ok
+  def stamp_note_payload_hash(note, payload) do
+    {:ok, :ok} =
+      Repo.with_tenant(note.user_id, fn -> stamp_payload_hash(note, payload_hash(payload)) end)
+
+    :ok
+  end
+
+  @doc "The note-level Qdrant payload `note`'s points must carry (see `note_payload/1` below)."
+  @spec expected_note_payload(Note.t()) :: map()
+  def expected_note_payload(note), do: note_payload(note)
+
+  @doc "Whether `note.payload_hash` already stamps `payload` (see `stamp_payload_hash/2`)."
+  @spec payload_stamped?(Note.t(), map()) :: boolean()
+  def payload_stamped?(note, payload), do: note.payload_hash == payload_hash(payload)
+
+  @doc """
+  Maps every chunk fingerprint `note`'s current text produces under
+  `old_key` to its twin under `new_key` (dense and sparse-only alike, as
+  `plan_fingerprints/3` writes them). DEK rotation rekeys `chunks.context_hmac`
+  with it: the content-hash key derives from the DEK, so without this every
+  fingerprint goes stale and the next index re-embeds the whole note. `note`
+  is decrypted.
+  """
+  @spec rekey_fingerprints(Note.t(), binary(), binary()) :: %{String.t() => String.t()}
+  def rekey_fingerprints(note, old_key, new_key) do
+    case Markdown.parse(note.content || "", note.path) do
+      [] ->
+        %{}
+
+      chunks ->
+        for dense? <- [true, false], reduce: %{} do
+          acc ->
+            fingerprints(old_key, chunks, dense?)
+            |> Enum.zip(fingerprints(new_key, chunks, dense?))
+            |> Map.new()
+            |> Map.merge(acc)
+        end
+    end
+  end
+
   # The slice of a Qdrant payload that is a property of the NOTE rather than of
   # the chunk — identical across every point the note owns, which is what makes
   # refreshing a reused point a single call.

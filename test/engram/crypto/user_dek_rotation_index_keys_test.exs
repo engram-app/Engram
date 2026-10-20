@@ -112,11 +112,23 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
   end
 
   test "the note's content hashes move to the new key, so EmbedNote still skips it", ctx do
+    # What EmbedNote stamps once the note is indexed.
+    {1, _} =
+      Repo.update_all(
+        from(n in Notes.Note,
+          where: n.id == ^ctx.note.id,
+          update: [set: [embed_hash: n.content_hash]]
+        ),
+        [],
+        skip_tenant_check: true
+      )
+
     assert :ok = UserDekRotation.rotate_user(ctx.user.id)
-    {:ok, new_key} = Crypto.dek_content_hash_key(reload_user(ctx.user))
+    user = reload_user(ctx.user)
+    {:ok, new_key} = Crypto.dek_content_hash_key(user)
 
     raw = Repo.one!(from(n in Notes.Note, where: n.id == ^ctx.note.id), skip_tenant_check: true)
-    assert raw.content_hash == Crypto.hmac_content_hash(new_key, @content)
+    assert raw.content_hash == Crypto.hmac_content_hash(new_key, fresh(ctx.note, user).content)
     assert raw.embed_hash == raw.content_hash
   end
 
@@ -157,9 +169,14 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
   # Only the key/match conditions: the ones a filter HMAC answers.
   defp matches?(payload, conditions) do
     Enum.all?(conditions, fn
-      %{"key" => key, "match" => %{"value" => v}} -> v in List.wrap(payload[key])
-      %{"key" => key, "match" => %{"any" => vs}} -> Enum.any?(vs, &(&1 in List.wrap(payload[key])))
-      _other -> true
+      %{"key" => key, "match" => %{"value" => v}} ->
+        v in List.wrap(payload[key])
+
+      %{"key" => key, "match" => %{"any" => vs}} ->
+        Enum.any?(vs, &(&1 in List.wrap(payload[key])))
+
+      _other ->
+        true
     end)
   end
 
