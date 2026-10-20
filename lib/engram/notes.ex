@@ -4399,7 +4399,12 @@ defmodule Engram.Notes do
 
     base =
       if after_id do
-        from(n in base, where: n.seq > ^after_seq or (n.seq == ^after_seq and n.id > ^after_id))
+        # A row comparison, not `seq > s OR (seq = s AND id > i)`: only this
+        # form is an index range on (vault_id, seq, id), so a page seeks to its
+        # cursor instead of walking the feed from seq 0 (SeqFeedKeysetPlanTest).
+        from(n in base,
+          where: fragment("(?, ?) > (?, ?)", n.seq, n.id, ^after_seq, type(^after_id, Ecto.UUID))
+        )
       else
         from(n in base, where: n.seq > ^after_seq)
       end
