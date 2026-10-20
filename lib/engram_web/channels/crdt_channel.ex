@@ -386,14 +386,22 @@ defmodule EngramWeb.CrdtChannel do
       user = socket.assigns.current_user
       vault = socket.assigns.vault
 
-      # The seed runs inside the row's own transaction when the row is new, so
-      # the vault's other devices are never told about a note before its body
-      # exists (#1409; see Notes.genesis_crdt_note/5 `:seed`).
-      seed = fn note -> maybe_seed_detached(user, vault, note, b64) end
+      # The frame is decoded once, up front (pure, no DB). A fresh row is
+      # inserted WITH it (`:body`); every other leg seeds it after the fact.
+      # Either way the seed runs inside the row's own transaction when the row
+      # is new, so the vault's other devices are never told about a note
+      # before its body exists (#1409; see Notes.genesis_crdt_note/5 `:seed`).
+      body = genesis_body(b64, path)
+
+      seed = fn
+        {:inserted, note} -> seeded_by_insert(user, vault, note)
+        note -> maybe_seed_detached(user, vault, note, body)
+      end
 
       case Notes.genesis_crdt_note(user, vault, note_id, path,
              origin: socket.assigns[:client_type],
-             seed: seed
+             seed: seed,
+             body: with({:ok, doc} <- body, do: doc, else: (_ -> nil))
            ) do
         # A bulk import creates notes without ever sending an edit frame, so
         # count the create itself or an import-only user never shows as active.
@@ -937,12 +945,12 @@ defmodule EngramWeb.CrdtChannel do
   defp row_has_body?(%{content: content}) when is_binary(content), do: content != ""
   defp row_has_body?(_note), do: true
 
-  defp maybe_seed_detached(_user, _vault, _note, nil) do
-    seed_outcome(:no_b64)
-    :absent
-  end
+  # The genesis frame, decoded and applied to a fresh doc: `{:ok, doc}`, or
+  # `{:error, reason}` naming why the client must seed through a room
+  # instead. Pure; the row is not read here.
+  defp genesis_body(nil, _path), do: {:error, :no_b64}
 
-  defp maybe_seed_detached(user, vault, %{id: note_id} = note, b64) when is_binary(b64) do
+  defp genesis_body(b64, path) when is_binary(b64) do
     with {:ok, frame} <- decode_genesis_frame(b64),
          :ok <- guard_genesis_frame(frame),
          # CRDT projects to `notes.content` for MARKDOWN only — `checkpoint/5`
@@ -954,67 +962,75 @@ defmodule EngramWeb.CrdtChannel do
          # and stops. Unreachable today only because the plugin gates `.md`
          # client-side; the server's contract must not depend on that (#1409).
          # Same `.md` test CrdtDeliver and CrdtCheckpoint already use.
-         :ok <- require_markdown(note.path),
-         {:ok, update} <- take_sync_update(frame),
-         # Two writers, one document: a room holds the doc in memory and would
-         # later checkpoint over anything written behind its back. CheckpointNote
-         # snoozes on this exact condition (checkpoint_note.ex:50); a channel
-         # cannot snooze, so we decline and let the client's crdt_msg path — which
-         # goes THROUGH the room — do it.
-         #
-         # This check is a CHEAP, NON-authoritative fast path only — it just
-         # avoids the decode/apply below when a room OBVIOUSLY already exists.
-         # A room can `ensure_started` (and `CrdtPersistence.bind/3` can
-         # hydrate) right after this `lookup` returns nil but before our write
-         # commits. `checkpoint/5`'s `captured_version:` CAS does NOT close that
-         # window on its own — a room merely starting never bumps `notes.version`,
-         # only a COMMITTED checkpoint does. That window is closed AFTER the
-         # write instead, by `evict_racing_room/1` below (#1409).
-         :ok <- require_room_free(note_id),
-         {:ok, doc} <- apply_genesis_update(update) do
-      outcome = seed_detached(user, vault, note_id, doc)
-
-      # Report the OUTCOME, not a two-way collapse of it. `:write_declined`
-      # covered a benign concurrent-write decline, an unreadable row, AND a
-      # raised write — the first is routine at import scale, the other two are
-      # data-loss events, and on the dashboard they were one bar. No alert could
-      # separate "concurrent writes are normal today" from "notes are losing
-      # their bodies". The three-way return exists precisely because a two-way
-      # boolean was lossy; flattening it again on the next line gave that up.
-      seed_outcome(outcome)
-      outcome
-    else
-      # Every arm here means "the client falls back to its crdt_msg seed", and
-      # THAT is what allocates a room per imported note (#1409). A bare
-      # `_ -> false` made all of them indistinguishable, so a 70%-fallback rate
-      # could be measured but never explained.
-      #
-      # Each step returns a DISTINCT reason atom rather than a bare
-      # `{:error, _}`, so this one arm still attributes precisely. Three of the
-      # underlying calls (decode, guard, apply) all answer `{:error, _}` and
-      # would otherwise collapse into one bucket — a malformed frame, a crafted
-      # state vector and a NIF apply failure are a client bug, an attack and a
-      # server fault respectively, and lumping them answers none of the
-      # questions you would ask next.
-      #
-      # Tagged tuples as `with` placeholders would be the obvious way to do
-      # this; credo forbids them (Credo.Check.Refactor.WithClauses), so the
-      # distinction lives in the step functions instead.
-      {:error, reason} ->
-        seed_outcome(reason)
-        # A room owning the doc is NOT an empty server: its in-memory doc can
-        # hold content the row does not show yet, so pushing a full body against
-        # it is the same doubling hazard as a decline (#476). Every other reason
-        # here — no/!binary b64, a non-markdown path, a frame we could not
-        # decode, guard or apply — means the row we just created is untouched and
-        # the client's push is the only thing that will ever fill it.
-        if reason == :room_already_exists, do: :room_busy, else: :absent
+         :ok <- require_markdown(path),
+         {:ok, update} <- take_sync_update(frame) do
+      apply_genesis_update(update)
     end
   end
 
-  defp maybe_seed_detached(_user, _vault, _note, _b64) do
-    seed_outcome(:b64_not_binary)
-    :absent
+  defp genesis_body(_b64, _path), do: {:error, :b64_not_binary}
+
+  # A fresh row inserted with the genesis body (Notes.genesis_insert_bare/7):
+  # nothing left to write. Inside the row transaction, after the insert: the
+  # interleave seam parks here so a test can race a room or a writer against
+  # the commit. The two post-commit steps a seeded checkpoint
+  # takes still apply: evict a room that raced the create, and fan the state
+  # out to the vault's idle devices (see seed_detached/4 for both).
+  defp seeded_by_insert(user, vault, note) do
+    interleave_hook(:genesis_seed_before_write)
+    Repo.after_commit(fn -> evict_racing_room(note.id) end)
+    Repo.after_commit(fn -> CrdtDeliver.fanout_idle(user, vault.id, note) end)
+    seed_outcome(:stored)
+    :stored
+  end
+
+  defp maybe_seed_detached(user, vault, %{id: note_id}, {:ok, doc}) do
+    # Two writers, one document: a room holds the doc in memory and would
+    # later checkpoint over anything written behind its back. CheckpointNote
+    # snoozes on this exact condition (checkpoint_note.ex:50); a channel
+    # cannot snooze, so we decline and let the client's crdt_msg path — which
+    # goes THROUGH the room — do it.
+    #
+    # This check is a CHEAP, NON-authoritative fast path only — it just
+    # avoids the write below when a room OBVIOUSLY already exists. A room can
+    # `ensure_started` (and `CrdtPersistence.bind/3` can hydrate) right after
+    # this `lookup` returns nil but before our write commits.
+    # `checkpoint/5`'s `captured_version:` CAS does NOT close that window on
+    # its own — a room merely starting never bumps `notes.version`, only a
+    # COMMITTED checkpoint does. That window is closed AFTER the write
+    # instead, by `evict_racing_room/1` below (#1409).
+    case require_room_free(note_id) do
+      :ok ->
+        outcome = seed_detached(user, vault, note_id, doc)
+
+        # Report the OUTCOME, not a two-way collapse of it. `:write_declined`
+        # covered a benign concurrent-write decline, an unreadable row, AND a
+        # raised write — the first is routine at import scale, the other two
+        # are data-loss events, and on the dashboard they were one bar.
+        seed_outcome(outcome)
+        outcome
+
+      {:error, reason} ->
+        not_seeded(reason)
+    end
+  end
+
+  defp maybe_seed_detached(_user, _vault, _note, {:error, reason}), do: not_seeded(reason)
+
+  # Every reason here means "the client falls back to its crdt_msg seed", and
+  # THAT is what allocates a room per imported note (#1409). Each step returns
+  # a DISTINCT reason atom rather than a bare `{:error, _}`, so a malformed
+  # frame, a crafted state vector and a NIF apply failure (a client bug, an
+  # attack and a server fault) stay apart on the dashboard.
+  defp not_seeded(reason) do
+    seed_outcome(reason)
+    # A room owning the doc is NOT an empty server: its in-memory doc can hold
+    # content the row does not show yet, so pushing a full body against it is
+    # the same doubling hazard as a decline (#476). Every other reason — no or
+    # non-binary b64, a non-markdown path, a frame we could not decode, guard
+    # or apply — means the row is untouched and the client's push is the only
+    # thing that will ever fill it.
+    if reason == :room_already_exists, do: :room_busy, else: :absent
   end
 
   # `with` steps for maybe_seed_detached/4. Each maps its underlying call onto a

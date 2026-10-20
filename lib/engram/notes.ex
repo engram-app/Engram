@@ -10,6 +10,7 @@ defmodule Engram.Notes do
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Crypto.PathCrypto
+  alias Engram.Crypto.RotationGate
   alias Engram.Links
   alias Engram.Logger.DecryptFailure
   alias Engram.Logger.Metadata
@@ -43,6 +44,7 @@ defmodule Engram.Notes do
     DeleteNoteIndex,
     EmbedNote,
     FinalizeRevision,
+    NoteCommitted,
     ReleaseIndexEntries,
     RepathNoteIndex,
     RewriteNoteLinks
@@ -974,17 +976,21 @@ defmodule Engram.Notes do
          lookup_query,
          remint? \\ true
        ) do
+    # `crdt_doc` (genesis only) rides in the attrs so a re-mint keeps it.
+    {crdt_doc, insert_attrs} = Map.pop(base_attrs, :crdt_doc)
+
     with {:ok, crdt} <-
            maybe_merge_crdt(
              nil,
-             base_attrs.content,
+             insert_attrs.content,
              user,
              note_id,
-             base_attrs.vault_id,
-             sanitized_path
+             insert_attrs.vault_id,
+             sanitized_path,
+             crdt_doc
            ),
          merged_attrs = %{
-           base_attrs
+           insert_attrs
            | content: crdt.merged_text,
              title: crdt.title,
              tags: crdt.tags,
@@ -1003,7 +1009,7 @@ defmodule Engram.Notes do
       # writer (append, move, rename, get_note_for_update/3) takes the vault row
       # first, so inserting first and locking after deadlocks against them
       # (Postgres 40P01). Pinned by crdt_create_query_budget_test.exs.
-      seq = Engram.Vaults.next_seq!(base_attrs.vault_id)
+      seq = Engram.Vaults.next_seq!(insert_attrs.vault_id)
       changeset = Ecto.Changeset.put_change(changeset, :seq, seq)
 
       case Repo.insert(changeset, on_conflict: :nothing) do
@@ -1153,7 +1159,8 @@ defmodule Engram.Notes do
            folder: folder,
            origin: origin,
            recording: recording,
-           seed: Keyword.get(opts, :seed)
+           seed: Keyword.get(opts, :seed),
+           body: Keyword.get(opts, :body)
          },
          {:ran, result, claimed?} <- run_genesis(genesis, initial_claim(opts)) do
       {result, seed_outcome} = take_seed(result)
@@ -1285,6 +1292,9 @@ defmodule Engram.Notes do
   defp probe_vault_populated({:ok, _note, :announce, _finalize?} = result, g),
     do: tap(result, fn _ -> :ok = maybe_broadcast_vault_populated(g.user, g.vault) end)
 
+  defp probe_vault_populated({:ok, _note, :announce_bodied} = result, g),
+    do: tap(result, fn _ -> :ok = maybe_broadcast_vault_populated(g.user, g.vault) end)
+
   defp probe_vault_populated(result, _g), do: result
 
   # #1409's open half: an `opts[:seed]` fun writes the genesis body INSIDE the
@@ -1303,6 +1313,13 @@ defmodule Engram.Notes do
   defp seed_in_txn({:ok, note, :announce, _finalize?} = result, %{seed: seed})
        when is_function(seed, 1),
        do: {:seeded, result, seed.(note)}
+
+  # The body went into the INSERT itself (`:body`, genesis_insert_bare/7): no
+  # checkpoint is needed, the seed fun only learns it (`{:inserted, note}`).
+  defp seed_in_txn({:ok, note, :announce_bodied}, %{seed: seed}) when is_function(seed, 1),
+    do: {:seeded, {:ok, note, :announce}, seed.({:inserted, note})}
+
+  defp seed_in_txn({:ok, note, :announce_bodied}, _g), do: {:ok, note, :announce}
 
   defp seed_in_txn(result, _g), do: result
 
@@ -1327,7 +1344,7 @@ defmodule Engram.Notes do
            folder: folder,
            origin: origin,
            recording: recording
-         },
+         } = g,
          claim
        ) do
     case classify_by_id(vault, canonical_id) do
@@ -1387,11 +1404,12 @@ defmodule Engram.Notes do
           mint_id(),
           sanitized_path,
           folder,
-          canonical_id
+          canonical_id,
+          g[:body]
         )
 
       :none ->
-        genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder)
+        genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder, nil, g[:body])
     end
   end
 
@@ -1479,7 +1497,7 @@ defmodule Engram.Notes do
   # exists only so the re-mint is logged on the leg that actually inserts: an
   # OCCUPIED path adopts the note living there and never uses the fresh id, so
   # announcing a re-mint up at the call site would cry wolf on every adopt.
-  defp genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder, taken_id \\ nil) do
+  defp genesis_adopt_or_insert(user, vault, canonical_id, sanitized_path, folder, taken_id, body) do
     case note_by_path_query(user, vault, sanitized_path) do
       {:ok, lookup_query} ->
         case Repo.one(lookup_query) do
@@ -1501,7 +1519,8 @@ defmodule Engram.Notes do
                    canonical_id,
                    sanitized_path,
                    folder,
-                   lookup_query
+                   lookup_query,
+                   body
                  ) do
               {:ok, _note, _tag} = ok ->
                 if taken_id, do: log_id_taken(user, vault.id, taken_id, canonical_id)
@@ -1851,12 +1870,22 @@ defmodule Engram.Notes do
   # `id` is guaranteed a valid, cast UUID string by genesis_crdt_note/4's
   # single up-front validation point — unlike insert_new_note/7's optional
   # client_id, this id is REQUIRED, so there is no mint_id() fallback here.
-  defp genesis_insert_bare(user, vault, id, sanitized_path, folder, lookup_query) do
+  # With `body` (the client's genesis doc, decoded by the channel) the row is
+  # inserted WITH its content and the client's own CRDT state: one notes
+  # version and no in-transaction checkpoint (#1409's seed used to UPDATE the
+  # bare row it had just inserted). Without it the row is bare, as before.
+  defp genesis_insert_bare(user, vault, id, sanitized_path, folder, lookup_query, body) do
     now = DateTime.utc_now()
+
+    # A body is CRDT state encrypted under the user's current DEK, which a
+    # rotation in flight must not get (#1341). Locked: insert bare, and the
+    # seed's checkpoint skips exactly as it always did, so the client pushes.
+    body = if body && RotationGate.check(user.id) == :ok, do: body
 
     base_attrs = %{
       kind: "note",
-      content: "",
+      content: if(body, do: CrdtBridge.text_of(body), else: ""),
+      crdt_doc: body,
       title: nil,
       tags: [],
       content_hash: nil,
@@ -1872,8 +1901,13 @@ defmodule Engram.Notes do
       # decrypts inline and tags :announce (a real create), a version_conflict
       # on a concurrent-create race.
       case do_bare_insert(base_attrs, user, sanitized_path, folder, id, lookup_query) do
-        {:inserted, inserted, _crdt} ->
+        {:inserted, inserted, _crdt} when is_nil(body) ->
           {:ok, decrypt_or_raise!(inserted, user), :announce}
+
+        {:inserted, inserted, _crdt} ->
+          note = decrypt_or_raise!(inserted, user)
+          _ = if note.content != "", do: commit_genesis_body(note, user)
+          {:ok, note, :announce_bodied}
 
         {:raced, existing} ->
           {:error, :version_conflict, decrypt_or_raise!(existing, user)}
@@ -1882,6 +1916,20 @@ defmodule Engram.Notes do
           err
       end
     end
+  end
+
+  # The content jobs the seed's checkpoint used to enqueue for a genesis body,
+  # after the row's commit like the checkpoint's.
+  defp commit_genesis_body(note, user) do
+    Repo.after_commit(fn ->
+      Enqueue.enqueue(
+        NoteCommitted.job(note.id, user.id,
+          embed_priority: EmbedNote.priority_for(note),
+          finalize?: false
+        ),
+        "note_committed"
+      )
+    end)
   end
 
   # Phase 0 stale-base gate: a writer that declares the content_hash it READ
@@ -2596,6 +2644,15 @@ defmodule Engram.Notes do
        ) do
     with {:ok, merged} <- CrdtBridge.merge_plaintext_into_doc(doc, incoming_content),
          do: crdt_merge_result(merged, user, note_id, path)
+  end
+
+  # A genesis insert with the client's doc: stored as the client built it, no
+  # diff (re-ingesting would add server ops for nothing). Its own lineage, so
+  # a retried frame merges as a no-op instead of doubling (#846).
+  defp maybe_merge_crdt(nil, _incoming, user, note_id, _vault_id, path, %Yex.Doc{} = doc) do
+    with {:ok, state} <- Yex.encode_state_as_update(doc),
+         do:
+           crdt_merge_result(%{state: state, text: CrdtBridge.text_of(doc)}, user, note_id, path)
   end
 
   # A read-modify-write of a legacy row (no crdt_state) whose tail was empty

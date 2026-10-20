@@ -23,7 +23,11 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
   # their own.
   # 26 -> 24: link targets resolve on read, so a create no longer enqueues a
   # RebindNoteLinks job (insert + pg_notify).
-  @statements 24
+  # 24 -> 15: the genesis body goes into the INSERT (the channel decodes the
+  # frame first), so the seed's in-transaction checkpoint (row and tail
+  # reads, version read, second seq, notes UPDATE, revision, read-back) is
+  # gone. One notes version per create instead of two.
+  @statements 15
   @tenant_txns 1
   @subscription_reads 0
 
@@ -86,6 +90,7 @@ defmodule EngramWeb.CrdtCreateQueryBudgetTest do
     subscription_reads = Enum.count(queries, &(&1 =~ ~s(FROM "subscriptions")))
 
     assert length(queries) == @statements, "#{length(queries)} statements"
+    refute Enum.any?(queries, &(&1 =~ ~s(UPDATE "notes"))), "the create rewrote its own row"
     assert tenant_txns == @tenant_txns, "#{tenant_txns} tenant transactions"
     assert subscription_reads == @subscription_reads, "#{subscription_reads} tier reads"
   end

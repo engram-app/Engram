@@ -676,6 +676,36 @@ defmodule EngramWeb.CrdtChannelTest do
       assert unchanged.content == "base"
     end
 
+    test "a fresh create stores the client's own lineage, so a re-minted retry adds nothing",
+         %{socket: socket, user: user, vault: vault} do
+      # The body rides in the INSERT: the stored state is the frame's doc as
+      # the client built it, not a server re-ingest, and a retry that rebuilds
+      # the frame (a fresh Yjs clientID, same text) is the idempotent clause.
+      id = Ecto.UUID.generate()
+      frame = frame_for_content("lineage body")
+
+      ref1 =
+        push(socket, "crdt_create", %{"doc_id" => id, "path" => "Notes/l.md", "b64" => frame})
+
+      assert_reply ref1, :ok, %{seeded: true}
+
+      {:ok, note} = Notes.get_note_by_id(user, vault, id)
+      assert note.content == "lineage body"
+      {:ok, state} = Engram.Crypto.decrypt_crdt_state(note, user)
+      {:ok, {:sync, {:sync_update, update}}} = Yex.Sync.message_decode(Base.decode64!(frame))
+      assert state == update
+
+      ref2 =
+        push(socket, "crdt_create", %{
+          "doc_id" => id,
+          "path" => "Notes/l.md",
+          "b64" => frame_for_content("lineage body")
+        })
+
+      assert_reply ref2, :ok, %{doc_id: ^id, seeded: true}
+      assert {:ok, %{content: "lineage body"}} = Notes.get_note_by_id(user, vault, id)
+    end
+
     test "an empty frame on an already-empty row reports seeded: true with no write", %{
       socket: socket,
       user: user,
