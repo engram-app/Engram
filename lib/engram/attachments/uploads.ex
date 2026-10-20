@@ -34,7 +34,7 @@ defmodule Engram.Attachments.Uploads do
   # 8 MiB: above S3's 5 MiB non-final-part minimum, small enough to retry cheaply.
   @part_size 8_388_608
 
-  @spec part_size() :: pos_integer()
+  # No @spec: literal body (dialyzer contract_supertype; same as Envelope.tag_bytes/0).
   def part_size, do: @part_size
 
   @doc "Composable tenant scope for upload sessions (see `Attachments.scoped/2`)."
@@ -114,7 +114,8 @@ defmodule Engram.Attachments.Uploads do
             {:ok, upload}
 
           {:error, _} = err ->
-            abort_storage(storage_key, s3_upload_id)
+            # Best-effort; abort_storage logs its own failure.
+            _ = abort_storage(storage_key, s3_upload_id)
             err
         end
       end
@@ -214,8 +215,9 @@ defmodule Engram.Attachments.Uploads do
          {:ok, hash} <- content_hash(user, up, file_key) do
       result = commit(user, vault, up, file_key, hash)
 
-      with {:error, {:storage_cap_reached, _, _}} <- result,
-           do: drop(user, vault, up)
+      _ =
+        with {:error, {:storage_cap_reached, _, _}} <- result,
+             do: drop(user, vault, up)
 
       result
     else
@@ -380,7 +382,8 @@ defmodule Engram.Attachments.Uploads do
   end
 
   defp refuse(user, vault, upload_id, err) do
-    with {:ok, up} <- fetch(user, vault, upload_id), do: drop(user, vault, up)
+    # Already consumed by another caller: nothing left to drop.
+    _ = with {:ok, up} <- fetch(user, vault, upload_id), do: drop(user, vault, up)
     err
   end
 
@@ -389,10 +392,13 @@ defmodule Engram.Attachments.Uploads do
   # Storage is touched only by the caller that consumed the session: a stale
   # duplicate must not delete a blob a committed row now uses.
   defp drop(user, vault, %Upload{} = up) do
-    with :ok <- delete_session(user, vault, up) do
-      if is_nil(up.assembled_at), do: abort_storage(up.storage_key, up.s3_upload_id)
-      delete_object(up.storage_key)
-    end
+    # Storage cleanup is best-effort and logs its own failures; a session
+    # another caller consumed is theirs to clean up.
+    _ =
+      with :ok <- delete_session(user, vault, up) do
+        _ = if is_nil(up.assembled_at), do: abort_storage(up.storage_key, up.s3_upload_id)
+        delete_object(up.storage_key)
+      end
 
     :ok
   end
