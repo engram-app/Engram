@@ -151,4 +151,22 @@ defmodule Engram.UsageMetersBucketTest do
       assert UsageMeters.bucket_full_at(div(@cap, 2), @cap, @t0) == at(div(@year, 2))
     end
   end
+
+  describe "bucket_ready_at/4" do
+    test "a backlog bigger than the bucket drains at the refill rate, past the full date" do
+      # 10M parked behind an empty 6M bucket: the wake keeps draining as it
+      # refills, so the last note fits 10/6 of a year out, not when it is full.
+      assert UsageMeters.bucket_ready_at(0, 10_000_000, @cap, @t0) ==
+               at(div(10_000_000 * @year, @cap))
+    end
+
+    test "counts what the bucket already holds" do
+      assert UsageMeters.bucket_ready_at(1_000_000, 4_000_000, @cap, @t0) == at(div(@year, 2))
+    end
+
+    test "nil when the backlog fits now, or the bucket never refills" do
+      assert UsageMeters.bucket_ready_at(500, 500, @cap, @t0) == nil
+      assert UsageMeters.bucket_ready_at(0, 500, 0, @t0) == nil
+    end
+  end
 end

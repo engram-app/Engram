@@ -210,18 +210,18 @@ defmodule Engram.UsageMeters do
     do: bucket_ready_at(available, capacity, capacity, now)
 
   @doc """
-  When a bucket of `capacity` holding `available` reaches `need` (capped at
-  the capacity); nil when it already holds it, or never refills.
+  When a bucket of `capacity` holding `available` has paid for `need` in
+  total, at its refill rate; nil when it already holds it, or never refills.
+  NOT capped at the capacity: the queue spends as it refills, so a backlog
+  bigger than the bucket drains past the date the bucket would be full.
   """
   @spec bucket_ready_at(non_neg_integer(), non_neg_integer(), non_neg_integer(), DateTime.t()) ::
           DateTime.t() | nil
   def bucket_ready_at(available, need, capacity, %DateTime{} = now) do
-    target = min(need, capacity)
-
-    if available >= target or capacity <= 0 do
+    if available >= need or capacity <= 0 do
       nil
     else
-      seconds = div((target - available) * @bucket_refill_seconds + capacity - 1, capacity)
+      seconds = div((need - available) * @bucket_refill_seconds + capacity - 1, capacity)
       DateTime.add(now, seconds, :second)
     end
   end
