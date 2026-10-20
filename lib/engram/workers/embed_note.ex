@@ -216,7 +216,7 @@ defmodule Engram.Workers.EmbedNote do
             {:discard, "vault #{note.vault_id} not found for note #{note.id}"}
 
           %Vault{} = vault ->
-            {:run, note, user, vault, opts}
+            {:run, note, user, vault, with_queue_position(note, opts)}
         end
     end
   end
@@ -336,10 +336,10 @@ defmodule Engram.Workers.EmbedNote do
   # chunks queue up keyword-only behind it, so refill drains oldest first. A
   # refused or partly-fitting pass keeps every dense vector the note already
   # has (`Indexing` re-plans only the new chunks).
-  defp budget_opts(user, note, false) do
+  defp budget_opts(user, opts, false) do
     case Billing.effective_limit(user, :embed_token_bucket) do
       cap when is_integer(cap) and cap >= 0 ->
-        blocked? = queue_blocked?(note)
+        blocked? = Keyword.get(opts, :queued_behind, false)
 
         [
           reserve_tokens: fn tokens ->
@@ -371,7 +371,7 @@ defmodule Engram.Workers.EmbedNote do
   # maintenance: never refused, never charged to the user. Its spend is ours,
   # reported as `[:engram, :embed, :maintenance]`: + at the reservation, - on
   # release.
-  defp budget_opts(_user, _note, true) do
+  defp budget_opts(_user, _opts, true) do
     [
       reserve_tokens: fn tokens ->
         :telemetry.execute([:engram, :embed, :maintenance], %{tokens: tokens}, %{})
@@ -420,6 +420,15 @@ defmodule Engram.Workers.EmbedNote do
       _malformed ->
         true
     end
+  end
+
+  # Read here, inside `load/2`'s tenant transaction (the inner `with_tenant!`
+  # is re-entrant), so the budget check costs no transaction of its own.
+  # Maintenance passes are unmetered and never wait.
+  defp with_queue_position(note, opts) do
+    if Keyword.get(opts, :maintenance, false),
+      do: opts,
+      else: Keyword.put(opts, :queued_behind, queue_blocked?(note))
   end
 
   @doc """
@@ -662,7 +671,7 @@ defmodule Engram.Workers.EmbedNote do
         budget =
           if opts[:budget_spent],
             do: [reserve_tokens: fn _ -> false end, release_tokens: fn _ -> :ok end],
-            else: budget_opts(user, note, Keyword.get(opts, :maintenance, false))
+            else: budget_opts(user, opts, Keyword.get(opts, :maintenance, false))
 
         # `dense?` is what Indexing actually wrote. Do NOT re-check the
         # budget here: a second read can land a DIFFERENT answer, and
