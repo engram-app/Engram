@@ -29,6 +29,8 @@ defmodule Engram.UsageMeters do
     schema "usage_meters" do
       field :lifetime_embed_tokens, :integer, default: 0
       field :notes_count, :integer, default: 0
+      field :embed_bucket_tokens, :float
+      field :embed_bucket_at, :utc_datetime_usec
       field :last_active_at, :utc_datetime_usec
       field :updated_at, :utc_datetime_usec
     end
@@ -119,7 +121,11 @@ defmodule Engram.UsageMeters do
     end
   end
 
-  @doc "Gives back a reservation whose embed call failed."
+  @doc """
+  Gives back a reservation whose embed call failed: to the lifetime meter, and
+  to the refilling bucket when the user has one (a NULL bucket, already full,
+  stays NULL). Not clamped here: the next `bucket_take/4` clamps at capacity.
+  """
   @spec release_embed_tokens(Ecto.UUID.t(), non_neg_integer()) :: :ok
   def release_embed_tokens(_user_id, 0), do: :ok
 
@@ -128,12 +134,126 @@ defmodule Engram.UsageMeters do
     {_, _} =
       Repo.update_all(
         from(m in Meter, where: m.user_id == ^user_id),
-        [inc: [lifetime_embed_tokens: -count]],
+        [inc: [lifetime_embed_tokens: -count, embed_bucket_tokens: count]],
         skip_tenant_check: true
       )
 
     :ok
   end
+
+  # ── Refilling embed bucket (Free) ─────────────────────────────
+  #
+  # A token bucket in two `usage_meters` columns. Capacity is the plan's
+  # `embed_token_bucket`; it refills continuously at one capacity per 365 days,
+  # so there is no reset event and no cron. A NULL bucket is FULL: users who
+  # never took (and every user that existed before the bucket) start with the
+  # whole allowance. Same arithmetic as the retired `Engram.Usage.DailyCap`:
+  # one statement refills, clamps and spends, and the conflict row lock
+  # serializes concurrent takes, so two jobs can never spend the same tokens.
+
+  @bucket_refill_seconds 31_536_000
+
+  @doc "Seconds one full bucket takes to refill from empty (365 days)."
+  def bucket_refill_seconds, do: @bucket_refill_seconds
+
+  # Module attributes, not local strings: sobelow's SQL.Query check cannot
+  # prove a variable passed to `Repo.query/2` is constant. Fully parameterized.
+  #
+  # $1 user_id, $2 tokens, $3 capacity, $4 now, $5 refill per second.
+  # GREATEST(0, ...) guards a clock that moved backward (`now` is the calling
+  # node's), and the stamp never moves backward either, so a skewed node can
+  # neither mint nor destroy refill.
+  @take_sql """
+  INSERT INTO usage_meters AS m
+    (user_id, embed_bucket_tokens, embed_bucket_at, lifetime_embed_tokens, updated_at)
+  VALUES ($1::uuid, $3::float8 - $2::bigint, $4::timestamp, $2::bigint, $4::timestamp)
+  ON CONFLICT (user_id) DO UPDATE SET
+    embed_bucket_tokens = LEAST($3::float8,
+      COALESCE(m.embed_bucket_tokens, $3::float8)
+      + GREATEST(0, EXTRACT(EPOCH FROM ($4::timestamp - COALESCE(m.embed_bucket_at, $4::timestamp))))::float8
+        * $5::float8) - $2::bigint,
+    embed_bucket_at = GREATEST($4::timestamp, COALESCE(m.embed_bucket_at, $4::timestamp)),
+    lifetime_embed_tokens = m.lifetime_embed_tokens + $2::bigint,
+    updated_at = $4::timestamp
+  WHERE LEAST($3::float8,
+      COALESCE(m.embed_bucket_tokens, $3::float8)
+      + GREATEST(0, EXTRACT(EPOCH FROM ($4::timestamp - COALESCE(m.embed_bucket_at, $4::timestamp))))::float8
+        * $5::float8) >= $2::bigint
+  RETURNING embed_bucket_tokens
+  """
+
+  @available_sql """
+  SELECT LEAST($2::float8,
+    COALESCE(embed_bucket_tokens, $2::float8)
+    + GREATEST(0, EXTRACT(EPOCH FROM ($3::timestamp - COALESCE(embed_bucket_at, $3::timestamp))))::float8
+      * $4::float8)
+  FROM usage_meters WHERE user_id = $1::uuid
+  """
+
+  @doc """
+  Takes `tokens` from the user's refilling bucket of `capacity`, or refuses
+  without spending anything. A successful take also counts toward the lifetime
+  meter (analytics reads it). `opts[:now]` is a test seam.
+  """
+  @spec bucket_take(Ecto.UUID.t(), pos_integer(), non_neg_integer(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, :bucket_empty}
+  def bucket_take(user_id, tokens, capacity, opts \\ [])
+      when is_binary(user_id) and is_integer(tokens) and tokens > 0 and is_integer(capacity) do
+    if tokens > capacity do
+      {:error, :bucket_empty}
+    else
+      args = [Ecto.UUID.dump!(user_id), tokens, capacity * 1.0, naive_now(opts), rate(capacity)]
+
+      case Repo.query!(@take_sql, args) do
+        %{rows: [[left]]} -> {:ok, trunc(max(left, 0.0))}
+        %{rows: []} -> {:error, :bucket_empty}
+      end
+    end
+  end
+
+  @doc "Whole tokens in the bucket now, without spending any. No row is a full bucket."
+  @spec bucket_available(Ecto.UUID.t(), non_neg_integer(), keyword()) :: non_neg_integer()
+  def bucket_available(user_id, capacity, opts \\ [])
+      when is_binary(user_id) and is_integer(capacity) do
+    args = [Ecto.UUID.dump!(user_id), capacity * 1.0, naive_now(opts), rate(capacity)]
+
+    case Repo.query!(@available_sql, args) do
+      %{rows: [[n]]} -> trunc(max(n, 0.0))
+      %{rows: []} -> capacity
+    end
+  end
+
+  @doc "When a bucket holding `available` of `capacity` is full again; nil when it already is."
+  @spec bucket_full_at(non_neg_integer(), non_neg_integer(), DateTime.t()) :: DateTime.t() | nil
+  def bucket_full_at(available, capacity, %DateTime{}) when available >= capacity, do: nil
+
+  def bucket_full_at(available, capacity, %DateTime{} = now) do
+    missing = capacity - available
+    seconds = div(missing * @bucket_refill_seconds + capacity - 1, capacity)
+    DateTime.add(now, seconds, :second)
+  end
+
+  @doc """
+  Refills the bucket to full. Called when a subscription becomes paid, so a
+  later downgrade to Free starts with the whole allowance instead of whatever
+  was left before the upgrade.
+  """
+  @spec reset_embed_bucket(Ecto.UUID.t()) :: :ok
+  def reset_embed_bucket(user_id) when is_binary(user_id) do
+    {_, _} =
+      Repo.update_all(
+        from(m in Meter, where: m.user_id == ^user_id),
+        [set: [embed_bucket_tokens: nil, embed_bucket_at: nil]],
+        skip_tenant_check: true
+      )
+
+    :ok
+  end
+
+  defp rate(capacity), do: capacity / @bucket_refill_seconds
+
+  defp naive_now(opts),
+    do: opts |> Keyword.get_lazy(:now, &DateTime.utc_now/0) |> DateTime.to_naive()
 
   @doc """
   Estimates Voyage token count from raw byte size. English averages ~4 bytes
