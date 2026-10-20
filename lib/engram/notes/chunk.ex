@@ -22,6 +22,12 @@ defmodule Engram.Notes.Chunk do
     # Merged rows only: each member chunk's fingerprint, leading 16 hex
     # chars. See `Engram.Indexing.cap_chunks/4`.
     field :member_hmacs, {:array, :string}
+    # Display text and heading, encrypted and bound to `qdrant_point_id`
+    # (`Crypto.encrypt_chunk_text/4`). Nil while the write flag is off.
+    field :text_ciphertext, :binary, redact: true
+    field :text_nonce, :binary, redact: true
+    field :heading_ciphertext, :binary, redact: true
+    field :heading_nonce, :binary, redact: true
 
     belongs_to :note, Engram.Notes.Note
     belongs_to :user, Engram.Accounts.User

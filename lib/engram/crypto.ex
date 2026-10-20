@@ -838,6 +838,66 @@ defmodule Engram.Crypto do
   end
 
   @doc """
+  Encrypts a chunk's display text and heading for its `chunks` row (Task
+  11.1). AAD binds the column and the point id (`aad_for_row(:chunks, :text,
+  point_id)`); the DEK binds the user. The point id, not the row id, because
+  a row is rewritten on every pass while a reused point keeps its id. The
+  heading is stored as JSON so both today's `"A > B"` string and the v5
+  heading list round trip exactly.
+  """
+  @spec encrypt_chunk_text(binary(), String.t() | [String.t()] | nil, <<_::256>>, binary()) ::
+          %{
+            text_ciphertext: binary(),
+            text_nonce: binary(),
+            heading_ciphertext: binary(),
+            heading_nonce: binary()
+          }
+  def encrypt_chunk_text(text, heading, <<_::256>> = dek, point_id) when is_binary(text) do
+    {text_ct, text_nonce} = Envelope.encrypt(text, dek, aad_for_row(:chunks, :text, point_id))
+
+    {hd_ct, hd_nonce} =
+      Envelope.encrypt(Jason.encode!(heading), dek, aad_for_row(:chunks, :heading, point_id))
+
+    %{
+      text_ciphertext: text_ct,
+      text_nonce: text_nonce,
+      heading_ciphertext: hd_ct,
+      heading_nonce: hd_nonce
+    }
+  end
+
+  @doc """
+  Inverse of `encrypt_chunk_text/4` for one row. `:none` when the row has no
+  ciphertext (written with the write flag off), `:error` when it does not
+  decrypt under this DEK and point id.
+  """
+  @spec decrypt_chunk_text(map(), <<_::256>>, binary()) ::
+          {:ok, {String.t(), String.t() | [String.t()] | nil}} | :none | :error
+  def decrypt_chunk_text(%{text_ciphertext: nil}, _dek, _point_id), do: :none
+
+  def decrypt_chunk_text(row, <<_::256>> = dek, point_id) do
+    with {:ok, text} <-
+           Envelope.decrypt(
+             row.text_ciphertext,
+             row.text_nonce,
+             dek,
+             aad_for_row(:chunks, :text, point_id)
+           ),
+         {:ok, heading_json} <-
+           Envelope.decrypt(
+             row.heading_ciphertext,
+             row.heading_nonce,
+             dek,
+             aad_for_row(:chunks, :heading, point_id)
+           ),
+         {:ok, heading} <- Jason.decode(heading_json) do
+      {:ok, {text, heading}}
+    else
+      _ -> :error
+    end
+  end
+
+  @doc """
   Decrypts a list of Qdrant search candidates in-place. Phase B.4:
   encryption is mandatory, so every candidate with a known vault is
   expected to carry ciphertext.
