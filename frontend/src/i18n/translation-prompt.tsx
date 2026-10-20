@@ -6,6 +6,10 @@ import { type Catalog, type Translate, translate } from "./translate";
 
 const DECLINED_KEY = "engram:translation-prompt-declined";
 
+function declinedLocales(): string[] {
+	return readStorage("localStorage", DECLINED_KEY)?.split(",") ?? [];
+}
+
 interface Current {
 	locale: Locale;
 	setLocale: (next: Locale) => void;
@@ -36,11 +40,13 @@ async function catalogFor(locale: Locale, loaders: CatalogLoaders): Promise<Cata
  *  and a translator they keep using would otherwise re-prompt every session. */
 async function offerLocaleSwitch(target: string, { locale, setLocale, loaders }: Current) {
 	const match = matchLocale(target);
-	const declined = readStorage("localStorage", DECLINED_KEY)?.split(",") ?? [];
-	if (!match || match === locale || declined.includes(match)) {
+	if (!match || match === locale || declinedLocales().includes(match)) {
 		return;
 	}
-	const decline = () => writeStorage("localStorage", DECLINED_KEY, [...declined, match].join(","));
+	// Re-read at decline time: another offer may have been declined since this
+	// one opened, and writing back a stale list would erase that decline.
+	const decline = () =>
+		writeStorage("localStorage", DECLINED_KEY, [...declinedLocales(), match].join(","));
 	const catalog = await catalogFor(match, loaders);
 	const t: Translate = (en, vars) => translate(catalog, en, vars);
 	const inTarget = (text: string) => (

@@ -103,6 +103,22 @@ describe("offerLocaleSwitch", () => {
 		expect(toast).not.toHaveBeenCalled();
 	});
 
+	// Two offers open at once (the translator switched target mid-session):
+	// declining one must not erase the other's decline.
+	it("keeps both declines when two open offers are declined", async () => {
+		await offer("zh-CN");
+		const first = shown().options;
+		await offer("ja");
+		const second = shown().options;
+		first.cancel.onClick();
+		second.cancel.onClick();
+		toast.mockClear();
+
+		await offer("zh-CN");
+		await offer("ja");
+		expect(toast).not.toHaveBeenCalled();
+	});
+
 	it.each([
 		["Not now", (o: ToastOptions) => o.cancel.onClick()],
 		["the close button", (o: ToastOptions) => o.onDismiss()],
