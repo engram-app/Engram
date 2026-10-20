@@ -113,7 +113,9 @@ defmodule Engram.Vector.QdrantTest do
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
 
-        assert decoded["points"] == ["uuid-1", "uuid-2"]
+        # A has_id filter, not a `points` list: a missing id must not 404.
+        assert decoded["filter"] == %{"should" => [%{"has_id" => ["uuid-1", "uuid-2"]}]}
+        refute Map.has_key?(decoded, "points")
         assert decoded["payload"]["path_hmac"] == "AAAA"
         assert decoded["payload"]["folder_hmac"] == "BBBB"
         assert decoded["payload"]["tags_hmac"] == ["TTTT"]
@@ -127,6 +129,24 @@ defmodule Engram.Vector.QdrantTest do
 
       payload = %{path_hmac: "AAAA", folder_hmac: "BBBB", tags_hmac: ["TTTT"]}
       assert :ok = Qdrant.set_payload("test_col", ["uuid-1", "uuid-2"], payload)
+    end
+
+    test "splits a long id list into has_id conditions of max_ids each", %{bypass: bypass} do
+      ids = for i <- 1..(Qdrant.max_ids() + 1), do: "uuid-#{i}"
+
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/payload", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        %{"filter" => %{"should" => conds}} = Jason.decode!(body)
+
+        assert Enum.map(conds, &length(&1["has_id"])) == [Qdrant.max_ids(), 1]
+        assert Enum.flat_map(conds, & &1["has_id"]) == ids
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": {"status": "acknowledged"}}))
+      end)
+
+      assert :ok = Qdrant.set_payload("test_col", ids, %{path_hmac: "x"})
     end
 
     test "returns :ok on empty point list without HTTP call", %{bypass: bypass} do
