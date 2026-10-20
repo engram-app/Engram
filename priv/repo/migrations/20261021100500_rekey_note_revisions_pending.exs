@@ -13,11 +13,19 @@ defmodule Engram.Repo.Migrations.RekeyNoteRevisionsPending do
   # sort. fillfactor 90 leaves room on each page for the in-place version.
   # NoteRevisionsHotTouchTest pins both.
   def up do
-    create_if_not_exists index(:note_revisions, [:note_id],
-                           name: :note_revisions_pending_by_note,
-                           where: "pending_ciphertext IS NOT NULL AND finalize_failed_at IS NULL",
-                           concurrently: true
-                         )
+    # A CONCURRENTLY build that fails (lock timeout, deploy kill) leaves an
+    # INVALID index under its name, which a retry would skip or trip on.
+    # Dropping the name first makes the retry rebuild it.
+    drop_if_exists index(:note_revisions, [],
+                     name: :note_revisions_pending_by_note,
+                     concurrently: true
+                   )
+
+    create index(:note_revisions, [:note_id],
+             name: :note_revisions_pending_by_note,
+             where: "pending_ciphertext IS NOT NULL AND finalize_failed_at IS NULL",
+             concurrently: true
+           )
 
     drop_if_exists index(:note_revisions, [:updated_at],
                      name: :note_revisions_pending,

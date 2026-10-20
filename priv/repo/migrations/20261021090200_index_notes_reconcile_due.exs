@@ -14,6 +14,11 @@ defmodule Engram.Repo.Migrations.IndexNotesReconcileDue do
   # idx_notes_embed_pending is dropped: this index's predicate is a superset of
   # its, and nothing else filters on it.
   def up do
+    # A CONCURRENTLY build that fails (lock timeout, deploy kill) leaves an
+    # INVALID index under its name, which a retry would skip or trip on.
+    # Dropping the name first makes the retry rebuild it.
+    drop_if_exists index(:notes, [], name: :notes_reconcile_due, concurrently: true)
+
     create index(:notes, [:updated_at],
              name: :notes_reconcile_due,
              where:

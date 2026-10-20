@@ -12,11 +12,19 @@ defmodule Engram.Repo.Migrations.BrinAnalyticsEventsInsertedAt do
   # two years. Lookups by user or event keep their (x, inserted_at) btrees.
   # AnalyticsEventsBrinPlanTest pins the sweep's plan.
   def up do
-    create_if_not_exists index(:analytics_events, [:inserted_at],
-                           name: :analytics_events_inserted_at_brin,
-                           using: :brin,
-                           concurrently: true
-                         )
+    # A CONCURRENTLY build that fails (lock timeout, deploy kill) leaves an
+    # INVALID index under its name, which a retry would skip or trip on.
+    # Dropping the name first makes the retry rebuild it.
+    drop_if_exists index(:analytics_events, [],
+                     name: :analytics_events_inserted_at_brin,
+                     concurrently: true
+                   )
+
+    create index(:analytics_events, [:inserted_at],
+             name: :analytics_events_inserted_at_brin,
+             using: :brin,
+             concurrently: true
+           )
 
     drop_if_exists index(:analytics_events, [:inserted_at], concurrently: true)
   end

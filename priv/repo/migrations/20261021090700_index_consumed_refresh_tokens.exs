@@ -7,11 +7,26 @@ defmodule Engram.Repo.Migrations.IndexConsumedRefreshTokens do
   # 24h after its use instead of keeping it until the family expires (every
   # 15-minute rotation left one behind). The predicate is the cleanup's own,
   # so the planner can use the index, and it holds only a day of rotations.
-  def change do
+  def up do
+    # A CONCURRENTLY build that fails (lock timeout, deploy kill) leaves an
+    # INVALID index under its name, which a retry would skip or trip on.
+    # Dropping the name first makes the retry rebuild it.
+    drop_if_exists index(:oauth_refresh_tokens, [],
+                     name: :oauth_refresh_tokens_consumed_unrevoked_index,
+                     concurrently: true
+                   )
+
     create index(:oauth_refresh_tokens, [:consumed_at],
              name: :oauth_refresh_tokens_consumed_unrevoked_index,
              where: "consumed_at IS NOT NULL AND revoked_at IS NULL",
              concurrently: true
            )
+  end
+
+  def down do
+    drop_if_exists index(:oauth_refresh_tokens, [],
+                     name: :oauth_refresh_tokens_consumed_unrevoked_index,
+                     concurrently: true
+                   )
   end
 end

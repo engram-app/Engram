@@ -10,11 +10,20 @@ defmodule Engram.Repo.Migrations.IndexNoteTombstonesByPath do
   # (`RewriteNoteLinks.tombstone_old_path/4`). Every rename and delete adds a
   # tombstone and none is purged yet, so that scan only grows.
   # NotesPathIndexPlanTest pins the plan.
-  def change do
+  def up do
+    # A CONCURRENTLY build that fails (lock timeout, deploy kill) leaves an
+    # INVALID index under its name, which a retry would skip or trip on.
+    # Dropping the name first makes the retry rebuild it.
+    drop_if_exists index(:notes, [], name: :notes_vault_path_tombstone_index, concurrently: true)
+
     create index(:notes, [:vault_id, :path_hmac],
              name: :notes_vault_path_tombstone_index,
              where: "deleted_at IS NOT NULL",
              concurrently: true
            )
+  end
+
+  def down do
+    drop_if_exists index(:notes, [], name: :notes_vault_path_tombstone_index, concurrently: true)
   end
 end

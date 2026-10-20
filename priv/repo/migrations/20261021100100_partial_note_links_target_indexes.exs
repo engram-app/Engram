@@ -17,17 +17,30 @@ defmodule Engram.Repo.Migrations.PartialNoteLinksTargetIndexes do
   # Kept from the same audit item: note_links (user_id, vault_id,
   # source_note_id), 99,955 prod scans since June.
   def up do
-    create_if_not_exists index(:note_links, [:target_note_id],
-                           name: :note_links_target_note_id_index,
-                           where: "target_note_id IS NOT NULL",
-                           concurrently: true
-                         )
+    # A CONCURRENTLY build that fails (lock timeout, deploy kill) leaves an
+    # INVALID index under its name, which a retry would skip or trip on.
+    # Dropping the name first makes the retry rebuild it.
+    drop_if_exists index(:note_links, [],
+                     name: :note_links_target_note_id_index,
+                     concurrently: true
+                   )
 
-    create_if_not_exists index(:note_links, [:target_attachment_id],
-                           name: :note_links_target_attachment_id_index,
-                           where: "target_attachment_id IS NOT NULL",
-                           concurrently: true
-                         )
+    drop_if_exists index(:note_links, [],
+                     name: :note_links_target_attachment_id_index,
+                     concurrently: true
+                   )
+
+    create index(:note_links, [:target_note_id],
+             name: :note_links_target_note_id_index,
+             where: "target_note_id IS NOT NULL",
+             concurrently: true
+           )
+
+    create index(:note_links, [:target_attachment_id],
+             name: :note_links_target_attachment_id_index,
+             where: "target_attachment_id IS NOT NULL",
+             concurrently: true
+           )
 
     drop_if_exists index(:note_links, [:target_note_id, :user_id, :vault_id], concurrently: true)
 
