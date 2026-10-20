@@ -394,7 +394,8 @@ defmodule Engram.Indexing do
   # 64, not 256: JSON-encoding a batch is this process's heap peak (each float
   # becomes a list cell plus a formatted binary), and at 256 it measured ~54 MB
   # on its own. 64 keeps it ~4x lower for a few more round trips per big note.
-  @upsert_batch 64
+  # Declared in Qdrant so the strict-mode limits are checked against it.
+  @upsert_batch Qdrant.max_write_batch()
 
   defp upsert_points_batched(points) do
     points

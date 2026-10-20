@@ -92,11 +92,35 @@ defmodule Engram.Search do
     # unfiltered cross-vault search (#729). Refuse before billing/budget even
     # look at the request, and long before a Qdrant query could be built.
     with :ok <- vault_ids_present?(vault, opts),
+         :ok <- validate_input(query, opts),
          :ok <- cross_vault_entitlement(user, opts),
          :ok <- spend_search_budget(user) do
       do_search_instrumented(user, vault, query, opts)
     end
   end
+
+  @doc """
+  Refuses a search input that a downstream service would refuse later:
+  `{:error, :too_many_tags}` past `Qdrant.max_ids/0` tags (one `match.any`
+  condition; Qdrant Cloud's strict `condition_max_size` 400s a bigger one).
+  Checked before the search is billed.
+  """
+  @spec validate_input(term(), keyword()) :: :ok | {:error, :too_many_tags}
+  def validate_input(_query, opts) do
+    max_ids = Engram.Vector.Qdrant.max_ids()
+
+    case Keyword.get(opts, :tags) do
+      tags when is_list(tags) and length(tags) > max_ids -> {:error, :too_many_tags}
+      _ -> :ok
+    end
+  end
+
+  @doc "The caller-facing message for a `validate_input/2` refusal, `nil` for any other reason."
+  @spec input_error_message(term()) :: String.t() | nil
+  def input_error_message(:too_many_tags),
+    do: "tags: at most #{Engram.Vector.Qdrant.max_ids()} per search"
+
+  def input_error_message(_reason), do: nil
 
   # Fail closed: an explicit empty `vault_ids` means the credential's accessible
   # set is empty, so refuse rather than let it fall through to unfiltered

@@ -218,12 +218,12 @@ defmodule Engram.Vector.QdrantLayoutTest do
     # No read/write_rate_limit: they are per replica, not per tenant.
     test "cloud: exactly the audited limits, byte breakers at 3x the measured sizes" do
       assert QdrantLayout.desired_strict(:cloud) == %{
-               "max_query_limit" => 500,
+               "max_query_limit" => 8192,
                "search_max_oversampling" => 4,
                "search_max_hnsw_ef" => 512,
                "upsert_max_batchsize" => 256,
                "filter_max_conditions" => 64,
-               "condition_max_size" => 1000,
+               "condition_max_size" => 4096,
                "max_points_count" => 1_500_000,
                "max_timeout" => 30,
                "search_max_batchsize" => 8,
@@ -241,7 +241,7 @@ defmodule Engram.Vector.QdrantLayoutTest do
       strict = QdrantLayout.desired_strict(:cloud)
       refute Map.has_key?(strict, "max_collection_payload_size_bytes")
       refute Map.has_key?(strict, "max_collection_vector_size_bytes")
-      assert strict["max_query_limit"] == 500
+      assert strict["max_query_limit"] == 8192
     end
 
     # A self-hoster's collection can outgrow any number picked from our prod.
@@ -251,7 +251,7 @@ defmodule Engram.Vector.QdrantLayoutTest do
 
     test "desired/4 adds them on cloud next to the guards; self-host is unchanged" do
       cloud = QdrantLayout.desired(@v1182, nil, true, :cloud)["strict_mode_config"]
-      assert cloud["max_query_limit"] == 500
+      assert cloud["max_query_limit"] == 8192
       assert cloud["enabled"] == true
       assert cloud["max_disk_usage_percent"] == 85
 

@@ -65,20 +65,23 @@ defmodule Engram.Vector.QdrantLayout do
   }
 
   # Hard limits on Qdrant Cloud: circuit breakers against code bugs and
-  # runaway sweeps (10-19 config audit #7, docs sweep #15). The app's largest
-  # query is a 100 x 4 = 400 pool, an upsert batch is 64 points, a hybrid
-  # batch is 2 requests. `search_allow_exact` stays allowed (sweep #19): the
+  # runaway sweeps (10-19 config audit #7, docs sweep #15). Each sits at 2x
+  # the largest request the app sends, as `Qdrant` declares it: a 4096-id
+  # scroll page (`max_page/0`, OrphanSweep; Qdrant applies `max_query_limit`
+  # to scroll too), a 2048-id `has_id` (`max_ids/0`), a 64-point write batch
+  # (`max_write_batch/0`), a hybrid batch of 2. qdrant_strict_callers_test
+  # pins it. `search_allow_exact` stays allowed (sweep #19): the
   # ANN-recall check compares against `params.exact: true`, and
   # max_query_limit plus max_timeout already bound an exact search. No
   # read/write_rate_limit: they are per replica, not per tenant, so one large
   # vault would throttle everyone.
   @hard_limits %{
-    "max_query_limit" => 500,
+    "max_query_limit" => 8192,
     "search_max_oversampling" => 4,
     "search_max_hnsw_ef" => 512,
     "upsert_max_batchsize" => 256,
     "filter_max_conditions" => 64,
-    "condition_max_size" => 1000,
+    "condition_max_size" => 4096,
     "max_points_count" => 1_500_000,
     "max_timeout" => 30,
     "search_max_batchsize" => 8

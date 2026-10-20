@@ -44,6 +44,27 @@ defmodule Engram.Vector.Qdrant do
   # rather than keyword.
   @integer_payload_index_fields ~w(fm_timestamp fm_created)
 
+  # The largest request shapes any caller sends, so the Qdrant Cloud strict
+  # limits (`QdrantLayout.desired_strict/1`) can sit above them with headroom.
+  # A caller with an unbounded input (a note's point ids, a tag list) chunks
+  # or refuses to fit; test/engram/vector/qdrant_strict_callers_test.exs
+  # pins both sides.
+  @max_page 4096
+  @max_ids 2048
+  @max_write_batch 64
+
+  # No @specs on these constant accessors: dialyzer's :underspecs flags
+  # `pos_integer()` against the literal's success typing.
+
+  @doc "Largest `limit` a scroll or query sends (OrphanSweep's id-only page)."
+  def max_page, do: @max_page
+
+  @doc "Largest id or value list in one `has_id` / `match.any` condition."
+  def max_ids, do: @max_ids
+
+  @doc "Largest point batch one upsert or vector update sends."
+  def max_write_batch, do: @max_write_batch
+
   defp base_url, do: ServiceConfig.get(:qdrant_url, @default_url)
   defp collection, do: ServiceConfig.get(:qdrant_collection, @default_collection)
 
@@ -1156,12 +1177,18 @@ defmodule Engram.Vector.Qdrant do
   def scroll(col \\ nil, opts) when is_list(opts) do
     collection_name = col || collection()
     url = "#{base_url()}/collections/#{collection_name}/points/scroll"
+    limit = Keyword.get(opts, :limit, 200)
+
+    # Above max_page/0 the Cloud strict limit refuses the page; fail here,
+    # where the bad caller is in the stacktrace.
+    if limit > @max_page,
+      do: raise(ArgumentError, "scroll limit #{limit} is over max_page #{@max_page}")
 
     body = %{
       filter: Keyword.fetch!(opts, :filter),
       with_payload: Keyword.get(opts, :with_payload, true),
       with_vector: Keyword.get(opts, :with_vector, false),
-      limit: Keyword.get(opts, :limit, 200)
+      limit: limit
     }
 
     body =
@@ -1386,18 +1413,26 @@ defmodule Engram.Vector.Qdrant do
   @doc """
   The ids among `point_ids` whose points hold a `dense` vector. A recommend
   positive without one is refused for the whole request, and sparse-only
-  points (frontmatter, data, canvas, base) are normal. One page: the
-  `has_id` filter caps the matches at `length(point_ids)`.
+  points (frontmatter, data, canvas, base) are normal. One page per
+  `max_ids/0` ids: the `has_id` filter caps each page's matches at its batch.
   """
   def dense_point_ids(col \\ nil, point_ids)
   def dense_point_ids(_col, []), do: {:ok, []}
 
   def dense_point_ids(col, point_ids) do
-    filter = %{must: [%{has_id: point_ids}, %{has_vector: "dense"}]}
+    point_ids
+    |> Enum.chunk_every(@max_ids)
+    |> Enum.reduce_while({:ok, []}, fn batch, {:ok, acc} ->
+      filter = %{must: [%{has_id: batch}, %{has_vector: "dense"}]}
 
-    with {:ok, %{points: points}} <-
-           scroll(col, filter: filter, with_payload: false, limit: length(point_ids)) do
-      {:ok, Enum.map(points, & &1["id"])}
+      case scroll(col, filter: filter, with_payload: false, limit: length(batch)) do
+        {:ok, %{points: points}} -> {:cont, {:ok, [Enum.map(points, & &1["id"]) | acc]}}
+        error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, pages} -> {:ok, pages |> Enum.reverse() |> Enum.concat()}
+      error -> error
     end
   end
 
@@ -1419,7 +1454,7 @@ defmodule Engram.Vector.Qdrant do
     %{
       query: %{recommend: %{positive: point_ids, strategy: "average_vector"}},
       using: "dense",
-      filter: Map.put(build_tenant_filter(search_opts), :must_not, [%{has_id: point_ids}]),
+      filter: Map.put(build_tenant_filter(search_opts), :must_not, exclude_ids(point_ids)),
       limit: Keyword.get(search_opts, :limit, 5),
       with_payload: true
     }
@@ -1431,6 +1466,13 @@ defmodule Engram.Vector.Qdrant do
     end)
     |> maybe_with_vector(search_opts)
   end
+
+  # One `has_id` per `max_ids/0` ids: `not A and not B` is `not (A or B)`, and
+  # each condition stays under the Cloud `condition_max_size`.
+  # ponytail: a note past ~110k points (64 filter conditions) still trips
+  # `filter_max_conditions`; average a sample of its points if one appears.
+  defp exclude_ids(point_ids),
+    do: point_ids |> Enum.chunk_every(@max_ids) |> Enum.map(&%{has_id: &1})
 
   # The body is decoded in Rust (`Engram.Native.json_decode/1`): with vectors
   # requested it is ~200 x 1024 floats, 2.3 MB of JSON that took Jason ~290 ms

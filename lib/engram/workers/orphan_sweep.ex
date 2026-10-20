@@ -49,13 +49,15 @@ defmodule Engram.Workers.OrphanSweep do
   # ~36 bytes an id and can be far larger than the payload-carrying scroll
   # above. Round trips, not bytes, are what bound a full-collection walk:
   # at 500/page a 10M-point collection is 20k sequential requests and blows
-  # the 15-minute timeout; at 4096 it is ~2.4k.
-  @point_scroll_limit 4096
+  # the 15-minute timeout; at 4096 it is ~2.4k. `Qdrant.max_page/0` (4096) is
+  # what the Cloud strict `max_query_limit` is sized against.
+  @point_scroll_limit Qdrant.max_page()
   @point_delete_batch 256
   # Chunk rows probed against Qdrant per round trip (#1576). Smaller than the
   # id-only scroll above because `has_id` carries every id in the REQUEST body,
-  # not just the response. Validated against prod at this size.
-  @chunk_probe_batch 2048
+  # not just the response. Validated against prod at this size; it is
+  # `Qdrant.max_ids/0`, which the Cloud `condition_max_size` is sized against.
+  @chunk_probe_batch Qdrant.max_ids()
   # Ceiling on candidates carried in memory for the confirm pass.
   @max_candidates 50_000
   # Above this share of the scanned collection, the diff is telling us the

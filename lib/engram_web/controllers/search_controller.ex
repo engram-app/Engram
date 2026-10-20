@@ -233,6 +233,11 @@ defmodule EngramWeb.SearchController do
         |> put_status(403)
         |> json(%{error: "Cross-vault search requires Pro plan"})
 
+      {:error, reason} when reason in [:too_many_tags] ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: Search.input_error_message(reason)})
+
       {:error, reason} ->
         require Logger
 
