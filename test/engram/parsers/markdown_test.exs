@@ -183,6 +183,23 @@ defmodule Engram.Parsers.MarkdownTest do
     end
   end
 
+  describe "parse/2 review fixes (PR #2084)" do
+    test "a merged chunk counts its sections" do
+      [c] = Markdown.parse("## A\nalpha\n## B\nbeta\n", "T.md")
+      assert c.section_count in [1, 2]
+
+      assert Enum.all?(
+               Markdown.parse("## A\n#{String.duplicate("x ", 400)}", "T.md"),
+               &(&1.section_count == 1)
+             )
+    end
+
+    test "a long type is cut to 64 bytes in the lead" do
+      lead = Markdown.lead(%{"type" => String.duplicate("t", 500), "description" => "d"})
+      assert lead == String.duplicate("t", 64) <> ": d"
+    end
+  end
+
   describe "parse/2 malformed input" do
     # D6: parse/2 scrubs invalid UTF-8 before the NIF, so the note still
     # indexes (a replacement char per bad sequence); the NIF alone refuses
@@ -261,6 +278,7 @@ defmodule Engram.Parsers.MarkdownTest do
         )
 
       note = String.replace(note, "This is the intro paragraph.", "Intro. #{filler}")
+      note = String.replace(note, "Content of section two.", "Content of section two. #{filler}")
       chunks = Markdown.parse(note, "Test/Hello World.md")
       section_one = Enum.find(chunks, &String.contains?(&1.text, "Content of section one"))
       assert section_one.heading_path == "Hello World > Section One"

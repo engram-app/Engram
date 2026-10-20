@@ -37,15 +37,18 @@ const RUNT: usize = 512;
 
 /// One chunk: (text, context_text, embed_text, heading_path, char_start,
 /// char_end, kind). context_text carries the folder for keyword search
-/// (#1615); embed_text, the dense input, drops it (#1621). heading_path is
-/// a list, title first: a heading may itself contain ` > `. kind is
-/// `prose`, `data`, `frontmatter` or `drawing`: only prose gets a dense
-/// vector.
+/// (#1615); embed_text, the dense input, drops it (#1621). The 4th element
+/// is (heading path, members): the path is a list, title first (a heading
+/// may itself contain ` > `), and members counts the sections a min512
+/// chunk joins (1 when it joins none), so keyword scoring can treat merged
+/// chunks apart (plan Task 14.1). kind is `prose`, `data`, `frontmatter`,
+/// `frontmatter_dense` or `drawing`: only prose and frontmatter_dense get
+/// a dense vector. (Rustler encodes tuples of at most 7.)
 pub type Chunk = (
     String,
     String,
     String,
-    Vec<String>,
+    (Vec<String>, u16),
     usize,
     usize,
     &'static str,
@@ -98,14 +101,24 @@ pub fn each_chunk(
     lead: Option<&str>,
     mut emit: impl FnMut(Chunk),
 ) {
-    let mut lead = lead.filter(|l| !l.is_empty());
-    let mut emit = move |mut c: Chunk| {
-        if let Some(l) = lead.take() {
+    // The lead is for Voyage: it goes on the first chunk with a dense input,
+    // not on a leading data or query block (review M4). Capped: an
+    // over-length input is a permanent Voyage 400.
+    let mut lead = lead.filter(|l| !l.is_empty()).map(|l| cut(l, MAX_LEAD));
+    let prose_seen = std::cell::Cell::new(false);
+    let mut emit = |mut c: Chunk| {
+        let dense = c.6 == PROSE || c.6 == FRONTMATTER_DENSE;
+        prose_seen.set(prose_seen.get() || c.6 == PROSE);
+        if let Some(l) = lead.filter(|_| dense) {
             c.1 = with_lead(&c.1, l);
             c.2 = with_lead(&c.2, l);
+            lead = None;
         }
         emit(c)
     };
+    // A BOM before the fence still opens frontmatter here. Only for chunking:
+    // the shared splitter (CRDT ingest, normalize) keeps its byte contract.
+    let content = content.strip_prefix('\u{FEFF}').unwrap_or(content);
     let (block, body) = crate::frontmatter::parts(content);
     let body = &*excalidraw(block.as_deref(), body);
     let note = Note::new(folder, title, aliases);
@@ -114,7 +127,7 @@ pub fn each_chunk(
         chunk_body(body, &note, false, &mut |_| n += 1);
         n > budget(body.len())
     };
-    let mut emitted = chunk_body(body, &note, coalesce, &mut emit);
+    let emitted = chunk_body(body, &note, coalesce, &mut emit);
     // Every section was a bare heading (a stub, a daily-note template): keep
     // the headings as one chunk, or search could not find the note at all.
     if !emitted {
@@ -123,14 +136,14 @@ pub fn each_chunk(
             let path = [note.title.to_string()];
             for (t, kind) in classified(split(&normalize("", &rest))) {
                 emit(make(&note, &path, t, 0, body.len(), kind));
-                emitted = true;
             }
         }
     }
-    // A note of properties alone (B8): its first frontmatter chunk gets a
-    // small dense input, the head and the property values, or a search by
-    // meaning could never reach it. Its keyword input stays the raw block.
-    let mut dense = !emitted;
+    // A note with no prose (properties alone, B8, or only data and query
+    // blocks, review M5): its first frontmatter chunk gets a small dense
+    // input, the head and the property values, or a search by meaning could
+    // never reach it. Its keyword input stays the raw block.
+    let mut dense = !prose_seen.get();
     if let Some(block) = block.filter(|b| !b.is_empty()) {
         let text = normalize("", &strip_blobs(&block));
         let path = [note.title.to_string(), "frontmatter".to_string()];
@@ -139,13 +152,13 @@ pub fn each_chunk(
             .filter(|t| !t.is_empty())
         {
             let mut c = make(&note, &path, t, 0, 0, "frontmatter");
-            c.3 = vec!["frontmatter".to_string()];
+            c.3 = (vec!["frontmatter".to_string()], 1);
             if std::mem::take(&mut dense) {
                 c.2 = match props(&block) {
                     v if v.is_empty() => note.head.clone(),
                     v => format!("{}\n\n{v}", note.head),
                 };
-                c.6 = "frontmatter_dense";
+                c.6 = FRONTMATTER_DENSE;
             }
             emit(c);
         }
@@ -156,9 +169,15 @@ pub fn each_chunk(
 struct Note<'a> {
     folder: &'a str,
     title: &'a str,
+    /// The title as heading text reads (`clean_heading`), to spot the H1
+    /// that is the title: `# my_note` in `my_note.md` (review L1).
+    title_text: String,
     /// The title and its aliases, `Title (aka A, B)`: the prefix head.
     head: String,
 }
+
+/// Most bytes of the lead line (`Type: description`).
+const MAX_LEAD: usize = 256;
 
 /// Most chars of the alias part (validation W8: uncapped, a long list
 /// pushed the headings out of the prefix).
@@ -178,6 +197,7 @@ impl<'a> Note<'a> {
         Note {
             folder,
             title,
+            title_text: cut(&clean_heading(title), MAX_PREFIX).to_string(),
             head,
         }
     }
@@ -294,13 +314,46 @@ struct Sections<'a, 'e, F: FnMut(Chunk)> {
 /// Sections joined into one chunk so far.
 struct Pending {
     text: String,
-    /// The first member's: the chunk's prefix.
+    /// The path every member shares: the chunk's prefix and heading path,
+    /// so a hit in a later member is not labelled with the first one's
+    /// section (review M1).
     path: Vec<String>,
+    /// The first member's, and whether its breadcrumb is in `text` yet.
+    first: Vec<String>,
+    first_crumb: bool,
     /// The last member's, for the next breadcrumb.
     last: Vec<String>,
     kind: &'static str,
+    members: u16,
+    /// The last member is a content-defined boundary: the chunk ends there.
+    closed: bool,
     from: usize,
     to: usize,
+}
+
+/// One section in this many ends a min512 chunk, chosen by its own text
+/// (`boundary`), so an edit or an inserted section re-groups only the
+/// chunk it lands in and its neighbour, not every chunk after it (review
+/// H2; the cap groups use the same rule). 4 keeps groups of ~4 small
+/// sections: most of the point saving of greedy packing.
+const MERGE_EVERY: u64 = 4;
+
+/// The unkeyed SHA-256 of a section's text, first 48 bits, as the cap
+/// groups in `Indexing` take it: a DEK rotation never moves a boundary.
+fn boundary(text: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    let d = Sha256::digest(text.as_bytes());
+    let h = d[..6].iter().fold(0u64, |h, &b| h << 8 | u64::from(b));
+    h % MERGE_EVERY == 0
+}
+
+/// The longest common prefix of two paths.
+fn common(a: &[String], b: &[String]) -> Vec<String> {
+    a.iter()
+        .zip(b)
+        .take_while(|(x, y)| x == y)
+        .map(|(x, _)| x.clone())
+        .collect()
 }
 
 impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
@@ -308,7 +361,7 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
         self.close(h.start);
         // The H1 that IS the title is not repeated in the path. Matched by
         // text: a frontmatter title or an earlier setext H1 leaves it shown.
-        let is_title = !self.title_seen && h.level == 1 && h.text == self.note.title;
+        let is_title = !self.title_seen && h.level == 1 && h.text == self.note.title_text;
         self.title_seen |= is_title;
         self.stack.retain(|&(l, _, _)| l < h.level);
         self.stack.push((h.level, h.text, is_title));
@@ -337,36 +390,71 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
         }
     }
 
+    /// Bytes `p` grows by if `path`'s section joins it: the separator, the
+    /// section, its breadcrumb, and the first member's breadcrumb once the
+    /// shared path no longer holds the first member's parents.
+    fn joined(
+        p: &Pending,
+        path: &[String],
+        crumb: Option<&String>,
+        text: &str,
+    ) -> (usize, Option<String>) {
+        let shared = common(&p.path, path);
+        let first = (!p.first_crumb && p.first.len() > shared.len() + 1)
+            .then(|| breadcrumb(&p.first))
+            .flatten();
+        let add = 2
+            + text.len()
+            + crumb.map_or(0, |c| c.len() + 1)
+            + first.as_ref().map_or(0, |c| c.len() + 1);
+        (add, first)
+    }
+
     /// Joins a section that fits in one chunk to the ones before it while
-    /// either side is under MIN_CHUNK, the kinds match and the sum fits
-    /// (over budget: whenever it fits). A member under other headings than
-    /// the one before it starts with a breadcrumb line, `A > B` (the path
-    /// without the title), so a merged chunk keeps every member's parents.
+    /// either side is under MIN_CHUNK, the kinds match, the sum fits and
+    /// the last member is not a content-defined `boundary` (over budget:
+    /// whenever it fits). A member under other headings than the one before
+    /// it starts with a breadcrumb line, `A > B` (the path without the
+    /// title), so a merged chunk keeps every member's parents; the prefix
+    /// shows only the path all members share.
     fn pend(&mut self, text: String, path: Vec<String>, end: usize) {
         let kind = classify(&text, Fence::Out).0;
+        let closes = boundary(&text);
         if let Some(p) = &mut self.pending {
             let crumb = (p.last != path).then(|| breadcrumb(&path)).flatten();
-            let add = crumb.as_ref().map_or(0, |c| c.len() + 1) + text.len();
-            let fits = p.text.len() + 2 + add <= MAX_CHUNK;
+            let (add, first) = Self::joined(p, &path, crumb.as_ref(), &text);
+            let fits = p.text.len() + add <= MAX_CHUNK;
             let small = p.text.len() < MIN_CHUNK || text.len() < MIN_CHUNK;
-            if fits && (self.coalesce || (small && p.kind == kind)) {
+            let open = !p.closed && small && p.kind == kind;
+            if fits && (self.coalesce || open) {
+                if let Some(c) = first {
+                    p.text.insert_str(0, &format!("{c}\n"));
+                    p.first_crumb = true;
+                }
                 p.text.push_str("\n\n");
                 if let Some(c) = crumb {
                     p.text.push_str(&c);
                     p.text.push('\n');
                 }
                 p.text.push_str(&text);
+                p.path = common(&p.path, &path);
                 p.to = end;
                 p.last = path;
+                p.members += 1;
+                p.closed = closes;
                 return;
             }
             self.flush();
         }
         self.pending = Some(Pending {
             text,
+            first: path.clone(),
+            first_crumb: false,
             last: path.clone(),
             path,
             kind,
+            members: 1,
+            closed: closes,
             from: self.start,
             to: end,
         });
@@ -376,13 +464,16 @@ impl<F: FnMut(Chunk)> Sections<'_, '_, F> {
         if let Some(p) = self.pending.take() {
             // Members share a kind unless over budget; the whole decides.
             let kind = classify(&p.text, Fence::Out).0;
-            (self.emit)(make(self.note, &p.path, &p.text, p.from, p.to, kind));
+            let mut c = make(self.note, &p.path, &p.text, p.from, p.to, kind);
+            c.3 .1 = p.members;
+            (self.emit)(c);
             self.emitted = true;
         }
     }
 }
 
 const PROSE: &str = "prose";
+const FRONTMATTER_DENSE: &str = "frontmatter_dense";
 
 /// An Excalidraw note (a frontmatter line starting `excalidraw-plugin:`) is
 /// indexed by its text elements: the ```json / ```compressed-json drawing
@@ -472,14 +563,16 @@ fn query_info(info: &str) -> bool {
 }
 
 /// A code line that is not code to read: minified (over 400 bytes, under
-/// 5% whitespace) or number-heavy (a log or a dump: digits are a quarter of
-/// its non-space bytes, from 24 of them).
+/// 5% whitespace), a log line (it opens with a date or a time), or a dump
+/// (digits are half of its non-space bytes, from 24 of them). A quarter
+/// caught CSS, constant tables and configs, which are code (review L2).
 fn junk_line(line: &str) -> bool {
     let t = line.trim();
     let ws = t.bytes().filter(u8::is_ascii_whitespace).count();
     let solid = t.len() - ws;
     let digits = t.bytes().filter(u8::is_ascii_digit).count();
-    (t.len() > 400 && ws * 20 < t.len()) || (solid >= 24 && digits * 4 >= solid)
+    let stamped = re!(r"^\[?(\d{4}-\d{2}-\d{2}|\d{2}:\d{2}:\d{2})").is_match(t);
+    (t.len() > 400 && ws * 20 < t.len()) || stamped || (solid >= 24 && digits * 2 >= solid)
 }
 
 /// `p.len()` when the paragraph is data-shaped, else 0. Data-shaped: under
@@ -576,7 +669,7 @@ fn make(note: &Note, path: &[String], text: &str, s: usize, e: usize, kind: &'st
         text.to_string(),
         format!("{ctx}\n\n{text}"),
         format!("{emb}\n\n{text}"),
-        path.to_vec(),
+        (path.to_vec(), 1),
         s,
         e,
         kind,
@@ -1130,7 +1223,7 @@ mod tests {
     fn paths(content: &str) -> Vec<String> {
         chunk(content, "", "T")
             .into_iter()
-            .map(|c| c.3.join(" > "))
+            .map(|c| c.3 .0.join(" > "))
             .collect()
     }
 
@@ -1158,7 +1251,7 @@ mod tests {
         let cs = chunk("---\ntags: [a]\n---\n# T\n\nbody\n\n## S\n\nmore", "", "T");
         let kinds: Vec<_> = cs
             .iter()
-            .map(|c| format!("{}: {}", c.3.join(" > "), c.6))
+            .map(|c| format!("{}: {}", c.3 .0.join(" > "), c.6))
             .collect();
         // The two small sections are one chunk (min512).
         assert_eq!(kinds, ["T: prose", "frontmatter: frontmatter"]);
@@ -1246,12 +1339,12 @@ mod tests {
         assert!(
             chunks
                 .iter()
-                .all(|c| c.3.iter().all(|h| h.len() <= MAX_PREFIX)),
+                .all(|c| c.3 .0.iter().all(|h| h.len() <= MAX_PREFIX)),
             "uncapped path"
         );
         let total: usize = chunks
             .iter()
-            .map(|c| c.0.len() + c.1.len() + c.2.len() + c.3.concat().len())
+            .map(|c| c.0.len() + c.1.len() + c.2.len() + c.3 .0.concat().len())
             .sum();
         assert!(total < 8 * content.len(), "{total} bytes of chunks");
     }
@@ -1286,7 +1379,7 @@ mod tests {
             "",
             "T",
         );
-        let p: Vec<_> = c.iter().map(|c| c.3.join(" > ")).collect();
+        let p: Vec<_> = c.iter().map(|c| c.3 .0.join(" > ")).collect();
         assert_eq!(p, ["T > Bar", "T > Bar > Sub", "frontmatter"]);
         // A setext H1 before the title H1 is not mistaken for it.
         assert_eq!(
@@ -1691,15 +1784,18 @@ mod tests {
         "word ".repeat(n / 5)
     }
 
+    // Small sections join until a content-defined boundary (H2): the chunk
+    // count is 1 + the boundaries among all but the last section.
     #[test]
     fn min512_joins_small_sections() {
-        let note = format!(
-            "## A\n{}\n## B\n{}\n## C\n{}",
-            sized(200),
-            sized(200),
-            sized(200)
-        );
-        assert_eq!(chunk(&note, "", "T").len(), 1);
+        let secs: Vec<String> = (0..12)
+            .map(|i| format!("## S{i}\n\n{}", sized(200)))
+            .collect();
+        let cs = chunk(&secs.join("\n"), "", "T");
+        let cuts = secs[..11].iter().filter(|t| boundary(t.trim_end())).count();
+        assert!(cuts < 11, "fixture with no join at all");
+        assert_eq!(cs.len(), 1 + cuts);
+        assert_eq!(cs.iter().map(|c| usize::from(c.3 .1)).sum::<usize>(), 12);
     }
 
     #[test]
@@ -1727,7 +1823,9 @@ mod tests {
         assert!(cs[0].0.lines().any(|l| l == "Setup > Mac"), "{}", cs[0].0);
         assert!(cs[0].2.lines().any(|l| l == "Setup > Mac"));
         assert!(cs[0].1.lines().any(|l| l == "Setup > Mac"));
-        assert_eq!(cs[0].3, ["T", "Setup", "Linux"]);
+        // The prefix shows the path both members share (review M1).
+        assert_eq!(cs[0].3 .0, ["T", "Setup"]);
+        assert_eq!(cs[0].3 .1, 2);
     }
 
     // A member's own heading is already its first line: a top-level member
@@ -1743,7 +1841,7 @@ mod tests {
     #[test]
     fn heading_with_separator_is_one_path_element() {
         let cs = chunk(&format!("# X\n## A > B\n{}", sized(600)), "", "X");
-        assert_eq!(cs[0].3, ["X", "A > B"]);
+        assert_eq!(cs[0].3 .0, ["X", "A > B"]);
     }
 
     // A8
@@ -1751,7 +1849,7 @@ mod tests {
     fn skipped_levels_pop_by_level() {
         let note = format!("# H1\n#### H4\n{}\n## H2\n{}", sized(600), sized(600));
         let cs = chunk(&note, "", "T");
-        assert_eq!(cs[1].3, ["T", "H1", "H2"]);
+        assert_eq!(cs[1].3 .0, ["T", "H1", "H2"]);
     }
 
     // C5 F6: the folder is a filter, not meaning.
@@ -1820,13 +1918,13 @@ mod tests {
     #[test]
     fn heading_text_drops_link_markup() {
         let cs = chunk("## [[Note|Alias]] status\nx", "", "T");
-        assert_eq!(cs[0].3, ["T", "Alias status"]);
+        assert_eq!(cs[0].3 .0, ["T", "Alias status"]);
         let cs = chunk(
             "## **Bold** `code` [site](https://x.io/a) ~~old~~ [[Plain]]\u{200F}\nx",
             "",
             "T",
         );
-        assert_eq!(cs[0].3, ["T", "Bold code site old Plain"]);
+        assert_eq!(cs[0].3 .0, ["T", "Bold code site old Plain"]);
         assert!(!embed_prefix(&cs[0]).contains("https"));
     }
 
@@ -1834,7 +1932,7 @@ mod tests {
     #[test]
     fn bom_before_frontmatter_is_frontmatter() {
         let cs = chunk("\u{FEFF}---\naliases: [x]\n---\nbody", "", "T");
-        let paths: Vec<String> = cs.iter().map(|c| c.3.join(" > ")).collect();
+        let paths: Vec<String> = cs.iter().map(|c| c.3 .0.join(" > ")).collect();
         assert_eq!(paths, ["T", "frontmatter"]);
         assert_eq!(cs[0].0, "body");
     }
@@ -2005,7 +2103,7 @@ mod tests {
         assert!(!cs.is_empty());
         for c in &cs {
             assert!(c.0.len() <= MAX_CHUNK);
-            assert!(c.3.iter().all(|h| h.len() <= MAX_PREFIX));
+            assert!(c.3 .0.iter().all(|h| h.len() <= MAX_PREFIX));
         }
         let body: usize = cs
             .iter()
@@ -2013,5 +2111,142 @@ mod tests {
             .map(|c| c.0.matches('🎉').count())
             .sum();
         assert!(body >= 400, "{body}");
+    }
+
+    /// 30 small sections of distinct prose, about 300 B each.
+    fn thirty(i_edit: Option<usize>, extra: &str) -> String {
+        (0..30)
+            .map(|i| {
+                let body: String = (0..40).map(|w| format!("w{}x{} ", i, w)).collect();
+                let more = if Some(i) == i_edit { extra } else { "" };
+                format!("## Part {i}\n\n{body}{more}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    fn unchanged(a: &[Chunk], b: &[Chunk]) -> f64 {
+        let after: std::collections::HashSet<&str> = b.iter().map(|c| c.2.as_str()).collect();
+        a.iter().filter(|c| after.contains(c.2.as_str())).count() as f64 / a.len() as f64
+    }
+
+    // H2: an edit re-groups only its neighbourhood: the chunk it lands in
+    // and at most one neighbour it spills into, so at least (n - 2) / n of
+    // the chunks (5 of these 7) keep their text and point, and over every
+    // single-section edit and insert at least 80% do on average. Greedy
+    // packing changed every chunk after the edit (0% kept at the top).
+    #[test]
+    fn an_edit_regroups_only_its_neighbourhood() {
+        let before = chunk(&thirty(None, ""), "", "T");
+        let n = before.len();
+        assert!(n >= 6, "{n}");
+        let (mut worst, mut sum, mut runs) = (1.0f64, 0.0, 0);
+        let mut check = |after: Vec<Chunk>| {
+            let kept = unchanged(&before, &after);
+            worst = worst.min(kept);
+            sum += kept;
+            runs += 1;
+        };
+        for i in 0..30 {
+            for extra in ["one more sentence about it. ", &"grown text ".repeat(25)] {
+                check(chunk(&thirty(Some(i), extra), "", "T"));
+            }
+            let mut secs: Vec<String> = thirty(None, "")
+                .split("\n\n## ")
+                .map(str::to_string)
+                .collect();
+            secs.insert(i.max(1), format!("Inserted {i}\n\nA new short section."));
+            check(chunk(&secs.join("\n\n## "), "", "T"));
+        }
+        let mean = sum / f64::from(runs);
+        eprintln!("chunks {n} worst {worst:.3} mean {mean:.3}");
+        assert!(worst >= (n - 2) as f64 / n as f64, "worst {worst}");
+        assert!(mean >= 0.8, "mean {mean}");
+    }
+
+    // L2: config and constant code is code; logs are not.
+    #[test]
+    fn css_rust_and_json_fences_are_prose_logs_are_data() {
+        let css = format!(
+            "```css\n{}```",
+            ".card {\n  margin: 10px 20px 30px 40px;\n  padding: 4px 8px;\n  border: 1px solid #333;\n  z-index: 100;\n}\n"
+                .repeat(4)
+        );
+        let rust = format!(
+            "```rust\n{}```",
+            "const TABLE: [u32; 4] = [0x1F2E, 4096, 65535, 1024];\nfn size(n: usize) -> usize { n * 512 + 64 }\n"
+                .repeat(4)
+        );
+        let json = format!(
+            "```json\n{}```",
+            "{\n  \"port\": 5432,\n  \"host\": \"10.0.20.214\",\n  \"pool_size\": 225,\n  \"timeout_ms\": 30000\n}\n"
+                .repeat(4)
+        );
+        for code in [css, rust, json] {
+            assert!(code.len() >= 200);
+            all(&code, "prose");
+        }
+        let log: String = (0..20)
+            .map(|i| format!("2026-10-19 05:14:{i:02}.086 [info] 200 GET /api/notes 12.{i}ms\n"))
+            .collect();
+        all(&format!("```\n{log}```"), "data");
+    }
+
+    // M4: a note opening with a query block still feeds the lead to Voyage.
+    #[test]
+    fn the_lead_skips_a_leading_query_block() {
+        let note = format!(
+            "## Index\n```dataview\nLIST FROM \"x\"\n```\n## Notes\n{}",
+            sized(600)
+        );
+        let cs = led(&note, "Playbook: Restore");
+        assert_eq!(cs[0].6, "data");
+        assert!(!cs[0].2.contains("Playbook"));
+        assert!(cs[1].2.contains("\nPlaybook: Restore\n\n"), "{}", cs[1].2);
+    }
+
+    // M5: a body of data and query blocks only leaves the note reachable
+    // by meaning through its frontmatter.
+    #[test]
+    fn a_body_with_no_prose_makes_the_frontmatter_dense() {
+        let cs = led(
+            "---\nproject: zanzibar\n---\n```dataview\nLIST\n```\n",
+            "Index",
+        );
+        let kinds: Vec<_> = cs.iter().map(|c| c.6).collect();
+        assert_eq!(kinds, ["data", "frontmatter_dense"]);
+        assert_eq!(cs[1].2, "T\nIndex\n\nzanzibar");
+    }
+
+    #[test]
+    fn the_lead_is_capped() {
+        let cs = led("body", &"long lead ".repeat(100));
+        let lead = cs[0].2.lines().nth(1).unwrap();
+        assert!(lead.len() <= MAX_LEAD);
+    }
+
+    // L1: `# my_note` in `my_note.md` is the title, not a second heading.
+    #[test]
+    fn an_underscore_title_h1_is_the_title() {
+        let cs = chunk("# my_note\n\nbody", "", "my_note");
+        assert_eq!(cs[0].3 .0, ["my_note"]);
+    }
+
+    // H3: a BOM before the fence opens frontmatter for chunking, while the
+    // shared splitter keeps its contract (CRDT ingest, normalize).
+    #[test]
+    fn a_bom_is_stripped_for_chunking_only() {
+        assert_eq!(
+            crate::frontmatter::split("\u{FEFF}---\na: 1\n---\nb".as_bytes()),
+            None
+        );
+        let cs = chunk("\u{FEFF}---\na: 1\n---\nbody", "", "T");
+        assert_eq!(cs[0].0, "body");
+    }
+
+    #[test]
+    fn single_sections_count_one_member() {
+        let cs = chunk(&format!("## A\n{}\n---\nx: 1\n", sized(3000)), "", "T");
+        assert!(cs.iter().all(|c| c.3 .1 == 1));
     }
 }

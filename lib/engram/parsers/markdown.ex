@@ -58,7 +58,10 @@ defmodule Engram.Parsers.Markdown do
                       folder, which is a filter key, not meaning (#1621)
   - `:heading_path` — e.g. "Title > H1 > H2" (`:headings` joined)
   - `:headings`     — the same path as a list, title first: a heading
-                      may itself contain " > " (chunker v5)
+                      may itself contain " > " (chunker v5). A merged
+                      chunk's path is the one all its sections share.
+  - `:section_count` — how many sections the chunk joins (min512); 1 when
+                      it is one section, or part of one
   - `:char_start`   — byte offset in post-frontmatter body
   - `:char_end`     — byte offset end
   - `:kind`:         "prose" | "data" | "frontmatter" | "drawing" |
@@ -83,7 +86,14 @@ defmodule Engram.Parsers.Markdown do
     # The frontmatter codec and the heading patterns all expect LF, so a CRLF
     # note lost its frontmatter chunk and had its body cut short (#1605).
     # Invalid UTF-8 is scrubbed: the Rust side takes only valid text.
-    content = content |> Helpers.scrub_utf8() |> String.replace("\r\n", "\n")
+    # A leading BOM is dropped here only, so a BOM note's frontmatter
+    # chunks as frontmatter; the shared splitter (CRDT ingest) keeps it.
+    content =
+      content
+      |> Helpers.scrub_utf8()
+      |> String.replace("\r\n", "\n")
+      |> String.replace_prefix("\uFEFF", "")
+
     folder = extract_folder(path)
     title = Helpers.extract_title(content, path)
     # Structured files (JSON canvas, Obsidian bases) are keyword-only whole.
@@ -94,7 +104,8 @@ defmodule Engram.Parsers.Markdown do
     content
     |> Engram.Native.chunk(folder, title, aliases(fm, title), lead(fm))
     |> canvas_cards(path, content)
-    |> Enum.with_index(fn {text, context_text, embed_text, headings, char_start, char_end, kind},
+    |> Enum.with_index(fn {text, context_text, embed_text, {headings, members}, char_start,
+                           char_end, kind},
                           position ->
       %{
         position: position,
@@ -103,6 +114,7 @@ defmodule Engram.Parsers.Markdown do
         embed_text: embed_text,
         heading_path: Enum.join(headings, " > "),
         headings: headings,
+        section_count: members,
         char_start: char_start,
         char_end: char_end,
         kind: if(data? and kind == "prose", do: "data", else: kind)
@@ -115,11 +127,15 @@ defmodule Engram.Parsers.Markdown do
   def dense_kind?(kind), do: kind in ~w(prose frontmatter_dense canvas_dense)
 
   @max_cards 2_048
+  # ponytail: a canvas over this keeps its cards keyword-only rather than
+  # decode the whole JSON on the embed worker (review L5).
+  @max_canvas_decode 1_048_576
 
   # F12: the cards are a canvas's prose. The point count does not change:
   # the first chunk carries them as its dense input.
   defp canvas_cards([{text, ctx, embed, hs, s, e, _kind} | rest] = chunks, path, content) do
     with ".canvas" <- Path.extname(path),
+         true <- byte_size(content) <= @max_canvas_decode,
          {:ok, %{"nodes" => nodes}} when is_list(nodes) <- Jason.decode(content),
          cards when cards != "" <- card_text(nodes) do
       prefix = binary_part(embed, 0, byte_size(embed) - byte_size(text) - 2)
@@ -134,12 +150,21 @@ defmodule Engram.Parsers.Markdown do
   defp card_text(nodes) do
     nodes
     |> Enum.flat_map(fn
-      %{"type" => "text", "text" => t} when is_binary(t) -> [String.trim(t)]
+      %{"type" => "text", "text" => t} when is_binary(t) -> [t |> strip_blobs() |> String.trim()]
       _ -> []
     end)
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n\n")
     |> cut_bytes(@max_cards)
+  end
+
+  # A pasted image or attachment in a card is base64, not meaning (review
+  # L6): a run of 100+ base64 chars with both cases and digits goes, as the
+  # chunker's `strip_blobs` does for note text.
+  defp strip_blobs(t) do
+    Regex.replace(~r/(?:data:[\w\/+.-]+;base64,)?[A-Za-z0-9+\/=_-]{100,}/, t, fn run ->
+      if run =~ ~r/[A-Z]/ and run =~ ~r/[a-z]/ and run =~ ~r/[0-9]/, do: "", else: run
+    end)
   end
 
   # The longest valid UTF-8 prefix of at most `max` bytes.
@@ -148,8 +173,11 @@ defmodule Engram.Parsers.Markdown do
 
   # The decoded top-level frontmatter values; %{} when there is none or it
   # is not YAML.
+  # Only the keys the prefix and lead read; a block naming none of them is
+  # not parsed at all (review L5: YamlElixir on every embed pass).
   defp frontmatter(content) do
     with {block, _body} when is_binary(block) <- Frontmatter.split(content),
+         true <- String.contains?(block, ["alias", "description"]),
          {:ok, _order, values, _degraded} <- Frontmatter.parse(block) do
       Map.new(values, fn {k, v} -> {k, Jason.decode!(v)} end)
     else
@@ -178,6 +206,8 @@ defmodule Engram.Parsers.Markdown do
   end
 
   @max_lead 200
+  # A type is a word or two; a pasted one must not grow a paid input (M6).
+  @max_type 64
 
   @doc """
   The line after the first chunk's prefix: `"Type: description"`, or the
@@ -190,7 +220,7 @@ defmodule Engram.Parsers.Markdown do
     with d when is_binary(d) <- values["description"],
          d when d != "" <- d |> one_line() |> cut_bytes(@max_lead) do
       case values["type"] do
-        t when is_binary(t) and t != "" -> one_line(t) <> ": " <> d
+        t when is_binary(t) and t != "" -> cut_bytes(one_line(t), @max_type) <> ": " <> d
         _ -> d
       end
     else
