@@ -15,7 +15,8 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     EmbedNote: a note that exhausts its attempts is parked for a cooldown window
     so it can't re-bill Voyage every tick)
 
-  Uses the partial index idx_notes_embed_pending for fast lookups. Every stale
+  Uses the partial index notes_reconcile_due (its predicate is this filter
+  once IndexVersions is done). Every stale
   note is queued in one tick, a page at a time; nothing caps a tick. The embed
   queue's concurrency and priority are the throttle: backfill runs at
   priority 9, behind every live edit, and Voyage 429s snooze.
