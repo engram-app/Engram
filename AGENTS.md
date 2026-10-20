@@ -639,6 +639,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - Adding a fast mode to a fingerprinted CI job, widening a cache restore-key, or a job reads a file in no fingerprint group → `docs/context/ci-fingerprint-markers.md`
 - CI registry `:5001` refused or `manifest unknown` after a prune, or changing CI registry retention/GC (marker window < image window, never GC near a push) → `docs/context/ci-registry-down-during-appdata-backup.md`
 - A `Post <name>` cache step takes 10-15 min, or adding a cache / image-push target in CI (runs-on/cache only; NO_PROXY for push hosts) → `docs/context/github-cache-upload-cliff.md`
+- "Checkout plugin" slow/hung, CI Postgres unhealthy on `gamingpc-*`, Clerk 429 in e2e-browser, lychee sentry.io refused, a job with a step stuck `in_progress` and no log, or infra `assert-main-tip` red (credentialed git URLs bypass git_cdn; tmpfs every CI Postgres) → `docs/context/ci-runner-network-and-disk-gotchas.md`
 - Touching sobelow or `.sobelow-skips`, or regenerating skips after a line shift (fingerprints defend locations not provenance; `rm` before `--mark-skip-all`) → `docs/context/sobelow-silent-no-op-and-fingerprint-skips.md`
 
 **Deploy & Infra**
