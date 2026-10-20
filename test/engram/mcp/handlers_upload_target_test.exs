@@ -56,6 +56,21 @@ defmodule Engram.MCP.HandlersUploadTargetTest do
 
     # The model needs the caller's real limits to decide whether a file can go
     # up at all, and those are per-plan. Free is text-only with a 10MB cap.
+    # Two protocols, one token. Small files go up raw in a single request; a
+    # file over the request ceiling must use the parts protocol, which lives
+    # under its own prefix (not /api/attachments/uploads, which would shadow
+    # vault files in an `uploads/` folder).
+    test "describes the raw upload and the parts protocol", ctx do
+      {:ok, text, _} = Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
+
+      assert text =~ "application/octet-stream"
+      assert text =~ "/api/attachment-uploads"
+      assert text =~ "11000000"
+      assert text =~ "part_size"
+      refute text =~ "whitelisted"
+      refute text =~ "—"
+    end
+
     test "reports the caller's resolved plan limits", ctx do
       {:ok, text, _} = Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
 

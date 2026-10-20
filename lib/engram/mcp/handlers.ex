@@ -7,6 +7,7 @@ defmodule Engram.MCP.Handlers do
   alias Engram.MCP.{ParseGate, Sections}
   alias Engram.{Notes, Repo, Search}
   alias Engram.Notes.Frontmatter
+  alias EngramWeb.Endpoint
 
   # #1710: every MCP note write is the "mcp" history actor. The
   # HandlersWriteActorTest counts that every upsert_note call passes this.
@@ -704,22 +705,30 @@ defmodule Engram.MCP.Handlers do
     {:ok,
      """
      Attachments are uploaded over the REST API, not through this tool: the bytes
-     never pass through the model. POST the file yourself using the credential
+     never pass through the model. Send the file yourself using the credential
      already authorizing this MCP connection.
 
-     url:    #{base}/api/attachments
-     method: POST
-
-     headers:
-       content-type: application/json
+     headers (every request below):
        authorization: Bearer <the same token this MCP connection uses>
        x-vault-id: #{vault.id}
 
-     json body:
-       path            required: vault-relative destination, e.g. _attachments/diagram.png
-       content_base64  required: the file bytes, base64 encoded
-       mime_type       optional: inferred from the path extension when omitted
-       mtime           optional: unix timestamp
+     SMALL FILES (up to #{Endpoint.max_body_bytes()} bytes): one raw request.
+       POST #{base}/api/attachments?path=<vault-relative path>&mtime=<unix seconds>
+       content-type: application/octet-stream
+       body: the file bytes
+       optional query: mime_type (inferred from the path extension when omitted)
+
+     LARGER FILES (over #{Endpoint.max_body_bytes()} bytes): the parts protocol, same headers.
+       1. POST #{base}/api/attachment-uploads  (json: path, size_bytes, optional mime_type)
+          -> 201 {upload_id, part_size, part_count}. Use that part_size; do not choose your own.
+       2. PUT #{base}/api/attachment-uploads/<upload_id>/parts/<n>  (n from 1,
+          content-type: application/octet-stream). Every part is exactly part_size
+          bytes except the last. Re-sending a part replaces it.
+       3. POST #{base}/api/attachment-uploads/<upload_id>/complete
+          -> 200 with the attachment. 409 missing_parts lists what to resend.
+       To resume after an interruption, GET #{base}/api/attachment-uploads/<upload_id>
+       (returns done, part_count, part_size), send the missing parts, then complete.
+       DELETE the same URL to abandon an upload. Idle uploads expire after 24 hours.
 
      limits for this account:
        max_bytes: #{max_bytes}
@@ -730,6 +739,8 @@ defmodule Engram.MCP.Handlers do
      %{
        "url" => "#{base}/api/attachments",
        "method" => "POST",
+       "uploads_url" => "#{base}/api/attachment-uploads",
+       "max_body_bytes" => Endpoint.max_body_bytes(),
        "vault_id" => to_string(vault.id),
        # `max_bytes` renders as "unlimited" in the prose when the cap is
        # absent; the payload uses null rather than that string, so a client

@@ -1335,10 +1335,11 @@ defmodule Engram.MCP.Tools do
     %{
       name: "get_attachment_upload_target",
       description:
-        "Get the endpoint and this account's limits for uploading an attachment " <>
-          "(image, PDF, audio, video). Returns a URL to POST the file to yourself " <>
-          "using the credential already authorizing this connection; the bytes do " <>
-          "not pass through this tool. Call before uploading to learn the size cap " <>
+        "Get the endpoints and this account's limits for uploading an attachment " <>
+          "(any file type except executables). Returns how to send the file yourself " <>
+          "using the credential already authorizing this connection: one raw request " <>
+          "for small files, a resumable parts protocol above max_body_bytes. The bytes " <>
+          "do not pass through this tool. Call before uploading to learn the size cap " <>
           "and which file types the plan allows.",
       inputSchema: %{
         "type" => "object",
@@ -1350,6 +1351,14 @@ defmodule Engram.MCP.Tools do
         "properties" => %{
           "url" => %{"type" => "string"},
           "method" => %{"type" => "string"},
+          "uploads_url" => %{
+            "type" => "string",
+            "description" => "Start URL of the parts protocol, for files over max_body_bytes"
+          },
+          "max_body_bytes" => %{
+            "type" => "integer",
+            "description" => "Largest file a single raw POST accepts"
+          },
           "vault_id" => %{"type" => "string", "description" => "Send as the x-vault-id header"},
           # Null means uncapped. The prose renders that as "unlimited"; a
           # client comparing sizes should not have to parse an English word.
