@@ -782,9 +782,9 @@ defmodule Engram.Vector.QdrantTest do
   end
 
   describe "search_body/2 — body builder (no HTTP)" do
-    test "never sets with_vector, even when asked (MMR retrieves its pool's)" do
+    test "sets with_vector when requested" do
       body = Qdrant.search_body(%{some: :vec}, user_id: "u1", with_vector: true)
-      refute Map.has_key?(body, :with_vector)
+      assert body.with_vector == ["dense"]
     end
 
     test "does not set with_vector by default" do
@@ -816,10 +816,10 @@ defmodule Engram.Vector.QdrantTest do
   end
 
   describe "sparse_search_body/2 — body builder (no HTTP)" do
-    test "never sets with_vector, even when asked (MMR retrieves its pool's)" do
+    test "sets with_vector when requested" do
       sparse = %{indices: [1, 2], values: [0.5, 0.3]}
       body = Qdrant.sparse_search_body(sparse, user_id: "u1", with_vector: true)
-      refute Map.has_key?(body, :with_vector)
+      assert body.with_vector == ["dense"]
     end
 
     test "does not set with_vector by default" do

@@ -1257,11 +1257,7 @@ defmodule Engram.SearchTest do
 
           assert length(decoded["searches"]) == 2
           refute Enum.any?(decoded["searches"], &Map.has_key?(&1, "with_vector"))
-
-          points = [
-            diverse_point(user, vault, "m", 0.9, [1.0, 0.0], "mmr"),
-            diverse_point(user, vault, "n", 0.8, [0.0, 1.0], "mmr two")
-          ]
+          points = [diverse_point(user, vault, "m", 0.9, [1.0, 0.0], "mmr")]
 
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
@@ -1272,10 +1268,10 @@ defmodule Engram.SearchTest do
         end
       )
 
-      assert {:ok, [_, _]} = Search.search(user, vault, "q")
+      assert {:ok, [_]} = Search.search(user, vault, "q")
 
       assert QdrantStub.last_retrieve(bypass)["with_vector"] == ["dense"],
-             "the MMR pool's retrieve must ask for the dense vector (MMR on by default)"
+             "the MMR candidates' retrieve must ask for the dense vector (MMR on by default)"
     end
   end
 
