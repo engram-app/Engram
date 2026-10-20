@@ -185,6 +185,7 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- sweep_note_links(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_qdrant(user, old_dek, new_dek),
          :ok <- clear_chunk_context_hmacs(user),
+         :ok <- clear_note_attrs(user),
          :ok <- final_flip(user, new_dek_version, new_wrapped) do
       Logger.info(
         "T3.7 per-user DEK rotation complete",
@@ -897,6 +898,20 @@ defmodule Engram.Crypto.UserDekRotation do
   # `Indexing.forget_chunk_reuse_for_user/1` (account soft-delete). There the
   # key is unchanged, so a surviving hmac matches and the reused id names a
   # point that is gone.
+  # `note_attrs` holds only HMACs under the OLD filter key and no plaintext to
+  # recompute them from, so the rows are dropped; the re-index the new
+  # content-hash key forces rewrites them under the new key. Unlike
+  # `clear_chunk_context_hmacs/1` this IS needed for correctness: a stale row
+  # would never match a filter built with the new key.
+  defp clear_note_attrs(%User{id: user_id}) do
+    {:ok, {_count, _}} =
+      Repo.with_tenant(user_id, fn ->
+        Repo.delete_all(from(a in Engram.Notes.NoteAttr, where: a.user_id == ^user_id))
+      end)
+
+    :ok
+  end
+
   defp clear_chunk_context_hmacs(%User{id: user_id}) do
     # `chunks` carries FORCE ROW LEVEL SECURITY. Unscoped, this matches zero
     # rows and still returns :ok — a silent no-op.
@@ -1015,6 +1030,12 @@ defmodule Engram.Crypto.UserDekRotation do
   end
 
   @qdrant_encrypted_fields [:text, :title, :heading_path]
+
+  # The v5 flat fields are encrypted with the row-bound AAD from their first
+  # write, whatever the row's `dek_version` (`FlatFields.columns/3`), so the
+  # old AAD is always the bound one. Not covered by `AadRebind`, which only
+  # rebinds pre-T3.6 empty-AAD columns.
+  @always_bound_columns [:status, :author, :reviewed_by, :project, :source]
 
   defp rewrap_qdrant_payload(collection, qdrant_id, payload, old_dek, new_dek) do
     encrypted_fields_present? =
@@ -1287,7 +1308,11 @@ defmodule Engram.Crypto.UserDekRotation do
         if is_nil(ct) or is_nil(nonce) do
           []
         else
-          old_aad = old_aad_for(:notes, column, note)
+          old_aad =
+            if column in @always_bound_columns,
+              do: Crypto.aad_for_row(:notes, column, note.id),
+              else: old_aad_for(:notes, column, note)
+
           new_aad = Crypto.aad_for_row(:notes, column, note.id)
 
           case try_rewrap(ct, nonce, old_dek, new_dek, old_aad, new_aad,
@@ -1327,7 +1352,9 @@ defmodule Engram.Crypto.UserDekRotation do
                   []
                 end
 
-              ct_updates ++ hmac_updates ++ basename_updates
+              ct_updates ++
+                hmac_updates ++
+                basename_updates ++ src_hmac_updates(column, plaintext, new_filter_key)
 
             :already_rotated ->
               # Already rotated under this run's new_dek — skip
@@ -1342,6 +1369,20 @@ defmodule Engram.Crypto.UserDekRotation do
     # The caller checks `updates != []` before issuing the UPDATE.
     base_updates ++ tag_updates ++ rewrap_crdt_state(note, old_dek, new_dek)
   end
+
+  # `source` is one encrypted JSON list with a blind index PER element, so its
+  # `src_hmac` array is recomputed from the decrypted list under the new key.
+  defp src_hmac_updates(:source, json, new_filter_key) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, list} when is_list(list) ->
+        [{:src_hmac, for(s <- list, is_binary(s), do: FilterId.value_hmac(new_filter_key, s))}]
+
+      _ ->
+        []
+    end
+  end
+
+  defp src_hmac_updates(_column, _plaintext, _key), do: []
 
   # crdt_state is handled apart from base_columns for two reasons. #1341.
   #

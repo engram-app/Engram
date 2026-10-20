@@ -17,6 +17,8 @@ defmodule Engram.Crypto.UserDekRotationTest do
     VaultIndexUpdateLog
   }
 
+  alias Engram.Notes.FlatFields
+  alias Engram.Notes.NoteAttr
   alias Engram.Repo
   alias Engram.Test.LogCapture
   alias Engram.Vector.FilterId
@@ -924,7 +926,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
     test "rotation rewraps the v5 flat columns and recomputes their blind indexes",
          %{user: user, vault: vault} do
-      content = "---\nstatus: Draft\nauthor: alice\nsource: [https://a]\n---\nbody\n"
+      content = "---\nstatus: Draft\nauthor: alice\nsource: [https://a]\nmood: calm\n---\nbody\n"
 
       {:ok, note} =
         Engram.Notes.upsert_note(user, vault, %{"path" => "rot/flat.md", "content" => content},
@@ -935,13 +937,15 @@ defmodule Engram.Crypto.UserDekRotationTest do
       user = Repo.get!(Engram.Accounts.User, user.id)
       {:ok, fk} = Crypto.dek_filter_key(user)
       {:ok, dek} = Crypto.get_dek(user)
-      flat = Engram.Notes.FlatFields.extract(content, fk)
+      flat = FlatFields.extract(content, fk)
 
       Repo.update_all(
         from(n in Engram.Notes.Note, where: n.id == ^note.id),
-        [set: Engram.Notes.FlatFields.columns(flat, dek, note.id)],
+        [set: FlatFields.columns(flat, dek, note.id)],
         skip_tenant_check: true
       )
+
+      Repo.insert_all(NoteAttr, FlatFields.attr_rows(flat, note), skip_tenant_check: true)
 
       assert :ok = UserDekRotation.rotate_user(user.id)
 
@@ -962,6 +966,14 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert raw.status_hmac == FilterId.value_hmac(new_fk, "draft")
       assert raw.author_hmac == FilterId.value_hmac(new_fk, "alice")
       refute raw.status_hmac == FilterId.value_hmac(fk, "draft")
+
+      # `source` is a list: each element's blind index is recomputed.
+      assert raw.src_hmac == [FilterId.value_hmac(new_fk, "https://a")]
+
+      # note_attrs held only old-key HMACs; the forced re-index rewrites them.
+      assert Repo.all(from(a in NoteAttr, where: a.note_id == ^note.id),
+               skip_tenant_check: true
+             ) == []
     end
   end
 
