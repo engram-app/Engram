@@ -53,11 +53,18 @@ defmodule Engram.Analytics.PersonProperties do
 
   @doc "`{%{email: _}, traits}` for every live, non-opted-out user, for `Engram.Analytics.set_traits/1`."
   @spec all() :: [{map(), map()}]
-  def all do
+  def all, do: Enum.map(by_user(), fn {_user_id, traits} -> {%{email: traits.email}, traits} end)
+
+  @doc """
+  `{user_id, traits}` for every live, non-opted-out user: the same facts as
+  `all/0`, keyed by user id (`Engram.Workers.DailySnapshot`).
+  """
+  @spec by_user() :: [{Ecto.UUID.t(), map()}]
+  def by_user do
     repo = Repo.maintenance()
     {rows, oauth} = Repo.cross_tenant(fn -> {repo.all(query()), repo.all(oauth_clients())} end)
     oauth = Enum.group_by(oauth, &elem(&1, 0), &elem(&1, 1))
-    Enum.map(rows, &to_person(&1, Map.get(oauth, &1.user_id, [])))
+    Enum.map(rows, &{&1.user_id, to_traits(&1, Map.get(oauth, &1.user_id, []))})
   end
 
   # Cross-tenant on purpose: one aggregate over every user. Maintenance repo so
@@ -202,36 +209,35 @@ defmodule Engram.Analytics.PersonProperties do
     )
   end
 
-  defp to_person(row, clients) do
+  defp to_traits(row, clients) do
     {obsidian, mcp} = Enum.split_with(clients, &(&1.kind == "obsidian"))
 
-    {%{email: row.email},
-     %{
-       email: row.email,
-       name: row.name,
-       signed_up_at: row.created_at,
-       plan: plan(row.tier, row.status),
-       subscription_status: row.status,
-       vault_count: row.vault_count,
-       total_notes: row.total_notes,
-       total_note_bytes: row.total_note_bytes,
-       total_attachments: row.total_attachments,
-       total_attachment_bytes: row.total_attachment_bytes,
-       largest_vault_notes: row.largest_vault_notes,
-       largest_vault_bytes: row.largest_vault_bytes,
-       # Device-flow families plus OAuth-linked Obsidian clients.
-       obsidian_devices: row.obsidian_devices + length(obsidian),
-       obsidian_last_seen_at: row.obsidian_last_seen_at,
-       mcp_clients:
-         mcp |> Enum.map(&elem(McpClient.of_client(&1), 0)) |> Enum.uniq() |> Enum.sort(),
-       mcp_client_count: length(mcp),
-       api_keys_count: row.api_keys_count,
-       embed_tokens_used: row.embed_tokens_used,
-       last_active_at: row.last_active_at,
-       first_vault_at: row.first_vault_at,
-       plugin_connected_at: row.plugin_connected_at,
-       ai_connected_at: row.ai_connected_at
-     }}
+    %{
+      email: row.email,
+      name: row.name,
+      signed_up_at: row.created_at,
+      plan: plan(row.tier, row.status),
+      subscription_status: row.status,
+      vault_count: row.vault_count,
+      total_notes: row.total_notes,
+      total_note_bytes: row.total_note_bytes,
+      total_attachments: row.total_attachments,
+      total_attachment_bytes: row.total_attachment_bytes,
+      largest_vault_notes: row.largest_vault_notes,
+      largest_vault_bytes: row.largest_vault_bytes,
+      # Device-flow families plus OAuth-linked Obsidian clients.
+      obsidian_devices: row.obsidian_devices + length(obsidian),
+      obsidian_last_seen_at: row.obsidian_last_seen_at,
+      mcp_clients:
+        mcp |> Enum.map(&elem(McpClient.of_client(&1), 0)) |> Enum.uniq() |> Enum.sort(),
+      mcp_client_count: length(mcp),
+      api_keys_count: row.api_keys_count,
+      embed_tokens_used: row.embed_tokens_used,
+      last_active_at: row.last_active_at,
+      first_vault_at: row.first_vault_at,
+      plugin_connected_at: row.plugin_connected_at,
+      ai_connected_at: row.ai_connected_at
+    }
   end
 
   @doc "The `plan` trait for a subscription's tier and status. Mirrors `Billing.tier/1`: only an entitled status grants the paid tier."

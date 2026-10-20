@@ -171,6 +171,23 @@ defmodule Engram.Billing do
     end
   end
 
+  @doc """
+  `cap/2` for a whole tier, ignoring per-user overrides: the env override,
+  else the catalog default. nil means no ceiling. For reports over many users
+  that read the overrides in one query instead of one lookup per user.
+  """
+  @spec tier_cap(:free | :starter | :pro, atom()) :: integer() | nil
+  def tier_cap(tier, key) do
+    limit =
+      case {enforced?(), env_override_lookup(tier, key)} do
+        {false, _} -> nil
+        {true, {:hit, v}} -> v
+        {true, :miss} -> LimitKeys.default_for(key, tier)
+      end
+
+    if is_integer(limit) and limit >= 0, do: limit
+  end
+
   @spec granted?(term(), atom()) :: boolean()
   def granted?(user, key), do: check_feature(user, key) == :ok
 
