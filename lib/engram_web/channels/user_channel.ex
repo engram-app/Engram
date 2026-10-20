@@ -38,7 +38,25 @@ defmodule EngramWeb.UserChannel do
   # `crdt_diff_refusal`: a diff whose deps the server lacks is refused
   # without opening a room. Read from the join reply, which comes from the
   # task holding this socket (/health can hit another task mid-deploy).
-  @features %{raw_attachment_upload: true, raw_attachment_download: true, crdt_diff_refusal: true}
+  #
+  # A function, not a module attribute: the multipart answer depends on the
+  # configured storage adapter, which is runtime config.
+  defp features do
+    base = %{
+      raw_attachment_upload: true,
+      raw_attachment_download: true,
+      crdt_diff_refusal: true
+    }
+
+    if Engram.Storage.adapter().multipart?() do
+      Map.merge(base, %{
+        chunked_attachment_upload: true,
+        attachment_part_size: Engram.Attachments.Uploads.part_size()
+      })
+    else
+      Map.put(base, :chunked_attachment_upload, false)
+    end
+  end
 
   @impl true
   def join("user:" <> user_id_str, _params, socket) do
@@ -54,7 +72,7 @@ defmodule EngramWeb.UserChannel do
       # reached this socket (`ChannelGate.vault_scope/1`).
       with :ok <- ChannelGate.check_not_deleted(user),
            scope when scope != :revoked <- ChannelGate.vault_scope(socket.assigns) do
-        {:ok, %{plan: Engram.Billing.plan_state(user), features: @features}, socket}
+        {:ok, %{plan: Engram.Billing.plan_state(user), features: features()}, socket}
       else
         :revoked -> {:error, %{reason: "unauthorized"}}
         {:error, payload} -> {:error, payload}

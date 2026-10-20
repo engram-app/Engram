@@ -227,6 +227,10 @@ defmodule Engram.BillingTest do
   end
 
   describe "plan_state/1" do
+    test "lists the blocked extensions so clients can skip them up front" do
+      assert ".exe" in Billing.plan_state(build(:user)).blocked_extensions
+    end
+
     test "free user: all MIME types allowed, numeric caps present" do
       user = build(:user, free_tier_accepted_at: nil)
       state = Billing.plan_state(user)

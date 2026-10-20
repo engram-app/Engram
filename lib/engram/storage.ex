@@ -85,6 +85,13 @@ defmodule Engram.Storage do
   @callback abort_multipart_upload(key :: String.t(), upload_id :: String.t()) ::
               :ok | {:error, term()}
 
+  @doc """
+  Whether this adapter supports the multipart calls above. Gates the chunked
+  attachment upload feature advertised to clients; `Database` cannot, so a
+  self-host on Postgres keeps single-request uploads.
+  """
+  @callback multipart?() :: boolean()
+
   @doc "Returns the configured storage adapter module."
   def adapter, do: Application.get_env(:engram, :storage, __MODULE__.S3)
 

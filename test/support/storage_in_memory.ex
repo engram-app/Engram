@@ -93,6 +93,9 @@ defmodule Engram.Storage.InMemory do
   def selfhost?, do: true
 
   @impl true
+  def multipart?, do: true
+
+  @impl true
   def sign_url(_key, _opts) do
     raise "Engram.Storage.InMemory.sign_url/2 — test stub does not presign"
   end
@@ -161,20 +164,25 @@ defmodule Engram.Storage.InMemory do
 
     case :ets.lookup(@multipart_table, handle) do
       [{^handle, stored}] ->
-        binary =
-          parts
-          |> Enum.map(fn %{part_number: n} -> n end)
-          |> Enum.sort()
-          |> Enum.map(&Map.fetch!(stored, &1))
-          |> IO.iodata_to_binary()
+        # Mirror S3: every part but the last must be at least 5 MiB, so tests
+        # catch an undersized-part bug that only real storage would reject.
+        numbers = parts |> Enum.map(& &1.part_number) |> Enum.sort()
 
-        put(key, binary)
-        :ets.delete(@multipart_table, handle)
-        :ok
+        if Enum.any?(Enum.drop(numbers, -1), &(byte_size(Map.fetch!(stored, &1)) < 5_242_880)) do
+          {:error, :entity_too_small}
+        else
+          assemble(key, handle, stored, numbers)
+        end
 
       [] ->
         {:error, :no_such_upload}
     end
+  end
+
+  defp assemble(key, handle, stored, numbers) do
+    put(key, numbers |> Enum.map(&Map.fetch!(stored, &1)) |> IO.iodata_to_binary())
+    :ets.delete(@multipart_table, handle)
+    :ok
   end
 
   @impl true

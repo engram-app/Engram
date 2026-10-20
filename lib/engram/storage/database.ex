@@ -142,6 +142,9 @@ defmodule Engram.Storage.Database do
   @impl true
   def selfhost?, do: true
 
+  @impl true
+  def multipart?, do: false
+
   # Multipart upload + presigned URLs are S3-only. Selfhost streams the
   # archive through the controller (see Task 22) and never reaches these
   # callbacks. They raise loudly so a misrouted call surfaces during

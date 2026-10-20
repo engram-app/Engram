@@ -118,6 +118,9 @@ defmodule Engram.Storage.S3 do
   def selfhost?, do: false
 
   @impl true
+  def multipart?, do: true
+
+  @impl true
   def sign_url(key, opts) when is_binary(key) and is_list(opts) do
     ttl = Keyword.fetch!(opts, :ttl)
 

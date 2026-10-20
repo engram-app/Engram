@@ -388,6 +388,7 @@ defmodule Engram.Billing do
     %{
       tier: tier(user),
       attachments_all_types: all_types?,
+      blocked_extensions: Engram.Storage.MimeWhitelist.blocked_extensions(),
       max_file_bytes: numeric_limit(user, :max_file_bytes),
       attachment_bytes_cap: numeric_limit(user, :attachment_bytes_cap),
       # COMPAT SHIM, remove in a later contract PR. The search-coverage cap was
@@ -1150,6 +1151,7 @@ defmodule Engram.Billing do
           plan_state(u)
           |> Map.take([
             :attachments_all_types,
+            :blocked_extensions,
             :max_file_bytes,
             :attachment_bytes_cap,
             :indexed_notes_cap
@@ -1158,6 +1160,7 @@ defmodule Engram.Billing do
         _ ->
           %{
             attachments_all_types: nil,
+            blocked_extensions: Engram.Storage.MimeWhitelist.blocked_extensions(),
             max_file_bytes: nil,
             attachment_bytes_cap: nil,
             indexed_notes_cap: nil
