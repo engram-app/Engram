@@ -40,7 +40,8 @@ defmodule Engram.Workers.ReconcileEmbeddingsIndexPlanTest do
 
     assert_enqueued(worker: Engram.Workers.EmbedNote, args: %{"note_id" => note.id})
 
-    sweeps = for %{sql: "UPDATE \"notes\"" <> _ = sql} <- queries, do: sql
+    # The eligible ids are a materialized CTE in front of the UPDATE.
+    sweeps = for %{sql: "WITH \"reconcile_eligible\"" <> _ = sql} <- queries, do: sql
     assert [sql | _] = sweeps, "recorded no reconcile UPDATE on notes"
 
     plan = QueryPlan.generic_plan(sql)

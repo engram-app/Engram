@@ -171,8 +171,17 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       # but kept explicit so this bulk UPDATE is self-evidently note-scoped — a
       # folder marker can never get an embed cooldown stamped even if the subquery
       # changed. Also satisfies NotesScopeLintTest (kind filter on the from/Note).
+      # The eligible ids are a MATERIALIZED CTE, read once. As an `IN
+      # (subquery ... LIMIT)` the plan hinged on row estimates: with stale
+      # statistics (a fresh install's first big import, or the extended
+      # (user_id, vault_id) statistics on an unanalyzed table) Postgres chose a
+      # nested-loop semi join that re-ran the sorted subquery per outer row,
+      # O(N^2): 15 s for 1,205 notes, past the checkout deadline, every tick.
       {_count, rows} =
-        from(n in Note, where: n.kind == "note" and n.id in subquery(eligible))
+        Note
+        |> with_cte("reconcile_eligible", as: ^eligible, materialized: true)
+        |> join(:inner, [n], e in "reconcile_eligible", on: field(e, :id) == n.id)
+        |> where([n], n.kind == "note")
         # The columns `EmbedNote.version_stale?/1` reads, to route each note.
         |> select([n], %{
           id: n.id,
