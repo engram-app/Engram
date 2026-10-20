@@ -21,7 +21,11 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   setup :verify_on_exit!
 
   setup do
-    {:ok, store} = Agent.start_link(fn -> %{points: %{}, upserts: 0, set_payloads: []} end)
+    {:ok, store} =
+      Agent.start_link(fn ->
+        %{points: %{}, upserts: 0, set_payloads: [], on_scroll: nil, payload_status: 200}
+      end)
+
     bypass = Bypass.open()
     Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
     Bypass.stub(bypass, :any, :any, &fake_qdrant(&1, store))
@@ -93,7 +97,90 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
     assert reload(ctx.stale).payload_hash
     assert reload(ctx.healthy).payload_hash
+    # Drifted filter keys mean a rotation, so its sparse vectors are stale too.
+    assert reload(ctx.stale).keyword_version == nil
+    refute reload(ctx.healthy).keyword_version == nil
     assert NotePayloadStamps.run_pass() == :done
+  end
+
+  test "reports what it checked and rewrote", ctx do
+    ref =
+      :telemetry_test.attach_event_handlers(self(), [[:engram, :indexing, :payload_reconcile]])
+
+    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+    counts =
+      for _ <- 1..4, into: %{} do
+        assert_receive {[:engram, :indexing, :payload_reconcile], ^ref, %{count: n},
+                        %{outcome: o}}
+
+        {o, n}
+      end
+
+    assert counts == %{checked: 2, drifted: 1, rewritten: 1, skipped_v5: 0}
+  end
+
+  # #2087's short-key layout: the legacy keys are absent, so a v3 compare
+  # would read every such point as drifted and merge v3 keys onto it.
+  test "a v5-shaped point is never written and its note is left for the v5 heal", ctx do
+    for id <- point_ids(ctx.stale),
+        do: Agent.update(ctx.store, &put_in(&1.points[id], %{"u" => "x", "y" => "b2xk"}))
+
+    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+    assert Agent.get(ctx.store, & &1.set_payloads) == []
+    assert reload(ctx.stale).payload_hash == nil
+    assert reload(ctx.healthy).payload_hash
+  end
+
+  # An EmbedNote commit between the heal's read and its stamp: stamping the
+  # hash read before it would vouch for HMACs the row no longer holds.
+  test "a row that moved under the heal is left unstamped", ctx do
+    stale_id = ctx.stale.id
+
+    Agent.update(ctx.store, fn s ->
+      %{
+        s
+        | on_scroll: fn ->
+            Repo.update_all(
+              from(n in Note, where: n.id == ^stale_id),
+              [set: [tags_hmac: [<<1, 2, 3>>]]],
+              skip_tenant_check: true
+            )
+          end
+      }
+    end)
+
+    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+    assert reload(ctx.stale).payload_hash == nil
+    assert reload(ctx.healthy).payload_hash
+  end
+
+  test "a rotation that starts mid-job snoozes it before any write", ctx do
+    uid = ctx.user.id
+
+    Agent.update(ctx.store, fn s ->
+      %{
+        s
+        | on_scroll: fn ->
+            Repo.update_all(
+              from(u in Engram.Accounts.User, where: u.id == ^uid),
+              [set: [dek_rotation_locked_at: DateTime.utc_now()]],
+              skip_tenant_check: true
+            )
+          end
+      }
+    end)
+
+    assert {:snooze, _} = perform_job(ReconcileNotePayloads, %{"user_id" => uid})
+    assert Agent.get(ctx.store, & &1.set_payloads) == []
+    assert reload(ctx.healthy).payload_hash == nil
+  end
+
+  test "Qdrant refusing writes (507) snoozes the job instead of burning an attempt", ctx do
+    Agent.update(ctx.store, &%{&1 | payload_status: 507})
+    assert {:snooze, _} = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+    assert reload(ctx.stale).payload_hash == nil
   end
 
   test "snoozes while the user's DEK rotation holds the lock", ctx do
@@ -129,7 +216,14 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   defp fake_qdrant(conn, store) do
     {:ok, body, conn} = Plug.Conn.read_body(conn, length: 10_000_000)
     body = if body == "", do: %{}, else: Jason.decode!(body)
+    status = Agent.get(store, & &1.payload_status)
 
+    if status != 200 and String.ends_with?(conn.request_path, "/points/payload"),
+      do: Plug.Conn.send_resp(conn, status, "{}"),
+      else: fake_reply(conn, store, body)
+  end
+
+  defp fake_reply(conn, store, body) do
     result =
       case {conn.method, conn.request_path} do
         {"PUT", "/collections/engram_notes/points"} ->
@@ -153,6 +247,8 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           %{"status" => "completed"}
 
         {"POST", "/collections/engram_notes/points/scroll"} ->
+          if hook = Agent.get(store, & &1.on_scroll), do: hook.()
+
           ids =
             for %{"has_id" => ids} <- get_in(body, ["filter", "must"]) || [], id <- ids, do: id
 
