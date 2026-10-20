@@ -120,6 +120,9 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
     end
   end
 
+  # The outage outlasts the post-flip retries, so the point text stays under
+  # the DEK the flip retired. The notes are queued for a rebuild (cleared
+  # fingerprints and embed_hash): Voyage pays, but only on this failure path.
   test "a Qdrant outage during the rotation neither fails it nor strands the notes", ctx do
     Agent.update(ctx.store, &%{&1 | fail: true})
 
@@ -129,6 +132,35 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
     assert user.dek_rotation_locked_at == nil
     assert fresh(ctx.note, user).content =~ "Page the secondary"
     assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
+
+    raw = Repo.one!(from(n in Notes.Note, where: n.id == ^ctx.note.id), skip_tenant_check: true)
+    assert raw.embed_hash == nil, "EmbedNote must pick the note up"
+
+    assert Repo.all(from(c in Chunk, where: c.note_id == ^ctx.note.id, select: c.context_hmac),
+             skip_tenant_check: true
+           )
+           |> Enum.all?(&is_nil/1),
+           "no chunk may reuse a point whose text is under the retired DEK"
+
+    Agent.update(ctx.store, &%{&1 | fail: false})
+    assert {:ok, _} = Indexing.index_note(fresh(ctx.note, user), ctx.vault)
+    assert drain_embedded() != [], "the rebuild re-embeds (the failure path's cost)"
+
+    {:ok, dek} = Crypto.get_dek(user)
+
+    for id <- point_ids(ctx.note) do
+      p = point(ctx.store, id)
+      aad = Crypto.aad_for_qdrant(Engram.Vector.Qdrant.collection_name(), id, :text)
+
+      assert {:ok, _} =
+               Engram.Crypto.Envelope.decrypt(
+                 Base.decode64!(p["text"]),
+                 Base.decode64!(p["text_nonce"]),
+                 dek,
+                 aad
+               ),
+             "every point of the rebuilt note must decrypt under the new DEK"
+    end
   end
 
   test "keyword search hits the note again once its sparse vectors are refreshed", ctx do

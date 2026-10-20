@@ -1402,6 +1402,130 @@ defmodule Engram.Crypto.UserDekRotationTest do
       refute_received {:write, "/points/batch", _, _}
     end
 
+    # A point under neither key (left by an earlier crashed rotation) used to
+    # halt the whole sweep, stranding every point after it under the DEK the
+    # flip just retired. It is skipped and counted, and the user's notes are
+    # queued for a rebuild, since their point text is no longer readable.
+    test "a point under neither key is skipped, the rest rewrapped, the notes requeued",
+         %{user: user, bypass: bypass} do
+      {:ok, old_dek} = Crypto.get_dek(user)
+      collection = Qdrant.collection_name()
+
+      [bad, good] = [
+        "00000000-0000-0000-0000-000000000201",
+        "00000000-0000-0000-0000-000000000202"
+      ]
+
+      point = fn id, dek ->
+        {ct, nonce} = Envelope.encrypt("text", dek, Crypto.aad_for_qdrant(collection, id, :text))
+
+        %{
+          "id" => id,
+          "payload" => %{
+            "user_id" => user.id,
+            "text" => Base.encode64(ct),
+            "text_nonce" => Base.encode64(nonce)
+          }
+        }
+      end
+
+      points = [point.(bad, :crypto.strong_rand_bytes(32)), point.(good, old_dek)]
+
+      vault = Engram.Fixtures.insert_vault!(user, "SkipVault")
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "skip.md", content: "body"})
+
+      {1, _} =
+        Repo.update_all(
+          from(n in Engram.Notes.Note,
+            where: n.id == ^note.id,
+            update: [set: [embed_hash: n.content_hash]]
+          ),
+          [],
+          skip_tenant_check: true
+        )
+
+      Repo.insert!(
+        %Engram.Notes.Chunk{
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          position: 0,
+          char_start: 0,
+          char_end: 4,
+          qdrant_point_id: good,
+          context_hmac: "stale"
+        },
+        skip_tenant_check: true
+      )
+
+      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"result" => %{"points" => points, "next_page_offset" => nil}})
+        )
+      end)
+
+      test_pid = self()
+      stored = :ets.new(:stored_skip, [:set, :public])
+
+      for path <- ["/points/batch", "/points/payload/delete"] do
+        Bypass.stub(bypass, "POST", "/collections/#{collection}#{path}", fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+
+          resp =
+            case Jason.decode!(body) do
+              %{"operations" => ops} ->
+                for %{"set_payload" => %{"points" => [id], "payload" => p}} <- ops do
+                  send(test_pid, {:rewrapped, id})
+                  :ets.insert(stored, {id, p})
+                end
+
+                Jason.encode!(%{result: Enum.map(ops, fn _ -> %{status: "acknowledged"} end)})
+
+              _ ->
+                ~s({"result":{"status":"completed"},"status":"ok"})
+            end
+
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(200, resp)
+        end)
+      end
+
+      stub_read_back(bypass, collection, fn ->
+        for {id, p} <- :ets.tab2list(stored), do: %{"id" => id, "payload" => p}
+      end)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :crypto, :rotate, :dek, :row_failed]
+        ])
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      assert_received {:rewrapped, ^good}
+      refute_received {:rewrapped, ^bad}
+
+      assert_received {[:engram, :crypto, :rotate, :dek, :row_failed], ^ref, %{count: 1},
+                       %{table: :qdrant, status: :after_flip}}
+
+      raw =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      assert raw.embed_hash == nil, "EmbedNote must rebuild the note's points"
+
+      assert [nil] =
+               Repo.all(
+                 from(c in Engram.Notes.Chunk,
+                   where: c.note_id == ^note.id,
+                   select: c.context_hmac
+                 ),
+                 skip_tenant_check: true
+               )
+    end
+
     test "sweep re-encrypts Qdrant points under the new DEK and verifies decrypt correctness",
          %{user: user, bypass: bypass} do
       # Build a synthetic Qdrant point whose payload fields are encrypted under
