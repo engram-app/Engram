@@ -102,6 +102,8 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/indexing/retained_vectors.ex",
     "lib/engram/crypto.ex",
     "lib/engram_web/controllers/attachments_controller.ex",
+    # Serves decrypted attachment bytes and builds a header from the path.
+    "lib/engram_web/attachment_raw_response.ex",
     "lib/engram/backfill/",
     "lib/engram/mcp/",
     "lib/engram/vaults.ex",
