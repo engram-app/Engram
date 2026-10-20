@@ -45,6 +45,7 @@ defmodule Engram.SearchTenantIdfTest do
     setup do
       bypass = Bypass.open()
       ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+      ServiceConfig.put_override(:tenant_idf, true)
       {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
       vault = insert(:vault, user: user)
       note = insert(:note, user: user, vault: vault)
@@ -60,7 +61,7 @@ defmodule Engram.SearchTenantIdfTest do
     end
 
     defp points(user, note, n) do
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      now = DateTime.utc_now(:second)
 
       rows =
         for pos <- 1..n//1 do
@@ -94,6 +95,13 @@ defmodule Engram.SearchTenantIdfTest do
 
     test "off on 1.18 whatever the count", %{bypass: b, user: u, note: n} do
       qdrant_version(b, "1.18.2")
+      points(u, n, 1_000)
+      refute Search.tenant_idf?(u)
+    end
+
+    test "off when switched off, with no Qdrant call", %{bypass: b, user: u, note: n} do
+      Bypass.down(b)
+      ServiceConfig.put_override(:tenant_idf, false)
       points(u, n, 1_000)
       refute Search.tenant_idf?(u)
     end

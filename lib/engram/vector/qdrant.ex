@@ -1539,7 +1539,21 @@ defmodule Engram.Vector.Qdrant do
       limit: Keyword.get(search_opts, :limit, 5),
       with_payload: true
     }
+    |> maybe_tenant_idf(search_opts)
     |> maybe_with_vector(search_opts)
+  end
+
+  # `tenant_idf: true` (Qdrant >= 1.19.0, see `Engram.Search.tenant_idf?/1`)
+  # computes the keyword leg's IDF over the user's own points instead of the
+  # whole shard, so another tenant's vocabulary does not move term rarity.
+  # Independent of the retrieval filter, which may narrow further.
+  defp maybe_tenant_idf(leg, search_opts) do
+    if Keyword.get(search_opts, :tenant_idf, false) do
+      user = %{key: "user_id", match: %{value: Keyword.fetch!(search_opts, :user_id)}}
+      Map.put(leg, :params, %{idf: %{corpus: %{must: [user]}}})
+    else
+      leg
+    end
   end
 
   # Qdrant's own RRF default, kept so fused scores read as before.
@@ -1611,7 +1625,7 @@ defmodule Engram.Vector.Qdrant do
       with_payload: false
     }
 
-    %{searches: [dense_leg, sparse_leg]}
+    %{searches: [dense_leg, maybe_tenant_idf(sparse_leg, search_opts)]}
   end
 
   @doc """

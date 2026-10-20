@@ -502,6 +502,7 @@ defmodule Engram.Search do
           |> Keyword.merge(date_bounds)
           |> Keyword.put(:with_vector, need_vectors?)
           |> Keyword.put(:full_precision, profile.full_precision)
+          |> Keyword.put(:tenant_idf, mode in [:keyword, :hybrid] and tenant_idf?(user))
 
         with {:ok, candidates} <- run_legs(mode, user, query, search_opts, profile),
              vaults_by_id = load_candidate_vaults(user, vault, candidates),
@@ -655,6 +656,28 @@ defmodule Engram.Search do
   defp error_label({status, _body}) when is_integer(status), do: "http_#{status}"
   defp error_label(reason) when is_atom(reason), do: to_string(reason)
   defp error_label(_), do: "unknown"
+
+  @doc """
+  Whether the keyword leg computes IDF over this user's points only (spec
+  K4): Qdrant >= 1.19.0 (older servers reject the param; the version is
+  node-cached, unreadable means no) and at least
+  `ServiceConfig.get(:tenant_idf_min_points, 1_000)` points, below which a
+  per-tenant N is noise. The count is one index-only Postgres read, made
+  only past the version check, so a 1.18 server costs nothing.
+  `:tenant_idf` (default true) switches it off; the test suite does.
+  """
+  @spec tenant_idf?(map()) :: boolean()
+  def tenant_idf?(user) do
+    case Engram.ServiceConfig.get(:tenant_idf, true) and Qdrant.cached_server_version() do
+      %Version{} = v ->
+        Version.compare(v, "1.19.0") != :lt and
+          Engram.Indexing.point_count(user.id) >=
+            Engram.ServiceConfig.get(:tenant_idf_min_points, 1_000)
+
+      _off_or_unreadable ->
+        false
+    end
+  end
 
   defp sparse_query(user, query) do
     case Engram.Crypto.dek_filter_key(user) do

@@ -53,6 +53,13 @@ defmodule Engram.KeywordIndex.QdrantSparse do
   # time scale with it.
   @query_chars 4096
 
+  # A capped document is scored as if it were at most `@cap_len_avgdls` x
+  # avgdl long (review M3): capped at avgdl it had no length penalty at all,
+  # so a 1 MB floor point beat a short exact chunk on tf saturation alone.
+  @cap_len_avgdls 3
+  # The b the NIF encodes with: its norm is 0.25 + 0.75 * len / avgdl.
+  @nif_b 0.75
+
   # Vectors come back PACKED (u32 LE indices ascending, f64 LE values) so a
   # note's worth sits off-heap; see `Engram.Native` for the memory accounting.
   #
@@ -67,10 +74,19 @@ defmodule Engram.KeywordIndex.QdrantSparse do
   # it would outrank them. A longer document is encoded a second time with
   # `avgdl = doc_len / 3`; the NIF has no length knob, and that second pass
   # is one point's text.
+  #
+  # `b:` (default 0.75) is BM25's length weight. Merged v5 groups use a
+  # smaller one (plan Task 14.1): at 0.75 a 30 KB group sits 10 to 50x
+  # above `avgdl` and is buried on the leg exact queries need. The NIF's b
+  # is fixed, so such a document is re-encoded the same way, see
+  # `renormalize/7`.
   @impl Engram.KeywordIndex
   def encode_documents(texts, filter_key, avgdl, language, opts \\ [])
       when byte_size(filter_key) == 32 and is_number(avgdl) and avgdl > 0 do
     lang = Tokenizer.lang(language)
+    b = Keyword.get(opts, :b, @nif_b)
+    cap? = Keyword.get(opts, :cap_doc_len, false)
+    unless is_number(b) and b >= 0 and b <= @nif_b, do: raise(ArgumentError, "b: #{inspect(b)}")
 
     encoded =
       texts
@@ -86,8 +102,8 @@ defmodule Engram.KeywordIndex.QdrantSparse do
             do: {%{indices: indices, values: values}, doc_len}
       end)
 
-    if Keyword.get(opts, :cap_doc_len, false),
-      do: Enum.zip_with(texts, encoded, &cap_doc_len(&1, &2, filter_key, avgdl, lang)),
+    if cap? or b != @nif_b,
+      do: Enum.zip_with(texts, encoded, &renormalize(&1, &2, filter_key, avgdl, lang, b, cap?)),
       else: encoded
   end
 
@@ -112,25 +128,30 @@ defmodule Engram.KeywordIndex.QdrantSparse do
     )
   end
 
-  # A capped document is scored as if it were at most `@cap_len_avgdls` x
-  # avgdl long (review M3): capped at avgdl it had no length penalty at all,
-  # so a 1 MB floor point beat a short exact chunk on tf saturation alone.
-  # Re-encoding with avgdl = doc_len / 3 makes the length ratio exactly 3.
-  @cap_len_avgdls 3
+  # BM25 at `b` over a length `eff` (capped or not) has the norm
+  # 1 - b + b * eff / avgdl. The NIF gives the same norm when handed
+  # avgdl' = 0.75 * len / (0.75 - b + b * eff / avgdl), so a document that
+  # needs it is encoded once more with that avgdl. Positive for any b in
+  # [0, 0.75] and len > 0. At b = 0.75 and a capped length this is
+  # len / 3, the original cap (kept literal so floor points encode exactly
+  # as before).
+  # ponytail: a second NIF pass per such document; a `b` argument on the
+  # NIF removes it if the keyword encode ever shows up in a profile.
+  defp renormalize(text, {_vector, doc_len} = encoded, filter_key, avgdl, lang, b, cap?) do
+    eff = if cap?, do: min(doc_len, @cap_len_avgdls * avgdl), else: doc_len
 
-  defp cap_doc_len(text, {_vector, doc_len} = encoded, filter_key, avgdl, lang) do
-    if doc_len > @cap_len_avgdls * avgdl do
+    if doc_len == 0 or (b == @nif_b and eff == doc_len) do
+      encoded
+    else
+      nif_avgdl =
+        if b == @nif_b,
+          do: doc_len / @cap_len_avgdls,
+          else: @nif_b * doc_len / (@nif_b - b + b * eff / avgdl)
+
       [{indices, values, ^doc_len}] =
-        Engram.Native.encode_documents(
-          [IO.iodata_to_binary(text)],
-          filter_key,
-          doc_len / @cap_len_avgdls,
-          lang
-        )
+        Engram.Native.encode_documents([IO.iodata_to_binary(text)], filter_key, nif_avgdl, lang)
 
       {%{indices: indices, values: values}, doc_len}
-    else
-      encoded
     end
   end
 

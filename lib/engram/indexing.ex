@@ -232,7 +232,7 @@ defmodule Engram.Indexing do
          {:ok, vectors} <- retained_or_embed(retained, dense?, plan, texts, opts),
          :ok <- ensure_one_vector_per_text(vectors, texts, note),
          :ok = collect_garbage(n),
-         avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id),
+         avgdl = avgdl(note.user_id, note.vault_id),
          {:ok, prepared} <-
            build_prepared(note, user, plan, vectors, filter_key, avgdl) do
       # What the embedder was actually sent (#1618): reused chunks and
@@ -2179,25 +2179,52 @@ defmodule Engram.Indexing do
     out
   end
 
-  # Floor and merged chunks encode length-capped (`cap_doc_len`), the rest
-  # as usual: one call each, results in `chunks` order.
+  # One encode call per distinct `sparse_opts/1` (plain chunks, merged
+  # groups, floor points), results back in `chunks` order. The plain group
+  # calls the /4 arity: test doubles implement only that one.
   defp encode_sparse(chunks, filter_key, avgdl, language) do
-    {capped, plain} = Enum.split_with(chunks, &capped_length?/1)
-    texts = &Enum.map(&1, fn chunk -> chunk.context_text end)
+    chunks
+    |> Enum.with_index()
+    |> Enum.group_by(fn {chunk, _i} -> sparse_opts(chunk) end)
+    |> Enum.flat_map(fn {opts, group} ->
+      texts = Enum.map(group, fn {chunk, _i} -> chunk.context_text end)
 
-    capped_vectors =
-      if capped == [],
-        do: [],
-        else:
-          KeywordIndex.module().encode_documents(texts.(capped), filter_key, avgdl, language,
-            cap_doc_len: true
-          )
+      vectors =
+        if opts == [],
+          do: KeywordIndex.module().encode_documents(texts, filter_key, avgdl, language),
+          else: KeywordIndex.module().encode_documents(texts, filter_key, avgdl, language, opts)
 
-    plain_vectors =
-      KeywordIndex.module().encode_documents(texts.(plain), filter_key, avgdl, language)
-
-    restitch(chunks, &capped_length?/1, capped_vectors, plain_vectors)
+      Enum.zip_with(group, vectors, fn {_chunk, i}, vector -> {i, vector} end)
+    end)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.map(&elem(&1, 1))
   end
+
+  @doc """
+  Keyword encoder options for a chunk (plan Task 14.1). Floor and capped
+  groups encode length-capped (`cap_doc_len`). A chunk joining more than one
+  section (`section_count > 1`: a v5 min512 chunk or a capped group) scores
+  with BM25 `b` = `ServiceConfig.get(:bm25_b_merged, 0.25)`, everything else
+  with the encoder's 0.75. A v3 chunk has no `section_count`, so its
+  encoding is unchanged.
+  """
+  @spec sparse_opts(map()) :: keyword()
+  def sparse_opts(chunk) do
+    cap = if capped_length?(chunk), do: [cap_doc_len: true], else: []
+
+    if Map.get(chunk, :section_count, 1) > 1,
+      do: cap ++ [b: Engram.ServiceConfig.get(:bm25_b_merged, 0.25)],
+      else: cap
+  end
+
+  @doc """
+  The vault's BM25 `avgdl`, the one source every keyword encode reads.
+  Today the cached `KeywordIndex.Stats.avgdl/2`.
+  """
+  # ponytail: Task 16 pins avgdl for the v5 pass here (spec K2, H14): the
+  # `rebuild_manifest_vaults.avgdl` row when one exists, else this value.
+  @spec avgdl(Ecto.UUID.t(), Ecto.UUID.t()) :: float()
+  def avgdl(user_id, vault_id), do: Engram.KeywordIndex.Stats.avgdl(user_id, vault_id)
 
   # Both inputs: `context_text` (keyword vector, payload) and `embed_text`
   # (dense vector). They are capped separately, so past 512 bytes of
@@ -2312,7 +2339,7 @@ defmodule Engram.Indexing do
           {:ok, 0, unmatched}
 
         {matched, unmatched} ->
-          avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id)
+          avgdl = avgdl(note.user_id, note.vault_id)
           language = note_language(chunks)
           sparse = encode_sparse(Enum.map(matched, &elem(&1, 0)), filter_key, avgdl, language)
 
