@@ -32,17 +32,27 @@ defmodule Engram.Crypto.RotationGate do
   alias Engram.Accounts.User
   alias Engram.Repo
 
-  @spec check(Ecto.UUID.t()) :: :ok | {:error, :rotation_in_progress | :user_not_found}
-  def check(user_id) when is_binary(user_id) do
+  @doc """
+  Reads the lock fresh. With `share_lock: true` (inside a transaction) the
+  user row is also held `FOR SHARE` until commit: `RotationLock.acquire/1`
+  updates that row, so a rotation starting after this check waits for the
+  caller's write to commit, and its sweep then sees the row. Without it, a
+  write that passed the check can still commit after the sweep went by.
+  """
+  @spec check(Ecto.UUID.t(), keyword()) ::
+          :ok | {:error, :rotation_in_progress | :user_not_found}
+  def check(user_id, opts \\ []) when is_binary(user_id) do
     # Select `{id, locked_at}` so we can distinguish "user not found" (nil)
     # from "user found, lock nil" ({id, nil}).
-    case Repo.one(
-           from(u in User,
-             where: u.id == ^user_id,
-             select: {u.id, u.dek_rotation_locked_at}
-           ),
-           skip_tenant_check: true
-         ) do
+    query =
+      from(u in User,
+        where: u.id == ^user_id,
+        select: {u.id, u.dek_rotation_locked_at}
+      )
+
+    query = if opts[:share_lock], do: from(u in query, lock: "FOR SHARE"), else: query
+
+    case Repo.one(query, skip_tenant_check: true) do
       nil -> {:error, :user_not_found}
       {_id, %DateTime{}} -> {:error, :rotation_in_progress}
       {_id, _} -> :ok

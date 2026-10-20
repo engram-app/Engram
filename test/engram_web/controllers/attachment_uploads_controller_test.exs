@@ -367,6 +367,75 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
     end
   end
 
+  describe "while a DEK rotation holds the user" do
+    import Mox
+
+    defp set_rotation_lock(user, at) do
+      Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: at]],
+        skip_tenant_check: true
+      )
+
+      # The auth path serves the user from the :user cache.
+      Engram.Accounts.evict_user(user.id)
+    end
+
+    defp rows(schema, user),
+      do: Repo.all(from(r in schema, where: r.user_id == ^user.id), skip_tenant_check: true)
+
+    defp assert_rotating(resp) do
+      assert %{"error" => "rotation_in_progress"} = json_response(resp, 503)
+      assert get_resp_header(resp, "retry-after") == ["60"]
+    end
+
+    test "start, put_part and complete are 503 and write nothing; all succeed once cleared", %{
+      conn: conn,
+      user: user
+    } do
+      bytes = :crypto.strong_rand_bytes(100)
+      %{"upload_id" => id} = start!(conn, "a.png", byte_size(bytes))
+      set_rotation_lock(user, DateTime.utc_now(:second))
+
+      assert_rotating(start(conn, "b.png", 10))
+      assert_rotating(put_part(conn, id, 1, bytes))
+      assert_rotating(complete(conn, id))
+      assert [%Upload{parts: parts}] = rows(Upload, user)
+      assert parts == %{}
+      assert rows(Attachment, user) == []
+
+      set_rotation_lock(user, nil)
+      assert conn |> put_part(id, 1, bytes) |> json_response(200)
+      assert %{"attachment" => _} = conn |> complete(id) |> json_response(200)
+      assert conn |> start("b.png", 10) |> json_response(201)
+    end
+
+    # The request plug saw no lock; the rotation starts while the parts are
+    # assembled, before the locked row write.
+    test "a rotation that starts mid-complete is refused at the row write", %{
+      conn: conn,
+      user: user
+    } do
+      bytes = :crypto.strong_rand_bytes(100)
+      %{"upload_id" => id} = start!(conn, "a.png", byte_size(bytes))
+      assert conn |> put_part(id, 1, bytes) |> json_response(200)
+
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      stub_with(Engram.MockStorage, InMemory)
+
+      stub(Engram.MockStorage, :complete_multipart_upload, fn key, s3_id, parts ->
+        set_rotation_lock(user, DateTime.utc_now(:second))
+        InMemory.complete_multipart_upload(key, s3_id, parts)
+      end)
+
+      assert_rotating(complete(conn, id))
+      assert rows(Attachment, user) == []
+      assert [_] = rows(Upload, user)
+    end
+  end
+
   # Over a real Bandit socket: Plug.Test never reaches Bandit's body state,
   # which is what a refusal on a stale (pre-read) conn corrupts.
   describe "part bodies over HTTP/1" do

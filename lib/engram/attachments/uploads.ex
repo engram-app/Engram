@@ -58,10 +58,12 @@ defmodule Engram.Attachments.Uploads do
              | {:too_large, integer()}
              | {:storage_cap_reached, integer(), integer()}
              | :multipart_unsupported
+             | :rotation_in_progress
              | {:storage, term()}
              | Ecto.Changeset.t()}
   def start(user, vault, attrs) do
-    with {:ok, req} <- cast_request(attrs),
+    with :ok <- Attachments.rotation_gate(user),
+         {:ok, req} <- cast_request(attrs),
          path = PathSanitizer.sanitize(req.path),
          mime = req[:mime_type] || MimeWhitelist.detect_mime(path),
          :ok <- MimeWhitelist.check(mime, path),
@@ -98,7 +100,14 @@ defmodule Engram.Attachments.Uploads do
           wrapped_file_key: wrapped,
           file_key_nonce: key_nonce
         })
-        |> then(&Repo.with_tenant(user.id, fn -> Repo.insert(&1) end))
+        # Gated again inside the insert's transaction (share-locks the user
+        # row): a session committed after rotation swept the sessions would
+        # keep a file key and path under the retiring DEK.
+        |> then(fn changeset ->
+          Repo.with_tenant(user.id, fn ->
+            with :ok <- Attachments.rotation_gate(user), do: Repo.insert(changeset)
+          end)
+        end)
         |> unwrap()
         |> case do
           {:ok, upload} ->
@@ -119,11 +128,17 @@ defmodule Engram.Attachments.Uploads do
   """
   @spec put_part(map(), map(), Ecto.UUID.t(), integer(), binary()) ::
           {:ok, %{part: pos_integer()}}
-          | {:error, :not_found | :bad_part_number | :bad_part_size | {:storage, term()}}
+          | {:error,
+             :not_found
+             | :bad_part_number
+             | :bad_part_size
+             | :rotation_in_progress
+             | {:storage, term()}}
   def put_part(user, vault, upload_id, n, bytes) when is_binary(bytes) do
     user = Crypto.fresh_user(user)
 
-    with {:ok, up} <- fetch(user, vault, upload_id),
+    with :ok <- Attachments.rotation_gate(user),
+         {:ok, up} <- fetch(user, vault, upload_id),
          :ok <- check_part(up, n, byte_size(bytes)),
          {:ok, file_key} <- file_key(user, up, up.attachment_id),
          sealed = SegmentedCipher.seal_segment(bytes, file_key, up.id, n - 1, up.part_count),
@@ -176,6 +191,7 @@ defmodule Engram.Attachments.Uploads do
              :not_found
              | {:missing_parts, [pos_integer()]}
              | {:storage_cap_reached, integer(), integer()}
+             | :rotation_in_progress
              | {:storage, term()}}
   def complete(user, vault, upload_id) do
     user = Crypto.fresh_user(user)

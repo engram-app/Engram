@@ -87,7 +87,12 @@ defmodule EngramWeb.Plugs.RotationLockCheck do
     end)
   end
 
-  defp halt_rotating(conn) do
+  @doc """
+  The 503 every rotation refusal answers with. Also used by write paths that
+  hit the lock after this plug let the request through.
+  """
+  @spec halt_rotating(Plug.Conn.t()) :: Plug.Conn.t()
+  def halt_rotating(conn) do
     conn
     |> put_resp_header("retry-after", "60")
     |> Halt.json(503, %{error: "rotation_in_progress"})

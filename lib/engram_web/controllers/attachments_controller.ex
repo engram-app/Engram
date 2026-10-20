@@ -61,6 +61,9 @@ defmodule EngramWeb.AttachmentsController do
       }
     },
     responses: [
+      service_unavailable:
+        {"`rotation_in_progress`: an encryption key rotation holds the account; retry after " <>
+           "`retry-after` seconds.", "application/json", Schemas.MessageError},
       ok: {"Uploaded", "application/json", Schemas.AttachmentResponse},
       bad_request: {"Invalid base64", "application/json", Schemas.MessageError},
       payment_required:
@@ -316,6 +319,10 @@ defmodule EngramWeb.AttachmentsController do
 
       {:error, {:storage, _reason}} ->
         conn |> put_status(502) |> json(%{error: "failed to upload to storage backend"})
+
+      # A rotation that started after RotationLockCheck let the request in.
+      {:error, :rotation_in_progress} ->
+        EngramWeb.Plugs.RotationLockCheck.halt_rotating(conn)
 
       # Defense in depth: the context enforces the gate too. The pre-check
       # above answers first on the HTTP path; these keep a context rejection

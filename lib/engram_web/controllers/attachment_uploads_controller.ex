@@ -34,6 +34,9 @@ defmodule EngramWeb.AttachmentUploadsController do
     request_body:
       {"File to upload", "application/json", Schemas.AttachmentUploadStartRequest, required: true},
     responses: [
+      service_unavailable:
+        {"`rotation_in_progress`: an encryption key rotation holds the account; retry after " <>
+           "`retry-after` seconds.", "application/json", Schemas.MessageError},
       created: {"Session opened", "application/json", Schemas.AttachmentUploadSession},
       payment_required:
         {"Attachments require a paid plan / quota", "application/json", Schemas.LimitError},
@@ -84,6 +87,9 @@ defmodule EngramWeb.AttachmentUploadsController do
       }
     },
     responses: [
+      service_unavailable:
+        {"`rotation_in_progress`: an encryption key rotation holds the account; retry after " <>
+           "`retry-after` seconds.", "application/json", Schemas.MessageError},
       ok: {"Part stored", "application/json", Schemas.AttachmentUploadPart},
       not_found: {"No such upload", "application/json", Schemas.Error},
       request_timeout:
@@ -144,6 +150,9 @@ defmodule EngramWeb.AttachmentUploadsController do
     tags: ["Attachments"],
     parameters: [id: @id_param],
     responses: [
+      service_unavailable:
+        {"`rotation_in_progress`: an encryption key rotation holds the account; retry after " <>
+           "`retry-after` seconds.", "application/json", Schemas.MessageError},
       ok: {"Uploaded", "application/json", Schemas.AttachmentResponse},
       payment_required: {"Quota exceeded", "application/json", Schemas.LimitError},
       not_found: {"No such upload", "application/json", Schemas.Error},
@@ -283,6 +292,10 @@ defmodule EngramWeb.AttachmentUploadsController do
 
   defp refuse(conn, {:storage, _reason}),
     do: conn |> put_status(502) |> json(%{error: "failed to upload to storage backend"})
+
+  # A rotation that started after RotationLockCheck let the request in.
+  defp refuse(conn, :rotation_in_progress),
+    do: EngramWeb.Plugs.RotationLockCheck.halt_rotating(conn)
 
   # Changesets (422) and anything unforeseen go through the fallback.
   defp refuse(_conn, reason), do: {:error, reason}

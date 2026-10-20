@@ -16,6 +16,7 @@ defmodule Engram.Attachments do
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.Crypto.RotationGate
   alias Engram.Links
   alias Engram.Logger.Metadata
   alias Engram.Notes.Enqueue
@@ -159,7 +160,10 @@ defmodule Engram.Attachments do
       existing = fetch_existing(user, vault.id, path_hmac)
       :ok = Repo.advisory_lock!(quota_lock_id(user.id))
 
-      with :ok <- validate_storage_cap(user, existing, size),
+      # Under the locks and before anything is written: a row committed after
+      # a DEK rotation's sweep went by would stay under the retiring key.
+      with :ok <- rotation_gate(user),
+           :ok <- validate_storage_cap(user, existing, size),
            {:ok, insert_id, attrs} <- build.(existing),
            {:ok, att} <- write_row(user, existing, insert_id, attrs) do
         # Phase B.3: path is virtual — splice the plaintext we already have
@@ -184,6 +188,20 @@ defmodule Engram.Attachments do
 
       {:error, _} = err ->
         err
+    end
+  end
+
+  @doc """
+  `{:error, :rotation_in_progress}` while a DEK rotation holds the user (read
+  fresh, never from a cached struct). Inside a transaction it also holds the
+  user row against a rotation starting before the caller commits
+  (`RotationGate.check/2`). Fails closed on a missing user.
+  """
+  @spec rotation_gate(map()) :: :ok | {:error, :rotation_in_progress}
+  def rotation_gate(user) do
+    case RotationGate.check(user.id, share_lock: Repo.in_transaction?()) do
+      :ok -> :ok
+      {:error, _} -> {:error, :rotation_in_progress}
     end
   end
 

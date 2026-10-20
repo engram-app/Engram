@@ -371,6 +371,102 @@ defmodule Engram.Attachments.UploadsTest do
     end
   end
 
+  # A write that commits after DEK rotation has swept past it is wrapped under
+  # the retiring key and becomes unreadable once the rotation finishes.
+  describe "while a DEK rotation holds the user" do
+    defp set_rotation_lock(user, at) do
+      import Ecto.Query, only: [from: 2]
+
+      Engram.Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: at]],
+        skip_tenant_check: true
+      )
+
+      # The auth path serves the user from the :user cache.
+      Engram.Accounts.evict_user(user.id)
+    end
+
+    defp rows(schema, user) do
+      import Ecto.Query, only: [from: 2]
+      Engram.Repo.all(from(r in schema, where: r.user_id == ^user.id), skip_tenant_check: true)
+    end
+
+    test "start is refused and opens nothing", %{user: user, vault: vault} do
+      set_rotation_lock(user, DateTime.utc_now(:second))
+
+      assert {:error, :rotation_in_progress} =
+               Uploads.start(user, vault, %{path: "a.png", size_bytes: 10, mtime: 1.0})
+
+      assert rows(Upload, user) == []
+    end
+
+    # The top-of-start check passed; the rotation starts while storage opens
+    # the multipart upload, before the session row is inserted.
+    test "a rotation that starts mid-start is refused at the insert", %{
+      user: user,
+      vault: vault
+    } do
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      stub_with(Engram.MockStorage, InMemory)
+
+      stub(Engram.MockStorage, :start_multipart, fn key ->
+        set_rotation_lock(user, DateTime.utc_now(:second))
+        InMemory.start_multipart(key)
+      end)
+
+      assert {:error, :rotation_in_progress} =
+               Uploads.start(user, vault, %{path: "a.png", size_bytes: 10, mtime: 1.0})
+
+      assert rows(Upload, user) == []
+    end
+
+    test "put_part is refused and records nothing", %{user: user, vault: vault} do
+      up = start!(user, vault, "a.png", 10)
+      set_rotation_lock(user, DateTime.utc_now(:second))
+
+      assert {:error, :rotation_in_progress} =
+               Uploads.put_part(user, vault, up.id, 1, :binary.copy("x", 10))
+
+      assert [%Upload{parts: parts}] = rows(Upload, user)
+      assert parts == %{}
+    end
+
+    test "complete is refused, keeps the session, and succeeds once the lock clears", %{
+      user: user,
+      vault: vault
+    } do
+      up = start!(user, vault, "a.png", 10)
+      bytes = :binary.copy("x", 10)
+      {:ok, _} = Uploads.put_part(user, vault, up.id, 1, bytes)
+      set_rotation_lock(user, DateTime.utc_now(:second))
+
+      assert {:error, :rotation_in_progress} = Uploads.complete(user, vault, up.id)
+      assert rows(Attachment, user) == []
+      assert [_] = rows(Upload, user)
+
+      set_rotation_lock(user, nil)
+      assert {:ok, att} = Uploads.complete(user, vault, up.id)
+      assert decrypt_stored(user, Engram.Repo.reload!(att, skip_tenant_check: true)) == bytes
+    end
+
+    test "a single-request upload is refused at the locked write", %{user: user, vault: vault} do
+      set_rotation_lock(user, DateTime.utc_now(:second))
+
+      assert {:error, :rotation_in_progress} =
+               Attachments.upsert_attachment(user, vault, %{path: "doc.png", content: "v1"})
+
+      assert rows(Attachment, user) == []
+
+      set_rotation_lock(user, nil)
+
+      assert {:ok, _} =
+               Attachments.upsert_attachment(user, vault, %{path: "doc.png", content: "v1"})
+    end
+  end
+
   describe "abort/3" do
     test "drops the session", %{user: user, vault: vault} do
       up = start!(user, vault, "a.png", 10)

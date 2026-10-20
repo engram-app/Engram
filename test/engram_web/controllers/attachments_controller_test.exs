@@ -1332,6 +1332,72 @@ defmodule EngramWeb.AttachmentsControllerTest do
   end
 
   # ---------------------------------------------------------------------------
+  # DEK rotation lock
+  # ---------------------------------------------------------------------------
+
+  describe "POST /attachments while a DEK rotation holds the user" do
+    import Ecto.Query, only: [from: 2]
+    import Mox
+
+    alias Engram.Attachments.Attachment
+    alias Engram.Repo
+    alias Engram.Storage.InMemory
+
+    defp set_rotation_lock(user, at) do
+      Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: at]],
+        skip_tenant_check: true
+      )
+
+      # The auth path serves the user from the :user cache.
+      Engram.Accounts.evict_user(user.id)
+    end
+
+    defp live_rows(user),
+      do: Repo.all(from(a in Attachment, where: a.user_id == ^user.id), skip_tenant_check: true)
+
+    defp upload(conn),
+      do: post(conn, "/api/attachments", %{path: "r.png", content_base64: @sample_base64})
+
+    test "is 503 rotation_in_progress and writes nothing; succeeds once cleared", %{
+      conn: conn,
+      user: user
+    } do
+      set_rotation_lock(user, DateTime.utc_now(:second))
+      resp = upload(conn)
+      assert %{"error" => "rotation_in_progress"} = json_response(resp, 503)
+      assert get_resp_header(resp, "retry-after") == ["60"]
+      assert live_rows(user) == []
+
+      set_rotation_lock(user, nil)
+      assert conn |> upload() |> json_response(200)
+    end
+
+    # The request plug saw no lock; the rotation starts while the bytes are
+    # stored, before the locked row write.
+    test "a rotation that starts mid-request is refused at the row write", %{
+      conn: conn,
+      user: user
+    } do
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      stub_with(Engram.MockStorage, InMemory)
+
+      stub(Engram.MockStorage, :put, fn key, bin, opts ->
+        set_rotation_lock(user, DateTime.utc_now(:second))
+        InMemory.put(key, bin, opts)
+      end)
+
+      resp = upload(conn)
+      assert %{"error" => "rotation_in_progress"} = json_response(resp, 503)
+      assert get_resp_header(resp, "retry-after") == ["60"]
+      assert live_rows(user) == []
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # GET /attachments/*path for format v2 (segmented, chunked uploads)
   # ---------------------------------------------------------------------------
 
