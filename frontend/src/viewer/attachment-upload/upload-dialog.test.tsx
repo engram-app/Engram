@@ -213,6 +213,42 @@ describe("AttachmentUploadDialog failure states", () => {
 	});
 });
 
+describe("AttachmentUploadDialog live region", () => {
+	it("keeps the progress bar and percent while waiting to retry", async () => {
+		mutateAsync.mockImplementation(
+			({
+				onProgress,
+				onRetry,
+			}: {
+				onProgress: (d: number, t: number) => void;
+				onRetry: () => void;
+			}) => {
+				onProgress(1, 4);
+				onRetry();
+				return new Promise(() => {});
+			},
+		);
+		renderOne();
+		clickUpload();
+		await screen.findByText("Waiting to retry");
+		expect(screen.getByRole("progressbar", { name: "Uploading a.txt" })).toHaveAttribute(
+			"value",
+			"25",
+		);
+		expect(screen.getByText("25%")).toBeInTheDocument();
+	});
+
+	it("announces only the status text; the action buttons sit outside the live region", async () => {
+		mutateAsync.mockRejectedValue(limit("file_too_large"));
+		renderOne();
+		clickUpload();
+		const upgrade = await screen.findByRole("button", { name: "Upgrade" });
+		const status = screen.getByText("This file is over your plan's size limit.").closest("output");
+		expect(status).not.toBeNull();
+		expect(status).not.toContainElement(upgrade);
+	});
+});
+
 describe("AttachmentUploadDialog focus", () => {
 	it("focuses the folder search box on open", () => {
 		render(

@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useConfig } from "@/config-context";
 import { useT } from "@/i18n/locale-provider";
+import type { Translate } from "@/i18n/translate";
 import { FolderPicker } from "./folder-picker";
 import { type UploadFailure, uploadFailure } from "./upload-failure";
 
@@ -35,6 +36,24 @@ function humanSize(bytes: number): string {
 		return `${(bytes / 1024).toFixed(1)} KB`;
 	}
 	return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function statusText(row: Row, t: Translate): string {
+	switch (row.status) {
+		case "error":
+			return row.error?.text ?? "";
+		case "uploading":
+			return t("Uploading…");
+		case "waiting":
+			return t("Waiting to retry");
+		case "done":
+			return t("Done");
+		default:
+			return t("{size} · {type}", {
+				size: humanSize(row.file.size),
+				type: row.file.type || t("unknown"),
+			});
+	}
 }
 
 const patch = (rows: Row[], i: number, next: Partial<Row>): Row[] =>
@@ -145,31 +164,12 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 								className="flex items-center justify-between border-border/50 border-b py-1.5 text-sm last:border-b-0"
 							>
 								<span className="truncate">{row.file.name}</span>
-								<output className="ml-2 flex shrink-0 items-center gap-2 text-muted-foreground text-xs">
-									{row.status === "error" && row.error ? (
-										<>
-											<span className="text-destructive">{row.error.text}</span>
-											{row.error.upgradeReason !== undefined && billingEnabled ? (
-												<Button
-													variant="link"
-													size="sm"
-													onClick={() => showUpgrade(row.error?.upgradeReason ?? "")}
-												>
-													{t("Upgrade")}
-												</Button>
-											) : null}
-											{row.error.retry ? (
-												<Button
-													variant="link"
-													size="sm"
-													disabled={busy}
-													onClick={() => retryRow(i)}
-												>
-													{t("Try again")}
-												</Button>
-											) : null}
-										</>
-									) : row.status === "uploading" ? (
+								<span className="ml-2 flex shrink-0 items-center gap-2 text-muted-foreground text-xs">
+									{/* Only the status text is announced; the controls stay outside the live region. */}
+									<output className={row.status === "error" ? "text-destructive" : undefined}>
+										{statusText(row, t)}
+									</output>
+									{row.status === "uploading" || row.status === "waiting" ? (
 										<>
 											<progress
 												aria-label={t("Uploading {name}", { name: row.file.name })}
@@ -178,17 +178,24 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 											/>
 											{row.pct === undefined ? null : t("{pct}%", { pct: row.pct })}
 										</>
-									) : row.status === "waiting" ? (
-										t("Waiting to retry")
-									) : row.status === "done" ? (
-										t("Done")
-									) : (
-										t("{size} · {type}", {
-											size: humanSize(row.file.size),
-											type: row.file.type || t("unknown"),
-										})
-									)}
-								</output>
+									) : null}
+									{row.status === "error" &&
+									row.error?.upgradeReason !== undefined &&
+									billingEnabled ? (
+										<Button
+											variant="link"
+											size="sm"
+											onClick={() => showUpgrade(row.error?.upgradeReason ?? "")}
+										>
+											{t("Upgrade")}
+										</Button>
+									) : null}
+									{row.status === "error" && row.error?.retry ? (
+										<Button variant="link" size="sm" disabled={busy} onClick={() => retryRow(i)}>
+											{t("Try again")}
+										</Button>
+									) : null}
+								</span>
 							</li>
 						))}
 					</ul>

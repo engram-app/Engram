@@ -1,8 +1,9 @@
 import { ApiError, LimitExceededError } from "@/api/client";
 import type { Translate } from "@/i18n/translate";
+import type { UIText } from "@/i18n/ui-text";
 
-interface UploadFailure {
-	text: string;
+export interface UploadFailure {
+	text: UIText;
 	/** Set when raising the plan fixes it: the reason the upgrade dialog explains. */
 	upgradeReason?: string;
 	/** True when sending the same file again can work. */
@@ -16,8 +17,6 @@ const isApi = (err: unknown): err is ApiError =>
 	err instanceof ApiError || (err instanceof Error && err.name === "ApiError");
 
 /** The one mapping from an upload error to what the user is told and offered. */
-export type { UploadFailure };
-
 export function uploadFailure(err: unknown, t: Translate): UploadFailure {
 	if (isLimit(err)) {
 		switch (err.reason) {

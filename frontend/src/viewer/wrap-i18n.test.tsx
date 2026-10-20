@@ -60,7 +60,7 @@ test("uploadFilesTo reports a failure through the translate function it is given
 		folder: "",
 		t,
 	});
-	expect(toastError).toHaveBeenCalledWith("[Couldn't upload a.png]");
+	expect(toastError).toHaveBeenCalledWith("[Upload failed. Try again.]");
 });
 
 test("the translator facet defaults to English and carries the editor's translate function", () => {

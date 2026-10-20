@@ -158,6 +158,12 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
 		"Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
 	"disconnect it in your connections":
 		"Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
+	// ms read "Upload" as "restore" (Pemulihan gagal), cs mis-agreed "This file"
+	// (Tato soubor); both 2026-10-20.
+	"Upload failed. Try again.":
+		"Error shown when sending a file to the server failed. Upload means sending a file from the user's device to the server, not restoring or recovering. Then ask the user to try again.",
+	"This file is over your plan's size limit.":
+		"Error shown for one file the user tried to upload. 'This file' is one file, so make the demonstrative agree in gender and case with the word for file.",
 	// cs read {folder} as a vault ("ve skladu", 2026-10-18).
 	"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 	// ja joined the items with 、 and dropped the separators (2026-10-18).

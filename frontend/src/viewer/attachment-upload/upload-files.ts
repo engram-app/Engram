@@ -2,6 +2,7 @@ import { LimitExceededError } from "@/api/client";
 import type { Translate } from "@/i18n/translate";
 import { notify } from "@/lib/notify";
 import { uniqueAttachmentName } from "../attachment-blob";
+import { uploadFailure } from "./upload-failure";
 
 // Paths this tab has just uploaded. The attachments list only learns about them
 // after the upload's refetch lands, and the backend upserts, so a second drop of
@@ -63,7 +64,7 @@ export async function uploadFilesTo(opts: {
 			done.push(path);
 		} catch (err) {
 			if (!(err instanceof LimitExceededError)) {
-				notify.error(t("Couldn't upload {name}", { name: file.name }));
+				notify.error(uploadFailure(err, t).text);
 			}
 		}
 	}
