@@ -117,6 +117,33 @@ jobs:
           VID: ${{ steps.v.outputs.vid || steps.rebuild.outputs.vid }}
         run: bunx wrangler versions deploy "${VID}@100%" --yes
 
+      # Marks the promote on every Grafana graph, so an alert (e.g. the OAuth
+      # code redemption ratio, which #2003's promote broke) lines up with the
+      # frontend change that caused it. Skipped until GRAFANA_ANNOTATION_TOKEN
+      # (a Grafana service-account token with annotations:write) and the
+      # GRAFANA_URL repo variable are set. Never fails the promote: it
+      # already happened in the step above.
+      - name: Annotate promote in Grafana
+        env:
+          GRAFANA_TOKEN: ${{ secrets.GRAFANA_ANNOTATION_TOKEN }}
+          GRAFANA_URL: ${{ vars.GRAFANA_URL }}
+        run: |
+          set -uo pipefail
+          if [ -z "${GRAFANA_TOKEN:-}" ] || [ -z "${GRAFANA_URL:-}" ]; then
+            echo "No Grafana token/url configured, skipping annotation."; exit 0
+          fi
+          SHORT="${SHA:0:7}"
+          BODY=$(jq -nc --arg t "frontend promote \`$SHORT\`" \
+            --argjson ms "$(( $(date +%s) * 1000 ))" \
+            '{time:$ms, text:$t, tags:["deploy","frontend"]}')
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $GRAFANA_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --max-time 10 \
+            --data "$BODY" \
+            "${GRAFANA_URL%/}/api/annotations") || code="000"
+          case "$code" in 2*) echo "Annotated ($code)";; *) echo "::warning::Grafana annotation failed (HTTP $code)";; esac
+
       # A shipped release is the ONE thing that belongs in announcements.
       # Everything else this workflow can say is a failure, and failures go
       # to alerts (below) — the two used to share one webhook, so "we
