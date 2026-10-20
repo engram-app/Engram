@@ -106,6 +106,18 @@ defmodule Engram.Vector.QdrantWaitTest do
     assert Qdrant.server_timeout_s(:indexing) == 25
   end
 
+  # Qdrant Cloud's strict `max_timeout` (30) 400s any request asking for
+  # more, so a configured search budget of 32s or more broke every search
+  # (review L5). Clamped; the client budget still waits the full time.
+  test "the search server timeout never exceeds the strict max_timeout" do
+    max = Engram.Vector.QdrantLayout.desired_strict(:cloud)["max_timeout"]
+
+    for ms <- [31_000, 32_000, 60_000, 600_000] do
+      ServiceConfig.put_override(:qdrant_search_timeout, ms)
+      assert Qdrant.server_timeout_s(:search) == max
+    end
+  end
+
   # `wait=true` past the server `timeout`: HTTP 200 with result.status
   # "wait_timeout" (shard_ops.rs). The op is queued, not applied, so the
   # points may still be invisible; it must not read as success.

@@ -73,6 +73,8 @@ defmodule Engram.Vector.QdrantLayout do
   # max_query_limit plus max_timeout already bound an exact search. No
   # read/write_rate_limit: they are per replica, not per tenant, so one large
   # vault would throttle everyone.
+  @max_timeout_s 30
+
   @hard_limits %{
     "max_query_limit" => 8192,
     "search_max_oversampling" => 4,
@@ -81,7 +83,7 @@ defmodule Engram.Vector.QdrantLayout do
     "filter_max_conditions" => 64,
     "condition_max_size" => 4096,
     "max_points_count" => 1_500_000,
-    "max_timeout" => 30,
+    "max_timeout" => @max_timeout_s,
     "search_max_batchsize" => 8
   }
 
@@ -104,6 +106,9 @@ defmodule Engram.Vector.QdrantLayout do
                      "max_collection_vector_size_bytes" => @byte_ceiling
                    }
                  )
+
+  @doc "Cloud `max_timeout`, seconds: every server `timeout` the app sends is at most this."
+  def max_timeout_s, do: @max_timeout_s
 
   @doc """
   The strict-mode hard limits for a deployment. `:cloud` (our Qdrant Cloud

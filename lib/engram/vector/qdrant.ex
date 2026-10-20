@@ -138,11 +138,17 @@ defmodule Engram.Vector.Qdrant do
 
   @doc """
   Qdrant-side `timeout` (whole seconds) for a request profile, below that
-  profile's client `receive_timeout`. Floored at 1: Qdrant reads 0 as no limit.
+  profile's client `receive_timeout`. Floored at 1 (Qdrant reads 0 as no
+  limit) and capped at `QdrantLayout.max_timeout_s/0`.
   """
   @spec server_timeout_s(:search | :indexing) :: pos_integer()
-  def server_timeout_s(:search),
-    do: max(div(ServiceConfig.get(:qdrant_search_timeout, 5_000), 1000) - 1, 1)
+  # Clamped to the Cloud strict `max_timeout`: above it Qdrant 400s the
+  # search outright. The client `receive_timeout` keeps the configured budget.
+  def server_timeout_s(:search) do
+    (div(ServiceConfig.get(:qdrant_search_timeout, 5_000), 1000) - 1)
+    |> max(1)
+    |> min(QdrantLayout.max_timeout_s())
+  end
 
   # 5s under the 30s indexing `receive_timeout`.
   def server_timeout_s(:indexing), do: 25
