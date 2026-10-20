@@ -192,6 +192,9 @@ defmodule Engram.Mailer do
     render_and_deliver(email, legal_subject(l, doc, kind), body, l)
   end
 
+  # Stands in for `{link}` while a sentence is escaped (see `with_link/2`).
+  @link_marker "\uE000link\uE000"
+
   @doc """
   Tells a user an MCP client just connected, with a link into their vault.
   The consent tab hands straight back to the client, so this (and the
@@ -202,32 +205,42 @@ defmodule Engram.Mailer do
     l = I18n.locale_for(user)
     app_url = String.trim_trailing(app_url, "/")
 
-    {subject, intro} =
-      if is_binary(client_name) and client_name != "",
-        do:
-          {I18n.t(l, "{client} is connected to Engram", client: client_name),
-           t(
-             l,
-             "{client} is now connected to your Engram account and can use the vaults you chose.",
-             client: client_name
-           )},
-        else:
-          {I18n.t(l, "Your AI tool is connected to Engram"),
-           t(
-             l,
-             "Your AI tool is now connected to your Engram account and can use the vaults you chose."
-           )}
+    link =
+      &~s(<a href="#{app_url}/#settings/connections" style="color:#{Tokens.brand_purple()};">#{&1}</a>)
+
+    disconnect = link.(t(l, "Disconnect it in your connections"))
+
+    {subject, heading, can, ask, footer} =
+      if is_binary(client_name) and client_name != "" do
+        vars = [client: client_name]
+
+        {I18n.t(l, "{client} is connected to Engram", vars), t(l, "{client} is connected", vars),
+         t(l, "{client} can now use the vaults you chose in your Engram account.", vars),
+         t(l, "Ask {client} to save a note, and it shows up in your vault.", vars),
+         with_link(
+           I18n.t(l, "Didn't connect {client}? {link}.", [{:link, @link_marker} | vars]),
+           disconnect
+         )}
+      else
+        {I18n.t(l, "Your AI tool is connected to Engram"), t(l, "Your AI tool is connected"),
+         t(l, "Your AI tool can now use the vaults you chose in your Engram account."),
+         t(l, "Ask your AI tool to save a note, and it shows up in your vault."),
+         with_link(I18n.t(l, "Didn't connect this tool? {link}.", link: @link_marker), disconnect)}
+      end
 
     body = """
+    <mj-text font-size="22px" font-weight="700" line-height="1.3" padding-bottom="4px">#{heading}</mj-text>
     <mj-text>#{greeting(l, user)}</mj-text>
-    <mj-text>#{intro}</mj-text>
-    <mj-text>#{t(l, "Open your vault any time to see your notes.")}</mj-text>
-    #{button(app_url <> "/", t(l, "Open your vault"))}
-    <mj-text>#{t(l, "If this was not you, disconnect it right away.")} <a href="#{app_url}/#settings/connections">#{t(l, "Manage your connections")}</a></mj-text>
+    <mj-text>#{can}</mj-text>
+    <mj-text>#{ask}</mj-text>
+    #{button(app_url <> "/", t(l, "Open your vault"), ~s( font-size="16px" font-weight="600" inner-padding="14px 28px" border-radius="6px" padding="16px 25px 20px"))}
     <mj-text>#{t(l, "The Engram team")}</mj-text>
     """
 
-    render_and_deliver(email, subject, body, l)
+    case Template.render(body, l, footer: footer) do
+      {:ok, html} -> deliver(email, subject, html, [])
+      {:error, reason} -> {:error, {:render_failed, reason}}
+    end
   end
 
   # Whole sentences per document, never "{document}" spliced into one: the
@@ -289,9 +302,19 @@ defmodule Engram.Mailer do
   # once, here, so translated text and user input both reach HTML safely.
   defp t(l, key, vars \\ []), do: Template.esc(I18n.t(l, key, vars))
 
-  defp button(href, label),
+  # One sentence with a link inside it: `{link}` is a placeholder in the key,
+  # so translators see the whole sentence. The caller translates with
+  # `link: @link_marker` (a literal `I18n.t(l, "...")`, which the translate
+  # script scans); everything is escaped, then the marker becomes the
+  # already-escaped link HTML, so translated text can never inject markup.
+  defp with_link(translated, link_html),
+    do: translated |> Template.esc() |> String.replace(@link_marker, link_html)
+
+  # `attrs`: extra mj-button attributes (a leading space included), for an
+  # email that sizes its button differently.
+  defp button(href, label, attrs \\ ""),
     do:
-      ~s(<mj-button href="#{href}" background-color="#{Tokens.brand_purple()}" color="#{Tokens.brand_purple_fg()}">#{label}</mj-button>)
+      ~s(<mj-button href="#{href}" background-color="#{Tokens.brand_purple()}" color="#{Tokens.brand_purple_fg()}"#{attrs}>#{label}</mj-button>)
 
   # Render an MJML body to HTML, then deliver. A render failure becomes a
   # {:error, {:render_failed, reason}} return rather than a raise.
