@@ -40,6 +40,74 @@ defmodule Engram.Vector.QdrantCollectionTest do
     assert "note_id" in fields
   end
 
+  describe "tenant layout by server version (Task 8.1)" do
+    # The layout follows the server version only while the app manages the
+    # collection layout (`:qdrant_reconcile_config`, off suite-wide).
+    setup %{bypass: bypass} do
+      ServiceConfig.put_override(:qdrant_reconcile_config, true)
+      Bypass.stub(bypass, "PATCH", "/collections/c1", &Plug.Conn.send_resp(&1, 200, "{}"))
+      Bypass.stub(bypass, "GET", "/collections/c1", &Plug.Conn.send_resp(&1, 500, "{}"))
+      :ok
+    end
+
+    defp create_on(bypass, version) do
+      test_pid = self()
+
+      Bypass.stub(bypass, "GET", "/", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{version: version}))
+      end)
+
+      Bypass.expect_once(bypass, "PUT", "/collections/c1", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:create, Jason.decode!(body)})
+        Plug.Conn.send_resp(conn, 200, "{}")
+      end)
+
+      Bypass.stub(bypass, "PUT", "/collections/c1/index", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        %{"field_name" => f, "field_schema" => s} = Jason.decode!(body)
+        send(test_pid, {:index, f, s})
+        Plug.Conn.send_resp(conn, 200, ~s({"status":"ok"}))
+      end)
+
+      Qdrant.ensure_collection("c1", 1024)
+      assert_receive {:create, create}
+      {create, collect_indexes(%{})}
+    end
+
+    defp collect_indexes(acc) do
+      receive do
+        {:index, f, s} -> collect_indexes(Map.put(acc, f, s))
+      after
+        50 -> acc
+      end
+    end
+
+    test "1.19.2: per-tenant graph at create, tenant + on-disk index schemas",
+         %{bypass: bypass} do
+      {create, indexes} = create_on(bypass, "1.19.2")
+
+      assert create["hnsw_config"] == %{"m" => 0, "payload_m" => 16, "max_indexing_threads" => 1}
+      assert create["optimizers_config"]["max_segment_size"] == 1_000_000
+      assert indexes["u"] == %{"type" => "uuid", "is_tenant" => true, "on_disk" => true}
+      assert indexes["vault_id"]["enable_hnsw"] == false
+      refute Map.has_key?(indexes, "note_id")
+    end
+
+    test "1.18.2 (prod's old cluster): today's create body and indexes", %{bypass: bypass} do
+      ServiceConfig.put_override(:v5_payload_format, false)
+      {create, indexes} = create_on(bypass, "1.18.2")
+
+      refute Map.has_key?(create, "hnsw_config")
+      assert create["optimizers_config"] == %{"max_optimization_threads" => 1}
+      assert indexes["user_id"] == "keyword"
+      assert indexes["note_id"] == "keyword"
+      assert indexes["fm_timestamp"] == "integer"
+    end
+  end
+
   # All tenant-scoped filters target payload fields that Qdrant Cloud
   # strict-mode requires an index for. ensure_collection must create them
   # (idempotently) or every filtered op 400s on Cloud. See #626. `type_hmac`

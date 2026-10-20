@@ -59,6 +59,9 @@ defmodule Engram.Vector.QdrantReconcileTest do
       {"sparse_vectors", v}, acc ->
         update_in(acc, ["config", "params", "sparse_vectors"], &deep_merge(&1, v))
 
+      {"hnsw_config", v}, acc ->
+        update_in(acc, ["config", "hnsw_config"], &deep_merge(&1, v))
+
       {"optimizers_config", v}, acc ->
         update_in(acc, ["config", "optimizer_config"], &deep_merge(&1, v))
 
