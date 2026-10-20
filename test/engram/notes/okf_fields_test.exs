@@ -77,6 +77,45 @@ defmodule Engram.Notes.OkfFieldsTest do
     assert extract(content).fm_created == ~U[2026-01-05 00:00:00Z]
   end
 
+  describe "OKF v0.2 generated.at" do
+    test "a v0.2 note with only generated.at gets fm_timestamp in UTC" do
+      content = """
+      ---
+      generated:
+        by: "human:x"
+        at: 2026-08-21T10:00:00+02:00
+      ---
+      body
+      """
+
+      assert extract(content).fm_timestamp == ~U[2026-08-21 08:00:00Z]
+    end
+
+    test "generated.at wins over the deprecated timestamp" do
+      content =
+        "---\ntimestamp: 2026-01-01\ngenerated:\n  at: 2026-08-21T08:00:00Z\n---\nx\n"
+
+      assert extract(content).fm_timestamp == ~U[2026-08-21 08:00:00Z]
+    end
+
+    test "a note with only timestamp still works" do
+      assert extract("---\ntimestamp: 2026-01-01\n---\nx\n").fm_timestamp ==
+               ~U[2026-01-01 00:00:00Z]
+    end
+
+    test "a non-map generated is ignored without crashing" do
+      assert extract("---\ngenerated: text\n---\nx\n").fm_timestamp == nil
+
+      assert extract("---\ngenerated: text\nupdated: 2026-03-03\n---\nx\n").fm_timestamp ==
+               ~U[2026-03-03 00:00:00Z]
+    end
+
+    test "a generated map without at falls back to timestamp" do
+      content = "---\ngenerated:\n  by: agent\ntimestamp: 2026-01-01\n---\nx\n"
+      assert extract(content).fm_timestamp == ~U[2026-01-01 00:00:00Z]
+    end
+  end
+
   test "normalize_type is NFKC + lowercase" do
     assert OkfFields.normalize_type("Playbook") == "playbook"
     assert OkfFields.normalize_type("ＮＯＴＥ") == "note"
