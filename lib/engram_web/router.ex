@@ -580,6 +580,22 @@ defmodule EngramWeb.Router do
     post "/telemetry/spans", TelemetryController, :create
   end
 
+  # Operator insights: every tenant's analytics, read-only. Its own scope
+  # and plug (role "operator" on a browser session, else 404), never a role
+  # switch on another route. See Engram.Insights.
+  scope "/api/operator/insights", EngramWeb.Operator, as: :operator do
+    pipe_through [
+      :api,
+      EngramWeb.Plugs.Auth,
+      EngramWeb.Plugs.OAuthScopeEnforce,
+      EngramWeb.Plugs.RequireOperator
+    ]
+
+    get "/", InsightsController, :index
+    get "/users/:user_id", InsightsController, :timeline
+    get "/:report", InsightsController, :show
+  end
+
   # Self-host admin scope. 404 under Clerk (RequireAdmin gates on local auth);
   # 403 for non-admins. There is no named `:authenticated` pipeline, so we list
   # EngramWeb.Plugs.Auth explicitly. Invite/user routes are added in their own
