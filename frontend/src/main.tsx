@@ -10,6 +10,7 @@ import { queryClient } from "./api/query-client";
 import { configPromise, type EngramConfig } from "./config";
 import { ConfigProvider } from "./config-context";
 import ErrorFallback from "./error-fallback";
+import { reportLanguageDemand } from "./i18n/browser-language";
 import { LocaleProvider } from "./i18n/locale-provider";
 import LoadingScreen from "./layout/loading-screen";
 import { appRouterFor } from "./router";
@@ -52,6 +53,9 @@ window.addEventListener("vite:preloadError", (event) => {
 // so nothing on the critical path needs it synchronously. Everything else
 // reaches PostHog through analytics/client.ts, never a static import.
 initAnalytics(import.meta.env.VITE_POSTHOG_KEY ?? "");
+// Which languages users need that the app does not ship (once per device).
+// Waits for the analytics client above, so GPC and self-host send nothing.
+reportLanguageDemand();
 
 // Both auth providers are declared lazy at module scope; only one is
 // instantiated per page load based on resolved config (BootstrapGate).

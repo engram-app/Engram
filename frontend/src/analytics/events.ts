@@ -19,7 +19,8 @@ export type EngramEvent =
 	| "upgrade_link_clicked"
 	| "checklist_action"
 	| "vault_source_picked"
-	| "plugin_listing_opened";
+	| "plugin_listing_opened"
+	| "browser_languages_unsupported";
 
 /** Mirrors Engram.Onboarding.gate/2's next_step. One state machine, not two. */
 export type OnboardingStep = "agreement" | "billing" | "heard" | "vault" | "done";
@@ -121,6 +122,7 @@ export type PropKind =
 	| "vault_source"
 	| "error_code"
 	| "gate_reasons"
+	| "language_tags"
 	| "boolean"
 	| "number";
 
@@ -153,4 +155,6 @@ export const EVENT_SCHEMAS: Record<EngramEvent, Record<string, PropKind>> = {
 	vault_source_picked: { source: "vault_source" },
 	// No properties: the click itself is the signal.
 	plugin_listing_opened: {},
+	// navigator.languages entries no app locale serves: which languages to add.
+	browser_languages_unsupported: { languages: "language_tags" },
 };

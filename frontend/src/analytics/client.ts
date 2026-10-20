@@ -7,8 +7,26 @@ import type { PostHog } from "posthog-js";
 // entry bundle and defeats init.ts's lazy import.
 let client: PostHog | null = null;
 
+// Work waiting for the client: a once-per-device report must not be marked
+// sent while nothing can send it. Never runs under GPC or on self-host.
+const waiting: Array<() => void> = [];
+
 export function setAnalyticsClient(next: PostHog | null): void {
 	client = next;
+	if (client) {
+		for (const run of waiting.splice(0)) {
+			run();
+		}
+	}
+}
+
+/** Run `fn` once analytics can send: now if it is loaded, else when it loads. */
+export function whenAnalyticsReady(fn: () => void): void {
+	if (client) {
+		fn();
+	} else {
+		waiting.push(fn);
+	}
 }
 
 export function analyticsClient(): PostHog | null {

@@ -122,6 +122,7 @@ describe("track onboarding interaction events", () => {
 		["vault_source_picked", { source: "obsidian" }],
 		["vault_source_picked", { source: "fresh" }],
 		["plugin_listing_opened", {}],
+		["browser_languages_unsupported", { languages: ["ar", "he-IL", "zh-Hant-HK"] }],
 	] as const)("allows %s %j", (event, props) => {
 		track(event, props);
 		expect(posthog.capture).toHaveBeenCalledWith(event, props);
@@ -138,6 +139,8 @@ describe("track onboarding interaction events", () => {
 		["an unknown checklist action", "checklist_action", { item: "claude", action: "rage_clicked" }],
 		["a path as the vault source", "vault_source_picked", { source: "Work/Q3.md" }],
 		["any property on the listing click", "plugin_listing_opened", { url: "https://x.example" }],
+		["free text as a language", "browser_languages_unsupported", { languages: ["My journal"] }],
+		["a single language, not a list", "browser_languages_unsupported", { languages: "ar" }],
 	] as const)("rejects %s", (_label, event, props) => {
 		track(event, props);
 		expect(posthog.capture).not.toHaveBeenCalled();

@@ -18,6 +18,9 @@ import {
 } from "./events";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// A BCP-47 language tag: language, then up to three script/region/variant
+// subtags. Nothing else fits, so no free text can pass as one.
+const LANGUAGE_TAG = /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/;
 
 /** A value is allowed only if it both matches its declared kind AND sits under
  *  a key the event's schema actually declares — see EVENT_SCHEMAS. Checking
@@ -47,6 +50,10 @@ function isKind(kind: PropKind, value: unknown): boolean {
 			return isMember(ERROR_CODES, value);
 		case "gate_reasons":
 			return Array.isArray(value) && value.every((v) => isMember(GATE_REASONS, v));
+		case "language_tags":
+			return (
+				Array.isArray(value) && value.every((v) => typeof v === "string" && LANGUAGE_TAG.test(v))
+			);
 		case "boolean":
 			return typeof value === "boolean";
 		case "number":
