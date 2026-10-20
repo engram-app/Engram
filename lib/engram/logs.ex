@@ -168,6 +168,8 @@ defmodule Engram.Logs do
 
   @doc """
   Query logs for a user. Supports filtering by level, category, since timestamp.
+  `:since` is applied at the stored one-second resolution: rows whose second is
+  at or after `since`'s second match.
   Returns newest first, up to `limit` entries.
 
   `:vault_id` restricts to one vault's lines. The HTTP read always passes it;
@@ -194,7 +196,18 @@ defmodule Engram.Logs do
 
     query = if level, do: where(query, [l], l.level == ^level), else: query
     query = if category, do: where(query, [l], l.category == ^category), else: query
-    query = if since, do: where(query, [l], l.ts > ^since), else: query
+
+    query =
+      if since do
+        # `ts` is stored truncated to the second (parse_ts/1), so compare at
+        # that resolution: floor `since` and use >=. A strict `ts > since` with a
+        # sub-second `since` silently dropped every row logged in the same
+        # second (e2e test_66). Cost: rows up to <1 s before `since` also match.
+        floor = DateTime.truncate(since, :second)
+        where(query, [l], l.ts >= ^floor)
+      else
+        query
+      end
 
     {:ok, Repo.all(query, skip_tenant_check: true)}
   end
