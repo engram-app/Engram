@@ -342,15 +342,25 @@ defmodule Engram.IndexingHugeNotesTest do
       embedded = dir |> embedded_texts() |> word_set()
       prose = prose_words(content, path)
 
+      prose_sentinels = Enum.filter(sentinels, &MapSet.member?(prose, &1))
+
+      # Past the per-pass embed budget (12 MiB) the rest of the prose is
+      # keyword-only by design, in note order: the dense sentinels are then a
+      # prefix of the prose ones, never a scatter.
       dense_lost =
-        Enum.reject(sentinels, &(MapSet.member?(embedded, &1) or not MapSet.member?(prose, &1)))
+        if sent > @pass_embed_bytes - 256 * 1024,
+          do:
+            prose_sentinels
+            |> Enum.drop_while(&MapSet.member?(embedded, &1))
+            |> Enum.filter(&MapSet.member?(embedded, &1)),
+          else: Enum.reject(prose_sentinels, &MapSet.member?(embedded, &1))
 
       assert dense_lost == [],
              "#{inspect(report)}: #{length(dense_lost)}/#{length(sentinels)} sentinels " <>
                "in no dense input, first #{inspect(Enum.take(dense_lost, 3))}"
 
       # The deepest sentinel with a dense input (a canvas has none).
-      case sentinels |> Enum.filter(&MapSet.member?(prose, &1)) |> List.last() do
+      case prose_sentinels |> Enum.filter(&MapSet.member?(embedded, &1)) |> List.last() do
         nil -> :ok
         deep -> assert Search.snippet(input_holding(dir, deep), deep) =~ deep
       end
