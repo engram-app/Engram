@@ -378,8 +378,16 @@ defmodule Engram.Indexing do
 
   # Decided BEFORE any token reservation, so a floored pass reserves nothing.
   # A full plan writes one point per chunk, reused or not.
+  #
+  # The note a pass indexes is the one the user is working on (review M1):
+  # it may overshoot the cap by `@inline_overshoot_pct` rather than floor,
+  # and the 04:00 sweep brings the account back under by demoting the
+  # least recently edited notes. Past that it floors.
+  @inline_overshoot_pct 5
+
   defp over_points_budget_tier(note, user, chunks) do
-    unless points_budget_ok?(user, note.id, length(chunks)), do: demoted_tier(note)
+    unless points_budget_ok?(user, note.id, length(chunks), @inline_overshoot_pct),
+      do: demoted_tier(note)
   end
 
   # ponytail: 7,500 estimated tokens (bytes / 4, as the reservation counts)
@@ -617,11 +625,15 @@ defmodule Engram.Indexing do
   unlimited plan). Counts inside `Repo.with_tenant/2`: unscoped, RLS filters
   the count to 0 and every pass would fit.
 
+  `overshoot_pct` lets the count pass the cap by that share (the inline
+  pass, see `over_points_budget_tier/3`).
+
   No lock: two concurrent passes can both fit on one reading, so the cap can
   be overshot by one note's chunks. Accepted.
   """
-  @spec points_budget_ok?(map(), Ecto.UUID.t(), non_neg_integer()) :: boolean()
-  def points_budget_ok?(user, note_id, planned_points) do
+  @spec points_budget_ok?(map(), Ecto.UUID.t(), non_neg_integer(), non_neg_integer()) ::
+          boolean()
+  def points_budget_ok?(user, note_id, planned_points, overshoot_pct \\ 0) do
     case Engram.Billing.effective_limit(user, :index_points_cap) do
       cap when is_integer(cap) and cap >= 0 ->
         # All the user's rows minus this note's, not one `note_id !=` count:
@@ -641,7 +653,7 @@ defmodule Engram.Indexing do
             )
           end)
 
-        all - own + planned_points <= cap
+        all - own + planned_points <= cap + div(cap * overshoot_pct, 100)
 
       # nil / :unlimited / a negative sentinel: no ceiling.
       _ ->

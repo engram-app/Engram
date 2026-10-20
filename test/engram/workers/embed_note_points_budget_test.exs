@@ -156,9 +156,29 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
       assert indexed.dense_indexed_hash == indexed.content_hash
     end
 
-    # No embedder stub: any Voyage call fails the test.
-    test "at 11,998 the same note is floored, unmetered", %{user: user, vault: vault, note: note} do
+    # Review M1: an inline pass may overshoot the cap by 5% rather than
+    # floor the note the user is editing; the 04:00 sweep then demotes the
+    # least recently edited notes. 11,998 + 5 = 12,003, under 12,600.
+    test "at 11,998 the note being indexed overshoots instead of flooring", %{
+      user: user,
+      vault: vault,
+      note: note
+    } do
       seed_points(user, vault, 11_998)
+      stub_embedder()
+
+      assert :ok = embed(note)
+      assert length(rows_for(note)) == 5
+      assert reload(note).index_tier == nil
+    end
+
+    # No embedder stub: any Voyage call fails the test.
+    test "past the 5% overshoot the note is floored, unmetered", %{
+      user: user,
+      vault: vault,
+      note: note
+    } do
+      seed_points(user, vault, 12_598)
       before = UsageMeters.lifetime_embed_tokens(user.id)
 
       assert :ok = embed(note)
@@ -172,7 +192,7 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
       vault: vault,
       note: note
     } do
-      seed_points(user, vault, 11_998)
+      seed_points(user, vault, 12_598)
       {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
       parent = self()
 
@@ -245,7 +265,7 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
       vault: vault,
       note: note
     } do
-      seed_points(user, vault, 12_000)
+      seed_points(user, vault, 12_600)
       {:ok, note} = Crypto.maybe_decrypt_note_fields(note, user)
       note = with_tier(note, "floor_paid")
 
