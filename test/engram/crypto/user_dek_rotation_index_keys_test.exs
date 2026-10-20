@@ -86,7 +86,12 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
         from(n in Notes.Note,
           where: n.id == ^note.id,
           update: [
-            set: [embed_hash: n.content_hash, keyword_version: ^Engram.KeywordIndex.version()]
+            set: [
+              embed_hash: n.content_hash,
+              dense_indexed_hash: n.content_hash,
+              chunker_version: ^Engram.Parsers.Markdown.chunker_version(),
+              keyword_version: ^Engram.KeywordIndex.version()
+            ]
           ]
         ),
         [],
@@ -121,9 +126,21 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
   end
 
   # The outage outlasts the post-flip retries, so the point text stays under
-  # the DEK the flip retired. The notes are queued for a rebuild (cleared
-  # fingerprints and embed_hash): Voyage pays, but only on this failure path.
+  # the DEK the flip retired. The notes are queued for a rebuild as OUR
+  # maintenance (version-stale, fingerprints cleared): a Free user at the
+  # cap still gets dense vectors back, and their meter does not move.
   test "a Qdrant outage during the rotation neither fails it nor strands the notes", ctx do
+    prev = Application.get_env(:engram, :limits_enforced)
+    Application.put_env(:engram, :limits_enforced, true)
+
+    on_exit(fn ->
+      if is_nil(prev),
+        do: Application.delete_env(:engram, :limits_enforced),
+        else: Application.put_env(:engram, :limits_enforced, prev)
+    end)
+
+    Engram.UsageMeters.add_embed_tokens(ctx.user.id, 20_000_000)
+    used = Engram.UsageMeters.lifetime_embed_tokens(ctx.user.id)
     Agent.update(ctx.store, &%{&1 | fail: true})
 
     assert :ok = UserDekRotation.rotate_user(ctx.user.id)
@@ -134,7 +151,8 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
     assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
 
     raw = Repo.one!(from(n in Notes.Note, where: n.id == ^ctx.note.id), skip_tenant_check: true)
-    assert raw.embed_hash == nil, "EmbedNote must pick the note up"
+    assert raw.chunker_version == nil, "version-stale, so EmbedNote rebuilds it as maintenance"
+    assert raw.embed_hash == raw.content_hash, "never the metered content path"
 
     assert Repo.all(from(c in Chunk, where: c.note_id == ^ctx.note.id, select: c.context_hmac),
              skip_tenant_check: true
@@ -142,9 +160,19 @@ defmodule Engram.Crypto.UserDekRotationIndexKeysTest do
            |> Enum.all?(&is_nil/1),
            "no chunk may reuse a point whose text is under the retired DEK"
 
+    # Enqueued now, not left for the 04:00 reconcile hour.
+    assert_enqueued(worker: Engram.Workers.EmbedNote, args: %{note_id: ctx.note.id})
+
     Agent.update(ctx.store, &%{&1 | fail: false})
-    assert {:ok, _} = Indexing.index_note(fresh(ctx.note, user), ctx.vault)
-    assert drain_embedded() != [], "the rebuild re-embeds (the failure path's cost)"
+
+    assert :ok =
+             perform_job(Engram.Workers.EmbedNote, %{
+               "note_id" => ctx.note.id,
+               "user_id" => ctx.user.id
+             })
+
+    assert drain_embedded() != [], "the dense vectors are rebuilt, cap or not"
+    assert Engram.UsageMeters.lifetime_embed_tokens(ctx.user.id) == used
 
     {:ok, dek} = Crypto.get_dek(user)
 
