@@ -232,6 +232,7 @@ config :engram, Oban,
         # Every CRDT persist NULLs crdt_head; this re-warms them (a continuing
         # self-heal, never done; see docs/context/data-migrations-ledger.md).
         {"48 * * * *", Engram.Workers.WarmCrdtHeads},
+        {"5-59/15 * * * *", Engram.Workers.DrainStrandedTails},
         # Export archives past the 7-day download window (#859).
         {"53 * * * *", Engram.Workers.ExportExpirySweep},
         # Paddle drift check. Daily: drift logs at :error to Sentry, and a
