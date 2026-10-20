@@ -34,7 +34,10 @@ defmodule Engram.NotesScopeLintTest do
     # `stamp_embed_hash` is a point-update by primary key on a Note already
     # selected upstream by the embed pipeline (which excludes markers via
     # notes_only/0); the query itself is kind-agnostic by design.
-    "engram/workers/embed_note.ex"
+    "engram/workers/embed_note.ex",
+    # Wave 3 catch-up: folder markers need their derived keys too
+    # (`is_folder`, `folder_id`), so the touch is kind-agnostic.
+    "engram/data_migrations/note_split.ex"
   ]
 
   test "every from(_ in Note, ...) in lib/ filters by kind or is allowlisted" do

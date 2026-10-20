@@ -33,7 +33,8 @@ defmodule Engram.Workers.DataMigrationsRunner do
     Engram.DataMigrations.CrdtStateSeed,
     Engram.DataMigrations.EnvelopeFormat,
     Engram.DataMigrations.LinkResolutionKeys,
-    Engram.DataMigrations.NotePayloadStamps
+    Engram.DataMigrations.NotePayloadStamps,
+    Engram.DataMigrations.NoteSplit
   ]
 
   @impl Oban.Worker
