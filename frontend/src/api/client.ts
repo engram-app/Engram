@@ -127,8 +127,10 @@ function reportUnlessRetried(err: object, failure: Failure, queryAttempt: QueryA
 
 /** Methods safe to send twice, so a network error gets one more try here.
  *  Not GET: React Query already retries queries. Not POST/PATCH: not
- *  idempotent. Every DELETE route was checked for a safe repeat (see api.del). */
-const RETRY_ONCE_METHODS = new Set(["PUT", "DELETE"]);
+ *  idempotent. DELETE: every route the SPA calls was checked for a safe repeat
+ *  (see api.del). PUT is idempotent by HTTP's definition, but the SPA sends
+ *  none today and no PUT route has been audited; add it with that audit. */
+const RETRY_ONCE_METHODS = new Set(["DELETE"]);
 const RETRY_DELAY_MS = 300;
 
 async function authFetch(
