@@ -7,7 +7,7 @@ defmodule Engram.IndexingFlagRebuildTest do
   alias Engram.Notes.{Chunk, Note}
   alias Engram.Repo
 
-  test "flag_notes_for_rebuild/2 clears embed_hash, dense_indexed_hash and chunk context_hmac" do
+  test "flag_notes_for_rebuild/2 clears embed_hash and chunk context_hmac, keeps dense_indexed_hash" do
     {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
     vault = insert(:vault, user: user)
 
@@ -42,6 +42,7 @@ defmodule Engram.IndexingFlagRebuildTest do
 
     reloaded = Repo.get!(Note, note.id, skip_tenant_check: true)
     assert is_nil(reloaded.embed_hash)
-    assert is_nil(reloaded.dense_indexed_hash)
+    # The marker EmbedNote reads to run this rebuild unmetered.
+    assert reloaded.dense_indexed_hash == "same"
   end
 end

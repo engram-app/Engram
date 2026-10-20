@@ -208,7 +208,113 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       )
     )
 
+    :ok = wake_budget_parked(backoff_until)
+
     if versions_done, do: :ok, else: sweep_keyword_stale(now, paid, page_size)
+  end
+
+  # The Free embed-bucket queue. A budget-parked note waits with no clock
+  # (`EmbedNote.parked_until_edited/0`); this wakes, per user, the OLDEST
+  # parked notes (`embed_budget_parked_at`) whose recorded `embed_budget_need`
+  # fits what the bucket holds now, and stops at the first that does not, so
+  # refill drains strictly oldest first and no pass runs only to be refused.
+  # A head note bigger than the whole bucket wakes once the bucket is full: it
+  # embeds what fits and parks the rest at the front again.
+  @wake_page 500
+
+  defp wake_budget_parked(backoff_until) do
+    Enum.each(parked_user_ids(), &wake_user(&1, backoff_until))
+  end
+
+  defp parked_user_ids do
+    parked = from(n in Note, where: n.kind == "note" and n.embed_budget_parked == true)
+
+    case Repo.maintenance() do
+      # No cross-tenant pool (self-host): the per-user scan the sweep uses.
+      Repo ->
+        Enum.filter(TenantScan.user_ids(), fn user_id ->
+          Repo.with_tenant!(user_id, fn -> Repo.exists?(parked) end)
+        end)
+
+      maintenance ->
+        maintenance.all(from(n in parked, distinct: true, select: n.user_id))
+    end
+  end
+
+  defp wake_user(user_id, backoff_until) do
+    case Engram.Accounts.get_user_with_subscription(user_id) do
+      nil -> :ok
+      user -> wake(user, backoff_until)
+    end
+  end
+
+  defp wake(user, backoff_until) do
+    budget = spendable(user)
+
+    woken =
+      Repo.with_tenant!(user.id, fn ->
+        candidates =
+          from(n in IndexVersions.live_notes(),
+            where: n.embed_budget_parked == true,
+            order_by: [asc_nulls_last: n.embed_budget_parked_at, asc: n.id],
+            limit: @wake_page,
+            select: {n.id, n.embed_budget_need}
+          )
+          |> Repo.all()
+
+        ids = fitting(candidates, budget)
+
+        _ =
+          Repo.update_all(from(n in Note, where: n.kind == "note" and n.id in ^ids),
+            set: [embed_budget_parked: nil, embed_retry_after: backoff_until]
+          )
+
+        ids
+      end)
+
+    fresh = EmbedNote.reject_already_queued(woken, EmbedNote.backfill_priority())
+
+    _ =
+      Oban.insert_all(
+        Enum.map(
+          fresh,
+          &EmbedNote.new_debounced(&1, user.id, priority: EmbedNote.backfill_priority())
+        )
+      )
+
+    :ok
+  end
+
+  # `{available, capacity}`, or `:unmetered` (paid, self-host, a -1 override).
+  defp spendable(user) do
+    case Engram.Billing.effective_limit(user, :embed_token_bucket) do
+      cap when is_integer(cap) and cap >= 0 ->
+        {Engram.UsageMeters.bucket_available(user.id, cap), cap}
+
+      _ ->
+        :unmetered
+    end
+  end
+
+  @doc false
+  # The oldest-first prefix of `candidates` (`{id, need}`) that `budget` covers.
+  def fitting(candidates, :unmetered), do: Enum.map(candidates, &elem(&1, 0))
+
+  def fitting(candidates, {available, capacity}) do
+    candidates
+    |> Enum.reduce_while({[], available, true}, fn {id, need}, {ids, left, head?} ->
+      # Parked by an older release, need unknown: wake it once anything is
+      # left; its pass records the real need.
+      need = need || 1
+
+      cond do
+        need <= left -> {:cont, {[id | ids], left - need, false}}
+        head? and available >= capacity and capacity > 0 -> {:halt, {[id], 0, false}}
+        true -> {:halt, {ids, left, false}}
+      end
+    end)
+    |> elem(0)
+    |> Enum.reverse()
   end
 
   # The hour a day (04:00-04:59 UTC, twelve "2-59/5" ticks) that re-checks
