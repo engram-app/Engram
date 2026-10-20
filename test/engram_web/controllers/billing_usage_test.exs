@@ -75,4 +75,38 @@ defmodule EngramWeb.BillingUsageTest do
 
     assert body["usage"]["indexed_notes"] == %{"used" => 2_500, "limit" => nil}
   end
+
+  describe "embed_bucket" do
+    test "a new Free user sees a full bucket that is not refilling", %{conn: conn} do
+      assert usage(conn)["usage"]["embed_bucket"] == %{
+               "available" => 6_000_000,
+               "capacity" => 6_000_000,
+               "refill_per_day" => 16_438,
+               "full_at" => nil
+             }
+    end
+
+    test "a partly spent bucket says when it is full again", %{conn: conn, user: user} do
+      {:ok, _} = UsageMeters.bucket_take(user.id, 3_000_000, 6_000_000)
+      bucket = usage(conn)["usage"]["embed_bucket"]
+
+      assert_in_delta bucket["available"], 3_000_000, 10
+      {:ok, full_at, 0} = DateTime.from_iso8601(bucket["full_at"])
+      expected = DateTime.add(DateTime.utc_now(), div(UsageMeters.bucket_refill_seconds(), 2))
+      assert abs(DateTime.diff(full_at, expected)) < 60
+    end
+
+    test "is null for a paid user", %{conn: conn, user: user} do
+      insert(:subscription, user: user, tier: "pro", status: "active")
+      # Setup's rps-cap override warmed the Free entitlement snapshot.
+      :ok = Engram.Billing.EntitlementCache.evict(user.id)
+      :ok = Engram.Cache.evict(:subscription, user.id)
+      assert usage(conn)["usage"]["embed_bucket"] == nil
+    end
+
+    test "is null when an override removes the bucket", %{conn: conn, user: user} do
+      insert(:user_limit_override, user: user, key: "embed_token_bucket", value: %{"v" => -1})
+      assert usage(conn)["usage"]["embed_bucket"] == nil
+    end
+  end
 end
