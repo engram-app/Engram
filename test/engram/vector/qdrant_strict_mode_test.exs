@@ -40,7 +40,7 @@ defmodule Engram.Vector.QdrantStrictModeTest do
     :ok = enable_strict_mode(col)
     :ok = upsert_point(col)
 
-    on_exit(fn -> Qdrant.delete_collection(col) end)
+    Engram.QdrantIntegration.drop_on_exit(col)
 
     %{col: col}
   end
