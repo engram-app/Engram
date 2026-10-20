@@ -1,13 +1,15 @@
 import type { ReactNode } from "react";
 import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useState } from "react";
-
 import { setUpgradeHandler } from "@/api/client";
+import { whenLoaded } from "@/lib/when-loaded";
 
 // Lazy: the provider mounts at the router root (so it wraps the sign-in page
 // too), but the dialog itself only renders after a 402 — no reason for its
 // radix-dialog + billing-copy weight to sit in the eager entry bundle.
 const UpgradeRequiredDialog = lazy(() =>
-	import("./upgrade-required-dialog").then((m) => ({ default: m.UpgradeRequiredDialog })),
+	whenLoaded(import("./upgrade-required-dialog")).then((m) => ({
+		default: m.UpgradeRequiredDialog,
+	})),
 );
 
 interface Ctx {

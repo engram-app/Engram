@@ -1,5 +1,6 @@
 import type { Breadcrumb } from "@sentry/react";
 import type { ErrorInfo } from "react";
+import { whenLoaded } from "@/lib/when-loaded";
 import { scrubLogText } from "./lib/scrub-log-text";
 import { ROUTES, VAULT_PREFIX } from "./routes";
 
@@ -106,7 +107,7 @@ function scrubExceptionValue(
 }
 
 export const sentryReady: Promise<SentrySdk | null> | null = sentryDsn
-	? import("@sentry/react")
+	? whenLoaded(import("@sentry/react"))
 			.then((Sentry) => {
 				Sentry.init(sentryInitOptions(sentryDsn));
 				// The SDK's own global handlers are live from here; hand it the

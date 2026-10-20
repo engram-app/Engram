@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react";
 import { useSearchParams } from "react-router";
 import { useT } from "@/i18n/locale-provider";
+import { whenLoaded } from "@/lib/when-loaded";
 import { useConfig } from "../config-context";
 import AuthLayout from "./auth-layout";
 import { safeReturnTo } from "./safe-return-to";
@@ -9,8 +10,8 @@ import SignupRejectionNotice from "./signup-rejection-notice";
 // Both lazy refs are declared at module scope so React preserves the lazy
 // component identity across renders. Only one is actually rendered per
 // run — the auth provider is resolved at config load and never changes.
-const ClerkSignIn = lazy(() => import("./clerk-sign-in"));
-const LocalSignIn = lazy(() => import("./local-sign-in"));
+const ClerkSignIn = lazy(() => whenLoaded(import("./clerk-sign-in")));
+const LocalSignIn = lazy(() => whenLoaded(import("./local-sign-in")));
 
 export default function SignInPage() {
 	const { t } = useT();

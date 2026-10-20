@@ -1,4 +1,5 @@
 import type { PostHogConfig } from "posthog-js";
+import { whenLoaded } from "@/lib/when-loaded";
 import { setAnalyticsClient } from "./client";
 
 // PostHog — product analytics. Cookieless by `persistence: 'memory'` per
@@ -46,7 +47,7 @@ export async function initAnalytics(key: string): Promise<void> {
 		return;
 	}
 
-	const { default: posthog } = await import("posthog-js");
+	const { default: posthog } = await whenLoaded(import("posthog-js"));
 	posthog.init(key, posthogInitOptions());
 	setAnalyticsClient(posthog);
 }

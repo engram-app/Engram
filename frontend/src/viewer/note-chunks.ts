@@ -1,4 +1,5 @@
 import { type ComponentType, createElement, lazy, useState } from "react";
+import { whenLoaded } from "@/lib/when-loaded";
 
 /**
  * The lazy chunks on the path to reading a note, and one call to warm them.
@@ -36,7 +37,9 @@ import { type ComponentType, createElement, lazy, useState } from "react";
  * Cold, it IS `React.lazy` — the Suspense boundaries around these stay
  * load-bearing for the cold path and for preload failures.
  */
-function preloadable<P extends object>(load: () => Promise<{ default: ComponentType<P> }>) {
+function preloadable<P extends object>(importModule: () => Promise<{ default: ComponentType<P> }>) {
+	// Both the lazy and preload paths read `.default`; see whenLoaded.
+	const load = () => whenLoaded(importModule());
 	let loaded: ComponentType<P> | null = null;
 	let inFlight: Promise<void> | null = null;
 

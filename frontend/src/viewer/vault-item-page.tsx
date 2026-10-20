@@ -1,12 +1,13 @@
 import { lazy, Suspense } from "react";
 import { useParams } from "react-router";
+import { whenLoaded } from "@/lib/when-loaded";
 import { useAttachments } from "../api/queries";
 import LoadingPane from "./loading-pane";
 import { NotePage } from "./note-chunks";
 
 // Both viewers are heavy (NotePage pulls remark/CodeMirror; AttachmentPage pulls
 // pdf.js on demand) — load whichever the route resolves to.
-const AttachmentPage = lazy(() => import("./attachment-page"));
+const AttachmentPage = lazy(() => whenLoaded(import("./attachment-page")));
 
 // Resolver behind the unified /v/:slug/:itemId route. Notes and attachments share one
 // URL shape (like Obsidian, where everything is a vault item) — decide which
