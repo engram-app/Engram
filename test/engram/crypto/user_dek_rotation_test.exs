@@ -1643,7 +1643,10 @@ defmodule Engram.Crypto.UserDekRotationTest do
       :ets.delete(set_payload_count)
     end
 
-    test "sweep returns error when scroll fails", %{user: user, bypass: bypass} do
+    test "a scroll failure is reported after the flip, not returned", %{
+      user: user,
+      bypass: bypass
+    } do
       collection = Qdrant.collection_name()
 
       Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
@@ -1652,10 +1655,27 @@ defmodule Engram.Crypto.UserDekRotationTest do
         |> Plug.Conn.send_resp(503, ~s({"status": {"error": "unavailable"}}))
       end)
 
-      assert {:error, {:qdrant_scroll, 503, _}} = UserDekRotation.rotate_user(user.id)
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :crypto, :rotate, :dek, :row_failed]
+        ])
+
+      # Points are derived data: the rotation commits, and the failure is
+      # reported, never returned (a failure before the flip stranded notes).
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      assert_receive {[:engram, :crypto, :rotate, :dek, :row_failed], ^ref, %{count: 1},
+                      %{table: :qdrant, status: :after_flip}}
+
+      assert Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+               skip_tenant_check: true
+             ).dek_rotation_locked_at == nil
     end
 
-    test "sweep returns error when set_payload fails", %{user: user, bypass: bypass} do
+    test "a set_payload failure is reported after the flip, not returned", %{
+      user: user,
+      bypass: bypass
+    } do
       {:ok, old_dek} = Crypto.get_dek(user)
       collection = Qdrant.collection_name()
       qdrant_id = "fail-payload-uuid-0001"
@@ -1695,7 +1715,21 @@ defmodule Engram.Crypto.UserDekRotationTest do
         |> Plug.Conn.send_resp(500, ~s({"status": {"error": "internal"}}))
       end)
 
-      assert {:error, {:qdrant_set_payload_failed, _}} = UserDekRotation.rotate_user(user.id)
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :crypto, :rotate, :dek, :row_failed]
+        ])
+
+      # Points are derived data: the rotation commits, and the failure is
+      # reported, never returned (a failure before the flip stranded notes).
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      assert_receive {[:engram, :crypto, :rotate, :dek, :row_failed], ^ref, %{count: 1},
+                      %{table: :qdrant, status: :after_flip}}
+
+      assert Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+               skip_tenant_check: true
+             ).dek_rotation_locked_at == nil
     end
   end
 
@@ -2113,7 +2147,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
     # which calls emit_telemetry/3 → classify_reason/1. We use telemetry capture
     # to assert the reason_label metadata key gets the expected string.
 
-    test "qdrant_scroll error is classified as qdrant_scroll_failed", %{user: user} do
+    test "a qdrant_scroll error after the flip is not a failed rotation", %{user: user} do
       # The module-level setup bypass already stubs scroll with 200/empty.
       # We override with a failing bypass in this test's own Bypass.
       bypass = Bypass.open()
@@ -2142,13 +2176,11 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
       on_exit(fn -> :telemetry.detach(handler_id) end)
 
-      assert {:error, {:qdrant_scroll, 503, _}} = UserDekRotation.rotate_user(user.id)
-
-      assert_receive {:telemetry_fired, %{status: :failed, reason_label: "qdrant_scroll_failed"}},
-                     500
+      assert :ok = UserDekRotation.rotate_user(user.id)
+      assert_receive {:telemetry_fired, %{status: :ok}}, 500
     end
 
-    test "qdrant_set_payload_failed is classified correctly", %{user: user} do
+    test "a set_payload failure after the flip is not a failed rotation", %{user: user} do
       bypass = Bypass.open()
       Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
       on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
@@ -2205,11 +2237,8 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
       on_exit(fn -> :telemetry.detach(handler_id) end)
 
-      assert {:error, {:qdrant_set_payload_failed, _}} = UserDekRotation.rotate_user(user.id)
-
-      assert_receive {:telemetry_fired,
-                      %{status: :failed, reason_label: "qdrant_set_payload_failed"}},
-                     500
+      assert :ok = UserDekRotation.rotate_user(user.id)
+      assert_receive {:telemetry_fired, %{status: :ok}}, 500
     end
 
     test "postgres error tuple is classified with code", %{user: _user} do
