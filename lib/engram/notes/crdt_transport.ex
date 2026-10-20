@@ -282,9 +282,7 @@ defmodule Engram.Notes.CrdtTransport do
         cond do
           not CrdtPersistence.owned_by?(user_id, vault_id) -> {:error, :not_found}
           not CrdtBridge.fits?(doc, update) -> {:error, :note_too_large}
-          missing_dependencies?(doc, update) -> {:error, :missing_dependencies}
-          Yex.apply_update(doc, update) == :ok -> {:ok, head_marker(doc)}
-          true -> {:error, :invalid_update}
+          true -> apply_checked(doc, update)
         end
 
       send(parent, {ref, result})
@@ -292,23 +290,28 @@ defmodule Engram.Notes.CrdtTransport do
     end)
   end
 
-  # Would `update` leave structs or deletes pending (its dependencies are not
-  # in the doc)? A delivery diffed against a state vector the doc no longer
-  # has (the checkpoint's flatten replaced the lineage) is one. Applied, yrs
-  # parks it in memory, so an acknowledgement would claim an edit the server
-  # does not hold, and the pending part would ride the next checkpoint. So it
-  # is tried on a copy first and refused, which sends the client back to its
-  # full state. A full state carries its own dependencies and never pends.
-  # ponytail: the copy costs one decode of the doc per room-free delivery;
-  # an update-only dependency check needs a y_ex NIF it does not export.
-  defp missing_dependencies?(doc, update) do
-    {:ok, state} = Yex.encode_state_as_update(doc)
-    probe = Yex.Doc.new()
-    :ok = Yex.apply_update(probe, state)
+  # A delivery diffed against a state vector the doc no longer has (the
+  # checkpoint's flatten replaced the lineage) has missing dependencies, and
+  # yrs parks those structs as pending instead of applying them. Acknowledged,
+  # the client would drop an edit the server does not hold; refused, it
+  # resends its full state, which carries its own dependencies. Pending
+  # structs never leave the doc: a state encode (the checkpoint) and the update
+  # event (the tail append) both carry only integrated ones, so refusing after
+  # the apply keeps nothing of them, and costs nothing on the common path.
+  defp apply_checked(doc, update) do
+    before = pending(doc)
 
-    Yex.apply_update(probe, update) == :ok and
-      (Yex.Doc.get_pending_update(probe) != {:ok, nil} or
-         Yex.Doc.get_pending_ds(probe) != {:ok, nil})
+    cond do
+      Yex.apply_update(doc, update) != :ok -> {:error, :invalid_update}
+      pending(doc) not in [before, {nil, nil}] -> {:error, :missing_dependencies}
+      true -> {:ok, head_marker(doc)}
+    end
+  end
+
+  defp pending(doc) do
+    {:ok, structs} = Yex.Doc.get_pending_update(doc)
+    {:ok, ds} = Yex.Doc.get_pending_ds(doc)
+    {structs, ds}
   end
 
   @doc """

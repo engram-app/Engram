@@ -147,6 +147,11 @@ defmodule Engram.Notes.CrdtTransportTest do
       assert CrdtBridge.body_of(probe) == "hello"
 
       # The fallback: the client's full state applies and the two converge.
+      # Converge, not "hello world": after a flatten the client's history and
+      # the server's are unrelated, so the merged body can hold both copies
+      # (the flatten's known doubling risk, CrdtCheckpoint.maybe_flatten). That
+      # is the flatten's to fix (a client reset); this pins that no acked edit
+      # is lost and both sides agree.
       {:ok, whole} = Yex.encode_state_as_update(client)
       assert {:ok, _} = CrdtTransport.apply_update(user, vault, note.id, whole)
       {:ok, %{update: after_}} = CrdtTransport.read_delta(user, vault, note.id, nil)
