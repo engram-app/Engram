@@ -15,6 +15,11 @@ defmodule Engram.IndexingHugeNotesTest do
   # read node-wide.
   use Engram.DataCase, async: false
 
+  import Engram.IndexBudgetHelpers
+
+  # The v5 index budget is off by default (review H2); these tests are about it.
+  setup :enable_index_budget
+
   import Ecto.Query
   import Mox
 

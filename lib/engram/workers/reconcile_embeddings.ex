@@ -226,7 +226,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # budget-checked as they are indexed (`Indexing`), and a promotion after
     # deletes can wait a day.
     _ =
-      if daily_reverify?(scheduled_at) do
+      if daily_reverify?(scheduled_at) and Indexing.budget_enabled?() do
         :ok = sweep_over_note_cap(now)
         {:ok, _} = budget_sweep(@budget_users, now)
       end

@@ -563,6 +563,13 @@ end
 # rather than a per-node remote-console `Application.put_env` — that was the
 # explicit ask in #1004. The queue-depth gauge shipped (#1487); the alarm in
 # #1004 is still open.
+# The v5 index budget (`Engram.Indexing.budget_enabled?/0`): per-note cap
+# merge, points budget and floor, the 04:00 UTC recap and budget sweeps.
+# Off until the v5 pass completes; turned on with the v5 stamp.
+if budget = System.get_env("INDEX_BUDGET_ENABLED") do
+  config :engram, :index_budget_enabled, budget == "true"
+end
+
 if pacing = System.get_env("FANOUT_PACING_ENABLED") do
   config :engram, :fanout_pacing_enabled, pacing == "true"
 end

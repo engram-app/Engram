@@ -279,9 +279,43 @@ defmodule Engram.Indexing do
     end
   end
 
+  @doc """
+  Whether the v5 index budget is on: the per-note cap merge, the index
+  points budget and its floor, the per-pass embed budget, and the 04:00
+  UTC recap and budget sweeps (`ReconcileEmbeddings`). Off by default
+  (review H2): the caps are sized for chunker v5 (~5.2 points a note), so
+  on v3-chunked data they would demote and re-embed notes the v5 pass
+  re-embeds anyway. `INDEX_BUDGET_ENABLED=true` turns it on as a step of
+  the v5 go sequence, after the pass and with the v5 stamp. Off, a pass
+  plans exactly as before the budget existed.
+  """
+  @spec budget_enabled?() :: boolean()
+  def budget_enabled?, do: Application.get_env(:engram, :index_budget_enabled, false)
+
   # The per-note cap runs first, so the points budget below counts the points
   # a full pass would actually write.
   defp plan_index(note, user, chunks, content_key, opts) do
+    if budget_enabled?() or floor_tier(note, opts),
+      do: plan_budgeted(note, user, chunks, content_key, opts),
+      else: plan_unbudgeted(note, chunks, content_key, opts)
+  end
+
+  # The pre-budget plan: one point a chunk, metered in full.
+  defp plan_unbudgeted(note, chunks, content_key, opts) do
+    {dense?, plan, retained} =
+      plan_within_budget(
+        note,
+        indexed_rows(note),
+        chunks,
+        content_key,
+        Keyword.get(opts, :dense, true),
+        opts
+      )
+
+    {nil, dense?, plan, retained}
+  end
+
+  defp plan_budgeted(note, user, chunks, content_key, opts) do
     forced = floor_tier(note, opts)
     cap = note_points_cap(user)
     rows = if forced, do: [], else: indexed_rows(note)
@@ -1511,7 +1545,7 @@ defmodule Engram.Indexing do
     texts = embed_texts(plan)
     reserve = Keyword.get(opts, :reserve_tokens, fn _tokens -> true end)
     total = texts |> text_bytes() |> UsageMeters.estimate_tokens()
-    charged = min(changed_tokens(plan, rows), total)
+    charged = if budget_enabled?(), do: min(changed_tokens(plan, rows), total), else: total
     plan = Map.put(plan, :charge, {charged, total - charged})
 
     case retained(note, texts) do

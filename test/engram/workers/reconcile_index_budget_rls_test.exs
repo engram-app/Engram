@@ -21,8 +21,10 @@ defmodule Engram.Workers.ReconcileIndexBudgetRlsTest do
   committed rows until the sandbox owner exits, after the cleanup runs.
   """
   use Engram.DataCase, async: false
+
   use Oban.Testing, repo: Engram.Repo
 
+  import Engram.IndexBudgetHelpers
   import Ecto.Query
   import Engram.RlsCase
 
@@ -36,6 +38,9 @@ defmodule Engram.Workers.ReconcileIndexBudgetRlsTest do
   @moduletag :rls_unsafe
 
   @email_prefix "reconcile-index-budget-rls-"
+
+  # The v5 index budget is off by default (review H2); these tests are about it.
+  setup :enable_index_budget
 
   setup do
     bypass = Bypass.open()
