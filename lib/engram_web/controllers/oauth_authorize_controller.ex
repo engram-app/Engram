@@ -66,7 +66,11 @@ defmodule EngramWeb.OAuthAuthorizeController do
                params["label"]
              ) do
           {:ok, redirect_url, granted} ->
-            Engram.Analytics.track(user, "mcp_oauth_granted", funnel_props(validated))
+            props = funnel_props(validated)
+            Engram.Analytics.track(user, "mcp_oauth_granted", props)
+            # One per minted code; against the token counter's
+            # `authorization_code` issues it is the redemption ratio per client.
+            :telemetry.execute([:engram, :oauth, :consent], %{count: 1}, %{client: props.client})
 
             # `granted` echoes what was stored (#174), so the consent screen
             # can refuse to redirect when it is wider than the user's pick.

@@ -341,7 +341,20 @@ defmodule EngramWeb.OAuthTokenRejectionLogTest do
                        grant_type: :authorization_code,
                        result: :issued,
                        error: nil,
-                       reason: :none
+                       reason: :none,
+                       client: "claude"
                      }}
+  end
+
+  # The client label is the bounded family, so a rejection is attributable
+  # per client too, and an unknown client_id is "other", never its raw value.
+  test "a rejection carries the client family; an unknown client is other" do
+    client = register_client()
+    params = %{code_params(client) | "code" => "not-a-code"}
+    json_response(post(build_conn(), "/oauth/token", params), 400)
+    assert_received {:oauth_token, %{result: :rejected, client: "claude"}}
+
+    post(build_conn(), "/oauth/token", %{"grant_type" => "password", "client_id" => "evil"})
+    assert_received {:oauth_token, %{result: :rejected, client: "other"}}
   end
 end

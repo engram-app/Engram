@@ -123,6 +123,37 @@ defmodule EngramWeb.OAuthMcpAnalyticsTest do
     assert e["properties"]["scopes_granted"] == ["mcp"]
   end
 
+  # engram_prom_ex_oauth_consent_total: one per minted code, by client family.
+  test "consent emits one [:engram, :oauth, :consent] event with the client family", %{
+    client: client,
+    user: user
+  } do
+    test_pid = self()
+    handler = "oauth-consent-test-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler,
+      [:engram, :oauth, :consent],
+      fn _e, measurements, meta, _ -> send(test_pid, {:oauth_consent, measurements, meta}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    user = ensure_external_id(user)
+    insert(:vault, user: user)
+    {:ok, token} = Engram.Auth.Providers.Local.issue_access_token(user.external_id, user.email)
+    {_verifier, challenge} = pkce_pair()
+
+    build_conn()
+    |> put_req_header("authorization", "Bearer #{token}")
+    |> post("/api/oauth/authorize/consent", authorize_params(client, challenge))
+    |> json_response(200)
+
+    assert_received {:oauth_consent, %{count: 1}, %{client: "claude"}}
+    refute_received {:oauth_consent, _, _}
+  end
+
   test "a successful exchange emits mcp_oauth_token_issued for the user", %{
     client: client,
     user: user
