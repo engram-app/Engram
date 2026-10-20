@@ -32,7 +32,8 @@ defmodule Engram.Workers.DataMigrationsRunner do
     Engram.DataMigrations.IndexVersions,
     Engram.DataMigrations.CrdtStateSeed,
     Engram.DataMigrations.EnvelopeFormat,
-    Engram.DataMigrations.LinkResolutionKeys
+    Engram.DataMigrations.LinkResolutionKeys,
+    Engram.DataMigrations.NotePayloadStamps
   ]
 
   @impl Oban.Worker
