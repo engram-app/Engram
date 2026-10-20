@@ -1,0 +1,302 @@
+defmodule Engram.Workers.EmbedNoteBucketQueueTest do
+  # The Free embed bucket as a queue: partial passes keep existing dense
+  # vectors, parked notes wait FIFO with their need, and ReconcileEmbeddings
+  # wakes them oldest first only when they fit.
+  use Engram.DataCase, async: false
+  use Oban.Testing, repo: Engram.Repo
+
+  import Ecto.Query, only: [from: 2]
+  import Mox
+
+  alias Engram.Notes
+  alias Engram.Notes.{Chunk, Note}
+  alias Engram.Repo
+  alias Engram.UsageMeters
+  alias Engram.Workers.{EmbedNote, ReconcileEmbeddings}
+
+  setup :verify_on_exit!
+
+  @cap 6_000_000
+  @words ~w(alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike
+            november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee
+            zulu amber basil cedar dune ember fjord grove heron iris jade kelp lotus maple
+            nectar onyx pearl quartz raven sage thistle umber violet willow yarrow zinnia)
+
+  setup do
+    prev = Application.get_env(:engram, :limits_enforced)
+    Application.put_env(:engram, :limits_enforced, true)
+
+    bypass = Bypass.open()
+    Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
+
+    on_exit(fn ->
+      Application.delete_env(:engram, :qdrant_url)
+
+      if is_nil(prev),
+        do: Application.delete_env(:engram, :limits_enforced),
+        else: Application.put_env(:engram, :limits_enforced, prev)
+    end)
+
+    Bypass.stub(bypass, :any, :any, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, ~s({"result": true}))
+    end)
+
+    {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
+    vault = insert(:vault, user: user)
+    %{user: user, vault: vault}
+  end
+
+  defp capture_embeds do
+    test_pid = self()
+
+    stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+      send(test_pid, {:embedded, texts})
+      {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+    end)
+  end
+
+  defp embedded do
+    receive do
+      {:embedded, texts} -> texts ++ embedded()
+    after
+      0 -> []
+    end
+  end
+
+  defp set_bucket(user_id, tokens) do
+    _ = UsageMeters.add_embed_tokens(user_id, 1)
+
+    Repo.update_all(from(m in UsageMeters.Meter, where: m.user_id == ^user_id),
+      set: [embed_bucket_tokens: tokens * 1.0, embed_bucket_at: DateTime.utc_now()]
+    )
+  end
+
+  defp section(i), do: "## Section #{i}\n\n#{String.duplicate("#{Enum.at(@words, i - 1)} ", 120)}"
+  defp body(n), do: Enum.map_join(1..n, "\n\n", &section/1)
+
+  defp point_ids(note) do
+    Repo.all(from(c in Chunk, where: c.note_id == ^note.id, select: c.qdrant_point_id),
+      skip_tenant_check: true
+    )
+  end
+
+  defp reload(note), do: Repo.get!(Note, note.id, skip_tenant_check: true)
+
+  defp edit(user, vault, note, content) do
+    {:ok, _} =
+      Notes.upsert_note(
+        user,
+        vault,
+        %{"path" => note.path, "content" => content, "mtime" => 2_000.0},
+        actor: "api"
+      )
+
+    :ok
+  end
+
+  # A dense note of `n` sections, fully embedded.
+  defp dense_note(user, vault, n) do
+    note =
+      Engram.Fixtures.insert_note!(user, vault, %{path: "Big.md", content: "# Big\n\n" <> body(n)})
+
+    capture_embeds()
+    assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+    _ = embedded()
+    assert reload(note).dense_indexed_hash != nil
+    note
+  end
+
+  defp edit_sections(n, edited) do
+    "# Big\n\n" <>
+      Enum.map_join(1..n, "\n\n", fn i ->
+        if i in edited,
+          do: String.replace(section(i), "## Section #{i}", "## Edited #{i}"),
+          else: section(i)
+      end)
+  end
+
+  describe "a pass that does not fit the bucket" do
+    test "one edited chunk of 50 fits: 49 dense vectors reused, 1 embedded",
+         %{user: user, vault: vault} do
+      note = dense_note(user, vault, 50)
+      before = MapSet.new(point_ids(note))
+      total = MapSet.size(before)
+      assert total >= 50
+
+      # Less than the whole note, more than one chunk.
+      set_bucket(user.id, 5_000)
+      edit(user, vault, note, edit_sections(50, [7]))
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      assert length(embedded()) == 1
+      kept = MapSet.intersection(before, MapSet.new(point_ids(note)))
+      assert MapSet.size(kept) == total - 1
+      assert reload(note).dense_indexed_hash == reload(note).content_hash
+    end
+
+    test "an empty bucket keeps every existing dense vector and parks the new chunk",
+         %{user: user, vault: vault} do
+      note = dense_note(user, vault, 50)
+      before = MapSet.new(point_ids(note))
+
+      set_bucket(user.id, 0)
+      edit(user, vault, note, edit_sections(50, [7]))
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      assert embedded() == []
+      kept = MapSet.intersection(before, MapSet.new(point_ids(note)))
+      assert MapSet.size(kept) == MapSet.size(before) - 1
+
+      parked = reload(note)
+      assert is_nil(parked.dense_indexed_hash)
+      assert parked.embed_budget_parked == true
+      assert parked.embed_budget_need > 0
+      assert parked.embed_retry_after == EmbedNote.parked_until_edited()
+    end
+
+    test "embeds the new chunks that fit and parks only the rest", %{user: user, vault: vault} do
+      note = dense_note(user, vault, 10)
+      one_chunk = UsageMeters.estimate_tokens(section(1))
+
+      # Room for one edited chunk, not three.
+      set_bucket(user.id, one_chunk + div(one_chunk, 2))
+      edit(user, vault, note, edit_sections(10, [2, 5, 8]))
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      assert length(embedded()) == 1
+      parked = reload(note)
+      assert parked.embed_budget_parked == true
+      assert_in_delta parked.embed_budget_need, 2 * one_chunk, one_chunk
+    end
+  end
+
+  describe "the parked queue" do
+    test "new work queues behind an older parked note, and refill wakes them oldest first",
+         %{user: user, vault: vault} do
+      older =
+        Engram.Fixtures.insert_note!(user, vault, %{path: "Old.md", content: "# Old\n\nold words"})
+
+      hour_ago = DateTime.add(DateTime.utc_now(), -3600, :second)
+
+      Repo.update_all(
+        from(n in Note, where: n.id == ^older.id),
+        [
+          set: [
+            embed_hash: older.content_hash,
+            dense_indexed_hash: nil,
+            embed_retry_after: EmbedNote.parked_until_edited(),
+            embed_budget_parked: true,
+            embed_budget_parked_at: hour_ago,
+            embed_budget_need: 700_000
+          ]
+        ],
+        skip_tenant_check: true
+      )
+
+      set_bucket(user.id, 600_000)
+
+      newer =
+        Engram.Fixtures.insert_note!(user, vault, %{path: "New.md", content: "# New\n\nnew words"})
+
+      # The bucket could pay for it, but an older note is waiting: no Voyage.
+      capture_embeds()
+      assert :ok = perform_job(EmbedNote, %{note_id: newer.id})
+      assert embedded() == []
+
+      queued = reload(newer)
+      assert queued.embed_budget_parked == true
+      assert DateTime.compare(queued.embed_budget_parked_at, hour_ago) == :gt
+
+      # 600k < the head's 700k: nothing wakes, and the small newer note may not
+      # jump the queue.
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert reload(older).embed_budget_parked == true
+      assert reload(newer).embed_budget_parked == true
+
+      # Refill: both fit, oldest first.
+      set_bucket(user.id, 800_000)
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert reload(older).embed_budget_parked == nil
+      assert reload(newer).embed_budget_parked == nil
+      assert_enqueued(worker: EmbedNote, args: %{"note_id" => older.id})
+    end
+
+    test "end to end: an empty bucket parks, refill re-queues, and the pass goes dense",
+         %{user: user, vault: vault} do
+      note =
+        Engram.Fixtures.insert_note!(user, vault, %{path: "N.md", content: "# N\n\nsome words"})
+
+      set_bucket(user.id, 0)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+      assert reload(note).embed_budget_parked == true
+
+      # Still empty: the sweep wakes nothing and runs no refused pass.
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert reload(note).embed_budget_parked == true
+
+      # A year later the bucket is full.
+      Repo.update_all(from(m in UsageMeters.Meter, where: m.user_id == ^user.id),
+        set: [embed_bucket_at: DateTime.add(DateTime.utc_now(), -366, :day)]
+      )
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert reload(note).embed_budget_parked == nil
+      assert_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+
+      capture_embeds()
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+      assert embedded() != []
+
+      done = reload(note)
+      assert done.dense_indexed_hash == done.content_hash
+      assert is_nil(done.embed_budget_parked_at)
+      assert is_nil(done.embed_budget_need)
+    end
+  end
+
+  describe "maintenance rebuilds stay unmetered" do
+    test "an OrphanSweep rebuild of a dense note spends nothing from an empty bucket",
+         %{user: user, vault: vault} do
+      note = dense_note(user, vault, 3)
+      set_bucket(user.id, 0)
+      used = UsageMeters.lifetime_embed_tokens(user.id)
+
+      assert 1 ==
+               Repo.with_tenant!(user.id, fn ->
+                 Engram.Indexing.flag_notes_for_rebuild([note.id], Repo)
+               end)
+
+      capture_embeds()
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      assert embedded() != []
+      assert UsageMeters.lifetime_embed_tokens(user.id) == used
+      assert UsageMeters.bucket_available(user.id, @cap) == 0
+      assert reload(note).dense_indexed_hash == reload(note).content_hash
+    end
+
+    test "the rename fallback re-embed of a dense note is unmetered", %{user: user, vault: vault} do
+      note = dense_note(user, vault, 3)
+      set_bucket(user.id, 0)
+      used = UsageMeters.lifetime_embed_tokens(user.id)
+
+      capture_embeds()
+
+      assert :ok =
+               perform_job(EmbedNote, %{
+                 note_id: note.id,
+                 user_id: user.id,
+                 old_path_hmac: Base.encode64("old-path")
+               })
+
+      assert UsageMeters.lifetime_embed_tokens(user.id) == used
+      assert reload(note).dense_indexed_hash == reload(note).content_hash
+    end
+  end
+end
