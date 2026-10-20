@@ -34,7 +34,7 @@ defmodule EngramWeb.Schemas.LogInput do
         type: :object,
         nullable: true,
         description:
-          "Structured fields beside the message (the web app's network_error context: browser, online, attempt, elapsed_ms, error_name, error_message, visibility, effective_type). Only allowlisted keys holding their declared shape are kept; the rest are dropped."
+          "Structured fields beside the message (the web app's network_error context: browser, went_offline, attempt, elapsed_ms, error_name, error_message, visibility, effective_type). Only allowlisted keys holding their declared shape are kept; the rest are dropped."
       }
     }
   })

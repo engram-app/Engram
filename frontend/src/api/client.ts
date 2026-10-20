@@ -5,7 +5,7 @@ import { scrubUrl } from "../sentry";
 import { getActiveVaultId } from "./active-vault";
 import { getApiBase, joinApiUrl } from "./base";
 import { getDeviceId } from "./device-id";
-import { type NetworkContext, networkContext } from "./network-context";
+import { type NetworkContext, networkContext, offlineMark } from "./network-context";
 
 // Module-level token getter — set by AuthTokenProvider component
 let tokenGetter: (() => Promise<string | null>) | null = null;
@@ -144,6 +144,7 @@ async function authFetch(
 		tryNumber: number,
 	): Promise<{ response: Response; attempt: number }> => {
 		const startedAt = performance.now();
+		const offlineSince = offlineMark();
 		try {
 			return { response: await fetch(url, { ...options, headers }), attempt: tryNumber };
 		} catch (err) {
@@ -162,7 +163,7 @@ async function authFetch(
 					kind: "network_error",
 					method,
 					url,
-					context: networkContext(err, tryNumber, performance.now() - startedAt),
+					context: networkContext(err, tryNumber, performance.now() - startedAt, offlineSince),
 				});
 			}
 			throw err;

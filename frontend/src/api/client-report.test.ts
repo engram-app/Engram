@@ -201,13 +201,30 @@ describe("network_error reports carry diagnostic context", () => {
 		expect(message).toMatch(/^network_error POST \S*\/:seg$/);
 		expect(context).toEqual({
 			browser: "Chrome 155",
-			online: true,
+			went_offline: false,
 			attempt: 1,
 			elapsed_ms: expect.any(Number),
 			error_name: "TypeError",
 			error_message: "Failed to fetch",
 			visibility: "visible",
 		});
+	});
+
+	// navigator.onLine is always true here (reports are gated on it), so the
+	// signal is whether the link dropped while this request was in flight.
+	it("records whether the browser went offline during the request", async () => {
+		globalThis.fetch = vi.fn((url: RequestInfo | URL) => {
+			if (String(url).endsWith("/api/health")) {
+				return Promise.resolve(new Response(null, { status: 200 }));
+			}
+			window.dispatchEvent(new Event("offline"));
+			return Promise.reject(new TypeError("Failed to fetch"));
+		});
+
+		await expect(api.get("/me")).rejects.toThrow();
+
+		await vi.waitFor(() => expect(mockError).toHaveBeenCalledTimes(1));
+		expect(mockError.mock.calls[0]?.[2]).toMatchObject({ went_offline: true });
 	});
 
 	it("prefers userAgentData brands, and never forwards an unknown message", async () => {

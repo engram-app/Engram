@@ -63,7 +63,7 @@ defmodule Engram.Logs do
   # where a free-text field would be a path leak and a cardinality bomb.
   @context_fields [
     browser: {:match, ~r/\A(?:[A-Za-z][A-Za-z ]{0,30} \d{1,4}|unknown)\z/},
-    online: :boolean,
+    went_offline: :boolean,
     attempt: {:integer, 1..10},
     elapsed_ms: {:integer, 0..3_600_000},
     error_name: {:one_of, ~w(TypeError AbortError TimeoutError NetworkError other)},

@@ -1,13 +1,14 @@
 // What a network_error report carries besides its route. The browser hides the
 // real cause of a failed fetch ("Failed to fetch" is all it says), so these
 // are the signals that can still tell causes apart: a fast refusal vs a stall
-// (elapsed_ms), a backgrounded or offline tab, a slow link, one browser build.
+// (elapsed_ms), a link that dropped mid-request, a backgrounded tab, a slow
+// link, one browser build.
 // Every field is an enum, a number or a family+major: nothing identifying, and
 // the backend allowlists the same set (Engram.Logs) before it reaches Loki.
 
 interface NetworkContext {
 	browser: string;
-	online: boolean;
+	went_offline: boolean;
 	attempt: number;
 	elapsed_ms: number;
 	error_name: string;
@@ -45,6 +46,21 @@ const UA_PATTERNS: [pattern: RegExp, family: string][] = [
 	[/\bVersion\/(?<major>\d+)[\d.]* (?:Mobile\/\S+ )?Safari\//u, "Safari"],
 ];
 
+// Count of `offline` events, so a request can tell whether the link dropped
+// while it was in flight. navigator.onLine itself is useless here: a report
+// is only sent while it is true (client.ts), so it would always read true.
+let offlineEvents = 0;
+if (typeof window !== "undefined") {
+	window.addEventListener("offline", () => {
+		offlineEvents += 1;
+	});
+}
+
+/** A mark to pass back to networkContext: "offline since this point?" */
+function offlineMark(): number {
+	return offlineEvents;
+}
+
 interface Brand {
 	brand: string;
 	version: string;
@@ -79,11 +95,16 @@ function browserFamily(): string {
 	return "unknown";
 }
 
-function networkContext(err: Error, attempt: number, elapsedMs: number): NetworkContext {
+function networkContext(
+	err: Error,
+	attempt: number,
+	elapsedMs: number,
+	sinceOfflineMark: number,
+): NetworkContext {
 	const effectiveType = extras().connection?.effectiveType;
 	return {
 		browser: browserFamily(),
-		online: navigator.onLine,
+		went_offline: offlineEvents !== sinceOfflineMark,
 		attempt,
 		elapsed_ms: Math.round(elapsedMs),
 		error_name: ERROR_NAMES.has(err.name) ? err.name : "other",
@@ -96,4 +117,4 @@ function networkContext(err: Error, attempt: number, elapsedMs: number): Network
 }
 
 export type { NetworkContext };
-export { networkContext };
+export { networkContext, offlineMark };

@@ -190,7 +190,7 @@ defmodule Engram.LogsReemitTest do
       meta =
         reemit_context(%{
           "browser" => "Chrome 155",
-          "online" => true,
+          "went_offline" => true,
           "attempt" => 2,
           "elapsed_ms" => 812,
           "error_name" => "TypeError",
@@ -200,7 +200,7 @@ defmodule Engram.LogsReemitTest do
         })
 
       assert meta[:browser] == "Chrome 155"
-      assert meta[:online] == true
+      assert meta[:went_offline] == true
       assert meta[:attempt] == 2
       assert meta[:elapsed_ms] == 812
       assert meta[:error_name] == "TypeError"
@@ -214,7 +214,7 @@ defmodule Engram.LogsReemitTest do
         reemit_context(%{
           "url" => "https://api.engram.page/notes/Medical/x.md",
           "browser" => String.duplicate("Chrome ", 50) <> "155",
-          "online" => "yes",
+          "went_offline" => "yes",
           "attempt" => 10_000,
           "elapsed_ms" => -1,
           "error_name" => "Medical/x.md",
@@ -224,16 +224,16 @@ defmodule Engram.LogsReemitTest do
         })
 
       for key <-
-            ~w(url browser online attempt elapsed_ms error_name error_message visibility effective_type)a do
+            ~w(url browser went_offline attempt elapsed_ms error_name error_message visibility effective_type)a do
         refute Map.has_key?(meta, key), "#{key} passed through"
       end
     end
 
-    # `false` is a value, not an absence: an offline flag that is false is
+    # `false` is a value, not an absence: "did not go offline" is
     # exactly as much signal as one that is true.
     test "a false value survives" do
-      meta = reemit_context(%{"online" => false})
-      assert Map.fetch(meta, :online) == {:ok, false}
+      meta = reemit_context(%{"went_offline" => false})
+      assert Map.fetch(meta, :went_offline) == {:ok, false}
     end
 
     # A burst of the same network_error differs only in timing. Keying the
