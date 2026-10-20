@@ -955,59 +955,62 @@ defmodule Engram.Crypto.UserDekRotation do
     end
   end
 
+  # One page, two Qdrant requests whatever its size (`Qdrant.set_payloads/2`):
+  # a waited set_payload per point was one WAL flush each, and a ~150k-point
+  # user ran past the 60-minute rotation timeout (review M3).
   defp rewrap_qdrant_points(collection, user_id, points, old_dek, new_dek) do
-    Enum.reduce_while(points, :ok, fn point, :ok ->
-      qdrant_id =
-        point["id"] ||
-          (
-            Logger.error(
-              "T3.7 sweep_qdrant: point missing id",
-              Metadata.with_category(:error, :crypto,
-                user_id: user_id,
-                phase: :sweep_qdrant,
-                status: :missing_id
-              )
-            )
+    pairs =
+      Enum.reduce_while(points, {:ok, []}, fn point, {:ok, acc} ->
+        qdrant_id = point["id"] || missing_point_id!(user_id)
+        payload = point["payload"] || %{}
 
-            :telemetry.execute(
-              [:engram, :crypto, :rotate, :dek, :row_failed],
-              %{count: 1},
-              %{table: :qdrant, phase: :sweep_qdrant, status: :missing_id}
-            )
+        case rewrap_qdrant_payload(collection, qdrant_id, payload, old_dek, new_dek) do
+          {:ok, :unchanged} -> {:cont, {:ok, acc}}
+          {:ok, new_payload} -> {:cont, {:ok, [{qdrant_id, new_payload} | acc]}}
+          {:error, _} = err -> {:halt, err}
+        end
+      end)
 
-            raise "T3.7 sweep_qdrant: point missing id"
+    with {:ok, pairs} <- pairs do
+      case Qdrant.set_payloads(collection, Enum.reverse(pairs)) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.error(
+            "T3.7 sweep_qdrant: set_payload failed",
+            Metadata.with_category(:error, :crypto,
+              user_id: user_id,
+              total_count: length(pairs),
+              phase: :sweep_qdrant,
+              status: :set_payload_failed,
+              reason_label: Metadata.safe_reason(reason)
+            )
           )
 
-      payload = point["payload"] || %{}
-
-      case rewrap_qdrant_payload(collection, qdrant_id, payload, old_dek, new_dek) do
-        {:ok, :unchanged} ->
-          {:cont, :ok}
-
-        {:ok, new_payload} ->
-          case Qdrant.set_payload(collection, [qdrant_id], new_payload) do
-            :ok ->
-              {:cont, :ok}
-
-            {:error, reason} ->
-              Logger.error(
-                "T3.7 sweep_qdrant: set_payload failed",
-                Metadata.with_category(:error, :crypto,
-                  user_id: user_id,
-                  qdrant_id: qdrant_id,
-                  phase: :sweep_qdrant,
-                  status: :set_payload_failed,
-                  reason_label: Metadata.safe_reason(reason)
-                )
-              )
-
-              {:halt, {:error, {:qdrant_set_payload_failed, reason}}}
-          end
-
-        {:error, _} = err ->
-          {:halt, err}
+          {:error, {:qdrant_set_payload_failed, reason}}
       end
-    end)
+    end
+  end
+
+  @spec missing_point_id!(term()) :: no_return()
+  defp missing_point_id!(user_id) do
+    Logger.error(
+      "T3.7 sweep_qdrant: point missing id",
+      Metadata.with_category(:error, :crypto,
+        user_id: user_id,
+        phase: :sweep_qdrant,
+        status: :missing_id
+      )
+    )
+
+    :telemetry.execute(
+      [:engram, :crypto, :rotate, :dek, :row_failed],
+      %{count: 1},
+      %{table: :qdrant, phase: :sweep_qdrant, status: :missing_id}
+    )
+
+    raise "T3.7 sweep_qdrant: point missing id"
   end
 
   @qdrant_encrypted_fields [:text, :title, :heading_path]

@@ -988,6 +988,43 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
+  A different payload per point (`[{id, payload}]`), merged like
+  `set_payload/3`, in two requests whatever the count: one `/points/batch`
+  of set_payload ops without `wait`, then one waited barrier. Qdrant runs a
+  batch's ops one by one with the request's `wait` (`do_batch_update_points`),
+  so a waited batch still pays a WAL flush per op. The barrier, a delete of a
+  key no point has over the same ids, reaches every shard holding them after
+  the batch (each shard applies its queue in order), so once it is applied
+  the whole batch is too, and flushed. Verified on 1.19.2 with 3 shards.
+  """
+  # Never written, so the barrier delete changes nothing.
+  @barrier_key "__engram_write_barrier"
+
+  def set_payloads(col \\ nil, pairs)
+  def set_payloads(_col, []), do: :ok
+
+  def set_payloads(col, pairs) when is_list(pairs) do
+    col = col || collection()
+    ops = for {id, payload} <- pairs, do: %{set_payload: %{points: [id], payload: payload}}
+    batch = [json: %{operations: ops}, params: [wait: false]] ++ req_opts()
+    barrier = write_opts(%{keys: [@barrier_key], points: Enum.map(pairs, &elem(&1, 0))})
+
+    instrument(:set_payload, fn ->
+      with :ok <- write(&Req.post/2, "/collections/#{col}/points/batch", batch) do
+        write(&Req.post/2, "/collections/#{col}/points/payload/delete", barrier)
+      end
+    end)
+  end
+
+  defp write(request, path, opts) do
+    case request.("#{base_url()}#{path}", opts) do
+      {:ok, %{status: 200, body: body}} -> applied(body)
+      {:ok, %{status: status, body: body}} -> write_error(status, body)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
   Patch (overwrite-or-add) payload keys on EVERY point matching the
   `{user_id, vault_id, path_hmac}` filter — vectors untouched. The cost-free
   way to re-path a note's points after a rename without re-running the
