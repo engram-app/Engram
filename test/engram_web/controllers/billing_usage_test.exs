@@ -6,6 +6,8 @@ defmodule EngramWeb.BillingUsageTest do
   """
   use EngramWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Engram.UsageMeters
 
   setup %{conn: conn} do
@@ -96,6 +98,30 @@ defmodule EngramWeb.BillingUsageTest do
       {:ok, full_at, 0} = DateTime.from_iso8601(bucket["full_at"])
       expected = DateTime.add(DateTime.utc_now(), div(UsageMeters.bucket_refill_seconds(), 2))
       assert abs(DateTime.diff(full_at, expected)) < 60
+    end
+
+    test "parked_ready_at is when the whole backlog fits, even past the full date",
+         %{conn: conn, user: user} do
+      {:ok, _} = UsageMeters.bucket_take(user.id, 6_000_000, 6_000_000)
+      vault = Engram.Repo.one!(Engram.Vaults.Vault, skip_tenant_check: true)
+
+      for {path, need} <- [{"A.md", 4_000_000}, {"B.md", 6_000_000}] do
+        note = Engram.Fixtures.insert_note!(user, vault, %{path: path, content: "# #{path}"})
+
+        Engram.Repo.update_all(
+          from(n in Engram.Notes.Note, where: n.id == ^note.id),
+          [set: [embed_budget_parked: true, embed_budget_need: need]],
+          skip_tenant_check: true
+        )
+      end
+
+      bucket = usage(conn)["usage"]["embed_bucket"]
+      assert bucket["parked_notes"] == 2
+
+      # 10M behind an empty 6M bucket: 10/6 of a refill period, not one.
+      {:ok, ready_at, 0} = DateTime.from_iso8601(bucket["parked_ready_at"])
+      seconds = div(10_000_000 * UsageMeters.bucket_refill_seconds(), 6_000_000)
+      assert abs(DateTime.diff(ready_at, DateTime.add(DateTime.utc_now(), seconds))) < 60
     end
 
     test "is null for a paid user", %{conn: conn, user: user} do
