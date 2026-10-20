@@ -49,6 +49,14 @@ defmodule Engram.Notes do
 
   require Logger
 
+  # Every persisted Note column except the CRDT state: what a catch-up page
+  # (`list_changes_by_seq/4`, `fields: :all`) reads. Nothing on that path uses
+  # the page's crdt_state (change maps carry none; stale-facade resolution
+  # re-reads its own rows), and it is about half of a note's stored bytes, so
+  # selecting it detoasted and shipped bytes the byte budget never counted.
+  # Computed from the schema so a new column is fed by default.
+  @note_feed_fields Note.__schema__(:fields) -- [:crdt_state_ciphertext, :crdt_state_nonce]
+
   # Every persisted Note column except content_ciphertext/content_nonce —
   # the metadata projection for reads that never serialize content (changes
   # feeds `fields=meta`, search rehydration). Skipping the big column saves
@@ -4391,7 +4399,7 @@ defmodule Engram.Notes do
     query =
       case fields do
         :meta -> from(n in base, select: struct(n, @note_meta_fields))
-        :all -> base
+        :all -> from(n in base, select: struct(n, @note_feed_fields))
       end
 
     # Byte budget. `limit` caps ROWS; nothing capped BYTES, and POST /notes
@@ -4404,6 +4412,9 @@ defmodule Engram.Notes do
     # decrypted the rows it was meant to exclude, which is exactly where the
     # memory goes. The probe selects sizes only — no content, no decrypt — so it
     # is a few KB regardless of how fat the page would have been.
+    #
+    # The page reads no CRDT state (@note_feed_fields), so content is the only
+    # large column it selects and this probe measures what is actually read.
     #
     # The probe bounds the STORED ciphertext read only. Stored size is NOT the
     # plaintext size (format 1 rows are zstd-compressed, so a few KB can inflate
