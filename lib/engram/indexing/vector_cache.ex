@@ -1,6 +1,4 @@
 defmodule Engram.Indexing.VectorCache do
-  @prune_batch 10_000
-
   @moduledoc """
   Short-lived encrypted per-user dense vector cache (chunker v5 Task 12). Its
   job is pay-once across retries, crashes and the v5 rebuild window: a 429
@@ -45,7 +43,7 @@ defmodule Engram.Indexing.VectorCache do
   an 8 KB page (~2,730 B a row), plus ~76 B of primary key and ~32 B of note
   index: about 2,840 B a row. Retention is 72 h by `inserted_at` (no touch on
   hit: a full page leaves no room for a HOT update, so a touch would rewrite a
-  2.8 KB tuple), deleted by `prune/1` in batches of #{@prune_batch} rows. So
+  2.8 KB tuple), deleted by `prune/1` in batches of 10,000 rows. So
   the table holds about three days of embed volume: ~0.6 to 1 GB at the peak
   of the v5 rebuild (~340,000 vectors), megabytes in steady state.
 
@@ -67,6 +65,7 @@ defmodule Engram.Indexing.VectorCache do
   @table "embedding_cache"
   @put_rows 1_000
   @retention_hours 72
+  @prune_batch 10_000
 
   @get_many_sql """
   SELECT key, vector_ciphertext, vector_nonce
