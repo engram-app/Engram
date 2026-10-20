@@ -1462,6 +1462,28 @@ defmodule Engram.Crypto.UserDekRotationTest do
       refute_enqueued(worker: Engram.Workers.EmbedNote)
     end
 
+    test "a point under neither key owned by a trashed note is deleted, not rebuilt",
+         %{user: user, bypass: bypass} do
+      %{note: note, bad: bad} = neither_key_fixture(user, bypass, true)
+
+      {1, _} =
+        Repo.update_all(
+          from(n in Engram.Notes.Note, where: n.id == ^note.id),
+          [set: [deleted_at: DateTime.utc_now()]],
+          skip_tenant_check: true
+        )
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      assert_received {:deleted, %{"points" => [^bad]}}
+
+      raw =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      assert raw.chunker_version == 1, "a trashed note gets no rebuild"
+      refute_enqueued(worker: Engram.Workers.EmbedNote)
+    end
+
     # The heal can now run concurrently with the text sweep (both start at the
     # flip). The sweep must write only the text it rewrapped: a full payload
     # from its scroll put the old-key filter HMACs back over the heal's.

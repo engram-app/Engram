@@ -938,6 +938,12 @@ defmodule Engram.Crypto.UserDekRotation do
       )
     )
 
+    :telemetry.execute(
+      [:engram, :crypto, :rotate, :dek, :row_failed],
+      %{count: 1},
+      %{table: :chunks, phase: :post_flip_index_repairs, status: :remap_failed}
+    )
+
     :ok
   end
 
@@ -1041,16 +1047,21 @@ defmodule Engram.Crypto.UserDekRotation do
       requeue_for_rebuild(user.id, :all, Metadata.safe_exit_reason(reason))
   end
 
-  # A skipped point some chunk row names belongs to a note whose index must be
-  # rebuilt. One no row names is an orphan (a deleted note's, left by a
-  # crashed rotation): nothing would ever rebuild or reap it, so it is
+  # A skipped point a LIVE note's chunk row names belongs to an index that
+  # must be rebuilt. Any other is dead weight: no row names it (an orphan
+  # left by a crashed rotation), or its note is trashed, where a rebuild job
+  # would only discard. Nothing would ever rebuild or reap those, so they are
   # deleted. The ids come from a scroll filtered to this user, so the delete
   # touches only this user's points.
   defp settle_undecryptable(user_id, skipped) do
     {:ok, named} =
       Repo.with_tenant(user_id, fn ->
         from(c in Engram.Notes.Chunk,
-          where: c.user_id == ^user_id and c.qdrant_point_id in ^skipped,
+          join: n in Engram.Notes.Note,
+          on: n.id == c.note_id,
+          where:
+            c.user_id == ^user_id and c.qdrant_point_id in ^skipped and n.kind == "note" and
+              is_nil(n.deleted_at),
           select: {c.qdrant_point_id, c.note_id}
         )
         |> Repo.all()
