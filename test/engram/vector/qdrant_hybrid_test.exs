@@ -78,8 +78,9 @@ defmodule Engram.Vector.QdrantHybridTest do
              Qdrant.hybrid_search("c1", [0.1], sparse, user_id: "u1", vault_id: "v1", limit: 2)
 
     # p2: rank 1 in both legs = 1/3 + 1/3. p1 and p3 tie at 1/2 (rank 0 in
-    # one leg each); p3 holds the larger leg score. Only two survive.
-    assert Enum.map(results, & &1.qdrant_id) == ["p2", "p3"]
+    # one leg each, best rank 0 both), so the id breaks it, never p3's larger
+    # raw BM25 score. Only two survive.
+    assert Enum.map(results, & &1.qdrant_id) == ["p2", "p1"]
     assert_in_delta first.score, 2 / 3, 1.0e-12
     assert first.text == "t-p2"
     refute Map.has_key?(first, :id)
