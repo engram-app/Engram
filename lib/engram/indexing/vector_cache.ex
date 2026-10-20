@@ -117,12 +117,12 @@ defmodule Engram.Indexing.VectorCache do
   end
 
   @doc "The cache key for a digest under a user's content-hash subkey."
-  @spec key_for_digest(binary(), digest()) :: key()
+  @spec key_for_digest(<<_::256>>, digest()) :: key()
   def key_for_digest(<<_::256>> = content_key, <<_::256>> = digest),
     do: :crypto.mac(:hmac, :sha256, content_key, digest)
 
   @doc "`key_for_digest(content_key, digest(text, opts))`."
-  @spec key(binary(), iodata(), keyword()) :: key()
+  @spec key(<<_::256>>, iodata(), keyword()) :: key()
   def key(content_key, text, opts), do: key_for_digest(content_key, digest(text, opts))
 
   @doc """
@@ -248,10 +248,12 @@ defmodule Engram.Indexing.VectorCache do
       # Insert before delete: a crash in between leaves the old row, which the
       # next run re-keys again (`on_conflict: :nothing`) and then deletes.
       Repo.with_tenant!(user_id, fn ->
-        Repo.insert_all(Entry, inserts, on_conflict: :nothing)
+        {_, _} = Repo.insert_all(Entry, inserts, on_conflict: :nothing)
 
-        from(e in Entry, where: e.user_id == ^user_id and e.key in ^gone)
-        |> Repo.delete_all()
+        {_, _} =
+          Repo.delete_all(from(e in Entry, where: e.user_id == ^user_id and e.key in ^gone))
+
+        :ok
       end)
 
       rotate_loop(user_id, old_dek, new_dek, new_content_key, rows |> List.last() |> elem(0))
