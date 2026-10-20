@@ -69,20 +69,7 @@ export async function uploadInParts(
 	opts: Opts = {},
 ): Promise<{ attachment: AttachmentSummary }> {
 	const { onProgress, signal, backoffMs = 500 } = opts;
-	const { upload_id, part_size, part_count } = await api.post<{
-		upload_id: string;
-		part_size: number;
-		part_count: number;
-	}>(
-		"/attachment-uploads",
-		{
-			path,
-			size_bytes: file.size,
-			mtime: Math.floor(file.lastModified / 1000),
-			mime_type: file.type || undefined,
-		},
-		{ signal },
-	);
+	const { upload_id, part_size, part_count } = await start();
 	const base = `/attachment-uploads/${upload_id}`;
 	let completeOutcomeUnknown = false;
 
@@ -92,6 +79,29 @@ export async function uploadInParts(
 			throw err;
 		}
 		await sleep(delayFor(err, attempt, backoffMs), signal);
+	}
+
+	/** Opens the session. Only 429 `too_many_uploads` (the user holds the most
+	 *  open sessions allowed) is retried: a slot frees when one completes. Any
+	 *  other failure is final here, since a start whose answer was lost may have
+	 *  opened a session, and a resend would hold a second slot. */
+	async function start(): Promise<{ upload_id: string; part_size: number; part_count: number }> {
+		for (let attempt = 0; ; attempt++) {
+			try {
+				return await api.post(
+					"/attachment-uploads",
+					{
+						path,
+						size_bytes: file.size,
+						mtime: Math.floor(file.lastModified / 1000),
+						mime_type: file.type || undefined,
+					},
+					{ signal },
+				);
+			} catch (err) {
+				await backOff(err, attempt, (e) => !(e instanceof ApiError && e.status === 429));
+			}
+		}
 	}
 
 	/** `completed`: complete already committed; complete again returns the attachment. */

@@ -137,6 +137,24 @@ describe("uploadInParts", () => {
 		expect(putRaw).toHaveBeenCalledTimes(2);
 	});
 
+	it("retries a start refused 429 too_many_uploads, using retry-after", async () => {
+		session(1);
+		post.mockRejectedValueOnce(new ApiError(429, "too_many_uploads", 0));
+		const out = await uploadInParts(bigFile(PART), "big.bin", { backoffMs: 10_000 });
+		expect(post.mock.calls.filter((c) => c[0] === "/attachment-uploads")).toHaveLength(2);
+		expect(out).toEqual({ attachment: row });
+	});
+
+	it("does not resend a start that failed any other way", async () => {
+		for (const err of [new ApiError(415, "extension_not_allowed"), new TypeError("network")]) {
+			post.mockReset();
+			post.mockRejectedValue(err);
+			await expect(uploadInParts(bigFile(PART), "big.bin", { backoffMs: 0 })).rejects.toBe(err);
+			// A lost answer may have opened a session; a resend would hold a second slot.
+			expect(post).toHaveBeenCalledTimes(1);
+		}
+	});
+
 	it("sends DELETE and rejects when aborted", async () => {
 		session(2);
 		const ctl = new AbortController();
