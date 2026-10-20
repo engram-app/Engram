@@ -492,7 +492,12 @@ defmodule Engram.Workers.EmbedNote do
   # must still park (WHERE content_hash = NULL never matches, which would leave
   # the exact loop this guards against running), so fall back to an id-only match.
   defp maybe_mark_poison(note, {:error, reason}, %Oban.Job{attempt: attempt, max_attempts: max})
-       when attempt >= max do
+       when attempt >= max,
+       do: park_poisoned(note, reason)
+
+  defp maybe_mark_poison(_note, _result, _job), do: :ok
+
+  defp park_poisoned(note, reason) do
     cooldown = poison_cooldown_seconds(reason)
     retry_after = DateTime.add(DateTime.utc_now(), cooldown, :second)
 
@@ -553,8 +558,6 @@ defmodule Engram.Workers.EmbedNote do
     :ok
   end
 
-  defp maybe_mark_poison(_note, _result, _job), do: :ok
-
   defp run_embed(note, user, vault, old_path_hmac_b64, opts) do
     case Crypto.maybe_decrypt_note_fields(note, user) do
       {:ok, decrypted_note} ->
@@ -596,6 +599,13 @@ defmodule Engram.Workers.EmbedNote do
           # and the reservation stays charged: it was spent.
           {:error, :qdrant_backpressure} ->
             Qdrant.backpressure_snooze(:refused)
+
+          # A failure no retry can fix (H7: input over the model's context
+          # window). Park now, on any attempt, and stop: four more attempts
+          # would each pay a request to learn the same thing.
+          {:error, {:permanent, kind}} ->
+            :ok = park_poisoned(note, kind)
+            {:cancel, kind}
 
           {:error, reason} ->
             # Per-attempt failure (Voyage non-429 / Qdrant). Previously

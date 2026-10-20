@@ -80,6 +80,8 @@ defmodule Engram.Embedders.Voyage do
   defp status_label({:ok, _}), do: :ok
   defp status_label({:error, {429, %{"detail" => "client_rate_limited"}}}), do: :throttled
 
+  defp status_label({:error, {:permanent, _}}), do: :client_error
+
   defp status_label({:error, {status, _}}) when is_integer(status) and status >= 500,
     do: :server_error
 
@@ -97,7 +99,22 @@ defmodule Engram.Embedders.Voyage do
   """
   @spec request_defaults(atom()) :: keyword()
   def request_defaults(:query), do: [receive_timeout: 5_000, retry: false]
+
+  # A maintenance pass re-embeds unchanged content at our cost. A receive
+  # timeout may still have been billed, so a retry can pay twice (H6).
+  def request_defaults(:maintenance),
+    do: [receive_timeout: 30_000, retry: &__MODULE__.retry_maintenance?/2]
+
   def request_defaults(_purpose), do: [receive_timeout: 30_000, retry: :transient, max_retries: 3]
+
+  @doc """
+  Req `retry` for `:maintenance`: only what provably never reached the model,
+  a 429 or a refused connection. Never a timeout or a 5xx.
+  """
+  @spec retry_maintenance?(Req.Request.t(), Req.Response.t() | Exception.t()) :: boolean()
+  def retry_maintenance?(_request, %Req.Response{status: 429}), do: true
+  def retry_maintenance?(_request, %Req.TransportError{reason: :econnrefused}), do: true
+  def retry_maintenance?(_request, _response_or_exception), do: false
 
   defp do_embed_texts(texts, opts) do
     url = ServiceConfig.get(:voyage_url, @default_url)
@@ -118,7 +135,10 @@ defmodule Engram.Embedders.Voyage do
         # side an input is on, and its docs say not to omit this for
         # retrieval. Vectors with and without it are compatible, so the
         # existing index needs no re-embed.
-        input_type: input_type(purpose)
+        input_type: input_type(purpose),
+        # Voyage defaults this to true and silently embeds a prefix of an
+        # over-length input. False turns that into a 400 we can park.
+        truncation: false
       }
       |> maybe_put_output_dimension()
       |> maybe_put_packed_encoding(purpose)
@@ -144,6 +164,11 @@ defmodule Engram.Embedders.Voyage do
         emit_token_telemetry(body, Keyword.get(opts, :purpose, :index))
         {:ok, vectors}
 
+      {:ok, %{status: 400, body: body}} ->
+        if context_window_error?(body),
+          do: {:error, {:permanent, :input_too_long}},
+          else: {:error, {400, body}}
+
       {:ok, %{status: status, body: body}} ->
         {:error, {status, body}}
 
@@ -151,6 +176,12 @@ defmodule Engram.Embedders.Voyage do
         {:error, reason}
     end
   end
+
+  # Voyage's 400 for `truncation: false`: "... does not fit into the model's
+  # context window of 32000 tokens".
+  defp context_window_error?(%{"detail" => detail}), do: context_window_error?(detail)
+  defp context_window_error?(detail) when is_binary(detail), do: detail =~ "context window"
+  defp context_window_error?(_body), do: false
 
   # Indexing asks for base64: each vector arrives as packed little-endian
   # float32 (a NumPy float32 buffer), ~3x smaller than JSON numbers and with no

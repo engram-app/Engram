@@ -206,6 +206,82 @@ defmodule Engram.Embedders.VoyageTest do
     end
   end
 
+  describe "truncation: false (over-length input fails loudly)" do
+    # Voyage defaults `truncation` to true and silently embeds a prefix of an
+    # over-length input. Sent false, the same input is a 400 instead.
+    test "indexing and search both send truncation false", %{bypass: bypass} do
+      expect_body(bypass)
+      assert {:ok, _} = Voyage.embed_texts(["hello"])
+      assert_receive {:body, %{"truncation" => false}}
+
+      expect_body(bypass)
+      assert {:ok, _} = Voyage.embed_texts(["hello"], purpose: :query)
+      assert_receive {:body, %{"truncation" => false}}
+    end
+
+    test "a context-window 400 is permanent, after exactly one request", %{bypass: bypass} do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Bypass.expect(bypass, "POST", "/v1/embeddings", fn conn ->
+        Agent.update(counter, &(&1 + 1))
+
+        Plug.Conn.send_resp(
+          conn,
+          400,
+          ~s({"detail":"Request to model 'voyage-4-large' failed. The input at index 0 does not fit into the model's context window of 32000 tokens."})
+        )
+      end)
+
+      assert {:error, {:permanent, :input_too_long}} = Voyage.embed_texts(["huge"])
+      assert Agent.get(counter, & &1) == 1
+    end
+
+    test "any other 400 keeps the raw status and body", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/embeddings", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(400, ~s({"detail":"invalid model"}))
+      end)
+
+      assert {:error, {400, %{"detail" => "invalid model"}}} = Voyage.embed_texts(["x"])
+    end
+  end
+
+  describe "maintenance purpose" do
+    test "defaults never retry a receive timeout" do
+      assert Voyage.request_defaults(:maintenance) == [
+               receive_timeout: 30_000,
+               retry: &Voyage.retry_maintenance?/2
+             ]
+
+      req = Req.new()
+      refute Voyage.retry_maintenance?(req, %Req.TransportError{reason: :timeout})
+      refute Voyage.retry_maintenance?(req, %Req.Response{status: 500})
+      refute Voyage.retry_maintenance?(req, %Req.Response{status: 400})
+      assert Voyage.retry_maintenance?(req, %Req.Response{status: 429})
+      assert Voyage.retry_maintenance?(req, %Req.TransportError{reason: :econnrefused})
+    end
+
+    # H6: a timed-out request may still have been billed; a retry pays again.
+    test "a maintenance request that times out makes exactly one call", %{bypass: bypass} do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Bypass.stub(bypass, "POST", "/v1/embeddings", fn conn ->
+        Agent.update(counter, &(&1 + 1))
+        Process.sleep(300)
+        Plug.Conn.send_resp(conn, 200, ~s({"data":[{"embedding":[0.1]}]}))
+      end)
+
+      assert {:error, %Req.TransportError{reason: :timeout}} =
+               Voyage.embed_texts(["x"], purpose: :maintenance, receive_timeout: 50)
+
+      Process.sleep(350)
+      assert Agent.get(counter, & &1) == 1
+      # The client hung up on the sleeping handler; that is the point.
+      Bypass.pass(bypass)
+    end
+  end
+
   defp expect_body(bypass) do
     test_pid = self()
 
