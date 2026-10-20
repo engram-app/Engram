@@ -910,15 +910,71 @@ defmodule Engram.Indexing do
   # Declared in Qdrant so the strict-mode limits are checked against it.
   @upsert_batch Qdrant.max_write_batch()
 
+  # And bytes: 64 merged points of dense CJK (30 KB of text and ~10k terms
+  # each) were an 8.75 MB request at 3 MB of note. A quarter of Qdrant's
+  # 32 MiB request cap, so no note shape gets near it.
+  @upsert_batch_bytes 8 * 1_048_576
+
   defp upsert_points_batched(points) do
     points
-    |> Enum.chunk_every(@upsert_batch)
+    |> point_batches()
     |> Enum.reduce_while(:ok, fn batch, :ok ->
       case Qdrant.upsert_points(collection(), Enum.map(batch, &unpack_point/1)) do
         :ok -> {:cont, :ok}
         other -> {:halt, other}
       end
     end)
+  end
+
+  # At most `@upsert_batch` points and `@upsert_batch_bytes` of JSON each. A
+  # point bigger than the byte budget goes alone (a floor point is bounded by
+  # `@floor_span`).
+  defp point_batches(points) do
+    Enum.chunk_while(
+      points,
+      {[], 0, 0},
+      fn point, {batch, count, bytes} ->
+        size = point_json_bytes(point)
+
+        if batch != [] and (count == @upsert_batch or bytes + size > @upsert_batch_bytes),
+          do: {:cont, Enum.reverse(batch), {[point], 1, size}},
+          else: {:cont, {[point | batch], count + 1, bytes + size}}
+      end,
+      fn
+        {[], _, _} -> {:cont, {[], 0, 0}}
+        {batch, _, _} -> {:cont, Enum.reverse(batch), {[], 0, 0}}
+      end
+    )
+  end
+
+  # An upper bound on a point's JSON, from what it holds before encoding: a
+  # packed f32 (4 bytes) prints in at most 15 (`-1.2345678e-38,`), a packed
+  # sparse entry (u32 index + f64 value, 12 bytes) in at most 36, a payload
+  # string in its own bytes plus quotes and key.
+  defp point_json_bytes(%{vector: named} = point) do
+    vectors =
+      for {_name, v} <- named, reduce: 0 do
+        acc ->
+          case v do
+            v when is_binary(v) -> acc + div(byte_size(v), 4) * 15
+            %{indices: i} when is_binary(i) -> acc + div(byte_size(i), 4) * 36
+            v when is_list(v) -> acc + length(v) * 26
+            %{indices: i} when is_list(i) -> acc + length(i) * 36
+          end
+      end
+
+    vectors + payload_json_bytes(Map.get(point, :payload, %{})) + 256
+  end
+
+  defp payload_json_bytes(payload) do
+    for {_key, v} <- payload, reduce: 0 do
+      acc ->
+        case v do
+          v when is_binary(v) -> acc + byte_size(v) + 32
+          v when is_list(v) -> acc + Enum.sum(Enum.map(v, &(byte_size(to_string(&1)) + 4))) + 32
+          _ -> acc + 48
+        end
+    end
   end
 
   # Nothing reusable — every chunk is being rebuilt, so keep the belt-and-
@@ -2018,7 +2074,7 @@ defmodule Engram.Indexing do
 
   defp update_vectors_batched(points) do
     points
-    |> Enum.chunk_every(@upsert_batch)
+    |> point_batches()
     |> Enum.reduce_while(:ok, fn batch, :ok ->
       case Qdrant.update_vectors(collection(), Enum.map(batch, &unpack_point/1)) do
         :ok -> {:cont, :ok}
