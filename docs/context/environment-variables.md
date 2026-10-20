@@ -115,6 +115,7 @@ Live. Covers every var `config/runtime.exs` reads (`Engram.EnvVarDocsTest` fails
 | `QDRANT_RECONCILE_CONFIG` | `true` | Kill switch: `false` = never PATCH the collection config (boot reconcile + poller strict-mode sync). |
 | `QDRANT_RECONCILE_ON_DISK` | `true` | Kill switch: `false` = skip only the on-disk group (dense + sparse index on disk). |
 | `QDRANT_STRICT_MODE` | `true` | Kill switch: `false` = reconcile sets `strict_mode_config.enabled=false` (no write refusals). |
+| `QDRANT_STRICT_PROFILE` | unset (from the `QDRANT_URL` host) | `cloud` or `self_host`: which strict-mode hard limits the reconcile applies. `cloud` lets staging rehearse the Qdrant Cloud limits. |
 | `QDRANT_BACKPRESSURE_PREFLIGHT` | `true` | Kill switch: `false` = EmbedNote never pauses for Qdrant pressure. |
 | `QDRANT_MEMORY_LIMIT_BYTES` | unset | Qdrant container memory limit. Enables the heap pressure reading and the reserve-derived strict-mode memory limit. |
 | `QDRANT_MEMORY_RESERVE_BYTES` | 268435456 (256 MiB) | Heap kept free below the memory limit (floor 256 MiB). |
