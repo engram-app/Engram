@@ -11,15 +11,12 @@ use std::sync::OnceLock;
 /// frontmatter, the whole note is body.
 pub type Split = Option<(usize, usize, usize, bool)>;
 
-/// The opening fence only at byte 0 (after a UTF-8 BOM, which Windows
-/// editors write), with either line ending.
+/// The opening fence only at byte 0, with either line ending.
 fn open_fence(s: &[u8]) -> Option<usize> {
-    let bom = if s.starts_with(b"\xEF\xBB\xBF") { 3 } else { 0 };
-    let s = &s[bom..];
     if s.starts_with(b"---\r\n") {
-        Some(bom + 5)
+        Some(5)
     } else if s.starts_with(b"---\n") {
-        Some(bom + 4)
+        Some(4)
     } else {
         None
     }
