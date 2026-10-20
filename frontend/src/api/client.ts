@@ -90,6 +90,12 @@ interface Failure {
  *  second later, and the per-attempt report paged anyway. */
 const pendingReports = new WeakMap<object, Failure>();
 
+/** Errors whose reporting the api client owns: every fetch rejection (a
+ *  network failure, reported or deliberately not, e.g. offline) and every
+ *  5xx. A caller that handles a failure checks this before capturing it, so
+ *  nothing is reported twice and nothing else goes unreported. */
+const ownedFailures = new WeakSet<object>();
+
 /** One run of a query's queryFn. React Query marks it `retried` when it decides
  *  to run the queryFn again, so every request made in that run is dropped,
  *  however the queryFn combined or wrapped their errors (Promise.all, a
@@ -183,6 +189,9 @@ async function authFetch(
 			// ours. Everything else (CORS, DNS, TLS, connection reset) is a TypeError
 			// the browser deliberately leaves vague.
 			const aborted = err instanceof Error && err.name === "AbortError";
+			if (err instanceof Error) {
+				ownedFailures.add(err);
+			}
 			if (!aborted && navigator.onLine && err instanceof Error) {
 				reportUnlessRetried(
 					err,
@@ -239,6 +248,7 @@ async function authFetch(
 			body.error ?? firstValidationError(body.errors) ?? response.statusText,
 		);
 		if (response.status >= 500) {
+			ownedFailures.add(error);
 			reportUnlessRetried(error, { kind: `http_${response.status}`, method, url }, queryAttempt);
 		}
 		throw error;
@@ -249,6 +259,12 @@ async function authFetch(
 
 /** The attempt that threw `err` will be retried: its failure is not final, so
  *  drop its report. The final attempt's own error reports if it fails too. */
+/** True when the api client already reports (or deliberately skips) this
+ *  failure: a network error or a 5xx. Anything else is the caller's to report. */
+export function isApiClientFailure(err: unknown): boolean {
+	return typeof err === "object" && err !== null && ownedFailures.has(err);
+}
+
 /** Run one attempt of a query's queryFn as `attempt` (see QueryAttempt). */
 export function runInQueryAttempt<T>(attempt: QueryAttempt, fn: () => T): T {
 	const outer = currentQueryAttempt;

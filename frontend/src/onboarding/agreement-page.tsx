@@ -5,13 +5,17 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
 import { Trans } from "@/i18n/trans";
+import type { UIText } from "@/i18n/ui-text";
 import AuthPanel from "@/layout/auth-panel";
+import { serverErrorMessage } from "@/lib/server-error";
 import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { track } from "../analytics/track";
+import { isApiClientFailure } from "../api/client";
 import { useOnboardingStatus } from "../api/queries";
 import { LegalDoc } from "../legal/legal-doc";
 import { formatEffectiveDate, useDocumentName } from "../legal/legal-notice-banner";
 import { useAcceptAgreements } from "../legal/use-accept-current";
+import { captureError } from "../sentry";
 
 // The legal texts take whatever height the card has left, so the agreement
 // and Continue stay on screen without the page scrolling (AuthPanel).
@@ -30,21 +34,24 @@ export default function AgreementPage() {
 	const notices = data?.legal_notices ?? [];
 	// Guards a second accept while the first is still in flight.
 	const [submitting, setSubmitting] = useState(false);
-	const [failed, setFailed] = useState(false);
+	const [failure, setFailure] = useState<UIText | null>(null);
 
 	async function submit() {
 		if (submitting) {
 			return;
 		}
 		setSubmitting(true);
-		setFailed(false);
+		setFailure(null);
 		try {
 			await submitSteps();
-		} catch {
-			// A dropped request (Safari's "Load failed") or a 5xx: the accept
-			// did not land, so say so and leave Continue live to retry. The api
-			// client has already reported the failure.
-			setFailed(true);
+		} catch (err) {
+			// The accept did not land: say so and leave Continue live to retry.
+			// The api client reports network failures and 5xx itself; anything
+			// else (a 4xx, a bug in this flow) is reported here.
+			if (!isApiClientFailure(err)) {
+				captureError(err);
+			}
+			setFailure(serverErrorMessage(err, t("Could not continue. Please try again."), t));
 		} finally {
 			setSubmitting(false);
 		}
@@ -152,9 +159,9 @@ export default function AgreementPage() {
 							{t("I have read and agree to the agreement shown above and the privacy notice")}
 						</span>
 					</label>
-					{failed ? (
+					{failure ? (
 						<p role="alert" className={destructiveAlert}>
-							{t("Could not continue. Please try again.")}
+							{failure}
 						</p>
 					) : null}
 					<Button
