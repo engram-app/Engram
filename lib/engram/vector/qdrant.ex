@@ -1112,7 +1112,7 @@ defmodule Engram.Vector.Qdrant do
       {:ok, %{status: 200, body: %{"result" => points}}} when is_list(points) ->
         stored = Map.new(points, &{&1["id"], &1["payload"] || %{}})
 
-        case for({id, payload} <- pairs, not landed?(stored[id], want[id]), do: id) do
+        case for({id, _payload} <- pairs, not landed?(stored[id], want[id]), do: id) do
           [] -> :ok
           missing -> {:error, {:set_payloads_not_applied, missing}}
         end
