@@ -18,6 +18,8 @@ defmodule Engram.Crypto.UserDekRotationTest do
   }
 
   alias Engram.Notes.FlatFields
+  alias Engram.Notes.FrontmatterKey
+  alias Engram.Notes.FrontmatterKeys
   alias Engram.Notes.NoteAttr
   alias Engram.Repo
   alias Engram.Test.LogCapture
@@ -924,9 +926,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert raw.type_hmac == Crypto.hmac_field(new_filter_key, "playbook")
     end
 
-    test "rotation rewraps the v5 flat columns and recomputes their blind indexes",
+    test "rotation keeps every frontmatter key id, rekeys the dictionary, rewraps names",
          %{user: user, vault: vault} do
-      content = "---\nstatus: Draft\nauthor: alice\nsource: [https://a]\nmood: calm\n---\nbody\n"
+      content = "---\nstatus: Draft\nMood: calm\nrating: 4\n---\nbody\n"
 
       {:ok, note} =
         Engram.Notes.upsert_note(user, vault, %{"path" => "rot/flat.md", "content" => content},
@@ -938,13 +940,8 @@ defmodule Engram.Crypto.UserDekRotationTest do
       {:ok, fk} = Crypto.dek_filter_key(user)
       {:ok, dek} = Crypto.get_dek(user)
       flat = FlatFields.extract(content, fk)
-
-      Repo.update_all(
-        from(n in Engram.Notes.Note, where: n.id == ^note.id),
-        [set: FlatFields.columns(flat, dek, note.id)],
-        skip_tenant_check: true
-      )
-
+      {ids, 0} = FrontmatterKeys.resolve(user.id, dek, flat.names)
+      flat = FlatFields.put_key_ids(flat, ids)
       Repo.insert_all(NoteAttr, FlatFields.attr_rows(flat, note), skip_tenant_check: true)
 
       assert :ok = UserDekRotation.rotate_user(user.id)
@@ -953,24 +950,20 @@ defmodule Engram.Crypto.UserDekRotationTest do
       {:ok, new_fk} = Crypto.dek_filter_key(reloaded)
       {:ok, new_dek} = Crypto.get_dek(reloaded)
 
-      raw =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+      keys =
+        Repo.all(from(k in FrontmatterKey, where: k.user_id == ^user.id),
+          skip_tenant_check: true
+        )
 
-      open = fn field, ct, nonce ->
-        Envelope.decrypt(ct, nonce, new_dek, Crypto.aad_for_row(:notes, field, note.id))
-      end
+      by_id = Map.new(keys, &{&1.key_id, &1})
+      assert Map.keys(by_id) |> Enum.sort() == ids |> Map.values() |> Enum.sort()
 
-      assert open.(:status, raw.status_ciphertext, raw.status_nonce) == {:ok, "Draft"}
-      assert open.(:author, raw.author_ciphertext, raw.author_nonce) == {:ok, "alice"}
-      assert open.(:source, raw.source_ciphertext, raw.source_nonce) == {:ok, ~s(["https://a"])}
-      assert raw.status_hmac == FilterId.value_hmac(new_fk, "draft")
-      assert raw.author_hmac == FilterId.value_hmac(new_fk, "alice")
-      refute raw.status_hmac == FilterId.value_hmac(fk, "draft")
+      mood = by_id[ids[FilterId.key_hmac(fk, "mood")]]
+      assert mood.key_hmac == FilterId.key_hmac(new_fk, "mood")
+      assert FrontmatterKeys.name(mood, new_dek) == {:ok, "Mood"}
 
-      # `source` is a list: each element's blind index is recomputed.
-      assert raw.src_hmac == [FilterId.value_hmac(new_fk, "https://a")]
-
-      # note_attrs held only old-key HMACs; the forced re-index rewrites them.
+      # note_attrs held old-key HMACs; with the v5 format off nothing rebuilds
+      # them, so they are dropped.
       assert Repo.all(from(a in NoteAttr, where: a.note_id == ^note.id),
                skip_tenant_check: true
              ) == []
@@ -1087,13 +1080,19 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert p["y"] == FilterId.from_hmac(Crypto.hmac_field(new_fk, "playbook"))
       assert p["s"] == FilterId.attr_value(new_fk, "draft")
 
-      assert p["at"] == [
-               %{"k" => FilterId.attr(new_fk, "mood"), "v" => FilterId.attr_value(new_fk, "calm")}
-             ]
+      [mood] =
+        Repo.all(from(k in FrontmatterKey, where: k.user_id == ^user.id),
+          skip_tenant_check: true
+        )
 
-      [row] = Repo.all(from(a in NoteAttr, where: a.note_id == ^note.id), skip_tenant_check: true)
-      assert row.key_hmac == FilterId.key_hmac(new_fk, "mood")
-      assert row.value_hmac == FilterId.value_hmac(new_fk, "calm")
+      assert mood.key_hmac == FilterId.key_hmac(new_fk, "mood")
+      assert p["fa"] == [%{"k" => mood.key_id, "h" => FilterId.attr_value(new_fk, "calm")}]
+
+      rows = Repo.all(from(a in NoteAttr, where: a.note_id == ^note.id), skip_tenant_check: true)
+      assert Enum.find(rows, &(&1.key_id == mood.key_id)).h == FilterId.value_hmac(new_fk, "calm")
+
+      assert Enum.find(rows, &(&1.key_id == FrontmatterKeys.named_id(:status))).h ==
+               FilterId.value_hmac(new_fk, "draft")
     end
   end
 

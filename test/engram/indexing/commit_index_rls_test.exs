@@ -310,8 +310,9 @@ defmodule Engram.Indexing.CommitIndexRlsTest do
       {:ok, note: note}
     end
 
-    test "commit_index writes note_attrs and the notes columns as engram_app",
+    test "commit_index writes note_attrs as engram_app",
          %{bypass: bypass, note: note, vault: vault, user: user} do
+      status_id = Engram.Notes.FrontmatterKeys.named_id(:status)
       stub_qdrant(bypass)
       prepared = prepare!(note, vault, user)
       assert [_ | _] = prepared.attr_rows
@@ -324,8 +325,13 @@ defmodule Engram.Indexing.CommitIndexRlsTest do
           # the WITH CHECK, and only the owner's tenant sees them.
           {:ok, counts} =
             Repo.with_tenant(note.user_id, fn ->
-              {Repo.one(from(a in Engram.Notes.NoteAttr, select: count(a.id))),
-               Repo.one(from(n in Note, where: n.id == ^note.id, select: n.status_hmac))}
+              {Repo.one(from(a in Engram.Notes.NoteAttr, select: count(a.note_id))),
+               Repo.one(
+                 from(a in Engram.Notes.NoteAttr,
+                   where: a.note_id == ^note.id and a.key_id == ^status_id,
+                   select: a.h
+                 )
+               )}
             end)
 
           counts

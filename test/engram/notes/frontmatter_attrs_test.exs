@@ -33,6 +33,11 @@ defmodule Engram.Notes.FrontmatterAttrsTest do
              ])
   end
 
+  test "names maps each used key HMAC to the key as written (memory only)" do
+    got = extract(%{"Mood" => "calm", "rating" => 4.5, "skip" => nil})
+    assert got.names == %{k("mood") => "Mood", k("rating") => "rating"}
+  end
+
   test "first-class keys, their aliases and the prefix keys never appear" do
     values =
       Map.new(
@@ -42,14 +47,14 @@ defmodule Engram.Notes.FrontmatterAttrsTest do
         &{&1, "x"}
       )
 
-    assert extract(values) == %{attrs: [], nums: [], dates: []}
+    assert extract(values) == %{attrs: [], nums: [], dates: [], names: %{}}
   end
 
   test "a nested map is skipped, not flattened" do
-    assert extract(%{"meta" => %{"a" => 1}}) == %{attrs: [], nums: [], dates: []}
+    assert extract(%{"meta" => %{"a" => 1}}) == %{attrs: [], nums: [], dates: [], names: %{}}
 
     assert extract(%{"generated" => %{"by" => "human:x", "at" => "2026-01-01T00:00:00Z"}}) ==
-             %{attrs: [], nums: [], dates: []}
+             %{attrs: [], nums: [], dates: [], names: %{}}
   end
 
   test "a list gives one entry per scalar element" do
@@ -73,6 +78,6 @@ defmodule Engram.Notes.FrontmatterAttrsTest do
   end
 
   test "nil and empty strings store nothing" do
-    assert extract(%{"a" => nil, "b" => ""}) == %{attrs: [], nums: [], dates: []}
+    assert extract(%{"a" => nil, "b" => ""}) == %{attrs: [], nums: [], dates: [], names: %{}}
   end
 end

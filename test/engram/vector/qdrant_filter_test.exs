@@ -163,21 +163,30 @@ defmodule Engram.Vector.QdrantFilterTest do
       assert [%{should: [_, _]}, %{should: [_, _]}] = must
     end
 
-    test "nested long-tail filters" do
-      assert Qdrant.attr_filter("k1", "v1") == %{
+    test "nested user-key filters: key id and value in the same fa entry" do
+      assert Qdrant.attr_filter(70, {:h, "v1"}) == %{
                nested: %{
-                 key: "at",
+                 key: "fa",
                  filter: %{
-                   must: [%{key: "k", match: %{value: "k1"}}, %{key: "v", match: %{value: "v1"}}]
+                   must: [%{key: "k", match: %{value: 70}}, %{key: "h", match: %{value: "v1"}}]
                  }
                }
              }
 
-      assert %{nested: %{key: "nm", filter: %{must: [_, %{key: "n", range: %{gte: 4}}]}}} =
-               Qdrant.num_range("k", gte: 4)
+      assert %{nested: %{filter: %{must: [_, %{key: "h", match: %{any: ["a", "b"]}}]}}} =
+               Qdrant.attr_filter(70, {:h, ["a", "b"]})
 
-      assert %{nested: %{key: "dt", filter: %{must: [_, %{key: "t", range: %{lt: 9}}]}}} =
-               Qdrant.date_range("k", lt: 9)
+      assert %{nested: %{key: "fa", filter: %{must: [_, %{key: "n", range: %{gte: 4}}]}}} =
+               Qdrant.attr_filter(70, {:n, gte: 4})
+
+      assert %{nested: %{key: "fa", filter: %{must: [_, %{key: "d", range: %{lt: 9}}]}}} =
+               Qdrant.attr_filter(70, {:d, lt: 9})
+    end
+
+    test "resolved field filters join the tenant filter's must" do
+      cond = Qdrant.attr_filter(70, {:n, gte: 4})
+      %{must: must} = Qdrant.build_tenant_filter(user_id: @uuid, attr_filters: [cond])
+      assert List.last(must) == cond
     end
   end
 end

@@ -34,7 +34,9 @@ defmodule Engram.Indexing.PayloadV5SchemaTest do
 
   defp payload(note, yaml) do
     flat = FlatFields.extract("---\n" <> yaml <> "---\nbody\n", @fk)
-    PayloadV5.build(note, flat)
+    # Dictionary ids as `FrontmatterKeys.resolve/3` would hand them out.
+    ids = flat.names |> Map.keys() |> Enum.sort() |> Enum.with_index(64) |> Map.new()
+    PayloadV5.build(note, FlatFields.put_key_ids(flat, ids))
   end
 
   @full """
@@ -62,6 +64,18 @@ defmodule Engram.Indexing.PayloadV5SchemaTest do
     assert MapSet.new(Map.keys(p)) == MapSet.difference(@allowed, MapSet.new(~w(us cs)))
   end
 
+  test "fa: one entry per user value, `h` exact, `n` / `d` plaintext" do
+    p = payload(note(), "mood: calm\nrating: 4.5\nlaunch: 2026-10-01\ntags2: [x, y]\n")
+    kinds = p["fa"] |> Enum.map(&(Map.keys(&1) -- ["k"])) |> Enum.sort()
+    assert kinds == [["d"], ["h"], ["h"], ["h"], ["n"]]
+    assert Enum.find(p["fa"], &Map.has_key?(&1, "n"))["n"] == 4.5
+  end
+
+  test "a key without a dictionary id (past the cap) is left out of fa" do
+    flat = FlatFields.extract("---\nmood: calm\n---\nbody\n", @fk)
+    refute Map.has_key?(PayloadV5.build(note(), flat), "fa")
+  end
+
   test "the fallback sources store their flags, and no key outside the set" do
     p = PayloadV5.build(note(%{mtime: 1_760_000_000.7}), FlatFields.empty())
     assert MapSet.subset?(MapSet.new(Map.keys(p)), @allowed)
@@ -83,8 +97,8 @@ defmodule Engram.Indexing.PayloadV5SchemaTest do
 
     for key <- ~w(u v p f y s a r j), do: assert(p[key] =~ @id, key)
     for list <- ~w(g o), id <- p[list], do: assert(id =~ @id)
-    for %{"k" => k} <- p["at"] ++ p["nm"] ++ p["dt"], do: assert(k =~ @id)
-    for %{"v" => v} <- p["at"], do: assert(v =~ @id)
+    for %{"k" => k} <- p["fa"], do: assert(is_integer(k) and k >= 64)
+    for %{"h" => h} <- p["fa"], do: assert(h =~ @id)
     assert p["u"] == FilterId.uuid(n.user_id)
     assert p["p"] == FilterId.from_hmac(n.path_hmac)
   end

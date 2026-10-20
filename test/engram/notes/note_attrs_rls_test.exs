@@ -1,6 +1,6 @@
 defmodule Engram.Notes.NoteAttrsRlsTest do
   @moduledoc """
-  `note_attrs` is tenant-isolated by RLS. Every assertion runs as a
+  `note_attrs` and `frontmatter_keys` are tenant-isolated by RLS. Every assertion runs as a
   non-superuser role (the suite connects as a superuser, which bypasses RLS
   even when FORCED); the CONTROL proves the harness bites.
   """
@@ -8,6 +8,7 @@ defmodule Engram.Notes.NoteAttrsRlsTest do
 
   import Engram.RlsCase
 
+  alias Engram.Notes.FrontmatterKey
   alias Engram.Notes.NoteAttr
   alias Engram.Repo
   alias Engram.Vector.FilterId
@@ -31,8 +32,22 @@ defmodule Engram.Notes.NoteAttrsRlsTest do
               note_id: note.id,
               user_id: user.id,
               vault_id: vault.id,
-              key_hmac: FilterId.key_hmac(fk, "status"),
-              value_hmac: FilterId.value_hmac(fk, "draft")
+              key_id: 64,
+              h: FilterId.value_hmac(fk, "draft")
+            }
+          ],
+          skip_tenant_check: true
+        )
+
+        Repo.insert_all(
+          FrontmatterKey,
+          [
+            %{
+              user_id: user.id,
+              key_id: 64,
+              key_hmac: FilterId.key_hmac(fk, "phase"),
+              name_ct: "ct",
+              name_nonce: "nonce"
             }
           ],
           skip_tenant_check: true
@@ -45,6 +60,7 @@ defmodule Engram.Notes.NoteAttrsRlsTest do
   end
 
   defp rows, do: Repo.all(NoteAttr, skip_tenant_check: true)
+  defp keys, do: Repo.all(FrontmatterKey, skip_tenant_check: true)
 
   defp as_tenant(user_id, fun) do
     as_prod_role(fn ->
@@ -56,14 +72,36 @@ defmodule Engram.Notes.NoteAttrsRlsTest do
   test "CONTROL: engram_app with no tenant sees zero rows" do
     assert length(rows()) == 2
     assert as_prod_role(&rows/0) == {:returned, []}
+    assert length(keys()) == 2
+    assert as_prod_role(&keys/0) == {:returned, []}
   end
 
   test "a tenant sees only its own rows; equal values HMAC differently", %{a: a, b: b} do
     assert {:returned, [row]} = as_tenant(a.user.id, &rows/0)
     assert row.user_id == a.user.id
-    assert row.key_hmac == FilterId.key_hmac(a.fk, "status")
-    refute row.key_hmac == FilterId.key_hmac(b.fk, "status")
-    refute row.value_hmac == FilterId.value_hmac(b.fk, "draft")
+    assert row.h == FilterId.value_hmac(a.fk, "draft")
+    refute row.h == FilterId.value_hmac(b.fk, "draft")
+  end
+
+  test "a tenant sees only its own dictionary; the same key, the same id, other HMACs",
+       %{a: a, b: b} do
+    assert {:returned, [key]} = as_tenant(a.user.id, &keys/0)
+    assert key.user_id == a.user.id and key.key_id == 64
+    assert key.key_hmac == FilterId.key_hmac(a.fk, "phase")
+    refute key.key_hmac == FilterId.key_hmac(b.fk, "phase")
+  end
+
+  test "a tenant cannot write another tenant's dictionary", %{a: a, b: b} do
+    assert {:raised, %Postgrex.Error{postgres: %{code: :insufficient_privilege}}} =
+             as_tenant(a.user.id, fn ->
+               Repo.insert_all(
+                 FrontmatterKey,
+                 [
+                   %{user_id: b.user.id, key_id: 65, key_hmac: "k", name_ct: "c", name_nonce: "n"}
+                 ],
+                 skip_tenant_check: true
+               )
+             end)
   end
 
   test "a tenant cannot write another tenant's row", %{a: a, b: b} do
@@ -78,8 +116,8 @@ defmodule Engram.Notes.NoteAttrsRlsTest do
                      note_id: b.note.id,
                      user_id: b.user.id,
                      vault_id: b.vault.id,
-                     key_hmac: "k",
-                     value_num: 1.0
+                     key_id: 64,
+                     n: 1.0
                    }
                  ],
                  skip_tenant_check: true
@@ -95,9 +133,12 @@ defmodule Engram.Notes.NoteAttrsRlsTest do
            ).rows ==
              [[false, false]]
 
-    assert Repo.query!(
-             "SELECT roles::text[] FROM pg_policies WHERE tablename = 'note_attrs' AND policyname = 'maintenance_all'"
-           ).rows == [[["engram_maintenance"]]]
+    for table <- ~w(note_attrs frontmatter_keys) do
+      assert Repo.query!(
+               "SELECT roles::text[] FROM pg_policies WHERE tablename = $1 AND policyname = 'maintenance_all'",
+               [table]
+             ).rows == [[["engram_maintenance"]]]
+    end
   end
 
   test "real users get different filter keys", %{a: a, b: b} do
@@ -110,9 +151,10 @@ defmodule Engram.Notes.NoteAttrsRlsTest do
     {:error, n} =
       Repo.transaction(fn ->
         Repo.query!("DROP POLICY maintenance_all ON note_attrs")
+        Repo.query!("DROP POLICY maintenance_all ON frontmatter_keys")
         Repo.query!("SELECT set_config('app.current_tenant', '', true)")
         Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_maintenance")
-        n = length(rows())
+        n = length(rows()) + length(keys())
         Repo.query!("RESET SESSION AUTHORIZATION")
         Repo.rollback(n)
       end)
@@ -125,11 +167,11 @@ defmodule Engram.Notes.NoteAttrsRlsTest do
       Repo.transaction(fn ->
         Repo.query!("SELECT set_config('app.current_tenant', '', true)")
         Repo.query!("SET LOCAL SESSION AUTHORIZATION engram_maintenance")
-        n = length(rows())
+        n = length(rows()) + length(keys())
         Repo.query!("RESET SESSION AUTHORIZATION")
         n
       end)
 
-    assert n == 2
+    assert n == 4
   end
 end
