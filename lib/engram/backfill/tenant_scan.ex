@@ -85,6 +85,26 @@ defmodule Engram.Backfill.TenantScan do
   end
 
   @doc """
+  Every row `query` returns, across all tenants.
+
+  On the maintenance pool when one is configured (SaaS): ONE query, which its
+  `maintenance_all` policies let see every tenant. Otherwise (self-host, dev)
+  one query per user via `flat_map_users/1`, with an explicit `user_id`
+  predicate on the first binding, so a database without the RLS policies
+  still answers per user. The per-user loop cost 4 round trips per user per
+  run on SaaS, every hour (2026-10-20 audit, P1-7).
+
+  `query`'s first binding must have a `user_id` field.
+  """
+  @spec all(Ecto.Query.t()) :: list()
+  def all(%Ecto.Query{} = query) do
+    case Repo.maintenance() do
+      Repo -> flat_map_users(fn user_id -> Repo.all(where(query, [r], r.user_id == ^user_id)) end)
+      maintenance -> maintenance.all(query)
+    end
+  end
+
+  @doc """
   Every user id. No tenant context needed: `users` is not a tenant table, so
   no RLS policy applies and no `prepare_query/3` guard fires.
   """

@@ -105,21 +105,17 @@ defmodule Engram.Workers.BackfillCrdtState do
   """
   @spec enqueue_missing() :: non_neg_integer()
   def enqueue_missing do
-    # Per-user inside each tenant's RLS context. A single cross-tenant read
-    # with `skip_tenant_check: true` returns zero rows on prod under FORCE ROW
-    # LEVEL SECURITY and enqueues nothing while reporting success (#1349).
+    # Through TenantScan.all/1: one maintenance-pool query on SaaS, a
+    # per-tenant loop elsewhere. Never one cross-tenant read on the app pool,
+    # which FORCE ROW LEVEL SECURITY turns into zero rows (#1349).
     pairs =
-      TenantScan.flat_map_users(fn user_id ->
-        from(n in seedable(),
-          join: v in Vault,
-          on: v.id == n.vault_id and is_nil(v.deleted_at),
-          where: n.user_id == ^user_id,
-          distinct: true,
-          select: n.vault_id
-        )
-        |> Repo.all()
-        |> Enum.map(&{user_id, &1})
-      end)
+      from(n in seedable(),
+        join: v in Vault,
+        on: v.id == n.vault_id and is_nil(v.deleted_at),
+        distinct: true,
+        select: {n.user_id, n.vault_id}
+      )
+      |> TenantScan.all()
 
     Enum.each(pairs, fn {user_id, vault_id} -> {:ok, _} = enqueue_vault(user_id, vault_id) end)
 
