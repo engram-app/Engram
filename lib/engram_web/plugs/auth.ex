@@ -95,8 +95,8 @@ defmodule EngramWeb.Plugs.Auth do
 
   # The routes an MCP-audience OAuth token may reach (RFC 8707) declare
   # `private: %{token_surface: :mcp}` in the router: the MCP endpoint, and the
-  # upload `get_attachment_upload_target` tells MCP clients to make with the
-  # same token. Route privates are set before pipelines run; the controller is not.
+  # uploads (single-request and chunked) `get_attachment_upload_target` tells
+  # MCP clients to make with the same token. Route privates are set before pipelines run; the controller is not.
   defp surface(%{private: %{token_surface: :mcp}}), do: :mcp
   defp surface(_conn), do: :rest
 
