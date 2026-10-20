@@ -599,6 +599,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
             note.folder,
             tags
           )
+          |> Notes.keep_stored_path(note)
           |> Notes.inject_frontmatter_fields_pub(user, note_id, text)
           |> Map.put(:crdt_state_ciphertext, ct)
           |> Map.put(:crdt_state_nonce, nonce)

@@ -2493,6 +2493,7 @@ defmodule Engram.Notes do
          {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, existing.id) do
       phase_b =
         inject_phase_b_fields(encrypted, user, existing.id, sanitized_path, folder, crdt.tags)
+        |> keep_stored_path(existing)
         |> inject_frontmatter_fields(user, existing.id, crdt.merged_text)
         |> Map.put(:crdt_state_ciphertext, crdt.crdt_state_ciphertext)
         |> Map.put(:crdt_state_nonce, crdt.crdt_state_nonce)
@@ -2523,7 +2524,10 @@ defmodule Engram.Notes do
   # counts it when building the parameter list, so mixing one with a non-nil
   # filter raises `parameters must be of length N`. A row with no snapshot has
   # none to lose, and its `seq` still guards it.
-  defp snapshot_fenced(changeset, %Note{crdt_state_ciphertext: nil} = pre) do
+  # The state is fenced by its nonce: every write of crdt_state encrypts it
+  # under a fresh one, so the nonce names the version without sending (and
+  # de-TOASTing) the whole state as a parameter on every edit.
+  defp snapshot_fenced(changeset, %Note{crdt_state_nonce: nil} = pre) do
     %{changeset | filters: Map.put(changeset.filters, :seq, pre.seq)}
   end
 
@@ -2533,7 +2537,7 @@ defmodule Engram.Notes do
       | filters:
           Map.merge(changeset.filters, %{
             seq: pre.seq,
-            crdt_state_ciphertext: pre.crdt_state_ciphertext
+            crdt_state_nonce: pre.crdt_state_nonce
           })
     }
   end
@@ -7063,6 +7067,36 @@ defmodule Engram.Notes do
   # thin wrapper exposes it without promoting it to an official public API.
   def inject_phase_b_fields_pub(attrs, user, note_id, path, folder, tags) do
     inject_phase_b_fields(attrs, user, note_id, path, folder, tags)
+  end
+
+  @path_folder_fields [
+    :path_ciphertext,
+    :path_nonce,
+    :path_hmac,
+    :basename_hmac,
+    :path_ci_hmac,
+    :path_length,
+    :link_keys_stamp,
+    :folder_ciphertext,
+    :folder_nonce,
+    :folder_hmac
+  ]
+
+  @doc """
+  Drops the freshly encrypted path and folder from a content write's
+  attributes when the row already stores the same path and folder, AAD-bound:
+  equal hmacs under the current filter key mean equal plaintext. Re-encrypting
+  them only swapped the nonces, and `path_nonce`/`link_keys_stamp` sit in
+  index keys and predicates, so no content write could be a HOT update. A
+  rename, a legacy (pre-AAD) row or a filter-key change keeps the new fields.
+  """
+  @spec keep_stored_path(map(), Note.t()) :: map()
+  def keep_stored_path(attrs, %Note{} = stored) do
+    if stored.dek_version == Crypto.row_version_aad_bound() and
+         is_binary(stored.path_ciphertext) and is_binary(stored.folder_ciphertext) and
+         attrs[:path_hmac] == stored.path_hmac and attrs[:folder_hmac] == stored.folder_hmac,
+       do: Map.drop(attrs, @path_folder_fields),
+       else: attrs
   end
 
   @doc false
