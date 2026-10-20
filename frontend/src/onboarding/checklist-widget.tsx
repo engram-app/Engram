@@ -8,6 +8,7 @@ import { msg } from "@/i18n/msg";
 import type { MsgKey } from "@/i18n/ui-text";
 import { track } from "../analytics/track";
 import { type OnboardingStatus, useConnections, useOnboardingStatus } from "../api/queries";
+import { noteUpgradeSource } from "../billing/upgrade-source";
 import { useIsFreeTier } from "../billing/use-is-free-tier";
 import { Button } from "../components/ui/button";
 import {
@@ -388,7 +389,10 @@ function ChecklistBody({ visible, total, completed, pct, isFreeTier, onDismiss }
 					    in the wizard any more, so that route punts home. */}
 					<Link
 						to={settingsTo("billing", location.search)}
-						onClick={() => track("upgrade_link_clicked", { source: "checklist" })}
+						onClick={() => {
+							track("upgrade_link_clicked", { source: "checklist" });
+							noteUpgradeSource("checklist");
+						}}
 						className="font-medium text-foreground underline underline-offset-4"
 					>
 						{t("See paid plans")}

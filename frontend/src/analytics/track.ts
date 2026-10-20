@@ -5,12 +5,14 @@ import { analyticsClient } from "./client";
 import {
 	CHECKLIST_ACTIONS,
 	CHECKLIST_ITEMS,
+	CHECKOUT_CADENCES,
 	CHECKOUT_METHODS,
 	CHECKOUT_TIERS,
 	type EngramEvent,
 	ERROR_CODES,
 	EVENT_SCHEMAS,
 	GATE_REASONS,
+	LIMIT_REASONS,
 	MCP_CLIENTS,
 	ONBOARDING_STEPS,
 	type PropKind,
@@ -41,6 +43,10 @@ function isKind(kind: PropKind, value: unknown): boolean {
 			return isMember(MCP_CLIENTS, value);
 		case "upgrade_source":
 			return isMember(UPGRADE_SOURCES, value);
+		case "cadence":
+			return isMember(CHECKOUT_CADENCES, value);
+		case "limit_reason":
+			return isMember(LIMIT_REASONS, value);
 		case "checklist_item":
 			return isMember(CHECKLIST_ITEMS, value);
 		case "checklist_action":

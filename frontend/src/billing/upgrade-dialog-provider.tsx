@@ -2,6 +2,9 @@ import type { ReactNode } from "react";
 import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useState } from "react";
 import { setUpgradeHandler } from "@/api/client";
 import { whenLoaded } from "@/lib/when-loaded";
+import { LIMIT_REASONS } from "../analytics/events";
+import { track } from "../analytics/track";
+import { isMember } from "../lib/is-member";
 
 // Lazy: the provider mounts at the router root (so it wraps the sign-in page
 // too), but the dialog itself only renders after a 402 — no reason for its
@@ -20,7 +23,11 @@ const UpgradeCtx = createContext<Ctx | null>(null);
 export function UpgradeDialogProvider({ children }: { children: ReactNode }) {
 	const [reason, setReason] = useState<string | null>(null);
 
-	const showUpgrade = useCallback((next: string) => setReason(next), []);
+	const showUpgrade = useCallback((next: string) => {
+		// Every 402 the app sees lands here, so this is "saw the paywall".
+		track("paywall_shown", { limit_key: isMember(LIMIT_REASONS, next) ? next : "other" });
+		setReason(next);
+	}, []);
 
 	// Wire the module-level handler in the API client so 402 responses surface
 	// the dialog automatically. Cleared on unmount so a stale closure doesn't

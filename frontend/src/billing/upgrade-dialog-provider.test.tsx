@@ -2,7 +2,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setUpgradeHandler } from "@/api/client";
+import { track } from "../analytics/track";
 import { UpgradeDialogProvider, useUpgradeDialog } from "./upgrade-dialog-provider";
+
+vi.mock("../analytics/track", () => ({ track: vi.fn() }));
 
 function Trigger() {
 	const { showUpgrade } = useUpgradeDialog();
@@ -35,6 +38,38 @@ describe("UpgradeDialogProvider", () => {
 
 	beforeEach(() => {
 		setUpgradeHandler(null);
+	});
+
+	it("records paywall_shown with the refused limit", () => {
+		vi.mocked(track).mockClear();
+		renderWithRouter(
+			<UpgradeDialogProvider>
+				<Trigger />
+			</UpgradeDialogProvider>,
+		);
+		fireEvent.click(screen.getByText("show"));
+		expect(vi.mocked(track)).toHaveBeenCalledWith("paywall_shown", {
+			limit_key: "notes_cap_exceeded",
+		});
+	});
+
+	it("records an unrecognised refusal as other", () => {
+		vi.mocked(track).mockClear();
+		function Odd() {
+			const { showUpgrade } = useUpgradeDialog();
+			return (
+				<button type="button" onClick={() => showUpgrade("brand_new_reason")}>
+					odd
+				</button>
+			);
+		}
+		renderWithRouter(
+			<UpgradeDialogProvider>
+				<Odd />
+			</UpgradeDialogProvider>,
+		);
+		fireEvent.click(screen.getByText("odd"));
+		expect(vi.mocked(track)).toHaveBeenCalledWith("paywall_shown", { limit_key: "other" });
 	});
 
 	it("renders dialog when showUpgrade is called", async () => {

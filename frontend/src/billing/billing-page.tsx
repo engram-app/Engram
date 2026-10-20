@@ -41,6 +41,7 @@ import {
 	PlanCard,
 } from "./plan-cards";
 import PlanChangePanel from "./plan-change-panel";
+import { upgradeSource } from "./upgrade-source";
 import { useSubscriptionActivatedEvents } from "./use-subscription-activated-events";
 
 // Time after CHECKOUT_COMPLETED we keep Paddle's own "Payment successful"
@@ -284,6 +285,9 @@ export default function BillingPage({
 	// one, read by the CHECKOUT_LOADED handler (captured pre-render, so it
 	// can't come from a render-time variable).
 	const checkoutTierRef = useRef<"starter" | "pro" | null>(null);
+	// The cadence the checkout opened with: the Paddle callback below is bound
+	// once, so it cannot read the `cadence` state of a later render.
+	const checkoutCadenceRef = useRef<BillingCadence>("annual");
 	// The payment method selected mid-checkout, tracked so checkout_completed/
 	// checkout_stalled can report it — Paddle's own COMPLETED/FAILED payloads
 	// don't reliably carry method_details, but PAYMENT_SELECTED always does.
@@ -434,7 +438,12 @@ export default function BillingPage({
 						// signup/upgrade funnel this event exists to measure.
 						const tier = checkoutTierRef.current;
 						if (tier) {
-							track("checkout_opened", { method: "unknown", tier });
+							track("checkout_opened", {
+								method: "unknown",
+								tier,
+								cadence: checkoutCadenceRef.current,
+								source: upgradeSource(),
+							});
 						}
 						break;
 					}
@@ -557,6 +566,7 @@ export default function BillingPage({
 			// (see the four dead Apple Pay attempts in two minutes this exists to
 			// distinguish from one another).
 			checkoutTierRef.current = tier;
+			checkoutCadenceRef.current = cadence;
 			checkoutMethodRef.current = "unknown";
 			checkoutCompletedRef.current = false;
 			if (isInline) {
