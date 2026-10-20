@@ -14,13 +14,11 @@ describe("pending authorization stash", () => {
 		window.sessionStorage.clear();
 	});
 
-	it("round-trips the consent URL, the tool slug and the client name", () => {
-		stashPendingAuthorization(SEARCH, "antigravity", "Google Antigravity");
+	it("round-trips the consent URL", () => {
+		stashPendingAuthorization(SEARCH);
 
 		expect(peekPendingAuthorization()).toEqual({
 			returnTo: `/oauth/consent${SEARCH}`,
-			toolSlug: "antigravity",
-			clientName: "Google Antigravity",
 			redirectVerified: false,
 		});
 	});
@@ -33,8 +31,6 @@ describe("pending authorization stash", () => {
 
 		expect(peekPendingAuthorization()).toEqual({
 			returnTo: "/link?code=ENGR-7X4K",
-			toolSlug: null,
-			clientName: "Obsidian",
 			redirectVerified: false,
 		});
 	});
@@ -45,14 +41,6 @@ describe("pending authorization stash", () => {
 		expect(peekPendingAuthorization()?.returnTo).toBe("/link");
 	});
 
-	// There is no OAuth client waiting on a refusal, so there is nothing to
-	// cancel to — the button must not render.
-	it("has no cancel URL for a parked device link", () => {
-		stashPendingDeviceLink("ENGR-7X4K");
-
-		expect(pendingCancelUrl()).toBeNull();
-	});
-
 	it("returns null when nothing is stashed", () => {
 		expect(peekPendingAuthorization()).toBeNull();
 	});
@@ -61,23 +49,17 @@ describe("pending authorization stash", () => {
 	// where onboarding should land, and the first one to ask must not delete
 	// the answer for the rest.
 	it("peek does not consume the stash", () => {
-		stashPendingAuthorization(SEARCH, null, null);
+		stashPendingAuthorization(SEARCH);
 
 		expect(peekPendingAuthorization()).not.toBeNull();
 		expect(peekPendingAuthorization()).not.toBeNull();
 	});
 
 	it("clear removes it", () => {
-		stashPendingAuthorization(SEARCH, null, null);
+		stashPendingAuthorization(SEARCH);
 		clearPendingAuthorization();
 
 		expect(peekPendingAuthorization()).toBeNull();
-	});
-
-	it("carries a null slug for a client we cannot attribute", () => {
-		stashPendingAuthorization(SEARCH, null, null);
-
-		expect(peekPendingAuthorization()?.toolSlug).toBeNull();
 	});
 
 	describe("rejects a tampered stash", () => {
@@ -86,7 +68,7 @@ describe("pending authorization stash", () => {
 		it("drops a returnTo pointing somewhere other than the consent page", () => {
 			window.sessionStorage.setItem(
 				"engram:pending-oauth",
-				JSON.stringify({ returnTo: "/settings", toolSlug: null }),
+				JSON.stringify({ returnTo: "/settings" }),
 			);
 
 			expect(peekPendingAuthorization()).toBeNull();
@@ -95,7 +77,7 @@ describe("pending authorization stash", () => {
 		it("drops a protocol-relative returnTo", () => {
 			window.sessionStorage.setItem(
 				"engram:pending-oauth",
-				JSON.stringify({ returnTo: "//evil.com/oauth/consent", toolSlug: null }),
+				JSON.stringify({ returnTo: "//evil.com/oauth/consent" }),
 			);
 
 			expect(peekPendingAuthorization()).toBeNull();
@@ -104,19 +86,10 @@ describe("pending authorization stash", () => {
 		it("drops an absolute returnTo", () => {
 			window.sessionStorage.setItem(
 				"engram:pending-oauth",
-				JSON.stringify({ returnTo: "https://evil.com/oauth/consent", toolSlug: null }),
+				JSON.stringify({ returnTo: "https://evil.com/oauth/consent" }),
 			);
 
 			expect(peekPendingAuthorization()).toBeNull();
-		});
-
-		it("drops a non-string tool slug", () => {
-			window.sessionStorage.setItem(
-				"engram:pending-oauth",
-				JSON.stringify({ returnTo: "/oauth/consent?a=1", toolSlug: { evil: true } }),
-			);
-
-			expect(peekPendingAuthorization()?.toolSlug).toBeNull();
 		});
 
 		it("drops malformed JSON rather than throwing", () => {
@@ -139,22 +112,29 @@ describe("pendingCancelUrl", () => {
 		expect(pendingCancelUrl()).toBeNull();
 	});
 
+	// There is no OAuth client waiting on a refusal behind a device link.
+	it("is null for a parked device link", () => {
+		stashPendingDeviceLink("ENGR-7X4K");
+
+		expect(pendingCancelUrl()).toBeNull();
+	});
+
 	// The parked query string is anyone's to write: no backend confirmation of
 	// the redirect, no Cancel, or it is an open redirect.
 	it("is null when the redirect was never confirmed as registered", () => {
-		stashPendingAuthorization(SEARCH, null, "Google Antigravity");
+		stashPendingAuthorization(SEARCH);
 
 		expect(pendingCancelUrl()).toBeNull();
 	});
 
 	it("sends access_denied back to the client with the original state", () => {
-		stashPendingAuthorization(SEARCH, null, "Google Antigravity", true);
+		stashPendingAuthorization(SEARCH, true);
 
 		expect(pendingCancelUrl()).toBe("https://app/cb?error=access_denied&state=xyz");
 	});
 
 	it("appends to a redirect that already has a query", () => {
-		stashPendingAuthorization("?redirect_uri=https://app/cb%3Fa%3D1&state=xyz", null, null, true);
+		stashPendingAuthorization("?redirect_uri=https://app/cb%3Fa%3D1&state=xyz", true);
 
 		expect(pendingCancelUrl()).toBe("https://app/cb?a=1&error=access_denied&state=xyz");
 	});
@@ -163,8 +143,6 @@ describe("pendingCancelUrl", () => {
 	it("carries iss when the server sent one", () => {
 		stashPendingAuthorization(
 			"?redirect_uri=https://app/cb&state=xyz&iss=https%3A%2F%2Fmcp.engram.page",
-			null,
-			null,
 			true,
 		);
 
@@ -174,21 +152,19 @@ describe("pendingCancelUrl", () => {
 	});
 
 	it("omits state when the request carried none", () => {
-		stashPendingAuthorization("?redirect_uri=https://app/cb", null, null, true);
+		stashPendingAuthorization("?redirect_uri=https://app/cb", true);
 
 		expect(pendingCancelUrl()).toBe("https://app/cb?error=access_denied");
 	});
 
-	// Without a redirect there is nowhere to report to, and inventing one is
-	// how an open redirect gets built by accident.
 	it("is null when the parked request has no redirect_uri", () => {
-		stashPendingAuthorization("?client_id=cli&state=xyz", null, null, true);
+		stashPendingAuthorization("?client_id=cli&state=xyz", true);
 
 		expect(pendingCancelUrl()).toBeNull();
 	});
 
-	it("refuses a non-http redirect", () => {
-		stashPendingAuthorization("?redirect_uri=javascript:alert(1)&state=xyz", null, null, true);
+	it("refuses a script-executing redirect", () => {
+		stashPendingAuthorization("?redirect_uri=javascript:alert(1)&state=xyz", true);
 
 		expect(pendingCancelUrl()).toBeNull();
 	});

@@ -421,9 +421,12 @@ export default {
 	"previous device": "vorheriges Gerät",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"'{name}' wurde getrennt, aber die Verknüpfung des neuen Geräts ist fehlgeschlagen. Versuche es erneut von Obsidian – derzeit sind keine Geräte synchronisiert.",
-	"Authorization failed": "Autorisierung fehlgeschlagen",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Dieser Code ist ungültig oder abgelaufen. Bitte versuche es erneut von Obsidian.",
+	"Authorization failed": "Autorisierung fehlgeschlagen",
+	"Welcome to Engram": "Willkommen bei Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Gib deiner ersten Vault einen Namen. Deine Obsidian-Notizen werden damit synchronisiert.",
 	"Enter the code shown in your Obsidian plugin:":
 		"Gib den Code ein, der in deinem Obsidian-Plugin angezeigt wird:",
 	"Verifying…": "Überprüfen…",
@@ -434,11 +437,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Wird in deiner Verbindungsliste angezeigt, damit du deine Geräte unterscheiden kannst.",
 	"Obsidian Vault Sync": "Obsidian Vault Synchronisierung",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Vault-Limit erreicht: Dein kostenloses Abo beinhaltet 1 Vault",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Du kannst keinen neuen Vault im kostenlosen Abo erstellen. Synchronisiere stattdessen mit deinem bestehenden Vault oben oder upgrade, um mehr hinzuzufügen.",
-	"Upgrade plan": "Abo upgraden",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Dein kostenloser Plan beinhaltet 1 Vault, daher synchronisiert dieses Gerät mit dem oben genannten.",
+	"Need more vaults? Upgrade": "Benötigst du mehr Vaults? Upgrade",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"Die Synchronisierung gibt diesem Gerät Zugriff auf deine Notizen. Fahre nur fort, wenn du diesen Link selbst gestartet hast. Wenn dich jemand anderes hierher geschickt hat, schließe diese Seite.",
 	"Syncing…": "Synchronisieren…",
@@ -462,7 +463,6 @@ export default {
 	"Sync with an existing vault": "Synchronisiere mit einem bestehenden Vault",
 	"(choose from {count} vaults)": "(wähle aus {count} Vaults)",
 	"Or create a new vault": "Oder erstelle einen neuen Vault",
-	"Create your first vault": "Erstelle deinen ersten Vault",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"das Gerät auf {os}, das dein '{vault}' Vault synchronisiert (letzte Aktivität: {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -641,7 +641,6 @@ export default {
 		one: "Noch {count} Tag in deiner Testphase.",
 		other: "Noch {count} Tage in deiner Testphase.",
 	},
-	"Free plan device limit: {count}.": "Geräte-Limit für den kostenlosen Plan: {count}.",
 	"Collapse sidebar": "Sidebar ein-/ausblenden",
 	"No vaults": "Keine Vaults",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -793,6 +792,17 @@ export default {
 	"Page not found": "Seite nicht gefunden",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Wir konnten nicht finden, wonach du suchst. Der Link könnte defekt sein oder die Seite könnte verschoben worden sein.",
+	"Name your first vault": "Gib deinem ersten Vault einen Namen",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Ein Vault ist eine Sammlung von Notizen. {client} kann die Notizen darin lesen und schreiben.",
+	"Also allow {client} to read and write vaults I create later":
+		"Erlaube auch {client}, Vaults zu lesen und zu schreiben, die ich später erstelle",
+	"Turn this off to limit {client} to this vault only.":
+		"Deaktiviere dies, um {client} auf diese Vault zu beschränken.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Du kannst jederzeit in den Einstellungen > Verbindungen festlegen, was jede App sehen oder ändern darf.",
+	"Approving…": "Wird genehmigt…",
+	Approve: "Genehmigen",
 	"Invalid authorization request": "Ungültige Autorisierungsanfrage",
 	"Missing required OAuth parameters:": "Fehlende erforderliche OAuth-Parameter:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -804,21 +814,22 @@ export default {
 		"Diese App hat die Adresse nicht registriert, zu der sie dich zurücksenden sollte.",
 	"Finish setting up Engram": "Engram einrichten abschließen",
 	"this app": "diese App",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"Dein Vault konnte nicht in {name} umbenannt werden. Versuche einen anderen Namen.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Dein Vault konnte nicht umbenannt werden. Überprüfe deine Verbindung und versuche es erneut.",
 	"previous connection": "vorherige Verbindung",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Der Server gewährte mehr Zugriff, als du gewählt hast, daher wurde nichts verbunden. Versuche es erneut oder kontaktiere den Support, wenn das weiterhin passiert.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Trennung von '{name}', aber die Autorisierung der neuen Verbindung fehlgeschlagen. Versuche die Anfrage erneut von {client} – es sind derzeit keine Verbindungen dieser Art aktiv.",
-	"This app is requesting access to your Engram.": "Diese App möchte Zugriff auf dein Engram.",
 	"Signed in as {email}.": "Angemeldet als {email}.",
-	"App details from {host}.": "App-Details von {host}.",
-	"You will return to {host}.": "Du wirst zu {host} zurückkehren.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Dadurch wirst du zu einer App auf diesem Computer weitergeleitet. Bestätige nur, wenn du gerade von dieser App aus eine Verbindung herstellst.",
 	"your existing connection": "deine bestehende Verbindung",
 	"Which vaults can {client} access?": "Auf welche Vaults kann {client} zugreifen?",
-	Approve: "Genehmigen",
-	"Approving…": "Wird genehmigt…",
+	"App details from {host}.": "App-Details von {host}.",
+	"You will return to {host}.": "Du wirst zu {host} zurückkehren.",
 	"Disconnect {name}?": "Verbindung zu {name} trennen?",
 	"Connecting…": "Wird verbunden…",
 	"Disconnect & connect {client}": "Verbindung trennen & verbinden {client}",
@@ -849,6 +860,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Bitte lies das vollständige Dokument unten, bevor du fortfährst. Unsere {privacy} (wird bei der Anmeldung geprüft) beschreibt, wie wir deine Daten verarbeiten.",
 	"Connect {tool}": "{tool} verbinden",
+	"Create your first vault": "Erstelle deinen ersten Vault",
 	"Join our Discord": "Tritt unserem Discord bei",
 	Join: "Beitreten",
 	"Install the Obsidian plugin": "Installiere das Obsidian-Plugin",
@@ -863,7 +875,8 @@ export default {
 	"{completed} of {total} done": "{completed} von {total} erledigt",
 	"Setup guide": "Installationsanleitung",
 	"Dismiss {label}": "{label} schließen",
-	"You're on the Free plan.": "Du nutzt den kostenlosen Plan.",
+	"Want more devices and vaults?": "Möchtest du mehr Geräte und Vaults?",
+	"See paid plans": "Sieh dir die kostenpflichtigen Pläne an",
 	"Connect Claude Desktop": "Verbinde Claude Desktop",
 	"Connect Cursor": "Cursor verbinden",
 	"Connect Devin": "Devin verbinden",
@@ -896,9 +909,12 @@ export default {
 		"Konnte nicht fortgesetzt werden. Bitte versuche es erneut.",
 	"Step {step} of {total}": "Schritt {step} von {total}",
 	Onboarding: "Einrichtung",
-	"your app": "deine App",
-	"Cancel connection": "Verbindung aufheben",
-	"Connecting {app}": "Verbindung zu {app} herstellen",
+	"Stop connecting this app": "Verbindung zu dieser App beenden",
+	"Stop connecting this app?": "Verbindung zu dieser App wirklich beenden?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		'Der App, die dich hierhergeleitet hat, wird mitgeteilt, dass du "Nein" gesagt hast. Dein Engram-Konto bleibt erhalten.',
+	"Keep setting up": "Einrichtung fortsetzen",
+	"Stop connecting": "Verbindung beenden",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Deine Auswahl konnte nicht gespeichert werden. Versuche es erneut – wenn es weiterhin fehlschlägt, lade die Seite neu.",
 	"Let's get your notes in.": "Lass uns deine Notizen importieren.",
@@ -923,7 +939,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Vault erkannt. Warte auf die erste Synchronisierung…",
 	"Syncing your notes, almost there…": "Synchronisiere deine Notizen, fast fertig…",
-	"Name your first vault": "Gib deinem ersten Vault einen Namen",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Ein Vault ist ein Ordner für zusammengehörige Notizen. Wir füllen es mit einer Willkommensnotiz, damit der Editor nicht leer ist, wenn du ankommst.",
 	"Create vault & continue": "Vault erstellen & fortfahren",

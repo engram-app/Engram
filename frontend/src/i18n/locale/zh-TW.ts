@@ -388,9 +388,12 @@ export default {
 	"previous device": "之前的裝置",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"已斷開 '{name}'，但連結新裝置失敗。請從 Obsidian 重新連結 — 目前沒有任何裝置同步。",
-	"Authorization failed": "授權失敗",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"此碼無效或已過期。請從 Obsidian 重新嘗試。",
+	"Authorization failed": "授權失敗",
+	"Welcome to Engram": "歡迎使用 Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"為你的第一個儲存庫命名。你的 Obsidian 筆記將同步到其中。",
 	"Enter the code shown in your Obsidian plugin:": "輸入您 Obsidian 插件中顯示的碼：",
 	"Verifying…": "驗證中…",
 	Verify: "驗證",
@@ -400,11 +403,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"在您的連線列表中顯示，以便區分您的裝置。",
 	"Obsidian Vault Sync": "Obsidian 儲存庫同步",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"已達儲存庫上限：您的免費方案包含 1 個儲存庫",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"您無法在免費方案中建立新的儲存庫。請與上方現有的儲存庫同步，或升級以新增更多。",
-	"Upgrade plan": "升級方案",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"您的免費方案包含 1 個儲存庫，此裝置同步的是上述儲存庫。",
+	"Need more vaults? Upgrade": "需要更多儲存庫嗎？升級",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"同步會讓此裝置存取您的筆記。僅在您自行啟動此連線時才繼續。如果是其他人將您引導至此，請關閉此頁面。",
 	"Syncing…": "同步中…",
@@ -427,7 +428,6 @@ export default {
 	"Sync with an existing vault": "與現有儲存庫同步",
 	"(choose from {count} vaults)": "(從 {count} 個儲存庫中選擇)",
 	"Or create a new vault": "或建立新的儲存庫",
-	"Create your first vault": "建立您的第一個儲存庫",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"與您的 '{vault}' 儲存庫同步的裝置 ({os}) (上次活動：{since})",
 	"the device on {os} that syncs your '{vault}' vault": "與您的 '{vault}' 儲存庫同步的 {os} 裝置",
@@ -592,7 +592,6 @@ export default {
 	Language: "語言",
 	"My Vault": "我的儲存庫",
 	"{count} days left in your trial.": { other: "試用期剩 {count} 天。" },
-	"Free plan device limit: {count}.": "免費方案的裝置數量上限：{count}。",
 	"Collapse sidebar": "摺疊側邊欄",
 	"No vaults": "沒有儲存庫",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -742,6 +741,17 @@ export default {
 	"Page not found": "頁面未找到",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"我們找不到您要查找的內容。連結可能已失效，或頁面可能已移動。",
+	"Name your first vault": "為你的第一個儲存庫命名",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"儲存庫是筆記的集合。{client} 可以讀取和修改其中的筆記。",
+	"Also allow {client} to read and write vaults I create later":
+		"允許 {client} 讀取和寫入我之後建立的儲存庫",
+	"Turn this off to limit {client} to this vault only.":
+		"關閉此選項，將 {client} 限制在此儲存庫內。",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"您可以在「設定」>「連線」中隨時限制每個應用程式的訪問權限。",
+	"Approving…": "正在批准…",
+	Approve: "批准",
 	"Invalid authorization request": "無效的授權請求",
 	"Missing required OAuth parameters:": "缺少必要的 OAuth 參數：",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -753,21 +763,22 @@ export default {
 		"此應用程式未記錄您要返回的地址。",
 	"Finish setting up Engram": "完成 Engram 的設定",
 	"this app": "此應用程式",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"無法將你的儲存庫重新命名為 {name}。請嘗試其他名稱。",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"無法重新命名您的儲存庫。請檢查連線並再次嘗試。",
 	"previous connection": "之前的連線",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"伺服器授予了比您選擇的更多權限，因此沒有任何內容連接。請重試，或如果此問題持續發生，請聯絡支援。",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"已斷開 '{name}'，但授權新的連線失敗。請重新從 {client} 執行請求 — 目前沒有任何此類連線。",
-	"This app is requesting access to your Engram.": "此應用程式正在請求存取您的 Engram。",
 	"Signed in as {email}.": "已登入 {email}。",
-	"App details from {host}.": "來自 {host} 的應用程式資訊。",
-	"You will return to {host}.": "您將返回至 {host}。",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"這會將您導向電腦上的應用程式。僅在您剛從該應用程式開始連接時才允許。",
 	"your existing connection": "您的現有連線",
 	"Which vaults can {client} access?": "{client} 可以存取哪些儲存庫？",
-	Approve: "批准",
-	"Approving…": "正在批准…",
+	"App details from {host}.": "來自 {host} 的應用程式資訊。",
+	"You will return to {host}.": "您將返回至 {host}。",
 	"Disconnect {name}?": "斷線 {name}?",
 	"Connecting…": "正在連線…",
 	"Disconnect & connect {client}": "斷線並連線 {client}",
@@ -796,6 +807,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"請在繼續之前，閱讀下方完整的協議。我們的 {privacy}（註冊時檢閱）說明我們如何處理您的資料。",
 	"Connect {tool}": "連接 {tool}",
+	"Create your first vault": "建立您的第一個儲存庫",
 	"Join our Discord": "加入我們的 Discord",
 	Join: "加入",
 	"Install the Obsidian plugin": "安裝 Obsidian 插件",
@@ -808,7 +820,8 @@ export default {
 	"{completed} of {total} done": "已完成 {completed} 個，總共 {total} 個",
 	"Setup guide": "設定指南",
 	"Dismiss {label}": "關閉 {label}",
-	"You're on the Free plan.": "您正在使用免費方案。",
+	"Want more devices and vaults?": "想要更多裝置和儲存庫嗎？",
+	"See paid plans": "參閱付費方案",
 	"Connect Claude Desktop": "連接 Claude Desktop",
 	"Connect Cursor": "連接 Cursor",
 	"Connect Devin": "連接 Devin",
@@ -839,9 +852,12 @@ export default {
 	"Could not continue. Please try again.": "執行失敗。請重試。",
 	"Step {step} of {total}": "第 {step} 步，共 {total} 步",
 	Onboarding: "入門指南",
-	"your app": "你的應用程式",
-	"Cancel connection": "取消連線",
-	"Connecting {app}": "連線 {app}",
+	"Stop connecting this app": "停止連接此應用程式",
+	"Stop connecting this app?": "停止連接此應用程式？",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"將訊息傳送給您，告知您已選擇不同意。您的 Engram 帳戶保持不變。",
+	"Keep setting up": "繼續設定",
+	"Stop connecting": "停止連接",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"儲存您的選擇失敗。請再次點擊 — 如果持續失敗，請重新載入頁面。",
 	"Let's get your notes in.": "讓我們將您的筆記導入。",
@@ -864,7 +880,6 @@ export default {
 	"Waiting for the plugin to sign in…": "等待插件登入…",
 	"Vault detected. Waiting for your first sync…": "偵測到儲存庫。等待你的首次同步…",
 	"Syncing your notes, almost there…": "同步你的筆記，稍後完成…",
-	"Name your first vault": "為你的第一個儲存庫命名",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"儲存庫是一個用於存放相關筆記的資料夾。我們會加入一個歡迎筆記，讓編輯器在你開始使用時不會是空白的。",
 	"Create vault & continue": "建立儲存庫 & 繼續",

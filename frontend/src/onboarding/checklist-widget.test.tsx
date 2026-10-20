@@ -590,15 +590,15 @@ describe("ChecklistWidget, desktop panel height", () => {
 describe("ChecklistWidget, Free-tier reminder", () => {
 	// There is no plan step any more (every signup starts on Free), so
 	// /onboard/billing punts home; the link must open Settings > Billing.
-	it("renders Free reminder with Upgrade link to Settings > Billing when tier=free", () => {
+	it("renders a soft paid-plans link to Settings > Billing when tier=free", () => {
 		onboardingStatusValue.data!.profile = { uses_obsidian: false, tools: ["claude"] };
 		billingStatusValue.data = { tier: "free", active: false } as Partial<BillingStatus>;
 		render(wrap(<ChecklistWidget />));
 
-		expect(screen.getByText(/You're on the Free plan/iu)).toBeInTheDocument();
+		expect(screen.getByText(/Want more devices and vaults\?/iu)).toBeInTheDocument();
 		// #1974: MCP connections are uncapped, so the reminder names no count.
 		expect(screen.queryByText(/1 connection/iu)).toBeNull();
-		const link = screen.getByRole("link", { name: /upgrade/iu });
+		const link = screen.getByRole("link", { name: /see paid plans/iu });
 		expect(link.getAttribute("href")).toMatch(/#settings\/billing$/u);
 	});
 
@@ -607,8 +607,8 @@ describe("ChecklistWidget, Free-tier reminder", () => {
 		billingStatusValue.data = { tier: "pro", active: true } as Partial<BillingStatus>;
 		render(wrap(<ChecklistWidget />));
 
-		expect(screen.queryByText(/You're on the Free plan/iu)).toBeNull();
-		expect(screen.queryByRole("link", { name: /upgrade/iu })).toBeNull();
+		expect(screen.queryByText(/Want more devices and vaults\?/iu)).toBeNull();
+		expect(screen.queryByRole("link", { name: /see paid plans/iu })).toBeNull();
 	});
 });
 
@@ -635,10 +635,10 @@ describe("ChecklistWidget, interaction tracking", () => {
 		});
 	});
 
-	it("reports the Free-tier Upgrade link as coming from the checklist", () => {
+	it("reports the Free-tier paid-plans link as coming from the checklist", () => {
 		render(wrap(<ChecklistWidget />));
 
-		fireEvent.click(screen.getByRole("link", { name: /upgrade/iu }));
+		fireEvent.click(screen.getByRole("link", { name: /see paid plans/iu }));
 
 		expect(mockTrack).toHaveBeenCalledWith("upgrade_link_clicked", { source: "checklist" });
 	});

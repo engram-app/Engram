@@ -411,9 +411,12 @@ export default {
 	"previous device": "以前のデバイス",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"'{name}' からの接続を切断しましたが、新しいデバイスへのリンクに失敗しました。Obsidian から再リンクしてください — 現在、同期されているデバイスはありません。",
-	"Authorization failed": "認証に失敗しました",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"このコードは無効であるか、期限切れです。Obsidian から再度お試しください。",
+	"Authorization failed": "認証に失敗しました",
+	"Welcome to Engram": "Engramへようこそ",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"最初の保管庫の名前を入力してください。Obsidianのノートがここに同期されます。",
 	"Enter the code shown in your Obsidian plugin:":
 		"Obsidian プラグインに表示されているコードを入力してください。",
 	"Verifying…": "認証中です…",
@@ -424,11 +427,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"接続リストに表示され、デバイスを区別できます。",
 	"Obsidian Vault Sync": "Obsidian 保管庫の同期",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"保管庫の制限に達しました。無料プランでは1つの保管庫が利用可能です",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"無料プランでは新しい保管庫を作成できません。上記で既存の保管庫と同期するか、アップグレードしてさらに保管庫を追加してください。",
-	"Upgrade plan": "アップグレードプラン",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"無料プランでは1つの保管庫が含まれます。このデバイスは上記の保管庫と同期されます。",
+	"Need more vaults? Upgrade": "より多くの保管庫が必要ですか？アップグレードしてください",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"同期により、このデバイスがあなたのノートにアクセスできるようになります。ご自身でこのリンクを開始した場合のみ、続行してください。他の方があなたをここに誘導した場合、このページを閉じます。",
 	"Syncing…": "同期中…",
@@ -452,7 +453,6 @@ export default {
 	"Sync with an existing vault": "既存の保管庫と同期します",
 	"(choose from {count} vaults)": "( {count} 個の保管庫から選択)",
 	"Or create a new vault": "または、新しい保管庫を作成します",
-	"Create your first vault": "最初の保管庫を作成します",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"{os}に同期している'{vault}'という保管庫のデバイス (最終アクティブ: {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -624,7 +624,6 @@ export default {
 	Language: "言語",
 	"My Vault": "私の保管庫",
 	"{count} days left in your trial.": { other: "トライアル期間は残り{count}日です。" },
-	"Free plan device limit: {count}.": "無料プランのデバイス接続台数制限: {count}.",
 	"Collapse sidebar": "サイドバーを折りたたみ",
 	"No vaults": "保管庫がありません",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -777,6 +776,17 @@ export default {
 	"Page not found": "ページが見つかりません",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"お探しのものが見つかりませんでした。リンクが壊れているか、ページが移動している可能性があります。",
+	"Name your first vault": "最初の保管庫の名前を入力",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"保管庫は、ノートの集まりです。{client} は、その中のノートを読み書きできます。",
+	"Also allow {client} to read and write vaults I create later":
+		"後に作成する保管庫も、{client} が読み書きできるようにします",
+	"Turn this off to limit {client} to this vault only.":
+		"これをオフにすると、{client} はこの保管庫でのみ利用可能になります。",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"各アプリが参照または変更できる内容を、設定 > 接続 でいつでも制限できます。",
+	"Approving…": "承認中…",
+	Approve: "承認",
 	"Invalid authorization request": "無効な認証リクエスト",
 	"Missing required OAuth parameters:": "必須のOAuthパラメータがありません:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -788,22 +798,22 @@ export default {
 		"このアプリは、戻る際に使用するアドレスを登録できませんでした。",
 	"Finish setting up Engram": "Engramの設定を完了する",
 	"this app": "このアプリ",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"保管庫の名前を {name} に変更できませんでした。別の名前を試してください。",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"保管庫の名前を変更できませんでした。接続を確認し、再試行してください。",
 	"previous connection": "前の接続",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"サーバーが許可したアクセス権が、お客様が選択したものよりも大きいため、何も接続されませんでした。もう一度お試しください。それでも問題が解決しない場合は、サポートまでお問い合わせください。",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"'{name}'との接続が解除されましたが、新しい接続の認証に失敗しました。{client}からのリクエストを再実行してください。この種類の接続は現在アクティブではありません。",
-	"This app is requesting access to your Engram.":
-		"このアプリは、Engramへのアクセスを要求しています。",
 	"Signed in as {email}.": "{email} としてサインインしました。",
-	"App details from {host}.": "{host}からのアプリ詳細.",
-	"You will return to {host}.": "{host} に戻ります。",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"これにより、このコンピューター上のアプリに移動します。そのアプリから初めて接続する場合のみ承認してください。",
 	"your existing connection": "現在の接続",
 	"Which vaults can {client} access?": "{client} はどの保管庫にアクセスできますか？",
-	Approve: "承認",
-	"Approving…": "承認中…",
+	"App details from {host}.": "{host}からのアプリ詳細.",
+	"You will return to {host}.": "{host} に戻ります。",
 	"Disconnect {name}?": "{name}から切断しますか？",
 	"Connecting…": "接続中…",
 	"Disconnect & connect {client}": "切断して{client}に接続",
@@ -833,6 +843,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"続きに進む前に、以下の利用規約を全文お読みください。当社の {privacy} (サインアップ時に確認) は、お客様のデータを取り扱い方について説明しています。",
 	"Connect {tool}": "{tool} に接続",
+	"Create your first vault": "最初の保管庫を作成します",
 	"Join our Discord": "Discordに参加",
 	Join: "参加",
 	"Install the Obsidian plugin": "Obsidianプラグインをインストール",
@@ -846,7 +857,8 @@ export default {
 	"{completed} of {total} done": "{completed} / {total} 完了",
 	"Setup guide": "セットアップガイド",
 	"Dismiss {label}": "{label} を閉じる",
-	"You're on the Free plan.": "無料プランをお使いです。",
+	"Want more devices and vaults?": "もっと多くのデバイスと保管庫をご希望ですか？",
+	"See paid plans": "有料プランをご覧ください",
 	"Connect Claude Desktop": "Claude Desktopに接続",
 	"Connect Cursor": "Cursorに接続",
 	"Connect Devin": "Devinに接続",
@@ -878,9 +890,12 @@ export default {
 	"Could not continue. Please try again.": "続行できませんでした。もう一度お試しください。",
 	"Step {step} of {total}": "{total} の {step} 段階",
 	Onboarding: "初期設定",
-	"your app": "あなたのアプリ",
-	"Cancel connection": "接続を解除",
-	"Connecting {app}": "{app} に接続中",
+	"Stop connecting this app": "このアプリの接続を停止",
+	"Stop connecting this app?": "このアプリの接続を停止しますか？",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"こちらに誘導したアプリに、拒否した旨が通知されます。Engramアカウントは引き継ぎます。",
+	"Keep setting up": "設定を続行",
+	"Stop connecting": "接続を停止",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"選択を保存できませんでした。もう一度クリックしてみてください。それでもうまくいかない場合は、ページを更新してください。",
 	"Let's get your notes in.": "ノートをインポートしましょう。",
@@ -904,7 +919,6 @@ export default {
 	"Waiting for the plugin to sign in…": "プラグインがサインインを待機中です…",
 	"Vault detected. Waiting for your first sync…": "保管庫を検出しました。最初の同期を待機中です…",
 	"Syncing your notes, almost there…": "ノートの同期中、もうすぐ完了します…",
-	"Name your first vault": "最初の保管庫の名前を入力",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"保管庫は関連するノートをまとめるフォルダです。ウェルカムノートを登録して、編集画面が空にならないようにします。",
 	"Create vault & continue": "保管庫を作成して続行",

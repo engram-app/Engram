@@ -414,9 +414,12 @@ export default {
 	"previous device": "önceki cihaz",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"'{name}' cihazından bağlantı kesildi, ancak yeni cihazla bağlantı kurulamadı. Obsidian üzerinden yeniden bağlayın - şu anda hiçbir cihaz senkronize değil.",
-	"Authorization failed": "Yetkilendirme başarısız oldu",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Bu kod geçersiz veya süresi dolmuş. Lütfen Obsidian üzerinden tekrar deneyin.",
+	"Authorization failed": "Yetkilendirme başarısız oldu",
+	"Welcome to Engram": "Engram uygulamasına hoş geldiniz",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"İlk kasanıza bir isim verin. Obsidian notlarınız bu kasaya senkronize edilecek.",
 	"Enter the code shown in your Obsidian plugin:": "Obsidian eklentinizde gösterilen kodu girin:",
 	"Verifying…": "Doğrulama yapılıyor...",
 	Verify: "Doğrula",
@@ -426,11 +429,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Cihazlarınızı ayırt edebilmeniz için bağlantı listenizde gösterilir.",
 	"Obsidian Vault Sync": "Obsidian Kasa Senkronizasyonu",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Kasa limiti aşıldı: Ücretsiz planınızda 1 kasa bulunur",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Ücretsiz planda yeni kasa oluşturamazsınız. Yukarıdaki mevcut kasanızla senkronize edin veya daha fazla kasa eklemek için yükseltin.",
-	"Upgrade plan": "Yükseltme planı",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Ücretsiz planınızda 1 kasa bulunur, bu nedenle bu cihaz yukarıdaki kasayla senkronize olur.",
+	"Need more vaults? Upgrade": "Daha fazla kasaya mı ihtiyacınız var? Ücretsiz aboneliği yükseltin",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"Senkronizasyon, bu cihazın notlarınıza erişmesini sağlar. Sadece kendiniz başlattıysanız devam edin. Başka biri sizi buraya gönderdiyse, bu sayfayı kapatın.",
 	"Syncing…": "Senkronize ediliyor…",
@@ -453,7 +454,6 @@ export default {
 	"Sync with an existing vault": "Mevcut bir kasayla senkronize edin",
 	"(choose from {count} vaults)": "({count} kasa arasından seçin)",
 	"Or create a new vault": "Veya yeni bir kasa oluşturun",
-	"Create your first vault": "İlk kasanızı oluşturun",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"{os} ile senkronize edilen '{vault}' kasası (son kullanım {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -628,7 +628,6 @@ export default {
 		one: "Deneme süreniz sona ermeye {count} gün kaldı.",
 		other: "Deneme sürenizin bitmesine {count} gün kaldı.",
 	},
-	"Free plan device limit: {count}.": "Ücretsiz plan cihaz limiti: {count}.",
 	"Collapse sidebar": "Yan menüyü gizle",
 	"No vaults": "Kasa yok",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -781,6 +780,17 @@ export default {
 	"Page not found": "Sayfa bulunamadı",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Aradığınızı bulamadık. Bağlantı bozuk olabilir veya sayfa taşınmış olabilir.",
+	"Name your first vault": "İlk kasanıza bir isim verin",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Bir kasa, notların bir koleksiyonudur. {client}, içindeki notları okuyabilir ve yazabilir.",
+	"Also allow {client} to read and write vaults I create later":
+		"Ayrıca, daha sonra oluşturacağım kasaları da {client}'ın okuyup yazmasına izin verin",
+	"Turn this off to limit {client} to this vault only.":
+		"Bunu kapatarak {client}'ı yalnızca bu kasaya sınırlayın.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Her uygulamanın neyi görebileceğini veya değiştirebileceğini, Ayarlar > Bağlantılar'da istediğiniz zaman sınırlayabilirsiniz.",
+	"Approving…": "Onaylanıyor…",
+	Approve: "Onayla",
 	"Invalid authorization request": "Geçersiz yetkilendirme isteği",
 	"Missing required OAuth parameters:": "Gerekli OAuth parametreleri eksik:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -792,22 +802,22 @@ export default {
 		"Bu uygulama, size geri göndermeye çalıştığı adresi kaydedemedi.",
 	"Finish setting up Engram": "Engram kurulumunu tamamlayın",
 	"this app": "bu uygulama",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"Kasanızı {name} olarak yeniden adlandıramadık. Farklı bir isim deneyin.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Kasanızı yeniden adlandıramadık. Bağlantınızı kontrol edin ve tekrar deneyin.",
 	"previous connection": "önceki bağlantı",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Sunucu, seçtiğinizden daha fazla erişim sağladı, bu yüzden hiçbir şey bağlanmadı. Tekrar deneyin veya sorun devam ederse destek ile iletişime geçin.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"'{name}' bağlantısı kesildi, ancak yeni bağlantının yetkilendirilmesi başarısız oldu. {client} adresinden isteği tekrar deneyin — şu anda bu tür aktif bağlantı yok.",
-	"This app is requesting access to your Engram.":
-		"Bu uygulama, Engram hesabınıza erişim talep ediyor.",
 	"Signed in as {email}.": "{email} olarak giriş yapıldı.",
-	"App details from {host}.": "{host} uygulamasının bilgileri.",
-	"You will return to {host}.": "{host} sayfasına geri döneceksiniz.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Bu, bu bilgisayardaki bir uygulamaya yönlendirir. Sadece o uygulamadan yeni bağlantı kurduysanız onaylayın.",
 	"your existing connection": "mevcut bağlantınız",
 	"Which vaults can {client} access?": "{client}, hangi kasalara erişebilir?",
-	Approve: "Onayla",
-	"Approving…": "Onaylanıyor…",
+	"App details from {host}.": "{host} uygulamasının bilgileri.",
+	"You will return to {host}.": "{host} sayfasına geri döneceksiniz.",
 	"Disconnect {name}?": "{name} ile bağlantıyı kes?",
 	"Connecting…": "Bağlanıyor…",
 	"Disconnect & connect {client}": "{client} ile bağlantıyı kes ve tekrar bağla",
@@ -837,6 +847,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Lütfen devam etmeden önce aşağıdaki tam anlaşmayı okuyun. {privacy} (kayıt sırasında incelenir), verilerinizi nasıl işlediğimizi açıklar.",
 	"Connect {tool}": "{tool} ile bağlantı kurun",
+	"Create your first vault": "İlk kasanızı oluşturun",
 	"Join our Discord": "Discord'umuza katılın",
 	Join: "Katıl",
 	"Install the Obsidian plugin": "Obsidian eklentisini yükleyin",
@@ -850,7 +861,8 @@ export default {
 	"{completed} of {total} done": "{completed} / {total} tamamlandı",
 	"Setup guide": "Kurulum kılavuzu",
 	"Dismiss {label}": "{label} öğesini kapatın",
-	"You're on the Free plan.": "Ücretsiz planı kullanıyorsunuz.",
+	"Want more devices and vaults?": "Daha fazla cihaz ve kasa mı istiyorsunuz?",
+	"See paid plans": "Ücretli planları inceleyin",
 	"Connect Claude Desktop": "Claude Masaüstü uygulamasını bağlayın",
 	"Connect Cursor": "Cursor'ı bağla",
 	"Connect Devin": "Devin'i bağla",
@@ -882,9 +894,12 @@ export default {
 	"Could not continue. Please try again.": "Devam edilemedi. Lütfen tekrar deneyin.",
 	"Step {step} of {total}": "{step} adımı, {total} toplam",
 	Onboarding: "Tanıtım",
-	"your app": "uygulamanız",
-	"Cancel connection": "Bağlantıyı iptal et",
-	"Connecting {app}": "{app} ile bağlantı kuruluyor",
+	"Stop connecting this app": "Bu uygulamayı bağlantıdan çıkar",
+	"Stop connecting this app?": "Bu uygulamayı bağlantıdan çıkarmak istiyor musunuz?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		'Sizi buraya yönlendiren uygulamaya, "hayır" dediğiniz bildirilecektir. Engram hesabınız kalır.',
+	"Keep setting up": "Kurulumu devam ettir",
+	"Stop connecting": "Bağlantıyı kes",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Seçiminizi kaydedemedik. Lütfen tekrar tıklayın; sorun devam ederse sayfayı yenileyin.",
 	"Let's get your notes in.": "Notlarınızı ekleyelim.",
@@ -909,7 +924,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Kasa tespit edildi. İlk senkronizasyon için bekleniyor…",
 	"Syncing your notes, almost there…": "Notlarınız senkronize ediliyor, neredeyse tamam…",
-	"Name your first vault": "İlk kasanıza bir isim verin",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Bir kasa, ilgili notlar için bir klasördür. Düzenleyicinin boş olmaması için, hoş geldiniz notuyla başlatacağız.",
 	"Create vault & continue": "Kasa oluştur ve devam et",

@@ -25,13 +25,9 @@ const KEY = "engram:pending-oauth";
 
 // A cancel navigates via `window.location.assign`, so the boundary that matters
 // is not http-vs-custom-scheme. Native OAuth clients legitimately register
-// custom schemes (`cursor://`, `vscode://`, `com.example.app://`) and DCR
-// admits them — `cursor://` is documented as observed in prod. Requiring
-// http(s) left the Cancel button dead for exactly those clients.
-//
-// What must never reach `location.assign` is a script-executing scheme. Host
-// trust is deliberately NOT decided here; that belongs upstream, against the
-// client's registered redirect_uris.
+// custom schemes (`cursor://`, `vscode://`) and DCR admits them. What must
+// never reach `location.assign` is a script-executing scheme. Host trust is
+// decided upstream, against the client's registered redirect_uris.
 const ABSOLUTE_URI = /^[a-z][a-z0-9+.-]*:/iu;
 const SCRIPT_SCHEME = /^(?:javascript|data|vbscript|blob|file):/iu;
 
@@ -68,43 +64,25 @@ export interface PendingAuthorization {
 	/** The full consent URL, query string included, so `state` and the PKCE
 	 *  challenge survive the detour and the original request is honored. */
 	returnTo: string;
-	/** Catalog slug of the client being authorized, or null when it cannot be
-	 *  attributed. Lets the wizard skip asking which tools you use, which the
-	 *  act of connecting one has already answered. */
-	toolSlug: string | null;
-	/** Display name of the client, so the wizard can say whose authorization
-	 *  is waiting instead of dropping the user into an unexplained signup —
-	 *  the "preserve context" half of interrupting an OAuth flow. */
-	clientName: string | null;
 	/** The backend confirmed `redirect_uri` is one the client registered.
 	 *  Without it there is no Cancel: the parked query string is anyone's to
 	 *  write, so its redirect is an open redirect until proven otherwise. */
-	redirectVerified?: boolean;
+	redirectVerified: boolean;
 }
 
 /** True when the request was actually parked. Callers MUST NOT promise a
  *  return trip on a false. */
-export function stashPendingAuthorization(
-	search: string,
-	toolSlug: string | null,
-	clientName: string | null,
-	redirectVerified = false,
-): boolean {
-	return stash({
-		returnTo: `${ROUTES.OAUTH_CONSENT}${search}`,
-		toolSlug,
-		clientName,
-		redirectVerified,
-	});
+export function stashPendingAuthorization(search: string, redirectVerified = false): boolean {
+	return stash({ returnTo: `${ROUTES.OAUTH_CONSENT}${search}`, redirectVerified });
 }
 
 /** Parks a device-link code (possibly empty) so the wizard returns to /link
- *  with it. There is no OAuth client behind it, so no cancel URL either. */
+ *  with it. */
 export function stashPendingDeviceLink(code: string): boolean {
 	const returnTo = code
 		? `${ROUTES.DEVICE_LINK}?${new URLSearchParams({ code }).toString()}`
 		: ROUTES.DEVICE_LINK;
-	return stash({ returnTo, toolSlug: null, clientName: "Obsidian" });
+	return stash({ returnTo, redirectVerified: false });
 }
 
 export function peekPendingAuthorization(): PendingAuthorization | null {
@@ -133,14 +111,8 @@ export function peekPendingAuthorization(): PendingAuthorization | null {
 			return null;
 		}
 
-		const toolSlug =
-			"toolSlug" in parsed && typeof parsed.toolSlug === "string" ? parsed.toolSlug : null;
-		const clientName =
-			"clientName" in parsed && typeof parsed.clientName === "string" ? parsed.clientName : null;
-
 		const redirectVerified = "redirectVerified" in parsed && parsed.redirectVerified === true;
-
-		return { returnTo: parsed.returnTo, toolSlug, clientName, redirectVerified };
+		return { returnTo: parsed.returnTo, redirectVerified };
 	} catch {
 		return null;
 	}
@@ -148,13 +120,9 @@ export function peekPendingAuthorization(): PendingAuthorization | null {
 
 /**
  * Where to send the client when the user abandons setup instead of finishing.
- *
- * OAuth 2.1 expects an interrupted authorization to end in a standards-
- * compliant response, not a tab the user closes: a refusal is `access_denied`
- * carrying the original `state`. Null when there is nothing pending, or when
- * the parked request has no usable redirect — there is nowhere to report to
- * then, and inventing a destination is how an open redirect gets built by
- * accident.
+ * OAuth 2.1 expects an interrupted authorization to end in `access_denied`
+ * carrying the original `state`, not a tab the user closes. Null when there is
+ * nowhere verified to report to.
  */
 export function pendingCancelUrl(): string | null {
 	const pending = peekPendingAuthorization();
@@ -164,10 +132,7 @@ export function pendingCancelUrl(): string | null {
 
 	const query = new URLSearchParams(pending.returnTo.split("?").slice(1).join("?"));
 	const redirectUri = query.get("redirect_uri")?.trim();
-	if (!redirectUri) {
-		return null;
-	}
-	if (SCRIPT_SCHEME.test(redirectUri) || !ABSOLUTE_URI.test(redirectUri)) {
+	if (!redirectUri || SCRIPT_SCHEME.test(redirectUri) || !ABSOLUTE_URI.test(redirectUri)) {
 		return null;
 	}
 
@@ -181,7 +146,6 @@ export function pendingCancelUrl(): string | null {
 	if (iss) {
 		answer.set("iss", iss);
 	}
-
 	return `${redirectUri}${redirectUri.includes("?") ? "&" : "?"}${answer.toString()}`;
 }
 

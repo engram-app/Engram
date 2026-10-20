@@ -383,7 +383,7 @@ function ChecklistBody({ visible, total, completed, pct, isFreeTier, onDismiss }
 			</ul>
 			{isFreeTier ? (
 				<p className="shrink-0 border-border border-t px-4 py-3 text-muted-foreground text-xs">
-					{t("You're on the Free plan.")}{" "}
+					{t("Want more devices and vaults?")}{" "}
 					{/* Settings > Billing, not /onboard/billing: there is no plan step
 					    in the wizard any more, so that route punts home. */}
 					<Link
@@ -391,7 +391,7 @@ function ChecklistBody({ visible, total, completed, pct, isFreeTier, onDismiss }
 						onClick={() => track("upgrade_link_clicked", { source: "checklist" })}
 						className="font-medium text-foreground underline underline-offset-4"
 					>
-						{t("Upgrade")}
+						{t("See paid plans")}
 					</Link>
 				</p>
 			) : null}

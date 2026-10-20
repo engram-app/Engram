@@ -415,9 +415,12 @@ export default {
 	"previous device": "peranti sebelumnya",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"Dilepaskan '{name}' tetapi pautan peranti baharu gagal. Pautkan semula dari Obsidian – tiada peranti yang disinkronkan pada masa ini.",
-	"Authorization failed": "Pengesahan gagal",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Kod ini tidak sah atau telah tamat tempoh. Sila cuba lagi dari Obsidian.",
+	"Authorization failed": "Pengesahan gagal",
+	"Welcome to Engram": "Selamat datang ke Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Namakan peti nota pertama anda. Nota Obsidian anda akan disegerakkan ke dalamnya.",
 	"Enter the code shown in your Obsidian plugin:":
 		"Masukkan kod yang ditunjukkan dalam plugin Obsidian anda:",
 	"Verifying…": "Mengesahkan…",
@@ -428,11 +431,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Ditunjukkan dalam senarai sambungan anda supaya anda boleh membezakan peranti anda.",
 	"Obsidian Vault Sync": "Obsidian Segerakan Peti Nota",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Had petinya telah dicapai: pelan percuma anda termasuk 1 petinya",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Anda tidak boleh mencipta peti nota baharu dalam pelan percuma. Segerakkan dengan peti nota anda yang sedia ada di atas, atau tingkatkan untuk menambah lebih banyak.",
-	"Upgrade plan": "Tingkatkan pelan",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Pelan percuma anda termasuk 1 peti nota, jadi peranti ini menyegerakkan dengan yang di atas.",
+	"Need more vaults? Upgrade": "Perlukan lebih banyak peti nota? Tingkatkan",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"Menyinkronkan memberikan peranti ini akses kepada nota anda. Teruskan hanya jika anda yang memulakan pautan ini. Jika orang lain menghantar anda ke sini, tutup halaman ini.",
 	"Syncing…": "Menyinkronkan…",
@@ -456,7 +457,6 @@ export default {
 	"Sync with an existing vault": "Segerakkan dengan peti nota yang sudah ada",
 	"(choose from {count} vaults)": "(pilih daripada {count} peti nota)",
 	"Or create a new vault": "Atau, cipta peti nota baharu",
-	"Create your first vault": "Cipta peti nota pertama anda",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"peranti pada {os} yang menyegerakkan peti nota anda '{vault}' (terakhir aktif {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -629,7 +629,6 @@ export default {
 	Language: "Bahasa",
 	"My Vault": "Peti Nota Saya",
 	"{count} days left in your trial.": { other: "{count} hari lagi untuk tempoh percubaan anda." },
-	"Free plan device limit: {count}.": "Had peranti pelan percuma: {count}.",
 	"Collapse sidebar": "Lipat bar sisi",
 	"No vaults": "Tiada peti nota",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -781,6 +780,17 @@ export default {
 	"Page not found": "Halaman tidak ditemui",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Kami tidak dapat mencari apa yang anda cari. Pautan mungkin rosak atau halaman mungkin telah dipindahkan.",
+	"Name your first vault": "Namakan peti nota pertama anda",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Sebuah peti nota ialah koleksi nota. {client} boleh membaca dan menulis nota di dalamnya.",
+	"Also allow {client} to read and write vaults I create later":
+		"Izinkan juga {client} membaca dan menulis peti nota yang saya cipta kemudian",
+	"Turn this off to limit {client} to this vault only.":
+		"Matikan ini untuk mengehadkan {client} kepada peti nota ini sahaja.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Anda boleh hadkan apa yang setiap aplikasi boleh lihat atau ubah pada bila-bila masa dalam Tetapan > Sambungan.",
+	"Approving…": "Memperuntukkan…",
+	Approve: "Peruntukkan",
 	"Invalid authorization request": "Permintaan pengesahan tidak sah",
 	"Missing required OAuth parameters:": "Parameter OAuth yang diperlukan hilang:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -792,21 +802,22 @@ export default {
 		"Aplikasi ini tidak merekod alamat yang diminta untuk menghantar anda kembali.",
 	"Finish setting up Engram": "Selesaikan persediaan Engram",
 	"this app": "aplikasi ini",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"Tidak dapat menukar nama peti nota anda kepada {name}. Cuba nama yang lain.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Tidak dapat menukar nama peti nota anda. Semak sambungan anda dan cuba lagi.",
 	"previous connection": "sambungan sebelumnya",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Pelayan memberikan akses lebih daripada yang anda pilih, jadi tiada apa yang disambungkan. Cuba lagi, atau hubungi sokongan jika ini berterusan.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Telah memutuskan sambungan '{name}' tetapi pengesahan sambungan baharu gagal. Jalankan semula permintaan daripada {client} — tiada sambungan seumpama ini yang aktif pada masa ini.",
-	"This app is requesting access to your Engram.": "Aplikasi ini meminta akses ke Engram anda.",
 	"Signed in as {email}.": "Log masuk sebagai {email}.",
-	"App details from {host}.": "Butiran aplikasi daripada {host}.",
-	"You will return to {host}.": "Anda akan kembali ke {host}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Ini akan membawa anda ke aplikasi di komputer ini. Sahkan sahaja jika anda baru sahaja mula berhubung dari aplikasi tersebut.",
 	"your existing connection": "sambungan anda yang sedia ada",
 	"Which vaults can {client} access?": "Peti Nota mana yang boleh diakses oleh {client}?",
-	Approve: "Peruntukkan",
-	"Approving…": "Memperuntukkan…",
+	"App details from {host}.": "Butiran aplikasi daripada {host}.",
+	"You will return to {host}.": "Anda akan kembali ke {host}.",
 	"Disconnect {name}?": "Putuskan sambungan {name}?",
 	"Connecting…": "Menyambung…",
 	"Disconnect & connect {client}": "Putuskan sambungan & sambung {client}",
@@ -836,6 +847,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Sila baca keseluruhan perjanjian di bawah sebelum meneruskan. {privacy} kami (disemak semasa pendaftaran) menerangkan bagaimana kami mengendalikan data anda.",
 	"Connect {tool}": "Sambungkan {tool}",
+	"Create your first vault": "Cipta peti nota pertama anda",
 	"Join our Discord": "Sertai Discord kami",
 	Join: "Sertai",
 	"Install the Obsidian plugin": "Pasang plugin Obsidian",
@@ -848,7 +860,8 @@ export default {
 	"{completed} of {total} done": "{completed} daripada {total} selesai",
 	"Setup guide": "Panduan persediaan",
 	"Dismiss {label}": "Tutup {label}",
-	"You're on the Free plan.": "Anda menggunakan pelan percuma.",
+	"Want more devices and vaults?": "Ingin lebih peranti dan peti nota?",
+	"See paid plans": "Lihat pelan berbayar",
 	"Connect Claude Desktop": "Sambungkan Claude Desktop",
 	"Connect Cursor": "Sambung Cursor",
 	"Connect Devin": "Sambung Devin",
@@ -880,9 +893,12 @@ export default {
 	"Could not continue. Please try again.": "Tidak dapat meneruskan. Sila cuba lagi.",
 	"Step {step} of {total}": "Langkah {step} daripada {total}",
 	Onboarding: "Pengenalan",
-	"your app": "aplikasi anda",
-	"Cancel connection": "Batalkan sambungan",
-	"Connecting {app}": "Menyambung {app}",
+	"Stop connecting this app": "Hentikan sambungan aplikasi ini",
+	"Stop connecting this app?": "Hentikan sambungan aplikasi ini?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"Aplikasi yang membawa anda ke sini akan dimaklumkan bahawa anda berkata tidak. Akaun Engram anda kekal.",
+	"Keep setting up": "Teruskan persediaan",
+	"Stop connecting": "Hentikan sambungan",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Tidak dapat menyimpan pilihan anda. Cuba klik sekali lagi — jika masih gagal, muat semula halaman.",
 	"Let's get your notes in.": "Mari kita masukkan nota anda.",
@@ -907,7 +923,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Peti nota dikesan. Menunggu penyegerakan pertama anda…",
 	"Syncing your notes, almost there…": "Menyinkronkan nota anda, hampir selesai…",
-	"Name your first vault": "Namakan peti nota pertama anda",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Peti nota ialah folder untuk nota yang berkaitan. Kami akan menyemainya dengan nota pengenalan supaya editor tidak kosong apabila anda tiba.",
 	"Create vault & continue": "Cipta peti nota & teruskan",

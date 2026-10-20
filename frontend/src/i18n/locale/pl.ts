@@ -425,9 +425,12 @@ export default {
 	"previous device": "poprzednie urządzenie",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"Odłączono '{name}', ale połączenie z nowym urządzeniem się nie powiodło. Ponownie połącz z Obsidian — obecnie nie są synchronizowane żadne urządzenia.",
-	"Authorization failed": "Autoryzacja nie powiodła się",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Ten kod jest nieprawidłowy lub wygasł. Spróbuj ponownie z Obsidian.",
+	"Authorization failed": "Autoryzacja nie powiodła się",
+	"Welcome to Engram": "Witaj w Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Nadaj nazwę swojemu pierwszemu sejfowi. Twoje notatki Obsidian zostaną zsynchronizowane z nim.",
 	"Enter the code shown in your Obsidian plugin:": "Wprowadź kod wyświetlony w wtyczce Obsidian:",
 	"Verifying…": "Weryfikacja…",
 	Verify: "Zweryfikuj",
@@ -437,11 +440,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Wyświetlane na liście połączeń, aby rozróżniać urządzenia.",
 	"Obsidian Vault Sync": "Synchronizacja sejfu Obsidian",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Osiągnięto limit sejfów: Twój darmowy plan obejmuje 1 sejf",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Na darmowym planie nie możesz tworzyć nowych sejfów. Zsynchronizuj istniejący sejf powyżej lub rozważ aktualizację, aby dodać więcej.",
-	"Upgrade plan": "Zaktualizuj plan",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Twój darmowy plan obejmuje 1 sejf, więc to urządzenie synchronizuje się z tym powyżej.",
+	"Need more vaults? Upgrade": "Potrzebujesz więcej sejfów? Zaktualizuj",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"Synchronizacja daje temu urządzeniu dostęp do Twoich notatek. Kontynuuj tylko, jeśli sam rozpocząłeś to połączenie. Jeśli ktoś inny Cię tu przekierował, zamknij tę stronę.",
 	"Syncing…": "Synchronizacja…",
@@ -465,7 +466,6 @@ export default {
 	"Sync with an existing vault": "Synchronizuj z istniejącym sejfem",
 	"(choose from {count} vaults)": "(wybierz spośród {count} sejfów)",
 	"Or create a new vault": "Lub utwórz nowy sejf",
-	"Create your first vault": "Utwórz swój pierwszy sejf",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"urządzenie na {os}, które synchronizuje twój sejf '{vault}' (ostatnio aktywne {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -667,7 +667,6 @@ export default {
 		many: "Zostało {count} dni w Twoim okresie próbnym.",
 		other: "Zostało {count} dnia w okresie próbnym.",
 	},
-	"Free plan device limit: {count}.": "Limit urządzeń w planie darmowym: {count}.",
 	"Collapse sidebar": "Zwinąć pasek boczny",
 	"No vaults": "Brak sejfów",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -843,6 +842,17 @@ export default {
 	"Page not found": "Strona nie znaleziona",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Nie mogliśmy znaleźć tego, czego szukasz. Link może być nieprawidłowy lub strona mogła zostać przeniesiona.",
+	"Name your first vault": "Nadaj nazwę swojemu pierwszemu sejfowi",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Sejf to zbiór notatek. {client} może czytać i zapisywać notatki w nim.",
+	"Also allow {client} to read and write vaults I create later":
+		"Umożliw również {client} odczyt i zapis sejfów, które utworzę później",
+	"Turn this off to limit {client} to this vault only.":
+		"Wyłącz to, aby ograniczyć {client} tylko do tego sejfu.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Możesz ograniczyć, co każda aplikacja może zobaczyć lub zmienić, w Ustawieniach > Połączenia.",
+	"Approving…": "Zatwierdzam…",
+	Approve: "Zatwierdź",
 	"Invalid authorization request": "Nieprawidłowe żądanie autoryzacji",
 	"Missing required OAuth parameters:": "Brak wymaganych parametrów OAuth:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -854,22 +864,22 @@ export default {
 		"Ta aplikacja nie zarejestrowała adresu, na który próbowała przekierować.",
 	"Finish setting up Engram": "Zakończ konfigurację Engram",
 	"this app": "tej aplikacji",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"Nie udało się zmienić nazwy twojego sejfu na {name}. Spróbuj innej nazwy.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Nie udało się zmienić nazwy twojego sejfu. Sprawdź połączenie i spróbuj ponownie.",
 	"previous connection": "poprzednie połączenie",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Serwer przyznał więcej uprawnień niż wybrałeś, więc nic nie zostało połączone. Spróbuj ponownie lub skontaktuj się z działem pomocy, jeśli problem się powtarza.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Odłączono '{name}', ale autoryzacja nowego połączenia się nie powiodła. Spróbuj ponownie z {client} — obecnie nie są aktywne żadne połączenia tego typu.",
-	"This app is requesting access to your Engram.":
-		"Ta aplikacja próbuje uzyskać dostęp do twojego Engram.",
 	"Signed in as {email}.": "Zalogowano jako {email}.",
-	"App details from {host}.": "Szczegóły aplikacji z {host}.",
-	"You will return to {host}.": "Wrócisz do {host}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"To przekieruje cię do aplikacji na tym komputerze. Zatwierdź tylko, jeśli właśnie rozpocząłeś połączenie z tej aplikacji.",
 	"your existing connection": "twoje istniejące połączenie",
 	"Which vaults can {client} access?": "Do których sejfów {client} może uzyskać dostęp?",
-	Approve: "Zatwierdź",
-	"Approving…": "Zatwierdzam…",
+	"App details from {host}.": "Szczegóły aplikacji z {host}.",
+	"You will return to {host}.": "Wrócisz do {host}.",
 	"Disconnect {name}?": "Odłącz {name}?",
 	"Connecting…": "Łączenie…",
 	"Disconnect & connect {client}": "Odłącz i połącz {client}",
@@ -900,6 +910,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Prosimy przeczytać pełną umowę poniżej przed kontynuowaniem. Nasz {privacy} (dostępny podczas rejestracji) opisuje, jak przetwarzamy twoje dane.",
 	"Connect {tool}": "Połącz z {tool}",
+	"Create your first vault": "Utwórz swój pierwszy sejf",
 	"Join our Discord": "Dołącz do naszego Discorda",
 	Join: "Dołącz",
 	"Install the Obsidian plugin": "Zainstaluj wtyczkę Obsidian",
@@ -913,7 +924,8 @@ export default {
 	"{completed} of {total} done": "{completed} z {total} zrobione",
 	"Setup guide": "Przewodnik konfiguracji",
 	"Dismiss {label}": "Zamknij {label}",
-	"You're on the Free plan.": "Korzystasz z planu Free.",
+	"Want more devices and vaults?": "Chcesz więcej urządzeń i sejfów?",
+	"See paid plans": "Zobacz płatne plany",
 	"Connect Claude Desktop": "Połącz z Claude Desktop",
 	"Connect Cursor": "Połącz z Cursor",
 	"Connect Devin": "Połącz z Devin",
@@ -945,9 +957,12 @@ export default {
 	"Could not continue. Please try again.": "Nie udało się kontynuować. Spróbuj ponownie.",
 	"Step {step} of {total}": "Krok {step} z {total}",
 	Onboarding: "Wprowadzenie",
-	"your app": "twoja aplikacja",
-	"Cancel connection": "Anuluj połączenie",
-	"Connecting {app}": "Połączenie z {app}",
+	"Stop connecting this app": "Przestań łączyć tę aplikację",
+	"Stop connecting this app?": "Czy na pewno chcesz przestać łączyć tę aplikację?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"Aplikacja, która przeniosła cię tutaj, zostanie poinformowana, że odmówiłeś. Twoje konto Engram pozostaje.",
+	"Keep setting up": "Kontynuuj konfigurację",
+	"Stop connecting": "Przestań łączyć",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Nie udało się zapisać Twojego wyboru. Spróbuj kliknąć ponownie — jeśli problem nadal występuje, odśwież stronę.",
 	"Let's get your notes in.": "Przenieśmy Twoje notatki.",
@@ -972,7 +987,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Sejf wykryty. Czekam na pierwszą synchronizację…",
 	"Syncing your notes, almost there…": "Synchronizuję twoje notatki, prawie gotowe…",
-	"Name your first vault": "Nadaj nazwę swojemu pierwszemu sejfowi",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Sejf to folder dla powiązanych notatek. Wypełnimy go notatką powitalną, aby edytor nie był pusty, gdy do niego wejdziesz.",
 	"Create vault & continue": "Utwórz sejf i kontynuuj",

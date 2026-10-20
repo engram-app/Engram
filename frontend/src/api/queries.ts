@@ -1607,7 +1607,12 @@ export function useAcceptTerms() {
 		// they're forced to accept twice. invalidateQueries returns a Promise that
 		// settles when active queries have refetched — await it.
 		onSuccess: async () => {
-			await qc.invalidateQueries({ queryKey: ["onboarding", "status"] });
+			// Both settle before resolving. Accepting can provision the connector
+			// vault, which a cached vault list would hide from the consent screen.
+			await Promise.all([
+				qc.invalidateQueries({ queryKey: ["onboarding", "status"] }),
+				qc.invalidateQueries({ queryKey: ["vaults"] }),
+			]);
 		},
 	});
 }
@@ -1628,9 +1633,13 @@ export function useSetOnboardingProfile() {
 		// AWAIT the invalidation so mutateAsync resolves only after
 		// ['onboarding','status'] has refetched. Without the await,
 		// OnboardingGate reads the still-cached next_step (e.g. "tools")
-		// immediately after navigate and bounces back here.
+		// immediately after navigate and bounces back here. A pre-answered
+		// tools step can provision the connector vault: refresh the list too.
 		onSuccess: async () => {
-			await qc.invalidateQueries({ queryKey: ["onboarding", "status"] });
+			await Promise.all([
+				qc.invalidateQueries({ queryKey: ["onboarding", "status"] }),
+				qc.invalidateQueries({ queryKey: ["vaults"] }),
+			]);
 		},
 	});
 }

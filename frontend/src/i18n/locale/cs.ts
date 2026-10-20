@@ -424,9 +424,12 @@ export default {
 	"previous device": "předchozí zařízení",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"Odpojeno '{name}', ale propojení nového zařízení selhalo. Propojte znovu z Obsidian – v současné době nejsou žádná zařízení synchronizována.",
-	"Authorization failed": "Autorizace selhala",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Tento kód je neplatný nebo vypršel. Zkuste to znovu z Obsidian.",
+	"Authorization failed": "Autorizace selhala",
+	"Welcome to Engram": "Vítejte v Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Pojmenujte svůj první trezor. Vaše poznámky Obsidian se do něj synchronizují.",
 	"Enter the code shown in your Obsidian plugin:":
 		"Zadejte kód zobrazený ve vašem pluginu Obsidian:",
 	"Verifying…": "Ověřování…",
@@ -437,11 +440,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Zobrazí se ve vašem seznamu připojení, abyste mohli rozlišit svá zařízení.",
 	"Obsidian Vault Sync": "Synchronizace trezoru Obsidian",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Limit trezorů byl dosažen: váš bezplatný plán zahrnuje 1 trezor",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Na bezplatném plánu nemůžete vytvořit nový trezor. Synchronizujte se se stávajícím trezorem výše nebo upgradujte, abyste přidali další.",
-	"Upgrade plan": "Plán předplatného",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Váš bezplatný plán zahrnuje 1 trezor, takže toto zařízení se synchronizuje s tím výše.",
+	"Need more vaults? Upgrade": "Potřebujete více trezorů? Upgradujte",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"Synchronizace umožňuje tomuto zařízení přístup k vašim poznámkám. Pokračujte pouze pokud jste tuto stránku otevřeli sami. Pokud vás sem poslal někdo jiný, zavřete tuto stránku.",
 	"Syncing…": "Probíhá synchronizace…",
@@ -465,7 +466,6 @@ export default {
 	"Sync with an existing vault": "Synchronizace s existujícím trezorem",
 	"(choose from {count} vaults)": "(vyberte z {count} trezorů)",
 	"Or create a new vault": "Nebo vytvořte nový trezor",
-	"Create your first vault": "Vytvořte svůj první trezor",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"zařízení na {os}, které synchronizuje váš trezor '{vault}' (poslední aktivita {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -669,7 +669,6 @@ export default {
 		many: "Zbývá {count} dne do konce zkušební verze.",
 		other: "Zbývá {count} dní do konce zkušební verze.",
 	},
-	"Free plan device limit: {count}.": "Limit zařízení pro bezplatný plán: {count}.",
 	"Collapse sidebar": "Sbalit boční panel",
 	"No vaults": "Žádné trezory",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -845,6 +844,17 @@ export default {
 	"Page not found": "Stránka nenalezena",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Nenašli jsme, co hledáte. Odkaz může být nefunkční nebo se stránka mohla přesunout.",
+	"Name your first vault": "Pojmenujte svůj první trezor",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Trezor je kolekce poznámek. {client} může číst a zapisovat poznámky v něm.",
+	"Also allow {client} to read and write vaults I create later":
+		"Umožněte také {client} číst a zapisovat trezory, které vytvořím později",
+	"Turn this off to limit {client} to this vault only.":
+		"Vypněte toto, abyste omezili {client} pouze na tento trezor.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Můžete omezit, co každá aplikace může vidět nebo měnit, kdykoli v Nastavení > Připojení.",
+	"Approving…": "Probíhá schvalování…",
+	Approve: "Schválit",
 	"Invalid authorization request": "Neplatná žádost o autorizaci",
 	"Missing required OAuth parameters:": "Chybí povinné parametry OAuth:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -856,21 +866,22 @@ export default {
 		"Tato aplikace neregistrovala adresu, na kterou se pokoušela vás přesměrovat.",
 	"Finish setting up Engram": "Dokončete nastavení Engram",
 	"this app": "tato aplikace",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"Nepodařilo se přejmenovat váš trezor na {name}. Zkuste jiné jméno.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Nepodařilo se přejmenovat váš trezor. Zkontrolujte připojení a zkuste to znovu.",
 	"previous connection": "předchozí připojení",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Server udělil více oprávnění, než jste vybrali, takže nic nebylo připojeno. Zkuste to znovu, nebo kontaktujte podporu, pokud se to bude opakovat.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Odpojeno '{name}', ale autorizace nového připojení selhala. Spusťte požadavek znovu z {client} – žádná připojení tohoto typu nejsou aktuálně aktivní.",
-	"This app is requesting access to your Engram.": "Tato aplikace žádá přístup k vašemu Engram.",
 	"Signed in as {email}.": "Přihlášeno jako {email}.",
-	"App details from {host}.": "Podrobnosti aplikace z {host}.",
-	"You will return to {host}.": "Vrátíte se do {host}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"To vás přesměruje na aplikaci v tomto počítači. Schvalte pouze pokud jste se právě začali připojovat z této aplikace.",
 	"your existing connection": "vaše stávající připojení",
 	"Which vaults can {client} access?": "Které trezory může {client} přistupovat?",
-	Approve: "Schválit",
-	"Approving…": "Probíhá schvalování…",
+	"App details from {host}.": "Podrobnosti aplikace z {host}.",
+	"You will return to {host}.": "Vrátíte se do {host}.",
 	"Disconnect {name}?": "Odpojit {name}?",
 	"Connecting…": "Probíhá připojování…",
 	"Disconnect & connect {client}": "Odpojit a připojit {client}",
@@ -900,6 +911,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Před pokračováním si, prosím, přečtěte celou smlouvu níže. Naše {privacy} (prohlédnuta při registraci) popisuje, jak nakládáme s vašimi daty.",
 	"Connect {tool}": "Připojit {tool}",
+	"Create your first vault": "Vytvořte svůj první trezor",
 	"Join our Discord": "Připojte se k našemu Discordu",
 	Join: "Připojit",
 	"Install the Obsidian plugin": "Nainstalovat plugin Obsidian",
@@ -913,7 +925,8 @@ export default {
 	"{completed} of {total} done": "{completed} z {total} dokončeno",
 	"Setup guide": "Návod k nastavení",
 	"Dismiss {label}": "Zrušit {label}",
-	"You're on the Free plan.": "Používáte bezplatný plán.",
+	"Want more devices and vaults?": "Chcete více zařízení a trezorů?",
+	"See paid plans": "Prohlédněte si placené plány",
 	"Connect Claude Desktop": "Připojit Claude Desktop",
 	"Connect Cursor": "Připojit Cursor",
 	"Connect Devin": "Připojit Devin",
@@ -945,9 +958,12 @@ export default {
 	"Could not continue. Please try again.": "Nelze pokračovat. Zkuste to znovu.",
 	"Step {step} of {total}": "Krok {step} z {total}",
 	Onboarding: "Úvodní nastavení",
-	"your app": "vaše aplikace",
-	"Cancel connection": "Zrušit připojení",
-	"Connecting {app}": "Připojení k {app}",
+	"Stop connecting this app": "Zastavit připojení této aplikace",
+	"Stop connecting this app?": "Zastavit připojení této aplikace?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"Aplikace, která vás sem poslala, bude informována, že jste odmítli. Váš účet Engram zůstane.",
+	"Keep setting up": "Pokračovat v nastavení",
+	"Stop connecting": "Zastavit připojení",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Nelze uložit vaši volbu. Zkuste kliknout znovu – pokud to stále nefunguje, obnovte stránku.",
 	"Let's get your notes in.": "Připravme vaše poznámky.",
@@ -972,7 +988,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Trezor detekován. Čekáme na vaši první synchronizaci…",
 	"Syncing your notes, almost there…": "Synchronizace vašich poznámek, už skoro hotovo…",
-	"Name your first vault": "Pojmenujte svůj první trezor",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Trezor je složka pro související poznámky. Naplníme ji uvítací poznámkou, aby editor nebyl prázdný, až k němu přijdete.",
 	"Create vault & continue": "Vytvořit trezor a pokračovat",

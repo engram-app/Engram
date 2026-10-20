@@ -410,9 +410,12 @@ export default {
 	"previous device": "thiết bị trước đó",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"Đã ngắt kết nối '{name}' nhưng việc liên kết thiết bị mới không thành công. Hãy liên kết lại từ Obsidian – hiện tại không có thiết bị nào được đồng bộ hóa.",
-	"Authorization failed": "Xác thực thất bại",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Mã này không hợp lệ hoặc đã hết hạn. Vui lòng thử lại từ Obsidian.",
+	"Authorization failed": "Xác thực thất bại",
+	"Welcome to Engram": "Chào mừng bạn đến với Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Đặt tên cho kho lưu trữ đầu tiên của bạn. Các ghi chú Obsidian của bạn sẽ được đồng bộ hóa vào đó.",
 	"Enter the code shown in your Obsidian plugin:":
 		"Nhập mã hiển thị trong tiện ích Obsidian của bạn:",
 	"Verifying…": "Đang xác minh…",
@@ -423,11 +426,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Hiển thị trong danh sách kết nối của bạn để bạn có thể phân biệt các thiết bị.",
 	"Obsidian Vault Sync": "Đồng bộ hóa Kho lưu trữ Obsidian",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Đạt giới hạn kho lưu trữ: gói miễn phí của bạn bao gồm 1 kho lưu trữ",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Bạn không thể tạo kho lưu trữ mới trên gói miễn phí. Đồng bộ hóa với kho lưu trữ hiện có của bạn ở trên, hoặc nâng cấp để thêm nhiều hơn.",
-	"Upgrade plan": "Nâng cấp gói",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Gói miễn phí của bạn bao gồm 1 kho lưu trữ, vì vậy thiết bị này đồng bộ hóa với kho lưu trữ trên.",
+	"Need more vaults? Upgrade": "Cần thêm kho lưu trữ? Nâng cấp",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"Đồng bộ hóa cho phép thiết bị này truy cập ghi chú của bạn. Chỉ tiếp tục nếu bạn tự khởi động liên kết này. Nếu ai đó gửi bạn đến đây, hãy đóng trang này.",
 	"Syncing…": "Đang đồng bộ hóa…",
@@ -451,7 +452,6 @@ export default {
 	"Sync with an existing vault": "Đồng bộ hóa với một kho lưu trữ hiện có",
 	"(choose from {count} vaults)": "(chọn từ {count} kho lưu trữ)",
 	"Or create a new vault": "Hoặc tạo một kho lưu trữ mới",
-	"Create your first vault": "Tạo kho lưu trữ đầu tiên của bạn",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"thiết bị trên {os} đồng bộ hóa kho lưu trữ '{vault}' của bạn (lần hoạt động gần nhất {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -626,7 +626,6 @@ export default {
 	"{count} days left in your trial.": {
 		other: "Còn {count} ngày trong thời gian dùng thử của bạn.",
 	},
-	"Free plan device limit: {count}.": "Giới hạn thiết bị của gói Free: {count}.",
 	"Collapse sidebar": "Thu gọn thanh bên",
 	"No vaults": "Không có kho lưu trữ",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -777,6 +776,17 @@ export default {
 	"Page not found": "Trang không tìm thấy",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Chúng tôi không thể tìm thấy những gì bạn đang tìm kiếm. Liên kết có thể bị hỏng hoặc trang có thể đã được chuyển.",
+	"Name your first vault": "Đặt tên cho kho lưu trữ đầu tiên của bạn",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Một kho lưu trữ là một tập hợp các ghi chú. {client} có thể đọc và ghi các ghi chú trong đó.",
+	"Also allow {client} to read and write vaults I create later":
+		"Cho phép {client} đọc và ghi vào các kho lưu trữ mà bạn tạo sau này",
+	"Turn this off to limit {client} to this vault only.":
+		"Tắt tùy chọn này để giới hạn {client} chỉ cho kho lưu trữ này.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Bạn có thể giới hạn những gì mỗi ứng dụng có thể xem hoặc thay đổi bất cứ lúc nào trong Cài đặt > Kết nối.",
+	"Approving…": "Đang phê duyệt…",
+	Approve: "Phê duyệt",
 	"Invalid authorization request": "Yêu cầu xác thực không hợp lệ",
 	"Missing required OAuth parameters:": "Thiếu các tham số OAuth bắt buộc:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -788,22 +798,22 @@ export default {
 		"Ứng dụng này không đăng ký địa chỉ mà nó yêu cầu gửi bạn đến.",
 	"Finish setting up Engram": "Hoàn tất thiết lập Engram",
 	"this app": "ứng dụng này",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"Không thể đổi tên kho lưu trữ của bạn thành {name}. Hãy thử một tên khác.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Không thể đổi tên kho lưu trữ của bạn. Kiểm tra kết nối và thử lại.",
 	"previous connection": "kết nối trước đó",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Máy chủ đã cấp quyền truy cập lớn hơn mức bạn chọn, vì vậy không có gì được kết nối. Thử lại, hoặc liên hệ bộ phận hỗ trợ nếu sự cố này tiếp diễn.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Đã ngắt kết nối '{name}' nhưng việc cấp quyền cho kết nối mới không thành công. Hãy thử lại yêu cầu từ {client} — hiện tại không có kết nối nào như vậy đang hoạt động.",
-	"This app is requesting access to your Engram.":
-		"Ứng dụng này đang yêu cầu quyền truy cập vào Engram của bạn.",
 	"Signed in as {email}.": "Đã đăng nhập với tư cách là {email}.",
-	"App details from {host}.": "Chi tiết ứng dụng từ {host}.",
-	"You will return to {host}.": "Bạn sẽ quay lại {host}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Điều này sẽ đưa bạn đến một ứng dụng trên máy tính này. Chỉ chấp nhận nếu bạn vừa mới bắt đầu kết nối từ ứng dụng đó.",
 	"your existing connection": "kết nối hiện tại của bạn",
 	"Which vaults can {client} access?": "Kho lưu trữ nào mà {client} có thể truy cập?",
-	Approve: "Phê duyệt",
-	"Approving…": "Đang phê duyệt…",
+	"App details from {host}.": "Chi tiết ứng dụng từ {host}.",
+	"You will return to {host}.": "Bạn sẽ quay lại {host}.",
 	"Disconnect {name}?": "Ngắt kết nối {name}?",
 	"Connecting…": "Đang kết nối…",
 	"Disconnect & connect {client}": "Ngắt kết nối & kết nối {client}",
@@ -834,6 +844,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Vui lòng đọc toàn bộ bản hợp đồng bên dưới trước khi tiếp tục. Chính sách {privacy} của chúng tôi (được xem xét khi đăng ký) mô tả cách chúng tôi xử lý dữ liệu của bạn.",
 	"Connect {tool}": "Kết nối {tool}",
+	"Create your first vault": "Tạo kho lưu trữ đầu tiên của bạn",
 	"Join our Discord": "Tham gia Discord của chúng tôi",
 	Join: "Tham gia",
 	"Install the Obsidian plugin": "Cài đặt tiện ích Obsidian",
@@ -846,7 +857,8 @@ export default {
 	"{completed} of {total} done": "{completed} trong {total} đã hoàn thành",
 	"Setup guide": "Hướng dẫn thiết lập",
 	"Dismiss {label}": "Bỏ qua {label}",
-	"You're on the Free plan.": "Bạn đang sử dụng gói miễn phí.",
+	"Want more devices and vaults?": "Muốn thêm thiết bị và kho lưu trữ?",
+	"See paid plans": "Xem các gói trả phí",
 	"Connect Claude Desktop": "Kết nối với Claude Desktop",
 	"Connect Cursor": "Kết nối Cursor",
 	"Connect Devin": "Kết nối Devin",
@@ -878,9 +890,12 @@ export default {
 	"Could not continue. Please try again.": "Không thể tiếp tục. Vui lòng thử lại.",
 	"Step {step} of {total}": "Bước {step} trong {total}",
 	Onboarding: "Hướng dẫn sử dụng",
-	"your app": "ứng dụng của bạn",
-	"Cancel connection": "Hủy kết nối",
-	"Connecting {app}": "Kết nối {app}",
+	"Stop connecting this app": "Dừng kết nối ứng dụng này",
+	"Stop connecting this app?": "Dừng kết nối ứng dụng này?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"Ứng dụng đã đưa bạn đến đây sẽ được thông báo rằng bạn đã chọn không. Tài khoản Engram của bạn vẫn còn.",
+	"Keep setting up": "Tiếp tục thiết lập",
+	"Stop connecting": "Dừng kết nối",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Không thể lưu lựa chọn của bạn. Hãy thử nhấp lại — nếu vẫn không được, hãy làm mới trang.",
 	"Let's get your notes in.": "Chúng ta hãy đưa ghi chú của bạn vào.",
@@ -905,7 +920,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Phát hiện kho lưu trữ. Đang chờ lần đồng bộ hóa đầu tiên của bạn…",
 	"Syncing your notes, almost there…": "Đang đồng bộ hóa ghi chú của bạn, sắp xong…",
-	"Name your first vault": "Đặt tên cho kho lưu trữ đầu tiên của bạn",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Một kho lưu trữ là một thư mục chứa các ghi chú liên quan. Chúng tôi sẽ tạo một ghi chú chào mừng để trình soạn thảo không trống khi bạn truy cập.",
 	"Create vault & continue": "Tạo kho lưu trữ & tiếp tục",

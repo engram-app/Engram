@@ -1,8 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -23,7 +21,7 @@ import { destructiveAlert, heading, selectableRow } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { track } from "../analytics/track";
 import { setActiveVaultId } from "../api/active-vault";
-import { api } from "../api/client";
+import { api, isNotFound } from "../api/client";
 import {
 	type Connection,
 	useBillingStatus,
@@ -387,7 +385,13 @@ function DeviceLinkPage() {
 				const existingId = obsidianConnectionId(existingObsidian);
 				if (existingId) {
 					swappedFromName = existingObsidian.name ?? t("previous device");
-					await api.del(`/connections/device/${existingId}`);
+					// Already gone (revoked in another tab) is the outcome we
+					// wanted; letting that 404 through would read as an expired code.
+					await api.del(`/connections/device/${existingId}`).catch((err: unknown) => {
+						if (!isNotFound(err)) {
+							throw err;
+						}
+					});
 					await qc.invalidateQueries({ queryKey: ["connections"] });
 					await qc.invalidateQueries({ queryKey: ["billing", "status"] });
 				}
@@ -453,10 +457,16 @@ function DeviceLinkPage() {
 				track("plugin_connect_failed", { reason: "limit_exceeded" });
 				return;
 			}
-			const message = e instanceof Error ? e.message : t("Authorization failed");
-			const notFound = message.includes("404") || message.includes("not found");
+			// By status, not message: a 403 "vault not found or not owned by
+			// user" also says "not found", and its code is still good. Only the
+			// authorize 404 means the code is gone.
+			const notFound = isNotFound(e);
 			if (notFound) {
 				setError(t("This code is invalid or has expired. Please try again from Obsidian."));
+				// Expired while picking: back to the code form so the new code
+				// from Obsidian can go in. Staying on the picker is a dead end.
+				setUserCode("");
+				setStep("enter-code");
 			} else {
 				setError(serverErrorMessage(e, t("Authorization failed"), t));
 			}
@@ -468,19 +478,21 @@ function DeviceLinkPage() {
 
 	const canAuthorize = createNew ? effectiveNewName.length > 0 : true;
 
+	// No vault yet: this is the account's first sync, so greet instead of
+	// asking them to "choose" from an empty list.
+	const firstVault = step === "pick-vault" && vaults.length === 0;
+
 	return (
 		<AuthShell>
-			<AuthPanel
-				className={cn(
-					"flex flex-col gap-4",
-					// pick-vault is a tighter, decision-focused step — narrow the
-					// whole card so the radio rows + button don't feel oceanic.
-					step === "pick-vault" && "mx-auto sm:w-4/5",
-				)}
-			>
+			<AuthPanel className="flex flex-col gap-4">
 				<h1 className="font-bold text-2xl text-foreground tracking-tight sm:text-3xl">
-					{t(STEP_TITLES[step])}
+					{firstVault ? t("Welcome to Engram") : t(STEP_TITLES[step])}
 				</h1>
+				{firstVault ? (
+					<p className="text-muted-foreground">
+						{t("Name your first vault. Your Obsidian notes will sync into it.")}
+					</p>
+				) : null}
 
 				{capCheck.swapCooldownHours !== null && step !== "success" ? (
 					// Cooldown gates the Sync button (line 319) regardless of whether
@@ -588,28 +600,21 @@ function DeviceLinkPage() {
 							onCustomChange={setCustomName}
 							atVaultCap={atVaultCap}
 						/>
-						{Boolean(atVaultCap) && (
-							<Alert className="border-amber-500/40 bg-amber-500/10 p-4 text-foreground">
-								<TriangleAlert aria-hidden="true" className="text-amber-500" />
-								<AlertTitle className="text-base">
-									{t("Vault limit reached: your Free plan includes 1 vault")}
-								</AlertTitle>
-								<AlertDescription className="flex flex-col gap-3 text-foreground">
-									<span>
-										{t(
-											"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.",
-										)}
-									</span>
-									<Button
-										type="button"
-										className="w-full"
-										onClick={() => navigate(settingsTo("billing", location.search))}
-									>
-										{t("Upgrade plan")}
-									</Button>
-								</AlertDescription>
-							</Alert>
-						)}
+						{/* Informational, not a warning: linking another device to the
+						    one vault is the normal Free path, not an error. */}
+						{atVaultCap ? (
+							<p className="text-muted-foreground text-sm">
+								{t("Your Free plan includes 1 vault, so this device syncs with the one above.")}{" "}
+								<Button
+									type="button"
+									variant="link"
+									className="h-auto p-0"
+									onClick={() => navigate(settingsTo("billing", location.search))}
+								>
+									{t("Need more vaults? Upgrade")}
+								</Button>
+							</p>
+						) : null}
 
 						{/* The typed-code step IS the phishing defence RFC 8628 §5.4 names,
 						    and arriving with ?code= skips it. `vault_name` is
@@ -866,9 +871,10 @@ function VaultPickerFieldset({
 			    create would 402. */}
 			{!atVaultCap && (
 				<>
-					<p className={cn(sectionTitle, vaults.length > 0 && "mt-4")}>
-						{vaults.length > 0 ? t("Or create a new vault") : t("Create your first vault")}
-					</p>
+					{/* First vault: the page subtitle already says it. */}
+					{vaults.length > 0 && (
+						<p className={cn(sectionTitle, "mt-4")}>{t("Or create a new vault")}</p>
+					)}
 					{vaults.length > 0 ? (
 						<label className={selectableRow(isCustom)}>
 							<input

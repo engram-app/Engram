@@ -23,7 +23,7 @@ function NoteRow({ note }: NoteRowProps) {
 	return (
 		<article className="border-gray-100 border-b py-3 last:border-0 dark:border-gray-800">
 			<Link to={noteHref(slug, note.id)} className="block hover:text-blue-700">
-				<h3 className="font-medium text-gray-900 text-sm dark:text-gray-100">
+				<h3 translate="no" className="font-medium text-gray-900 text-sm dark:text-gray-100">
 					{noteName(note.path) || note.path}
 				</h3>
 			</Link>

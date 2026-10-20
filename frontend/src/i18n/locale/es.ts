@@ -419,9 +419,12 @@ export default {
 	"previous device": "dispositivo anterior",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"Desconectado '{name}', pero falló el vínculo con el nuevo dispositivo. Vuelve a vincular desde Obsidian; actualmente no hay dispositivos sincronizados.",
-	"Authorization failed": "La autorización falló",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Este código no es válido o ha expirado. Inténtalo de nuevo desde Obsidian.",
+	"Authorization failed": "La autorización falló",
+	"Welcome to Engram": "Bienvenido a Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Ponle un nombre a tu primera bóveda. Tus notas de Obsidian se sincronizarán en ella.",
 	"Enter the code shown in your Obsidian plugin:":
 		"Introduce el código que aparece en tu plugin de Obsidian:",
 	"Verifying…": "Verificando…",
@@ -432,11 +435,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Se mostrará en tu lista de conexiones para que puedas distinguir tus dispositivos.",
 	"Obsidian Vault Sync": "Sincronización de la Bóveda de Obsidian",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Límite de bóvedas alcanzado: tu plan gratuito incluye 1 bóveda",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"No puedes crear una nueva bóveda en el plan gratuito. Sincroniza con tu bóveda existente arriba, o actualiza para añadir más.",
-	"Upgrade plan": "Plan de actualización",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Tu plan gratuito incluye 1 bóveda, así que este dispositivo se sincroniza con la bóveda anterior.",
+	"Need more vaults? Upgrade": "¿Necesitas más bóvedas? Actualiza",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"Sincronizar le da a este dispositivo acceso a tus notas. Continúa solo si iniciaste tú esta conexión. Si alguien más te envió aquí, cierra esta página.",
 	"Syncing…": "Sincronizando…",
@@ -460,7 +461,6 @@ export default {
 	"Sync with an existing vault": "Sincroniza con una bóveda existente",
 	"(choose from {count} vaults)": "(elige entre {count} bóvedas)",
 	"Or create a new vault": "O crea una nueva bóveda",
-	"Create your first vault": "Crea tu primera bóveda",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"el dispositivo en {os} que sincroniza tu bóveda '{vault}' (última actividad: {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -659,7 +659,6 @@ export default {
 		many: "Quedan {count} días en tu prueba.",
 		other: "Quedan {count} días en tu período de prueba.",
 	},
-	"Free plan device limit: {count}.": "Límite de dispositivos del plan Gratuito: {count}.",
 	"Collapse sidebar": "Ocultar barra lateral",
 	"No vaults": "Sin bóvedas",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -814,6 +813,17 @@ export default {
 	"Page not found": "Página no encontrada",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"No pudimos encontrar lo que buscas. El enlace podría estar roto o la página podría haberse movido.",
+	"Name your first vault": "Ponle un nombre a tu primera bóveda",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Una bóveda es una colección de notas. {client} puede leer y escribir las notas en ella.",
+	"Also allow {client} to read and write vaults I create later":
+		"También permite que {client} lea y escriba en las bóvedas que crees más adelante",
+	"Turn this off to limit {client} to this vault only.":
+		"Desactiva esto para limitar {client} a esta bóveda únicamente.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Puedes limitar lo que cada aplicación puede ver o cambiar en cualquier momento en Ajustes > Conexiones.",
+	"Approving…": "Aprobando…",
+	Approve: "Aprobar",
 	"Invalid authorization request": "Solicitud de autorización inválida",
 	"Missing required OAuth parameters:": "Faltan parámetros OAuth requeridos:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -825,21 +835,22 @@ export default {
 		"Esta aplicación no registró la dirección a la que intentó enviarte.",
 	"Finish setting up Engram": "Finaliza la configuración de Engram",
 	"this app": "esta aplicación",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"No se pudo renombrar tu bóveda a {name}. Intenta con otro nombre.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"No se pudo renombrar tu bóveda. Verifica tu conexión e inténtalo de nuevo.",
 	"previous connection": "conexión anterior",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"El servidor concedió más acceso del que elegiste, así que nada se conectó. Inténtalo de nuevo, o contacta con soporte si esto sigue ocurriendo.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Desconectado '{name}' pero la autorización de la nueva conexión falló. Vuelve a intentar la solicitud desde {client} — no hay conexiones de este tipo activas actualmente.",
-	"This app is requesting access to your Engram.": "Esta aplicación solicita acceso a tu Engram.",
 	"Signed in as {email}.": "Iniciado sesión como {email}.",
-	"App details from {host}.": "Detalles de la aplicación de {host}.",
-	"You will return to {host}.": "Regresarás a {host}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Esto te lleva a una aplicación en este ordenador. Acepta solo si acabas de empezar a conectarte desde esa aplicación.",
 	"your existing connection": "tu conexión existente",
 	"Which vaults can {client} access?": "¿A qué bóvedas puede acceder {client}?",
-	Approve: "Aprobar",
-	"Approving…": "Aprobando…",
+	"App details from {host}.": "Detalles de la aplicación de {host}.",
+	"You will return to {host}.": "Regresarás a {host}.",
 	"Disconnect {name}?": "Desconectar {name}?",
 	"Connecting…": "Conectando…",
 	"Disconnect & connect {client}": "Desconectar y conectar {client}",
@@ -869,6 +880,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Por favor, lee el acuerdo completo a continuación antes de continuar. Nuestro {privacy} (revisado al registrarte) describe cómo manejamos tus datos.",
 	"Connect {tool}": "Conectar {tool}",
+	"Create your first vault": "Crea tu primera bóveda",
 	"Join our Discord": "Únete a nuestro Discord",
 	Join: "Únete",
 	"Install the Obsidian plugin": "Instala el plugin de Obsidian",
@@ -882,7 +894,8 @@ export default {
 	"{completed} of {total} done": "{completed} de {total} completados",
 	"Setup guide": "Guía de configuración",
 	"Dismiss {label}": "Cerrar {label}",
-	"You're on the Free plan.": "Estás en el plan gratuito.",
+	"Want more devices and vaults?": "¿Quieres más dispositivos y bóvedas?",
+	"See paid plans": "Consulta los planes de pago",
 	"Connect Claude Desktop": "Conectar Claude Desktop",
 	"Connect Cursor": "Conectar Cursor",
 	"Connect Devin": "Conectar Devin",
@@ -914,9 +927,12 @@ export default {
 	"Could not continue. Please try again.": "No se pudo continuar. Por favor, intenta de nuevo.",
 	"Step {step} of {total}": "Paso {step} de {total}",
 	Onboarding: "Incorporación",
-	"your app": "tu aplicación",
-	"Cancel connection": "Cancelar conexión",
-	"Connecting {app}": "Conectando {app}",
+	"Stop connecting this app": "Deja de conectar esta aplicación",
+	"Stop connecting this app?": "¿Dejar de conectar esta aplicación?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"La aplicación que te trajo aquí te indicará que has dicho que no. Tu cuenta de Engram se mantiene.",
+	"Keep setting up": "Continúa la configuración",
+	"Stop connecting": "Deja de conectar",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"No se pudo guardar tu elección. Intenta hacer clic de nuevo; si sigue fallando, actualiza la página.",
 	"Let's get your notes in.": "Importemos tus notas.",
@@ -942,7 +958,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Bóveda detectada. Esperando tu primera sincronización…",
 	"Syncing your notes, almost there…": "Sincronizando tus notas, casi listo…",
-	"Name your first vault": "Ponle un nombre a tu primera bóveda",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Una bóveda es una carpeta para notas relacionadas. La inicializaremos con una nota de bienvenida para que el editor no esté vacío cuando llegues.",
 	"Create vault & continue": "Crear bóveda y continuar",

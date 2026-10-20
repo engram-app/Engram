@@ -4,9 +4,10 @@ import { StrictMode } from "react";
 import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { track } from "../analytics/track";
+import { ApiError } from "../api/client";
 import type { OAuthConsentParams } from "../api/oauth";
 import OAuthAuthorizePage from "./oauth-authorize-page";
-import { peekPendingAuthorization } from "./pending-authorization";
+import { stashPendingAuthorization } from "./pending-authorization";
 
 vi.mock("../analytics/track", () => ({ track: vi.fn() }));
 const mockTrack = vi.mocked(track);
@@ -19,6 +20,7 @@ const { fetchOAuthClient, postOAuthConsent } = vi.hoisted(() => ({
 vi.mock("../api/oauth", () => ({ fetchOAuthClient, postOAuthConsent }));
 
 const { apiDel } = vi.hoisted(() => ({ apiDel: vi.fn() }));
+const { updateVaultMock } = vi.hoisted(() => ({ updateVaultMock: vi.fn() }));
 
 vi.mock("../api/client", async (importOriginal) => ({
 	ApiError: (await importOriginal<typeof import("../api/client")>()).ApiError,
@@ -108,6 +110,32 @@ const billingState = vi.hoisted(() => ({
 // predates them would silently ignore the level fields and mint full access.
 const accessLevelsState = vi.hoisted(() => ({ current: true }));
 
+const connectionsState = vi.hoisted(() => {
+	const OBSIDIAN_ONLY: Record<string, unknown>[] = [
+		{
+			kind: "obsidian",
+			client_id: "existing-obsidian-id",
+			key_id: null,
+			name: "Claude Desktop (old)",
+			software_id: null,
+			software_version: null,
+			verified: false,
+			logo: null,
+			vault_id: null,
+			vault_name: null,
+			scope: null,
+			last_used_at: null,
+			connected_at: null,
+			first_user_agent: null,
+			first_ip: null,
+			redirect_uri: null,
+			redirect_uris: [],
+		},
+	];
+	return { OBSIDIAN_ONLY, current: OBSIDIAN_ONLY, loading: false };
+});
+const { OBSIDIAN_ONLY } = connectionsState;
+
 vi.mock("../api/queries", () => ({
 	useMe: () => ({ data: { email: "todd@example.com" }, isLoading: false }),
 	useVaults: () => ({ data: vaultsState.current, isLoading: false }),
@@ -115,30 +143,11 @@ vi.mock("../api/queries", () => ({
 	useBillingStatus: () => ({ data: billingState.current }),
 	useOnboardingStatus: () => ({ data: onboardingState.current, isLoading: false }),
 	useSetOnboardingProfile: () => ({ mutateAsync: setProfileMock }),
-	useConnections: () => ({
-		data: [
-			{
-				kind: "obsidian",
-				client_id: "existing-obsidian-id",
-				key_id: null,
-				name: "Claude Desktop (old)",
-				software_id: null,
-				software_version: null,
-				verified: false,
-				logo: null,
-				vault_id: null,
-				vault_name: null,
-				scope: null,
-				last_used_at: null,
-				connected_at: null,
-				first_user_agent: null,
-				first_ip: null,
-				redirect_uri: null,
-				redirect_uris: [],
-			},
-		],
-		isLoading: false,
-	}),
+	useUpdateVault: () => ({ mutateAsync: updateVaultMock }),
+	useConnections: () =>
+		connectionsState.loading
+			? { data: undefined, isLoading: true }
+			: { data: connectionsState.current, isLoading: false },
 }));
 
 // A backend that supports levels echoes what it stored. These tests model one
@@ -268,6 +277,7 @@ afterEach(() => {
 	vi.clearAllMocks();
 	vaultsState.current = DEFAULT_VAULTS;
 	accessLevelsState.current = true;
+	connectionsState.current = OBSIDIAN_ONLY;
 	billingState.current = {
 		caps: {
 			obsidian_connections: null,
@@ -321,26 +331,6 @@ describe("OAuthAuthorizePage onboarding bounce", () => {
 			expect(window.sessionStorage.getItem("engram:pending-oauth")).toContain("/oauth/consent"),
 		);
 		expect(window.sessionStorage.getItem("engram:pending-oauth")).toContain("state=xyz");
-	});
-
-	// The wizard's Cancel trusts the parked redirect only as far as the backend did.
-	it("parks whether the backend confirmed the redirect", async () => {
-		onboardingState.current = { next_step: "agreement", gate_ok: false };
-		fetchOAuthClient.mockResolvedValue({ ...ANTIGRAVITY, redirect_uri_registered: true });
-
-		renderWithProbeAt(VALID_QS);
-
-		await waitFor(() => expect(peekPendingAuthorization()?.redirectVerified).toBe(true));
-	});
-
-	it("parks an unconfirmed redirect as unverified", async () => {
-		onboardingState.current = { next_step: "agreement", gate_ok: false };
-		fetchOAuthClient.mockResolvedValue(ANTIGRAVITY);
-
-		renderWithProbeAt(VALID_QS);
-
-		await waitFor(() => expect(peekPendingAuthorization()).not.toBeNull());
-		expect(peekPendingAuthorization()?.redirectVerified).toBe(false);
 	});
 
 	it("pre-answers the tool question from the connecting client", async () => {
@@ -421,7 +411,7 @@ describe("OAuthAuthorizePage onboarding bounce", () => {
 	it("leaves a finished user on consent and drops a stale park", async () => {
 		window.sessionStorage.setItem(
 			"engram:pending-oauth",
-			JSON.stringify({ returnTo: "/oauth/consent?old=1", toolSlug: null }),
+			JSON.stringify({ returnTo: "/oauth/consent?old=1" }),
 		);
 		fetchOAuthClient.mockResolvedValue(ANTIGRAVITY);
 
@@ -507,6 +497,8 @@ describe("OAuthAuthorizePage vault tab on Approve", () => {
 
 		await waitFor(() => expect(assign).toHaveBeenCalled());
 		expect(close).toHaveBeenCalled();
+		// A refusal connected nothing: it must not count as a success.
+		expect(mockTrack).not.toHaveBeenCalledWith("mcp_connect_succeeded", expect.anything());
 	});
 
 	// Blocked (every in-app/auth webview): the client comes first, so hand
@@ -561,6 +553,19 @@ describe("OAuthAuthorizePage", () => {
 		expect(screen.getByText(/signed in as todd@example.com/iu)).toBeInTheDocument();
 	});
 
+	// The account name is what stops an approval for the wrong account, so it
+	// sits with the title, read before the decision, not under the buttons.
+	it("shows the signed-in account in the header, above the decision", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude Desktop",
+			kind: "mcp",
+		});
+		renderAt(VALID_QS);
+		await screen.findByRole("heading", { name: /Claude Desktop/u });
+		expect(screen.getByText(/signed in as todd@example.com/iu).closest("header")).not.toBeNull();
+	});
+
 	it("shows the invalid-request alert when a required param is missing", () => {
 		renderAt("?client_id=cli");
 		expect(
@@ -607,6 +612,237 @@ describe("OAuthAuthorizePage", () => {
 		expect(screen.queryByRole("button", { name: /cancel/iu })).toBeNull();
 	});
 
+	// A brand-new account's first app: one vault, no MCP connection. The only
+	// question is the vault's name; access is the default, every vault read and
+	// write. Anyone else keeps the full picker.
+	describe("first vault", () => {
+		// Provisioned at signup moments ago, holding only the seeded note.
+		const freshVault = (over: Record<string, unknown> = {}) =>
+			({
+				...DEFAULT_VAULTS[0],
+				populated: false,
+				created_at: new Date().toISOString(),
+				...over,
+			}) as (typeof DEFAULT_VAULTS)[number];
+
+		beforeEach(() => {
+			fetchOAuthClient.mockResolvedValue({
+				client_id: "https://claude.ai/oauth/claude-code-client-metadata",
+				client_name: "Claude Code",
+				kind: "mcp",
+				redirect_uri_registered: true,
+			});
+			// The signup flow: the consent page parked this request before the
+			// wizard, and the vault provisioned at signup holds nothing yet.
+			stashPendingAuthorization(VALID_QS);
+			vaultsState.current = [freshVault()];
+			connectionsState.current = OBSIDIAN_ONLY;
+			consentRedirectsTo("https://claude.ai/cb?code=abc");
+		});
+
+		afterEach(() => {
+			window.sessionStorage.clear();
+			connectionsState.loading = false;
+		});
+
+		// The short form waits on the connections list. Showing the full picker
+		// meanwhile swapped it out from under a user already using it.
+		it("shows neither form while the connections list loads", async () => {
+			connectionsState.loading = true;
+			renderAt(VALID_QS);
+			// Past the client lookup, so "Loading" is the connections wait alone.
+			await screen.findByRole("heading", { name: /Claude Code/u });
+			expect(screen.getByText(/loading/iu)).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: /^review$/iu })).toBeNull();
+			expect(screen.queryByLabelText(/name your first vault/iu)).toBeNull();
+		});
+
+		it("asks only for the vault name, prefilled, with no vault picker", async () => {
+			renderAt(VALID_QS);
+			const input = await screen.findByLabelText(/name your first vault/iu);
+			expect(input).toHaveValue("Personal");
+			expect(screen.queryByRole("button", { name: /^review$/iu })).toBeNull();
+			expect(screen.queryByText(/all vaults/iu)).toBeNull();
+		});
+
+		it("approves on the default access without renaming an unchanged name", async () => {
+			renderAt(VALID_QS);
+			fireEvent.click(await screen.findByRole("button", { name: /^approve$/iu }));
+			await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
+			const body = postOAuthConsent.mock.calls[0]?.[0] as OAuthConsentParams;
+			expect(body.vault_ids).toBeUndefined();
+			expect(body.read_only).toBeUndefined();
+			expect(updateVaultMock).not.toHaveBeenCalled();
+		});
+
+		it("renames the vault before connecting", async () => {
+			renderAt(VALID_QS);
+			const input = await screen.findByLabelText(/name your first vault/iu);
+			fireEvent.change(input, { target: { value: "Northwind" } });
+			fireEvent.click(screen.getByRole("button", { name: /^approve$/iu }));
+			await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
+			expect(updateVaultMock).toHaveBeenCalledWith({
+				id: DEFAULT_VAULTS[0]?.id,
+				name: "Northwind",
+			});
+			expect(updateVaultMock.mock.invocationCallOrder[0]).toBeLessThan(
+				postOAuthConsent.mock.invocationCallOrder[0] ?? 0,
+			);
+		});
+
+		it("keeps the full picker once the user has connected an app before", async () => {
+			connectionsState.current = [
+				...OBSIDIAN_ONLY,
+				{ ...OBSIDIAN_ONLY[0], kind: "mcp", client_id: "prev" },
+			];
+			renderAt(VALID_QS);
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+			expect(screen.queryByLabelText(/name your first vault/iu)).toBeNull();
+		});
+
+		// An existing account connecting its first app is not a signup: renaming
+		// its vault and granting write everywhere would be a decision it never
+		// saw. Only a request resumed from the signup detour gets the short form.
+		it("keeps the full picker when the request was not resumed from signup", async () => {
+			window.sessionStorage.clear();
+			renderAt(VALID_QS);
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+			expect(screen.queryByLabelText(/name your first vault/iu)).toBeNull();
+		});
+
+		it("keeps the full picker when the vault already holds notes", async () => {
+			vaultsState.current = [freshVault({ populated: true })];
+			renderAt(VALID_QS);
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+		});
+
+		it("keeps the full picker when a different request was parked", async () => {
+			window.sessionStorage.clear();
+			stashPendingAuthorization(`${VALID_QS}&state=other`);
+			renderAt(VALID_QS);
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+		});
+
+		// A Terms update also routes an existing account through the wizard and
+		// back. Its vault is not a day-old signup vault.
+		it("keeps the full picker for a vault older than a day", async () => {
+			vaultsState.current = [
+				freshVault({ created_at: new Date(Date.now() - 2 * 86_400_000).toISOString() }),
+			];
+			renderAt(VALID_QS);
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+		});
+
+		const renameTo = async (name: string) => {
+			const input = await screen.findByLabelText(/name your first vault/iu);
+			fireEvent.change(input, { target: { value: name } });
+			fireEvent.click(screen.getByRole("button", { name: /^approve$/iu }));
+		};
+
+		it("asks for a different name when the server rejects it (422)", async () => {
+			const close = vi.fn();
+			vi.spyOn(window, "open").mockReturnValue({ close } as unknown as Window);
+			updateVaultMock.mockRejectedValueOnce(new ApiError(422, "invalid"));
+			renderAt(VALID_QS);
+			await renameTo("Northwind");
+			expect(await screen.findByRole("alert")).toHaveTextContent(/try a different name/iu);
+			expect(postOAuthConsent).not.toHaveBeenCalled();
+			expect(close).toHaveBeenCalled();
+			expect(screen.getByRole("button", { name: /^approve$/iu })).toBeEnabled();
+		});
+
+		// A network or server failure is not the name's fault.
+		it("does not blame the name for a server failure", async () => {
+			updateVaultMock.mockRejectedValueOnce(new ApiError(500, "boom"));
+			renderAt(VALID_QS);
+			await renameTo("Northwind");
+			const alert = await screen.findByRole("alert");
+			expect(alert).toHaveTextContent(/couldn't rename your vault/iu);
+			expect(alert).not.toHaveTextContent(/different name/iu);
+		});
+
+		// Rename landed, consent failed: the retry must connect without renaming
+		// again from a stale name.
+		it("retries consent without a second rename once the rename landed", async () => {
+			postOAuthConsent.mockRejectedValueOnce(new ApiError(500, "boom"));
+			renderAt(VALID_QS);
+			await renameTo("Northwind");
+			await screen.findByRole("alert");
+			// Before the vaults list has refetched: the old name is still current.
+			fireEvent.click(screen.getByRole("button", { name: /^approve$/iu }));
+			await waitFor(() => expect(postOAuthConsent).toHaveBeenCalledTimes(2));
+			expect(updateVaultMock).toHaveBeenCalledTimes(1);
+		});
+
+		it("grants this vault and ones created later by default", async () => {
+			renderAt(VALID_QS);
+			expect(
+				await screen.findByRole("checkbox", { name: /vaults i create later/iu }),
+			).toBeChecked();
+			fireEvent.click(screen.getByRole("button", { name: /^approve$/iu }));
+			await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
+			const body = postOAuthConsent.mock.calls[0]?.[0] as OAuthConsentParams;
+			expect(body.vault_ids).toBeUndefined();
+			expect(body.default_access).toBe("write");
+		});
+
+		it("grants only this vault when later vaults are unticked", async () => {
+			renderAt(VALID_QS);
+			fireEvent.click(await screen.findByRole("checkbox", { name: /vaults i create later/iu }));
+			fireEvent.click(screen.getByRole("button", { name: /^approve$/iu }));
+			await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
+			const body = postOAuthConsent.mock.calls[0]?.[0] as OAuthConsentParams;
+			const id = String(DEFAULT_VAULTS[0]?.id);
+			expect(body.vault_ids).toEqual([id]);
+			expect(body.vault_access).toEqual({ [id]: "write" });
+			expect(body.default_access).toBe("none");
+		});
+
+		it("keeps the full picker for a client that asked for read only", async () => {
+			renderAt(VALID_QS.replace("scope=vault.read", "scope=mcp:read"));
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+		});
+
+		// `populated === false`, not falsy: an older backend that omits the flag
+		// must get the full picker.
+		it("keeps the full picker when the backend omits populated", async () => {
+			vaultsState.current = [freshVault({ populated: undefined })];
+			renderAt(VALID_QS);
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+		});
+
+		it("keeps the full picker when created_at cannot be read", async () => {
+			vaultsState.current = [freshVault({ created_at: "not a date" })];
+			renderAt(VALID_QS);
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+		});
+
+		it("shows neither form until the connections list has loaded", async () => {
+			connectionsState.current = undefined as unknown as typeof OBSIDIAN_ONLY;
+			renderAt(VALID_QS);
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+			expect(screen.queryByLabelText(/name your first vault/iu)).toBeNull();
+		});
+
+		it("grants only this vault through vault_ids on a backend without levels", async () => {
+			accessLevelsState.current = false;
+			renderAt(VALID_QS);
+			fireEvent.click(await screen.findByRole("checkbox", { name: /vaults i create later/iu }));
+			fireEvent.click(screen.getByRole("button", { name: /^approve$/iu }));
+			await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
+			const body = postOAuthConsent.mock.calls[0]?.[0] as OAuthConsentParams;
+			expect(body.vault_ids).toEqual([String(DEFAULT_VAULTS[0]?.id)]);
+			expect(body.vault_access).toBeUndefined();
+			expect(body.default_access).toBeUndefined();
+		});
+
+		it("keeps the full picker when the account already has several vaults", async () => {
+			vaultsState.current = DEFAULT_VAULTS;
+			renderAt(VALID_QS);
+			expect(await screen.findByRole("button", { name: /^review$/iu })).toBeInTheDocument();
+		});
+	});
+
 	// MCP 2025-11-25: the user sees where the authorization code is sent.
 	it("shows the host the user will be returned to", async () => {
 		fetchOAuthClient.mockResolvedValue({
@@ -642,6 +878,21 @@ describe("OAuthAuthorizePage", () => {
 		});
 		renderAt(VALID_QS);
 		expect(await screen.findByText(/app details from claude\.ai/iu)).toBeInTheDocument();
+	});
+
+	// Same host for metadata and redirect: one provenance line, not two.
+	it("shows one provenance line when the metadata and redirect hosts match", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "https://claude.ai/oauth/claude-code-client-metadata",
+			client_name: "Claude Code",
+			kind: "mcp",
+			redirect_uri_registered: true,
+			client_host: "claude.ai",
+			redirect_host: "claude.ai",
+		});
+		renderAt(VALID_QS);
+		expect(await screen.findByText(/you will return to claude\.ai/iu)).toBeInTheDocument();
+		expect(screen.queryByText(/app details from/iu)).toBeNull();
 	});
 
 	// MCP 2025-11-25 "Localhost Redirect URI Risks": any local process can claim

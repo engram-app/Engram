@@ -431,9 +431,12 @@ export default {
 	"previous device": "попередній пристрій",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"Від'єднано '{name}', але підключення нового пристрою не вдалося. Підключіть знову з Obsidian — наразі жоден пристрій не синхронізовано.",
-	"Authorization failed": "Авторизація не вдалася",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Цей код недійсний або закінчився термін його дії. Будь ласка, спробуйте ще раз з Obsidian.",
+	"Authorization failed": "Авторизація не вдалася",
+	"Welcome to Engram": "Ласкаво просимо до Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Назвіть ваше перше сховище. Ваші Obsidian замітки будуть синхронізуватися з ним.",
 	"Enter the code shown in your Obsidian plugin:":
 		"Введіть код, показаний у вашому плагіні Obsidian:",
 	"Verifying…": "Перевірка…",
@@ -444,11 +447,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Відображається у вашому списку з'єднань, щоб ви могли розрізняти ваші пристрої.",
 	"Obsidian Vault Sync": "Синхронізація Obsidian сховища",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Досягнуто ліміт сховищ: ваш безкоштовний план включає 1 сховище",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Ви не можете створити нове сховище на безкоштовному плані. Синхронізуйте існуюче сховище вище або оновіть підписку, щоб додати більше.",
-	"Upgrade plan": "План оновлення",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Ваш безкоштовний план включає 1 сховище, тому цей пристрій синхронізується з ним.",
+	"Need more vaults? Upgrade": "Потрібно більше сховищ? Оновіть",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"Синхронізація надає цьому пристрою доступ до ваших заміток. Продовжуйте лише якщо ви самі ініціювали цей процес. Якщо вас сюди перенаправила інша особа, закрийте цю сторінку.",
 	"Syncing…": "Синхронізація…",
@@ -472,7 +473,6 @@ export default {
 	"Sync with an existing vault": "Синхронізувати з існуючим сховищем",
 	"(choose from {count} vaults)": "(виберіть з {count} сховищ)",
 	"Or create a new vault": "Або створити нове сховище",
-	"Create your first vault": "Створіть ваше перше сховище",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"пристрій на {os}, який синхронізує ваше сховище '{vault}' (останній активний {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -678,7 +678,6 @@ export default {
 		many: "Залишилося {count} днів до закінчення пробного періоду.",
 		other: "До кінця вашого пробного періоду залишилося {count} дні.",
 	},
-	"Free plan device limit: {count}.": "Обмеження пристроїв для безкоштовного плану: {count}.",
 	"Collapse sidebar": "Згорнути бічну панель",
 	"No vaults": "Немає сховищ",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -854,6 +853,17 @@ export default {
 	"Page not found": "Сторінка не знайдена",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Ми не змогли знайти те, що ви шукаєте. Посилання може бути недійсним або сторінка могла бути переміщена.",
+	"Name your first vault": "Назвіть ваше перше сховище",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Сховище – це колекція заміток. {client} може читати та записувати ці замітки.",
+	"Also allow {client} to read and write vaults I create later":
+		"Також дозвольте {client} читати та записувати сховища, які ви створите пізніше",
+	"Turn this off to limit {client} to this vault only.":
+		"Вимкніть це, щоб обмежити {client} лише цим сховищем.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Ви можете обмежити, що кожен додаток може бачити або змінювати, у будь-який час у розділі Налаштування > З'єднання.",
+	"Approving…": "Підключення…",
+	Approve: "Підтвердити",
 	"Invalid authorization request": "Некоректний запит авторизації",
 	"Missing required OAuth parameters:": "Відсутні обов'язкові параметри OAuth:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -865,21 +875,22 @@ export default {
 		"Ця програма не зареєструвала адресу, на яку вона просила вас перенаправити.",
 	"Finish setting up Engram": "Завершіть налаштування Engram",
 	"this app": "ця програма",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"Не вдалося перейменувати ваше сховище на {name}. Спробуйте інше ім'я.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Не вдалося перейменувати ваше сховище. Перевірте ваше з'єднання та спробуйте ще раз.",
 	"previous connection": "попереднє з'єднання",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Сервер надав більше прав, ніж ви обрали, тому жодне з'єднання не було встановлено. Спробуйте ще раз або зверніться до служби підтримки, якщо це повторюється.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Відключено '{name}', але авторизація нового з'єднання не вдалася. Повторіть запит з {client} — наразі немає активних з'єднань такого типу.",
-	"This app is requesting access to your Engram.": "Ця програма запитує доступ до вашого Engram.",
 	"Signed in as {email}.": "Увійшли як {email}.",
-	"App details from {host}.": "Інформація про додаток від {host}.",
-	"You will return to {host}.": "Ви повернетесь до {host}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Це перенаправить вас до програми на цьому комп'ютері. Підтверджуйте лише якщо ви щойно почали підключення з цієї програми.",
 	"your existing connection": "ваше поточне з'єднання",
 	"Which vaults can {client} access?": "До яких сховищ {client} має доступ?",
-	Approve: "Підтвердити",
-	"Approving…": "Підключення…",
+	"App details from {host}.": "Інформація про додаток від {host}.",
+	"You will return to {host}.": "Ви повернетесь до {host}.",
 	"Disconnect {name}?": "Від'єднати {name}?",
 	"Connecting…": "Підключення…",
 	"Disconnect & connect {client}": "Від'єднати та підключити {client}",
@@ -909,6 +920,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Будь ласка, прочитайте повну угоду нижче, перш ніж продовжувати. Наша {privacy} (переглянута під час реєстрації) описує, як ми обробляємо ваші дані.",
 	"Connect {tool}": "Підключити {tool}",
+	"Create your first vault": "Створіть ваше перше сховище",
 	"Join our Discord": "Приєднайтеся до нашого Discord",
 	Join: "Приєднатися",
 	"Install the Obsidian plugin": "Встановити плагін Obsidian",
@@ -922,7 +934,8 @@ export default {
 	"{completed} of {total} done": "Виконано {completed} із {total}",
 	"Setup guide": "Інструкція з налаштування",
 	"Dismiss {label}": "Закрити {label}",
-	"You're on the Free plan.": "Ви використовуєте безкоштовний план.",
+	"Want more devices and vaults?": "Бажаєте більше пристроїв і сховищ?",
+	"See paid plans": "Перегляньте платні плани",
 	"Connect Claude Desktop": "Підключити Claude Desktop",
 	"Connect Cursor": "Підключити Cursor",
 	"Connect Devin": "Підключити Devin",
@@ -954,9 +967,12 @@ export default {
 	"Could not continue. Please try again.": "Не вдалося продовжити. Будь ласка, спробуйте ще раз.",
 	"Step {step} of {total}": "Крок {step} з {total}",
 	Onboarding: "Ознайомлення",
-	"your app": "ваш додаток",
-	"Cancel connection": "Скасувати з'єднання",
-	"Connecting {app}": "Підключення до {app}",
+	"Stop connecting this app": "Припинити підключення цього застосунку",
+	"Stop connecting this app?": "Припинити підключення цього застосунку?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"Застосунок, який перенаправив вас сюди, отримає повідомлення про вашу відмову. Ваш обліковий запис Engram залишиться.",
+	"Keep setting up": "Продовжити налаштування",
+	"Stop connecting": "Припинити підключення",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Не вдалося зберегти ваш вибір. Спробуйте натиснути ще раз — якщо помилка повторюється, оновіть сторінку.",
 	"Let's get your notes in.": "Давайте імпортуємо ваші замітки.",
@@ -981,7 +997,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Сховище знайдено. Очікування першої синхронізації…",
 	"Syncing your notes, almost there…": "Синхронізація ваших заміток, майже готово…",
-	"Name your first vault": "Назвіть ваше перше сховище",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Сховище – це папка для пов'язаних заміток. Ми додамо туди вітальну замітку, щоб редактор не був порожнім, коли ви зайдете.",
 	"Create vault & continue": "Створити сховище та продовжити",

@@ -414,9 +414,12 @@ export default {
 	"previous device": "perangkat sebelumnya",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"Terputus dari '{name}' tetapi menghubungkan perangkat baru gagal. Hubungkan kembali dari Obsidian — tidak ada perangkat yang sedang disinkronkan.",
-	"Authorization failed": "Otorisasi gagal",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Kode ini tidak valid atau telah kedaluwarsa. Silakan coba lagi dari Obsidian.",
+	"Authorization failed": "Otorisasi gagal",
+	"Welcome to Engram": "Selamat datang di Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Beri nama vault pertama Anda. Catatan Obsidian Anda akan disinkronkan ke dalamnya.",
 	"Enter the code shown in your Obsidian plugin:":
 		"Masukkan kode yang ditampilkan di plugin Obsidian Anda:",
 	"Verifying…": "Memverifikasi…",
@@ -427,11 +430,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Ditampilkan dalam daftar koneksi Anda sehingga Anda dapat membedakan perangkat Anda.",
 	"Obsidian Vault Sync": "Sinkronisasi Vault Obsidian",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Batas Vault tercapai: paket Gratis Anda mencakup 1 vault",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Anda tidak dapat membuat vault baru di paket Gratis. Sinkronkan dengan vault yang sudah ada di atas, atau tingkatkan untuk menambahkan lebih banyak.",
-	"Upgrade plan": "Tingkatkan paket",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Paket Gratis Anda mencakup 1 vault, jadi perangkat ini menyinkronkan dengan vault di atas.",
+	"Need more vaults? Upgrade": "Butuh lebih banyak vault? Tingkatkan",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"Sinkronisasi memberikan perangkat ini akses ke catatan Anda. Lanjutkan hanya jika Anda memulai tautan ini sendiri. Jika orang lain mengirim Anda ke sini, tutup halaman ini.",
 	"Syncing…": "Mensinkronkan…",
@@ -455,7 +456,6 @@ export default {
 	"Sync with an existing vault": "Sinkronkan dengan vault yang sudah ada",
 	"(choose from {count} vaults)": "(pilih dari {count} vault)",
 	"Or create a new vault": "Atau buat vault baru",
-	"Create your first vault": "Buat vault pertama Anda",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"perangkat di {os} yang menyinkronkan Vault '{vault}' Anda (terakhir aktif {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -629,7 +629,6 @@ export default {
 	Language: "Bahasa",
 	"My Vault": "Vault Saya",
 	"{count} days left in your trial.": { other: "Sisa {count} hari dalam masa percobaan Anda." },
-	"Free plan device limit: {count}.": "Batas perangkat untuk paket gratis: {count}.",
 	"Collapse sidebar": "Sembunyikan bilah sisi",
 	"No vaults": "Tidak ada vault",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -781,6 +780,17 @@ export default {
 	"Page not found": "Halaman tidak ditemukan",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Kami tidak dapat menemukan apa yang Anda cari. Tautan mungkin rusak atau halaman mungkin telah dipindahkan.",
+	"Name your first vault": "Beri nama vault pertama Anda",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Sebuah vault adalah kumpulan catatan. {client} dapat membaca dan menulis catatan di dalamnya.",
+	"Also allow {client} to read and write vaults I create later":
+		"Izinkan juga {client} untuk membaca dan menulis vault yang Anda buat nanti",
+	"Turn this off to limit {client} to this vault only.":
+		"Matikan ini untuk membatasi {client} hanya ke vault ini.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Anda dapat membatasi apa yang dapat dilihat atau diubah oleh setiap aplikasi kapan saja di Pengaturan > Koneksi.",
+	"Approving…": "Menyetujui…",
+	Approve: "Setujui",
 	"Invalid authorization request": "Permintaan otorisasi tidak valid",
 	"Missing required OAuth parameters:": "Parameter OAuth yang diperlukan tidak ada:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -792,21 +802,22 @@ export default {
 		"Aplikasi ini tidak mengenali alamat yang digunakan untuk mengirim Anda kembali.",
 	"Finish setting up Engram": "Selesaikan pengaturan Engram",
 	"this app": "aplikasi ini",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"Tidak dapat mengganti nama vault Anda menjadi {name}. Coba nama lain.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Tidak dapat mengganti nama vault Anda. Periksa koneksi Anda dan coba lagi.",
 	"previous connection": "koneksi sebelumnya",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Server memberikan akses lebih dari yang Anda pilih, sehingga tidak ada yang terhubung. Coba lagi, atau hubungi dukungan jika ini terus terjadi.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Terputus dari '{name}' tetapi otorisasi koneksi baru gagal. Coba lagi permintaan dari {client} — tidak ada koneksi jenis ini yang aktif saat ini.",
-	"This app is requesting access to your Engram.": "Aplikasi ini meminta akses ke Engram Anda.",
 	"Signed in as {email}.": "Masuk sebagai {email}.",
-	"App details from {host}.": "Detail aplikasi dari {host}.",
-	"You will return to {host}.": "Anda akan kembali ke {host}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Ini akan mengarahkan Anda ke aplikasi di komputer ini. Hanya setujui jika Anda baru saja memulai koneksi dari aplikasi tersebut.",
 	"your existing connection": "koneksi Anda yang ada",
 	"Which vaults can {client} access?": "Vault mana yang dapat diakses oleh {client}?",
-	Approve: "Setujui",
-	"Approving…": "Menyetujui…",
+	"App details from {host}.": "Detail aplikasi dari {host}.",
+	"You will return to {host}.": "Anda akan kembali ke {host}.",
 	"Disconnect {name}?": "Putuskan sambungan {name}?",
 	"Connecting…": "Menghubungkan…",
 	"Disconnect & connect {client}": "Putuskan sambungan & hubungkan {client}",
@@ -837,6 +848,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Harap baca perjanjian lengkap di bawah ini sebelum melanjutkan. {privacy} kami (ditinjau saat pendaftaran) menjelaskan bagaimana kami menangani data Anda.",
 	"Connect {tool}": "Hubungkan {tool}",
+	"Create your first vault": "Buat vault pertama Anda",
 	"Join our Discord": "Bergabunglah dengan Discord kami",
 	Join: "Bergabung",
 	"Install the Obsidian plugin": "Instal plugin Obsidian",
@@ -850,7 +862,8 @@ export default {
 	"{completed} of {total} done": "{completed} dari {total} selesai",
 	"Setup guide": "Panduan pengaturan",
 	"Dismiss {label}": "Tutup {label}",
-	"You're on the Free plan.": "Anda menggunakan paket Gratis.",
+	"Want more devices and vaults?": "Ingin lebih banyak perangkat dan vault?",
+	"See paid plans": "Lihat paket berbayar",
 	"Connect Claude Desktop": "Hubungkan Claude Desktop",
 	"Connect Cursor": "Hubungkan Cursor",
 	"Connect Devin": "Hubungkan Devin",
@@ -882,9 +895,12 @@ export default {
 	"Could not continue. Please try again.": "Tidak dapat melanjutkan. Silakan coba lagi.",
 	"Step {step} of {total}": "Langkah {step} dari {total}",
 	Onboarding: "Pengaturan awal",
-	"your app": "aplikasi Anda",
-	"Cancel connection": "Batalkan koneksi",
-	"Connecting {app}": "Menghubungkan {app}",
+	"Stop connecting this app": "Hentikan koneksi aplikasi ini",
+	"Stop connecting this app?": "Hentikan koneksi aplikasi ini?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"Aplikasi yang membawa Anda ke sini akan diberi tahu bahwa Anda menolak. Akun Engram Anda tetap ada.",
+	"Keep setting up": "Lanjutkan pengaturan",
+	"Stop connecting": "Hentikan koneksi",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Tidak dapat menyimpan pilihan Anda. Coba klik lagi — jika terus gagal, muat ulang halaman.",
 	"Let's get your notes in.": "Mari kita masukkan catatan Anda.",
@@ -909,7 +925,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Vault terdeteksi. Menunggu sinkronisasi pertama Anda…",
 	"Syncing your notes, almost there…": "Mensinkronkan catatan Anda, sebentar lagi…",
-	"Name your first vault": "Beri nama vault pertama Anda",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Vault adalah folder untuk catatan terkait. Kami akan mengisinya dengan catatan selamat agar editor tidak kosong saat Anda tiba.",
 	"Create vault & continue": "Buat vault & lanjutkan",

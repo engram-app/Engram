@@ -39,8 +39,9 @@ function LanguageSelectInner({ className, iconOnly = false }: LanguageSelectProp
 				className={cn(
 					iconOnly &&
 						cn(
-							buttonVariants({ variant: "outline", size: "icon" }),
-							"[&>svg:last-child]:hidden [&_svg:not([class*='size-'])]:size-5",
+							// Same ghost icon button as the theme toggle beside it.
+							buttonVariants({ variant: "ghost", size: "icon" }),
+							"border-0 shadow-none dark:bg-transparent [&>svg:last-child]:hidden",
 						),
 					className,
 				)}

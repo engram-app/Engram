@@ -434,9 +434,12 @@ export default {
 	"previous device": "предыдущее устройство",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"Устройство '{name}' отключено, но подключение нового устройства не удалось. Повторите подключение из Obsidian — в данный момент ни одно устройство не синхронизировано.",
-	"Authorization failed": "Авторизация не удалась",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Этот код недействителен или истек. Пожалуйста, попробуйте еще раз из Obsidian.",
+	"Authorization failed": "Авторизация не удалась",
+	"Welcome to Engram": "Добро пожаловать в Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Назовите ваше первое хранилище. Ваши заметки Obsidian будут синхронизированы с ним.",
 	"Enter the code shown in your Obsidian plugin:":
 		"Введите код, отображаемый в вашем плагине Obsidian:",
 	"Verifying…": "Проверка…",
@@ -447,11 +450,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Отображается в списке ваших подключений, чтобы вы могли различать устройства.",
 	"Obsidian Vault Sync": "Синхронизация с хранилищем Obsidian",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Предел хранилищ достигнут: ваш бесплатный план включает 1 хранилище",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Вы не можете создать новое хранилище на бесплатном плане. Синхронизируйтесь с существующим хранилищем выше или обновите подписку, чтобы добавить больше.",
-	"Upgrade plan": "Обновить подписку",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Ваш бесплатный план включает 1 хранилище, поэтому это устройство синхронизируется с указанным выше.",
+	"Need more vaults? Upgrade": "Требуется больше хранилищ? Обновите подписку",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"Синхронизация предоставляет этому устройству доступ к вашим заметкам. Продолжайте только в том случае, если вы сами инициировали это подключение. Если вас сюда перенаправил кто-то другой, закройте эту страницу.",
 	"Syncing…": "Синхронизация…",
@@ -475,7 +476,6 @@ export default {
 	"Sync with an existing vault": "Синхронизировать с существующим хранилищем",
 	"(choose from {count} vaults)": "(выберите из {count} хранилищ)",
 	"Or create a new vault": "Или создайте новое хранилище",
-	"Create your first vault": "Создайте ваше первое хранилище",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"устройство, подключенное к {os}, которое синхронизирует ваше хранилище '{vault}' (последняя активность {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -682,7 +682,6 @@ export default {
 		many: "До конца пробного периода осталось {count} дней.",
 		other: "До конца пробного периода осталось {count} дня.",
 	},
-	"Free plan device limit: {count}.": "Лимит устройств для бесплатного плана: {count}.",
 	"Collapse sidebar": "Свернуть боковую панель",
 	"No vaults": "Нет хранилищ",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -858,6 +857,17 @@ export default {
 	"Page not found": "Страница не найдена",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Мы не смогли найти то, что вы ищете. Ссылка может быть недействительной, или страница могла быть перемещена.",
+	"Name your first vault": "Назовите ваше первое хранилище",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Хранилище – это набор заметок. {client} может читать и записывать заметки в нём.",
+	"Also allow {client} to read and write vaults I create later":
+		"Также разрешите {client} читать и записывать хранилища, которые я создаю позже",
+	"Turn this off to limit {client} to this vault only.":
+		"Отключите это, чтобы ограничить {client} только этим хранилищем.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		'Вы можете ограничить, что каждое приложение может видеть или изменять, в любое время в разделе "Настройки" > "Подключения".',
+	"Approving…": "Подтверждается…",
+	Approve: "Подтвердить",
 	"Invalid authorization request": "Неверный запрос авторизации",
 	"Missing required OAuth parameters:": "Отсутствуют необходимые параметры OAuth:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -869,22 +879,22 @@ export default {
 		"Это приложение не смогло зарегистрировать адрес, на который пытается вас перенаправить.",
 	"Finish setting up Engram": "Завершите настройку Engram",
 	"this app": "это приложение",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"Не удалось переименовать ваше хранилище в {name}. Попробуйте другое имя.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Не удалось переименовать ваше хранилище. Проверьте подключение и попробуйте снова.",
 	"previous connection": "предыдущее подключение",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"Сервер предоставил больше доступа, чем вы выбрали, поэтому ничего не было подключено. Попробуйте ещё раз или обратитесь в службу поддержки, если это повторяется.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Отключено '{name}', но авторизация нового подключения не удалась. Повторите запрос из {client} — в данный момент нет активных подключений этого типа.",
-	"This app is requesting access to your Engram.":
-		"Это приложение запрашивает доступ к вашему Engram.",
 	"Signed in as {email}.": "Вошли как {email}.",
-	"App details from {host}.": "Информация о приложении от {host}.",
-	"You will return to {host}.": "Вы вернетесь на страницу {host}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Это перенаправит вас к приложению на этом компьютере. Подтверждайте только если вы только что начали подключение из этого приложения.",
 	"your existing connection": "ваше текущее подключение",
 	"Which vaults can {client} access?": "К каким хранилищам {client} может получить доступ?",
-	Approve: "Подтвердить",
-	"Approving…": "Подтверждается…",
+	"App details from {host}.": "Информация о приложении от {host}.",
+	"You will return to {host}.": "Вы вернетесь на страницу {host}.",
 	"Disconnect {name}?": "Отключить {name}?",
 	"Connecting…": "Подключается…",
 	"Disconnect & connect {client}": "Отключить и подключить {client}",
@@ -915,6 +925,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Пожалуйста, ознакомьтесь с полным текстом соглашения ниже, прежде чем продолжить. Наше {privacy} (просматривается при регистрации) описывает, как мы обрабатываем ваши данные.",
 	"Connect {tool}": "Подключить {tool}",
+	"Create your first vault": "Создайте ваше первое хранилище",
 	"Join our Discord": "Присоединитесь к нашему Discord",
 	Join: "Присоединиться",
 	"Install the Obsidian plugin": "Установите плагин для Obsidian",
@@ -928,7 +939,8 @@ export default {
 	"{completed} of {total} done": "Выполнено {completed} из {total}",
 	"Setup guide": "Руководство по настройке",
 	"Dismiss {label}": "Закрыть {label}",
-	"You're on the Free plan.": "Вы используете бесплатный тариф.",
+	"Want more devices and vaults?": "Хотите больше устройств и хранилищ?",
+	"See paid plans": "Ознакомьтесь с платными тарифами",
 	"Connect Claude Desktop": "Подключить Claude Desktop",
 	"Connect Cursor": "Подключить Cursor",
 	"Connect Devin": "Подключить Devin",
@@ -960,9 +972,12 @@ export default {
 	"Could not continue. Please try again.": "Не удалось продолжить. Пожалуйста, попробуйте ещё раз.",
 	"Step {step} of {total}": "Шаг {step} из {total}",
 	Onboarding: "Обучение",
-	"your app": "ваше приложение",
-	"Cancel connection": "Отменить подключение",
-	"Connecting {app}": "Подключение {app}",
+	"Stop connecting this app": "Прекратить подключение этого приложения",
+	"Stop connecting this app?": "Прекратить подключение этого приложения?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"Приложению, которое привело вас сюда, будет сообщено, что вы отказались. Ваш аккаунт Engram останется.",
+	"Keep setting up": "Продолжить настройку",
+	"Stop connecting": "Прекратить подключение",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Не удалось сохранить ваш выбор. Попробуйте нажать ещё раз — если ошибка повторяется, обновите страницу.",
 	"Let's get your notes in.": "Давайте добавим ваши заметки.",
@@ -987,7 +1002,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Хранилище обнаружено. Ожидание первой синхронизации…",
 	"Syncing your notes, almost there…": "Синхронизируются ваши заметки, почти готово…",
-	"Name your first vault": "Назовите ваше первое хранилище",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Хранилище – это папка для связанных заметок. Мы добавим приветственную заметку, чтобы редактор не был пустым, когда вы войдете.",
 	"Create vault & continue": "Создать хранилище и продолжить",

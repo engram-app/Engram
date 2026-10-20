@@ -287,6 +287,8 @@ export function TreeRow({
 				aria-expanded={instance.isExpanded()}
 				aria-selected={instance.isSelected()}
 				{...fileDrop}
+				// Every row is user content, its aria-label (the name) included.
+				translate="no"
 				className={rowClass(instance, active, menuOpen, multiSelect)}
 				style={{ paddingLeft: `${folderPad}px`, height: TREE_ROW_HEIGHT }}
 			>
@@ -328,6 +330,8 @@ export function TreeRow({
 				onContextMenu={contextMenuHandler}
 				aria-selected={instance.isSelected()}
 				aria-current={active ? "page" : undefined}
+				// Every row is user content, its aria-label (the name) included.
+				translate="no"
 				className={rowClass(instance, active, menuOpen, multiSelect)}
 				style={{ paddingLeft: `${notePad}px`, height: TREE_ROW_HEIGHT }}
 			>
@@ -377,6 +381,8 @@ export function TreeRow({
 			{...fileDrop}
 			aria-selected={instance.isSelected()}
 			aria-current={active ? "page" : undefined}
+			// Every row is user content, its aria-label (the name) included.
+			translate="no"
 			className={rowClass(instance, active, menuOpen, multiSelect)}
 			style={{ paddingLeft: `${notePad}px`, height: TREE_ROW_HEIGHT }}
 		>

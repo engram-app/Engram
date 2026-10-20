@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { track } from "../analytics/track";
@@ -50,65 +50,73 @@ function renderAt(path: string, steps: Steps) {
 const SAAS: Steps = ["agreement", "billing", "heard", "vault"];
 const SELF: Steps = ["vault"];
 
-// Interrupting an OAuth flow for signup is fine, but it has to stay legible:
-// the user should know whose authorization is waiting, and be able to refuse
-// in a way the client actually hears (access_denied), rather than closing a
-// tab the client waits on forever.
+// Mid-OAuth signup shows no "Connecting {app}" bar: it cluttered the wizard,
+// and the consent screen at the end names the app anyway. It still offers a
+// refusal the client actually hears (access_denied), rather than a tab the
+// client waits on forever.
 describe("OnboardLayout pending authorization", () => {
 	const PARKED = "?redirect_uri=https://app/cb&state=xyz";
 
 	afterEach(() => {
 		window.sessionStorage.clear();
+		vi.restoreAllMocks();
 	});
 
-	it("names the app that is waiting", () => {
-		stashPendingAuthorization(PARKED, null, "Google Antigravity", true);
+	it("shows no connecting bar while an authorization is parked", () => {
+		stashPendingAuthorization(PARKED, true);
 
 		renderAt("/onboard/heard", SAAS);
 
-		expect(screen.getByText(/Google Antigravity/u)).toBeTruthy();
-	});
-
-	it("falls back to neutral wording for an unnamed client", () => {
-		stashPendingAuthorization(PARKED, null, null, true);
-
-		renderAt("/onboard/heard", SAAS);
-
-		expect(screen.getByRole("button", { name: /cancel/iu })).toBeTruthy();
+		expect(screen.queryByText(/connecting/iu)).toBeNull();
 	});
 
 	it("offers no Cancel when the redirect was never confirmed", () => {
-		stashPendingAuthorization(PARKED, null, "Google Antigravity");
+		stashPendingAuthorization(PARKED);
 
 		renderAt("/onboard/heard", SAAS);
 
-		expect(screen.getByText(/Google Antigravity/u)).toBeTruthy();
-		expect(screen.queryByRole("button", { name: /cancel/iu })).toBeNull();
+		expect(screen.queryByRole("button", { name: /stop connecting/iu })).toBeNull();
 	});
 
-	it("says nothing at all when no authorization is pending", () => {
+	it("offers no Cancel when no authorization is pending", () => {
 		renderAt("/onboard/heard", SAAS);
 
-		expect(screen.queryByRole("button", { name: /cancel/iu })).toBeNull();
+		expect(screen.queryByRole("button", { name: /stop connecting/iu })).toBeNull();
 	});
 
-	it("reports access_denied to the client on cancel", () => {
-		stashPendingAuthorization(PARKED, null, "Google Antigravity", true);
+	// One stray tap on an X must not refuse the connection and leave the site.
+	it("asks before refusing", () => {
+		stashPendingAuthorization(PARKED, true);
 		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
 
 		renderAt("/onboard/heard", SAAS);
-		fireEvent.click(screen.getByRole("button", { name: /cancel/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /stop connecting/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /keep setting up/iu }));
 
-		expect(assign).toHaveBeenCalledWith("https://app/cb?error=access_denied&state=xyz");
+		expect(assign).not.toHaveBeenCalled();
+		expect(window.sessionStorage.getItem("engram:pending-oauth")).not.toBeNull();
 	});
 
-	it("drops the parked request on cancel so it cannot resurface", () => {
-		stashPendingAuthorization(PARKED, null, "Google Antigravity", true);
-		vi.spyOn(window.location, "assign").mockImplementation(() => {});
+	// Phones lack room for the counter next to three icons.
+	it("hides the step counter on phones while a refusal is offered", () => {
+		stashPendingAuthorization(PARKED, true);
 
 		renderAt("/onboard/heard", SAAS);
-		fireEvent.click(screen.getByRole("button", { name: /cancel/iu }));
 
+		expect(screen.getByText(/step 3 of 4/iu)).toHaveClass("hidden", "sm:block");
+	});
+
+	it("reports access_denied to the client and drops the parked request", () => {
+		stashPendingAuthorization(PARKED, true);
+		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
+
+		renderAt("/onboard/heard", SAAS);
+		fireEvent.click(screen.getByRole("button", { name: /stop connecting/iu }));
+		fireEvent.click(
+			within(screen.getByRole("dialog")).getByRole("button", { name: /^stop connecting$/iu }),
+		);
+
+		expect(assign).toHaveBeenCalledWith("https://app/cb?error=access_denied&state=xyz");
 		expect(window.sessionStorage.getItem("engram:pending-oauth")).toBeNull();
 	});
 });

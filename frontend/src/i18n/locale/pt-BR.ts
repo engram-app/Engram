@@ -420,9 +420,12 @@ export default {
 	"previous device": "dispositivo anterior",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"Desconectado '{name}', mas a vinculação do novo dispositivo falhou. Tente vincular novamente a partir do Obsidian — nenhum dispositivo está sincronizado atualmente.",
-	"Authorization failed": "Autorização falhou",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"Este código é inválido ou expirou. Por favor, tente novamente a partir do Obsidian.",
+	"Authorization failed": "Autorização falhou",
+	"Welcome to Engram": "Bem-vindo ao Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"Dê um nome ao seu primeiro cofre. Suas notas do Obsidian serão sincronizadas nele.",
 	"Enter the code shown in your Obsidian plugin:":
 		"Insira o código exibido no seu plugin do Obsidian:",
 	"Verifying…": "Verificando…",
@@ -433,11 +436,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"Aparecerá na sua lista de conexões para que você possa diferenciar seus dispositivos.",
 	"Obsidian Vault Sync": "Sincronização do Cofre Obsidian",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"Limite de cofres atingido: seu plano gratuito inclui 1 cofre",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"Você não pode criar um novo cofre no plano gratuito. Sincronize com o seu cofre existente acima ou faça um upgrade para adicionar mais.",
-	"Upgrade plan": "Plano de upgrade",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"Seu plano gratuito inclui 1 cofre, então este dispositivo sincroniza com o acima.",
+	"Need more vaults? Upgrade": "Precisa de mais cofres? Faça um upgrade",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"A sincronização permite que este dispositivo acesse suas notas. Continue apenas se você iniciou este processo. Se outra pessoa o direcionou para aqui, feche esta página.",
 	"Syncing…": "Sincronizando…",
@@ -461,7 +462,6 @@ export default {
 	"Sync with an existing vault": "Sincronizar com um cofre existente",
 	"(choose from {count} vaults)": "(escolha entre {count} cofres)",
 	"Or create a new vault": "Ou crie um novo cofre",
-	"Create your first vault": "Crie seu primeiro cofre",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"o dispositivo em {os} que sincroniza seu cofre '{vault}' (última atividade: {since})",
 	"the device on {os} that syncs your '{vault}' vault":
@@ -657,7 +657,6 @@ export default {
 		many: "Restam {count} dias do seu período de teste.",
 		other: "Faltam {count} dias para o fim do seu período de teste.",
 	},
-	"Free plan device limit: {count}.": "Limite de dispositivos do plano Gratuito: {count}.",
 	"Collapse sidebar": "Colapsar barra lateral",
 	"No vaults": "Nenhum cofre",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -813,6 +812,17 @@ export default {
 	"Page not found": "Página não encontrada",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"Não encontramos o que você está procurando. O link pode estar quebrado ou a página pode ter sido movida.",
+	"Name your first vault": "Nomeie seu primeiro cofre",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"Um cofre é uma coleção de notas. {client} pode ler e escrever as notas nele.",
+	"Also allow {client} to read and write vaults I create later":
+		"Permitir também que {client} leia e escreva nos cofres que você criar posteriormente",
+	"Turn this off to limit {client} to this vault only.":
+		"Desative isso para limitar o {client} a este cofre.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"Você pode limitar o que cada aplicativo pode ver ou alterar a qualquer momento em Configurações > Conexões.",
+	"Approving…": "Aprovando…",
+	Approve: "Aprovar",
 	"Invalid authorization request": "Solicitação de autorização inválida",
 	"Missing required OAuth parameters:": "Parâmetros OAuth obrigatórios ausentes:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -824,22 +834,22 @@ export default {
 		"Este aplicativo não registrou o endereço para o qual tentou te redirecionar.",
 	"Finish setting up Engram": "Finalize a configuração do Engram",
 	"this app": "este aplicativo",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"Não foi possível renomear seu cofre para {name}. Tente outro nome.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"Não foi possível renomear seu cofre. Verifique sua conexão e tente novamente.",
 	"previous connection": "conexão anterior",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"O servidor concedeu mais acesso do que você escolheu, então nada foi conectado. Tente novamente ou entre em contato com o suporte se isso continuar acontecendo.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Desconectado '{name}', mas a autorização da nova conexão falhou. Tente novamente a partir de {client} — nenhuma conexão desse tipo está ativa no momento.",
-	"This app is requesting access to your Engram.":
-		"Este aplicativo está solicitando acesso ao seu Engram.",
 	"Signed in as {email}.": "Logado como {email}.",
-	"App details from {host}.": "Detalhes do aplicativo de {host}.",
-	"You will return to {host}.": "Você retornará para {host}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Isso te direciona para um aplicativo neste computador. Aprovе apenas se você acabou de começar a conexão a partir desse aplicativo.",
 	"your existing connection": "sua conexão existente",
 	"Which vaults can {client} access?": "Quais cofres {client} pode acessar?",
-	Approve: "Aprovar",
-	"Approving…": "Aprovando…",
+	"App details from {host}.": "Detalhes do aplicativo de {host}.",
+	"You will return to {host}.": "Você retornará para {host}.",
 	"Disconnect {name}?": "Desconectar {name}?",
 	"Connecting…": "Conectando…",
 	"Disconnect & connect {client}": "Desconectar e conectar {client}",
@@ -870,6 +880,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"Por favor, leia o contrato completo abaixo antes de continuar. Nosso {privacy} (revisado durante o cadastro) descreve como lidamos com seus dados.",
 	"Connect {tool}": "Conectar {tool}",
+	"Create your first vault": "Crie seu primeiro cofre",
 	"Join our Discord": "Junte-se ao nosso Discord",
 	Join: "Junte-se",
 	"Install the Obsidian plugin": "Instale o plugin do Obsidian",
@@ -883,7 +894,8 @@ export default {
 	"{completed} of {total} done": "{completed} de {total} concluídos",
 	"Setup guide": "Guia de configuração",
 	"Dismiss {label}": "Fechar {label}",
-	"You're on the Free plan.": "Você está no plano gratuito.",
+	"Want more devices and vaults?": "Quer mais dispositivos e cofres?",
+	"See paid plans": "Veja os planos pagos",
 	"Connect Claude Desktop": "Conectar Claude Desktop",
 	"Connect Cursor": "Conectar Cursor",
 	"Connect Devin": "Conectar Devin",
@@ -916,9 +928,12 @@ export default {
 		"Não foi possível continuar. Por favor, tente novamente.",
 	"Step {step} of {total}": "Etapa {step} de {total}",
 	Onboarding: "Integração",
-	"your app": "seu aplicativo",
-	"Cancel connection": "Cancelar conexão",
-	"Connecting {app}": "Conectando {app}",
+	"Stop connecting this app": "Parar de conectar este aplicativo",
+	"Stop connecting this app?": "Parar de conectar este aplicativo?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"O aplicativo que te trouxe aqui será informado de que você disse não. Sua conta Engram permanece.",
+	"Keep setting up": "Continuar a configuração",
+	"Stop connecting": "Parar de conectar",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Não foi possível salvar sua escolha. Tente clicar novamente — se continuar falhando, atualize a página.",
 	"Let's get your notes in.": "Vamos importar suas notas.",
@@ -943,7 +958,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"Cofre detectado. Aguardando sua primeira sincronização…",
 	"Syncing your notes, almost there…": "Sincronizando suas notas, quase lá…",
-	"Name your first vault": "Nomeie seu primeiro cofre",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"Um cofre é uma pasta para notas relacionadas. Vamos preenchê-lo com uma nota de boas-vindas para que o editor não esteja vazio quando você chegar.",
 	"Create vault & continue": "Criar cofre e continuar",

@@ -21,7 +21,7 @@ import { destructiveAlert, heading } from "@/lib/ui-classes";
 import { cn } from "@/lib/utils";
 import { MCP_CLIENTS } from "../analytics/events";
 import { track } from "../analytics/track";
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 import { fetchOAuthClient, type OAuthConsentParams, postOAuthConsent } from "../api/oauth";
 import {
 	type Connection,
@@ -30,6 +30,7 @@ import {
 	useMe,
 	useOnboardingStatus,
 	useSetOnboardingProfile,
+	useUpdateVault,
 	useVaults,
 } from "../api/queries";
 import { connectionId as oauthConnectionId } from "../billing/existing-connections-panel";
@@ -39,11 +40,22 @@ import AuthShell from "../layout/auth-shell";
 import { isMember } from "../lib/is-member";
 import { ROUTES } from "../routes";
 import { settingsHash, settingsTo } from "../settings/settings-hash";
-import { clearPendingAuthorization, stashPendingAuthorization } from "./pending-authorization";
+import FirstVaultConsent from "./first-vault-consent";
+import {
+	clearPendingAuthorization,
+	peekPendingAuthorization,
+	stashPendingAuthorization,
+} from "./pending-authorization";
 
 // The tab an approval opens while the client finishes connecting: the app
 // root, which lands on the active vault.
 const VAULT_URL = ROUTES.HOME;
+// A Terms update also sends existing accounts through the wizard and back, so
+// "resumed from the wizard" alone is not a signup. A vault provisioned within
+// the day is. ponytail: wall-clock age; a skewed client clock can misjudge it,
+// and the cost is only which form is shown, never which access is granted
+// without the user seeing it.
+const SIGNUP_VAULT_MAX_AGE_MS = 86_400_000;
 
 const REQUIRED_PARAMS = [
 	"client_id",
@@ -189,12 +201,7 @@ export default function OAuthAuthorizePage() {
 		// `onboardingDoneTarget()` already falls back to "/" when nothing was
 		// parked. Reading it into state here would also mean an effect that
 		// synchronously sets state, which the render-compiler lint rejects.
-		stashPendingAuthorization(
-			location.search,
-			slug,
-			clientQuery.data?.client_name ?? null,
-			redirectVerified,
-		);
+		stashPendingAuthorization(location.search, redirectVerified);
 
 		// Connecting a tool IS the answer to "which tools do you use", so the
 		// questionnaire is pre-answered instead of asked. An unattributable
@@ -264,9 +271,21 @@ export default function OAuthAuthorizePage() {
 	// predates them would ignore the fields and mint full access.
 	const leveled = clientKind === "mcp" && levelsSupported;
 	const capCheck = useConnectionCap(clientKind);
-	// Only need the existing-connection details when at cap (for the heads-up
-	// banner + the implicit disconnect on Approve).
-	const connections = useConnections({ enabled: capCheck.atCap });
+	// The existing-connection details feed the at-cap heads-up + implicit
+	// disconnect on Approve, and tell whether this is the user's first app.
+	const connections = useConnections();
+	const updateVault = useUpdateVault();
+	// This very request was parked before the signup wizard and is now back:
+	// the account-creation flow. Read once, at mount, because the effect below
+	// clears the stash on this same visit.
+	const [resumedFromSignup] = useState(
+		() => peekPendingAuthorization()?.returnTo === `${ROUTES.OAUTH_CONSENT}${location.search}`,
+	);
+	// Mount time, for the signup vault's age: render has to stay pure.
+	const [mountedAt] = useState(() => Date.now());
+	// The name a rename already landed, so a retry after a failed consent
+	// does not rename again (or race the vaults refetch for the old name).
+	const renamedTo = useRef<string | null>(null);
 	const existingPeer = (connections.data ?? []).find((c): c is Connection => c.kind === clientKind);
 
 	// "All vaults" (`selected === null`) stays all-vaults as new ones are
@@ -364,8 +383,8 @@ export default function OAuthAuthorizePage() {
 					    the previous copy ("you'll come straight back here")
 					    guaranteed a comeback that then quietly ended on the
 					    dashboard with the waiting client never mentioned again.
-					    The wizard banner names the client and offers the cancel,
-					    so under-promising here costs nothing. */}
+					    The wizard shows no banner (it cluttered every step); the
+					    consent screen it returns to names the client. */}
 					<p className="text-muted-foreground text-sm">
 						<Trans
 							text="Taking you to setup so you can finish connecting {app}."
@@ -383,6 +402,24 @@ export default function OAuthAuthorizePage() {
 		);
 	}
 
+	// Account creation only: the request came back from the signup wizard, the
+	// account holds one vault (provisioned at signup) with nothing but the
+	// seeded note, and no app is connected yet. It gets the short form, name
+	// the vault and approve, on the default access. An existing account never
+	// does: renaming its vault and granting write everywhere is a decision it
+	// has to see. `populated === false`, not falsy: a backend that does not
+	// send the flag gets the full picker. Waits for the connections list.
+	const firstVault =
+		resumedFromSignup &&
+		clientKind === "mcp" &&
+		!clientAskedReadOnly &&
+		live?.length === 1 &&
+		live[0]?.populated === false &&
+		mountedAt - Date.parse(live[0].created_at) < SIGNUP_VAULT_MAX_AGE_MS &&
+		connections.data !== undefined &&
+		!connections.data.some((c) => c.kind === "mcp");
+	const onlyVault = firstVault ? live?.[0] : undefined;
+
 	const handleApprove = async () => {
 		// At cap with a known peer: open the confirm modal first so the user
 		// sees the exact disconnect that's about to happen. Confirm there runs
@@ -394,7 +431,10 @@ export default function OAuthAuthorizePage() {
 		await runSubmit(false);
 	};
 
-	const runSubmit = async (isSwap: boolean) => {
+	const runSubmit = async (
+		isSwap: boolean,
+		firstVaultChoice?: { id: string; rename?: string; onlyThisVault: boolean },
+	) => {
 		setSubmitting(true);
 		setSubmitError(null);
 		// Every approval opens the vault, so the user lands in it while the
@@ -410,50 +450,83 @@ export default function OAuthAuthorizePage() {
 			track("mcp_connect_attempted", { client: mcpClient });
 		}
 
-		const body: OAuthConsentParams = {
-			client_id: values.client_id,
-			redirect_uri: values.redirect_uri,
-			response_type: values.response_type,
-			code_challenge: values.code_challenge,
-			code_challenge_method: values.code_challenge_method,
-			scope: values.scope,
-		};
-		if (values.state) {
-			body.state = values.state;
-		}
-		if (resource) {
-			body.resource = resource;
-		}
-		if (iss) {
-			body.iss = iss;
-		}
-		if (selected && selected.size > 0) {
-			body.vault_ids = [...selected];
-		}
-		const trimmed = label.trim();
-		if (trimmed) {
-			body.label = trimmed;
-		}
-		if (leveled && readOnly) {
-			body.read_only = true;
-		}
-		if (leveled) {
-			// Every "none" entry rides in the access token, so the request spells
-			// one out only where the policy would otherwise reach that vault.
-			Object.assign(
-				body,
-				access.request(
-					(live ?? []).map((v) => String(v.id)),
-					maxLevel,
-				),
-			);
-		}
-
-		// If swapping, disconnect the existing connection of the same kind
-		// first so the consent call doesn't 402. Mirrors the /link page swap
-		// shape — the confirm modal already named what's about to disconnect.
 		let swappedFromName: string | null = null;
+		// Everything after the tab opened sits inside the try: a throw while
+		// building the request must still close the tab and release the button.
 		try {
+			const body: OAuthConsentParams = {
+				client_id: values.client_id,
+				redirect_uri: values.redirect_uri,
+				response_type: values.response_type,
+				code_challenge: values.code_challenge,
+				code_challenge_method: values.code_challenge_method,
+				scope: values.scope,
+			};
+			if (values.state) {
+				body.state = values.state;
+			}
+			if (resource) {
+				body.resource = resource;
+			}
+			if (iss) {
+				body.iss = iss;
+			}
+			if (firstVaultChoice?.onlyThisVault) {
+				body.vault_ids = [firstVaultChoice.id];
+			} else if (selected && selected.size > 0) {
+				body.vault_ids = [...selected];
+			}
+			const trimmed = label.trim();
+			if (trimmed) {
+				body.label = trimmed;
+			}
+			if (leveled && readOnly) {
+				body.read_only = true;
+			}
+			if (leveled && firstVaultChoice?.onlyThisVault) {
+				// This vault only: nothing created later.
+				body.vault_access = { [firstVaultChoice.id]: "write" };
+				body.default_access = "none";
+			} else if (leveled) {
+				// Every "none" entry rides in the access token, so the request spells
+				// one out only where the policy would otherwise reach that vault.
+				Object.assign(
+					body,
+					access.request(
+						(live ?? []).map((v) => String(v.id)),
+						maxLevel,
+					),
+				);
+			}
+
+			// If swapping, disconnect the existing connection of the same kind
+			// first so the consent call doesn't 402. Mirrors the /link page swap
+			// shape — the confirm modal already named what's about to disconnect.
+			// After the tab opened (a popup blocker refuses one opened past an
+			// await), before consent: a failed rename stops the connect, and says
+			// it was the name, not the authorization.
+			if (firstVaultChoice?.rename) {
+				try {
+					await updateVault.mutateAsync({ id: firstVaultChoice.id, name: firstVaultChoice.rename });
+					renamedTo.current = firstVaultChoice.rename;
+				} catch (err) {
+					vaultTab?.close();
+					// 422 is the name itself (the changeset refused it); anything
+					// else is the network or the server, not the user's choice.
+					setSubmitError(
+						err instanceof ApiError && err.status === 422
+							? t("Couldn't rename your vault to {name}. Try a different name.", {
+									name: firstVaultChoice.rename,
+								})
+							: t("Couldn't rename your vault. Check your connection and try again."),
+					);
+					if (isMcp) {
+						track("mcp_connect_failed", { client: mcpClient, reason: "unknown" });
+					}
+					setSubmitting(false);
+					return;
+				}
+			}
 			if (isSwap && existingPeer) {
 				const existingId = oauthConnectionId(existingPeer);
 				if (existingId) {
@@ -496,7 +569,8 @@ export default function OAuthAuthorizePage() {
 				setSubmitting(false);
 				return;
 			}
-			if (isMcp) {
+			// Only a code is a connection: a 200 carrying `?error=` connected nothing.
+			if (isMcp && grantsCode) {
 				track("mcp_connect_succeeded", { client: mcpClient });
 			}
 			// A 200 can still carry a refusal (`?error=`): nothing will connect.
@@ -555,7 +629,10 @@ export default function OAuthAuthorizePage() {
 		clientQuery.isLoading ||
 		vaultsQuery.isLoading ||
 		meQuery.isLoading ||
-		onboardingQuery.isLoading;
+		onboardingQuery.isLoading ||
+		// The first-vault form waits on this list: showing the full picker
+		// meanwhile swaps it out from under the user.
+		(resumedFromSignup && connections.isLoading);
 
 	return (
 		<AuthShell>
@@ -567,18 +644,11 @@ export default function OAuthAuthorizePage() {
 							slots={{ client: <span className="text-primary-ink">{clientName}</span> }}
 						/>
 					</h1>
-					<p className="text-muted-foreground text-sm">
-						{t("This app is requesting access to your Engram.")}
-						{meQuery.data ? ` ${t("Signed in as {email}.", { email: meQuery.data.email })}` : ""}
-					</p>
-					{clientQuery.data?.client_host ? (
-						<p className="text-muted-foreground text-sm">
-							{t("App details from {host}.", { host: clientQuery.data.client_host })}
-						</p>
-					) : null}
-					{clientQuery.data?.redirect_host ? (
-						<p className="text-muted-foreground text-sm">
-							{t("You will return to {host}.", { host: clientQuery.data.redirect_host })}
+					{/* The account is what stops an approval for the wrong one, so it
+					    is read with the title, before the decision. */}
+					{meQuery.data ? (
+						<p className="truncate text-muted-foreground text-sm" title={meQuery.data.email}>
+							{t("Signed in as {email}.", { email: meQuery.data.email })}
 						</p>
 					) : null}
 					{clientQuery.data?.redirect_loopback ? (
@@ -621,56 +691,93 @@ export default function OAuthAuthorizePage() {
 								/>
 							</div>
 						) : null}
-						{/* Pick, then a plain-language summary to approve. Same route,
-						    so the OAuth params are untouched. */}
-						<VaultAccessFlow
-							access={access}
-							vaults={live ?? []}
-							legend={t("Which vaults can {client} access?", { client: clientName })}
-							name={label.trim() || clientName}
-							leveled={leveled}
-							lockReadOnly={clientAskedReadOnly}
-							backFocus={titleRef}
-							fields={
-								<label className="flex flex-col gap-1.5">
-									<span className="font-medium text-foreground text-sm">
-										<Trans
-											text="Name this connection {optional}"
-											slots={{
-												optional: (
-													<span className="font-normal text-muted-foreground">
-														{t("(optional)")}
-													</span>
-												),
-											}}
+						{onlyVault ? (
+							<FirstVaultConsent
+								client={clientName}
+								vaultName={onlyVault.name}
+								pending={submitting}
+								onApprove={(name, onlyThisVault) =>
+									runSubmit(false, {
+										id: String(onlyVault.id),
+										rename: name === (renamedTo.current ?? onlyVault.name) ? undefined : name,
+										onlyThisVault,
+									})
+								}
+								onCancel={redirectVerified ? handleCancel : undefined}
+								error={
+									submitError ? (
+										<p role="alert" className={cn(destructiveAlert, "p-3 text-foreground")}>
+											{submitError}
+										</p>
+									) : null
+								}
+							/>
+						) : (
+							/* Pick, then a plain-language summary to approve. Same route,
+							   so the OAuth params are untouched. */
+							<VaultAccessFlow
+								access={access}
+								vaults={live ?? []}
+								legend={t("Which vaults can {client} access?", { client: clientName })}
+								name={label.trim() || clientName}
+								leveled={leveled}
+								lockReadOnly={clientAskedReadOnly}
+								backFocus={titleRef}
+								fields={
+									<label className="flex flex-col gap-1.5">
+										<span className="font-medium text-foreground text-sm">
+											<Trans
+												text="Name this connection {optional}"
+												slots={{
+													optional: (
+														<span className="font-normal text-muted-foreground">
+															{t("(optional)")}
+														</span>
+													),
+												}}
+											/>
+										</span>
+										<Input
+											type="text"
+											maxLength={120}
+											value={label}
+											onChange={(e) => setLabel(e.target.value)}
+											placeholder={clientName}
 										/>
-									</span>
-									<Input
-										type="text"
-										maxLength={120}
-										value={label}
-										onChange={(e) => setLabel(e.target.value)}
-										placeholder={clientName}
-									/>
-								</label>
-							}
-							confirmLabel={t("Approve")}
-							pendingLabel={t("Approving…")}
-							pending={submitting}
-							onConfirm={handleApprove}
-							// Cancel redirects from the query string: only a redirect the
-							// backend confirmed gets one (an open redirect otherwise).
-							onCancel={redirectVerified ? handleCancel : undefined}
-							error={
-								submitError ? (
-									<p role="alert" className={cn(destructiveAlert, "p-3 text-foreground")}>
-										{submitError}
-									</p>
-								) : null
-							}
-						/>
+									</label>
+								}
+								confirmLabel={t("Approve")}
+								pendingLabel={t("Approving…")}
+								pending={submitting}
+								onConfirm={handleApprove}
+								// Cancel redirects from the query string: only a redirect the
+								// backend confirmed gets one (an open redirect otherwise).
+								onCancel={redirectVerified ? handleCancel : undefined}
+								error={
+									submitError ? (
+										<p role="alert" className={cn(destructiveAlert, "p-3 text-foreground")}>
+											{submitError}
+										</p>
+									) : null
+								}
+							/>
+						)}
 					</>
 				)}
+
+				{/* Where this goes: checkable, not the decision, so it sits small
+				    under the buttons. The return host is the anti-phishing fact
+				    (the app name is self-asserted, hosts are not); the metadata
+				    host only shows when it differs. */}
+				<footer className="flex flex-col gap-0.5 text-muted-foreground text-xs">
+					{clientQuery.data?.client_host &&
+					clientQuery.data.client_host !== clientQuery.data.redirect_host ? (
+						<p>{t("App details from {host}.", { host: clientQuery.data.client_host })}</p>
+					) : null}
+					{clientQuery.data?.redirect_host ? (
+						<p>{t("You will return to {host}.", { host: clientQuery.data.redirect_host })}</p>
+					) : null}
+				</footer>
 
 				<Dialog open={showSwapConfirm} onOpenChange={setShowSwapConfirm}>
 					<DialogContent className="sm:max-w-md">

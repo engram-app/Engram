@@ -68,7 +68,10 @@ async function signInAndOpenLink(
 ): Promise<void> {
 	await signIn(page, email);
 	await page.goto(`/link?code=${userCode}`);
-	await expect(page.getByRole("heading", { name: "Choose a vault to sync" })).toBeVisible({
+	// A first vault greets ("Welcome to Engram"); otherwise the picker title.
+	await expect(
+		page.getByRole("heading", { name: /^(?:Choose a vault to sync|Welcome to Engram)$/u }),
+	).toBeVisible({
 		timeout: 15_000,
 	});
 }
@@ -128,7 +131,10 @@ test.describe("/link vault picker", () => {
 
 			await signInAndOpenLink(page, user, flow.user_code);
 
-			await expect(page.getByText("Create your first vault")).toBeVisible();
+			await expect(page.getByRole("heading", { name: "Welcome to Engram" })).toBeVisible();
+			await expect(
+				page.getByText("Name your first vault. Your Obsidian notes will sync into it."),
+			).toBeVisible();
 			await expect(page.getByLabel("New vault name")).toHaveValue("My Notes");
 			await expect(page.getByRole("radio")).toHaveCount(0);
 		} finally {

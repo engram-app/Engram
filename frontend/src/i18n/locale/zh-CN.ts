@@ -386,9 +386,12 @@ export default {
 	"previous device": "之前的设备",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"已断开 '{name}' 的连接，但链接新设备失败。请从 Obsidian 重新链接 — 目前没有同步的设备。",
-	"Authorization failed": "授权失败",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"此代码无效或已过期。请从 Obsidian 重新尝试。",
+	"Authorization failed": "授权失败",
+	"Welcome to Engram": "欢迎使用 Engram",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"为你的第一个仓库命名。你的 Obsidian 笔记将同步到其中。",
 	"Enter the code shown in your Obsidian plugin:": "输入你在 Obsidian 插件中看到的代码：",
 	"Verifying…": "验证中…",
 	Verify: "验证",
@@ -398,10 +401,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"在你的连接列表中显示，以便区分你的设备。",
 	"Obsidian Vault Sync": "Obsidian 仓库同步",
-	"Vault limit reached: your Free plan includes 1 vault": "仓库数量已达上限：免费版包含 1 个仓库",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"您无法在免费版中创建新的仓库。请同步您现有的仓库，或升级以添加更多。",
-	"Upgrade plan": "升级方案",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"你的免费版包含 1 个仓库，所以此设备同步的是上面的那个。",
+	"Need more vaults? Upgrade": "需要更多仓库？升级",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"同步会使此设备访问你的笔记。仅在你主动发起此连接时继续。如果其他人将你引导到这里，请关闭此页面。",
 	"Syncing…": "同步中…",
@@ -424,7 +426,6 @@ export default {
 	"Sync with an existing vault": "同步到现有仓库",
 	"(choose from {count} vaults)": "(从 {count} 个仓库中选择)",
 	"Or create a new vault": "或创建新仓库",
-	"Create your first vault": "创建你的第一个仓库",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"与 '{vault}' 仓库同步的设备 ({os}) (上次活动 {since})",
 	"the device on {os} that syncs your '{vault}' vault": "与 '{vault}' 仓库同步的 {os} 设备",
@@ -589,7 +590,6 @@ export default {
 	Language: "语言",
 	"My Vault": "我的仓库",
 	"{count} days left in your trial.": { other: "试用期剩余{count}天。" },
-	"Free plan device limit: {count}.": "免费计划的设备数量限制：{count}。",
 	"Collapse sidebar": "隐藏侧边栏",
 	"No vaults": "没有仓库",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -739,6 +739,16 @@ export default {
 	"Page not found": "页面未找到",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"找不到您要查找的内容。链接可能已损坏，或页面可能已移动。",
+	"Name your first vault": "命名你的第一个仓库",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"仓库是一组笔记。{client} 可以读取和写入其中的笔记。",
+	"Also allow {client} to read and write vaults I create later":
+		"允许 {client} 读取和写入我之后创建的仓库",
+	"Turn this off to limit {client} to this vault only.": "关闭此选项，将 {client} 限制在此仓库内。",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"你可以在 设置 > 连接 中随时限制每个应用可以查看或修改的内容。",
+	"Approving…": "正在批准…",
+	Approve: "批准",
 	"Invalid authorization request": "无效的授权请求",
 	"Missing required OAuth parameters:": "缺少必需的 OAuth 参数：",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -750,21 +760,22 @@ export default {
 		"此应用未注册您要返回的地址。",
 	"Finish setting up Engram": "完成 Engram 的设置",
 	"this app": "此应用",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"无法将你的仓库重命名为 {name}。尝试其他名称。",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"无法重命名你的仓库。检查连接并重试。",
 	"previous connection": "上次连接",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"服务器授予了比你选择的更多权限，因此没有建立连接。请重试，或如果问题持续出现，请联系支持。",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"已断开连接 '{name}'，但授权新连接失败。请重新从 {client} 发起请求 — 目前没有此类活动连接。",
-	"This app is requesting access to your Engram.": "此应用正在请求访问您的 Engram。",
 	"Signed in as {email}.": "已登录：{email}。",
-	"App details from {host}.": "来自 {host} 的应用详情。",
-	"You will return to {host}.": "您将返回至 {host}。",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"这会将你引导到电脑上的一个应用。仅在从该应用首次连接时才批准。",
 	"your existing connection": "您的现有连接",
 	"Which vaults can {client} access?": "{client} 可以访问哪些仓库？",
-	Approve: "批准",
-	"Approving…": "正在批准…",
+	"App details from {host}.": "来自 {host} 的应用详情。",
+	"You will return to {host}.": "您将返回至 {host}。",
 	"Disconnect {name}?": "断开 {name}？",
 	"Connecting…": "正在连接…",
 	"Disconnect & connect {client}": "断开并连接 {client}",
@@ -794,6 +805,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"请在继续之前阅读完整的协议。我们的 {privacy} (注册时查看) 描述了我们如何处理您的数据。",
 	"Connect {tool}": "连接 {tool}",
+	"Create your first vault": "创建你的第一个仓库",
 	"Join our Discord": "加入我们的 Discord",
 	Join: "加入",
 	"Install the Obsidian plugin": "安装 Obsidian 插件",
@@ -806,7 +818,8 @@ export default {
 	"{completed} of {total} done": "已完成 {completed} 个，总共 {total} 个",
 	"Setup guide": "配置指南",
 	"Dismiss {label}": "关闭 {label}",
-	"You're on the Free plan.": "您使用的是免费版。",
+	"Want more devices and vaults?": "想要更多设备和仓库吗？",
+	"See paid plans": "查看付费计划",
 	"Connect Claude Desktop": "连接 Claude Desktop",
 	"Connect Cursor": "连接 Cursor",
 	"Connect Devin": "连接 Devin",
@@ -837,9 +850,12 @@ export default {
 	"Could not continue. Please try again.": "无法继续。请重试。",
 	"Step {step} of {total}": "第 {step} 步，共 {total} 步",
 	Onboarding: "入门引导",
-	"your app": "你的应用",
-	"Cancel connection": "取消连接",
-	"Connecting {app}": "连接 {app}",
+	"Stop connecting this app": "停止连接此应用",
+	"Stop connecting this app?": "停止连接此应用？",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"将此消息告知发送你到这里的应用。你的 Engram 账号保持不变。",
+	"Keep setting up": "继续设置",
+	"Stop connecting": "停止连接",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"无法保存您的选择。请重试点击 — 如果仍然失败，请刷新页面。",
 	"Let's get your notes in.": "让我们开始导入您的笔记。",
@@ -862,7 +878,6 @@ export default {
 	"Waiting for the plugin to sign in…": "正在等待插件登录…",
 	"Vault detected. Waiting for your first sync…": "检测到仓库。等待首次同步…",
 	"Syncing your notes, almost there…": "正在同步你的笔记，稍等…",
-	"Name your first vault": "命名你的第一个仓库",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"仓库是一个用于存放相关笔记的文件夹。我们会添加一个欢迎笔记，这样编辑器在您打开时就不会是空的。",
 	"Create vault & continue": "创建仓库并继续",

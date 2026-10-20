@@ -404,9 +404,12 @@ export default {
 	"previous device": "이전 기기",
 	"Disconnected '{name}' but linking the new device failed. Re-link from Obsidian — no devices are currently synced.":
 		"'{name}' 기기는 연결 해제되었지만, 새 기기 연결에 실패했습니다. Obsidian에서 다시 연결하세요. 현재 동기화된 기기가 없습니다.",
-	"Authorization failed": "인증 실패",
 	"This code is invalid or has expired. Please try again from Obsidian.":
 		"이 코드는 유효하지 않거나 만료되었습니다. Obsidian에서 다시 시도하세요.",
+	"Authorization failed": "인증 실패",
+	"Welcome to Engram": "Engram에 오신 것을 환영합니다",
+	"Name your first vault. Your Obsidian notes will sync into it.":
+		"첫 번째 보관함 이름을 지정하세요. Obsidian 노트가 이 보관함에 동기화됩니다.",
 	"Enter the code shown in your Obsidian plugin:": "Obsidian 플러그인에 표시된 코드를 입력하세요:",
 	"Verifying…": "확인 중입니다…",
 	Verify: "확인",
@@ -416,11 +419,9 @@ export default {
 	"Shown in your connections list so you can tell your devices apart.":
 		"연결 목록에 표시되어 기기를 구별할 수 있습니다.",
 	"Obsidian Vault Sync": "Obsidian 보관함 동기화",
-	"Vault limit reached: your Free plan includes 1 vault":
-		"보관함 제한에 도달했습니다. 무료 플랜은 1개의 보관함을 포함합니다",
-	"You can't create a new vault on Free. Sync with your existing vault above, or upgrade to add more.":
-		"무료 플랜에서는 새 보관함을 만들 수 없습니다. 위의 기존 보관함과 동기화하거나, 더 많은 보관함을 사용하려면 업그레이드하세요.",
-	"Upgrade plan": "업그레이드 플랜",
+	"Your Free plan includes 1 vault, so this device syncs with the one above.":
+		"무료 플랜에는 1개의 보관함이 포함되어 있으며, 이 장치는 위에 표시된 보관함과 동기화됩니다.",
+	"Need more vaults? Upgrade": "더 많은 보관함이 필요하신가요? 업그레이드하세요",
 	"Syncing gives this device access to your notes. Continue only if you started this link yourself. If someone else sent you here, close this page.":
 		"동기화는 이 기기가 노트에 접근할 수 있도록 합니다. 직접 이 링크를 시작했다면 계속 진행하세요. 다른 사람이 이 페이지로 연결했다면, 이 페이지를 닫으세요.",
 	"Syncing…": "동기화 중…",
@@ -443,7 +444,6 @@ export default {
 	"Sync with an existing vault": "기존 보관함과 동기화합니다",
 	"(choose from {count} vaults)": "(다음 중 선택: {count} 보관함)",
 	"Or create a new vault": "또는 새 보관함을 만듭니다",
-	"Create your first vault": "첫 번째 보관함을 만듭니다",
 	"the device on {os} that syncs your '{vault}' vault (last active {since})":
 		"{os}에 동기화되는 '{vault}' 보관함이 연결된 장치 (최근 사용 {since})",
 	"the device on {os} that syncs your '{vault}' vault": "'{vault}' 보관함과 동기화되는 {os}의 장치",
@@ -613,7 +613,6 @@ export default {
 	Language: "언어",
 	"My Vault": "내 보관함",
 	"{count} days left in your trial.": { other: "무료 체험은 {count}일 남았습니다." },
-	"Free plan device limit: {count}.": "무료 플랜의 기기 연결 제한: {count}.",
 	"Collapse sidebar": "사이드바 접기",
 	"No vaults": "보관함 없음",
 	"You don't have any vaults right now. Create one to start syncing and searching your notes.":
@@ -765,6 +764,17 @@ export default {
 	"Page not found": "페이지를 찾을 수 없습니다",
 	"We couldn't find what you're looking for. The link may be broken or the page may have moved.":
 		"찾으시는 내용을 찾을 수 없습니다. 링크가 잘못되었거나 페이지가 이동했을 수 있습니다.",
+	"Name your first vault": "첫 번째 보관함 이름을 지정하세요",
+	"A vault is a collection of notes. {client} can read and write the notes in it.":
+		"보관함은 노트들의 모음입니다. {client}은 이 보관함 내의 노트를 읽고 쓸 수 있습니다.",
+	"Also allow {client} to read and write vaults I create later":
+		"나중에 제가 생성하는 보관함에 대해 {client}가 읽고 쓸 수 있도록 허용합니다",
+	"Turn this off to limit {client} to this vault only.":
+		"이 기능을 끄면 {client}가 이 보관함에서만 작동합니다.",
+	"You can limit what each app can see or change anytime in Settings > Connections.":
+		"각 앱이 볼 수 있거나 변경할 수 있는 내용을 언제든지 설정 > 연결에서 제한할 수 있습니다.",
+	"Approving…": "승인 중입니다…",
+	Approve: "승인",
 	"Invalid authorization request": "잘못된 인증 요청",
 	"Missing required OAuth parameters:": "필수 OAuth 매개변수가 누락되었습니다:",
 	"This page should be opened via an OAuth client redirect, not directly.":
@@ -776,21 +786,22 @@ export default {
 		"이 앱은 사용자가 다시 연결되도록 요청한 주소를 등록하지 못했습니다.",
 	"Finish setting up Engram": "Engram 설정 완료",
 	"this app": "이 앱",
+	"Couldn't rename your vault to {name}. Try a different name.":
+		"보관함 이름을 {name}으로 변경할 수 없습니다. 다른 이름을 사용해 보세요.",
+	"Couldn't rename your vault. Check your connection and try again.":
+		"보관함 이름을 변경할 수 없습니다. 연결을 확인하고 다시 시도하세요.",
 	"previous connection": "이전 연결",
 	"The server granted more access than you chose, so nothing was connected. Try again, or contact support if this keeps happening.":
 		"서버가 귀하가 선택한 것보다 더 많은 접근 권한을 부여하여 연결되지 않았습니다. 다시 시도하거나, 문제가 계속 발생하면 지원팀에 문의하세요.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"'{name}' 연결이 끊어졌지만, 새로운 연결을 설정하는 데 실패했습니다. {client}에서 요청을 다시 실행하세요. 현재 이 종류의 연결은 활성화되어 있지 않습니다.",
-	"This app is requesting access to your Engram.": "이 앱은 Engram에 대한 접근 권한을 요청합니다.",
 	"Signed in as {email}.": "{email}으로 로그인되었습니다.",
-	"App details from {host}.": "{host}에서 가져온 앱 정보.",
-	"You will return to {host}.": "{host}으로 돌아갑니다.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"이 버튼은 해당 컴퓨터의 앱으로 연결합니다. 해당 앱에서 연결을 시작한 경우에만 승인하세요.",
 	"your existing connection": "기존 연결",
 	"Which vaults can {client} access?": "{client}은 어떤 보관함에 접근할 수 있나요?",
-	Approve: "승인",
-	"Approving…": "승인 중입니다…",
+	"App details from {host}.": "{host}에서 가져온 앱 정보.",
+	"You will return to {host}.": "{host}으로 돌아갑니다.",
 	"Disconnect {name}?": "{name} 연결 해제?",
 	"Connecting…": "연결 중입니다…",
 	"Disconnect & connect {client}": "연결 해제 및 {client} 연결",
@@ -820,6 +831,7 @@ export default {
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
 		"계속하기 전에 아래의 전체 약관을 읽어주세요. 저희 {privacy} (가입 시 확인)은 귀하의 데이터 처리 방식에 대한 설명을 담고 있습니다.",
 	"Connect {tool}": "{tool} 연결",
+	"Create your first vault": "첫 번째 보관함을 만듭니다",
 	"Join our Discord": "Discord 참여",
 	Join: "참여",
 	"Install the Obsidian plugin": "Obsidian 플러그인 설치",
@@ -832,7 +844,8 @@ export default {
 	"{completed} of {total} done": "{completed} / {total} 완료",
 	"Setup guide": "설정 안내",
 	"Dismiss {label}": "{label} 닫기",
-	"You're on the Free plan.": "무료 플랜을 사용 중입니다.",
+	"Want more devices and vaults?": "더 많은 기기 및 보관함을 원하시나요?",
+	"See paid plans": "유료 플랜을 확인하세요",
 	"Connect Claude Desktop": "Claude Desktop 연결",
 	"Connect Cursor": "Cursor 연결",
 	"Connect Devin": "Devin 연결",
@@ -863,9 +876,12 @@ export default {
 	"Could not continue. Please try again.": "계속할 수 없습니다. 다시 시도해주세요.",
 	"Step {step} of {total}": "{step}단계 / {total}단계",
 	Onboarding: "시작하기",
-	"your app": "앱",
-	"Cancel connection": "연결 해제",
-	"Connecting {app}": "{app} 연결 중",
+	"Stop connecting this app": "이 앱 연결 중지",
+	"Stop connecting this app?": "이 앱 연결을 중지하시겠습니까?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"이 앱은 연결을 거부하셨다는 내용을 받게 됩니다. Engram 계정은 유지됩니다.",
+	"Keep setting up": "설정 계속",
+	"Stop connecting": "연결 중지",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"선택을 저장하지 못했습니다. 다시 클릭해 보세요. 계속 실패하면 페이지를 새로 고쳐 주세요.",
 	"Let's get your notes in.": "노트를 가져오겠습니다.",
@@ -890,7 +906,6 @@ export default {
 	"Vault detected. Waiting for your first sync…":
 		"보관함이 감지되었습니다. 첫 번째 동기화를 기다리는 중입니다…",
 	"Syncing your notes, almost there…": "노트를 동기화 중입니다. 거의 다 되었습니다…",
-	"Name your first vault": "첫 번째 보관함 이름을 지정하세요",
 	"A vault is a folder for related notes. We'll seed it with a welcome note so the editor isn't empty when you arrive.":
 		"보관함은 관련된 노트들을 담는 폴더입니다. 편집기가 비어 있지 않도록 환영 노트를 추가해 드립니다.",
 	"Create vault & continue": "보관함 만들기 및 계속하기",

@@ -1,20 +1,10 @@
-import { Link, useLocation } from "react-router";
-import { useT } from "@/i18n/locale-provider";
-import { useBillingStatus } from "../api/queries";
-import { useIsFreeTier } from "../billing/use-is-free-tier";
-import { settingsTo } from "../settings/settings-hash";
 import FilesPanel from "./files-panel";
 import LazySearchPanel from "./lazy-search-panel";
 import Rail from "./rail";
 import { useRailView } from "./rail-view-context";
 
 export default function AppSidebarPanel() {
-	const { t } = useT();
 	const { view, sidebarOpen } = useRailView();
-	const showFreeFooter = useIsFreeTier();
-	// The served cap, never a guess: an absent or uncapped value names no number.
-	const deviceCap = useBillingStatus().data?.caps?.obsidian_connections;
-	const location = useLocation();
 
 	return (
 		// Collapsed means clipped to nothing, not unmounted, so inert is what keeps
@@ -23,18 +13,6 @@ export default function AppSidebarPanel() {
 			<div className="min-h-0 flex-1">
 				{view === "files" ? <FilesPanel /> : <LazySearchPanel />}
 			</div>
-			{showFreeFooter && (
-				<div className="border-border border-t px-3 py-2 text-muted-foreground text-xs">
-					{typeof deviceCap === "number" &&
-						`${t("Free plan device limit: {count}.", { count: deviceCap })} `}
-					<Link
-						to={settingsTo("billing", location.search)}
-						className="font-medium text-foreground underline underline-offset-4"
-					>
-						{t("Upgrade")}
-					</Link>
-				</div>
-			)}
 		</div>
 	);
 }
