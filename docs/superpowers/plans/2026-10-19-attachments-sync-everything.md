@@ -4,7 +4,7 @@
 
 **Goal:** The server accepts every non-executable attachment within plan limits, and files up to the plan's `max_file_bytes` (200/500 MiB) upload in resumable parts and download in streamed segments, with no plaintext at rest.
 
-**Architecture:** `MimeWhitelist` shrinks to an executable-extension blocklist. A new parts protocol (`/api/attachments/uploads/*`) stores state in a tenant table, encrypts each part as one AES-GCM segment under a per-file key (wrapped by the user's DEK), and writes it as one S3 multipart part. Rows gain `encryption_version: 2`; v1 rows and the single-request path are unchanged.
+**Architecture:** `MimeWhitelist` shrinks to an executable-extension blocklist. A new parts protocol (`/api/attachment-uploads/*`) stores state in a tenant table, encrypts each part as one AES-GCM segment under a per-file key (wrapped by the user's DEK), and writes it as one S3 multipart part. Rows gain `encryption_version: 2`; v1 rows and the single-request path are unchanged.
 
 **Tech Stack:** Elixir 1.17 / Phoenix 1.8, Ecto + Postgres RLS, ExAws S3 multipart, Oban cron, Rust NIF envelope (`Engram.Native`), React + vitest (web app).
 
@@ -126,7 +126,7 @@
 
 **Interfaces:**
 - Consumes: `Uploads.*` (Task 4).
-- Produces routes: `POST /api/attachments/uploads` → 201 `{upload_id, part_size, part_count}`; `PUT /api/attachments/uploads/:id/parts/:n` (octet-stream, body read with the same bounded `read_body` + 408/413 handling as `upload_raw/4`) → 200 `{part}`; `GET /api/attachments/uploads/:id` → 200 `{done, part_count, part_size}`; `POST /api/attachments/uploads/:id/complete` → 200 same body as `POST /api/attachments`; `DELETE /api/attachments/uploads/:id` → 204. Refusal bodies reuse `LimitResponse` (402 `file_too_large` / `attachments_quota_exceeded`) and 415 `extension_not_allowed`. `:multipart_unsupported` → 501.
+- Produces routes: `POST /api/attachment-uploads` → 201 `{upload_id, part_size, part_count}`; `PUT /api/attachment-uploads/:id/parts/:n` (octet-stream, body read with the same bounded `read_body` + 408/413 handling as `upload_raw/4`) → 200 `{part}`; `GET /api/attachment-uploads/:id` → 200 `{done, part_count, part_size}`; `POST /api/attachment-uploads/:id/complete` → 200 same body as `POST /api/attachments`; `DELETE /api/attachment-uploads/:id` → 204. Refusal bodies reuse `LimitResponse` (402 `file_too_large` / `attachments_quota_exceeded`) and 415 `extension_not_allowed`. `:multipart_unsupported` → 501.
 
 - [ ] **Step 1: Failing tests** for each route's happy path and each Review Focus item 1-4:
   - race: v1 `POST /api/attachments` lands between `start` and `complete` on the same path → after `complete` exactly one live row for the path (query by `path_hmac`), `GET ?raw=1` returns the v2 bytes, the v1 blob key no longer exists in InMemory.
@@ -177,7 +177,7 @@
 - Modify: `docs/context/attachment-mime-whitelist.md` (rename section to "executable blocklist"; record why), new `docs/context/attachment-chunked-upload.md` (protocol, format v2, failure modes, how to read a trace)
 - Test: `test/engram/mcp/*get_attachment_upload_target*` assertions on the new prose
 
-- [ ] **Step 1: Failing test** on the handler output containing `/api/attachments/uploads` and not "whitelisted". **Step 2-4:** implement, run, regenerate `mcp-tools.json`. **Step 5: Commit** `docs: attachment upload protocol and blocklist`.
+- [ ] **Step 1: Failing test** on the handler output containing `/api/attachment-uploads` and not "whitelisted". **Step 2-4:** implement, run, regenerate `mcp-tools.json`. **Step 5: Commit** `docs: attachment upload protocol and blocklist`.
 
 ### Task 10: engram-infra backstop (separate repo, separate small PR)
 

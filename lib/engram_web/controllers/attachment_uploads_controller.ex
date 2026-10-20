@@ -121,14 +121,10 @@ defmodule EngramWeb.AttachmentUploadsController do
     ]
   )
 
-  def status(conn, %{"id" => id} = params) do
-    if upload_id?(id) do
-      case Uploads.status(conn.assigns.current_user, conn.assigns.current_vault, id) do
-        {:ok, status} -> json(conn, status)
-        {:error, reason} -> refuse(conn, reason)
-      end
-    else
-      AttachmentsController.show(conn, vault_path_params(params))
+  def status(conn, %{"id" => id}) do
+    case Uploads.status(conn.assigns.current_user, conn.assigns.current_vault, id) do
+      {:ok, status} -> json(conn, status)
+      {:error, reason} -> refuse(conn, reason)
     end
   end
 
@@ -167,23 +163,10 @@ defmodule EngramWeb.AttachmentUploadsController do
     responses: [no_content: "Dropped"]
   )
 
-  def abort(conn, %{"id" => id} = params) do
-    if upload_id?(id) do
-      :ok = Uploads.abort(conn.assigns.current_user, conn.assigns.current_vault, id)
-      send_resp(conn, 204, "")
-    else
-      AttachmentsController.delete(conn, vault_path_params(params))
-    end
+  def abort(conn, %{"id" => id}) do
+    :ok = Uploads.abort(conn.assigns.current_user, conn.assigns.current_vault, id)
+    send_resp(conn, 204, "")
   end
-
-  # `/attachments/uploads/:id` shadows the `*path` show/delete routes for a
-  # vault file directly under `uploads/`. Upload ids are UUIDs, so anything
-  # else is a vault path.
-  # ponytail: a vault file literally named `uploads/<uuid>` stays shadowed.
-  defp upload_id?(id), do: match?({:ok, _}, Ecto.UUID.cast(id))
-
-  defp vault_path_params(%{"id" => id} = params),
-    do: params |> Map.delete("id") |> Map.put("path", ["uploads", id])
 
   defp feature(user) do
     case Billing.check_feature(user, :attachments_enabled) do

@@ -26,7 +26,7 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
   end
 
   defp start(conn, path, size) do
-    post(conn, "/api/attachments/uploads", %{path: path, size_bytes: size, mtime: 1.0})
+    post(conn, "/api/attachment-uploads", %{path: path, size_bytes: size, mtime: 1.0})
   end
 
   defp start!(conn, path, size), do: conn |> start(path, size) |> json_response(201)
@@ -35,10 +35,10 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
     conn
     |> put_req_header("content-type", "application/octet-stream")
     |> put_req_header("content-length", Integer.to_string(byte_size(bytes)))
-    |> put("/api/attachments/uploads/#{id}/parts/#{n}", bytes)
+    |> put("/api/attachment-uploads/#{id}/parts/#{n}", bytes)
   end
 
-  defp complete(conn, id), do: post(conn, "/api/attachments/uploads/#{id}/complete")
+  defp complete(conn, id), do: post(conn, "/api/attachment-uploads/#{id}/complete")
 
   defp used(user), do: elem(Attachments.storage_usage(user), 1).used_bytes
 
@@ -77,7 +77,7 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
       assert %{"part" => 2} = conn |> put_part(id, 2, p2) |> json_response(200)
 
       assert %{"done" => [2], "part_count" => 2, "part_size" => @part} =
-               conn |> get("/api/attachments/uploads/#{id}") |> json_response(200)
+               conn |> get("/api/attachment-uploads/#{id}") |> json_response(200)
 
       assert %{"error" => "missing_parts", "missing" => [1]} =
                conn |> complete(id) |> json_response(409)
@@ -92,41 +92,43 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
 
       row = Repo.get!(Attachment, att["id"], skip_tenant_check: true)
       assert decrypt_stored(user, row) == bytes
-      assert conn |> get("/api/attachments/uploads/#{id}") |> json_response(404)
+      assert conn |> get("/api/attachment-uploads/#{id}") |> json_response(404)
     end
 
     test "DELETE drops the session, idempotently", %{conn: conn} do
       %{"upload_id" => id} = start!(conn, "a.png", 10)
       storage_key = session(id).storage_key
 
-      assert conn |> delete("/api/attachments/uploads/#{id}") |> response(204)
-      assert conn |> delete("/api/attachments/uploads/#{id}") |> response(204)
-      assert conn |> get("/api/attachments/uploads/#{id}") |> json_response(404)
+      assert conn |> delete("/api/attachment-uploads/#{id}") |> response(204)
+      assert conn |> delete("/api/attachment-uploads/#{id}") |> response(204)
+      assert conn |> get("/api/attachment-uploads/#{id}") |> json_response(404)
       refute InMemory.exists?(storage_key)
     end
 
     test "an unknown session is 404 on every route", %{conn: conn} do
       id = Ecto.UUID.generate()
-      assert conn |> get("/api/attachments/uploads/#{id}") |> json_response(404)
+      assert conn |> get("/api/attachment-uploads/#{id}") |> json_response(404)
       assert conn |> put_part(id, 1, "x") |> json_response(404)
       assert conn |> complete(id) |> json_response(404)
     end
+  end
 
-    # The status/abort routes sit inside the `/attachments/*path` namespace; a
-    # vault file under an `uploads/` folder must still be served and deleted.
-    test "a vault attachment under uploads/ is not shadowed", %{conn: conn} do
-      conn
-      |> post("/api/attachments", %{path: "uploads/a.png", content_base64: Base.encode64("hi")})
-      |> json_response(200)
+  # The parts protocol has its own prefix, so a vault file whose path looks
+  # like an upload route is still an attachment.
+  test "/api/attachments/uploads/<uuid> is the vault file at that path", %{conn: conn} do
+    path = "uploads/#{Ecto.UUID.generate()}"
 
-      assert %{"path" => "uploads/a.png"} =
-               conn |> get("/api/attachments/uploads/a.png") |> json_response(200)
+    conn
+    |> post("/api/attachments", %{path: path, content_base64: Base.encode64("hi")})
+    |> json_response(200)
 
-      assert %{"deleted" => true} =
-               conn |> delete("/api/attachments/uploads/a.png") |> json_response(200)
+    assert %{"path" => ^path} =
+             conn |> get("/api/attachments/" <> path) |> json_response(200)
 
-      assert conn |> get("/api/attachments/uploads/a.png") |> json_response(404)
-    end
+    assert %{"deleted" => true} =
+             conn |> delete("/api/attachments/" <> path) |> json_response(200)
+
+    assert conn |> get("/api/attachments/" <> path) |> json_response(404)
   end
 
   describe "start refusals" do
@@ -138,7 +140,7 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
     test "a mime_type with header bytes is 422", %{conn: conn} do
       assert %{"error" => "invalid_mime_type"} =
                conn
-               |> post("/api/attachments/uploads", %{
+               |> post("/api/attachment-uploads", %{
                  path: "a.png",
                  size_bytes: 10,
                  mime_type: "image/png\r\nx: y"
@@ -181,7 +183,7 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
     end
 
     test "a missing size is 422", %{conn: conn} do
-      assert conn |> post("/api/attachments/uploads", %{path: "a.png"}) |> json_response(422)
+      assert conn |> post("/api/attachment-uploads", %{path: "a.png"}) |> json_response(422)
     end
   end
 
@@ -242,7 +244,7 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
         skip_tenant_check: true
       )
 
-    assert %{"done" => [1]} = conn |> get("/api/attachments/uploads/#{id}") |> json_response(200)
+    assert %{"done" => [1]} = conn |> get("/api/attachment-uploads/#{id}") |> json_response(200)
     assert conn |> put_part(id, 2, p2) |> json_response(200)
     assert %{"attachment" => att} = conn |> complete(id) |> json_response(200)
 
@@ -285,7 +287,7 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
       conn |> put_part(id, 3, "x") |> json_response(422)
       conn |> put_part(id, 1, "short") |> json_response(422)
 
-      assert %{"done" => []} = conn |> get("/api/attachments/uploads/#{id}") |> json_response(200)
+      assert %{"done" => []} = conn |> get("/api/attachment-uploads/#{id}") |> json_response(200)
       assert used(user) == before
     end
   end
@@ -311,7 +313,7 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
              conn |> complete(id_b) |> json_response(402)
 
     refute InMemory.exists?(key_b)
-    assert conn |> get("/api/attachments/uploads/#{id_b}") |> json_response(404)
+    assert conn |> get("/api/attachment-uploads/#{id_b}") |> json_response(404)
     assert used(user) == 600
   end
 end
