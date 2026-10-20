@@ -191,6 +191,7 @@ Paddle is the Merchant-of-Record. Server keys gate API calls; the client token f
 | `ENGRAM_LIMITS_ENFORCED` | derived (`clerk` + Paddle key) | `true`/`false` override of plan-limit enforcement. |
 | `ENGRAM_<TIER>_<KEY>` | unset | Per-tier limit overrides (e.g. `ENGRAM_FREE_MAX_NOTES`); names come from `LimitKeys.env_var_names/0`. |
 | `INDEX_BUDGET_ENABLED` | `false` | `true` turns on the index budget (per-note merge cap, index points cap and keyword-only floor, the 04:00 UTC recap and budget sweeps). Turn on only with the chunker v5 stamp, after the v5 rebuild pass; the caps are sized for v5 chunks. |
+| `VECTOR_CACHE_ENABLED` | `false` | `true` turns on the encrypted per-user vector cache (`Engram.Indexing.VectorCache`, table `embedding_cache`): each dense text is paid to Voyage once per user and model, so retries, re-chunks and the v5 rebuild reuse vectors, and hits are never charged to the embed meter. Off, the embed path never reads or writes the table. Rows unused for 30 days are pruned daily. |
 | `ATTACHMENT_MIME_BYPASS` | off (gate ON) | `true` disables the MIME/extension whitelist. |
 | `ATTACHMENT_MIME_ALLOWLIST_EXTRA` | unset | Comma-sep extra allowed MIMEs without disabling the gate. |
 | `RATE_LIMIT_AUTH_OVERRIDE` | ignored unless `CI=true` | Auth-limiter override for CI/E2E only. |
