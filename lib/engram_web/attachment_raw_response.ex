@@ -16,7 +16,7 @@ defmodule EngramWeb.AttachmentRawResponse do
   Format v2 content (`{:segments, stream}`) goes out chunked, one segment at
   a time, with `status` (206 for a range). Headers are sent before the first
   segment is opened, so a segment that fails to open cannot change the
-  status: the response is aborted instead (`StreamAborted`), which makes
+  status: the response is aborted instead (`StreamAbortedError`), which makes
   the server drop the connection. Returning normally would let the adapter
   finish the body, and the client would hold a truncated file that looks
   complete.
@@ -24,7 +24,7 @@ defmodule EngramWeb.AttachmentRawResponse do
 
   import Plug.Conn
 
-  defmodule StreamAborted do
+  defmodule StreamAbortedError do
     @moduledoc false
     # The cause (attachment id, segment) is logged where it is detected,
     # `Engram.Attachments.segment_stream/4`; this message carries none of it.
@@ -57,7 +57,7 @@ defmodule EngramWeb.AttachmentRawResponse do
         end
 
       {:error, _}, _conn ->
-        raise StreamAborted
+        raise StreamAbortedError
     end)
   end
 end
