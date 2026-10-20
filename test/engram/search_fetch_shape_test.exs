@@ -238,6 +238,7 @@ defmodule Engram.SearchFetchShapeTest do
       assert String.starts_with?(hit.text, "T"), inspect(hit)
       [_, i] = Regex.run(~r/^T(\d+) /, hit.text)
       if hit[:qdrant_id], do: assert(hit.qdrant_id == point_id(String.to_integer(i)))
+      assert hit.heading_path == "H#{i}", inspect(hit)
     end
   end
 
@@ -299,7 +300,7 @@ defmodule Engram.SearchFetchShapeTest do
 
   # `MEASURE=1` prints the numbers (Task 15.8 PR body).
   for read? <- [false, true] do
-    test "no path moves more bytes than before (chunk_text_read #{read?})", ctx do
+    test "bytes and calls against before (chunk_text_read #{read?})", ctx do
       ServiceConfig.put_override(:chunk_text_read, unquote(read?))
       requests()
 
@@ -310,13 +311,16 @@ defmodule Engram.SearchFetchShapeTest do
         vectors = reqs |> Enum.map(&elem(&1, 2).vector_bytes) |> Enum.sum()
         {before, calls} = @before[unquote(read?)][key]
 
-        assert total <= before, "#{inspect(key)}: #{total} bytes, #{before} before"
-
-        # Flag on, a page holding rows without Postgres text adds ONE
-        # fallback call; hybrid loses its fused retrieve when it has nothing
-        # to fetch (no MMR).
-        extra = if unquote(read?), do: 1, else: 0
-        assert length(reqs) <= calls + extra, "#{inspect(key)}: #{length(reqs)} calls"
+        if unquote(read?) do
+          assert total <= before, "#{inspect(key)}: #{total} bytes, #{before} before"
+          # A page holding rows without Postgres text adds ONE fallback
+          # call; hybrid loses its fused retrieve when it has nothing to
+          # fetch (no MMR).
+          assert length(reqs) <= calls + 1, "#{inspect(key)}: #{length(reqs)} calls"
+        else
+          # Flag off is main, byte for byte and call for call.
+          assert {total, length(reqs)} == {before, calls}, inspect(key)
+        end
 
         if System.get_env("MEASURE"),
           do:

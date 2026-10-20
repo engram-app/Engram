@@ -90,18 +90,23 @@ defmodule Engram.SearchChunkTextSourceTest do
   defp v5_point(ctx, id, score),
     do: %{"id" => id, "score" => score, "payload" => %{"u" => to_string(ctx.user.id)}}
 
-  # The ranked query answers `points` whole; a retrieve (Task 15.8: the
-  # payload fallback, or MMR's vectors) answers the keys it asks for.
-  defp answer(ctx, points) do
+  # Both the ranked query and a retrieve (Task 15.8: the payload fallback,
+  # or hybrid's fused retrieve) answer only the payload keys they ask for.
+  # `retrieved` defaults to `points`; a test passes fewer to delete a point
+  # between the two calls.
+  defp answer(ctx, points, retrieved \\ nil) do
     test_pid = self()
+    retrieved = retrieved || points
 
     Bypass.expect(ctx.bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
       {:ok, raw, conn} = Plug.Conn.read_body(conn)
-      send(test_pid, {:query_body, Jason.decode!(raw)})
+      body = Jason.decode!(raw)
+      send(test_pid, {:query_body, body})
+      shaped = Enum.map(points, &take_payload(&1, body["with_payload"]))
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => points}}))
+      |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => shaped}}))
     end)
 
     Bypass.stub(ctx.bypass, "POST", "/collections/engram_notes/points", fn conn ->
@@ -109,10 +114,9 @@ defmodule Engram.SearchChunkTextSourceTest do
       %{"ids" => ids, "with_payload" => keys} = body = Jason.decode!(raw)
       send(test_pid, {:retrieve_body, body})
 
-      # MMR's vector retrieve asks for no payload.
       found =
-        for id <- ids, p <- points, p["id"] == id do
-          %{"id" => id, "payload" => Map.take(p["payload"], keys || [])}
+        for id <- ids, p <- retrieved, p["id"] == id do
+          p |> Map.delete("score") |> take_payload(keys)
         end
 
       conn
@@ -120,6 +124,11 @@ defmodule Engram.SearchChunkTextSourceTest do
       |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => found}))
     end)
   end
+
+  defp take_payload(point, keys) when is_list(keys),
+    do: Map.update(point, "payload", %{}, &Map.take(&1, keys))
+
+  defp take_payload(point, _none), do: Map.delete(point, "payload")
 
   defp search(ctx), do: Search.search(ctx.user, ctx.vault, "ferritin", mode: :vector, limit: 5)
 
@@ -421,7 +430,8 @@ defmodule Engram.SearchChunkTextSourceTest do
              )
 
     assert Enum.sort(Enum.map(hits, & &1.text)) == ["T0", "T1", "T2"]
-    # The only retrieve is MMR's: its pool's vectors, no payload.
+    # The only retrieve is hybrid's fused one, carrying the pool's vectors
+    # for MMR and no payload (the text is in Postgres).
     assert %{"with_payload" => false, "with_vector" => ["dense"]} =
              Engram.QdrantStub.last_retrieve(ctx.bypass)
   end
@@ -464,9 +474,40 @@ defmodule Engram.SearchChunkTextSourceTest do
     insert_chunk!(ctx, id, 0, "Ferritin.")
     answer(ctx, [v5_point(ctx, id, 0.9)])
 
-    assert {:ok, [_]} = search(ctx)
+    {result, events} = with_event([:engram, :qdrant, :request, :stop], fn -> search(ctx) end)
+
+    assert {:ok, [_]} = result
     assert_received {:query_body, %{"with_payload" => false}}
     refute_received {:retrieve_body, _}
+    # Not even an empty (no-HTTP) retrieve shows on the Qdrant metrics.
+    refute Enum.any?(events, fn {_m, meta} -> meta[:op] == :retrieve end)
+  end
+
+  test "a point deleted before the fallback retrieve: its hit is dropped and counted", ctx do
+    live = Ecto.UUID.generate()
+    gone = Ecto.UUID.generate()
+    insert_chunk!(ctx, live, 0, "Ferritin live.")
+    insert_chunk!(ctx, gone, 1)
+    query_points = [legacy_point(ctx, gone, "Deleted.", 0.95), v5_point(ctx, live, 0.9)]
+    answer(ctx, query_points, [v5_point(ctx, live, 0.9)])
+
+    {{result, events}, _log} =
+      with_log(fn -> with_event([:engram, :search, :hit_dropped], fn -> search(ctx) end) end)
+
+    assert {:ok, [%{text: "Ferritin live."}]} = result
+    assert [{%{count: 1}, %{reason: :point_gone}}] = events
+  end
+
+  test "a failed fallback retrieve fails the search, as a failed query does", ctx do
+    id = Ecto.UUID.generate()
+    insert_chunk!(ctx, id, 0)
+    answer(ctx, [legacy_point(ctx, id, "Ferritin from the payload.", 0.9)])
+
+    Bypass.stub(ctx.bypass, "POST", "/collections/engram_notes/points", fn conn ->
+      Plug.Conn.send_resp(conn, 500, ~s({"status":{"error":"boom"}}))
+    end)
+
+    assert {{:error, _}, _log} = with_log(fn -> search(ctx) end)
   end
 
   test "a row without text: its point alone is retrieved, for the text keys only", ctx do
