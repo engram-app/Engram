@@ -41,6 +41,7 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Notes.CrdtUpdateLog
   alias Engram.Repo
   alias Engram.Vector.Qdrant
+  alias Engram.Workers.EmbedNote
 
   require Logger
 
@@ -1019,33 +1020,74 @@ defmodule Engram.Crypto.UserDekRotation do
   # rebuild (`requeue_for_rebuild/2`).
   defp sweep_qdrant_after_flip(user, old_dek, new_dek, attempt \\ 1) do
     case sweep_qdrant(user, old_dek, new_dek) do
-      {:ok, 0} ->
+      {:ok, []} ->
         :ok
 
       # Deterministic (the point is under neither key), so not retried.
       {:ok, skipped} ->
-        requeue_for_rebuild(user.id, "undecryptable_points:#{skipped}")
+        settle_undecryptable(user.id, skipped)
 
       {:error, _} when attempt < @qdrant_attempts ->
         Process.sleep(@qdrant_retry_ms * attempt)
         sweep_qdrant_after_flip(user, old_dek, new_dek, attempt + 1)
 
       {:error, reason} ->
-        requeue_for_rebuild(user.id, classify_reason(reason))
+        requeue_for_rebuild(user.id, :all, classify_reason(reason))
     end
   rescue
-    e -> requeue_for_rebuild(user.id, Metadata.safe_reason(e))
+    e -> requeue_for_rebuild(user.id, :all, Metadata.safe_reason(e))
   catch
     kind, reason when kind in [:exit, :throw] ->
-      requeue_for_rebuild(user.id, Metadata.safe_exit_reason(reason))
+      requeue_for_rebuild(user.id, :all, Metadata.safe_exit_reason(reason))
   end
 
-  # The cheap fallback, not the $0 one: with the fingerprints and
-  # `embed_hash` cleared, `ReconcileEmbeddings` re-embeds the user's notes
-  # and replaces every point (Voyage pays, on this failure path only). The
-  # $0 version would re-encrypt chunk text from the notes onto the matched
-  # points; not built while prod has had no rotation.
-  defp requeue_for_rebuild(user_id, reason) do
+  # A skipped point some chunk row names belongs to a note whose index must be
+  # rebuilt. One no row names is an orphan (a deleted note's, left by a
+  # crashed rotation): nothing would ever rebuild or reap it, so it is
+  # deleted. The ids come from a scroll filtered to this user, so the delete
+  # touches only this user's points.
+  defp settle_undecryptable(user_id, skipped) do
+    {:ok, named} =
+      Repo.with_tenant(user_id, fn ->
+        from(c in Engram.Notes.Chunk,
+          where: c.user_id == ^user_id and c.qdrant_point_id in ^skipped,
+          select: {c.qdrant_point_id, c.note_id}
+        )
+        |> Repo.all()
+      end)
+
+    orphans = skipped -- Enum.map(named, &elem(&1, 0))
+
+    # A failed delete leaves the orphan for the next rotation; it is never
+    # read (no row names it), so it costs nothing until then.
+    if orphans != [] and :ok == Qdrant.delete_points(Qdrant.collection_name(), orphans) do
+      :telemetry.execute(
+        [:engram, :crypto, :rotate, :dek, :row_failed],
+        %{count: length(orphans)},
+        %{table: :qdrant, phase: :sweep_qdrant, status: :orphan_deleted}
+      )
+    end
+
+    case named do
+      [] ->
+        :ok
+
+      named ->
+        note_ids = named |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
+        requeue_for_rebuild(user_id, note_ids, "undecryptable_points:#{length(named)}")
+    end
+  end
+
+  # The point text of these notes is under the retired DEK, which search
+  # drops. Their fingerprints are cleared (no point may be reused) and their
+  # `chunker_version` NULLed: version-stale with content unchanged is
+  # EmbedNote's maintenance path, unmetered and dense-preserving, so a Free
+  # user at the cap is not billed for our failure. `embed_hash` is left alone
+  # (clearing it meant the metered content path). EmbedNote is enqueued now
+  # rather than at the reconcile sweep's daily version hour.
+  #
+  # Never raises: the rotation is committed by now and must report :ok.
+  defp requeue_for_rebuild(user_id, note_ids, reason) do
     Logger.error(
       "T3.7 sweep_qdrant incomplete after the flip: notes requeued for a rebuild",
       Metadata.with_category(:error, :crypto,
@@ -1061,17 +1103,55 @@ defmodule Engram.Crypto.UserDekRotation do
       %{table: :qdrant, phase: :sweep_qdrant, status: :after_flip}
     )
 
-    {:ok, _} =
+    {:ok, ids} =
       Repo.with_tenant(user_id, fn ->
+        notes = from(n in Engram.Notes.Note, where: n.user_id == ^user_id and n.kind == "note")
+        notes = if note_ids == :all, do: notes, else: from(n in notes, where: n.id in ^note_ids)
+
+        {_, ids} = Repo.update_all(from(n in notes, select: n.id), set: [chunker_version: nil])
+
         {_, _} =
-          from(c in Engram.Notes.Chunk,
-            where: c.user_id == ^user_id and not is_nil(c.context_hmac)
-          )
+          from(c in Engram.Notes.Chunk, where: c.note_id in ^ids and not is_nil(c.context_hmac))
           |> Repo.update_all(set: [context_hmac: nil])
 
-        from(n in Engram.Notes.Note, where: n.user_id == ^user_id and n.kind == "note")
-        |> Repo.update_all(set: [embed_hash: nil])
+        ids
       end)
+
+    ids
+    |> EmbedNote.reject_already_queued(EmbedNote.backfill_priority())
+    |> Enum.chunk_every(500)
+    |> Enum.each(fn batch ->
+      Oban.insert_all(
+        Enum.map(
+          batch,
+          &EmbedNote.new_debounced(&1, user_id, priority: EmbedNote.backfill_priority())
+        )
+      )
+    end)
+
+    :ok
+  rescue
+    e -> requeue_failed(user_id, Metadata.safe_reason(e))
+  catch
+    kind, reason when kind in [:exit, :throw] ->
+      requeue_failed(user_id, Metadata.safe_exit_reason(reason))
+  end
+
+  defp requeue_failed(user_id, reason) do
+    Logger.error(
+      "T3.7 rebuild requeue failed after the flip: point text left unreadable",
+      Metadata.with_category(:error, :crypto,
+        user_id: user_id,
+        phase: :sweep_qdrant,
+        reason_label: reason
+      )
+    )
+
+    :telemetry.execute(
+      [:engram, :crypto, :rotate, :dek, :row_failed],
+      %{count: 1},
+      %{table: :qdrant, phase: :sweep_qdrant, status: :requeue_failed}
+    )
 
     :ok
   end
@@ -1079,7 +1159,7 @@ defmodule Engram.Crypto.UserDekRotation do
   defp sweep_qdrant(%User{id: user_id}, old_dek, new_dek) do
     collection = Qdrant.collection_name()
     filter = %{must: [%{key: "user_id", match: %{value: user_id}}]}
-    sweep_qdrant_loop(collection, filter, user_id, {old_dek, new_dek}, nil, 0)
+    sweep_qdrant_loop(collection, filter, user_id, {old_dek, new_dek}, nil, [])
   end
 
   defp sweep_qdrant_loop(collection, filter, user_id, {old_dek, new_dek} = deks, offset, skipped) do
@@ -1096,10 +1176,10 @@ defmodule Engram.Crypto.UserDekRotation do
       {:ok, %{points: points, next_page_offset: next}} ->
         case rewrap_qdrant_points(collection, user_id, points, old_dek, new_dek) do
           {:ok, page_skipped} when is_nil(next) ->
-            {:ok, skipped + page_skipped}
+            {:ok, page_skipped ++ skipped}
 
           {:ok, page_skipped} ->
-            sweep_qdrant_loop(collection, filter, user_id, deks, next, skipped + page_skipped)
+            sweep_qdrant_loop(collection, filter, user_id, deks, next, page_skipped ++ skipped)
 
           {:error, _} = err ->
             err
@@ -1123,19 +1203,19 @@ defmodule Engram.Crypto.UserDekRotation do
   # One page, two Qdrant requests whatever its size (`Qdrant.set_payloads/2`):
   # a waited set_payload per point was one WAL flush each, and a ~150k-point
   # user ran past the 60-minute rotation timeout (review M3).
-  # Returns `{:ok, skipped}`: a point under neither key (an earlier crashed
-  # rotation left it) is skipped and counted, never a halt. Halting stranded
+  # Returns `{:ok, skipped_ids}`: a point under neither key (an earlier
+  # crashed rotation left it) is skipped, never a halt. Halting stranded
   # every later point under the DEK the flip just retired.
   defp rewrap_qdrant_points(collection, user_id, points, old_dek, new_dek) do
     pairs =
-      Enum.reduce_while(points, {:ok, [], 0}, fn point, {:ok, acc, skipped} ->
+      Enum.reduce_while(points, {:ok, [], []}, fn point, {:ok, acc, skipped} ->
         qdrant_id = point["id"] || missing_point_id!(user_id)
         payload = point["payload"] || %{}
 
         case rewrap_qdrant_payload(collection, qdrant_id, payload, old_dek, new_dek) do
           {:ok, :unchanged} -> {:cont, {:ok, acc, skipped}}
           {:ok, new_payload} -> {:cont, {:ok, [{qdrant_id, new_payload} | acc], skipped}}
-          {:error, {:qdrant_decrypt_failed, _, _}} -> {:cont, {:ok, acc, skipped + 1}}
+          {:error, {:qdrant_decrypt_failed, _, _}} -> {:cont, {:ok, acc, [qdrant_id | skipped]}}
           {:error, _} = err -> {:halt, err}
         end
       end)
@@ -1244,9 +1324,17 @@ defmodule Engram.Crypto.UserDekRotation do
       end)
 
     case result do
-      {:ok, _final_payload, false} -> {:ok, :unchanged}
-      {:ok, final_payload, true} -> {:ok, final_payload}
-      {:error, _} = err -> err
+      {:ok, _final_payload, false} ->
+        {:ok, :unchanged}
+
+      # Only the keys rewrapped here, never the scrolled payload: the payload
+      # heal runs concurrently from the flip on, and writing back the filter
+      # HMACs this scroll read would revert the new-key ones it just wrote.
+      {:ok, final_payload, true} ->
+        {:ok, Map.filter(final_payload, fn {k, v} -> Map.get(payload, k) != v end)}
+
+      {:error, _} = err ->
+        err
     end
   end
 
