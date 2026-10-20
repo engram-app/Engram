@@ -536,6 +536,41 @@ defmodule Engram.Workers.EmbedNoteTest do
                )
     end
 
+    # H7: with `truncation: false`, an over-length input is a 400 that no retry
+    # can fix. Park the note on the FIRST attempt instead of paying four more
+    # requests and a 6h poison cycle to learn the same thing.
+    test "integration: a context-window 400 parks the note at once, one call, no retry",
+         %{bypass: bypass, note: note} do
+      voyage_bypass = Bypass.open()
+      prev_embedder = Application.get_env(:engram, :embedder)
+      Application.put_env(:engram, :embedder, Engram.Embedders.Voyage)
+      Engram.ServiceConfig.put_override(:voyage_url, "http://localhost:#{voyage_bypass.port}")
+      Engram.ServiceConfig.put_override(:voyage_api_key, "test-key")
+      on_exit(fn -> Application.put_env(:engram, :embedder, prev_embedder) end)
+
+      stub_qdrant_optional(bypass)
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Bypass.expect(voyage_bypass, "POST", "/v1/embeddings", fn conn ->
+        Agent.update(counter, &(&1 + 1))
+
+        Plug.Conn.send_resp(
+          conn,
+          400,
+          ~s({"detail":"The input at index 0 does not fit into the model's context window of 32000 tokens."})
+        )
+      end)
+
+      assert {:cancel, :input_too_long} =
+               perform_job(EmbedNote, %{note_id: note.id}, attempt: 1, max_attempts: 5)
+
+      assert Agent.get(counter, & &1) == 1
+
+      parked = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert DateTime.compare(parked.embed_retry_after, DateTime.utc_now()) == :gt
+      assert parked.embed_hash != parked.content_hash
+    end
+
     test "returns {:error, _} for non-429 embed failures (preserves retry behavior)",
          %{bypass: bypass, note: note} do
       stub_qdrant(bypass)
