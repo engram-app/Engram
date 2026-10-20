@@ -21,6 +21,10 @@ export default {
 	"Failed to duplicate.": "Nie udało się skopiować.",
 	"Batch delete failed.": "Nie udało się usunąć w pakiecie.",
 	"Batch move failed.": "Nie udało się przenieść w pakiecie.",
+	"Couldn't load sign-in": "Nie można załadować logowania",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Usługa logowania nie została załadowana. Sprawdź połączenie, a następnie odśwież stronę.",
+	Reload: "Odśwież",
 	"This account is suspended. Contact an admin to restore access.":
 		"To konto jest zawieszone. Skontaktuj się z administratorem, aby odzyskać dostęp.",
 	"Incorrect email or password.": "Nieprawidłowy adres e-mail lub hasło.",
@@ -523,7 +527,6 @@ export default {
 	"Linux PC": "Komputer z systemem Linux",
 	Oops: "Ups",
 	"Something went wrong": "Coś poszło nie tak",
-	Reload: "Odśwież",
 	"Back to home": "Powrót do strony głównej",
 	"Error detail (dev only)": "Szczegóły błędu (tylko dla deweloperów)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -907,6 +910,7 @@ export default {
 		"Zapoznałem się i akceptuję Regulamin oraz Politykę Prywatności",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Zapoznałem się i akceptuję umowę powyżej oraz politykę prywatności",
+	"Could not continue. Please try again.": "Nie udało się kontynuować. Spróbuj ponownie.",
 	"Saving…": "Zapisywanie…",
 	Continue: "Dalej",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -956,7 +960,6 @@ export default {
 		"7-dniowy okres próbny w płatnych planach. Wymagana karta, bez opłat do momentu zakończenia.",
 	"Continue with Free →": "Kontynuuj z darmowym planem →",
 	"{summary} · upgrade anytime": "{summary} · możesz uaktualnić w dowolnym momencie",
-	"Could not continue. Please try again.": "Nie udało się kontynuować. Spróbuj ponownie.",
 	"Step {step} of {total}": "Krok {step} z {total}",
 	Onboarding: "Wprowadzenie",
 	"Stop connecting this app": "Przestań łączyć tę aplikację",

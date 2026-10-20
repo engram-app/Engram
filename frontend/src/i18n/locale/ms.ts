@@ -21,6 +21,10 @@ export default {
 	"Failed to duplicate.": "Pemulihan gagal.",
 	"Batch delete failed.": "Pemadaman kumpulan gagal.",
 	"Batch move failed.": "Pemindahan kumpulan gagal.",
+	"Couldn't load sign-in": "Tidak dapat memuat log masuk",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Perkhidmatan log masuk tidak dapat dimuat. Semak sambungan anda, kemudian muat semula halaman.",
+	Reload: "Muat semula",
 	"This account is suspended. Contact an admin to restore access.":
 		"Akaun ini telah ditangguhkan. Hubungi pentadbir untuk memulihkan akses.",
 	"Incorrect email or password.": "Emel atau kata laluan tidak betul.",
@@ -490,7 +494,6 @@ export default {
 	"Linux PC": "Komputer Linux",
 	Oops: "Opsi",
 	"Something went wrong": "Sesatu berlaku",
-	Reload: "Muat semula",
 	"Back to home": "Kembali ke utama",
 	"Error detail (dev only)": "Butiran ralat (hanya untuk pembangun)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -844,6 +847,7 @@ export default {
 		"Saya telah membaca dan bersetuju dengan Terma Perkhidmatan dan Dasar Privasi",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Saya telah membaca dan bersetuju dengan perjanjian yang ditunjukkan di atas dan notis privasi",
+	"Could not continue. Please try again.": "Tidak dapat meneruskan. Sila cuba lagi.",
 	"Saving…": "Menyimpan…",
 	Continue: "Teruskan",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -892,7 +896,6 @@ export default {
 		"Tempoh percubaan 7 hari untuk pelan berbayar. Kad diperlukan, tiada caj sehingga tamat.",
 	"Continue with Free →": "Teruskan dengan Percuma →",
 	"{summary} · upgrade anytime": "{summary} · tingkatkan pada bila-bila masa",
-	"Could not continue. Please try again.": "Tidak dapat meneruskan. Sila cuba lagi.",
 	"Step {step} of {total}": "Langkah {step} daripada {total}",
 	Onboarding: "Pengenalan",
 	"Stop connecting this app": "Hentikan sambungan aplikasi ini",

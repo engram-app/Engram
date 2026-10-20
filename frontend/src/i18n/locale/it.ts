@@ -21,6 +21,10 @@ export default {
 	"Failed to duplicate.": "Duplicazione fallita.",
 	"Batch delete failed.": "Eliminazione di massa fallita.",
 	"Batch move failed.": "Spostamento di massa fallito.",
+	"Couldn't load sign-in": "Impossibile caricare l'accesso",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Il servizio di accesso non è stato caricato. Controlla la connessione e ricarica la pagina.",
+	Reload: "Ricarica",
 	"This account is suspended. Contact an admin to restore access.":
 		"Questo account è sospeso. Contatta un amministratore per ripristinare l'accesso.",
 	"Incorrect email or password.": "Email o password errate.",
@@ -509,7 +513,6 @@ export default {
 	"Linux PC": "PC Linux",
 	Oops: "Ops",
 	"Something went wrong": "Si è verificato un errore",
-	Reload: "Ricarica",
 	"Back to home": "Ritorna alla home",
 	"Error detail (dev only)": "Dettagli errore (solo sviluppatori)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -876,6 +879,7 @@ export default {
 		"Ho letto e accetto i Termini di servizio e l'informativa sulla privacy",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Ho letto e accetto l'accordo mostrato sopra e l'informativa sulla privacy",
+	"Could not continue. Please try again.": "Impossibile continuare. Riprova.",
 	"Saving…": "Salvataggio...",
 	Continue: "Continua",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -925,7 +929,6 @@ export default {
 	"Continue with Free →": "Continua con la versione gratuita →",
 	"{summary} · upgrade anytime":
 		"{summary} · puoi passare a un piano a pagamento in qualsiasi momento",
-	"Could not continue. Please try again.": "Impossibile continuare. Riprova.",
 	"Step {step} of {total}": "Fase {step} di {total}",
 	Onboarding: "Guida introduttiva",
 	"Stop connecting this app": "Interrompi la connessione di questa app",

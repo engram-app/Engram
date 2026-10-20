@@ -23,6 +23,10 @@ export default {
 	"Failed to duplicate.": "Duplizieren fehlgeschlagen.",
 	"Batch delete failed.": "Fehler beim Löschen mehrerer Elemente.",
 	"Batch move failed.": "Fehler beim Verschieben mehrerer Elemente.",
+	"Couldn't load sign-in": "Anmeldung konnte nicht geladen werden",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Der Anmeldedienst konnte nicht geladen werden. Überprüfe deine Verbindung und lade die Seite neu.",
+	Reload: "Neu laden",
 	"This account is suspended. Contact an admin to restore access.":
 		"Dieses Konto ist gesperrt. Kontaktiere einen Administrator, um den Zugriff wiederherzustellen.",
 	"Incorrect email or password.": "Falsche E-Mail-Adresse oder Passwort.",
@@ -498,7 +502,6 @@ export default {
 	"Linux PC": "Linux-PC",
 	Oops: "Ups",
 	"Something went wrong": "Etwas ist schiefgelaufen",
-	Reload: "Neu laden",
 	"Back to home": "Zurück zur Startseite",
 	"Error detail (dev only)": "Fehlerdetails (nur für Entwickler)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -857,6 +860,8 @@ export default {
 		"Ich habe die Nutzungsbedingungen und die Datenschutzerklärung gelesen und akzeptiere sie",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Ich habe das oben angezeigte Dokument und die Datenschutzerklärung gelesen und akzeptiere sie",
+	"Could not continue. Please try again.":
+		"Konnte nicht fortgesetzt werden. Bitte versuche es erneut.",
 	"Saving…": "Speichern…",
 	Continue: "Fortfahren",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -907,8 +912,6 @@ export default {
 		"7-tägige kostenlose Testphase für kostenpflichtige Pläne. Kreditkarte erforderlich, keine Gebühr bis zum Ende.",
 	"Continue with Free →": "Mit kostenloser Version fortfahren →",
 	"{summary} · upgrade anytime": "{summary} · jederzeit upgraden",
-	"Could not continue. Please try again.":
-		"Konnte nicht fortgesetzt werden. Bitte versuche es erneut.",
 	"Step {step} of {total}": "Schritt {step} von {total}",
 	Onboarding: "Einrichtung",
 	"Stop connecting this app": "Verbindung zu dieser App beenden",

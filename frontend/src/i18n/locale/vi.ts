@@ -20,6 +20,10 @@ export default {
 	"Failed to duplicate.": "Sao chép thất bại.",
 	"Batch delete failed.": "Xóa hàng loạt không thành công.",
 	"Batch move failed.": "Di chuyển hàng loạt không thành công.",
+	"Couldn't load sign-in": "Không tải được trang đăng nhập",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Dịch vụ đăng nhập không tải được. Kiểm tra kết nối của bạn, sau đó tải lại trang.",
+	Reload: "Tải lại",
 	"This account is suspended. Contact an admin to restore access.":
 		"Tài khoản này đã bị khóa. Liên hệ với quản trị viên để khôi phục quyền truy cập.",
 	"Incorrect email or password.": "Địa chỉ email hoặc mật khẩu không chính xác.",
@@ -485,7 +489,6 @@ export default {
 	"Linux PC": "Máy tính Linux",
 	Oops: "Ốp",
 	"Something went wrong": "Có lỗi xảy ra",
-	Reload: "Tải lại",
 	"Back to home": "Quay lại trang chủ",
 	"Error detail (dev only)": "Chi tiết lỗi (chỉ dành cho nhà phát triển)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -841,6 +844,7 @@ export default {
 		"Tôi đã đọc và đồng ý với Điều khoản dịch vụ và Chính sách quyền riêng tư",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Tôi đã đọc và đồng ý với bản hợp đồng hiển thị ở trên và thông báo về quyền riêng tư",
+	"Could not continue. Please try again.": "Không thể tiếp tục. Vui lòng thử lại.",
 	"Saving…": "Đang lưu…",
 	Continue: "Tiếp tục",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -889,7 +893,6 @@ export default {
 		"Thử nghiệm miễn phí 7 ngày cho các gói trả phí. Cần thẻ, không tính phí cho đến khi hết hạn.",
 	"Continue with Free →": "Tiếp tục với gói Miễn phí →",
 	"{summary} · upgrade anytime": "{summary} · nâng cấp bất cứ lúc nào",
-	"Could not continue. Please try again.": "Không thể tiếp tục. Vui lòng thử lại.",
 	"Step {step} of {total}": "Bước {step} trong {total}",
 	Onboarding: "Hướng dẫn sử dụng",
 	"Stop connecting this app": "Dừng kết nối ứng dụng này",

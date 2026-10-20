@@ -21,6 +21,10 @@ export default {
 	"Failed to duplicate.": "Duplikasi gagal.",
 	"Batch delete failed.": "Penghapusan massal gagal.",
 	"Batch move failed.": "Pemindahan massal gagal.",
+	"Couldn't load sign-in": "Tidak dapat memuat login",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Layanan login tidak dapat dimuat. Periksa koneksi Anda, lalu muat ulang halaman.",
+	Reload: "Muat ulang",
 	"This account is suspended. Contact an admin to restore access.":
 		"Akun ini telah diblokir. Hubungi administrator untuk mengaktifkan kembali.",
 	"Incorrect email or password.": "Email atau kata sandi salah.",
@@ -489,7 +493,6 @@ export default {
 	"Linux PC": "Komputer Linux",
 	Oops: "Ups",
 	"Something went wrong": "Terjadi kesalahan",
-	Reload: "Muat ulang",
 	"Back to home": "Kembali ke beranda",
 	"Error detail (dev only)": "Detail kesalahan (khusus pengembang)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -845,6 +848,7 @@ export default {
 		"Saya telah membaca dan menyetujui Ketentuan Layanan dan Kebijakan Privasi",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Saya telah membaca dan menyetujui perjanjian yang ditampilkan di atas dan pemberitahuan privasi",
+	"Could not continue. Please try again.": "Tidak dapat melanjutkan. Silakan coba lagi.",
 	"Saving…": "Menyimpan…",
 	Continue: "Lanjutkan",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -894,7 +898,6 @@ export default {
 		"Uji coba gratis 7 hari untuk paket berbayar. Kartu diperlukan, tidak ada biaya sampai selesai.",
 	"Continue with Free →": "Lanjutkan dengan Gratis →",
 	"{summary} · upgrade anytime": "{summary} · tingkatkan kapan saja",
-	"Could not continue. Please try again.": "Tidak dapat melanjutkan. Silakan coba lagi.",
 	"Step {step} of {total}": "Langkah {step} dari {total}",
 	Onboarding: "Pengaturan awal",
 	"Stop connecting this app": "Hentikan koneksi aplikasi ini",

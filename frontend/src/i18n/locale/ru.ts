@@ -21,6 +21,10 @@ export default {
 	"Failed to duplicate.": "Не удалось продублировать.",
 	"Batch delete failed.": "Удаление пакетом не удалось.",
 	"Batch move failed.": "Перемещение пакетом не удалось.",
+	"Couldn't load sign-in": "Не удалось загрузить страницу входа",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Сервис входа не загрузился. Проверьте подключение, затем перезагрузите страницу.",
+	Reload: "Обновить",
 	"This account is suspended. Contact an admin to restore access.":
 		"Эта учетная запись заблокирована. Обратитесь к администратору для восстановления доступа.",
 	"Incorrect email or password.": "Неверный адрес электронной почты или пароль.",
@@ -536,7 +540,6 @@ export default {
 	"Linux PC": "Компьютер Linux",
 	Oops: "Ой",
 	"Something went wrong": "Произошла ошибка",
-	Reload: "Обновить",
 	"Back to home": "Вернуться на главную",
 	"Error detail (dev only)": "Подробности ошибки (только для разработчиков)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -922,6 +925,7 @@ export default {
 		"Я прочитал и согласен с Условиями использования и Политикой конфиденциальности",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Я прочитал и согласен с представленным выше соглашением и Уведомлением о конфиденциальности",
+	"Could not continue. Please try again.": "Не удалось продолжить. Пожалуйста, попробуйте ещё раз.",
 	"Saving…": "Сохранение…",
 	Continue: "Продолжить",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -971,7 +975,6 @@ export default {
 		"7-дневный бесплатный пробный период для платных планов. Требуется карта, списание средств не произойдет до окончания пробного периода.",
 	"Continue with Free →": "Продолжить с бесплатным тарифом →",
 	"{summary} · upgrade anytime": "{summary} · можно обновить в любое время",
-	"Could not continue. Please try again.": "Не удалось продолжить. Пожалуйста, попробуйте ещё раз.",
 	"Step {step} of {total}": "Шаг {step} из {total}",
 	Onboarding: "Обучение",
 	"Stop connecting this app": "Прекратить подключение этого приложения",

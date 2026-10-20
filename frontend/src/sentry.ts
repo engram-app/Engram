@@ -62,7 +62,14 @@ const KNOWN_FIRST_SEGMENTS = new Set<string>([
  *  every frame of it is a bug in something the USER installed, surfacing here
  *  only because our global handlers catch it. Keep this to patterns actually
  *  observed in prod — a speculative blocklist is how a real error goes missing. */
-const IGNORED_ERROR_PATTERNS = [/runtime\.sendMessage/];
+const IGNORED_ERROR_PATTERNS = [
+	/runtime\.sendMessage/,
+	// @clerk/shared rethrows a clerk-js/clerk-ui script-load failure inside a
+	// `.catch` nobody awaits, so it always arrives as an unhandled rejection
+	// (ENGRAM-FRONTEND-A). The same failure flips Clerk's status to "error",
+	// which ClerkLoadGate renders and reports once as a handled warning.
+	/Failed to load Clerk (?:JS|UI)\b/,
+];
 
 /** Whether the SDK's inbound filter will discard this error.
  *

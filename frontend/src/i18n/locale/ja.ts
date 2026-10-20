@@ -22,6 +22,10 @@ export default {
 	"Failed to duplicate.": "コピーに失敗しました。",
 	"Batch delete failed.": "一括削除に失敗しました。",
 	"Batch move failed.": "一括移動に失敗しました。",
+	"Couldn't load sign-in": "ログインに失敗しました",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"ログインサービスが読み込まれませんでした。接続を確認し、ページを再読み込みしてください。",
+	Reload: "再読み込み",
 	"This account is suspended. Contact an admin to restore access.":
 		"このアカウントは停止されています。アクセスを回復するには、管理者にお問い合わせください。",
 	"Incorrect email or password.": "メールアドレスまたはパスワードが正しくありません。",
@@ -486,7 +490,6 @@ export default {
 	"Linux PC": "Linux PC",
 	Oops: "あら",
 	"Something went wrong": "エラーが発生しました",
-	Reload: "再読み込み",
 	"Back to home": "ホームへ戻る",
 	"Error detail (dev only)": "エラー詳細 (開発者向け)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -840,6 +843,7 @@ export default {
 		"利用規約とプライバシーポリシーを読み、同意します",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"上記の利用規約とプライバシーポリシーを読み、同意します",
+	"Could not continue. Please try again.": "続行できませんでした。もう一度お試しください。",
 	"Saving…": "保存中…",
 	Continue: "続ける",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -889,7 +893,6 @@ export default {
 		"有料プランでは、7日間の無料トライアルがあります。カード情報が必要ですが、終了するまでは料金は発生しません。",
 	"Continue with Free →": "無料版で続ける →",
 	"{summary} · upgrade anytime": "{summary} · いつでもアップグレード可能",
-	"Could not continue. Please try again.": "続行できませんでした。もう一度お試しください。",
 	"Step {step} of {total}": "{total} の {step} 段階",
 	Onboarding: "初期設定",
 	"Stop connecting this app": "このアプリの接続を停止",

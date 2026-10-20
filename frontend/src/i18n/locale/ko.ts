@@ -20,6 +20,10 @@ export default {
 	"Failed to duplicate.": "복사에 실패했습니다.",
 	"Batch delete failed.": "일괄 삭제에 실패했습니다.",
 	"Batch move failed.": "일괄 이동에 실패했습니다.",
+	"Couldn't load sign-in": "로그인 불러오기 실패",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"로그인 서비스 로드에 실패했습니다. 연결 상태를 확인한 후 페이지를 다시 로드하세요.",
+	Reload: "다시 로드",
 	"This account is suspended. Contact an admin to restore access.":
 		"이 계정은 정지되었습니다. 접근 권한을 복구하려면 관리자에게 문의하세요.",
 	"Incorrect email or password.": "이메일 또는 비밀번호가 올바르지 않습니다.",
@@ -475,7 +479,6 @@ export default {
 	"Linux PC": "리눅스 PC",
 	Oops: "어휴",
 	"Something went wrong": "오류가 발생했습니다",
-	Reload: "다시 로드",
 	"Back to home": "홈으로 돌아가기",
 	"Error detail (dev only)": "오류 세부 정보 (개발자 전용)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -828,6 +831,7 @@ export default {
 		"이용 약관 및 개인정보 처리방침을 읽고 동의합니다",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"위 약관 및 개인정보 처리방침을 읽고 동의합니다",
+	"Could not continue. Please try again.": "계속할 수 없습니다. 다시 시도해주세요.",
 	"Saving…": "저장 중...",
 	Continue: "계속하기",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -875,7 +879,6 @@ export default {
 		"유료 요금제의 경우 7일 무료 체험 제공. 카드 정보 필요하며, 종료 시까지 요금이 부과되지 않습니다.",
 	"Continue with Free →": "무료로 시작하기 →",
 	"{summary} · upgrade anytime": "{summary} · 언제든지 업그레이드 가능",
-	"Could not continue. Please try again.": "계속할 수 없습니다. 다시 시도해주세요.",
 	"Step {step} of {total}": "{step}단계 / {total}단계",
 	Onboarding: "시작하기",
 	"Stop connecting this app": "이 앱 연결 중지",
