@@ -131,6 +131,10 @@ defmodule EngramWeb.Plugs.AuthTest do
 
     insert(:subscription, user: user, tier: "pro", status: "active")
 
+    # A key used within the hour, as nearly every request's is: its hourly
+    # last_used stamp is a block of its own (ApiKeyLastUsedTest), not this one.
+    {:ok, _, _} = Engram.Accounts.validate_api_key(raw_key)
+
     # Cold subscription cache, stated: a warm one opens no block at all.
     Engram.DataCase.clear_request_caches()
 

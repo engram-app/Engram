@@ -107,7 +107,14 @@ defmodule Engram.IdempotencyTest do
 
     {result, queries} = Engram.QueryRecorder.record(fn -> Idempotency.prune_expired(2) end)
     assert result == {:ok, 5}
-    assert length(for %{sql: "DELETE" <> _} <- queries, do: 1) == 3
+    # Only this process's deletes of this table: the recorder sees every
+    # process's queries, async siblings' included.
+    me = self()
+
+    deletes =
+      for %{sql: "DELETE" <> _ = sql, pid: ^me} <- queries, sql =~ "idempotency_keys", do: 1
+
+    assert length(deletes) == 3
   end
 
   # #1869: the key alone matched, so a credential scoped to vault B could
