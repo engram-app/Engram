@@ -13,6 +13,7 @@ defmodule EngramWeb.OAuthMcpAnalyticsTest do
   import Engram.OAuthHelpers, only: [code_from_redirect: 1, pkce_pair: 0]
   import Mox
 
+  alias Engram.Auth.Providers.Local
   alias Engram.OAuth
   alias Engram.OAuth.Cimd.FetcherMock
   alias Engram.OAuth.Cimd.Jwks
@@ -108,7 +109,7 @@ defmodule EngramWeb.OAuthMcpAnalyticsTest do
   test "consent emits mcp_oauth_granted with client and scopes", %{client: client, user: user} do
     user = ensure_external_id(user)
     insert(:vault, user: user)
-    {:ok, token} = Engram.Auth.Providers.Local.issue_access_token(user.external_id, user.email)
+    {:ok, token} = Local.issue_access_token(user.external_id, user.email)
     {_verifier, challenge} = pkce_pair()
 
     build_conn()
@@ -133,7 +134,7 @@ defmodule EngramWeb.OAuthMcpAnalyticsTest do
   test "grant_id joins a mobile consent to its exchange", %{client: client, user: user} do
     user = ensure_external_id(user)
     insert(:vault, user: user)
-    {:ok, token} = Engram.Auth.Providers.Local.issue_access_token(user.external_id, user.email)
+    {:ok, token} = Local.issue_access_token(user.external_id, user.email)
     {verifier, challenge} = pkce_pair()
 
     %{"redirect_uri" => redirect} =
@@ -211,7 +212,7 @@ defmodule EngramWeb.OAuthMcpAnalyticsTest do
 
     user = ensure_external_id(user)
     insert(:vault, user: user)
-    {:ok, token} = Engram.Auth.Providers.Local.issue_access_token(user.external_id, user.email)
+    {:ok, token} = Local.issue_access_token(user.external_id, user.email)
     {_verifier, challenge} = pkce_pair()
 
     build_conn()
@@ -429,5 +430,35 @@ defmodule EngramWeb.OAuthMcpAnalyticsTest do
     for secret <- [code, verifier, rt, at] do
       refute wire =~ secret
     end
+  end
+
+  # Review of #2061: the code's grant_id lives in the request process too, and
+  # a keep-alive connection reuses it. A code exchange that never reached the
+  # controller's analytics (here: called directly, as a crashed request would
+  # leave it) must not lend its grant_id to the next request's failure.
+  test "a stale grant_id does not leak into the next request", %{client: client, user: user} do
+    {_verifier, challenge} = pkce_pair()
+    code = mint_code(client, user, challenge)
+
+    {:error, _} =
+      OAuth.exchange_authorization_code(%{
+        "code" => code,
+        "redirect_uri" => @redirect,
+        "client_id" => client.client_id,
+        "code_verifier" => "wrong"
+      })
+
+    # No code at all: the exchange never finds one of its own.
+    post(build_conn(), "/oauth/token", %{
+      "grant_type" => "authorization_code",
+      "redirect_uri" => @redirect,
+      "client_id" => client.client_id,
+      "code_verifier" => "v"
+    })
+    |> json_response(400)
+
+    e = event(drain(), "mcp_oauth_token_failed")
+    assert e["properties"]["reason"] == "code_missing"
+    refute Map.has_key?(e["properties"], "grant_id")
   end
 end

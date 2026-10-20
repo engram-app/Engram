@@ -49,6 +49,7 @@ defmodule EngramWeb.OAuthClientAuth do
   defp forget_request_state do
     _ = JwksCache.take_source()
     _ = OAuth.take_grant_user_id()
+    _ = OAuth.take_grant_id()
     :ok
   end
 
