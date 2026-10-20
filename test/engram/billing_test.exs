@@ -943,6 +943,32 @@ defmodule Engram.BillingTest do
       event = %{"event_type" => "transaction.completed", "data" => %{}}
       assert {:ok, :ignored} = Billing.upsert_from_paddle_event(event)
     end
+
+    # Adjustments carry no custom_data, so the owner is found through the
+    # subscription they belong to. Nothing is written.
+    test "adjustment.* resolves the owner's subscription and changes nothing" do
+      user = insert(:user)
+      sub = insert(:subscription, user: user, paddle_subscription_id: "sub_adj_1")
+
+      for type <- ~w(adjustment.created adjustment.updated) do
+        event = %{
+          "event_type" => type,
+          "data" => %{"subscription_id" => "sub_adj_1", "action" => "refund"}
+        }
+
+        assert {:ok, %Subscription{id: id, status: "active"}} =
+                 Billing.upsert_from_paddle_event(event)
+
+        assert id == sub.id
+      end
+    end
+
+    test "adjustment.* with no known subscription is ignored" do
+      for data <- [%{"subscription_id" => "sub_nope"}, %{"subscription_id" => nil}] do
+        event = %{"event_type" => "adjustment.created", "data" => data}
+        assert {:ok, :ignored} = Billing.upsert_from_paddle_event(event)
+      end
+    end
   end
 
   # #1737 — every transaction.* event used to fall to the catch-all and return

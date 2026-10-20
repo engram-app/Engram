@@ -27,6 +27,7 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   alias Engram.Accounts
   alias Engram.Analytics.PersonProperties
   alias Engram.Billing.Subscription
+  alias Engram.Webhooks.Idempotency
 
   @doc """
   Forward a verified Clerk webhook event. Returns `:ok` for every input
@@ -83,6 +84,8 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
       other state-sync update sends nothing.
     * `subscription.canceled`, `subscription.past_due`: same names
     * `transaction.completed`: `payment_completed` with bucketed amount
+    * `adjustment.*` approved refund or chargeback: `refund_issued`, once
+      per adjustment id
 
   Every prop is a bounded enum, bucket or Paddle id. `interval` and
   `discounted` separate comped (100%-off) subs from real payers.
@@ -153,7 +156,8 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
 
       _ =
         Engram.Analytics.track(user, "payment_completed", %{
-          amount_bucket: amount_bucket(data),
+          amount_bucket:
+            amount_bucket(get_in(data, ["details", "totals"]), data["currency_code"]),
           currency: enum(data["currency_code"], @currencies),
           interval: enum(interval, @intervals),
           discounted: not is_nil(data["discount_id"]),
@@ -162,6 +166,26 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
     end
 
     :ok
+  end
+
+  # Once per adjustment id, the first time it is seen approved: a refund waits
+  # in pending_approval, a chargeback is created approved and then updated
+  # while it stays approved. Credits are plan-change prorations, not refunds.
+  def forward_paddle_event(
+        %{"event_type" => "adjustment." <> _, "data" => %{"status" => "approved"} = data},
+        %Subscription{} = sub
+      )
+      when :erlang.map_get("action", data) in ["refund", "chargeback"] do
+    if Idempotency.claim(:paddle_adjustment, data["id"]) do
+      track_sub(sub, "refund_issued", %{
+        action: data["action"],
+        amount_bucket: amount_bucket(data["totals"], data["currency_code"]),
+        currency: enum(data["currency_code"], @currencies),
+        tier: sub.tier
+      })
+    else
+      :ok
+    end
   end
 
   def forward_paddle_event(_event, _result), do: :ok
@@ -186,12 +210,12 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   end
 
   # Major-unit buckets, so a comp (0) never reads as a real payment.
-  defp amount_bucket(data) do
-    totals = get_in(data, ["details", "totals"]) || %{}
+  defp amount_bucket(totals, currency) do
+    totals = totals || %{}
 
     with raw when is_binary(raw) <- totals["grand_total"] || totals["total"],
          {minor, ""} <- Integer.parse(raw) do
-      major = if data["currency_code"] in @zero_decimal, do: minor, else: div(minor, 100)
+      major = if currency in @zero_decimal, do: minor, else: div(minor, 100)
 
       cond do
         minor == 0 -> "0"

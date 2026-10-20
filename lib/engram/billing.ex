@@ -881,6 +881,19 @@ defmodule Engram.Billing do
     {:ok, :ignored}
   end
 
+  # Refunds and chargebacks. An adjustment carries no custom_data, so the owner
+  # is found through its subscription and handed to the analytics forwarder.
+  # Nothing is written: Paddle's subscription events carry any state change.
+  def upsert_from_paddle_event(%{"event_type" => type, "data" => data})
+      when type in ~w(adjustment.created adjustment.updated) do
+    with id when is_binary(id) <- data["subscription_id"],
+         %Subscription{} = sub <- get_subscription_by_paddle_id(id) do
+      {:ok, sub}
+    else
+      _ -> {:ok, :ignored}
+    end
+  end
+
   def upsert_from_paddle_event(%{"event_type" => type}) do
     # Debug, not warn: this is the gap-finding line, and Loki ships warn+ only.
     Logger.debug(

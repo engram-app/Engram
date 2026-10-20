@@ -26,6 +26,11 @@ defmodule Engram.Webhooks.Idempotency do
   @type source :: :paddle | :clerk
 
   @retention_days 7
+  # Claims on a Paddle object (not a delivery) outlive the replay window: an
+  # adjustment is updated for weeks. Same retention as the analytics events
+  # they guard.
+  @claim_sources ["paddle_adjustment"]
+  @claim_retention_days 730
 
   @doc "Returns `:proceed` if this event hasn't been processed, else `:duplicate`."
   @spec check(source(), String.t() | nil) :: :proceed | :duplicate
@@ -60,13 +65,41 @@ defmodule Engram.Webhooks.Idempotency do
 
   def mark_processed(_source, _id), do: :ok
 
+  @doc """
+  Claim `id` once: true the first time (the caller acts), false after. For a
+  side effect owed once per provider OBJECT rather than per delivery (a
+  refund per adjustment, however many `adjustment.updated` events it gets).
+  A blank/missing id cannot be deduped, so it is always true.
+  """
+  @spec claim(:paddle_adjustment, String.t() | nil) :: boolean()
+  def claim(source, id) when is_binary(id) and id != "" do
+    {n, _} =
+      Repo.insert_all(
+        "processed_webhook_events",
+        [%{provider: to_string(source), event_id: id}],
+        on_conflict: :nothing
+      )
+
+    n == 1
+  end
+
+  def claim(_source, _id), do: true
+
   @doc "Deletes rows past the retention window. Called by IdempotencyPrune."
   @spec prune() :: {:ok, non_neg_integer()}
   def prune do
-    cutoff = DateTime.add(DateTime.utc_now(), -@retention_days, :day)
+    now = DateTime.utc_now()
+    cutoff = DateTime.add(now, -@retention_days, :day)
+    claim_cutoff = DateTime.add(now, -@claim_retention_days, :day)
 
     {count, _} =
-      Repo.delete_all(from(e in "processed_webhook_events", where: e.inserted_at < ^cutoff))
+      Repo.delete_all(
+        from(e in "processed_webhook_events",
+          where:
+            (e.provider not in @claim_sources and e.inserted_at < ^cutoff) or
+              e.inserted_at < ^claim_cutoff
+        )
+      )
 
     {:ok, count}
   end

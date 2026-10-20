@@ -655,6 +655,85 @@ defmodule Engram.Observability.EmittersTest do
              }
     end
 
+    test "an approved refund or chargeback is refund_issued", %{bypass: bypass} do
+      user = user_with_clerk_id()
+      sub = insert(:subscription, user: user, tier: "pro")
+      expect_capture(bypass)
+
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{
+            "event_type" => "adjustment.updated",
+            "data" => %{
+              "action" => "refund",
+              "status" => "approved",
+              "currency_code" => "USD",
+              "totals" => %{"total" => "1400"}
+            }
+          },
+          sub
+        )
+
+      assert_receive {:posthog_body, body}, 1_500
+      assert body["event"] == "refund_issued"
+      assert body["distinct_id"] == PostHog.analytics_id(user.email)
+      assert body["properties"]["action"] == "refund"
+      assert body["properties"]["amount_bucket"] == "10_25"
+      assert body["properties"]["currency"] == "USD"
+      assert body["properties"]["tier"] == "pro"
+    end
+
+    # A chargeback is created approved and then updated (evidence, status
+    # detail) while it stays approved: one refund per adjustment, not per event.
+    test "refund_issued is sent once per adjustment id", %{bypass: bypass} do
+      sub = insert(:subscription, user: user_with_clerk_id(), tier: "pro")
+      expect_captures(bypass)
+
+      for {type, id} <- [
+            {"adjustment.created", "adj_cb_1"},
+            {"adjustment.updated", "adj_cb_1"},
+            {"adjustment.updated", "adj_cb_1"},
+            {"adjustment.updated", "adj_cb_2"}
+          ] do
+        :ok =
+          PostHogForwarder.forward_paddle_event(
+            %{
+              "event_type" => type,
+              "data" => %{
+                "id" => id,
+                "action" => "chargeback",
+                "status" => "approved",
+                "currency_code" => "USD",
+                "totals" => %{"total" => "1400"}
+              }
+            },
+            sub
+          )
+      end
+
+      assert_receive {:posthog_body, %{"event" => "refund_issued"}}, 1_500
+      assert_receive {:posthog_body, %{"event" => "refund_issued"}}, 1_500
+      refute_receive {:posthog_body, %{"event" => "refund_issued"}}, 300
+    end
+
+    test "pending, rejected and credit adjustments send nothing" do
+      sub = insert(:subscription, user: user_with_clerk_id())
+
+      for data <- [
+            %{"action" => "refund", "status" => "pending_approval"},
+            %{"action" => "refund", "status" => "rejected"},
+            %{"action" => "credit", "status" => "approved"}
+          ] do
+        :ok =
+          PostHogForwarder.forward_paddle_event(
+            %{"event_type" => "adjustment.created", "data" => data},
+            sub
+          )
+      end
+
+      refute_receive {:posthog_body, _}, 100
+    end
+
     test "unhandled event types no-op" do
       :ok = PostHogForwarder.forward_paddle_event(%{"event_type" => "transaction.paid"}, :ignored)
       :ok = PostHogForwarder.forward_paddle_event(%{"event_type" => "subscription.paused"}, :ok)
