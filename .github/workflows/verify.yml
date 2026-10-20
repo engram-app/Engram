@@ -1185,6 +1185,7 @@ jobs:
           clean: false  # Preserve _build/ and deps/ for incremental compilation
 
       - name: Checkout plugin
+        timeout-minutes: 5
         env:
           EXPLICIT_BRANCH: ${{ inputs.plugin_branch || github.event.client_payload.plugin_branch || '' }}
           CURRENT_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -1227,7 +1228,17 @@ jobs:
           git remote remove origin 2>/dev/null || true
           git remote add origin \
             "https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git"
-          git fetch origin "$PLUGIN_SHA"
+          # Shallow, stall-aborting, retried. A full-history fetch with no
+          # timeout took up to 885 s on some runners (p50 3 s) and twice hung
+          # until the job was cancelled (runs 39375387565, PR #2072). Nothing
+          # here reads plugin history. Under 10 KB/s for 20 s aborts the try.
+          for attempt in 1 2 3; do
+            GIT_HTTP_LOW_SPEED_LIMIT=10000 GIT_HTTP_LOW_SPEED_TIME=20 \
+              git fetch --depth=1 origin "$PLUGIN_SHA" && break
+            [ "$attempt" = 3 ] && { echo "::error::plugin fetch failed 3 times"; exit 1; }
+            echo "::warning::plugin fetch attempt $attempt stalled or failed; retrying"
+            sleep 5
+          done
           git checkout -B "$BRANCH" "$PLUGIN_SHA"
 
       # ------------------------------------------------------------------
@@ -1855,6 +1866,7 @@ jobs:
           clean: false  # Preserve _build/ and deps/ for incremental compilation
 
       - name: Checkout plugin
+        timeout-minutes: 5
         env:
           EXPLICIT_BRANCH: ${{ inputs.plugin_branch || github.event.client_payload.plugin_branch || '' }}
           CURRENT_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -1897,7 +1909,17 @@ jobs:
           git remote remove origin 2>/dev/null || true
           git remote add origin \
             "https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git"
-          git fetch origin "$PLUGIN_SHA"
+          # Shallow, stall-aborting, retried. A full-history fetch with no
+          # timeout took up to 885 s on some runners (p50 3 s) and twice hung
+          # until the job was cancelled (runs 39375387565, PR #2072). Nothing
+          # here reads plugin history. Under 10 KB/s for 20 s aborts the try.
+          for attempt in 1 2 3; do
+            GIT_HTTP_LOW_SPEED_LIMIT=10000 GIT_HTTP_LOW_SPEED_TIME=20 \
+              git fetch --depth=1 origin "$PLUGIN_SHA" && break
+            [ "$attempt" = 3 ] && { echo "::error::plugin fetch failed 3 times"; exit 1; }
+            echo "::warning::plugin fetch attempt $attempt stalled or failed; retrying"
+            sleep 5
+          done
           git checkout -B "$BRANCH" "$PLUGIN_SHA"
 
       # ------------------------------------------------------------------
@@ -2383,6 +2405,7 @@ jobs:
           clean: false
 
       - name: Checkout plugin
+        timeout-minutes: 5
         env:
           EXPLICIT_BRANCH: ${{ inputs.plugin_branch || github.event.client_payload.plugin_branch || '' }}
           CURRENT_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -2410,7 +2433,17 @@ jobs:
           git remote remove origin 2>/dev/null || true
           git remote add origin \
             "https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git"
-          git fetch origin "$PLUGIN_SHA"
+          # Shallow, stall-aborting, retried. A full-history fetch with no
+          # timeout took up to 885 s on some runners (p50 3 s) and twice hung
+          # until the job was cancelled (runs 39375387565, PR #2072). Nothing
+          # here reads plugin history. Under 10 KB/s for 20 s aborts the try.
+          for attempt in 1 2 3; do
+            GIT_HTTP_LOW_SPEED_LIMIT=10000 GIT_HTTP_LOW_SPEED_TIME=20 \
+              git fetch --depth=1 origin "$PLUGIN_SHA" && break
+            [ "$attempt" = 3 ] && { echo "::error::plugin fetch failed 3 times"; exit 1; }
+            echo "::warning::plugin fetch attempt $attempt stalled or failed; retrying"
+            sleep 5
+          done
           git checkout -B "$BRANCH" "$PLUGIN_SHA"
 
       - name: Allocate dynamic ports
