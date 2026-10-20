@@ -188,15 +188,17 @@ defmodule Engram.SearchChunkTextSourceTest do
     insert_chunk!(ctx, live, 0, "Ferritin live.")
     answer(ctx, [v5_point(ctx, stale, 0.95), v5_point(ctx, live, 0.9)])
 
+    # Every edit opens this window, so it is a counter and a debug line, not
+    # a warning per search.
     {{result, events}, log} =
-      with_log(fn ->
+      with_log([level: :warning], fn ->
         with_event([:engram, :search, :hit_dropped], fn -> search(ctx) end)
       end)
 
     assert {:ok, [hit]} = result
     assert hit.text == "Ferritin live."
     assert [{%{count: 1}, %{reason: :no_chunk_row}}] = events
-    assert log =~ "no chunk row"
+    refute log =~ "no chunk row"
   end
 
   test "only stale points: an empty page, not an error", ctx do
@@ -224,7 +226,172 @@ defmodule Engram.SearchChunkTextSourceTest do
       with_log(fn -> with_event([:engram, :search, :hit_dropped], fn -> search(ctx) end) end)
 
     assert {:ok, [%{text: "Ferritin good."}]} = result
-    assert [{%{count: 1}, %{reason: :text_decrypt_failed}}] = events
+    assert [{%{count: 1}, %{reason: :text_undecryptable}}] = events
+  end
+
+  defp corrupt_text!(ctx, point_id) do
+    {:ok, _} =
+      Repo.with_tenant(ctx.user.id, fn ->
+        Repo.update_all(from(c in Chunk, where: c.qdrant_point_id == ^point_id),
+          set: [text_ciphertext: :crypto.strong_rand_bytes(40)]
+        )
+      end)
+  end
+
+  test "every hit undecryptable fails the search, never an empty page", ctx do
+    ids = for pos <- 0..1, do: Ecto.UUID.generate() |> tap(&insert_chunk!(ctx, &1, pos, "x"))
+    Enum.each(ids, &corrupt_text!(ctx, &1))
+    answer(ctx, for(id <- ids, do: v5_point(ctx, id, 0.9)))
+
+    assert {{:error, :decrypt_failed}, _log} = with_log(fn -> search(ctx) end)
+  end
+
+  test "a DEK outage fails the search, never an empty page", ctx do
+    id = Ecto.UUID.generate()
+    insert_chunk!(ctx, id, 0, "Ferritin.")
+    answer(ctx, [v5_point(ctx, id, 0.9)])
+    keyless = %{ctx.user | encrypted_dek: nil}
+
+    assert {{:error, :decrypt_failed}, _log} =
+             with_log(fn ->
+               Search.search(keyless, ctx.vault, "ferritin", mode: :vector, limit: 5)
+             end)
+  end
+
+  # A second vault of the same user, with its own note.
+  defp other_vault!(ctx) do
+    vault = insert(:vault, user: ctx.user)
+
+    {:ok, note} =
+      Notes.upsert_note(
+        ctx.user,
+        vault,
+        %{"path" => "Other/Zinc.md", "content" => "# Zinc\n\nZinc.", "mtime" => 1.0},
+        actor: "api"
+      )
+
+    %{ctx | vault: vault, note: note}
+  end
+
+  defp cross_vault(ctx, opts \\ []),
+    do:
+      Search.search(
+        ctx.user,
+        nil,
+        "ferritin",
+        [mode: :vector, limit: 5, allow_cross_vault: true] ++ opts
+      )
+
+  test "cross-vault: each hit carries its own row's vault", ctx do
+    other = other_vault!(ctx)
+    a = Ecto.UUID.generate()
+    b = Ecto.UUID.generate()
+    insert_chunk!(ctx, a, 0, "Ferritin here.")
+    insert_chunk!(other, b, 0, "Zinc there.")
+    answer(ctx, [v5_point(ctx, a, 0.9), v5_point(ctx, b, 0.8)])
+
+    assert {:ok, hits} = cross_vault(ctx)
+
+    assert Enum.sort(Enum.map(hits, &{&1.text, &1.vault_id})) ==
+             Enum.sort([
+               {"Ferritin here.", to_string(ctx.vault.id)},
+               {"Zinc there.", to_string(other.vault.id)}
+             ])
+  end
+
+  test "a soft-deleted vault's hit never shows, even with Postgres text", ctx do
+    other = other_vault!(ctx)
+    live = Ecto.UUID.generate()
+    gone = Ecto.UUID.generate()
+    insert_chunk!(ctx, live, 0, "Ferritin live.")
+    insert_chunk!(other, gone, 0, "In a deleted vault.")
+
+    {1, _} =
+      Repo.update_all(
+        from(v in Engram.Vaults.Vault, where: v.id == ^other.vault.id),
+        [set: [deleted_at: DateTime.utc_now(:second)]],
+        skip_tenant_check: true
+      )
+
+    answer(ctx, [v5_point(ctx, gone, 0.95), v5_point(ctx, live, 0.9)])
+
+    {{result, events}, _log} =
+      with_log(fn -> with_event([:engram, :search, :hit_dropped], fn -> cross_vault(ctx) end) end)
+
+    assert {:ok, [%{text: "Ferritin live."}]} = result
+    assert [{%{count: 1}, %{reason: :vault_inactive}}] = events
+  end
+
+  test "grouped: the note's best chunk shows its Postgres text", ctx do
+    a = Ecto.UUID.generate()
+    b = Ecto.UUID.generate()
+    insert_chunk!(ctx, a, 0, "Best chunk.")
+    insert_chunk!(ctx, b, 1, "Second chunk.")
+    answer(ctx, [v5_point(ctx, a, 0.9), v5_point(ctx, b, 0.5)])
+
+    assert {:ok, [note]} =
+             Search.search(ctx.user, ctx.vault, "ferritin",
+               mode: :vector,
+               limit: 5,
+               group_by_note: true
+             )
+
+    assert note.text == "Best chunk."
+    assert note.source_path == "Health/Iron.md"
+    assert note.match_count == 2
+  end
+
+  test "hybrid with MMR: Postgres text on every diversified hit", ctx do
+    ids =
+      for pos <- 0..2, do: Ecto.UUID.generate() |> tap(&insert_chunk!(ctx, &1, pos, "T#{pos}"))
+
+    Engram.QdrantStub.stub_retrieve(ctx.bypass)
+
+    points =
+      for {id, i} <- Enum.with_index(ids) do
+        ctx
+        |> v5_point(id, 1.0 - i / 10)
+        |> Map.put("vector", %{"dense" => [1.0 * i, 1.0, 0.5]})
+      end
+
+    Bypass.expect(ctx.bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(
+        200,
+        Jason.encode!(Engram.QdrantStub.batch(conn, %{"result" => points}))
+      )
+    end)
+
+    assert {:ok, hits} =
+             Search.search(ctx.user, ctx.vault, "ferritin",
+               mode: :hybrid,
+               limit: 3,
+               diversity: 0.5
+             )
+
+    assert Enum.sort(Enum.map(hits, & &1.text)) == ["T0", "T1", "T2"]
+    refute "vault_id" in Engram.QdrantStub.last_retrieve(ctx.bypass)["with_payload"]
+  end
+
+  test "the reranker receives the Postgres text", ctx do
+    prev = Application.get_env(:engram, :reranker)
+    Application.put_env(:engram, :reranker, Engram.MockReranker)
+    on_exit(fn -> Application.put_env(:engram, :reranker, prev || Engram.Rerankers.None) end)
+    insert(:user_limit_override, user: ctx.user, key: "reranker_enabled", value: %{"v" => true})
+
+    id = Ecto.UUID.generate()
+    insert_chunk!(ctx, id, 0, "Ferritin from postgres.")
+    answer(ctx, [legacy_point(ctx, id, "Ferritin from the payload.", 0.9)])
+    test_pid = self()
+
+    expect(Engram.MockReranker, :rerank, fn _query, candidates, _top_n ->
+      send(test_pid, {:reranked, Enum.map(candidates, & &1.text)})
+      {:ok, candidates}
+    end)
+
+    assert {:ok, [_]} = search(ctx)
+    assert_received {:reranked, ["Ferritin from postgres."]}
   end
 
   test "one chunks query per search, whatever the hit count", ctx do

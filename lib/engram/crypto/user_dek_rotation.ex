@@ -1109,6 +1109,11 @@ defmodule Engram.Crypto.UserDekRotation do
     :ok
   end
 
+  @qdrant_encrypted_fields [:text, :title, :heading_path]
+  # Only what the rewrap reads. `set_payloads/2` merges, so writing back just
+  # these keys leaves the filter keys alone.
+  @qdrant_encrypted_keys Enum.flat_map(@qdrant_encrypted_fields, &[to_string(&1), "#{&1}_nonce"])
+
   defp sweep_qdrant(%User{id: user_id}, old_dek, new_dek) do
     collection = Qdrant.collection_name()
     filter = %{must: [%{key: "user_id", match: %{value: user_id}}]}
@@ -1118,7 +1123,7 @@ defmodule Engram.Crypto.UserDekRotation do
   defp sweep_qdrant_loop(collection, filter, user_id, old_dek, new_dek, offset) do
     case Qdrant.scroll(collection,
            filter: filter,
-           with_payload: true,
+           with_payload: @qdrant_encrypted_keys,
            with_vector: false,
            limit: 200,
            offset: offset
@@ -1211,8 +1216,6 @@ defmodule Engram.Crypto.UserDekRotation do
 
     raise "T3.7 sweep_qdrant: point missing id"
   end
-
-  @qdrant_encrypted_fields [:text, :title, :heading_path]
 
   # The v5 flat fields are encrypted with the row-bound AAD from their first
   # write, whatever the row's `dek_version` (`FlatFields.columns/3`), so the

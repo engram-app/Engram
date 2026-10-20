@@ -1466,7 +1466,8 @@ defmodule Engram.Vector.Qdrant do
     * `:filter` — a Qdrant filter map, e.g. `%{must: [%{key: "user_id", match: %{value: 42}}]}`
     * `:limit` — page size (default 200)
     * `:offset` — opaque page-token returned from a prior call's `next_page_offset` (nil on first call)
-    * `:with_payload` — defaults to `true`
+    * `:with_payload` — a list of the keys the caller reads, or `false`
+      (default). Never `true` (Task 15.7).
     * `:with_vector` — defaults to `false`
 
   Returns `{:ok, %{points: [...], next_page_offset: term() | nil}} | {:error, term()}`.
@@ -1483,7 +1484,7 @@ defmodule Engram.Vector.Qdrant do
 
     body = %{
       filter: Keyword.fetch!(opts, :filter),
-      with_payload: Keyword.get(opts, :with_payload, true),
+      with_payload: Keyword.get(opts, :with_payload, false),
       with_vector: Keyword.get(opts, :with_vector, false),
       limit: limit
     }
@@ -1539,7 +1540,7 @@ defmodule Engram.Vector.Qdrant do
       using: "dense",
       filter: build_tenant_filter(search_opts),
       limit: Keyword.get(search_opts, :limit, 5),
-      with_payload: result_payload()
+      with_payload: result_payload(search_opts)
     }
 
     base
@@ -1810,7 +1811,7 @@ defmodule Engram.Vector.Qdrant do
       using: "keyword",
       filter: build_tenant_filter(search_opts),
       limit: Keyword.get(search_opts, :limit, 5),
-      with_payload: result_payload()
+      with_payload: result_payload(search_opts)
     }
     |> maybe_with_vector(search_opts)
   end
@@ -1859,15 +1860,18 @@ defmodule Engram.Vector.Qdrant do
   @result_payload ~w(text title heading_path source_path tags text_nonce
                      title_nonce heading_path_nonce aad_version)
 
-  defp result_payload do
+  # `:chunk_text_read` comes from the caller's search opts, read ONCE per
+  # request by `Engram.Search`, so the keys asked for here and how search
+  # reads the hits never disagree mid-flip.
+  defp result_payload(search_opts) do
     keys = if v5_payload_format?(), do: @result_payload ++ ["u"], else: @result_payload
-    if ServiceConfig.get(:chunk_text_read, false), do: keys, else: ["vault_id" | keys]
+    if Keyword.get(search_opts, :chunk_text_read, false), do: keys, else: ["vault_id" | keys]
   end
 
   defp retrieve(_col, [], _search_opts), do: {:ok, []}
 
   defp retrieve(col, ids, search_opts) do
-    body = maybe_with_vector(%{ids: ids, with_payload: result_payload()}, search_opts)
+    body = maybe_with_vector(%{ids: ids, with_payload: result_payload(search_opts)}, search_opts)
     do_query(col, "/points", [json: body] ++ req_opts(:search), &{:ok, search_results(&1)})
   end
 
@@ -1942,7 +1946,7 @@ defmodule Engram.Vector.Qdrant do
       using: "dense",
       filter: Map.put(build_tenant_filter(search_opts), :must_not, has_ids(point_ids)),
       limit: Keyword.get(search_opts, :limit, 5),
-      with_payload: result_payload()
+      with_payload: result_payload(search_opts)
     }
     |> then(fn b ->
       case quantization_params(search_opts) do

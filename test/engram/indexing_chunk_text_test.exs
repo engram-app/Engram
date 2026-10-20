@@ -103,6 +103,26 @@ defmodule Engram.IndexingChunkTextTest do
       refute text =~ "Transferrin saturation"
     end
 
+    test "a sparse-only (budget-parked) pass also writes text", ctx do
+      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
+
+      assert {:ok, count, 0, false} =
+               Indexing.index_note_with_usage(note, ctx.vault, nil, dense: false)
+
+      pairs = texts(note, ctx.user)
+      assert length(pairs) == count
+      assert Enum.any?(pairs, fn {t, _} -> t =~ "Ferritin levels are low." end)
+    end
+
+    test "a floor point writes its row's text too (empty: no display text)", ctx do
+      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
+
+      assert {:ok, _, _, _} =
+               Indexing.index_note_with_usage(note, ctx.vault, nil, index_tier: "floor")
+
+      assert [{"", nil}] = texts(note, ctx.user)
+    end
+
     test "editing one section rewrites its text and keeps the others", ctx do
       note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
       assert {:ok, _} = Indexing.index_note(note, ctx.vault)
