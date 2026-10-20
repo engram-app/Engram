@@ -256,6 +256,31 @@ defmodule EngramWeb.OAuthRefusalTelemetryTest do
       assert log =~ @message
       assert log =~ "client_id_missing"
     end
+
+    # One OAuth param is enough to make it a connect attempt: a client that
+    # dropped its client_id must still page.
+    test "response_type alone still logs a client_id_missing refusal", %{conn: conn} do
+      log =
+        capture_log(fn ->
+          conn = get(conn, "/oauth/authorize", %{"response_type" => "code"})
+          assert conn.status == 400
+        end)
+
+      assert log =~ @message
+      assert log =~ "client_id_missing"
+    end
+
+    # 2026-10-20: Amazonbot loaded the bare URL and paged on-call through
+    # `mcp-connector-refused`. No OAuth params means nobody tried to connect.
+    test "a bare GET with no OAuth params logs no refusal", %{conn: conn} do
+      log =
+        capture_log(fn ->
+          conn = get(conn, "/oauth/authorize")
+          assert conn.status == 400
+        end)
+
+      refute log =~ @message
+    end
   end
 
   # Asserted on the structured event, because the metadata IS the diagnosis and

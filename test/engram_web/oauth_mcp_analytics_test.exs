@@ -106,6 +106,12 @@ defmodule EngramWeb.OAuthMcpAnalyticsTest do
     assert e["properties"]["scopes_granted"] == ["mcp"]
   end
 
+  test "a bare authorize GET (a crawler) emits no analytics" do
+    get(build_conn(), "/oauth/authorize")
+
+    assert drain() == []
+  end
+
   test "consent emits mcp_oauth_granted with client and scopes", %{client: client, user: user} do
     user = ensure_external_id(user)
     insert(:vault, user: user)
