@@ -36,9 +36,14 @@ defmodule Engram.Vector.PayloadKeys do
   @short Map.new(@keys)
   @long Map.new(@keys, fn {l, s} -> {s, l} end)
 
-  @range %{"type" => "integer", "lookup" => false, "range" => true, "on_disk" => true}
-  @uuid %{"type" => "uuid", "on_disk" => true}
-  @float %{"type" => "float", "on_disk" => true}
+  # ponytail: in memory, not `on_disk` as spec 3.3b asks. The first CI run with
+  # on-disk payload indexes SIGBUSed Qdrant 1.19.2 on its 2 GB tmpfs (each
+  # mutable on-disk index preallocates its storage), and a field no point
+  # carries costs ~0 heap. Switch to on_disk once its per-index disk footprint
+  # is measured on dev 1.19.2, BEFORE prod's disk sees 20 of them per segment.
+  @range %{"type" => "integer", "lookup" => false, "range" => true}
+  @uuid %{"type" => "uuid"}
+  @float %{"type" => "float"}
 
   @doc "Logical names, in declaration order."
   @spec logical_names() :: [atom()]
@@ -57,8 +62,8 @@ defmodule Engram.Vector.PayloadKeys do
   def decode(payload), do: Map.new(payload, fn {k, v} -> {long(to_string(k)) || k, v} end)
 
   @doc """
-  The v5 payload indexes as `{field, schema}`. All on disk, so the heap cost is
-  near zero. `u` also gets `is_tenant` on Qdrant >= 1.19.2 (Task 8.1, layout).
+  The v5 payload indexes as `{field, schema}` (in memory for now, see the
+  schema attributes). `u` also gets `is_tenant` on Qdrant >= 1.19.2 (Task 8.1, layout).
   The source flags are payload only.
   """
   @spec index_fields() :: [{String.t(), map()}]

@@ -1,6 +1,8 @@
 defmodule EngramWeb.McpControllerTest do
   use EngramWeb.ConnCase, async: true
 
+  import Engram.QdrantFilterView
+
   alias Engram.QdrantStub
 
   # ---------------------------------------------------------------------------
@@ -1330,7 +1332,7 @@ defmodule EngramWeb.McpControllerTest do
       assert legs != []
 
       for leg <- legs do
-        clause = Enum.find(leg["filter"]["must"], &(&1["key"] == "vault_id"))
+        clause = Enum.find(legacy_view(leg["filter"]["must"]), &(&1["key"] == "vault_id"))
         assert %{"match" => %{"any" => ids}} = clause
         assert Enum.sort(ids) == Enum.sort([to_string(va.id), to_string(vb.id)])
         refute to_string(vc.id) in ids

@@ -1,6 +1,8 @@
 defmodule EngramWeb.SearchControllerTest do
   use EngramWeb.ConnCase, async: false
 
+  import Engram.QdrantFilterView
+
   import ExUnit.CaptureLog
   import Mox
 
@@ -604,7 +606,7 @@ defmodule EngramWeb.SearchControllerTest do
       assert legs != []
 
       for leg <- legs do
-        clause = Enum.find(leg["filter"]["must"], &(&1["key"] == "vault_id"))
+        clause = Enum.find(legacy_view(leg["filter"]["must"]), &(&1["key"] == "vault_id"))
         assert %{"match" => %{"any" => ids}} = clause
         assert Enum.sort(ids) == Enum.sort([to_string(vault.id), to_string(vault_b.id)])
         refute to_string(vault_c.id) in ids
@@ -647,7 +649,7 @@ defmodule EngramWeb.SearchControllerTest do
       assert_received {:qdrant_body, body}
 
       for leg <- body["searches"] || [body] do
-        clause = Enum.find(leg["filter"]["must"], &(&1["key"] == "vault_id"))
+        clause = Enum.find(legacy_view(leg["filter"]["must"]), &(&1["key"] == "vault_id"))
         assert clause["match"] == %{"value" => to_string(vault.id)}
         refute to_string(vault_b.id) in List.wrap(clause["match"]["any"])
       end
@@ -723,7 +725,7 @@ defmodule EngramWeb.SearchControllerTest do
       assert_received {:qdrant_body, body}
 
       for leg <- body["searches"] || [body] do
-        refute Enum.any?(leg["filter"]["must"] || [], &(&1["key"] == "vault_id"))
+        refute Enum.any?(legacy_view(leg["filter"]["must"]) || [], &(&1["key"] == "vault_id"))
       end
     end
   end
