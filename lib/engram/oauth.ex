@@ -1666,23 +1666,27 @@ defmodule Engram.OAuth do
 
   # A bare DELETE locks rows in heap order and takes no grant lock, so against
   # a revoke (grant lock, then rows by id) each side could hold a row the
-  # other wants: a deadlock. So cleanup takes the revoke's order: every
-  # owner's grant lock, users sorted, then the rows by id, then deletes those
-  # rows. Rows of an owner whose lock it does not hold are left for next hour.
-  # ponytail: one transaction holds one advisory lock per affected user; fine
-  # at hourly volumes, batch by user if a run ever touches thousands.
+  # other wants: a deadlock. So cleanup takes the revoke's order: the owner's
+  # grant lock, then the rows by id, then deletes those rows.
+  #
+  # One transaction PER USER. A single transaction holding every affected
+  # user's grant lock grew with the user count, and blocked each of those
+  # users' sign-ins and refreshes for the whole sweep (2026-10-20 audit).
+  # Rows that appear for a user after the list is read are left for next hour.
   defp delete_tokens_locked(query) do
+    from(t in query, select: t.user_id, distinct: true, order_by: t.user_id)
+    |> Repo.all(skip_tenant_check: true)
+    |> Enum.reduce(0, fn user_id, total -> total + delete_user_tokens_locked(query, user_id) end)
+  end
+
+  defp delete_user_tokens_locked(query, user_id) do
     {:ok, count} =
       Repo.transaction(fn ->
-        users =
-          from(t in query, select: t.user_id, distinct: true, order_by: t.user_id)
-          |> Repo.all(skip_tenant_check: true)
-
-        Enum.each(users, &lock_grants!/1)
+        lock_grants!(user_id)
 
         ids =
           from(t in query,
-            where: t.user_id in ^users,
+            where: t.user_id == ^user_id,
             select: t.id,
             order_by: t.id,
             lock: "FOR UPDATE"

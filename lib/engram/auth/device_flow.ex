@@ -288,13 +288,25 @@ defmodule Engram.Auth.DeviceFlow do
 
     revoke_cutoff = DateTime.utc_now() |> DateTime.add(-7 * 24 * 3600, :second)
 
+    # Each predicate matches a partial index exactly
+    # (device_refresh_tokens_revoked_at_index / _unrevoked_expires_at_index).
     {token_count, _} =
       from(rt in DeviceRefreshToken,
         where: not is_nil(rt.revoked_at) and rt.revoked_at < ^revoke_cutoff
       )
       |> Repo.delete_all(skip_tenant_check: true)
 
-    {auth_count + token_count, nil}
+    # Expired without ever being rotated (an abandoned device). Expired tokens
+    # are refused before revocation is looked at (refresh_access_token/1), so
+    # deleting one changes no outcome. Same week of grace as revoked rows.
+    {expired_count, _} =
+      from(rt in DeviceRefreshToken,
+        where: is_nil(rt.revoked_at) and rt.expires_at < ^revoke_cutoff
+      )
+      # Not a tenant table: no RLS, and the tenant guard never fires here.
+      |> Repo.delete_all()
+
+    {auth_count + token_count + expired_count, nil}
   end
 
   # ── Private ─────────────────────────────────────────────────────
