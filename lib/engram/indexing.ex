@@ -198,6 +198,9 @@ defmodule Engram.Indexing do
 
   defp prepare_chunks(note, user, chunks, opts) do
     dims = Application.get_env(:engram, :embed_dims, @default_dims)
+    # Counted up front so nothing after planning holds the raw chunks: on a
+    # merged note the plan has its own copies (Task 9.2).
+    n = length(chunks)
 
     # A sparse-only pass (`dense: false`, or the embed budget refused the
     # reservation) never calls Voyage. `nil` vectors flow through
@@ -221,9 +224,11 @@ defmodule Engram.Indexing do
              with :ok <- tier_unchanged(note),
                   do: plan_index(note, user, chunks, content_key, opts)
            end),
+         :ok = collect_garbage(n),
          texts = embed_texts(plan),
          {:ok, vectors} <- retained_or_embed(retained, dense?, plan, texts, opts),
          :ok <- ensure_one_vector_per_text(vectors, texts, note),
+         :ok = collect_garbage(n),
          avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id),
          {:ok, prepared} <-
            build_prepared(note, user, plan, vectors, filter_key, avgdl) do
@@ -235,7 +240,7 @@ defmodule Engram.Indexing do
       # A note holding fewer points than its chunks (floored or merged)
       # records how many a full pass would write: the index budget sweep
       # promotes from it.
-      chunk_count = if tier != nil or merged?(plan), do: length(chunks)
+      chunk_count = if tier != nil or merged?(plan), do: n
 
       {:ok,
        Map.merge(prepared, %{
@@ -284,7 +289,10 @@ defmodule Engram.Indexing do
     capped =
       if forced,
         do: chunks,
-        else: cap_chunks(chunks, cap, Enum.any?(rows, &(elem(&1, 3) != nil)))
+        else:
+          chunks
+          |> cap_chunks(cap, Enum.any?(rows, &(elem(&1, 3) != nil)))
+          |> within_pass_embed_budget()
 
     case forced || over_note_cap_tier(note, capped, cap) ||
            over_points_budget_tier(note, user, capped) do
@@ -299,6 +307,39 @@ defmodule Engram.Indexing do
       tier ->
         {tier, false, floor_plan(note, chunks), nil}
     end
+  end
+
+  # Dense bytes one pass may send Voyage (chunker v5 Task 9.2). The pass must
+  # finish inside EmbedNote's 10 minute timeout, or Oban kills it after it
+  # paid and every retry pays again. 12 MiB is ~107 requests of 118 KB: at
+  # the slowest measured ~3 s a full batch that is ~5.3 min, which leaves
+  # the rest for the local work (bounded at 6 s/MB, 3 min at 30 MB). At
+  # Voyage's 3M TPM a pass is >= ~1.4 min even for CJK at a token a char.
+  #
+  # Only a note over ~12 MB of prose reaches it: a paid 30 MB note (1,024
+  # groups x 30 KB) or a self-host one. Prose past the budget is indexed
+  # keyword-only, in note order, so the dense part is the note's first 12
+  # MiB of prose and is the same on every pass: unchanged content reuses its
+  # points, nothing flaps, and no word leaves the keyword leg. Free cannot
+  # reach it (128 x 30 KB is ~3.8 MB). ponytail: a prefix, not a spread;
+  # split the embed across jobs (needs the per-batch vector cache, PR-12) to
+  # cover the rest densely.
+  @max_pass_embed_bytes 12 * 1024 * 1024
+
+  defp within_pass_embed_budget(chunks) do
+    budget = Application.get_env(:engram, :max_pass_embed_bytes, @max_pass_embed_bytes)
+
+    {chunks, _used} =
+      Enum.map_reduce(chunks, 0, fn
+        %{kind: "prose"} = chunk, used ->
+          used = used + IO.iodata_length(chunk.embed_text)
+          {if(used > budget, do: Map.put(chunk, :sparse_only, true), else: chunk), used}
+
+        chunk, used ->
+          {chunk, used}
+      end)
+
+    chunks
   end
 
   # Decided BEFORE any token reservation, so a floored pass reserves nothing.
@@ -321,7 +362,10 @@ defmodule Engram.Indexing do
   # single chunk over the ceiling: the note floors.
   defp over_note_cap_tier(note, chunks, cap) do
     if (is_integer(cap) and length(chunks) > cap) or
-         Enum.any?(chunks, &(UsageMeters.estimate_tokens(&1.embed_text) > @max_merged_tokens)),
+         Enum.any?(
+           chunks,
+           &(UsageMeters.estimate_tokens(IO.iodata_length(&1.embed_text)) > @max_merged_tokens)
+         ),
        do: demoted_tier(note)
   end
 
@@ -493,10 +537,14 @@ defmodule Engram.Indexing do
   defp merge_group([first | _] = members) do
     text = Enum.map_join(members, "\n\n", & &1.text)
 
+    # iodata, prefix + text: binaries, the two inputs were two more copies
+    # of the merged text, ~2x the note on the job (Task 9.2). Each consumer
+    # (fingerprint, keyword encode, Voyage batch) flattens one slice at a
+    # time.
     Map.merge(first, %{
       text: text,
-      context_text: prefix(first.context_text, first.text) <> text,
-      embed_text: prefix(first.embed_text, first.text) <> text,
+      context_text: [prefix(first.context_text, first.text), text],
+      embed_text: [prefix(first.embed_text, first.text), text],
       char_end: members |> Enum.map(& &1.char_end) |> Enum.max(),
       token_count: members |> Enum.map(&UsageMeters.estimate_tokens(&1.text)) |> Enum.sum(),
       merged: true,
@@ -505,7 +553,9 @@ defmodule Engram.Indexing do
   end
 
   # The chunker builds each input as `prefix <> "\n\n" <> text`.
-  defp prefix(input, text), do: binary_part(input, 0, byte_size(input) - byte_size(text))
+  # A copy, so the member's whole input is not kept alive by its prefix.
+  defp prefix(input, text),
+    do: :binary.copy(binary_part(input, 0, byte_size(input) - byte_size(text)))
 
   # A floor point and a merged one both keep their length out of `avgdl`
   # (NULL `token_count`) and encode with `cap_doc_len`.
@@ -926,15 +976,37 @@ defmodule Engram.Indexing do
   @upsert_batch_bytes 8 * 1_048_576
 
   defp upsert_points_batched(points) do
+    n = length(points)
+
     points
     |> point_batches()
     |> Enum.reduce_while(:ok, fn batch, :ok ->
       case Qdrant.upsert_points(collection(), Enum.map(batch, &unpack_point/1)) do
-        :ok -> {:cont, :ok}
+        :ok -> {:cont, collect_garbage(n)}
         other -> {:halt, other}
       end
     end)
   end
+
+  # Per-job memory on a huge note (chunker v5 Task 9.2). A pass allocates
+  # several times the note in short-lived binaries (the parse, request JSON,
+  # ciphertext), and a refc binary is freed only when the process that saw
+  # it collects, so between collections that garbage piled up on top of
+  # the live set: measured at 3 MB, ~10 MB of job memory per MB of note
+  # before, ~8 after. A full sweep at each phase and after each Qdrant batch
+  # caps it at the live set plus one batch. Costs a few ms a sweep, so only
+  # a pass over more than `@collect_above` chunks or points pays it.
+  # ponytail: explicit sweeps, not a restructure; build and upsert one batch
+  # at a time (prepare/commit hand off the whole point list today) if the
+  # live set itself ever outgrows the per-job budget.
+  @collect_above 512
+
+  defp collect_garbage(n) when n > @collect_above do
+    :erlang.garbage_collect()
+    :ok
+  end
+
+  defp collect_garbage(_n), do: :ok
 
   # At most `@upsert_batch` points and `@upsert_batch_bytes` of JSON each. A
   # point bigger than the byte budget goes alone (a floor point is bounded by
@@ -1450,8 +1522,12 @@ defmodule Engram.Indexing do
   # another node, after the TTL, or after a cap eviction re-pays Voyage for that
   # note. Oban's default backoff puts all five attempts inside the TTL. Persist
   # them (chunks table) if failures get common.
-  defp retained_key(note, texts),
-    do: {note.id, :crypto.hash(:sha256, :erlang.term_to_binary({embed_model(), texts}))}
+  # Over iodata, length-prefixed: `term_to_binary` built a copy of every
+  # text (30 MB at 30 MB) just to hash it.
+  defp retained_key(note, texts) do
+    lengths = Enum.map(texts, &[Integer.to_string(IO.iodata_length(&1)), ":", &1])
+    {note.id, :crypto.hash(:sha256, [to_string(embed_model()), "\n" | lengths])}
+  end
 
   defp retained(_note, []), do: :miss
   defp retained(note, texts), do: RetainedVectors.get(retained_key(note, texts))
@@ -1489,8 +1565,8 @@ defmodule Engram.Indexing do
     |> UsageMeters.estimate_tokens()
   end
 
-  defp changed_bytes(%{merged: true, members: members, member_hmacs: hmacs}, new?),
-    do: for({m, h} <- Enum.zip(members, hmacs), new?.(h), do: byte_size(m.embed_text))
+  defp changed_bytes(%{merged: true, member_bytes: bytes, member_hmacs: hmacs}, new?),
+    do: for({b, h} <- Enum.zip(bytes, hmacs), new?.(h), do: b)
 
   defp changed_bytes(chunk, new?),
     do: if(new?.(short_hmac(chunk.context_hmac)), do: [byte_size(chunk.embed_text)], else: [])
@@ -1534,7 +1610,7 @@ defmodule Engram.Indexing do
     result
   end
 
-  defp text_bytes(texts), do: texts |> Enum.map(&byte_size/1) |> Enum.sum()
+  defp text_bytes(texts), do: texts |> Enum.map(&IO.iodata_length/1) |> Enum.sum()
 
   # `false` yields a nil vector per chunk. Kept as an explicit list (not a bare
   # nil) so build_prepared/8 can zip chunks with vectors either way.
@@ -1623,12 +1699,18 @@ defmodule Engram.Indexing do
     do: Jason.Fragment.new(Engram.Native.sparse_json(indices, values))
 
   defp embed_for_indexing(texts) do
+    n = length(texts)
+
     texts
     |> batch_texts()
     |> Enum.reduce_while({:ok, []}, fn batch, {:ok, acc} ->
       case do_embed_batch(batch) do
-        {:ok, vectors} -> {:cont, {:ok, [Enum.map(vectors, &pack_vector/1) | acc]}}
-        other -> {:halt, other}
+        {:ok, vectors} ->
+          :ok = collect_garbage(n)
+          {:cont, {:ok, [Enum.map(vectors, &pack_vector/1) | acc]}}
+
+        other ->
+          {:halt, other}
       end
     end)
     |> case do
@@ -1656,7 +1738,7 @@ defmodule Engram.Indexing do
       texts,
       {[], 0, 0},
       fn text, {batch, count, bytes} ->
-        size = byte_size(text)
+        size = IO.iodata_length(text)
 
         if batch != [] and
              (count + 1 > @embed_batch_size or bytes + size > @embed_batch_bytes) do
@@ -1672,7 +1754,10 @@ defmodule Engram.Indexing do
     )
   end
 
+  # A merged input is iodata until its batch goes out.
   defp do_embed_batch(texts) do
+    texts = Enum.map(texts, &IO.iodata_to_binary/1)
+
     case doc_embed_model() do
       nil -> embedder().embed_texts(texts)
       model -> embedder().embed_texts(texts, model: model)
@@ -1702,6 +1787,7 @@ defmodule Engram.Indexing do
         Map.put(chunk, :context_hmac, hmac)
       end)
       |> with_member_hmacs(content_key, dense?)
+      |> Enum.map(&drop_members/1)
 
     existing =
       for {hmac, point_id, tokens, _members} <- rows,
@@ -1784,7 +1870,8 @@ defmodule Engram.Indexing do
     hmacs
   end
 
-  defp dense_chunk?(chunk, dense?), do: dense? and chunk.kind == "prose"
+  defp dense_chunk?(chunk, dense?),
+    do: dense? and chunk.kind == "prose" and not Map.get(chunk, :sparse_only, false)
 
   # A merged chunk's point holds a length-capped keyword vector and no
   # `avgdl` length, so it never matches an unmerged chunk with the same
@@ -1795,12 +1882,7 @@ defmodule Engram.Indexing do
     merged? = &Map.get(&1, :merged, false)
     {merged, plain} = Enum.split_with(chunks, merged?)
 
-    hmacs =
-      &Engram.Native.hmac_hex_many(
-        content_key,
-        &1,
-        Enum.map(&2, fn c -> fingerprint_input(c) end)
-      )
+    hmacs = &hmac_inputs(content_key, &1, Enum.map(&2, fn c -> {:input, c} end))
 
     restitch(chunks, merged?, hmacs.("merged/" <> prefix, merged), hmacs.(prefix, plain))
   end
@@ -1810,14 +1892,14 @@ defmodule Engram.Indexing do
   # group's members share its kind, so they share its dense-ness and prefix.
   defp with_member_hmacs(chunks, content_key, dense?) do
     member_hmacs = fn dense ->
-      Engram.Native.hmac_hex_many(
+      hmac_inputs(
         content_key,
         fingerprint_prefix(dense),
         for(
           %{merged: true, members: ms} = c <- chunks,
           dense_chunk?(c, dense?) == dense,
           m <- ms,
-          do: fingerprint_input(m)
+          do: {:input, m}
         )
       )
     end
@@ -1838,6 +1920,35 @@ defmodule Engram.Indexing do
       end)
 
     chunks
+  end
+
+  # A planned merged chunk keeps only what metering reads of its members
+  # (`changed_bytes/2`): holding the member chunks kept every original
+  # text, context_text and embed_text alive next to the merged copies, ~3x
+  # the note on the job until commit (Task 9.2).
+  defp drop_members(%{members: members} = chunk) do
+    chunk
+    |> Map.delete(:members)
+    |> Map.put(:member_bytes, Enum.map(members, &byte_size(&1.embed_text)))
+  end
+
+  defp drop_members(chunk), do: chunk
+
+  # `hmac_hex_many/3` over each chunk's `fingerprint_input/1`, 256 at a time:
+  # the inputs are copies (context + embed text), so building them for a
+  # whole 30 MB note at once held ~60 MB extra on the job (Task 9.2).
+  @hmac_slice 256
+
+  defp hmac_inputs(key, prefix, inputs) do
+    inputs
+    |> Enum.chunk_every(@hmac_slice)
+    |> Enum.flat_map(fn slice ->
+      Engram.Native.hmac_hex_many(
+        key,
+        prefix,
+        for({:input, c} <- slice, do: fingerprint_input(c))
+      )
+    end)
   end
 
   # Results computed separately for the chunks `pred` holds for (`yes`) and
@@ -1875,8 +1986,14 @@ defmodule Engram.Indexing do
   # (dense vector). They are capped separately, so past 512 bytes of
   # "folder > title" a title change can leave `context_text` equal while
   # `embed_text` moves. Length-prefixed so the pair cannot be confused.
-  defp fingerprint_input(chunk),
-    do: "#{byte_size(chunk.context_text)}:" <> chunk.context_text <> chunk.embed_text
+  defp fingerprint_input(chunk) do
+    IO.iodata_to_binary([
+      Integer.to_string(IO.iodata_length(chunk.context_text)),
+      ":",
+      chunk.context_text,
+      chunk.embed_text
+    ])
+  end
 
   # `/embed_text`: the dense input dropped the folder in chunker v3 (#1621),
   # so a vector fingerprinted before then came from another string.
@@ -2075,7 +2192,11 @@ defmodule Engram.Indexing do
         chunks,
         fingerprints(content_key, chunks, true),
         fingerprints(content_key, chunks, false),
-        Engram.Native.hmac_hex_many(content_key, "", Enum.map(chunks, & &1.context_text))
+        Engram.Native.hmac_hex_many(
+          content_key,
+          "",
+          Enum.map(chunks, &IO.iodata_to_binary(&1.context_text))
+        )
       ])
 
     {matched, _left} =

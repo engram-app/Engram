@@ -181,7 +181,11 @@ defmodule Engram.IndexingNoteCapTest do
       capped = Indexing.cap_chunks(Markdown.parse(content, "Big.md"), 3)
 
       assert length(capped) > 3
-      assert Enum.all?(capped, &(UsageMeters.estimate_tokens(&1.embed_text) <= 7_500))
+
+      assert Enum.all?(
+               capped,
+               &(UsageMeters.estimate_tokens(IO.iodata_length(&1.embed_text)) <= 7_500)
+             )
     end
 
     test "a merged chunk's inputs are what a single chunk with its text gets", %{
@@ -193,10 +197,12 @@ defmodule Engram.IndexingNoteCapTest do
 
       assert first_group.heading_path == first.heading_path
 
-      assert first_group.context_text ==
+      # iodata on a merged chunk (prefix, text), flattened by each consumer.
+      assert IO.iodata_to_binary(first_group.context_text) ==
                prefix.(first.context_text, first.text) <> first_group.text
 
-      assert first_group.embed_text == prefix.(first.embed_text, first.text) <> first_group.text
+      assert IO.iodata_to_binary(first_group.embed_text) ==
+               prefix.(first.embed_text, first.text) <> first_group.text
     end
 
     test "under the cap the list is returned unchanged" do
@@ -294,6 +300,53 @@ defmodule Engram.IndexingNoteCapTest do
       assert Crypto.dek_content_hash_key(user) != Crypto.dek_content_hash_key(other)
       assert [same, same] = bounds
       assert length(same) < 500
+    end
+  end
+
+  # Chunker v5 Task 9.2: one pass sends Voyage at most `max_pass_embed_bytes`
+  # (12 MiB in prod), so a huge note finishes inside EmbedNote's timeout.
+  # Lowered here so a small note crosses it.
+  describe "the per-pass embed budget" do
+    setup do
+      prev = Application.get_env(:engram, :max_pass_embed_bytes)
+      Application.put_env(:engram, :max_pass_embed_bytes, 2_000)
+
+      on_exit(fn ->
+        if is_nil(prev),
+          do: Application.delete_env(:engram, :max_pass_embed_bytes),
+          else: Application.put_env(:engram, :max_pass_embed_bytes, prev)
+      end)
+    end
+
+    test "prose past it is keyword-only; the first prose stays dense, and reuses", %{
+      user: user,
+      vault: vault
+    } do
+      note = insert_note(user, vault, sections(100))
+      stub_embedder()
+
+      # Every section is on the keyword leg, the dense part is a prefix.
+      {:ok, prepared} = Indexing.prepare_index(note, vault, user)
+      {:ok, key} = Crypto.dek_filter_key(user)
+      dim = QdrantSparse.dim(key, "section100")
+
+      assert Enum.any?(
+               prepared.qdrant_points,
+               &(dim in QdrantSparse.unpack(&1.vector["keyword"]).indices)
+             )
+
+      texts = embedded_texts()
+      assert texts != []
+      assert texts |> Enum.map(&byte_size/1) |> Enum.sum() <= 2_000
+      assert hd(texts) =~ "section1 body"
+      refute Enum.any?(texts, &(&1 =~ "section100 body"))
+
+      assert {:ok, 100, _, true} = Indexing.index_note_with_usage(note, vault, user)
+      assert embedded_texts() == texts
+
+      # Unchanged: every point reused, no embedder call.
+      assert {:ok, 100, 0, true} = Indexing.index_note_with_usage(note, vault, user)
+      assert embedded_texts() == []
     end
   end
 

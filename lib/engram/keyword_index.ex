@@ -23,7 +23,7 @@ defmodule Engram.KeywordIndex do
   tokenizes a second time just to count.
   """
   @callback encode_documents(
-              texts :: [String.t()],
+              texts :: [iodata()],
               filter_key :: binary(),
               avgdl :: float(),
               language :: atom() | nil
@@ -38,7 +38,7 @@ defmodule Engram.KeywordIndex do
   whole-note vector).
   """
   @callback encode_documents(
-              texts :: [String.t()],
+              texts :: [iodata()],
               filter_key :: binary(),
               avgdl :: float(),
               language :: atom() | nil,

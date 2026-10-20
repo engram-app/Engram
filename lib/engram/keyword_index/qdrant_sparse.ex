@@ -76,7 +76,12 @@ defmodule Engram.KeywordIndex.QdrantSparse do
       |> calls()
       |> Enum.flat_map(fn batch ->
         for {indices, values, doc_len} <-
-              Engram.Native.encode_documents(batch, filter_key, avgdl / 1, lang),
+              Engram.Native.encode_documents(
+                Enum.map(batch, &IO.iodata_to_binary/1),
+                filter_key,
+                avgdl / 1,
+                lang
+              ),
             do: {%{indices: indices, values: values}, doc_len}
       end)
 
@@ -92,10 +97,12 @@ defmodule Engram.KeywordIndex.QdrantSparse do
       texts,
       {[], 0, 0},
       fn text, {batch, count, bytes} ->
+        size = IO.iodata_length(text)
+
         if batch != [] and
-             (count == @docs_per_call or bytes + byte_size(text) > @bytes_per_call),
-           do: {:cont, Enum.reverse(batch), {[text], 1, byte_size(text)}},
-           else: {:cont, {[text | batch], count + 1, bytes + byte_size(text)}}
+             (count == @docs_per_call or bytes + size > @bytes_per_call),
+           do: {:cont, Enum.reverse(batch), {[text], 1, size}},
+           else: {:cont, {[text | batch], count + 1, bytes + size}}
       end,
       fn
         {[], _, _} -> {:cont, {[], 0, 0}}
@@ -107,7 +114,7 @@ defmodule Engram.KeywordIndex.QdrantSparse do
   defp cap_doc_len(text, {_vector, doc_len} = encoded, filter_key, avgdl, lang) do
     if doc_len > avgdl do
       [{indices, values, ^doc_len}] =
-        Engram.Native.encode_documents([text], filter_key, doc_len / 1, lang)
+        Engram.Native.encode_documents([IO.iodata_to_binary(text)], filter_key, doc_len / 1, lang)
 
       {%{indices: indices, values: values}, doc_len}
     else
