@@ -73,12 +73,13 @@ export function formatPlanPrice(
 export const FREE_TIER = {
 	name: msg("Free"),
 	price: "$0",
-	// Decision 2026-10-17: Free stores 3,000 notes and every one is
-	// searchable. The upgrade levers are the daily AI search limit and more
-	// vaults, so those are what the summary states.
-	summary: msg("3,000 notes · 20 AI searches a day · 1 vault"),
+	// Decision 2026-10-19: Free stores 2,000 notes (Starter 20,000, Pro
+	// 40,000) and every one is searchable. The upgrade levers are the daily
+	// AI search limit, more vaults and more notes, so those are what the
+	// summary states.
+	summary: msg("2,000 notes · 20 AI searches a day · 1 vault"),
 	features: [
-		msg("3,000 notes, all searchable"),
+		msg("2,000 notes, all searchable"),
 		msg("20 AI searches a day"),
 		msg("1 vault"),
 		msg("1 GB attachments"),
@@ -98,6 +99,7 @@ export const PLAN_CATALOG: Record<PlanTier, PlanCardCatalog> = {
 		monthlyPrice: 7,
 		annualPrice: 70,
 		features: [
+			msg("20,000 notes"),
 			msg("10 vaults"),
 			msg("Unlimited devices"),
 			msg("10 GB attachments"),
@@ -115,7 +117,12 @@ export const PLAN_CATALOG: Record<PlanTier, PlanCardCatalog> = {
 		// in `LimitKeys` (API access is every tier's since #1974). Reranking is also
 		// pro-only but ships with RERANKER_BACKEND unset, so it stays off this
 		// list until the backend is actually deployed.
-		features: [msg("Unlimited vaults"), msg("50 GB attachments"), msg("Cross-vault search")],
+		features: [
+			msg("Unlimited vaults"),
+			msg("40,000 notes"),
+			msg("50 GB attachments"),
+			msg("Cross-vault search"),
+		],
 	},
 };
 

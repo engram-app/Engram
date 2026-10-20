@@ -49,7 +49,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
-			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -116,7 +116,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
-			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -183,7 +183,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
-			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -250,7 +250,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
-			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -317,7 +317,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
-			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -384,7 +384,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
-			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -451,7 +451,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
-			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -518,7 +518,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
-			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -585,7 +585,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
-			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -652,7 +652,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
-			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -719,7 +719,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
-			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -786,7 +786,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
-			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -853,7 +853,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
-			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -920,7 +920,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
-			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -987,7 +987,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
-			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -1054,7 +1054,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
-			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",
@@ -1121,7 +1121,7 @@
 		"descriptions": {
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
-			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 			"Read": "Permission column header in a vault access table: the connection may read notes. A noun, not a verb.",
 			"Write": "Permission column header in a vault access table, next to the 'Read' column: the connection may change notes. Names the permission (a noun like 'write access'), never a command and never a Save button.",
 			"the device on {os} that syncs your '{vault}' vault (last active {since})": "Names an already-connected device (computer or phone) by the vault it syncs. A noun phrase, not a sentence.",

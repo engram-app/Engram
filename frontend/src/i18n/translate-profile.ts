@@ -161,7 +161,7 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
 	// cs read {folder} as a vault ("ve skladu", 2026-10-18).
 	"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 	// ja joined the items with 、 and dropped the separators (2026-10-18).
-	"3,000 notes · 20 AI searches a day · 1 vault":
+	"2,000 notes · 20 AI searches a day · 1 vault":
 		"Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
 	Reading: "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view.",
 	"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
