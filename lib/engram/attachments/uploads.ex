@@ -241,6 +241,13 @@ defmodule Engram.Attachments.Uploads do
     end
   end
 
+  @doc """
+  Drops an abandoned session (the expiry sweep's entry point). Same path as
+  `abort/3`, so a concurrent `complete/3` and the sweep cannot both act.
+  """
+  @spec expire(Upload.t()) :: :ok
+  def expire(%Upload{} = up), do: drop(%{id: up.user_id}, %{id: up.vault_id}, up)
+
   # -- Private --
 
   defp cast_request(attrs) do
@@ -419,11 +426,28 @@ defmodule Engram.Attachments.Uploads do
     # another caller consumed is theirs to clean up.
     _ =
       with :ok <- delete_session(user, vault, up) do
-        _ = if is_nil(up.assembled_at), do: abort_storage(up.storage_key, up.s3_upload_id)
-        delete_object(up.storage_key)
+        if is_nil(up.assembled_at) do
+          _ = abort_storage(up.storage_key, up.s3_upload_id)
+          delete_object(up.storage_key)
+        else
+          # Belt and braces: a live row never shares a consumed session's key.
+          unless referenced?(user, vault, up.storage_key), do: delete_object(up.storage_key)
+        end
       end
 
     :ok
+  end
+
+  defp referenced?(user, vault, storage_key) do
+    {:ok, found?} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.exists?(
+          from(a in Attachments.scoped(user, vault), where: a.storage_key == ^storage_key)
+        )
+      end)
+      |> unwrap()
+
+    found?
   end
 
   # `{:error, :not_found}` when another caller already consumed the session,
