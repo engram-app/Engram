@@ -225,7 +225,10 @@ defmodule Engram.Mailer do
         {I18n.t(l, "Your AI tool is connected to Engram"), t(l, "Your AI tool is connected"),
          t(l, "Your AI tool can now use the vaults you chose in your Engram account."),
          t(l, "Ask your AI tool to save a note, and it shows up in your vault."),
-         with_link(I18n.t(l, "If you didn't connect this tool, {link}.", link: @link_marker), disconnect)}
+         with_link(
+           I18n.t(l, "If you didn't connect this tool, {link}.", link: @link_marker),
+           disconnect
+         )}
       end
 
     body = """
