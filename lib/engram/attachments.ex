@@ -4,13 +4,15 @@ defmodule Engram.Attachments do
   All operations are tenant-scoped via Repo.with_tenant/2.
 
   Binary storage goes to the configured S3-compatible adapter
-  (MinIO locally, Tigris in prod). Ciphertext only — every row
-  is `encryption_version = 1` since A.5 (PR #62, 2026-05-02).
+  (MinIO locally, Tigris in prod). Ciphertext only: `encryption_version`
+  1 is one DEK-sealed blob (single-request uploads), 2 is segmented under a
+  per-file key (`Engram.Attachments.SegmentedCipher`, chunked uploads).
   """
 
   import Ecto.Query
 
   alias Engram.Attachments.Attachment
+  alias Engram.Attachments.SegmentedCipher
   alias Engram.Billing
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
@@ -339,7 +341,10 @@ defmodule Engram.Attachments do
 
   @doc """
   Gets an attachment by path. Returns nil for soft-deleted.
-  Fetches binary content from the configured storage backend.
+
+  Format v1: `content` is the plaintext, fetched and decrypted here.
+  Format v2: `content` is `{:segments, stream}`, the whole file as a lazy
+  `segment_stream/4`; nothing is fetched until it is consumed.
   """
   def get_attachment(user, vault, path) do
     path = PathSanitizer.sanitize(path)
@@ -379,6 +384,12 @@ defmodule Engram.Attachments do
         )
 
         {:error, {:storage, :blob_missing}}
+
+      {:ok, %Attachment{encryption_version: 2} = att} ->
+        {:ok, att} = Crypto.maybe_decrypt_attachment_fields(att, user)
+
+        with {:ok, stream} <- segment_stream(user, att, 0, att.size_bytes - 1),
+             do: {:ok, %{att | content: {:segments, stream}}}
 
       {:ok, %Attachment{} = att} ->
         {:ok, att} = Crypto.maybe_decrypt_attachment_fields(att, user)
@@ -424,6 +435,83 @@ defmodule Engram.Attachments do
         end
 
       {:error, _} = err ->
+        err
+    end
+  end
+
+  @doc """
+  Plaintext bytes `first..last` (inclusive) of a format-v2 attachment: a lazy
+  stream of `{:ok, bytes} | {:error, reason}`, one item per segment touched,
+  trimmed to the range. Each segment is fetched with a ranged GET and opened
+  only when the stream reaches it. Consumers stop at the first error, which
+  is already logged here.
+
+  The segment count comes from the row, never from the object's size: the
+  final-segment flag in the AAD only catches a truncated object if the
+  count is authoritative.
+  """
+  @spec segment_stream(map(), Attachment.t(), non_neg_integer(), non_neg_integer()) ::
+          {:ok, Enumerable.t()} | {:error, :decrypt_failed}
+  def segment_stream(
+        user,
+        %Attachment{encryption_version: 2, size_bytes: size} = att,
+        first,
+        last
+      )
+      when is_integer(first) and is_integer(last) and 0 <= first and first <= last and
+             last < size do
+    with {:ok, dek} <- Crypto.get_dek(fresh_user(user)),
+         {:ok, key} <-
+           SegmentedCipher.unwrap_key(att.wrapped_file_key, att.file_key_nonce, dek, att.id) do
+      seg = att.segment_size
+
+      {:ok,
+       Stream.map(div(first, seg)..div(last, seg)//1, fn i ->
+         with {:ok, plain} <- read_segment(att, key, i) do
+           lo = max(first - i * seg, 0)
+           hi = min(last - i * seg, byte_size(plain) - 1)
+           {:ok, binary_part(plain, lo, hi - lo + 1)}
+         end
+       end)}
+    else
+      _ -> {:error, :decrypt_failed}
+    end
+  end
+
+  defp read_segment(%Attachment{segment_size: seg, segment_count: count} = att, key, i) do
+    overhead = SegmentedCipher.overhead()
+    plain_len = if i == count - 1, do: att.size_bytes - (count - 1) * seg, else: seg
+
+    offset = i * (seg + overhead)
+
+    result =
+      case Storage.adapter().get_range(att.storage_key, offset, plain_len + overhead) do
+        {:ok, sealed} ->
+          with :error <- SegmentedCipher.open_segment(sealed, key, att.upload_id, i, count),
+               do: {:error, :segment_corrupt}
+
+        {:error, reason} ->
+          {:error, {:storage, reason}}
+      end
+
+    case result do
+      {:ok, plain} ->
+        {:ok, plain}
+
+      {:error, reason} = err ->
+        require Logger
+        # No path and no bytes: the id and segment index locate the damage.
+        reason_str = Metadata.safe_reason(reason)
+
+        Logger.error(
+          "attachment segment unreadable: #{reason_str}",
+          Metadata.with_category(:error, :sync,
+            attachment_id: att.id,
+            segment: i,
+            reason: reason_str
+          )
+        )
+
         err
     end
   end

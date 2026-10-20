@@ -1330,4 +1330,201 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert body["attachments"] == []
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # GET /attachments/*path for format v2 (segmented, chunked uploads)
+  # ---------------------------------------------------------------------------
+
+  describe "GET /attachments/*path (v2 segmented)" do
+    import ExUnit.CaptureLog
+
+    alias Engram.Attachments.{Attachment, SegmentedCipher, Uploads}
+    alias Engram.Repo
+    alias Engram.Storage.InMemory
+
+    @seg 8 * 1024 * 1024
+    # Two segments, 11.5 MB: over the 11 MB single-request ceiling.
+    @big @seg + 3 * 1024 * 1024
+
+    setup %{user: user, vault: vault} do
+      insert(:user_limit_override,
+        user: user,
+        key: "max_file_bytes",
+        value: %{"v" => 100 * 1024 * 1024}
+      )
+
+      bytes = :crypto.strong_rand_bytes(@big)
+      att = upload_v2(user, vault, "videos/clip.mp4", bytes)
+      %{bytes: bytes, att: att}
+    end
+
+    defp upload_v2(user, vault, path, bytes) do
+      {:ok, up} =
+        Uploads.start(user, vault, %{path: path, size_bytes: byte_size(bytes), mtime: 1.0})
+
+      for {part, n} <- Enum.with_index(chunk(bytes), 1),
+          do: {:ok, _} = Uploads.put_part(user, vault, up.id, n, part)
+
+      {:ok, att} = Uploads.complete(user, vault, up.id)
+      Repo.get!(Attachment, att.id, skip_tenant_check: true)
+    end
+
+    defp chunk(<<part::binary-size(@seg), rest::binary>>) when rest != "",
+      do: [part | chunk(rest)]
+
+    defp chunk(last), do: [last]
+
+    test "?raw=1 streams the plaintext with the metadata headers", %{
+      conn: conn,
+      bytes: bytes,
+      att: att
+    } do
+      resp = get(conn, "/api/attachments/videos/clip.mp4?raw=1")
+
+      assert resp.status == 200
+      assert resp.state == :chunked
+      assert resp.resp_body == bytes
+      assert get_resp_header(resp, "x-engram-content-hash") == [att.content_hash]
+      assert get_resp_header(resp, "content-length") == [Integer.to_string(@big)]
+      assert get_resp_header(resp, "accept-ranges") == ["bytes"]
+      assert get_resp_header(resp, "content-disposition") == [~s(attachment; filename="clip.mp4")]
+    end
+
+    test "Range: bytes=N- from a segment boundary is 206 with segment 2 onward", %{
+      conn: conn,
+      bytes: bytes
+    } do
+      resp =
+        conn
+        |> put_req_header("range", "bytes=#{@seg}-")
+        |> get("/api/attachments/videos/clip.mp4?raw=1")
+
+      assert resp.status == 206
+      assert resp.resp_body == binary_part(bytes, @seg, @big - @seg)
+      assert get_resp_header(resp, "content-range") == ["bytes #{@seg}-#{@big - 1}/#{@big}"]
+      assert get_resp_header(resp, "content-length") == [Integer.to_string(@big - @seg)]
+    end
+
+    test "Range: bytes=N-M across a boundary returns exactly those bytes", %{
+      conn: conn,
+      bytes: bytes
+    } do
+      {first, last} = {@seg - 5, @seg + 9}
+
+      resp =
+        conn
+        |> put_req_header("range", "bytes=#{first}-#{last}")
+        |> get("/api/attachments/videos/clip.mp4?raw=1")
+
+      assert resp.status == 206
+      assert resp.resp_body == binary_part(bytes, first, last - first + 1)
+      assert get_resp_header(resp, "content-range") == ["bytes #{first}-#{last}/#{@big}"]
+    end
+
+    test "Range end past the file is clamped to the last byte", %{conn: conn, bytes: bytes} do
+      resp =
+        conn
+        |> put_req_header("range", "bytes=#{@big - 3}-#{@big * 2}")
+        |> get("/api/attachments/videos/clip.mp4?raw=1")
+
+      assert resp.status == 206
+      assert resp.resp_body == binary_part(bytes, @big - 3, 3)
+      assert get_resp_header(resp, "content-range") == ["bytes #{@big - 3}-#{@big - 1}/#{@big}"]
+    end
+
+    test "a Range starting at or past the end is 416", %{conn: conn} do
+      resp =
+        conn
+        |> put_req_header("range", "bytes=#{@big}-")
+        |> get("/api/attachments/videos/clip.mp4?raw=1")
+
+      assert resp.status == 416
+      assert get_resp_header(resp, "content-range") == ["bytes */#{@big}"]
+    end
+
+    test "multi-range and suffix forms are ignored: 200 with the full body", %{
+      conn: conn,
+      bytes: bytes
+    } do
+      for range <- ["bytes=0-1,5-6", "bytes=-100", "items=0-1", "bytes=9-3"] do
+        resp =
+          conn
+          |> put_req_header("range", range)
+          |> get("/api/attachments/videos/clip.mp4?raw=1")
+
+        assert resp.status == 200, range
+        assert resp.resp_body == bytes
+      end
+    end
+
+    test "JSON show above the single-request ceiling is 409 use_raw_download", %{conn: conn} do
+      assert %{"error" => "use_raw_download"} =
+               conn |> get("/api/attachments/videos/clip.mp4") |> json_response(409)
+    end
+
+    test "JSON show of a small v2 row returns the assembled bytes", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      small = :crypto.strong_rand_bytes(5000)
+      _ = upload_v2(user, vault, "small.bin", small)
+
+      body = conn |> get("/api/attachments/small.bin") |> json_response(200)
+      assert Base.decode64!(body["content_base64"]) == small
+      assert body["size_bytes"] == 5000
+    end
+
+    # Over a real Bandit socket: once headers are out the status cannot
+    # change, so a bad segment must cut the connection rather than let Bandit
+    # finish the body (Plug.Test never shows what reaches the wire).
+    test "a tampered segment cuts the connection after headers, with an error log", %{
+      user: user,
+      att: att
+    } do
+      {:ok, blob} = InMemory.get(att.storage_key)
+      at = @seg + SegmentedCipher.overhead() + 100
+      <<head::binary-size(at), b, rest::binary>> = blob
+      :ok = InMemory.put(att.storage_key, <<head::binary, Bitwise.bxor(b, 1), rest::binary>>)
+
+      {:ok, pid} =
+        start_supervised(
+          {Bandit, plug: EngramWeb.Endpoint, port: 0, ip: :loopback, startup_log: false}
+        )
+
+      {:ok, {_ip, port}} = ThousandIsland.listener_info(pid)
+      {:ok, sock} = :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false])
+      {:ok, key, _} = Engram.Accounts.create_api_key(user, "socket-key")
+
+      log =
+        capture_log(fn ->
+          :ok =
+            :gen_tcp.send(
+              sock,
+              "GET /api/attachments/videos/clip.mp4?raw=1 HTTP/1.1\r\nhost: localhost\r\n" <>
+                "authorization: Bearer #{key}\r\n\r\n"
+            )
+
+          data = recv_until_closed(sock, [])
+          [headers, body] = :binary.split(data, "\r\n\r\n")
+
+          assert headers =~ "HTTP/1.1 200 OK"
+          assert headers =~ ~r/content-length: #{@big}/i
+          # Only the first, untampered segment made it out.
+          assert byte_size(body) < @big
+          assert byte_size(body) <= @seg
+        end)
+
+      assert log =~ "attachment segment unreadable"
+      assert log =~ att.id
+      refute log =~ "clip.mp4"
+    end
+
+    defp recv_until_closed(sock, acc) do
+      case :gen_tcp.recv(sock, 0, 5_000) do
+        {:ok, data} -> recv_until_closed(sock, [acc | data])
+        {:error, :closed} -> IO.iodata_to_binary(acc)
+      end
+    end
+  end
 end

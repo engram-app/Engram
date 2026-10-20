@@ -1372,6 +1372,82 @@ defmodule Engram.Crypto.UserDekRotationTest do
     end
   end
 
+  # Format v2: the DEK wraps only the per-file key, so rotation rewraps 32
+  # bytes and never touches the blob.
+  describe "rotate_user/1 - segmented (v2) attachments" do
+    alias Engram.Attachments.{Upload, Uploads}
+    alias Engram.Storage.InMemory
+
+    setup %{user: user} do
+      {:ok, vault: Engram.Fixtures.insert_vault!(user, "V2Rotation")}
+    end
+
+    defp reload_user(user),
+      do:
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+    test "rewraps only the file key; the blob is untouched and still downloads", %{
+      user: user,
+      vault: vault
+    } do
+      bytes = :crypto.strong_rand_bytes(3000)
+      {:ok, up} = Uploads.start(user, vault, %{path: "big.txt", size_bytes: 3000, mtime: 1.0})
+      {:ok, _} = Uploads.put_part(user, vault, up.id, 1, bytes)
+      {:ok, att} = Uploads.complete(user, vault, up.id)
+
+      before = Repo.get!(Engram.Attachments.Attachment, att.id, skip_tenant_check: true)
+      {:ok, blob_before} = InMemory.get(before.storage_key)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      after_ = Repo.get!(Engram.Attachments.Attachment, att.id, skip_tenant_check: true)
+      {:ok, blob_after} = InMemory.get(after_.storage_key)
+
+      assert blob_after == blob_before
+      assert after_.wrapped_file_key != before.wrapped_file_key
+      assert after_.file_key_nonce != before.file_key_nonce
+      assert after_.dek_version == 2
+      assert is_nil(after_.dek_version_pending)
+      assert is_nil(after_.content_nonce)
+
+      assert Map.take(after_, [:encryption_version, :upload_id, :segment_size, :segment_count]) ==
+               Map.take(before, [:encryption_version, :upload_id, :segment_size, :segment_count])
+
+      reloaded = reload_user(user)
+      {:ok, fetched} = Attachments.get_attachment(reloaded, vault, "big.txt")
+      assert {:segments, stream} = fetched.content
+      assert stream |> Enum.map(fn {:ok, b} -> b end) |> IO.iodata_to_binary() == bytes
+    end
+
+    test "an upload in flight across a rotation still completes", %{user: user, vault: vault} do
+      bytes = :crypto.strong_rand_bytes(2000)
+
+      {:ok, up} =
+        Uploads.start(user, vault, %{path: "inflight.txt", size_bytes: 2000, mtime: 1.0})
+
+      {:ok, _} = Uploads.put_part(user, vault, up.id, 1, bytes)
+      before = Repo.get!(Upload, up.id, skip_tenant_check: true)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      after_ = Repo.get!(Upload, up.id, skip_tenant_check: true)
+      assert after_.wrapped_file_key != before.wrapped_file_key
+      assert after_.path_ciphertext != before.path_ciphertext
+
+      reloaded = reload_user(user)
+      {:ok, filter_key} = Crypto.dek_filter_key(reloaded)
+      assert after_.path_hmac == Crypto.hmac_field(filter_key, "inflight.txt")
+
+      assert {:ok, _} = Uploads.complete(reloaded, vault, up.id)
+
+      {:ok, fetched} = Attachments.get_attachment(reloaded, vault, "inflight.txt")
+      assert {:segments, stream} = fetched.content
+      assert stream |> Enum.map(fn {:ok, b} -> b end) |> IO.iodata_to_binary() == bytes
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Production-path bug regression tests
   #

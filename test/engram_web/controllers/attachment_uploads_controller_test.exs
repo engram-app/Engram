@@ -217,9 +217,8 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
              )
 
     assert row.id == att["id"]
-    # ponytail: serving v2 over `?raw=1` lands in Task 6; read the stored
-    # segments directly until then.
     assert decrypt_stored(user, row) == bytes
+    assert conn |> get("/api/attachments/photos/a.png?raw=1") |> response(200) == bytes
     refute InMemory.exists?(v1_key)
   end
 

@@ -550,7 +550,17 @@ defmodule EngramWeb.AttachmentsController do
     ],
     responses: [
       ok: {"Attachment", "application/json", Schemas.AttachmentWithContent},
+      partial_content:
+        {"With `?raw=1` and `Range: bytes=N-` or `bytes=N-M` on a file uploaded in parts: " <>
+           "exactly the requested bytes, described by `content-range`.",
+         "application/octet-stream", %OpenApiSpex.Schema{type: :string, format: :binary}},
       not_found: {"No such attachment", "application/json", Schemas.MessageError},
+      conflict:
+        {"`use_raw_download`: the file is too large for the JSON body; use `?raw=1`.",
+         "application/json", Schemas.MessageError},
+      requested_range_not_satisfiable:
+        {"The range starts at or past the end of the file.", "application/json",
+         Schemas.MessageError},
       bad_gateway: {"Storage fetch failed", "application/json", Schemas.MessageError},
       internal_server_error: {"Fetch error", "application/json", Schemas.MessageError}
     ]
@@ -570,30 +580,118 @@ defmodule EngramWeb.AttachmentsController do
           conn
           |> maybe_skip_compression(att.mime_type)
           |> put_metadata_headers(att)
-          |> AttachmentRawResponse.send(att, inline_safe?(att.mime_type))
+          |> send_raw(user, att)
         else
-          # compat(plugin): raw_attachment_download - remove when plugin floor includes Engram-obsidian#555 (#1877)
-          json(conn, %{
-            id: att.id,
-            path: att.path,
-            mime_type: att.mime_type,
-            size_bytes: att.size_bytes,
-            mtime: att.mtime,
-            content_hash: att.content_hash,
-            # Pre-quoted fragment: the base64 alphabet needs no JSON escaping,
-            # so this skips Jason's escape scan over a multi-MB string. Same
-            # bytes on the wire (pinned by a byte-identity test).
-            content_base64: Jason.Fragment.new([?", Base.encode64(att.content), ?"]),
-            created_at: att.created_at,
-            updated_at: att.updated_at
-          })
+          show_json(conn, att)
         end
 
-      {:error, {:storage, _reason}} ->
-        conn |> put_status(502) |> json(%{error: "failed to fetch attachment from storage"})
+      {:error, reason} ->
+        fetch_error(conn, reason)
+    end
+  end
 
-      {:error, _reason} ->
-        conn |> put_status(500) |> json(%{error: "internal error fetching attachment"})
+  defp fetch_error(conn, {:storage, _reason}),
+    do: conn |> put_status(502) |> json(%{error: "failed to fetch attachment from storage"})
+
+  defp fetch_error(conn, _reason),
+    do: conn |> put_status(500) |> json(%{error: "internal error fetching attachment"})
+
+  defp send_raw(conn, _user, %{content: bytes} = att) when is_binary(bytes),
+    do: AttachmentRawResponse.send(conn, att, inline_safe?(att.mime_type))
+
+  # Format v2: streamed segment by segment, so a Range costs only the
+  # segments it touches. The body is trimmed to exactly the requested bytes.
+  defp send_raw(conn, user, att) do
+    size = att.size_bytes
+    conn = put_resp_header(conn, "accept-ranges", "bytes")
+
+    case byte_range(get_req_header(conn, "range"), size) do
+      :full ->
+        conn
+        |> put_resp_header("content-length", Integer.to_string(size))
+        |> AttachmentRawResponse.send(att, inline_safe?(att.mime_type))
+
+      {first, last} ->
+        case Attachments.segment_stream(user, att, first, last) do
+          {:ok, stream} ->
+            conn
+            |> put_resp_header("content-range", "bytes #{first}-#{last}/#{size}")
+            |> put_resp_header("content-length", Integer.to_string(last - first + 1))
+            |> AttachmentRawResponse.send(
+              %{att | content: {:segments, stream}},
+              inline_safe?(att.mime_type),
+              206
+            )
+
+          {:error, reason} ->
+            fetch_error(conn, reason)
+        end
+
+      :unsatisfiable ->
+        conn
+        |> put_resp_header("content-range", "bytes */#{size}")
+        |> put_status(416)
+        |> json(%{error: "range_not_satisfiable"})
+    end
+  end
+
+  # Only `bytes=N-` and `bytes=N-M`. Anything else (suffix, multi-range, a
+  # malformed or repeated header) is ignored and the full body is served,
+  # as RFC 9110 allows.
+  defp byte_range([header], size) do
+    case Regex.run(~r/\Abytes=(\d+)-(\d*)\z/, header) do
+      [_, first, ""] -> range_within(String.to_integer(first), nil, size)
+      [_, first, last] -> range_within(String.to_integer(first), String.to_integer(last), size)
+      nil -> :full
+    end
+  end
+
+  defp byte_range(_headers, _size), do: :full
+
+  # `last` nil: open-ended `bytes=N-`.
+  defp range_within(first, last, _size) when is_integer(last) and last < first, do: :full
+  defp range_within(first, _last, size) when first >= size, do: :unsatisfiable
+  defp range_within(first, last, size), do: {first, min(last || size - 1, size - 1)}
+
+  # compat(plugin): raw_attachment_download - remove when plugin floor includes Engram-obsidian#555 (#1877)
+  defp show_json(conn, %{content: {:segments, stream}} = att) do
+    # The base64 body of a file over the single-request ceiling is the
+    # oversized response this ceiling exists to prevent.
+    if att.size_bytes > EngramWeb.Endpoint.max_body_bytes() do
+      conn |> put_status(409) |> json(%{error: "use_raw_download"})
+    else
+      case collect_segments(stream) do
+        {:ok, bytes} -> show_json(conn, %{att | content: bytes})
+        {:error, reason} -> fetch_error(conn, reason)
+      end
+    end
+  end
+
+  defp show_json(conn, att) do
+    json(conn, %{
+      id: att.id,
+      path: att.path,
+      mime_type: att.mime_type,
+      size_bytes: att.size_bytes,
+      mtime: att.mtime,
+      content_hash: att.content_hash,
+      # Pre-quoted fragment: the base64 alphabet needs no JSON escaping,
+      # so this skips Jason's escape scan over a multi-MB string. Same
+      # bytes on the wire (pinned by a byte-identity test).
+      content_base64: Jason.Fragment.new([?", Base.encode64(att.content), ?"]),
+      created_at: att.created_at,
+      updated_at: att.updated_at
+    })
+  end
+
+  defp collect_segments(stream) do
+    Enum.reduce_while(stream, {:ok, []}, fn
+      {:ok, bytes}, {:ok, acc} -> {:cont, {:ok, [acc | bytes]}}
+      {:error, _} = err, _acc -> {:halt, err}
+    end)
+    |> case do
+      {:ok, iodata} -> {:ok, IO.iodata_to_binary(iodata)}
+      err -> err
     end
   end
 
