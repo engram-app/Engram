@@ -957,7 +957,12 @@ export default {
 	"Could not continue. Please try again.": "Nie udało się kontynuować. Spróbuj ponownie.",
 	"Step {step} of {total}": "Krok {step} z {total}",
 	Onboarding: "Wprowadzenie",
-	"Cancel connection": "Anuluj połączenie",
+	"Stop connecting this app": "Przestań łączyć tę aplikację",
+	"Stop connecting this app?": "Czy na pewno chcesz przestać łączyć tę aplikację?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"Aplikacja, która przeniosła cię tutaj, zostanie poinformowana, że odmówiłeś. Twoje konto Engram pozostaje.",
+	"Keep setting up": "Kontynuuj konfigurację",
+	"Stop connecting": "Przestań łączyć",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Nie udało się zapisać Twojego wyboru. Spróbuj kliknąć ponownie — jeśli problem nadal występuje, odśwież stronę.",
 	"Let's get your notes in.": "Przenieśmy Twoje notatki.",

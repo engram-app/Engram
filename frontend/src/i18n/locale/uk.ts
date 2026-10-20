@@ -967,7 +967,12 @@ export default {
 	"Could not continue. Please try again.": "Не вдалося продовжити. Будь ласка, спробуйте ще раз.",
 	"Step {step} of {total}": "Крок {step} з {total}",
 	Onboarding: "Ознайомлення",
-	"Cancel connection": "Скасувати з'єднання",
+	"Stop connecting this app": "Припинити підключення цього застосунку",
+	"Stop connecting this app?": "Припинити підключення цього застосунку?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"Застосунок, який перенаправив вас сюди, отримає повідомлення про вашу відмову. Ваш обліковий запис Engram залишиться.",
+	"Keep setting up": "Продовжити налаштування",
+	"Stop connecting": "Припинити підключення",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Не вдалося зберегти ваш вибір. Спробуйте натиснути ще раз — якщо помилка повторюється, оновіть сторінку.",
 	"Let's get your notes in.": "Давайте імпортуємо ваші замітки.",

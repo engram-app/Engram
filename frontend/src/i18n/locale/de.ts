@@ -909,7 +909,12 @@ export default {
 		"Konnte nicht fortgesetzt werden. Bitte versuche es erneut.",
 	"Step {step} of {total}": "Schritt {step} von {total}",
 	Onboarding: "Einrichtung",
-	"Cancel connection": "Verbindung abbrechen",
+	"Stop connecting this app": "Verbindung zu dieser App beenden",
+	"Stop connecting this app?": "Verbindung zu dieser App wirklich beenden?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		'Der App, die dich hierhergeleitet hat, wird mitgeteilt, dass du "Nein" gesagt hast. Dein Engram-Konto bleibt erhalten.',
+	"Keep setting up": "Einrichtung fortsetzen",
+	"Stop connecting": "Verbindung beenden",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Deine Auswahl konnte nicht gespeichert werden. Versuche es erneut – wenn es weiterhin fehlschlägt, lade die Seite neu.",
 	"Let's get your notes in.": "Lass uns deine Notizen importieren.",

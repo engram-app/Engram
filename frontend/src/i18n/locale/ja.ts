@@ -890,7 +890,12 @@ export default {
 	"Could not continue. Please try again.": "続行できませんでした。もう一度お試しください。",
 	"Step {step} of {total}": "{total} の {step} 段階",
 	Onboarding: "初期設定",
-	"Cancel connection": "接続を解除します",
+	"Stop connecting this app": "このアプリの接続を停止",
+	"Stop connecting this app?": "このアプリの接続を停止しますか？",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"こちらに誘導したアプリに、拒否した旨が通知されます。Engramアカウントは引き継ぎます。",
+	"Keep setting up": "設定を続行",
+	"Stop connecting": "接続を停止",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"選択を保存できませんでした。もう一度クリックしてみてください。それでもうまくいかない場合は、ページを更新してください。",
 	"Let's get your notes in.": "ノートをインポートしましょう。",

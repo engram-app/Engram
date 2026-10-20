@@ -895,7 +895,12 @@ export default {
 	"Could not continue. Please try again.": "Tidak dapat melanjutkan. Silakan coba lagi.",
 	"Step {step} of {total}": "Langkah {step} dari {total}",
 	Onboarding: "Pengaturan awal",
-	"Cancel connection": "Batalkan koneksi",
+	"Stop connecting this app": "Hentikan koneksi aplikasi ini",
+	"Stop connecting this app?": "Hentikan koneksi aplikasi ini?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"Aplikasi yang membawa Anda ke sini akan diberi tahu bahwa Anda menolak. Akun Engram Anda tetap ada.",
+	"Keep setting up": "Lanjutkan pengaturan",
+	"Stop connecting": "Hentikan koneksi",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Tidak dapat menyimpan pilihan Anda. Coba klik lagi — jika terus gagal, muat ulang halaman.",
 	"Let's get your notes in.": "Mari kita masukkan catatan Anda.",

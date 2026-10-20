@@ -893,7 +893,12 @@ export default {
 	"Could not continue. Please try again.": "Tidak dapat meneruskan. Sila cuba lagi.",
 	"Step {step} of {total}": "Langkah {step} daripada {total}",
 	Onboarding: "Pengenalan",
-	"Cancel connection": "Batalkan sambungan",
+	"Stop connecting this app": "Hentikan sambungan aplikasi ini",
+	"Stop connecting this app?": "Hentikan sambungan aplikasi ini?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"Aplikasi yang membawa anda ke sini akan dimaklumkan bahawa anda berkata tidak. Akaun Engram anda kekal.",
+	"Keep setting up": "Teruskan persediaan",
+	"Stop connecting": "Hentikan sambungan",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Tidak dapat menyimpan pilihan anda. Cuba klik sekali lagi — jika masih gagal, muat semula halaman.",
 	"Let's get your notes in.": "Mari kita masukkan nota anda.",

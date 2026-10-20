@@ -958,7 +958,12 @@ export default {
 	"Could not continue. Please try again.": "Nelze pokračovat. Zkuste to znovu.",
 	"Step {step} of {total}": "Krok {step} z {total}",
 	Onboarding: "Úvodní nastavení",
-	"Cancel connection": "Zrušit připojení",
+	"Stop connecting this app": "Zastavit připojení této aplikace",
+	"Stop connecting this app?": "Zastavit připojení této aplikace?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"Aplikace, která vás sem poslala, bude informována, že jste odmítli. Váš účet Engram zůstane.",
+	"Keep setting up": "Pokračovat v nastavení",
+	"Stop connecting": "Zastavit připojení",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Nelze uložit vaši volbu. Zkuste kliknout znovu – pokud to stále nefunguje, obnovte stránku.",
 	"Let's get your notes in.": "Připravme vaše poznámky.",

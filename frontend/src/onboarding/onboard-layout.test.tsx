@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { track } from "../analytics/track";
@@ -75,13 +75,35 @@ describe("OnboardLayout pending authorization", () => {
 
 		renderAt("/onboard/heard", SAAS);
 
-		expect(screen.queryByRole("button", { name: /cancel connection/iu })).toBeNull();
+		expect(screen.queryByRole("button", { name: /stop connecting/iu })).toBeNull();
 	});
 
 	it("offers no Cancel when no authorization is pending", () => {
 		renderAt("/onboard/heard", SAAS);
 
-		expect(screen.queryByRole("button", { name: /cancel connection/iu })).toBeNull();
+		expect(screen.queryByRole("button", { name: /stop connecting/iu })).toBeNull();
+	});
+
+	// One stray tap on an X must not refuse the connection and leave the site.
+	it("asks before refusing", () => {
+		stashPendingAuthorization(PARKED, true);
+		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
+
+		renderAt("/onboard/heard", SAAS);
+		fireEvent.click(screen.getByRole("button", { name: /stop connecting/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /keep setting up/iu }));
+
+		expect(assign).not.toHaveBeenCalled();
+		expect(window.sessionStorage.getItem("engram:pending-oauth")).not.toBeNull();
+	});
+
+	// Phones lack room for the counter next to three icons.
+	it("hides the step counter on phones while a refusal is offered", () => {
+		stashPendingAuthorization(PARKED, true);
+
+		renderAt("/onboard/heard", SAAS);
+
+		expect(screen.getByText(/step 3 of 4/iu)).toHaveClass("hidden", "sm:block");
 	});
 
 	it("reports access_denied to the client and drops the parked request", () => {
@@ -89,7 +111,10 @@ describe("OnboardLayout pending authorization", () => {
 		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
 
 		renderAt("/onboard/heard", SAAS);
-		fireEvent.click(screen.getByRole("button", { name: /cancel connection/iu }));
+		fireEvent.click(screen.getByRole("button", { name: /stop connecting/iu }));
+		fireEvent.click(
+			within(screen.getByRole("dialog")).getByRole("button", { name: /^stop connecting$/iu }),
+		);
 
 		expect(assign).toHaveBeenCalledWith("https://app/cb?error=access_denied&state=xyz");
 		expect(window.sessionStorage.getItem("engram:pending-oauth")).toBeNull();

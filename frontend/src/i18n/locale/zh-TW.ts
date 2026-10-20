@@ -852,7 +852,12 @@ export default {
 	"Could not continue. Please try again.": "執行失敗。請重試。",
 	"Step {step} of {total}": "第 {step} 步，共 {total} 步",
 	Onboarding: "入門指南",
-	"Cancel connection": "取消連線",
+	"Stop connecting this app": "停止連接此應用程式",
+	"Stop connecting this app?": "停止連接此應用程式？",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"將訊息傳送給您，告知您已選擇不同意。您的 Engram 帳戶保持不變。",
+	"Keep setting up": "繼續設定",
+	"Stop connecting": "停止連接",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"儲存您的選擇失敗。請再次點擊 — 如果持續失敗，請重新載入頁面。",
 	"Let's get your notes in.": "讓我們將您的筆記導入。",

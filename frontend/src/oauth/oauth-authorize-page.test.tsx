@@ -411,7 +411,7 @@ describe("OAuthAuthorizePage onboarding bounce", () => {
 	it("leaves a finished user on consent and drops a stale park", async () => {
 		window.sessionStorage.setItem(
 			"engram:pending-oauth",
-			JSON.stringify({ returnTo: "/oauth/consent?old=1", toolSlug: null }),
+			JSON.stringify({ returnTo: "/oauth/consent?old=1" }),
 		);
 		fetchOAuthClient.mockResolvedValue(ANTIGRAVITY);
 

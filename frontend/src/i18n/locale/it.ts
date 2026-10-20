@@ -926,7 +926,12 @@ export default {
 	"Could not continue. Please try again.": "Impossibile continuare. Riprova.",
 	"Step {step} of {total}": "Fase {step} di {total}",
 	Onboarding: "Guida introduttiva",
-	"Cancel connection": "Annulla connessione",
+	"Stop connecting this app": "Interrompi la connessione di questa app",
+	"Stop connecting this app?": "Interrompere la connessione di questa app?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"L'app che ti ha portato qui ti informerà che hai detto no. Il tuo account Engram rimane attivo.",
+	"Keep setting up": "Continua la configurazione",
+	"Stop connecting": "Interrompi la connessione",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Impossibile salvare la tua scelta. Riprova a cliccare; se continua a fallire, aggiorna la pagina.",
 	"Let's get your notes in.": "Importiamo le tue note.",

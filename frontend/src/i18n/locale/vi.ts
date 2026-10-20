@@ -890,7 +890,12 @@ export default {
 	"Could not continue. Please try again.": "Không thể tiếp tục. Vui lòng thử lại.",
 	"Step {step} of {total}": "Bước {step} trong {total}",
 	Onboarding: "Hướng dẫn sử dụng",
-	"Cancel connection": "Hủy kết nối",
+	"Stop connecting this app": "Dừng kết nối ứng dụng này",
+	"Stop connecting this app?": "Dừng kết nối ứng dụng này?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"Ứng dụng đã đưa bạn đến đây sẽ được thông báo rằng bạn đã chọn không. Tài khoản Engram của bạn vẫn còn.",
+	"Keep setting up": "Tiếp tục thiết lập",
+	"Stop connecting": "Dừng kết nối",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Không thể lưu lựa chọn của bạn. Hãy thử nhấp lại — nếu vẫn không được, hãy làm mới trang.",
 	"Let's get your notes in.": "Chúng ta hãy đưa ghi chú của bạn vào.",

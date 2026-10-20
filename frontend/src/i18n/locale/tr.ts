@@ -894,7 +894,12 @@ export default {
 	"Could not continue. Please try again.": "Devam edilemedi. Lütfen tekrar deneyin.",
 	"Step {step} of {total}": "{step} adımı, {total} toplam",
 	Onboarding: "Tanıtım",
-	"Cancel connection": "Bağlantıyı iptal et",
+	"Stop connecting this app": "Bu uygulamayı bağlantıdan çıkar",
+	"Stop connecting this app?": "Bu uygulamayı bağlantıdan çıkarmak istiyor musunuz?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		'Sizi buraya yönlendiren uygulamaya, "hayır" dediğiniz bildirilecektir. Engram hesabınız kalır.',
+	"Keep setting up": "Kurulumu devam ettir",
+	"Stop connecting": "Bağlantıyı kes",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Seçiminizi kaydedemedik. Lütfen tekrar tıklayın; sorun devam ederse sayfayı yenileyin.",
 	"Let's get your notes in.": "Notlarınızı ekleyelim.",

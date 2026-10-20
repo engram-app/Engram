@@ -68,7 +68,7 @@ describe("pending authorization stash", () => {
 		it("drops a returnTo pointing somewhere other than the consent page", () => {
 			window.sessionStorage.setItem(
 				"engram:pending-oauth",
-				JSON.stringify({ returnTo: "/settings", toolSlug: null }),
+				JSON.stringify({ returnTo: "/settings" }),
 			);
 
 			expect(peekPendingAuthorization()).toBeNull();
@@ -77,7 +77,7 @@ describe("pending authorization stash", () => {
 		it("drops a protocol-relative returnTo", () => {
 			window.sessionStorage.setItem(
 				"engram:pending-oauth",
-				JSON.stringify({ returnTo: "//evil.com/oauth/consent", toolSlug: null }),
+				JSON.stringify({ returnTo: "//evil.com/oauth/consent" }),
 			);
 
 			expect(peekPendingAuthorization()).toBeNull();
@@ -86,7 +86,7 @@ describe("pending authorization stash", () => {
 		it("drops an absolute returnTo", () => {
 			window.sessionStorage.setItem(
 				"engram:pending-oauth",
-				JSON.stringify({ returnTo: "https://evil.com/oauth/consent", toolSlug: null }),
+				JSON.stringify({ returnTo: "https://evil.com/oauth/consent" }),
 			);
 
 			expect(peekPendingAuthorization()).toBeNull();

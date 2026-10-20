@@ -182,10 +182,9 @@ test.describe("MCP-first signup resumes consent after onboarding", () => {
 		await page.waitForURL(/\/onboard/u, { timeout: 20_000 });
 		await expect(page.getByRole("button", { name: /^(?:review|approve)$/iu })).toHaveCount(0);
 
-		// 2. The detour names the app that is waiting. Dumping someone into an
-		//    unexplained signup is the phishing-shaped UX the OAuth guidance
-		//    warns about.
-		await expect(page.getByText(new RegExp(CLIENT_NAME, "iu")).first()).toBeVisible({
+		// 2. The detour can still be refused: the registered redirect gets a
+		//    "Stop connecting" control the waiting client will hear.
+		await expect(page.getByRole("button", { name: /stop connecting this app/iu })).toBeVisible({
 			timeout: 10_000,
 		});
 
@@ -213,8 +212,9 @@ test.describe("MCP-first signup resumes consent after onboarding", () => {
 		// carries `redirect_uri=...%2Foauth-callback-test`, so a loose regex
 		// matches before any navigation happens and the assertions below then
 		// read the consent URL's params instead of the callback's.
-		// Consent is two steps: Review the picked access, then Approve.
-		await page.getByRole("button", { name: /^review$/iu }).click();
+		// A brand-new account's first app gets the short form: name the vault
+		// provisioned at signup, then Approve. No picker, no Review step.
+		await expect(page.getByLabel(/name your first vault/iu)).toBeVisible({ timeout: 10_000 });
 		await page.getByRole("button", { name: /^approve$/iu }).click();
 		await page.waitForURL((url) => new URL(url).pathname === CALLBACK_PATH, {
 			timeout: 25_000,

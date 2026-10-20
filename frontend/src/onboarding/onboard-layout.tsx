@@ -1,8 +1,17 @@
 import { LogOut, X } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { useT } from "@/i18n/locale-provider";
+import { cn } from "@/lib/utils";
 import { track } from "../analytics/track";
 import { type OnboardingStep, useOnboardingStatus } from "../api/queries";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
@@ -23,6 +32,7 @@ export default function OnboardLayout() {
 	const { logout } = useAuthAdapter();
 	const { pathname } = useLocation();
 	const { data, isLoading } = useOnboardingStatus();
+	const [confirmCancel, setConfirmCancel] = useState(false);
 
 	// Computed unconditionally (Hooks can't follow the loading early-return
 	// below), so the effect beneath it can be called unconditionally too.
@@ -69,6 +79,7 @@ export default function OnboardLayout() {
 
 	// A user pulled in here mid-OAuth can refuse in a way the waiting client
 	// hears. Null when the refusal has nowhere verified to go: no button then.
+	// It leaves the site for good, so it asks first.
 	const cancelUrl = pendingCancelUrl();
 	const cancelPending = () => {
 		if (cancelUrl) {
@@ -82,7 +93,15 @@ export default function OnboardLayout() {
 			navLabel={t("Onboarding")}
 			actions={
 				counter ? (
-					<p className="whitespace-nowrap text-muted-foreground text-sm">{counter}</p>
+					// Hidden on phones while the refusal is offered: no room for both.
+					<p
+						className={cn(
+							"whitespace-nowrap text-muted-foreground text-sm",
+							cancelUrl && "hidden sm:block",
+						)}
+					>
+						{counter}
+					</p>
 				) : null
 			}
 			trailing={
@@ -92,9 +111,9 @@ export default function OnboardLayout() {
 							type="button"
 							variant="ghost"
 							size="icon"
-							aria-label={t("Cancel connection")}
-							title={t("Cancel connection")}
-							onClick={cancelPending}
+							aria-label={t("Stop connecting this app")}
+							title={t("Stop connecting this app")}
+							onClick={() => setConfirmCancel(true)}
 						>
 							<X aria-hidden="true" />
 						</Button>
@@ -113,6 +132,24 @@ export default function OnboardLayout() {
 			}
 		>
 			<Outlet />
+			<Dialog open={confirmCancel} onOpenChange={setConfirmCancel}>
+				<DialogContent className="sm:max-w-md">
+					<DialogHeader>
+						<DialogTitle>{t("Stop connecting this app?")}</DialogTitle>
+						<DialogDescription>
+							{t("The app that sent you here will be told you said no. Your Engram account stays.")}
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
+						<Button type="button" variant="outline" onClick={() => setConfirmCancel(false)}>
+							{t("Keep setting up")}
+						</Button>
+						<Button type="button" onClick={cancelPending}>
+							{t("Stop connecting")}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</AuthShell>
 	);
 }

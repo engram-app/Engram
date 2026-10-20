@@ -972,7 +972,12 @@ export default {
 	"Could not continue. Please try again.": "Не удалось продолжить. Пожалуйста, попробуйте ещё раз.",
 	"Step {step} of {total}": "Шаг {step} из {total}",
 	Onboarding: "Обучение",
-	"Cancel connection": "Отменить подключение",
+	"Stop connecting this app": "Прекратить подключение этого приложения",
+	"Stop connecting this app?": "Прекратить подключение этого приложения?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"Приложению, которое привело вас сюда, будет сообщено, что вы отказались. Ваш аккаунт Engram останется.",
+	"Keep setting up": "Продолжить настройку",
+	"Stop connecting": "Прекратить подключение",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Не удалось сохранить ваш выбор. Попробуйте нажать ещё раз — если ошибка повторяется, обновите страницу.",
 	"Let's get your notes in.": "Давайте добавим ваши заметки.",

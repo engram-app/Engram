@@ -876,7 +876,12 @@ export default {
 	"Could not continue. Please try again.": "계속할 수 없습니다. 다시 시도해주세요.",
 	"Step {step} of {total}": "{step}단계 / {total}단계",
 	Onboarding: "시작하기",
-	"Cancel connection": "연결 해제",
+	"Stop connecting this app": "이 앱 연결 중지",
+	"Stop connecting this app?": "이 앱 연결을 중지하시겠습니까?",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"이 앱은 연결을 거부하셨다는 내용을 받게 됩니다. Engram 계정은 유지됩니다.",
+	"Keep setting up": "설정 계속",
+	"Stop connecting": "연결 중지",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"선택을 저장하지 못했습니다. 다시 클릭해 보세요. 계속 실패하면 페이지를 새로 고쳐 주세요.",
 	"Let's get your notes in.": "노트를 가져오겠습니다.",

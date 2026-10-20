@@ -850,7 +850,12 @@ export default {
 	"Could not continue. Please try again.": "无法继续。请重试。",
 	"Step {step} of {total}": "第 {step} 步，共 {total} 步",
 	Onboarding: "入门引导",
-	"Cancel connection": "取消连接",
+	"Stop connecting this app": "停止连接此应用",
+	"Stop connecting this app?": "停止连接此应用？",
+	"The app that sent you here will be told you said no. Your Engram account stays.":
+		"将此消息告知发送你到这里的应用。你的 Engram 账号保持不变。",
+	"Keep setting up": "继续设置",
+	"Stop connecting": "停止连接",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"无法保存您的选择。请重试点击 — 如果仍然失败，请刷新页面。",
 	"Let's get your notes in.": "让我们开始导入您的笔记。",
