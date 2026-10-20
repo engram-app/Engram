@@ -37,6 +37,7 @@ import {
 	useRenameNote,
 	useReverseCancel,
 	useSearch,
+	useSetOnboardingProfile,
 	useTags,
 	useTypes,
 	useUpdateConnectionAccess,
@@ -152,6 +153,40 @@ describe("useAcceptTerms", () => {
 		// If onSuccess fires-and-forgets, this would still be false when mutateAsync resolves
 		// and the user would be navigated with a stale cache (bug: double-accept).
 		expect(invalidateResolved).toBe(true);
+	});
+});
+
+// Accepting terms or pre-answering the tools step can provision the
+// connector vault server-side. A vault list cached from before would hide it
+// from the consent screen the user returns to moments later.
+describe("mutations that can provision a vault", () => {
+	it("useAcceptTerms invalidates the vault list", async () => {
+		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+		post.mockResolvedValue({ version: "v2.0", accepted_at: "2026-06-01T00:00:00Z" });
+		const { result } = renderHook(() => useAcceptTerms(), { wrapper });
+
+		await act(async () => {
+			await result.current.mutateAsync({
+				tos_version: "v2.0",
+				tos_hash: "th",
+				privacy_version: "v1.0",
+				privacy_hash: "ph",
+			});
+		});
+
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vaults"] });
+	});
+
+	it("useSetOnboardingProfile invalidates the vault list", async () => {
+		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+		patch.mockResolvedValue({ tools: ["claude_code"] });
+		const { result } = renderHook(() => useSetOnboardingProfile(), { wrapper });
+
+		await act(async () => {
+			await result.current.mutateAsync({ tools: ["claude_code"], tools_prefilled: true });
+		});
+
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["vaults"] });
 	});
 });
 
