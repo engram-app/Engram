@@ -398,11 +398,11 @@ defmodule EngramWeb.CrdtChannel do
         # A bulk import creates notes without ever sending an edit frame, so
         # count the create itself or an import-only user never shows as active.
         {:seeded, note, outcome} ->
-          note_sync_activity(socket)
+          note_created_activity(socket)
           reply_created(note, reconcile_with_row(outcome, note), socket)
 
         {:ok, note} ->
-          note_sync_activity(socket)
+          note_created_activity(socket)
           reply_created(note, note |> seed.() |> reconcile_with_row(note), socket)
 
         {:adopted, note} ->
@@ -1964,6 +1964,20 @@ defmodule EngramWeb.CrdtChannel do
   # `plugin_version` and `client_type` are already length-bounded at the socket /
   # join boundary (user_socket.ex bounded_version/1, client_type/1 above), so
   # they are safe to forward. They give plugin-version adoption for free.
+  # The web editor creates one note per click, so it gets `note_created` like a
+  # REST create. Obsidian creates arrive as a bulk import: no per-note event,
+  # one request per note would flood PostHog.
+  defp note_created_activity(%{assigns: %{client_type: "web"}} = socket) do
+    note_sync_activity(socket)
+
+    Engram.Analytics.track(socket.assigns.current_user, "note_created", %{
+      vault_id: socket.assigns.vault.id,
+      surface: "web"
+    })
+  end
+
+  defp note_created_activity(socket), do: note_sync_activity(socket)
+
   defp note_sync_activity(socket) do
     props =
       %{
