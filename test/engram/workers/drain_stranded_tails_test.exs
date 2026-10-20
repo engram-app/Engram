@@ -68,4 +68,15 @@ defmodule Engram.Workers.DrainStrandedTailsTest do
     assert :ok = perform_job(DrainStrandedTails, %{})
     assert [_] = all_enqueued(worker: CheckpointNote)
   end
+
+  # Review finding: one LIMITed page per tick meant the same first notes (a
+  # live room, a checkpoint that keeps skipping) took the page every time and
+  # the rest never drained. A run now pages through every stale tail.
+  test "pages past the batch size in one run", %{user: u, vault: v} do
+    for i <- 1..5, do: tail!(u, note!(u, v, "n#{i}.md"), 120)
+
+    assert :ok = perform_job(DrainStrandedTails, %{"batch" => 2})
+
+    assert length(all_enqueued(worker: CheckpointNote)) == 5
+  end
 end

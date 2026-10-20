@@ -94,13 +94,18 @@ defmodule Engram.Backfill.TenantScan do
   still answers per user. The per-user loop cost 4 round trips per user per
   run on SaaS, every hour (2026-10-20 audit, P1-7).
 
-  `query`'s first binding must have a `user_id` field.
+  `query`'s first binding must have a `user_id` field. `run.(repo, query)`
+  executes it (default `repo.all(query)`); a caller that pages passes its own,
+  which then pages within one tenant or across all of them.
   """
-  @spec all(Ecto.Query.t()) :: list()
-  def all(%Ecto.Query{} = query) do
+  @spec all(Ecto.Query.t(), (module(), Ecto.Query.t() -> list())) :: list()
+  def all(%Ecto.Query{} = query, run \\ fn repo, q -> repo.all(q) end) do
     case Repo.maintenance() do
-      Repo -> flat_map_users(fn user_id -> Repo.all(where(query, [r], r.user_id == ^user_id)) end)
-      maintenance -> maintenance.all(query)
+      Repo ->
+        flat_map_users(fn user_id -> run.(Repo, where(query, [r], r.user_id == ^user_id)) end)
+
+      maintenance ->
+        run.(maintenance, query)
     end
   end
 

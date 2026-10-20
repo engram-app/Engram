@@ -30,14 +30,15 @@ defmodule Engram.Workers.DrainStrandedTails do
   # Well past a room's idle drain (5 min) and its unbind checkpoint, so a row
   # this old has no checkpoint coming.
   @stale_minutes 30
-  # Notes per tick; the next tick takes the rest.
+  # Notes per page; a run reads every page.
   @batch 500
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(5)
 
   @impl Oban.Worker
-  def perform(_job) do
+  def perform(%Oban.Job{args: args}) do
+    batch = Map.get(args, "batch", @batch)
     cutoff = DateTime.add(DateTime.utc_now(), -@stale_minutes * 60, :second)
 
     from(l in CrdtUpdateLog,
@@ -45,13 +46,28 @@ defmodule Engram.Workers.DrainStrandedTails do
       on: n.id == l.note_id and is_nil(n.deleted_at) and n.kind == "note",
       where: l.inserted_at < ^cutoff,
       distinct: true,
-      select: %{user_id: l.user_id, vault_id: l.vault_id, note_id: l.note_id},
-      limit: @batch
+      select: %{user_id: l.user_id, vault_id: l.vault_id, note_id: l.note_id}
     )
-    |> TenantScan.all()
+    |> TenantScan.all(&pages(&1, &2, batch, nil))
     |> Enum.reject(&CrdtRegistry.lookup(&1.note_id))
     |> Enum.each(fn args -> {:ok, _} = Oban.insert(CheckpointNote.new(args)) end)
 
     :ok
+  end
+
+  # Keyset pages by note_id, so notes that keep their tail (a live room, a
+  # checkpoint that skips) cannot hold the first page on every tick and
+  # starve the rest.
+  defp pages(repo, query, batch, after_id) do
+    page =
+      query
+      |> then(&if after_id, do: where(&1, [l], l.note_id > ^after_id), else: &1)
+      |> order_by([l], l.note_id)
+      |> limit(^batch)
+      |> repo.all()
+
+    if length(page) < batch,
+      do: page,
+      else: page ++ pages(repo, query, batch, List.last(page).note_id)
   end
 end
