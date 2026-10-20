@@ -294,7 +294,7 @@ defmodule Engram.Insights.Snapshot do
         where: m.vault_id in ^ids and m.date == ^Date.add(day, -1) and m.scanned_on > ^since
       )
       |> repo.all()
-      |> Enum.filter(&(&1.change_seq == Map.fetch!(seqs, &1.vault_id)))
+      |> Enum.filter(&(&1.change_seq == Map.get(seqs, &1.vault_id)))
 
     copied = Enum.map(copies, & &1.vault_id)
     links = link_counts(repo, copied)
