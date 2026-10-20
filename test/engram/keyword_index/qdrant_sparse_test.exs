@@ -117,6 +117,21 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
       assert_close({QdrantSparse.unpack(packed), len}, expected)
     end
 
+    # The NIF takes b and the length cap itself (review 2094 (a)): a merged
+    # or floor document is ONE encode, not an encode plus a re-encode.
+    test "b and the length cap cost one NIF call", %{key_a: key} do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :nif, :call, :stop]])
+      QdrantSparse.encode_documents([@long], key, 7.5, :en, b: 0.25, cap_doc_len: true)
+      assert_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :keyword_encode}}
+      refute_receive {[:engram, :nif, :call, :stop], ^ref, _, %{nif: :keyword_encode}}, 50
+    end
+
+    test "a floor point (b 0.75, capped) matches the capped reference", %{key_a: key} do
+      [{packed, len}] = QdrantSparse.encode_documents([@long], key, 7.5, :en, cap_doc_len: true)
+      expected = reference_encode(@long, key, 7.5, :en, 0.75, 3 * 7.5)
+      assert_close({QdrantSparse.unpack(packed), len}, expected)
+    end
+
     test "an empty document stays empty", %{key_a: key} do
       [{packed, 0}] = QdrantSparse.encode_documents([""], key, 7.5, :en, b: 0.0)
       assert QdrantSparse.unpack(packed) == %{indices: [], values: []}

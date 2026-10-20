@@ -1,14 +1,18 @@
 defmodule Engram.SearchTenantIdfTest do
   @moduledoc """
   Per-tenant IDF on the keyword leg (plan Task 14.1, spec K4): the sparse
-  leg narrows Qdrant's IDF corpus to the user's own points, but only on
-  Qdrant >= 1.19.0 (older servers reject the param) and only for a user
-  holding at least `:tenant_idf_min_points` points (below that per-tenant
-  N is noise, so global IDF stays).
+  leg narrows Qdrant's IDF corpus to the user's own points. Off unless
+  `:tenant_idf` is set (go time, review 2094 H1); then only on Qdrant
+  >= 1.19.0 (older servers reject the param) and only for a user holding
+  at least `:tenant_idf_min_points` points (below that per-tenant N is
+  noise, so global IDF stays).
   """
   use Engram.DataCase, async: true
 
+  import ExUnit.CaptureLog
+
   alias Engram.Notes.Chunk
+  alias Engram.QdrantStub
   alias Engram.Repo
   alias Engram.Search
   alias Engram.ServiceConfig
@@ -41,81 +45,165 @@ defmodule Engram.SearchTenantIdfTest do
     end
   end
 
+  setup do
+    bypass = Bypass.open()
+    ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+    ServiceConfig.put_override(:qdrant_search_timeout, 30_000)
+    {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
+    vault = insert(:vault, user: user)
+    note = insert(:note, user: user, vault: vault)
+    %{bypass: bypass, user: user, vault: vault, note: note}
+  end
+
+  defp qdrant_version(bypass, version) do
+    Bypass.stub(bypass, "GET", "/", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, ~s({"title":"qdrant","version":"#{version}"}))
+    end)
+  end
+
+  defp points(user, note, n) do
+    now = DateTime.utc_now(:second)
+
+    rows =
+      for pos <- 1..n//1 do
+        %{
+          id: Ecto.UUID.generate(),
+          position: pos,
+          char_start: 0,
+          char_end: 1,
+          qdrant_point_id: Ecto.UUID.generate(),
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: note.vault_id,
+          created_at: now
+        }
+      end
+
+    Repo.insert_all(Chunk, rows)
+  end
+
   describe "tenant_idf?/1" do
-    setup do
-      bypass = Bypass.open()
-      ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
-      ServiceConfig.put_override(:tenant_idf, true)
-      {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
-      vault = insert(:vault, user: user)
-      note = insert(:note, user: user, vault: vault)
-      %{bypass: bypass, user: user, note: note}
-    end
-
-    defp qdrant_version(bypass, version) do
-      Bypass.stub(bypass, "GET", "/", fn conn ->
-        conn
-        |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, ~s({"title":"qdrant","version":"#{version}"}))
-      end)
-    end
-
-    defp points(user, note, n) do
-      now = DateTime.utc_now(:second)
-
-      rows =
-        for pos <- 1..n//1 do
-          %{
-            id: Ecto.UUID.generate(),
-            position: pos,
-            char_start: 0,
-            char_end: 1,
-            qdrant_point_id: Ecto.UUID.generate(),
-            note_id: note.id,
-            user_id: user.id,
-            vault_id: note.vault_id,
-            created_at: now
-          }
-        end
-
-      Repo.insert_all(Chunk, rows)
+    test "off by default, with no Qdrant call", %{bypass: b, user: u, note: n} do
+      Bypass.down(b)
+      points(u, n, 1_000)
+      refute Search.tenant_idf?(u)
     end
 
     test "on for a 1,000-point user on 1.19", %{bypass: b, user: u, note: n} do
+      ServiceConfig.put_override(:tenant_idf, true)
       qdrant_version(b, "1.19.2")
       points(u, n, 1_000)
       assert Search.tenant_idf?(u)
     end
 
     test "off for a 999-point user on 1.19", %{bypass: b, user: u, note: n} do
+      ServiceConfig.put_override(:tenant_idf, true)
       qdrant_version(b, "1.19.0")
       points(u, n, 999)
       refute Search.tenant_idf?(u)
     end
 
     test "off on 1.18 whatever the count", %{bypass: b, user: u, note: n} do
+      ServiceConfig.put_override(:tenant_idf, true)
       qdrant_version(b, "1.18.2")
       points(u, n, 1_000)
       refute Search.tenant_idf?(u)
     end
 
-    test "off when switched off, with no Qdrant call", %{bypass: b, user: u, note: n} do
-      Bypass.down(b)
-      ServiceConfig.put_override(:tenant_idf, false)
-      points(u, n, 1_000)
-      refute Search.tenant_idf?(u)
-    end
-
-    test "off when the server version is unreadable", %{bypass: b, user: u} do
-      Bypass.down(b)
-      refute Search.tenant_idf?(u)
-    end
-
     test "the threshold is a ServiceConfig knob", %{bypass: b, user: u, note: n} do
-      qdrant_version(b, "1.19.2")
+      ServiceConfig.put_override(:tenant_idf, true)
       ServiceConfig.put_override(:tenant_idf_min_points, 2)
+      qdrant_version(b, "1.19.2")
       points(u, n, 2)
       assert Search.tenant_idf?(u)
+    end
+
+    # Review 2094 M2: an unreadable version is cached as unknown (< 1.19),
+    # so search probes `GET /` at most once per TTL and warns once.
+    test "an unreadable version is probed once and warned once", %{bypass: b, user: u} do
+      ServiceConfig.put_override(:tenant_idf, true)
+      {:ok, probes} = Agent.start_link(fn -> 0 end)
+
+      Bypass.stub(b, "GET", "/", fn conn ->
+        Agent.update(probes, &(&1 + 1))
+        Plug.Conn.send_resp(conn, 503, "")
+      end)
+
+      log =
+        capture_log(fn ->
+          refute Search.tenant_idf?(u)
+          refute Search.tenant_idf?(u)
+        end)
+
+      assert Agent.get(probes, & &1) == 1
+      assert length(String.split(log, "tenant idf: qdrant version unknown")) == 2
+    end
+
+    # Review 2094 M3: the count is cached per user, not read per search.
+    test "the user's point count is cached", %{bypass: b, user: u, note: n} do
+      ServiceConfig.put_override(:tenant_idf, true)
+      qdrant_version(b, "1.19.2")
+      points(u, n, 999)
+      refute Search.tenant_idf?(u)
+      points(u, n, 1)
+      refute Search.tenant_idf?(u)
+    end
+  end
+
+  # Review 2094 M1: the wiring through `Search.search/4`, per mode.
+  describe "Search.search/4" do
+    setup %{bypass: b, user: u, note: n} do
+      QdrantStub.stub_retrieve(b)
+      qdrant_version(b, "1.19.2")
+      ServiceConfig.put_override(:tenant_idf_min_points, 1)
+      points(u, n, 1)
+
+      Mox.stub(Engram.MockEmbedder, :embed_texts, fn _texts, _opts -> {:ok, [[0.1, 0.2]]} end)
+      :ok
+    end
+
+    defp capture(bypass, path) do
+      test = self()
+
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes" <> path, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        json = Jason.decode!(body)
+        send(test, {:qdrant_body, json})
+        result = %{"result" => %{"points" => []}}
+        resp = if path == "/points/query/batch", do: QdrantStub.batch(conn, result), else: result
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(resp))
+      end)
+    end
+
+    defp corpus(user), do: %{"must" => [%{"key" => "user_id", "match" => %{"value" => user.id}}]}
+
+    test "keyword mode sends the requesting user's IDF corpus", %{bypass: b, user: u, vault: v} do
+      ServiceConfig.put_override(:tenant_idf, true)
+      capture(b, "/points/query")
+      assert {:ok, []} = Search.search(u, v, "paddle", mode: :keyword)
+      assert_received {:qdrant_body, %{"using" => "keyword"} = json}
+      assert json["params"]["idf"]["corpus"] == corpus(u)
+    end
+
+    test "hybrid mode: only the keyword leg carries it", %{bypass: b, user: u, vault: v} do
+      ServiceConfig.put_override(:tenant_idf, true)
+      capture(b, "/points/query/batch")
+      assert {:ok, []} = Search.search(u, v, "paddle", mode: :hybrid)
+      assert_received {:qdrant_body, %{"searches" => [dense, sparse]}}
+      assert sparse["params"]["idf"]["corpus"] == corpus(u)
+      refute get_in(dense, ["params", "idf"])
+    end
+
+    test "off: the keyword leg has no IDF corpus", %{bypass: b, user: u, vault: v} do
+      capture(b, "/points/query")
+      assert {:ok, []} = Search.search(u, v, "paddle", mode: :keyword)
+      assert_received {:qdrant_body, json}
+      refute Map.has_key?(json, "params")
     end
   end
 end

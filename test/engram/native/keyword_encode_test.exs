@@ -40,7 +40,7 @@ defmodule Engram.Native.KeywordEncodeTest do
             [String.duplicate("a", 2_000_000)],
             for(i <- 1..2_000, do: "chunk #{i} " <> String.duplicate("word#{i} ", 100))
           ] do
-        {_, peak} = Engram.Native.encode_documents_nif(texts, @key, 300.0, "en")
+        {_, peak} = Engram.Native.encode_documents_nif(texts, @key, 300.0, "en", 0.75, nil)
         assert peak <= 4 * :erlang.iolist_size(texts) + 65_536
       end
     end
@@ -49,7 +49,7 @@ defmodule Engram.Native.KeywordEncodeTest do
       texts = for i <- 1..20, do: "note #{i} running fast and far"
 
       Engram.NativeLeak.assert_no_leak(fn ->
-        Engram.Native.encode_documents_nif(texts, @key, 300.0, "en")
+        Engram.Native.encode_documents_nif(texts, @key, 300.0, "en", 0.75, nil)
       end)
     end
 
