@@ -862,6 +862,46 @@ defmodule Engram.Notes do
     end
   end
 
+  @doc """
+  Fills `ctime` for existing live notes from `[%{path, ctime}]` in ONE statement.
+
+  Metadata-only: touches no content, version, seq, `updated_at`, CRDT state or
+  index, emits no fan-out, and fills only NULL ctimes, so it is idempotent and
+  never clobbers a value (re-sends and older plugins are harmless). Unknown
+  paths are skipped. Returns `{:ok, updated_count}`.
+  """
+  @spec set_client_ctimes(map(), map(), [%{path: String.t(), ctime: number()}]) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def set_client_ctimes(_user, _vault, []), do: {:ok, 0}
+
+  def set_client_ctimes(user, vault, entries) do
+    with {:ok, user} <- Crypto.ensure_user_dek(user),
+         {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+      {hmacs, ctimes} =
+        entries
+        |> Map.new(fn %{path: path, ctime: ctime} ->
+          {Crypto.hmac_field(filter_key, PathSanitizer.sanitize(path)), ctime * 1.0}
+        end)
+        |> Enum.unzip()
+
+      query =
+        from(n in scoped_live(user, vault),
+          join:
+            v in fragment(
+              "SELECT * FROM unnest(?::bytea[], ?::float8[]) AS t(h, c)",
+              ^hmacs,
+              ^ctimes
+            ),
+          on: n.path_hmac == field(v, :h),
+          where: is_nil(n.ctime) and n.kind == "note",
+          update: [set: [ctime: field(v, :c)]]
+        )
+
+      {n, _} = Repo.with_tenant!(user.id, fn -> Repo.update_all(query, []) end)
+      {:ok, n}
+    end
+  end
+
   # Only carry ctime when sent: the key's absence leaves a stored value
   # untouched on update (older plugins must not null it).
   defp put_client_ctime(base_attrs, attrs) do

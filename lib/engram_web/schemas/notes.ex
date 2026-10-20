@@ -165,3 +165,42 @@ defmodule EngramWeb.Schemas.BatchMoveNotesRequest do
     }
   })
 end
+
+defmodule EngramWeb.Schemas.SetCtimesRequest do
+  @moduledoc false
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "SetCtimesRequest",
+    type: :object,
+    properties: %{
+      entries: %Schema{
+        type: :array,
+        maxItems: 500,
+        items: %Schema{
+          type: :object,
+          properties: %{
+            path: %Schema{type: :string},
+            ctime: %Schema{type: :number, format: :float, description: "Epoch seconds"}
+          },
+          required: [:path, :ctime]
+        }
+      }
+    },
+    required: [:entries]
+  })
+end
+
+defmodule EngramWeb.Schemas.UpdatedCount do
+  @moduledoc false
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "UpdatedCount",
+    type: :object,
+    properties: %{updated: %Schema{type: :integer, example: 3}},
+    required: [:updated]
+  })
+end

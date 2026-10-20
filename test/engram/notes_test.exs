@@ -53,6 +53,38 @@ defmodule Engram.NotesTest do
     end
   end
 
+  describe "set_client_ctimes/3" do
+    test "fills nil ctime only, touches no sync state, is idempotent", %{user: user, vault: vault} do
+      {:ok, a} =
+        Notes.upsert_note(user, vault, %{"path" => "s1.md", "content" => "x", "mtime" => 1.0},
+          actor: "api"
+        )
+
+      {:ok, b} =
+        Notes.upsert_note(
+          user,
+          vault,
+          %{"path" => "s2.md", "content" => "y", "mtime" => 1.0, "ctime" => 7.0},
+          actor: "api"
+        )
+
+      entries = [
+        %{path: "s1.md", ctime: 11.0},
+        %{path: "s2.md", ctime: 99.0},
+        %{path: "missing.md", ctime: 5.0}
+      ]
+
+      assert {:ok, 1} = Notes.set_client_ctimes(user, vault, entries)
+      assert {:ok, 0} = Notes.set_client_ctimes(user, vault, entries)
+
+      a2 = Engram.Repo.get!(Engram.Notes.Note, a.id, skip_tenant_check: true)
+      b2 = Engram.Repo.get!(Engram.Notes.Note, b.id, skip_tenant_check: true)
+      assert a2.ctime == 11.0
+      assert b2.ctime == 7.0
+      assert {a2.version, a2.seq, a2.updated_at} == {a.version, a.seq, a.updated_at}
+    end
+  end
+
   describe "write-rejection logging" do
     import ExUnit.CaptureLog
 
