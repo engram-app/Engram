@@ -1571,9 +1571,19 @@ defmodule Engram.Vector.Qdrant do
   # filters. It gates the indexes because their disk footprint is unmeasured:
   # 20 more payload indexes per collection SIGBUSed CI's 2 GB tmpfs Qdrant,
   # and prod's disk is tight. Measure on dev 1.19.2, then flip the default.
-  @doc "Whether the v5 payload format is on (see the comment above)."
+  @doc """
+  Whether the v5 payload format is on (see the comment above). Writing the v5
+  layout IMPLIES it: a v5 point only carries short keys, so writing one with
+  legacy-only filters would make it unfindable. One accessor, so the two
+  flags cannot disagree and no operator has to set both.
+  """
   @spec v5_payload_format?() :: boolean()
-  def v5_payload_format?, do: ServiceConfig.get(:v5_payload_format, false) == true
+  def v5_payload_format?,
+    do: ServiceConfig.get(:v5_payload_format, false) == true or write_v5_layout?()
+
+  @doc "Whether new points are written in the v5 layout (UUIDv5 ids, v5 payload)."
+  @spec write_v5_layout?() :: boolean()
+  def write_v5_layout?, do: ServiceConfig.get(:write_v5_layout, false) == true
   defp legacy_filter_fields?, do: ServiceConfig.get(:legacy_filter_fields, true)
 
   @doc """

@@ -70,6 +70,16 @@ defmodule Engram.Vector.QdrantFilterTest do
       ServiceConfig.put_override(:v5_payload_format, true)
     end
 
+    test "writing the v5 layout implies the v5 format, so the flags cannot disagree" do
+      ServiceConfig.put_override(:v5_payload_format, false)
+      ServiceConfig.put_override(:write_v5_layout, true)
+      assert Qdrant.v5_payload_format?()
+      assert %{should: [_, %{key: "u"}]} = Qdrant.match_filter(:user, @uuid)
+
+      ServiceConfig.put_override(:write_v5_layout, false)
+      refute Qdrant.v5_payload_format?()
+    end
+
     test "with the v5 format off, filters are legacy-only" do
       ServiceConfig.put_override(:v5_payload_format, false)
       assert Qdrant.match_filter(:user, @uuid) == %{key: "user_id", match: %{value: @uuid}}

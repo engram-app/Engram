@@ -2495,7 +2495,7 @@ defmodule Engram.Indexing do
     # what main does: no extraction, no Postgres writes, the v3 payload.
     v5_format? = Qdrant.v5_payload_format?()
     v5? = write_v5_layout?()
-    flat = if v5_format? or v5?, do: FlatFields.extract(note.content, filter_key)
+    flat = if v5_format?, do: FlatFields.extract(note.content, filter_key)
     note_payload = if v5?, do: PayloadV5.build(note, flat), else: note_payload(note)
     ctx = {note, user, note_payload, now, v5?}
 
@@ -2723,7 +2723,7 @@ defmodule Engram.Indexing do
 
   # UUIDv5 ids and the text-free payload (Task 15.1/15.3), off until PR-17:
   # until then every write keeps random ids and payload text.
-  defp write_v5_layout?, do: Application.get_env(:engram, :write_v5_layout, false)
+  defp write_v5_layout?, do: Qdrant.write_v5_layout?()
 
   # A deterministic id can equal a stale id of the previous pass (same
   # fingerprint and ordinal, not reused because the plan regrouped). The point
