@@ -600,6 +600,13 @@ defmodule Engram.Workers.EmbedNote do
           {:error, :qdrant_backpressure} ->
             Qdrant.backpressure_snooze(:refused)
 
+          # The write is queued but not applied within its wait (Qdrant 200
+          # with status "wait_timeout"), so the note is not stamped. Same as a
+          # refusal: snooze without burning an attempt; the retry reuses the
+          # retained vectors and the upsert is idempotent.
+          {:error, :qdrant_wait_timeout} ->
+            {:snooze, 30 + :rand.uniform(60)}
+
           # A failure no retry can fix (H7: input over the model's context
           # window). Park now, on any attempt, and stop: four more attempts
           # would each pay a request to learn the same thing.

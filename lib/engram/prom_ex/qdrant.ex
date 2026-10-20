@@ -349,6 +349,12 @@ defmodule Engram.PromEx.Qdrant do
           description:
             "Embed jobs snoozed for Qdrant pressure: preflight (before Voyage) or refused (strict mode).",
           tags: [:reason]
+        ),
+        counter(
+          metric_prefix ++ [:wait_timeout, :total],
+          event_name: [:engram, :qdrant, :wait_timeout],
+          description:
+            "Writes whose wait=true outlived the server timeout: queued, not yet applied, so not stamped."
         )
       ]
     )

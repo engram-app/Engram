@@ -827,6 +827,27 @@ defmodule Engram.Vector.Qdrant do
   # key and vector deletes are (they rewrite the point).
   defp write_error(507, _body), do: {:error, :qdrant_backpressure}
 
+  # A 200 is not always applied: with `wait=true`, a server `timeout` that
+  # expires first answers 200 with `result.status = "wait_timeout"`
+  # (`shard_ops.rs`). The op is queued and will apply, but its points may be
+  # invisible now, which is the race `wait=true` exists to close, so it is an
+  # error the caller must not stamp on. EmbedNote snoozes on it; the retry
+  # reuses the retained vectors, so Voyage is not paid again.
+  defp applied(%{"result" => %{"status" => "wait_timeout"}}), do: wait_timeout()
+
+  defp applied(%{"result" => results}) when is_list(results) do
+    if Enum.any?(results, &match?(%{"status" => "wait_timeout"}, &1)),
+      do: wait_timeout(),
+      else: :ok
+  end
+
+  defp applied(_body), do: :ok
+
+  defp wait_timeout do
+    :telemetry.execute([:engram, :qdrant, :wait_timeout], %{count: 1}, %{})
+    {:error, :qdrant_wait_timeout}
+  end
+
   defp write_error(400, %{"status" => %{"error" => message}} = body) when is_binary(message) do
     if message =~ @backpressure, do: {:error, :qdrant_backpressure}, else: {:error, {400, body}}
   end
@@ -920,7 +941,7 @@ defmodule Engram.Vector.Qdrant do
 
     instrument(:upsert, fn ->
       case Req.put("#{base_url()}/collections/#{col}/points", opts) do
-        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: 200, body: body}} -> applied(body)
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
@@ -938,7 +959,7 @@ defmodule Engram.Vector.Qdrant do
 
     instrument(:update_vectors, fn ->
       case Req.put("#{base_url()}/collections/#{col}/points/vectors", opts) do
-        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: 200, body: body}} -> applied(body)
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
@@ -959,7 +980,7 @@ defmodule Engram.Vector.Qdrant do
 
     instrument(:set_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
-        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: 200, body: body}} -> applied(body)
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
@@ -989,7 +1010,7 @@ defmodule Engram.Vector.Qdrant do
 
     instrument(:set_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
-        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: 200, body: body}} -> applied(body)
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
@@ -1029,7 +1050,7 @@ defmodule Engram.Vector.Qdrant do
 
     instrument(:delete_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload/delete", opts) do
-        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: 200, body: body}} -> applied(body)
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
@@ -1057,7 +1078,8 @@ defmodule Engram.Vector.Qdrant do
         # point ids come back 200. Treating it as an error made DeleteNoteIndex
         # (#1608, which retries now rather than swallowing) burn its attempts
         # on a stack that has never indexed anything.
-        {:ok, %{status: status}} when status in [200, 404] -> :ok
+        {:ok, %{status: 200, body: body}} -> applied(body)
+        {:ok, %{status: 404}} -> :ok
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
@@ -1087,7 +1109,8 @@ defmodule Engram.Vector.Qdrant do
     instrument(:delete, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
         # Missing collection: nothing to delete. See `delete_points/2`.
-        {:ok, %{status: status}} when status in [200, 404] -> :ok
+        {:ok, %{status: 200, body: body}} -> applied(body)
+        {:ok, %{status: 404}} -> :ok
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
@@ -1136,7 +1159,8 @@ defmodule Engram.Vector.Qdrant do
     instrument(:delete, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
         # Missing collection: nothing to delete. See `delete_points/2`.
-        {:ok, %{status: status}} when status in [200, 404] -> :ok
+        {:ok, %{status: 200, body: body}} -> applied(body)
+        {:ok, %{status: 404}} -> :ok
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
@@ -1161,7 +1185,8 @@ defmodule Engram.Vector.Qdrant do
     instrument(:delete, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
         # Missing collection: nothing to delete. See `delete_points/2`.
-        {:ok, %{status: status}} when status in [200, 404] -> :ok
+        {:ok, %{status: 200, body: body}} -> applied(body)
+        {:ok, %{status: 404}} -> :ok
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end

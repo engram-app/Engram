@@ -105,4 +105,43 @@ defmodule Engram.Vector.QdrantWaitTest do
 
     assert Qdrant.server_timeout_s(:indexing) == 25
   end
+
+  # `wait=true` past the server `timeout`: HTTP 200 with result.status
+  # "wait_timeout" (shard_ops.rs). The op is queued, not applied, so the
+  # points may still be invisible; it must not read as success.
+  @wait_timeout ~s({"result":{"operation_id":7,"status":"wait_timeout"},"status":"ok"})
+
+  test "every write answers a wait_timeout as :qdrant_wait_timeout, with telemetry",
+       %{bypass: bypass} do
+    ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :qdrant, :wait_timeout]])
+
+    writes = [
+      {"PUT", "/points",
+       fn -> Qdrant.upsert_points(@col, [%{id: "p1", vector: [0.1], payload: %{}}]) end},
+      {"PUT", "/points/vectors",
+       fn -> Qdrant.update_vectors(@col, [%{id: "p1", vector: %{}}]) end},
+      {"POST", "/points/payload", fn -> Qdrant.set_payload(@col, ["p1"], %{"a" => 1}) end},
+      {"POST", "/points/payload",
+       fn -> Qdrant.set_payload_by_filter(@col, @user, @vault, "h", %{"a" => 1}) end},
+      {"POST", "/points/payload/delete", fn -> Qdrant.delete_payload_keys(@col, ["k"]) end},
+      {"POST", "/points/delete", fn -> Qdrant.delete_points(@col, ["p1"]) end},
+      {"POST", "/points/delete", fn -> Qdrant.delete_by_note(@col, @user, @vault, "h") end},
+      {"POST", "/points/delete", fn -> Qdrant.delete_by_user(@col, @user) end},
+      {"POST", "/points/delete", fn -> Qdrant.delete_by_vault(@col, @user, @vault) end}
+    ]
+
+    for {method, suffix, write} <- writes do
+      capture(bypass, method, "/collections/#{@col}#{suffix}", @wait_timeout)
+      assert write.() == {:error, :qdrant_wait_timeout}, suffix
+      assert_receive {[:engram, :qdrant, :wait_timeout], ^ref, %{count: 1}, _meta}
+    end
+  end
+
+  test "a completed or acknowledged write is still :ok", %{bypass: bypass} do
+    for status <- ["completed", "acknowledged"] do
+      body = ~s({"result":{"operation_id":7,"status":"#{status}"},"status":"ok"})
+      capture(bypass, "POST", "/collections/#{@col}/points/delete", body)
+      assert :ok = Qdrant.delete_points(@col, ["p1"])
+    end
+  end
 end
