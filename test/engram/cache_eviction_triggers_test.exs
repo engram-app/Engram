@@ -132,6 +132,37 @@ defmodule Engram.CacheEvictionTriggersTest do
     end)
   end
 
+  # The seq bump (every note write) runs this WHEN clause, so it compares the
+  # columns directly instead of building two jsonb documents per bump. A
+  # column list goes stale silently when a column is added: every column but
+  # the two seq-bump ones must be in it, or that column's changes never evict.
+  test "vaults: the UPDATE trigger names every column but change_seq/updated_at, no jsonb" do
+    Sandbox.unboxed_run(Repo, fn ->
+      %{rows: [[defn]]} =
+        sql(
+          """
+          SELECT pg_get_triggerdef(t.oid) FROM pg_trigger t
+          WHERE t.tgrelid = 'vaults'::regclass AND t.tgname = 'vaults_cache_notify_1'
+          """,
+          []
+        )
+
+      %{rows: cols} =
+        sql(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = 'vaults'",
+          []
+        )
+
+      refute defn =~ "to_jsonb"
+
+      for [col] <- cols, col not in ~w(change_seq updated_at) do
+        assert defn =~ ~r/old\.#{col}\b/, "vaults.#{col} is not in the trigger's WHEN clause"
+      end
+
+      refute defn =~ "old.change_seq"
+    end)
+  end
+
   defp insert_note(user_id, vault_id) do
     %{rows: [[id]]} =
       sql(
