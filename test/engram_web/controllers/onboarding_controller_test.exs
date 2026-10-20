@@ -298,6 +298,26 @@ defmodule EngramWeb.OnboardingControllerTest do
       assert reloaded.onboarding_profile["tools"] == ["claude", "claude_code"]
     end
 
+    test "accepts signup attribution on its own", %{conn: conn, user: user} do
+      conn =
+        patch(conn, "/api/onboarding/profile", %{
+          "attribution" => %{"utm_source" => "reddit", "referrer_domain" => "reddit.com"}
+        })
+
+      assert json_response(conn, 201)["attribution"] == %{
+               "utm_source" => "reddit",
+               "referrer_domain" => "reddit.com"
+             }
+
+      reloaded = Engram.Repo.get!(Engram.Accounts.User, user.id, skip_tenant_check: true)
+      assert reloaded.onboarding_profile["attribution"]["utm_source"] == "reddit"
+    end
+
+    test "returns 422 invalid_attribution for unusable attribution", %{conn: conn} do
+      conn = patch(conn, "/api/onboarding/profile", %{"attribution" => %{"utm_term" => "x"}})
+      assert json_response(conn, 422)["error"] == "invalid_attribution"
+    end
+
     test "returns 422 invalid_tool for unknown tool slug", %{conn: conn} do
       conn =
         patch(conn, "/api/onboarding/profile", %{
