@@ -773,6 +773,8 @@ defmodule Engram.Search do
 
   defp postgres_hits(candidates, user, true) do
     ids = Enum.map(candidates, & &1[:qdrant_id])
+    # The denominator of the hits_dropped / text_missing ratio alert.
+    :telemetry.execute([:engram, :search, :hits], %{count: length(ids)}, %{})
 
     with {:ok, hits} <- Engram.Notes.search_hits_by_qdrant_points(user, ids) do
       {kept, dropped} =
@@ -798,9 +800,9 @@ defmodule Engram.Search do
 
   defp bump(counts, reason), do: Map.update(counts, reason, 1, &(&1 + 1))
 
-  # One counter for every reason (`engram_prom_ex_search_hits_dropped_total`,
-  # alerted on as a ratio of searches). The orphan window is expected on
-  # every edit, so it logs at debug; the others are real faults.
+  # One counter for every reason (`engram_prom_ex_search_hits_dropped_total`).
+  # The orphan window is expected on every edit, so it logs at debug; the
+  # others are real faults.
   defp emit_hit_dropped(reason, count, user) do
     :telemetry.execute([:engram, :search, :hit_dropped], %{count: count}, %{reason: reason})
 
@@ -841,6 +843,11 @@ defmodule Engram.Search do
         {:ok, decrypted} -> Map.new(decrypted, &{&1.qdrant_id, &1})
         {:error, _} -> %{}
       end
+
+    # A fallback hit the payload decrypt did not return is gone from the
+    # page, whether the whole batch errored or one point failed.
+    lost = length(from_payload) - map_size(by_id)
+    if lost > 0, do: emit_hit_dropped(:payload_undecryptable, lost, user)
 
     missing = Enum.count(rest, &is_nil(hits[&1.qdrant_id].text))
 
