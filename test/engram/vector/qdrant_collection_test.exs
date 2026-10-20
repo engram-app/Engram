@@ -7,7 +7,31 @@ defmodule Engram.Vector.QdrantCollectionTest do
   setup do
     bypass = Bypass.open()
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+    ServiceConfig.put_override(:v5_payload_format, true)
     %{bypass: bypass}
+  end
+
+  test "with the v5 format off, no v5 index is created", %{bypass: bypass} do
+    ServiceConfig.put_override(:v5_payload_format, false)
+    test_pid = self()
+
+    Bypass.expect_once(bypass, "PUT", "/collections/c1", fn conn ->
+      Plug.Conn.send_resp(conn, 200, "{}")
+    end)
+
+    Bypass.expect(bypass, "PUT", "/collections/c1/index", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:index, Jason.decode!(body)["field_name"]})
+      Plug.Conn.send_resp(conn, 200, ~s({"status":"ok"}))
+    end)
+
+    assert :ok = Qdrant.ensure_collection("c1", 1024)
+
+    # The 6 legacy keyword + 2 integer indexes (attributes are defined below).
+    for _ <- 1..8,
+        do: assert_receive({:index, _})
+
+    refute_receive {:index, _}
   end
 
   # All tenant-scoped filters target payload fields that Qdrant Cloud

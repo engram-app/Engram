@@ -22,6 +22,7 @@ defmodule Engram.Vector.FilterRoundtripTest do
 
   setup do
     ServiceConfig.put_override(:qdrant_url, qdrant_url())
+    ServiceConfig.put_override(:v5_payload_format, true)
 
     col =
       "engram_rt_#{System.get_env("MIX_TEST_PARTITION")}_#{System.unique_integer([:positive])}"

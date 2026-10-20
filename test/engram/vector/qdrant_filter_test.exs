@@ -66,6 +66,20 @@ defmodule Engram.Vector.QdrantFilterTest do
     @uuid "6f9619ff-8b86-d011-b42d-00c04fc964ff"
     @hmac :crypto.strong_rand_bytes(32)
 
+    setup do
+      ServiceConfig.put_override(:v5_payload_format, true)
+    end
+
+    test "with the v5 format off, filters are legacy-only" do
+      ServiceConfig.put_override(:v5_payload_format, false)
+      assert Qdrant.match_filter(:user, @uuid) == %{key: "user_id", match: %{value: @uuid}}
+
+      assert Qdrant.range_filter(:fm_timestamp, %{gte: 1}) == %{
+               key: "fm_timestamp",
+               range: %{gte: 1}
+             }
+    end
+
     test "user and vault match the dashed legacy id or the undashed v5 id" do
       assert Qdrant.match_filter(:user, @uuid) == %{
                should: [

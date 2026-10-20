@@ -341,7 +341,7 @@ defmodule Engram.Vector.Qdrant do
   defp ensure_payload_indexes(col, indexed) do
     keyword = Enum.map(@payload_index_fields, &{&1, "keyword"})
     integer = Enum.map(@integer_payload_index_fields, &{&1, "integer"})
-    v5 = PayloadKeys.index_fields()
+    v5 = if v5_payload_format?(), do: PayloadKeys.index_fields(), else: []
 
     missing =
       Enum.reject(keyword ++ integer ++ v5, fn {field, _} -> MapSet.member?(indexed, field) end)
@@ -1163,13 +1163,13 @@ defmodule Engram.Vector.Qdrant do
     col = col || collection()
 
     legacy =
-      if legacy_filter_fields?(),
+      if legacy_filter_fields?() or not v5_payload_format?(),
         do: [{legacy_note_filter(user_id, vault_id, path_hmac), payload, []}],
         else: []
 
     v5 =
-      case hmac_id(path_hmac) do
-        nil ->
+      case v5_payload_format?() && hmac_id(path_hmac) do
+        v when v in [nil, false] ->
           []
 
         old_id ->
@@ -1512,8 +1512,9 @@ defmodule Engram.Vector.Qdrant do
   # During the v5 pass a vault holds v3/v4 points (long `*_hmac` keys, base64
   # HMACs, dashed uuids) and v5 points (short `PayloadKeys` keys, 128-bit hex
   # ids). Every filter condition goes through `match_filter/2` or
-  # `range_filter/2`, which match EITHER format with a `should` while
-  # `:legacy_filter_fields` is on (the default), and only the v5 format once
+  # `range_filter/2`. With `:v5_payload_format` on, they match EITHER format
+  # with a `should` while `:legacy_filter_fields` is on (the default), and
+  # only the v5 format once
   # the pass has dropped the legacy fields (Task 18.1). A `should` nested in a
   # `must` is still an AND with the other conditions, so tenant scoping is
   # unchanged.
@@ -1536,6 +1537,13 @@ defmodule Engram.Vector.Qdrant do
   }
   @range_keys %{fm_timestamp: :fm_timestamp, fm_created: :fm_created}
 
+  # OFF until flipped in code, before any v5 write (PR-17 also flips
+  # `:write_v5_layout`; the two go together or v5 points are unfindable).
+  # While off, nothing about Qdrant changes: no v5 indexes, legacy-only
+  # filters. It gates the indexes because their disk footprint is unmeasured:
+  # 20 more payload indexes per collection SIGBUSed CI's 2 GB tmpfs Qdrant,
+  # and prod's disk is tight. Measure on dev 1.19.2, then flip the default.
+  defp v5_payload_format?, do: ServiceConfig.get(:v5_payload_format, false)
   defp legacy_filter_fields?, do: ServiceConfig.get(:legacy_filter_fields, true)
 
   @doc """
@@ -1548,8 +1556,8 @@ defmodule Engram.Vector.Qdrant do
   def match_filter(field, value) do
     legacy = %{key: Map.fetch!(@legacy_keys, field), match: match(value)}
 
-    case v5_value(field, value) do
-      nil ->
+    case v5_payload_format?() && v5_value(field, value) do
+      v when v in [nil, false] ->
         legacy
 
       v ->
@@ -1563,7 +1571,12 @@ defmodule Engram.Vector.Qdrant do
   def range_filter(field, range) do
     legacy = %{key: Atom.to_string(field), range: range}
     v5 = %{key: PayloadKeys.short(Map.fetch!(@range_keys, field)), range: range}
-    if legacy_filter_fields?(), do: %{should: [legacy, v5]}, else: v5
+
+    cond do
+      not v5_payload_format?() -> legacy
+      legacy_filter_fields?() -> %{should: [legacy, v5]}
+      true -> v5
+    end
   end
 
   @doc """
