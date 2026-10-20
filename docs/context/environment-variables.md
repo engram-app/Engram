@@ -190,6 +190,7 @@ Paddle is the Merchant-of-Record. Server keys gate API calls; the client token f
 |----------|---------|---------|
 | `ENGRAM_LIMITS_ENFORCED` | derived (`clerk` + Paddle key) | `true`/`false` override of plan-limit enforcement. |
 | `ENGRAM_<TIER>_<KEY>` | unset | Per-tier limit overrides (e.g. `ENGRAM_FREE_MAX_NOTES`); names come from `LimitKeys.env_var_names/0`. |
+| `INDEX_BUDGET_ENABLED` | `false` | `true` turns on the index budget (per-note merge cap, index points cap and keyword-only floor, the 04:00 UTC recap and budget sweeps). Turn on only with the chunker v5 stamp, after the v5 rebuild pass; the caps are sized for v5 chunks. |
 | `ATTACHMENT_MIME_BYPASS` | off (gate ON) | `true` disables the MIME/extension whitelist. |
 | `ATTACHMENT_MIME_ALLOWLIST_EXTRA` | unset | Comma-sep extra allowed MIMEs without disabling the gate. |
 | `RATE_LIMIT_AUTH_OVERRIDE` | ignored unless `CI=true` | Auth-limiter override for CI/E2E only. |
