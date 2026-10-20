@@ -147,7 +147,8 @@ defmodule Engram.SearchTenantIdfTest do
       qdrant_version(b, "1.19.2")
       points(u, n, 999)
       refute Search.tenant_idf?(u)
-      points(u, n, 1)
+      # Another note: positions are unique per note.
+      points(u, insert(:note, user: u, vault: Repo.preload(n, :vault).vault), 1)
       refute Search.tenant_idf?(u)
     end
   end

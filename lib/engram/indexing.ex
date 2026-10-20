@@ -2202,19 +2202,22 @@ defmodule Engram.Indexing do
 
   @doc """
   Keyword encoder options for a chunk (plan Task 14.1). Floor and capped
-  groups encode length-capped (`cap_doc_len`). A chunk joining more than one
-  section (`section_count > 1`: a v5 min512 chunk or a capped group) scores
-  with BM25 `b` = `ServiceConfig.get(:bm25_b_merged, 0.25)`, everything else
-  with the encoder's 0.75. A v3 chunk has no `section_count`, so its
-  encoding is unchanged.
+  groups encode length-capped (`cap_doc_len`). When the v5 layout is
+  written (`:write_v5_layout`), a chunk joining more than one section
+  (`section_count > 1`: a v5 min512 chunk or a capped group) scores with
+  BM25 `b` = `ServiceConfig.get(:bm25_b_merged, 0.25)`; everything else, and
+  every v3 write, keeps the encoder's 0.75, byte-identical to before.
   """
   @spec sparse_opts(map()) :: keyword()
   def sparse_opts(chunk) do
     cap = if capped_length?(chunk), do: [cap_doc_len: true], else: []
 
-    if Map.get(chunk, :section_count, 1) > 1,
-      do: cap ++ [b: Engram.ServiceConfig.get(:bm25_b_merged, 0.25)],
-      else: cap
+    # The same flag as `Qdrant.write_v5_layout?/0` (PR-15b); switch to that
+    # accessor when both are on one branch.
+    if Engram.ServiceConfig.get(:write_v5_layout, false) == true and
+         Map.get(chunk, :section_count, 1) > 1,
+       do: cap ++ [b: Engram.ServiceConfig.get(:bm25_b_merged, 0.25)],
+       else: cap
   end
 
   @doc """

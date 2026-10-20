@@ -71,7 +71,7 @@ defmodule Engram.Native do
 
   # NIFs reached only through a wrapper below that fixes their schedule.
   @single [
-    encode_documents_nif: 4,
+    encode_documents_nif: 6,
     mmr_select_nif: 5,
     pack_f32_nif: 1,
     dense_json_nif: 1,
@@ -197,10 +197,17 @@ defmodule Engram.Native do
   @doc """
   Batch keyword encode: `[{indices_u32le, values_f64le, doc_len}]`, indices
   ascending. Emits `[:engram, :nif, :call, :stop]`.
+
+  Options: `:b` BM25 length weight (default 0.75), `:cap` score each
+  document as if it were at most `cap` x `avgdl` long (default none). The
+  defaults encode exactly as before the options existed.
   """
-  def encode_documents(texts, filter_key, avgdl, language) do
+  def encode_documents(texts, filter_key, avgdl, language, opts \\ []) do
+    b = Keyword.get(opts, :b, 0.75) / 1
+    cap = with c when is_number(c) <- Keyword.get(opts, :cap), do: c / 1
+
     call(:keyword_encode, texts, %{dirty: true}, fn ->
-      encode_documents_nif(texts, filter_key, avgdl, language)
+      encode_documents_nif(texts, filter_key, avgdl, language, b, cap)
     end)
   end
 
