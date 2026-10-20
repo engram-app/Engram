@@ -22,7 +22,7 @@ defmodule Engram.Repo.Migrations.AddEmbedBucketToUsageMetersExpand do
   def up do
     alter table(:usage_meters) do
       add :embed_bucket_tokens, :float
-      add :embed_bucket_at, :utc_datetime_usec
+      add :embed_bucket_at, :timestamptz
     end
   end
 

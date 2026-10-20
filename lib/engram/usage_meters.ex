@@ -133,18 +133,18 @@ defmodule Engram.UsageMeters do
   @take_sql """
   INSERT INTO usage_meters AS m
     (user_id, embed_bucket_tokens, embed_bucket_at, lifetime_embed_tokens, updated_at)
-  VALUES ($1::uuid, $3::float8 - $2::bigint, $4::timestamp, $2::bigint, $4::timestamp)
+  VALUES ($1::uuid, $3::float8 - $2::bigint, $4::timestamptz, $2::bigint, $4::timestamptz AT TIME ZONE 'UTC')
   ON CONFLICT (user_id) DO UPDATE SET
     embed_bucket_tokens = LEAST($3::float8,
       COALESCE(m.embed_bucket_tokens, $3::float8)
-      + GREATEST(0, EXTRACT(EPOCH FROM ($4::timestamp - COALESCE(m.embed_bucket_at, $4::timestamp))))::float8
+      + GREATEST(0, EXTRACT(EPOCH FROM ($4::timestamptz - COALESCE(m.embed_bucket_at, $4::timestamptz))))::float8
         * $5::float8) - $2::bigint,
-    embed_bucket_at = GREATEST($4::timestamp, COALESCE(m.embed_bucket_at, $4::timestamp)),
+    embed_bucket_at = GREATEST($4::timestamptz, COALESCE(m.embed_bucket_at, $4::timestamptz)),
     lifetime_embed_tokens = m.lifetime_embed_tokens + $2::bigint,
-    updated_at = $4::timestamp
+    updated_at = $4::timestamptz AT TIME ZONE 'UTC'
   WHERE LEAST($3::float8,
       COALESCE(m.embed_bucket_tokens, $3::float8)
-      + GREATEST(0, EXTRACT(EPOCH FROM ($4::timestamp - COALESCE(m.embed_bucket_at, $4::timestamp))))::float8
+      + GREATEST(0, EXTRACT(EPOCH FROM ($4::timestamptz - COALESCE(m.embed_bucket_at, $4::timestamptz))))::float8
         * $5::float8) >= $2::bigint
   RETURNING embed_bucket_tokens
   """
@@ -152,7 +152,7 @@ defmodule Engram.UsageMeters do
   @available_sql """
   SELECT LEAST($2::float8,
     COALESCE(embed_bucket_tokens, $2::float8)
-    + GREATEST(0, EXTRACT(EPOCH FROM ($3::timestamp - COALESCE(embed_bucket_at, $3::timestamp))))::float8
+    + GREATEST(0, EXTRACT(EPOCH FROM ($3::timestamptz - COALESCE(embed_bucket_at, $3::timestamptz))))::float8
       * $4::float8)
   FROM usage_meters WHERE user_id = $1::uuid
   """
@@ -169,7 +169,7 @@ defmodule Engram.UsageMeters do
     if tokens > capacity do
       {:error, :bucket_empty}
     else
-      args = [Ecto.UUID.dump!(user_id), tokens, capacity * 1.0, naive_now(opts), rate(capacity)]
+      args = [Ecto.UUID.dump!(user_id), tokens, capacity * 1.0, utc_now(opts), rate(capacity)]
 
       case Repo.query!(@take_sql, args) do
         %{rows: [[left]]} -> {:ok, trunc(max(left, 0.0))}
@@ -182,7 +182,7 @@ defmodule Engram.UsageMeters do
   @spec bucket_available(Ecto.UUID.t(), non_neg_integer(), keyword()) :: non_neg_integer()
   def bucket_available(user_id, capacity, opts \\ [])
       when is_binary(user_id) and is_integer(capacity) do
-    args = [Ecto.UUID.dump!(user_id), capacity * 1.0, naive_now(opts), rate(capacity)]
+    args = [Ecto.UUID.dump!(user_id), capacity * 1.0, utc_now(opts), rate(capacity)]
 
     case Repo.query!(@available_sql, args) do
       %{rows: [[n]]} -> trunc(max(n, 0.0))
@@ -233,8 +233,7 @@ defmodule Engram.UsageMeters do
 
   defp rate(capacity), do: capacity / @bucket_refill_seconds
 
-  defp naive_now(opts),
-    do: opts |> Keyword.get_lazy(:now, &DateTime.utc_now/0) |> DateTime.to_naive()
+  defp utc_now(opts), do: Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
 
   @doc """
   Estimates Voyage token count from raw byte size. English averages ~4 bytes
