@@ -221,6 +221,26 @@ describe("AgreementPage: terms only", () => {
 		expect(screen.queryByRole("radio")).toBeNull();
 	});
 
+	// ENGRAM-FRONTEND-5: Safari's "Load failed" on POST /onboarding/accept-terms
+	// escaped the click handler as an unhandled rejection, and the user was left
+	// on a page that said nothing.
+	it("shows a retryable error, not an unhandled rejection, when accepting fails", async () => {
+		const unhandled = vi.fn();
+		process.on("unhandledRejection", unhandled);
+		mutate.mockRejectedValueOnce(new TypeError("Load failed"));
+		renderPage();
+		fireEvent.click(screen.getByRole("checkbox", { name: /agree/iu }));
+		await clickContinue();
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"Could not continue. Please try again.",
+		);
+		expect(screen.getByRole("button", { name: /continue/iu })).toBeEnabled();
+		await new Promise((r) => setTimeout(r, 0));
+		process.off("unhandledRejection", unhandled);
+		expect(unhandled).not.toHaveBeenCalled();
+	});
+
 	it("cannot be submitted twice while saving", async () => {
 		let release: (v: unknown) => void = () => undefined;
 		mutate.mockClear();

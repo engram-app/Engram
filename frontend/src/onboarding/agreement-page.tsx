@@ -30,14 +30,21 @@ export default function AgreementPage() {
 	const notices = data?.legal_notices ?? [];
 	// Guards a second accept while the first is still in flight.
 	const [submitting, setSubmitting] = useState(false);
+	const [failed, setFailed] = useState(false);
 
 	async function submit() {
 		if (submitting) {
 			return;
 		}
 		setSubmitting(true);
+		setFailed(false);
 		try {
 			await submitSteps();
+		} catch {
+			// A dropped request (Safari's "Load failed") or a 5xx: the accept
+			// did not land, so say so and leave Continue live to retry. The api
+			// client has already reported the failure.
+			setFailed(true);
 		} finally {
 			setSubmitting(false);
 		}
@@ -145,6 +152,11 @@ export default function AgreementPage() {
 							{t("I have read and agree to the agreement shown above and the privacy notice")}
 						</span>
 					</label>
+					{failed ? (
+						<p role="alert" className={destructiveAlert}>
+							{t("Could not continue. Please try again.")}
+						</p>
+					) : null}
 					<Button
 						type="button"
 						onClick={submit}
