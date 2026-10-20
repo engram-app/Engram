@@ -17,10 +17,12 @@ defmodule Engram.Notes.NoteAttrsRlsTest do
   setup do
     seeded =
       for _ <- 1..2 do
-        user = insert(:user)
+        # Real per-user filter keys, so "equal values HMAC differently" is a
+        # property of the key derivation, not of two random test keys.
+        {:ok, user} = Engram.Crypto.ensure_user_dek(insert(:user))
         vault = insert(:vault, user: user)
         note = insert(:note, user: user, vault: vault)
-        fk = :crypto.strong_rand_bytes(32)
+        {:ok, fk} = Engram.Crypto.dek_filter_key(user)
 
         Repo.insert_all(
           NoteAttr,
@@ -28,6 +30,7 @@ defmodule Engram.Notes.NoteAttrsRlsTest do
             %{
               note_id: note.id,
               user_id: user.id,
+              vault_id: vault.id,
               key_hmac: FilterId.key_hmac(fk, "status"),
               value_hmac: FilterId.value_hmac(fk, "draft")
             }
@@ -35,7 +38,7 @@ defmodule Engram.Notes.NoteAttrsRlsTest do
           skip_tenant_check: true
         )
 
-        %{user: user, fk: fk, note: note}
+        %{user: user, fk: fk, note: note, vault: vault}
       end
 
     {:ok, a: Enum.at(seeded, 0), b: Enum.at(seeded, 1)}
@@ -70,10 +73,31 @@ defmodule Engram.Notes.NoteAttrsRlsTest do
              as_tenant(a.user.id, fn ->
                Repo.insert_all(
                  NoteAttr,
-                 [%{note_id: b.note.id, user_id: b.user.id, key_hmac: "k", value_num: 1.0}],
+                 [
+                   %{
+                     note_id: b.note.id,
+                     user_id: b.user.id,
+                     vault_id: b.vault.id,
+                     key_hmac: "k",
+                     value_num: 1.0
+                   }
+                 ],
                  skip_tenant_check: true
                )
              end)
+  end
+
+  # CONTROL for the test below: the maintenance role reaches other tenants'
+  # rows through the maintenance_all POLICY, not through a bypass attribute.
+  test "CONTROL: engram_maintenance has no BYPASSRLS and note_attrs carries maintenance_all" do
+    assert Repo.query!(
+             "SELECT rolbypassrls, rolsuper FROM pg_roles WHERE rolname = 'engram_maintenance'"
+           ).rows ==
+             [[false, false]]
+
+    assert Repo.query!(
+             "SELECT roles::text[] FROM pg_policies WHERE tablename = 'note_attrs' AND policyname = 'maintenance_all'"
+           ).rows == [[["engram_maintenance"]]]
   end
 
   test "maintenance_all sees every tenant's rows" do

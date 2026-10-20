@@ -20,15 +20,29 @@ defmodule Engram.Repo.Migrations.CreateNoteAttrsExpand do
       add :id, :uuid, primary_key: true, default: fragment("uuidv7()")
       add :note_id, references(:notes, type: :uuid, on_delete: :delete_all), null: false
       add :user_id, references(:users, type: :uuid, on_delete: :delete_all), null: false
+      # Readers scope by vault (a multi-vault grant must never see another
+      # vault's rows), and CleanupVault hard-deletes vaults, so it cascades.
+      add :vault_id, references(:vaults, type: :uuid, on_delete: :delete_all), null: false
       add :key_hmac, :binary, null: false
       add :value_hmac, :binary
       add :value_num, :float
       add :value_date, :bigint
     end
 
-    create index(:note_attrs, [:user_id, :key_hmac, :value_hmac], where: "value_hmac IS NOT NULL")
-    create index(:note_attrs, [:user_id, :key_hmac, :value_num], where: "value_num IS NOT NULL")
-    create index(:note_attrs, [:user_id, :key_hmac, :value_date], where: "value_date IS NOT NULL")
+    create index(:note_attrs, [:user_id, :vault_id, :key_hmac, :value_hmac],
+             where: "value_hmac IS NOT NULL"
+           )
+
+    create index(:note_attrs, [:user_id, :vault_id, :key_hmac, :value_num],
+             where: "value_num IS NOT NULL"
+           )
+
+    create index(:note_attrs, [:user_id, :vault_id, :key_hmac, :value_date],
+             where: "value_date IS NOT NULL"
+           )
+
+    # The vault FK cascades.
+    create index(:note_attrs, [:vault_id])
     create index(:note_attrs, [:note_id])
     # The users FK cascades: account deletion scans it. Also the RLS predicate.
     create index(:note_attrs, [:user_id])

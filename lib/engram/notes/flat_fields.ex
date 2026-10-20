@@ -165,9 +165,10 @@ defmodule Engram.Notes.FlatFields do
   end
 
   @doc "The `note_attrs` rows for `flat` (one per long-tail value)."
-  @spec attr_rows(t(), %{id: Ecto.UUID.t(), user_id: Ecto.UUID.t()}) :: [map()]
-  def attr_rows(flat, %{id: note_id, user_id: user_id}) do
-    row = &Map.merge(%{note_id: note_id, user_id: user_id, key_hmac: &1}, &2)
+  @spec attr_rows(t(), %{id: Ecto.UUID.t(), user_id: Ecto.UUID.t(), vault_id: Ecto.UUID.t()}) ::
+          [map()]
+  def attr_rows(flat, %{id: note_id, user_id: user_id, vault_id: vault_id}) do
+    row = &Map.merge(%{note_id: note_id, user_id: user_id, vault_id: vault_id, key_hmac: &1}, &2)
 
     for(%{k: k, v: v} <- flat.attrs, do: row.(k, %{value_hmac: v})) ++
       for(%{k: k, n: n} <- flat.nums, do: row.(k, %{value_num: n})) ++
