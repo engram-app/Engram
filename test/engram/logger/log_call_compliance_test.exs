@@ -115,6 +115,9 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # Queries the notes table (counts only) and holds user emails and names
     # bound for PostHog; scanned so a future log line cannot leak either.
     "lib/engram/analytics",
+    # Customer insights: reads every tenant's event props and note counts,
+    # and the snapshot job queries the notes table.
+    "lib/engram/insights",
     "lib/engram/folders.ex",
     "lib/engram/search.ex",
     "lib/engram/search/",
