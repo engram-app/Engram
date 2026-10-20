@@ -15,9 +15,6 @@ import { DeleteConfirm } from "./tree-actions/delete-confirm";
 
 const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: toastError } }));
-vi.mock("./attachment-upload/file-to-base64", () => ({
-	fileToBase64: () => Promise.resolve("AAAA"),
-}));
 
 test("DeleteConfirm counts a folder's items with the plural form", () => {
 	const { rerender } = render(

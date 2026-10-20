@@ -3,7 +3,6 @@ import { LimitExceededError } from "@/api/client";
 import { englishT } from "@/i18n/translate";
 import { uploadFilesTo } from "./upload-files";
 
-vi.mock("./file-to-base64", () => ({ fileToBase64: () => Promise.resolve("AAAA") }));
 const toastError = vi.fn();
 vi.mock("sonner", () => ({ toast: { error: (m: string) => toastError(m) } }));
 

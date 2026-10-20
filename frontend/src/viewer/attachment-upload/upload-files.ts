@@ -2,7 +2,6 @@ import { LimitExceededError } from "@/api/client";
 import type { Translate } from "@/i18n/translate";
 import { notify } from "@/lib/notify";
 import { uniqueAttachmentName } from "../attachment-blob";
-import { fileToBase64 } from "./file-to-base64";
 
 // Paths this tab has just uploaded. The attachments list only learns about them
 // after the upload's refetch lands, and the backend upserts, so a second drop of
@@ -20,12 +19,7 @@ function reservedPaths(now: number): { path: string }[] {
 	return [...reserved.keys()].map((path) => ({ path }));
 }
 
-type Upload = (body: {
-	path: string;
-	mime_type?: string;
-	content_base64: string;
-	mtime: number;
-}) => Promise<unknown>;
+type Upload = (body: { path: string; file: File }) => Promise<unknown>;
 
 /**
  * Upload files straight into `folder` ("" = vault root), no dialog. A name that
@@ -64,12 +58,7 @@ export async function uploadFilesTo(opts: {
 		const path = opts.folder ? `${opts.folder}/${name}` : name;
 		reserved.set(path, Date.now());
 		try {
-			await opts.upload({
-				path,
-				mime_type: file.type || undefined,
-				content_base64: await fileToBase64(file),
-				mtime: Math.floor(file.lastModified / 1000),
-			});
+			await opts.upload({ path, file });
 			taken.push({ path });
 			done.push(path);
 		} catch (err) {

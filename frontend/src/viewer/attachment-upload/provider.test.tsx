@@ -9,7 +9,6 @@ vi.mock("@/api/queries", () => ({
 	useUploadAttachment: () => ({ mutateAsync }),
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-vi.mock("./file-to-base64", () => ({ fileToBase64: () => Promise.resolve("AAAA") }));
 // Render a sentinel instead of the real dialog so this test stays unit-scoped.
 vi.mock("./upload-dialog", () => ({
 	AttachmentUploadDialog: ({ initialFiles }: { initialFiles: File[] }) => (

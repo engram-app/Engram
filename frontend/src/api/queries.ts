@@ -27,8 +27,10 @@ import {
 import type { NoteLinkEdge } from "../viewer/wiki-link";
 import { reconcileActiveVault, useActiveVaultId } from "./active-vault";
 import { crdtCreateNote, crdtCreateNoteWithContent, crdtDeleteNote } from "./channel";
+import { uploadInParts } from "./chunked-upload";
 import { ApiError, api } from "./client";
 import { CrdtOpError, isPermanentJoinRefusal, toastJoinRefused } from "./crdt-ops";
+import { attachmentPartSize } from "./server-features";
 import {
 	type AttachmentEvent,
 	applyAttachmentEvents,
@@ -682,9 +684,26 @@ export function useUploadAttachment() {
 	return useMutation<
 		{ attachment: AttachmentSummary },
 		Error,
-		{ path: string; mime_type?: string; content_base64: string; mtime: number }
+		{ path: string; file: File; signal?: AbortSignal }
 	>({
-		mutationFn: (body) => api.post<{ attachment: AttachmentSummary }>("/attachments", body),
+		// Raw bytes, not base64 JSON. Parts only when the server offers them and the
+		// file is bigger than one part; otherwise one request up to its size limit.
+		mutationFn: ({ path, file, signal }) => {
+			const partSize = attachmentPartSize();
+			if (partSize !== null && file.size > partSize) {
+				return uploadInParts(file, path, { signal });
+			}
+			return api.postRaw<{ attachment: AttachmentSummary }>(
+				"/attachments",
+				file,
+				{
+					path,
+					mtime: Math.floor(file.lastModified / 1000),
+					mime_type: file.type || undefined,
+				},
+				{ signal },
+			);
+		},
 		onSuccess: ({ attachment }) => {
 			// New attachment row changes the tree's attachment list AND the
 			// dashboard folder-browse list (which renders attachments). The

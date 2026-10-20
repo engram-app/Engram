@@ -6,7 +6,6 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
 import type { Translate } from "@/i18n/translate";
-import { fileToBase64 } from "./file-to-base64";
 import { FolderPicker } from "./folder-picker";
 
 type RowStatus = "pending" | "uploading" | "done" | "error";
@@ -61,7 +60,7 @@ function messageFor(err: unknown, t: Translate): string {
 	}
 	if (isApiError(err)) {
 		if (err.status === 415) {
-			return t("This file type is not allowed");
+			return t("Executable files can't be uploaded");
 		}
 		return t("Upload failed");
 	}
@@ -92,14 +91,8 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 				}
 				setRows((r) => patch(r, i, { status: "uploading", error: undefined }));
 				try {
-					const content_base64 = await fileToBase64(row.file);
 					const path = folder ? `${folder}/${row.file.name}` : row.file.name;
-					await upload.mutateAsync({
-						path,
-						mime_type: row.file.type || undefined,
-						content_base64,
-						mtime: Math.floor(row.file.lastModified / 1000),
-					});
+					await upload.mutateAsync({ path, file: row.file });
 					setRows((r) => patch(r, i, { status: "done" }));
 				} catch (err) {
 					setRows((r) => patch(r, i, { status: "error", error: messageFor(err, t) }));

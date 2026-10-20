@@ -47,6 +47,7 @@ import {
 	type VaultTree,
 	vaultTreeQueryOptions,
 } from "./queries";
+import { captureServerFeatures, resetServerFeatures } from "./server-features";
 import { dirOf } from "./vault-tree-patch";
 
 vi.mock("sonner", () => ({
@@ -72,7 +73,9 @@ vi.mock("./active-vault", async () => {
 	return { ...actual, useActiveVaultId: () => "42" };
 });
 
-const { get, post, patch, del } = vi.hoisted(() => ({
+const { get, post, patch, del, postRaw, uploadInParts } = vi.hoisted(() => ({
+	postRaw: vi.fn(),
+	uploadInParts: vi.fn(),
 	get: vi.fn(),
 	post: vi.fn(),
 	patch: vi.fn(),
@@ -89,12 +92,13 @@ const { crdtCreateNote, crdtDeleteNote, crdtCreateNoteWithContent } = vi.hoisted
 		Promise.resolve(docId),
 	),
 }));
+vi.mock("./chunked-upload", () => ({ uploadInParts }));
 vi.mock("./channel", () => ({ crdtCreateNote, crdtDeleteNote, crdtCreateNoteWithContent }));
 vi.mock("./client", async () => {
 	const actual = await vi.importActual<typeof import("./client")>("./client");
 	return {
 		...actual,
-		api: { get, post, patch, del },
+		api: { get, post, patch, del, postRaw },
 		setTokenGetter: vi.fn(),
 	};
 });
@@ -104,6 +108,9 @@ let qc: QueryClient;
 beforeEach(() => {
 	get.mockReset();
 	post.mockReset();
+	postRaw.mockReset();
+	uploadInParts.mockReset();
+	resetServerFeatures();
 	patch.mockReset();
 	del.mockReset();
 	crdtCreateNote.mockReset().mockImplementation((docId: string) => Promise.resolve(docId));
@@ -2386,30 +2393,63 @@ describe("useUploadAttachment", () => {
 		return { qc, Wrapper };
 	}
 
-	it("POSTs the upload payload and invalidates the vault tree", async () => {
-		post.mockResolvedValue({ attachment: { id: "a1", path: "pic.png" } });
+	it("POSTs the raw file and invalidates the vault tree", async () => {
+		postRaw.mockResolvedValue({ attachment: { id: "a1", path: "pic.png" } });
 		const { qc, Wrapper } = wrapper();
 		const spy = vi.spyOn(qc, "invalidateQueries");
 		const { result } = renderHook(() => useUploadAttachment(), { wrapper: Wrapper });
+		const file = new File(["abc"], "pic.png", {
+			type: "image/png",
+			lastModified: 1_718_000_000_500,
+		});
 
 		await act(async () => {
+			await result.current.mutateAsync({ path: "pic.png", file });
+		});
+
+		expect(postRaw).toHaveBeenCalledWith(
+			"/attachments",
+			file,
+			{ path: "pic.png", mtime: 1_718_000_000, mime_type: "image/png" },
+			{ signal: undefined },
+		);
+		expect(uploadInParts).not.toHaveBeenCalled();
+		expect(spy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
+		expect(spy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
+	});
+
+	it("uploads in parts only when the server offers them and the file is bigger than a part", async () => {
+		captureServerFeatures({
+			features: { chunked_attachment_upload: true, attachment_part_size: 4 },
+		});
+		uploadInParts.mockResolvedValue({ attachment: { id: "b", path: "big.bin" } });
+		postRaw.mockResolvedValue({ attachment: { id: "s", path: "small.bin" } });
+		const { Wrapper } = wrapper();
+		const { result } = renderHook(() => useUploadAttachment(), { wrapper: Wrapper });
+
+		await act(async () => {
+			await result.current.mutateAsync({ path: "big.bin", file: new File(["12345"], "big.bin") });
 			await result.current.mutateAsync({
-				path: "pic.png",
-				mime_type: "image/png",
-				content_base64: "AAAA",
-				mtime: 1_718_000_000,
+				path: "small.bin",
+				file: new File(["1234"], "small.bin"),
 			});
 		});
 
-		expect(post).toHaveBeenCalledWith("/attachments", {
-			path: "pic.png",
-			mime_type: "image/png",
-			content_base64: "AAAA",
-			mtime: 1_718_000_000,
+		expect(uploadInParts).toHaveBeenCalledTimes(1);
+		expect(uploadInParts.mock.calls[0]![1]).toBe("big.bin");
+		expect(postRaw).toHaveBeenCalledTimes(1);
+	});
+
+	it("sends a big file raw when the server has no parts", async () => {
+		captureServerFeatures({ features: { chunked_attachment_upload: false } });
+		postRaw.mockResolvedValue({ attachment: { id: "b", path: "big.bin" } });
+		const { Wrapper } = wrapper();
+		const { result } = renderHook(() => useUploadAttachment(), { wrapper: Wrapper });
+		await act(async () => {
+			await result.current.mutateAsync({ path: "big.bin", file: new File(["12345"], "big.bin") });
 		});
-		expect(spy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
-		expect(spy).toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });
-		expect(spy).toHaveBeenCalledWith({ queryKey: ["folderNotes", "42"] });
+		expect(uploadInParts).not.toHaveBeenCalled();
+		expect(postRaw).toHaveBeenCalledTimes(1);
 	});
 
 	// The response is the full row, so a cached tree takes it as a patch instead
@@ -2424,19 +2464,14 @@ describe("useUploadAttachment", () => {
 			mtime: 1_718_000_000,
 			updated_at: "u",
 		};
-		post.mockResolvedValue({ attachment: row });
+		postRaw.mockResolvedValue({ attachment: row });
 		const { qc, Wrapper } = wrapper();
 		qc.setQueryData(["vault-tree", "42"], { folders: [], notes: [], attachments: [] });
 		const spy = vi.spyOn(qc, "invalidateQueries");
 		const { result } = renderHook(() => useUploadAttachment(), { wrapper: Wrapper });
 
 		await act(async () => {
-			await result.current.mutateAsync({
-				path: "pic.png",
-				mime_type: "image/png",
-				content_base64: "AAAA",
-				mtime: 1_718_000_000,
-			});
+			await result.current.mutateAsync({ path: "pic.png", file: new File(["abc"], "pic.png") });
 		});
 
 		expect(spy).not.toHaveBeenCalledWith({ queryKey: ["vault-tree", "42"] });

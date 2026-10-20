@@ -7,7 +7,6 @@ const mutateAsync = vi.fn();
 vi.mock("@/api/queries", () => ({
 	useUploadAttachment: () => ({ mutateAsync }),
 }));
-vi.mock("./file-to-base64", () => ({ fileToBase64: () => Promise.resolve("AAAA") }));
 
 function file(name: string, type = "text/plain") {
 	return new File([new Uint8Array([1, 2, 3])], name, { type });
@@ -35,7 +34,7 @@ describe("AttachmentUploadDialog", () => {
 
 		await waitFor(() =>
 			expect(mutateAsync).toHaveBeenCalledWith(
-				expect.objectContaining({ path: "docs/a.txt", content_base64: "AAAA" }),
+				expect.objectContaining({ path: "docs/a.txt", file: expect.any(File) }),
 			),
 		);
 	});
@@ -87,7 +86,7 @@ describe("AttachmentUploadDialog", () => {
 
 	it("marks a row errored on 415 without blocking the others", async () => {
 		mutateAsync
-			.mockRejectedValueOnce(new ApiError(415, "mime_not_allowed"))
+			.mockRejectedValueOnce(new ApiError(415, "extension_not_allowed"))
 			.mockResolvedValueOnce({ attachment: { id: "y", path: "b.txt" } });
 		render(
 			<AttachmentUploadDialog
@@ -97,7 +96,9 @@ describe("AttachmentUploadDialog", () => {
 			/>,
 		);
 		fireEvent.click(screen.getByRole("button", { name: /^upload$/iu }));
-		await waitFor(() => expect(screen.getByText(/not allowed/iu)).toBeInTheDocument());
+		await waitFor(() =>
+			expect(screen.getByText("Executable files can't be uploaded")).toBeInTheDocument(),
+		);
 		expect(mutateAsync).toHaveBeenCalledTimes(2);
 	});
 
