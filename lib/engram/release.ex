@@ -209,9 +209,23 @@ defmodule Engram.Release do
     _ = load_app()
 
     for repo <- repos() do
+      :ok = use_migrator_session(repo)
       {:ok, _, _} = Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :up, all: true))
     end
   end
+
+  # The app Repo's session timeouts (`RuntimeConfig.repo_parameters/1`) must
+  # not reach the migrator: `lock_timeout` would fail a
+  # `CREATE INDEX CONCURRENTLY` that is waiting out older transactions, and
+  # leave an INVALID index behind. The migrator runs in its own `eval` before
+  # the app boots, so changing the env here touches nothing else.
+  defp use_migrator_session(repo) do
+    Application.put_env(@app, repo, migrator_config(Application.get_env(@app, repo, [])))
+  end
+
+  @doc false
+  @spec migrator_config(keyword()) :: keyword()
+  def migrator_config(config), do: Keyword.delete(config, :parameters)
 
   @doc """
   Grant the platform `operator` role (the operator insights page) to the
@@ -286,6 +300,7 @@ defmodule Engram.Release do
 
   def rollback(repo, version) do
     _ = load_app()
+    :ok = use_migrator_session(repo)
     {:ok, _, _} = Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :down, to: version))
   end
 

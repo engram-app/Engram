@@ -817,7 +817,10 @@ if config_env() == :prod do
            # T3.0.2 — defense-in-depth. Prevents Ecto SQL params (path, folder,
            # tags, wrapped DEK on UPDATE) from hitting :debug logs if anyone
            # bumps prod log level. Audit-only; prod log level today is :info.
-           log: false
+           log: false,
+           # Idle-in-transaction and lock timeouts; see the function's doc.
+           # Release.migrate strips them for the migrator.
+           parameters: Engram.RuntimeConfig.repo_parameters(:app)
          ] ++ database_ssl_opts
 
   # Second pool, for work that legitimately spans tenants (orphan reaping,
@@ -860,7 +863,8 @@ if config_env() == :prod do
                socket_options: maybe_ipv6,
                # Same reasoning as Engram.Repo above (T3.0.2): keep Ecto params
                # out of :debug logs if anyone raises the log level.
-               log: false
+               log: false,
+               parameters: Engram.RuntimeConfig.repo_parameters(:maintenance)
              ] ++
                Engram.RuntimeConfig.database_ssl(
                  &System.get_env/1,
