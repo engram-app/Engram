@@ -68,7 +68,9 @@ defmodule Engram.IndexingVectorCacheTest do
 
       case fail.(call) do
         false ->
-          send(test, {:embedded, length(texts), texts |> Enum.map(&byte_size/1) |> Enum.sum()})
+          new = Enum.filter(texts, &(&1 =~ "NEWTAG"))
+          bytes = &(&1 |> Enum.map(fn t -> byte_size(t) end) |> Enum.sum())
+          send(test, {:embedded, length(texts), bytes.(texts), length(new), bytes.(new)})
           {:ok, Enum.map(texts, fn _ -> [0.5, 0.25, -0.125] end)}
 
         true ->
@@ -85,7 +87,7 @@ defmodule Engram.IndexingVectorCacheTest do
   # `{texts, bytes}` per successful embed call since the last drain.
   defp calls do
     receive do
-      {:embedded, n, bytes} -> [{n, bytes} | calls()]
+      {:embedded, n, bytes, new_n, new_bytes} -> [{n, bytes, new_n, new_bytes} | calls()]
     after
       0 -> []
     end
@@ -93,6 +95,27 @@ defmodule Engram.IndexingVectorCacheTest do
 
   defp tokens(calls),
     do: calls |> Enum.map(&elem(&1, 1)) |> Enum.sum() |> UsageMeters.estimate_tokens()
+
+  # Tokens of the user's changed texts (marked NEWTAG) in these calls.
+  defp new_tokens(calls),
+    do: calls |> Enum.map(&elem(&1, 3)) |> Enum.sum() |> UsageMeters.estimate_tokens()
+
+  defp embedded_texts(calls), do: calls |> Enum.map(&elem(&1, 0)) |> Enum.sum()
+
+  defp new_texts(calls), do: calls |> Enum.map(&elem(&1, 2)) |> Enum.sum()
+
+  defp big_body(n) do
+    for i <- 1..n, into: "" do
+      "## Long #{i}\n\nParagraph #{i}. #{String.duplicate("words that fill it ", 95)}\n\n"
+    end
+  end
+
+  # Sections whose text no earlier version of the note had: the user's change.
+  defp new_sections(n) do
+    for i <- 1..n, into: "" do
+      "## New #{i}\n\nNEWTAG fresh paragraph #{i}. #{String.duplicate("brand new words here ", 42)}\n\n"
+    end
+  end
 
   defp meter_opts(user) do
     test = self()
@@ -132,7 +155,7 @@ defmodule Engram.IndexingVectorCacheTest do
   # pass re-embeds them all and `changed_tokens/2` counts none of them.
   defp known_but_unreusable(note) do
     Repo.query!(
-      "UPDATE chunks SET member_hmacs = ARRAY[left(context_hmac, 16)], context_hmac = NULL WHERE note_id = $1",
+      "UPDATE chunks SET member_hmacs = coalesce(member_hmacs, '{}') || ARRAY[left(context_hmac, 16)], context_hmac = NULL WHERE note_id = $1",
       [Ecto.UUID.dump!(note.id)]
     )
 
@@ -274,7 +297,7 @@ defmodule Engram.IndexingVectorCacheTest do
     assert {:ok, _, _, true} =
              Indexing.index_note_with_usage(a, ctx.vault, nil, meter_opts(ctx.user))
 
-    assert [{2, _}] = calls(), "only the two maintenance misses go to Voyage"
+    assert [{2, _, _, _}] = calls(), "only the two maintenance misses go to Voyage"
     refute_received {:reserved, _}
   end
 
@@ -310,5 +333,101 @@ defmodule Engram.IndexingVectorCacheTest do
 
     assert {:snooze, 1} =
              perform_job(Engram.Workers.EmbedNote, %{note_id: note.id, user_id: ctx.user.id})
+  end
+
+  describe "budget on: the user pays for changed text actually sent, once" do
+    # No per-note merging (cap far above these notes), so every sent text is
+    # one chunk and its changed bytes are exactly its bytes: the oracle below
+    # can then read the charge straight off what the embedder received.
+    setup ctx do
+      enable(:index_budget_enabled)
+
+      insert(:user_limit_override,
+        user: ctx.user,
+        key: "note_points_cap",
+        value: %{"v" => 10_000}
+      )
+
+      :ok
+    end
+
+    test "a mid-note 429 after a maintenance-only batch, then the retry", ctx do
+      stub_embedder()
+      # Long sections, so the unchanged text overflows request 1's 118 KB.
+      a = put_note(ctx.user, ctx.vault, "Work/Big.md", big_body(64))
+      assert {:ok, _} = Indexing.index_note(a, ctx.vault)
+      known_but_unreusable(a)
+      _ = calls()
+
+      stub_embedder(&(&1 == 2))
+      a = put_note(ctx.user, ctx.vault, "Work/Big.md", big_body(64) <> new_sections(40))
+      opts = meter_opts(ctx.user)
+
+      assert {:error, {429, _}} = Indexing.index_note_with_usage(a, ctx.vault, nil, opts)
+      first = calls()
+      assert [{_, _, 0, 0}] = first, "request 1 should carry maintenance only"
+      assert UsageMeters.lifetime_embed_tokens(ctx.user.id) == 0
+
+      RetainedVectors.forget({a.id, nil})
+      assert {:ok, count, _, true} = Indexing.index_note_with_usage(a, ctx.vault, nil, opts)
+      retry = calls()
+
+      # Every chunk reached Voyage exactly once across the two passes (request 1
+      # is all hits on the retry), and the change rode the later requests.
+      assert embedded_texts(first ++ retry) == count
+      assert new_texts(retry) > 0
+
+      assert UsageMeters.lifetime_embed_tokens(ctx.user.id) ==
+               new_tokens(first) + new_tokens(retry)
+    end
+
+    test "a pass byte budget split across passes charges each changed text when sent", ctx do
+      small_pass_budget()
+      stub_embedder()
+      a = put_note(ctx.user, ctx.vault, "Work/Split.md", body(4))
+      assert {:ok, _} = until_done(fn -> Indexing.index_note(a, ctx.vault) end)
+      known_but_unreusable(a)
+      _ = calls()
+
+      a = put_note(ctx.user, ctx.vault, "Work/Split.md", body(4) <> new_sections(2))
+      opts = meter_opts(ctx.user)
+
+      per_pass =
+        Stream.repeatedly(fn ->
+          result = Indexing.index_note_with_usage(a, ctx.vault, nil, opts)
+          {result, calls()}
+        end)
+        |> Enum.reduce_while([], fn
+          {{:error, :embed_continues}, sent}, acc when length(acc) < 20 -> {:cont, [sent | acc]}
+          {{:ok, _, _, true}, sent}, acc -> {:halt, Enum.reverse([sent | acc])}
+        end)
+
+      assert length(per_pass) > 1
+      assert [first | _] = per_pass
+      assert new_texts(first) == 0, "pass 1 sends maintenance only, deferring the change"
+      assert per_pass |> Enum.map(&new_texts/1) |> Enum.sum() == 2
+
+      assert UsageMeters.lifetime_embed_tokens(ctx.user.id) ==
+               per_pass |> Enum.map(&new_tokens/1) |> Enum.sum()
+    end
+
+    test "a maintenance-only pass never charges the user", ctx do
+      stub_embedder()
+      a = put_note(ctx.user, ctx.vault, "Work/Same.md", body(3))
+      assert {:ok, _} = Indexing.index_note(a, ctx.vault)
+      known_but_unreusable(a)
+      _ = calls()
+
+      assert {:ok, _, _, true} =
+               Indexing.index_note_with_usage(a, ctx.vault, nil, meter_opts(ctx.user))
+
+      assert embedded() > 0
+      refute_received {:reserved, _}
+      assert UsageMeters.lifetime_embed_tokens(ctx.user.id) == 0
+    end
+  end
+
+  defp until_done(fun) do
+    Stream.repeatedly(fun) |> Stream.take(20) |> Enum.find(&match?({:ok, _}, &1))
   end
 end

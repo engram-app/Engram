@@ -283,6 +283,46 @@ defmodule Engram.Indexing.VectorCacheTest do
       assert %{^key => _} = VectorCache.get_many(user.id, new_dek, [key])
       assert length(rows(user.id)) == 1
     end
+
+    test "a note deleted mid-rotation: the row is re-keyed without its note, rotate/3 returns :ok" do
+      {user, dek} = user_and_dek()
+      vault = insert(:vault, user: user)
+      note = insert(:note, user: user, vault: vault)
+      digest = VectorCache.digest("doomed", @opts)
+
+      :ok =
+        VectorCache.put_many(user.id, note.id, dek, [
+          {VectorCache.key_for_digest(@ck, digest), digest, vector(1)}
+        ])
+
+      new_dek = :crypto.strong_rand_bytes(32)
+
+      # Delete the note right after the rotation's scan read the row: its
+      # re-keyed insert then names a note that is gone (FK violation).
+      handler = "rotate-delete-#{System.unique_integer()}"
+
+      :telemetry.attach(
+        handler,
+        [:engram, :repo, :query],
+        fn _, _, %{query: q}, _ ->
+          if String.starts_with?(q, "SELECT") and q =~ ~s(FROM "embedding_cache") and
+               not Process.get(:deleted_note, false) do
+            Process.put(:deleted_note, true)
+            Repo.query!("DELETE FROM notes WHERE id = $1", [Ecto.UUID.dump!(note.id)])
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert :ok = VectorCache.rotate(user.id, dek, new_dek)
+      :telemetry.detach(handler)
+      assert Process.get(:deleted_note)
+
+      key = VectorCache.key(Crypto.dek_content_hash_key_from_bytes(new_dek), "doomed", @opts)
+      assert %{^key => _} = VectorCache.get_many(user.id, new_dek, [key])
+    end
   end
 
   defp count_queries(fun) do

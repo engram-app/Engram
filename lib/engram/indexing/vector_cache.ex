@@ -75,6 +75,9 @@ defmodule Engram.Indexing.VectorCache do
   # Six parameters whatever the row count. Writes nothing while the user's
   # DEK rotation is running or once the DEK version moved past `$6` (nil:
   # no version check), so no row lands under a key being rotated away.
+  # `FOR SHARE` makes the check a lock: `RotationLock.acquire/1` updates the
+  # same users row, so it waits for an in-flight write to commit, and the
+  # rotation's scan then sees (and re-keys) that row.
   @put_many_sql """
   INSERT INTO #{@table} (user_id, key, note_id, vector_ciphertext, vector_nonce)
   SELECT $1, k, $2, c, n FROM unnest($3::bytea[], $4::bytea[], $5::bytea[]) AS t(k, c, n)
@@ -82,6 +85,7 @@ defmodule Engram.Indexing.VectorCache do
     SELECT 1 FROM users u
     WHERE u.id = $1 AND u.dek_rotation_locked_at IS NULL
       AND ($6::integer IS NULL OR coalesce(u.dek_version, 1) = $6::integer)
+    FOR SHARE
   )
   ON CONFLICT (user_id, key) DO UPDATE
     SET vector_ciphertext = EXCLUDED.vector_ciphertext,
@@ -301,9 +305,11 @@ defmodule Engram.Indexing.VectorCache do
   end
 
   # A note deleted mid-rotation fails the FK: that batch is rewritten without
-  # note ids (the 72 h expiry still reaps it) rather than aborting the rotation.
+  # note ids (the 72 h expiry still reaps it) rather than aborting the
+  # rotation. A savepoint, as in `put_many/5`: a nested `Repo.transaction`
+  # is not one, and the retry would run in an aborted transaction.
   defp insert_rekeyed(inserts) do
-    {_, _} = Repo.transaction(fn -> Repo.insert_all(Entry, inserts, on_conflict: :nothing) end)
+    {_, _} = Repo.insert_all(Entry, inserts, on_conflict: :nothing, mode: :savepoint)
     :ok
   rescue
     e in Postgrex.Error ->

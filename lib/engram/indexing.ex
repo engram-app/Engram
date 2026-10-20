@@ -1741,11 +1741,28 @@ defmodule Engram.Indexing do
         {true, plan, vectors}
 
       :miss ->
-        # Cache hits are free: only what Voyage will be sent is reserved.
-        plan = with_cache_lookup(plan, texts, Keyword.get(opts, :vector_cache))
+        # Cache hits are free: only what Voyage will be sent is reserved. With
+        # the cache, the user's share is summed over exactly the texts this
+        # pass sends (`:charge_bytes`): a hit or a miss deferred past the pass
+        # budget costs nothing until it is actually sent.
+        cache = Keyword.get(opts, :vector_cache)
+        user_bytes = if cache && budget_enabled?(), do: changed_bytes_per_text(plan, rows)
+        plan = with_cache_lookup(plan, texts, cache, user_bytes)
         sent = Map.get_lazy(plan, :embed_bytes, fn -> text_bytes(texts) end)
         total = UsageMeters.estimate_tokens(sent)
-        charged = if budget_enabled?(), do: min(changed_tokens(plan, rows), total), else: total
+
+        charged =
+          cond do
+            Map.has_key?(plan, :charge_bytes) ->
+              min(UsageMeters.estimate_tokens(plan.charge_bytes), total)
+
+            budget_enabled?() ->
+              min(changed_tokens(plan, rows), total)
+
+            true ->
+              total
+          end
+
         plan = Map.put(plan, :charge, {charged, total - charged})
 
         if charged > 0 and not reserve.(charged) do
@@ -1785,7 +1802,13 @@ defmodule Engram.Indexing do
   # Estimated tokens of the embed entries' chunks, or of a merged one's
   # members, whose fingerprint (leading 16 hex chars) the stored rows do
   # not hold, as a point's own or among a merged point's members.
-  defp changed_tokens(plan, rows) do
+  defp changed_tokens(plan, rows),
+    do: plan |> changed_bytes_per_text(rows) |> Enum.sum() |> UsageMeters.estimate_tokens()
+
+  # The changed bytes of each dense text, in `embed_texts/1` order: what the
+  # user is charged for when that text is sent. Only what Voyage is sent
+  # counts, so a keyword-only chunk or group has no entry.
+  defp changed_bytes_per_text(plan, rows) do
     known =
       MapSet.new(
         for {hmac, _point_id, _tokens, members} <- rows,
@@ -1796,31 +1819,10 @@ defmodule Engram.Indexing do
 
     new? = &(not MapSet.member?(known, &1))
 
-    # Only what Voyage is sent: a keyword-only chunk or group costs nothing,
-    # and neither does a vector cache hit. `hit_flags` runs in `embed_texts/1`
-    # order, one per dense embed entry (absent without the cache).
-    hit_flags = get_in(plan, [:cache, :hit_flags]) || []
-
-    plan.entries
-    |> Enum.flat_map_reduce(hit_flags, fn
-      {:embed, chunk}, flags ->
-        if dense_chunk?(chunk, plan.dense?) do
-          {hit?, rest} = pop_flag(flags)
-          {if(hit?, do: [], else: changed_bytes(chunk, new?)), rest}
-        else
-          {[], flags}
-        end
-
-      {:reuse, _chunk, _point_id, _tokens}, flags ->
-        {[], flags}
-    end)
-    |> elem(0)
-    |> Enum.sum()
-    |> UsageMeters.estimate_tokens()
+    for {:embed, chunk} <- plan.entries,
+        dense_chunk?(chunk, plan.dense?),
+        do: chunk |> changed_bytes(new?) |> Enum.sum()
   end
-
-  defp pop_flag([flag | rest]), do: {flag, rest}
-  defp pop_flag([]), do: {false, []}
 
   defp changed_bytes(%{merged: true, member_bytes: bytes, member_hmacs: hmacs}, new?),
     do: for({b, h} <- Enum.zip(bytes, hmacs), new?.(h), do: b)
@@ -1844,9 +1846,10 @@ defmodule Engram.Indexing do
   # Oban timeout) between the reservation and the embed returning — no code
   # runs, so that pass's tokens stay charged. Accepted: rare, and bounded to one
   # note's worth of tokens per kill.
-  # Bytes of the dense texts this pass has sent Voyage and cached so far
-  # (`embed_misses/1`). Process-scoped so the release can read it after a
-  # raise as well as after an `{:error, _}`. Always 0 without the cache.
+  # `{bytes, user_bytes}` of the dense texts this pass has sent Voyage so far
+  # (`embed_misses/1`), the second being the user-chargeable part.
+  # Process-scoped so the release can read it after a raise as well as after
+  # an `{:error, _}`. Always `{0, 0}` without the cache.
   @paid_bytes_key {__MODULE__, :vector_cache_paid_bytes}
 
   defp embed_or_release(false, _plan, texts, _opts), do: maybe_embed(false, texts)
@@ -1857,18 +1860,22 @@ defmodule Engram.Indexing do
     # Gives back only what Voyage was NOT sent. With the vector cache, the
     # batches that returned before the failure were paid and cached: the
     # retry finds them as hits and reserves nothing for them, so they stay
-    # charged here (the user's share first, then ours), exactly once.
+    # charged here, exactly once. The user keeps the charge for the changed
+    # bytes those batches carried, never for our maintenance texts in them.
+    # A batch whose cache write was skipped (rotation, deleted note) still
+    # stays charged: Voyage was paid for it, and its retry pays again.
     release = fn ->
-      paid = UsageMeters.estimate_tokens(Process.get(@paid_bytes_key, 0))
-      keep_charged = min(charged, paid)
-      keep_maintenance = min(maintenance, paid - keep_charged)
+      {paid_bytes, paid_user_bytes} = Process.get(@paid_bytes_key, {0, 0})
+      paid = UsageMeters.estimate_tokens(paid_bytes)
+      keep_charged = min(charged, UsageMeters.estimate_tokens(paid_user_bytes))
+      keep_maintenance = min(maintenance, max(paid - keep_charged, 0))
       refund = charged - keep_charged
 
       if refund > 0, do: Keyword.get(opts, :release_tokens, fn _tokens -> :ok end).(refund)
       maintenance_tokens(-(maintenance - keep_maintenance))
     end
 
-    Process.put(@paid_bytes_key, 0)
+    Process.put(@paid_bytes_key, {0, 0})
 
     result =
       try do
@@ -1914,24 +1921,44 @@ defmodule Engram.Indexing do
   # ONE query for every dense text of the pass. Misses are deduplicated by
   # key (a note repeating a section embeds it once) and taken in note order up
   # to the pass byte budget; any left over make the pass `:continues`.
-  defp with_cache_lookup(plan, _texts, nil), do: plan
+  defp with_cache_lookup(plan, _texts, nil, _user_bytes), do: plan
 
-  defp with_cache_lookup(plan, texts, cache) do
+  # `user_bytes`: each text's chargeable bytes (budget on), or nil for
+  # "all of it" (budget off: the user pays for everything sent).
+  defp with_cache_lookup(plan, texts, cache, user_bytes) do
+    user_bytes = user_bytes || Enum.map(texts, &IO.iodata_length/1)
+
     pairs =
-      Enum.map(texts, fn text ->
+      Enum.zip_with(texts, user_bytes, fn text, ub ->
         digest = VectorCache.digest(text, cache.key_opts)
-        {VectorCache.key_for_digest(cache.content_key, digest), digest, text}
+        {VectorCache.key_for_digest(cache.content_key, digest), digest, text, ub}
       end)
 
     keys = Enum.map(pairs, &elem(&1, 0))
     hits = VectorCache.get_many(cache.user_id, cache.dek, keys)
     budget = max_pass_embed_bytes()
 
+    # A text repeated in the note is sent once and charged once, at the
+    # largest share any of its copies carries.
     {send, deferred?, bytes} =
       pairs
-      |> Enum.reject(fn {key, _d, _t} -> Map.has_key?(hits, key) end)
-      |> Enum.uniq_by(&elem(&1, 0))
-      |> Enum.reduce({[], false, 0}, fn {_k, _d, text} = miss, {acc, deferred?, used} ->
+      |> Enum.reject(fn {key, _d, _t, _ub} -> Map.has_key?(hits, key) end)
+      |> Enum.group_by(&elem(&1, 0))
+      |> then(fn groups ->
+        pairs
+        |> Enum.map(&elem(&1, 0))
+        |> Enum.uniq()
+        |> Enum.flat_map(fn key ->
+          case groups do
+            %{^key => [{k, d, t, _} | _] = copies} ->
+              [{k, d, t, copies |> Enum.map(&elem(&1, 3)) |> Enum.max()}]
+
+            _hit ->
+              []
+          end
+        end)
+      end)
+      |> Enum.reduce({[], false, 0}, fn {_k, _d, text, _ub} = miss, {acc, deferred?, used} ->
         size = IO.iodata_length(text)
 
         if acc != [] and used + size > budget,
@@ -1939,16 +1966,18 @@ defmodule Engram.Indexing do
           else: {[miss | acc], deferred?, used + size}
       end)
 
+    send = Enum.reverse(send)
+
     Map.merge(plan, %{
       cache:
         Map.merge(cache, %{
           keys: keys,
           hits: hits,
-          hit_flags: Enum.map(keys, &Map.has_key?(hits, &1)),
-          send: Enum.reverse(send),
+          send: send,
           continues: deferred?
         }),
-      embed_bytes: bytes
+      embed_bytes: bytes,
+      charge_bytes: send |> Enum.map(&elem(&1, 3)) |> Enum.sum()
     })
   end
 
@@ -1967,12 +1996,12 @@ defmodule Engram.Indexing do
   # node pays only for the batches not yet cached.
   defp embed_misses(cache) do
     cache.send
-    |> batch_texts(fn {_key, _digest, text} -> IO.iodata_length(text) end)
+    |> batch_texts(fn {_key, _digest, text, _ub} -> IO.iodata_length(text) end)
     |> Enum.reduce_while({:ok, %{}}, fn batch, {:ok, acc} ->
       with {:ok, vectors} <- do_embed_batch(Enum.map(batch, &elem(&1, 2))),
            :ok <- same_count(vectors, batch) do
         entries =
-          Enum.zip_with(batch, vectors, fn {key, digest, _text}, v ->
+          Enum.zip_with(batch, vectors, fn {key, digest, _text, _ub}, v ->
             {key, digest, pack_vector(v)}
           end)
 
@@ -1985,8 +2014,13 @@ defmodule Engram.Indexing do
             cache.dek_version
           )
 
-        sent = batch |> Enum.map(fn {_k, _d, text} -> IO.iodata_length(text) end) |> Enum.sum()
-        Process.put(@paid_bytes_key, Process.get(@paid_bytes_key, 0) + sent)
+        {paid, paid_user} = Process.get(@paid_bytes_key, {0, 0})
+
+        sent =
+          batch |> Enum.map(fn {_k, _d, text, _ub} -> IO.iodata_length(text) end) |> Enum.sum()
+
+        user = batch |> Enum.map(&elem(&1, 3)) |> Enum.sum()
+        Process.put(@paid_bytes_key, {paid + sent, paid_user + user})
         {:cont, {:ok, Enum.into(entries, acc, fn {key, _digest, v} -> {key, v} end)}}
       else
         other -> {:halt, other}

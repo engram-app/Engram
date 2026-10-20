@@ -75,13 +75,16 @@ defmodule Engram.Indexing.VectorCacheRlsTest do
   test "an INSERT with no tenant set is rejected with 42501", ctx do
     %{user: user, key: key} = ctx
 
-    assert {:raised, %Postgrex.Error{postgres: %{code: :insufficient_privilege}}} =
+    assert {:raised, %Postgrex.Error{postgres: %{code: :insufficient_privilege, message: msg}}} =
              as_prod_role(fn ->
                Repo.query!(
                  "INSERT INTO embedding_cache (user_id, key, vector_ciphertext, vector_nonce) VALUES ($1, $2, $3, $4)",
                  [Ecto.UUID.dump!(user.id), key, "ct", "nonce"]
                )
              end)
+
+    # 42501 is also "permission denied"; the message proves it was the policy.
+    assert msg =~ "row-level security"
   end
 
   test "rotate re-keys the owner's rows (persisted effect, committed)", ctx do
