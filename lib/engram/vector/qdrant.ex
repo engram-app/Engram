@@ -827,6 +827,12 @@ defmodule Engram.Vector.Qdrant do
   # key and vector deletes are (they rewrite the point).
   defp write_error(507, _body), do: {:error, :qdrant_backpressure}
 
+  defp write_error(400, %{"status" => %{"error" => message}} = body) when is_binary(message) do
+    if message =~ @backpressure, do: {:error, :qdrant_backpressure}, else: {:error, {400, body}}
+  end
+
+  defp write_error(status, body), do: {:error, {status, body}}
+
   # A 200 is not always applied: with `wait=true`, a server `timeout` that
   # expires first answers 200 with `result.status = "wait_timeout"`
   # (`shard_ops.rs`). The op is queued and will apply, but its points may be
@@ -847,12 +853,6 @@ defmodule Engram.Vector.Qdrant do
     :telemetry.execute([:engram, :qdrant, :wait_timeout], %{count: 1}, %{})
     {:error, :qdrant_wait_timeout}
   end
-
-  defp write_error(400, %{"status" => %{"error" => message}} = body) when is_binary(message) do
-    if message =~ @backpressure, do: {:error, :qdrant_backpressure}, else: {:error, {400, body}}
-  end
-
-  defp write_error(status, body), do: {:error, {status, body}}
 
   @doc """
   How full Qdrant is, in whole percent, with the strict-mode limits it is
