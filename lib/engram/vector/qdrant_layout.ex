@@ -1,7 +1,7 @@
 defmodule Engram.Vector.QdrantLayout do
   @moduledoc """
   Desired storage + safety params for the EXISTING Qdrant collection, and the
-  diff against what `GET /collections/{name}` reports. Pure: no HTTP.
+  diff against what `GET /collections/{name}` reports. No HTTP.
 
   Measured on prod 2026-10-18 (Qdrant Cloud 1.18.2, 447k points): the sparse
   `keyword` index (419 MB) and payload indexes (~140 MB) are the bulk of RAM;
@@ -19,6 +19,8 @@ defmodule Engram.Vector.QdrantLayout do
   (`update_collection` in `toc/collection_meta_ops.rs`), not replaced, so a
   partial body never resets an unrelated setting.
   """
+
+  alias Engram.ServiceConfig
 
   # Strict-mode fields by the Qdrant versions that honour them, `since <= v <
   # until`, from each tag's docs/redoc/master/openapi.json `StrictModeConfig`:
@@ -62,32 +64,79 @@ defmodule Engram.Vector.QdrantLayout do
     "strict_mode_config" => ["strict_mode_config"]
   }
 
+  # Hard limits on Qdrant Cloud: circuit breakers against code bugs and
+  # runaway sweeps (10-19 config audit #7, docs sweep #15). The app's largest
+  # query is a 100 x 4 = 400 pool, an upsert batch is 64 points, a hybrid
+  # batch is 2 requests. `search_allow_exact` stays allowed (sweep #19): the
+  # ANN-recall check compares against `params.exact: true`, and
+  # max_query_limit plus max_timeout already bound an exact search. No
+  # read/write_rate_limit: they are per replica, not per tenant, so one large
+  # vault would throttle everyone.
+  @hard_limits %{
+    "max_query_limit" => 500,
+    "search_max_oversampling" => 4,
+    "search_max_hnsw_ef" => 512,
+    "upsert_max_batchsize" => 256,
+    "filter_max_conditions" => 64,
+    "condition_max_size" => 1000,
+    "max_points_count" => 1_500_000,
+    "max_timeout" => 30,
+    "search_max_batchsize" => 8
+  }
+
+  @byte_breakers [
+    payload: "max_collection_payload_size_bytes",
+    vector: "max_collection_vector_size_bytes"
+  ]
+
+  @doc """
+  The strict-mode hard limits for a deployment. `:cloud` (our Qdrant Cloud
+  prod) gets the circuit breakers, plus byte breakers at 3x the sizes in
+  `:qdrant_measured_bytes` (omitted when unset). `:self_host` gets none: a
+  self-hoster's collection can outgrow any number picked from our prod.
+  """
+  @spec desired_strict(:cloud | :self_host) :: map()
+  def desired_strict(:self_host), do: %{}
+
+  def desired_strict(:cloud) do
+    measured = ServiceConfig.get(:qdrant_measured_bytes) || []
+
+    for {kind, field} <- @byte_breakers, is_integer(measured[kind]), into: @hard_limits do
+      {field, measured[kind] * 3}
+    end
+  end
+
   @doc """
   The desired PATCH sub-objects for a server at `version` (`nil` = unknown),
   with strict mode refusing writes at `limits` (see `strict_limits/2`;
   default 85/85), or switched off when `strict?` is false.
   Strict mode is included only with at least one guard the server supports:
-  enabling it with no guard adds risk for no protection.
+  enabling it with no guard adds risk for no protection. On `:cloud` it also
+  carries `desired_strict/1`; the kill switch leaves those as they are.
   """
-  @spec desired(Version.t() | nil, map() | nil, boolean()) :: map()
-  def desired(version, limits \\ @default_limits, strict? \\ true)
+  @spec desired(Version.t() | nil, map() | nil, boolean(), :cloud | :self_host) :: map()
+  def desired(version, limits \\ @default_limits, strict? \\ true, deployment \\ :self_host)
 
   # Ops kill switch (QDRANT_STRICT_MODE=false): our two guards at 100 (a
   # refusal only on a full disk/heap), never `enabled: false`, which would also
   # drop Qdrant Cloud's own strict-mode guards (unindexed filtering). 100, not
   # null: the strict-mode PATCH merge keeps the old value for a null field
   # (`x.or(self.x)` in lib/collection/src/operations/config_diff.rs, 1.18.2).
-  def desired(version, _limits, false) do
+  def desired(version, _limits, false, _deployment) do
     case supported_guards(version, @off_limits) do
       [] -> @storage
       guards -> Map.put(@storage, "strict_mode_config", Map.new(guards))
     end
   end
 
-  def desired(version, limits, true) do
+  def desired(version, limits, true, deployment) do
     case supported_guards(version, limits || @default_limits) do
-      [] -> @storage
-      guards -> Map.put(@storage, "strict_mode_config", Map.new([{"enabled", true} | guards]))
+      [] ->
+        @storage
+
+      guards ->
+        strict = Map.merge(desired_strict(deployment), Map.new([{"enabled", true} | guards]))
+        Map.put(@storage, "strict_mode_config", strict)
     end
   end
 

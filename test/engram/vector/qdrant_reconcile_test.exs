@@ -724,4 +724,14 @@ defmodule Engram.Vector.QdrantReconcileTest do
     assert_receive {:patch, patch}
     assert Map.keys(patch) == ["strict_mode_config"]
   end
+
+  test "deployment: only a Qdrant Cloud host is :cloud" do
+    assert Qdrant.deployment("https://abc-123.eu-central-1-0.aws.cloud.qdrant.io:6333") ==
+             :cloud
+
+    assert Qdrant.deployment("http://localhost:6333") == :self_host
+    assert Qdrant.deployment("http://qdrant:6333") == :self_host
+    assert Qdrant.deployment("https://cloud.qdrant.io.evil.test") == :self_host
+    assert Qdrant.deployment("") == :self_host
+  end
 end

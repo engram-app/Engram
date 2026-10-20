@@ -431,6 +431,16 @@ defmodule Engram.Vector.Qdrant do
 
   defp strict_mode?, do: ServiceConfig.get(:qdrant_strict_mode, true)
 
+  @doc """
+  `:cloud` for a Qdrant Cloud URL (`*.cloud.qdrant.io`), where the strict
+  hard limits (`QdrantLayout.desired_strict/1`) apply; `:self_host` otherwise.
+  """
+  @spec deployment(String.t()) :: :cloud | :self_host
+  def deployment(url) do
+    host = URI.parse(url).host || ""
+    if String.ends_with?(host, ".cloud.qdrant.io"), do: :cloud, else: :self_host
+  end
+
   # Boot only (this runs once per node). A guard the server does not honour
   # is not applied, so say which, rather than imply a write cap that is not
   # there. The app-side preflight still reads disk pressure where it can.
@@ -456,7 +466,7 @@ defmodule Engram.Vector.Qdrant do
       diff =
         QdrantLayout.diff(
           info["config"] || %{},
-          QdrantLayout.desired(version, limits, strict_mode?())
+          QdrantLayout.desired(version, limits, strict_mode?(), deployment(base_url()))
         )
 
       {strict, rest} = Map.split(diff, ["strict_mode_config"])
@@ -541,7 +551,7 @@ defmodule Engram.Vector.Qdrant do
   defp reconcile_strict_fields(col, info, limits, version) do
     want =
       version
-      |> QdrantLayout.desired(limits, strict_mode?())
+      |> QdrantLayout.desired(limits, strict_mode?(), deployment(base_url()))
       |> Map.take(["strict_mode_config"])
 
     case QdrantLayout.diff(info["config"] || %{}, want) do
