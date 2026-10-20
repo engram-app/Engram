@@ -221,7 +221,7 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
               char_start: 0,
               char_end: 1,
               qdrant_point_id: point_id,
-              created_at: DateTime.utc_now() |> DateTime.truncate(:second)
+              created_at: DateTime.utc_now(:second)
             })
           ],
           skip_tenant_check: true

@@ -11,7 +11,8 @@ defmodule Engram.Vector.QdrantRecommendTest do
     assert body.query == %{recommend: %{positive: ["p1", "p2"], strategy: "average_vector"}}
     assert body.using == "dense"
     assert body.limit == 7
-    assert body.with_payload == true
+    # Task 15.7: named keys only, never `true`.
+    assert "text_nonce" in body.with_payload
     assert body.filter.must_not == [%{has_id: ["p1", "p2"]}]
     assert %{key: "user_id", match: %{value: "u1"}} in legacy_view(body.filter.must)
     assert %{key: "vault_id", match: %{value: "v1"}} in legacy_view(body.filter.must)

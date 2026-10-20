@@ -19,6 +19,8 @@ defmodule Engram.PromEx.Search do
       histogram here.
     * `engram_prom_ex_search_hits_dropped_total`: sum of `count` from
       `[:engram, :search, :hit_dropped]`, tag `[:reason]`.
+    * `engram_prom_ex_search_text_missing_total`: sum of `count` from
+      `[:engram, :search, :text_missing]`.
 
   Cardinality contract: only the booleans/atoms above. NEVER add
   user_id, vault_id, or the query string.
@@ -29,6 +31,7 @@ defmodule Engram.PromEx.Search do
   @stop_event [:engram, :search, :request, :stop]
   @degraded_event [:engram, :search, :degraded]
   @hit_dropped_event [:engram, :search, :hit_dropped]
+  @text_missing_event [:engram, :search, :text_missing]
 
   @impl true
   def event_metrics(opts) do
@@ -62,8 +65,17 @@ defmodule Engram.PromEx.Search do
           metric_prefix ++ [:hits_dropped, :total],
           event_name: @hit_dropped_event,
           measurement: :count,
-          description: "Search hits dropped at rehydrate (no chunk row).",
+          description: "Search hits dropped: no chunk row, or its text does not decrypt.",
           tags: [:reason]
+        ),
+        # Task 11.3: hits shown with empty text because neither the chunk row
+        # nor the payload carried any. Near zero once the v5 pass has written
+        # every row; a rate means rows are missing their text.
+        sum(
+          metric_prefix ++ [:text_missing, :total],
+          event_name: @text_missing_event,
+          measurement: :count,
+          description: "Search hits with no text in Postgres or the payload."
         )
       ]
     )
