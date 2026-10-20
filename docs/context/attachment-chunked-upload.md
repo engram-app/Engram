@@ -30,7 +30,7 @@ lives in an `uploads/` folder.
 | `POST /api/attachment-uploads` json `{path, size_bytes, mime_type?}` | 201 `{upload_id, part_size, part_count}` | Same up-front refusals as the raw route. Clients must use the returned `part_size`. |
 | `PUT /api/attachment-uploads/:id/parts/:n` (n from 1), octet-stream | 200 `{part}` | Every part is exactly `part_size` bytes except the last. Re-sending a part replaces it. |
 | `GET /api/attachment-uploads/:id` | 200 `{done, part_count, part_size}` | Resume: send what is not in `done`. |
-| `POST /api/attachment-uploads/:id/complete` | 200 attachment | Safe to retry. |
+| `POST /api/attachment-uploads/:id/complete` | 200 `{attachment}` | Safe to retry. |
 | `DELETE /api/attachment-uploads/:id` | 204 | Idempotent; a consumed or foreign id is also 204 and touches nothing. |
 
 Status codes by failure: 402 plan, size or quota; 404 unknown or foreign upload
@@ -38,7 +38,7 @@ Status codes by failure: 402 plan, size or quota; 404 unknown or foreign upload
 `missing_parts` with `missing: [..]` on complete; 415 executable extension; 422
 `bad_part_size` (an over-size part is 422, not 413), `bad_part_number`,
 `invalid_mime_type`; 501 `multipart_unsupported` (self-host database storage
-has no multipart); 502 storage failure; 503 `rotation_in_progress` with
+has no multipart; the MCP tool omits `uploads_url` there); 502 storage failure; 503 `rotation_in_progress` with
 `retry-after`.
 
 Auth: the MCP OAuth token works on all five routes, like `POST /api/attachments`.

@@ -702,6 +702,29 @@ defmodule Engram.MCP.Handlers do
         do: "any file type except executables (.exe, .sh, .dmg and similar)",
         else: "text/* only on this plan; images, PDFs, audio and video need a paid plan"
 
+    multipart? = Engram.Storage.adapter().multipart?()
+
+    larger_files =
+      if multipart? do
+        """
+        LARGER FILES (over #{Endpoint.max_body_bytes()} bytes): the parts protocol, same headers.
+          1. POST #{base}/api/attachment-uploads  (json: path, size_bytes, optional mime_type)
+             -> 201 {upload_id, part_size, part_count}. Use that part_size; do not choose your own.
+          2. PUT #{base}/api/attachment-uploads/<upload_id>/parts/<n>  (n from 1,
+             content-type: application/octet-stream). Every part is exactly part_size
+             bytes except the last. Re-sending a part replaces it.
+          3. POST #{base}/api/attachment-uploads/<upload_id>/complete
+             -> 200 with the attachment. 409 missing_parts lists what to resend.
+          To resume after an interruption, GET #{base}/api/attachment-uploads/<upload_id>
+          (returns done, part_count, part_size), send the missing parts, then complete.
+          DELETE the same URL to abandon an upload. Idle uploads expire after 24 hours.
+        """
+        |> String.trim_trailing()
+      else
+        "LARGER FILES (over #{Endpoint.max_body_bytes()} bytes): cannot be uploaded on this server " <>
+          "(its storage backend has no resumable uploads)."
+      end
+
     {:ok,
      """
      Attachments are uploaded over the REST API, not through this tool: the bytes
@@ -718,17 +741,7 @@ defmodule Engram.MCP.Handlers do
        body: the file bytes
        optional query: mime_type (inferred from the path extension when omitted)
 
-     LARGER FILES (over #{Endpoint.max_body_bytes()} bytes): the parts protocol, same headers.
-       1. POST #{base}/api/attachment-uploads  (json: path, size_bytes, optional mime_type)
-          -> 201 {upload_id, part_size, part_count}. Use that part_size; do not choose your own.
-       2. PUT #{base}/api/attachment-uploads/<upload_id>/parts/<n>  (n from 1,
-          content-type: application/octet-stream). Every part is exactly part_size
-          bytes except the last. Re-sending a part replaces it.
-       3. POST #{base}/api/attachment-uploads/<upload_id>/complete
-          -> 200 with the attachment. 409 missing_parts lists what to resend.
-       To resume after an interruption, GET #{base}/api/attachment-uploads/<upload_id>
-       (returns done, part_count, part_size), send the missing parts, then complete.
-       DELETE the same URL to abandon an upload. Idle uploads expire after 24 hours.
+     #{larger_files}
 
      limits for this account:
        max_bytes: #{max_bytes}
@@ -739,7 +752,6 @@ defmodule Engram.MCP.Handlers do
      %{
        "url" => "#{base}/api/attachments",
        "method" => "POST",
-       "uploads_url" => "#{base}/api/attachment-uploads",
        "max_body_bytes" => Endpoint.max_body_bytes(),
        "vault_id" => to_string(vault.id),
        # `max_bytes` renders as "unlimited" in the prose when the cap is
@@ -747,7 +759,10 @@ defmodule Engram.MCP.Handlers do
        # comparing sizes never has to parse an English word.
        "max_bytes" => Engram.Billing.cap(user, :max_file_bytes),
        "all_types" => Engram.Billing.attachments_all_types?(user)
-     }}
+     }
+     |> then(
+       &if(multipart?, do: Map.put(&1, "uploads_url", "#{base}/api/attachment-uploads"), else: &1)
+     )}
   end
 
   # No "unknown tool" clause: `Tools.get/1` gates dispatch in mcp_controller.ex,

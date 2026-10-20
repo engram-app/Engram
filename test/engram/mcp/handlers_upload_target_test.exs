@@ -68,7 +68,35 @@ defmodule Engram.MCP.HandlersUploadTargetTest do
       assert text =~ "11000000"
       assert text =~ "part_size"
       refute text =~ "whitelisted"
-      refute text =~ "—"
+      refute text =~ "\u2014"
+    end
+
+    # Self-host database storage has no multipart (the routes answer 501), so
+    # the tool must not send an agent to a protocol that cannot work.
+    test "omits the parts protocol when the storage adapter has no multipart", ctx do
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.Storage.Database)
+
+      on_exit(fn ->
+        if is_nil(prev),
+          do: Application.delete_env(:engram, :storage),
+          else: Application.put_env(:engram, :storage, prev)
+      end)
+
+      {:ok, text, payload} =
+        Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
+
+      refute text =~ "/api/attachment-uploads"
+      assert text =~ "cannot be uploaded on this server"
+      assert text =~ "application/octet-stream"
+      refute Map.has_key?(payload, "uploads_url")
+    end
+
+    test "advertises uploads_url when multipart is supported", ctx do
+      {:ok, _text, payload} =
+        Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
+
+      assert payload["uploads_url"] =~ "/api/attachment-uploads"
     end
 
     test "reports the caller's resolved plan limits", ctx do
