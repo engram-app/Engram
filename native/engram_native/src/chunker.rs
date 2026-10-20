@@ -120,7 +120,7 @@ pub fn each_chunk(
     if !emitted {
         let rest = strip_blobs(body);
         if !markup_only(&rest) {
-            let path = [title.to_string()];
+            let path = [note.title.to_string()];
             for (t, kind) in classified(split(&normalize("", &rest))) {
                 emit(make(&note, &path, t, 0, body.len(), kind));
                 emitted = true;
@@ -133,7 +133,7 @@ pub fn each_chunk(
     let mut dense = !emitted;
     if let Some(block) = block.filter(|b| !b.is_empty()) {
         let text = normalize("", &strip_blobs(&block));
-        let path = [title.to_string(), "frontmatter".to_string()];
+        let path = [note.title.to_string(), "frontmatter".to_string()];
         for t in word_split(&text, MAX_CHUNK)
             .into_iter()
             .filter(|t| !t.is_empty())
@@ -166,6 +166,9 @@ const MAX_AKA: usize = 200;
 
 impl<'a> Note<'a> {
     fn new(folder: &'a str, title: &'a str, aliases: &[String]) -> Self {
+        // Capped as heading text is, so the H1 that is the title still
+        // matches it, and every heading path element is bounded.
+        let title = cut(title, MAX_PREFIX);
         let aka = aliases.join(", ");
         let head = match aka.char_indices().nth(MAX_AKA) {
             _ if aka.is_empty() => title.to_string(),
@@ -1947,5 +1950,68 @@ mod tests {
     fn a_property_only_note_carries_the_lead() {
         let cs = led("---\nproject: zanzibar\n---\n", "Restore a backup");
         assert_eq!(cs[0].2, "T\nRestore a backup\n\nzanzibar");
+    }
+
+    /// Wall-time bounds hold in release (CI); debug builds only check
+    /// the shape.
+    fn within(limit_ms: u128, f: impl FnOnce() -> Vec<Chunk>) -> Vec<Chunk> {
+        let t = std::time::Instant::now();
+        let out = f();
+        let ms = t.elapsed().as_millis();
+        assert!(cfg!(debug_assertions) || ms < limit_ms, "{ms} ms");
+        out
+    }
+
+    // A7
+    #[test]
+    fn ten_thousand_headings_stay_bounded() {
+        let note: String = (0..10_000).map(|i| format!("## h{i}\nx\n")).collect();
+        let cs = within(2_000, || chunk(&note, "", "T"));
+        assert!(cs.len() <= budget(note.len()), "{}", cs.len());
+        assert_eq!(
+            cs.iter().map(|c| c.0.matches("\nx").count()).sum::<usize>(),
+            10_000
+        );
+        assert!(cs.iter().all(|c| c.0.len() <= MAX_CHUNK));
+    }
+
+    // E1
+    #[test]
+    fn a_megabyte_line_with_no_space_stays_bounded() {
+        let line = "abcdefghij".repeat(100_000);
+        let cs = within(1_000, || chunk(&line, "", "T"));
+        assert!(cs.len() >= 1_000_000 / MAX_CHUNK);
+        assert!(cs.iter().all(|c| c.0.len() <= MAX_CHUNK));
+        assert!(cs.iter().all(|c| c.2.len() <= MAX_CHUNK + MAX_PREFIX + 2));
+    }
+
+    // D7: every cut (pieces, headings, aliases, prefixes) is on a char
+    // boundary; slicing off one would panic.
+    #[test]
+    fn emoji_are_never_split() {
+        let emoji = "🎉🚀✨🧪".repeat(200);
+        assert!(emoji.len() >= 3_000);
+        let aliases = [emoji.clone()];
+        let note = format!("---\ndescription: x\n---\n## {emoji}\n{emoji}\n\n{emoji}");
+        let mut cs = Vec::new();
+        each_chunk(
+            &note,
+            &emoji,
+            &emoji,
+            &aliases,
+            Some(cut(&emoji, 400)),
+            |c| cs.push(c),
+        );
+        assert!(!cs.is_empty());
+        for c in &cs {
+            assert!(c.0.len() <= MAX_CHUNK);
+            assert!(c.3.iter().all(|h| h.len() <= MAX_PREFIX));
+        }
+        let body: usize = cs
+            .iter()
+            .filter(|c| c.6 != "frontmatter")
+            .map(|c| c.0.matches('🎉').count())
+            .sum();
+        assert!(body >= 400, "{body}");
     }
 }

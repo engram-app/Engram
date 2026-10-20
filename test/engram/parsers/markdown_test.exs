@@ -183,6 +183,18 @@ defmodule Engram.Parsers.MarkdownTest do
     end
   end
 
+  describe "parse/2 malformed input" do
+    # D6: parse/2 scrubs invalid UTF-8 before the NIF, so the note still
+    # indexes (a replacement char per bad sequence); the NIF alone refuses
+    # it with an ArgumentError, never a panic.
+    test "invalid UTF-8 is scrubbed, not a crash" do
+      bad = "## A\nbefore " <> <<0xFF, 0xFE>> <> " after"
+      assert [%{text: text}] = Markdown.parse(bad, "T.md")
+      assert String.valid?(text) and text =~ "before" and text =~ "after"
+      assert_raise ArgumentError, fn -> Engram.Native.chunk(bad, "", "T") end
+    end
+  end
+
   describe "parse/2 basic structure" do
     test "returns list of chunks" do
       chunks = Markdown.parse(@simple_note, "Test/Hello World.md")
