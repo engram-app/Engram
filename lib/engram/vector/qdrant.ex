@@ -1262,7 +1262,7 @@ defmodule Engram.Vector.Qdrant do
     filter =
       if keep_ids == [], do: filter, else: Map.put(filter, :must_not, [%{has_id: keep_ids}])
 
-    opts = [json: %{filter: filter}] ++ req_opts()
+    opts = write_opts(%{filter: filter})
 
     instrument(:delete, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do

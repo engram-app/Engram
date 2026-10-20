@@ -645,6 +645,19 @@ defmodule Engram.Workers.EmbedNote do
           {:error, :over_budget} ->
             :ok
 
+          # The write is queued but not applied within its wait (Qdrant 200
+          # with status "wait_timeout"), so the note is not stamped. Same as a
+          # refusal: snooze without burning an attempt; the retry reuses the
+          # retained vectors and the upsert is idempotent.
+          {:error, :qdrant_wait_timeout} ->
+            Qdrant.wait_timeout_snooze()
+
+          # Input over the model's context window (H7): no re-send can fix
+          # it. Index the note keyword-only now (zero Voyage spend) and park
+          # it until its content changes, so it is findable and never loops.
+          {:error, {:permanent, :input_too_long}} ->
+            index_keyword_only(note, decrypted_note, vault, user)
+
           {:error, reason} ->
             # Per-attempt failure (Voyage non-429 / Qdrant). Previously
             # silent until the terminal discard after 5 retries — log it now
@@ -700,7 +713,7 @@ defmodule Engram.Workers.EmbedNote do
     opts = [
       reserve_tokens: fn _ -> false end,
       release_tokens: fn _ -> :ok end,
-      in_commit: &stamp_embed_hash(note, &2, &1, :too_long)
+      in_commit: &stamp_embed_hash(note, &2, &1, &3, :too_long)
     ]
 
     case Indexing.index_note_with_usage(decrypted_note, vault, user, opts) do
@@ -724,10 +737,15 @@ defmodule Engram.Workers.EmbedNote do
   # Also clears any embed_retry_after poison cooldown — a successful embed means
   # the note is no longer broken, and the crash guard's dead-man stamp, since
   # this runs inside the index write's transaction.
-  defp stamp_embed_hash(%Note{content_hash: nil} = note, _dense?, _count, _index_tier),
+  # `sparse_park`: :budget (a refused reservation parks until the budget
+  # allows) or :too_long (an input over the model's window, parked until the
+  # content changes).
+  defp stamp_embed_hash(note, dense?, chunk_count, index_tier, sparse_park \\ :budget)
+
+  defp stamp_embed_hash(%Note{content_hash: nil} = note, _dense?, _count, _index_tier, _park),
     do: CrashGuard.clear(note, :ok)
 
-  defp stamp_embed_hash(note, dense?, chunk_count, index_tier) do
+  defp stamp_embed_hash(note, dense?, chunk_count, index_tier, sparse_park) do
     # `embed_hash` = "this content is indexed" (keyword and/or dense).
     # `dense_indexed_hash` = "this content has dense vectors in Qdrant".
     # Keeping them separate is what lets ReconcileEmbeddings backfill the
@@ -777,6 +795,14 @@ defmodule Engram.Workers.EmbedNote do
             dense_indexed_hash: nil,
             embed_model: nil,
             embed_retry_after: nil,
+            embed_budget_parked: nil
+          ]
+
+        sparse_park == :too_long ->
+          [
+            dense_indexed_hash: nil,
+            embed_model: nil,
+            embed_retry_after: @parked_until_edited,
             embed_budget_parked: nil
           ]
 

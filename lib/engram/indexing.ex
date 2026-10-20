@@ -195,11 +195,11 @@ defmodule Engram.Indexing do
       {:ok, :no_chunks}
     else
       user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
-      prepare_chunks(note, user, chunks, opts)
+      prepare_chunks(note, user, chunks, opts, okf_healed?)
     end
   end
 
-  defp prepare_chunks(note, user, chunks, opts) do
+  defp prepare_chunks(note, user, chunks, opts, okf_healed? \\ false) do
     dims = Application.get_env(:engram, :embed_dims, @default_dims)
     # Counted up front so nothing after planning holds the raw chunks: on a
     # merged note the plan has its own copies (Task 9.2).
@@ -250,6 +250,7 @@ defmodule Engram.Indexing do
          embedded_bytes: embedded_bytes,
          dense?: dense?,
          index_tier: tier,
+         okf_healed?: okf_healed?,
          write_first: regroup?(note, plan),
          retain: if(dense? and texts != [], do: {retained_key(note, texts), vectors}),
          chunk_count: chunk_count
@@ -263,6 +264,43 @@ defmodule Engram.Indexing do
         other
     end
   end
+
+  # OKF v0.2 `generated.at` is read since #2066, but `fm_timestamp` is set
+  # on write, so a note saved before then holds nil until edited. Re-derived
+  # here, so its next index (the v5 rebuild reaches every note) heals the
+  # payload (the payload hash moves, so reused points are refreshed) and the
+  # row (`stamp_okf_timestamp/1`). Only a nil timestamp next to a `generated`
+  # key pays the YAML parse; every other note costs a substring check.
+  defp heal_okf_timestamp(%{fm_timestamp: nil, content: content} = note)
+       when is_binary(content) do
+    with {block, _body} when is_binary(block) <- Frontmatter.split(content),
+         true <- String.contains?(block, "generated"),
+         %{fm_timestamp: %DateTime{} = ts} <- OkfFields.from_parse(Frontmatter.parse(block)) do
+      {%{note | fm_timestamp: ts}, true}
+    else
+      _ -> {note, false}
+    end
+  end
+
+  defp heal_okf_timestamp(note), do: {note, false}
+
+  # Inside the chunk-row transaction; guarded on the content it was derived
+  # from and on the column still being nil, so an edit in between wins.
+  defp stamp_okf_timestamp(%{okf_healed?: true, note: note}) do
+    {_, _} =
+      Repo.update_all(
+        from(n in Note,
+          where:
+            n.kind == "note" and n.id == ^note.id and n.content_hash == ^note.content_hash and
+              is_nil(n.fm_timestamp)
+        ),
+        set: [fm_timestamp: note.fm_timestamp]
+      )
+
+    :ok
+  end
+
+  defp stamp_okf_timestamp(_prepared), do: :ok
 
   @floor_tiers ["floor", "floor_paid"]
 
@@ -982,6 +1020,7 @@ defmodule Engram.Indexing do
           |> Enum.each(&Repo.insert_all(Chunk, &1, skip_tenant_check: true))
 
           stamp_payload_hash(note, payload_hash)
+          stamp_okf_timestamp(prepared)
           in_commit.(length(chunk_rows))
         end)
 

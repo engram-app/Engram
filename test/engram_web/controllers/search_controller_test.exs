@@ -511,13 +511,12 @@ defmodule EngramWeb.SearchControllerTest do
 
       text = merged_text("quixotic")
 
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
+        result = %{"result" => [chunk("uuid-m", 0.9, "Big.md", "Big", text, user)]}
+
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(
-          200,
-          Jason.encode!(%{"result" => [chunk("uuid-m", 0.9, "Big.md", "Big", text, user)]})
-        )
+        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(c, result)))
       end)
 
       conn = post(conn, "/api/search", %{query: "quixotic finale", diversity: 0})
