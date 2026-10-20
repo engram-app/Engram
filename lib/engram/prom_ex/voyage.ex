@@ -35,6 +35,8 @@ defmodule Engram.PromEx.Voyage do
 
   use PromEx.Plugin
 
+  alias Engram.PromEx.Buckets
+
   @embed_stop_event [:engram, :voyage, :embed, :stop]
   @embed_tokens_event [:engram, :voyage, :embed, :tokens]
   @client_rate_limited_event [:engram, :embed, :client_rate_limited]
@@ -52,9 +54,7 @@ defmodule Engram.PromEx.Voyage do
           event_name: @embed_stop_event,
           measurement: :duration,
           description: "Voyage embedding request latency.",
-          reporter_options: [
-            buckets: [50, 100, 250, 500, 1_000, 2_000, 3_000, 5_000, 10_000]
-          ],
+          reporter_options: Buckets.opts(Engram.PromEx.Voyage.EmbedDurationBuckets),
           tags: [:status, :purpose],
           unit: {:native, :millisecond}
         ),
@@ -82,4 +82,9 @@ defmodule Engram.PromEx.Voyage do
       ]
     )
   end
+end
+
+defmodule Engram.PromEx.Voyage.EmbedDurationBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [50, 100, 250, 500, 1_000, 2_000, 3_000, 5_000, 10_000]
 end
