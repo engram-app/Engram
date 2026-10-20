@@ -688,7 +688,7 @@
             "x-validate": null
           },
           "pending_checkpoints": {
-            "description": "Scheduled or running checkpoint jobs for this vault's notes.",
+            "description": "Unfinished checkpoint jobs for this vault's notes, excluding notes with a live room (those wait for the room to close).",
             "type": "integer",
             "x-struct": null,
             "x-validate": null
