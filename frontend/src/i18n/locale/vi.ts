@@ -781,8 +781,8 @@ export default {
 		"Một kho lưu trữ là một tập hợp các ghi chú. {client} có thể đọc và ghi các ghi chú trong đó.",
 	"Also allow {client} to read and write vaults I create later":
 		"Cho phép {client} đọc và ghi vào các kho lưu trữ mà bạn tạo sau này",
-	"Turn this off to keep {client} to this vault only.":
-		"Tắt tùy chọn này để giữ {client} chỉ trong kho lưu trữ này.",
+	"Turn this off to limit {client} to this vault only.":
+		"Tắt tùy chọn này để giới hạn {client} chỉ cho kho lưu trữ này.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Bạn có thể giới hạn những gì mỗi ứng dụng có thể xem hoặc thay đổi bất cứ lúc nào trong Cài đặt > Kết nối.",
 	"Approving…": "Đang phê duyệt…",
@@ -807,11 +807,11 @@ export default {
 		"Máy chủ đã cấp quyền truy cập lớn hơn mức bạn chọn, vì vậy không có gì được kết nối. Thử lại, hoặc liên hệ bộ phận hỗ trợ nếu sự cố này tiếp diễn.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Đã ngắt kết nối '{name}' nhưng việc cấp quyền cho kết nối mới không thành công. Hãy thử lại yêu cầu từ {client} — hiện tại không có kết nối nào như vậy đang hoạt động.",
+	"Signed in as {email}.": "Đã đăng nhập với tư cách là {email}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Điều này sẽ đưa bạn đến một ứng dụng trên máy tính này. Chỉ chấp nhận nếu bạn vừa mới bắt đầu kết nối từ ứng dụng đó.",
 	"your existing connection": "kết nối hiện tại của bạn",
 	"Which vaults can {client} access?": "Kho lưu trữ nào mà {client} có thể truy cập?",
-	"Signed in as {email}.": "Đã đăng nhập với tư cách là {email}.",
 	"App details from {host}.": "Chi tiết ứng dụng từ {host}.",
 	"You will return to {host}.": "Bạn sẽ quay lại {host}.",
 	"Disconnect {name}?": "Ngắt kết nối {name}?",
@@ -890,6 +890,7 @@ export default {
 	"Could not continue. Please try again.": "Không thể tiếp tục. Vui lòng thử lại.",
 	"Step {step} of {total}": "Bước {step} trong {total}",
 	Onboarding: "Hướng dẫn sử dụng",
+	"Cancel connection": "Hủy kết nối",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Không thể lưu lựa chọn của bạn. Hãy thử nhấp lại — nếu vẫn không được, hãy làm mới trang.",
 	"Let's get your notes in.": "Chúng ta hãy đưa ghi chú của bạn vào.",

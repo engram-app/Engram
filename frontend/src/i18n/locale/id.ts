@@ -785,8 +785,8 @@ export default {
 		"Sebuah vault adalah kumpulan catatan. {client} dapat membaca dan menulis catatan di dalamnya.",
 	"Also allow {client} to read and write vaults I create later":
 		"Izinkan juga {client} untuk membaca dan menulis vault yang Anda buat nanti",
-	"Turn this off to keep {client} to this vault only.":
-		"Matikan ini untuk menjaga {client} hanya di vault ini.",
+	"Turn this off to limit {client} to this vault only.":
+		"Matikan ini untuk membatasi {client} hanya ke vault ini.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Anda dapat membatasi apa yang dapat dilihat atau diubah oleh setiap aplikasi kapan saja di Pengaturan > Koneksi.",
 	"Approving…": "Menyetujui…",
@@ -811,11 +811,11 @@ export default {
 		"Server memberikan akses lebih dari yang Anda pilih, sehingga tidak ada yang terhubung. Coba lagi, atau hubungi dukungan jika ini terus terjadi.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Terputus dari '{name}' tetapi otorisasi koneksi baru gagal. Coba lagi permintaan dari {client} — tidak ada koneksi jenis ini yang aktif saat ini.",
+	"Signed in as {email}.": "Masuk sebagai {email}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Ini akan mengarahkan Anda ke aplikasi di komputer ini. Hanya setujui jika Anda baru saja memulai koneksi dari aplikasi tersebut.",
 	"your existing connection": "koneksi Anda yang ada",
 	"Which vaults can {client} access?": "Vault mana yang dapat diakses oleh {client}?",
-	"Signed in as {email}.": "Masuk sebagai {email}.",
 	"App details from {host}.": "Detail aplikasi dari {host}.",
 	"You will return to {host}.": "Anda akan kembali ke {host}.",
 	"Disconnect {name}?": "Putuskan sambungan {name}?",
@@ -895,6 +895,7 @@ export default {
 	"Could not continue. Please try again.": "Tidak dapat melanjutkan. Silakan coba lagi.",
 	"Step {step} of {total}": "Langkah {step} dari {total}",
 	Onboarding: "Pengaturan awal",
+	"Cancel connection": "Batalkan koneksi",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Tidak dapat menyimpan pilihan Anda. Coba klik lagi — jika terus gagal, muat ulang halaman.",
 	"Let's get your notes in.": "Mari kita masukkan catatan Anda.",

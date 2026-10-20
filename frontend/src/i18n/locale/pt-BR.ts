@@ -817,8 +817,8 @@ export default {
 		"Um cofre é uma coleção de notas. {client} pode ler e escrever as notas nele.",
 	"Also allow {client} to read and write vaults I create later":
 		"Permitir também que {client} leia e escreva nos cofres que você criar posteriormente",
-	"Turn this off to keep {client} to this vault only.":
-		"Desative isso para manter {client} apenas neste cofre.",
+	"Turn this off to limit {client} to this vault only.":
+		"Desative isso para limitar o {client} a este cofre.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Você pode limitar o que cada aplicativo pode ver ou alterar a qualquer momento em Configurações > Conexões.",
 	"Approving…": "Aprovando…",
@@ -843,11 +843,11 @@ export default {
 		"O servidor concedeu mais acesso do que você escolheu, então nada foi conectado. Tente novamente ou entre em contato com o suporte se isso continuar acontecendo.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Desconectado '{name}', mas a autorização da nova conexão falhou. Tente novamente a partir de {client} — nenhuma conexão desse tipo está ativa no momento.",
+	"Signed in as {email}.": "Logado como {email}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Isso te direciona para um aplicativo neste computador. Aprovе apenas se você acabou de começar a conexão a partir desse aplicativo.",
 	"your existing connection": "sua conexão existente",
 	"Which vaults can {client} access?": "Quais cofres {client} pode acessar?",
-	"Signed in as {email}.": "Logado como {email}.",
 	"App details from {host}.": "Detalhes do aplicativo de {host}.",
 	"You will return to {host}.": "Você retornará para {host}.",
 	"Disconnect {name}?": "Desconectar {name}?",
@@ -928,6 +928,7 @@ export default {
 		"Não foi possível continuar. Por favor, tente novamente.",
 	"Step {step} of {total}": "Etapa {step} de {total}",
 	Onboarding: "Integração",
+	"Cancel connection": "Cancelar conexão",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Não foi possível salvar sua escolha. Tente clicar novamente — se continuar falhando, atualize a página.",
 	"Let's get your notes in.": "Vamos importar suas notas.",

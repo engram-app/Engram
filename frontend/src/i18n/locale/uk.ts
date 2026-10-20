@@ -858,8 +858,8 @@ export default {
 		"Сховище – це колекція заміток. {client} може читати та записувати ці замітки.",
 	"Also allow {client} to read and write vaults I create later":
 		"Також дозвольте {client} читати та записувати сховища, які ви створите пізніше",
-	"Turn this off to keep {client} to this vault only.":
-		"Вимкніть цю опцію, щоб {client} працював лише з цим сховищем.",
+	"Turn this off to limit {client} to this vault only.":
+		"Вимкніть це, щоб обмежити {client} лише цим сховищем.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Ви можете обмежити, що кожен додаток може бачити або змінювати, у будь-який час у розділі Налаштування > З'єднання.",
 	"Approving…": "Підключення…",
@@ -884,11 +884,11 @@ export default {
 		"Сервер надав більше прав, ніж ви обрали, тому жодне з'єднання не було встановлено. Спробуйте ще раз або зверніться до служби підтримки, якщо це повторюється.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Відключено '{name}', але авторизація нового з'єднання не вдалася. Повторіть запит з {client} — наразі немає активних з'єднань такого типу.",
+	"Signed in as {email}.": "Увійшли як {email}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Це перенаправить вас до програми на цьому комп'ютері. Підтверджуйте лише якщо ви щойно почали підключення з цієї програми.",
 	"your existing connection": "ваше поточне з'єднання",
 	"Which vaults can {client} access?": "До яких сховищ {client} має доступ?",
-	"Signed in as {email}.": "Увійшли як {email}.",
 	"App details from {host}.": "Інформація про додаток від {host}.",
 	"You will return to {host}.": "Ви повернетесь до {host}.",
 	"Disconnect {name}?": "Від'єднати {name}?",
@@ -967,6 +967,7 @@ export default {
 	"Could not continue. Please try again.": "Не вдалося продовжити. Будь ласка, спробуйте ще раз.",
 	"Step {step} of {total}": "Крок {step} з {total}",
 	Onboarding: "Ознайомлення",
+	"Cancel connection": "Скасувати з'єднання",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Не вдалося зберегти ваш вибір. Спробуйте натиснути ще раз — якщо помилка повторюється, оновіть сторінку.",
 	"Let's get your notes in.": "Давайте імпортуємо ваші замітки.",

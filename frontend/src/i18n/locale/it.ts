@@ -816,8 +816,8 @@ export default {
 		"Un vault è una raccolta di note. {client} può leggere e scrivere le note al suo interno.",
 	"Also allow {client} to read and write vaults I create later":
 		"Consenti anche a {client} di leggere e scrivere i vault che creerai in seguito",
-	"Turn this off to keep {client} to this vault only.":
-		"Disattiva questa opzione per mantenere {client} solo in questa vault.",
+	"Turn this off to limit {client} to this vault only.":
+		"Disattiva questa opzione per limitare {client} a questa vault.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Puoi limitare ciò che ogni app può vedere o modificare in qualsiasi momento in Impostazioni > Connessioni.",
 	"Approving…": "Approvando…",
@@ -842,11 +842,11 @@ export default {
 		"Il server ha concesso più accesso di quanto tu abbia scelto, quindi nulla è stato collegato. Riprova o contatta l'assistenza se il problema persiste.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Disconnesso '{name}' ma l'autorizzazione della nuova connessione è fallita. Riprova la richiesta da {client} — non ci sono connessioni di questo tipo attive al momento.",
+	"Signed in as {email}.": "Accesso effettuato come {email}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Questo ti porta a un'app su questo computer. Approva solo se hai appena iniziato a connetterti da quell'app.",
 	"your existing connection": "la tua connessione esistente",
 	"Which vaults can {client} access?": "A quali vault può accedere {client}?",
-	"Signed in as {email}.": "Accesso effettuato come {email}.",
 	"App details from {host}.": "Dettagli dell'app da {host}.",
 	"You will return to {host}.": "Tornerai a {host}.",
 	"Disconnect {name}?": "Disconnetti {name}?",
@@ -926,6 +926,7 @@ export default {
 	"Could not continue. Please try again.": "Impossibile continuare. Riprova.",
 	"Step {step} of {total}": "Fase {step} di {total}",
 	Onboarding: "Guida introduttiva",
+	"Cancel connection": "Annulla connessione",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Impossibile salvare la tua scelta. Riprova a cliccare; se continua a fallire, aggiorna la pagina.",
 	"Let's get your notes in.": "Importiamo le tue note.",

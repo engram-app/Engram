@@ -849,8 +849,8 @@ export default {
 		"Trezor je kolekce poznámek. {client} může číst a zapisovat poznámky v něm.",
 	"Also allow {client} to read and write vaults I create later":
 		"Umožněte také {client} číst a zapisovat trezory, které vytvořím později",
-	"Turn this off to keep {client} to this vault only.":
-		"Vypněte toto, pokud chcete, aby {client} měl přístup pouze k tomuto trezoru.",
+	"Turn this off to limit {client} to this vault only.":
+		"Vypněte toto, abyste omezili {client} pouze na tento trezor.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Můžete omezit, co každá aplikace může vidět nebo měnit, kdykoli v Nastavení > Připojení.",
 	"Approving…": "Probíhá schvalování…",
@@ -875,11 +875,11 @@ export default {
 		"Server udělil více oprávnění, než jste vybrali, takže nic nebylo připojeno. Zkuste to znovu, nebo kontaktujte podporu, pokud se to bude opakovat.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Odpojeno '{name}', ale autorizace nového připojení selhala. Spusťte požadavek znovu z {client} – žádná připojení tohoto typu nejsou aktuálně aktivní.",
+	"Signed in as {email}.": "Přihlášeno jako {email}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"To vás přesměruje na aplikaci v tomto počítači. Schvalte pouze pokud jste se právě začali připojovat z této aplikace.",
 	"your existing connection": "vaše stávající připojení",
 	"Which vaults can {client} access?": "Které trezory může {client} přistupovat?",
-	"Signed in as {email}.": "Přihlášeno jako {email}.",
 	"App details from {host}.": "Podrobnosti aplikace z {host}.",
 	"You will return to {host}.": "Vrátíte se do {host}.",
 	"Disconnect {name}?": "Odpojit {name}?",
@@ -958,6 +958,7 @@ export default {
 	"Could not continue. Please try again.": "Nelze pokračovat. Zkuste to znovu.",
 	"Step {step} of {total}": "Krok {step} z {total}",
 	Onboarding: "Úvodní nastavení",
+	"Cancel connection": "Zrušit připojení",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Nelze uložit vaši volbu. Zkuste kliknout znovu – pokud to stále nefunguje, obnovte stránku.",
 	"Let's get your notes in.": "Připravme vaše poznámky.",

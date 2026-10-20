@@ -862,8 +862,8 @@ export default {
 		"Хранилище – это набор заметок. {client} может читать и записывать заметки в нём.",
 	"Also allow {client} to read and write vaults I create later":
 		"Также разрешите {client} читать и записывать хранилища, которые я создаю позже",
-	"Turn this off to keep {client} to this vault only.":
-		"Отключите эту опцию, чтобы {client} хранились только в этом хранилище.",
+	"Turn this off to limit {client} to this vault only.":
+		"Отключите это, чтобы ограничить {client} только этим хранилищем.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		'Вы можете ограничить, что каждое приложение может видеть или изменять, в любое время в разделе "Настройки" > "Подключения".',
 	"Approving…": "Подтверждается…",
@@ -888,11 +888,11 @@ export default {
 		"Сервер предоставил больше доступа, чем вы выбрали, поэтому ничего не было подключено. Попробуйте ещё раз или обратитесь в службу поддержки, если это повторяется.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Отключено '{name}', но авторизация нового подключения не удалась. Повторите запрос из {client} — в данный момент нет активных подключений этого типа.",
+	"Signed in as {email}.": "Вошли как {email}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Это перенаправит вас к приложению на этом компьютере. Подтверждайте только если вы только что начали подключение из этого приложения.",
 	"your existing connection": "ваше текущее подключение",
 	"Which vaults can {client} access?": "К каким хранилищам {client} может получить доступ?",
-	"Signed in as {email}.": "Вошли как {email}.",
 	"App details from {host}.": "Информация о приложении от {host}.",
 	"You will return to {host}.": "Вы вернетесь на страницу {host}.",
 	"Disconnect {name}?": "Отключить {name}?",
@@ -972,6 +972,7 @@ export default {
 	"Could not continue. Please try again.": "Не удалось продолжить. Пожалуйста, попробуйте ещё раз.",
 	"Step {step} of {total}": "Шаг {step} из {total}",
 	Onboarding: "Обучение",
+	"Cancel connection": "Отменить подключение",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Не удалось сохранить ваш выбор. Попробуйте нажать ещё раз — если ошибка повторяется, обновите страницу.",
 	"Let's get your notes in.": "Давайте добавим ваши заметки.",

@@ -785,7 +785,7 @@ export default {
 		"Sebuah peti nota ialah koleksi nota. {client} boleh membaca dan menulis nota di dalamnya.",
 	"Also allow {client} to read and write vaults I create later":
 		"Izinkan juga {client} membaca dan menulis peti nota yang saya cipta kemudian",
-	"Turn this off to keep {client} to this vault only.":
+	"Turn this off to limit {client} to this vault only.":
 		"Matikan ini untuk mengehadkan {client} kepada peti nota ini sahaja.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Anda boleh hadkan apa yang setiap aplikasi boleh lihat atau ubah pada bila-bila masa dalam Tetapan > Sambungan.",
@@ -811,11 +811,11 @@ export default {
 		"Pelayan memberikan akses lebih daripada yang anda pilih, jadi tiada apa yang disambungkan. Cuba lagi, atau hubungi sokongan jika ini berterusan.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Telah memutuskan sambungan '{name}' tetapi pengesahan sambungan baharu gagal. Jalankan semula permintaan daripada {client} — tiada sambungan seumpama ini yang aktif pada masa ini.",
+	"Signed in as {email}.": "Log masuk sebagai {email}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Ini akan membawa anda ke aplikasi di komputer ini. Sahkan sahaja jika anda baru sahaja mula berhubung dari aplikasi tersebut.",
 	"your existing connection": "sambungan anda yang sedia ada",
 	"Which vaults can {client} access?": "Peti Nota mana yang boleh diakses oleh {client}?",
-	"Signed in as {email}.": "Log masuk sebagai {email}.",
 	"App details from {host}.": "Butiran aplikasi daripada {host}.",
 	"You will return to {host}.": "Anda akan kembali ke {host}.",
 	"Disconnect {name}?": "Putuskan sambungan {name}?",
@@ -893,6 +893,7 @@ export default {
 	"Could not continue. Please try again.": "Tidak dapat meneruskan. Sila cuba lagi.",
 	"Step {step} of {total}": "Langkah {step} daripada {total}",
 	Onboarding: "Pengenalan",
+	"Cancel connection": "Batalkan sambungan",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Tidak dapat menyimpan pilihan anda. Cuba klik sekali lagi — jika masih gagal, muat semula halaman.",
 	"Let's get your notes in.": "Mari kita masukkan nota anda.",

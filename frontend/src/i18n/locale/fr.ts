@@ -819,8 +819,8 @@ export default {
 		"Un coffre est une collection de notes. {client} peut lire et écrire les notes qu'il contient.",
 	"Also allow {client} to read and write vaults I create later":
 		"Autorise également {client} à lire et à écrire dans les coffres que tu crées plus tard",
-	"Turn this off to keep {client} to this vault only.":
-		"Désactive ceci pour que {client} reste limité à ce coffre.",
+	"Turn this off to limit {client} to this vault only.":
+		"Désactive ceci pour limiter {client} à ce coffre uniquement.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Tu peux limiter ce que chaque application peut voir ou modifier à tout moment dans Paramètres > Connexions.",
 	"Approving…": "En cours d'approbation…",
@@ -845,11 +845,11 @@ export default {
 		"Le serveur a accordé plus d'accès que ce que tu as choisi, donc rien n'a été connecté. Réessaie, ou contacte le support si cela continue.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Déconnecté '{name}' mais l'autorisation de la nouvelle connexion a échoué. Relance la requête depuis {client} — aucune connexion de ce type n'est actuellement active.",
+	"Signed in as {email}.": "Connecté en tant que {email}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Cela t'ouvre une application sur cet ordinateur. N'accepte que si tu viens de te connecter depuis cette application.",
 	"your existing connection": "ta connexion existante",
 	"Which vaults can {client} access?": "Quels coffres {client} peut-il consulter ?",
-	"Signed in as {email}.": "Connecté en tant que {email}.",
 	"App details from {host}.": "Détails de l'application provenant de {host}.",
 	"You will return to {host}.": "Tu seras redirigé vers {host}.",
 	"Disconnect {name}?": "Déconnecter {name} ?",
@@ -930,6 +930,7 @@ export default {
 	"Could not continue. Please try again.": "Impossible de continuer. Essaie à nouveau.",
 	"Step {step} of {total}": "Étape {step} sur {total}",
 	Onboarding: "Premiers pas",
+	"Cancel connection": "Annuler la connexion",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Impossible de sauvegarder ton choix. Essaie de cliquer à nouveau. Si cela continue de ne pas fonctionner, actualise la page.",
 	"Let's get your notes in.": "Ajoutons tes notes.",

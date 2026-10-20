@@ -746,8 +746,8 @@ export default {
 		"儲存庫是筆記的集合。{client} 可以讀取和修改其中的筆記。",
 	"Also allow {client} to read and write vaults I create later":
 		"允許 {client} 讀取和寫入我之後建立的儲存庫",
-	"Turn this off to keep {client} to this vault only.":
-		"關閉此選項，讓 {client} 只與此儲存庫同步。",
+	"Turn this off to limit {client} to this vault only.":
+		"關閉此選項，將 {client} 限制在此儲存庫內。",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"您可以在「設定」>「連線」中隨時限制每個應用程式的訪問權限。",
 	"Approving…": "正在批准…",
@@ -772,11 +772,11 @@ export default {
 		"伺服器授予了比您選擇的更多權限，因此沒有任何內容連接。請重試，或如果此問題持續發生，請聯絡支援。",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"已斷開 '{name}'，但授權新的連線失敗。請重新從 {client} 執行請求 — 目前沒有任何此類連線。",
+	"Signed in as {email}.": "已登入 {email}。",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"這會將您導向電腦上的應用程式。僅在您剛從該應用程式開始連接時才允許。",
 	"your existing connection": "您的現有連線",
 	"Which vaults can {client} access?": "{client} 可以存取哪些儲存庫？",
-	"Signed in as {email}.": "已登入 {email}。",
 	"App details from {host}.": "來自 {host} 的應用程式資訊。",
 	"You will return to {host}.": "您將返回至 {host}。",
 	"Disconnect {name}?": "斷線 {name}?",
@@ -852,6 +852,7 @@ export default {
 	"Could not continue. Please try again.": "執行失敗。請重試。",
 	"Step {step} of {total}": "第 {step} 步，共 {total} 步",
 	Onboarding: "入門指南",
+	"Cancel connection": "取消連線",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"儲存您的選擇失敗。請再次點擊 — 如果持續失敗，請重新載入頁面。",
 	"Let's get your notes in.": "讓我們將您的筆記導入。",

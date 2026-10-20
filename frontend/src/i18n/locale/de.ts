@@ -797,8 +797,8 @@ export default {
 		"Ein Vault ist eine Sammlung von Notizen. {client} kann die Notizen darin lesen und schreiben.",
 	"Also allow {client} to read and write vaults I create later":
 		"Erlaube auch {client}, Vaults zu lesen und zu schreiben, die ich später erstelle",
-	"Turn this off to keep {client} to this vault only.":
-		"Deaktiviere dies, um {client} nur für diesen Vault zu speichern.",
+	"Turn this off to limit {client} to this vault only.":
+		"Deaktiviere dies, um {client} auf diese Vault zu beschränken.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Du kannst jederzeit in den Einstellungen > Verbindungen festlegen, was jede App sehen oder ändern darf.",
 	"Approving…": "Wird genehmigt…",
@@ -823,11 +823,11 @@ export default {
 		"Der Server gewährte mehr Zugriff, als du gewählt hast, daher wurde nichts verbunden. Versuche es erneut oder kontaktiere den Support, wenn das weiterhin passiert.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Trennung von '{name}', aber die Autorisierung der neuen Verbindung fehlgeschlagen. Versuche die Anfrage erneut von {client} – es sind derzeit keine Verbindungen dieser Art aktiv.",
+	"Signed in as {email}.": "Angemeldet als {email}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Dadurch wirst du zu einer App auf diesem Computer weitergeleitet. Bestätige nur, wenn du gerade von dieser App aus eine Verbindung herstellst.",
 	"your existing connection": "deine bestehende Verbindung",
 	"Which vaults can {client} access?": "Auf welche Vaults kann {client} zugreifen?",
-	"Signed in as {email}.": "Angemeldet als {email}.",
 	"App details from {host}.": "App-Details von {host}.",
 	"You will return to {host}.": "Du wirst zu {host} zurückkehren.",
 	"Disconnect {name}?": "Verbindung zu {name} trennen?",
@@ -909,6 +909,7 @@ export default {
 		"Konnte nicht fortgesetzt werden. Bitte versuche es erneut.",
 	"Step {step} of {total}": "Schritt {step} von {total}",
 	Onboarding: "Einrichtung",
+	"Cancel connection": "Verbindung abbrechen",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Deine Auswahl konnte nicht gespeichert werden. Versuche es erneut – wenn es weiterhin fehlschlägt, lade die Seite neu.",
 	"Let's get your notes in.": "Lass uns deine Notizen importieren.",

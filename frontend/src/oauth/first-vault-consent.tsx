@@ -81,7 +81,7 @@ export default function FirstVaultConsent({
 						{t("Also allow {client} to read and write vaults I create later", { client })}
 					</span>
 					<span className="text-muted-foreground text-sm">
-						{t("Turn this off to keep {client} to this vault only.", { client })}
+						{t("Turn this off to limit {client} to this vault only.", { client })}
 					</span>
 				</span>
 			</label>

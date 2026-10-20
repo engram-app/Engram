@@ -847,7 +847,7 @@ export default {
 		"Sejf to zbiór notatek. {client} może czytać i zapisywać notatki w nim.",
 	"Also allow {client} to read and write vaults I create later":
 		"Umożliw również {client} odczyt i zapis sejfów, które utworzę później",
-	"Turn this off to keep {client} to this vault only.":
+	"Turn this off to limit {client} to this vault only.":
 		"Wyłącz to, aby ograniczyć {client} tylko do tego sejfu.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Możesz ograniczyć, co każda aplikacja może zobaczyć lub zmienić, w Ustawieniach > Połączenia.",
@@ -873,11 +873,11 @@ export default {
 		"Serwer przyznał więcej uprawnień niż wybrałeś, więc nic nie zostało połączone. Spróbuj ponownie lub skontaktuj się z działem pomocy, jeśli problem się powtarza.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"Odłączono '{name}', ale autoryzacja nowego połączenia się nie powiodła. Spróbuj ponownie z {client} — obecnie nie są aktywne żadne połączenia tego typu.",
+	"Signed in as {email}.": "Zalogowano jako {email}.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"To przekieruje cię do aplikacji na tym komputerze. Zatwierdź tylko, jeśli właśnie rozpocząłeś połączenie z tej aplikacji.",
 	"your existing connection": "twoje istniejące połączenie",
 	"Which vaults can {client} access?": "Do których sejfów {client} może uzyskać dostęp?",
-	"Signed in as {email}.": "Zalogowano jako {email}.",
 	"App details from {host}.": "Szczegóły aplikacji z {host}.",
 	"You will return to {host}.": "Wrócisz do {host}.",
 	"Disconnect {name}?": "Odłącz {name}?",
@@ -957,6 +957,7 @@ export default {
 	"Could not continue. Please try again.": "Nie udało się kontynuować. Spróbuj ponownie.",
 	"Step {step} of {total}": "Krok {step} z {total}",
 	Onboarding: "Wprowadzenie",
+	"Cancel connection": "Anuluj połączenie",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Nie udało się zapisać Twojego wyboru. Spróbuj kliknąć ponownie — jeśli problem nadal występuje, odśwież stronę.",
 	"Let's get your notes in.": "Przenieśmy Twoje notatki.",

@@ -785,8 +785,8 @@ export default {
 		"Bir kasa, notların bir koleksiyonudur. {client}, içindeki notları okuyabilir ve yazabilir.",
 	"Also allow {client} to read and write vaults I create later":
 		"Ayrıca, daha sonra oluşturacağım kasaları da {client}'ın okuyup yazmasına izin verin",
-	"Turn this off to keep {client} to this vault only.":
-		"Bunu kapatarak {client} öğelerini yalnızca bu kasaya kaydedin.",
+	"Turn this off to limit {client} to this vault only.":
+		"Bunu kapatarak {client}'ı yalnızca bu kasaya sınırlayın.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"Her uygulamanın neyi görebileceğini veya değiştirebileceğini, Ayarlar > Bağlantılar'da istediğiniz zaman sınırlayabilirsiniz.",
 	"Approving…": "Onaylanıyor…",
@@ -811,11 +811,11 @@ export default {
 		"Sunucu, seçtiğinizden daha fazla erişim sağladı, bu yüzden hiçbir şey bağlanmadı. Tekrar deneyin veya sorun devam ederse destek ile iletişime geçin.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"'{name}' bağlantısı kesildi, ancak yeni bağlantının yetkilendirilmesi başarısız oldu. {client} adresinden isteği tekrar deneyin — şu anda bu tür aktif bağlantı yok.",
+	"Signed in as {email}.": "{email} olarak giriş yapıldı.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"Bu, bu bilgisayardaki bir uygulamaya yönlendirir. Sadece o uygulamadan yeni bağlantı kurduysanız onaylayın.",
 	"your existing connection": "mevcut bağlantınız",
 	"Which vaults can {client} access?": "{client}, hangi kasalara erişebilir?",
-	"Signed in as {email}.": "{email} olarak giriş yapıldı.",
 	"App details from {host}.": "{host} uygulamasının bilgileri.",
 	"You will return to {host}.": "{host} sayfasına geri döneceksiniz.",
 	"Disconnect {name}?": "{name} ile bağlantıyı kes?",
@@ -894,6 +894,7 @@ export default {
 	"Could not continue. Please try again.": "Devam edilemedi. Lütfen tekrar deneyin.",
 	"Step {step} of {total}": "{step} adımı, {total} toplam",
 	Onboarding: "Tanıtım",
+	"Cancel connection": "Bağlantıyı iptal et",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"Seçiminizi kaydedemedik. Lütfen tekrar tıklayın; sorun devam ederse sayfayı yenileyin.",
 	"Let's get your notes in.": "Notlarınızı ekleyelim.",

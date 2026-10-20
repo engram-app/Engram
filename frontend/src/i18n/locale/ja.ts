@@ -781,8 +781,8 @@ export default {
 		"保管庫は、ノートの集まりです。{client} は、その中のノートを読み書きできます。",
 	"Also allow {client} to read and write vaults I create later":
 		"後に作成する保管庫も、{client} が読み書きできるようにします",
-	"Turn this off to keep {client} to this vault only.":
-		"これをオフにすると、{client} はこの保管庫のみに制限されます。",
+	"Turn this off to limit {client} to this vault only.":
+		"これをオフにすると、{client} はこの保管庫でのみ利用可能になります。",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"各アプリが参照または変更できる内容を、設定 > 接続 でいつでも制限できます。",
 	"Approving…": "承認中…",
@@ -807,11 +807,11 @@ export default {
 		"サーバーが許可したアクセス権が、お客様が選択したものよりも大きいため、何も接続されませんでした。もう一度お試しください。それでも問題が解決しない場合は、サポートまでお問い合わせください。",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"'{name}'との接続が解除されましたが、新しい接続の認証に失敗しました。{client}からのリクエストを再実行してください。この種類の接続は現在アクティブではありません。",
+	"Signed in as {email}.": "{email} としてサインインしました。",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"これにより、このコンピューター上のアプリに移動します。そのアプリから初めて接続する場合のみ承認してください。",
 	"your existing connection": "現在の接続",
 	"Which vaults can {client} access?": "{client} はどの保管庫にアクセスできますか？",
-	"Signed in as {email}.": "{email} としてサインインしました。",
 	"App details from {host}.": "{host}からのアプリ詳細.",
 	"You will return to {host}.": "{host} に戻ります。",
 	"Disconnect {name}?": "{name}から切断しますか？",
@@ -890,6 +890,7 @@ export default {
 	"Could not continue. Please try again.": "続行できませんでした。もう一度お試しください。",
 	"Step {step} of {total}": "{total} の {step} 段階",
 	Onboarding: "初期設定",
+	"Cancel connection": "接続を解除します",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"選択を保存できませんでした。もう一度クリックしてみてください。それでもうまくいかない場合は、ページを更新してください。",
 	"Let's get your notes in.": "ノートをインポートしましょう。",

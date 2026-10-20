@@ -769,8 +769,8 @@ export default {
 		"보관함은 노트들의 모음입니다. {client}은 이 보관함 내의 노트를 읽고 쓸 수 있습니다.",
 	"Also allow {client} to read and write vaults I create later":
 		"나중에 제가 생성하는 보관함에 대해 {client}가 읽고 쓸 수 있도록 허용합니다",
-	"Turn this off to keep {client} to this vault only.":
-		"이 기능을 끄면 {client}가 이 보관함에만 적용됩니다.",
+	"Turn this off to limit {client} to this vault only.":
+		"이 기능을 끄면 {client}가 이 보관함에서만 작동합니다.",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"각 앱이 볼 수 있거나 변경할 수 있는 내용을 언제든지 설정 > 연결에서 제한할 수 있습니다.",
 	"Approving…": "승인 중입니다…",
@@ -795,11 +795,11 @@ export default {
 		"서버가 귀하가 선택한 것보다 더 많은 접근 권한을 부여하여 연결되지 않았습니다. 다시 시도하거나, 문제가 계속 발생하면 지원팀에 문의하세요.",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"'{name}' 연결이 끊어졌지만, 새로운 연결을 설정하는 데 실패했습니다. {client}에서 요청을 다시 실행하세요. 현재 이 종류의 연결은 활성화되어 있지 않습니다.",
+	"Signed in as {email}.": "{email}으로 로그인되었습니다.",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"이 버튼은 해당 컴퓨터의 앱으로 연결합니다. 해당 앱에서 연결을 시작한 경우에만 승인하세요.",
 	"your existing connection": "기존 연결",
 	"Which vaults can {client} access?": "{client}은 어떤 보관함에 접근할 수 있나요?",
-	"Signed in as {email}.": "{email}으로 로그인되었습니다.",
 	"App details from {host}.": "{host}에서 가져온 앱 정보.",
 	"You will return to {host}.": "{host}으로 돌아갑니다.",
 	"Disconnect {name}?": "{name} 연결 해제?",
@@ -876,6 +876,7 @@ export default {
 	"Could not continue. Please try again.": "계속할 수 없습니다. 다시 시도해주세요.",
 	"Step {step} of {total}": "{step}단계 / {total}단계",
 	Onboarding: "시작하기",
+	"Cancel connection": "연결 해제",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"선택을 저장하지 못했습니다. 다시 클릭해 보세요. 계속 실패하면 페이지를 새로 고쳐 주세요.",
 	"Let's get your notes in.": "노트를 가져오겠습니다.",

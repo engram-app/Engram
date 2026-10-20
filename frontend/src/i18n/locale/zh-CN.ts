@@ -744,7 +744,7 @@ export default {
 		"仓库是一组笔记。{client} 可以读取和写入其中的笔记。",
 	"Also allow {client} to read and write vaults I create later":
 		"允许 {client} 读取和写入我之后创建的仓库",
-	"Turn this off to keep {client} to this vault only.": "禁用此项，使 {client} 仅同步到此仓库。",
+	"Turn this off to limit {client} to this vault only.": "关闭此选项，将 {client} 限制在此仓库内。",
 	"You can limit what each app can see or change anytime in Settings > Connections.":
 		"你可以在 设置 > 连接 中随时限制每个应用可以查看或修改的内容。",
 	"Approving…": "正在批准…",
@@ -769,11 +769,11 @@ export default {
 		"服务器授予了比你选择的更多权限，因此没有建立连接。请重试，或如果问题持续出现，请联系支持。",
 	"Disconnected '{name}' but authorizing the new connection failed. Re-run the request from {client} — no connections of this kind are currently active.":
 		"已断开连接 '{name}'，但授权新连接失败。请重新从 {client} 发起请求 — 目前没有此类活动连接。",
+	"Signed in as {email}.": "已登录：{email}。",
 	"This sends you to an app on this computer. Only approve if you just started connecting from that app.":
 		"这会将你引导到电脑上的一个应用。仅在从该应用首次连接时才批准。",
 	"your existing connection": "您的现有连接",
 	"Which vaults can {client} access?": "{client} 可以访问哪些仓库？",
-	"Signed in as {email}.": "已登录：{email}。",
 	"App details from {host}.": "来自 {host} 的应用详情。",
 	"You will return to {host}.": "您将返回至 {host}。",
 	"Disconnect {name}?": "断开 {name}？",
@@ -850,6 +850,7 @@ export default {
 	"Could not continue. Please try again.": "无法继续。请重试。",
 	"Step {step} of {total}": "第 {step} 步，共 {total} 步",
 	Onboarding: "入门引导",
+	"Cancel connection": "取消连接",
 	"Could not save your choice. Try clicking again — if it keeps failing, refresh the page.":
 		"无法保存您的选择。请重试点击 — 如果仍然失败，请刷新页面。",
 	"Let's get your notes in.": "让我们开始导入您的笔记。",
