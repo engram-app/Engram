@@ -25,7 +25,10 @@ defmodule Engram.PromEx.Ecto do
   Ecto did not measure (queue_time inside a transaction) is nil, which takes
   no sample; an absent key would record Peep's counter default of 1.
   """
+
   use PromEx.Plugin
+
+  alias Engram.PromEx.Buckets
 
   @query_event [:prom_ex, :plugin, :ecto, :query]
 
@@ -49,9 +52,7 @@ defmodule Engram.PromEx.Ecto do
             description: "Total query time (queue + query + decode), microseconds.",
             tags: [:repo, :command],
             tag_values: &tag_values/1,
-            reporter_options: [
-              buckets: [10_000, 50_000, 250_000, 2_500_000, 10_000_000, 30_000_000]
-            ]
+            reporter_options: Buckets.opts(Engram.PromEx.Ecto.TotalTimeBuckets)
           ),
           counter(prefix ++ [:source, :queries, :total],
             event_name: @query_event,
@@ -117,4 +118,9 @@ defmodule Engram.PromEx.Ecto do
 
   defp command({:ok, %_{command: command}}) when is_atom(command), do: Atom.to_string(command)
   defp command(_), do: "unavailable"
+end
+
+defmodule Engram.PromEx.Ecto.TotalTimeBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [10_000, 50_000, 250_000, 2_500_000, 10_000_000, 30_000_000]
 end
