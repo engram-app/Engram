@@ -1395,6 +1395,35 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert get_resp_header(resp, "retry-after") == ["60"]
       assert live_rows(user) == []
     end
+
+    test "a refused overwrite leaves the existing attachment readable", %{
+      conn: conn,
+      user: user
+    } do
+      original = conn |> upload() |> json_response(200)
+      [%{storage_key: key}] = live_rows(user)
+
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      stub_with(Engram.MockStorage, InMemory)
+
+      stub(Engram.MockStorage, :put, fn k, bin, opts ->
+        set_rotation_lock(user, DateTime.utc_now(:second))
+        InMemory.put(k, bin, opts)
+      end)
+
+      resp = post(conn, "/api/attachments", %{path: "r.png", content_base64: @updated_base64})
+      assert %{"error" => "rotation_in_progress"} = json_response(resp, 503)
+      assert [%{storage_key: ^key}] = live_rows(user)
+
+      set_rotation_lock(user, nil)
+      raw = get(conn, "/api/attachments/r.png?raw=1")
+      assert response(raw, 200) == @sample_content
+
+      assert original["attachment"]["content_hash"] ==
+               get_resp_header(raw, "x-engram-content-hash") |> hd()
+    end
   end
 
   # ---------------------------------------------------------------------------

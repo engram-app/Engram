@@ -318,14 +318,16 @@ defmodule Engram.Attachments.UploadsTest do
       raced = :counters.new(1, [])
 
       # The v1 PUT lands before its lock; the chunked complete commits in that
-      # window and, as the row's previous blob, deletes the key v1 just wrote.
+      # window and releases the row's previous blob. The v1 write's own key
+      # is fresh, so that cleanup cannot reach it.
       stub(Engram.MockStorage, :put, fn key, bin, opts ->
         :ok = InMemory.put(key, bin, opts)
 
         if :counters.get(raced, 1) == 0 do
           :counters.add(raced, 1, 1)
           assert {:ok, _} = Uploads.complete(user, vault, up.id)
-          refute InMemory.exists?(key)
+          refute InMemory.exists?(old.storage_key)
+          assert InMemory.exists?(key)
         end
 
         :ok

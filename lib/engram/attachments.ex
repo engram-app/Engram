@@ -85,52 +85,44 @@ defmodule Engram.Attachments do
           %Attachment{id: id} -> id
         end
 
+      # Every write stores its ciphertext under a fresh key, never over the
+      # live row's blob: this PUT runs before the lock, and a refusal under
+      # the lock must leave the live row and its bytes as they were. On
+      # commit the row moves to the new key and commit_row/6 releases the
+      # old blob; on any refusal the new blob is deleted.
+      key = Storage.object_key(user.id, vault.id, Ecto.UUID.generate())
+
+      prepare = fn id ->
+        prepare_upload(
+          user,
+          vault,
+          {id, key},
+          path,
+          {path_hmac, basename_hmac},
+          plaintext,
+          mtime,
+          explicit_mime
+        )
+      end
+
       with :ok <- validate_storage_cap(user, existing0, byte_size(plaintext)),
-           {:ok, key, attrs0, ciphertext} <-
-             prepare_upload(
-               user,
-               vault,
-               att_id0,
-               path,
-               {path_hmac, basename_hmac},
-               plaintext,
-               mtime,
-               explicit_mime
-             ),
+           {:ok, attrs0, ciphertext} <- prepare.(att_id0),
            :ok <- store_external(key, ciphertext, attrs0.mime_type) do
-        # T3-audit H1 — concurrent upserts to the same path can race: each
-        # encrypts the blob with AAD bound to its own att_id, then PUTs to
-        # the same S3 key (last writer wins on the blob). The surviving DB
-        # row's id must match the AAD baked into the surviving blob, so
-        # commit_row/6 serializes the row write per (user, path); if the
-        # locked re-read reveals a different winning id, we re-encrypt +
-        # re-PUT under the lock (rare race path only).
+        # T3-audit H1 — the content AAD binds the row id, so if the locked
+        # re-read finds a different row holding the path, re-encrypt for its
+        # id and re-PUT, to the same fresh key (rare race path only).
         commit_row(user, vault, path, path_hmac, byte_size(plaintext), fn
           %Attachment{id: id} when id != att_id0 ->
-            with {:ok, rebind_key, attrs1, ciphertext1} <-
-                   prepare_upload(
-                     user,
-                     vault,
-                     id,
-                     path,
-                     {path_hmac, basename_hmac},
-                     plaintext,
-                     mtime,
-                     explicit_mime
-                   ),
-                 :ok <- store_external(rebind_key, ciphertext1, attrs1.mime_type) do
-              {:ok, id, attrs1}
-            end
-
-          # A chunked upload committed this row after our pre-lock PUT, and
-          # its cleanup may already have deleted the key we wrote (it held
-          # the row's old blob). Write it again now that we hold the lock.
-          %Attachment{storage_key: other} when is_binary(other) and other != key ->
-            with :ok <- store_external(key, ciphertext, attrs0.mime_type),
-                 do: {:ok, att_id0, attrs0}
+            with {:ok, attrs1, ciphertext1} <- prepare.(id),
+                 :ok <- store_external(key, ciphertext1, attrs1.mime_type),
+                 do: {:ok, id, attrs1}
 
           _ ->
             {:ok, att_id0, attrs0}
+        end)
+        |> tap(fn
+          {:ok, _} -> :ok
+          {:error, _} -> delete_external(key)
         end)
       end
     end
@@ -211,13 +203,10 @@ defmodule Engram.Attachments do
   # acquire_path_lock/2's, so the two keyspaces do not meet by construction.
   def quota_lock_id(user_id), do: "attachment_quota:" <> user_id
 
-  # A write that moved the row to a new storage key (a chunked upload always
-  # does; a single-request upload does when it replaces a chunked one) leaves
-  # the old blob unreferenced. Deleted under the path lock, and only if the
-  # live row has not since been pointed back at it: a single-request upload
-  # writes its blob BEFORE taking the lock, then re-PUTs under the lock when
-  # it sees the row moved (commit_row's build above), so the check and the
-  # delete must not interleave with that.
+  # Every write moves the row to a fresh storage key (single-request and
+  # chunked alike), which leaves the old blob unreferenced. Deleted under the
+  # path lock, and only if the live row has not since been pointed back at
+  # it.
   #
   # ponytail: path lock only. A concurrent move of the row to another path
   # plus a single-request upload there is not serialized against this
@@ -390,8 +379,8 @@ defmodule Engram.Attachments do
       # "user/vault/<cleartext path>" at READ time — so a path ended up in the
       # S3 URL, and from there in ExAws's own log line, S3 access logs and
       # bucket listings, none of which any call-site control can reach. Blobs
-      # are keyed by the immutable attachment UUID (`Storage.object_key/3`);
-      # nothing reconstructs a key from a path any more, and the builder that
+      # are keyed by a UUID (`Storage.object_key/3`) and read only via the
+      # row's storage_key; nothing reconstructs a key from a path any more, and the builder that
       # could is deleted.
       {:ok, %Attachment{storage_key: nil} = att} ->
         require Logger
@@ -1613,7 +1602,7 @@ defmodule Engram.Attachments do
   defp prepare_upload(
          user,
          vault,
-         att_id,
+         {att_id, key},
          path,
          hmacs,
          plaintext,
@@ -1621,7 +1610,6 @@ defmodule Engram.Attachments do
          explicit_mime
        ) do
     mime = explicit_mime || MimeWhitelist.detect_mime(path)
-    key = Storage.object_key(user.id, vault.id, att_id)
 
     with {:ok, dek} <- Crypto.get_dek(user),
          {:ok, content_key} <- Crypto.dek_content_hash_key(user) do
@@ -1651,7 +1639,7 @@ defmodule Engram.Attachments do
         }
         |> Map.merge(path_attrs(dek, att_id, path, hmacs))
 
-      {:ok, key, attrs, ciphertext}
+      {:ok, attrs, ciphertext}
     end
   end
 

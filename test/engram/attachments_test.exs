@@ -255,6 +255,8 @@ defmodule Engram.AttachmentsTest do
 
     test "different bytes at the same path still write", %{user: user, vault: vault} do
       expect(Engram.MockStorage, :put, 2, fn _key, _binary, _opts -> :ok end)
+      # The overwrite moves the row to a fresh key and releases the old blob.
+      expect(Engram.MockStorage, :delete, fn key -> send(self(), {:deleted, key}) && :ok end)
 
       {:ok, first} =
         Attachments.upsert_attachment(user, vault, %{
@@ -271,6 +273,7 @@ defmodule Engram.AttachmentsTest do
       assert second.id == first.id
       refute second.content_hash == first.content_hash
       assert second.size_bytes == byte_size("genuinely different bytes")
+      assert_received {:deleted, key} when key == first.storage_key
     end
 
     test "a corrected mime_type still lands even when the bytes are identical", %{
@@ -284,6 +287,8 @@ defmodule Engram.AttachmentsTest do
       # existing test.
       b64 = Base.encode64("PNGDATA")
       expect(Engram.MockStorage, :put, 2, fn _key, _binary, _opts -> :ok end)
+      # The overwrite moves the row to a fresh key and releases the old blob.
+      expect(Engram.MockStorage, :delete, fn key -> send(self(), {:deleted, key}) && :ok end)
 
       {:ok, _} =
         Attachments.upsert_attachment(user, vault, %{
@@ -429,6 +434,8 @@ defmodule Engram.AttachmentsTest do
 
     test "updates existing attachment at same path", %{user: user, vault: vault} do
       expect(Engram.MockStorage, :put, 2, fn _key, _binary, _opts -> :ok end)
+      # The overwrite moves the row to a fresh key and releases the old blob.
+      expect(Engram.MockStorage, :delete, fn key -> send(self(), {:deleted, key}) && :ok end)
 
       {:ok, v1} =
         Attachments.upsert_attachment(user, vault, %{
@@ -445,6 +452,8 @@ defmodule Engram.AttachmentsTest do
       # Same DB row id — it's an update, not a new insert
       assert v1.id == v2.id
       assert v2.size_bytes == byte_size("updated content")
+      refute v2.storage_key == v1.storage_key
+      assert_received {:deleted, key} when key == v1.storage_key
     end
 
     test "vault isolation — attachment in vault A not visible from vault B", %{user: user} do
@@ -817,7 +826,9 @@ defmodule Engram.AttachmentsTest do
           "mtime" => 1.0
         })
 
-      assert att.storage_key =~ ~r{/objects/#{att.id}$}
+      # A fresh uuid per stored blob (not the row id: an overwrite must not
+      # write over the live blob before it holds the lock).
+      assert att.storage_key =~ ~r"^#{user.id}/#{vault.id}/objects/[0-9a-f-]{36}$"
       refute att.storage_key =~ "img/cat.png"
     end
 
@@ -999,6 +1010,103 @@ defmodule Engram.AttachmentsTest do
 
     test "batch_delete counts only paths that held a live row", %{user: user, vault: vault} do
       {:ok, %{deleted: 1}} = Attachments.batch_delete(user, vault, ["a.png", "absent.png"])
+    end
+  end
+
+  # A single-request write stores its ciphertext before it takes the path
+  # lock. Writing it over the live row's blob meant any refusal under the
+  # lock left the row pointing at bytes it cannot decrypt.
+  describe "single-request overwrites write a fresh blob" do
+    setup %{user: user} do
+      Mox.stub_with(Engram.MockStorage, InMemory)
+      {:ok, user} = Crypto.ensure_user_dek(user)
+      %{user: user}
+    end
+
+    defp upsert(user, vault, path, bytes),
+      do: Attachments.upsert_attachment(user, vault, %{path: path, content: bytes})
+
+    defp blobs(user, vault) do
+      prefix = "#{user.id}/#{vault.id}/"
+
+      :ets.foldl(
+        fn {k, _}, acc -> if String.starts_with?(k, prefix), do: [k | acc], else: acc end,
+        [],
+        :engram_test_storage_in_memory
+      )
+      |> Enum.sort()
+    end
+
+    defp content(user, vault, path) do
+      {:ok, att} = Attachments.get_attachment(Crypto.fresh_user(user), vault, path)
+      att.content
+    end
+
+    # Runs `fun` inside the first storage PUT, i.e. after the pre-lock checks
+    # and before the locked row write.
+    defp during_first_put(fun) do
+      ran = :counters.new(1, [])
+
+      Mox.stub(Engram.MockStorage, :put, fn key, bin, opts ->
+        :ok = InMemory.put(key, bin, opts)
+
+        if :counters.get(ran, 1) == 0 do
+          :counters.add(ran, 1, 1)
+          fun.()
+        end
+
+        :ok
+      end)
+    end
+
+    defp set_rotation_lock(user, at) do
+      Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: at]],
+        skip_tenant_check: true
+      )
+    end
+
+    test "a successful overwrite leaves exactly the new blob", %{user: user, vault: vault} do
+      {:ok, a} = upsert(user, vault, "a.txt", "original")
+      {:ok, b} = upsert(user, vault, "a.txt", "replacement")
+
+      assert b.id == a.id
+      refute b.storage_key == a.storage_key
+      assert blobs(user, vault) == [b.storage_key]
+      assert content(user, vault, "a.txt") == "replacement"
+    end
+
+    test "refused by the rotation gate: the live attachment is untouched, no new blob", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, a} = upsert(user, vault, "a.txt", "original")
+      during_first_put(fn -> set_rotation_lock(user, DateTime.utc_now(:second)) end)
+
+      assert {:error, :rotation_in_progress} = upsert(user, vault, "a.txt", "replacement")
+      assert blobs(user, vault) == [a.storage_key]
+
+      set_rotation_lock(user, nil)
+      assert content(user, vault, "a.txt") == "original"
+    end
+
+    test "refused by the locked quota re-check: the live attachment is untouched, no new blob",
+         %{user: user, vault: vault} do
+      insert(:user_limit_override, user: user, key: "attachment_bytes_cap", value: %{"v" => 30})
+      {:ok, a} = upsert(user, vault, "a.txt", :binary.copy("a", 10))
+
+      # Another upload takes the headroom between the pre-lock and locked checks.
+      during_first_put(fn ->
+        assert {:ok, _} = upsert(user, vault, "other.txt", :binary.copy("o", 15))
+      end)
+
+      assert {:error, {:storage_cap_reached, _, _}} =
+               upsert(user, vault, "a.txt", :binary.copy("b", 20))
+
+      {:ok, other} = Attachments.get_attachment(Crypto.fresh_user(user), vault, "other.txt")
+      assert blobs(user, vault) == Enum.sort([a.storage_key, other.storage_key])
+      assert content(user, vault, "a.txt") == :binary.copy("a", 10)
     end
   end
 
