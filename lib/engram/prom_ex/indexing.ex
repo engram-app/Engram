@@ -42,6 +42,13 @@ defmodule Engram.PromEx.Indexing do
       Sizes each embed-less lever. `drawing` stays 0 while drawing data is
       dropped; canvas and base are labelled from the note path.
 
+    * `engram_prom_ex_indexing_vector_cache_{hits,misses,written_bytes}_total`:
+      the vector cache (`Engram.Indexing.VectorCache`). Hit rate is
+      hits / (hits + misses); written bytes sizes the table. Untagged.
+    * `engram_prom_ex_indexing_vector_cache_skipped_rows_total`: rows the cache
+      refused to write, tagged by `:reason` (`rotation | note_deleted`). A
+      sustained rate means the cache is not saving the retries it exists for.
+
   Cardinality contract: only `:outcome`/`:reason`/`:kind`/`:dense` (closed
   enums). NEVER add note_id, user_id, or vault_id.
   """
@@ -53,6 +60,9 @@ defmodule Engram.PromEx.Indexing do
   @stale_points_leaked_event [:engram, :indexing, :stale_points_leaked]
   @maintenance_embed_event [:engram, :embed, :maintenance]
   @points_written_event [:engram, :indexing, :points_written]
+  @vector_cache_lookup_event [:engram, :vector_cache, :lookup]
+  @vector_cache_write_event [:engram, :vector_cache, :write]
+  @vector_cache_skipped_event [:engram, :vector_cache, :skipped]
 
   @impl true
   def event_metrics(opts) do
@@ -110,6 +120,33 @@ defmodule Engram.PromEx.Indexing do
             "Qdrant points written by a commit (reused excluded), by chunk kind and " <>
               "whether the point carries a dense vector.",
           tags: [:kind, :dense]
+        ),
+        sum(
+          metric_prefix ++ [:vector_cache, :hits, :total],
+          event_name: @vector_cache_lookup_event,
+          measurement: :hits,
+          description: "Dense texts served from the vector cache: Voyage tokens not paid."
+        ),
+        sum(
+          metric_prefix ++ [:vector_cache, :misses, :total],
+          event_name: @vector_cache_lookup_event,
+          measurement: :misses,
+          description: "Dense texts the vector cache did not hold, so Voyage embeds them."
+        ),
+        sum(
+          metric_prefix ++ [:vector_cache, :written_bytes, :total],
+          event_name: @vector_cache_write_event,
+          measurement: :bytes,
+          description: "Ciphertext bytes written to embedding_cache (table growth)."
+        ),
+        sum(
+          metric_prefix ++ [:vector_cache, :skipped_rows, :total],
+          event_name: @vector_cache_skipped_event,
+          measurement: :rows,
+          description:
+            "Vector cache rows not written (DEK rotation running or DEK moved on, " <>
+              "or the note was deleted mid-embed): vectors a retry pays for again.",
+          tags: [:reason]
         )
       ]
     )
