@@ -7,11 +7,13 @@ defmodule Engram.Workers.CleanupVault do
 
   Cleanup order:
   1. Qdrant points (best-effort, non-fatal)
-  2. Chunks, then notes, then attachments in id-ordered batches, each its own
+  2. Stamp `purge_started_at`: from here `Vaults.restore_vault/2` refuses the
+     vault, since a purge that fails part-way leaves it partial
+  3. Chunks, then notes, then attachments in id-ordered batches, each its own
      transaction (attachment blobs deleted after each batch commits)
-  3. One transaction for the remainder: chunks, notes, attachments, keys,
+  4. One transaction for the remainder: chunks, notes, attachments, keys,
      grants, api_key_vaults, the vault row
-  4. Remaining storage blobs (post-commit, best-effort), only after the DB is
+  5. Remaining storage blobs (post-commit, best-effort), only after the DB is
      authoritative
   """
 
@@ -201,7 +203,8 @@ defmodule Engram.Workers.CleanupVault do
     # either waits for the batch in flight or stops the purge at the next one,
     # instead of the remaining batches (and the final vault delete) wiping a
     # vault the user has taken back and may be syncing into.
-    with :ok <- delete_batches(vault, Chunk, [:id], fn _rows -> :ok end),
+    with :ok <- mark_purge_started(vault),
+         :ok <- delete_batches(vault, Chunk, [:id], fn _rows -> :ok end),
          :ok <-
            delete_batches(vault, Note, [:id, :kind, :deleted_at], &dec_live_notes(vault, &1)),
          :ok <-
@@ -225,6 +228,32 @@ defmodule Engram.Workers.CleanupVault do
     )
 
     :ok
+  end
+
+  # Before the first batch, in its own committed transaction: from here a
+  # failed purge leaves the vault partial, and `Vaults.restore_vault/2` refuses
+  # a vault with `purge_started_at` set. Kept on a retry (coalesce). The
+  # deleted_at re-check under the row lock is the same race guard the batches
+  # use: a restore that committed first wins and nothing is stamped.
+  defp mark_purge_started(vault) do
+    {:ok, n} =
+      Repo.with_tenant(vault.user_id, fn ->
+        {n, _} =
+          from(v in Vault,
+            where: v.id == ^vault.id and not is_nil(v.deleted_at),
+            update: [
+              set: [
+                purge_started_at:
+                  fragment("coalesce(?, date_trunc('second', now()))", v.purge_started_at)
+              ]
+            ]
+          )
+          |> Repo.update_all([])
+
+        n
+      end)
+
+    if n == 1, do: :ok, else: :restored
   end
 
   # Locks the vault row for the rest of the caller's transaction and reports

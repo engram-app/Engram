@@ -25,6 +25,8 @@ defmodule Engram.Vaults.Vault do
     field :client_id, :string
     field :is_default, :boolean, default: false
     field :deleted_at, :utc_datetime
+    # Set by CleanupVault before its first delete batch; restore refuses it.
+    field :purge_started_at, :utc_datetime
     field :name_ciphertext, :binary
     field :name_nonce, :binary
     field :name_hmac, :binary
