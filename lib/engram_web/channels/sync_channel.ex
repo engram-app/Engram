@@ -78,7 +78,12 @@ defmodule EngramWeb.SyncChannel do
       :ok ->
         socket = assign(socket, :vault, vault)
         send(self(), {:after_join, params})
-        {:ok, %{reconnect_jitter_max_ms: reconnect_jitter_max_ms()}, socket}
+
+        {:ok,
+         %{
+           reconnect_jitter_max_ms: reconnect_jitter_max_ms(),
+           features: EngramWeb.UserChannel.features()
+         }, socket}
 
       refused ->
         refused

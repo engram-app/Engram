@@ -45,6 +45,14 @@ defmodule EngramWeb.SyncChannelTest do
       assert reply.reconnect_jitter_max_ms == 5_000
     end
 
+    # The web app never joins `user:`, so it reads the server features here.
+    test "join reply carries the server features", %{user: user, vault: vault} do
+      socket = user_socket(user)
+      assert {:ok, reply, _socket} = join_sync(socket, user, vault)
+      assert reply.features == EngramWeb.UserChannel.features()
+      assert reply.features.chunked_attachment_upload == true
+    end
+
     test "accepts join for own user_id and vault", %{user: user, vault: vault} do
       socket = user_socket(user)
       assert {:ok, _, _} = join_sync(socket, user, vault)

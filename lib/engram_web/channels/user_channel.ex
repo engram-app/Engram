@@ -41,7 +41,9 @@ defmodule EngramWeb.UserChannel do
   #
   # A function, not a module attribute: the multipart answer depends on the
   # configured storage adapter, which is runtime config.
-  defp features do
+  @doc "Server features, also sent on the sync join reply (the web app never joins `user:`)."
+  @spec features() :: map()
+  def features do
     base = %{
       raw_attachment_upload: true,
       raw_attachment_download: true,
