@@ -13,7 +13,7 @@ defmodule Engram.Repo.Migrations.DropRedundantIndexes do
   #   * idx_notes_user_deleted (user_id, deleted_at) WHERE deleted_at IS NOT
   #     NULL: its readers, the delete-wins check and the rename link rewrite's
   #     old-path lookup, are by (vault_id, path_hmac) and now have
-  #     notes_vault_path_tombstone_index (20261020120100).
+  #     notes_vault_path_tombstone_index (20261021090100).
   #   * idx_attachments_user (user_id): left prefix of attachments (user_id,
   #     vault_id, basename_hmac, path_length), which also covers the user FK.
   #   * user_limit_overrides_user_id_index: left prefix of UNIQUE (user_id,
