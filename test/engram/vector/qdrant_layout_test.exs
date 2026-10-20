@@ -202,21 +202,14 @@ defmodule Engram.Vector.QdrantLayoutTest do
   end
 
   describe "desired_strict/1 (hard limits, Qdrant Cloud only)" do
-    setup do
-      Engram.ServiceConfig.put_override(:qdrant_measured_bytes,
-        payload: 1_355_000_000,
-        vector: 3_280_000_000
-      )
-
-      :ok
-    end
-
     # Circuit breakers against code bugs and runaway sweeps, from the
     # 10-19 config audit (#7) and docs sweep (#15). `search_allow_exact`
     # stays allowed (sweep #19): the ANN-recall check compares against
     # `params.exact: true`; max_query_limit and max_timeout bound it.
     # No read/write_rate_limit: they are per replica, not per tenant.
-    test "cloud: exactly the audited limits, byte breakers at 3x the measured sizes" do
+    # No byte breakers: a static byte number drifts with the layout, and the
+    # disk and memory guards already refuse on live usage.
+    test "cloud: exactly the audited limits, no byte breakers" do
       assert QdrantLayout.desired_strict(:cloud) == %{
                "max_query_limit" => 8192,
                "search_max_oversampling" => 4,
@@ -226,22 +219,12 @@ defmodule Engram.Vector.QdrantLayoutTest do
                "condition_max_size" => 4096,
                "max_points_count" => 1_500_000,
                "max_timeout" => 30,
-               "search_max_batchsize" => 8,
-               "max_collection_payload_size_bytes" => 4_065_000_000,
-               "max_collection_vector_size_bytes" => 9_840_000_000
+               "search_max_batchsize" => 8
              }
 
       refute Map.has_key?(QdrantLayout.desired_strict(:cloud), "search_allow_exact")
       refute Map.has_key?(QdrantLayout.desired_strict(:cloud), "read_rate_limit")
       refute Map.has_key?(QdrantLayout.desired_strict(:cloud), "write_rate_limit")
-    end
-
-    test "cloud without a measurement: no byte breakers, the rest unchanged" do
-      Engram.ServiceConfig.put_override(:qdrant_measured_bytes, nil)
-      strict = QdrantLayout.desired_strict(:cloud)
-      refute Map.has_key?(strict, "max_collection_payload_size_bytes")
-      refute Map.has_key?(strict, "max_collection_vector_size_bytes")
-      assert strict["max_query_limit"] == 8192
     end
 
     # A self-hoster's collection can outgrow any number picked from our prod.
@@ -258,9 +241,27 @@ defmodule Engram.Vector.QdrantLayoutTest do
       assert QdrantLayout.desired(@v1182, nil, true, :self_host) == QdrantLayout.desired(@v1182)
     end
 
-    # The kill switch only lifts our write refusals; the breakers stay as set.
-    test "strict mode off on cloud sends only the two guards at 100" do
-      assert QdrantLayout.desired(@v1182, nil, false, :cloud)["strict_mode_config"] == %{
+    # The kill switch lifts every refusal we set. A PATCH null cannot clear a
+    # strict field (`x.or(self.x)` merge), so each goes to a ceiling no
+    # request reaches, including the byte breakers an earlier config or a
+    # hand PATCH may have left.
+    test "strict mode off on cloud lifts the guards and every breaker" do
+      off = QdrantLayout.desired(@v1182, nil, false, :cloud)["strict_mode_config"]
+
+      assert off["max_disk_usage_percent"] == 100
+      assert off["max_resident_memory_percent"] == 100
+      refute Map.has_key?(off, "enabled")
+
+      for field <- Map.keys(QdrantLayout.desired_strict(:cloud)) do
+        assert is_number(off[field]) and off[field] >= 2_147_483_647, field
+      end
+
+      assert off["max_collection_payload_size_bytes"] == 2 ** 53 - 1
+      assert off["max_collection_vector_size_bytes"] == 2 ** 53 - 1
+    end
+
+    test "strict mode off on self-host still sends only the two guards" do
+      assert QdrantLayout.desired(@v1182, nil, false, :self_host)["strict_mode_config"] == %{
                "max_disk_usage_percent" => 100,
                "max_resident_memory_percent" => 100
              }

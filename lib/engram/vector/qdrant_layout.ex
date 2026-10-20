@@ -20,8 +20,6 @@ defmodule Engram.Vector.QdrantLayout do
   partial body never resets an unrelated setting.
   """
 
-  alias Engram.ServiceConfig
-
   # Strict-mode fields by the Qdrant versions that honour them, `since <= v <
   # until`, from each tag's docs/redoc/master/openapi.json `StrictModeConfig`:
   #   * memory: added 1.18.1; 1.19.0 marks it "Deprecated: use the node-wide
@@ -87,27 +85,35 @@ defmodule Engram.Vector.QdrantLayout do
     "search_max_batchsize" => 8
   }
 
-  @byte_breakers [
-    payload: "max_collection_payload_size_bytes",
-    vector: "max_collection_vector_size_bytes"
-  ]
+  # No byte breakers (`max_collection_{payload,vector}_size_bytes`): a static
+  # number measured on one layout drifts as the layout changes (f16 dense,
+  # chunk text moving to Postgres), and Qdrant checks it against a size
+  # estimate refreshed only every 32 requests. The disk and memory guards
+  # (`max_disk_usage_percent` in /quotas, `max_resident_memory_percent`)
+  # already refuse writes on LIVE usage, which is what a byte cap stands in for.
+
+  # Kill switch values: no request reaches them. A null cannot clear a strict
+  # field (see `desired/4`), so the switch raises each one instead. The byte
+  # fields are included in case an earlier config or a hand PATCH set them.
+  @ceiling 2_147_483_647
+  @byte_ceiling 2 ** 53 - 1
+  @lifted_limits Map.merge(
+                   Map.new(@hard_limits, fn {field, _} -> {field, @ceiling} end),
+                   %{
+                     "max_collection_payload_size_bytes" => @byte_ceiling,
+                     "max_collection_vector_size_bytes" => @byte_ceiling
+                   }
+                 )
 
   @doc """
   The strict-mode hard limits for a deployment. `:cloud` (our Qdrant Cloud
-  prod) gets the circuit breakers, plus byte breakers at 3x the sizes in
-  `:qdrant_measured_bytes` (omitted when unset). `:self_host` gets none: a
-  self-hoster's collection can outgrow any number picked from our prod.
+  prod) gets the circuit breakers. `:self_host` gets none: a self-hoster's
+  collection can outgrow any number picked from our prod.
   """
-  @spec desired_strict(:cloud | :self_host) :: map()
+  # No @spec: both clauses return literals, so dialyzer's :underspecs flags
+  # any wider map type.
   def desired_strict(:self_host), do: %{}
-
-  def desired_strict(:cloud) do
-    measured = ServiceConfig.get(:qdrant_measured_bytes) || []
-
-    for {kind, field} <- @byte_breakers, is_integer(measured[kind]), into: @hard_limits do
-      {field, measured[kind] * 3}
-    end
-  end
+  def desired_strict(:cloud), do: @hard_limits
 
   @doc """
   The desired PATCH sub-objects for a server at `version` (`nil` = unknown),
@@ -115,7 +121,7 @@ defmodule Engram.Vector.QdrantLayout do
   default 85/85), or switched off when `strict?` is false.
   Strict mode is included only with at least one guard the server supports:
   enabling it with no guard adds risk for no protection. On `:cloud` it also
-  carries `desired_strict/1`; the kill switch leaves those as they are.
+  carries `desired_strict/1`, which the kill switch lifts to a ceiling.
   """
   @spec desired(Version.t() | nil, map() | nil, boolean(), :cloud | :self_host) :: map()
   def desired(version, limits \\ @default_limits, strict? \\ true, deployment \\ :self_host)
@@ -125,10 +131,13 @@ defmodule Engram.Vector.QdrantLayout do
   # drop Qdrant Cloud's own strict-mode guards (unindexed filtering). 100, not
   # null: the strict-mode PATCH merge keeps the old value for a null field
   # (`x.or(self.x)` in lib/collection/src/operations/config_diff.rs, 1.18.2).
-  def desired(version, _limits, false, _deployment) do
+  def desired(version, _limits, false, deployment) do
     case supported_guards(version, @off_limits) do
-      [] -> @storage
-      guards -> Map.put(@storage, "strict_mode_config", Map.new(guards))
+      [] ->
+        @storage
+
+      guards ->
+        Map.put(@storage, "strict_mode_config", Map.merge(lifted(deployment), Map.new(guards)))
     end
   end
 
@@ -142,6 +151,9 @@ defmodule Engram.Vector.QdrantLayout do
         Map.put(@storage, "strict_mode_config", strict)
     end
   end
+
+  defp lifted(:cloud), do: @lifted_limits
+  defp lifted(:self_host), do: %{}
 
   defp supported_guards(version, limits) do
     kinds = guard_kinds(version)

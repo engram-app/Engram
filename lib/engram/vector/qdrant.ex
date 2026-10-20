@@ -13,9 +13,10 @@ defmodule Engram.Vector.Qdrant do
     reconcile and the 60s poller's strict-mode sync).
   - QDRANT_RECONCILE_ON_DISK: false = skip only the on-disk group.
   - QDRANT_STRICT_MODE: false = the reconcile sets our two strict-mode
-    guards (`max_disk_usage_percent`, `max_resident_memory_percent`) to 100;
-    `enabled` and every other strict field (Qdrant Cloud's unindexed-filter
-    guard) are left as they are.
+    guards (`max_disk_usage_percent`, `max_resident_memory_percent`) to 100
+    and, on Qdrant Cloud, every hard limit we set (`QdrantLayout.desired_strict/1`,
+    plus both byte breakers) to a ceiling no request reaches. `enabled` and
+    Qdrant Cloud's own unindexed-filter guard are left as they are.
   - QDRANT_BACKPRESSURE_PREFLIGHT: false = EmbedNote never pauses for pressure.
   """
 
@@ -810,7 +811,14 @@ defmodule Engram.Vector.Qdrant do
   # lib/collection/src/operations/verification/mod.rs. Searches and deletes
   # are never refused (delete ops are not "disk/memory-consuming"); deletes
   # map it anyway so a future Qdrant that does refuse them is handled alike.
-  @backpressure ~r/(Disk usage|Resident memory usage) is at \d+% of total/
+  #
+  # Every other strict-mode refusal of a write is backpressure too: the
+  # breakers (`max_points_count`, the byte sizes; `check_collection_size_limit`
+  # in verification/update.rs) and the request-shape limits. A plain error
+  # makes EmbedNote retry, re-embedding (and re-paying Voyage) only to be
+  # refused again; backpressure snoozes with the vectors retained. Strings
+  # captured from 1.19.2 (qdrant_backpressure_test).
+  @backpressure ~r/(Disk usage|Resident memory usage) is at \d+% of total|Max points count limit of \d+ reached|Max (vector|payload) storage size limit of [\d.]+MB reached|Limit exceeded \d+ > \d+ for |Condition size limit reached|Filter condition limit reached/
 
   # Qdrant 1.19+ node-wide quota (`/quotas`) refusing a write: HTTP 507, whose
   # only producer is StorageError::InsufficientStorage (src/actix/helpers.rs),

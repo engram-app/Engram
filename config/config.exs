@@ -76,12 +76,6 @@ config :engram, :embedder, Engram.Embedders.Voyage
 # Storage adapter — S3-compatible object storage (MinIO local, AWS S3 prod).
 config :engram, :storage, Engram.Storage.S3
 
-# Prod `engram_notes` sizes from GET /collections/{c}/memory, 2026-10-19
-# (payload 1.36 GB; dense 2.42 GB + sparse 0.86 GB of vector storage). On
-# Qdrant Cloud the strict-mode byte breakers sit at 3x these
-# (`QdrantLayout.desired_strict/1`). Self-host ignores them.
-config :engram, :qdrant_measured_bytes, payload: 1_355_000_000, vector: 3_280_000_000
-
 # Oban job queue (per-env overrides in dev/test/prod configs)
 config :engram, Oban,
   # Sanitizes a failed job's stored error; see the module doc.

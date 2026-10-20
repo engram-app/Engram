@@ -86,6 +86,27 @@ defmodule Engram.Vector.QdrantBackpressureTest do
       assert {:error, :qdrant_backpressure} = Qdrant.update_vectors("c1", [@point])
     end
 
+    # Captured from Qdrant 1.19.2 (10.0.20.201, 2026-10-19) with strict
+    # limits set to trip: the breakers and the request-shape limits. Every
+    # strict-mode refusal is backpressure: a retry re-embeds (and re-pays
+    # Voyage) only to be refused again.
+    @strict_refusals [
+      "Bad request: Max points count limit of 2 reached!",
+      "Bad request: Max vector storage size limit of 0.000009536743MB reached!",
+      "Bad request: Max payload storage size limit of 0.000009536743MB reached!",
+      ~S|Bad request: Limit exceeded 4 > 3 for "upsert limit". Help: Reduce the "upsert limit" parameter to or below 3.|,
+      "Bad request: Condition size limit reached (3 > 2). Help: Reduce the size of your condition.",
+      "Bad request: Filter condition limit reached (3 > 2). Help: Reduce the amount of conditions of your filter."
+    ]
+
+    test "every strict-mode breaker and limit refusal is :qdrant_backpressure", %{bypass: bypass} do
+      for message <- @strict_refusals do
+        body = Jason.encode!(%{status: %{error: message}, time: 0.0001})
+        Bypass.expect_once(bypass, "PUT", "/collections/c1/points", &respond(&1, 400, body))
+        assert {:error, :qdrant_backpressure} = Qdrant.upsert_points("c1", [@point]), message
+      end
+    end
+
     test "any other 400 stays a plain error", %{bypass: bypass} do
       body = ~s({"status":{"error":"Bad request: Wrong input: Vector dimension error"}})
       Bypass.expect_once(bypass, "PUT", "/collections/c1/points", &respond(&1, 400, body))
