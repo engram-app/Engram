@@ -424,13 +424,14 @@ config :engram, :hmac_key_user_id, "dev-hmac-key-do-not-use-in-prod"
 # away. Throwaway default for dev/test; prod overrides via runtime.exs.
 config :engram, :hmac_key_analytics_id, "dev-analytics-key-do-not-use-in-prod"
 
-# Sentry PII scrubber. Compile-time so it applies wherever Sentry captures,
+# Sentry before_send: drops client-side request failures, then scrubs PII
+# (Engram.Sentry.EventFilter). Compile-time so it applies wherever Sentry captures,
 # including the no-DSN dev/test case if a future test exercises a Sentry stub.
 # DSN, release tag, environment_name, and source-context flags live in
 # runtime.exs (gated on SENTRY_DSN).
 config :sentry,
   context_lines: 5,
-  before_send: {Engram.Sentry.Scrubber, :scrub},
+  before_send: {Engram.Sentry.EventFilter, :before_send},
   client: Engram.Observability.SentryFinchClient
 
 # OpenTelemetry tracing is off by default. runtime.exs flips the
