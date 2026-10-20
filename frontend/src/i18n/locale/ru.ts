@@ -1392,6 +1392,7 @@ export default {
 	"Upgrade required": "Требуется обновление подписки",
 	"Executable files don't sync.": "Исполняемые файлы не синхронизируются.",
 	"Upload failed. Try again.": "Ошибка при отправке. Попробуйте еще раз.",
+	"{name}: {reason}": "{name}: {reason}",
 	"No backlinks yet": "Обратных ссылок пока нет",
 	"Failed to load notes.": "Не удалось загрузить заметки.",
 	"No notes in this folder.": "В этой папке нет заметок.",

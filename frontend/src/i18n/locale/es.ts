@@ -1339,6 +1339,7 @@ export default {
 	"Upgrade required": "Se requiere una actualización",
 	"Executable files don't sync.": "Los archivos ejecutables no se sincronizan.",
 	"Upload failed. Try again.": "Error al subir. Inténtalo de nuevo.",
+	"{name}: {reason}": "{name}: {reason}",
 	"No backlinks yet": "Aún no hay enlaces entrantes",
 	"Failed to load notes.": "No se pudieron cargar las notas.",
 	"No notes in this folder.": "No hay notas en esta carpeta.",

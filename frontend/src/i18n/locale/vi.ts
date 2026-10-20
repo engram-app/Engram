@@ -1275,6 +1275,7 @@ export default {
 	"Upgrade required": "Cần nâng cấp",
 	"Executable files don't sync.": "Các tệp thực thi không được đồng bộ hóa.",
 	"Upload failed. Try again.": "Tải lên thất bại. Thử lại.",
+	"{name}: {reason}": "{name}: {reason}",
 	"No backlinks yet": "Chưa có liên kết đến",
 	"Failed to load notes.": "Không thể tải ghi chú.",
 	"No notes in this folder.": "Không có ghi chú nào trong thư mục này.",

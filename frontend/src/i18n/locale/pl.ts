@@ -1374,6 +1374,7 @@ export default {
 	"Upgrade required": "Wymagane uaktualnienie",
 	"Executable files don't sync.": "Pliki wykonywalne nie są synchronizowane.",
 	"Upload failed. Try again.": "Wgranie nie powiodło się. Spróbuj ponownie.",
+	"{name}: {reason}": "{name}: {reason}",
 	"No backlinks yet": "Brak linków zwrotnych",
 	"Failed to load notes.": "Nie udało się załadować notatek.",
 	"No notes in this folder.": "Brak notatek w tym folderze.",

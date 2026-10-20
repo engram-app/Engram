@@ -1332,6 +1332,7 @@ export default {
 	"Upgrade required": "Upgrade necessário",
 	"Executable files don't sync.": "Arquivos executáveis não são sincronizados.",
 	"Upload failed. Try again.": "Envio falhou. Tente novamente.",
+	"{name}: {reason}": "{name}: {reason}",
 	"No backlinks yet": "Ainda não há links inversos",
 	"Failed to load notes.": "Falha ao carregar as notas.",
 	"No notes in this folder.": "Não há notas nesta pasta.",

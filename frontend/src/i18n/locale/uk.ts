@@ -1385,6 +1385,7 @@ export default {
 	"Upgrade required": "Потрібне оновлення",
 	"Executable files don't sync.": "Виконані файли не синхронізуються.",
 	"Upload failed. Try again.": "Помилка завантаження. Спробуйте ще раз.",
+	"{name}: {reason}": "{name}: {reason}",
 	"No backlinks yet": "Поки немає зворотних посилань",
 	"Failed to load notes.": "Не вдалося завантажити заміток.",
 	"No notes in this folder.": "У цій папці немає заміток.",

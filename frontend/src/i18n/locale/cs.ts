@@ -1370,6 +1370,7 @@ export default {
 	"Upgrade required": "Je vyžadována aktualizace",
 	"Executable files don't sync.": "Spustitelné soubory se nesynchronizují.",
 	"Upload failed. Try again.": "Nahrání selhalo. Zkuste to znovu.",
+	"{name}: {reason}": "{name}: {reason}",
 	"No backlinks yet": "Zatím žádné zpětné odkazy",
 	"Failed to load notes.": "Nepodařilo se načíst poznámky.",
 	"No notes in this folder.": "V této složce nejsou žádné poznámky.",

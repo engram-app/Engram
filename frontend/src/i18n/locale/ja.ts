@@ -1277,6 +1277,7 @@ export default {
 	"Upgrade required": "アップグレードが必要です",
 	"Executable files don't sync.": "実行ファイルは同期されません。",
 	"Upload failed. Try again.": "アップロードに失敗しました。再試行してください。",
+	"{name}: {reason}": "{name}: {reason}",
 	"No backlinks yet": "まだバックリンクはありません",
 	"Failed to load notes.": "ノートの読み込みに失敗しました。",
 	"No notes in this folder.": "このフォルダにはノートがありません。",

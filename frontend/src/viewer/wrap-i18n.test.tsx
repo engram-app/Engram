@@ -52,7 +52,9 @@ test("uploadFilesTo reports a failure through the translate function it is given
 	toastError.mockReset();
 	const upload = vi.fn().mockRejectedValue(new Error("boom"));
 	const t = (en: string, vars?: Record<string, string | number>) =>
-		untranslated(`[${en.replace("{name}", String(vars?.name))}]`);
+		untranslated(
+			`[${en.replace("{name}", String(vars?.name)).replace("{reason}", String(vars?.reason))}]`,
+		);
 	await uploadFilesTo({
 		upload,
 		existing: [],
@@ -60,7 +62,7 @@ test("uploadFilesTo reports a failure through the translate function it is given
 		folder: "",
 		t,
 	});
-	expect(toastError).toHaveBeenCalledWith("[Upload failed. Try again.]");
+	expect(toastError).toHaveBeenCalledWith("[a.png: [Upload failed. Try again.]]");
 });
 
 test("the translator facet defaults to English and carries the editor's translate function", () => {

@@ -1338,6 +1338,7 @@ export default {
 	"Upgrade required": "Mise à niveau requise",
 	"Executable files don't sync.": "Les fichiers exécutables ne sont pas synchronisés.",
 	"Upload failed. Try again.": "Échec du chargement. Réessaie.",
+	"{name}: {reason}": "{name}: {reason}",
 	"No backlinks yet": "Pas de rétroliens pour le moment",
 	"Failed to load notes.": "Échec du chargement des notes.",
 	"No notes in this folder.": "Aucune note dans ce dossier.",

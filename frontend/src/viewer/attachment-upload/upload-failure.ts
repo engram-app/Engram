@@ -2,6 +2,12 @@ import { ApiError, LimitExceededError } from "@/api/client";
 import type { Translate } from "@/i18n/translate";
 import type { UIText } from "@/i18n/ui-text";
 
+// instanceof can fail across module copies (tests, HMR), so fall back to the name.
+const isLimit = (err: unknown): err is LimitExceededError =>
+	err instanceof LimitExceededError || (err instanceof Error && err.name === "LimitExceededError");
+const isApi = (err: unknown): err is ApiError =>
+	err instanceof ApiError || (err instanceof Error && err.name === "ApiError");
+
 export interface UploadFailure {
 	text: UIText;
 	/** Set when raising the plan fixes it: the reason the upgrade dialog explains. */
@@ -9,12 +15,6 @@ export interface UploadFailure {
 	/** True when sending the same file again can work. */
 	retry?: boolean;
 }
-
-// instanceof can fail across module copies (tests, HMR), so fall back to the name.
-const isLimit = (err: unknown): err is LimitExceededError =>
-	err instanceof LimitExceededError || (err instanceof Error && err.name === "LimitExceededError");
-const isApi = (err: unknown): err is ApiError =>
-	err instanceof ApiError || (err instanceof Error && err.name === "ApiError");
 
 /** The one mapping from an upload error to what the user is told and offered. */
 export function uploadFailure(err: unknown, t: Translate): UploadFailure {

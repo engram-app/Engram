@@ -1284,6 +1284,7 @@ export default {
 	"Upgrade required": "Yükseltme gerekiyor",
 	"Executable files don't sync.": "Çalıştırılabilir dosyalar senkronize edilmiyor.",
 	"Upload failed. Try again.": "Yükleme başarısız oldu. Lütfen tekrar deneyin.",
+	"{name}: {reason}": "{name}: {reason}",
 	"No backlinks yet": "Henüz geri bağlantı yok",
 	"Failed to load notes.": "Notlar yüklenemedi.",
 	"No notes in this folder.": "Bu klasörde not yok.",

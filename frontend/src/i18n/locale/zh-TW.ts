@@ -1220,6 +1220,7 @@ export default {
 	"Upgrade required": "需要升級",
 	"Executable files don't sync.": "可執行檔案不會同步。",
 	"Upload failed. Try again.": "上傳失敗。請重試。",
+	"{name}: {reason}": "{name}: {reason}",
 	"No backlinks yet": "尚未有反向連結",
 	"Failed to load notes.": "載入筆記失敗。",
 	"No notes in this folder.": "此資料夾沒有筆記。",

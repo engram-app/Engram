@@ -64,7 +64,9 @@ export async function uploadFilesTo(opts: {
 			done.push(path);
 		} catch (err) {
 			if (!(err instanceof LimitExceededError)) {
-				notify.error(uploadFailure(err, t).text);
+				notify.error(
+					t("{name}: {reason}", { name: file.name, reason: uploadFailure(err, t).text }),
+				);
 			}
 		}
 	}

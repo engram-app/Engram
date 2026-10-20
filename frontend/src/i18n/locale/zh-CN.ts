@@ -1217,6 +1217,7 @@ export default {
 	"Upgrade required": "需升级",
 	"Executable files don't sync.": "可执行文件不进行同步。",
 	"Upload failed. Try again.": "上传失败。请重试。",
+	"{name}: {reason}": "{name}: {reason}",
 	"No backlinks yet": "暂无反向链接",
 	"Failed to load notes.": "加载笔记失败。",
 	"No notes in this folder.": "此文件夹中没有笔记。",

@@ -1278,6 +1278,7 @@ export default {
 	"Upgrade required": "Peningkatan diperlukan",
 	"Executable files don't sync.": "Fail boleh laksana tidak akan disegerakkan.",
 	"Upload failed. Try again.": "Muat naik gagal. Cuba lagi.",
+	"{name}: {reason}": "{name}: {reason}",
 	"No backlinks yet": "Tiada pautan balik setakat ini",
 	"Failed to load notes.": "Gagal memuat nota.",
 	"No notes in this folder.": "Tiada nota dalam folder ini.",

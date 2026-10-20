@@ -62,19 +62,19 @@ test("one failure toasts and the rest still upload; a plan limit does not toast"
 	});
 	expect(done).toEqual(["c.png"]);
 	expect(toastError).toHaveBeenCalledTimes(1);
-	expect(toastError).toHaveBeenCalledWith("Upload failed. Try again.");
+	expect(toastError).toHaveBeenCalledWith("a.png: Upload failed. Try again.");
 });
 
 test("a dropped executable toasts that executables don't sync", async () => {
 	const upload = vi.fn().mockRejectedValue(new ApiError(415, "extension_not_allowed"));
 	await uploadFilesTo({ upload, existing: [], files: [f("a.exe")], folder: "", t: englishT });
-	expect(toastError).toHaveBeenCalledWith("Executable files don't sync.");
+	expect(toastError).toHaveBeenCalledWith("a.exe: Executable files don't sync.");
 });
 
 test("a network failure toasts Upload failed. Try again.", async () => {
 	const upload = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
 	await uploadFilesTo({ upload, existing: [], files: [f("a.png")], folder: "", t: englishT });
-	expect(toastError).toHaveBeenCalledWith("Upload failed. Try again.");
+	expect(toastError).toHaveBeenCalledWith("a.png: Upload failed. Try again.");
 });
 
 test("a second drop of the same name inside the refetch window does not overwrite the first", async () => {

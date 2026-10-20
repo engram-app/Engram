@@ -1257,6 +1257,7 @@ export default {
 	"Upgrade required": "업그레이드가 필요합니다",
 	"Executable files don't sync.": "실행 파일은 동기화되지 않습니다.",
 	"Upload failed. Try again.": "업로드 실패. 다시 시도하세요.",
+	"{name}: {reason}": "{name}: {reason}",
 	"No backlinks yet": "아직 백링크가 없습니다",
 	"Failed to load notes.": "노트 불러오기 실패.",
 	"No notes in this folder.": "이 폴더에 노트가 없습니다.",
