@@ -75,7 +75,8 @@ defmodule Engram.Indexing do
     * `:release_tokens` — `fn tokens -> any end`, called when the embed call
       fails after a reservation, so a failed attempt is not charged.
     * `:in_commit`: `fn chunk_count, dense? -> any end` (or
-      `fn chunk_count, dense?, deferred_tokens -> any end`), run on success INSIDE
+      `fn chunk_count, dense?, deferred_tokens -> any end`, or with a 4th
+      argument, the first deferred chunk's tokens, nil when none), run on success INSIDE
       the tenant transaction that writes the chunk rows (or, on the no-chunks
       path, in one opened after the purge). `EmbedNote` stamps its
       hashes here, so the stamp shares the index write's transaction instead
@@ -118,7 +119,7 @@ defmodule Engram.Indexing do
             # keeps `dense_indexed_hash` nil and ReconcileEmbeddings re-selects
             # it every tick.
             with :ok <- purge_stale_index(note) do
-              run_in_commit(note, opts, 0, true, 0)
+              run_in_commit(note, opts, 0, true, {0, nil})
               {:ok, 0, 0, true}
             end
 
@@ -135,7 +136,11 @@ defmodule Engram.Indexing do
         # each attempt re-embedded the whole note (3-4 full paid passes).
         retain(prepared.retain)
 
-        commit = &run_in_commit(note, opts, &1, prepared.dense?, prepared.deferred_tokens)
+        commit =
+          &run_in_commit(note, opts, &1, prepared.dense?, {
+            prepared.deferred_tokens,
+            prepared.next_deferred_tokens
+          })
 
         case commit_index(prepared, commit) do
           {:ok, count} ->
@@ -214,6 +219,7 @@ defmodule Engram.Indexing do
          # note dense-missing, so it is parked and finished as tokens refill.
          |> Map.put(:dense?, dense? and deferred == 0)
          |> Map.put(:deferred_tokens, deferred)
+         |> Map.put(:next_deferred_tokens, Map.get(plan, :next_deferred_tokens))
          |> Map.put(:okf_healed?, okf_healed?)
          |> Map.put(:retain, if(dense?, do: retention(note, plan, texts, vectors)))}
       else
@@ -266,10 +272,13 @@ defmodule Engram.Indexing do
 
   # Re-entrant inside commit_index/2's chunk transaction; on the purge path it
   # opens one of its own.
-  defp run_in_commit(note, opts, chunk_count, dense?, deferred) do
+  defp run_in_commit(note, opts, chunk_count, dense?, {deferred, next}) do
     case Keyword.get(opts, :in_commit) do
       nil ->
         :ok
+
+      fun when is_function(fun, 4) ->
+        Repo.with_tenant!(note.user_id, fn -> fun.(chunk_count, dense?, deferred, next) end)
 
       fun when is_function(fun, 3) ->
         Repo.with_tenant!(note.user_id, fn -> fun.(chunk_count, dense?, deferred) end)
@@ -989,12 +998,19 @@ defmodule Engram.Indexing do
       |> text_bytes()
       |> UsageMeters.estimate_tokens()
 
+    next =
+      Enum.find_value(flagged, fn
+        %{keyword_only: true} = c -> UsageMeters.estimate_tokens(c.embed_text)
+        _ -> nil
+      end)
+
     full = dense_entry_indexes(plan)
 
     note
     |> plan_chunks(flagged, content_key, true)
     |> Map.merge(%{
       deferred_tokens: deferred,
+      next_deferred_tokens: next,
       retain_texts: embed_texts(plan),
       retain_mask: Enum.map(full, &MapSet.member?(fit, &1))
     })

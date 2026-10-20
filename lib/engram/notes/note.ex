@@ -58,10 +58,12 @@ defmodule Engram.Notes.Note do
     field :embed_retry_after, :utc_datetime_usec
     field :embed_budget_parked, :boolean
     # The Free embed-bucket queue (see `EmbedNote`): when a note was first
-    # parked (its FIFO position, kept across re-parks) and the tokens it still
-    # needs. ReconcileEmbeddings wakes the oldest notes whose need fits.
+    # parked (its queue position, kept across re-parks), the tokens it still
+    # needs, and its next deferred chunk's estimate (nil = unknown).
+    # ReconcileEmbeddings wakes, first fit by age, the notes whose need fits.
     field :embed_budget_parked_at, :utc_datetime_usec
     field :embed_budget_need, :integer
+    field :embed_budget_next, :integer
     # Crash-loop dead-man stamp, see Engram.Workers.EmbedNote.CrashGuard.
     field :embed_started_at, :utc_datetime_usec
     field :embed_started_by, :string

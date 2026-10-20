@@ -84,7 +84,7 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
 
   defp reload(note), do: Repo.get!(Note, note.id, skip_tenant_check: true)
 
-  defp park!(note, at, need) do
+  defp park!(note, at, need, next \\ nil) do
     Repo.update_all(
       from(n in Note, where: n.id == ^note.id),
       [
@@ -94,7 +94,8 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
           embed_retry_after: EmbedNote.parked_until_edited(),
           embed_budget_parked: true,
           embed_budget_parked_at: at,
-          embed_budget_need: need
+          embed_budget_need: need,
+          embed_budget_next: next
         ]
       ],
       skip_tenant_check: true
@@ -189,6 +190,8 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
       parked = reload(note)
       assert parked.embed_budget_parked == true
       assert_in_delta parked.embed_budget_need, 2 * one_chunk, one_chunk
+      # The next deferred chunk's estimate, for the wake guard.
+      assert_in_delta parked.embed_budget_next, one_chunk, div(one_chunk, 4)
     end
 
     test "a new non-prose chunk does not stop later prose from fitting",
@@ -268,6 +271,23 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
       [head_job] = all_enqueued(worker: EmbedNote, args: %{"note_id" => older.id})
       # The bucket refills ~0.2 tokens a second while the test runs.
       assert_in_delta head_job.args["budget_cap"], 600_000 - queued.embed_budget_need, 5
+    end
+
+    test "the oldest wakes alone only once the balance covers its next chunk",
+         %{user: user, vault: vault} do
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "A.md", content: "# A\n\nwords"})
+      park!(note, DateTime.utc_now(), 10_000, 600)
+
+      set_bucket(user.id, 500)
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert reload(note).embed_budget_parked == true
+      refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+
+      set_bucket(user.id, 600)
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert reload(note).embed_budget_parked == nil
+      [job] = all_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+      assert job.args["budget_cap"] in 600..601
     end
 
     test "the wake is a no-op on an empty bucket", %{user: user, vault: vault} do
@@ -352,31 +372,44 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
   end
 
   describe "ReconcileEmbeddings.fitting/2 (oldest first, first fit)" do
+    # Candidates are `{id, need, next_chunk}`, oldest first.
     test "the oldest note that fits wakes first" do
-      assert ReconcileEmbeddings.fitting([{:a, 100}, {:b, 50}, {:c, 50}], 120) == [{:a, nil}]
+      assert ReconcileEmbeddings.fitting([{:a, 100, nil}, {:b, 50, nil}, {:c, 50, nil}], 120) ==
+               [{:a, nil}]
     end
 
     test "a note that does not fit is skipped; smaller ones behind it wake" do
-      assert ReconcileEmbeddings.fitting([{:a, 50}, {:b, 900}, {:c, 40}, {:d, 30}], 100) ==
-               [{:a, nil}, {:c, nil}]
+      candidates = [{:a, 50, nil}, {:b, 900, nil}, {:c, 40, nil}, {:d, 30, nil}]
+      assert ReconcileEmbeddings.fitting(candidates, 100) == [{:a, nil}, {:c, nil}]
     end
 
     test "the oldest, skipped, still gets what is left, so it cannot starve" do
-      assert ReconcileEmbeddings.fitting([{:a, 700}, {:b, 100}, {:c, 600}], 600) ==
+      assert ReconcileEmbeddings.fitting([{:a, 700, 400}, {:b, 100, nil}, {:c, 600, nil}], 600) ==
                [{:a, 500}, {:b, nil}]
     end
 
+    test "the skipped oldest wakes only once what is left covers its next chunk" do
+      candidates = [{:a, 700, 300}, {:b, 100, nil}]
+      assert ReconcileEmbeddings.fitting(candidates, 399) == [{:b, nil}]
+      assert ReconcileEmbeddings.fitting(candidates, 400) == [{:a, 300}, {:b, nil}]
+    end
+
+    test "an unknown next chunk is taken as 512 tokens" do
+      assert ReconcileEmbeddings.fitting([{:a, 2_000, nil}], 511) == []
+      assert ReconcileEmbeddings.fitting([{:a, 2_000, nil}], 512) == [{:a, 512}]
+    end
+
     test "nothing wakes on an empty bucket, and nothing partial on a spent one" do
-      assert ReconcileEmbeddings.fitting([{:a, 700}], 0) == []
-      assert ReconcileEmbeddings.fitting([{:a, 700}, {:b, 100}], 100) == [{:b, nil}]
+      assert ReconcileEmbeddings.fitting([{:a, 700, nil}], 0) == []
+      assert ReconcileEmbeddings.fitting([{:a, 700, nil}, {:b, 100, nil}], 100) == [{:b, nil}]
     end
 
     test "a legacy park with no need recorded wakes once anything is left" do
-      assert ReconcileEmbeddings.fitting([{:a, nil}], 1) == [{:a, nil}]
+      assert ReconcileEmbeddings.fitting([{:a, nil, nil}], 1) == [{:a, nil}]
     end
 
     test "unmetered wakes everything" do
-      assert ReconcileEmbeddings.fitting([{:a, 700}, {:b, nil}], :unmetered) ==
+      assert ReconcileEmbeddings.fitting([{:a, 700, 5}, {:b, nil, nil}], :unmetered) ==
                [{:a, nil}, {:b, nil}]
     end
   end

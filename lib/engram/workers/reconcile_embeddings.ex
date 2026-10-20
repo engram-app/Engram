@@ -218,8 +218,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # whose recorded `embed_budget_need` fits what the bucket holds now, first
   # fit by age (`embed_budget_parked_at`): oldest first, and a note that does
   # not fit is skipped so smaller ones behind it still wake. The oldest note,
-  # if skipped, also wakes with whatever is left as its cap (`budget_cap`): it
-  # embeds what fits and parks the rest, so it cannot starve.
+  # if skipped, also wakes with whatever is left as its cap (`budget_cap`) once
+  # that covers its next chunk (`embed_budget_next`): it embeds what fits and
+  # parks the rest, so it cannot starve, and no pass runs to embed nothing.
   @wake_page 500
 
   defp wake_budget_parked(backoff_until) do
@@ -258,7 +259,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
             where: n.embed_budget_parked == true,
             order_by: [asc_nulls_last: n.embed_budget_parked_at, asc: n.id],
             limit: @wake_page,
-            select: {n.id, n.embed_budget_need}
+            select: {n.id, n.embed_budget_need, n.embed_budget_next}
           )
           |> Repo.all()
 
@@ -297,28 +298,33 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     end
   end
 
+  # A parked note's next chunk when its park did not record one.
+  @unknown_next_chunk 512
+
   @doc false
-  # `candidates` (`{id, need}`, oldest first) to wake as `{id, budget_cap}`:
-  # every one whose need fits what is left, first fit, cap nil; then the oldest,
-  # if it was skipped and anything is left, capped at that remainder.
+  # `candidates` (`{id, need, next_chunk}`, oldest first) to wake as
+  # `{id, budget_cap}`: every one whose need fits what is left, first fit, cap
+  # nil; then the oldest, if it was skipped and what is left covers its next
+  # chunk, capped at that remainder. Below that its pass would embed nothing.
   def fitting(candidates, :unmetered), do: Enum.map(candidates, &{elem(&1, 0), nil})
 
   def fitting([], _available), do: []
 
-  def fitting([{head, _} | _] = candidates, available) do
+  def fitting([{head, _, head_next} | _] = candidates, available) do
     # Parked by an older release, need unknown: wake it once anything is left;
     # its pass records the real need.
     {fits, left} =
-      Enum.reduce(candidates, {[], available}, fn {id, need}, {fits, left} ->
+      Enum.reduce(candidates, {[], available}, fn {id, need, _next}, {fits, left} ->
         need = need || 1
         if need <= left, do: {[{id, nil} | fits], left - need}, else: {fits, left}
       end)
 
     fits = Enum.reverse(fits)
 
-    if left > 0 and not List.keymember?(fits, head, 0),
-      do: [{head, left} | fits],
-      else: fits
+    if left > 0 and left >= (head_next || @unknown_next_chunk) and
+         not List.keymember?(fits, head, 0),
+       do: [{head, left} | fits],
+       else: fits
   end
 
   # The hour a day (04:00-04:59 UTC, twelve "2-59/5" ticks) that re-checks

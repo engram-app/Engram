@@ -527,19 +527,22 @@ defmodule Engram.Workers.EmbedNote do
   # bucket, oldest `embed_budget_parked_at` first), when it is edited, or when
   # the user upgrades (`embed_budget_parked` lets the sweep tell this park from
   # a poison cooldown).
-  defp budget_park_set(note, need) do
+  defp budget_park_set(note, need, next) do
     [
       embed_retry_after: parked_until_edited(),
       embed_budget_parked: true,
       embed_budget_need: need,
+      embed_budget_next: next,
       embed_budget_parked_at: note.embed_budget_parked_at || DateTime.utc_now()
     ]
   end
 
-  @queue_clear [embed_budget_parked: nil, embed_budget_need: nil, embed_budget_parked_at: nil]
-
-  defp budget_need({:budget, need}) when is_integer(need), do: need
-  defp budget_need(_park), do: 0
+  @queue_clear [
+    embed_budget_parked: nil,
+    embed_budget_need: nil,
+    embed_budget_next: nil,
+    embed_budget_parked_at: nil
+  ]
 
   # Tenant-scoped: `chunks` is under FORCE RLS, and a tenant-less read sees
   # zero rows, which would run (not park) every budget-spent note.
@@ -558,7 +561,7 @@ defmodule Engram.Workers.EmbedNote do
     {:ok, _} =
       Repo.with_tenant(note.user_id, fn ->
         Repo.update_all(from(n in Note, where: n.id == ^note.id),
-          set: budget_park_set(note, need)
+          set: budget_park_set(note, need, note.embed_budget_next)
         )
       end)
 
@@ -710,7 +713,7 @@ defmodule Engram.Workers.EmbedNote do
         # partial pass still needs.
         index_opts =
           budget ++
-            [in_commit: &stamp_embed_hash(note, &2, &1, {:budget, &3})]
+            [in_commit: &stamp_embed_hash(note, &2, &1, {:budget, &3, &4})]
 
         case Indexing.index_note_with_usage(decrypted_note, vault, user, index_opts) do
           {:ok, _count, _embedded_bytes, true} ->
@@ -882,8 +885,13 @@ defmodule Engram.Workers.EmbedNote do
           ] ++ @queue_clear
 
         true ->
-          [dense_indexed_hash: nil, embed_model: nil] ++
-            budget_park_set(note, budget_need(sparse_park))
+          {need, next} =
+            case sparse_park do
+              {:budget, need, next} when is_integer(need) -> {need, next}
+              _ -> {0, nil}
+            end
+
+          [dense_indexed_hash: nil, embed_model: nil] ++ budget_park_set(note, need, next)
       end
 
     # A full pass encodes the current keyword version too, so it stamps both.
