@@ -42,6 +42,11 @@ defmodule Engram.PromEx.Indexing do
       Sizes each embed-less lever. `drawing` stays 0 while drawing data is
       dropped; canvas and base are labelled from the note path.
 
+    * `engram_prom_ex_indexing_payload_reconcile_total`: notes handled by
+      `ReconcileNotePayloads`, tagged by `:outcome` (`checked | drifted |
+      rewritten | skipped_v5`). `rewritten / checked` is how much of the
+      collection the heal is rewriting; expected near zero outside a rotation.
+
   Cardinality contract: only `:outcome`/`:reason`/`:kind`/`:dense` (closed
   enums). NEVER add note_id, user_id, or vault_id.
   """
@@ -53,6 +58,7 @@ defmodule Engram.PromEx.Indexing do
   @stale_points_leaked_event [:engram, :indexing, :stale_points_leaked]
   @maintenance_embed_event [:engram, :embed, :maintenance]
   @points_written_event [:engram, :indexing, :points_written]
+  @payload_reconcile_event [:engram, :indexing, :payload_reconcile]
 
   @impl true
   def event_metrics(opts) do
@@ -110,6 +116,15 @@ defmodule Engram.PromEx.Indexing do
             "Qdrant points written by a commit (reused excluded), by chunk kind and " <>
               "whether the point carries a dense vector.",
           tags: [:kind, :dense]
+        ),
+        sum(
+          metric_prefix ++ [:payload_reconcile, :total],
+          event_name: @payload_reconcile_event,
+          measurement: :count,
+          description:
+            "Notes handled by ReconcileNotePayloads, by outcome (checked, drifted, " <>
+              "rewritten, skipped_v5).",
+          tags: [:outcome]
         )
       ]
     )

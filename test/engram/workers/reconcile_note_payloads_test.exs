@@ -55,9 +55,12 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
         note
       end
 
-    # Written before `payload_hash` existed.
+    # Written before `payload_hash` existed; keyword vectors current, as
+    # EmbedNote stamps them.
     {2, _} =
-      Repo.update_all(from(n in Note, where: n.user_id == ^user.id), [set: [payload_hash: nil]],
+      Repo.update_all(
+        from(n in Note, where: n.user_id == ^user.id),
+        [set: [payload_hash: nil, keyword_version: Engram.KeywordIndex.version()]],
         skip_tenant_check: true
       )
 

@@ -2,24 +2,32 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   @moduledoc """
   Heals Qdrant points whose note-level payload (the filter HMACs and dates,
   `Engram.Indexing.expected_note_payload/1`) no longer matches their note's
-  row, one user per chain. Run by the `NotePayloadStamps` data migration.
+  row, one user per chain. Run by the `NotePayloadStamps` data migration and
+  enqueued by every DEK rotation right after its flip.
 
-  The case it exists for: a DEK rotation before the rotation rewrote filter
-  HMACs. It rekeyed the rows but left every point on the old key, so a
-  type/tag/folder/path filter matched nothing, and nothing re-indexed.
+  The case it exists for: every filter HMAC derives from the DEK. A rotation
+  rekeys the rows, and the points follow here, outside the rotation (nothing
+  network-bound may sit before the rotation's flip). A rotation before this
+  worker existed left the points on the old key for good.
 
-  A note is checked while its `payload_hash` is NULL (written before the
-  column existed, or never stamped since). Its points are READ (payload keys
-  only); if every one already holds the expected payload the row is just
-  stamped, otherwise the payload is rewritten with `set_payload` (never an
-  upsert: vectors and text are untouched, no embedder call). Either way the
-  note is stamped and leaves the selection, so the chain converges. A note
-  whose points are all gone is stamped too: nothing here can repair a
-  missing point, and the next index re-creates it.
+  A note is checked while its `payload_hash` is NULL. Its points are READ
+  (payload keys only); if every one already holds the expected payload the
+  row is just stamped, otherwise the drifted ones are rewritten with
+  `set_payload` (never an upsert: vectors and text are untouched, no
+  embedder call) and its `keyword_version` is cleared, because the sparse
+  vectors are keyed on the same filter key. The stamp is a compare-and-set,
+  so a concurrent index wins. A note whose points are all gone is stamped
+  too: the next index re-creates them.
 
-  Rate-limited: one batch of 200 notes costs one scroll per 2048 points
-  plus a `set_payload` per drifted note, with a pause between batches, on the
-  single-slot `crdt_backfill` lane.
+  v3 points only. A v5 point (#2087's short-key layout) is skipped and its
+  note left unstamped; #2087 extends this heal to v5.
+
+  Rate-limited: one batch of 200 notes costs one scroll per 2048 points plus
+  a `set_payload` per drifted note, with a pause between batches, on the
+  single-slot `crdt_backfill` lane. Qdrant refusals and unapplied waits
+  snooze. Each hop logs its counts and emits
+  `[:engram, :indexing, :payload_reconcile]` per outcome
+  (`Engram.PromEx.Indexing`).
   """
   # One chain per user, as `BackfillLinkKeys`: `:executing` is not a unique
   # state, so a job can insert its own successor.
@@ -43,6 +51,8 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   require Logger
 
   @batch_size 200
+  @event [:engram, :indexing, :payload_reconcile]
+  @zero %{checked: 0, drifted: 0, rewritten: 0, skipped_v5: 0}
   @budget_ms 30_000
   # Between batches, so a large vault never saturates Qdrant.
   @pause_ms 200
@@ -55,8 +65,10 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     with %User{} = user <- Repo.get(User, user_id),
          :ok <- RotationGate.check_user(user) do
       deadline = System.monotonic_time(:millisecond) + @budget_ms
+      {result, counts} = heal(user_id, args["after"], deadline, @zero)
+      report(user_id, counts)
 
-      case heal(user_id, args["after"], deadline) do
+      case result do
         :done ->
           :ok
 
@@ -64,8 +76,8 @@ defmodule Engram.Workers.ReconcileNotePayloads do
           {:ok, _} = Oban.insert(new(%{"user_id" => user_id, "after" => after_id}))
           :ok
 
-        {:error, _} = err ->
-          err
+        other ->
+          other
       end
     else
       nil -> :ok
@@ -114,28 +126,47 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     |> MapSet.new()
   end
 
-  defp heal(user_id, after_id, deadline) do
+  defp heal(user_id, after_id, deadline, counts) do
     {notes, points} = batch(user_id, after_id)
 
     cond do
       notes == [] ->
-        :done
+        {:done, counts}
 
       System.monotonic_time(:millisecond) > deadline ->
-        {:more, after_id}
+        {{:more, after_id}, counts}
 
       true ->
-        with {:ok, stored} <- read_payloads(points |> Map.values() |> List.flatten()),
-             :ok <- heal_notes(notes, points, stored) do
+        with {:ok, stored} <- read_payloads(user_id, points |> Map.values() |> List.flatten()),
+             # Per batch, after the read and before any write: a rotation
+             # that started since would have its fresh keys overwritten.
+             :ok <- RotationGate.check(user_id),
+             {:ok, counts} <- heal_notes(notes, points, stored, counts) do
           if length(notes) < @batch_size do
-            :done
+            {:done, counts}
           else
             Process.sleep(@pause_ms)
-            heal(user_id, List.last(notes).id, deadline)
+            heal(user_id, List.last(notes).id, deadline, counts)
           end
+        else
+          {:error, reason, counts} -> {qdrant_answer(reason), counts}
+          {:error, reason} -> {qdrant_answer(reason), counts}
         end
     end
   end
+
+  # As every other Qdrant writer: refusal and an unapplied wait are snoozes,
+  # not attempts (five of those and the job is discarded into the same
+  # pressure).
+  defp qdrant_answer(:rotation_in_progress), do: {:snooze, 60}
+  defp qdrant_answer(:user_not_found), do: :ok
+  defp qdrant_answer(:qdrant_backpressure), do: Qdrant.backpressure_snooze(:refused)
+  defp qdrant_answer(:qdrant_wait_timeout), do: Qdrant.wait_timeout_snooze()
+
+  defp qdrant_answer({:qdrant_scroll, status, _body}) when status in [429, 503, 507],
+    do: Qdrant.backpressure_snooze(:refused)
+
+  defp qdrant_answer(reason), do: {:error, reason}
 
   defp batch(user_id, after_id) do
     query =
@@ -163,14 +194,14 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   end
 
   # `%{point_id => payload}` for the points that exist, payload keys only.
-  defp read_payloads(ids) do
+  defp read_payloads(user_id, ids) do
     keys = Indexing.expected_note_payload(%Note{}) |> Map.keys() |> Enum.map(&to_string/1)
 
     ids
     |> Enum.chunk_every(Qdrant.max_ids())
     |> Enum.reduce_while({:ok, %{}}, fn chunk, {:ok, acc} ->
       case Qdrant.scroll(Qdrant.collection_name(),
-             filter: %{must: [%{has_id: chunk}]},
+             filter: %{must: [%{has_id: chunk}, %{key: "user_id", match: %{value: user_id}}]},
              with_payload: keys,
              limit: length(chunk)
            ) do
@@ -183,37 +214,107 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     end)
   end
 
-  defp heal_notes(notes, points, stored) do
-    Enum.reduce_while(notes, :ok, fn note, :ok ->
+  defp heal_notes(notes, points, stored, counts) do
+    Enum.reduce_while(notes, {:ok, counts}, fn note, {:ok, counts} ->
       payload = Indexing.expected_note_payload(note)
       want = payload |> Jason.encode!() |> Jason.decode!()
       present = for id <- Map.get(points, note.id, []), Map.has_key?(stored, id), do: id
-      drifted = Enum.reject(present, &holds?(stored[&1], want))
+      counts = bump(counts, :checked)
 
-      result =
-        if drifted == [],
-          do: Indexing.stamp_note_payload_hash(note, payload),
-          else: Indexing.rewrite_note_payload(note, drifted)
-
-      case result do
-        :ok ->
-          {:cont, :ok}
-
-        {:error, reason} = err ->
-          Logger.warning(
-            "note payload reconcile: set_payload failed",
-            Metadata.with_category(:warning, :search,
-              user_id: note.user_id,
-              note_id: note.id,
-              reason_label: Metadata.safe_reason(reason)
-            )
-          )
-
-          {:halt, err}
+      if Enum.any?(present, &v5?(stored[&1])) do
+        # #2087's short-key layout. A v3 compare reads every such point as
+        # drifted and would merge v3 keys onto it, so it is left alone and
+        # unstamped: the v5 heal (#2087) compares and stamps those.
+        {:cont, {:ok, bump(counts, :skipped_v5)}}
+      else
+        drifted = Enum.reject(present, &holds?(stored[&1], want))
+        heal_note(note, payload, drifted, counts)
       end
     end)
   end
 
+  defp heal_note(note, payload, [], counts) do
+    stamp(note, payload, false)
+    {:cont, {:ok, counts}}
+  end
+
+  defp heal_note(note, payload, drifted, counts) do
+    counts = bump(counts, :drifted)
+
+    case Qdrant.set_payload(Qdrant.collection_name(), drifted, payload) do
+      :ok ->
+        # Drifted filter keys mean a rotation, so the sparse vectors (keyed
+        # on the same filter key) are stale too: the keyword sweep redoes them.
+        stamp(note, payload, true)
+        {:cont, {:ok, bump(counts, :rewritten)}}
+
+      {:error, reason} ->
+        Logger.warning(
+          "note payload reconcile: set_payload failed",
+          Metadata.with_category(:warning, :search,
+            user_id: note.user_id,
+            note_id: note.id,
+            reason_label: Metadata.safe_reason(reason)
+          )
+        )
+
+        {:halt, {:error, reason, counts}}
+    end
+  end
+
+  # Compare-and-set on every column the payload is built from, and on the
+  # stamp still being NULL: an index that committed since the read wrote (and
+  # stamped) its own payload, and stamping ours would vouch for HMACs the row
+  # no longer holds. A miss stays NULL for the next pass.
+  @payload_columns [
+    :vault_id,
+    :path_hmac,
+    :folder_hmac,
+    :tags_hmac,
+    :type_hmac,
+    :fm_timestamp,
+    :fm_created
+  ]
+
+  defp stamp(note, payload, drifted?) do
+    guard =
+      Enum.reduce(@payload_columns, dynamic([n], n.id == ^note.id and is_nil(n.payload_hash)), fn
+        col, acc ->
+          case Map.fetch!(note, col) do
+            nil -> dynamic([n], ^acc and is_nil(field(n, ^col)))
+            value -> dynamic([n], ^acc and field(n, ^col) == ^value)
+          end
+      end)
+
+    set = [payload_hash: Indexing.note_payload_hash(payload)]
+    set = if drifted?, do: [{:keyword_version, nil} | set], else: set
+
+    {:ok, {_, _}} =
+      Repo.with_tenant(note.user_id, fn ->
+        Repo.update_all(from(n in Note, where: ^guard), set: set)
+      end)
+
+    :ok
+  end
+
+  # A v3 point always carries `user_id` (`Indexing.expected_note_payload/1`);
+  # a v5 one carries `u` instead.
+  defp v5?(point), do: Map.has_key?(point, "u") or not Map.has_key?(point, "user_id")
+
   # A null and an absent key are the same to a filter.
   defp holds?(point, want), do: Enum.all?(want, fn {k, v} -> Map.get(point, k) == v end)
+
+  defp bump(counts, key), do: Map.update!(counts, key, &(&1 + 1))
+
+  # One line per hop, and a counter per outcome, so a deploy can tell a heal
+  # that verifies from one that rewrites the collection.
+  defp report(user_id, counts) do
+    for {outcome, n} <- counts,
+        do: :telemetry.execute(@event, %{count: n}, %{outcome: outcome})
+
+    Logger.info(
+      "note payload reconcile hop",
+      Metadata.with_category(:info, :oban, [user_id: user_id] ++ Map.to_list(counts))
+    )
+  end
 end
