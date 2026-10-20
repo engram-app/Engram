@@ -66,9 +66,13 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
 
   # One user's points in BOTH formats during the pass (legacy `user_id`, v5
   # `u`), more of them than full_scan_threshold, so Qdrant searches the HNSW
-  # graph rather than scanning the payload index. With the global graph
-  # (m 16) the tenant filter's `should` over both formats must find exactly
-  # what an exact search finds.
+  # graph rather than scanning the payload index.
+  #
+  # HNSW is approximate, so this asserts recall@20 against an exact search,
+  # not equality. The bug it catches is the m 0 one: with no global graph a
+  # user split across formats is two disconnected subgraphs, and recall drops
+  # to about one format's share. The control builds exactly that and must
+  # fall below the bar, or the main assertion proves nothing.
   #
   # Thresholds are per segment and in KB of vectors (Qdrant default segment
   # count is the CPU count), so the vectors must be wide enough that each
@@ -76,17 +80,45 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
   # point, about 190 KB per segment on 8 segments, against 10 KB.
   @n 3000
   @wide 256
+  @k 20
+  @min_recall 0.9
+  @rounds 3
 
-  @tag timeout: 120_000
-  test "mixed-format tenant search over the graph equals exact search" do
+  @tag timeout: 300_000
+  test "mixed-format tenant search over the global graph keeps recall" do
+    for round <- 1..@rounds do
+      {recall, approx, exact} = graph_recall(round, %{})
+      IO.puts("tenant graph recall m16 round #{round}: #{recall}")
+
+      assert recall >= @min_recall,
+             "m 16 recall #{recall}: #{inspect(approx)} vs #{inspect(exact)}"
+
+      assert both_formats?(approx) and both_formats?(exact)
+    end
+  end
+
+  @tag timeout: 300_000
+  test "control: m 0 over two formats (two subgraphs) loses recall" do
+    for round <- 1..@rounds do
+      {recall, _approx, exact} = graph_recall(round, %{m: 0, payload_m: 16})
+      IO.puts("tenant graph recall m0 round #{round}: #{recall}")
+
+      assert both_formats?(exact)
+      assert recall < @min_recall, "m 0 kept recall #{recall}: the control no longer bites"
+    end
+  end
+
+  # A fresh collection per round, dropped right after, so CI's tmpfs holds
+  # one 3000-point collection at a time.
+  defp graph_recall(round, hnsw) do
     col = collection!("engram_tenant_graph", @wide)
 
     patch!(col, %{
-      hnsw_config: %{full_scan_threshold: 10},
+      hnsw_config: Map.merge(%{full_scan_threshold: 10}, hnsw),
       optimizers_config: %{indexing_threshold: 10}
     })
 
-    :rand.seed(:exsss, {1, 2, 3})
+    :rand.seed(:exsss, {round, 2, 3})
 
     @n
     |> points()
@@ -101,16 +133,18 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
     filter = Qdrant.build_tenant_filter(user_id: @user, vault_id: @vault)
     query = vector(@wide)
 
-    approx = top(col, query, filter, %{hnsw_ef: 128, quantization: %{ignore: true}})
+    approx = top(col, query, filter, %{hnsw_ef: 256, quantization: %{ignore: true}})
     exact = top(col, query, filter, %{exact: true, quantization: %{ignore: true}})
+    :ok = Qdrant.delete_collection(col)
 
-    assert length(exact) == 20
-    assert approx == exact
-
-    # Both formats are in the answer, or the test proves one subgraph only.
-    assert Enum.any?(exact, &(&1 <= div(@n, 2)))
-    assert Enum.any?(exact, &(&1 > div(@n, 2)))
+    assert length(exact) == @k
+    hits = MapSet.intersection(MapSet.new(approx), MapSet.new(exact)) |> MapSet.size()
+    {hits / @k, approx, exact}
   end
+
+  # Ids 1..n/2 are legacy points, the rest v5.
+  defp both_formats?(ids),
+    do: Enum.any?(ids, &(&1 <= div(@n, 2))) and Enum.any?(ids, &(&1 > div(@n, 2)))
 
   defp points(n) do
     for i <- 1..n do
@@ -128,7 +162,7 @@ defmodule Engram.Vector.QdrantTenantLayoutTest do
   defp top(col, query, filter, params) do
     {:ok, %{status: 200, body: %{"result" => %{"points" => hits}}}} =
       Req.post("#{qdrant_url()}/collections/#{col}/points/query",
-        json: %{query: query, using: "dense", filter: filter, limit: 20, params: params}
+        json: %{query: query, using: "dense", filter: filter, limit: @k, params: params}
       )
 
     Enum.map(hits, & &1["id"])
