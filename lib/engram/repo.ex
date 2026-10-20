@@ -266,6 +266,12 @@ defmodule Engram.Repo do
     result
   end
 
+  @tenant_enter "SELECT set_config('app.current_tenant', $1, true), " <>
+                  "set_config('role', 'engram_app', true)"
+  @tenant_enter_gated @tenant_enter <>
+                        ", (SELECT dek_rotation_locked_at IS NOT NULL " <>
+                        "FROM users WHERE id = $1::uuid)"
+
   defp tenant_transaction(uuid, fun) do
     # Decided before the transaction opens: inside it, in_transaction? is
     # always true.
@@ -292,13 +298,21 @@ defmodule Engram.Repo do
           # tenant + the engram_app role drop in a single round trip.
           # Superusers bypass RLS even with FORCE — the role drop scopes
           # enforcement to this transaction.
-          _ =
+          #
+          # Under `RotationGate.gated/1` the same statement also reads the
+          # user's DEK rotation lock (a primary-key probe), so a write learns
+          # of a lock taken on another node without a separate round trip.
+          # `users` carries no RLS, so the role drop does not hide the row.
+          gated? = Process.get(:engram_write_gate, false)
+
+          %{rows: [row]} =
             query!(
-              "SELECT set_config('app.current_tenant', $1, true), " <>
-                "set_config('role', 'engram_app', true)",
+              if(gated?, do: @tenant_enter_gated, else: @tenant_enter),
               [uuid],
               source: "tenant_enter"
             )
+
+          if gated? and List.last(row), do: raise(Engram.Crypto.RotationInProgress)
 
           result = fun.()
 
