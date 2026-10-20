@@ -17,9 +17,10 @@ defmodule Engram.Notes.FrontmatterDate do
 
   @spec parse(term(), :strict | :lenient) :: {integer(), Date.t()} | nil
   def parse(<<date::binary-size(10)>>, :lenient) do
-    with {:ok, d} <- Date.from_iso8601(date),
-         do: {DateTime.to_unix(DateTime.new!(d, ~T[00:00:00], "Etc/UTC")), d},
-         else: (_ -> nil)
+    case Date.from_iso8601(date) do
+      {:ok, d} -> {DateTime.to_unix(DateTime.new!(d, ~T[00:00:00], "Etc/UTC")), d}
+      {:error, _} -> nil
+    end
   end
 
   def parse(<<date::binary-size(10), sep, rest::binary>>, mode) when sep in [?T, ?\s] do

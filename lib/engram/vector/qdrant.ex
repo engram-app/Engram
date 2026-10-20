@@ -1804,14 +1804,15 @@ defmodule Engram.Vector.Qdrant do
   end
 
   # The payload keys `search_results/1` reads; nothing else is fetched.
-  # `u` only marks a v5 point (its AAD is implied bound, Task 15.7).
   @result_payload ~w(text title heading_path source_path tags vault_id text_nonce
-                     title_nonce heading_path_nonce aad_version u)
+                     title_nonce heading_path_nonce aad_version)
 
   defp retrieve(_col, [], _search_opts), do: {:ok, []}
 
   defp retrieve(col, ids, search_opts) do
-    body = maybe_with_vector(%{ids: ids, with_payload: @result_payload}, search_opts)
+    # `u` only marks a v5 point (its AAD is implied bound, Task 15.7).
+    keys = if v5_payload_format?(), do: @result_payload ++ ["u"], else: @result_payload
+    body = maybe_with_vector(%{ids: ids, with_payload: keys}, search_opts)
     do_query(col, "/points", [json: body] ++ req_opts(:search), &{:ok, search_results(&1)})
   end
 
