@@ -175,14 +175,20 @@ defmodule Engram.Logs do
   # Keyword list of the allowlisted context fields that hold their declared
   # shape. The keys come from the allowlist, never from input. String-keyed
   # off the wire, atom-keyed from internal callers, as `get/3` above.
+  # A generator, not `value = ...`: a bare match in a `for` is a FILTER, so a
+  # `false` value was silently dropped.
   defp bound_context(context) when is_map(context) do
     for {key, shape} <- @context_fields,
-        value = Map.get(context, Atom.to_string(key), Map.get(context, key)),
+        {:ok, value} <- [fetch_context(context, key)],
         context_value?(shape, value),
         do: {key, value}
   end
 
   defp bound_context(_context), do: []
+
+  defp fetch_context(context, key) do
+    with :error <- Map.fetch(context, Atom.to_string(key)), do: Map.fetch(context, key)
+  end
 
   defp context_value?(:boolean, value), do: is_boolean(value)
   defp context_value?({:integer, range}, value), do: is_integer(value) and value in range

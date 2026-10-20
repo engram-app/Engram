@@ -229,6 +229,13 @@ defmodule Engram.LogsReemitTest do
       end
     end
 
+    # `false` is a value, not an absence: an offline flag that is false is
+    # exactly as much signal as one that is true.
+    test "a false value survives" do
+      meta = reemit_context(%{"online" => false})
+      assert Map.fetch(meta, :online) == {:ok, false}
+    end
+
     test "a context that is not a map is ignored" do
       meta = reemit_context("browser=Chrome")
       refute Map.has_key?(meta, :browser)
