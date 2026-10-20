@@ -158,7 +158,7 @@ export default {
 		other: "Ücretsiz denemenize {count} gün kaldı.",
 	},
 	"Indexing budget": "İndeksleme kotası",
-	"{available} of {capacity} tokens left": "{available} adet, {capacity} adet belirteç kaldı",
+	"{available} of {capacity} tokens left": "{available} {capacity} adet belirteç kaldı",
 	"Refills {perDay} tokens a day. Full again on {date}.":
 		"Günde {perDay} token doldurur. {date} tarihinde tekrar dolacaktır.",
 	"All tokens are available.": "Tüm jetonlar kullanılabilir.",

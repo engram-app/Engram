@@ -154,7 +154,7 @@ export default {
 	Free: "無料",
 	"{count} days remaining in your free trial.": { other: "無料トライアルは残り{count}日です。" },
 	"Indexing budget": "インデックス作成の制限",
-	"{available} of {capacity} tokens left": "残り {available} トークン ({capacity} / {capacity})",
+	"{available} of {capacity} tokens left": "残り {available} / {capacity} トークン",
 	"Refills {perDay} tokens a day. Full again on {date}.":
 		"1日に{perDay}トークンを補充します。{date}に上限まで補充されます。",
 	"All tokens are available.": "すべてのトークンが利用可能です。",
