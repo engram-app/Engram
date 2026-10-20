@@ -151,11 +151,16 @@ export default {
 	Free: "무료",
 	"{count} days remaining in your free trial.": { other: "무료 체험은 {count}일 남았습니다." },
 	"Indexing budget": "인덱싱 용량",
-	"{available} of {capacity} tokens left": "{available} / {capacity} 토큰 남음",
-	"Refills {perDay} a day, full again on {date}": "매일 {perDay}회 충전, {date}일에 용량 꽉 참",
-	Full: "용량 꽉 참",
-	"New notes are searchable by keyword now and get full search as your budget refills.":
-		"새 노트는 키워드로 검색 가능하며, 용량이 채워지면 전체 검색 기능을 사용할 수 있습니다.",
+	"{available} of {capacity} tokens left": "{available} 토큰 남음 ({capacity} 토큰 중)",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"하루 {perDay} 토큰을 충전합니다. {date}에 다시 가득 찹니다.",
+	"All tokens are available.": "모든 토큰이 사용 가능합니다.",
+	"{count} notes have keyword search only, until {date}.": {
+		other: "{count} 노트는 {date}까지 키워드 검색만 지원합니다.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		other: "{count} 노트는 예산이 충전될 때까지 키워드 검색만 지원합니다.",
+	},
 	"Loading current connection…": "현재 연결 로딩 중…",
 	"Disconnected. Retry the new connection now.": "연결 해제됨. 지금 새로운 연결을 시도하세요.",
 	"Couldn't disconnect. Try Settings → Connections.":

@@ -1354,6 +1354,10 @@ export interface EmbedBucket {
 	refill_per_day: number;
 	/** ISO timestamp the bucket is full again; null when it already is. */
 	full_at: string | null;
+	/** Notes waiting on the bucket, searchable by keyword until they fit. */
+	parked_notes: number;
+	/** When every waiting note fits; null when they fit now or never refill. */
+	parked_ready_at: string | null;
 }
 
 export function useEmbedBucket() {

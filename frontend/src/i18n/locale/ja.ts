@@ -154,11 +154,16 @@ export default {
 	Free: "無料",
 	"{count} days remaining in your free trial.": { other: "無料トライアルは残り{count}日です。" },
 	"Indexing budget": "インデックス作成の制限",
-	"{available} of {capacity} tokens left": "残りトークン: {available} / {capacity}",
-	"Refills {perDay} a day, full again on {date}": "毎日 {perDay} トークンを補充、{date} に満杯",
-	Full: "満杯",
-	"New notes are searchable by keyword now and get full search as your budget refills.":
-		"新しいノートはキーワードで検索可能になり、制限が満杯になるとフル検索が利用可能になります。",
+	"{available} of {capacity} tokens left": "残り {available} トークン ({capacity} / {capacity})",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"1日に{perDay}トークンを補充します。{date}に上限まで補充されます。",
+	"All tokens are available.": "すべてのトークンが利用可能です。",
+	"{count} notes have keyword search only, until {date}.": {
+		other: "{count} ノートは、{date} までキーワード検索のみに対応します。",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		other: "{count} ノートは、予算が回復するまでキーワード検索のみが可能です。",
+	},
 	"Loading current connection…": "接続中です…",
 	"Disconnected. Retry the new connection now.": "接続解除されました。新しい接続を試してください。",
 	"Couldn't disconnect. Try Settings → Connections.":

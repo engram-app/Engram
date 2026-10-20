@@ -164,11 +164,21 @@ export default {
 	},
 	"Indexing budget": "Обсяг індексування",
 	"{available} of {capacity} tokens left": "Залишилося {available} з {capacity} токенів",
-	"Refills {perDay} a day, full again on {date}":
-		"Поповнення {perDay} на день, повне поповнення {date}",
-	Full: "Повно",
-	"New notes are searchable by keyword now and get full search as your budget refills.":
-		"Нові замітки тепер можна шукати за ключовими словами, і вони отримають повний пошук після поповнення вашого обсягу.",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Поповнює {perDay} токенів на день. Поповнення відбудеться знову {date}.",
+	"All tokens are available.": "Усі токени доступні.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} замітка має лише пошук за ключовими словами, до {date}.",
+		few: "{count} замітки мають лише пошук за ключовими словами, до {date}.",
+		many: "{count} заміток мають лише пошук за ключовими словами, до {date}.",
+		other: "{count} Замітки мають лише пошук за ключовими словами, до {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "{count} замітка має лише пошук за ключовими словами, поки не буде відновлено бюджет.",
+		few: "Для {count} заміток доступний лише пошук за ключовими словами, поки не буде відновлено бюджет.",
+		many: "{count} заміток мають лише пошук за ключовими словами, поки не буде відновлено бюджет.",
+		other: "{count} Замітки мають лише пошук за ключовими словами, поки не буде відновлено бюджет.",
+	},
 	"Loading current connection…": "Завантаження поточного з'єднання…",
 	"Disconnected. Retry the new connection now.": "Відключено. Спробуйте повторно підключитися.",
 	"Couldn't disconnect. Try Settings → Connections.":

@@ -166,10 +166,21 @@ export default {
 	},
 	"Indexing budget": "Лимит индексации",
 	"{available} of {capacity} tokens left": "Осталось {available} из {capacity} токенов",
-	"Refills {perDay} a day, full again on {date}": "Пополняется {perDay} в день, снова полон {date}",
-	Full: "Заполнено",
-	"New notes are searchable by keyword now and get full search as your budget refills.":
-		"Новые заметки теперь можно искать по ключевым словам, и они будут полностью доступны для поиска после пополнения вашего лимита.",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Пополняет {perDay} токенов в день. Пополнение до {date}.",
+	"All tokens are available.": "Все токены доступны.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} заметка поддерживает только поиск по ключевым словам, до {date}.",
+		few: "{count} заметки имеют только поиск по ключевым словам, до {date}.",
+		many: "{count} заметок имеют только поиск по ключевым словам, до {date}.",
+		other: "{count} Заметки поддерживают поиск по ключевым словам, но только до {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "{count} заметка поддерживает только поиск по ключевым словам, пока не будет пополнен лимит.",
+		few: "Для {count} заметок доступен только поиск по ключевым словам, пока не будет пополнен лимит.",
+		many: "{count} заметок доступны только для поиска по ключевым словам, пока не будет пополнен лимит.",
+		other: "{count}: Поиск по ключевым словам доступен только до пополнения бюджета.",
+	},
 	"Loading current connection…": "Загрузка текущего подключения…",
 	"Disconnected. Retry the new connection now.": "Отключено. Повторите подключение.",
 	"Couldn't disconnect. Try Settings → Connections.":

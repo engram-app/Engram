@@ -155,11 +155,15 @@ export default {
 	},
 	"Indexing budget": "Ngân sách lập chỉ mục",
 	"{available} of {capacity} tokens left": "Còn {available} trong số {capacity} token",
-	"Refills {perDay} a day, full again on {date}":
-		"Tái nạp {perDay} mỗi ngày, đầy lại vào ngày {date}",
-	Full: "Đầy",
-	"New notes are searchable by keyword now and get full search as your budget refills.":
-		"Các ghi chú mới có thể tìm kiếm theo từ khóa và được tìm kiếm đầy đủ khi ngân sách của bạn được tái nạp.",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Tái nạp {perDay} token mỗi ngày. Đủ token lại vào lúc {date}.",
+	"All tokens are available.": "Tất cả mã thông báo đều khả dụng.",
+	"{count} notes have keyword search only, until {date}.": {
+		other: "{count} ghi chú chỉ hỗ trợ tìm kiếm theo từ khóa, cho đến {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		other: "{count} ghi chú chỉ có tìm kiếm theo từ khóa, cho đến khi tài khoản được nạp lại.",
+	},
 	"Loading current connection…": "Đang tải kết nối hiện tại…",
 	"Disconnected. Retry the new connection now.": "Đã ngắt kết nối. Thử kết nối mới ngay bây giờ.",
 	"Couldn't disconnect. Try Settings → Connections.":

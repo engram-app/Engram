@@ -2,11 +2,11 @@ import { useEmbedBucket } from "@/api/queries";
 import { useT } from "@/i18n/locale-provider";
 import { intlLocale } from "@/lib/intl-locale";
 
-// Free's indexing budget, shown so the limit is never invisible: what is left
-// and when it is full again. Renders nothing for a user with no bucket (paid,
+// Free's indexing budget, shown so the limit is never invisible: what is left,
+// when it is full again, and how many notes wait on it keyword-only. Renders nothing for a user with no bucket (paid,
 // self-host).
 export default function EmbedBucketRow() {
-	const { t, renderedLocale } = useT();
+	const { t, tn, renderedLocale } = useT();
 	const { data: bucket } = useEmbedBucket();
 	if (!bucket) {
 		return null;
@@ -24,17 +24,30 @@ export default function EmbedBucketRow() {
 				})}
 				<small className="block font-normal text-muted-foreground">
 					{bucket.full_at
-						? t("Refills {perDay} a day, full again on {date}", {
+						? t("Refills {perDay} tokens a day. Full again on {date}.", {
 								perDay: num.format(bucket.refill_per_day),
 								date: new Date(bucket.full_at).toLocaleDateString(localeTag),
 							})
-						: t("Full")}
+						: t("All tokens are available.")}
 				</small>
-				{bucket.available === 0 && (
+				{bucket.parked_notes > 0 && (
 					<small className="block font-normal text-muted-foreground">
-						{t(
-							"New notes are searchable by keyword now and get full search as your budget refills.",
-						)}
+						{bucket.parked_ready_at
+							? tn(
+									{
+										one: "{count} note has keyword search only, until {date}.",
+										other: "{count} notes have keyword search only, until {date}.",
+									},
+									bucket.parked_notes,
+									{ date: new Date(bucket.parked_ready_at).toLocaleDateString(localeTag) },
+								)
+							: tn(
+									{
+										one: "{count} note has keyword search only, until the budget refills.",
+										other: "{count} notes have keyword search only, until the budget refills.",
+									},
+									bucket.parked_notes,
+								)}
 					</small>
 				)}
 			</dd>

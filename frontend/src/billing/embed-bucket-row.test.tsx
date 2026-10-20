@@ -25,11 +25,13 @@ describe("EmbedBucketRow", () => {
 			capacity: 6_000_000,
 			refill_per_day: 16_438,
 			full_at: null,
+			parked_notes: 0,
+			parked_ready_at: null,
 		};
 		render(<EmbedBucketRow />);
 		expect(screen.getByText("Indexing budget")).toBeInTheDocument();
 		expect(screen.getByText(/6,000,000 of 6,000,000 tokens left/)).toBeInTheDocument();
-		expect(screen.getByText("Full")).toBeInTheDocument();
+		expect(screen.getByText("All tokens are available.")).toBeInTheDocument();
 	});
 
 	it("says how fast a spent bucket refills and when it is full", () => {
@@ -38,25 +40,40 @@ describe("EmbedBucketRow", () => {
 			capacity: 6_000_000,
 			refill_per_day: 16_438,
 			full_at: "2027-10-20T12:00:00Z",
+			parked_notes: 0,
+			parked_ready_at: null,
 		};
 		render(<EmbedBucketRow />);
 		expect(screen.getByText(/1,500 of 6,000,000 tokens left/)).toBeInTheDocument();
-		expect(screen.getByText(/Refills 16,438 a day, full again on/)).toBeInTheDocument();
-		expect(screen.queryByText(/searchable by keyword/)).toBeNull();
+		expect(screen.getByText(/Refills 16,438 tokens a day. Full again on/)).toBeInTheDocument();
+		expect(screen.queryByText(/keyword search only/)).toBeNull();
 	});
 
-	it("explains what an empty bucket means, so nothing stops silently", () => {
+	it("names the waiting notes and when they get full search, at any balance", () => {
+		state.bucket = {
+			available: 1500,
+			capacity: 6_000_000,
+			refill_per_day: 16_438,
+			full_at: "2027-10-20T12:00:00Z",
+			parked_notes: 3,
+			parked_ready_at: "2026-11-02T12:00:00Z",
+		};
+		render(<EmbedBucketRow />);
+		expect(screen.getByText(/3 notes have keyword search only, until/)).toBeInTheDocument();
+	});
+
+	it("uses the singular for one waiting note", () => {
 		state.bucket = {
 			available: 0,
 			capacity: 6_000_000,
 			refill_per_day: 16_438,
 			full_at: "2027-10-20T12:00:00Z",
+			parked_notes: 1,
+			parked_ready_at: null,
 		};
 		render(<EmbedBucketRow />);
 		expect(
-			screen.getByText(
-				"New notes are searchable by keyword now and get full search as your budget refills.",
-			),
+			screen.getByText("1 note has keyword search only, until the budget refills."),
 		).toBeInTheDocument();
 	});
 });

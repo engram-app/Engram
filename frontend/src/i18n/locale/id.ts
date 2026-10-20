@@ -157,13 +157,18 @@ export default {
 	"{count} days remaining in your free trial.": {
 		other: "Sisa {count} hari dalam uji coba gratis Anda.",
 	},
-	"Indexing budget": "Kuota indeks",
+	"Indexing budget": "Kuota pengindeksan",
 	"{available} of {capacity} tokens left": "Tersisa {available} dari {capacity} token",
-	"Refills {perDay} a day, full again on {date}":
-		"Diisi ulang {perDay} per hari, penuh kembali pada {date}",
-	Full: "Penuh",
-	"New notes are searchable by keyword now and get full search as your budget refills.":
-		"Catatan baru sekarang dapat dicari berdasarkan kata kunci dan mendapatkan pencarian lengkap saat kuota Anda terisi ulang.",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Mengisi ulang {perDay} token per hari. Penuh kembali pada {date}.",
+	"All tokens are available.": "Semua token tersedia.",
+	"{count} notes have keyword search only, until {date}.": {
+		other: "{count} catatan hanya memiliki pencarian berdasarkan kata kunci, hingga {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		other:
+			"{count} catatan hanya memiliki pencarian berdasarkan kata kunci, sampai anggaran terisi kembali.",
+	},
 	"Loading current connection…": "Memuat koneksi saat ini…",
 	"Disconnected. Retry the new connection now.": "Terputus. Coba sambungkan kembali sekarang.",
 	"Couldn't disconnect. Try Settings → Connections.": "Gagal terputus. Coba Pengaturan → Koneksi.",

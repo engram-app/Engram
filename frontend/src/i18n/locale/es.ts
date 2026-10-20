@@ -161,13 +161,21 @@ export default {
 		many: "Te quedan {count} días en tu prueba gratuita.",
 		other: "Quedan {count} días en tu prueba gratuita.",
 	},
-	"Indexing budget": "Límite de indexación",
+	"Indexing budget": "Presupuesto de indexación",
 	"{available} of {capacity} tokens left": "Te quedan {available} de {capacity} tokens",
-	"Refills {perDay} a day, full again on {date}":
-		"Se recargan {perDay} al día, y se llenan de nuevo el {date}",
-	Full: "Lleno",
-	"New notes are searchable by keyword now and get full search as your budget refills.":
-		"Las nuevas notas ahora se pueden buscar por palabra clave y obtienen una búsqueda completa cuando se recarga tu límite.",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Recarga {perDay} tokens al día. Se recarga completamente el {date}.",
+	"All tokens are available.": "Todos los tokens están disponibles.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} nota tiene búsqueda por palabras clave solo, hasta {date}.",
+		many: "{count} notas tienen solo búsqueda por palabra clave, hasta {date}.",
+		other: "{count} notas tienen solo búsqueda por palabra clave, hasta {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "{count} nota tiene búsqueda por palabras clave, hasta que se recargue el crédito.",
+		many: "{count} notas tienen solo búsqueda por palabra clave, hasta que se recargue el presupuesto.",
+		other: "{count} notas tienen búsqueda por palabra clave, hasta que se recargue el crédito.",
+	},
 	"Loading current connection…": "Cargando la conexión actual…",
 	"Disconnected. Retry the new connection now.": "Desconectado. Intenta conectar de nuevo.",
 	"Couldn't disconnect. Try Settings → Connections.":
