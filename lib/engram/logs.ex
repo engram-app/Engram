@@ -356,21 +356,46 @@ defmodule Engram.Logs do
   # Identical lines of one batch (a refused frame retried per flush) as one
   # `{first, count}`, in first-seen order. Everything that ends up in the line
   # or its metadata is part of the key, so collapsing never merges two lines
-  # that would have read differently.
+  # that would have read differently, except `elapsed_ms`: it differs on every
+  # network_error, so keying on it never collapsed a burst. A collapsed line
+  # carries the range instead (`elapsed_ms` = slowest, `elapsed_ms_min` =
+  # fastest), which still tells a run of fast failures from one stall.
   defp collapse_repeats(items) do
-    {order, counts} =
-      Enum.reduce(items, {[], %{}}, fn {e, ship?} = item, {order, counts} ->
+    {order, groups} =
+      Enum.reduce(items, {[], %{}}, fn {e, ship?} = item, {order, groups} ->
         key =
           {e.level, e.category, e.message, ship?, e.forced, e.conn_id, e.device_id, e.platform,
-           e.context}
+           Keyword.delete(e.context, :elapsed_ms)}
 
-        case counts do
-          %{^key => {first, n}} -> {order, Map.put(counts, key, {first, n + 1})}
-          _ -> {[key | order], Map.put(counts, key, {item, 1})}
+        case groups do
+          %{^key => {first, elapsed}} ->
+            {order, Map.put(groups, key, {first, [e.context[:elapsed_ms] | elapsed]})}
+
+          _ ->
+            {[key | order], Map.put(groups, key, {item, [e.context[:elapsed_ms]]})}
         end
       end)
 
-    order |> Enum.reverse() |> Enum.map(&Map.fetch!(counts, &1))
+    order
+    |> Enum.reverse()
+    |> Enum.map(fn key ->
+      {{first, ship?}, elapsed} = Map.fetch!(groups, key)
+      {{%{first | context: elapsed_range(first.context, elapsed)}, ship?}, length(elapsed)}
+    end)
+  end
+
+  defp elapsed_range(context, [_one]), do: context
+
+  defp elapsed_range(context, elapsed) do
+    case Enum.reject(elapsed, &is_nil/1) do
+      [] ->
+        context
+
+      timed ->
+        context
+        |> Keyword.put(:elapsed_ms, Enum.max(timed))
+        |> Keyword.put(:elapsed_ms_min, Enum.min(timed))
+    end
   end
 
   # How many diagnostic entries this batch may ship, and how many it loses.

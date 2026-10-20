@@ -236,6 +236,51 @@ defmodule Engram.LogsReemitTest do
       assert Map.fetch(meta, :online) == {:ok, false}
     end
 
+    # A burst of the same network_error differs only in timing. Keying the
+    # collapse on the whole context kept every one of them a separate line.
+    test "identical errors collapse even though elapsed_ms differs" do
+      user = insert(:user)
+      parent = self()
+      ref = make_ref()
+      handler_id = :logs_reemit_context_handler
+
+      :logger.add_handler(handler_id, __MODULE__, %{config: %{parent: parent, ref: ref}})
+      on_exit(fn -> :logger.remove_handler(handler_id) end)
+
+      entry = fn elapsed, message ->
+        %{
+          "level" => "error",
+          "category" => "api_request",
+          "message" => "network_error GET https://api.engram.page/me",
+          "platform" => "web",
+          "conn_id" => "c1",
+          "context" => %{
+            "browser" => "Chrome 155",
+            "error_message" => message,
+            "elapsed_ms" => elapsed
+          }
+        }
+      end
+
+      entries =
+        for(ms <- 1..50, do: entry.(ms * 10, "Failed to fetch")) ++ [entry.(7, "other")]
+
+      {:ok, 51} = Logs.insert_logs(user, entries)
+
+      assert_receive {^ref, _level, burst}, 1000
+      assert burst[:repeat] == 50
+      assert burst[:error_message] == "Failed to fetch"
+      # The range, so a burst of fast failures and one stall stay distinguishable.
+      assert burst[:elapsed_ms] == 500
+      assert burst[:elapsed_ms_min] == 10
+
+      assert_receive {^ref, _level, other}, 1000
+      assert other[:error_message] == "other"
+      assert other[:elapsed_ms] == 7
+      refute Map.has_key?(other, :elapsed_ms_min)
+      refute_receive {^ref, _, _}, 100
+    end
+
     test "a context that is not a map is ignored" do
       meta = reemit_context("browser=Chrome")
       refute Map.has_key?(meta, :browser)
