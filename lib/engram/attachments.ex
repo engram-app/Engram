@@ -839,10 +839,11 @@ defmodule Engram.Attachments do
   end
 
   # Soft-deleted full-row insert at the vacated path. storage_key=nil (no blob),
-  # content_hash + content_nonce carried from the live row (the changeset
-  # requires content_nonce; the value is irrelevant — the row is deleted and
-  # never decrypted). Path encrypted under the tombstone's OWN id-AAD so reads
-  # of the (never-served) row stay AAD-consistent.
+  # content_hash and the content-format columns carried from the live row (the
+  # changeset requires the live row's format to be complete; the values are
+  # irrelevant, the row is deleted and never decrypted). Path encrypted under
+  # the tombstone's OWN id-AAD so reads of the (never-served) row stay
+  # AAD-consistent.
   defp tombstone_changeset(
          user,
          vault,
@@ -857,26 +858,44 @@ defmodule Engram.Attachments do
     path_aad = Crypto.aad_for_row(:attachments, :path, tomb_id)
     {path_ct, path_n} = Envelope.encrypt(old_path, dek, path_aad)
 
-    Attachment.changeset(%Attachment{id: tomb_id}, %{
-      path_ciphertext: path_ct,
-      path_nonce: path_n,
-      path_hmac: old_hmac,
-      basename_hmac: old_basename_hmac,
-      content_hash: live.content_hash,
-      mime_type: live.mime_type,
-      size_bytes: live.size_bytes,
-      mtime: live.mtime,
-      user_id: user.id,
-      vault_id: vault.id,
-      storage_key: nil,
-      deleted_at: now,
-      seq: seq,
-      version: 1,
-      encryption_version: 1,
-      dek_version: Crypto.row_version_aad_bound(),
-      content_nonce: live.content_nonce
-    })
+    Attachment.changeset(
+      %Attachment{id: tomb_id},
+      %{
+        path_ciphertext: path_ct,
+        path_nonce: path_n,
+        path_hmac: old_hmac,
+        basename_hmac: old_basename_hmac,
+        content_hash: live.content_hash,
+        mime_type: live.mime_type,
+        size_bytes: live.size_bytes,
+        mtime: live.mtime,
+        user_id: user.id,
+        vault_id: vault.id,
+        storage_key: nil,
+        deleted_at: now,
+        seq: seq,
+        version: 1,
+        dek_version: Crypto.row_version_aad_bound()
+      }
+      |> Map.merge(content_format(live))
+    )
   end
+
+  # The columns that say how a row's content is sealed (v1 or v2), for a
+  # row copied from `att`.
+  defp content_format(%Attachment{encryption_version: 2} = att),
+    do:
+      Map.take(att, [
+        :encryption_version,
+        :wrapped_file_key,
+        :file_key_nonce,
+        :upload_id,
+        :segment_size,
+        :segment_count
+      ])
+
+  defp content_format(%Attachment{} = att),
+    do: %{encryption_version: 1, content_nonce: att.content_nonce}
 
   @doc """
   Moves each attachment into `target_folder` (\"\" = root). All-or-nothing: any
