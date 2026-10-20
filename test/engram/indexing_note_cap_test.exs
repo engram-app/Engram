@@ -114,18 +114,15 @@ defmodule Engram.IndexingNoteCapTest do
       end)
   end
 
-  describe "cap_chunks/3" do
+  describe "cap_chunks/2" do
     setup do
       chunks = Markdown.parse(sections(500), "Big.md")
       assert length(chunks) == 500
-      %{chunks: chunks, key: :crypto.strong_rand_bytes(32)}
+      %{chunks: chunks}
     end
 
-    test "500 chunks to at most 128 contiguous groups, nothing dropped", %{
-      chunks: chunks,
-      key: key
-    } do
-      capped = Indexing.cap_chunks(chunks, 128, key)
+    test "500 chunks to at most 128 contiguous groups, nothing dropped", %{chunks: chunks} do
+      capped = Indexing.cap_chunks(chunks, 128)
 
       assert length(capped) <= 128
       assert Enum.map(capped, & &1.position) == Enum.to_list(0..(length(capped) - 1))
@@ -156,37 +153,41 @@ defmodule Engram.IndexingNoteCapTest do
 
     # Headroom: the first `g` (a power of two >= 1.25 n / cap) aims at 0.4 to
     # 0.8 x cap groups, so the doubling fallback (which regroups the whole
-    # note) is rare. Fixed keys: deterministic. 500 chunks: g = 8, ~62 groups.
-    test "the first g fits without doubling", %{chunks: chunks} do
+    # note) is rare. Ten fixed texts: deterministic. 500 chunks: g = 8, ~62
+    # groups.
+    test "the first g fits without doubling" do
       counts =
         for i <- 1..10 do
-          chunks |> Indexing.cap_chunks(128, :crypto.hash(:sha256, "key #{i}")) |> length()
+          sections(500)
+          |> String.replace("body text here", "body text #{i}")
+          |> Markdown.parse("Big.md")
+          |> Indexing.cap_chunks(128)
+          |> length()
         end
 
       # Doubled to g = 16 would land near 31.
       assert Enum.all?(counts, &(&1 in 45..128)), inspect(counts, charlists: :as_lists)
     end
 
-    test "the same chunks and key give the same groups", %{chunks: chunks, key: key} do
-      assert Indexing.cap_chunks(chunks, 128, key) == Indexing.cap_chunks(chunks, 128, key)
+    test "the same chunks give the same groups", %{chunks: chunks} do
+      assert Indexing.cap_chunks(chunks, 128) == Indexing.cap_chunks(chunks, 128)
     end
 
     # ~200 KB of ~1 KB sections, cap 3: no 3 groups fit under the ceiling, so
     # it closes groups early and the result stays over the cap.
-    test "a group closes before passing 7,500 estimated tokens", %{key: key} do
+    test "a group closes before passing 7,500 estimated tokens" do
       filler = String.duplicate("lorem ipsum dolor ", 55)
       content = "# Big\n\n" <> Enum.map_join(1..200, "\n\n", &"## S#{&1}\n\n#{filler}#{&1}")
-      capped = Indexing.cap_chunks(Markdown.parse(content, "Big.md"), 3, key)
+      capped = Indexing.cap_chunks(Markdown.parse(content, "Big.md"), 3)
 
       assert length(capped) > 3
       assert Enum.all?(capped, &(UsageMeters.estimate_tokens(&1.embed_text) <= 7_500))
     end
 
     test "a merged chunk's inputs are what a single chunk with its text gets", %{
-      chunks: chunks,
-      key: key
+      chunks: chunks
     } do
-      [first_group | _] = Indexing.cap_chunks(chunks, 128, key)
+      [first_group | _] = Indexing.cap_chunks(chunks, 128)
       first = hd(chunks)
       prefix = fn full, text -> binary_part(full, 0, byte_size(full) - byte_size(text)) end
 
@@ -198,11 +199,101 @@ defmodule Engram.IndexingNoteCapTest do
       assert first_group.embed_text == prefix.(first.embed_text, first.text) <> first_group.text
     end
 
-    test "under the cap the list is returned unchanged", %{key: key} do
+    test "under the cap the list is returned unchanged" do
       chunks = Markdown.parse(sections(100), "Big.md")
       assert length(chunks) == 100
-      assert Indexing.cap_chunks(chunks, 128, key) === chunks
-      assert Indexing.cap_chunks(chunks, nil, key) === chunks
+      assert Indexing.cap_chunks(chunks, 128) === chunks
+      assert Indexing.cap_chunks(chunks, nil) === chunks
+    end
+  end
+
+  # A numeric table: the chunker calls it "data" (keyword-only, #2041).
+  defp table(i) do
+    rows = for r <- 1..10, do: "| #{r} | #{4_810 + r * 37 + i} | #{r * 3} | #{rem(r, 4)}.#{i} |"
+    Enum.join(["| id | value | count | rate |", "|---|---|---|---|" | rows], "\n")
+  end
+
+  # Runs of prose and data sections, `runs` of each kind, `per` sections a run.
+  defp mixed(runs, per) do
+    "---\ntags: [mixed]\n---\n# Mixed\n\n" <>
+      Enum.map_join(1..(runs * 2), "\n\n", fn run ->
+        Enum.map_join(1..per, "\n\n", fn j ->
+          i = run * 1_000 + j
+
+          if rem(run, 2) == 1,
+            do: "## P#{i}\n\nprose#{i} sentence about the topic here.",
+            else: "## T#{i}\n\n#{table(i)}"
+        end)
+      end)
+  end
+
+  # Chunker v5 Task 9.1: a merged group never mixes kinds, so data,
+  # frontmatter and drawings never become dense and prose never loses its
+  # vector. Boundaries are unkeyed, so a DEK rotation keeps the groups.
+  describe "kind-aware groups" do
+    setup do
+      chunks = Markdown.parse(mixed(3, 50), "Mixed.md")
+      kinds = chunks |> Enum.map(& &1.kind) |> Enum.frequencies()
+      assert kinds["prose"] > 100 and kinds["data"] > 100 and kinds["frontmatter"] == 1
+      %{chunks: chunks}
+    end
+
+    test "a mixed note groups by kind", %{chunks: chunks} do
+      capped = Indexing.cap_chunks(chunks, 128)
+      assert length(capped) <= 128
+      assert Enum.any?(capped, &Map.get(&1, :merged, false))
+
+      for %{merged: true} = group <- capped do
+        assert group.members |> Enum.map(& &1.kind) |> Enum.uniq() == [group.kind]
+      end
+
+      # Every chunk lands in a group of its own kind.
+      grouped = for g <- capped, m <- Map.get(g, :members, [g]), do: {m.text, g.kind}
+      assert grouped == Enum.map(chunks, &{&1.text, &1.kind})
+    end
+
+    test "frontmatter is never grouped with body chunks", %{chunks: chunks} do
+      [fm] =
+        for g <- Indexing.cap_chunks(chunks, 128),
+            Enum.any?(Map.get(g, :members, [g]), &(&1.kind == "frontmatter")),
+            do: g
+
+      assert fm.kind == "frontmatter"
+      assert Enum.all?(Map.get(fm, :members, [fm]), &(&1.kind == "frontmatter"))
+    end
+
+    test "a data group is never embedded; every prose chunk is", %{user: user, vault: vault} do
+      note = insert_note(user, vault, mixed(3, 50), "Mixed.md")
+      stub_embedder()
+
+      assert {:ok, count, _, true} = Indexing.index_note_with_usage(note, vault, user)
+      assert count <= 128
+      embedded = Enum.join(embedded_texts(), "\n")
+
+      for i <- 1..50 do
+        assert embedded =~ "prose#{1_000 + i} ", "prose chunk #{i} has no dense vector"
+      end
+
+      refute embedded =~ "| 4"
+      refute embedded =~ "tags:"
+    end
+
+    test "group boundaries do not change when the DEK rotates", %{user: user, vault: vault} do
+      # Two users: the same content under two content keys.
+      {:ok, other} = Crypto.ensure_user_dek(insert(:user))
+      other_vault = insert(:vault, user: other, is_default: true)
+      stub_embedder()
+
+      bounds =
+        for {u, v} <- [{user, vault}, {other, other_vault}] do
+          note = insert_note(u, v, sections(500))
+          assert {:ok, _, _, true} = Indexing.index_note_with_usage(note, v, u)
+          Enum.map(rows_for(note), &{&1.position, &1.char_start, &1.char_end})
+        end
+
+      assert Crypto.dek_content_hash_key(user) != Crypto.dek_content_hash_key(other)
+      assert [same, same] = bounds
+      assert length(same) < 500
     end
   end
 
@@ -293,8 +384,7 @@ defmodule Engram.IndexingNoteCapTest do
       # An edit that tips the group count over the cap doubles `g` and
       # regroups the whole note (a known cost, see the Task 7 report), so pick
       # a middle chunk whose edit keeps `g`: the count moves by at most one.
-      {:ok, key} = Crypto.dek_content_hash_key(user)
-      groups = &(&1 |> Markdown.parse("Big.md") |> Indexing.cap_chunks(128, key) |> length())
+      groups = &(&1 |> Markdown.parse("Big.md") |> Indexing.cap_chunks(128) |> length())
 
       edited =
         Enum.find_value(240..260, fn i ->
@@ -359,12 +449,10 @@ defmodule Engram.IndexingNoteCapTest do
     # stored point has (reuse matches by fingerprint over those inputs, by
     # multiplicity), so that is the embedder-call count per step.
     test "growing 500 -> 1,000 chunks one at a time regroups at most once" do
-      key = :crypto.hash(:sha256, "growth")
-
       inputs = fn n ->
         sections(n)
         |> Markdown.parse("Big.md")
-        |> Indexing.cap_chunks(128, key)
+        |> Indexing.cap_chunks(128)
         |> Enum.map(&{&1.context_text, &1.embed_text})
       end
 

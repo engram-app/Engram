@@ -320,7 +320,9 @@ defmodule Engram.IndexingHugeNotesTest do
       # dense input.
       embedded = dir |> embedded_texts() |> word_set()
       prose = prose_words(content, path)
-      dense_lost = Enum.reject(sentinels, &(MapSet.member?(embedded, &1) or not MapSet.member?(prose, &1)))
+
+      dense_lost =
+        Enum.reject(sentinels, &(MapSet.member?(embedded, &1) or not MapSet.member?(prose, &1)))
 
       assert dense_lost == [],
              "#{inspect(report)}: #{length(dense_lost)}/#{length(sentinels)} sentinels " <>
