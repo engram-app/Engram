@@ -32,10 +32,6 @@ vi.mock("./oauth/oauth-authorize-page", () => ({
 vi.mock("./i18n/report-locale", () => ({
 	ReportLocale: () => <p data-testid="report-locale" />,
 }));
-// Same for the connection notice (react-query, a socket).
-vi.mock("./oauth/connection-created-notice", () => ({
-	ConnectionCreatedNotice: () => <p data-testid="connection-notice" />,
-}));
 // The onboarding layout needs react-query; a pass-through keeps /onboard renderable.
 vi.mock("./onboarding/onboard-entry", async () => {
 	const { Outlet } = await import("react-router");
@@ -115,19 +111,6 @@ describe("createAppRouter - locale reporter mount point", () => {
 			renderAt(entry);
 			expect(
 				await screen.findByTestId("report-locale", undefined, { timeout: 15_000 }),
-			).toBeInTheDocument();
-		},
-	);
-
-	// The consent tab hands straight back to the client; whichever Engram tab is
-	// open (onboarding, /link, a consent tab a desktop client left behind) is
-	// where the user hears the connection landed.
-	it.each(["/onboard", "/link", "/oauth/consent"])(
-		"mounts the connection notice on %s",
-		async (entry) => {
-			renderAt(entry);
-			expect(
-				await screen.findByTestId("connection-notice", undefined, { timeout: 15_000 }),
 			).toBeInTheDocument();
 		},
 	);

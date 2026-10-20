@@ -9,12 +9,6 @@ import { useAuthAdapter } from "./use-auth-adapter";
 const ReportLocale = lazy(() =>
 	import("../i18n/report-locale").then((m) => ({ default: m.ReportLocale })),
 );
-// Lazy for the same reason: it opens a socket and reads /me.
-const ConnectionCreatedNotice = lazy(() =>
-	import("../oauth/connection-created-notice").then((m) => ({
-		default: m.ConnectionCreatedNotice,
-	})),
-);
 
 export default function AuthGuard() {
 	const { isLoaded, isSignedIn } = useAuthAdapter();
@@ -35,9 +29,6 @@ export default function AuthGuard() {
 		<>
 			<Suspense fallback={null}>
 				<ReportLocale />
-			</Suspense>
-			<Suspense fallback={null}>
-				<ConnectionCreatedNotice />
 			</Suspense>
 			<Outlet />
 		</>
