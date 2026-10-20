@@ -24,6 +24,13 @@ defmodule Engram.Vector.FilterId do
   @spec uuid(String.t()) :: String.t()
   def uuid(id) when is_binary(id), do: String.replace(id, "-", "")
 
+  @doc "The dashed form of an undashed uuid from `uuid/1` (other strings unchanged)."
+  @spec dashed(String.t()) :: String.t()
+  def dashed(<<a::binary-8, b::binary-4, c::binary-4, d::binary-4, e::binary-12>>),
+    do: Enum.join([a, b, c, d, e], "-")
+
+  def dashed(other), do: other
+
   @doc "Full HMAC of a frontmatter key name (Postgres `key_hmac`)."
   @spec key_hmac(binary(), String.t()) :: binary()
   def key_hmac(filter_key, key), do: Crypto.hmac_field(filter_key, "fmk:" <> norm(key))

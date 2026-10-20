@@ -100,6 +100,10 @@ defmodule Engram.Logger.LogCallComplianceTest do
     "lib/engram/indexing.ex",
     # Holds paid Voyage vectors of note text, keyed by a hash of that text.
     "lib/engram/indexing/retained_vectors.ex",
+    # The v5 payload builder sees frontmatter-derived values; the point id
+    # is a hash of a note id and a chunk fingerprint.
+    "lib/engram/indexing/payload_v5.ex",
+    "lib/engram/indexing/point_id.ex",
     "lib/engram/crypto.ex",
     "lib/engram_web/controllers/attachments_controller.ex",
     "lib/engram/backfill/",

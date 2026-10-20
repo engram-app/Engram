@@ -1,6 +1,8 @@
 defmodule Engram.MCP.HandlersSimilarTest do
   use Engram.DataCase, async: false
 
+  import Engram.QdrantFilterView
+
   import Mox
 
   alias Engram.MCP.Handlers
@@ -108,7 +110,7 @@ defmodule Engram.MCP.HandlersSimilarTest do
     Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/scroll", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       json = Jason.decode!(body)
-      assert %{"has_vector" => "dense"} in json["filter"]["must"]
+      assert %{"has_vector" => "dense"} in legacy_view(json["filter"]["must"])
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
@@ -142,15 +144,15 @@ defmodule Engram.MCP.HandlersSimilarTest do
       assert [%{"has_id" => excluded}] = json["filter"]["must_not"]
       assert Enum.sort(excluded) == Enum.sort(s_ids)
 
-      assert %{"key" => "vault_id", "match" => %{"value" => to_string(v.id)}} in json["filter"][
-               "must"
-             ]
+      assert %{"key" => "vault_id", "match" => %{"value" => to_string(v.id)}} in legacy_view(
+               json["filter"]["must"]
+             )
 
       # Review Focus (d): the tenant filter, not just the excluded ids, is what
       # keeps a recommend call from ever crossing user/vault boundaries.
-      assert %{"key" => "user_id", "match" => %{"value" => to_string(u.id)}} in json["filter"][
-               "must"
-             ]
+      assert %{"key" => "user_id", "match" => %{"value" => to_string(u.id)}} in legacy_view(
+               json["filter"]["must"]
+             )
 
       respond(conn, [hit(u, v, o_id)])
     end)
@@ -220,7 +222,7 @@ defmodule Engram.MCP.HandlersSimilarTest do
 
     Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/scroll", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
-      must = Jason.decode!(body)["filter"]["must"]
+      must = legacy_view(Jason.decode!(body)["filter"]["must"])
       assert %{"has_vector" => "dense"} in must
       assert [ids] = for(%{"has_id" => ids} <- must, do: ids)
       assert Enum.sort(ids) == Enum.sort(s_ids)
@@ -296,7 +298,7 @@ defmodule Engram.MCP.HandlersSimilarTest do
 
     Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
-      must = Jason.decode!(body)["filter"]["must"]
+      must = legacy_view(Jason.decode!(body)["filter"]["must"])
 
       assert %{"key" => "vault_id", "match" => %{"any" => ids}} =
                Enum.find(must, &(&1["key"] == "vault_id"))
@@ -372,7 +374,7 @@ defmodule Engram.MCP.HandlersSimilarTest do
       # Grouped (group_by_note: true) always over-fetches the candidate pool
       # (max(limit * 4, profile default 20)); limit=6 -> 24.
       assert json["limit"] == 24
-      must = json["filter"]["must"]
+      must = legacy_view(json["filter"]["must"])
       assert Enum.any?(must, &(&1["key"] == "folder_hmac"))
       assert Enum.any?(must, &(&1["key"] == "tags_hmac"))
       respond(conn, [])

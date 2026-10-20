@@ -2699,12 +2699,8 @@ defmodule Engram.Indexing do
     {_, _} =
       Repo.update_all(from(n in Note, where: n.kind == "note" and n.id == ^note.id), set: columns)
 
-    Repo.delete_all(from(a in NoteAttr, where: a.note_id == ^note.id), skip_tenant_check: true)
-
-    _ =
-      rows
-      |> Enum.chunk_every(@insert_batch)
-      |> Enum.each(&Repo.insert_all(NoteAttr, &1, skip_tenant_check: true))
+    Repo.delete_all(from(a in NoteAttr, where: a.note_id == ^note.id))
+    _ = rows |> Enum.chunk_every(@insert_batch) |> Enum.each(&Repo.insert_all(NoteAttr, &1))
 
     :ok
   end

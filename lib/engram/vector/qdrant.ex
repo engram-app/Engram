@@ -23,6 +23,7 @@ defmodule Engram.Vector.Qdrant do
   alias Engram.Logger.Metadata
   alias Engram.Search.Fusion
   alias Engram.ServiceConfig
+  alias Engram.Vector.FilterId
   alias Engram.Vector.PayloadKeys
   alias Engram.Vector.QdrantLayout
 
@@ -1150,18 +1151,67 @@ defmodule Engram.Vector.Qdrant do
   embedder (#746). Triple-scope is mandatory: filtering on `path_hmac` alone
   could cross tenants if two users' folded HMACs collide.
   """
+  #
+  # `payload` uses the legacy string keys (`"path_hmac"`, `"folder_hmac"`,
+  # base64). Each
+  # format gets its own keys, so a v3 point never gains `p` and a v5 point never
+  # gains a 44-byte `path_hmac`: one PATCH on the legacy points (while
+  # `:legacy_filter_fields` is on) and one on the v5 points. A nil value on a v5
+  # point deletes the key (no nulls in a v5 payload).
   def set_payload_by_filter(col \\ nil, user_id, vault_id, path_hmac, payload)
       when is_map(payload) do
     col = col || collection()
 
-    filter = %{
-      must: [
-        %{key: "user_id", match: %{value: user_id}},
-        %{key: "vault_id", match: %{value: vault_id}},
-        %{key: "path_hmac", match: %{value: path_hmac}}
-      ]
-    }
+    legacy =
+      if legacy_filter_fields?(),
+        do: [{legacy_note_filter(user_id, vault_id, path_hmac), payload, []}],
+        else: []
 
+    v5 =
+      case hmac_id(path_hmac) do
+        nil ->
+          []
+
+        old_id ->
+          {set, unset} = v5_repath_payload(payload)
+          filter = %{must: v5_conditions(user_id, vault_id) ++ [v5_eq(:path_id, old_id)]}
+          [{filter, set, unset}]
+      end
+
+    Enum.reduce_while(legacy ++ v5, :ok, fn {filter, set, unset}, :ok ->
+      with :ok <- post_payload(col, filter, set),
+           :ok <- delete_payload_keys(col, filter, unset) do
+        {:cont, :ok}
+      else
+        err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp v5_repath_payload(payload) do
+    pairs =
+      for {legacy, short} <- [{"path_hmac", :path_id}, {"folder_hmac", :folder_id}],
+          Map.has_key?(payload, legacy),
+          do: {PayloadKeys.short(short), hmac_id(payload[legacy])}
+
+    {for({k, v} <- pairs, v != nil, into: %{}, do: {k, v}), for({k, nil} <- pairs, do: k)}
+  end
+
+  defp delete_payload_keys(_col, _filter, []), do: :ok
+
+  defp delete_payload_keys(col, filter, keys) do
+    opts = write_opts(%{filter: filter, keys: keys})
+
+    instrument(:set_payload, fn ->
+      case Req.post("#{base_url()}/collections/#{col}/points/payload/delete", opts) do
+        {:ok, %{status: 200, body: body}} -> applied(body)
+        {:ok, %{status: status, body: body}} -> write_error(status, body)
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
+  defp post_payload(col, filter, payload) do
     opts = write_opts(%{filter: filter, payload: payload})
 
     instrument(:set_payload, fn ->
@@ -1258,13 +1308,7 @@ defmodule Engram.Vector.Qdrant do
   def delete_by_note_except(col, user_id, vault_id, path_hmac, keep_ids) do
     col = col || collection()
 
-    filter = %{
-      must: [
-        %{key: "user_id", match: %{value: user_id}},
-        %{key: "vault_id", match: %{value: vault_id}},
-        %{key: "path_hmac", match: %{value: path_hmac}}
-      ]
-    }
+    filter = note_filter(user_id, vault_id, path_hmac)
 
     filter =
       if keep_ids == [], do: filter, else: Map.put(filter, :must_not, [%{has_id: keep_ids}])
@@ -1290,13 +1334,7 @@ defmodule Engram.Vector.Qdrant do
   def count_by_note(col \\ nil, user_id, vault_id, path_hmac) do
     col = col || collection()
 
-    filter = %{
-      must: [
-        %{key: "user_id", match: %{value: user_id}},
-        %{key: "vault_id", match: %{value: vault_id}},
-        %{key: "path_hmac", match: %{value: path_hmac}}
-      ]
-    }
+    filter = note_filter(user_id, vault_id, path_hmac)
 
     opts = [json: %{filter: filter, exact: true}] ++ req_opts()
 
@@ -1318,7 +1356,7 @@ defmodule Engram.Vector.Qdrant do
   def delete_by_user(col \\ nil, user_id, purpose \\ :indexing) do
     col = col || collection()
 
-    filter = %{must: [%{key: "user_id", match: %{value: user_id}}]}
+    filter = %{must: [match_filter(:user, user_id)]}
     opts = write_opts(%{filter: filter}, purpose)
 
     instrument(:delete, fn ->
@@ -1338,12 +1376,7 @@ defmodule Engram.Vector.Qdrant do
   def delete_by_vault(col \\ nil, user_id, vault_id) do
     col = col || collection()
 
-    filter = %{
-      must: [
-        %{key: "user_id", match: %{value: user_id}},
-        %{key: "vault_id", match: %{value: vault_id}}
-      ]
-    }
+    filter = %{must: [match_filter(:user, user_id), match_filter(:vault, vault_id)]}
 
     opts = write_opts(%{filter: filter})
 
@@ -1474,6 +1507,155 @@ defmodule Engram.Vector.Qdrant do
       else: body
   end
 
+  # -- Dual-format filters (Task 15.4) -----------------------------------
+  #
+  # During the v5 pass a vault holds v3/v4 points (long `*_hmac` keys, base64
+  # HMACs, dashed uuids) and v5 points (short `PayloadKeys` keys, 128-bit hex
+  # ids). Every filter condition goes through `match_filter/2` or
+  # `range_filter/2`, which match EITHER format with a `should` while
+  # `:legacy_filter_fields` is on (the default), and only the v5 format once
+  # the pass has dropped the legacy fields (Task 18.1). A `should` nested in a
+  # `must` is still an AND with the other conditions, so tenant scoping is
+  # unchanged.
+
+  @legacy_keys %{
+    user: "user_id",
+    vault: "vault_id",
+    path: "path_hmac",
+    folder: "folder_hmac",
+    type: "type_hmac",
+    tags: "tags_hmac"
+  }
+  @v5_keys %{
+    user: :user_id,
+    vault: :vault_id,
+    path: :path_id,
+    folder: :folder_id,
+    type: :type_id,
+    tags: :tags_id
+  }
+  @range_keys %{fm_timestamp: :fm_timestamp, fm_created: :fm_created}
+
+  defp legacy_filter_fields?, do: ServiceConfig.get(:legacy_filter_fields, true)
+
+  @doc """
+  One filter condition for `field` equal to `value` (a list matches any), in
+  both payload formats. `:user`/`:vault` take ids as stored in Postgres;
+  `:path`/`:folder`/`:type`/`:tags` take the base64 HMACs the legacy filters
+  use.
+  """
+  @spec match_filter(:user | :vault | :path | :folder | :type | :tags, term()) :: map()
+  def match_filter(field, value) do
+    legacy = %{key: Map.fetch!(@legacy_keys, field), match: match(value)}
+
+    v5 =
+      case v5_value(field, value) do
+        nil -> nil
+        v -> %{key: PayloadKeys.short(Map.fetch!(@v5_keys, field)), match: match(v)}
+      end
+
+    cond do
+      v5 == nil -> legacy
+      legacy_filter_fields?() -> %{should: [legacy, v5]}
+      true -> v5
+    end
+  end
+
+  @doc "A range condition on `fm_timestamp` / `fm_created`, in both formats."
+  @spec range_filter(:fm_timestamp | :fm_created, map()) :: map()
+  def range_filter(field, range) do
+    legacy = %{key: Atom.to_string(field), range: range}
+    v5 = %{key: PayloadKeys.short(Map.fetch!(@range_keys, field)), range: range}
+    if legacy_filter_fields?(), do: %{should: [legacy, v5]}, else: v5
+  end
+
+  @doc """
+  Nested long-tail filter: the note has an `fm_attrs` entry with key id `k_id`
+  and value id `v_id` in the SAME element (not one entry's key and another's
+  value).
+  """
+  @spec attr_filter(String.t(), String.t()) :: map()
+  def attr_filter(k_id, v_id) do
+    %{
+      nested: %{
+        key: PayloadKeys.short(:fm_attrs),
+        filter: %{must: [%{key: "k", match: %{value: k_id}}, %{key: "v", match: %{value: v_id}}]}
+      }
+    }
+  end
+
+  @doc "Nested range over `fm_nums` (`n`) for key id `k_id`."
+  @spec num_range(String.t(), keyword()) :: map()
+  def num_range(k_id, range), do: nested_range(:fm_nums, "n", k_id, range)
+
+  @doc "Nested range over `fm_dates` (`t`, unix seconds) for key id `k_id`."
+  @spec date_range(String.t(), keyword()) :: map()
+  def date_range(k_id, range), do: nested_range(:fm_dates, "t", k_id, range)
+
+  defp nested_range(list, field, k_id, range) do
+    %{
+      nested: %{
+        key: PayloadKeys.short(list),
+        filter: %{
+          must: [%{key: "k", match: %{value: k_id}}, %{key: field, range: Map.new(range)}]
+        }
+      }
+    }
+  end
+
+  defp match(values) when is_list(values), do: %{any: values}
+  defp match(value), do: %{value: value}
+
+  defp v5_value(field, ids) when field in [:user, :vault] and is_list(ids),
+    do: Enum.map(ids, &FilterId.uuid(to_string(&1)))
+
+  defp v5_value(field, id) when field in [:user, :vault], do: FilterId.uuid(to_string(id))
+
+  defp v5_value(_field, b64s) when is_list(b64s) do
+    case Enum.map(b64s, &hmac_id/1) |> Enum.reject(&is_nil/1) do
+      [] -> nil
+      ids -> ids
+    end
+  end
+
+  defp v5_value(_field, b64), do: hmac_id(b64)
+
+  # A legacy filter value that is not a full base64 HMAC (a test literal, a
+  # malformed opt) has no v5 form; the legacy condition alone then applies.
+  defp hmac_id(b64) when is_binary(b64) do
+    case Base.decode64(b64) do
+      {:ok, <<_::binary-size(16), _::binary>> = hmac} -> FilterId.from_hmac(hmac)
+      _ -> nil
+    end
+  end
+
+  defp hmac_id(_), do: nil
+
+  defp legacy_note_filter(user_id, vault_id, path_hmac) do
+    %{
+      must: [
+        %{key: "user_id", match: %{value: user_id}},
+        %{key: "vault_id", match: %{value: vault_id}},
+        %{key: "path_hmac", match: %{value: path_hmac}}
+      ]
+    }
+  end
+
+  defp v5_conditions(user_id, vault_id),
+    do: [v5_eq(:user_id, FilterId.uuid(user_id)), v5_eq(:vault_id, FilterId.uuid(vault_id))]
+
+  defp v5_eq(name, value), do: %{key: PayloadKeys.short(name), match: %{value: value}}
+
+  defp note_filter(user_id, vault_id, path_hmac) do
+    %{
+      must: [
+        match_filter(:user, user_id),
+        match_filter(:vault, vault_id),
+        match_filter(:path, path_hmac)
+      ]
+    }
+  end
+
   @doc false
   # Public for filter-shape tests only (test/engram/vector/qdrant_filter_test.exs).
   # Extracted from search/3 so all three query shapes share tenant + OKF
@@ -1485,31 +1667,27 @@ defmodule Engram.Vector.Qdrant do
     folder_hmac = Keyword.get(search_opts, :folder_hmac)
     type_hmac = Keyword.get(search_opts, :type_hmac)
 
-    must = [%{key: "user_id", match: %{value: user_id}}]
+    must = [match_filter(:user, user_id)]
     # `vault_id` accepts one id or a set. The set form is what a multi-vault
     # OAuth grant (and a subset-restricted API key) needs: without it the only
     # options were one query per vault or dropping the filter entirely, and
     # dropping it leaks every vault the credential was scoped away from (#729).
-    # `vault_id` is already a keyword payload index (@payload_index_fields), so
+    # `vault_id` is already a payload index (@payload_index_fields), so
     # `any` needs no new index — same shape as tags_hmac below.
     must =
       case vault_id do
         nil -> must
-        id when is_binary(id) -> must ++ [%{key: "vault_id", match: %{value: id}}]
-        ids when is_list(ids) -> must ++ [%{key: "vault_id", match: %{any: ids}}]
+        id when is_binary(id) -> must ++ [match_filter(:vault, id)]
+        ids when is_list(ids) -> must ++ [match_filter(:vault, ids)]
       end
 
-    must = if tags_hmac, do: [%{key: "tags_hmac", match: %{any: tags_hmac}} | must], else: must
-
-    must =
-      if folder_hmac, do: [%{key: "folder_hmac", match: %{value: folder_hmac}} | must], else: must
-
-    must =
-      if type_hmac, do: [%{key: "type_hmac", match: %{value: type_hmac}} | must], else: must
+    must = if tags_hmac, do: [match_filter(:tags, tags_hmac) | must], else: must
+    must = if folder_hmac, do: [match_filter(:folder, folder_hmac) | must], else: must
+    must = if type_hmac, do: [match_filter(:type, type_hmac) | must], else: must
 
     must
-    |> add_range_clause("fm_timestamp", search_opts, :fm_timestamp_gte, :fm_timestamp_lte)
-    |> add_range_clause("fm_created", search_opts, :fm_created_gte, :fm_created_lte)
+    |> add_range_clause(:fm_timestamp, search_opts, :fm_timestamp_gte, :fm_timestamp_lte)
+    |> add_range_clause(:fm_created, search_opts, :fm_created_gte, :fm_created_lte)
     |> then(&%{must: &1})
   end
 
@@ -1519,7 +1697,7 @@ defmodule Engram.Vector.Qdrant do
       |> maybe_put_bound(:gte, Keyword.get(opts, gte_key))
       |> maybe_put_bound(:lte, Keyword.get(opts, lte_key))
 
-    if range == %{}, do: must, else: must ++ [%{key: key, range: range}]
+    if range == %{}, do: must, else: must ++ [range_filter(key, range)]
   end
 
   defp maybe_put_bound(range, _bound, nil), do: range

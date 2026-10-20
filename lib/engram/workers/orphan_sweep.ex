@@ -40,6 +40,7 @@ defmodule Engram.Workers.OrphanSweep do
   alias Engram.Repo
   alias Engram.Storage
   alias Engram.Vaults.Vault
+  alias Engram.Vector.FilterId
   alias Engram.Vector.Qdrant
 
   require Logger
@@ -732,7 +733,8 @@ defmodule Engram.Workers.OrphanSweep do
     opts = [
       filter: %{},
       limit: @qdrant_scroll_limit,
-      with_payload: ["user_id"],
+      # `u` is the v5 point's user id (undashed, `PayloadKeys`).
+      with_payload: ["user_id", "u"],
       with_vector: false
     ]
 
@@ -742,8 +744,9 @@ defmodule Engram.Workers.OrphanSweep do
       {:ok, %{points: points, next_page_offset: next}} ->
         acc =
           Enum.reduce(points, acc, fn point, set ->
-            case get_in(point, ["payload", "user_id"]) do
-              uid when is_binary(uid) -> MapSet.put(set, uid)
+            case point["payload"] do
+              %{"user_id" => uid} when is_binary(uid) -> MapSet.put(set, uid)
+              %{"u" => uid} when is_binary(uid) -> MapSet.put(set, FilterId.dashed(uid))
               _ -> set
             end
           end)
