@@ -902,6 +902,78 @@ defmodule Engram.IndexingNoteCapTest do
     end
   end
 
+  # Review M4: a recap or promotion writes its new points before it deletes
+  # the old ones, so a refused upsert (507, strict mode) leaves the note's
+  # old index whole instead of empty.
+  describe "a regroup writes before it deletes" do
+    setup %{user: user, vault: vault} do
+      with_limits_enforced(false)
+      stub_embedder()
+      note = insert_note(user, vault, sections(500))
+      assert {:ok, 500, _, true} = Indexing.index_note_with_usage(note, vault, user)
+      Application.put_env(:engram, :limits_enforced, true)
+      %{note: note}
+    end
+
+    # Qdrant answers 507 to every upsert and reports each request.
+    defp refuse_upserts(bypass) do
+      parent = self()
+
+      Bypass.stub(bypass, :any, :any, fn conn ->
+        send(parent, {:qdrant, conn.method, conn.request_path})
+
+        if conn.method == "PUT" and String.ends_with?(conn.request_path, "/points"),
+          do: Plug.Conn.send_resp(conn, 507, ~s({"status": {"error": "full"}})),
+          else:
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.send_resp(200, ~s({"result": true}))
+      end)
+    end
+
+    defp deletes(acc \\ 0) do
+      receive do
+        {:qdrant, "POST", path} ->
+          deletes(if(String.ends_with?(path, "/points/delete"), do: acc + 1, else: acc))
+
+        {:qdrant, _method, _path} ->
+          deletes(acc)
+      after
+        0 -> acc
+      end
+    end
+
+    test "a promotion refused by Qdrant keeps the floor point", %{user: user, vault: vault} do
+      floored = insert_note(user, vault, sections(20), "Floored.md")
+
+      assert {:ok, 1, 0, false} =
+               Indexing.index_note_with_usage(floored, vault, user, index_tier: "floor")
+
+      floored = %{floored | index_tier: "floor"}
+      [%{qdrant_point_id: floor_id}] = rows_for(floored)
+
+      bypass = Bypass.open()
+      ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+      refuse_upserts(bypass)
+      _ = deletes()
+
+      assert {:error, _} = Indexing.index_note_with_usage(floored, vault, user, index_tier: nil)
+      assert deletes() == 0
+      assert [%{qdrant_point_id: ^floor_id}] = rows_for(floored)
+    end
+
+    test "a recap refused by Qdrant deletes nothing", %{user: user, vault: vault, note: note} do
+      bypass = Bypass.open()
+      ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+      refuse_upserts(bypass)
+      _ = deletes()
+
+      assert {:error, _} = Indexing.index_note_with_usage(note, vault, user)
+      assert deletes() == 0
+      assert length(rows_for(note)) == 500
+    end
+  end
+
   describe "reconcile self-heal" do
     # Indexed uncapped (billing off), then the cap applies.
     defp index_uncapped(note) do

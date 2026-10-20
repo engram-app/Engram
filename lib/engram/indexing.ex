@@ -250,6 +250,7 @@ defmodule Engram.Indexing do
          embedded_bytes: embedded_bytes,
          dense?: dense?,
          index_tier: tier,
+         write_first: regroup?(note, plan),
          retain: if(dense? and texts != [], do: {retained_key(note, texts), vectors}),
          chunk_count: chunk_count
        })}
@@ -264,6 +265,10 @@ defmodule Engram.Indexing do
   end
 
   @floor_tiers ["floor", "floor_paid"]
+
+  # A pass that changes how the note is grouped: it writes before it deletes.
+  defp regroup?(note, plan),
+    do: merged?(plan) or Map.get(note, :index_tier) != nil or Map.get(note, :chunk_count) != nil
 
   defp merged?(plan), do: Enum.any?(plan.entries, &Map.get(entry_chunk(&1), :merged, false))
 
@@ -865,9 +870,12 @@ defmodule Engram.Indexing do
     #
     # A floor plan reuses nothing, yet it skips the purge: its points are
     # written first and the dense points deleted only after the rows name them
-    # (`drop_replaced_points/3`). A refused write (strict mode) then leaves the
+    # (`drop_replaced_points/4`). A refused write (strict mode) then leaves the
     # old index whole, and a refused delete leaves both, still searchable.
-    floor? = Map.get(prepared, :index_tier) != nil
+    # A regroup (a merged plan, or a note leaving a floor or a merge) does the
+    # same (review M4): merged fingerprints never reuse, so it used to purge
+    # first and a refused upsert left the note with no points at all.
+    floor? = Map.get(prepared, :index_tier) != nil or Map.get(prepared, :write_first, false)
 
     with :ok <-
            if(floor?,
@@ -922,7 +930,7 @@ defmodule Engram.Indexing do
       with {:ok, _} <- committed,
            :ok <-
              if(floor?,
-               do: drop_replaced_points(note, stale_point_ids, qdrant_points),
+               do: drop_replaced_points(note, stale_point_ids, qdrant_points, reused_point_ids),
                else: drop_stale_points(reused_point_ids, stale_point_ids, note)
              ) do
         # Only once the rows are committed: a failed attempt is retried, and
@@ -1025,14 +1033,14 @@ defmodule Engram.Indexing do
   # refused delete left behind). Returns an error so the job retries: the
   # rows already name the floor point, and an `index_budget: "demote"`
   # retry (or the next edit) re-floors and finishes the delete.
-  defp drop_replaced_points(note, stale, points) do
+  defp drop_replaced_points(note, stale, points, reused) do
     with :ok <- Qdrant.delete_points(collection(), stale) do
       Qdrant.delete_by_note_except(
         collection(),
         to_string(note.user_id),
         to_string(note.vault_id),
         encode_hmac(note.path_hmac),
-        Enum.map(points, & &1.id)
+        Enum.map(points, & &1.id) ++ reused
       )
     end
   end
