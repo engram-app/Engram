@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.58.0](https://github.com/engram-app/Engram/compare/0.57.0...0.58.0) (2026-10-20)
+
+
+### Features
+
+* **onboarding:** connect-flow UX pass (link, consent, first vault) ([#2009](https://github.com/engram-app/Engram/issues/2009)) ([d499395](https://github.com/engram-app/Engram/commit/d499395e8d5614b39e12ad3940fcb120d463b86d))
+* **qdrant:** /quotas on 1.19 and 507 as backpressure (upgrade prerequisite) ([#2059](https://github.com/engram-app/Engram/issues/2059)) ([7a2445d](https://github.com/engram-app/Engram/commit/7a2445d625d491c22558acc0d95992b0c2a58f6e))
+
+
+### Bug Fixes
+
+* fail fast on the account-delete Qdrant drop ([#2022](https://github.com/engram-app/Engram/issues/2022)) ([a5a8807](https://github.com/engram-app/Engram/commit/a5a88071ff8573527a4e8dc176a987ee0cec4e14))
+* **oauth:** hand consent straight back to the client ([#2061](https://github.com/engram-app/Engram/issues/2061)) ([061f574](https://github.com/engram-app/Engram/commit/061f57405f8a5faf4f0d03a490b4b9f6eb64b250))
+
 ## [0.57.0](https://github.com/engram-app/Engram/compare/0.56.0...0.57.0) (2026-10-19)
 
 
