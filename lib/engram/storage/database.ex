@@ -103,15 +103,40 @@ defmodule Engram.Storage.Database do
   def delete_prefix(prefix) when is_binary(prefix) and prefix != "" do
     pattern = escape_like(prefix) <> "%"
 
+    # LIKE decides; the byte-wise range (`~>=~`/`~<~`, text_pattern_ops) is
+    # what lets storage_objects_storage_key_pattern_index serve it, generic
+    # plan included, instead of reading every attachment row.
     %{num_rows: count} =
-      Repo.query!(
-        "DELETE FROM storage_objects WHERE storage_key LIKE $1 ESCAPE $2",
-        [pattern, @like_escape]
-      )
+      case prefix_upper_bound(prefix) do
+        {:ok, upper} ->
+          Repo.query!(
+            "DELETE FROM storage_objects WHERE storage_key LIKE $1 ESCAPE $2 " <>
+              "AND storage_key ~>=~ $3 AND storage_key ~<~ $4",
+            [pattern, @like_escape, prefix, upper]
+          )
+
+        :none ->
+          Repo.query!(
+            "DELETE FROM storage_objects WHERE storage_key LIKE $1 ESCAPE $2 " <>
+              "AND storage_key ~>=~ $3",
+            [pattern, @like_escape, prefix]
+          )
+      end
 
     {:ok, count}
   rescue
     e -> {:error, e}
+  end
+
+  # The smallest string above every string starting with `prefix`, byte-wise:
+  # the prefix with its last byte incremented. Only for an ASCII last byte, so
+  # the bound stays valid UTF-8; otherwise the range is open above (keys are
+  # uuid paths, so in practice the last byte is ASCII).
+  defp prefix_upper_bound(prefix) do
+    case :binary.last(prefix) do
+      b when b < 0x7F -> {:ok, binary_part(prefix, 0, byte_size(prefix) - 1) <> <<b + 1>>}
+      _ -> :none
+    end
   end
 
   @impl true

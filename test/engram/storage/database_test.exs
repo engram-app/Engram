@@ -72,6 +72,28 @@ defmodule Engram.Storage.DatabaseTest do
     end
   end
 
+  describe "delete_prefix/1 plan" do
+    # storage_objects holds attachment bytes. Under a non-C collation the
+    # default btree cannot serve a prefix match, so `LIKE 'x%'` read every
+    # row. A text_pattern_ops index serves a byte-wise range, and the range
+    # bounds are bind parameters, so even a generic plan can use it.
+    test "the prefix delete is an index range scan" do
+      {_, queries} = Engram.QueryRecorder.record(fn -> Database.delete_prefix("1/") end)
+      [sql] = for %{sql: sql} <- queries, sql =~ "DELETE FROM storage_objects", do: sql
+      plan = Engram.QueryPlan.generic_plan(sql, analyze: ["storage_objects"])
+      assert plan =~ "storage_objects_storage_key_pattern_index", plan
+    end
+
+    test "a prefix ending in a non-ASCII character still deletes exactly its keys" do
+      assert :ok = Database.put("é/x.png", @binary)
+      assert :ok = Database.put("éa/x.png", @binary)
+      assert :ok = Database.put("ê/x.png", @binary)
+
+      assert {:ok, 2} = Database.delete_prefix("é")
+      assert {:ok, @binary} = Database.get("ê/x.png")
+    end
+  end
+
   describe "list_user_prefixes/0" do
     test "returns distinct uuid first segments" do
       u1 = "00000000-0000-0000-0000-000000000001"
