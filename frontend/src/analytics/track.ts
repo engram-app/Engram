@@ -19,6 +19,7 @@ import {
 	UPGRADE_SOURCES,
 	VAULT_SOURCES,
 } from "./events";
+import { serverEvents } from "./server-sink";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // A BCP-47 language tag: language, then up to three script/region/variant
@@ -119,4 +120,7 @@ export function track(event: EngramEvent, props: Record<string, unknown> = {}): 
 	}
 
 	analyticsClient()?.capture(event, props);
+	// Our own event log too (recorded there only, never re-sent to PostHog),
+	// under the same consent: see server-sink.ts.
+	serverEvents.add(event, props);
 }

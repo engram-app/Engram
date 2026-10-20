@@ -210,6 +210,8 @@ config :engram, Oban,
         # census pings): hourly, so each run deletes an hour's worth.
         {"23 * * * *", Engram.Workers.ClientLogsPruner},
         {"28 * * * *", Engram.Workers.InstallPingsPruner},
+        # analytics_events: two-year retention.
+        {"58 * * * *", Engram.Workers.AnalyticsEventsPrune},
         # Self-healing data migrations (#1872): one pass of each one whose
         # ledger row is not done; a pass that finds no work closes it.
         # Also at boot, so an upgrade heals without waiting up to an hour. A boot

@@ -14,6 +14,8 @@ defmodule Engram.Analytics do
       long-lived socket cannot outlive an opt-out or an email change.
     * **Throttling** of high-frequency events (`track_activity/3`).
     * **Erasure** of every id a person is known by (`forget/1`).
+    * **Our own copy** of every event (`Engram.Analytics.EventLog`), under
+      the same opt-out, whether or not PostHog is configured.
 
   Never send note content, titles, paths, vault names or search text
   (privacy policy 2026-10-12).
@@ -23,6 +25,7 @@ defmodule Engram.Analytics do
 
   alias Engram.Accounts
   alias Engram.Accounts.User
+  alias Engram.Analytics.EventLog
   alias Engram.Analytics.Folds
   alias Engram.Observability.PostHog
   alias Engram.Workers.PostHogErasure
@@ -42,15 +45,34 @@ defmodule Engram.Analytics do
   @spec enabled?() :: boolean()
   def enabled?, do: PostHog.enabled?()
 
+  # Whether an event goes anywhere: PostHog, our event log, or both.
+  defp recording?, do: enabled?() or EventLog.enabled?()
+
   @doc "Record `event` for `user`. Fire-and-forget; never raises."
   @spec track(map(), String.t(), map()) :: :ok
   def track(user, event, props \\ %{}) do
-    if enabled?(), do: PostHog.capture(id_for(user), event, props), else: :ok
+    if recording?(), do: emit(user, event, props), else: :ok
+  end
+
+  @doc """
+  Record a web-app event (`Engram.Analytics.ClientEvents`) in our event log
+  ONLY. The browser sends the same event to PostHog itself, so forwarding it
+  would count it twice. Same opt-out as every other path.
+  """
+  @spec record_client_event(User.t(), String.t(), map()) :: :ok
+  def record_client_event(%User{} = user, event, props) do
+    case person(user) do
+      {nil, _user_id} -> :ok
+      {_distinct_id, user_id} -> EventLog.record(user_id, event, props)
+    end
   end
 
   @doc "Record an event attached to no person (e.g. a deleted account's exit reason)."
   @spec track_anonymous(String.t(), map()) :: :ok
-  def track_anonymous(event, props), do: PostHog.capture_anonymous(event, props)
+  def track_anonymous(event, props) do
+    :ok = EventLog.record(nil, event, props)
+    PostHog.capture_anonymous(event, props)
+  end
 
   @doc """
   Record that `user` was active on `surface`. Emits `surface_active` at most
@@ -76,7 +98,7 @@ defmodule Engram.Analytics do
   """
   @spec track_folded(map(), String.t(), String.t(), pos_integer(), map(), map()) :: :ok
   def track_folded(%{id: id} = user, event, dedupe, window_ms, props, counts) do
-    if enabled?() do
+    if recording?() do
       key = {event, id, dedupe}
       :ok = Folds.add(key, counts, props)
 
@@ -129,7 +151,7 @@ defmodule Engram.Analytics do
   @spec track_throttled(map(), String.t(), String.t(), pos_integer(), map() | (-> map())) ::
           :ok
   def track_throttled(%{id: id} = user, event, dedupe, window_ms, props) do
-    with true <- enabled?(),
+    with true <- recording?(),
          {:allow, _} <-
            EngramWeb.RateLimiter.hit(
              "ph:#{event}:#{id}:#{dedupe}",
@@ -138,7 +160,7 @@ defmodule Engram.Analytics do
              :analytics_activity
            ) do
       props = if is_function(props, 0), do: props.(), else: props
-      PostHog.capture(id_for(user), event, props)
+      emit(user, event, props)
     else
       _ -> :ok
     end
@@ -259,14 +281,28 @@ defmodule Engram.Analytics do
     Enum.reject([email_id, Map.get(user, :external_id)], &is_nil/1)
   end
 
-  # A persisted user is re-read, so opt-out and email changes made after the
-  # caller loaded its struct still apply. A deleted user resolves to nil.
-  defp id_for(%User{id: id}) do
-    case Accounts.get_user(id) do
-      %User{} = fresh -> PostHog.distinct_id(fresh)
-      nil -> nil
+  # Both sinks get the event, or neither: a nil distinct id (opted out, no
+  # email, deleted) means nothing is recorded anywhere.
+  defp emit(user, event, props) do
+    case person(user) do
+      {nil, _user_id} ->
+        :ok
+
+      {distinct_id, user_id} ->
+        if user_id, do: :ok = EventLog.record(user_id, event, props)
+        PostHog.capture(distinct_id, event, props)
     end
   end
 
-  defp id_for(user), do: PostHog.distinct_id(user)
+  # A persisted user is re-read, so opt-out and email changes made after the
+  # caller loaded its struct still apply. A deleted user resolves to nil. Only
+  # a persisted user has an id to store; any other map reaches PostHog only.
+  defp person(%User{id: id}) do
+    case Accounts.get_user(id) do
+      %User{} = fresh -> {PostHog.distinct_id(fresh), fresh.id}
+      nil -> {nil, nil}
+    end
+  end
+
+  defp person(user), do: {PostHog.distinct_id(user), nil}
 end

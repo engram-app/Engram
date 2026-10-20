@@ -566,6 +566,14 @@ defmodule EngramWeb.Router do
 
     post "/onboarding/actions", OnboardingController, :record
 
+    # The web app's funnel events into our event log (never PostHog). Here,
+    # not the vault scope: onboarding steps are sent mid-wizard. Browser
+    # session only: no API key, plugin token or OAuth grant sends them.
+    scope "/" do
+      pipe_through EngramWeb.Plugs.RequireSession
+      post "/analytics/events", AnalyticsController, :events
+    end
+
     # Client trace beacon ingest. Must work before onboarding completes (the
     # SPA emits render/sync spans from the very first screen), so it lives in
     # this scope rather than the vault-scoped/RequireOnboarding pipeline.

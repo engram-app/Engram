@@ -288,6 +288,7 @@ defmodule Engram.Accounts do
              |> Repo.update(skip_tenant_check: true),
            :ok <- Engram.Analytics.erase(user) do
         :ok = delete_analytics_history(user.id)
+        Repo.after_commit(fn -> Engram.Analytics.EventLog.discard(user.id) end)
         {:ok, updated}
       end
     end)

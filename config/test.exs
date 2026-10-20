@@ -196,6 +196,12 @@ config :engram, :billing_enabled, true
 # Limits enforced by default in test env so existing tests don't bypass.
 config :engram, :limits_enforced, true
 
+# Our own analytics event log (Engram.Analytics.EventLog); a test that wants
+# it turns it on, and flushes its buffer by hand (`EventLog.flush/0`).
+config :engram, :analytics_event_log, false
+config :engram, :analytics_event_log_flush_ms, nil
+config :engram, :analytics_event_log_flush_on_terminate, false
+
 # Legal seeder skipped at boot in tests — SeederTest seeds per-case.
 config :engram, :seed_legal_on_boot, false
 

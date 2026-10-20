@@ -1,8 +1,10 @@
 import { analyticsClient } from "./client";
+import { serverEvents } from "./server-sink";
 
 // Who the browser is capturing for, and whether it may capture at all. Every
-// call is a no-op until init.ts has loaded posthog-js (see client.ts), which
-// on self-host or under GPC is never.
+// PostHog call is a no-op until init.ts has loaded posthog-js (see client.ts),
+// which on self-host or under GPC is never. The server event log
+// (server-sink.ts) follows the same consent whether or not PostHog loaded.
 
 // Properties set while capture was off. On re-opt-in the locale effect runs
 // before the identify hook lifts the opt-out and never re-runs, so they are
@@ -21,6 +23,7 @@ function resumeCaptureIfAllowed(): void {
 /** Bind captures to the signed-in user. Id only, never an email. */
 export function identifyUser(analyticsId: string): void {
 	resumeCaptureIfAllowed();
+	serverEvents.enable();
 	analyticsClient()?.identify(analyticsId);
 	if (held) {
 		const properties = held;
@@ -33,12 +36,14 @@ export function identifyUser(analyticsId: string): void {
  *  posthog-js persists this in localStorage, so it holds from the next page
  *  load onward, before /me has answered. */
 export function stopCapture(): void {
+	serverEvents.disable();
 	analyticsClient()?.opt_out_capturing();
 }
 
 /** Sign-out. `reset()` also clears posthog-js's persisted consent. */
 export function forgetUser(): void {
 	held = null;
+	serverEvents.disable();
 	analyticsClient()?.reset();
 }
 
