@@ -654,7 +654,33 @@ defmodule Engram.OAuth do
            |> grant_attrs(code_row.id, ip)
            |> Map.put(:granted_at, DateTime.utc_now())
            |> insert_refresh_token() do
+      announce_connection(user.id, code_row)
       {:ok, build_token_response(user, code_row, refresh_raw, refresh_row)}
+    end
+  end
+
+  # The exchange is when a connection exists: the consent tab hands straight
+  # back to the client, so this is how the user hears about it. Open web tabs
+  # get `connection_created` on `user:{id}`; an MCP client also gets one
+  # "you're connected" email. The code id is the token family id, so it names
+  # this connection and keeps the email to one. Runs after the refresh token
+  # committed (no surrounding transaction), so nothing announces a rollback.
+  defp announce_connection(user_id, code_row) do
+    case Repo.get(Client, code_row.client_id) do
+      nil ->
+        :ok
+
+      client ->
+        _ =
+          EngramWeb.Endpoint.broadcast("user:#{user_id}", "connection_created", %{
+            client_name: client.client_name,
+            kind: client.kind
+          })
+
+        if client.kind == "mcp",
+          do: Engram.Workers.ConnectedEmail.enqueue(user_id, code_row.id, client.client_name)
+
+        :ok
     end
   end
 

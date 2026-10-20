@@ -12,6 +12,7 @@ defmodule Engram.Mailer do
   - `send_account_deleted_notice/2`
   - `send_vault_deletion_notice/4`
   - `send_legal_notice/3`
+  - `send_connected/3`
   """
 
   alias Engram.Accounts.User
@@ -189,6 +190,44 @@ defmodule Engram.Mailer do
     """
 
     render_and_deliver(email, legal_subject(l, doc, kind), body, l)
+  end
+
+  @doc """
+  Tells a user an MCP client just connected, with a link into their vault.
+  The consent tab hands straight back to the client, so this (and the
+  `connection_created` notice in any open tab) is how they find the vault.
+  `client_name` is the client's registered name, which is optional.
+  """
+  def send_connected(%User{email: email} = user, client_name, app_url) do
+    l = I18n.locale_for(user)
+    app_url = String.trim_trailing(app_url, "/")
+
+    {subject, intro} =
+      if is_binary(client_name) and client_name != "",
+        do:
+          {I18n.t(l, "{client} is connected to Engram", client: client_name),
+           t(
+             l,
+             "{client} is now connected to your Engram account and can use the vaults you chose.",
+             client: client_name
+           )},
+        else:
+          {I18n.t(l, "Your AI tool is connected to Engram"),
+           t(
+             l,
+             "Your AI tool is now connected to your Engram account and can use the vaults you chose."
+           )}
+
+    body = """
+    <mj-text>#{greeting(l, user)}</mj-text>
+    <mj-text>#{intro}</mj-text>
+    <mj-text>#{t(l, "Open your vault any time to see your notes.")}</mj-text>
+    #{button(app_url <> "/", t(l, "Open your vault"))}
+    <mj-text>#{t(l, "If this was not you, disconnect it right away.")} <a href="#{app_url}/#settings/connections">#{t(l, "Manage your connections")}</a></mj-text>
+    <mj-text>#{t(l, "The Engram team")}</mj-text>
+    """
+
+    render_and_deliver(email, subject, body, l)
   end
 
   # Whole sentences per document, never "{document}" spliced into one: the
