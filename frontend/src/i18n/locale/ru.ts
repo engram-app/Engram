@@ -678,6 +678,9 @@ export default {
 	"Love it": "Мне это нравится",
 	"Tell us more": "Расскажите нам подробнее",
 	Language: "Язык",
+	"Show Engram in {language}?": "Показать Engram в {language}?",
+	"Switch language": "Сменить язык",
+	"Not now": "Не сейчас",
 	"My Vault": "Моё хранилище",
 	"{count} days left in your trial.": {
 		one: "До конца пробного периода остался {count} день.",

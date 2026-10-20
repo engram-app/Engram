@@ -663,6 +663,9 @@ export default {
 	"Love it": "Uwielbiam to",
 	"Tell us more": "Powiedz nam więcej",
 	Language: "Język",
+	"Show Engram in {language}?": "Pokaż Engram w {language}?",
+	"Switch language": "Zmień język",
+	"Not now": "Nie teraz",
 	"My Vault": "Mój Sejf",
 	"{count} days left in your trial.": {
 		one: "Jeden dzień pozostał do końca okresu próbnego.",

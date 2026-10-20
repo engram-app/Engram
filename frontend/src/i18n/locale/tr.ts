@@ -626,6 +626,9 @@ export default {
 	"Love it": "Çok beğendim",
 	"Tell us more": "Lütfen daha fazla bilgi verin",
 	Language: "Dil",
+	"Show Engram in {language}?": "Engram'ı {language} içinde göster?",
+	"Switch language": "Dili değiştir",
+	"Not now": "Şu anda değil",
 	"My Vault": "Benim Kasam",
 	"{count} days left in your trial.": {
 		one: "Deneme süreniz sona ermeye {count} gün kaldı.",

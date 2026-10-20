@@ -22,6 +22,7 @@ import {
 	translate,
 	translatePlural,
 } from "./translate";
+import { offerLocaleSwitch } from "./translation-prompt";
 
 type CatalogLoaders = Partial<Record<Locale, () => Promise<{ default: Catalog } | undefined>>>;
 // ^ undefined: vite:preloadError's preventDefault() makes the preload resolve nothing.
@@ -110,13 +111,6 @@ function LocaleProvider({
 		setDocumentLang(renderedLocale);
 	}, [renderedLocale]);
 
-	// Browser page translation: reported once per target (see watchTranslation).
-	const localeRef = useRef(locale);
-	useLayoutEffect(() => {
-		localeRef.current = locale;
-	}, [locale]);
-	useEffect(() => watchTranslation(() => localeRef.current), []);
-
 	const setLocale = useCallback(
 		(next: Locale) => {
 			setStoredLocale(next);
@@ -140,6 +134,24 @@ function LocaleProvider({
 		}),
 		[locale, renderedLocale, setLocale, catalog],
 	);
+
+	// Browser page translation: reported once per target, and a shipped target
+	// is offered as a real switch (see watchTranslation, offerLocaleSwitch).
+	const latest = useRef({ locale, setLocale, loaders });
+	useLayoutEffect(() => {
+		latest.current = { locale, setLocale, loaders };
+	}, [locale, setLocale, loaders]);
+	useEffect(
+		() =>
+			watchTranslation(
+				() => latest.current.locale,
+				(target) => {
+					offerLocaleSwitch(target, latest.current).catch(captureError);
+				},
+			),
+		[],
+	);
+
 	return <LocaleContext.Provider value={value}>{children}</LocaleContext.Provider>;
 }
 

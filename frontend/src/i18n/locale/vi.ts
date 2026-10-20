@@ -625,6 +625,9 @@ export default {
 	"Love it": "Rất thích",
 	"Tell us more": "Hãy cho chúng tôi biết thêm",
 	Language: "Ngôn ngữ",
+	"Show Engram in {language}?": "Hiển thị Engram trong {language}?",
+	"Switch language": "Chuyển đổi ngôn ngữ",
+	"Not now": "Không hiện tại",
 	"My Vault": "Kho lưu trữ của tôi",
 	"{count} days left in your trial.": {
 		other: "Còn {count} ngày trong thời gian dùng thử của bạn.",

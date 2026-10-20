@@ -674,6 +674,9 @@ export default {
 	"Love it": "Мені це подобається",
 	"Tell us more": "Розкажіть нам більше",
 	Language: "Мова",
+	"Show Engram in {language}?": "Показати Engram у {language}?",
+	"Switch language": "Змінити мову",
+	"Not now": "Не зараз",
 	"My Vault": "Моє сховище",
 	"{count} days left in your trial.": {
 		one: "До кінця вашого пробного періоду залишилося {count} день.",

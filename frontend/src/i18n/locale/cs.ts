@@ -665,6 +665,9 @@ export default {
 	"Love it": "Miluji to",
 	"Tell us more": "Řekněte nám více",
 	Language: "Jazyk",
+	"Show Engram in {language}?": "Zobrazit Engram v {language}?",
+	"Switch language": "Změnit jazyk",
+	"Not now": "Ne, děkuji",
 	"My Vault": "Můj trezor",
 	"{count} days left in your trial.": {
 		one: "Zbývá vám {count} den do konce zkušební verze.",

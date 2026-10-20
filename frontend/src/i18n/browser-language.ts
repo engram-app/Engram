@@ -102,4 +102,11 @@ function writeStorage(area: StorageArea, key: string, value: string): void {
 	}
 }
 
-export { reportLanguageDemand, setDocumentLang, unsupportedLanguages, watchTranslation };
+export {
+	readStorage,
+	reportLanguageDemand,
+	setDocumentLang,
+	unsupportedLanguages,
+	watchTranslation,
+	writeStorage,
+};
