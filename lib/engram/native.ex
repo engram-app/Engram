@@ -200,11 +200,22 @@ defmodule Engram.Native do
 
   Options: `:b` BM25 length weight (default 0.75), `:cap` score each
   document as if it were at most `cap` x `avgdl` long (default none). The
-  defaults encode exactly as before the options existed.
+  defaults encode exactly as before the options existed. A `b` outside
+  [0, 1] or a `cap` below 1 would make the norm zero or negative (inf, NaN
+  or negative weights) and raises `ArgumentError` before the NIF runs.
   """
   def encode_documents(texts, filter_key, avgdl, language, opts \\ []) do
-    b = Keyword.get(opts, :b, 0.75) / 1
-    cap = with c when is_number(c) <- Keyword.get(opts, :cap), do: c / 1
+    b = Keyword.get(opts, :b, 0.75)
+    cap = Keyword.get(opts, :cap)
+
+    unless is_number(b) and b >= 0 and b <= 1,
+      do: raise(ArgumentError, "b must be in [0, 1], got: #{inspect(b)}")
+
+    unless is_nil(cap) or (is_number(cap) and cap >= 1),
+      do: raise(ArgumentError, "cap must be nil or >= 1, got: #{inspect(cap)}")
+
+    b = b / 1
+    cap = cap && cap / 1
 
     call(:keyword_encode, texts, %{dirty: true}, fn ->
       encode_documents_nif(texts, filter_key, avgdl, language, b, cap)

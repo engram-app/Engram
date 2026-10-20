@@ -71,7 +71,8 @@ defmodule Engram.KeywordIndex.QdrantSparse do
   # buried by length normalization under every short chunk, and with no
   # penalty at all it would outrank them.
   #
-  # `b:` (default 0.75) is BM25's length weight, in [0, 1]. Merged v5 groups
+  # `b:` (default 0.75) is BM25's length weight, in [0, 1] (the NIF wrapper
+  # refuses anything else). Merged v5 groups
   # use a smaller one (plan Task 14.1): at 0.75 a 30 KB group sits 10 to 50x
   # above `avgdl` and is buried on the leg exact queries need.
   #
@@ -83,7 +84,6 @@ defmodule Engram.KeywordIndex.QdrantSparse do
     lang = Tokenizer.lang(language)
     b = Keyword.get(opts, :b, 0.75)
     cap = if Keyword.get(opts, :cap_doc_len, false), do: @cap_len_avgdls
-    unless is_number(b) and b >= 0 and b <= 1, do: raise(ArgumentError, "b: #{inspect(b)}")
 
     texts
     |> calls()
@@ -132,7 +132,7 @@ defmodule Engram.KeywordIndex.QdrantSparse do
     %{indices: indices, values: values}
   end
 
-  @doc "Packed sparse vector (see `encode_documents/4`) back to plain lists."
+  @doc "Packed sparse vector (see `encode_documents/5`) back to plain lists."
   @spec unpack(Engram.KeywordIndex.packed_sparse()) :: Engram.KeywordIndex.sparse()
   def unpack(%{indices: indices, values: values}) do
     %{

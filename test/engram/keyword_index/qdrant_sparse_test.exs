@@ -91,8 +91,8 @@ defmodule Engram.KeywordIndex.QdrantSparseTest do
     {%{indices: indices, values: values}, doc_len}
   end
 
-  # The NIF hard-codes b = 0.75; `b:` re-encodes with an avgdl that makes
-  # its norm equal BM25's at that b, so the weights must match the reference.
+  # `b:` and `cap_doc_len` go to the NIF, which computes BM25's norm at that
+  # b over min(len, 3 x avgdl); the weights must match the reference.
   describe "b: (merged v5 groups, plan Task 14.1)" do
     @long String.duplicate("alpha beta gamma delta ", 200) <> "omega"
 
