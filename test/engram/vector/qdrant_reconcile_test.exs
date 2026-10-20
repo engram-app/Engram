@@ -734,4 +734,22 @@ defmodule Engram.Vector.QdrantReconcileTest do
     assert Qdrant.deployment("https://cloud.qdrant.io.evil.test") == :self_host
     assert Qdrant.deployment("") == :self_host
   end
+
+  # A URL without a scheme parses with no host, which silently read as
+  # self-host: no breakers, no log (review L4).
+  test "deployment: a scheme-less Cloud URL is still :cloud" do
+    assert Qdrant.deployment("abc-123.eu-central-1-0.aws.cloud.qdrant.io:6333") == :cloud
+    assert Qdrant.deployment("abc-123.aws.cloud.qdrant.io") == :cloud
+    assert Qdrant.deployment("localhost:6333") == :self_host
+  end
+
+  # QDRANT_STRICT_PROFILE lets staging (self-host) rehearse the Cloud limits.
+  test "deployment: the :qdrant_strict_profile override wins over the host" do
+    ServiceConfig.put_override(:qdrant_strict_profile, :cloud)
+    assert Qdrant.deployment("http://qdrant:6333") == :cloud
+
+    ServiceConfig.put_override(:qdrant_strict_profile, :self_host)
+    assert Qdrant.deployment("https://abc.aws.cloud.qdrant.io") == :self_host
+    assert Qdrant.deployment_source() == :override
+  end
 end

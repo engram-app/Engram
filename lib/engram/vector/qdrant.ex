@@ -454,12 +454,31 @@ defmodule Engram.Vector.Qdrant do
   defp strict_mode?, do: ServiceConfig.get(:qdrant_strict_mode, true)
 
   @doc """
-  `:cloud` for a Qdrant Cloud URL (`*.cloud.qdrant.io`), where the strict
-  hard limits (`QdrantLayout.desired_strict/1`) apply; `:self_host` otherwise.
+  `:cloud` for a Qdrant Cloud URL (`*.cloud.qdrant.io`, with or without a
+  scheme), where the strict hard limits (`QdrantLayout.desired_strict/1`)
+  apply; `:self_host` otherwise. `QDRANT_STRICT_PROFILE` (`:qdrant_strict_profile`)
+  overrides it, so staging (self-host) can rehearse the Cloud limits.
   """
   @spec deployment(String.t()) :: :cloud | :self_host
   def deployment(url) do
-    host = URI.parse(url).host || ""
+    case ServiceConfig.get(:qdrant_strict_profile) do
+      profile when profile in [:cloud, :self_host] -> profile
+      _ -> deployment_by_host(url)
+    end
+  end
+
+  @doc "`:override` when `:qdrant_strict_profile` decides `deployment/1`, `:host` otherwise."
+  @spec deployment_source() :: :override | :host
+  def deployment_source,
+    do:
+      if(ServiceConfig.get(:qdrant_strict_profile) in [:cloud, :self_host],
+        do: :override,
+        else: :host
+      )
+
+  # A scheme-less URL parses with no host; read it as `//host:port` then.
+  defp deployment_by_host(url) do
+    host = URI.parse(url).host || URI.parse("//" <> url).host || ""
     if String.ends_with?(host, ".cloud.qdrant.io"), do: :cloud, else: :self_host
   end
 
@@ -482,6 +501,8 @@ defmodule Engram.Vector.Qdrant do
     with {:ok, info} <- collection_info(col) do
       version = server_version()
       log_missing_guards(version)
+
+      Logger.info("qdrant strict profile #{deployment(base_url())} (#{deployment_source()})")
 
       limits = strict_limits(col, volume_stats())
 
