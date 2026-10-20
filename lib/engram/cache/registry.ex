@@ -55,6 +55,8 @@ defmodule Engram.Cache.Registry do
     %{name: :terms, ttl: 300_000, cache_nil: false, evict_match: :key, pg_channel: nil},
     # Last usage_meters.last_active_at stamp per user (debounce).
     %{name: :activity, ttl: :infinity, cache_nil: false, evict_match: :key, pg_channel: nil},
+    # Last api_keys.last_used stamp per key id (debounce, Accounts).
+    %{name: :api_key_used, ttl: :infinity, cache_nil: false, evict_match: :key, pg_channel: nil},
     # Plan limits maps by plan id; plan rows are static at runtime.
     %{name: :plan, ttl: :infinity, cache_nil: true, evict_match: :key, pg_channel: nil},
     # Per-request auth and tenancy lookups. Freshness comes from the

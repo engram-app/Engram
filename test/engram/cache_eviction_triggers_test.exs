@@ -163,6 +163,35 @@ defmodule Engram.CacheEvictionTriggersTest do
     end)
   end
 
+  # Authentication stamps last_used (hourly per key); the stamp must not
+  # evict, and the check is a row compare, not two jsonb documents.
+  test "api_keys: the UPDATE trigger names every column but last_used, no jsonb" do
+    Sandbox.unboxed_run(Repo, fn ->
+      %{rows: [[defn]]} =
+        sql(
+          """
+          SELECT pg_get_triggerdef(t.oid) FROM pg_trigger t
+          WHERE t.tgrelid = 'api_keys'::regclass AND t.tgname = 'api_keys_cache_notify_1'
+          """,
+          []
+        )
+
+      %{rows: cols} =
+        sql(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = 'api_keys'",
+          []
+        )
+
+      refute defn =~ "to_jsonb"
+
+      for [col] <- cols, col != "last_used" do
+        assert defn =~ ~r/old\.#{col}\b/, "api_keys.#{col} is not in the trigger's WHEN clause"
+      end
+
+      refute defn =~ "old.last_used"
+    end)
+  end
+
   defp insert_note(user_id, vault_id) do
     %{rows: [[id]]} =
       sql(
