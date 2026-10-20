@@ -33,25 +33,8 @@ defmodule Engram.Vector.Qdrant do
   @default_url "http://localhost:6333"
   @default_collection "obsidian_notes"
 
-  # Payload fields every tenant-scoped op filters on. Qdrant Cloud strict-mode
-  # rejects (400) a filter on an un-indexed field, so each must have a keyword
-  # index before any upsert/search/delete. See #626. `type_hmac` is the OKF
-  # frontmatter `type` blind index (spec 2026-07-02). `folder_hmac`/`tags_hmac`
-  # are the folder and tag search filters (#1609). No `note_id`: no read path
-  # filters on it and v5 points do not carry it (spec 3.3b). An index that
-  # already exists is left alone; dropping it is the new cluster's (Task 8.2).
-  # These are the legacy (v3/v4) names; the v5 short-key indexes come from
-  # `PayloadKeys.index_fields/0`, and both sets live until the pass drops the
-  # legacy fields (Task 18.1).
-  @payload_index_fields ~w(user_id vault_id path_hmac type_hmac folder_hmac tags_hmac)
-  # Created only while the v5 format is off, so a new collection is exactly
-  # what main creates until the flag flips.
-  @legacy_only_index_fields ~w(note_id)
-
-  # OKF frontmatter dates are stored plaintext (see build_prepared/6) so
-  # Qdrant can range-filter on them; they need an integer payload index
-  # rather than keyword.
-  @integer_payload_index_fields ~w(fm_timestamp fm_created)
+  # The payload indexes (legacy and v5, by server version) are
+  # `QdrantLayout.payload_indexes/2`.
 
   # The largest request shapes any caller sends, so the Qdrant Cloud strict
   # limits (`QdrantLayout.desired_strict/1`) can sit above them with headroom.
@@ -277,18 +260,33 @@ defmodule Engram.Vector.Qdrant do
   end
 
   defp do_ensure_collection(col, dims) do
-    case create_collection(col, dims) do
+    version = layout_version()
+
+    case create_collection(col, dims, version) do
       {:ok, :created} ->
-        with :ok <- ensure_payload_indexes(col, MapSet.new()), do: reconciled(col)
+        with :ok <- ensure_payload_indexes(col, MapSet.new(), version), do: reconciled(col)
 
       {:ok, {:exists, :unknown}} ->
         {:ok, :unverified}
 
       {:ok, {:exists, indexed}} ->
-        with :ok <- ensure_payload_indexes(col, indexed), do: reconciled(col)
+        with :ok <- ensure_payload_indexes(col, indexed, version), do: reconciled(col)
 
       {:error, _} = error ->
         error
+    end
+  end
+
+  # The server version the layout is chosen for (`QdrantLayout.tenant_layout?/1`).
+  # Only while the app manages the layout (`:qdrant_reconcile_config`, the
+  # same switch as the PATCH reconcile; off in tests, so Bypass suites see no
+  # extra GET). nil = unknown, which keeps the pre-1.19.2 layout.
+  defp layout_version do
+    if ServiceConfig.get(:qdrant_reconcile_config, true) do
+      with nil <- server_version() do
+        Logger.warning("qdrant version unreadable, using the pre-1.19.2 collection layout")
+        nil
+      end
     end
   end
 
@@ -300,10 +298,10 @@ defmodule Engram.Vector.Qdrant do
     {:ok, :verified}
   end
 
-  defp create_collection(col, dims) do
+  defp create_collection(col, dims, version) do
     body =
       dims
-      |> QdrantLayout.create_params(v5_payload_format?())
+      |> QdrantLayout.create_params(v5_payload_format?(), version)
       |> then(fn b ->
         if binary_quantization_enabled?() do
           Map.put(b, "quantization_config", %{"binary" => %{"always_ram" => true}})
@@ -341,14 +339,13 @@ defmodule Engram.Vector.Qdrant do
   # collection that already existed: prod indexed only the first four, and
   # strict mode 400'd every folder, tag, type and date filter.
   #
-  defp ensure_payload_indexes(col, indexed) do
-    legacy_only = if v5_payload_format?(), do: [], else: @legacy_only_index_fields
-    keyword = Enum.map(@payload_index_fields ++ legacy_only, &{&1, "keyword"})
-    integer = Enum.map(@integer_payload_index_fields, &{&1, "integer"})
-    v5 = if v5_payload_format?(), do: PayloadKeys.index_fields(), else: []
-
+  # An index that exists is never re-created, so an existing collection keeps
+  # its index params; only a missing field gets the version's schema.
+  defp ensure_payload_indexes(col, indexed, version) do
     missing =
-      Enum.reject(keyword ++ integer ++ v5, fn {field, _} -> MapSet.member?(indexed, field) end)
+      version
+      |> QdrantLayout.payload_indexes(v5_payload_format?())
+      |> Enum.reject(fn {field, _} -> MapSet.member?(indexed, field) end)
 
     last = length(missing) - 1
 
@@ -1726,7 +1723,7 @@ defmodule Engram.Vector.Qdrant do
     # OAuth grant (and a subset-restricted API key) needs: without it the only
     # options were one query per vault or dropping the filter entirely, and
     # dropping it leaks every vault the credential was scoped away from (#729).
-    # `vault_id` is already a payload index (@payload_index_fields), so
+    # `vault_id` is already a payload index (`QdrantLayout.payload_indexes/2`), so
     # `any` needs no new index — same shape as tags_hmac below.
     must =
       case vault_id do

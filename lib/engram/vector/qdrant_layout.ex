@@ -9,8 +9,12 @@ defmodule Engram.Vector.QdrantLayout do
   vectors on disk, serialises optimizer rebuilds onto one thread, and turns on
   strict-mode upsert guards for memory and disk.
 
-  Deliberately NOT here: `datatype` (float16 needs a new collection) and
-  `max_segment_size` / `default_segment_number` (need a disk-headroom gate).
+  On Qdrant >= 1.19.2 (`tenant_layout?/1`, Task 8.1) the graph is per tenant:
+  `m: 0` drops the global HNSW graph, `payload_m: 16` builds one per value of
+  the `is_tenant` field, every other payload index sets `enable_hnsw: false`,
+  and every payload index is on disk. Below 1.19.2 (prod's old 1.18.2
+  cluster, self-host compose) the layout is exactly the pre-8.1 one, so the
+  reconcile never PATCHes those collections for it.
 
   Field names are the PATCH (`UpdateCollection`) names. The GET response names
   two of them differently (`optimizers_config` reads back as
@@ -19,6 +23,9 @@ defmodule Engram.Vector.QdrantLayout do
   (`update_collection` in `toc/collection_meta_ops.rs`), not replaced, so a
   partial body never resets an unrelated setting.
   """
+
+  alias Engram.ServiceConfig
+  alias Engram.Vector.PayloadKeys
 
   # Strict-mode fields by the Qdrant versions that honour them, `since <= v <
   # until`, from each tag's docs/redoc/master/openapi.json `StrictModeConfig`:
@@ -54,8 +61,36 @@ defmodule Engram.Vector.QdrantLayout do
     "optimizers_config" => %{"max_optimization_threads" => 1}
   }
 
+  # Task 8.1, Qdrant >= 1.19.2. `max_segment_size` is in KB (1 KB = one
+  # 256-dim f32 vector), so about 1 GB per segment.
+  @tenant_version "1.19.2"
+  @tenant_hnsw %{"m" => 0, "payload_m" => 16, "max_indexing_threads" => 1}
+  @max_segment_size_kb 1_000_000
+
+  # Payload fields every tenant-scoped op filters on. Qdrant Cloud strict-mode
+  # rejects (400) a filter on an un-indexed field, so each must have an index
+  # before any upsert/search/delete (#626). `type_hmac` is the OKF frontmatter
+  # `type` blind index (spec 2026-07-02); `folder_hmac`/`tags_hmac` are the
+  # folder and tag search filters (#1609). These are the legacy (v3/v4) names;
+  # the v5 short-key indexes come from `PayloadKeys.index_fields/0`, and both
+  # sets live until the pass drops the legacy fields (Task 18.1).
+  @legacy_keyword ~w(user_id vault_id path_hmac type_hmac folder_hmac tags_hmac)
+  # OKF frontmatter dates, plaintext so Qdrant can range-filter on them.
+  @legacy_integer ~w(fm_timestamp fm_created)
+  # No read path filters on `note_id` and v5 points do not carry it (spec
+  # 3.3b). Created only on a pre-1.19.2 server with the v5 format off, so such
+  # a collection is exactly what main creates. An index that already exists
+  # is left alone; the new cluster simply never gets one (Task 8.2).
+  @legacy_only ~w(note_id)
+  # The tenant field of each format. Legacy `user_id` gets no `is_tenant`
+  # (one tenant field per collection), but keeps `enable_hnsw` so copied
+  # v3/v4 points still have a per-user graph while the pass runs.
+  @tenant_field "u"
+  @legacy_tenant_field "user_id"
+
   # PATCH key -> path of the same settings in the GET `config` object.
   @get_path %{
+    "hnsw_config" => ["hnsw_config"],
     "vectors" => ["params", "vectors"],
     "sparse_vectors" => ["params", "sparse_vectors"],
     "optimizers_config" => ["optimizer_config"],
@@ -139,23 +174,89 @@ defmodule Engram.Vector.QdrantLayout do
   def desired(version, _limits, false, deployment) do
     case supported_guards(version, @off_limits) do
       [] ->
-        @storage
+        storage(version)
 
       guards ->
-        Map.put(@storage, "strict_mode_config", Map.merge(lifted(deployment), Map.new(guards)))
+        Map.put(
+          storage(version),
+          "strict_mode_config",
+          Map.merge(lifted(deployment), Map.new(guards))
+        )
     end
   end
 
   def desired(version, limits, true, deployment) do
     case supported_guards(version, limits || @default_limits) do
       [] ->
-        @storage
+        storage(version)
 
       guards ->
         strict = Map.merge(desired_strict(deployment), Map.new([{"enabled", true} | guards]))
-        Map.put(@storage, "strict_mode_config", strict)
+        Map.put(storage(version), "strict_mode_config", strict)
     end
   end
+
+  @doc "True on Qdrant >= 1.19.2, where the tenant layout applies (Task 8.1); false when unknown."
+  @spec tenant_layout?(Version.t() | nil) :: boolean()
+  def tenant_layout?(nil), do: false
+  def tenant_layout?(version), do: Version.compare(version, @tenant_version) != :lt
+
+  defp storage(version) do
+    if tenant_layout?(version) do
+      @storage
+      |> Map.put("hnsw_config", @tenant_hnsw)
+      |> Map.update!("optimizers_config", fn o ->
+        Map.merge(o, %{
+          "max_segment_size" => @max_segment_size_kb,
+          "deleted_threshold" => ServiceConfig.get(:qdrant_deleted_threshold, 0.2)
+        })
+      end)
+    else
+      @storage
+    end
+  end
+
+  @doc """
+  The payload indexes to create, `[{field, schema}]`, for a server at
+  `version` with the v5 format on or off. Below 1.19.2 these are the pre-8.1
+  sets (bare `"keyword"` / `"integer"` schemas, `note_id` while v5 is off).
+  On 1.19.2 every index is on disk, `u` is the tenant field, and only the two
+  tenant fields build HNSW edges.
+  """
+  @spec payload_indexes(Version.t() | nil, boolean()) :: [{String.t(), String.t() | map()}]
+  def payload_indexes(version, v5?) do
+    tenant? = tenant_layout?(version)
+    legacy_only = if v5? or tenant?, do: [], else: @legacy_only
+
+    indexes =
+      Enum.map(@legacy_keyword ++ legacy_only, &{&1, "keyword"}) ++
+        Enum.map(@legacy_integer, &{&1, "integer"}) ++
+        if(v5?, do: PayloadKeys.index_fields(), else: [])
+
+    if tenant?, do: Enum.map(indexes, &tenant_schema/1), else: indexes
+  end
+
+  defp tenant_schema({@legacy_tenant_field, "keyword"}),
+    do: {@legacy_tenant_field, %{"type" => "keyword", "on_disk" => true}}
+
+  defp tenant_schema({field, "keyword"}),
+    do: {field, %{"type" => "keyword", "on_disk" => true, "enable_hnsw" => false}}
+
+  defp tenant_schema({field, "integer"}) do
+    {field,
+     %{
+       "type" => "integer",
+       "lookup" => false,
+       "range" => true,
+       "on_disk" => true,
+       "enable_hnsw" => false
+     }}
+  end
+
+  defp tenant_schema({@tenant_field, schema}),
+    do: {@tenant_field, Map.put(schema, "is_tenant", true)}
+
+  defp tenant_schema({field, schema}), do: {field, Map.put(schema, "enable_hnsw", false)}
 
   defp lifted(:cloud), do: @lifted_limits
   defp lifted(:self_host), do: %{}
@@ -272,13 +373,16 @@ defmodule Engram.Vector.QdrantLayout do
 
   defp limit(_size, _reserve, static), do: %{percent: static, reserve: nil}
 
-  @doc "PATCH keys that move data on disk (headroom-gated by the caller)."
+  @doc """
+  PATCH keys that rewrite data on disk (headroom-gated by the caller).
+  `hnsw_config` rebuilds every segment's graph.
+  """
   @spec on_disk_keys() :: [String.t()]
-  def on_disk_keys, do: ["vectors", "sparse_vectors"]
+  def on_disk_keys, do: ["vectors", "sparse_vectors", "hnsw_config"]
 
-  @doc "Create-collection body: the desired storage params plus shape."
-  @spec create_params(pos_integer(), boolean()) :: map()
-  def create_params(dims, float16? \\ false) do
+  @doc "Create-collection body: the desired storage params for `version` plus shape."
+  @spec create_params(pos_integer(), boolean(), Version.t() | nil) :: map()
+  def create_params(dims, float16? \\ false, version \\ nil) do
     dense = %{"size" => dims, "distance" => "Cosine", "on_disk" => true}
 
     # float16 halves dense storage (Task 15.1), only with the v5 payload
@@ -286,7 +390,7 @@ defmodule Engram.Vector.QdrantLayout do
     # datatype, so an existing float32 collection is not drift and boot never
     # PATCHes it (Qdrant cannot convert in place).
     dense = if float16?, do: Map.put(dense, "datatype", "float16"), else: dense
-    put_in(@storage, ["vectors", "dense"], dense)
+    put_in(storage(version), ["vectors", "dense"], dense)
   end
 
   @doc """
