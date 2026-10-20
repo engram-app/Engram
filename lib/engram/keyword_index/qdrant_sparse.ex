@@ -44,6 +44,10 @@ defmodule Engram.KeywordIndex.QdrantSparse do
   # chunks of at most 2 KB keeps a call well under a second; the token -> dim
   # memo just restarts per batch.
   @docs_per_call 256
+  # And this many bytes of text: the encoder's token -> dim memo spans the
+  # call, so a call over merged (30 KB) or floor (1 MiB) documents held every
+  # term of all of them at once. Ordinary chunks never reach it (256 x 2.5 KB).
+  @bytes_per_call 1_048_576
   # A query's keyword leg reads this many characters. Search input is
   # otherwise bounded only by the request body limit, and NIF memory and
   # time scale with it.
@@ -69,7 +73,7 @@ defmodule Engram.KeywordIndex.QdrantSparse do
 
     encoded =
       texts
-      |> Enum.chunk_every(@docs_per_call)
+      |> calls()
       |> Enum.flat_map(fn batch ->
         for {indices, values, doc_len} <-
               Engram.Native.encode_documents(batch, filter_key, avgdl / 1, lang),
@@ -79,6 +83,25 @@ defmodule Engram.KeywordIndex.QdrantSparse do
     if Keyword.get(opts, :cap_doc_len, false),
       do: Enum.zip_with(texts, encoded, &cap_doc_len(&1, &2, filter_key, avgdl, lang)),
       else: encoded
+  end
+
+  # Batches of at most `@docs_per_call` texts and `@bytes_per_call` bytes;
+  # a text over the byte budget goes alone.
+  defp calls(texts) do
+    Enum.chunk_while(
+      texts,
+      {[], 0, 0},
+      fn text, {batch, count, bytes} ->
+        if batch != [] and
+             (count == @docs_per_call or bytes + byte_size(text) > @bytes_per_call),
+           do: {:cont, Enum.reverse(batch), {[text], 1, byte_size(text)}},
+           else: {:cont, {[text | batch], count + 1, bytes + byte_size(text)}}
+      end,
+      fn
+        {[], _, _} -> {:cont, {[], 0, 0}}
+        {batch, _, _} -> {:cont, Enum.reverse(batch), {[], 0, 0}}
+      end
+    )
   end
 
   defp cap_doc_len(text, {_vector, doc_len} = encoded, filter_key, avgdl, lang) do
