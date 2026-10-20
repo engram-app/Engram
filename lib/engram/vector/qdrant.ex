@@ -1764,8 +1764,9 @@ defmodule Engram.Vector.Qdrant do
   end
 
   # The payload keys `search_results/1` reads; nothing else is fetched.
+  # `u` only marks a v5 point (its AAD is implied bound, Task 15.7).
   @result_payload ~w(text title heading_path source_path tags vault_id text_nonce
-                     title_nonce heading_path_nonce aad_version)
+                     title_nonce heading_path_nonce aad_version u)
 
   defp retrieve(_col, [], _search_opts), do: {:ok, []}
 
@@ -1940,7 +1941,8 @@ defmodule Engram.Vector.Qdrant do
         heading_path_nonce: Map.get(payload, "heading_path_nonce"),
         # T3.6 — present on AAD-bound payloads (>= v2). Drives the
         # bind-vs-empty AAD decision in `Engram.Crypto.qdrant_aad/3`.
-        aad_version: Map.get(payload, "aad_version")
+        aad_version: Map.get(payload, "aad_version"),
+        format: if(Map.has_key?(payload, PayloadKeys.short(:user_id)), do: :v5)
       }
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new()

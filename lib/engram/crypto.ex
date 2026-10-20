@@ -949,11 +949,16 @@ defmodule Engram.Crypto do
   # before this PR have neither key — fall back to empty AAD. `collection`
   # may be nil when callers haven't been threaded through yet (legacy reads
   # only); empty AAD applies in that case too.
+  #
+  # Task 15.7: a v5 point stores no `aad_version`; the v5 payload format
+  # (`format: :v5`, set by `Qdrant` from the short keys) implies it is bound.
+  # v3/v4 points still read through their stored `aad_version`.
   defp qdrant_aad(candidate, collection, field) do
     aad_version = Map.get(candidate, :aad_version)
     qdrant_id = Map.get(candidate, :qdrant_id)
+    bound? = Map.get(candidate, :format) == :v5 or aad_version_aad_bound?(aad_version)
 
-    if is_binary(collection) and is_binary(qdrant_id) and aad_version_aad_bound?(aad_version),
+    if is_binary(collection) and is_binary(qdrant_id) and bound?,
       do: aad_for_qdrant(collection, qdrant_id, field),
       else: <<>>
   end
