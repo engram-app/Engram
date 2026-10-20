@@ -41,7 +41,8 @@ defmodule EngramWeb.SearchController do
             limit: note_limit,
             cross_vault: cross_vault,
             mode: Search.parse_mode(params["mode"]),
-            group_by_note: true
+            group_by_note: true,
+            surface: EngramWeb.Plugs.WebActivity.surface(conn.assigns)
           ]
           |> then(&if(tags, do: Keyword.put(&1, :tags, tags), else: &1))
           |> then(&if(folder, do: Keyword.put(&1, :folder, folder), else: &1))

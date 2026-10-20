@@ -229,6 +229,83 @@ defmodule Engram.Observability.EmittersTest do
       assert body["properties"]["result_count"] == 0
       assert is_integer(body["properties"]["latency_ms"])
       assert body["properties"]["cross_vault"] == false
+      assert body["properties"]["status"] == "ok"
+      refute Map.has_key?(body["properties"], "surface")
+    end
+
+    test "carries the caller's surface", %{bypass: bypass} do
+      user = user_with_clerk_id()
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
+      Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
+      on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+      Engram.MockEmbedder |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
+      parent = self()
+
+      Bypass.expect(bypass, fn conn ->
+        if conn.request_path == "/capture/" do
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          send(parent, {:posthog_body, Jason.decode!(body)})
+          Plug.Conn.resp(conn, 200, "1")
+        else
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => []}))
+        end
+      end)
+
+      assert {:ok, []} = Search.search(user, vault, "anything", surface: "mcp")
+
+      assert_receive {:posthog_body, %{"event" => "search_performed"} = body}, 1_500
+      assert body["properties"]["surface"] == "mcp"
+    end
+
+    test "a refused search is search_performed{status: refused}", %{bypass: bypass} do
+      EngramWeb.RateLimiter.reset_buckets!()
+      user = user_with_clerk_id()
+      insert(:user_limit_override, user: user, key: "ai_searches_per_day", value: %{"v" => 0})
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
+      expect_captures(bypass)
+
+      assert {:error, :search_cap_exceeded, 0} =
+               Search.search(user, vault, "anything", surface: "web")
+
+      assert_receive {:posthog_body, %{"event" => "search_performed"} = body}, 1_500
+      assert body["properties"]["status"] == "refused"
+      assert body["properties"]["surface"] == "web"
+      assert_receive {:posthog_body, %{"event" => "limit_hit"} = hit}, 1_500
+      assert hit["properties"]["surface"] == "web"
+    end
+
+    # A client retrying past its cap must not send one event per retry.
+    test "refusals are throttled per user and surface", %{bypass: bypass} do
+      EngramWeb.RateLimiter.reset_buckets!()
+      user = user_with_clerk_id()
+      insert(:user_limit_override, user: user, key: "ai_searches_per_day", value: %{"v" => 0})
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
+      expect_captures(bypass)
+
+      for surface <- ["web", "web", "web", "mcp"] do
+        assert {:error, :search_cap_exceeded, 0} =
+                 Search.search(user, vault, "anything", surface: surface)
+      end
+
+      refused =
+        Stream.repeatedly(fn ->
+          receive do
+            {:posthog_body, %{"event" => "search_performed"} = b} -> b["properties"]["surface"]
+            {:posthog_body, _other} -> :skip
+          after
+            300 -> :done
+          end
+        end)
+        |> Enum.take_while(&(&1 != :done))
+        |> Enum.reject(&(&1 == :skip))
+
+      assert Enum.sort(refused) == ["mcp", "web"]
+    end
+
+    test "MCP searches name their surface" do
+      assert Engram.MCP.Handlers.build_search_opts(%{})[:surface] == "mcp"
     end
   end
 
@@ -376,12 +453,11 @@ defmodule Engram.Observability.EmittersTest do
       user = user_with_clerk_id()
       insert(:user_limit_override, user: user, key: "ai_searches_per_day", value: %{"v" => 0})
       {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
-      expect_capture(bypass)
+      expect_captures(bypass)
 
       assert {:error, :search_cap_exceeded, 0} = Search.search(user, vault, "anything")
 
-      assert_receive {:posthog_body, body}, 1_500
-      assert body["event"] == "limit_hit"
+      assert_receive {:posthog_body, %{"event" => "limit_hit"} = body}, 1_500
       assert body["properties"]["limit_key"] == "ai_searches_per_day"
     end
   end
