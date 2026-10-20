@@ -990,7 +990,7 @@ defmodule Engram.Indexing do
          # other point still answers tag filters with the pre-edit tags. One
          # PATCH refreshes the lot — the values are identical across a note's
          # points, which is why `chunk_index` no longer lives in the payload.
-         :ok <- Qdrant.set_payload(collection(), refresh_ids, note_payload) do
+         :ok <- refresh_payload(prepared, refresh_ids, note_payload) do
       # Wholesale rewrite rather than a row-level diff: the rows are local and
       # cheap, and replacing them all sidesteps every ordering problem with
       # `chunks_note_id_position_index` when positions shift. One transaction
@@ -2491,12 +2491,16 @@ defmodule Engram.Indexing do
     # `notes` columns and `note_attrs` rows (the source of truth, written in
     # the chunk-row transaction by `stamp_flat_fields/1`) and, once
     # `:write_v5_layout` is on, the v5 Qdrant payload.
-    flat = FlatFields.extract(note.content, filter_key)
+    # Both behind flags that are off, so with them off a pass does exactly
+    # what main does: no extraction, no Postgres writes, the v3 payload.
+    v5_format? = Qdrant.v5_payload_format?()
     v5? = write_v5_layout?()
+    flat = if v5_format? or v5?, do: FlatFields.extract(note.content, filter_key)
     note_payload = if v5?, do: PayloadV5.build(note, flat), else: note_payload(note)
     ctx = {note, user, note_payload, now, v5?}
 
-    ordinals = PointId.ordinals(Enum.map(plan.entries, &entry_chunk(&1).context_hmac))
+    point_ids =
+      if v5?, do: v5_point_ids(note, plan), else: Enum.map(plan.entries, fn _ -> nil end)
 
     # The whole note in one call so the encoder can share per-note work (the
     # token -> dim memo) across chunks. One sparse vector per :embed entry, in
@@ -2514,11 +2518,11 @@ defmodule Engram.Indexing do
 
     prepared =
       Enum.reduce_while(
-        Enum.zip(plan.entries, ordinals),
+        Enum.zip(plan.entries, point_ids),
         {:ok, [], Enum.zip(entry_vectors(plan, vectors), sparse)},
         fn
-          {entry, ordinal}, {:ok, acc, pending} ->
-            case build_entry(entry, {ctx, ordinal}, pending) do
+          {entry, point_id}, {:ok, acc, pending} ->
+            case build_entry(entry, {ctx, point_id}, pending) do
               {:ok, built, rest} -> {:cont, {:ok, [built | acc], rest}}
               {:error, _reason} = err -> {:halt, err}
             end
@@ -2526,7 +2530,7 @@ defmodule Engram.Indexing do
       )
 
     with {:ok, reversed, _spent} <- prepared,
-         {:ok, dek} <- Crypto.get_dek(user) do
+         {:ok, dek} <- if(v5_format?, do: Crypto.get_dek(user), else: {:ok, nil}) do
       built = Enum.reverse(reversed)
       qdrant_points = for(%{point: p} <- built, p != nil, do: p)
 
@@ -2544,26 +2548,32 @@ defmodule Engram.Indexing do
          stale_point_ids: unrewritten(plan.stale_point_ids, qdrant_points, v5?),
          note_payload: note_payload,
          payload_hash: payload_hash(note_payload),
-         flat_columns: FlatFields.columns(flat, dek, note.id),
-         attr_rows: FlatFields.attr_rows(flat, note)
-       }}
+         v5_layout?: v5?
+       }
+       |> then(fn p ->
+         if v5_format?,
+           do:
+             Map.merge(p, %{
+               flat_columns: FlatFields.columns(flat, dek, note.id),
+               attr_rows: FlatFields.attr_rows(flat, note)
+             }),
+           else: p
+       end)}
     end
   end
 
   # A reused chunk costs nothing but a row: no embed, no tokenizer pass, no
   # encryption. Its `token_count` rides along from the row it replaces rather
   # than being recomputed from text that has not changed.
-  defp build_entry({:reuse, chunk, point_id, tokens}, {{note, _u, _p, now, _v5}, _ord}, pending) do
+  defp build_entry({:reuse, chunk, point_id, tokens}, {{note, _u, _p, now, _v5}, _id}, pending) do
     {:ok, %{row: chunk_row(note, chunk, point_id, tokens, now), point: nil}, pending}
   end
 
   # `doc_len` is the raw token count from the same tokenization pass as the
   # sparse vector, also persisted as `chunks.token_count`.
-  defp build_entry({:embed, chunk}, {ctx, ordinal}, [{vector, {sparse, doc_len}} | rest]) do
+  defp build_entry({:embed, chunk}, {ctx, v5_id}, [{vector, {sparse, doc_len}} | rest]) do
     {note, user, note_payload, now, v5?} = ctx
-
-    point_id =
-      if v5?, do: PointId.v5(note.id, chunk.context_hmac, ordinal), else: Ecto.UUID.generate()
+    point_id = v5_id || Ecto.UUID.generate()
 
     # `chunk_index` used to live here. Nothing ever read it, and dropping it is
     # what lets a reused point be refreshed for the whole note in ONE
@@ -2677,6 +2687,39 @@ defmodule Engram.Indexing do
       fm_created: note.fm_created && DateTime.to_unix(note.fm_created)
     }
   end
+
+  # Deterministic ids for the :embed entries (nil for :reuse), in entry order.
+  # Reuse matches by fingerprint, not by ordinal, so a reused point can
+  # already hold `v5(F, k)` for the k an embed would get (review M7: two rows
+  # naming one point). An id taken by a reused point, or earlier in this
+  # pass, moves to the next free ordinal, which is still deterministic for
+  # the same rows and content.
+  defp v5_point_ids(note, plan) do
+    taken = MapSet.new(plan.reused_point_ids)
+    fps = Enum.map(plan.entries, &entry_chunk(&1).context_hmac)
+
+    {ids, _} =
+      plan.entries
+      |> Enum.zip(PointId.ordinals(fps))
+      |> Enum.map_reduce(taken, fn
+        {{:reuse, _c, _id, _t}, _ord}, taken ->
+          {nil, taken}
+
+        {{:embed, chunk}, ord}, taken ->
+          id = PointId.free_v5(note.id, chunk.context_hmac, ord, taken)
+          {id, MapSet.put(taken, id)}
+      end)
+
+    ids
+  end
+
+  # v5 points are REPLACED, not merged: their payload omits absent and default
+  # keys, so a merge would keep a removed key (or an old folder id) forever.
+  defp refresh_payload(%{v5_layout?: true}, ids, payload),
+    do: Qdrant.overwrite_payload(collection(), ids, payload)
+
+  defp refresh_payload(_prepared, ids, payload),
+    do: Qdrant.set_payload(collection(), ids, payload)
 
   # UUIDv5 ids and the text-free payload (Task 15.1/15.3), off until PR-17:
   # until then every write keeps random ids and payload text.

@@ -44,6 +44,7 @@ defmodule Engram.Notes.NoteFieldsTest do
     bypass = Bypass.open()
     Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+    Engram.ServiceConfig.put_override(:v5_payload_format, true)
 
     test_pid = self()
 
@@ -52,6 +53,9 @@ defmodule Engram.Notes.NoteFieldsTest do
 
       if conn.method == "PUT" and conn.request_path =~ ~r{/points$},
         do: send(test_pid, {:upsert, body})
+
+      if conn.request_path =~ ~r{/points/payload$},
+        do: send(test_pid, {:payload, conn.method, body})
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
@@ -172,6 +176,19 @@ defmodule Engram.Notes.NoteFieldsTest do
     assert attrs(note.id) == []
   end
 
+  test "with the v5 format off, a pass writes nothing new to Postgres", %{
+    user: user,
+    vault: vault
+  } do
+    Engram.ServiceConfig.put_override(:v5_payload_format, false)
+    {note, _user} = index!(user, vault, @full)
+
+    for col <- ~w(status_hmac author_hmac src_hmac fm_updated fm_due fm_priority)a,
+        do: assert(is_nil(Map.fetch!(note, col)), "#{col}")
+
+    assert attrs(note.id) == []
+  end
+
   describe "Postgres and the v5 Qdrant payload agree" do
     setup do
       Application.put_env(:engram, :write_v5_layout, true)
@@ -224,6 +241,28 @@ defmodule Engram.Notes.NoteFieldsTest do
                )
 
       # Deterministic v5 id, no text in the payload.
+      assert String.at(id, 14) == "5"
+      refute Map.has_key?(p, "text")
+    end
+
+    # Review H2: a reused point is refreshed by REPLACING its payload, so a key
+    # removed from the frontmatter (or a move to the root) leaves no stale key.
+    test "a removed key disappears from a reused point", %{user: user, vault: vault} do
+      body = "\n# Fields\n\nBody text that yields at least one chunk.\n"
+      {_note, _user} = index!(user, vault, "---\nstatus: draft\ndue: 2026-11-01\n---" <> body)
+      {_note, _user} = index!(user, vault, "---\ndue: 2026-11-01\n---" <> body)
+
+      assert_received {:payload, "PUT", refresh}
+      refute_received {:payload, "POST", _}
+      payload = Jason.decode!(refresh)["payload"]
+      refute Map.has_key?(payload, "s")
+      assert Map.has_key?(payload, "du")
+    end
+
+    test "deterministic ids, no text", %{user: user, vault: vault} do
+      {_note, _user} = index!(user, vault, @full)
+      assert_received {:upsert, body}
+      %{"points" => [%{"payload" => p, "id" => id} | _]} = Jason.decode!(body)
       assert String.at(id, 14) == "5"
       refute Map.has_key?(p, "text")
     end

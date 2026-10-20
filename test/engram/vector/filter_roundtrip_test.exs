@@ -163,6 +163,36 @@ defmodule Engram.Vector.FilterRoundtripTest do
              1
   end
 
+  # Review H2: the v5 refresh replaces the payload, so a removed key is gone,
+  # and a refresh that lands before the debounced repath leaves no stale `f`.
+  test "a refresh replaces the payload; rename to root holds either order", %{col: col} do
+    t = tenant()
+    point = v5_point(t, "status: draft\n")
+    :ok = Qdrant.upsert_points(col, [point])
+    u = %{key: "u", match: %{value: FilterId.uuid(t.user_id)}}
+    assert count(col, %{must: [u, %{is_empty: %{key: "s"}}]}) == 0
+
+    moved = %{v5_point(t, "") | id: point.id}
+    new_path = :crypto.strong_rand_bytes(32)
+    payload = moved.payload |> Map.delete("f") |> Map.put("p", FilterId.from_hmac(new_path))
+    assert :ok = Qdrant.overwrite_payload(col, [point.id], payload)
+
+    assert count(col, %{must: [u, %{is_empty: %{key: "s"}}]}) == 1
+    assert count(col, %{must: [u, %{is_empty: %{key: "f"}}]}) == 1
+
+    # The repath that follows filters on the old path and matches nothing.
+    assert :ok =
+             Qdrant.set_payload_by_filter(col, t.user_id, t.vault_id, Base.encode64(t.path), %{
+               "path_hmac" => Base.encode64(new_path),
+               "folder_hmac" => nil
+             })
+
+    assert count(col, %{must: [u, %{is_empty: %{key: "f"}}]}) == 1
+
+    assert count(col, %{must: [u, %{key: "p", match: %{value: FilterId.from_hmac(new_path)}}]}) ==
+             1
+  end
+
   test "with legacy fields off only the v5 point matches", %{col: col} do
     t = tenant()
     new = v5_point(t, "")

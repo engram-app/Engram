@@ -36,4 +36,10 @@ defmodule Engram.Indexing.PointIdTest do
     ids = fn pairs -> for {fp, o} <- pairs, fp != <<9>>, do: PointId.v5(@note, fp, o) end
     assert ids.(before) == ids.(after_)
   end
+
+  test "free_v5 skips an id a kept point already holds" do
+    taken = MapSet.new([PointId.v5(@note, <<1>>, 1)])
+    assert PointId.free_v5(@note, <<1>>, 0, taken) == PointId.v5(@note, <<1>>, 0)
+    assert PointId.free_v5(@note, <<1>>, 1, taken) == PointId.v5(@note, <<1>>, 2)
+  end
 end

@@ -19,6 +19,16 @@ defmodule Engram.Indexing.PointId do
     uuid5(@namespace, "#{note_id}:#{fp}:#{ordinal}")
   end
 
+  @doc """
+  `v5/3` at the first ordinal from `ordinal` up whose id is not in `taken`.
+  Keeps a new point from reusing an id a kept point already holds.
+  """
+  @spec free_v5(Ecto.UUID.t(), binary() | nil, non_neg_integer(), MapSet.t()) :: Ecto.UUID.t()
+  def free_v5(note_id, fingerprint, ordinal, taken) do
+    id = v5(note_id, fingerprint, ordinal)
+    if MapSet.member?(taken, id), do: free_v5(note_id, fingerprint, ordinal + 1, taken), else: id
+  end
+
   @doc "Ordinal of each fingerprint among the equal ones before it."
   @spec ordinals([binary() | nil]) :: [non_neg_integer()]
   def ordinals(fingerprints) do
