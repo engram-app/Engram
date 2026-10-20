@@ -312,9 +312,9 @@ defmodule Engram.Workers.EmbedNote do
   defp embed_error_status({status, _body}) when is_integer(status), do: status
   defp embed_error_status(_), do: nil
 
-  # Pricing v2 §B — the lifetime embed-token budget. Resolver returns nil for
-  # Starter/Pro (unmetered), so this binds on Free. Per-user overrides via
-  # Billing.UserLimitOverride.
+  # Free's refilling embed-token bucket (`embed_token_bucket`, which replaced
+  # the 20M lifetime cap). Resolver returns nil for Starter/Pro (unmetered), so
+  # this binds on Free. Per-user overrides via Billing.UserLimitOverride.
   #
   # Reserved per pass, for exactly the tokens the pass would send AFTER chunk
   # reuse — a one-section edit asks for one section, not the whole note — and
@@ -368,9 +368,9 @@ defmodule Engram.Workers.EmbedNote do
     do: note.dense_indexed_hash == note.content_hash and note.embed_model != model
 
   defp reserve_embed_tokens(user, tokens) do
-    case Billing.effective_limit(user, :lifetime_embed_token_cap) do
+    case Billing.effective_limit(user, :embed_token_bucket) do
       cap when is_integer(cap) and cap >= 0 ->
-        UsageMeters.reserve_embed_tokens(user.id, tokens, cap) or budget_exhausted(user)
+        match?({:ok, _}, UsageMeters.bucket_take(user.id, tokens, cap)) or budget_exhausted(user)
 
       # nil / :unlimited / a negative sentinel: unmetered, still recorded.
       cap when is_nil(cap) or cap == :unlimited or is_integer(cap) ->
@@ -386,19 +386,19 @@ defmodule Engram.Workers.EmbedNote do
   # Cheap pre-check for the dense backfill of an already-indexed note: with
   # nothing left there is no point rebuilding it just to be refused.
   defp embed_budget_left?(user) do
-    case Billing.effective_limit(user, :lifetime_embed_token_cap) do
-      cap when is_integer(cap) and cap >= 0 -> UsageMeters.lifetime_embed_tokens(user.id) < cap
+    case Billing.effective_limit(user, :embed_token_bucket) do
+      cap when is_integer(cap) and cap >= 0 -> UsageMeters.bucket_available(user.id, cap) > 0
       cap when is_nil(cap) or cap == :unlimited or is_integer(cap) -> true
       _malformed -> false
     end
   end
 
   defp budget_exhausted(%{id: user_id} = user) do
-    # This cap degrades to sparse-only without telling the user, so product
-    # analytics hears it here or not at all. Once a day per user.
+    # The usage endpoint shows the bucket, but nothing pushes it at the user,
+    # so product analytics hears it here or not at all. Once a day per user.
     Engram.Analytics.track_limit_hit(
       user,
-      :lifetime_embed_token_cap,
+      :embed_token_bucket,
       %{silent: true},
       :timer.hours(24)
     )
@@ -410,7 +410,7 @@ defmodule Engram.Workers.EmbedNote do
     )
 
     Logger.warning(
-      "EmbedNote indexing sparse-only — lifetime embed-token cap reached",
+      "EmbedNote indexing sparse-only, embed-token bucket empty",
       Metadata.with_category(:warning, :search,
         user_id: user_id,
         reason_label: :embed_budget_exhausted
@@ -421,10 +421,11 @@ defmodule Engram.Workers.EmbedNote do
   end
 
   # How long an over-budget note sits out of ReconcileEmbeddings' dense
-  # backfill before it is re-checked. The budget is LIFETIME, so it only frees
-  # up on an upgrade or an override; until then every re-check is a no-op.
-  # `embed_budget_parked` marks the park so ReconcileEmbeddings can skip it for
-  # a user who upgraded, without also skipping a poison cooldown.
+  # backfill before it is re-checked. The bucket refills ~16.4k tokens a day,
+  # so a daily re-check is when there is new budget to spend; ReconcileEmbeddings
+  # takes the woken notes oldest first, and the ones that still do not fit park
+  # again. `embed_budget_parked` marks the park so ReconcileEmbeddings can skip
+  # it for a user who upgraded, without also skipping a poison cooldown.
   # ponytail: a raised per-user override (not an upgrade) still waits out the
   # 24h.
   @budget_park_seconds 86_400

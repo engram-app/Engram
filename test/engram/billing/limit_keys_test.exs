@@ -55,7 +55,7 @@ defmodule Engram.Billing.LimitKeysTest do
       assert LimitKeys.default_for(:vaults_cap, :free) == 1
       assert LimitKeys.default_for(:attachment_bytes_cap, :free) == 1_073_741_824
       assert LimitKeys.default_for(:max_file_bytes, :free) == 10_485_760
-      assert LimitKeys.default_for(:lifetime_embed_token_cap, :free) == 20_000_000
+      assert LimitKeys.default_for(:embed_token_bucket, :free) == 6_000_000
       assert LimitKeys.default_for(:concurrent_devices, :free) == 2
       assert LimitKeys.default_for(:device_swap_cooldown_hours, :free) == 24
       # One AI meter, replacing six. See the note on the key in `LimitKeys`.
@@ -80,7 +80,7 @@ defmodule Engram.Billing.LimitKeysTest do
       # 10 GiB. Raised from 3 GiB in pricing v3.1 (2026-09-03).
       assert LimitKeys.default_for(:attachment_bytes_cap, :starter) == 10_737_418_240
       assert LimitKeys.default_for(:max_file_bytes, :starter) == 209_715_200
-      assert LimitKeys.default_for(:lifetime_embed_token_cap, :starter) == nil
+      assert LimitKeys.default_for(:embed_token_bucket, :starter) == nil
       assert LimitKeys.default_for(:api_rps_cap, :starter) == 30
     end
 

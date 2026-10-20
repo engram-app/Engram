@@ -149,6 +149,7 @@ defmodule Engram.Insights.Snapshot do
     ids = Enum.map(facts, &elem(&1, 0))
     created = keys_created(repo, ids)
     overrides = embed_cap_overrides(repo, ids, now)
+    buckets = embed_buckets(repo, ids)
 
     for {user_id, t} <- facts do
       rollup = Map.get(rollups, {user_id, day}, empty_rollup())
@@ -171,7 +172,8 @@ defmodule Engram.Insights.Snapshot do
         api_keys_live: t.api_keys_count,
         api_keys_created: Map.get(created, user_id, 0),
         embed_tokens_used: t.embed_tokens_used,
-        embed_budget_pct: budget_pct(t, Map.fetch(overrides, user_id)),
+        embed_budget_pct:
+          budget_pct(t, Map.fetch(overrides, user_id), Map.get(buckets, user_id), now),
         last_active_at: usec(t.last_active_at),
         inserted_at: now,
         updated_at: now
@@ -185,16 +187,30 @@ defmodule Engram.Insights.Snapshot do
   defp usec(%DateTime{} = dt), do: DateTime.add(dt, 0, :microsecond)
   defp usec(%NaiveDateTime{} = dt), do: dt |> DateTime.from_naive!("Etc/UTC") |> usec()
 
-  # A per-user override wins (-1 / nil: no ceiling); else the tier's cap.
-  defp budget_pct(t, override) do
+  # Share of the refilling embed bucket currently spent (0 = full, 100 =
+  # empty). A per-user override wins (-1 / nil: no bucket); else the tier's.
+  defp budget_pct(t, override, bucket, now) do
     cap =
       case override do
         {:ok, v} when is_integer(v) and v >= 0 -> v
         {:ok, _no_ceiling} -> nil
-        :error -> Billing.tier_cap(String.to_existing_atom(t.plan), :lifetime_embed_token_cap)
+        :error -> Billing.tier_cap(String.to_existing_atom(t.plan), :embed_token_bucket)
       end
 
-    if is_integer(cap) and cap > 0, do: Float.round(t.embed_tokens_used * 100 / cap, 2)
+    if is_integer(cap) and cap > 0 do
+      {tokens, at} = bucket || {nil, nil}
+      left = Engram.UsageMeters.bucket_level(tokens, at, cap, now)
+      Float.round((cap - left) * 100 / cap, 2)
+    end
+  end
+
+  defp embed_buckets(repo, ids) do
+    from(m in Engram.UsageMeters.Meter,
+      where: m.user_id in ^ids and not is_nil(m.embed_bucket_tokens),
+      select: {m.user_id, {m.embed_bucket_tokens, m.embed_bucket_at}}
+    )
+    |> repo.all()
+    |> Map.new()
   end
 
   defp keys_created(repo, ids) do
@@ -209,7 +225,7 @@ defmodule Engram.Insights.Snapshot do
 
   defp embed_cap_overrides(repo, ids, now) do
     from(o in UserLimitOverride,
-      where: o.key == "lifetime_embed_token_cap" and o.user_id in ^ids,
+      where: o.key == "embed_token_bucket" and o.user_id in ^ids,
       where: is_nil(o.expires_at) or o.expires_at > ^now,
       select: {o.user_id, fragment("?->'v'", o.value)}
     )

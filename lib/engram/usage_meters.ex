@@ -2,8 +2,9 @@ defmodule Engram.UsageMeters do
   @moduledoc """
   Per-user usage counters that drive pricing-v2 abuse defenses.
 
-  Lifetime embed-token counter (§B): monotonic — never decremented on note
-  delete so re-upload cycles can't reset the Free quota.
+  Lifetime embed-token counter: monotonic, never decremented on note delete.
+  It no longer gates anything (analytics reads it); Free's embed budget is the
+  refilling bucket below (`bucket_take/4`).
 
   Lazy-initialized: rows are inserted on first write via `add_embed_tokens/2`.
   Reads return zero for users without a row yet.
@@ -86,40 +87,6 @@ defmodule Engram.UsageMeters do
   end
 
   def add_embed_tokens(user_id, 0) when is_binary(user_id), do: lifetime_embed_tokens(user_id)
-
-  @doc """
-  Atomically charges `count` tokens only if the total stays within `cap`.
-  Returns `true` when charged, `false` when it would overshoot.
-
-  One statement, so concurrent embeds cannot all pass on the same reading of
-  the meter: whichever commits first takes the headroom, the rest see it
-  spent. Callers reserve BEFORE calling the embedder and
-  `release_embed_tokens/2` on failure.
-  """
-  @spec reserve_embed_tokens(Ecto.UUID.t(), pos_integer(), non_neg_integer()) :: boolean()
-  def reserve_embed_tokens(user_id, count, cap)
-      when is_binary(user_id) and is_integer(count) and count > 0 and is_integer(cap) do
-    if count > cap do
-      false
-    else
-      now = DateTime.utc_now()
-
-      {n, _} =
-        Repo.insert_all(
-          Meter,
-          [%{user_id: user_id, lifetime_embed_tokens: count, updated_at: now}],
-          on_conflict:
-            from(m in Meter,
-              where: m.lifetime_embed_tokens + ^count <= ^cap,
-              update: [inc: [lifetime_embed_tokens: ^count], set: [updated_at: ^now]]
-            ),
-          conflict_target: :user_id,
-          skip_tenant_check: true
-        )
-
-      n == 1
-    end
-  end
 
   @doc """
   Gives back a reservation whose embed call failed: to the lifetime meter, and
@@ -221,6 +188,20 @@ defmodule Engram.UsageMeters do
       %{rows: [[n]]} -> trunc(max(n, 0.0))
       %{rows: []} -> capacity
     end
+  end
+
+  @doc """
+  The bucket level from a stored `{tokens, at}` pair, in Elixir, for reports
+  that already hold the row (`Engram.Insights.Snapshot`). Same arithmetic as
+  the SQL above; a nil pair is a full bucket.
+  """
+  @spec bucket_level(float() | nil, DateTime.t() | nil, non_neg_integer(), DateTime.t()) ::
+          non_neg_integer()
+  def bucket_level(nil, _at, capacity, _now), do: capacity
+
+  def bucket_level(tokens, at, capacity, %DateTime{} = now) do
+    elapsed = max(0, DateTime.diff(now, at, :microsecond)) / 1_000_000
+    trunc(max(0.0, min(capacity * 1.0, tokens + elapsed * rate(capacity))))
   end
 
   @doc "When a bucket holding `available` of `capacity` is full again; nil when it already is."

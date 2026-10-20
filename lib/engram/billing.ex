@@ -1101,6 +1101,11 @@ defmodule Engram.Billing do
     plan_fields =
       case Engram.Accounts.get_user(user_id) do
         %Engram.Accounts.User{} = u ->
+          # Paid tiers have no embed bucket. Refill it on every paid mutation
+          # so a later downgrade to Free starts with the whole allowance, not
+          # whatever the user had left when they upgraded.
+          if paid?(u), do: :ok = Engram.UsageMeters.reset_embed_bucket(user_id)
+
           plan_state(u)
           |> Map.take([
             :attachments_all_types,
