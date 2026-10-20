@@ -1,8 +1,9 @@
 defmodule Engram.SearchFetchShapeTest do
   @moduledoc """
   Task 15.8: every search path asks Qdrant for an include list (never
-  `with_payload: true`), and for dense vectors only for the pool MMR
-  reranks: none when diversity is 0 or there is one hit.
+  `with_payload: true`), and for dense vectors only when MMR runs, on the
+  pool query itself. No path moves more bytes or makes more calls than
+  before.
 
   The fake Qdrant answers exactly what each request asks for (a retrieve
   with no `with_payload` gets the whole payload, as Qdrant's default), so a
@@ -275,9 +276,30 @@ defmodule Engram.SearchFetchShapeTest do
     end
   end
 
-  # Response bytes per search, `MEASURE=1` prints them (Task 15.8 PR body).
+  # Response bytes and Qdrant calls per search on ed0564746, by
+  # `:chunk_text_read`: {bytes, calls}.
+  @before %{
+    false => %{
+      {:vector, 0.3} => {271_852, 1},
+      {:vector, 0.0} => {9_925, 1},
+      {:keyword, 0.3} => {271_876, 1},
+      {:hybrid, 0.3} => {274_060, 2},
+      {:hybrid, 0.0} => {10_474, 2},
+      {:similar, 0.3} => {271_864, 1}
+    },
+    true => %{
+      {:vector, 0.3} => {270_852, 1},
+      {:vector, 0.0} => {9_675, 1},
+      {:keyword, 0.3} => {270_876, 1},
+      {:hybrid, 0.3} => {273_060, 2},
+      {:hybrid, 0.0} => {10_224, 2},
+      {:similar, 0.3} => {270_864, 1}
+    }
+  }
+
+  # `MEASURE=1` prints the numbers (Task 15.8 PR body).
   for read? <- [false, true] do
-    test "response bytes per search (chunk_text_read #{read?})", ctx do
+    test "no path moves more bytes than before (chunk_text_read #{read?})", ctx do
       ServiceConfig.put_override(:chunk_text_read, unquote(read?))
       requests()
 
@@ -286,6 +308,15 @@ defmodule Engram.SearchFetchShapeTest do
         reqs = requests()
         total = reqs |> Enum.map(&elem(&1, 2).bytes) |> Enum.sum()
         vectors = reqs |> Enum.map(&elem(&1, 2).vector_bytes) |> Enum.sum()
+        {before, calls} = @before[unquote(read?)][key]
+
+        assert total <= before, "#{inspect(key)}: #{total} bytes, #{before} before"
+
+        # Flag on, a page holding rows without Postgres text adds ONE
+        # fallback call; hybrid loses its fused retrieve when it has nothing
+        # to fetch (no MMR).
+        extra = if unquote(read?), do: 1, else: 0
+        assert length(reqs) <= calls + extra, "#{inspect(key)}: #{length(reqs)} calls"
 
         if System.get_env("MEASURE"),
           do:
@@ -317,12 +348,14 @@ defmodule Engram.SearchFetchShapeTest do
         refute b["with_payload"] == true, "whole payload asked for: #{inspect(b)}"
       end
 
-      # Vectors never ride on a ranked query: only the pool retrieve has them.
+      # Vectors ride on the pool call (the ranked query, or hybrid's fused
+      # retrieve), never on the hybrid legs.
       for {kind, body} = req <- reqs, vector_request?(req) do
-        assert kind == :retrieve
+        assert kind in [:query, :retrieve]
         assert body["with_vector"] == ["dense"]
-        assert body["with_payload"] == false
       end
+
+      for {:batch, body} <- reqs, leg <- body["searches"], do: refute(leg["with_vector"])
     end
   end
 
@@ -331,6 +364,13 @@ defmodule Engram.SearchFetchShapeTest do
 
     for {mode, d} <- @paths do
       {_result, reqs} = requests_of(ctx, mode, limit: 5, diversity: d)
+
+      text_calls =
+        Enum.count(reqs, fn {_k, b} ->
+          Enum.any?(List.wrap(b["with_payload"]), &(&1 in @text_keys))
+        end)
+
+      assert text_calls == 1, "the fallback is one batched call per search"
 
       for {_kind, body} <- reqs, b <- Map.get(body, "searches", [body]) do
         keys = if is_list(b["with_payload"]), do: b["with_payload"], else: []
@@ -358,15 +398,18 @@ defmodule Engram.SearchFetchShapeTest do
     assert Enum.all?(@text_keys, &(&1 in body["with_payload"]))
   end
 
-  test "MMR: vectors only for the pool it reranks, in one retrieve", ctx do
+  test "MMR: the vectors come with the pool, in the same call", ctx do
     for read? <- [false, true], {mode, d} <- @paths, d > 0 do
       ServiceConfig.put_override(:chunk_text_read, read?)
       {_result, reqs} = requests_of(ctx, mode, limit: 5, diversity: d)
 
-      assert [{:retrieve, body}] = Enum.filter(reqs, &vector_request?/1), inspect({mode, read?})
-      # The pool is every live candidate: 20 here (similar_to excludes its
-      # source point, the corpus holds 24).
-      assert length(body["ids"]) == 20
+      assert [{kind, body}] = Enum.filter(reqs, &vector_request?/1), inspect({mode, read?})
+
+      # The pool: 20 (max(limit * 4, 20)).
+      case kind do
+        :query -> assert body["limit"] == 20
+        :retrieve -> assert length(body["ids"]) == 20
+      end
     end
   end
 
@@ -376,27 +419,5 @@ defmodule Engram.SearchFetchShapeTest do
       {_result, reqs} = requests_of(ctx, mode, limit: 5, diversity: 0.0)
       refute Enum.any?(reqs, &vector_request?/1)
     end
-  end
-
-  test "no vectors when there is one hit (or one note, grouped)", ctx do
-    Agent.update(ctx.corpus, &Enum.take(&1, 2))
-
-    for read? <- [false, true] do
-      ServiceConfig.put_override(:chunk_text_read, read?)
-
-      # Points 0 and 1 are one note: similar_to (from point 0) finds one hit.
-      {[_], reqs} = requests_of(ctx, :similar, limit: 5, diversity: 0.3)
-      refute Enum.any?(reqs, &vector_request?/1)
-
-      # Two chunks of one note, grouped: one note to diversify.
-      {:ok, [_]} =
-        Search.search(ctx.user, ctx.vault, "ferritin", mode: :vector, group_by_note: true)
-
-      refute Enum.any?(requests(), fn {_k, body, _b} -> vector_request?({nil, body}) end)
-    end
-
-    Agent.update(ctx.corpus, &Enum.take(&1, 1))
-    {[_], reqs} = requests_of(ctx, :vector, limit: 5, diversity: 0.3)
-    refute Enum.any?(reqs, &vector_request?/1)
   end
 end

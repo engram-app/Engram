@@ -529,8 +529,8 @@ defmodule Engram.Search do
     group? = Keyword.get(opts, :group_by_note, false)
     profile = SearchProfile.resolve(user)
     # Caller `:diversity` opt overrides the profile default; nil → profile
-    # default. Clamped to [0.0, 1.0]. diversity > 0 ⇒ MMR pass over a pool,
-    # whose dense vectors are fetched once the pool is known (`mmr_vectors/3`).
+    # default. Clamped to [0.0, 1.0]. diversity > 0 ⇒ MMR pass ⇒ the pool
+    # query brings the dense vectors back with it (one call).
     diversity = clamp_diversity(Keyword.get(opts, :diversity), profile.diversity)
     diversify? = diversity > 0.0
 
@@ -560,6 +560,7 @@ defmodule Engram.Search do
           |> Keyword.merge(phase_b_kw)
           |> Keyword.merge(date_bounds)
           |> Keyword.put(:attr_filters, Keyword.get(opts, :attr_filters, []))
+          |> Keyword.put(:with_vector, diversify?)
           |> Keyword.put(:full_precision, profile.full_precision)
           |> Keyword.put(:chunk_text_read, read?)
 
@@ -589,45 +590,14 @@ defmodule Engram.Search do
   # left a page short of `limit`, #1608), and collapse_to_notes keys on the
   # decrypted source_path. Grouped, diversity runs at note granularity.
   defp diversify(live, true = _group?, limit, diversity) do
-    with {:ok, live} <- mmr_vectors(live, diversity, note_count(live)) do
-      notes = collapse_to_notes(live)
+    notes = collapse_to_notes(live)
 
-      if diversity > 0.0,
-        do: {:ok, MMR.rerank(notes, limit, diversity)},
-        else: {:ok, notes |> Enum.sort_by(& &1.score, :desc) |> Enum.take(limit)}
-    end
+    if diversity > 0.0,
+      do: {:ok, MMR.rerank(notes, limit, diversity)},
+      else: {:ok, notes |> Enum.sort_by(& &1.score, :desc) |> Enum.take(limit)}
   end
 
-  defp diversify(live, false, limit, diversity) do
-    with {:ok, live} <- mmr_vectors(live, diversity, length(live)),
-         do: {:ok, MMR.rerank(live, limit, diversity)}
-  end
-
-  # MMR's dense vectors, for the pool it reranks and nothing else (Task
-  # 15.8): fetched after the reranker and the dropped hits, never on the
-  # ranked query, and not at all at diversity 0 or with one candidate (one
-  # note, grouped), where MMR returns the relevance order.
-  defp mmr_vectors(pool, diversity, candidates) when diversity > 0.0 and candidates > 1 do
-    ids = for %{qdrant_id: id} <- pool, do: id
-
-    with {:ok, points} <- Qdrant.retrieve(collection(), ids, with_vector: true) do
-      vectors = Map.new(points, &{&1.qdrant_id, &1[:vector]})
-      {:ok, Enum.map(pool, &put_vector(&1, vectors[&1[:qdrant_id]]))}
-    end
-  end
-
-  defp mmr_vectors(pool, _diversity, _candidates), do: {:ok, pool}
-
-  defp put_vector(hit, nil), do: hit
-  defp put_vector(hit, vector), do: Map.put(hit, :vector, vector)
-
-  # The notes `collapse_to_notes/1` makes of these chunks.
-  defp note_count(chunks) do
-    chunks
-    |> Enum.reject(&is_nil(Map.get(&1, :source_path)))
-    |> Enum.uniq_by(&{Map.get(&1, :vault_id), &1.source_path})
-    |> length()
-  end
+  defp diversify(live, false, limit, diversity), do: {:ok, MMR.rerank(live, limit, diversity)}
 
   # nil → use the profile default; a number is clamped to [0.0, 1.0] and forced
   # to a float (MMR's diversity==0.0 short-circuit relies on a float compare);

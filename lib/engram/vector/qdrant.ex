@@ -1547,6 +1547,15 @@ defmodule Engram.Vector.Qdrant do
       nil -> base
       params -> Map.put(base, :params, params)
     end
+    |> maybe_with_vector(search_opts)
+  end
+
+  # MMR's vectors ride on the pool query itself (one call), and only when
+  # MMR runs (`:with_vector`, set by `Engram.Search` at diversity > 0).
+  defp maybe_with_vector(body, search_opts) do
+    if Keyword.get(search_opts, :with_vector, false),
+      do: Map.put(body, :with_vector, ["dense"]),
+      else: body
   end
 
   # Per-query quantization params. full_precision bypasses binary quant
@@ -1796,6 +1805,7 @@ defmodule Engram.Vector.Qdrant do
       limit: Keyword.get(search_opts, :limit, 5),
       with_payload: result_payload_for(search_opts)
     }
+    |> maybe_with_vector(search_opts)
   end
 
   # Qdrant's own RRF default, kept so fused scores read as before.
@@ -1808,9 +1818,9 @@ defmodule Engram.Vector.Qdrant do
   them arbitrarily). `sparse` is `%{indices, values}`. Tenant filter is
   applied to BOTH legs (load-bearing: the sparse inverted index is global).
   Each leg fetches `:limit` ids and scores only; the fused `:limit` points
-  then come back in one retrieve with the payload fields results use, or
-  with none and no retrieve at all when search reads them from Postgres
-  (`:chunk_text_read`). No vectors: MMR fetches its pool's (`retrieve/3`).
+  then come back in one retrieve with the payload fields results use and
+  the dense vector when `:with_vector` asks (MMR); with neither to fetch
+  (`:chunk_text_read` on, no MMR) there is no retrieve at all.
   The legs carrying payload and vectors returned up to 2x the bytes for
   points fusion drops.
   """
@@ -1873,16 +1883,19 @@ defmodule Engram.Vector.Qdrant do
   # With nothing to fetch, the fused ids are the result: a point deleted
   # since the legs has no chunk row either, and search drops it there.
   defp fused_points(col, ids, search_opts) do
-    case result_payload_for(search_opts) do
-      false -> {:ok, Enum.map(ids, &%{qdrant_id: &1})}
-      keys -> do_retrieve(col, ids, with_payload: keys)
-    end
+    keys = result_payload_for(search_opts)
+    vector? = Keyword.get(search_opts, :with_vector, false)
+
+    if keys == false and not vector?,
+      do: {:ok, Enum.map(ids, &%{qdrant_id: &1})},
+      else: do_retrieve(col, ids, with_payload: keys, with_vector: vector?)
   end
 
   @doc """
   The given points, as search results without scores: `:with_payload` an
-  include list (default `false`), `:with_vector` true for the dense vector
-  (MMR's pool, Task 15.8). A missing point is left out.
+  include list (default `false`), `:with_vector` true for the dense vector.
+  A missing point is left out. Search's payload-text fallback (Task 15.8)
+  calls it once per search with every hit that needs it.
   """
   @spec retrieve(String.t() | nil, [String.t()], keyword()) :: {:ok, [map()]} | {:error, term()}
   def retrieve(col \\ nil, ids, opts),
@@ -1980,6 +1993,7 @@ defmodule Engram.Vector.Qdrant do
         params -> Map.put(b, :params, params)
       end
     end)
+    |> maybe_with_vector(search_opts)
   end
 
   # One `has_id` per `max_ids/0` ids: `not A and not B` is `not (A or B)`, and

@@ -14,7 +14,7 @@ defmodule Engram.Vector.QdrantWithPayloadTest do
   @sparse %{indices: [1], values: [0.5]}
 
   defp bodies(opts) do
-    opts = [user_id: "u1", with_vector: true] ++ opts
+    opts = [user_id: "u1"] ++ opts
 
     [
       Qdrant.search_body([0.1], opts),
@@ -55,9 +55,20 @@ defmodule Engram.Vector.QdrantWithPayloadTest do
     end
   end
 
+  test "with_vector (MMR) puts the dense vector on the pool query itself" do
+    for read? <- [false, true], body <- bodies(chunk_text_read: read?, with_vector: true) do
+      assert body.with_vector == ["dense"]
+    end
+  end
+
   test "hybrid legs carry ids and scores only" do
     for read? <- [false, true] do
-      body = Qdrant.hybrid_search_body([0.1], @sparse, user_id: "u1", chunk_text_read: read?)
+      body =
+        Qdrant.hybrid_search_body([0.1], @sparse,
+          user_id: "u1",
+          chunk_text_read: read?,
+          with_vector: true
+        )
 
       for leg <- body.searches do
         assert leg.with_payload == false
