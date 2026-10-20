@@ -195,10 +195,51 @@ defmodule Engram.Workers.CleanupVault do
     # retry after a crash resumes from whatever is left and double-counts
     # nothing. The final transaction below then handles the small remainder
     # (normally nothing) exactly as before.
-    delete_batches(vault, Chunk, [:id], fn _rows -> :ok end)
-    delete_batches(vault, Note, [:id, :kind, :deleted_at], &dec_live_notes(vault, &1))
-    delete_batches(vault, Attachment, [:id, :storage_key], fn _rows -> :ok end, &blob_keys/1)
+    #
+    # Every batch, and the final transaction, first locks the vault row and
+    # re-checks it is still soft-deleted. A restore landing mid-purge then
+    # either waits for the batch in flight or stops the purge at the next one,
+    # instead of the remaining batches (and the final vault delete) wiping a
+    # vault the user has taken back and may be syncing into.
+    with :ok <- delete_batches(vault, Chunk, [:id], fn _rows -> :ok end),
+         :ok <-
+           delete_batches(vault, Note, [:id, :kind, :deleted_at], &dec_live_notes(vault, &1)),
+         :ok <-
+           delete_batches(
+             vault,
+             Attachment,
+             [:id, :storage_key],
+             fn _rows -> :ok end,
+             &blob_keys/1
+           ) do
+      purge_remainder(vault)
+    else
+      :restored -> log_restored_mid_purge(vault)
+    end
+  end
 
+  defp log_restored_mid_purge(vault) do
+    Logger.warning(
+      "CleanupVault: vault restored mid-purge; stopping",
+      Metadata.with_category(:warning, :oban, vault_id: vault.id, user_id: vault.user_id)
+    )
+
+    :ok
+  end
+
+  # Locks the vault row for the rest of the caller's transaction and reports
+  # whether it is still soft-deleted (a restore clears `deleted_at`).
+  defp locked_for_purge?(vault_id) do
+    from(v in Vault,
+      where: v.id == ^vault_id and not is_nil(v.deleted_at),
+      select: v.id,
+      lock: "FOR UPDATE"
+    )
+    |> Repo.one()
+    |> is_binary()
+  end
+
+  defp purge_remainder(vault) do
     # Collect storage keys BEFORE deleting the remaining DB rows
     storage_keys = collect_storage_keys(vault)
 
@@ -209,76 +250,87 @@ defmodule Engram.Workers.CleanupVault do
     # below needs the tenant: a filtered `delete_all` reports `{0, nil}` with
     # no error, and `Repo.delete!(vault)` carries no bypass at all, so a
     # filtered delete would raise `Ecto.StaleEntryError` instead.
-    {:ok, {revoked_keys, revoked_grants}} =
+    final =
       Repo.with_tenant(vault.user_id, fn ->
         vault_id = vault.id
-
-        # Drop the owner's live-note counter by the notes this vault still holds
-        # as live (deleted_at IS NULL). Soft-deleted notes were already
-        # decremented at soft-delete time, so only the live set counts here.
-        live_notes =
-          Repo.one(
-            from(n in Note,
-              where:
-                n.vault_id == ^vault_id and is_nil(n.deleted_at) and
-                  n.kind == "note",
-              select: count(n.id)
-            )
-          ) || 0
-
-        Chunk
-        |> where(vault_id: ^vault_id)
-        |> Repo.delete_all()
-
-        Note
-        |> where(vault_id: ^vault_id)
-        |> Repo.delete_all()
-
-        :ok = UsageMeters.dec_notes_count(vault.user_id, live_notes)
-
-        Attachment
-        |> where(vault_id: ^vault_id)
-        |> Repo.delete_all()
-
-        # Revoke every key that reaches NOTHING once this vault is gone, before
-        # its mapping rows go. A pre-#332 key with no `api_key_vaults` rows is
-        # unrestricted (`Permissions.from_key/2`), so deleting the mapping
-        # would widen a one-vault key to every vault the user owns, and the key
-        # can start that itself through `DELETE /api/vaults/:id`. A leveled key
-        # whose only reachable vault was this one, with a `none` new-vaults
-        # policy, reaches nothing afterwards either. One rule for both kinds
-        # (and the one `Connections.revoke_by_vault/2` applies to OAuth
-        # grants): the key's scope without this vault reaches nothing. A key
-        # with a non-none policy keeps working. Deleting the key cascades its
-        # mapping rows. Scoped by `with_tenant` via `api_keys`' own policy.
-        live = List.delete(Engram.Vaults.active_vault_ids(vault.user_id), vault_id)
-
-        {revoked, _} =
-          from(k in ApiKey, where: k.id in ^keys_left_with_nothing(vault_id, live))
-          |> Repo.delete_all()
-
-        # The same judgement for OAuth grants, mirroring keys: soft delete
-        # already ran it, but a listed vault purged or deleted since can leave
-        # a grant reaching nothing live, and a grant soft delete missed still
-        # names this vault. BEFORE the vault row goes: a grant's scalar
-        # `vault_id` cascades on delete, so a grant still naming this vault
-        # there would vanish uncounted instead of being narrowed or revoked.
-        # Kicks the owner's sockets once if a grant changed or a key went.
-        revoked_grants =
-          Engram.Connections.drop_vault_from_grants(vault.user_id, vault_id,
-            kick_owner: revoked > 0
-          )
-
-        # `api_key_vaults` carries no RLS policy, so the guard never fires for it
-        # and the option here is inert either way. Left as-is to keep this diff
-        # to the queries that were actually broken.
-        from(akv in "api_key_vaults", where: akv.vault_id == type(^vault_id, Ecto.UUID))
-        |> Repo.delete_all(skip_tenant_check: true)
-
-        Repo.delete!(vault)
-        {revoked, revoked_grants}
+        if locked_for_purge?(vault_id), do: purge_rows(vault, vault_id), else: :restored
       end)
 
+    case final do
+      {:ok, :restored} ->
+        log_restored_mid_purge(vault)
+
+      {:ok, {revoked_keys, revoked_grants}} ->
+        finish_purge(vault, storage_keys, revoked_keys, revoked_grants)
+    end
+  end
+
+  defp purge_rows(vault, vault_id) do
+    # Drop the owner's live-note counter by the notes this vault still holds
+    # as live (deleted_at IS NULL). Soft-deleted notes were already
+    # decremented at soft-delete time, so only the live set counts here.
+    live_notes =
+      Repo.one(
+        from(n in Note,
+          where:
+            n.vault_id == ^vault_id and is_nil(n.deleted_at) and
+              n.kind == "note",
+          select: count(n.id)
+        )
+      ) || 0
+
+    Chunk
+    |> where(vault_id: ^vault_id)
+    |> Repo.delete_all()
+
+    Note
+    |> where(vault_id: ^vault_id)
+    |> Repo.delete_all()
+
+    :ok = UsageMeters.dec_notes_count(vault.user_id, live_notes)
+
+    Attachment
+    |> where(vault_id: ^vault_id)
+    |> Repo.delete_all()
+
+    # Revoke every key that reaches NOTHING once this vault is gone, before
+    # its mapping rows go. A pre-#332 key with no `api_key_vaults` rows is
+    # unrestricted (`Permissions.from_key/2`), so deleting the mapping
+    # would widen a one-vault key to every vault the user owns, and the key
+    # can start that itself through `DELETE /api/vaults/:id`. A leveled key
+    # whose only reachable vault was this one, with a `none` new-vaults
+    # policy, reaches nothing afterwards either. One rule for both kinds
+    # (and the one `Connections.revoke_by_vault/2` applies to OAuth
+    # grants): the key's scope without this vault reaches nothing. A key
+    # with a non-none policy keeps working. Deleting the key cascades its
+    # mapping rows. Scoped by `with_tenant` via `api_keys`' own policy.
+    live = List.delete(Engram.Vaults.active_vault_ids(vault.user_id), vault_id)
+
+    {revoked, _} =
+      from(k in ApiKey, where: k.id in ^keys_left_with_nothing(vault_id, live))
+      |> Repo.delete_all()
+
+    # The same judgement for OAuth grants, mirroring keys: soft delete
+    # already ran it, but a listed vault purged or deleted since can leave
+    # a grant reaching nothing live, and a grant soft delete missed still
+    # names this vault. BEFORE the vault row goes: a grant's scalar
+    # `vault_id` cascades on delete, so a grant still naming this vault
+    # there would vanish uncounted instead of being narrowed or revoked.
+    # Kicks the owner's sockets once if a grant changed or a key went.
+    revoked_grants =
+      Engram.Connections.drop_vault_from_grants(vault.user_id, vault_id, kick_owner: revoked > 0)
+
+    # `api_key_vaults` carries no RLS policy, so the guard never fires for it
+    # and the option here is inert either way. Left as-is to keep this diff
+    # to the queries that were actually broken.
+    from(akv in "api_key_vaults", where: akv.vault_id == type(^vault_id, Ecto.UUID))
+    |> Repo.delete_all(skip_tenant_check: true)
+
+    Repo.delete!(vault)
+    {revoked, revoked_grants}
+  end
+
+  defp finish_purge(vault, storage_keys, revoked_keys, revoked_grants) do
     # An open socket authenticated with a revoked key or grant must not
     # outlive it: `drop_vault_from_grants/3` kicked the owner once, above.
 
@@ -300,7 +352,7 @@ defmodule Engram.Workers.CleanupVault do
     :ok
   end
 
-  defp batch_size, do: Application.get_env(:engram, :cleanup_vault_batch_size, 2_000)
+  defp batch_size, do: Application.get_env(:engram, :cleanup_vault_batch_size, 1_000)
 
   # Deletes `schema` rows of `vault`, `batch_size()` at a time in id order,
   # until a batch comes back short. `in_txn` runs inside each batch's
@@ -309,27 +361,44 @@ defmodule Engram.Workers.CleanupVault do
     vault_id = vault.id
     size = batch_size()
 
-    {:ok, rows} =
+    {:ok, result} =
       Repo.with_tenant(vault.user_id, fn ->
-        ids =
-          from(r in schema,
-            where: r.vault_id == ^vault_id,
-            order_by: r.id,
-            limit: ^size,
-            select: r.id
-          )
-
-        {_n, rows} =
-          from(r in schema, where: r.id in subquery(ids), select: map(r, ^fields))
-          |> Repo.delete_all()
-
-        :ok = in_txn.(rows)
-        rows
+        if locked_for_purge?(vault_id),
+          do: delete_batch(schema, vault_id, size, fields, in_txn),
+          else: :restored
       end)
 
-    after_commit.(rows)
-    if length(rows) == size, do: delete_batches(vault, schema, fields, in_txn, after_commit)
-    :ok
+    case result do
+      :restored ->
+        :restored
+
+      rows ->
+        after_commit.(rows)
+
+        if length(rows) == size,
+          do: delete_batches(vault, schema, fields, in_txn, after_commit),
+          else: :ok
+    end
+  end
+
+  defp delete_batch(schema, vault_id, size, fields, in_txn) do
+    ids =
+      from(r in schema,
+        where: r.vault_id == ^vault_id,
+        order_by: r.id,
+        limit: ^size,
+        select: r.id
+      )
+
+    # A note's delete cascades into its op log, revisions and links, so a
+    # batch costs more than its row count: allow it longer than the
+    # default 15s per-statement checkout timeout.
+    {_n, rows} =
+      from(r in schema, where: r.id in subquery(ids), select: map(r, ^fields))
+      |> Repo.delete_all(timeout: :timer.minutes(5))
+
+    :ok = in_txn.(rows)
+    rows
   end
 
   # Soft-deleted notes were decremented at soft-delete time; folder markers

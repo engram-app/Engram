@@ -321,6 +321,55 @@ defmodule Engram.Workers.CleanupVaultTest do
       refute Repo.get(Vault, vault.id, skip_tenant_check: true)
     end
 
+    # A restore committing between two batches must stop the purge: the
+    # remaining batches and the final vault delete would otherwise wipe a vault
+    # the user has taken back. The restore is injected right after the first
+    # note batch's DELETE, so it commits with that batch.
+    test "a restore between batches stops the purge and keeps the vault", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      stub_qdrant(bypass)
+      Application.put_env(:engram, :cleanup_vault_batch_size, 2)
+      on_exit(fn -> Application.delete_env(:engram, :cleanup_vault_batch_size) end)
+      for _ <- 1..4, do: insert(:note, user: user, vault: vault)
+
+      test_pid = self()
+      handler = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        handler,
+        [:engram, :repo, :query],
+        fn _e, _m, %{query: sql}, _c ->
+          if self() == test_pid and sql =~ ~s(DELETE FROM "notes") do
+            :telemetry.detach(handler)
+
+            Repo.update_all(from(v in Vault, where: v.id == ^vault.id), [set: [deleted_at: nil]],
+              skip_tenant_check: true
+            )
+          end
+        end,
+        nil
+      )
+
+      try do
+        capture_log(fn -> assert :ok = CleanupVault.perform_cleanup(vault.id, user.id) end)
+      after
+        :telemetry.detach(handler)
+      end
+
+      assert Repo.get(Vault, vault.id, skip_tenant_check: true)
+
+      left =
+        Repo.aggregate(from(n in Note, where: n.vault_id == ^vault.id), :count,
+          skip_tenant_check: true
+        )
+
+      # 5 notes (setup's + 4); one batch of 2 went before the restore.
+      assert left == 3
+    end
+
     test "hard-deletes chunks associated with notes", %{
       bypass: bypass,
       user: user,
