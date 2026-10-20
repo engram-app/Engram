@@ -242,7 +242,7 @@ config :engram, Oban,
         # Export archives past the 7-day download window (#859).
         {"53 * * * *", Engram.Workers.ExportExpirySweep},
         # Chunked-upload sessions idle for 24h.
-        {"58 * * * *", Engram.Workers.AttachmentUploadExpiry},
+        {"9 * * * *", Engram.Workers.AttachmentUploadExpiry},
         # Paddle drift check. Daily: drift logs at :error to Sentry, and a
         # repair is manual, so more runs would only repeat the alert.
         {"0 2 * * *", Engram.Billing.Workers.PaddleReconcile},
