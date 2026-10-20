@@ -1,4 +1,4 @@
-import { ApiError, api } from "./client";
+import { ApiError, api, LimitExceededError } from "./client";
 import type { AttachmentSummary } from "./queries";
 
 const MAX_RETRIES = 3;
@@ -35,13 +35,32 @@ function delayFor(err: unknown, attempt: number, backoffMs: number): number {
 	return backoffMs * 2 ** attempt;
 }
 
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** A backoff wait that ends the moment the caller aborts. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		if (signal?.aborted) {
+			reject(new DOMException("aborted", "AbortError"));
+			return;
+		}
+		const onAbort = () => {
+			clearTimeout(timer);
+			reject(new DOMException("aborted", "AbortError"));
+		};
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		signal?.addEventListener("abort", onAbort, { once: true });
+	});
+}
 
 /**
  * Upload `file` through the resumable parts protocol. The server picks the part
- * size. A failed part is retried (3 times, backing off) after asking the server
- * which parts it holds, so a part that landed before the connection dropped is
- * not sent again. Any failure drops the server session, best effort.
+ * size. Every request retries transient failures (3 times, backing off). After a
+ * failed part or a failed complete the server is asked which parts it holds, so
+ * only missing parts are sent again. A failure drops the server session, best
+ * effort, except when a complete attempt may have committed (outcome unknown):
+ * deleting then could discard a finished upload.
  */
 export async function uploadInParts(
 	file: File,
@@ -64,6 +83,25 @@ export async function uploadInParts(
 		{ signal },
 	);
 	const base = `/attachment-uploads/${upload_id}`;
+	let completeOutcomeUnknown = false;
+
+	/** Wait out a retryable failure, or rethrow when it is terminal or retries ran out. */
+	async function backOff(err: unknown, attempt: number, terminal = isTerminal): Promise<void> {
+		if (terminal(err) || attempt >= MAX_RETRIES) {
+			throw err;
+		}
+		await sleep(delayFor(err, attempt, backoffMs), signal);
+	}
+
+	async function status(): Promise<number[]> {
+		for (let attempt = 0; ; attempt++) {
+			try {
+				return (await api.get<{ done: number[] }>(base)).done;
+			} catch (err) {
+				await backOff(err, attempt);
+			}
+		}
+	}
 
 	async function putPart(n: number): Promise<void> {
 		const body = file.slice((n - 1) * part_size, n * part_size);
@@ -72,13 +110,35 @@ export async function uploadInParts(
 				await api.putRaw(`${base}/parts/${n}`, body, { signal });
 				return;
 			} catch (err) {
-				if (isTerminal(err) || attempt >= MAX_RETRIES) {
-					throw err;
-				}
-				await sleep(delayFor(err, attempt, backoffMs));
-				const { done } = await api.get<{ done: number[] }>(base);
-				if (done.includes(n)) {
+				await backOff(err, attempt);
+				if ((await status()).includes(n)) {
 					return;
+				}
+			}
+		}
+	}
+
+	// 409 missing_parts is the one 4xx that resending fixes.
+	const isMissingParts = (err: unknown) => err instanceof ApiError && err.status === 409;
+	const terminalOnComplete = (err: unknown) => isTerminal(err) && !isMissingParts(err);
+
+	async function complete(): Promise<{ attachment: AttachmentSummary }> {
+		for (let attempt = 0; ; attempt++) {
+			try {
+				return await api.post<{ attachment: AttachmentSummary }>(`${base}/complete`, undefined, {
+					signal,
+				});
+			} catch (err) {
+				// A refusal with a status proves nothing committed; anything else may have.
+				completeOutcomeUnknown = !(err instanceof ApiError || err instanceof LimitExceededError);
+				await backOff(err, attempt, terminalOnComplete);
+				const done = await status();
+				// The session answered, so complete did not commit it.
+				completeOutcomeUnknown = false;
+				for (let n = 1; n <= part_count; n++) {
+					if (!done.includes(n)) {
+						await putPart(n);
+					}
 				}
 			}
 		}
@@ -89,12 +149,12 @@ export async function uploadInParts(
 			await putPart(n);
 			onProgress?.(Math.min(n * part_size, file.size), file.size);
 		}
-		return await api.post<{ attachment: AttachmentSummary }>(`${base}/complete`, undefined, {
-			signal,
-		});
+		return await complete();
 	} catch (err) {
-		// The original error is what the caller needs; a failed cleanup must not replace it.
-		await api.del(base).catch(() => undefined);
+		if (!completeOutcomeUnknown) {
+			// The original error is what the caller needs; a failed cleanup must not replace it.
+			await api.del(base).catch(() => undefined);
+		}
 		throw err;
 	}
 }

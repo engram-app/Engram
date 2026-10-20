@@ -161,4 +161,104 @@ describe("uploadInParts", () => {
 			status: 422,
 		});
 	});
+
+	describe("complete", () => {
+		const completeCalls = () => post.mock.calls.filter((c) => String(c[0]).endsWith("/complete"));
+
+		it("on 409 missing_parts, re-sends exactly the missing part and completes again", async () => {
+			let completes = 0;
+			post.mockImplementation((path: string) => {
+				if (path === "/attachment-uploads") {
+					return Promise.resolve({ upload_id: "u1", part_size: PART, part_count: 2 });
+				}
+				completes += 1;
+				return completes === 1
+					? Promise.reject(new ApiError(409, "missing_parts"))
+					: Promise.resolve({ attachment: row });
+			});
+			get.mockResolvedValue({ done: [1], part_count: 2, part_size: PART });
+
+			const out = await uploadInParts(bigFile(10 * MiB), "big.bin", { backoffMs: 0 });
+
+			expect(out).toEqual({ attachment: row });
+			expect(putRaw.mock.calls.map((c) => c[0])).toEqual([
+				"/attachment-uploads/u1/parts/1",
+				"/attachment-uploads/u1/parts/2",
+				"/attachment-uploads/u1/parts/2",
+			]);
+			expect(completeCalls()).toHaveLength(2);
+			expect(del).not.toHaveBeenCalled();
+		});
+
+		it("on a network error, re-syncs and completes again without sending DELETE", async () => {
+			let completes = 0;
+			post.mockImplementation((path: string) => {
+				if (path === "/attachment-uploads") {
+					return Promise.resolve({ upload_id: "u1", part_size: PART, part_count: 1 });
+				}
+				completes += 1;
+				return completes === 1
+					? Promise.reject(new TypeError("network"))
+					: Promise.resolve({ attachment: row });
+			});
+			get.mockResolvedValue({ done: [1], part_count: 1, part_size: PART });
+
+			await uploadInParts(bigFile(PART + 1), "big.bin", { backoffMs: 0 });
+
+			expect(completeCalls()).toHaveLength(2);
+			expect(putRaw).toHaveBeenCalledTimes(1);
+			expect(del).not.toHaveBeenCalled();
+		});
+
+		it("does not DELETE when every complete attempt ended unknown", async () => {
+			post.mockImplementation((path: string) =>
+				path === "/attachment-uploads"
+					? Promise.resolve({ upload_id: "u1", part_size: PART, part_count: 1 })
+					: Promise.reject(new TypeError("network")),
+			);
+			get.mockRejectedValue(new TypeError("network"));
+			await expect(uploadInParts(bigFile(PART + 1), "big.bin", { backoffMs: 0 })).rejects.toThrow();
+			expect(del).not.toHaveBeenCalled();
+		});
+
+		it("DELETEs after a definite terminal refusal on complete", async () => {
+			post.mockImplementation((path: string) =>
+				path === "/attachment-uploads"
+					? Promise.resolve({ upload_id: "u1", part_size: PART, part_count: 1 })
+					: Promise.reject(new ApiError(422, "bad")),
+			);
+			await expect(
+				uploadInParts(bigFile(PART + 1), "big.bin", { backoffMs: 0 }),
+			).rejects.toMatchObject({
+				status: 422,
+			});
+			expect(del).toHaveBeenCalledWith("/attachment-uploads/u1");
+		});
+	});
+
+	it("retries a transient 5xx on the status check instead of aborting", async () => {
+		session(1);
+		putRaw.mockRejectedValueOnce(new TypeError("network")).mockResolvedValue({});
+		get
+			.mockRejectedValueOnce(new ApiError(500, "boom"))
+			.mockResolvedValue({ done: [], part_count: 1, part_size: PART });
+		await uploadInParts(bigFile(PART + 1), "big.bin", { backoffMs: 0 });
+		expect(get).toHaveBeenCalledTimes(2);
+		expect(putRaw).toHaveBeenCalledTimes(2);
+	});
+
+	it("stops waiting for a retry as soon as the signal aborts", async () => {
+		session(1);
+		putRaw.mockRejectedValue(new TypeError("network"));
+		const ctl = new AbortController();
+		const started = Date.now();
+		const run = uploadInParts(bigFile(PART + 1), "big.bin", {
+			backoffMs: 60_000,
+			signal: ctl.signal,
+		});
+		setTimeout(() => ctl.abort(), 20);
+		await expect(run).rejects.toMatchObject({ name: "AbortError" });
+		expect(Date.now() - started).toBeLessThan(5000);
+		expect(del).toHaveBeenCalledWith("/attachment-uploads/u1");
+	});
 });
