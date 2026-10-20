@@ -319,6 +319,59 @@ defmodule Engram.Observability.EmittersTest do
     end
   end
 
+  describe "limit_hit" do
+    setup do
+      EngramWeb.RateLimiter.reset_buckets!()
+      :ok
+    end
+
+    for {name, assigns, surface} <- [
+          {"a Clerk session", %{}, "web"},
+          {"an API key", %{current_api_key: %{id: "k"}}, "api"},
+          {"a device or OAuth token", %{current_auth_method: :internal_jwt}, "obsidian_sync"}
+        ] do
+      test "a 402 for #{name} is limit_hit{surface: #{surface}}", %{bypass: bypass} do
+        user = user_with_clerk_id()
+        expect_capture(bypass)
+
+        conn =
+          Enum.reduce(unquote(Macro.escape(assigns)), build_conn(), fn {k, v}, c ->
+            assign(c, k, v)
+          end)
+          |> assign(:current_user, user)
+
+        EngramWeb.LimitResponse.halt(conn, "vaults_cap_exceeded", :vaults_cap, 1, 1)
+
+        assert_receive {:posthog_body, body}, 1_500
+        assert body["event"] == "limit_hit"
+        assert body["properties"]["limit_key"] == "vaults_cap"
+        assert body["properties"]["surface"] == unquote(surface)
+      end
+    end
+
+    test "a 402 with no limit key names the reason instead", %{bypass: bypass} do
+      expect_capture(bypass)
+      conn = assign(build_conn(), :current_user, user_with_clerk_id())
+      EngramWeb.LimitResponse.halt(conn, "account_suspended", nil, nil, nil)
+
+      assert_receive {:posthog_body, body}, 1_500
+      assert body["properties"]["limit_key"] == "account_suspended"
+    end
+
+    test "a spent ai_searches_per_day budget is limit_hit", %{bypass: bypass} do
+      user = user_with_clerk_id()
+      insert(:user_limit_override, user: user, key: "ai_searches_per_day", value: %{"v" => 0})
+      {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
+      expect_capture(bypass)
+
+      assert {:error, :search_cap_exceeded, 0} = Search.search(user, vault, "anything")
+
+      assert_receive {:posthog_body, body}, 1_500
+      assert body["event"] == "limit_hit"
+      assert body["properties"]["limit_key"] == "ai_searches_per_day"
+    end
+  end
+
   describe "PostHogForwarder.forward_paddle_event/2" do
     test "subscription.activated resolves the user via Subscription.user_id and emits with tier + price_id",
          %{bypass: bypass} do

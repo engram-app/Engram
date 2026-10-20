@@ -784,14 +784,20 @@ defmodule Engram.Search do
       limit when is_integer(limit) and limit > 0 ->
         case RateLimiter.hit("ai_search:#{user.id}", @budget_scale_ms, limit, :ai_search) do
           {:allow, _count} -> :ok
-          {:deny, _retry} -> {:error, :search_cap_exceeded, limit}
+          {:deny, _retry} -> refuse_search(user, limit)
         end
 
       # `Billing.cap/2` answers `integer | nil` and maps every "no cap" spelling
       # (including a malformed override) to nil, so what reaches here is an
       # integer <= 0: a tier configured not to search at all.
       limit ->
-        {:error, :search_cap_exceeded, limit}
+        refuse_search(user, limit)
     end
+  end
+
+  # Reported here, at the one funnel, so MCP refusals count as well as REST.
+  defp refuse_search(user, limit) do
+    Engram.Analytics.track_limit_hit(user, :ai_searches_per_day)
+    {:error, :search_cap_exceeded, limit}
   end
 end

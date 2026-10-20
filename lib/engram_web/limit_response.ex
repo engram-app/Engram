@@ -39,10 +39,27 @@ defmodule EngramWeb.LimitResponse do
       "upgrade_url" => upgrade_url
     }
 
+    if user = conn.assigns[:current_user] do
+      Engram.Analytics.track_limit_hit(user, limit_key || reason, %{
+        surface: surface(conn.assigns)
+      })
+    end
+
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(402, Jason.encode!(body))
     |> Plug.Conn.halt()
+  end
+
+  # Same credential split as `EngramWeb.Plugs.WebActivity`: an API key marks
+  # itself, a device / OAuth token is internal_jwt (the plugin; MCP refusals
+  # are reported by the MCP path), and a Clerk session is neither.
+  defp surface(assigns) do
+    cond do
+      assigns[:current_api_key] -> "api"
+      assigns[:current_auth_method] == :internal_jwt -> "obsidian_sync"
+      true -> "web"
+    end
   end
 
   defp tier_string(nil), do: nil

@@ -104,6 +104,26 @@ defmodule Engram.AnalyticsTest do
     end
   end
 
+  describe "track_limit_hit/3" do
+    test "emits limit_hit with the key and tier once per user and key per hour" do
+      user = insert(:user, email: "cap@example.com")
+
+      for _ <- 1..3,
+          do: assert(:ok = Analytics.track_limit_hit(user, :notes_cap, %{surface: "web"}))
+
+      assert :ok = Analytics.track_limit_hit(user, :vaults_cap, %{})
+
+      bodies = for _ <- 1..2, do: assert_receive({:captured, body}, 1_000) && body
+      refute_receive {:captured, _}, 300
+
+      by_key = Map.new(bodies, &{&1["properties"]["limit_key"], &1})
+      assert by_key["notes_cap"]["event"] == "limit_hit"
+      assert by_key["notes_cap"]["properties"]["tier"] == "free"
+      assert by_key["notes_cap"]["properties"]["surface"] == "web"
+      refute Map.has_key?(by_key["vaults_cap"]["properties"], "surface")
+    end
+  end
+
   describe "track_anonymous/2" do
     test "sends a person-less event" do
       assert :ok = Analytics.track_anonymous("account_delete_reason", %{"reason" => "x"})

@@ -427,6 +427,10 @@ defmodule EngramWeb.CrdtChannel do
           {:reply, {:error, %{reason: "version_conflict", doc_id: note.id}}, socket}
 
         {:error, {:notes_cap_reached, limit, _count}} ->
+          Engram.Analytics.track_limit_hit(socket.assigns.current_user, :notes_cap, %{
+            surface: Atom.to_string(activity_surface(socket.assigns[:client_type]))
+          })
+
           {:reply, {:error, %{reason: "notes_cap_reached", limit: limit}}, socket}
 
         {:error, :recently_deleted} ->

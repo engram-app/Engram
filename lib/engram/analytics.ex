@@ -31,6 +31,7 @@ defmodule Engram.Analytics do
   @surfaces [:obsidian_sync, :mcp, :web]
   @type surface :: :obsidian_sync | :mcp | :web
   @activity_window_ms :timer.minutes(5)
+  @limit_window_ms :timer.hours(1)
 
   # Longer than PostHogPersonSync's 5-minute timeout, so a batch that read the
   # user before an erasure has finished before the second erasure runs.
@@ -62,11 +63,31 @@ defmodule Engram.Analytics do
   end
 
   @doc """
+  Record that `user` was refused by plan limit `limit_key` (a 402, a refused
+  create, a spent budget). At most one `limit_hit` per user and key per hour,
+  so a bulk import past a cap costs one event. `props` (`surface`, `silent`)
+  can never override `limit_key` or `tier`.
+  """
+  @spec track_limit_hit(map(), atom() | String.t(), map()) :: :ok
+  def track_limit_hit(user, limit_key, props \\ %{}) do
+    key = to_string(limit_key)
+
+    track_throttled(user, "limit_hit", key, @limit_window_ms, fn ->
+      Map.merge(props, %{limit_key: key, tier: tier(user)})
+    end)
+  end
+
+  defp tier(%User{} = user), do: user |> Engram.Billing.tier() |> Atom.to_string()
+  defp tier(_user), do: nil
+
+  @doc """
   `track/3`, but at most one `event` per user and `dedupe` value per
   `window_ms`. The user is re-read only after the limiter allows the event, so
-  the throttled-away majority costs no lookup.
+  the throttled-away majority costs no lookup. `props` may be a 0-arity
+  function, built only when the event is allowed.
   """
-  @spec track_throttled(map(), String.t(), String.t(), pos_integer(), map()) :: :ok
+  @spec track_throttled(map(), String.t(), String.t(), pos_integer(), map() | (-> map())) ::
+          :ok
   def track_throttled(%{id: id} = user, event, dedupe, window_ms, props) do
     with true <- enabled?(),
          {:allow, _} <-
@@ -76,6 +97,7 @@ defmodule Engram.Analytics do
              1,
              :analytics_activity
            ) do
+      props = if is_function(props, 0), do: props.(), else: props
       PostHog.capture(id_for(user), event, props)
     else
       _ -> :ok

@@ -3487,6 +3487,26 @@ defmodule EngramWeb.CrdtChannelTest do
       assert [] == Enum.filter(drain_posthog([]), &(&1["event"] == "note_created"))
     end
 
+    test "a create refused by notes_cap fires one throttled limit_hit", %{
+      socket: socket,
+      user: user
+    } do
+      insert(:user_limit_override, user: user, key: "notes_cap", value: %{"v" => 0})
+      # The join already resolved this user's limits into the read-through cache.
+      :ok = Engram.Billing.OverrideCache.evict(user.id)
+
+      for path <- ["Notes/c1.md", "Notes/c2.md"] do
+        ref = push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => path})
+        assert_reply ref, :error, %{reason: "notes_cap_reached"}, 3000
+      end
+
+      Process.sleep(400)
+      assert [body] = Enum.filter(drain_posthog([]), &(&1["event"] == "limit_hit"))
+      assert body["properties"]["limit_key"] == "notes_cap"
+      assert body["properties"]["surface"] == "obsidian_sync"
+      assert body["properties"]["tier"] == "free"
+    end
+
     defp drain_posthog(acc) do
       receive do
         {:posthog_body, b} -> drain_posthog([b | acc])
