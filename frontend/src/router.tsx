@@ -1,5 +1,6 @@
 import { lazy, type ReactNode, Suspense } from "react";
 import { createBrowserRouter, Navigate, Outlet } from "react-router";
+import { whenLoaded } from "@/lib/when-loaded";
 import AuthGuard from "./auth/auth-guard";
 import CatchAllRoute from "./auth/catch-all-route";
 import SignInPage from "./auth/sign-in";
@@ -28,44 +29,50 @@ import { VaultItemPage } from "./viewer/note-chunks";
 // single async chunk (no gate → shell → layout chunk waterfall). This is what
 // keeps yjs / phoenix / react-resizable-panels / the folder tree out of the
 // eager bundle that gates the sign-in page.
-const AppLayout = lazy(() => import("./layout/app-shell").then((m) => ({ default: m.AppLayout })));
+const AppLayout = lazy(() =>
+	whenLoaded(import("./layout/app-shell")).then((m) => ({ default: m.AppLayout })),
+);
 const OnboardingGate = lazy(() =>
-	import("./layout/app-shell").then((m) => ({ default: m.OnboardingGate })),
+	whenLoaded(import("./layout/app-shell")).then((m) => ({ default: m.OnboardingGate })),
 );
 const OnboardingShell = lazy(() =>
-	import("./layout/app-shell").then((m) => ({ default: m.OnboardingShell })),
+	whenLoaded(import("./layout/app-shell")).then((m) => ({ default: m.OnboardingShell })),
 );
 // Onboarding entry surface — same one-chunk barrel pattern.
 const OnboardLayout = lazy(() =>
-	import("./onboarding/onboard-entry").then((m) => ({ default: m.OnboardLayout })),
+	whenLoaded(import("./onboarding/onboard-entry")).then((m) => ({ default: m.OnboardLayout })),
 );
 const OnboardRedirect = lazy(() =>
-	import("./onboarding/onboard-entry").then((m) => ({ default: m.OnboardRedirect })),
+	whenLoaded(import("./onboarding/onboard-entry")).then((m) => ({ default: m.OnboardRedirect })),
 );
-const Dashboard = lazy(() => import("./viewer/dashboard"));
+const Dashboard = lazy(() => whenLoaded(import("./viewer/dashboard")));
 const VaultRoute = lazy(() =>
-	import("./layout/app-shell").then((m) => ({ default: m.VaultRoute })),
+	whenLoaded(import("./layout/app-shell")).then((m) => ({ default: m.VaultRoute })),
 );
-const VaultRedirect = lazy(() => import("./viewer/vault-redirect"));
-const LegacyNoteRedirect = lazy(() => import("./viewer/legacy-note-redirect"));
+const VaultRedirect = lazy(() => whenLoaded(import("./viewer/vault-redirect")));
+const LegacyNoteRedirect = lazy(() => whenLoaded(import("./viewer/legacy-note-redirect")));
 // Wikilink hrefs name notes by path/title; this resolves them to /v/:slug/:id.
-const ResetPasswordPage = lazy(() => import("./features/auth/ResetPasswordPage"));
-const DeviceLinkPage = lazy(() => import("./device/device-link-page"));
-const OAuthAuthorizePage = lazy(() => import("./oauth/oauth-authorize-page"));
+const ResetPasswordPage = lazy(() => whenLoaded(import("./features/auth/ResetPasswordPage")));
+const DeviceLinkPage = lazy(() => whenLoaded(import("./device/device-link-page")));
+const OAuthAuthorizePage = lazy(() => whenLoaded(import("./oauth/oauth-authorize-page")));
 // Dev-only (see the guarded route below). The `lazy()` MUST live inside the
 // DEV ternary, not at plain module scope: a bare `lazy(() => import(...))`
 // still emits its chunk in a production build even when the only route
 // referencing it is guarded away. Verified the hard way, it shipped 4.3 kB of
 // dead weight. With the dynamic import in a statically-false branch, Rollup
 // drops it entirely.
-const ConnectorQcPage = import.meta.env.DEV ? lazy(() => import("./dev/connector-qc-page")) : null;
+const ConnectorQcPage = import.meta.env.DEV
+	? lazy(() => whenLoaded(import("./dev/connector-qc-page")))
+	: null;
 // `/settings` and `/settings/*` are the old path route. Phoenix still serves
 // the SPA for those paths, so old bookmarks boot and land here.
-const LegacySettingsRedirect = lazy(() => import("./settings/legacy-settings-redirect"));
-const AgreementPage = lazy(() => import("./onboarding/agreement-page"));
-const HeardPage = lazy(() => import("./onboarding/heard-page"));
-const OnboardBillingPage = lazy(() => import("./onboarding/onboard-billing-page"));
-const OnboardVaultPage = lazy(() => import("./onboarding/onboard-vault-page"));
+const LegacySettingsRedirect = lazy(() =>
+	whenLoaded(import("./settings/legacy-settings-redirect")),
+);
+const AgreementPage = lazy(() => whenLoaded(import("./onboarding/agreement-page")));
+const HeardPage = lazy(() => whenLoaded(import("./onboarding/heard-page")));
+const OnboardBillingPage = lazy(() => whenLoaded(import("./onboarding/onboard-billing-page")));
+const OnboardVaultPage = lazy(() => whenLoaded(import("./onboarding/onboard-vault-page")));
 
 const routeFallback = <LoadingPane />;
 

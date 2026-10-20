@@ -29,6 +29,12 @@ defmodule EngramWeb.Schemas.LogInput do
         nullable: true,
         description:
           "Set by the client when the entry bypassed its diagnostics gate (RemoteLogger.anomaly). Provenance, not severity: it marks a signal that reaches the whole fleet rather than only opted-in users."
+      },
+      context: %Schema{
+        type: :object,
+        nullable: true,
+        description:
+          "Structured fields beside the message (the web app's network_error context: browser, went_offline, attempt, elapsed_ms, error_name, error_message, visibility, effective_type). Only allowlisted keys holding their declared shape are kept; the rest are dropped."
       }
     }
   })

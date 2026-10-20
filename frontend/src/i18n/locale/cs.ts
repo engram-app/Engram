@@ -20,6 +20,10 @@ export default {
 	"Failed to duplicate.": "Duplikování selhalo.",
 	"Batch delete failed.": "Hromadné smazání selhalo.",
 	"Batch move failed.": "Hromadné přesunutí selhalo.",
+	"Couldn't load sign-in": "Nelze načíst přihlášení",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Služba přihlášení se nenačetla. Zkontrolujte připojení a obnovte stránku.",
+	Reload: "Obnovit",
 	"This account is suspended. Contact an admin to restore access.":
 		"Tento účet je pozastaven. Kontaktujte administrátora pro obnovení přístupu.",
 	"Incorrect email or password.": "Nesprávná e-mailová adresa nebo heslo.",
@@ -524,7 +528,6 @@ export default {
 	"Linux PC": "Linux počítač",
 	Oops: "Ups",
 	"Something went wrong": "Nastala chyba",
-	Reload: "Obnovit",
 	"Back to home": "Zpět na úvodní stránku",
 	"Error detail (dev only)": "Podrobnosti chyby (pouze pro vývojáře)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -662,6 +665,9 @@ export default {
 	"Love it": "Miluji to",
 	"Tell us more": "Řekněte nám více",
 	Language: "Jazyk",
+	"Show Engram in {language}?": "Zobrazit Engram v {language}?",
+	"Switch language": "Změnit jazyk",
+	"Not now": "Ne, děkuji",
 	"My Vault": "Můj trezor",
 	"{count} days left in your trial.": {
 		one: "Zbývá vám {count} den do konce zkušební verze.",
@@ -908,6 +914,7 @@ export default {
 		"Přečetl jsem a souhlasím s obchodními podmínkami a zásadami ochrany osobních údajů",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Přečetl jsem a souhlasím s uvedenou smlouvou a prohlášením o ochraně osobních údajů",
+	"Could not continue. Please try again.": "Nelze pokračovat. Zkuste to znovu.",
 	"Saving…": "Ukládám…",
 	Continue: "Pokračovat",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -957,7 +964,6 @@ export default {
 		"7denní zkušební verze u placených tarifů. Vyžaduje se platební karta, poplatek bude stržen až po skončení zkušební doby.",
 	"Continue with Free →": "Pokračovat s bezplatnou verzí →",
 	"{summary} · upgrade anytime": "{summary} · můžete kdykoli upgradovat",
-	"Could not continue. Please try again.": "Nelze pokračovat. Zkuste to znovu.",
 	"Step {step} of {total}": "Krok {step} z {total}",
 	Onboarding: "Úvodní nastavení",
 	"Stop connecting this app": "Zastavit připojení této aplikace",

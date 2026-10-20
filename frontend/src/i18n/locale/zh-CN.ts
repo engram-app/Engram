@@ -18,6 +18,10 @@ export default {
 	"Failed to duplicate.": "复制失败。",
 	"Batch delete failed.": "批量删除失败。",
 	"Batch move failed.": "批量移动失败。",
+	"Couldn't load sign-in": "无法加载登录",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"登录服务加载失败。检查网络连接，然后重新加载页面。",
+	Reload: "重新加载",
 	"This account is suspended. Contact an admin to restore access.":
 		"账号已禁用。联系管理员恢复访问。",
 	"Incorrect email or password.": "邮箱或密码错误。",
@@ -457,7 +461,6 @@ export default {
 	"Linux PC": "Linux 电脑",
 	Oops: "哎呀",
 	"Something went wrong": "发生错误",
-	Reload: "重新加载",
 	"Back to home": "返回主页",
 	"Error detail (dev only)": "错误详情 (仅限开发者)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -588,6 +591,9 @@ export default {
 	"Love it": "非常喜欢",
 	"Tell us more": "详细说明",
 	Language: "语言",
+	"Show Engram in {language}?": "在 {language} 中显示 Engram？",
+	"Switch language": "切换语言",
+	"Not now": "稍后",
 	"My Vault": "我的仓库",
 	"{count} days left in your trial.": { other: "试用期剩余{count}天。" },
 	"Collapse sidebar": "隐藏侧边栏",
@@ -802,6 +808,7 @@ export default {
 		"我已阅读并同意服务条款和隐私政策",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"我已阅读并同意上述协议和隐私声明",
+	"Could not continue. Please try again.": "无法继续。请重试。",
 	"Saving…": "保存中…",
 	Continue: "继续",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -849,7 +856,6 @@ export default {
 		"付费方案提供 7 天免费试用。需要信用卡，到期才收费。",
 	"Continue with Free →": "继续使用免费版 →",
 	"{summary} · upgrade anytime": "{summary} · 随时升级",
-	"Could not continue. Please try again.": "无法继续。请重试。",
 	"Step {step} of {total}": "第 {step} 步，共 {total} 步",
 	Onboarding: "入门引导",
 	"Stop connecting this app": "停止连接此应用",

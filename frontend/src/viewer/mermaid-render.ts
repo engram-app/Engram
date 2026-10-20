@@ -1,3 +1,4 @@
+import { whenLoaded } from "@/lib/when-loaded";
 // One mermaid instance, shared by Reading mode's <MermaidBlock> and the
 // editor's live-preview decoration. Both need the same lazy import, the same
 // per-render theme handling and the same lazy draw (drawMermaid), and two
@@ -66,7 +67,7 @@ const BASE_CONFIG = { startOnLoad: false, securityLevel: "strict", layout: "dagr
 // renderMermaid re-applies the palette before each render instead.
 function loadMermaid() {
 	if (!mermaidPromise) {
-		mermaidPromise = import("mermaid")
+		mermaidPromise = whenLoaded(import("mermaid"))
 			.then((m) => {
 				m.default.initialize(BASE_CONFIG);
 				return m.default;

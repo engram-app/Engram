@@ -20,6 +20,10 @@ export default {
 	"Failed to duplicate.": "Kopyalama işlemi başarısız oldu.",
 	"Batch delete failed.": "Toplu silme işlemi başarısız oldu.",
 	"Batch move failed.": "Toplu taşıma işlemi başarısız oldu.",
+	"Couldn't load sign-in": "Giriş yüklenemedi",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Giriş servisi yüklenemedi. Bağlantınızı kontrol edin, ardından sayfayı yeniden yükleyin.",
+	Reload: "Yeniden yükle",
 	"This account is suspended. Contact an admin to restore access.":
 		"Bu hesap askıya alınmış. Erişimi yeniden etkinleştirmek için bir yöneticiyle iletişime geçin.",
 	"Incorrect email or password.": "Yanlış e-posta veya şifre.",
@@ -487,7 +491,6 @@ export default {
 	"Linux PC": "Linux bilgisayar",
 	Oops: "Hata",
 	"Something went wrong": "Bir sorun oluştu",
-	Reload: "Yeniden yükle",
 	"Back to home": "Ana menüye dön",
 	"Error detail (dev only)": "Hata ayrıntısı (geliştiriciler için)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -623,6 +626,9 @@ export default {
 	"Love it": "Çok beğendim",
 	"Tell us more": "Lütfen daha fazla bilgi verin",
 	Language: "Dil",
+	"Show Engram in {language}?": "Engram'ı {language} içinde göster?",
+	"Switch language": "Dili değiştir",
+	"Not now": "Şu anda değil",
 	"My Vault": "Benim Kasam",
 	"{count} days left in your trial.": {
 		one: "Deneme süreniz sona ermeye {count} gün kaldı.",
@@ -844,6 +850,7 @@ export default {
 		"Hizmet Şartları ve Gizlilik Politikasını okudum ve kabul ediyorum",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Yukarıdaki anlaşmayı ve gizlilik bildirimini okudum ve kabul ediyorum",
+	"Could not continue. Please try again.": "Devam edilemedi. Lütfen tekrar deneyin.",
 	"Saving…": "Kaydediliyor…",
 	Continue: "Devam",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -893,7 +900,6 @@ export default {
 		"Ücretli planlarda 7 günlük ücretsiz deneme. Kredi kartı gereklidir, deneme süresi dolana kadar ücret alınmaz.",
 	"Continue with Free →": "Ücretsiz sürümle devam et →",
 	"{summary} · upgrade anytime": "{summary} · istediğiniz zaman yükseltin",
-	"Could not continue. Please try again.": "Devam edilemedi. Lütfen tekrar deneyin.",
 	"Step {step} of {total}": "{step} adımı, {total} toplam",
 	Onboarding: "Tanıtım",
 	"Stop connecting this app": "Bu uygulamayı bağlantıdan çıkar",

@@ -21,6 +21,10 @@ export default {
 	"Failed to duplicate.": "No se pudo duplicar.",
 	"Batch delete failed.": "Falló la eliminación por lotes.",
 	"Batch move failed.": "Falló el movimiento por lotes.",
+	"Couldn't load sign-in": "No se pudo cargar el inicio de sesión",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"El servicio de inicio de sesión no se cargó. Verifica tu conexión y vuelve a cargar la página.",
+	Reload: "Recargar",
 	"This account is suspended. Contact an admin to restore access.":
 		"Esta cuenta está suspendida. Contacta a un administrador para restablecer el acceso.",
 	"Incorrect email or password.": "Correo electrónico o contraseña incorrectos.",
@@ -515,7 +519,6 @@ export default {
 	"Linux PC": "PC con Linux",
 	Oops: "¡Uy!",
 	"Something went wrong": "Algo salió mal",
-	Reload: "Recargar",
 	"Back to home": "Volver al inicio",
 	"Error detail (dev only)": "Detalle del error (solo para desarrolladores)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -653,6 +656,9 @@ export default {
 	"Love it": "Me encanta",
 	"Tell us more": "Cuéntanos más",
 	Language: "Idioma",
+	"Show Engram in {language}?": "¿Mostrar Engram en {language}?",
+	"Switch language": "Cambiar idioma",
+	"Not now": "No, gracias",
 	"My Vault": "Mi bóveda",
 	"{count} days left in your trial.": {
 		one: "Te queda {count} día en tu prueba.",
@@ -877,6 +883,7 @@ export default {
 		"He leído y acepto los Términos del Servicio y la Política de Privacidad",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"He leído y acepto el acuerdo que se muestra arriba y el aviso de privacidad",
+	"Could not continue. Please try again.": "No se pudo continuar. Por favor, intenta de nuevo.",
 	"Saving…": "Guardando…",
 	Continue: "Continuar",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -926,7 +933,6 @@ export default {
 		"Prueba gratuita de 7 días en los planes de pago. Se requiere tarjeta, no se te cobrará hasta que finalice.",
 	"Continue with Free →": "Continuar con la versión gratuita →",
 	"{summary} · upgrade anytime": "{summary} · puedes actualizar en cualquier momento",
-	"Could not continue. Please try again.": "No se pudo continuar. Por favor, intenta de nuevo.",
 	"Step {step} of {total}": "Paso {step} de {total}",
 	Onboarding: "Incorporación",
 	"Stop connecting this app": "Deja de conectar esta aplicación",

@@ -21,6 +21,10 @@ export default {
 	"Failed to duplicate.": "La duplication a échoué.",
 	"Batch delete failed.": "La suppression par lots a échoué.",
 	"Batch move failed.": "Le déplacement par lots a échoué.",
+	"Couldn't load sign-in": "Impossible de charger la connexion",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Le service de connexion n'a pas été chargé. Vérifie ta connexion, puis recharge la page.",
+	Reload: "Recharger",
 	"This account is suspended. Contact an admin to restore access.":
 		"Ce compte est suspendu. Contacte un administrateur pour rétablir l'accès.",
 	"Incorrect email or password.": "Adresse e-mail ou mot de passe incorrect.",
@@ -516,7 +520,6 @@ export default {
 	"Linux PC": "PC Linux",
 	Oops: "Oups",
 	"Something went wrong": "Une erreur s'est produite",
-	Reload: "Recharger",
 	"Back to home": "Retour à l'accueil",
 	"Error detail (dev only)": "Détails de l'erreur (développeurs uniquement)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -654,6 +657,9 @@ export default {
 	"Love it": "J'adore !",
 	"Tell us more": "Dis-nous en plus",
 	Language: "Langue",
+	"Show Engram in {language}?": "Afficher Engram dans {language} ?",
+	"Switch language": "Changer de langue",
+	"Not now": "Pas maintenant",
 	"My Vault": "Mon coffre",
 	"{count} days left in your trial.": {
 		one: "Il te reste {count} jour pour ta période d'essai.",
@@ -879,6 +885,7 @@ export default {
 		"J'ai lu et j'accepte les conditions d'utilisation et la politique de confidentialité",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"J'ai lu et j'accepte l'accord ci-dessus et l'avis de confidentialité",
+	"Could not continue. Please try again.": "Impossible de continuer. Essaie à nouveau.",
 	"Saving…": "Enregistrement…",
 	Continue: "Continuer",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -929,7 +936,6 @@ export default {
 	"Continue with Free →": "Continuer avec l'offre gratuite →",
 	"{summary} · upgrade anytime":
 		"{summary} · possibilité de passer à une version supérieure à tout moment",
-	"Could not continue. Please try again.": "Impossible de continuer. Essaie à nouveau.",
 	"Step {step} of {total}": "Étape {step} sur {total}",
 	Onboarding: "Premiers pas",
 	"Stop connecting this app": "Arrêter la connexion de cette application",

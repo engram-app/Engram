@@ -10,6 +10,7 @@ import {
 	useState,
 } from "react";
 import { captureError } from "../sentry";
+import { setDocumentLang, watchTranslation } from "./browser-language";
 import { LOCALES, type Locale, resolveLocale } from "./locales";
 import { getStoredLocale, setStoredLocale } from "./storage";
 import {
@@ -21,6 +22,7 @@ import {
 	translate,
 	translatePlural,
 } from "./translate";
+import { offerLocaleSwitch } from "./translation-prompt";
 
 type CatalogLoaders = Partial<Record<Locale, () => Promise<{ default: Catalog } | undefined>>>;
 // ^ undefined: vite:preloadError's preventDefault() makes the preload resolve nothing.
@@ -106,7 +108,7 @@ function LocaleProvider({
 	const renderedLocale = loaded?.locale ?? "en";
 	// Layout effect: lang must change in the same commit as the text it describes.
 	useLayoutEffect(() => {
-		document.documentElement.lang = renderedLocale;
+		setDocumentLang(renderedLocale);
 	}, [renderedLocale]);
 
 	const setLocale = useCallback(
@@ -132,6 +134,24 @@ function LocaleProvider({
 		}),
 		[locale, renderedLocale, setLocale, catalog],
 	);
+
+	// Browser page translation: reported once per target, and a shipped target
+	// is offered as a real switch (see watchTranslation, offerLocaleSwitch).
+	const latest = useRef({ locale, setLocale, loaders });
+	useLayoutEffect(() => {
+		latest.current = { locale, setLocale, loaders };
+	}, [locale, setLocale, loaders]);
+	useEffect(
+		() =>
+			watchTranslation(
+				() => latest.current.locale,
+				(target) => {
+					offerLocaleSwitch(target, latest.current).catch(captureError);
+				},
+			),
+		[],
+	);
+
 	return <LocaleContext.Provider value={value}>{children}</LocaleContext.Provider>;
 }
 

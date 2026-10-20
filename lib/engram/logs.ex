@@ -54,6 +54,38 @@ defmodule Engram.Logs do
   # already far past anything legitimate; the rest are short enums/versions.
   @max_short_chars 128
 
+  # Structured fields a client may send beside a line (`context`), each with
+  # the only shape it may take. Today: the web SPA's network_error context
+  # (frontend/src/api/network-context.ts), which is how a "Failed to fetch"
+  # that never reached Cloudflare gets told apart (fast fail vs stall, a
+  # backgrounded tab, one browser build). Anything else in `context` (a key
+  # not listed, a value out of shape) is dropped: these become Loki metadata,
+  # where a free-text field would be a path leak and a cardinality bomb.
+  @context_fields [
+    browser: {:match, ~r/\A(?:[A-Za-z][A-Za-z ]{0,30} \d{1,4}|unknown)\z/},
+    went_offline: :boolean,
+    attempt: {:integer, 1..10},
+    elapsed_ms: {:integer, 0..3_600_000},
+    error_name: {:one_of, ~w(TypeError AbortError TimeoutError NetworkError other)},
+    error_message:
+      {:one_of,
+       [
+         "Failed to fetch",
+         "Load failed",
+         "NetworkError when attempting to fetch resource.",
+         "other"
+       ]},
+    visibility: {:one_of, ~w(visible hidden prerender)},
+    effective_type: {:one_of, ~w(slow-2g 2g 3g 4g)}
+  ]
+
+  @doc """
+  Metadata keys a client context can add to a re-emitted line: the
+  allowlisted fields plus `elapsed_ms_min` on a collapsed repeat. Each must
+  be declared in config.exs's `:default_formatter` metadata list.
+  """
+  def context_metadata_keys, do: Keyword.keys(@context_fields) ++ [:elapsed_ms_min]
+
   @doc """
   Insert a batch of log entries for a user.
   Returns {:ok, count} with the number of entries inserted.
@@ -142,9 +174,33 @@ defmodule Engram.Logs do
       conn_id: get(entry, "conn_id", :conn_id) |> clamp(@max_short_chars),
       device_id: get(entry, "device_id", :device_id) |> clamp(@max_short_chars),
       diagnostic: get(entry, "diagnostic", :diagnostic) == true,
-      forced: get(entry, "forced", :forced) == true
+      forced: get(entry, "forced", :forced) == true,
+      context: bound_context(get(entry, "context", :context))
     }
   end
+
+  # Keyword list of the allowlisted context fields that hold their declared
+  # shape. The keys come from the allowlist, never from input. String-keyed
+  # off the wire, atom-keyed from internal callers, as `get/3` above.
+  # A generator, not `value = ...`: a bare match in a `for` is a FILTER, so a
+  # `false` value was silently dropped.
+  defp bound_context(context) when is_map(context) do
+    for {key, shape} <- @context_fields,
+        {:ok, value} <- [fetch_context(context, key)],
+        context_value?(shape, value),
+        do: {key, value}
+  end
+
+  defp bound_context(_context), do: []
+
+  defp fetch_context(context, key) do
+    with :error <- Map.fetch(context, Atom.to_string(key)), do: Map.fetch(context, key)
+  end
+
+  defp context_value?(:boolean, value), do: is_boolean(value)
+  defp context_value?({:integer, range}, value), do: is_integer(value) and value in range
+  defp context_value?({:one_of, allowed}, value), do: value in allowed
+  defp context_value?({:match, regex}, value), do: is_binary(value) and value =~ regex
 
   # Entries arrive string-keyed as JSON in prod, but atom-keyed from internal
   # callers and tests — the original code checked both for every field, so this
@@ -282,6 +338,7 @@ defmodule Engram.Logs do
             # path exactly as blind as before.
             forced: entry.forced
           )
+          |> Keyword.merge(entry.context)
 
         meta = if repeat > 1, do: Keyword.put(meta, :repeat, repeat), else: meta
 
@@ -306,20 +363,46 @@ defmodule Engram.Logs do
   # Identical lines of one batch (a refused frame retried per flush) as one
   # `{first, count}`, in first-seen order. Everything that ends up in the line
   # or its metadata is part of the key, so collapsing never merges two lines
-  # that would have read differently.
+  # that would have read differently, except `elapsed_ms`: it differs on every
+  # network_error, so keying on it never collapsed a burst. A collapsed line
+  # carries the range instead (`elapsed_ms` = slowest, `elapsed_ms_min` =
+  # fastest), which still tells a run of fast failures from one stall.
   defp collapse_repeats(items) do
-    {order, counts} =
-      Enum.reduce(items, {[], %{}}, fn {e, ship?} = item, {order, counts} ->
+    {order, groups} =
+      Enum.reduce(items, {[], %{}}, fn {e, ship?} = item, {order, groups} ->
         key =
-          {e.level, e.category, e.message, ship?, e.forced, e.conn_id, e.device_id, e.platform}
+          {e.level, e.category, e.message, ship?, e.forced, e.conn_id, e.device_id, e.platform,
+           Keyword.delete(e.context, :elapsed_ms)}
 
-        case counts do
-          %{^key => {first, n}} -> {order, Map.put(counts, key, {first, n + 1})}
-          _ -> {[key | order], Map.put(counts, key, {item, 1})}
+        case groups do
+          %{^key => {first, elapsed}} ->
+            {order, Map.put(groups, key, {first, [e.context[:elapsed_ms] | elapsed]})}
+
+          _ ->
+            {[key | order], Map.put(groups, key, {item, [e.context[:elapsed_ms]]})}
         end
       end)
 
-    order |> Enum.reverse() |> Enum.map(&Map.fetch!(counts, &1))
+    order
+    |> Enum.reverse()
+    |> Enum.map(fn key ->
+      {{first, ship?}, elapsed} = Map.fetch!(groups, key)
+      {{%{first | context: elapsed_range(first.context, elapsed)}, ship?}, length(elapsed)}
+    end)
+  end
+
+  defp elapsed_range(context, [_one]), do: context
+
+  defp elapsed_range(context, elapsed) do
+    case Enum.reject(elapsed, &is_nil/1) do
+      [] ->
+        context
+
+      timed ->
+        context
+        |> Keyword.put(:elapsed_ms, Enum.max(timed))
+        |> Keyword.put(:elapsed_ms_min, Enum.min(timed))
+    end
   end
 
   # How many diagnostic entries this batch may ship, and how many it loses.

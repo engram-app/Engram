@@ -1,3 +1,5 @@
+// First, before React renders: see the module for why.
+import "./lib/dom-translation-guard";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Component, lazy, type ReactNode, StrictMode, Suspense, use } from "react";
 import { createRoot } from "react-dom/client";
@@ -8,12 +10,14 @@ import { queryClient } from "./api/query-client";
 import { configPromise, type EngramConfig } from "./config";
 import { ConfigProvider } from "./config-context";
 import ErrorFallback from "./error-fallback";
+import { reportLanguageDemand } from "./i18n/browser-language";
 import { LocaleProvider } from "./i18n/locale-provider";
 import LoadingScreen from "./layout/loading-screen";
 import { appRouterFor } from "./router";
 import { captureError } from "./sentry";
 import { ThemeProvider } from "./theme/theme-provider";
 import "./main.css";
+import { whenLoaded } from "@/lib/when-loaded";
 
 // Stale-deploy self-heal. Every lazy() below (app shell, Clerk provider,
 // Toaster, upgrade dialog, …) is a hashed chunk that a deploy can rotate out
@@ -21,6 +25,8 @@ import "./main.css";
 // throw lands on the route error boundary (router.tsx errorElement). Vite
 // fires `vite:preloadError` for failed dynamic-import
 // loads — reload once to pick up the fresh index.html + hashes.
+// preventDefault() makes the failed import RESOLVE undefined, so every
+// dynamic import whose module is read goes through lib/when-loaded.
 // preventDefault() suppresses the rethrow for the reload we handle; the
 // 30s guard means a genuinely broken asset host degrades back to the error
 // page instead of a reload loop.
@@ -47,17 +53,22 @@ window.addEventListener("vite:preloadError", (event) => {
 // so nothing on the critical path needs it synchronously. Everything else
 // reaches PostHog through analytics/client.ts, never a static import.
 initAnalytics(import.meta.env.VITE_POSTHOG_KEY ?? "");
+// Which languages users need that the app does not ship (once per device).
+// Waits for the analytics client above, so GPC and self-host send nothing.
+reportLanguageDemand();
 
 // Both auth providers are declared lazy at module scope; only one is
 // instantiated per page load based on resolved config (BootstrapGate).
-const ClerkAuthProvider = lazy(() => import("./auth/clerk-auth-provider"));
-const LocalAuthProvider = lazy(() => import("./auth/local-auth-provider"));
+const ClerkAuthProvider = lazy(() => whenLoaded(import("./auth/clerk-auth-provider")));
+const LocalAuthProvider = lazy(() => whenLoaded(import("./auth/local-auth-provider")));
 
 // sonner (~32 KB) is toast plumbing, not first-paint UI — lazy so it loads in
 // parallel after mount instead of inside the eager bundle that gates the
 // sign-in page. Worst case a toast fired before the chunk lands is dropped;
 // toasts are interaction-driven, so that window is effectively unreachable.
-const Toaster = lazy(() => import("@/components/ui/sonner").then((m) => ({ default: m.Toaster })));
+const Toaster = lazy(() =>
+	whenLoaded(import("@/components/ui/sonner")).then((m) => ({ default: m.Toaster })),
+);
 
 // Toasts are cosmetic: if the sonner chunk is truly unloadable (network flake
 // that survives the vite:preloadError reload), losing toasts must not take

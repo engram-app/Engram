@@ -43,12 +43,17 @@ function createRemoteLog(): RemoteLogBuffer {
 
 export type RemoteLogLevel = "info" | "warn" | "error";
 
+/** Structured fields beside the message. The backend keeps only the keys and
+ *  value shapes it allowlists (Engram.Logs) and emits them as Loki metadata. */
+export type RemoteLogContext = Record<string, string | number | boolean>;
+
 export interface RemoteLogEntry {
 	ts: string;
 	level: RemoteLogLevel;
 	category: string;
 	message: string;
 	platform: string;
+	context?: RemoteLogContext;
 }
 
 export class RemoteLogBuffer {
@@ -64,13 +69,14 @@ export class RemoteLogBuffer {
 		} | null>,
 	) {}
 
-	log(level: RemoteLogLevel, category: string, message: string): void {
+	log(level: RemoteLogLevel, category: string, message: string, context?: RemoteLogContext): void {
 		this.queue.push({
 			ts: new Date().toISOString(),
 			level,
 			category,
 			message: message.slice(0, MAX_MESSAGE_CHARS),
 			platform: "web",
+			...(context ? { context } : {}),
 		});
 		if (this.queue.length > MAX_QUEUE) {
 			this.queue.splice(0, this.queue.length - MAX_QUEUE);
@@ -123,11 +129,11 @@ export const remoteLog = createRemoteLog();
 export function rlog(): {
 	info: (category: string, message: string) => void;
 	warn: (category: string, message: string) => void;
-	error: (category: string, message: string) => void;
+	error: (category: string, message: string, context?: RemoteLogContext) => void;
 } {
 	return {
 		info: (category, message) => remoteLog.log("info", category, message),
 		warn: (category, message) => remoteLog.log("warn", category, message),
-		error: (category, message) => remoteLog.log("error", category, message),
+		error: (category, message, context) => remoteLog.log("error", category, message, context),
 	};
 }

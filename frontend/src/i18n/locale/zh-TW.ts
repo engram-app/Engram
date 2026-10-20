@@ -18,6 +18,10 @@ export default {
 	"Failed to duplicate.": "複製失敗。",
 	"Batch delete failed.": "批量刪除失敗。",
 	"Batch move failed.": "批量移動失敗。",
+	"Couldn't load sign-in": "載入登入失敗",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"登入服務載入失敗。請檢查網路連線，然後重新載入頁面。",
+	Reload: "重新載入",
 	"This account is suspended. Contact an admin to restore access.":
 		"該帳戶已停用。請聯繫管理員以恢復存取權。",
 	"Incorrect email or password.": "電子郵件或密碼錯誤。",
@@ -459,7 +463,6 @@ export default {
 	"Linux PC": "Linux 電腦",
 	Oops: "哎呀",
 	"Something went wrong": "發生錯誤",
-	Reload: "重新載入",
 	"Back to home": "返回首頁",
 	"Error detail (dev only)": "錯誤詳情（僅限開發者）",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -590,6 +593,9 @@ export default {
 	"Love it": "非常喜歡",
 	"Tell us more": "告訴我們更多",
 	Language: "語言",
+	"Show Engram in {language}?": "在 {language} 中顯示 Engram？",
+	"Switch language": "切換語言",
+	"Not now": "現在不感興趣",
 	"My Vault": "我的儲存庫",
 	"{count} days left in your trial.": { other: "試用期剩 {count} 天。" },
 	"Collapse sidebar": "摺疊側邊欄",
@@ -804,6 +810,7 @@ export default {
 		"我已閱讀並同意服務條款和隱私權政策",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"我已閱讀並同意上方顯示的協議和隱私權聲明",
+	"Could not continue. Please try again.": "執行失敗。請重試。",
 	"Saving…": "儲存中…",
 	Continue: "繼續",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -851,7 +858,6 @@ export default {
 		"付費方案提供 7 天免費試用。需綁定信用卡，試用期滿後才會扣款。",
 	"Continue with Free →": "繼續使用免費版 →",
 	"{summary} · upgrade anytime": "{summary} · 隨時升級",
-	"Could not continue. Please try again.": "執行失敗。請重試。",
 	"Step {step} of {total}": "第 {step} 步，共 {total} 步",
 	Onboarding: "入門指南",
 	"Stop connecting this app": "停止連接此應用程式",

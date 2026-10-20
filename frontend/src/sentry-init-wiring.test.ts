@@ -37,7 +37,7 @@ describe("Sentry.init wiring", () => {
 			sendDefaultPii?: boolean;
 		};
 		expect(options.beforeBreadcrumb).toBe(sentry.scrubBreadcrumb);
-		expect(options.beforeSend).toBe(sentry.scrubEvent);
+		expect(options.beforeSend).toBe(sentry.beforeSend);
 		expect(options.sendDefaultPii).toBe(false);
 	});
 

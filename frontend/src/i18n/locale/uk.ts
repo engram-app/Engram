@@ -21,6 +21,10 @@ export default {
 	"Failed to duplicate.": "Не вдалося скопіювати.",
 	"Batch delete failed.": "Видалення пакету не вдалося.",
 	"Batch move failed.": "Переміщення пакету не вдалося.",
+	"Couldn't load sign-in": "Не вдалося завантажити сторінку входу",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"Сервіс входу не завантажився. Перевірте ваше з'єднання, потім перезавантажте сторінку.",
+	Reload: "Перезавантажити",
 	"This account is suspended. Contact an admin to restore access.":
 		"Цей обліковий запис заблоковано. Зв'яжіться з адміністратором, щоб відновити доступ.",
 	"Incorrect email or password.": "Неправильний електронний адрес або пароль.",
@@ -532,7 +536,6 @@ export default {
 	"Linux PC": "Комп'ютер Linux",
 	Oops: "Ой",
 	"Something went wrong": "Виникла помилка",
-	Reload: "Перезавантажити",
 	"Back to home": "Повернутися на головну",
 	"Error detail (dev only)": "Деталі помилки (лише для розробників)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -671,6 +674,9 @@ export default {
 	"Love it": "Мені це подобається",
 	"Tell us more": "Розкажіть нам більше",
 	Language: "Мова",
+	"Show Engram in {language}?": "Показати Engram у {language}?",
+	"Switch language": "Змінити мову",
+	"Not now": "Не зараз",
 	"My Vault": "Моє сховище",
 	"{count} days left in your trial.": {
 		one: "До кінця вашого пробного періоду залишилося {count} день.",
@@ -917,6 +923,7 @@ export default {
 		"Я прочитав і погоджуюся з Умовами надання послуг та Політикою конфіденційності",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Я прочитав і погоджуюся з угодою, показаною вище, та політикою конфіденційності",
+	"Could not continue. Please try again.": "Не вдалося продовжити. Будь ласка, спробуйте ще раз.",
 	"Saving…": "Збереження…",
 	Continue: "Продовжити",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -966,7 +973,6 @@ export default {
 		"7-денний безкоштовний пробний період для платних планів. Потрібна картка, зняття коштів не відбудеться до закінчення пробного періоду.",
 	"Continue with Free →": "Продовжити з безкоштовного →",
 	"{summary} · upgrade anytime": "{summary} · можливість оновлення в будь-який час",
-	"Could not continue. Please try again.": "Не вдалося продовжити. Будь ласка, спробуйте ще раз.",
 	"Step {step} of {total}": "Крок {step} з {total}",
 	Onboarding: "Ознайомлення",
 	"Stop connecting this app": "Припинити підключення цього застосунку",

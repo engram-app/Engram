@@ -13,6 +13,7 @@ import {
 	SheetTrigger,
 } from "@/components/ui/sheet";
 import { useT } from "@/i18n/locale-provider";
+import { whenLoaded } from "@/lib/when-loaded";
 import { useMe } from "../api/queries";
 import { useConfig } from "../config-context";
 import { buildSettingsSections, type SettingsSection } from "./sections";
@@ -26,12 +27,12 @@ const CLOSE_ANIMATION_MS = 200;
 // These are the settings section bodies, lazily loaded here. Settings
 // stopped being a path route, so router.tsx no longer references any of
 // them; this component owns the section bodies exclusively.
-const AccountPage = lazy(() => import("./account-page"));
-const AccountPageLocal = lazy(() => import("./account-page-local"));
-const VaultsPage = lazy(() => import("./vaults-page"));
-const ConnectionsPage = lazy(() => import("./connections-page"));
-const BillingPage = lazy(() => import("../billing/billing-page"));
-const AdminPanel = lazy(() => import("../features/admin/AdminPanel"));
+const AccountPage = lazy(() => whenLoaded(import("./account-page")));
+const AccountPageLocal = lazy(() => whenLoaded(import("./account-page-local")));
+const VaultsPage = lazy(() => whenLoaded(import("./vaults-page")));
+const ConnectionsPage = lazy(() => whenLoaded(import("./connections-page")));
+const BillingPage = lazy(() => whenLoaded(import("../billing/billing-page")));
+const AdminPanel = lazy(() => whenLoaded(import("../features/admin/AdminPanel")));
 
 function SectionBody({ section }: { section: SettingsSectionKey }) {
 	const config = useConfig();

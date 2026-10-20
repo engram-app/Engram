@@ -5,6 +5,7 @@ import { scrubUrl } from "../sentry";
 import { getActiveVaultId } from "./active-vault";
 import { getApiBase, joinApiUrl } from "./base";
 import { getDeviceId } from "./device-id";
+import { type NetworkContext, networkContext, offlineMark } from "./network-context";
 
 // Module-level token getter — set by AuthTokenProvider component
 let tokenGetter: (() => Promise<string | null>) | null = null;
@@ -42,8 +43,9 @@ function firstValidationError(errors: unknown): string | undefined {
  *
  *  ponytail: prod keeps the resource (`/folders/:seg`), not the endpoint.
  *  Report the caller's route template if per-endpoint alerts are ever needed. */
-function reportFailure(kind: string, method: string, url: string) {
-	rlog().error("api_request", `${kind} ${method} ${scrubUrl(url)}`);
+function reportFailure({ kind, method, url, context }: Failure) {
+	// Spread: an interface has no index signature, a plain object type does.
+	rlog().error("api_request", `${kind} ${method} ${scrubUrl(url)}`, context && { ...context });
 }
 
 /** navigator.onLine stays true through a laptop wake or a dead Wi-Fi, so a
@@ -68,13 +70,82 @@ function probeApi(): Promise<boolean> {
 	return inFlightProbe;
 }
 
-async function reportIfApiReachable(method: string, url: string) {
-	if (await probeApi()) {
-		reportFailure("network_error", method, url);
+/** A network failure (it has context) reports only if the API is reachable. */
+async function sendReport(failure: Failure) {
+	if (!failure.context || (await probeApi())) {
+		reportFailure(failure);
 	}
 }
 
-async function authFetch(path: string, options: RequestInit = {}): Promise<Response> {
+interface Failure {
+	kind: string;
+	method: string;
+	url: string;
+	context?: NetworkContext;
+}
+
+/** Reports waiting on whether the caller will retry, keyed by the thrown error.
+ *  React Query retries a failed query, and a retry that succeeds is invisible to
+ *  the user: 2026-10-20 one user's five boot GETs failed once, all succeeded a
+ *  second later, and the per-attempt report paged anyway. */
+const pendingReports = new WeakMap<object, Failure>();
+
+/** Errors whose reporting the api client owns: every fetch rejection (a
+ *  network failure, reported or deliberately not, e.g. offline) and every
+ *  5xx. A caller that handles a failure checks this before capturing it, so
+ *  nothing is reported twice and nothing else goes unreported. */
+const ownedFailures = new WeakSet<object>();
+
+/** One run of a query's queryFn. React Query marks it `retried` when it decides
+ *  to run the queryFn again, so every request made in that run is dropped,
+ *  however the queryFn combined or wrapped their errors (Promise.all, a
+ *  rethrow). Linking by the thrown error alone missed exactly those. */
+interface QueryAttempt {
+	/** Failed attempts before this one, for the report's `attempt`. */
+	earlier: number;
+	retried: boolean;
+}
+
+// The attempt whose queryFn is running right now. A request belongs to it if
+// authFetch is CALLED synchronously inside the queryFn, which every queryFn
+// here does for its first request; one made after an `await` falls back to
+// the thrown-error link below.
+let currentQueryAttempt: QueryAttempt | null = null;
+
+/** Report `err` once the current attempt has settled, unless a retry claims it:
+ *  its query attempt is marked retried, or (outside a query attempt) React
+ *  Query discards this exact error. React Query decides to retry inside the
+ *  rejection's microtasks; a timer runs after them. A caller outside React
+ *  Query never claims, so it still reports. */
+function reportUnlessRetried(err: object, failure: Failure, queryAttempt: QueryAttempt | null) {
+	if (queryAttempt && failure.context) {
+		failure.context.attempt += queryAttempt.earlier;
+	}
+	pendingReports.set(err, failure);
+	setTimeout(() => {
+		const pending = pendingReports.get(err);
+		pendingReports.delete(err);
+		if (pending && !queryAttempt?.retried) {
+			sendReport(pending);
+		}
+	}, 0);
+}
+
+/** Methods safe to send twice, so a network error gets one more try here.
+ *  Not GET: React Query already retries queries. Not POST/PATCH: not
+ *  idempotent. DELETE: every route the SPA calls was checked for a safe repeat
+ *  (see api.del). PUT is idempotent by HTTP's definition, but the SPA sends
+ *  none today and no PUT route has been audited; add it with that audit. */
+const RETRY_ONCE_METHODS = new Set(["DELETE"]);
+const RETRY_DELAY_MS = 300;
+
+async function authFetch(
+	path: string,
+	options: RequestInit = {},
+	{ retryNetworkError = true } = {},
+): Promise<Response> {
+	// Before the first await: only the synchronous part of a queryFn is inside it.
+	const queryAttempt = currentQueryAttempt;
 	const token = await getAuthToken();
 
 	const headers = new Headers(options.headers);
@@ -99,24 +170,57 @@ async function authFetch(path: string, options: RequestInit = {}): Promise<Respo
 	// this composes to `/api${path}` identically to the pre-eject shape.
 	const url = joinApiUrl(getApiBase(), `/api${path}`);
 	const method = options.method ?? "GET";
-	let response: Response;
-	try {
-		response = await fetch(url, { ...options, headers });
-	} catch (err) {
-		// Aborts are the caller's choice and offline is the user's network, not
-		// ours. Everything else (CORS, DNS, TLS, connection reset) is a TypeError
-		// the browser deliberately leaves vague.
-		const aborted = err instanceof Error && err.name === "AbortError";
-		if (!aborted && navigator.onLine) {
-			reportIfApiReachable(method, url);
+	const retriesOnce = retryNetworkError && RETRY_ONCE_METHODS.has(method);
+	const attemptFetch = async (
+		tryNumber: number,
+	): Promise<{ response: Response; attempt: number }> => {
+		const startedAt = performance.now();
+		const offlineSince = offlineMark();
+		try {
+			return { response: await fetch(url, { ...options, headers }), attempt: tryNumber };
+		} catch (err) {
+			// A TypeError is the browser's network failure; an AbortError (a
+			// DOMException) is the caller's choice and is never retried.
+			if (retriesOnce && tryNumber === 1 && err instanceof TypeError) {
+				await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+				return attemptFetch(2);
+			}
+			// Aborts are the caller's choice and offline is the user's network, not
+			// ours. Everything else (CORS, DNS, TLS, connection reset) is a TypeError
+			// the browser deliberately leaves vague.
+			const aborted = err instanceof Error && err.name === "AbortError";
+			if (err instanceof Error) {
+				ownedFailures.add(err);
+			}
+			if (!aborted && navigator.onLine && err instanceof Error) {
+				reportUnlessRetried(
+					err,
+					{
+						kind: "network_error",
+						method,
+						url,
+						context: networkContext(err, tryNumber, performance.now() - startedAt, offlineSince),
+					},
+					queryAttempt,
+				);
+			}
+			throw err;
 		}
-		throw err;
+	};
+	const { response, attempt } = await attemptFetch(1);
+
+	// A 404 on the repeat of a DELETE: either the first attempt reached the
+	// server and deleted it before the connection failed, or it never arrived
+	// and the id was wrong all along. The user's goal (it is gone) holds either
+	// way, and failing would read as "delete failed" for a delete that worked,
+	// so it resolves. The ambiguity is logged, so a wrong-id bug that only
+	// shows up when a network error coincides is still countable in Loki.
+	if (attempt === 2 && method === "DELETE" && response.status === 404) {
+		rlog().warn("api_request", `delete_retry_not_found DELETE ${scrubUrl(url)}`);
+		return new Response(null, { status: 204 });
 	}
 
 	if (!response.ok) {
-		if (response.status >= 500) {
-			reportFailure(`http_${response.status}`, method, url);
-		}
 		const body = await response.json().catch(() => ({}));
 		// EngramWeb.Plugs.RequireOnboarding's 403 shape. Every caller routes
 		// through this one function, so this is the single place that can see
@@ -139,13 +243,55 @@ async function authFetch(path: string, options: RequestInit = {}): Promise<Respo
 				body.upgrade_url ?? null,
 			);
 		}
-		throw new ApiError(
+		const error = new ApiError(
 			response.status,
 			body.error ?? firstValidationError(body.errors) ?? response.statusText,
 		);
+		if (response.status >= 500) {
+			ownedFailures.add(error);
+			reportUnlessRetried(error, { kind: `http_${response.status}`, method, url }, queryAttempt);
+		}
+		throw error;
 	}
 
 	return response;
+}
+
+/** The attempt that threw `err` will be retried: its failure is not final, so
+ *  drop its report. The final attempt's own error reports if it fails too. */
+/** True when the api client already reports (or deliberately skips) this
+ *  failure: a network error or a 5xx. Anything else is the caller's to report. */
+export function isApiClientFailure(err: unknown): boolean {
+	return typeof err === "object" && err !== null && ownedFailures.has(err);
+}
+
+/** Run one attempt of a query's queryFn as `attempt` (see QueryAttempt). */
+export function runInQueryAttempt<T>(attempt: QueryAttempt, fn: () => T): T {
+	const outer = currentQueryAttempt;
+	currentQueryAttempt = attempt;
+	try {
+		return fn();
+	} finally {
+		currentQueryAttempt = outer;
+	}
+}
+
+export function discardRetriedFailure(err: unknown) {
+	if (typeof err === "object" && err !== null) {
+		pendingReports.delete(err);
+	}
+}
+
+/** A mutation's earlier failed attempts of the request that threw `err`, so
+ *  the final report's `attempt` counts every try, not just the last fetch.
+ *  (A query's come from its QueryAttempt.) */
+export function noteEarlierAttempts(err: unknown, earlier: number) {
+	if (typeof err === "object" && err !== null) {
+		const context = pendingReports.get(err)?.context;
+		if (context) {
+			context.attempt += earlier;
+		}
+	}
 }
 
 export function setTokenGetter(getter: () => Promise<string | null>) {
@@ -162,6 +308,8 @@ export async function getAuthToken(): Promise<string | null> {
 export function setUpgradeHandler(fn: ((reason: string) => void) | null) {
 	upgradeHandler = fn;
 }
+
+export type { QueryAttempt };
 
 export class ApiError extends Error {
 	constructor(
@@ -231,11 +379,23 @@ export const api = {
 	// needs to send a password, and a credential in a query string is written
 	// to every access log between the browser and Phoenix — plus Sentry's fetch
 	// breadcrumbs, which capture the URL.
+	//
+	// A network error is retried once (authFetch). Every DELETE route called
+	// here repeats safely: connections (oauth, device, pat), admin invites
+	// and users re-revoke or re-stamp, folders answer 204 when already gone,
+	// and vaults' 404 on a repeat is read as success. Except DELETE /me: it
+	// re-sends the password, and a repeat after a success we never saw answers
+	// 401 for an account that is already gone, which the UI would show as a
+	// failed deletion.
 	async del<T>(path: string, body?: unknown): Promise<T | undefined> {
-		const res = await authFetch(path, {
-			method: "DELETE",
-			body: body === undefined ? undefined : JSON.stringify(body),
-		});
+		const res = await authFetch(
+			path,
+			{
+				method: "DELETE",
+				body: body === undefined ? undefined : JSON.stringify(body),
+			},
+			{ retryNetworkError: path !== "/me" },
+		);
 		// 204 No Content is the conventional REST response for DELETE; tolerate
 		// empty bodies so callers don't have to differentiate.
 		if (res.status === 204 || res.headers.get("content-length") === "0") {

@@ -4,13 +4,16 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
 import { activeTabClass } from "@/lib/ui-classes";
+import { whenLoaded } from "@/lib/when-loaded";
 import { RIGHT_TOOLS, type RightToolId, useRightTools } from "./right-tools-context";
 
 // Lazy on purpose. The reference panel reaches insertSnippet, which pulls in
 // @codemirror/{state,view} — today those live only in the note-page chunk.
 // Importing it eagerly here would drag CodeMirror into the always-loaded app
 // shell, the exact regression the router's code-splitting comments guard.
-const MarkdownReferencePanel = lazy(() => import("../viewer/reference/markdown-reference-panel"));
+const MarkdownReferencePanel = lazy(() =>
+	whenLoaded(import("../viewer/reference/markdown-reference-panel")),
+);
 
 // Tools that render themselves from static data, valid on every route. Anything
 // not listed here is contextual and reads its node out of `slots`.

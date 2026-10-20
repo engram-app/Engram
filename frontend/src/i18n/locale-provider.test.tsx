@@ -1,10 +1,15 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type CatalogLoaders, LocaleProvider, useStableT, useT } from "./locale-provider";
 
 const captureError = vi.fn();
 vi.mock("../sentry", () => ({ captureError: (...args: unknown[]) => captureError(...args) }));
+const track = vi.fn();
+vi.mock("../analytics/track", () => ({ track: (...args: unknown[]) => track(...args) }));
+vi.mock("../analytics/client", () => ({ whenAnalyticsReady: (fn: () => void) => fn() }));
+const offerLocaleSwitch = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+vi.mock("./translation-prompt", () => ({ offerLocaleSwitch }));
 
 function Probe() {
 	const { t, tn, locale, renderedLocale, setLocale } = useT();
@@ -44,6 +49,50 @@ describe("LocaleProvider", () => {
 		captureError.mockReset();
 	});
 	afterEach(() => vi.restoreAllMocks());
+
+	// The provider writes <html lang> on every switch; the translation watcher
+	// must not mistake those writes for a browser translation.
+	it("reports a browser translation, but not its own lang writes", async () => {
+		window.sessionStorage.clear();
+		track.mockClear();
+		mount({ de });
+		fireEvent.click(screen.getByRole("button", { name: "german" }));
+		await vi.waitFor(() => expect(document.documentElement.lang).toBe("de"));
+		fireEvent.click(screen.getByRole("button", { name: "english" }));
+		await vi.waitFor(() => expect(document.documentElement.lang).toBe("en"));
+		await new Promise((r) => setTimeout(r, 0));
+		expect(track).not.toHaveBeenCalled();
+
+		document.documentElement.lang = "zh-CN";
+		await vi.waitFor(() =>
+			expect(track).toHaveBeenCalledWith("browser_translation_detected", {
+				to: "zh-CN",
+				app_locale: "en",
+			}),
+		);
+	});
+
+	// What the offer looks like is translation-prompt.test.tsx's; this pins
+	// that a translation reaches it with the live locale and setter.
+	it("hands a detected translation to the switch offer", async () => {
+		window.sessionStorage.clear();
+		offerLocaleSwitch.mockClear();
+		mount({ de });
+		document.documentElement.lang = "de-DE";
+		await vi.waitFor(() =>
+			expect(offerLocaleSwitch).toHaveBeenCalledWith(
+				"de-DE",
+				expect.objectContaining({ locale: "en", loaders: { de } }),
+			),
+		);
+
+		const [, current] = offerLocaleSwitch.mock.calls[0] as unknown as [
+			string,
+			{ setLocale: (next: "de") => void },
+		];
+		act(() => current.setLocale("de"));
+		expect(await screen.findByText("Hallo Todd")).toBeInTheDocument();
+	});
 
 	it("renders English with no provider", () => {
 		render(<Probe />);

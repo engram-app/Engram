@@ -21,6 +21,10 @@ export default {
 	"Failed to duplicate.": "Falha ao duplicar.",
 	"Batch delete failed.": "Falha ao excluir em lote.",
 	"Batch move failed.": "Falha ao mover em lote.",
+	"Couldn't load sign-in": "Não foi possível carregar o login",
+	"The sign-in service didn't load. Check your connection, then reload the page.":
+		"O serviço de login não foi carregado. Verifique sua conexão e recarregue a página.",
+	Reload: "Recarregar",
 	"This account is suspended. Contact an admin to restore access.":
 		"Esta conta está suspensa. Entre em contato com um administrador para restaurar o acesso.",
 	"Incorrect email or password.": "E-mail ou senha incorretos.",
@@ -514,7 +518,6 @@ export default {
 	"Linux PC": "Computador Linux",
 	Oops: "Ops",
 	"Something went wrong": "Algo deu errado",
-	Reload: "Recarregar",
 	"Back to home": "Voltar para a página inicial",
 	"Error detail (dev only)": "Detalhes do erro (apenas para desenvolvedores)",
 	"An unexpected error broke this page. It has been reported. Try reloading. If it keeps happening, contact {support}.":
@@ -651,6 +654,9 @@ export default {
 	"Love it": "Adorei",
 	"Tell us more": "Conte-nos mais",
 	Language: "Idioma",
+	"Show Engram in {language}?": "Mostrar Engram em {language}?",
+	"Switch language": "Mudar de idioma",
+	"Not now": "Não agora",
 	"My Vault": "Meu Cofre",
 	"{count} days left in your trial.": {
 		one: "Faltam {count} dia para o fim do seu período de teste.",
@@ -877,6 +883,8 @@ export default {
 		"Eu li e concordo com os Termos de Serviço e a Política de Privacidade",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Eu li e concordo com o contrato exibido acima e o aviso de privacidade",
+	"Could not continue. Please try again.":
+		"Não foi possível continuar. Por favor, tente novamente.",
 	"Saving…": "Salvando…",
 	Continue: "Continuar",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
@@ -926,8 +934,6 @@ export default {
 		"Teste gratuito de 7 dias nos planos pagos. Cartão necessário, sem cobrança até o término.",
 	"Continue with Free →": "Continuar com a versão Gratuita →",
 	"{summary} · upgrade anytime": "{summary} · faça upgrade a qualquer momento",
-	"Could not continue. Please try again.":
-		"Não foi possível continuar. Por favor, tente novamente.",
 	"Step {step} of {total}": "Etapa {step} de {total}",
 	Onboarding: "Integração",
 	"Stop connecting this app": "Parar de conectar este aplicativo",
