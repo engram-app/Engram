@@ -38,6 +38,9 @@ defmodule Engram.Repo.Migrations.CreateAttachmentUploadsExpand do
       add :file_key_nonce, :binary, null: false
       # Part number (string key) => storage ETag.
       add :parts, :map, null: false, default: %{}
+      # Set once storage has assembled the parts into one object; a retried
+      # complete skips re-assembly (the multipart upload no longer exists).
+      add :assembled_at, :timestamptz
 
       add :inserted_at, :timestamptz, null: false, default: fragment("now()")
       add :updated_at, :timestamptz, null: false, default: fragment("now()")

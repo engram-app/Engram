@@ -99,10 +99,10 @@ defmodule Engram.Attachments do
         # encrypts the blob with AAD bound to its own att_id, then PUTs to
         # the same S3 key (last writer wins on the blob). The surviving DB
         # row's id must match the AAD baked into the surviving blob, so
-        # commit_row/5 serializes the row write per (user, path); if the
+        # commit_row/6 serializes the row write per (user, path); if the
         # locked re-read reveals a different winning id, we re-encrypt +
         # re-PUT under the lock (rare race path only).
-        commit_row(user, vault, path, path_hmac, fn
+        commit_row(user, vault, path, path_hmac, byte_size(plaintext), fn
           %Attachment{id: id} when id != att_id0 ->
             with {:ok, rebind_key, attrs1, ciphertext1} <-
                    prepare_upload(
@@ -136,23 +136,29 @@ defmodule Engram.Attachments do
   @doc false
   # The locked row write shared by single-request uploads (above) and chunked
   # ones (`Engram.Attachments.Uploads.complete/3`). Takes the per-path
-  # advisory lock, re-reads the live row at `path_hmac` and hands it (or nil)
-  # to `build`, which returns `{:ok, insert_id, attrs}`; `insert_id` is used
-  # only when no live row holds the path. The lock auto-releases on
+  # advisory lock, re-reads the live row at `path_hmac`, then takes the
+  # per-user quota lock and re-checks the storage cap for `size` against live
+  # usage (two uploads to different paths would otherwise both pass). Then
+  # hands the live row (or nil) to `build`, which returns
+  # `{:ok, insert_id, attrs}`; `insert_id` is used only when no live row holds
+  # the path. Lock order is always path then user. Both locks auto-release on
   # commit/rollback, and an `{:error, reason}` from `build` rolls back.
   #
   # After commit: releases the replaced row's blob when the new write moved
   # the row to a different storage key, then broadcasts the upsert.
-  @spec commit_row(map(), map(), String.t(), binary(), (Attachment.t() | nil ->
-                                                          {:ok, Ecto.UUID.t(), map()}
-                                                          | {:error, term()})) ::
+  @spec commit_row(map(), map(), String.t(), binary(), non_neg_integer(), (Attachment.t() | nil ->
+                                                                             {:ok, Ecto.UUID.t(),
+                                                                              map()}
+                                                                             | {:error, term()})) ::
           {:ok, Attachment.t()} | {:error, term()}
-  def commit_row(user, vault, path, path_hmac, build) do
+  def commit_row(user, vault, path, path_hmac, size, build) do
     Repo.transaction(fn ->
       :ok = acquire_path_lock(user.id, path_hmac)
       existing = fetch_existing(user, vault.id, path_hmac)
+      :ok = Repo.advisory_lock!(quota_lock_id(user.id))
 
-      with {:ok, insert_id, attrs} <- build.(existing),
+      with :ok <- validate_storage_cap(user, existing, size),
+           {:ok, insert_id, attrs} <- build.(existing),
            {:ok, att} <- write_row(user, existing, insert_id, attrs) do
         # Phase B.3: path is virtual — splice the plaintext we already have
         # onto the returned struct so callers can read att.path without a
@@ -178,6 +184,12 @@ defmodule Engram.Attachments do
         err
     end
   end
+
+  @doc false
+  # Per-user lock serializing the storage-cap check with the row write.
+  # Hashed by `Repo.advisory_lock!/1`, a different derivation from
+  # acquire_path_lock/2's, so the two keyspaces do not meet by construction.
+  def quota_lock_id(user_id), do: "attachment_quota:" <> user_id
 
   # A write that moved the row to a new storage key (a chunked upload always
   # does; a single-request upload does when it replaces a chunked one) leaves

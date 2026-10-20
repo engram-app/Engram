@@ -7,7 +7,7 @@ defmodule Engram.Attachments.Uploads do
   Each part is sealed as one segment under a per-file key before it reaches
   storage, so no plaintext is ever stored. Nothing counts against the quota
   until `complete/3`, which re-checks it against live usage under the same
-  per-path lock single-request uploads take (`Attachments.commit_row/5`).
+  per-path lock single-request uploads take (`Attachments.commit_row/6`).
 
   The blob key is per upload (`Storage.object_key/3` on the upload id), never
   shared with the row it replaces, so a refused or abandoned upload can be
@@ -181,21 +181,30 @@ defmodule Engram.Attachments.Uploads do
     user = Crypto.fresh_user(user)
 
     with {:ok, up} <- fetch(user, vault, upload_id),
-         [] <- Enum.to_list(1..up.part_count) -- done(up),
+         do: complete_session(user, vault, up)
+  end
+
+  @doc false
+  # `complete/3` past the fetch. Public so a test can replay a stale session
+  # struct, which is what a second concurrent caller holds.
+  @spec complete_session(map(), map(), Upload.t()) ::
+          {:ok, Attachment.t()} | {:error, term()}
+  def complete_session(user, vault, %Upload{} = up) do
+    with [] <- Enum.to_list(1..up.part_count) -- done(up),
          # Early quota refusal: no point assembling and reading back the file.
          :ok <- quota(user, vault, up),
          {:ok, file_key} <- file_key(user, up, up.attachment_id),
-         :ok <- complete_storage(up),
+         {:ok, up} <- assemble(user, vault, up),
          {:ok, hash} <- content_hash(user, up, file_key) do
       result = commit(user, vault, up, file_key, hash)
 
       with {:error, {:storage_cap_reached, _, _}} <- result,
-           do: drop(user, vault, up, :completed)
+           do: drop(user, vault, up)
 
       result
     else
       missing when is_list(missing) -> {:error, {:missing_parts, missing}}
-      {:error, {:storage_cap_reached, _, _}} = err -> refuse(user, vault, upload_id, err)
+      {:error, {:storage_cap_reached, _, _}} = err -> refuse(user, vault, up.id, err)
       {:error, _} = err -> err
     end
   end
@@ -204,7 +213,7 @@ defmodule Engram.Attachments.Uploads do
   @spec abort(map(), map(), Ecto.UUID.t()) :: :ok
   def abort(user, vault, upload_id) do
     case fetch(user, vault, upload_id) do
-      {:ok, up} -> drop(user, vault, up, :in_progress)
+      {:ok, up} -> drop(user, vault, up)
       {:error, :not_found} -> :ok
     end
   end
@@ -300,8 +309,10 @@ defmodule Engram.Attachments.Uploads do
     {:ok, path} = Envelope.decrypt(up.path_ciphertext, up.path_nonce, dek, path_aad(up.id))
     basename_hmac = Crypto.hmac_field(filter_key, Links.basename_key(path))
 
-    Attachments.commit_row(user, vault, path, up.path_hmac, fn existing ->
-      with :ok <- Attachments.validate_storage_cap(user, existing, up.size_bytes) do
+    Attachments.commit_row(user, vault, path, up.path_hmac, up.size_bytes, fn existing ->
+      # Consumed first, in the same transaction as the row write: a duplicate
+      # concurrent complete finds it gone and rolls back.
+      with :ok <- delete_session(user, vault, up) do
         id = commit_id(user, vault, existing, up.attachment_id)
 
         # A different row won the path since start (a single-request upload,
@@ -311,9 +322,6 @@ defmodule Engram.Attachments.Uploads do
           if id == up.attachment_id,
             do: {up.wrapped_file_key, up.file_key_nonce},
             else: SegmentedCipher.wrap_key(file_key, dek, id)
-
-        # Consumed in the same transaction as the row write.
-        :ok = delete_session(user, vault, up)
 
         {:ok, id,
          Map.merge(
@@ -356,27 +364,55 @@ defmodule Engram.Attachments.Uploads do
   end
 
   defp refuse(user, vault, upload_id, err) do
-    with {:ok, up} <- fetch(user, vault, upload_id), do: drop(user, vault, up, :in_progress)
+    with {:ok, up} <- fetch(user, vault, upload_id), do: drop(user, vault, up)
     err
   end
 
-  # `:completed`: storage already assembled the object, so delete it;
-  # `:in_progress`: abort the multipart upload (and delete, in case a failed
-  # `complete/3` had already assembled it).
-  defp drop(user, vault, %Upload{} = up, stage) do
-    if stage == :in_progress, do: abort_storage(up.storage_key, up.s3_upload_id)
-    delete_object(up.storage_key)
-    :ok = delete_session(user, vault, up)
-  end
-
-  defp delete_session(user, vault, %Upload{id: id}) do
-    {:ok, _} =
-      Repo.with_tenant(user.id, fn ->
-        Repo.delete_all(from(u in scoped(user, vault), where: u.id == ^id))
-      end)
-      |> unwrap()
+  # Before assembly there is a multipart upload to abort; after it, an
+  # object to delete. Deleting is harmless when nothing was assembled.
+  # Storage is touched only by the caller that consumed the session: a stale
+  # duplicate must not delete a blob a committed row now uses.
+  defp drop(user, vault, %Upload{} = up) do
+    with :ok <- delete_session(user, vault, up) do
+      if is_nil(up.assembled_at), do: abort_storage(up.storage_key, up.s3_upload_id)
+      delete_object(up.storage_key)
+    end
 
     :ok
+  end
+
+  # `{:error, :not_found}` when another caller already consumed the session,
+  # so a duplicate complete rolls back instead of committing twice.
+  defp delete_session(user, vault, %Upload{id: id}) do
+    Repo.with_tenant(user.id, fn ->
+      Repo.delete_all(from(u in scoped(user, vault), where: u.id == ^id))
+    end)
+    |> unwrap()
+    |> case do
+      {:ok, {1, _}} -> :ok
+      {:ok, {0, _}} -> {:error, :not_found}
+    end
+  end
+
+  # Assembles the parts once. Recorded so a complete retried after a later
+  # failure (readback, commit) does not re-assemble a multipart upload that
+  # no longer exists.
+  defp assemble(_user, _vault, %Upload{assembled_at: %DateTime{}} = up), do: {:ok, up}
+
+  defp assemble(user, vault, %Upload{} = up) do
+    now = DateTime.utc_now(:second)
+
+    with :ok <- complete_storage(up) do
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.update_all(from(u in scoped(user, vault), where: u.id == ^up.id),
+            set: [assembled_at: now, updated_at: now]
+          )
+        end)
+        |> unwrap()
+
+      {:ok, %{up | assembled_at: now}}
+    end
   end
 
   defp start_multipart(storage_key) do

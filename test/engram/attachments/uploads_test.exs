@@ -4,6 +4,7 @@ defmodule Engram.Attachments.UploadsTest do
   use Engram.DataCase, async: false
 
   import Engram.RlsCase
+  import Mox
 
   alias Engram.Attachments
   alias Engram.Attachments.Attachment
@@ -204,6 +205,169 @@ defmodule Engram.Attachments.UploadsTest do
       assert decrypt_stored(user, att) == bytes
       refute InMemory.exists?(v1.storage_key)
       assert Repo.aggregate(Attachment, :count, skip_tenant_check: true) == 1
+    end
+  end
+
+  describe "complete/3 recovery and races" do
+    setup %{user: user, vault: vault} do
+      allow_big_files(user)
+      bytes = :crypto.strong_rand_bytes(20 * @mib)
+      up = start!(user, vault, "videos/clip.mp4", byte_size(bytes))
+      put_all(user, vault, up, bytes)
+      %{bytes: bytes, up: up}
+    end
+
+    # InMemory storage whose first ranged read fails (a transient S3 error
+    # after the multipart upload was already assembled).
+    defp fail_first_get_range do
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      stub_with(Engram.MockStorage, InMemory)
+      failed = :counters.new(1, [])
+
+      stub(Engram.MockStorage, :get_range, fn key, offset, len ->
+        if :counters.get(failed, 1) == 0 do
+          :counters.add(failed, 1, 1)
+          {:error, :timeout}
+        else
+          InMemory.get_range(key, offset, len)
+        end
+      end)
+    end
+
+    test "resumes after a failure that follows assembly", %{
+      user: user,
+      vault: vault,
+      bytes: bytes,
+      up: up
+    } do
+      fail_first_get_range()
+
+      assert {:error, {:storage, :timeout}} = Uploads.complete(user, vault, up.id)
+      assert {:ok, att} = Uploads.complete(user, vault, up.id)
+      assert decrypt_stored(user, att) == bytes
+    end
+
+    test "a duplicate complete with a stale session commits nothing", %{
+      user: user,
+      vault: vault,
+      up: up
+    } do
+      # Reach the state a second concurrent caller holds: a session struct
+      # fetched after assembly, used after the first caller committed.
+      fail_first_get_range()
+      {:error, _} = Uploads.complete(user, vault, up.id)
+      stale = Repo.get!(Upload, up.id, skip_tenant_check: true)
+      refute is_nil(stale.assembled_at)
+
+      {:ok, att} = Uploads.complete(user, vault, up.id)
+
+      assert {:error, :not_found} = Uploads.complete_session(user, vault, stale)
+
+      live = Repo.get!(Attachment, att.id, skip_tenant_check: true)
+      assert live.version == att.version
+      assert live.seq == att.seq
+      assert InMemory.exists?(att.storage_key)
+    end
+
+    test "a single-request upload over a chunked one replaces it cleanly", %{
+      user: user,
+      vault: vault,
+      up: up
+    } do
+      {:ok, v2} = Uploads.complete(user, vault, up.id)
+
+      {:ok, v1} =
+        Attachments.upsert_attachment(user, vault, %{path: "videos/clip.mp4", content: "v1 bytes"})
+
+      assert v1.id == v2.id
+      row = Repo.get!(Attachment, v1.id, skip_tenant_check: true)
+      assert row.encryption_version == 1
+      assert is_nil(row.wrapped_file_key)
+      assert is_nil(row.file_key_nonce)
+      assert is_nil(row.upload_id)
+      assert is_nil(row.segment_size)
+      assert is_nil(row.segment_count)
+
+      refute row.storage_key == v2.storage_key
+      assert InMemory.exists?(row.storage_key)
+      refute InMemory.exists?(v2.storage_key)
+
+      assert {:ok, %{content: "v1 bytes"}} =
+               Attachments.get_attachment(user, vault, "videos/clip.mp4")
+    end
+
+    test "a single-request upload racing a chunked complete keeps its blob", %{
+      user: user,
+      vault: vault
+    } do
+      # The live v1 row the chunked upload claims at start.
+      {:ok, old} =
+        Attachments.upsert_attachment(user, vault, %{path: "doc.png", content: "old v1"})
+
+      bytes = :crypto.strong_rand_bytes(10)
+      up = start!(user, vault, "doc.png", byte_size(bytes))
+      assert up.attachment_id == old.id
+      put_all(user, vault, up, bytes)
+
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      stub_with(Engram.MockStorage, InMemory)
+      raced = :counters.new(1, [])
+
+      # The v1 PUT lands before its lock; the chunked complete commits in that
+      # window and, as the row's previous blob, deletes the key v1 just wrote.
+      stub(Engram.MockStorage, :put, fn key, bin, opts ->
+        :ok = InMemory.put(key, bin, opts)
+
+        if :counters.get(raced, 1) == 0 do
+          :counters.add(raced, 1, 1)
+          assert {:ok, _} = Uploads.complete(user, vault, up.id)
+          refute InMemory.exists?(key)
+        end
+
+        :ok
+      end)
+
+      {:ok, _} = Attachments.upsert_attachment(user, vault, %{path: "doc.png", content: "new v1"})
+
+      assert {:ok, %{content: "new v1", encryption_version: 1}} =
+               Attachments.get_attachment(user, vault, "doc.png")
+
+      refute InMemory.exists?(up.storage_key)
+    end
+
+    # Not a true two-completes race: under the sandbox both would share one
+    # connection, where an advisory lock is re-entrant and blocks nothing. A
+    # second connection holding the per-user quota lock proves complete
+    # serializes on it.
+    test "complete waits on the per-user quota lock", %{user: user, vault: vault, up: up} do
+      parent = self()
+
+      holder =
+        spawn_link(fn ->
+          :ok = Ecto.Adapters.SQL.Sandbox.checkout(Repo)
+
+          Repo.transaction(fn ->
+            Repo.advisory_lock!(Attachments.quota_lock_id(user.id))
+            send(parent, :held)
+            receive do: (:release -> :ok)
+          end)
+
+          Ecto.Adapters.SQL.Sandbox.checkin(Repo)
+          send(parent, :released)
+        end)
+
+      assert_receive :held, 2_000
+      completer = Task.async(fn -> Uploads.complete(user, vault, up.id) end)
+
+      refute Task.yield(completer, 300), "complete did not wait for the user quota lock"
+
+      send(holder, :release)
+      assert_receive :released, 2_000
+      assert {:ok, %Attachment{}} = Task.await(completer, 10_000)
     end
   end
 

@@ -42,6 +42,7 @@ defmodule Engram.Attachments.Upload do
     field :file_key_nonce, :binary
     # Part number as a string key (jsonb) => storage ETag.
     field :parts, :map, default: %{}
+    field :assembled_at, :utc_datetime
 
     belongs_to :user, Engram.Accounts.User
     belongs_to :vault, Engram.Vaults.Vault
