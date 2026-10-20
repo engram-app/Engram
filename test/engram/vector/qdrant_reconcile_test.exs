@@ -79,6 +79,12 @@ defmodule Engram.Vector.QdrantReconcileTest do
     end)
   end
 
+  defp stub_index_creates(bypass, col) do
+    Bypass.stub(bypass, "PUT", "/collections/#{col}/index", fn conn ->
+      json(conn, 200, %{status: "ok"})
+    end)
+  end
+
   defp stub_no_memory(bypass, col) do
     Bypass.stub(bypass, "GET", "/collections/#{col}/memory", fn conn ->
       Plug.Conn.send_resp(conn, 404, "")
@@ -663,6 +669,10 @@ defmodule Engram.Vector.QdrantReconcileTest do
       json(conn, 409, %{status: %{error: "already exists"}})
     end)
 
+    # The prod fixture predates the v5 short-key indexes, which ensure_collection
+    # now adds to an existing collection.
+    stub_index_creates(bypass, "engram_notes")
+
     assert :ok = Qdrant.ensure_collection("engram_notes", 1024)
     assert_receive {:patch, %{"vectors" => _}}
   end
@@ -684,6 +694,10 @@ defmodule Engram.Vector.QdrantReconcileTest do
     Bypass.expect_once(bypass, "PUT", "/collections/engram_notes", fn conn ->
       json(conn, 409, %{status: %{error: "already exists"}})
     end)
+
+    # The prod fixture predates the v5 short-key indexes, which ensure_collection
+    # now adds to an existing collection.
+    stub_index_creates(bypass, "engram_notes")
 
     assert :ok = Qdrant.ensure_collection("engram_notes", 1024)
   end

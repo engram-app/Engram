@@ -23,6 +23,7 @@ defmodule Engram.Vector.Qdrant do
   alias Engram.Logger.Metadata
   alias Engram.Search.Fusion
   alias Engram.ServiceConfig
+  alias Engram.Vector.PayloadKeys
   alias Engram.Vector.QdrantLayout
 
   require Logger
@@ -33,12 +34,15 @@ defmodule Engram.Vector.Qdrant do
 
   # Payload fields every tenant-scoped op filters on. Qdrant Cloud strict-mode
   # rejects (400) a filter on an un-indexed field, so each must have a keyword
-  # index before any upsert/search/delete. `note_id` is not a live filter key
-  # today (deletes resolve via `path_hmac`) but is indexed to match the prod
-  # collection + future-proof. See #626. `type_hmac` is the OKF frontmatter
-  # `type` blind index (spec 2026-07-02). `folder_hmac`/`tags_hmac` are the
-  # folder and tag search filters (#1609).
-  @payload_index_fields ~w(user_id vault_id note_id path_hmac type_hmac folder_hmac tags_hmac)
+  # index before any upsert/search/delete. See #626. `type_hmac` is the OKF
+  # frontmatter `type` blind index (spec 2026-07-02). `folder_hmac`/`tags_hmac`
+  # are the folder and tag search filters (#1609). No `note_id`: no read path
+  # filters on it and v5 points do not carry it (spec 3.3b). An index that
+  # already exists is left alone; dropping it is the new cluster's (Task 8.2).
+  # These are the legacy (v3/v4) names; the v5 short-key indexes come from
+  # `PayloadKeys.index_fields/0`, and both sets live until the pass drops the
+  # legacy fields (Task 18.1).
+  @payload_index_fields ~w(user_id vault_id path_hmac type_hmac folder_hmac tags_hmac)
 
   # OKF frontmatter dates are stored plaintext (see build_prepared/6) so
   # Qdrant can range-filter on them; they need an integer payload index
@@ -336,8 +340,11 @@ defmodule Engram.Vector.Qdrant do
   defp ensure_payload_indexes(col, indexed) do
     keyword = Enum.map(@payload_index_fields, &{&1, "keyword"})
     integer = Enum.map(@integer_payload_index_fields, &{&1, "integer"})
+    v5 = PayloadKeys.index_fields()
 
-    missing = Enum.reject(keyword ++ integer, fn {field, _} -> MapSet.member?(indexed, field) end)
+    missing =
+      Enum.reject(keyword ++ integer ++ v5, fn {field, _} -> MapSet.member?(indexed, field) end)
+
     last = length(missing) - 1
 
     # Only the last create waits. Index ops apply in order on each shard, so

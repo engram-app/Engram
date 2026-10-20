@@ -16,8 +16,12 @@ defmodule Engram.Vector.QdrantCollectionTest do
   # is the OKF frontmatter blind index (keyword); `fm_timestamp`/`fm_created`
   # are the OKF frontmatter dates (integer, range-filterable). `folder_hmac`
   # and `tags_hmac` are the folder/tag search filters (#1609).
-  @indexed_fields ~w(user_id vault_id note_id path_hmac type_hmac folder_hmac tags_hmac)
+  # `note_id` is gone: no read path filters on it (v5, spec 3.3b).
+  @indexed_fields ~w(user_id vault_id path_hmac type_hmac folder_hmac tags_hmac)
   @integer_indexed_fields ~w(fm_timestamp fm_created)
+  # The v5 short-key indexes, on disk, with their typed schemas.
+  @v5_fields Engram.Vector.PayloadKeys.index_fields()
+  @all_count length(@indexed_fields) + length(@integer_indexed_fields) + length(@v5_fields)
 
   # A named-shape collection_info body carrying the given payload_schema.
   defp existing_body(payload_schema) do
@@ -67,6 +71,7 @@ defmodule Engram.Vector.QdrantCollectionTest do
       assert json["vectors"]["dense"]["size"] == 1024
       assert json["vectors"]["dense"]["distance"] == "Cosine"
       assert json["sparse_vectors"]["keyword"]["modifier"] == "idf"
+      assert json["vectors"]["dense"]["datatype"] == "float16"
       Plug.Conn.send_resp(conn, 200, "{}")
     end)
 
@@ -97,6 +102,12 @@ defmodule Engram.Vector.QdrantCollectionTest do
     for field <- @integer_indexed_fields do
       assert_receive {:index, ^field, "integer"}
     end
+
+    for {field, schema} <- @v5_fields do
+      assert_receive {:index, ^field, ^schema}
+    end
+
+    refute_received {:index, "note_id", _}
   end
 
   # Each waited index create is a fsync'd round trip; nine in a row on a
@@ -119,7 +130,7 @@ defmodule Engram.Vector.QdrantCollectionTest do
     assert :ok = Qdrant.ensure_collection("c1", 1024)
 
     waits =
-      for _ <- 1..(length(@indexed_fields) + length(@integer_indexed_fields)) do
+      for _ <- 1..@all_count do
         assert_receive {:wait, wait}
         wait
       end
@@ -136,10 +147,9 @@ defmodule Engram.Vector.QdrantCollectionTest do
     expect_existing(
       bypass,
       "c1",
-      Map.merge(
-        schema_for(@indexed_fields, "keyword"),
-        schema_for(@integer_indexed_fields, "integer")
-      )
+      schema_for(@indexed_fields, "keyword")
+      |> Map.merge(schema_for(@integer_indexed_fields, "integer"))
+      |> Map.merge(Map.new(@v5_fields, fn {f, s} -> {f, %{data_type: s["type"]}} end))
     )
 
     # If the steady-state path wrongly (re-)created indexes, this fires.
@@ -196,7 +206,7 @@ defmodule Engram.Vector.QdrantCollectionTest do
 
     assert :ok = Qdrant.ensure_collection("c1", 1024)
 
-    for field <- @indexed_fields ++ @integer_indexed_fields do
+    for field <- @indexed_fields ++ @integer_indexed_fields ++ Enum.map(@v5_fields, &elem(&1, 0)) do
       assert_receive {:index, ^field}
     end
   end

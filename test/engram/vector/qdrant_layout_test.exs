@@ -193,6 +193,21 @@ defmodule Engram.Vector.QdrantLayoutTest do
       assert QdrantLayout.diff(config, QdrantLayout.desired(@v1192)) == %{}
     end
 
+    test "an existing float32 collection is not drift" do
+      config =
+        @prod_info["config"]
+        |> put_in(["params", "vectors", "dense", "on_disk"], true)
+        |> put_in(["params", "vectors", "dense", "datatype"], "float32")
+        |> put_in(["params", "sparse_vectors", "keyword", "index"], %{"on_disk" => true})
+        |> put_in(["optimizer_config", "max_optimization_threads"], 1)
+        |> put_in(["strict_mode_config"], %{
+          "enabled" => true,
+          "max_resident_memory_percent" => 85
+        })
+
+      assert QdrantLayout.diff(config, QdrantLayout.desired(@v1192)) == %{}
+    end
+
     test "never changes size, distance or datatype" do
       dense = QdrantLayout.desired(@v1182)["vectors"]["dense"]
       refute Map.has_key?(dense, "size")
@@ -327,7 +342,8 @@ defmodule Engram.Vector.QdrantLayoutTest do
       assert body["vectors"]["dense"] == %{
                "size" => 1024,
                "distance" => "Cosine",
-               "on_disk" => true
+               "on_disk" => true,
+               "datatype" => "float16"
              }
 
       assert body["sparse_vectors"]["keyword"] == %{

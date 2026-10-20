@@ -279,10 +279,14 @@ defmodule Engram.Vector.QdrantLayout do
   @doc "Create-collection body: the desired storage params plus shape."
   @spec create_params(pos_integer()) :: map()
   def create_params(dims) do
+    # float16 halves dense storage (Task 15.1). Only a NEW collection gets it:
+    # `diff/2` never compares the datatype, so an existing float32 collection
+    # is not drift and boot never PATCHes it (Qdrant cannot convert in place).
     put_in(@storage, ["vectors", "dense"], %{
       "size" => dims,
       "distance" => "Cosine",
-      "on_disk" => true
+      "on_disk" => true,
+      "datatype" => "float16"
     })
   end
 
