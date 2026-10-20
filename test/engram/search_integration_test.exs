@@ -74,9 +74,8 @@ defmodule Engram.SearchIntegrationTest do
     assert {:ok, chunk_count} = Engram.Indexing.index_note(decrypted, vault)
     assert chunk_count > 0, "the note must produce chunks, or nothing below is exercised"
 
-    # `upsert_points` does not pass `?wait=true`: Qdrant acknowledges and
-    # applies the write asynchronously, so a count read straight after can
-    # still be 0. Poll, bounded.
+    # `upsert_points` waits for the write to apply, so this should read >= 1
+    # at once; the bounded poll only guards the count endpoint's own lag.
     assert await_points(col) >= 1
 
     # Not a hardcoded port: CI runs Qdrant on an ephemeral one (see
@@ -102,6 +101,45 @@ defmodule Engram.SearchIntegrationTest do
       assert is_binary(r.text)
       refute Map.has_key?(r, :text_nonce)
     end)
+  end
+
+  test "updated_after finds an OKF v0.2 note dated only by generated.at",
+       %{user: user, vault: vault, collection: col} do
+    content = """
+    ---
+    generated:
+      by: "human:x"
+      at: 2026-08-21T10:00:00+02:00
+    ---
+    # Report
+
+    Quarterly freshness report body.
+    """
+
+    {:ok, note} =
+      Engram.Notes.upsert_note(user, vault, %{"path" => "okf/v02.md", "content" => content},
+        actor: "api"
+      )
+
+    {:ok, decrypted} = Engram.Crypto.maybe_decrypt_note_fields(note, user)
+    assert decrypted.fm_timestamp == ~U[2026-08-21 08:00:00Z]
+    assert {:ok, n} = Engram.Indexing.index_note(decrypted, vault)
+    assert n > 0
+    assert await_points(col) >= 1
+
+    {:ok, results} =
+      Engram.Search.search(user, vault, "freshness report",
+        updated_after: ~U[2026-08-01 00:00:00Z]
+      )
+
+    assert Enum.any?(results, &(&1.source_path == "okf/v02.md"))
+
+    {:ok, none} =
+      Engram.Search.search(user, vault, "freshness report",
+        updated_after: ~U[2026-09-01 00:00:00Z]
+      )
+
+    assert none == []
   end
 
   defp await_points(col, tries \\ 50) do

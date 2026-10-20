@@ -211,14 +211,21 @@ defmodule EngramWeb.VaultAccessLevelsTest do
     Mox.stub(Engram.MockEmbedder, :embed_texts, fn _texts, _opts -> {:ok, [[0.1, 0.2, 0.3]]} end)
     test_pid = self()
 
-    Bypass.stub(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
-      {:ok, raw, conn} = Plug.Conn.read_body(conn)
-      send(test_pid, {:qdrant_body, raw})
+    # Hybrid sends one `/points/query/batch` (a request per leg); the other
+    # modes send `/points/query`.
+    for {path, empty} <- [
+          {"/points/query", ~s({"result":{"points":[]}})},
+          {"/points/query/batch", ~s({"result":[{"points":[]},{"points":[]}]})}
+        ] do
+      Bypass.stub(bypass, "POST", "/collections/engram_notes" <> path, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:qdrant_body, raw})
 
-      conn
-      |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, ~s({"result":{"points":[]}}))
-    end)
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, empty)
+      end)
+    end
   end
 
   # Every UUID in the query bodies sent so far (the vault filter, plus the

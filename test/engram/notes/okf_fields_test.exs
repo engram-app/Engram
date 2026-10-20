@@ -77,6 +77,67 @@ defmodule Engram.Notes.OkfFieldsTest do
     assert extract(content).fm_created == ~U[2026-01-05 00:00:00Z]
   end
 
+  describe "OKF v0.2 generated.at" do
+    test "a v0.2 note with only generated.at gets fm_timestamp in UTC" do
+      content = """
+      ---
+      generated:
+        by: "human:x"
+        at: 2026-08-21T10:00:00+02:00
+      ---
+      body
+      """
+
+      assert extract(content).fm_timestamp == ~U[2026-08-21 08:00:00Z]
+    end
+
+    test "generated.at wins over the deprecated timestamp" do
+      content =
+        "---\ntimestamp: 2026-01-01\ngenerated:\n  at: 2026-08-21T08:00:00Z\n---\nx\n"
+
+      assert extract(content).fm_timestamp == ~U[2026-08-21 08:00:00Z]
+    end
+
+    test "a note with only timestamp still works" do
+      assert extract("---\ntimestamp: 2026-01-01\n---\nx\n").fm_timestamp ==
+               ~U[2026-01-01 00:00:00Z]
+    end
+
+    test "a non-map generated is ignored without crashing" do
+      assert extract("---\ngenerated: text\n---\nx\n").fm_timestamp == nil
+
+      assert extract("---\ngenerated: text\nupdated: 2026-03-03\n---\nx\n").fm_timestamp ==
+               ~U[2026-03-03 00:00:00Z]
+    end
+
+    # v0.2 (amended 2026-08-21) rejects a date-only or offset-less
+    # generated.at. Read as absent, so it never shadows a valid timestamp:
+    # here midnight UTC would have stored 08-21T00:00Z for 08-22T06:30Z.
+    test "a date-only generated.at is rejected and never shadows a valid timestamp" do
+      content =
+        "---\ntimestamp: 2026-08-21T23:30:00-07:00\ngenerated:\n  at: 2026-08-21\n---\nx\n"
+
+      assert extract(content).fm_timestamp == ~U[2026-08-22 06:30:00Z]
+      assert extract("---\ngenerated:\n  at: 2026-08-21\n---\nx\n").fm_timestamp == nil
+    end
+
+    test "an offset-less generated.at is rejected too" do
+      assert extract("---\ngenerated:\n  at: 2026-08-21T10:00:00\n---\nx\n").fm_timestamp == nil
+    end
+
+    test "the deprecated aliases keep their date-only leniency" do
+      assert extract("---\nmodified: 2026-02-02\n---\nx\n").fm_timestamp ==
+               ~U[2026-02-02 00:00:00Z]
+
+      assert extract("---\ndate: 2026-02-03\n---\nx\n").fm_created == ~U[2026-02-03 00:00:00Z]
+    end
+
+    test "a generated map without at falls back to timestamp" do
+      content = "---\ngenerated:\n  by: agent\ntimestamp: 2026-01-01\n---\nx\n"
+      assert extract(content).fm_timestamp == ~U[2026-01-01 00:00:00Z]
+    end
+  end
+
   test "normalize_type is NFKC + lowercase" do
     assert OkfFields.normalize_type("Playbook") == "playbook"
     assert OkfFields.normalize_type("ＮＯＴＥ") == "note"

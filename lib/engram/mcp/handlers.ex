@@ -300,7 +300,10 @@ defmodule Engram.MCP.Handlers do
       # found. The vault may be empty." — an outage rendered as a fact about
       # the vault, which tells the caller to give up rather than retry.
       {:error, reason} ->
-        log_and_error("suggest_folder", reason, "Folder suggestion unavailable.")
+        case Search.input_error_message(reason, "description") do
+          nil -> log_and_error("suggest_folder", reason, "Folder suggestion unavailable.")
+          message -> {:error, message}
+        end
     end
   end
 
@@ -1233,7 +1236,8 @@ defmodule Engram.MCP.Handlers do
   # Was `{:ok, "Search unavailable."}` — an outage reported as success, which
   # no client could distinguish from a genuine zero-hit search, and which a
   # retry loop would never retry.
-  def render_search({:error, _reason}, _names), do: {:error, "Search unavailable."}
+  def render_search({:error, reason}, _names),
+    do: {:error, Search.input_error_message(reason) || "Search unavailable."}
 
   @search_filters ~w(tags folder type created_after created_before updated_after updated_before)
 

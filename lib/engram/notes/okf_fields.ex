@@ -1,7 +1,9 @@
 defmodule Engram.Notes.OkfFields do
   @moduledoc """
-  Extraction of the OKF v0.1 standard frontmatter fields (plus the `created`
-  extension) from note content. Pure functions; extraction never errors, so a
+  Extraction of the OKF standard frontmatter fields (plus the `created`
+  extension) from note content. v0.2 dates a note by `generated.at`; the
+  deprecated v0.1 `timestamp` (and its `modified`/`updated` aliases) is the
+  fallback. Pure functions; extraction never errors, so a
   malformed note still syncs (all fields degrade to nil).
 
   Crypto line (spec-locked): only the two dates are stored plaintext; `type`
@@ -11,8 +13,17 @@ defmodule Engram.Notes.OkfFields do
 
   alias Engram.Notes.Frontmatter
 
-  @timestamp_aliases ~w(timestamp modified updated)
-  @created_aliases ~w(created date)
+  # Key paths into the decoded frontmatter, first valid wins. v0.2
+  # (amended 2026-08-21) requires `generated.at` to be a full datetime with
+  # an offset, so a date-only one reads as absent rather than as midnight
+  # UTC shadowing a valid `timestamp`. The older keys keep their leniency.
+  @timestamp_aliases [
+    {~w(generated at), :strict},
+    {~w(timestamp), :lenient},
+    {~w(modified), :lenient},
+    {~w(updated), :lenient}
+  ]
+  @created_aliases [{~w(created), :lenient}, {~w(date), :lenient}]
 
   @type t :: %{
           type: String.t() | nil,
@@ -68,21 +79,28 @@ defmodule Engram.Notes.OkfFields do
   defp string_field(_), do: nil
 
   defp first_date(decoded, aliases) do
-    Enum.find_value(aliases, fn key -> parse_datetime(decoded[key]) end)
+    Enum.find_value(aliases, fn {path, mode} -> path |> dig(decoded) |> parse_datetime(mode) end)
   end
 
-  defp parse_datetime(v) when is_binary(v) do
-    case DateTime.from_iso8601(v) do
-      {:ok, dt, _offset} ->
-        DateTime.truncate(dt, :second)
+  # A non-map at an intermediate key (`generated: "text"`) reads as absent.
+  defp dig([], value), do: value
+  defp dig([key | rest], %{} = map), do: dig(rest, Map.get(map, key))
+  defp dig(_path, _not_a_map), do: nil
 
-      {:error, _} ->
-        case Date.from_iso8601(v) do
-          {:ok, d} -> DateTime.new!(d, ~T[00:00:00], "Etc/UTC")
-          {:error, _} -> nil
-        end
+  defp parse_datetime(v, mode) when is_binary(v) do
+    case {DateTime.from_iso8601(v), mode} do
+      {{:ok, dt, _offset}, _mode} -> DateTime.truncate(dt, :second)
+      {{:error, _}, :strict} -> nil
+      {{:error, _}, :lenient} -> parse_date(v)
     end
   end
 
-  defp parse_datetime(_), do: nil
+  defp parse_datetime(_v, _mode), do: nil
+
+  defp parse_date(v) do
+    case Date.from_iso8601(v) do
+      {:ok, d} -> DateTime.new!(d, ~T[00:00:00], "Etc/UTC")
+      {:error, _} -> nil
+    end
+  end
 end

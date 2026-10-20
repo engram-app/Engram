@@ -1741,6 +1741,12 @@
             "x-struct": null,
             "x-validate": null
           },
+          "keyword_only_too_long": {
+            "description": "Indexed notes searchable by keyword only: their content is too long for the embedding model. They get semantic search once edited.",
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
           "pending": {
             "description": "Notes awaiting (re)embedding.",
             "type": "integer",
@@ -1756,7 +1762,8 @@
         "required": [
           "total",
           "indexed",
-          "pending"
+          "pending",
+          "keyword_only_too_long"
         ],
         "title": "EmbedStatusResponse",
         "type": "object",

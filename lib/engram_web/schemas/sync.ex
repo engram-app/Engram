@@ -73,9 +73,15 @@ defmodule EngramWeb.Schemas.EmbedStatusResponse do
         type: :integer,
         description: "Notes whose embedding matches current content."
       },
-      pending: %Schema{type: :integer, description: "Notes awaiting (re)embedding."}
+      pending: %Schema{type: :integer, description: "Notes awaiting (re)embedding."},
+      keyword_only_too_long: %Schema{
+        type: :integer,
+        description:
+          "Indexed notes searchable by keyword only: their content is too long for the " <>
+            "embedding model. They get semantic search once edited."
+      }
     },
-    required: [:total, :indexed, :pending]
+    required: [:total, :indexed, :pending, :keyword_only_too_long]
   })
 end
 

@@ -1320,6 +1320,88 @@ defmodule Engram.Crypto.UserDekRotationTest do
       {:ok, bypass: bypass, user: user}
     end
 
+    # One fsync'd write per point (wait=true each) let a ~150k-point user run
+    # past the 60-minute rotation timeout (review M3). A page is now one
+    # `/points/batch` of set_payload ops without wait, then ONE waited barrier
+    # (a no-op delete of an absent key over the page's ids) that every shard
+    # holding those points applies after the batch, flushing its WAL.
+    test "a page of re-wrapped points is one unwaited batch plus one waited barrier",
+         %{user: user, bypass: bypass} do
+      {:ok, old_dek} = Crypto.get_dek(user)
+      collection = Qdrant.collection_name()
+      ids = for i <- 1..3, do: "00000000-0000-0000-0000-00000000010#{i}"
+
+      points =
+        for id <- ids do
+          aad = Crypto.aad_for_qdrant(collection, id, :text)
+          {ct, nonce} = Envelope.encrypt("text #{id}", old_dek, aad)
+
+          %{
+            "id" => id,
+            "payload" => %{
+              "user_id" => user.id,
+              "text" => Base.encode64(ct),
+              "text_nonce" => Base.encode64(nonce),
+              "aad_version" => 2
+            }
+          }
+        end
+
+      test_pid = self()
+
+      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"result" => %{"points" => points, "next_page_offset" => nil}})
+        )
+      end)
+
+      stored = :ets.new(:stored, [:set, :public])
+
+      for path <- ["/points/batch", "/points/payload/delete", "/points/payload"] do
+        Bypass.stub(bypass, "POST", "/collections/#{collection}#{path}", fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          decoded = Jason.decode!(body)
+          send(test_pid, {:write, path, URI.decode_query(conn.query_string), decoded})
+
+          resp =
+            case decoded do
+              %{"operations" => ops} ->
+                for %{"set_payload" => %{"points" => [id], "payload" => p}} <- ops,
+                    do: :ets.insert(stored, {id, p})
+
+                Jason.encode!(%{result: Enum.map(ops, fn _ -> %{status: "acknowledged"} end)})
+
+              _ ->
+                ~s({"result":{"status":"completed"},"status":"ok"})
+            end
+
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(200, resp)
+        end)
+      end
+
+      stub_read_back(bypass, collection, fn ->
+        for {id, p} <- :ets.tab2list(stored), do: %{"id" => id, "payload" => p}
+      end)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      assert_receive {:write, "/points/batch", batch_query, %{"operations" => ops}}
+      assert batch_query["wait"] == "false"
+      assert Enum.map(ops, & &1["set_payload"]["points"]) == Enum.map(ids, &[&1])
+
+      assert_receive {:write, "/points/payload/delete", barrier_query, barrier}
+      assert barrier_query["wait"] == "true"
+      assert barrier["points"] == ids
+
+      refute_received {:write, "/points/payload", _, _}
+      refute_received {:write, "/points/batch", _, _}
+    end
+
     test "sweep re-encrypts Qdrant points under the new DEK and verifies decrypt correctness",
          %{user: user, bypass: bypass} do
       # Build a synthetic Qdrant point whose payload fields are encrypted under
@@ -1371,20 +1453,31 @@ defmodule Engram.Crypto.UserDekRotationTest do
         |> Plug.Conn.send_resp(200, Jason.encode!(resp))
       end)
 
-      # Capture the set_payload body so we can verify re-encryption happened
-      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/payload", fn conn ->
+      # Capture the set_payload batch so we can verify re-encryption happened
+      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/batch", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         :ets.insert(set_payload_calls, {:body, Jason.decode!(body)})
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, ~s({"result": {"status": "acknowledged"}}))
+        |> Plug.Conn.send_resp(200, ~s({"result": [{"status": "acknowledged"}]}))
+      end)
+
+      stub_barrier(bypass, collection)
+
+      stub_read_back(bypass, collection, fn ->
+        [{:body, %{"operations" => ops}}] = :ets.lookup(set_payload_calls, :body)
+
+        for %{"set_payload" => %{"points" => [id], "payload" => p}} <- ops,
+            do: %{"id" => id, "payload" => p}
       end)
 
       assert :ok = UserDekRotation.rotate_user(user.id)
 
-      # set_payload must have been called exactly once for our point
-      assert [{:body, captured}] = :ets.lookup(set_payload_calls, :body)
+      # One set_payload op, for our point
+      assert [{:body, %{"operations" => [%{"set_payload" => captured}]}}] =
+               :ets.lookup(set_payload_calls, :body)
+
       assert captured["points"] == [qdrant_id]
       new_payload = captured["payload"]
 
@@ -1445,7 +1538,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
       end)
 
       # set_payload must NOT be called — any call here would fail the test
-      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/payload", fn _conn ->
+      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/batch", fn _conn ->
         flunk("set_payload must not be called for points with no encrypted fields")
       end)
 
@@ -1510,9 +1603,11 @@ defmodule Engram.Crypto.UserDekRotationTest do
       set_payload_count = :ets.new(:sp_count, [:set, :public])
       :ets.insert(set_payload_count, {:count, 0})
 
-      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/payload", fn conn ->
+      stub_barrier(bypass, collection)
+
+      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/batch", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
-        decoded = Jason.decode!(body)
+        %{"operations" => [%{"set_payload" => decoded}]} = Jason.decode!(body)
         [{:count, n}] = :ets.lookup(set_payload_count, :count)
         :ets.insert(set_payload_count, {:count, n + 1})
         # Update the point ref to simulate Qdrant storing the new payload
@@ -1526,7 +1621,12 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, ~s({"result": {"status": "acknowledged"}}))
+        |> Plug.Conn.send_resp(200, ~s({"result": [{"status": "acknowledged"}]}))
+      end)
+
+      stub_read_back(bypass, collection, fn ->
+        [{:point, p}] = :ets.lookup(new_point_ref, :point)
+        [p]
       end)
 
       # First rotation: point is under old DEK, should be re-encrypted
@@ -1594,7 +1694,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
         )
       end)
 
-      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/payload", fn conn ->
+      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/batch", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.send_resp(500, ~s({"status": {"error": "internal"}}))
@@ -2090,7 +2190,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
         )
       end)
 
-      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/payload", fn conn ->
+      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/batch", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.send_resp(500, ~s({"status": {"error": "internal"}}))
@@ -2233,5 +2333,23 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert event.meta[:loki_ship] == true
       assert event.meta[:user_id] == user.id
     end
+  end
+
+  # The read-back `Qdrant.set_payloads/2` checks the page against.
+  defp stub_read_back(bypass, collection, points_fun) do
+    Bypass.stub(bypass, "POST", "/collections/#{collection}/points", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => points_fun.()}))
+    end)
+  end
+
+  # The waited no-op barrier `Qdrant.set_payloads/2` ends each page with.
+  defp stub_barrier(bypass, collection) do
+    Bypass.stub(bypass, "POST", "/collections/#{collection}/points/payload/delete", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, ~s({"result": {"status": "completed"}}))
+    end)
   end
 end

@@ -1,6 +1,8 @@
 defmodule EngramWeb.McpControllerTest do
   use EngramWeb.ConnCase, async: true
 
+  alias Engram.QdrantStub
+
   # ---------------------------------------------------------------------------
   # Setup: authenticated connection + seeded notes
   # ---------------------------------------------------------------------------
@@ -370,6 +372,23 @@ defmodule EngramWeb.McpControllerTest do
 
       assert_tool_error(resp)
       assert tool_text(conn) =~ "vault_id"
+    end
+
+    # An over-long query is a fixable caller error, not "Search unavailable."
+    test "search_notes and suggest_folder refuse an over-long query with its limit",
+         %{conn: conn} do
+      long = String.duplicate("a", Engram.Search.max_query_bytes() + 1)
+
+      # Each names its own parameter (re-review N6).
+      for {tool, args, param} <- [
+            {"search_notes", %{"query" => long}, "query:"},
+            {"suggest_folder", %{"description" => long}, "description:"}
+          ] do
+        resp = call_tool(conn, tool, args)
+        assert_tool_error(json_response(resp, 200))
+        assert tool_text(resp) =~ "bytes", tool
+        assert tool_text(resp) =~ param, tool
+      end
     end
 
     # Proves the fix lives at the shared dispatch choke point, not as a
@@ -1236,6 +1255,7 @@ defmodule EngramWeb.McpControllerTest do
     setup do
       # Per-process override (not Application.put_env) so this stays async-safe.
       bypass = Bypass.open()
+      Engram.QdrantStub.stub_retrieve(bypass)
       Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
       Engram.ServiceConfig.put_override(:qdrant_search_timeout, 30_000)
 
@@ -1274,19 +1294,26 @@ defmodule EngramWeb.McpControllerTest do
 
       test_pid = self()
 
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn bconn ->
-        {:ok, raw, bconn} = Plug.Conn.read_body(bconn)
-        send(test_pid, {:qdrant_body, Jason.decode!(raw)})
+      Bypass.expect_once(
+        bypass,
+        "POST",
+        "/collections/engram_notes/points/query/batch",
+        fn bconn ->
+          {:ok, raw, bconn} = Plug.Conn.read_body(bconn)
+          send(test_pid, {:qdrant_body, Jason.decode!(raw)})
 
-        bconn
-        |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(
-          200,
-          Jason.encode!(%{
-            "result" => %{"points" => [hit(user, va, "uuid-a"), hit(user, vb, "uuid-b")]}
-          })
-        )
-      end)
+          bconn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(
+            200,
+            Jason.encode!(
+              QdrantStub.batch(bconn, %{
+                "result" => [hit(user, va, "uuid-a"), hit(user, vb, "uuid-b")]
+              })
+            )
+          )
+        end
+      )
 
       conn = call_tool(conn, "search_notes", %{"query" => "findme"})
       resp = json_response(conn, 200)
@@ -1297,9 +1324,9 @@ defmodule EngramWeb.McpControllerTest do
       # The safety property: ONE query, every leg of it carrying an any-match
       # filter over exactly the accessible set. Not a nil filter, and never a
       # filter that names C. (MCP defaults to :hybrid, so the filter rides on
-      # each `prefetch` leg; the `[body]` fallback covers the dense shape.)
+      # each `searches` leg; the `[body]` fallback covers the dense shape.)
       assert_received {:qdrant_body, body}
-      legs = body["prefetch"] || [body]
+      legs = body["searches"] || [body]
       assert legs != []
 
       for leg <- legs do

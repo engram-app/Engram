@@ -5,6 +5,7 @@ defmodule Engram.SearchHybridTest do
   import Ecto.Query
 
   alias Engram.Crypto.DekCache
+  alias Engram.QdrantStub
   alias Engram.Search
   alias Engram.ServiceConfig
 
@@ -12,6 +13,7 @@ defmodule Engram.SearchHybridTest do
 
   setup do
     bypass = Bypass.open()
+    Engram.QdrantStub.stub_retrieve(bypass)
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
 
     # The search path's prod budget is 5s (`:qdrant_search_timeout`), tuned for
@@ -62,20 +64,76 @@ defmodule Engram.SearchHybridTest do
       }
     }
 
-    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       json = Jason.decode!(body)
-      assert json["query"]["fusion"] == "rrf"
-      assert length(json["prefetch"]) == 2
+      assert Enum.map(json["searches"], & &1["using"]) == ["dense", "keyword"]
+      assert length(json["searches"]) == 2
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, Jason.encode!(fused))
+      |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(conn, fused)))
     end)
 
     assert {:ok, [hit]} = Search.search(user, vault, "paddle_api_key", mode: :hybrid)
     assert hit.text == "PADDLE_API_KEY rotation"
-    assert_in_delta hit.score, 0.0163, 1.0e-6
+    assert hit.score == QdrantStub.rrf(0)
+  end
+
+  defp hit_point(user, vault, id, score) do
+    {:ok, enc} =
+      Engram.Crypto.encrypt_qdrant_payload(
+        %{text: "text #{id}", title: id, heading_path: id},
+        user,
+        "engram_notes",
+        id
+      )
+
+    %{
+      "id" => id,
+      "score" => score,
+      "payload" => %{
+        "text" => enc.text,
+        "title" => enc.title,
+        "heading_path" => enc.heading_path,
+        "text_nonce" => enc.text_nonce,
+        "title_nonce" => enc.title_nonce,
+        "heading_path_nonce" => enc.heading_path_nonce,
+        "aad_version" => enc.aad_version,
+        "source_path" => "#{id}.md",
+        "user_id" => to_string(user.id),
+        "vault_id" => to_string(vault.id)
+      }
+    }
+  end
+
+  # End to end through Search: a point in BOTH legs is returned once with the
+  # summed score, and a cross-leg tie (dense rank 1 vs keyword rank 1) breaks
+  # by id, never by the keyword leg's larger raw BM25 score.
+  test "a point in both legs fuses once; a cross-leg rank tie breaks by id",
+       %{bypass: bypass, user: user, vault: vault} do
+    Engram.MockEmbedder
+    |> expect(:embed_texts, fn ["iron"], _opts -> {:ok, [[0.1, 0.2, 0.3]]} end)
+
+    both_dense = hit_point(user, vault, "mm-both", 0.9)
+    dense = [both_dense, hit_point(user, vault, "aa-dense", 0.8)]
+    keyword = [%{both_dense | "score" => 12.0}, hit_point(user, vault, "zz-kw", 9.0)]
+
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(
+        200,
+        Jason.encode!(QdrantStub.batch(conn, %{"result" => dense}, keyword))
+      )
+    end)
+
+    assert {:ok, results} = Search.search(user, vault, "iron", mode: :hybrid, diversity: 0)
+    assert Enum.map(results, & &1.title) == ["mm-both", "aa-dense", "zz-kw"]
+    assert hd(results).score == QdrantStub.rrf(0) * 2
+
+    assert QdrantStub.last_retrieve(bypass)["ids"] |> Enum.sort() ==
+             ["aa-dense", "mm-both", "zz-kw"]
   end
 
   # The default is what MCP's `suggest_folder` and note auto-placement get,
@@ -86,14 +144,14 @@ defmodule Engram.SearchHybridTest do
     Engram.MockEmbedder
     |> expect(:embed_texts, fn ["x"], _opts -> {:ok, [[0.1, 0.2, 0.3]]} end)
 
-    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       json = Jason.decode!(body)
-      assert Enum.map(json["prefetch"], & &1["using"]) |> Enum.sort() == ["dense", "keyword"]
+      assert Enum.map(json["searches"], & &1["using"]) |> Enum.sort() == ["dense", "keyword"]
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, ~s({"result":[]}))
+      |> Plug.Conn.send_resp(200, ~s({"result":[{"points":[]},{"points":[]}]}))
     end)
 
     assert {:ok, []} = Search.search(user, vault, "x")

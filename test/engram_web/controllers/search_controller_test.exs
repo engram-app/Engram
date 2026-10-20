@@ -4,6 +4,8 @@ defmodule EngramWeb.SearchControllerTest do
   import ExUnit.CaptureLog
   import Mox
 
+  alias Engram.QdrantStub
+
   setup :verify_on_exit!
 
   setup %{conn: conn} do
@@ -15,10 +17,28 @@ defmodule EngramWeb.SearchControllerTest do
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
 
     bypass = Bypass.open()
+
+    Engram.QdrantStub.stub_retrieve(bypass)
     Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
 
     %{conn: authed, user: user, vault: vault, bypass: bypass}
+  end
+
+  describe "input limits" do
+    test "an over-long query is a 422 naming the limit", %{conn: conn} do
+      long = String.duplicate("a", Engram.Search.max_query_bytes() + 1)
+      conn = post(conn, ~p"/api/search", %{"query" => long})
+      assert %{"error" => error} = json_response(conn, 422)
+      assert error =~ "query"
+    end
+
+    test "too many tags is a 422 naming the limit", %{conn: conn} do
+      tags = for i <- 1..(Engram.Vector.Qdrant.max_ids() + 1), do: "t#{i}"
+      conn = post(conn, ~p"/api/search", %{"query" => "q", "tags" => tags})
+      assert %{"error" => error} = json_response(conn, 422)
+      assert error =~ "tags"
+    end
   end
 
   describe "POST /search" do
@@ -61,17 +81,17 @@ defmodule EngramWeb.SearchControllerTest do
         ]
       }
 
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(qdrant_result))
+        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(c, qdrant_result)))
       end)
 
       conn = post(conn, "/api/search", %{query: "iron panel"})
       assert %{"results" => results} = json_response(conn, 200)
       assert length(results) == 1
       [hit] = results
-      assert hit["score"] == 0.95
+      assert hit["score"] == QdrantStub.rrf(0)
       assert hit["path"] == "Health/Iron Panel.md"
       assert hit["title"] == "Iron Panel"
       assert hit["folder"] == "Health"
@@ -133,10 +153,10 @@ defmodule EngramWeb.SearchControllerTest do
         ]
       }
 
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(qdrant_result))
+        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(c, qdrant_result)))
       end)
 
       conn = post(conn, "/api/search", %{query: "iron panel"})
@@ -150,16 +170,16 @@ defmodule EngramWeb.SearchControllerTest do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         {:ok, body, c} = Plug.Conn.read_body(c)
         decoded = Jason.decode!(body)
         # Client requests 10 notes → Search asks Qdrant for max(10*4, 20)=40
         # candidates so collapse_to_notes has enough chunks to populate 10 notes.
-        assert decoded["limit"] == 40
+        assert Enum.map(decoded["searches"], & &1["limit"]) == [40, 40]
 
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, ~s({"result": []}))
+        |> Plug.Conn.send_resp(200, ~s({"result":[{"points":[]},{"points":[]}]}))
       end)
 
       # diversity: 0 disables MMR so the stub only sees the Search
@@ -170,13 +190,13 @@ defmodule EngramWeb.SearchControllerTest do
     end
 
     test "web search requests hybrid mode", %{conn: conn, bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         {:ok, body, c} = Plug.Conn.read_body(c)
-        assert Jason.decode!(body)["query"]["fusion"] == "rrf"
+        assert Enum.map(Jason.decode!(body)["searches"], & &1["using"]) == ["dense", "keyword"]
 
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, ~s({"result":{"points":[]}}))
+        |> Plug.Conn.send_resp(200, ~s({"result":[{"points":[]},{"points":[]}]}))
       end)
 
       Engram.MockEmbedder |> expect(:embed_texts, fn ["hi"], _ -> {:ok, [[0.1, 0.2, 0.3]]} end)
@@ -211,13 +231,13 @@ defmodule EngramWeb.SearchControllerTest do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         {:ok, body, c} = Plug.Conn.read_body(c)
-        assert Jason.decode!(body)["query"]["fusion"] == "rrf"
+        assert Enum.map(Jason.decode!(body)["searches"], & &1["using"]) == ["dense", "keyword"]
 
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, ~s({"result":{"points":[]}}))
+        |> Plug.Conn.send_resp(200, ~s({"result":[{"points":[]},{"points":[]}]}))
       end)
 
       conn = post(conn, ~p"/api/search", %{"query" => "ferritin", "mode" => "garbage"})
@@ -236,15 +256,15 @@ defmodule EngramWeb.SearchControllerTest do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         {:ok, body, c} = Plug.Conn.read_body(c)
         decoded = Jason.decode!(body)
         # 999 notes → clamped to 50 → Search asks Qdrant for max(50*4, 20)=200 candidates.
-        assert decoded["limit"] == 200
+        assert Enum.map(decoded["searches"], & &1["limit"]) == [200, 200]
 
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, ~s({"result": []}))
+        |> Plug.Conn.send_resp(200, ~s({"result":[{"points":[]},{"points":[]}]}))
       end)
 
       # diversity: 0 isolates the controller clamp + Search pool sizing from
@@ -257,10 +277,10 @@ defmodule EngramWeb.SearchControllerTest do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, ~s({"result": []}))
+        |> Plug.Conn.send_resp(200, ~s({"result":[{"points":[]},{"points":[]}]}))
       end)
 
       conn =
@@ -296,7 +316,7 @@ defmodule EngramWeb.SearchControllerTest do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
-      Bypass.expect(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         Plug.Conn.send_resp(c, 500, ~s({"status":{"error":"Qdrant internal"}}))
       end)
 
@@ -316,10 +336,10 @@ defmodule EngramWeb.SearchControllerTest do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, ~s({"result": []}))
+        |> Plug.Conn.send_resp(200, ~s({"result":[{"points":[]},{"points":[]}]}))
       end)
 
       conn = post(conn, "/api/search", %{query: "nothing here"})
@@ -350,10 +370,10 @@ defmodule EngramWeb.SearchControllerTest do
         ]
       }
 
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(qdrant_result))
+        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(c, qdrant_result)))
       end)
 
       # diversity: 0 disables MMR so the stub doesn't need to supply vectors;
@@ -368,7 +388,7 @@ defmodule EngramWeb.SearchControllerTest do
       assert iron["path"] == "Health/Iron Panel.md"
       assert iron["match_count"] == 3
       assert iron["snippet"] == "Ferritin section."
-      assert iron["score"] == 0.95
+      assert iron["score"] == QdrantStub.rrf(0)
 
       assert vitd["path"] == "Health/Vitamin D.md"
       assert vitd["match_count"] == 1
@@ -383,24 +403,27 @@ defmodule EngramWeb.SearchControllerTest do
       Engram.MockEmbedder
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         {:ok, body, c} = Plug.Conn.read_body(c)
         decoded = Jason.decode!(body)
         # diversity > 0 triggers the MMR path: Search requests dense vectors from
         # Qdrant so MMR can compare cosine similarity between candidates.
-        assert decoded["with_vector"] == ["dense"],
-               "expected with_vector: [\"dense\"] when diversity=0.5, got: #{inspect(decoded["with_vector"])}"
+        # Qdrant so MMR can compare cosine similarity between candidates; they
+        # come with the fused points' retrieve, not the legs.
+        assert length(decoded["searches"]) == 2
+        refute Enum.any?(decoded["searches"], &Map.has_key?(&1, "with_vector"))
 
         # Return a valid point with a dense vector so the MMR pipeline succeeds.
         points = [diverse_chunk(user, vault, "mmr-1", 0.9, [1.0, 0.0], "MMR result")]
 
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => points}))
+        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(c, %{"result" => points})))
       end)
 
       conn = post(conn, ~p"/api/search", %{"query" => "hello", "diversity" => "0.5"})
       assert json_response(conn, 200)
+      assert QdrantStub.last_retrieve(bypass)["with_vector"] == ["dense"]
     end
 
     test "out-of-range diversity=5 is clamped downstream — still returns 200", %{
@@ -412,12 +435,12 @@ defmodule EngramWeb.SearchControllerTest do
 
       # diversity=5 is parsed as a float and passed to Search; Search clamps it
       # to 1.0. The request is still valid and returns a 200 with results.
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         {:ok, _body, c} = Plug.Conn.read_body(c)
 
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, ~s({"result":[]}))
+        |> Plug.Conn.send_resp(200, ~s({"result":[{"points":[]},{"points":[]}]}))
       end)
 
       conn = post(conn, ~p"/api/search", %{"query" => "hello", "diversity" => "5"})
@@ -432,12 +455,12 @@ defmodule EngramWeb.SearchControllerTest do
       |> expect(:embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
 
       # diversity="not-a-float" → parse error → key omitted → profile default
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         {:ok, _body, c} = Plug.Conn.read_body(c)
 
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, ~s({"result":[]}))
+        |> Plug.Conn.send_resp(200, ~s({"result":[{"points":[]},{"points":[]}]}))
       end)
 
       conn = post(conn, ~p"/api/search", %{"query" => "hello", "diversity" => "not-a-float"})
@@ -463,10 +486,10 @@ defmodule EngramWeb.SearchControllerTest do
           end
       }
 
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(result))
+        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(c, result)))
       end)
 
       # diversity: 0 disables MMR (which requires vectors in stub results);
@@ -524,7 +547,7 @@ defmodule EngramWeb.SearchControllerTest do
       stub(Engram.MockEmbedder, :embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
       test_pid = self()
 
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         {:ok, raw, c} = Plug.Conn.read_body(c)
         send(test_pid, {:qdrant_body, Jason.decode!(raw)})
 
@@ -532,12 +555,14 @@ defmodule EngramWeb.SearchControllerTest do
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.send_resp(
           200,
-          Jason.encode!(%{
-            "result" => [
-              chunk("uuid-a", 0.9, "A/a.md", "A", "findme", user, vault.id),
-              chunk("uuid-b", 0.8, "B/b.md", "B", "findme", user, vault_b.id)
-            ]
-          })
+          Jason.encode!(
+            QdrantStub.batch(c, %{
+              "result" => [
+                chunk("uuid-a", 0.9, "A/a.md", "A", "findme", user, vault.id),
+                chunk("uuid-b", 0.8, "B/b.md", "B", "findme", user, vault_b.id)
+              ]
+            })
+          )
         )
       end)
 
@@ -547,9 +572,9 @@ defmodule EngramWeb.SearchControllerTest do
 
       # The safety property: every leg of the emitted query carries an any-match
       # filter over exactly the permitted set. (Default mode is :hybrid, so the
-      # filter rides each `prefetch` leg; `[body]` covers the dense shape.)
+      # filter rides each `searches` leg; `[body]` covers the dense shape.)
       assert_received {:qdrant_body, body}
-      legs = body["prefetch"] || [body]
+      legs = body["searches"] || [body]
       assert legs != []
 
       for leg <- legs do
@@ -576,7 +601,7 @@ defmodule EngramWeb.SearchControllerTest do
       stub(Engram.MockEmbedder, :embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
       test_pid = self()
 
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         {:ok, raw, c} = Plug.Conn.read_body(c)
         send(test_pid, {:qdrant_body, Jason.decode!(raw)})
 
@@ -595,7 +620,7 @@ defmodule EngramWeb.SearchControllerTest do
 
       assert_received {:qdrant_body, body}
 
-      for leg <- body["prefetch"] || [body] do
+      for leg <- body["searches"] || [body] do
         clause = Enum.find(leg["filter"]["must"], &(&1["key"] == "vault_id"))
         assert clause["match"] == %{"value" => to_string(vault.id)}
         refute to_string(vault_b.id) in List.wrap(clause["match"]["any"])
@@ -621,14 +646,16 @@ defmodule EngramWeb.SearchControllerTest do
       permitted = Engram.Fixtures.insert_note!(user, vault, %{"path" => "Inbox.md"})
       out_of_scope = Engram.Fixtures.insert_note!(user, vault_c, %{"path" => "Inbox.md"})
 
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         c
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.send_resp(
           200,
-          Jason.encode!(%{
-            "result" => [chunk("uuid-a", 0.9, "Inbox.md", "Inbox", "findme", user, vault.id)]
-          })
+          Jason.encode!(
+            QdrantStub.batch(c, %{
+              "result" => [chunk("uuid-a", 0.9, "Inbox.md", "Inbox", "findme", user, vault.id)]
+            })
+          )
         )
       end)
 
@@ -650,7 +677,7 @@ defmodule EngramWeb.SearchControllerTest do
       stub(Engram.MockEmbedder, :embed_texts, fn _, _ -> {:ok, [List.duplicate(0.1, 3)]} end)
       test_pid = self()
 
-      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn c ->
+      Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         {:ok, raw, c} = Plug.Conn.read_body(c)
         send(test_pid, {:qdrant_body, Jason.decode!(raw)})
 
@@ -669,7 +696,7 @@ defmodule EngramWeb.SearchControllerTest do
 
       assert_received {:qdrant_body, body}
 
-      for leg <- body["prefetch"] || [body] do
+      for leg <- body["searches"] || [body] do
         refute Enum.any?(leg["filter"]["must"] || [], &(&1["key"] == "vault_id"))
       end
     end

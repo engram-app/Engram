@@ -76,6 +76,7 @@ defmodule Engram.Workers.RefreshKeywordVectors do
       {:discard, _} = discard -> discard
       {:error, :rotation_in_progress} -> {:snooze, 60}
       {:error, :qdrant_backpressure} -> Qdrant.backpressure_snooze(:refused)
+      {:error, :qdrant_wait_timeout} -> Qdrant.wait_timeout_snooze()
       {:error, :user_not_found} -> {:discard, :user_deleted}
       {:error, _} = err -> err
     end

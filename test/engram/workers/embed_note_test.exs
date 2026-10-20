@@ -536,6 +536,43 @@ defmodule Engram.Workers.EmbedNoteTest do
                )
     end
 
+    # H7: with `truncation: false`, an over-length input is a 400 that no retry
+    # can fix. Never re-sent: the note is indexed keyword-only (zero Voyage
+    # spend) on the FIRST attempt and parked until its content changes, not
+    # on a 6h poison loop, and the park shows in embed-status.
+    test "integration: a context-window 400 indexes keyword-only and parks until edited",
+         %{bypass: bypass, note: note} do
+      voyage_bypass = Bypass.open()
+      prev_embedder = Application.get_env(:engram, :embedder)
+      Application.put_env(:engram, :embedder, Engram.Embedders.Voyage)
+      Engram.ServiceConfig.put_override(:voyage_url, "http://localhost:#{voyage_bypass.port}")
+      Engram.ServiceConfig.put_override(:voyage_api_key, "test-key")
+      on_exit(fn -> Application.put_env(:engram, :embedder, prev_embedder) end)
+
+      stub_qdrant_optional(bypass)
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Bypass.expect(voyage_bypass, "POST", "/v1/embeddings", fn conn ->
+        Agent.update(counter, &(&1 + 1))
+
+        Plug.Conn.send_resp(
+          conn,
+          400,
+          ~s({"detail":"The input at index 0 does not fit into the model's context window of 32000 tokens."})
+        )
+      end)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id}, attempt: 1, max_attempts: 5)
+      assert Agent.get(counter, & &1) == 1
+
+      parked = Repo.get!(Note, note.id, skip_tenant_check: true)
+      # Keyword-indexed: the content is stamped indexed, with no dense leg.
+      assert parked.embed_hash == parked.content_hash
+      assert parked.dense_indexed_hash == nil
+      assert parked.embed_retry_after == EmbedNote.parked_until_edited()
+      assert parked.embed_budget_parked == nil
+    end
+
     test "returns {:error, _} for non-429 embed failures (preserves retry behavior)",
          %{bypass: bypass, note: note} do
       stub_qdrant(bypass)

@@ -26,10 +26,10 @@ defmodule Engram.Search.FreeSemanticTest do
     Engram.MockEmbedder
     |> expect(:embed_texts, fn ["iron panel"], _opts -> {:ok, [List.duplicate(0.1, 3)]} end)
 
-    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, ~s({"result": []}))
+      |> Plug.Conn.send_resp(200, ~s({"result":[{"points":[]},{"points":[]}]}))
     end)
   end
 
@@ -40,14 +40,14 @@ defmodule Engram.Search.FreeSemanticTest do
     Engram.MockEmbedder
     |> expect(:embed_texts, fn ["iron panel"], _opts -> {:ok, [List.duplicate(0.1, 3)]} end)
 
-    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
-      legs = Enum.map(Jason.decode!(body)["prefetch"], & &1["using"])
+      legs = Enum.map(Jason.decode!(body)["searches"], & &1["using"])
       assert Enum.sort(legs) == ["dense", "keyword"]
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, ~s({"result": []}))
+      |> Plug.Conn.send_resp(200, ~s({"result":[{"points":[]},{"points":[]}]}))
     end)
 
     # No `:mode` — the default, and what two MCP call sites send. Hybrid, so
@@ -130,18 +130,21 @@ defmodule Engram.Search.FreeSemanticTest do
       }
     }
 
-    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
-      prefetch = Jason.decode!(body)["prefetch"] || []
-
-      # The sparse note only matches through the keyword leg: a dense-only
-      # query reaches nothing, exactly as in production.
-      points = if Enum.any?(prefetch, &(&1["using"] == "keyword")), do: [point], else: []
+      # The sparse note only matches through the keyword leg: the dense leg
+      # reaches nothing, exactly as in production.
+      assert ["dense", "keyword"] == Enum.map(Jason.decode!(body)["searches"], & &1["using"])
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => %{"points" => points}}))
+      |> Plug.Conn.send_resp(
+        200,
+        Jason.encode!(Engram.QdrantStub.batch(conn, %{"result" => []}, [point]))
+      )
     end)
+
+    Engram.QdrantStub.stub_retrieve(bypass)
 
     assert {:ok, text, %{"suggestions" => [%{"folder" => "Health"}]}} =
              Engram.MCP.Handlers.handle("suggest_folder", user, vault, %{

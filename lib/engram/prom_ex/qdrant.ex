@@ -78,6 +78,7 @@ defmodule Engram.PromEx.Qdrant do
   @ram_event [:engram, :qdrant, :memory]
   @pressure_event [:engram, :qdrant, :pressure]
   @limit_event [:engram, :qdrant, :strict_limit]
+  @breaker_event [:engram, :qdrant, :points_breaker]
   @reserve_event [:engram, :qdrant, :reserve]
   @poller_name {__MODULE__, :collection_poller}
 
@@ -112,6 +113,12 @@ defmodule Engram.PromEx.Qdrant do
           event_name: @collection_event,
           measurement: :points,
           description: "Approximate points in the Qdrant collection."
+        ),
+        last_value(prefix ++ [:max_points],
+          event_name: @breaker_event,
+          measurement: :max_points,
+          description:
+            "The strict-mode max_points_count Qdrant applies to the collection (absent when unset)."
         ),
         last_value(prefix ++ [:segments],
           event_name: @collection_event,
@@ -223,6 +230,11 @@ defmodule Engram.PromEx.Qdrant do
     case Qdrant.collection_info(col, :search) do
       {:ok, info} ->
         :telemetry.execute(@collection_event, collection_measurements(info), %{})
+
+        case get_in(info, ["config", "strict_mode_config", "max_points_count"]) do
+          max when is_integer(max) -> :telemetry.execute(@breaker_event, %{max_points: max}, %{})
+          _ -> :ok
+        end
 
         limits = QdrantLayout.applied_limits(info["config"], version, poll_quotas(version))
 
@@ -349,6 +361,18 @@ defmodule Engram.PromEx.Qdrant do
           description:
             "Embed jobs snoozed for Qdrant pressure: preflight (before Voyage) or refused (strict mode).",
           tags: [:reason]
+        ),
+        counter(
+          metric_prefix ++ [:strict_shape_refusal, :total],
+          event_name: [:engram, :qdrant, :strict_shape_refusal],
+          description:
+            "Writes Qdrant strict mode refused for their shape (limit, condition or filter size): a code bug."
+        ),
+        counter(
+          metric_prefix ++ [:wait_timeout, :total],
+          event_name: [:engram, :qdrant, :wait_timeout],
+          description:
+            "Writes whose wait=true outlived the server timeout: queued, not yet applied, so not stamped."
         )
       ]
     )

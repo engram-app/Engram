@@ -316,6 +316,15 @@ case qdrant_switch.("QDRANT_STRICT_MODE") do
   on? -> config :engram, :qdrant_strict_mode, on?
 end
 
+# cloud | self_host = which strict-mode hard limits the reconcile applies,
+# instead of reading it from the QDRANT_URL host (`Qdrant.deployment/1`).
+# Lets staging (self-host) rehearse the Qdrant Cloud limits.
+case System.get_env("QDRANT_STRICT_PROFILE") do
+  "cloud" -> config :engram, :qdrant_strict_profile, :cloud
+  "self_host" -> config :engram, :qdrant_strict_profile, :self_host
+  _ -> :ok
+end
+
 # true = on Qdrant 1.19+ the reconcile also manages the node-wide `/quotas`
 # (disk + memory write guards). Node-wide: set it only where the Qdrant server
 # holds this app's collection alone (Qdrant Cloud prod). Default false.

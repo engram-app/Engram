@@ -291,6 +291,61 @@ defmodule Engram.IndexingChunkReuseTest do
     end
   end
 
+  # OKF v0.2 `generated.at` is read since #2066, but `fm_timestamp` is a
+  # write-time column, so a note saved before then holds nil until edited.
+  # Its next index (the v5 rebuild pass reaches every note) re-derives it:
+  # payload refreshed on the reused points, row stamped, nothing re-embedded.
+  describe "a v0.2 note saved before generated.at was read" do
+    test "its next index heals fm_timestamp in the payload and the row", ctx do
+      {:ok, note} =
+        Notes.upsert_note(
+          ctx.user,
+          ctx.vault,
+          %{
+            "path" => @path,
+            "content" =>
+              "---\ngenerated:\n  at: 2026-08-21T10:00:00+02:00\n---\n# T\n\nBody text.\n",
+            "mtime" => 1_000.0
+          },
+          actor: "api"
+        )
+
+      stub_embedder(self())
+      assert {:ok, _} = Indexing.index_note(fresh(note, ctx.user), ctx.vault)
+
+      # What a pre-#2066 write left behind: no timestamp in the row, and a
+      # payload stamped without one.
+      {1, _} =
+        Repo.update_all(
+          from(n in Engram.Notes.Note, where: n.id == ^note.id),
+          [set: [fm_timestamp: nil, payload_hash: nil]],
+          skip_tenant_check: true
+        )
+
+      _ = embedded_texts()
+      reset(ctx.recorder)
+
+      assert {:ok, _} = Indexing.index_note(fresh(note, ctx.user), ctx.vault)
+
+      assert embedded_texts() == []
+      assert upserts(ctx.recorder) == []
+      unix = DateTime.to_unix(~U[2026-08-21 08:00:00Z])
+      assert [%{body: %{"payload" => %{"fm_timestamp" => ^unix}}}] = set_payloads(ctx.recorder)
+      assert Repo.reload!(note, skip_tenant_check: true).fm_timestamp == ~U[2026-08-21 08:00:00Z]
+    end
+
+    test "a note without a generated key is not re-parsed or changed", ctx do
+      note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
+      stub_embedder(self())
+      assert {:ok, _} = Indexing.index_note(note, ctx.vault)
+      reset(ctx.recorder)
+
+      assert {:ok, _} = Indexing.index_note(fresh(note, ctx.user), ctx.vault)
+      assert set_payloads(ctx.recorder) == []
+      assert Repo.reload!(note, skip_tenant_check: true).fm_timestamp == nil
+    end
+  end
+
   describe "after the rename pre-delete" do
     test "nothing is reused, because those points are already gone", ctx do
       note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")

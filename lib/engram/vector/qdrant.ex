@@ -13,13 +13,15 @@ defmodule Engram.Vector.Qdrant do
     reconcile and the 60s poller's strict-mode sync).
   - QDRANT_RECONCILE_ON_DISK: false = skip only the on-disk group.
   - QDRANT_STRICT_MODE: false = the reconcile sets our two strict-mode
-    guards (`max_disk_usage_percent`, `max_resident_memory_percent`) to 100;
-    `enabled` and every other strict field (Qdrant Cloud's unindexed-filter
-    guard) are left as they are.
+    guards (`max_disk_usage_percent`, `max_resident_memory_percent`) to 100
+    and, on Qdrant Cloud, every hard limit we set (`QdrantLayout.desired_strict/1`,
+    plus both byte breakers) to a ceiling no request reaches. `enabled` and
+    Qdrant Cloud's own unindexed-filter guard are left as they are.
   - QDRANT_BACKPRESSURE_PREFLIGHT: false = EmbedNote never pauses for pressure.
   """
 
   alias Engram.Logger.Metadata
+  alias Engram.Search.Fusion
   alias Engram.ServiceConfig
   alias Engram.Vector.QdrantLayout
 
@@ -42,6 +44,27 @@ defmodule Engram.Vector.Qdrant do
   # Qdrant can range-filter on them; they need an integer payload index
   # rather than keyword.
   @integer_payload_index_fields ~w(fm_timestamp fm_created)
+
+  # The largest request shapes any caller sends, so the Qdrant Cloud strict
+  # limits (`QdrantLayout.desired_strict/1`) can sit above them with headroom.
+  # A caller with an unbounded input (a note's point ids, a tag list) chunks
+  # or refuses to fit; test/engram/vector/qdrant_strict_callers_test.exs
+  # pins both sides.
+  @max_page 4096
+  @max_ids 2048
+  @max_write_batch 64
+
+  # No @specs on these constant accessors: dialyzer's :underspecs flags
+  # `pos_integer()` against the literal's success typing.
+
+  @doc "Largest `limit` a scroll or query sends (OrphanSweep's id-only page)."
+  def max_page, do: @max_page
+
+  @doc "Largest id or value list in one `has_id` / `match.any` condition."
+  def max_ids, do: @max_ids
+
+  @doc "Largest point batch one upsert or vector update sends."
+  def max_write_batch, do: @max_write_batch
 
   defp base_url, do: ServiceConfig.get(:qdrant_url, @default_url)
   defp collection, do: ServiceConfig.get(:qdrant_collection, @default_collection)
@@ -104,6 +127,31 @@ defmodule Engram.Vector.Qdrant do
       connect_options: [protocols: [:http1]]
     )
   end
+
+  # Point writes wait until APPLIED (`wait=true`): an ack alone let a worker
+  # stamp a note indexed while its points were still invisible to search.
+  # `timeout` makes Qdrant give up before the client does (`req_opts/1`), so a
+  # slow write ends as a server timeout, not a hang-up that leaves it running.
+  defp write_opts(body, purpose \\ :indexing) do
+    [json: body, params: [wait: true, timeout: server_timeout_s(purpose)]] ++ req_opts(purpose)
+  end
+
+  @doc """
+  Qdrant-side `timeout` (whole seconds) for a request profile, below that
+  profile's client `receive_timeout`. Floored at 1 (Qdrant reads 0 as no
+  limit) and capped at `QdrantLayout.max_timeout_s/0`.
+  """
+  @spec server_timeout_s(:search | :indexing) :: pos_integer()
+  # Clamped to the Cloud strict `max_timeout`: above it Qdrant 400s the
+  # search outright. The client `receive_timeout` keeps the configured budget.
+  def server_timeout_s(:search) do
+    (div(ServiceConfig.get(:qdrant_search_timeout, 5_000), 1000) - 1)
+    |> max(1)
+    |> min(QdrantLayout.max_timeout_s())
+  end
+
+  # 5s under the 30s indexing `receive_timeout`.
+  def server_timeout_s(:indexing), do: 25
 
   defp put_api_key(base) do
     case ServiceConfig.get(:qdrant_api_key) do
@@ -289,26 +337,38 @@ defmodule Engram.Vector.Qdrant do
     keyword = Enum.map(@payload_index_fields, &{&1, "keyword"})
     integer = Enum.map(@integer_payload_index_fields, &{&1, "integer"})
 
-    (keyword ++ integer)
-    |> Enum.reject(fn {field, _schema} -> MapSet.member?(indexed, field) end)
-    |> Enum.reduce_while(:ok, fn {field, schema}, :ok ->
-      case create_payload_index(col, field, schema) do
+    missing = Enum.reject(keyword ++ integer, fn {field, _} -> MapSet.member?(indexed, field) end)
+    last = length(missing) - 1
+
+    # Only the last create waits. Index ops apply in order on each shard, so
+    # once the last is built every earlier one is too, and nine waited
+    # fsync-bound builds in a row became one (the #2064 CI stall; verified on
+    # 1.19.2 over 3000 points on 2 shards).
+    missing
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {{field, schema}, i}, :ok ->
+      case create_payload_index(col, field, schema, i == last) do
         :ok -> {:cont, :ok}
         error -> {:halt, error}
       end
     end)
   end
 
-  defp create_payload_index(col, field, schema) do
-    # `?wait=true` blocks until the index is built over every existing point,
-    # which on a large collection outlasts the default indexing budget. A
-    # timeout here fails `ensure_collection` (deliberately not memoised), so
-    # every retrying job would re-issue the same build. Give it its own.
+  defp create_payload_index(col, field, schema, wait?) do
+    # A waited create blocks until the index is built over every existing
+    # point, which on a large collection outlasts the default indexing
+    # budget. A timeout here fails `ensure_collection` (deliberately not
+    # memoised), so every retrying job would re-issue the same build. Give it
+    # its own.
     opts =
-      [json: %{field_name: field, field_schema: schema}, receive_timeout: 120_000] ++ req_opts()
+      [
+        json: %{field_name: field, field_schema: schema},
+        params: [wait: wait?],
+        receive_timeout: 120_000
+      ] ++ req_opts()
 
     instrument(:create_payload_index, fn ->
-      case Req.put("#{base_url()}/collections/#{col}/index?wait=true", opts) do
+      case Req.put("#{base_url()}/collections/#{col}/index", opts) do
         {:ok, %{status: status}} when status in [200, 201] -> :ok
         {:ok, %{status: status, body: body}} -> {:error, {status, body}}
         {:error, reason} -> {:error, reason}
@@ -411,6 +471,35 @@ defmodule Engram.Vector.Qdrant do
 
   defp strict_mode?, do: ServiceConfig.get(:qdrant_strict_mode, true)
 
+  @doc """
+  `:cloud` for a Qdrant Cloud URL (`*.cloud.qdrant.io`, with or without a
+  scheme), where the strict hard limits (`QdrantLayout.desired_strict/1`)
+  apply; `:self_host` otherwise. `QDRANT_STRICT_PROFILE` (`:qdrant_strict_profile`)
+  overrides it, so staging (self-host) can rehearse the Cloud limits.
+  """
+  @spec deployment(String.t()) :: :cloud | :self_host
+  def deployment(url) do
+    case ServiceConfig.get(:qdrant_strict_profile) do
+      profile when profile in [:cloud, :self_host] -> profile
+      _ -> deployment_by_host(url)
+    end
+  end
+
+  @doc "`:override` when `:qdrant_strict_profile` decides `deployment/1`, `:host` otherwise."
+  @spec deployment_source() :: :override | :host
+  def deployment_source,
+    do:
+      if(ServiceConfig.get(:qdrant_strict_profile) in [:cloud, :self_host],
+        do: :override,
+        else: :host
+      )
+
+  # A scheme-less URL parses with no host; read it as `//host:port` then.
+  defp deployment_by_host(url) do
+    host = URI.parse(url).host || URI.parse("//" <> url).host || ""
+    if String.ends_with?(host, ".cloud.qdrant.io"), do: :cloud, else: :self_host
+  end
+
   # Boot only (this runs once per node). A guard the server does not honour
   # is not applied, so say which, rather than imply a write cap that is not
   # there. The app-side preflight still reads disk pressure where it can.
@@ -431,12 +520,14 @@ defmodule Engram.Vector.Qdrant do
       version = server_version()
       log_missing_guards(version)
 
+      Logger.info("qdrant strict profile #{deployment(base_url())} (#{deployment_source()})")
+
       limits = strict_limits(col, volume_stats())
 
       diff =
         QdrantLayout.diff(
           info["config"] || %{},
-          QdrantLayout.desired(version, limits, strict_mode?())
+          QdrantLayout.desired(version, limits, strict_mode?(), deployment(base_url()))
         )
 
       {strict, rest} = Map.split(diff, ["strict_mode_config"])
@@ -521,7 +612,7 @@ defmodule Engram.Vector.Qdrant do
   defp reconcile_strict_fields(col, info, limits, version) do
     want =
       version
-      |> QdrantLayout.desired(limits, strict_mode?())
+      |> QdrantLayout.desired(limits, strict_mode?(), deployment(base_url()))
       |> Map.take(["strict_mode_config"])
 
     case QdrantLayout.diff(info["config"] || %{}, want) do
@@ -759,7 +850,19 @@ defmodule Engram.Vector.Qdrant do
   # lib/collection/src/operations/verification/mod.rs. Searches and deletes
   # are never refused (delete ops are not "disk/memory-consuming"); deletes
   # map it anyway so a future Qdrant that does refuse them is handled alike.
-  @backpressure ~r/(Disk usage|Resident memory usage) is at \d+% of total/
+  #
+  # The capacity breakers are backpressure too (`max_points_count`, the byte
+  # sizes; `check_collection_size_limit` in verification/update.rs): a plain
+  # error makes EmbedNote retry, re-embedding (and re-paying Voyage) only to
+  # be refused again; backpressure snoozes with the vectors retained.
+  # Strings captured from 1.19.2 (qdrant_backpressure_test).
+  @backpressure ~r/(Disk usage|Resident memory usage) is at \d+% of total|Max points count limit of \d+ reached|Max (vector|payload) storage size limit of [\d.]+MB reached/
+
+  # A request-shape refusal (a limit, condition or filter over its strict
+  # cap) is a code bug the same request repeats forever, so it is NOT
+  # backpressure: it stays a plain error (attempts count, then the poison
+  # park), logged and counted for the alert (review N1).
+  @shape_refusal ~r/Limit exceeded \d+ > \d+ for |Condition size limit reached|Filter condition limit reached/
 
   # Qdrant 1.19+ node-wide quota (`/quotas`) refusing a write: HTTP 507, whose
   # only producer is StorageError::InsufficientStorage (src/actix/helpers.rs),
@@ -769,10 +872,42 @@ defmodule Engram.Vector.Qdrant do
   defp write_error(507, _body), do: {:error, :qdrant_backpressure}
 
   defp write_error(400, %{"status" => %{"error" => message}} = body) when is_binary(message) do
-    if message =~ @backpressure, do: {:error, :qdrant_backpressure}, else: {:error, {400, body}}
+    cond do
+      message =~ @backpressure ->
+        {:error, :qdrant_backpressure}
+
+      message =~ @shape_refusal ->
+        Logger.error("qdrant strict-mode refused a request shape: #{message}")
+        :telemetry.execute([:engram, :qdrant, :strict_shape_refusal], %{count: 1}, %{})
+        {:error, {400, body}}
+
+      true ->
+        {:error, {400, body}}
+    end
   end
 
   defp write_error(status, body), do: {:error, {status, body}}
+
+  # A 200 is not always applied: with `wait=true`, a server `timeout` that
+  # expires first answers 200 with `result.status = "wait_timeout"`
+  # (`shard_ops.rs`). The op is queued and will apply, but its points may be
+  # invisible now, which is the race `wait=true` exists to close, so it is an
+  # error the caller must not stamp on. EmbedNote snoozes on it; the retry
+  # reuses the retained vectors, so Voyage is not paid again.
+  defp applied(%{"result" => %{"status" => "wait_timeout"}}), do: wait_timeout()
+
+  defp applied(%{"result" => results}) when is_list(results) do
+    if Enum.any?(results, &match?(%{"status" => "wait_timeout"}, &1)),
+      do: wait_timeout(),
+      else: :ok
+  end
+
+  defp applied(_body), do: :ok
+
+  defp wait_timeout do
+    :telemetry.execute([:engram, :qdrant, :wait_timeout], %{count: 1}, %{})
+    {:error, :qdrant_wait_timeout}
+  end
 
   @doc """
   How full Qdrant is, in whole percent, with the strict-mode limits it is
@@ -821,6 +956,15 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
+  The Oban answer for a waited write that came back `:qdrant_wait_timeout`
+  (queued, not applied): snooze without burning an attempt, so no worker
+  reaches a final-attempt fallback (Repath's is a paid re-embed). Every
+  write is idempotent, so the retry is safe. The event was already emitted
+  by the write.
+  """
+  def wait_timeout_snooze, do: {:snooze, 30 + :rand.uniform(60)}
+
+  @doc """
   True when disk or heap is within `QDRANT_PREFLIGHT_MARGIN_POINTS` (default
   5) of its strict-mode limit, i.e. about to be refused. Unknown is never over.
   """
@@ -857,11 +1001,11 @@ defmodule Engram.Vector.Qdrant do
     col = col || collection()
 
     serialized = Enum.map(points, fn p -> %{id: p.id, vector: p.vector, payload: p.payload} end)
-    opts = [json: %{points: serialized}] ++ req_opts()
+    opts = write_opts(%{points: serialized})
 
     instrument(:upsert, fn ->
       case Req.put("#{base_url()}/collections/#{col}/points", opts) do
-        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: 200, body: body}} -> applied(body)
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
@@ -875,11 +1019,11 @@ defmodule Engram.Vector.Qdrant do
   def update_vectors(col \\ nil, points) do
     col = col || collection()
     serialized = Enum.map(points, fn p -> %{id: p.id, vector: p.vector} end)
-    opts = [json: %{points: serialized}] ++ req_opts()
+    opts = write_opts(%{points: serialized})
 
     instrument(:update_vectors, fn ->
       case Req.put("#{base_url()}/collections/#{col}/points/vectors", opts) do
-        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: 200, body: body}} -> applied(body)
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
@@ -896,15 +1040,100 @@ defmodule Engram.Vector.Qdrant do
 
   def set_payload(col, point_ids, payload) when is_list(point_ids) and is_map(payload) do
     col = col || collection()
-    opts = [json: %{points: point_ids, payload: payload}] ++ req_opts()
+    opts = write_opts(%{points: point_ids, payload: payload})
 
     instrument(:set_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
-        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: 200, body: body}} -> applied(body)
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
     end)
+  end
+
+  @doc """
+  A different payload per point (`[{id, payload}]`), merged like
+  `set_payload/3`, in two requests whatever the count: one `/points/batch`
+  of set_payload ops without `wait`, then one waited barrier. Qdrant runs a
+  batch's ops one by one with the request's `wait` (`do_batch_update_points`),
+  so a waited batch still pays a WAL flush per op. The barrier, a delete of a
+  key no point has over the same ids, reaches every shard holding them after
+  the batch (each shard applies its queue in order), so once it is applied
+  the whole batch is too, and flushed. Verified on 1.19.2 with 3 shards.
+  """
+  # Never written, so the barrier delete changes nothing.
+  @barrier_key "__engram_write_barrier"
+
+  def set_payloads(col \\ nil, pairs)
+  def set_payloads(_col, []), do: :ok
+
+  def set_payloads(col, pairs) when is_list(pairs) do
+    col = col || collection()
+    ops = for {id, payload} <- pairs, do: %{set_payload: %{points: [id], payload: payload}}
+    batch = [json: %{operations: ops}, params: [wait: false]] ++ req_opts()
+    barrier = write_opts(%{keys: [@barrier_key], points: Enum.map(pairs, &elem(&1, 0))})
+
+    instrument(:set_payload, fn ->
+      with :ok <-
+             batch_accepted(Req.post("#{base_url()}/collections/#{col}/points/batch", batch)),
+           :ok <- write(&Req.post/2, "/collections/#{col}/points/payload/delete", barrier) do
+        verify_applied(col, pairs)
+      end
+    end)
+  end
+
+  # Every op of the unwaited batch must be accepted ("acknowledged", or
+  # "completed" if it applied first); anything else fails the page.
+  defp batch_accepted({:ok, %{status: 200, body: %{"result" => results}}})
+       when is_list(results) do
+    case Enum.reject(
+           results,
+           &match?(%{"status" => s} when s in ["acknowledged", "completed"], &1)
+         ) do
+      [] -> :ok
+      bad -> {:error, {:batch_op_failed, Enum.map(bad, & &1["status"])}}
+    end
+  end
+
+  defp batch_accepted({:ok, %{status: status, body: body}}), do: write_error(status, body)
+  defp batch_accepted({:error, reason}), do: {:error, reason}
+
+  # The barrier proves the batch was applied in order and flushed, but not
+  # that each op succeeded at apply time (a waited per-op write reported
+  # that). So read the page back and compare: a payload that did not land
+  # fails the page, and the caller retries it (re-review N4). One retrieve
+  # of the set keys only, no vectors.
+  defp verify_applied(col, pairs) do
+    want = Map.new(pairs, fn {id, payload} -> {id, Jason.decode!(Jason.encode!(payload))} end)
+    keys = want |> Map.values() |> Enum.flat_map(&Map.keys/1) |> Enum.uniq()
+    opts = [json: %{ids: Map.keys(want), with_payload: keys, with_vector: false}] ++ req_opts()
+
+    case Req.post("#{base_url()}/collections/#{col}/points", opts) do
+      {:ok, %{status: 200, body: %{"result" => points}}} when is_list(points) ->
+        stored = Map.new(points, &{&1["id"], &1["payload"] || %{}})
+
+        case for({id, _payload} <- pairs, not landed?(stored[id], want[id]), do: id) do
+          [] -> :ok
+          missing -> {:error, {:set_payloads_not_applied, missing}}
+        end
+
+      {:ok, %{status: status, body: body}} ->
+        {:error, {status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp landed?(nil, _want), do: false
+  defp landed?(stored, want), do: Enum.all?(want, fn {k, v} -> stored[k] == v end)
+
+  defp write(request, path, opts) do
+    case request.("#{base_url()}#{path}", opts) do
+      {:ok, %{status: 200, body: body}} -> applied(body)
+      {:ok, %{status: status, body: body}} -> write_error(status, body)
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   @doc """
@@ -926,11 +1155,11 @@ defmodule Engram.Vector.Qdrant do
       ]
     }
 
-    opts = [json: %{filter: filter, payload: payload}] ++ req_opts()
+    opts = write_opts(%{filter: filter, payload: payload})
 
     instrument(:set_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
-        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: 200, body: body}} -> applied(body)
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
@@ -966,11 +1195,11 @@ defmodule Engram.Vector.Qdrant do
 
   def delete_payload_keys(col, keys) when is_list(keys) do
     col = col || collection()
-    opts = [json: %{keys: keys, filter: %{must: []}}] ++ req_opts()
+    opts = write_opts(%{keys: keys, filter: %{must: []}})
 
     instrument(:delete_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload/delete", opts) do
-        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: 200, body: body}} -> applied(body)
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
@@ -990,7 +1219,7 @@ defmodule Engram.Vector.Qdrant do
 
   def delete_points(col, point_ids) when is_list(point_ids) do
     col = col || collection()
-    opts = [json: %{points: point_ids}] ++ req_opts()
+    opts = write_opts(%{points: point_ids})
 
     instrument(:delete, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
@@ -998,7 +1227,8 @@ defmodule Engram.Vector.Qdrant do
         # point ids come back 200. Treating it as an error made DeleteNoteIndex
         # (#1608, which retries now rather than swallowing) burn its attempts
         # on a stack that has never indexed anything.
-        {:ok, %{status: status}} when status in [200, 404] -> :ok
+        {:ok, %{status: 200, body: body}} -> applied(body)
+        {:ok, %{status: 404}} -> :ok
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
@@ -1023,12 +1253,13 @@ defmodule Engram.Vector.Qdrant do
       ]
     }
 
-    opts = [json: %{filter: filter}] ++ req_opts()
+    opts = write_opts(%{filter: filter})
 
     instrument(:delete, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
         # Missing collection: nothing to delete. See `delete_points/2`.
-        {:ok, %{status: status}} when status in [200, 404] -> :ok
+        {:ok, %{status: 200, body: body}} -> applied(body)
+        {:ok, %{status: 404}} -> :ok
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
@@ -1072,12 +1303,13 @@ defmodule Engram.Vector.Qdrant do
     col = col || collection()
 
     filter = %{must: [%{key: "user_id", match: %{value: user_id}}]}
-    opts = [json: %{filter: filter}] ++ req_opts(purpose)
+    opts = write_opts(%{filter: filter}, purpose)
 
     instrument(:delete, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
         # Missing collection: nothing to delete. See `delete_points/2`.
-        {:ok, %{status: status}} when status in [200, 404] -> :ok
+        {:ok, %{status: 200, body: body}} -> applied(body)
+        {:ok, %{status: 404}} -> :ok
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
@@ -1097,12 +1329,13 @@ defmodule Engram.Vector.Qdrant do
       ]
     }
 
-    opts = [json: %{filter: filter}] ++ req_opts()
+    opts = write_opts(%{filter: filter})
 
     instrument(:delete, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/delete", opts) do
         # Missing collection: nothing to delete. See `delete_points/2`.
-        {:ok, %{status: status}} when status in [200, 404] -> :ok
+        {:ok, %{status: 200, body: body}} -> applied(body)
+        {:ok, %{status: 404}} -> :ok
         {:ok, %{status: status, body: body}} -> write_error(status, body)
         {:error, reason} -> {:error, reason}
       end
@@ -1126,12 +1359,18 @@ defmodule Engram.Vector.Qdrant do
   def scroll(col \\ nil, opts) when is_list(opts) do
     collection_name = col || collection()
     url = "#{base_url()}/collections/#{collection_name}/points/scroll"
+    limit = Keyword.get(opts, :limit, 200)
+
+    # Above max_page/0 the Cloud strict limit refuses the page; fail here,
+    # where the bad caller is in the stacktrace.
+    if limit > @max_page,
+      do: raise(ArgumentError, "scroll limit #{limit} is over max_page #{@max_page}")
 
     body = %{
       filter: Keyword.fetch!(opts, :filter),
       with_payload: Keyword.get(opts, :with_payload, true),
       with_vector: Keyword.get(opts, :with_vector, false),
-      limit: Keyword.get(opts, :limit, 200)
+      limit: limit
     }
 
     body =
@@ -1294,17 +1533,51 @@ defmodule Engram.Vector.Qdrant do
     |> maybe_with_vector(search_opts)
   end
 
+  # Qdrant's own RRF default, kept so fused scores read as before.
+  @rrf_k 2
+
   @doc """
-  Hybrid search: dense + keyword prefetches fused server-side by RRF in one
-  request. `sparse` is `%{indices, values}`. Tenant filter is applied to BOTH
-  legs (load-bearing — the sparse inverted index is global).
+  Hybrid search: the dense and keyword legs run as one `/points/query/batch`
+  request and are fused here by `Engram.Search.Fusion.rrf/2` (k = 2), so
+  fused-score ties break the same way every time (server-side RRF orders
+  them arbitrarily). `sparse` is `%{indices, values}`. Tenant filter is
+  applied to BOTH legs (load-bearing: the sparse inverted index is global).
+  Each leg fetches `:limit` ids and scores only; the fused `:limit` points
+  then come back in one retrieve with the payload fields results use, and
+  the dense vector only when `:with_vector` asks (MMR). The legs carrying
+  payload and vectors returned up to 2x the bytes for points fusion drops.
   """
   def hybrid_search(col \\ nil, dense, sparse, search_opts) do
     col = col || collection()
+    limit = Keyword.get(search_opts, :limit, 5)
 
     instrument(:hybrid_search, fn ->
-      do_search(col, [json: hybrid_search_body(dense, sparse, search_opts)] ++ req_opts(:search))
+      opts = [json: hybrid_search_body(dense, sparse, search_opts)] ++ req_opts(:search)
+
+      with {:ok, legs} <- do_query(col, "/points/query/batch", opts, &batch_results/1),
+           fused =
+             legs
+             |> Enum.map(fn leg -> Enum.map(leg, &%{id: &1.qdrant_id, score: &1.score}) end)
+             |> Fusion.rrf(@rrf_k)
+             |> Enum.take(limit),
+           {:ok, points} <- retrieve(col, Enum.map(fused, & &1.id), search_opts) do
+        by_id = Map.new(points, &{&1.qdrant_id, &1})
+
+        # A point deleted between the legs and the retrieve is dropped.
+        {:ok, for(%{id: id, score: score} <- fused, p = by_id[id], do: Map.put(p, :score, score))}
+      end
     end)
+  end
+
+  # The payload keys `search_results/1` reads; nothing else is fetched.
+  @result_payload ~w(text title heading_path source_path tags vault_id text_nonce
+                     title_nonce heading_path_nonce aad_version)
+
+  defp retrieve(_col, [], _search_opts), do: {:ok, []}
+
+  defp retrieve(col, ids, search_opts) do
+    body = maybe_with_vector(%{ids: ids, with_payload: @result_payload}, search_opts)
+    do_query(col, "/points", [json: body] ++ req_opts(:search), &{:ok, search_results(&1)})
   end
 
   @doc false
@@ -1313,7 +1586,7 @@ defmodule Engram.Vector.Qdrant do
     limit = Keyword.get(search_opts, :limit, 5)
 
     dense_leg =
-      %{query: dense, using: "dense", filter: filter, limit: limit}
+      %{query: dense, using: "dense", filter: filter, limit: limit, with_payload: false}
       |> then(fn leg ->
         case quantization_params(search_opts) do
           nil -> leg
@@ -1321,38 +1594,40 @@ defmodule Engram.Vector.Qdrant do
         end
       end)
 
-    %{
-      prefetch: [
-        dense_leg,
-        %{
-          query: %{indices: sparse.indices, values: sparse.values},
-          using: "keyword",
-          filter: filter,
-          limit: limit
-        }
-      ],
-      query: %{fusion: "rrf"},
+    sparse_leg = %{
+      query: %{indices: sparse.indices, values: sparse.values},
+      using: "keyword",
+      filter: filter,
       limit: limit,
-      with_payload: true
+      with_payload: false
     }
-    |> maybe_with_vector(search_opts)
+
+    %{searches: [dense_leg, sparse_leg]}
   end
 
   @doc """
   The ids among `point_ids` whose points hold a `dense` vector. A recommend
   positive without one is refused for the whole request, and sparse-only
-  points (frontmatter, data, canvas, base) are normal. One page: the
-  `has_id` filter caps the matches at `length(point_ids)`.
+  points (frontmatter, data, canvas, base) are normal. One page per
+  `max_ids/0` ids: the `has_id` filter caps each page's matches at its batch.
   """
   def dense_point_ids(col \\ nil, point_ids)
   def dense_point_ids(_col, []), do: {:ok, []}
 
   def dense_point_ids(col, point_ids) do
-    filter = %{must: [%{has_id: point_ids}, %{has_vector: "dense"}]}
+    point_ids
+    |> Enum.chunk_every(@max_ids)
+    |> Enum.reduce_while({:ok, []}, fn batch, {:ok, acc} ->
+      filter = %{must: [%{has_id: batch}, %{has_vector: "dense"}]}
 
-    with {:ok, %{points: points}} <-
-           scroll(col, filter: filter, with_payload: false, limit: length(point_ids)) do
-      {:ok, Enum.map(points, & &1["id"])}
+      case scroll(col, filter: filter, with_payload: false, limit: length(batch)) do
+        {:ok, %{points: points}} -> {:cont, {:ok, [Enum.map(points, & &1["id"]) | acc]}}
+        error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, pages} -> {:ok, pages |> Enum.reverse() |> Enum.concat()}
+      error -> error
     end
   end
 
@@ -1374,7 +1649,7 @@ defmodule Engram.Vector.Qdrant do
     %{
       query: %{recommend: %{positive: point_ids, strategy: "average_vector"}},
       using: "dense",
-      filter: Map.put(build_tenant_filter(search_opts), :must_not, [%{has_id: point_ids}]),
+      filter: Map.put(build_tenant_filter(search_opts), :must_not, exclude_ids(point_ids)),
       limit: Keyword.get(search_opts, :limit, 5),
       with_payload: true
     }
@@ -1387,22 +1662,39 @@ defmodule Engram.Vector.Qdrant do
     |> maybe_with_vector(search_opts)
   end
 
+  # One `has_id` per `max_ids/0` ids: `not A and not B` is `not (A or B)`, and
+  # each condition stays under the Cloud `condition_max_size`.
+  # ponytail: a note past ~110k points (64 filter conditions) still trips
+  # `filter_max_conditions`; average a sample of its points if one appears.
+  defp exclude_ids(point_ids),
+    do: point_ids |> Enum.chunk_every(@max_ids) |> Enum.map(&%{has_id: &1})
+
   # The body is decoded in Rust (`Engram.Native.json_decode/1`): with vectors
   # requested it is ~200 x 1024 floats, 2.3 MB of JSON that took Jason ~290 ms
   # per search, ten times the MMR pass that consumes it.
   # The `qdrant.query` span covers the HTTP call only, with no attributes
   # (the body holds the query vector and tenant filter).
-  defp do_search(col, opts) do
+  defp do_search(col, opts), do: do_query(col, "/points/query", opts, &{:ok, search_results(&1)})
+
+  # `/points/query/batch` answers a list of `%{"points" => [...]}`, one per
+  # request in order; it comes back as a list of hit lists.
+  defp batch_results(result) when is_list(result), do: {:ok, Enum.map(result, &search_results/1)}
+  defp batch_results(other), do: {:error, {200, other}}
+
+  defp do_query(col, path, opts, parse) do
     resp =
       Tracer.with_span "qdrant.query" do
-        Req.post("#{base_url()}/collections/#{col}/points/query", opts ++ [decode_body: false])
+        Req.post(
+          "#{base_url()}/collections/#{col}#{path}",
+          opts ++ [params: [timeout: server_timeout_s(:search)], decode_body: false]
+        )
         |> Engram.Observability.Otel.mark_http_result()
       end
 
     case resp do
       {:ok, %{status: 200, body: raw}} when is_binary(raw) ->
         case Engram.Native.json_decode(raw) do
-          {:ok, %{"result" => result}} -> {:ok, search_results(result)}
+          {:ok, %{"result" => result}} -> parse.(result)
           {:ok, other} -> {:error, {200, other}}
           {:error, _} -> {:error, {200, raw}}
         end

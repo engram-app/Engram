@@ -89,6 +89,62 @@ defmodule Engram.Vector.QdrantStrictModeTest do
     assert :ok = Qdrant.delete_by_note(col, @user_id, @vault_id, "cGF0aC1obWFj")
   end
 
+  # The Cloud hard limits on a real server (review H1): Qdrant applies
+  # max_query_limit to scroll and sizes has_id / match.any by their length,
+  # neither of which a Bypass stub can show. Every call at its largest must
+  # pass the server's own verification.
+  describe "under the Qdrant Cloud hard limits" do
+    setup %{col: col} do
+      {:ok, %{status: 200}} =
+        Req.patch("#{qdrant_url()}/collections/#{col}",
+          json: %{strict_mode_config: Engram.Vector.QdrantLayout.desired_strict(:cloud)}
+        )
+
+      :ok
+    end
+
+    test "the largest scroll page, has_id lists and tenant filter all fit", %{col: col} do
+      ids = for _ <- 1..(Qdrant.max_ids() * 3), do: Ecto.UUID.generate()
+      assert {:ok, []} = Qdrant.dense_point_ids(col, ids)
+
+      assert {:ok, %{points: _}} =
+               Qdrant.scroll(col,
+                 filter: %{must: [%{has_id: Enum.take(ids, Qdrant.max_ids())}]},
+                 with_payload: false,
+                 limit: Qdrant.max_page()
+               )
+
+      opts = [
+        user_id: @user_id,
+        vault_id: for(_ <- 1..Qdrant.max_ids(), do: Ecto.UUID.generate()),
+        tags_hmac: for(i <- 1..Qdrant.max_ids(), do: "t#{i}"),
+        folder_hmac: "Zm9sZGVyLWhtYWM=",
+        fm_timestamp_gte: 0,
+        limit: Qdrant.max_page()
+      ]
+
+      assert {:ok, _} = Qdrant.search(col, @vector, opts)
+      assert {:ok, _} = Qdrant.hybrid_search(col, @vector, %{indices: [1], values: [1.0]}, opts)
+    end
+
+    test "the kill switch PATCH is accepted and lifts every limit", %{col: col} do
+      off = Engram.Vector.QdrantLayout.desired(Version.parse!("1.19.2"), nil, false, :cloud)
+
+      {:ok, %{status: 200}} =
+        Req.patch("#{qdrant_url()}/collections/#{col}",
+          json: Map.take(off, ["strict_mode_config"])
+        )
+
+      {:ok, %{status: 200, body: %{"result" => info}}} =
+        Req.get("#{qdrant_url()}/collections/#{col}")
+
+      applied = info["config"]["strict_mode_config"]
+      assert applied["max_query_limit"] == 2_147_483_647
+      assert applied["max_points_count"] == 2_147_483_647
+      assert applied["max_collection_vector_size_bytes"] == 2 ** 53 - 1
+    end
+  end
+
   defp upsert_point(col) do
     Qdrant.upsert_points(col, [
       %{

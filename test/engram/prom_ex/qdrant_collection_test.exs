@@ -21,6 +21,7 @@ defmodule Engram.PromEx.QdrantCollectionTest do
   @pressure_event [:engram, :qdrant, :pressure]
   @limit_event [:engram, :qdrant, :strict_limit]
   @reserve_event [:engram, :qdrant, :reserve]
+  @breaker_event [:engram, :qdrant, :points_breaker]
 
   setup do
     bypass = Bypass.open()
@@ -39,7 +40,15 @@ defmodule Engram.PromEx.QdrantCollectionTest do
 
     :telemetry.attach_many(
       {__MODULE__, ref},
-      [@collection_event, @ram_event, @disk_event, @pressure_event, @limit_event, @reserve_event],
+      [
+        @collection_event,
+        @ram_event,
+        @disk_event,
+        @pressure_event,
+        @limit_event,
+        @reserve_event,
+        @breaker_event
+      ],
       fn e, m, meta, _ -> send(test_pid, {e, m, meta}) end,
       nil
     )
@@ -76,6 +85,7 @@ defmodule Engram.PromEx.QdrantCollectionTest do
           [:engram, :prom_ex, :qdrant, :optimizer, :ok],
           [:engram, :prom_ex, :qdrant, :last_poll, :timestamp, :seconds],
           [:engram, :prom_ex, :qdrant, :points],
+          [:engram, :prom_ex, :qdrant, :max_points],
           [:engram, :prom_ex, :qdrant, :disk, :bytes],
           [:engram, :prom_ex, :qdrant, :ram, :bytes],
           [:engram, :prom_ex, :qdrant, :pressure, :percent],
@@ -156,6 +166,28 @@ defmodule Engram.PromEx.QdrantCollectionTest do
              "quantized" => 59_000_000,
              "id_tracker" => 19_000_000
            }
+  end
+
+  # The 70% points alert divides by the breaker Qdrant actually applied, so
+  # the number lives in one place (QdrantLayout) and cannot drift from the
+  # alert (re-review N7). No breaker set: no series, so the alert is quiet.
+  test "publishes the applied max_points_count, and nothing when unset", %{bypass: bypass} do
+    with_breaker =
+      put_in(@info, ["config", "strict_mode_config"], %{
+        "enabled" => true,
+        "max_points_count" => 1_500_000
+      })
+
+    stub_info(bypass, with_breaker)
+    Bypass.stub(bypass, "GET", "/collections/engram_notes/memory", &json(&1, 404, %{}))
+
+    Plugin.execute_collection_metrics()
+    assert_receive {@breaker_event, %{max_points: 1_500_000}, %{}}
+
+    stub_info(bypass, put_in(@info, ["config", "strict_mode_config"], %{"enabled" => true}))
+    Plugin.execute_collection_metrics()
+    assert_receive {@collection_event, _, _}
+    refute_receive {@breaker_event, _, _}, 100
   end
 
   test "a yellow collection with a failing optimizer reads 0", %{bypass: bypass} do

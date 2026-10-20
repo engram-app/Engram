@@ -168,6 +168,50 @@ defmodule Engram.Workers.EmbedNoteBackpressureTest do
     assert UsageMeters.lifetime_embed_tokens(note.user_id) == charged
   end
 
+  # A tripped strict breaker (review H2) and a write still queued past its
+  # wait (review M2): neither may stamp the note, and neither may re-embed.
+  for {label, first_upsert, event} <- [
+        {"a tripped max_points_count breaker",
+         {400,
+          ~S|{"status":{"error":"Bad request: Max points count limit of 1500000 reached!"}}|},
+         :backpressure},
+        {"a wait_timeout (queued, not applied)",
+         {200, ~S|{"result":{"operation_id":9,"status":"wait_timeout"},"status":"ok"}|},
+         :wait_timeout}
+      ] do
+    @first_upsert first_upsert
+    @event event
+    test "#{label} snoozes unstamped, and the retry neither re-embeds nor re-charges",
+         %{bypass: bypass, note: note} do
+      {:ok, calls} = Agent.start_link(fn -> 0 end)
+      first = @first_upsert
+
+      upserts = fn ->
+        case Agent.get_and_update(calls, &{&1, &1 + 1}) do
+          0 -> first
+          _ -> {200, ~s({"result":{"status":"completed"}})}
+        end
+      end
+
+      fake_qdrant(bypass, upserts: upserts)
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :qdrant, @event]])
+      embeds_ok(1)
+
+      assert {:snooze, seconds} =
+               perform_job(EmbedNote, %{note_id: note.id, user_id: note.user_id})
+
+      assert seconds in 30..90
+      assert_received {[:engram, :qdrant, @event], ^ref, %{count: 1}, _meta}
+      charged = UsageMeters.lifetime_embed_tokens(note.user_id)
+      assert reloaded(note).embed_hash == nil
+      assert reloaded(note).embed_retry_after == nil
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id, user_id: note.user_id})
+      assert reloaded(note).embed_hash == note.content_hash
+      assert UsageMeters.lifetime_embed_tokens(note.user_id) == charged
+    end
+  end
+
   # 2026-10-19 prod: a commit that failed AFTER the embed (the chunk insert
   # overflowed the bind cap) re-embedded and re-charged the whole note on every
   # retry. Retention now spans the commit, so any post-embed failure is paid once.

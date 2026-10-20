@@ -118,6 +118,10 @@ defmodule Engram.Workers.RepathNoteIndex do
   defp maybe_fallback(_job, _note, _old_path_hmac, {:error, :qdrant_backpressure}),
     do: Qdrant.backpressure_snooze(:refused)
 
+  # Queued but not applied within the wait: same, no attempt burned.
+  defp maybe_fallback(_job, _note, _old_path_hmac, {:error, :qdrant_wait_timeout}),
+    do: Qdrant.wait_timeout_snooze()
+
   defp maybe_fallback(%Oban.Job{attempt: a, max_attempts: m} = _job, note, old_path_hmac, _err)
        when a >= m do
     _ = EmbedNote.insert_debounced(note.id, note.user_id, old_path_hmac: old_path_hmac)

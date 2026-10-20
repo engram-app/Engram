@@ -34,6 +34,18 @@ defmodule EngramWeb.EmbedStatusController do
                   n.embed_hash,
                   n.content_hash
                 )
+              ),
+            # Indexed keyword-only for an input too long for the embed
+            # model, until the note is edited (EmbedNote.parked_until_edited/0).
+            keyword_only_too_long:
+              count(
+                fragment(
+                  "CASE WHEN ? = ? AND ? = ? THEN 1 END",
+                  n.embed_hash,
+                  n.content_hash,
+                  n.embed_retry_after,
+                  ^Engram.Workers.EmbedNote.parked_until_edited()
+                )
               )
           }
         )

@@ -88,6 +88,7 @@ defmodule Engram.Workers.DeleteNoteIndex do
     # snooze here like on every other Qdrant writer.
     case Indexing.delete_note_index(note) do
       {:error, :qdrant_backpressure} -> Qdrant.backpressure_snooze(:refused)
+      {:error, :qdrant_wait_timeout} -> Qdrant.wait_timeout_snooze()
       other -> other
     end
   end

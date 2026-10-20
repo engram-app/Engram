@@ -38,6 +38,9 @@ defmodule Engram.Workers.QdrantWriteWorkersBackpressureTest do
           refused[key] == 507 ->
             {507, @quota_refusal}
 
+          refused[key] == :wait_timeout ->
+            {200, ~s({"result":{"operation_id":1,"status":"wait_timeout"},"status":"ok"})}
+
           Map.has_key?(refused, key) ->
             {400, @disk_refusal}
 
@@ -78,8 +81,21 @@ defmodule Engram.Workers.QdrantWriteWorkersBackpressureTest do
 
     refuse_route = fn method, path -> Agent.update(refuse, &Map.put(&1, {method, path}, 400)) end
     quota_refuse = fn method, path -> Agent.update(refuse, &Map.put(&1, {method, path}, 507)) end
+
+    wait_timeout = fn method, path ->
+      Agent.update(refuse, &Map.put(&1, {method, path}, :wait_timeout))
+    end
+
     ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :qdrant, :backpressure]])
-    %{note: note, user: user, refuse: refuse_route, quota_refuse: quota_refuse, ref: ref}
+
+    %{
+      note: note,
+      user: user,
+      refuse: refuse_route,
+      quota_refuse: quota_refuse,
+      wait_timeout: wait_timeout,
+      ref: ref
+    }
   end
 
   defp assert_backpressure_snooze(result, ref) do
@@ -125,5 +141,61 @@ defmodule Engram.Workers.QdrantWriteWorkersBackpressureTest do
       path_hmac: Base.encode64(ctx.note.path_hmac)
     })
     |> assert_backpressure_snooze(ctx.ref)
+  end
+
+  # A write still queued past its wait (Qdrant 200, status "wait_timeout")
+  # is not applied: every waited writer snoozes, burning no attempt, so
+  # Repath never reaches its final-attempt fallback, a paid re-embed
+  # (re-review N3).
+  describe "wait_timeout" do
+    defp assert_wait_snooze(result) do
+      assert {:snooze, seconds} = result
+      assert seconds in 30..90
+    end
+
+    test "RepathNoteIndex snoozes on its last attempt and never falls back to EmbedNote",
+         ctx do
+      ctx.wait_timeout.("POST", "/collections/engram_notes/points/payload")
+
+      perform_job(
+        RepathNoteIndex,
+        %{note_id: ctx.note.id, old_path_hmac: Base.encode64(<<7>>)},
+        attempt: 5,
+        max_attempts: 5
+      )
+      |> assert_wait_snooze()
+
+      # The fallback is an EmbedNote carrying the old path (the note's own
+      # write already enqueued a plain one in setup).
+      refute_enqueued(
+        worker: Engram.Workers.EmbedNote,
+        args: %{"old_path_hmac" => Base.encode64(<<7>>)}
+      )
+    end
+
+    test "RefreshKeywordVectors snoozes", ctx do
+      ctx.wait_timeout.("PUT", "/collections/engram_notes/points/vectors")
+
+      perform_job(RefreshKeywordVectors, %{note_id: ctx.note.id, user_id: ctx.user.id})
+      |> assert_wait_snooze()
+    end
+
+    test "DeleteNoteIndex snoozes", ctx do
+      ctx.wait_timeout.("POST", "/collections/engram_notes/points/delete")
+
+      Repo.update_all(
+        from(n in Note, where: n.id == ^ctx.note.id),
+        [set: [deleted_at: DateTime.utc_now()]],
+        skip_tenant_check: true
+      )
+
+      perform_job(DeleteNoteIndex, %{
+        note_id: ctx.note.id,
+        user_id: ctx.user.id,
+        vault_id: ctx.note.vault_id,
+        path_hmac: Base.encode64(ctx.note.path_hmac)
+      })
+      |> assert_wait_snooze()
+    end
   end
 end
