@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
 import { api } from "@/api/client";
 import { useMe } from "@/api/queries";
@@ -6,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n/locale-provider";
 import { heading } from "@/lib/ui-classes";
-import NotFoundPage from "@/not-found";
 import LoadingPane from "@/viewer/loading-pane";
 
 // Operator insights (Engram.Insights). Only an operator account sees it;
@@ -114,7 +114,7 @@ function Cell({ column, value, max }: { column: string; value: Json; max: number
 	return <Value value={value} />;
 }
 
-function OperatorInsightsPage() {
+function OperatorInsightsPage({ notFound }: { notFound: ReactNode }) {
 	const { t } = useT();
 	const me = useMe();
 	const [params] = useSearchParams();
@@ -137,7 +137,7 @@ function OperatorInsightsPage() {
 		return <LoadingPane />;
 	}
 	if (!isOperator) {
-		return <NotFoundPage />;
+		return notFound;
 	}
 
 	return (
