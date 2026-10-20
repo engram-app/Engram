@@ -45,6 +45,12 @@ defmodule Engram.Crypto.UserDekRotationTest do
       )
     end)
 
+    # resync_index_keys set_payloads every chunk's point, so a test that seeds
+    # chunk rows reaches this route even with no points in Qdrant.
+    Bypass.stub(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
+      Plug.Conn.send_resp(conn, 200, ~s({"result": {"status": "completed"}, "status": "ok"}))
+    end)
+
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture(dek_version: 1)
     {:ok, user: user}
   end
