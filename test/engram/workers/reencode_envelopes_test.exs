@@ -203,6 +203,40 @@ defmodule Engram.Workers.ReencodeEnvelopesTest do
       refute ReencodeEnvelopes.legacy_rows?(u.id)
     end
 
+    test "re-encodes chunk text and heading, still bound to the point id", %{user: u, vault: v} do
+      note = legacy_note!(u, v, "a.md", @big)
+      point_id = Ecto.UUID.generate()
+      enc = legacy(fn -> Crypto.encrypt_chunk_text(@big <> "chunk", "H", dek(u), point_id) end)
+      assert byte_size(enc.text_nonce) == 12
+
+      tenant!(u, fn ->
+        Repo.insert_all(
+          Engram.Notes.Chunk,
+          [
+            Map.merge(enc, %{
+              note_id: note.id,
+              user_id: u.id,
+              vault_id: v.id,
+              position: 0,
+              char_start: 0,
+              char_end: 1,
+              qdrant_point_id: point_id,
+              created_at: DateTime.utc_now() |> DateTime.truncate(:second)
+            })
+          ],
+          skip_tenant_check: true
+        )
+      end)
+
+      assert :ok = run(u)
+
+      c = reload(Engram.Notes.Chunk, qdrant_point_id: point_id)
+      assert byte_size(c.text_nonce) == 13
+      assert byte_size(c.heading_nonce) == 13
+      assert {:ok, {@big <> "chunk", "H"}} = Crypto.decrypt_chunk_text(c, dek(u), point_id)
+      refute ReencodeEnvelopes.legacy_rows?(u.id)
+    end
+
     # The crdt_state rewrite NULLs every head (trigger); rotation re-warms right
     # after its sweep (#1341), and so does this, instead of waiting for the
     # hourly WarmCrdtHeads.

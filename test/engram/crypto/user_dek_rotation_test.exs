@@ -450,6 +450,69 @@ defmodule Engram.Crypto.UserDekRotationTest do
     end
   end
 
+  # Task 11.1: chunk text is encrypted under the DEK and bound to the point id.
+  # Left out of the rotation, it decrypts until the old key is retired, then
+  # every search hit loses its text.
+  describe "rotate_user/1 - chunk text" do
+    test "chunk text re-encrypts under the new DEK, still bound to its point", %{user: user} do
+      vault = Engram.Fixtures.insert_vault!(user, "ChunkTextVault")
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "c.md", content: "c"})
+      {:ok, old_dek} = Crypto.get_dek(user)
+
+      rows =
+        for {text, pos} <- [{"first", 0}, {"second", 1}, {"third", 2}] do
+          point_id = Ecto.UUID.generate()
+
+          Map.merge(
+            %{
+              note_id: note.id,
+              user_id: user.id,
+              vault_id: vault.id,
+              position: pos,
+              char_start: 0,
+              char_end: 1,
+              qdrant_point_id: point_id,
+              created_at: DateTime.utc_now() |> DateTime.truncate(:second)
+            },
+            Crypto.encrypt_chunk_text(text, "H#{pos}", old_dek, point_id)
+          )
+        end
+
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.insert_all(Engram.Notes.Chunk, rows, skip_tenant_check: true)
+        end)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      {:ok, new_dek} = Crypto.get_dek(reloaded_user)
+      refute new_dek == old_dek
+
+      {:ok, stored} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(
+            from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id, order_by: c.position)
+          )
+        end)
+
+      assert [{"first", "H0"}, {"second", "H1"}, {"third", "H2"}] =
+               Enum.map(stored, fn c ->
+                 {:ok, pair} = Crypto.decrypt_chunk_text(c, new_dek, c.qdrant_point_id)
+                 pair
+               end)
+
+      assert Enum.all?(
+               stored,
+               &(Crypto.decrypt_chunk_text(&1, old_dek, &1.qdrant_point_id) == :error)
+             )
+    end
+  end
+
   describe "rotate_user/1 — vaults sweep" do
     test "every vault re-encrypts under the new DEK", %{user: user} do
       vault = Engram.Fixtures.insert_vault!(user, "Personal")

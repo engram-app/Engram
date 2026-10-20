@@ -97,7 +97,7 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   alias Engram.Crypto
   alias Engram.Crypto.{Envelope, RotationGate, TenantSweep}
   alias Engram.Logger.Metadata
-  alias Engram.Notes.{CrdtUpdateLog, Note, VaultIndexState, VaultIndexUpdateLog}
+  alias Engram.Notes.{Chunk, CrdtUpdateLog, Note, VaultIndexState, VaultIndexUpdateLog}
   alias Engram.Repo
   alias Engram.Workers.BackfillCrdtHead
 
@@ -155,6 +155,23 @@ defmodule Engram.Workers.ReencodeEnvelopes do
       ct: :update_ciphertext,
       nonce: :update_nonce,
       aad: {:vault_index_update_log, :update, :id}
+    },
+    # Task 11.1: bound to the point id, not the row id.
+    %{
+      label: :chunks_text,
+      schema: Chunk,
+      key: :id,
+      ct: :text_ciphertext,
+      nonce: :text_nonce,
+      aad: {:chunks, :text, :qdrant_point_id}
+    },
+    %{
+      label: :chunks_heading,
+      schema: Chunk,
+      key: :id,
+      ct: :heading_ciphertext,
+      nonce: :heading_nonce,
+      aad: {:chunks, :heading, :qdrant_point_id}
     }
   ]
 
