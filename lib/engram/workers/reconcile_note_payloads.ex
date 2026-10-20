@@ -291,7 +291,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
     {:ok, {_, _}} =
       Repo.with_tenant(note.user_id, fn ->
-        Repo.update_all(from(n in Note, where: ^guard), set: set)
+        Repo.update_all(from(n in Note, where: n.kind == "note", where: ^guard), set: set)
       end)
 
     :ok
