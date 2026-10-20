@@ -1,0 +1,157 @@
+defmodule Engram.UsageMetersBucketTest do
+  use Engram.DataCase, async: true
+
+  alias Engram.UsageMeters
+
+  @cap 6_000_000
+  @year 31_536_000
+  @t0 ~U[2027-01-01 00:00:00.000000Z]
+
+  defp at(seconds), do: DateTime.add(@t0, seconds, :second)
+
+  describe "bucket_take/4" do
+    test "a new user takes the whole bucket at once, then the next token is refused" do
+      user = insert(:user)
+      assert {:ok, 0} = UsageMeters.bucket_take(user.id, @cap, @cap, now: @t0)
+      assert {:error, :bucket_empty} = UsageMeters.bucket_take(user.id, 1, @cap, now: @t0)
+    end
+
+    test "a take larger than the capacity is refused without touching the row" do
+      user = insert(:user)
+      assert {:error, :bucket_empty} = UsageMeters.bucket_take(user.id, @cap + 1, @cap, now: @t0)
+      assert UsageMeters.bucket_available(user.id, @cap, now: @t0) == @cap
+    end
+
+    test "refills continuously: 30.4 days restores about 500k" do
+      user = insert(:user)
+      {:ok, 0} = UsageMeters.bucket_take(user.id, @cap, @cap, now: @t0)
+
+      available = UsageMeters.bucket_available(user.id, @cap, now: at(round(30.4 * 86_400)))
+      assert_in_delta available, 500_000, 5_000
+    end
+
+    test "half a day restores about 8.2k" do
+      user = insert(:user)
+      {:ok, 0} = UsageMeters.bucket_take(user.id, @cap, @cap, now: @t0)
+      assert_in_delta UsageMeters.bucket_available(user.id, @cap, now: at(43_200)), 8_219, 2
+    end
+
+    test "never refills above capacity" do
+      user = insert(:user)
+      {:ok, _} = UsageMeters.bucket_take(user.id, 10, @cap, now: @t0)
+      assert UsageMeters.bucket_available(user.id, @cap, now: at(5 * @year)) == @cap
+      assert {:ok, 0} = UsageMeters.bucket_take(user.id, @cap, @cap, now: at(5 * @year))
+    end
+
+    test "refill is per elapsed second, so a leap day counts like any other day" do
+      user = insert(:user)
+      feb28 = ~U[2028-02-28 00:00:00.000000Z]
+      mar1 = ~U[2028-03-01 00:00:00.000000Z]
+      {:ok, 0} = UsageMeters.bucket_take(user.id, @cap, @cap, now: feb28)
+
+      # 2028 is a leap year: Feb 28 -> Mar 1 is two days, not one.
+      two_days = 2 * 86_400 * @cap / @year
+      assert_in_delta UsageMeters.bucket_available(user.id, @cap, now: mar1), two_days, 1
+    end
+
+    test "a full year after emptying, the bucket is full again (leap year included)" do
+      user = insert(:user)
+      {:ok, 0} = UsageMeters.bucket_take(user.id, @cap, @cap, now: ~U[2028-01-01 00:00:00Z])
+
+      # 366 days > the 365-day refill period: full, clamped at capacity.
+      assert UsageMeters.bucket_available(user.id, @cap, now: ~U[2029-01-01 00:00:00Z]) == @cap
+    end
+
+    test "a clock that moved backward refills nothing and does not rewind the stamp" do
+      user = insert(:user)
+      {:ok, 0} = UsageMeters.bucket_take(user.id, @cap, @cap, now: at(1000))
+      assert {:error, :bucket_empty} = UsageMeters.bucket_take(user.id, 1, @cap, now: @t0)
+      assert UsageMeters.bucket_available(user.id, @cap, now: @t0) == 0
+      # Refill counts from the latest stamp, not the skewed earlier one.
+      assert_in_delta UsageMeters.bucket_available(user.id, @cap, now: at(1000 + 86_400)),
+                      86_400 * @cap / @year,
+                      1
+    end
+
+    test "small frequent takes do not lose the fractional refill" do
+      user = insert(:user)
+      {:ok, 0} = UsageMeters.bucket_take(user.id, @cap, @cap, now: @t0)
+
+      # ~1.9 tokens refill per 10 s. An integer bucket re-stamped on every take
+      # would floor each refill to 1, spend it, and sit at 0 forever.
+      for i <- 1..100, do: {:ok, _} = UsageMeters.bucket_take(user.id, 1, @cap, now: at(10 * i))
+
+      assert_in_delta UsageMeters.bucket_available(user.id, @cap, now: at(1000)),
+                      1000 * @cap / @year - 100,
+                      1
+    end
+
+    test "concurrent takes never spend the same tokens twice" do
+      user = insert(:user)
+
+      results =
+        1..20
+        |> Task.async_stream(
+          fn _ -> UsageMeters.bucket_take(user.id, 1_000_000, @cap, now: @t0) end,
+          max_concurrency: 10
+        )
+        |> Enum.map(fn {:ok, r} -> r end)
+
+      assert Enum.count(results, &match?({:ok, _}, &1)) == 6
+      assert Enum.count(results, &(&1 == {:error, :bucket_empty})) == 14
+      assert UsageMeters.bucket_available(user.id, @cap, now: @t0) == 0
+    end
+
+    test "every successful take still counts toward the lifetime meter" do
+      user = insert(:user)
+      {:ok, _} = UsageMeters.bucket_take(user.id, 1500, @cap, now: @t0)
+      {:error, :bucket_empty} = UsageMeters.bucket_take(user.id, @cap, @cap, now: @t0)
+      assert UsageMeters.lifetime_embed_tokens(user.id) == 1500
+    end
+
+    test "an existing user who spent the old lifetime allowance starts with a full bucket" do
+      user = insert(:user)
+      UsageMeters.add_embed_tokens(user.id, 19_000_000)
+      assert UsageMeters.bucket_available(user.id, @cap, now: @t0) == @cap
+      assert {:ok, 0} = UsageMeters.bucket_take(user.id, @cap, @cap, now: @t0)
+    end
+  end
+
+  describe "release_embed_tokens/2" do
+    test "gives a failed embed's tokens back to the bucket" do
+      user = insert(:user)
+      {:ok, 0} = UsageMeters.bucket_take(user.id, @cap, @cap, now: @t0)
+      :ok = UsageMeters.release_embed_tokens(user.id, 2_000)
+      assert UsageMeters.bucket_available(user.id, @cap, now: @t0) == 2_000
+      assert UsageMeters.lifetime_embed_tokens(user.id) == @cap - 2_000
+    end
+  end
+
+  describe "reset_embed_bucket/1" do
+    test "fills the bucket back up" do
+      user = insert(:user)
+      {:ok, 0} = UsageMeters.bucket_take(user.id, @cap, @cap, now: @t0)
+      :ok = UsageMeters.reset_embed_bucket(user.id)
+      assert UsageMeters.bucket_available(user.id, @cap, now: @t0) == @cap
+    end
+
+    test "is a no-op for a user with no meter row" do
+      user = insert(:user)
+      assert :ok = UsageMeters.reset_embed_bucket(user.id)
+    end
+  end
+
+  describe "bucket_full_at/3" do
+    test "nil when already full" do
+      assert UsageMeters.bucket_full_at(@cap, @cap, @t0) == nil
+    end
+
+    test "an empty bucket is full one refill period later" do
+      assert UsageMeters.bucket_full_at(0, @cap, @t0) == at(@year)
+    end
+
+    test "half full is half a period away" do
+      assert UsageMeters.bucket_full_at(div(@cap, 2), @cap, @t0) == at(div(@year, 2))
+    end
+  end
+end
