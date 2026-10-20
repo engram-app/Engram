@@ -45,4 +45,22 @@ defmodule Engram.SearchSnippetTest do
     assert String.valid?(snippet)
     assert snippet =~ "zebraß"
   end
+
+  # Review M3: a note floored into one point per MiB could fill the top-k
+  # with empty-snippet hits. Only its best floor point stays.
+  test "a note's floor points collapse to its best one, in rank order" do
+    hits = [
+      %{vault_id: "v", source_path: "Log.md", text: "", score: 0.9},
+      %{vault_id: "v", source_path: "A.md", text: "alpha", score: 0.8},
+      %{vault_id: "v", source_path: "Log.md", text: "", score: 0.7},
+      %{vault_id: "v", source_path: "Log.md", text: "", score: 0.6},
+      %{vault_id: "v", source_path: "A.md", text: "beta", score: 0.5}
+    ]
+
+    assert Search.collapse_floor_hits(hits) == [
+             %{vault_id: "v", source_path: "Log.md", text: "", score: 0.9},
+             %{vault_id: "v", source_path: "A.md", text: "alpha", score: 0.8},
+             %{vault_id: "v", source_path: "A.md", text: "beta", score: 0.5}
+           ]
+  end
 end

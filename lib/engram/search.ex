@@ -264,9 +264,29 @@ defmodule Engram.Search do
   end
 
   defp window_texts({:ok, results}, query) when is_list(results),
-    do: {:ok, Enum.map(results, &window_text(&1, query))}
+    do: {:ok, results |> collapse_floor_hits() |> Enum.map(&window_text(&1, query))}
 
   defp window_texts(other, _query), do: other
+
+  @doc """
+  Keeps only the first (best ranked) floor hit of each note. A floor point
+  has no display text, and a large floored note holds one per MiB, so it
+  could fill the results with empty snippets (review M3). Other hits, and
+  their order, are untouched.
+  """
+  def collapse_floor_hits(results) do
+    {kept, _seen} =
+      Enum.flat_map_reduce(results, MapSet.new(), fn
+        %{text: ""} = hit, seen ->
+          key = {Map.get(hit, :vault_id), Map.get(hit, :source_path)}
+          if MapSet.member?(seen, key), do: {[], seen}, else: {[hit], MapSet.put(seen, key)}
+
+        hit, seen ->
+          {[hit], seen}
+      end)
+
+    kept
+  end
 
   defp window_text(%{text: text} = result, query) when is_binary(text),
     do: %{result | text: snippet(text, query)}

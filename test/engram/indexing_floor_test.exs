@@ -328,20 +328,41 @@ defmodule Engram.IndexingFloorTest do
   end
 
   describe "BM25 length cap" do
-    test "cap_doc_len scores a long document as if it were avgdl long" do
+    # Review M3: capped at 3 x avgdl, not avgdl: a long floor or merged
+    # document keeps a length penalty, so tf saturation alone cannot let it
+    # beat a short exact chunk.
+    test "cap_doc_len scores a long document as if it were 3 x avgdl long" do
       key = :crypto.strong_rand_bytes(32)
       long = Enum.map_join(1..400, " ", &"word#{&1}")
+      at_cap = Enum.map_join(1..300, " ", &"term#{&1}")
 
       [{capped, _}] = QdrantSparse.encode_documents([long], key, 100.0, nil, cap_doc_len: true)
       [{plain, n}] = QdrantSparse.encode_documents([long], key, 100.0, nil)
-      assert n > 100
+      [{ref, 300}] = QdrantSparse.encode_documents([at_cap], key, 100.0, nil)
+      assert n > 300
 
       [w | _] = QdrantSparse.unpack(capped).values
       [p | _] = QdrantSparse.unpack(plain).values
+      [r | _] = QdrantSparse.unpack(ref).values
 
-      # tf = 1 at norm = 1: (k1 + 1) / (1 + k1) = 1.0 exactly.
-      assert_in_delta w, 1.0, 1.0e-9
+      # tf = 1 in both: the same weight as a plain 300-token document.
+      assert_in_delta w, r, 1.0e-9
       assert p < w
+    end
+
+    test "a short exact chunk outranks a 1 MB floor point holding the term 5 times" do
+      key = :crypto.strong_rand_bytes(32)
+      filler = Enum.map_join(1..40_000, " ", &"filler#{rem(&1, 5_000)} text")
+      floor = Enum.map_join(1..5, " ", fn _ -> filler <> " zymurgy" end)
+      assert byte_size(floor) > 1_000_000
+
+      dim = QdrantSparse.dim(key, "zymurgy")
+      weight = fn vector -> vector |> QdrantSparse.unpack() |> weight_of(dim) end
+
+      [{short, _}] = QdrantSparse.encode_documents(["zymurgy notes"], key, 50.0, nil)
+      [{long, _}] = QdrantSparse.encode_documents([floor], key, 50.0, nil, cap_doc_len: true)
+
+      assert weight.(short) > weight.(long)
     end
 
     test "cap_doc_len leaves a document shorter than avgdl unchanged" do
@@ -425,22 +446,27 @@ defmodule Engram.IndexingFloorTest do
       assert out.text == ""
     end
 
-    test "the floor note outranks an unrelated full chunk", %{
+    # Review M3: the length cap keeps a penalty, so a short chunk holding
+    # the term exactly outranks a floor point holding it once among more.
+    test "a short exact chunk outranks the floor note on a shared term", %{
       user: user,
       vault: vault,
       collection: col
     } do
-      other = floor_note(user, vault, "Other.md", "# Other\n\nFermentation of cabbage.")
+      other = floor_note(user, vault, "Other.md", "# Other\n\nZymurgy explained.")
       {:ok, _} = Indexing.index_note(other, vault, user)
 
       note = floor_note(user, vault)
       {:ok, 1, 0, false} = Indexing.index_note_with_usage(note, vault, user, index_tier: "floor")
 
-      assert [first, second | _] = await_hits(col, user, vault, "zymurgy fermentation", 2)
-      assert first.qdrant_id == point_id(note)
-      assert second.score < first.score
+      assert [first, second | _] = await_hits(col, user, vault, "zymurgy", 2)
+      assert first.qdrant_id == point_id(other)
+      assert second.qdrant_id == point_id(note)
     end
   end
+
+  defp weight_of(%{indices: indices, values: values}, dim),
+    do: indices |> Enum.zip(values) |> Map.new() |> Map.fetch!(dim)
 
   defp off_hour_tick, do: DateTime.new!(Date.utc_today(), ~T[12:02:00])
 end

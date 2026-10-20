@@ -60,12 +60,13 @@ defmodule Engram.KeywordIndex.QdrantSparse do
   # and avgdl <= 0 would silently zero every weight. Both raised before the
   # encoder moved to Rust, and still do.
   #
-  # `cap_doc_len: true` normalizes each document as if it were at most
-  # `avgdl` long (BM25 with `min(doc_len, avgdl)`). Only the floor index uses
-  # it: a whole note in one vector would otherwise be buried by length
-  # normalization under every short chunk. A document longer than `avgdl` is
-  # encoded a second time with `avgdl = doc_len`, which makes the norm exactly
-  # 1; the NIF has no length knob, and that second pass is one note's text.
+  # `cap_doc_len: true` normalizes each document as if it were at most 3 x
+  # `avgdl` long (BM25 with `min(doc_len, 3 * avgdl)`). Floor and merged
+  # points use it: a whole note in one vector would otherwise be buried by
+  # length normalization under every short chunk, and with no penalty at all
+  # it would outrank them. A longer document is encoded a second time with
+  # `avgdl = doc_len / 3`; the NIF has no length knob, and that second pass
+  # is one point's text.
   @impl Engram.KeywordIndex
   def encode_documents(texts, filter_key, avgdl, language, opts \\ [])
       when byte_size(filter_key) == 32 and is_number(avgdl) and avgdl > 0 do
@@ -111,10 +112,21 @@ defmodule Engram.KeywordIndex.QdrantSparse do
     )
   end
 
+  # A capped document is scored as if it were at most `@cap_len_avgdls` x
+  # avgdl long (review M3): capped at avgdl it had no length penalty at all,
+  # so a 1 MB floor point beat a short exact chunk on tf saturation alone.
+  # Re-encoding with avgdl = doc_len / 3 makes the length ratio exactly 3.
+  @cap_len_avgdls 3
+
   defp cap_doc_len(text, {_vector, doc_len} = encoded, filter_key, avgdl, lang) do
-    if doc_len > avgdl do
+    if doc_len > @cap_len_avgdls * avgdl do
       [{indices, values, ^doc_len}] =
-        Engram.Native.encode_documents([IO.iodata_to_binary(text)], filter_key, doc_len / 1, lang)
+        Engram.Native.encode_documents(
+          [IO.iodata_to_binary(text)],
+          filter_key,
+          doc_len / @cap_len_avgdls,
+          lang
+        )
 
       {%{indices: indices, values: values}, doc_len}
     else
