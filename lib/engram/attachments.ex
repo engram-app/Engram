@@ -125,14 +125,16 @@ defmodule Engram.Attachments do
             %Attachment{id: id} when id != att_id0 ->
               reprepare.(id)
 
+            %Attachment{} ->
+              {:ok, att_id0, attrs0}
+
             # The row read before the lock was deleted (or moved) since: its
             # id stays taken by the tombstone, so a fresh row needs a fresh
             # id (as `Uploads` does for a claimed id).
-            nil when not is_nil(existing0) ->
-              reprepare.(Ecto.UUID.generate())
-
-            _ ->
-              {:ok, att_id0, attrs0}
+            nil ->
+              if existing0,
+                do: reprepare.(Ecto.UUID.generate()),
+                else: {:ok, att_id0, attrs0}
           end)
         end)
         |> tap(fn
