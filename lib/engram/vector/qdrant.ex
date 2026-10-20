@@ -956,6 +956,15 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
+  The Oban answer for a waited write that came back `:qdrant_wait_timeout`
+  (queued, not applied): snooze without burning an attempt, so no worker
+  reaches a final-attempt fallback (Repath's is a paid re-embed). Every
+  write is idempotent, so the retry is safe. The event was already emitted
+  by the write.
+  """
+  def wait_timeout_snooze, do: {:snooze, 30 + :rand.uniform(60)}
+
+  @doc """
   True when disk or heap is within `QDRANT_PREFLIGHT_MARGIN_POINTS` (default
   5) of its strict-mode limit, i.e. about to be refused. Unknown is never over.
   """

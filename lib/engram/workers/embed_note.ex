@@ -605,7 +605,7 @@ defmodule Engram.Workers.EmbedNote do
           # refusal: snooze without burning an attempt; the retry reuses the
           # retained vectors and the upsert is idempotent.
           {:error, :qdrant_wait_timeout} ->
-            {:snooze, 30 + :rand.uniform(60)}
+            Qdrant.wait_timeout_snooze()
 
           # Input over the model's context window (H7): no re-send can fix
           # it. Index the note keyword-only now (zero Voyage spend) and park

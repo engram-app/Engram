@@ -77,6 +77,11 @@ defmodule Engram.Workers.RotateUserDek do
 
         {:snooze, 60}
 
+      # A page queued but not applied within its wait: the rotation resumes
+      # idempotently (decrypt-as-discriminator), so snooze, no attempt.
+      {:error, {:qdrant_set_payload_failed, :qdrant_wait_timeout}} ->
+        Engram.Vector.Qdrant.wait_timeout_snooze()
+
       {:error, reason} ->
         {:error, reason}
     end
