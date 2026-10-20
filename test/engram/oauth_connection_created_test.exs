@@ -1,19 +1,26 @@
 defmodule Engram.OAuthConnectionCreatedTest do
   @moduledoc """
-  A code exchange is the moment a connection exists. It tells the user's open
-  web tabs (`connection_created` on `user:{id}`) and, for an MCP client, queues
-  one "you're connected" email per connection. The consent tab hands straight
-  back to the client, so this is how the user reaches their vault.
+  A code exchange queues `Engram.Workers.ConnectionCreated` (notice + email)
+  and does nothing else on its own path: the exchange has already consumed
+  the code and minted the tokens, so a failing side effect must never turn
+  into a 500. A client retrying a 500 replays the consumed code, and a replay
+  REVOKES the family it just minted. Global app env, so not async.
   """
-  use Engram.DataCase, async: true
+  use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
   import Engram.OAuthHelpers, only: [code_from_redirect: 1, pkce_pair: 0]
+  import ExUnit.CaptureLog
 
   alias Engram.OAuth
-  alias Engram.Workers.ConnectedEmail
+  alias Engram.OAuth.RefreshToken
+  alias Engram.Workers.ConnectionCreated
 
   @redirect "https://claude.ai/api/mcp/auth_callback"
+
+  defmodule RaisingAnnouncer do
+    def enqueue(_user_id, _client_id, _connection_id), do: raise("announce exploded")
+  end
 
   defp exchange_params(user, client) do
     {verifier, challenge} = pkce_pair()
@@ -50,59 +57,62 @@ defmodule Engram.OAuthConnectionCreatedTest do
     %{user: user, client: client}
   end
 
-  test "an MCP code exchange broadcasts connection_created and queues one email", %{
+  test "an exchange queues one announce job and broadcasts nothing itself", %{
     user: user,
     client: client
   } do
     assert {:ok, _} = OAuth.exchange_authorization_code(exchange_params(user, client))
 
-    assert_receive %Phoenix.Socket.Broadcast{
-      topic: topic,
-      event: "connection_created",
-      payload: %{client_name: "Claude", kind: "mcp"}
-    }
-
-    assert topic == "user:#{user.id}"
-    assert [%Oban.Job{args: args}] = all_enqueued(worker: ConnectedEmail)
+    assert [%Oban.Job{args: args}] = all_enqueued(worker: ConnectionCreated)
     assert args["user_id"] == user.id
-    assert args["client_name"] == "Claude"
+    assert is_binary(args["client_id"])
     assert is_binary(args["connection_id"])
+    refute_receive %Phoenix.Socket.Broadcast{event: "connection_created"}, 50
   end
 
-  test "one email per connection: a retried enqueue never doubles it", %{
+  test "one job per user and client: a re-authorization queues nothing new", %{
     user: user,
     client: client
   } do
     assert {:ok, _} = OAuth.exchange_authorization_code(exchange_params(user, client))
-    assert [%Oban.Job{args: args}] = all_enqueued(worker: ConnectedEmail)
-
-    ConnectedEmail.enqueue(user.id, args["connection_id"], "Claude")
-    assert [_one] = all_enqueued(worker: ConnectedEmail)
-
-    # A second connection is a second email.
     assert {:ok, _} = OAuth.exchange_authorization_code(exchange_params(user, client))
-    assert [_, _] = all_enqueued(worker: ConnectedEmail)
+    assert [_one] = all_enqueued(worker: ConnectionCreated)
+
+    {:ok, other} =
+      OAuth.register_client(%{"redirect_uris" => [@redirect], "client_name" => "Cursor"})
+
+    assert {:ok, _} = OAuth.exchange_authorization_code(exchange_params(user, other))
+    assert [_, _] = all_enqueued(worker: ConnectionCreated)
   end
 
-  test "an Obsidian client is announced to the tabs but gets no email", %{user: user} do
-    client =
-      insert(:oauth_client, kind: "obsidian", client_name: "Obsidian", redirect_uris: [@redirect])
-
-    assert {:ok, _} = OAuth.exchange_authorization_code(exchange_params(user, client))
-
-    assert_receive %Phoenix.Socket.Broadcast{
-      event: "connection_created",
-      payload: %{kind: "obsidian"}
-    }
-
-    assert [] = all_enqueued(worker: ConnectedEmail)
-  end
-
-  test "a refused exchange announces nothing", %{user: user, client: client} do
+  test "a refused exchange queues nothing", %{user: user, client: client} do
     params = %{exchange_params(user, client) | "code_verifier" => "wrong"}
     assert {:error, {:invalid_grant, _}} = OAuth.exchange_authorization_code(params)
+    assert [] = all_enqueued(worker: ConnectionCreated)
+  end
 
-    refute_receive %Phoenix.Socket.Broadcast{event: "connection_created"}, 50
-    assert [] = all_enqueued(worker: ConnectedEmail)
+  test "a raising announce still returns the token and revokes nothing", %{
+    user: user,
+    client: client
+  } do
+    prev = Application.get_env(:engram, :connection_announcer)
+    Application.put_env(:engram, :connection_announcer, RaisingAnnouncer)
+
+    on_exit(fn ->
+      if prev,
+        do: Application.put_env(:engram, :connection_announcer, prev),
+        else: Application.delete_env(:engram, :connection_announcer)
+    end)
+
+    log =
+      capture_log(fn ->
+        assert {:ok, %{refresh_token: _}} =
+                 OAuth.exchange_authorization_code(exchange_params(user, client))
+      end)
+
+    assert log =~ "oauth_connection_announce_failed"
+
+    assert [%RefreshToken{revoked_at: nil}] =
+             Repo.all(from(t in RefreshToken, where: t.user_id == ^user.id))
   end
 end

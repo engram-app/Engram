@@ -664,28 +664,52 @@ defmodule Engram.OAuth do
   end
 
   # The exchange is when a connection exists: the consent tab hands straight
-  # back to the client, so this is how the user hears about it. Open web tabs
-  # get `connection_created` on `user:{id}`; an MCP client also gets one
-  # "you're connected" email. The code id is the token family id, so it names
-  # this connection and keeps the email to one. Runs after the refresh token
-  # committed (no surrounding transaction), so nothing announces a rollback.
+  # back to the client, so this is how the user hears about it. Everything it
+  # announces runs in `Engram.Workers.ConnectionCreated`; this only queues it.
+  # The code is consumed and the tokens minted by now, so nothing here may
+  # fail the exchange: a 500 makes the client retry the consumed code, and
+  # that replay revokes the family just minted. A failure is logged and the
+  # token is still returned. The code id is the token family id.
   defp announce_connection(user_id, code_row) do
-    case Repo.get(Client, code_row.client_id) do
-      nil ->
-        :ok
+    announcer().enqueue(user_id, code_row.client_id, code_row.id)
+    :ok
+  catch
+    kind, reason ->
+      Logger.error(
+        "oauth_connection_announce_failed",
+        Metadata.with_category(:error, :auth,
+          kind: kind,
+          reason: Metadata.safe_reason(reason)
+        )
+      )
 
-      client ->
-        _ =
-          EngramWeb.Endpoint.broadcast("user:#{user_id}", "connection_created", %{
-            client_name: client.client_name,
-            kind: client.kind
-          })
+      :ok
+  end
 
-        if client.kind == "mcp",
-          do: Engram.Workers.ConnectedEmail.enqueue(user_id, code_row.id, client.client_name)
+  # Test seam: a raising announcer proves the exchange survives one.
+  defp announcer,
+    do: Application.get_env(:engram, :connection_announcer, Engram.Workers.ConnectionCreated)
 
-        :ok
-    end
+  @prior_connection_days 30
+
+  @doc """
+  Whether `user_id` has, or had in the last #{@prior_connection_days} days, a
+  connection of `client_id` other than `family_id`: some refresh token of
+  another family that was not revoked and had not expired before the cutoff.
+  Revoked families are reaped after 7 days (`cleanup_expired/0`), so for them
+  the look-back is a week. Decides whether a new connection is announced.
+  """
+  @spec prior_connection?(Ecto.UUID.t(), Ecto.UUID.t(), Ecto.UUID.t()) :: boolean()
+  def prior_connection?(user_id, client_id, family_id) do
+    cutoff = DateTime.add(DateTime.utc_now(:second), -@prior_connection_days, :day)
+
+    from(rt in RefreshToken,
+      where: rt.user_id == ^user_id and rt.client_id == ^client_id,
+      where: rt.family_id != ^family_id,
+      where: is_nil(rt.revoked_at) or rt.revoked_at > ^cutoff,
+      where: rt.expires_at > ^cutoff
+    )
+    |> Repo.exists?()
   end
 
   # How long after a refresh token is consumed a replay of it may still
