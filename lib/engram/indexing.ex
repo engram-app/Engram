@@ -927,10 +927,12 @@ defmodule Engram.Indexing do
     )
   end
 
-  # Rows per chunk `insert_all`. A row binds 10 parameters (chunk_row/5) against
-  # the protocol's 65535 cap, which leaves room for 6553; 3000 is a deliberate
-  # half-margin (as Links' @insert_chunk) so a new column cannot silently
-  # re-arm the overflow. Prod hit it at 73040 params (7,304 chunks, one note).
+  # Rows per chunk `insert_all`. A row binds 15 parameters (chunk_row/5 plus
+  # the four chunk-text columns) against the protocol's 65535 cap, which
+  # leaves room for 4369; 3000 keeps a margin (as Links' @insert_chunk) so a
+  # new column cannot silently re-arm the overflow. Prod hit it at 73040
+  # params (7,304 chunks, one note). The text columns add bytes, not
+  # parameters: a batch carries at most the note's own text.
   @insert_batch 3000
 
   @doc """
@@ -2549,14 +2551,14 @@ defmodule Engram.Indexing do
       )
 
     with {:ok, reversed, _spent} <- prepared,
-         {:ok, _dek} <- if(v5_format?, do: Crypto.get_dek(user), else: {:ok, nil}) do
+         {:ok, dek} <- if(v5_format?, do: Crypto.get_dek(user), else: {:ok, nil}) do
       built = Enum.reverse(reversed)
       qdrant_points = for(%{point: p} <- built, p != nil, do: p)
 
       {:ok,
        %{
          note: note,
-         chunk_rows: Enum.map(built, & &1.row),
+         chunk_rows: chunk_rows(plan.entries, built, dek, v5? or chunk_text_write?()),
          qdrant_points: qdrant_points,
          point_kinds: for(%{kind: k, dense?: d} <- built, do: {k, d}),
          # Straight from the plan, not re-derived from `built`. Two independent
@@ -2589,6 +2591,30 @@ defmodule Engram.Indexing do
         flat
     end
   end
+
+  # Task 11.2: each row carries its chunk's display text and heading,
+  # encrypted and bound to the point id, so search can read them from
+  # Postgres. They land in the same INSERT as the row, so a row never exists
+  # without its text and text never outlives its row (it is deleted with it).
+  # A reused row is encrypted afresh from the chunk in hand rather than copied
+  # from the old row: the rows are rewritten wholesale anyway, and the seal is
+  # cheap next to the embed it replaces.
+  defp chunk_rows(_entries, built, _dek, false), do: Enum.map(built, & &1.row)
+
+  defp chunk_rows(entries, built, dek, true) do
+    Enum.zip_with(entries, built, fn entry, %{row: row} ->
+      chunk = entry_chunk(entry)
+
+      Map.merge(
+        row,
+        Crypto.encrypt_chunk_text(chunk.text, chunk.heading_path, dek, row.qdrant_point_id)
+      )
+    end)
+  end
+
+  # Off until the v5 rollout turns it on; the v5 layout writes text
+  # regardless, since its payload has none.
+  defp chunk_text_write?, do: Engram.ServiceConfig.get(:chunk_text_write, false)
 
   # A reused chunk costs nothing but a row: no embed, no tokenizer pass, no
   # encryption. Its `token_count` rides along from the row it replaces rather

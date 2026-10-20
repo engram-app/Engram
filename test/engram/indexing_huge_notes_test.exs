@@ -156,6 +156,27 @@ defmodule Engram.IndexingHugeNotesTest do
     test("#{size} MB #{shape} headings=#{headings} #{tier}", ctx, do: run_case(ctx))
   end
 
+  # Task 11.2: the chunk text columns at the cap, on the shape with the most
+  # rows (self-host: one row a chunk, thousands of them). Every row carries
+  # 15 bind parameters and its ciphertext, and the insert still fits the
+  # 65,535-parameter cap and the per-job memory bound.
+  @tag :huge
+  @tag size: @cap_mb, shape: :tiny_sections, headings: true, tier: :selfhost
+  @tag timeout: (@seconds_per_mb * @cap_mb + 60) * 1_000
+  test "#{@cap_mb} MB tiny_sections selfhost with chunk text in postgres", ctx do
+    ServiceConfig.put_override(:chunk_text_write, true)
+    run_case(ctx)
+
+    [row | _] =
+      rows =
+      Repo.all(from(c in Chunk, where: c.user_id == ^ctx.user.id), skip_tenant_check: true)
+
+    assert length(rows) > 4_369, "fixture must overflow one statement (got #{length(rows)})"
+    assert Enum.all?(rows, &is_binary(&1.text_ciphertext))
+    {:ok, dek} = Crypto.get_dek(ctx.user)
+    assert {:ok, {_text, _heading}} = Crypto.decrypt_chunk_text(row, dek, row.qdrant_point_id)
+  end
+
   # Real Qdrant (the unit-tests CI job runs `:qdrant_integration`): a word in
   # the note's last section, searched for, comes back with a snippet that
   # shows it, merged (paid) and floored (CJK, several floor points).
