@@ -410,6 +410,26 @@ defmodule Engram.MCP.Tools do
             "description" =>
               "Optional frontmatter type to filter by (e.g. 'Playbook', 'Reference'); case-insensitive"
           },
+          "fields" => %{
+            "type" => "array",
+            "description" =>
+              "Optional filters on any user-added frontmatter key (all must match). " <>
+                "op: eq, in (value is a list), gt/gte/lt/lte (numbers or ISO dates), " <>
+                "after/before (ISO dates). A key no note has is an error.",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "key" => %{"type" => "string"},
+                "op" => %{
+                  "type" => "string",
+                  "enum" => ~w(eq in gt gte lt lte after before),
+                  "default" => "eq"
+                },
+                "value" => %{}
+              },
+              "required" => ["key", "value"]
+            }
+          },
           "created_after" => %{
             "type" => "string",
             "description" =>

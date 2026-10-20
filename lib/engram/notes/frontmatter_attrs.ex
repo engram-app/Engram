@@ -4,9 +4,11 @@ defmodule Engram.Notes.FrontmatterAttrs do
   that is not first-class, not an alias of one and not in the dense prefix.
   Strings and booleans become exact `{k, v}` HMAC pairs, numbers `{k, n}`,
   ISO dates and datetimes `{k, t}` (unix seconds; a bare date is midnight
-  UTC). Keys and values are HMAC'd under the per-user filter key
-  (`FilterId.key_hmac/2`, `FilterId.value_hmac/2`); the Qdrant payload
-  formats them with `FilterId.from_hmac/1`, Postgres keeps them whole.
+  UTC); numbers and dates are plaintext so they range. Keys are HMAC'd under
+  the per-user filter key (`FilterId.key_hmac/2`) and mapped to a per-user
+  `key_id` by `Engram.Notes.FrontmatterKeys` from `names` (key HMAC to the
+  key as written, held in memory only); string values are HMAC'd too
+  (`FilterId.value_hmac/2`).
 
   Nested maps are skipped entirely (no `.` flattening); a list gives one
   entry per scalar element, at most 64 of them; a string over 256 bytes
@@ -29,7 +31,8 @@ defmodule Engram.Notes.FrontmatterAttrs do
   @type t :: %{
           attrs: [%{k: binary(), v: binary()}],
           nums: [%{k: binary(), n: float()}],
-          dates: [%{k: binary(), t: integer()}]
+          dates: [%{k: binary(), t: integer()}],
+          names: %{binary() => String.t()}
         }
 
   @spec extract(map(), binary()) :: t()
@@ -42,11 +45,18 @@ defmodule Engram.Notes.FrontmatterAttrs do
 
     k = Map.new(entries, fn {key, _kind, _v} -> {key, FilterId.key_hmac(filter_key, key)} end)
 
-    %{
-      attrs: take(entries, :attr, &%{k: k[&1], v: FilterId.value_hmac(filter_key, &2)}),
-      nums: take(entries, :num, &%{k: k[&1], n: &2}),
-      dates: take(entries, :date, &%{k: k[&1], t: &2})
-    }
+    attrs = take(entries, :attr, &%{k: k[&1], v: FilterId.value_hmac(filter_key, &2)})
+    nums = take(entries, :num, &%{k: k[&1], n: &2})
+    dates = take(entries, :date, &%{k: k[&1], t: &2})
+    used = MapSet.new(attrs ++ nums ++ dates, & &1.k)
+
+    # First spelling wins when two keys fold together (`Mood`, `mood`).
+    names =
+      Enum.reduce(entries, %{}, fn {key, _kind, _v}, acc ->
+        if MapSet.member?(used, k[key]), do: Map.put_new(acc, k[key], key), else: acc
+      end)
+
+    %{attrs: attrs, nums: nums, dates: dates, names: names}
   end
 
   defp take(entries, kind, build) do

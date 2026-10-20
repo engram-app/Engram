@@ -1658,35 +1658,25 @@ defmodule Engram.Vector.Qdrant do
   end
 
   @doc """
-  Nested long-tail filter: the note has an `fm_attrs` entry with key id `k_id`
-  and value id `v_id` in the SAME element (not one entry's key and another's
-  value).
+  Nested filter on a user-added frontmatter key: the note has an `fm_attrs`
+  (`fa`) entry whose key id is `key_id` AND whose value matches, in the SAME
+  element (so `a: 1, b: 5` never matches `a = 5`). `value` is
+  `{:h, id | [ids]}` (exact: a value filter id, or any of several) or
+  `{:n | :d, range}` (`gte`/`gt`/`lte`/`lt`; numbers, or dates in unix
+  seconds).
   """
-  @spec attr_filter(String.t(), String.t()) :: map()
-  def attr_filter(k_id, v_id) do
+  @spec attr_filter(integer(), {:h, String.t() | [String.t()]} | {:n | :d, keyword() | map()}) ::
+          map()
+  def attr_filter(key_id, {:h, ids}), do: nested_attr(key_id, %{key: "h", match: match(ids)})
+
+  def attr_filter(key_id, {field, range}) when field in [:n, :d],
+    do: nested_attr(key_id, %{key: Atom.to_string(field), range: Map.new(range)})
+
+  defp nested_attr(key_id, condition) do
     %{
       nested: %{
         key: PayloadKeys.short(:fm_attrs),
-        filter: %{must: [%{key: "k", match: %{value: k_id}}, %{key: "v", match: %{value: v_id}}]}
-      }
-    }
-  end
-
-  @doc "Nested range over `fm_nums` (`n`) for key id `k_id`."
-  @spec num_range(String.t(), keyword()) :: map()
-  def num_range(k_id, range), do: nested_range(:fm_nums, "n", k_id, range)
-
-  @doc "Nested range over `fm_dates` (`t`, unix seconds) for key id `k_id`."
-  @spec date_range(String.t(), keyword()) :: map()
-  def date_range(k_id, range), do: nested_range(:fm_dates, "t", k_id, range)
-
-  defp nested_range(list, field, k_id, range) do
-    %{
-      nested: %{
-        key: PayloadKeys.short(list),
-        filter: %{
-          must: [%{key: "k", match: %{value: k_id}}, %{key: field, range: Map.new(range)}]
-        }
+        filter: %{must: [%{key: "k", match: %{value: key_id}}, condition]}
       }
     }
   end
@@ -1776,6 +1766,9 @@ defmodule Engram.Vector.Qdrant do
     must
     |> add_range_clause(:fm_timestamp, search_opts, :fm_timestamp_gte, :fm_timestamp_lte)
     |> add_range_clause(:fm_created, search_opts, :fm_created_gte, :fm_created_lte)
+    # User-added frontmatter key filters, already resolved to nested
+    # conditions (`Engram.Search.FieldFilters`).
+    |> Kernel.++(Keyword.get(search_opts, :attr_filters, []))
     |> then(&%{must: &1})
   end
 

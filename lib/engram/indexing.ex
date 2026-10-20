@@ -17,6 +17,7 @@ defmodule Engram.Indexing do
   alias Engram.Notes.Chunk
   alias Engram.Notes.FlatFields
   alias Engram.Notes.Frontmatter
+  alias Engram.Notes.FrontmatterKeys
   alias Engram.Notes.Note
   alias Engram.Notes.NoteAttr
   alias Engram.Notes.OkfFields
@@ -2487,15 +2488,21 @@ defmodule Engram.Indexing do
         note_language(Enum.map(plan.entries, &entry_chunk/1))
       end)
 
-    # ONE extraction of the v5 flat frontmatter fields, two sinks: the
-    # `notes` columns and `note_attrs` rows (the source of truth, written in
-    # the chunk-row transaction by `stamp_flat_fields/1`) and, once
-    # `:write_v5_layout` is on, the v5 Qdrant payload.
-    # Both behind flags that are off, so with them off a pass does exactly
-    # what main does: no extraction, no Postgres writes, the v3 payload.
+    # ONE extraction of the v5 frontmatter filter fields, two sinks: the
+    # `note_attrs` rows (the source of truth, written in the chunk-row
+    # transaction by `stamp_flat_fields/1`) and, once `:write_v5_layout` is
+    # on, the v5 Qdrant payload. User-added keys get their per-user
+    # dictionary ids first (allocated here, committed on their own: an id
+    # for a key whose pass then fails is harmless). Both behind flags that
+    # are off, so with them off a pass does exactly what main does: no
+    # extraction, no Postgres writes, the v3 payload.
     v5_format? = Qdrant.v5_payload_format?()
     v5? = write_v5_layout?()
-    flat = if v5_format?, do: FlatFields.extract(note.content, filter_key)
+
+    flat =
+      if v5_format?,
+        do: note.content |> FlatFields.extract(filter_key) |> with_key_ids(note, user)
+
     note_payload = if v5?, do: PayloadV5.build(note, flat), else: note_payload(note)
     ctx = {note, user, note_payload, now, v5?}
 
@@ -2530,7 +2537,7 @@ defmodule Engram.Indexing do
       )
 
     with {:ok, reversed, _spent} <- prepared,
-         {:ok, dek} <- if(v5_format?, do: Crypto.get_dek(user), else: {:ok, nil}) do
+         {:ok, _dek} <- if(v5_format?, do: Crypto.get_dek(user), else: {:ok, nil}) do
       built = Enum.reverse(reversed)
       qdrant_points = for(%{point: p} <- built, p != nil, do: p)
 
@@ -2552,13 +2559,22 @@ defmodule Engram.Indexing do
        }
        |> then(fn p ->
          if v5_format?,
-           do:
-             Map.merge(p, %{
-               flat_columns: FlatFields.columns(flat, dek, note.id),
-               attr_rows: FlatFields.attr_rows(flat, note)
-             }),
+           do: Map.put(p, :attr_rows, FlatFields.attr_rows(flat, note)),
            else: p
        end)}
+    end
+  end
+
+  # Past the per-user cap a new key is skipped (left out of the payload and
+  # `note_attrs`, counted by `FrontmatterKeys`), never an indexing error.
+  defp with_key_ids(flat, note, user) do
+    case Crypto.get_dek(user) do
+      {:ok, dek} ->
+        {ids, _skipped} = FrontmatterKeys.resolve(note.user_id, dek, flat.names)
+        FlatFields.put_key_ids(flat, ids)
+
+      _no_dek ->
+        flat
     end
   end
 
@@ -2740,12 +2756,9 @@ defmodule Engram.Indexing do
   end
 
   # Inside the chunk-row transaction, from the same extraction as the payload.
-  # Every column is set (an absent key clears it) and the note's rows are
-  # replaced wholesale, like the chunk rows.
-  defp stamp_flat_fields(%{note: note, flat_columns: columns, attr_rows: rows}) do
-    {_, _} =
-      Repo.update_all(from(n in Note, where: n.kind == "note" and n.id == ^note.id), set: columns)
-
+  # The note's rows are replaced wholesale, like the chunk rows, so an absent
+  # key leaves no row.
+  defp stamp_flat_fields(%{note: note, attr_rows: rows}) do
     Repo.delete_all(from(a in NoteAttr, where: a.note_id == ^note.id))
     _ = rows |> Enum.chunk_every(@insert_batch) |> Enum.each(&Repo.insert_all(NoteAttr, &1))
 

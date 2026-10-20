@@ -1114,6 +1114,7 @@ defmodule Engram.MCP.Handlers do
     opts = if tags, do: Keyword.put(opts, :tags, tags), else: opts
     opts = if args["folder"], do: Keyword.put(opts, :folder, args["folder"]), else: opts
     opts = if args["type"], do: Keyword.put(opts, :type, args["type"]), else: opts
+    opts = if is_list(args["fields"]), do: Keyword.put(opts, :fields, args["fields"]), else: opts
 
     opts =
       Enum.reduce(Search.date_params(), opts, fn key, acc ->
@@ -1239,7 +1240,7 @@ defmodule Engram.MCP.Handlers do
   def render_search({:error, reason}, _names),
     do: {:error, Search.input_error_message(reason) || "Search unavailable."}
 
-  @search_filters ~w(tags folder type created_after created_before updated_after updated_before)
+  @search_filters ~w(tags folder type fields created_after created_before updated_after updated_before)
 
   # `:recent` when query is blank AND similar_to is absent. `similar_to` and a
   # non-blank query never combine: naming a source note AND asking a question

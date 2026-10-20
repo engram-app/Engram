@@ -26,9 +26,7 @@ defmodule Engram.Vector.PayloadKeys do
     fm_expires: "ex",
     fm_due: "du",
     fm_priority: "pr",
-    fm_attrs: "at",
-    fm_nums: "nm",
-    fm_dates: "dt",
+    fm_attrs: "fa",
     fm_timestamp_src: "us",
     fm_created_src: "cs"
   ]
@@ -39,6 +37,8 @@ defmodule Engram.Vector.PayloadKeys do
   @range %{"type" => "integer", "lookup" => false, "range" => true, "on_disk" => true}
   @uuid %{"type" => "uuid", "on_disk" => true}
   @float %{"type" => "float", "on_disk" => true}
+  @keyword %{"type" => "keyword", "on_disk" => true}
+  @key_id %{"type" => "integer", "lookup" => true, "range" => false, "on_disk" => true}
 
   @doc "Logical names, in declaration order."
   @spec logical_names() :: [atom()]
@@ -74,12 +74,13 @@ defmodule Engram.Vector.PayloadKeys do
       Enum.map(range, &{short(&1), @range}) ++
       [
         {short(:fm_priority), @float},
-        {short(:fm_attrs) <> "[].k", @uuid},
-        {short(:fm_attrs) <> "[].v", @uuid},
-        {short(:fm_nums) <> "[].k", @uuid},
-        {short(:fm_nums) <> "[].n", @float},
-        {short(:fm_dates) <> "[].k", @uuid},
-        {short(:fm_dates) <> "[].t", @range}
+        # User-added keys, one nested entry per value: `k` the per-user key
+        # id (`FrontmatterKeys`, exact lookups only), and one of `h` (an
+        # exact value's filter id), `n` (number) or `d` (unix seconds).
+        {short(:fm_attrs) <> "[].k", @key_id},
+        {short(:fm_attrs) <> "[].h", @keyword},
+        {short(:fm_attrs) <> "[].n", @float},
+        {short(:fm_attrs) <> "[].d", @range}
       ]
   end
 end

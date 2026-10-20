@@ -12,6 +12,7 @@ defmodule Engram.Search do
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Helpers
+  alias Engram.Search.FieldFilters
   alias Engram.Search.MMR
   alias Engram.Search.SearchProfile
   alias Engram.Vector.Qdrant
@@ -94,10 +95,38 @@ defmodule Engram.Search do
     with :ok <- vault_ids_present?(vault, opts),
          :ok <- validate_input(query, opts),
          :ok <- cross_vault_entitlement(user, opts),
+         {:ok, opts} <- resolve_field_filters(user, opts),
          :ok <- spend_search_budget(user) do
       do_search_instrumented(user, vault, query, opts)
     end
   end
+
+  # `:fields` (user-added frontmatter key filters) resolve to Qdrant
+  # conditions ONCE per request, before the budget is spent: an unknown key is
+  # an explicit error, never an empty result (`Engram.Search.FieldFilters`).
+  defp resolve_field_filters(user, opts) do
+    case Keyword.get(opts, :fields, []) do
+      [] ->
+        {:ok, opts}
+
+      fields ->
+        with {:ok, fk} <- field_filter_key(user, fields),
+             {:ok, conditions} <- FieldFilters.to_conditions(to_string(user.id), fk, fields) do
+          {:ok, Keyword.put(opts, :attr_filters, conditions)}
+        end
+    end
+  end
+
+  # A user with no DEK has written no keys, so every key is unknown to them.
+  defp field_filter_key(user, [first | _]) do
+    case Engram.Crypto.dek_filter_key(user) do
+      {:ok, fk} -> {:ok, fk}
+      {:error, :no_dek} -> {:error, {:unknown_field, field_name(first)}}
+    end
+  end
+
+  defp field_name(%{} = f), do: to_string(f["key"] || f[:key])
+  defp field_name(other), do: inspect(other)
 
   # Voyage's context window is 32k tokens and a token is at least one byte,
   # so a query this size always fits, with room. Real queries are far
@@ -145,6 +174,17 @@ defmodule Engram.Search do
 
   def input_error_message(:too_many_tags, _param),
     do: "tags: at most #{Engram.Vector.Qdrant.max_ids()} per search"
+
+  def input_error_message({:unknown_field, key}, _param),
+    do: "fields: no note in this account has the frontmatter key #{inspect(key)}"
+
+  def input_error_message({:reserved_field, key}, _param),
+    do: "fields: #{inspect(key)} is a built-in field; use its own filter"
+
+  def input_error_message({:invalid_field_filter, key}, _param),
+    do:
+      "fields: invalid filter on #{inspect(key)}; use {key, op, value} with op " <>
+        "eq, in, gt, gte, lt, lte, after or before"
 
   def input_error_message(_reason, _param), do: nil
 
@@ -500,6 +540,7 @@ defmodule Engram.Search do
           |> then(&put_vault_filter(&1, vault, opts))
           |> Keyword.merge(phase_b_kw)
           |> Keyword.merge(date_bounds)
+          |> Keyword.put(:attr_filters, Keyword.get(opts, :attr_filters, []))
           |> Keyword.put(:with_vector, need_vectors?)
           |> Keyword.put(:full_precision, profile.full_precision)
 

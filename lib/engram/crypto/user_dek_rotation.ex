@@ -41,8 +41,8 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Logger.Metadata
   alias Engram.Notes.CrdtUpdateLog
   alias Engram.Notes.FlatFields
+  alias Engram.Notes.FrontmatterKeys
   alias Engram.Repo
-  alias Engram.Vector.FilterId
   alias Engram.Vector.Qdrant
 
   require Logger
@@ -188,6 +188,7 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- sweep_note_links(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_qdrant(user, old_dek, new_dek),
          :ok <- clear_chunk_context_hmacs(user),
+         :ok <- FrontmatterKeys.rotate(to_string(user_id), old_dek, new_dek, new_filter_key),
          :ok <- resync_index_keys(user, new_dek, new_filter_key),
          :ok <- final_flip(user, new_dek_version, new_wrapped) do
       Logger.info(
@@ -937,28 +938,37 @@ defmodule Engram.Crypto.UserDekRotation do
       end)
 
     flats =
-      if v5?, do: Map.new(notes, &{&1.id, flat_fields(&1, new_dek, new_filter_key)}), else: %{}
+      if v5?,
+        do: Map.new(notes, &{&1.id, flat_fields(user_id, &1, new_dek, new_filter_key)}),
+        else: %{}
 
-    with :ok <- rewrite_note_attrs(user_id, notes, flats, new_dek) do
+    with :ok <- rewrite_note_attrs(user_id, notes, flats) do
       v5_ids = v5_point_ids(points_by_note |> Map.values() |> List.flatten(), v5?)
       resync_points(notes, points_by_note, flats, v5_ids)
     end
   end
 
-  defp flat_fields(note, new_dek, new_filter_key) do
+  # Key ids survive a rotation (`FrontmatterKeys.rotate/4` already rekeyed
+  # the dictionary), so resolving under the new filter key finds the same ids.
+  defp flat_fields(user_id, note, new_dek, new_filter_key) do
     aad = Crypto.aad_for_row(:notes, :content, note.id)
 
     case note.content_ciphertext &&
            Envelope.decrypt(note.content_ciphertext, note.content_nonce, new_dek, aad) do
-      {:ok, content} -> FlatFields.extract(content, new_filter_key)
-      _ -> FlatFields.empty()
+      {:ok, content} ->
+        flat = FlatFields.extract(content, new_filter_key)
+        {ids, _skipped} = FrontmatterKeys.resolve(user_id, new_dek, flat.names)
+        FlatFields.put_key_ids(flat, ids)
+
+      _ ->
+        FlatFields.empty()
     end
   end
 
-  # `note_attrs` holds only HMACs, so the rows are rebuilt from the decrypted
-  # frontmatter under the new key (dropped when the v5 format is off: any
-  # leftover row is under the old key and could never match).
-  defp rewrite_note_attrs(user_id, notes, flats, new_dek) do
+  # `note_attrs` HMACs are under the old key, so the rows are rebuilt from
+  # the decrypted frontmatter under the new one (dropped when the v5 format
+  # is off: any leftover row is under the old key and could never match).
+  defp rewrite_note_attrs(user_id, notes, flats) do
     ids = Enum.map(notes, & &1.id)
 
     {:ok, _} =
@@ -966,11 +976,6 @@ defmodule Engram.Crypto.UserDekRotation do
         Repo.delete_all(from(a in Engram.Notes.NoteAttr, where: a.note_id in ^ids))
 
         for note <- notes, flat = flats[note.id], flat != nil do
-          {_, _} =
-            Repo.update_all(from(n in Engram.Notes.Note, where: n.id == ^note.id),
-              set: FlatFields.columns(flat, new_dek, note.id)
-            )
-
           Repo.insert_all(Engram.Notes.NoteAttr, FlatFields.attr_rows(flat, note))
         end
       end)
@@ -1140,12 +1145,6 @@ defmodule Engram.Crypto.UserDekRotation do
   end
 
   @qdrant_encrypted_fields [:text, :title, :heading_path]
-
-  # The v5 flat fields are encrypted with the row-bound AAD from their first
-  # write, whatever the row's `dek_version` (`FlatFields.columns/3`), so the
-  # old AAD is always the bound one. Not covered by `AadRebind`, which only
-  # rebinds pre-T3.6 empty-AAD columns.
-  @always_bound_columns [:status, :author, :reviewed_by, :project, :source]
 
   defp rewrap_qdrant_payload(collection, qdrant_id, payload, old_dek, new_dek) do
     encrypted_fields_present? =
@@ -1397,16 +1396,7 @@ defmodule Engram.Crypto.UserDekRotation do
       {:type, :type_ciphertext, :type_nonce, :type_hmac,
        &Engram.Notes.OkfFields.normalize_type/1},
       {:description, :description_ciphertext, :description_nonce, nil, nil},
-      {:resource, :resource_ciphertext, :resource_nonce, nil, nil},
-      # v5 flat frontmatter fields (`Engram.Notes.FlatFields`). `source` is a
-      # JSON list whose `src_hmac` array, like the `note_attrs` rows, is
-      # rewritten by the re-index the new content-hash key already forces.
-      {:status, :status_ciphertext, :status_nonce, :status_hmac, &FilterId.value_input/1},
-      {:author, :author_ciphertext, :author_nonce, :author_hmac, &FilterId.value_input/1},
-      {:reviewed_by, :reviewed_by_ciphertext, :reviewed_by_nonce, :rev_by_hmac,
-       &FilterId.value_input/1},
-      {:project, :project_ciphertext, :project_nonce, :proj_hmac, &FilterId.value_input/1},
-      {:source, :source_ciphertext, :source_nonce, nil, nil}
+      {:resource, :resource_ciphertext, :resource_nonce, nil, nil}
     ]
 
     base_updates =
@@ -1418,10 +1408,7 @@ defmodule Engram.Crypto.UserDekRotation do
         if is_nil(ct) or is_nil(nonce) do
           []
         else
-          old_aad =
-            if column in @always_bound_columns,
-              do: Crypto.aad_for_row(:notes, column, note.id),
-              else: old_aad_for(:notes, column, note)
+          old_aad = old_aad_for(:notes, column, note)
 
           new_aad = Crypto.aad_for_row(:notes, column, note.id)
 
@@ -1464,7 +1451,7 @@ defmodule Engram.Crypto.UserDekRotation do
 
               ct_updates ++
                 hmac_updates ++
-                basename_updates ++ src_hmac_updates(column, plaintext, new_filter_key)
+                basename_updates
 
             :already_rotated ->
               # Already rotated under this run's new_dek — skip
@@ -1479,20 +1466,6 @@ defmodule Engram.Crypto.UserDekRotation do
     # The caller checks `updates != []` before issuing the UPDATE.
     base_updates ++ tag_updates ++ rewrap_crdt_state(note, old_dek, new_dek)
   end
-
-  # `source` is one encrypted JSON list with a blind index PER element, so its
-  # `src_hmac` array is recomputed from the decrypted list under the new key.
-  defp src_hmac_updates(:source, json, new_filter_key) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, list} when is_list(list) ->
-        [{:src_hmac, for(s <- list, is_binary(s), do: FilterId.value_hmac(new_filter_key, s))}]
-
-      _ ->
-        []
-    end
-  end
-
-  defp src_hmac_updates(_column, _plaintext, _key), do: []
 
   # crdt_state is handled apart from base_columns for two reasons. #1341.
   #

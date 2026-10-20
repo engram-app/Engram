@@ -1,9 +1,12 @@
 defmodule Engram.Notes.FlatFields do
   @moduledoc """
-  The v5 first-class frontmatter fields (spec 3.3b, flat schema approved
+  The v5 frontmatter filter fields (spec 3.3b, flat schema approved
   2026-10-20), extracted ONCE per indexing pass and written to two sinks:
-  the `notes` columns and `note_attrs` rows (Postgres, the source of truth)
-  and the v5 Qdrant payload (a derived copy).
+  `note_attrs` rows (Postgres, the source of truth; `notes` itself gets no
+  columns, per the 2026-10-20 Postgres scale audit) and the v5 Qdrant payload
+  (a derived copy). The named fields take the reserved key ids of
+  `Engram.Notes.FrontmatterKeys`; user-added keys get dictionary ids
+  (`put_key_ids/2`).
 
   Our own FLAT keys; OKF's nested forms are read only as aliases, and the
   flat key wins when a note has both. `type` and `tags` are not here: their
@@ -21,11 +24,10 @@ defmodule Engram.Notes.FlatFields do
   differ only for a note that sets conflicting keys.
   """
 
-  alias Engram.Crypto
-  alias Engram.Crypto.Envelope
   alias Engram.Notes.Frontmatter
   alias Engram.Notes.FrontmatterAttrs
   alias Engram.Notes.FrontmatterDate
+  alias Engram.Notes.FrontmatterKeys
   alias Engram.Notes.OkfFields
   alias Engram.Vector.FilterId
 
@@ -60,7 +62,9 @@ defmodule Engram.Notes.FlatFields do
           fm_priority: float() | nil,
           attrs: [map()],
           nums: [map()],
-          dates: [map()]
+          dates: [map()],
+          names: %{binary() => String.t()},
+          key_ids: %{binary() => integer()}
         }
 
   @empty %{
@@ -82,7 +86,9 @@ defmodule Engram.Notes.FlatFields do
     fm_priority: nil,
     attrs: [],
     nums: [],
-    dates: []
+    dates: [],
+    names: %{},
+    key_ids: %{}
   }
 
   # No @spec on the constant accessors: dialyzer's :underspecs flags any
@@ -115,7 +121,10 @@ defmodule Engram.Notes.FlatFields do
     project = str(v["project"])
     source = strs(v["source"]) || strs(v["resource"]) || strs(v["sources"]) || []
 
-    Map.merge(FrontmatterAttrs.extract(v, fk), %{
+    # The long tail from the keys as written (the HMAC folds case), so the
+    # dictionary keeps the user's spelling.
+    Map.merge(FrontmatterAttrs.extract(values, fk), %{
+      key_ids: %{},
       status: status,
       author: author,
       reviewed_by: reviewed_by,
@@ -135,67 +144,60 @@ defmodule Engram.Notes.FlatFields do
     })
   end
 
+  @doc "`flat` with the dictionary ids of its user-added keys (`FrontmatterKeys.resolve/3`)."
+  @spec put_key_ids(t(), %{binary() => integer()}) :: t()
+  def put_key_ids(flat, key_ids), do: %{flat | key_ids: key_ids}
+
   @doc """
-  The `notes` columns for `flat`: blind indexes and plaintext numbers as
-  stored, exact values encrypted under `dek` with AAD
-  `aad_for_row(:notes, <field>, note_id)` (`source` as one JSON list). Every
-  column is present, so an absent key clears what an earlier pass stored.
+  The `note_attrs` rows for `flat`: one per value, `key_id` plus exactly one
+  of `h` (exact, HMAC), `n` or `d`. The named fields use their reserved ids
+  (`type`/`tags` from the note row's existing blind indexes); a user-added
+  key without a dictionary id (past the cap) is left out, as in the payload.
   """
-  @spec columns(t(), <<_::256>>, Ecto.UUID.t()) :: keyword()
-  def columns(flat, dek, note_id) do
-    source = if flat.source != [], do: Jason.encode!(flat.source)
+  @spec attr_rows(t(), map()) :: [map()]
+  def attr_rows(flat, %{id: note_id, user_id: user_id, vault_id: vault_id} = note) do
+    row = fn key_id, value ->
+      Map.merge(%{note_id: note_id, user_id: user_id, vault_id: vault_id, key_id: key_id}, value)
+    end
 
-    [
-      status_hmac: flat.status_hmac,
-      author_hmac: flat.author_hmac,
-      rev_by_hmac: flat.rev_by_hmac,
-      proj_hmac: flat.proj_hmac,
-      src_hmac: if(flat.src_hmac != [], do: flat.src_hmac),
-      fm_updated: flat.fm_updated,
-      fm_reviewed: flat.fm_reviewed,
-      fm_expires: flat.fm_expires,
-      fm_due: flat.fm_due,
-      fm_priority: flat.fm_priority
-    ] ++
-      envelope(dek, note_id, :status, flat.status) ++
-      envelope(dek, note_id, :author, flat.author) ++
-      envelope(dek, note_id, :reviewed_by, flat.reviewed_by) ++
-      envelope(dek, note_id, :project, flat.project) ++
-      envelope(dek, note_id, :source, source)
-  end
+    named =
+      [
+        type: [Map.get(note, :type_hmac)],
+        tags: Map.get(note, :tags_hmac) || [],
+        status: [flat.status_hmac],
+        author: [flat.author_hmac],
+        reviewed_by: [flat.rev_by_hmac],
+        source: flat.src_hmac,
+        project: [flat.proj_hmac]
+      ]
+      |> Enum.flat_map(fn {field, hs} ->
+        for h <- hs, h != nil, do: row.(FrontmatterKeys.named_id(field), %{h: h})
+      end)
 
-  @doc "The `note_attrs` rows for `flat` (one per long-tail value)."
-  @spec attr_rows(t(), %{id: Ecto.UUID.t(), user_id: Ecto.UUID.t(), vault_id: Ecto.UUID.t()}) ::
-          [map()]
-  def attr_rows(flat, %{id: note_id, user_id: user_id, vault_id: vault_id}) do
-    row = &Map.merge(%{note_id: note_id, user_id: user_id, vault_id: vault_id, key_hmac: &1}, &2)
+    dates =
+      for {field, d} <- [
+            created: flat.fm_created,
+            updated: flat.fm_updated,
+            reviewed: flat.fm_reviewed,
+            expires: flat.fm_expires,
+            due: flat.fm_due
+          ],
+          d != nil,
+          do: row.(FrontmatterKeys.named_id(field), %{d: d})
 
-    for(%{k: k, v: v} <- flat.attrs, do: row.(k, %{value_hmac: v})) ++
-      for(%{k: k, n: n} <- flat.nums, do: row.(k, %{value_num: n})) ++
-      for(%{k: k, t: t} <- flat.dates, do: row.(k, %{value_date: t}))
-  end
+    priority =
+      if flat.fm_priority,
+        do: [row.(FrontmatterKeys.named_id(:priority), %{n: flat.fm_priority})],
+        else: []
 
-  # Explicit atoms per field (no runtime atom building).
-  @envelope_keys %{
-    status: {:status_ciphertext, :status_nonce},
-    author: {:author_ciphertext, :author_nonce},
-    reviewed_by: {:reviewed_by_ciphertext, :reviewed_by_nonce},
-    project: {:project_ciphertext, :project_nonce},
-    source: {:source_ciphertext, :source_nonce}
-  }
+    ids = flat.key_ids
 
-  @doc "The `{ciphertext, nonce}` column names of each encrypted flat field."
-  def envelope_keys, do: @envelope_keys
+    user =
+      for(%{k: k, v: v} <- flat.attrs, Map.has_key?(ids, k), do: row.(ids[k], %{h: v})) ++
+        for(%{k: k, n: n} <- flat.nums, Map.has_key?(ids, k), do: row.(ids[k], %{n: n})) ++
+        for %{k: k, t: t} <- flat.dates, Map.has_key?(ids, k), do: row.(ids[k], %{d: t})
 
-  defp envelope(dek, note_id, field, value) do
-    {ct_key, nonce_key} = Map.fetch!(@envelope_keys, field)
-
-    {ct, nonce} =
-      if value,
-        do: Envelope.encrypt(value, dek, Crypto.aad_for_row(:notes, field, note_id)),
-        else: {nil, nil}
-
-    [{ct_key, ct}, {nonce_key, nonce}]
+    named ++ dates ++ priority ++ user
   end
 
   # OKF `verified` is a list of `{by, at}`; the most recent entry with a

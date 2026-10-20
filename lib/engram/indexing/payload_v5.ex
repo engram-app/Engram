@@ -52,15 +52,21 @@ defmodule Engram.Indexing.PayloadV5 do
       fm_expires: day(flat.fm_expires),
       fm_due: day(flat.fm_due),
       fm_priority: flat.fm_priority,
-      fm_attrs: for(%{k: k, v: v} <- flat.attrs, do: %{"k" => id(k), "v" => id(v)}),
-      fm_nums: for(%{k: k, n: n} <- flat.nums, do: %{"k" => id(k), "n" => n}),
-      fm_dates: for(%{k: k, t: t} <- flat.dates, do: %{"k" => id(k), "t" => t})
+      fm_attrs: user_attrs(flat)
     ]
     |> Enum.reject(fn {_k, v} -> v in [nil, []] end)
     |> Map.new(fn {k, v} -> {short(k), v} end)
   end
 
   defp id(hmac), do: FilterId.from_hmac(hmac)
+
+  # One nested entry per user-added value, keyed by the per-user dictionary
+  # id; a key without an id (past the cap) is left out.
+  defp user_attrs(%{key_ids: ids} = flat) do
+    for(%{k: k, v: v} <- flat.attrs, Map.has_key?(ids, k), do: %{"k" => ids[k], "h" => id(v)}) ++
+      for(%{k: k, n: n} <- flat.nums, Map.has_key?(ids, k), do: %{"k" => ids[k], "n" => n}) ++
+      for %{k: k, t: t} <- flat.dates, Map.has_key?(ids, k), do: %{"k" => ids[k], "d" => t}
+  end
 
   defp stable?(nil), do: true
   defp stable?(status), do: OkfFields.normalize_type(status) == "stable"
