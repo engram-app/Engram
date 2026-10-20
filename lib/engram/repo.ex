@@ -272,6 +272,10 @@ defmodule Engram.Repo do
                         ", (SELECT dek_rotation_locked_at IS NOT NULL " <>
                         "FROM users WHERE id = $1::uuid)"
 
+  # Two literal statements, not one built at runtime: the SQL is fixed text.
+  defp enter_tenant(uuid, false), do: query!(@tenant_enter, [uuid], source: "tenant_enter")
+  defp enter_tenant(uuid, true), do: query!(@tenant_enter_gated, [uuid], source: "tenant_enter")
+
   defp tenant_transaction(uuid, fun) do
     # Decided before the transaction opens: inside it, in_transaction? is
     # always true.
@@ -305,12 +309,7 @@ defmodule Engram.Repo do
           # `users` carries no RLS, so the role drop does not hide the row.
           gated? = Process.get(:engram_write_gate, false)
 
-          %{rows: [row]} =
-            query!(
-              if(gated?, do: @tenant_enter_gated, else: @tenant_enter),
-              [uuid],
-              source: "tenant_enter"
-            )
+          %{rows: [row]} = enter_tenant(uuid, gated?)
 
           if gated? and List.last(row), do: raise(Engram.Crypto.RotationInProgressError)
 
