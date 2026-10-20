@@ -17,6 +17,8 @@ defmodule EngramWeb.SearchControllerTest do
     authed = put_req_header(conn, "authorization", "Bearer #{api_key}")
 
     bypass = Bypass.open()
+
+    Engram.QdrantStub.stub_retrieve(bypass)
     Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
 
@@ -66,7 +68,7 @@ defmodule EngramWeb.SearchControllerTest do
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(qdrant_result)))
+        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(c, qdrant_result)))
       end)
 
       conn = post(conn, "/api/search", %{query: "iron panel"})
@@ -138,7 +140,7 @@ defmodule EngramWeb.SearchControllerTest do
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(qdrant_result)))
+        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(c, qdrant_result)))
       end)
 
       conn = post(conn, "/api/search", %{query: "iron panel"})
@@ -355,7 +357,7 @@ defmodule EngramWeb.SearchControllerTest do
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(qdrant_result)))
+        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(c, qdrant_result)))
       end)
 
       # diversity: 0 disables MMR so the stub doesn't need to supply vectors;
@@ -390,19 +392,22 @@ defmodule EngramWeb.SearchControllerTest do
         decoded = Jason.decode!(body)
         # diversity > 0 triggers the MMR path: Search requests dense vectors from
         # Qdrant so MMR can compare cosine similarity between candidates.
-        assert Enum.all?(decoded["searches"], &(&1["with_vector"] == ["dense"])),
-               "expected with_vector: [\"dense\"] when diversity=0.5, got: #{inspect(decoded["with_vector"])}"
+        # Qdrant so MMR can compare cosine similarity between candidates; they
+        # come with the fused points' retrieve, not the legs.
+        assert length(decoded["searches"]) == 2
+        refute Enum.any?(decoded["searches"], &Map.has_key?(&1, "with_vector"))
 
         # Return a valid point with a dense vector so the MMR pipeline succeeds.
         points = [diverse_chunk(user, vault, "mmr-1", 0.9, [1.0, 0.0], "MMR result")]
 
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(%{"result" => points})))
+        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(c, %{"result" => points})))
       end)
 
       conn = post(conn, ~p"/api/search", %{"query" => "hello", "diversity" => "0.5"})
       assert json_response(conn, 200)
+      assert QdrantStub.last_retrieve(bypass)["with_vector"] == ["dense"]
     end
 
     test "out-of-range diversity=5 is clamped downstream — still returns 200", %{
@@ -468,7 +473,7 @@ defmodule EngramWeb.SearchControllerTest do
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn c ->
         c
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(result)))
+        |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(c, result)))
       end)
 
       # diversity: 0 disables MMR (which requires vectors in stub results);
@@ -535,7 +540,7 @@ defmodule EngramWeb.SearchControllerTest do
         |> Plug.Conn.send_resp(
           200,
           Jason.encode!(
-            QdrantStub.batch(%{
+            QdrantStub.batch(c, %{
               "result" => [
                 chunk("uuid-a", 0.9, "A/a.md", "A", "findme", user, vault.id),
                 chunk("uuid-b", 0.8, "B/b.md", "B", "findme", user, vault_b.id)
@@ -631,7 +636,7 @@ defmodule EngramWeb.SearchControllerTest do
         |> Plug.Conn.send_resp(
           200,
           Jason.encode!(
-            QdrantStub.batch(%{
+            QdrantStub.batch(c, %{
               "result" => [chunk("uuid-a", 0.9, "Inbox.md", "Inbox", "findme", user, vault.id)]
             })
           )

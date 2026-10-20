@@ -134,15 +134,17 @@ defmodule Engram.Search.FreeSemanticTest do
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       # The sparse note only matches through the keyword leg: the dense leg
       # reaches nothing, exactly as in production.
-      legs =
-        for search <- Jason.decode!(body)["searches"] do
-          %{"points" => if(search["using"] == "keyword", do: [point], else: [])}
-        end
+      assert ["dense", "keyword"] == Enum.map(Jason.decode!(body)["searches"], & &1["using"])
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => legs}))
+      |> Plug.Conn.send_resp(
+        200,
+        Jason.encode!(Engram.QdrantStub.batch(conn, %{"result" => []}, [point]))
+      )
     end)
+
+    Engram.QdrantStub.stub_retrieve(bypass)
 
     assert {:ok, text, %{"suggestions" => [%{"folder" => "Health"}]}} =
              Engram.MCP.Handlers.handle("suggest_folder", user, vault, %{

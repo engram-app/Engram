@@ -12,6 +12,7 @@ defmodule Engram.SearchTest do
 
   setup do
     bypass = Bypass.open()
+    Engram.QdrantStub.stub_retrieve(bypass)
     Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
     on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
 
@@ -64,7 +65,7 @@ defmodule Engram.SearchTest do
         fn conn ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(qdrant_result)))
+          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(conn, qdrant_result)))
         end
       )
 
@@ -122,7 +123,7 @@ defmodule Engram.SearchTest do
         fn conn ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(qdrant_result)))
+          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(conn, qdrant_result)))
         end
       )
 
@@ -206,7 +207,7 @@ defmodule Engram.SearchTest do
         fn conn ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(qdrant_result)))
+          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(conn, qdrant_result)))
         end
       )
 
@@ -349,7 +350,7 @@ defmodule Engram.SearchTest do
         fn conn ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(qdrant_result)))
+          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(conn, qdrant_result)))
         end
       )
 
@@ -439,7 +440,10 @@ defmodule Engram.SearchTest do
         fn conn ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(%{"result" => results})))
+          |> Plug.Conn.send_resp(
+            200,
+            Jason.encode!(QdrantStub.batch(conn, %{"result" => results}))
+          )
         end
       )
 
@@ -719,7 +723,10 @@ defmodule Engram.SearchTest do
 
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(%{"result" => results})))
+          |> Plug.Conn.send_resp(
+            200,
+            Jason.encode!(QdrantStub.batch(conn, %{"result" => results}))
+          )
         end
       )
 
@@ -806,7 +813,10 @@ defmodule Engram.SearchTest do
 
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(%{"result" => [result]})))
+          |> Plug.Conn.send_resp(
+            200,
+            Jason.encode!(QdrantStub.batch(conn, %{"result" => [result]}))
+          )
         end
       )
 
@@ -1070,7 +1080,7 @@ defmodule Engram.SearchTest do
         fn conn ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(qdrant_result)))
+          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(conn, qdrant_result)))
         end
       )
 
@@ -1145,15 +1155,21 @@ defmodule Engram.SearchTest do
           {:ok, body, conn} = Plug.Conn.read_body(conn)
           decoded = Jason.decode!(body)
           # diversity > 0 must request vectors from Qdrant.
-          assert Enum.all?(decoded["searches"], &(&1["with_vector"] == ["dense"]))
+          # The legs carry ids and scores only; vectors come with the retrieve.
+          assert length(decoded["searches"]) == 2
+          refute Enum.any?(decoded["searches"], &Map.has_key?(&1, "with_vector"))
 
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(%{"result" => points})))
+          |> Plug.Conn.send_resp(
+            200,
+            Jason.encode!(QdrantStub.batch(conn, %{"result" => points}))
+          )
         end
       )
 
       assert {:ok, results} = Search.search(user, vault, "q", limit: 2, diversity: 1.0)
+      assert QdrantStub.last_retrieve(bypass)["with_vector"] == ["dense"]
       assert length(results) == 2
       paths = Enum.map(results, & &1.source_path)
       assert "c.md" in paths or "d.md" in paths
@@ -1181,7 +1197,10 @@ defmodule Engram.SearchTest do
         fn conn ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(%{"result" => points})))
+          |> Plug.Conn.send_resp(
+            200,
+            Jason.encode!(QdrantStub.batch(conn, %{"result" => points}))
+          )
         end
       )
 
@@ -1206,6 +1225,7 @@ defmodule Engram.SearchTest do
           {:ok, body, conn} = Plug.Conn.read_body(conn)
           decoded = Jason.decode!(body)
           # diversity 0, no reranker → MMR skipped → with_vector must be absent/false.
+          assert length(decoded["searches"]) == 2
           refute Enum.any?(decoded["searches"], & &1["with_vector"])
 
           conn
@@ -1233,16 +1253,23 @@ defmodule Engram.SearchTest do
           {:ok, body, conn} = Plug.Conn.read_body(conn)
           decoded = Jason.decode!(body)
 
-          assert Enum.all?(decoded["searches"], &(&1["with_vector"] == ["dense"])),
-                 "expected with_vector: [\"dense\"] for default search (MMR on by default), got: #{inspect(decoded["with_vector"])}"
+          assert length(decoded["searches"]) == 2
+          refute Enum.any?(decoded["searches"], &Map.has_key?(&1, "with_vector"))
+          points = [diverse_point(user, vault, "m", 0.9, [1.0, 0.0], "mmr")]
 
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.send_resp(200, ~s({"result":[{"points":[]},{"points":[]}]}))
+          |> Plug.Conn.send_resp(
+            200,
+            Jason.encode!(QdrantStub.batch(conn, %{"result" => points}))
+          )
         end
       )
 
-      assert {:ok, []} = Search.search(user, vault, "q")
+      assert {:ok, [_]} = Search.search(user, vault, "q")
+
+      assert QdrantStub.last_retrieve(bypass)["with_vector"] == ["dense"],
+             "the MMR candidates' retrieve must ask for the dense vector (MMR on by default)"
     end
   end
 
@@ -1304,7 +1331,10 @@ defmodule Engram.SearchTest do
         fn conn ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(%{"result" => points})))
+          |> Plug.Conn.send_resp(
+            200,
+            Jason.encode!(QdrantStub.batch(conn, %{"result" => points}))
+          )
         end
       )
 
@@ -1335,6 +1365,7 @@ defmodule Engram.SearchTest do
           {:ok, body, conn} = Plug.Conn.read_body(conn)
           decoded = Jason.decode!(body)
           # diversity 0 grouped → MMR skipped → no vectors fetched.
+          assert length(decoded["searches"]) == 2
           refute Enum.any?(decoded["searches"], & &1["with_vector"])
 
           conn
@@ -1430,7 +1461,7 @@ defmodule Engram.SearchTest do
         fn conn ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(qdrant_result)))
+          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(conn, qdrant_result)))
         end
       )
 
@@ -1492,7 +1523,7 @@ defmodule Engram.SearchTest do
         fn conn ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(qdrant_result)))
+          |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(conn, qdrant_result)))
         end
       )
 
@@ -1578,7 +1609,7 @@ defmodule Engram.SearchTest do
     Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(body)))
+      |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(conn, body)))
     end)
   end
 end

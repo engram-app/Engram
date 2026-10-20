@@ -813,18 +813,18 @@ defmodule Engram.Vector.QdrantTest do
   end
 
   describe "hybrid_search_body/3 — body builder (no HTTP)" do
-    test "sets with_vector on both legs when requested" do
+    # Fusion needs ids and scores only. Payload and vectors are fetched for
+    # the fused points alone (the retrieve in hybrid_search/4).
+    test "the legs ask for no payload and no vector, even with with_vector" do
       dense = List.duplicate(0.1, 4)
       sparse = %{indices: [1, 2], values: [0.5, 0.3]}
-      body = Qdrant.hybrid_search_body(dense, sparse, user_id: "u1", with_vector: true)
-      assert Enum.map(body.searches, & &1.with_vector) == [["dense"], ["dense"]]
-    end
 
-    test "does not set with_vector on either leg by default" do
-      dense = List.duplicate(0.1, 4)
-      sparse = %{indices: [1, 2], values: [0.5, 0.3]}
-      body = Qdrant.hybrid_search_body(dense, sparse, user_id: "u1")
-      refute Enum.any?(body.searches, &Map.has_key?(&1, :with_vector))
+      for opts <- [[user_id: "u1"], [user_id: "u1", with_vector: true]] do
+        body = Qdrant.hybrid_search_body(dense, sparse, opts)
+        assert length(body.searches) == 2
+        assert Enum.all?(body.searches, &(&1.with_payload == false))
+        refute Enum.any?(body.searches, &Map.has_key?(&1, :with_vector))
+      end
     end
 
     test "puts quantization params on the dense leg only when full_precision" do

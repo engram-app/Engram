@@ -13,6 +13,7 @@ defmodule Engram.SearchHybridTest do
 
   setup do
     bypass = Bypass.open()
+    Engram.QdrantStub.stub_retrieve(bypass)
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
 
     # The search path's prod budget is 5s (`:qdrant_search_timeout`), tuned for
@@ -71,7 +72,7 @@ defmodule Engram.SearchHybridTest do
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(fused)))
+      |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(conn, fused)))
     end)
 
     assert {:ok, [hit]} = Search.search(user, vault, "paddle_api_key", mode: :hybrid)

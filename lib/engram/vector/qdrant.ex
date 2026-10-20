@@ -1368,7 +1368,10 @@ defmodule Engram.Vector.Qdrant do
   fused-score ties break the same way every time (server-side RRF orders
   them arbitrarily). `sparse` is `%{indices, values}`. Tenant filter is
   applied to BOTH legs (load-bearing: the sparse inverted index is global).
-  Each leg fetches `:limit` points; the fused list is cut back to `:limit`.
+  Each leg fetches `:limit` ids and scores only; the fused `:limit` points
+  then come back in one retrieve with the payload fields results use, and
+  the dense vector only when `:with_vector` asks (MMR). The legs carrying
+  payload and vectors returned up to 2x the bytes for points fusion drops.
   """
   def hybrid_search(col \\ nil, dense, sparse, search_opts) do
     col = col || collection()
@@ -1377,17 +1380,30 @@ defmodule Engram.Vector.Qdrant do
     instrument(:hybrid_search, fn ->
       opts = [json: hybrid_search_body(dense, sparse, search_opts)] ++ req_opts(:search)
 
-      with {:ok, legs} <- do_query(col, "/points/query/batch", opts, &batch_results/1) do
-        fused =
-          legs
-          |> Enum.map(fn leg -> Enum.map(leg, &Map.put(&1, :id, &1.qdrant_id)) end)
-          |> Fusion.rrf(@rrf_k)
-          |> Enum.take(limit)
-          |> Enum.map(&Map.delete(&1, :id))
+      with {:ok, legs} <- do_query(col, "/points/query/batch", opts, &batch_results/1),
+           fused =
+             legs
+             |> Enum.map(fn leg -> Enum.map(leg, &%{id: &1.qdrant_id, score: &1.score}) end)
+             |> Fusion.rrf(@rrf_k)
+             |> Enum.take(limit),
+           {:ok, points} <- retrieve(col, Enum.map(fused, & &1.id), search_opts) do
+        by_id = Map.new(points, &{&1.qdrant_id, &1})
 
-        {:ok, fused}
+        # A point deleted between the legs and the retrieve is dropped.
+        {:ok, for(%{id: id, score: score} <- fused, p = by_id[id], do: Map.put(p, :score, score))}
       end
     end)
+  end
+
+  # The payload keys `search_results/1` reads; nothing else is fetched.
+  @result_payload ~w(text title heading_path source_path tags vault_id text_nonce
+                     title_nonce heading_path_nonce aad_version)
+
+  defp retrieve(_col, [], _search_opts), do: {:ok, []}
+
+  defp retrieve(col, ids, search_opts) do
+    body = maybe_with_vector(%{ids: ids, with_payload: @result_payload}, search_opts)
+    do_query(col, "/points", [json: body] ++ req_opts(:search), &{:ok, search_results(&1)})
   end
 
   @doc false
@@ -1396,24 +1412,21 @@ defmodule Engram.Vector.Qdrant do
     limit = Keyword.get(search_opts, :limit, 5)
 
     dense_leg =
-      %{query: dense, using: "dense", filter: filter, limit: limit, with_payload: true}
+      %{query: dense, using: "dense", filter: filter, limit: limit, with_payload: false}
       |> then(fn leg ->
         case quantization_params(search_opts) do
           nil -> leg
           params -> Map.put(leg, :params, params)
         end
       end)
-      |> maybe_with_vector(search_opts)
 
-    sparse_leg =
-      %{
-        query: %{indices: sparse.indices, values: sparse.values},
-        using: "keyword",
-        filter: filter,
-        limit: limit,
-        with_payload: true
-      }
-      |> maybe_with_vector(search_opts)
+    sparse_leg = %{
+      query: %{indices: sparse.indices, values: sparse.values},
+      using: "keyword",
+      filter: filter,
+      limit: limit,
+      with_payload: false
+    }
 
     %{searches: [dense_leg, sparse_leg]}
   end

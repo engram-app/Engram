@@ -10,6 +10,9 @@ Engram.ServiceConfig.ensure_table()
 # take every other test's blobs with it when it exits.
 Engram.Storage.InMemory.ensure_table()
 
+# Hybrid-search stub: batch answers record points for the retrieve stub.
+Engram.QdrantStub.init()
+
 # One suite-wide structured-log capture handler; see Engram.Test.LogCapture.
 Engram.Test.LogCapture.install()
 

@@ -67,9 +67,32 @@ defmodule Engram.Vector.QdrantHybridTest do
       })
 
     Bypass.expect_once(bypass, "POST", "/collections/c1/points/query/batch", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      # Fusion needs ids and scores only.
+      searches = Jason.decode!(body)["searches"]
+      assert length(searches) == 2
+      assert Enum.all?(searches, &(&1["with_payload"] == false))
+
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.send_resp(200, response_body)
+    end)
+
+    # One retrieve, for the fused `limit` only, with the result fields and no
+    # vector (none asked). Answered out of order: the fused order must hold.
+    Bypass.expect_once(bypass, "POST", "/collections/c1/points", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      json = Jason.decode!(body)
+      assert json["ids"] == ["p2", "p1"]
+      assert "text" in json["with_payload"] and "aad_version" in json["with_payload"]
+      refute "user_id" in json["with_payload"]
+      refute Map.has_key?(json, "with_vector")
+
+      points = Enum.map(["p1", "p2"], &%{id: &1, payload: %{text: "t-#{&1}"}})
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, Jason.encode!(%{result: points}))
     end)
 
     sparse = %{indices: [7], values: [1.0]}

@@ -1238,6 +1238,7 @@ defmodule EngramWeb.McpControllerTest do
     setup do
       # Per-process override (not Application.put_env) so this stays async-safe.
       bypass = Bypass.open()
+      Engram.QdrantStub.stub_retrieve(bypass)
       Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
       Engram.ServiceConfig.put_override(:qdrant_search_timeout, 30_000)
 
@@ -1289,7 +1290,9 @@ defmodule EngramWeb.McpControllerTest do
           |> Plug.Conn.send_resp(
             200,
             Jason.encode!(
-              QdrantStub.batch(%{"result" => [hit(user, va, "uuid-a"), hit(user, vb, "uuid-b")]})
+              QdrantStub.batch(bconn, %{
+                "result" => [hit(user, va, "uuid-a"), hit(user, vb, "uuid-b")]
+              })
             )
           )
         end
