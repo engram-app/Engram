@@ -1,3 +1,5 @@
+// First, before React renders: see the module for why.
+import "./lib/dom-translation-guard";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Component, lazy, type ReactNode, StrictMode, Suspense, use } from "react";
 import { createRoot } from "react-dom/client";
