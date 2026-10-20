@@ -517,14 +517,29 @@ defmodule Engram.Crypto do
           {:ok, Engram.Notes.Note.t()} | {:error, term()}
   def decrypt_note_fields_unscrubbed(%Engram.Notes.Note{} = note, %User{} = user) do
     if needs_note_decrypt?(note) do
-      with {:ok, dek} <- get_dek(user),
-           {:ok, note} <- decrypt_phase_4_note_fields(note, dek),
-           {:ok, note} <- decrypt_phase_b_note_fields(note, dek),
-           {:ok, note} <- decrypt_phase_b_tags(note, dek) do
-        decrypt_okf_fields(note, dek)
-      end
+      with {:ok, dek} <- get_dek(user), do: decrypt_note_fields_under(note, dek)
     else
       {:ok, note}
+    end
+  end
+
+  @doc """
+  `maybe_decrypt_note_fields/2` under an explicit DEK. Only for DEK rotation,
+  which reads its freshly rewrapped rows under the NEW key before the user
+  row is flipped, so `get_dek/1` would still hand back the old one.
+  """
+  @spec maybe_decrypt_note_fields_with_dek(Engram.Notes.Note.t(), binary()) ::
+          {:ok, Engram.Notes.Note.t()} | {:error, term()}
+  def maybe_decrypt_note_fields_with_dek(%Engram.Notes.Note{} = note, <<_::256>> = dek) do
+    with {:ok, note} <- decrypt_note_fields_under(note, dek),
+         do: {:ok, scrub_note_text_fields(note)}
+  end
+
+  defp decrypt_note_fields_under(note, dek) do
+    with {:ok, note} <- decrypt_phase_4_note_fields(note, dek),
+         {:ok, note} <- decrypt_phase_b_note_fields(note, dek),
+         {:ok, note} <- decrypt_phase_b_tags(note, dek) do
+      decrypt_okf_fields(note, dek)
     end
   end
 
@@ -1107,10 +1122,13 @@ defmodule Engram.Crypto do
   user dedup oracles and dictionary attacks against known content.
   """
   def dek_content_hash_key(user) do
-    with {:ok, dek} <- get_dek(user) do
-      {:ok, :crypto.mac(:hmac, :sha256, dek, @content_hash_info)}
-    end
+    with {:ok, dek} <- get_dek(user), do: {:ok, dek_content_hash_key_from_bytes(dek)}
   end
+
+  @doc "`dek_content_hash_key/1` for a raw DEK (DEK rotation, as `dek_filter_key_from_bytes/1`)."
+  @spec dek_content_hash_key_from_bytes(<<_::256>>) :: <<_::256>>
+  def dek_content_hash_key_from_bytes(<<_::256>> = dek),
+    do: :crypto.mac(:hmac, :sha256, dek, @content_hash_info)
 
   @doc """
   Computes the HMAC-SHA256 content-hash hex digest using a content-hash key
