@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { useT } from "@/i18n/locale-provider";
 import { cn } from "@/lib/utils";
+import { sendSignupAttribution } from "../analytics/attribution";
 import { track } from "../analytics/track";
 import { type OnboardingStep, useOnboardingStatus } from "../api/queries";
 import { useAuthAdapter } from "../auth/use-auth-adapter";
@@ -49,6 +50,12 @@ export default function OnboardLayout() {
 	// refetch even when `steps` is unchanged, which would refire this on every
 	// background revalidation.
 	const ready = !isLoading && data !== undefined;
+
+	// Every new account passes through here signed in, so this is where the
+	// attribution stashed on /sign-up reaches the server (once).
+	useEffect(() => {
+		sendSignupAttribution();
+	}, []);
 
 	// Fires once per distinct step actually shown, not once per
 	// onboarding/status refetch — this is the signal that would have shown
