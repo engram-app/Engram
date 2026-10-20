@@ -99,6 +99,79 @@ defmodule Engram.Notes.CrdtTransportTest do
     end
   end
 
+  # The checkpoint's flatten (big, many-client docs) replaces the stored doc
+  # with a fresh lineage: the structs a client's state vector names are gone.
+  # A room-free delivery diffed against that pre-flatten vector then has
+  # missing dependencies, and yrs parks it as pending rather than applying it.
+  # Acknowledging that told the client "delivered" for an edit the server does
+  # not hold; it is refused instead, so the client resends its full state.
+  describe "apply_update/5 with missing dependencies" do
+    defp flatten_stored!(user, vault, note) do
+      {:ok, %{update: full}} = CrdtTransport.read_delta(user, vault, note.id, nil)
+      doc = CrdtBridge.new_doc()
+      :ok = Yex.apply_update(doc, full)
+      {:ok, %{state: flat}} = CrdtBridge.flatten(doc)
+      {:ok, {ct, nonce}} = Engram.Crypto.encrypt_crdt_state(flat, user, note.id)
+
+      Repo.with_tenant!(user.id, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id),
+          set: [crdt_state_ciphertext: ct, crdt_state_nonce: nonce]
+        )
+      end)
+    end
+
+    test "a diff against a pre-flatten state vector is refused, and nothing of it is kept",
+         %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "F/A.md", content: "hello"}, actor: "api")
+
+      on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+
+      # The client holds the pre-flatten lineage and edits on top of it.
+      {:ok, %{update: full}} = CrdtTransport.read_delta(user, vault, note.id, nil)
+      client = CrdtBridge.new_doc()
+      :ok = Yex.apply_update(client, full)
+      acked_sv = Yex.encode_state_vector!(client)
+      CrdtBridge.ingest_plaintext(client, "hello world")
+      {:ok, diff} = Yex.encode_state_as_update(client, acked_sv)
+
+      flatten_stored!(user, vault, note)
+
+      assert {:error, :missing_dependencies} =
+               CrdtTransport.apply_update(user, vault, note.id, diff)
+
+      assert {:ok, %{update: server}} = CrdtTransport.read_delta(user, vault, note.id, nil)
+      probe = CrdtBridge.new_doc()
+      :ok = Yex.apply_update(probe, server)
+      assert {:ok, nil} = Yex.Doc.get_pending_update(probe)
+      assert CrdtBridge.body_of(probe) == "hello"
+
+      # The fallback: the client's full state applies and the two converge.
+      {:ok, whole} = Yex.encode_state_as_update(client)
+      assert {:ok, _} = CrdtTransport.apply_update(user, vault, note.id, whole)
+      {:ok, %{update: after_}} = CrdtTransport.read_delta(user, vault, note.id, nil)
+      :ok = Yex.apply_update(client, after_)
+      converged = CrdtBridge.new_doc()
+      :ok = Yex.apply_update(converged, after_)
+      assert CrdtBridge.body_of(converged) == CrdtBridge.body_of(client)
+    end
+
+    # Old plugins send full state; a full state carries its own dependencies.
+    test "a full-state delivery is still acknowledged", %{user: user, vault: vault} do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{path: "F/B.md", content: "base"}, actor: "api")
+
+      on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
+      {:ok, %{update: full}} = CrdtTransport.read_delta(user, vault, note.id, nil)
+      client = CrdtBridge.new_doc()
+      :ok = Yex.apply_update(client, full)
+      CrdtBridge.ingest_plaintext(client, "base more")
+      {:ok, whole} = Yex.encode_state_as_update(client)
+
+      assert {:ok, _} = CrdtTransport.apply_update(user, vault, note.id, whole)
+    end
+  end
+
   describe "read_delta/4" do
     test "full state (since=nil) reconstructs the note text on a fresh client doc",
          %{user: user, vault: vault} do
