@@ -198,9 +198,14 @@ async function authFetch(
 	};
 	const { response, attempt } = await attemptFetch(1);
 
-	// The first attempt may have reached the server and deleted the resource
-	// before the connection failed: a 404 on the repeat means it is gone.
+	// A 404 on the repeat of a DELETE: either the first attempt reached the
+	// server and deleted it before the connection failed, or it never arrived
+	// and the id was wrong all along. The user's goal (it is gone) holds either
+	// way, and failing would read as "delete failed" for a delete that worked,
+	// so it resolves. The ambiguity is logged, so a wrong-id bug that only
+	// shows up when a network error coincides is still countable in Loki.
 	if (attempt === 2 && method === "DELETE" && response.status === 404) {
+		rlog().warn("api_request", `delete_retry_not_found DELETE ${scrubUrl(url)}`);
 		return new Response(null, { status: 204 });
 	}
 

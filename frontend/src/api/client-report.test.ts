@@ -4,8 +4,9 @@ import { ApiError, api } from "./client";
 import { queryClient } from "./query-client";
 
 const mockError = vi.hoisted(() => vi.fn());
+const mockWarn = vi.hoisted(() => vi.fn());
 vi.mock("../observability/remote-log", () => ({
-	rlog: () => ({ info: vi.fn(), warn: vi.fn(), error: mockError }),
+	rlog: () => ({ info: vi.fn(), warn: mockWarn, error: mockError }),
 }));
 
 function respond(status: number) {
@@ -327,14 +328,21 @@ describe("idempotent writes retry once on a network error", () => {
 		expect(mockError.mock.calls[0]?.[2]).toMatchObject({ attempt: 2 });
 	});
 
-	// The first attempt may have reached the server and deleted it.
-	it("a 404 on the retry of a DELETE means it is gone: success", async () => {
+	// The first attempt may have reached the server and deleted it; or it never
+	// arrived and the id was wrong all along. The user's goal holds either way,
+	// so it resolves, but the case is logged so a wrong-id bug stays countable.
+	it("a 404 on the retry of a DELETE resolves, and is logged once", async () => {
+		mockWarn.mockClear();
 		outcomes(
 			new TypeError("Failed to fetch"),
 			new Response(JSON.stringify({ error: "not_found" }), { status: 404 }),
 		);
 
 		await expect(api.del("/vaults/v1")).resolves.toBeUndefined();
+
+		expect(mockWarn).toHaveBeenCalledOnce();
+		expect(mockWarn.mock.calls[0]?.[0]).toBe("api_request");
+		expect(String(mockWarn.mock.calls[0]?.[1])).toMatch(/^delete_retry_not_found DELETE /);
 	});
 
 	it("a 404 on a first DELETE is still an error", async () => {
