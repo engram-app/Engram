@@ -6,8 +6,8 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   enqueued by every DEK rotation right after its flip.
 
   The case it exists for: every filter HMAC derives from the DEK. A rotation
-  rekeys the rows, and the points follow here, outside the rotation (nothing
-  network-bound may sit before the rotation's flip). A rotation before this
+  rekeys the rows, and the points follow here, outside the rotation (no
+  Qdrant call may sit before the rotation's flip). A rotation before this
   worker existed left the points on the old key for good.
 
   A note is checked while its `payload_hash` is NULL. Its points are READ
@@ -61,7 +61,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   def timeout(_job), do: :timer.minutes(5)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"user_id" => user_id} = args}) do
+  def perform(%Oban.Job{args: %{"user_id" => user_id} = args} = job) do
     with %User{} = user <- Repo.get(User, user_id),
          :ok <- RotationGate.check_user(user) do
       deadline = System.monotonic_time(:millisecond) + @budget_ms
@@ -81,8 +81,23 @@ defmodule Engram.Workers.ReconcileNotePayloads do
       end
     else
       nil -> :ok
-      {:error, :rotation_in_progress} -> {:snooze, 60}
+      {:error, :rotation_in_progress} -> locked_snooze(user_id, job)
     end
+  end
+
+  # A crashed rotation keeps its lock on purpose (an operator must clear it),
+  # and the heal must not write under it, so it keeps snoozing. After an
+  # hour of that, one warning per job.
+  @lock_warn_after 60
+  defp locked_snooze(user_id, %Oban.Job{meta: meta}) do
+    if (meta["snoozed"] || 0) == @lock_warn_after do
+      Logger.warning(
+        "note payload reconcile: rotation lock held for an hour, still waiting",
+        Metadata.with_category(:warning, :oban, user_id: user_id)
+      )
+    end
+
+    {:snooze, 60}
   end
 
   @doc "Enqueues a chain for every user with an unstamped indexed note. Returns how many."
@@ -195,13 +210,22 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   # `%{point_id => payload}` for the points that exist, payload keys only.
   defp read_payloads(user_id, ids) do
-    keys = Indexing.expected_note_payload(%Note{}) |> Map.keys() |> Enum.map(&to_string/1)
+    keys = ["u" | Indexing.expected_note_payload(%Note{}) |> Map.keys() |> Enum.map(&to_string/1)]
 
     ids
     |> Enum.chunk_every(Qdrant.max_ids())
     |> Enum.reduce_while({:ok, %{}}, fn chunk, {:ok, acc} ->
       case Qdrant.scroll(Qdrant.collection_name(),
-             filter: %{must: [%{has_id: chunk}, %{key: "user_id", match: %{value: user_id}}]},
+             filter: %{
+               must: [%{has_id: chunk}],
+               # v3 points carry `user_id`; v5 ones carry `u` (an encoded id)
+               # instead. Both must come back, or a v5 note reads as "all
+               # points gone" and is stamped out of the v5 heal's reach.
+               should: [
+                 %{key: "user_id", match: %{value: user_id}},
+                 %{must_not: [%{is_empty: %{key: "u"}}]}
+               ]
+             },
              with_payload: keys,
              limit: length(chunk)
            ) do
