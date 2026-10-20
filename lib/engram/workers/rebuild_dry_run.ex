@@ -12,7 +12,9 @@ defmodule Engram.Workers.RebuildDryRun do
   next tick, and only a run that reaches the end seals.
   """
   use Oban.Worker,
-    queue: :maintenance,
+    # :events, not :maintenance: that queue runs the cron workers only
+    # (ObanQueueConfigTest).
+    queue: :events,
     max_attempts: 1,
     unique: [period: :infinity, states: [:available, :scheduled, :executing]]
 
