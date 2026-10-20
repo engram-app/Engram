@@ -17,19 +17,23 @@ defmodule Engram.IndexingChunkTextTest do
 
   @path "Health/Iron Panel.md"
 
+  # Over 512 B a section: the v5 chunker's min512 coalesce (#2084) would
+  # otherwise merge these short sections into one chunk.
+  @pad String.duplicate("filler words here ", 30)
+
   defp content(ferritin_body) do
     """
     # Iron Panel
 
-    Intro paragraph.
+    Intro paragraph. #{@pad}
 
     ## Ferritin
 
-    #{ferritin_body}
+    #{ferritin_body} #{@pad}
 
     ## Transferrin
 
-    Transferrin saturation is normal.
+    Transferrin saturation is normal. #{@pad}
     """
   end
 
