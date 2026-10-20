@@ -49,6 +49,11 @@ services:
 
   postgres:
     image: postgres:18.4
+    # Throwaway data dir in RAM, as the unit-tests job does. On the gamingpc
+    # VMs a shared-disk sync stalled initdb 23 s plus a 6 s shutdown
+    # checkpoint, past the 30 s health budget (run 39373741040).
+    tmpfs:
+      - /var/lib/postgresql
     ports:
       - "${CI_PG_PORT:-5443}:5432"
     environment:
