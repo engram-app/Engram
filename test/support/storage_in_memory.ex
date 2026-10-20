@@ -55,6 +55,15 @@ defmodule Engram.Storage.InMemory do
   end
 
   @impl true
+  def get_range(key, offset, length) do
+    with {:ok, binary} <- get(key) do
+      if offset + length <= byte_size(binary),
+        do: {:ok, binary_part(binary, offset, length)},
+        else: {:error, :invalid_range}
+    end
+  end
+
+  @impl true
   def delete(key) do
     ensure_table()
     :ets.delete(@table, key)

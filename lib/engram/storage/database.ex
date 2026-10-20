@@ -57,6 +57,11 @@ defmodule Engram.Storage.Database do
     e -> {:error, e}
   end
 
+  # Ranged reads serve segmented (v2) attachments, which only multipart
+  # backends can write; this adapter is not one (`multipart?/0`).
+  @impl true
+  def get_range(_key, _offset, _length), do: {:error, :unsupported}
+
   @impl true
   def delete(key) when is_binary(key) do
     _ = Repo.query!("DELETE FROM storage_objects WHERE storage_key = $1", [key])

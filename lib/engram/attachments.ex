@@ -57,7 +57,7 @@ defmodule Engram.Attachments do
          # Security boundary: enforced HERE, not (only) in the controller —
          # MCP tools, Oban jobs, and console callers must hit the same gate.
          :ok <- MimeWhitelist.check(explicit_mime || MimeWhitelist.detect_mime(path), path),
-         :ok <- validate_size(plaintext, user),
+         :ok <- validate_size(byte_size(plaintext), user),
          {:ok, user} <- Crypto.ensure_user_dek(user),
          {:ok, filter_key} <- Crypto.dek_filter_key(user),
          path_hmac = Crypto.hmac_field(filter_key, path),
@@ -98,70 +98,120 @@ defmodule Engram.Attachments do
         # T3-audit H1 — concurrent upserts to the same path can race: each
         # encrypts the blob with AAD bound to its own att_id, then PUTs to
         # the same S3 key (last writer wins on the blob). The surviving DB
-        # row's id must match the AAD baked into the surviving blob, so the
-        # row write is serialized per (user, path) via a transaction-scoped
-        # advisory lock; if the locked re-read reveals a different winning
-        # id, we re-encrypt + re-PUT under the lock (rare race path only).
-        # The lock auto-releases on commit/rollback.
-        result =
-          Repo.transaction(fn ->
-            :ok = acquire_path_lock(user.id, path_hmac)
-
-            existing = fetch_existing(user, vault.id, path_hmac)
-
-            rebind =
-              case existing do
-                %Attachment{id: id} when id != att_id0 ->
-                  with {:ok, rebind_key, attrs1, ciphertext1} <-
-                         prepare_upload(
-                           user,
-                           vault,
-                           id,
-                           path,
-                           {path_hmac, basename_hmac},
-                           plaintext,
-                           mtime,
-                           explicit_mime
-                         ),
-                       :ok <- store_external(rebind_key, ciphertext1, attrs1.mime_type) do
-                    {:ok, attrs1}
-                  end
-
-                _ ->
-                  {:ok, attrs0}
-              end
-
-            with {:ok, changeset_attrs} <- rebind,
-                 {:ok, att} <- write_row(user, existing, att_id0, changeset_attrs) do
-              # Phase B.3: path is virtual — splice the plaintext we already
-              # have onto the returned struct so callers can read att.path
-              # without a second decrypt round-trip. `is_nil(existing)`
-              # (captured under the same lock that decided insert-vs-update
-              # in write_row/4) tells the caller below whether this was a
-              # CREATE, for the #591 create-only rebind hook.
-              {:ok, %{att | path: path}}
+        # row's id must match the AAD baked into the surviving blob, so
+        # commit_row/5 serializes the row write per (user, path); if the
+        # locked re-read reveals a different winning id, we re-encrypt +
+        # re-PUT under the lock (rare race path only).
+        commit_row(user, vault, path, path_hmac, fn
+          %Attachment{id: id} when id != att_id0 ->
+            with {:ok, rebind_key, attrs1, ciphertext1} <-
+                   prepare_upload(
+                     user,
+                     vault,
+                     id,
+                     path,
+                     {path_hmac, basename_hmac},
+                     plaintext,
+                     mtime,
+                     explicit_mime
+                   ),
+                 :ok <- store_external(rebind_key, ciphertext1, attrs1.mime_type) do
+              {:ok, id, attrs1}
             end
-            |> case do
-              {:ok, pair} -> pair
-              {:error, reason} -> Repo.rollback(reason)
-            end
-          end)
 
-        # Real-time notification (Engram#942) — create/upload previously had NO
-        # live signal at all (only delete and move broadcast), so peers only
-        # ever saw a new/changed attachment via the next manual pull. Mirrors
-        # the "upsert" leg of move_attachment/4's broadcast_attachment/5 below
-        # — the plugin's WebSocket handler already fetches + materializes any
-        # attachment "upsert" event (it's the same code path move's new-path
-        # leg drives), so no plugin change is needed.
-        with {:ok, %Attachment{} = att} <- result do
-          broadcast_attachment(user.id, vault.id, "upsert", path, att)
-        end
+          # A chunked upload committed this row after our pre-lock PUT, and
+          # its cleanup may already have deleted the key we wrote (it held
+          # the row's old blob). Write it again now that we hold the lock.
+          %Attachment{storage_key: other} when is_binary(other) and other != key ->
+            with :ok <- store_external(key, ciphertext, attrs0.mime_type),
+                 do: {:ok, att_id0, attrs0}
 
-        result
+          _ ->
+            {:ok, att_id0, attrs0}
+        end)
       end
     end
   end
+
+  @doc false
+  # The locked row write shared by single-request uploads (above) and chunked
+  # ones (`Engram.Attachments.Uploads.complete/3`). Takes the per-path
+  # advisory lock, re-reads the live row at `path_hmac` and hands it (or nil)
+  # to `build`, which returns `{:ok, insert_id, attrs}`; `insert_id` is used
+  # only when no live row holds the path. The lock auto-releases on
+  # commit/rollback, and an `{:error, reason}` from `build` rolls back.
+  #
+  # After commit: releases the replaced row's blob when the new write moved
+  # the row to a different storage key, then broadcasts the upsert.
+  @spec commit_row(map(), map(), String.t(), binary(), (Attachment.t() | nil ->
+                                                          {:ok, Ecto.UUID.t(), map()}
+                                                          | {:error, term()})) ::
+          {:ok, Attachment.t()} | {:error, term()}
+  def commit_row(user, vault, path, path_hmac, build) do
+    Repo.transaction(fn ->
+      :ok = acquire_path_lock(user.id, path_hmac)
+      existing = fetch_existing(user, vault.id, path_hmac)
+
+      with {:ok, insert_id, attrs} <- build.(existing),
+           {:ok, att} <- write_row(user, existing, insert_id, attrs) do
+        # Phase B.3: path is virtual — splice the plaintext we already have
+        # onto the returned struct so callers can read att.path without a
+        # second decrypt round-trip.
+        {%{att | path: path}, existing}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, {att, existing}} ->
+        :ok = release_replaced_blob(user, vault, path_hmac, existing, att)
+
+        # Real-time notification (Engram#942) — create/upload previously had
+        # NO live signal at all (only delete and move broadcast), so peers
+        # only ever saw a new/changed attachment via the next manual pull.
+        # The plugin's WebSocket handler already fetches + materializes any
+        # attachment "upsert" event, so no plugin change is needed.
+        broadcast_attachment(user.id, vault.id, "upsert", path, att)
+        {:ok, att}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # A write that moved the row to a new storage key (a chunked upload always
+  # does; a single-request upload does when it replaces a chunked one) leaves
+  # the old blob unreferenced. Deleted under the path lock, and only if the
+  # live row has not since been pointed back at it: a single-request upload
+  # writes its blob BEFORE taking the lock, then re-PUTs under the lock when
+  # it sees the row moved (commit_row's build above), so the check and the
+  # delete must not interleave with that.
+  #
+  # ponytail: path lock only. A concurrent move of the row to another path
+  # plus a single-request upload there is not serialized against this
+  # delete; lock on the row id if that ever shows up.
+  defp release_replaced_blob(
+         user,
+         vault,
+         path_hmac,
+         %Attachment{storage_key: old},
+         %Attachment{storage_key: new}
+       )
+       when is_binary(old) and old != new do
+    {:ok, :ok} =
+      Repo.transaction(fn ->
+        :ok = acquire_path_lock(user.id, path_hmac)
+
+        case fetch_existing(user, vault.id, path_hmac) do
+          %Attachment{storage_key: ^old} -> :ok
+          _ -> delete_external(old)
+        end
+      end)
+
+    :ok
+  end
+
+  defp release_replaced_blob(_user, _vault, _path_hmac, _existing, _att), do: :ok
 
   # `{:ok, att}` when the stored bytes are already the offered bytes (the `with`
   # above short-circuits and returns it); `:changed` otherwise.
@@ -219,7 +269,8 @@ defmodule Engram.Attachments do
 
   defp identical_or_changed(_user, _existing, _plaintext, _path, _explicit_mime), do: :changed
 
-  defp fetch_existing(user, vault_id, path_hmac) do
+  @doc false
+  def fetch_existing(user, vault_id, path_hmac) do
     Repo.with_tenant(user.id, fn ->
       Repo.one(from(a in scoped_live(user, vault_id), where: a.path_hmac == ^path_hmac))
     end)
@@ -1402,7 +1453,8 @@ defmodule Engram.Attachments do
   # Pricing v2 §G — per-plan max_file_bytes via `Engram.Billing`. When
   # limits aren't enforced (self-host without Paddle), `effective_limit`
   # returns `:unlimited` and uploads are unbounded — operator's call.
-  defp validate_size(binary, user) do
+  @doc false
+  def validate_size(size, user) when is_integer(size) do
     case Billing.effective_limit(user, :max_file_bytes) do
       # A NEGATIVE limit is the "unlimited" sentinel (check_limit/3,
       # normalize_capability/2, Billing.plan_state/1), never a real ceiling.
@@ -1410,7 +1462,7 @@ defmodule Engram.Attachments do
       # upload as {:too_large, -1} — and since the client is told the limit is
       # nil, its own pre-gate passes and the rejection arrives unexplained.
       n when is_integer(n) and n < 0 -> :ok
-      n when is_integer(n) and byte_size(binary) > n -> {:error, {:too_large, n}}
+      n when is_integer(n) and size > n -> {:error, {:too_large, n}}
       _ -> :ok
     end
   end
@@ -1420,7 +1472,8 @@ defmodule Engram.Attachments do
   # size (if upserting) plus the new payload size. Sum is scoped to
   # non-deleted rows via storage_usage/1. Runs inside the per-path
   # advisory lock for consistency with the writer's view of `existing`.
-  defp validate_storage_cap(user, existing, new_size) do
+  @doc false
+  def validate_storage_cap(user, existing, new_size) do
     case Billing.effective_limit(user, :attachment_bytes_cap) do
       # Same unlimited sentinel as validate_size/2 above.
       n when is_integer(n) and n < 0 ->
@@ -1444,7 +1497,7 @@ defmodule Engram.Attachments do
          vault,
          att_id,
          path,
-         {path_hmac, basename_hmac},
+         hmacs,
          plaintext,
          mtime,
          explicit_mime
@@ -1456,36 +1509,51 @@ defmodule Engram.Attachments do
          {:ok, content_key} <- Crypto.dek_content_hash_key(user) do
       hash = Crypto.hmac_content_hash(content_key, plaintext)
       content_aad = Crypto.aad_for_row(:attachments, :content, att_id)
-      path_aad = Crypto.aad_for_row(:attachments, :path, att_id)
       {ciphertext, nonce} = Envelope.encrypt(plaintext, dek, content_aad)
-      {path_ct, path_n} = Envelope.encrypt(path, dek, path_aad)
 
-      attrs = %{
-        content_hash: hash,
-        mime_type: mime,
-        size_bytes: byte_size(plaintext),
-        mtime: mtime,
-        user_id: user.id,
-        vault_id: vault.id,
-        storage_key: key,
-        deleted_at: nil,
-        encryption_version: 1,
-        dek_version: Crypto.row_version_aad_bound(),
-        content_nonce: nonce,
+      attrs =
+        %{
+          content_hash: hash,
+          mime_type: mime,
+          size_bytes: byte_size(plaintext),
+          mtime: mtime,
+          user_id: user.id,
+          vault_id: vault.id,
+          storage_key: key,
+          deleted_at: nil,
+          encryption_version: 1,
+          dek_version: Crypto.row_version_aad_bound(),
+          content_nonce: nonce,
+          # Clears a segmented (v2) row's fields when this replaces one.
+          wrapped_file_key: nil,
+          file_key_nonce: nil,
+          upload_id: nil,
+          segment_size: nil,
+          segment_count: nil
+        }
+        |> Map.merge(path_attrs(dek, att_id, path, hmacs))
+
+      {:ok, key, attrs, ciphertext}
+    end
+  end
+
+  @doc false
+  # The path columns of an attachment row: ciphertext bound to `att_id`, the
+  # lookup HMACs, and the link-resolution keys.
+  @spec path_attrs(binary(), Ecto.UUID.t(), String.t(), {binary(), binary()}) :: map()
+  def path_attrs(dek, att_id, path, {path_hmac, basename_hmac}) do
+    path_aad = Crypto.aad_for_row(:attachments, :path, att_id)
+    {path_ct, path_n} = Envelope.encrypt(path, dek, path_aad)
+
+    Map.merge(
+      %{
         path_ciphertext: path_ct,
         path_nonce: path_n,
         path_hmac: path_hmac,
         basename_hmac: basename_hmac
-      }
-
-      attrs =
-        Map.merge(
-          attrs,
-          Map.new(Links.path_keys(Crypto.dek_filter_key_from_bytes(dek), path, path_n))
-        )
-
-      {:ok, key, attrs, ciphertext}
-    end
+      },
+      Map.new(Links.path_keys(Crypto.dek_filter_key_from_bytes(dek), path, path_n))
+    )
   end
 
   defp store_external(key, binary, mime) do

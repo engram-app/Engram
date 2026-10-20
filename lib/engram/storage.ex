@@ -10,6 +10,13 @@ defmodule Engram.Storage do
   @callback get(key :: String.t()) ::
               {:ok, binary()} | {:error, :not_found | term()}
 
+  @doc """
+  Reads `length` bytes of `key` starting at byte `offset` (an S3 ranged GET).
+  Lets a segmented (format v2) attachment be read one segment at a time.
+  """
+  @callback get_range(key :: String.t(), offset :: non_neg_integer(), length :: pos_integer()) ::
+              {:ok, binary()} | {:error, :not_found | term()}
+
   @callback delete(key :: String.t()) ::
               :ok | {:error, term()}
 
