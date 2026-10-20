@@ -1079,11 +1079,15 @@ defmodule Engram.Crypto.UserDekRotation do
           end
       end
 
-    if sets do
-      {_, _} =
-        from(c in Engram.Notes.Chunk, where: c.id == ^chunk.id)
-        |> Repo.update_all([set: sets], skip_tenant_check: true)
-    end
+    write_chunk_text(chunk.id, sets)
+  end
+
+  defp write_chunk_text(_id, nil), do: :ok
+
+  defp write_chunk_text(id, sets) do
+    {_, _} =
+      from(c in Engram.Notes.Chunk, where: c.id == ^id)
+      |> Repo.update_all([set: sets], skip_tenant_check: true)
 
     :ok
   end
