@@ -200,7 +200,12 @@ defmodule Engram.IndexingNoteCapTest do
       first = hd(chunks)
       prefix = fn full, text -> binary_part(full, 0, byte_size(full) - byte_size(text)) end
 
-      assert first_group.heading_path == first.heading_path
+      # Review L5: a merged point spans several sections, so its first
+      # member's heading would label the hit wrongly: none until Task 13.1's
+      # breadcrumbs.
+      assert first_group.merged
+      assert first_group.heading_path == nil
+      assert first.heading_path != nil
 
       # iodata on a merged chunk (prefix, text), flattened by each consumer.
       assert IO.iodata_to_binary(first_group.context_text) ==

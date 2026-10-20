@@ -486,7 +486,9 @@ defmodule Engram.Indexing do
     * `text`: the members' `text` joined with "\n\n"
     * `context_text` / `embed_text`: its first member's prefix + that text,
       exactly what the chunker gives a single chunk with that text
-    * `heading_path` and `kind`: its first member's (every member's kind)
+    * `heading_path`: nil. It spans sections, so its first member's heading
+      would label a hit wrongly (review L5); Task 13.1 adds breadcrumbs
+    * `kind`: "prose" if any member is, else its first member's
     * `char_start` of its first member to the largest `char_end` (a
       frontmatter chunk has `char_end` 0)
     * `token_count`: the members' `UsageMeters.estimate_tokens/1` sum
@@ -624,6 +626,7 @@ defmodule Engram.Indexing do
     # time.
     Map.merge(first, %{
       kind: if(prose?, do: "prose", else: first.kind),
+      heading_path: nil,
       text: text,
       context_text: [prefix(first.context_text, first.text), text],
       embed_text: [prefix(first.embed_text, first.text), embed],
