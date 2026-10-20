@@ -79,7 +79,8 @@ defmodule Engram.Storage.DatabaseTest do
     # bounds are bind parameters, so even a generic plan can use it.
     test "the prefix delete is an index range scan" do
       {_, queries} = Engram.QueryRecorder.record(fn -> Database.delete_prefix("1/") end)
-      [sql] = for %{sql: sql} <- queries, sql =~ "DELETE FROM storage_objects", do: sql
+      me = self()
+      [sql] = for %{sql: sql, pid: ^me} <- queries, sql =~ "DELETE FROM storage_objects", do: sql
       plan = Engram.QueryPlan.generic_plan(sql, analyze: ["storage_objects"])
       assert plan =~ "storage_objects_storage_key_pattern_index", plan
     end

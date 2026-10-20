@@ -53,7 +53,9 @@ defmodule Engram.NotesContentWritePathTest do
         Notes.upsert_note(u, v, %{"path" => "Dir/A.md", "content" => "c"}, actor: "api")
       end)
 
-    [update] = for %{sql: "UPDATE \"notes\"" <> _ = sql} <- queries, sql =~ "WHERE", do: sql
+    # This process's statements only: the recorder sees async siblings' too.
+    me = self()
+    [update] = for %{sql: "UPDATE \"notes\" SET" <> _ = sql, pid: ^me} <- queries, do: sql
     [_, where] = String.split(update, " WHERE ", parts: 2)
     assert where =~ ~s("crdt_state_nonce" = $)
     refute where =~ "crdt_state_ciphertext"
