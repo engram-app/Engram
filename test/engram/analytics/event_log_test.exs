@@ -215,5 +215,33 @@ defmodule Engram.Analytics.EventLogTest do
       assert {:ok, 1} = perform_job(AnalyticsEventsPrune, %{})
       assert Repo.all(from(e in Event, select: e.event, order_by: e.event)) == ["kept", "new"]
     end
+
+    # Retention follows the readers: the operator reports look a user's
+    # metrics up up to two years back (the longest report window), but read
+    # vault metrics only for the last 30 days, and the per-user page within
+    # the default 180-day window.
+    test "prunes daily metrics: users after two years, vaults after 180 days" do
+      alias Engram.Insights.{UserDailyMetric, VaultDailyMetric}
+
+      user = insert(:user)
+      vault = insert(:vault, user: user)
+      today = Date.utc_today()
+
+      for d <- [731, 729] do
+        Repo.insert!(%UserDailyMetric{user_id: user.id, date: Date.add(today, -d)})
+      end
+
+      for d <- [181, 179] do
+        Repo.insert!(
+          %VaultDailyMetric{vault_id: vault.id, user_id: user.id, date: Date.add(today, -d)},
+          skip_tenant_check: true
+        )
+      end
+
+      assert {:ok, 0} = perform_job(AnalyticsEventsPrune, %{})
+
+      assert Repo.all(from(m in UserDailyMetric, select: m.date)) == [Date.add(today, -729)]
+      assert Repo.all(from(m in VaultDailyMetric, select: m.date)) == [Date.add(today, -179)]
+    end
   end
 end
