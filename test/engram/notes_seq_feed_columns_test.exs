@@ -29,8 +29,12 @@ defmodule Engram.NotesSeqFeedColumnsTest do
 
     assert [%{path: "A.md", content: "hello"}] = changes
 
+    # Own process only: the recorder sees async siblings' queries too (e.g. a
+    # direct `Repo.all(Note)` in NotesSeqTest selects every column).
+    me = self()
+
     page =
-      for %{sql: sql} <- queries,
+      for %{sql: sql, pid: ^me} <- queries,
           sql =~ ~s(FROM "notes"),
           sql =~ ~s("seq" > ),
           not (sql =~ "pg_column_size"),

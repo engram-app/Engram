@@ -44,7 +44,11 @@ defmodule Engram.NotesPathIndexPlanTest do
     assert sqls != [], "recorded no path lookup on notes; the test no longer reaches it"
 
     for sql <- sqls do
-      plan = QueryPlan.generic_plan(sql, analyze: ["notes"])
+      # `= ANY($n)` is costed as 10 index descents; on 300 rows one bitmap over
+      # the vault via another (user_id, vault_id, ...) index can cost less, and
+      # which one wins flips with ANALYZE's sample. A prod vault spans far more
+      # pages, so the bitmap is ruled out here rather than outvoted.
+      plan = QueryPlan.generic_plan(sql, analyze: ["notes"], bitmapscan: false)
       assert plan =~ index, "expected #{index} to serve:\n#{sql}\n\nplan:\n#{plan}"
     end
   end

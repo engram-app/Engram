@@ -8,13 +8,15 @@ defmodule Engram.TokenCleanupIndexPlanTest do
   alias Engram.QueryPlan
   alias Engram.QueryRecorder
 
-  defp plans(fun, table) do
+  defp plans(fun, table, opts \\ []) do
     {_, queries} = QueryRecorder.record(fun)
+    # Own process only: the recorder sees async siblings' queries too.
+    me = self()
 
-    for %{sql: sql} <- queries,
+    for %{sql: sql, pid: ^me} <- queries,
         sql =~ ~s("#{table}"),
         not String.starts_with?(sql, "SELECT pg_"),
-        do: {sql, QueryPlan.generic_plan(sql)}
+        do: {sql, QueryPlan.generic_plan(sql, opts)}
   end
 
   test "device token cleanup uses the revoked and the unrevoked-expiry indexes" do
@@ -36,7 +38,16 @@ defmodule Engram.TokenCleanupIndexPlanTest do
       revoked_at: long_ago
     )
 
-    plans = plans(&OAuth.cleanup_expired/0, "oauth_refresh_tokens")
+    # Live tokens around the one revoked row, analyzed: on a near-empty table
+    # the planner can walk the user_id index for the DISTINCT ... ORDER BY and
+    # probe each family instead, a cost tie that flips with whatever other
+    # tests left in the table's statistics. Prod has many live rows per
+    # revoked one, which is the shape the partial index exists for.
+    for _ <- 1..200,
+        do: insert(:oauth_refresh_token, user_id: user.id, client_id: client.client_id)
+
+    plans =
+      plans(&OAuth.cleanup_expired/0, "oauth_refresh_tokens", analyze: ["oauth_refresh_tokens"])
 
     reap =
       for {sql, plan} <- plans, sql =~ "SELECT DISTINCT", sql =~ "family_id\" IN", do: plan
