@@ -826,6 +826,8 @@ export default {
 	"Name this connection {optional}": "Đặt tên cho kết nối này là {optional}",
 	"Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
 		"Giới hạn thiết bị của gói Free của bạn là {count}. Kết nối {client} sẽ ngắt kết nối {name}, thiết bị này sẽ ngừng truy cập vào Engram.",
+	"{client} is connected": "{client} đã kết nối",
+	"Your AI tool is connected": "Công cụ AI của bạn đã kết nối",
 	"What will you use Engram for?": "Bạn sẽ sử dụng Engram cho mục đích gì?",
 	"Review the Terms": "Xem lại Điều khoản",
 	"privacy notice": "Thông báo về quyền riêng tư",

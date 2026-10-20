@@ -814,6 +814,8 @@ export default {
 	"Name this connection {optional}": "이 연결을 {optional}이라고 명명하세요",
 	"Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
 		"무료 플랜의 기기 연결 제한은 {count}입니다. {client}을 연결하면 {name}가 연결 해제되어 Engram에 대한 접근 권한을 잃게 됩니다.",
+	"{client} is connected": "{client}이 연결되었습니다",
+	"Your AI tool is connected": "AI 도구가 연결되었습니다",
 	"What will you use Engram for?": "Engram을 어디에 사용하시겠습니까?",
 	"Review the Terms": "이용 약관 확인",
 	"privacy notice": "개인정보 처리방침",

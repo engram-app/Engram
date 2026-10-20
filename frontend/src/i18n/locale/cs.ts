@@ -894,6 +894,8 @@ export default {
 	"Name this connection {optional}": "Pojmenujte toto připojení {optional}",
 	"Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
 		"Limit zařízení pro váš bezplatný plán je {count}. Připojením {client} se odpojí {name}, které ztratí přístup k vašemu Engram.",
+	"{client} is connected": "{client} je připojen",
+	"Your AI tool is connected": "Váš nástroj umělé inteligence je připojen",
 	"What will you use Engram for?": "K čemu budete Engram používat?",
 	"Review the Terms": "Prohlédněte si podmínky",
 	"privacy notice": "Zásady ochrany osobních údajů",

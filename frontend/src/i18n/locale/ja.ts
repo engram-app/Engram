@@ -826,6 +826,8 @@ export default {
 	"Name this connection {optional}": "この接続を{optional}と名付けます",
 	"Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
 		"無料プランのデバイス接続台数制限は {count} です。{client} を接続すると、{name} が切断され、Engram へのアクセスできなくなります。",
+	"{client} is connected": "{client} に接続されています",
+	"Your AI tool is connected": "AIツールに接続されています",
 	"What will you use Engram for?": "Engramをどのように利用しますか？",
 	"Review the Terms": "利用規約を確認",
 	"privacy notice": "プライバシーポリシー",

@@ -790,6 +790,8 @@ export default {
 	"Name this connection {optional}": "將此連線命名為 {optional}",
 	"Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
 		"您的免費方案的裝置數量上限為 {count}。連接 {client} 將會斷開 {name} 的連線，導致其失去對您的 Engram 的存取權。",
+	"{client} is connected": "{client} 已連線",
+	"Your AI tool is connected": "您的 AI 工具已連線",
 	"What will you use Engram for?": "您將如何使用 Engram？",
 	"Review the Terms": "檢閱條款",
 	"privacy notice": "隱私權聲明",

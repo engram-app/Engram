@@ -830,6 +830,8 @@ export default {
 	"Name this connection {optional}": "Namakan sambungan ini {optional}",
 	"Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
 		"Had peranti pelan percuma anda ialah {count}. Menyambungkan {client} akan memutuskan sambungan {name}, yang akan berhenti mengakses Engram anda.",
+	"{client} is connected": "{client} sedang disambungkan",
+	"Your AI tool is connected": "Alat AI anda sedang disambungkan",
 	"What will you use Engram for?": "Apa yang akan anda gunakan Engram untuk?",
 	"Review the Terms": "Semak Terma",
 	"privacy notice": "Notis privasi",

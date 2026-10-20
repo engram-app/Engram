@@ -903,6 +903,8 @@ export default {
 	"Name this connection {optional}": "Назвіть це з'єднання {optional}",
 	"Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
 		"Ліміт пристроїв для вашого безкоштовного плану – {count}. Підключення {client} призведе до відключення {name}, який втратить доступ до вашого Engram.",
+	"{client} is connected": "{client} підключено",
+	"Your AI tool is connected": "Ваш AI-інструмент підключено",
 	"What will you use Engram for?": "Для чого ви будете використовувати Engram?",
 	"Review the Terms": "Переглянути умови",
 	"privacy notice": "Повідомлення про конфіденційність",
