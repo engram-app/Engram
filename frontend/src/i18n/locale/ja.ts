@@ -153,6 +153,12 @@ export default {
 	"Current Plan": "現在のプラン",
 	Free: "無料",
 	"{count} days remaining in your free trial.": { other: "無料トライアルは残り{count}日です。" },
+	"Indexing budget": "インデックス作成の制限",
+	"{available} of {capacity} tokens left": "残りトークン: {available} / {capacity}",
+	"Refills {perDay} a day, full again on {date}": "毎日 {perDay} トークンを補充、{date} に満杯",
+	Full: "満杯",
+	"New notes are searchable by keyword now and get full search as your budget refills.":
+		"新しいノートはキーワードで検索可能になり、制限が満杯になるとフル検索が利用可能になります。",
 	"Loading current connection…": "接続中です…",
 	"Disconnected. Retry the new connection now.": "接続解除されました。新しい接続を試してください。",
 	"Couldn't disconnect. Try Settings → Connections.":
@@ -835,6 +841,7 @@ export default {
 	"{client} is connected": "{client} に接続されています",
 	"Your AI tool is connected": "AIツールに接続されています",
 	"What will you use Engram for?": "Engramをどのように利用しますか？",
+	"Could not continue. Please try again.": "続行できませんでした。もう一度お試しください。",
 	"Review the Terms": "利用規約を確認",
 	"privacy notice": "プライバシーポリシー",
 	"What changed": "変更点",
@@ -846,7 +853,6 @@ export default {
 		"利用規約とプライバシーポリシーを読み、同意します",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"上記の利用規約とプライバシーポリシーを読み、同意します",
-	"Could not continue. Please try again.": "続行できませんでした。もう一度お試しください。",
 	"Saving…": "保存中…",
 	Continue: "続ける",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

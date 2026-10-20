@@ -162,6 +162,13 @@ export default {
 		many: "До кінця безкоштовного пробного періоду залишилося {count} днів.",
 		other: "До кінця безкоштовного пробного періоду залишилося {count} дні.",
 	},
+	"Indexing budget": "Обсяг індексування",
+	"{available} of {capacity} tokens left": "Залишилося {available} з {capacity} токенів",
+	"Refills {perDay} a day, full again on {date}":
+		"Поповнення {perDay} на день, повне поповнення {date}",
+	Full: "Повно",
+	"New notes are searchable by keyword now and get full search as your budget refills.":
+		"Нові замітки тепер можна шукати за ключовими словами, і вони отримають повний пошук після поповнення вашого обсягу.",
 	"Loading current connection…": "Завантаження поточного з'єднання…",
 	"Disconnected. Retry the new connection now.": "Відключено. Спробуйте повторно підключитися.",
 	"Couldn't disconnect. Try Settings → Connections.":
@@ -912,6 +919,7 @@ export default {
 	"{client} is connected": "{client} підключено",
 	"Your AI tool is connected": "Ваш AI-інструмент підключено",
 	"What will you use Engram for?": "Для чого ви будете використовувати Engram?",
+	"Could not continue. Please try again.": "Не вдалося продовжити. Будь ласка, спробуйте ще раз.",
 	"Review the Terms": "Переглянути умови",
 	"privacy notice": "Повідомлення про конфіденційність",
 	"What changed": "Що змінилося",
@@ -923,7 +931,6 @@ export default {
 		"Я прочитав і погоджуюся з Умовами надання послуг та Політикою конфіденційності",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Я прочитав і погоджуюся з угодою, показаною вище, та політикою конфіденційності",
-	"Could not continue. Please try again.": "Не вдалося продовжити. Будь ласка, спробуйте ще раз.",
 	"Saving…": "Збереження…",
 	Continue: "Продовжити",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

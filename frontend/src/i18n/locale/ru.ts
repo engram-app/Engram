@@ -164,6 +164,12 @@ export default {
 		many: "До окончания бесплатного пробного периода осталось {count} дней.",
 		other: "До окончания бесплатного пробного периода осталось {count} дня.",
 	},
+	"Indexing budget": "Лимит индексации",
+	"{available} of {capacity} tokens left": "Осталось {available} из {capacity} токенов",
+	"Refills {perDay} a day, full again on {date}": "Пополняется {perDay} в день, снова полон {date}",
+	Full: "Заполнено",
+	"New notes are searchable by keyword now and get full search as your budget refills.":
+		"Новые заметки теперь можно искать по ключевым словам, и они будут полностью доступны для поиска после пополнения вашего лимита.",
 	"Loading current connection…": "Загрузка текущего подключения…",
 	"Disconnected. Retry the new connection now.": "Отключено. Повторите подключение.",
 	"Couldn't disconnect. Try Settings → Connections.":
@@ -916,6 +922,7 @@ export default {
 	"{client} is connected": "{client} подключено",
 	"Your AI tool is connected": "Ваш AI-инструмент подключен",
 	"What will you use Engram for?": "Для чего вы будете использовать Engram?",
+	"Could not continue. Please try again.": "Не удалось продолжить. Пожалуйста, попробуйте ещё раз.",
 	"Review the Terms": "Ознакомьтесь с условиями",
 	"privacy notice": "Уведомление о конфиденциальности",
 	"What changed": "Что изменилось",
@@ -928,7 +935,6 @@ export default {
 		"Я прочитал и согласен с Условиями использования и Политикой конфиденциальности",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Я прочитал и согласен с представленным выше соглашением и Уведомлением о конфиденциальности",
-	"Could not continue. Please try again.": "Не удалось продолжить. Пожалуйста, попробуйте ещё раз.",
 	"Saving…": "Сохранение…",
 	Continue: "Продолжить",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

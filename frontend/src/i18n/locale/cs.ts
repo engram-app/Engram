@@ -157,6 +157,13 @@ export default {
 		many: "Zbývá {count} dne vaší bezplatné zkušební verze.",
 		other: "Zbývá {count} dní vaší bezplatné zkušební verze.",
 	},
+	"Indexing budget": "Limit indexace",
+	"{available} of {capacity} tokens left": "Zbývá {available} z {capacity} tokenů",
+	"Refills {perDay} a day, full again on {date}":
+		"Doplňování {perDay} denně, plné znovu dne {date}",
+	Full: "Plné",
+	"New notes are searchable by keyword now and get full search as your budget refills.":
+		"Nové poznámky jsou nyní vyhledávatelné podle klíčových slov a získají plné vyhledávání, jakmile se váš limit doplní.",
 	"Loading current connection…": "Načítám aktuální připojení…",
 	"Disconnected. Retry the new connection now.": "Odpojeno. Zkuste znovu připojit.",
 	"Couldn't disconnect. Try Settings → Connections.":
@@ -903,6 +910,7 @@ export default {
 	"{client} is connected": "{client} je připojen",
 	"Your AI tool is connected": "Váš nástroj umělé inteligence je připojen",
 	"What will you use Engram for?": "K čemu budete Engram používat?",
+	"Could not continue. Please try again.": "Nelze pokračovat. Zkuste to znovu.",
 	"Review the Terms": "Prohlédněte si podmínky",
 	"privacy notice": "Zásady ochrany osobních údajů",
 	"What changed": "Co se změnilo",
@@ -914,7 +922,6 @@ export default {
 		"Přečetl jsem a souhlasím s obchodními podmínkami a zásadami ochrany osobních údajů",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Přečetl jsem a souhlasím s uvedenou smlouvou a prohlášením o ochraně osobních údajů",
-	"Could not continue. Please try again.": "Nelze pokračovat. Zkuste to znovu.",
 	"Saving…": "Ukládám…",
 	Continue: "Pokračovat",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
