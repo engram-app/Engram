@@ -284,6 +284,34 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Korzystasz z bezpłatnego okresu próbnego. Paddle, nasz procesor płatności, nie pozwala na zmiany planu podczas okresu próbnego – Twój okres próbny kończy się {date}.",
 	Upgrade: "Zaktualizuj",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Osiągnąłeś limit {cap} notatek. Nowe notatki przestają się synchronizować, dopóki nie wykupisz dodatkowej przestrzeni lub nie usuniesz niektórych.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Wykorzystałeś {percent}% z {cap} notatek. Przy {cap}, nowe notatki przestają się synchronizować, dopóki nie wykupisz dodatkowej przestrzeni lub nie usuniesz niektórych.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Wykorzystałeś {percent}% z {cap} fragmentów przeszukiwanych. Po przekroczeniu tego limitu, starsze notatki są wyszukiwane tylko po słowach kluczowych (dokładne słowa, nie znaczenie). Nic nie jest usuwane.",
+	"See usage": "Zobacz użycie",
+	Usage: "Użycie",
+	"Notes: {used}": "Notatki: {used}",
+	"Notes: {used} of {cap}": "Notatki: {used} z {cap}",
+	"Full search: {used} of {cap} passages": "Pełne wyszukiwanie: {used} z {cap} fragmentów",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Fragment to jedna wyszukiwalna część notatki. Po przekroczeniu tego limitu, starsze notatki są wyszukiwane tylko po słowach kluczowych (dokładne słowa, nie znaczenie). Nic nie jest usuwane.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			one: "Twoje możliwości pełnego wyszukiwania zostały wykorzystane. Znaleziono {count} starszą notatkę tylko po słowach kluczowych (dokładne słowa, nie znaczenie). Nic nie zostanie usunięte. Zaktualizuj, aby przywrócić pełne wyszukiwanie.",
+			few: "Twoje możliwości pełnego wyszukiwania zostały wykorzystane. Znaleziono {count} starsze notatki tylko po słowach kluczowych (dokładne słowa, nie znaczenie). Nic nie zostanie usunięte. Zaktualizuj, aby przywrócić pełne wyszukiwanie.",
+			many: "Twoje możliwości pełnego wyszukiwania zostały wykorzystane. Znaleziono {count} starszych notatek, ale tylko po słowach kluczowych (dokładne słowa, nie znaczenie). Nic nie zostanie usunięte. Zaktualizuj, aby odzyskać pełne wyszukiwanie.",
+			other:
+				"Wykorzystano wszystkie możliwości pełnego wyszukiwania. Znaleziono {count} starszych notatek, ale tylko po słowach kluczowych (dokładne słowa, nie znaczenie). Nic nie zostanie usunięte. Zaktualizuj, aby przywrócić pełne wyszukiwanie.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		one: "Znaleziono {count} notatkę, pasującą tylko do podanych słów (dokładne słowa, nie znaczenie).",
+		few: "Znaleziono {count} notatki, pasujące tylko do podanych słów (dokładne słowa, nie znaczenie).",
+		many: "Znaleziono {count} notatek, pasujących tylko do podanych słów (dokładne słowa, nie znaczenie).",
+		other:
+			"{count} Notatki są wyszukiwane tylko po słowach kluczowych (dokładne słowa, nie znaczenie).",
+	},
 	"All vaults, including ones you create later":
 		"Wszystkie sejfy, w tym te, które utworzysz później",
 	"All current vaults": "Wszystkie aktualne sejfy",

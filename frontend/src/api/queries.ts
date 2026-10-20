@@ -1346,6 +1346,31 @@ export function useBillingStatus() {
 	});
 }
 
+// GET /billing/usage, the slice the usage meter reads. `limit: null` is
+// uncapped (`index_points` is uncapped while the v5 index budget is off).
+export interface UsageEntry {
+	used: number;
+	limit: number | null;
+}
+
+export interface BillingUsage {
+	tier: string;
+	usage: {
+		notes: UsageEntry;
+		index_points: UsageEntry;
+		// Notes on keyword-only search (the floor tier).
+		floor_notes: number;
+	};
+}
+
+export function useBillingUsage() {
+	return useQuery({
+		queryKey: ["billing", "usage"],
+		queryFn: () => api.get<BillingUsage>("/billing/usage"),
+		staleTime: 60_000,
+	});
+}
+
 export interface BillingConfig {
 	client_token: string;
 	environment: "sandbox" | "production";

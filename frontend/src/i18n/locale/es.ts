@@ -287,6 +287,32 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Estás en una prueba gratuita. Paddle, nuestro procesador de pagos, no permite cambiar de plan mientras la suscripción está en período de prueba; tu prueba finaliza el {date}.",
 	Upgrade: "Actualizar",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Has alcanzado tu límite de {cap} notas. Las nuevas notas dejarán de sincronizarse hasta que actualices o elimines algunas.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Has utilizado el {percent}% de tus {cap} notas. Con {cap}, las nuevas notas dejarán de sincronizarse hasta que actualices o elimines algunas.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Has utilizado el {percent}% de tus {cap} fragmentos con búsqueda completa. Más allá de eso, las notas más antiguas se encuentran solo por palabra clave (palabras exactas, no significado). Nada se elimina.",
+	"See usage": "Ver uso",
+	Usage: "Uso",
+	"Notes: {used}": "Notas: {used}",
+	"Notes: {used} of {cap}": "Notas: {used} de {cap}",
+	"Full search: {used} of {cap} passages": "Búsqueda completa: {used} de {cap} fragmentos",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Un fragmento es una parte de una nota que se puede buscar. Más allá de eso, las notas más antiguas se encuentran solo por palabra clave (palabras exactas, no significado). Nada se elimina.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			one: "Tus búsquedas completas se han agotado. Se encontró {count} nota antigua solo por palabra clave (palabras exactas, no significado). Nada se ha borrado. Actualiza para recuperar la búsqueda completa.",
+			many: "Tus búsquedas completas se han agotado. Se encontraron {count} de notas antiguas solo por palabra clave (palabras exactas, no significado). Nada se elimina. Actualiza para recuperar la búsqueda completa.",
+			other:
+				"Tus búsquedas completas se han agotado. Se encontraron {count} notas antiguas solo por palabra clave (palabras exactas, no significado). Nada se borra. Actualiza para recuperar la búsqueda completa.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		one: "Se encuentra {count} nota solo por palabra clave (palabras exactas, no significado).",
+		many: "Se encontraron {count} notas solo por palabra clave (palabras exactas, no significado).",
+		other:
+			"Se encontraron {count} notas solo por palabra clave (palabras exactas, no significado).",
+	},
 	"All vaults, including ones you create later":
 		"Todas las bóvedas, incluidas las que crees después",
 	"All current vaults": "Todas tus bóvedas actuales",

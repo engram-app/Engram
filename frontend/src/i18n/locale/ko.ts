@@ -274,6 +274,27 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"무료 체험 기간입니다. 결제 처리 업체인 Paddle은 구독이 체험 기간 중인 경우 요금제 변경을 허용하지 않습니다. 체험 기간은 {date}에 종료됩니다.",
 	Upgrade: "업그레이드",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"{cap}개의 노트를 모두 사용했습니다. 새 노트는 업그레이드하거나 일부 노트를 삭제할 때까지 동기화되지 않습니다.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"{cap}개의 노트를 {percent}% 사용했습니다. {cap}을 초과하면 새 노트는 업그레이드하거나 일부 노트를 삭제할 때까지 동기화되지 않습니다.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"전체 검색 기능을 {cap}개의 항목 중 {percent}% 사용했습니다. 이 제한을 초과하면 이전 노트는 키워드만으로 검색되며 (단어 일치, 의미 불문). 데이터는 삭제되지 않습니다.",
+	"See usage": "사용량 확인",
+	Usage: "사용량",
+	"Notes: {used}": "노트: {used}개",
+	"Notes: {used} of {cap}": "노트: {cap}개 중 {used}개",
+	"Full search: {used} of {cap} passages": "전체 검색: {cap}개 항목 중 {used}개",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"'구절'은 노트의 검색 가능한 한 부분입니다. 이 제한을 초과하면 이전 노트는 키워드만으로 검색되며 (단어 일치, 의미 불문). 데이터는 삭제되지 않습니다.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			other:
+				"전체 검색 횟수가 모두 소진되었습니다. {count}개의 이전 노트는 키워드 검색으로만 찾을 수 있습니다 (단어 일치, 의미는 고려하지 않음). 삭제되는 항목은 없습니다. 전체 검색 기능을 다시 사용하려면 업그레이드하세요.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		other: "{count} 노트는 키워드만으로 검색됩니다 (단어 일치, 의미는 고려하지 않음).",
+	},
 	"All vaults, including ones you create later": "모든 보관함, 나중에 생성하는 것도 포함",
 	"All current vaults": "현재 보관함 전체",
 	"Vaults you create later": "나중에 생성하는 보관함",

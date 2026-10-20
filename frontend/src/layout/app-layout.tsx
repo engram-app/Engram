@@ -6,6 +6,7 @@ import { useMediaQuery } from "@/hooks/use-media-query";
 import { useT } from "@/i18n/locale-provider";
 import { useBillingStatus } from "../api/queries";
 import { useChannel } from "../api/use-channel";
+import { UsageBanner } from "../billing/usage-limits";
 import { LegalNoticeBanner } from "../legal/legal-notice-banner";
 import { useConnectionCreatedNotice } from "../oauth/use-connection-created-notice";
 import { AttachmentUploadProvider } from "../viewer/attachment-upload/provider";
@@ -93,6 +94,7 @@ function DesktopLayout() {
 						/>
 						<TrialBanner />
 						<LegalNoticeBanner />
+						<UsageBanner />
 						{/* No floating expand button: the rail's tool group is now the one
 						    discoverable way to open this panel, for every tool. */}
 						<div className="relative z-10 flex-1 overflow-hidden p-6">

@@ -282,6 +282,27 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Anda sedang dalam masa uji coba gratis. Paddle, pemroses pembayaran kami, tidak mengizinkan perubahan paket selama masa uji coba — uji coba Anda akan berakhir pada {date}.",
 	Upgrade: "Tingkatkan",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Anda telah mencapai batas {cap} catatan. Catatan baru berhenti disinkronkan sampai Anda meningkatkan atau menghapus beberapa.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Anda telah menggunakan {percent}% dari {cap} catatan Anda. Pada {cap}, catatan baru berhenti disinkronkan sampai Anda meningkatkan atau menghapus beberapa.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Anda telah menggunakan {percent}% dari {cap} bagian yang dapat dicari sepenuhnya. Melebihi itu, catatan yang lebih lama hanya ditemukan berdasarkan kata kunci (kata yang tepat, bukan makna). Tidak ada yang dihapus.",
+	"See usage": "Lihat penggunaan",
+	Usage: "Penggunaan",
+	"Notes: {used}": "Catatan: {used}",
+	"Notes: {used} of {cap}": "Catatan: {used} dari {cap}",
+	"Full search: {used} of {cap} passages": "Pencarian lengkap: {used} dari {cap} bagian",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Sebuah bagian adalah satu bagian yang dapat dicari dari sebuah catatan. Melebihi itu, catatan yang lebih lama hanya ditemukan berdasarkan kata kunci (kata yang tepat, bukan makna). Tidak ada yang dihapus.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			other:
+				"Bagian pencarian lengkap Anda telah habis. {count} catatan lama ditemukan hanya berdasarkan kata kunci (kata yang tepat, bukan makna). Tidak ada yang dihapus. Tingkatkan untuk mengaktifkan kembali pencarian lengkap.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		other: "{count} catatan ditemukan hanya berdasarkan kata kunci (kata yang tepat, bukan makna).",
+	},
 	"All vaults, including ones you create later": "Semua vault, termasuk yang Anda buat nanti",
 	"All current vaults": "Semua vault yang ada",
 	"Vaults you create later": "Vault yang Anda buat nanti",

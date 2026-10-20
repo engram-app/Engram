@@ -288,6 +288,31 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Você está em um período de teste gratuito. O Paddle, nosso processador de pagamentos, não permite alterações de plano durante o período de teste — seu período de teste termina em {date}.",
 	Upgrade: "Atualizar",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Você atingiu o limite de {cap} notas. Novas notas param de sincronizar até que você faça um upgrade ou remova algumas.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Você utilizou {percent}% das suas {cap} notas. Ao atingir {cap}, novas notas param de sincronizar até que você faça um upgrade ou remova algumas.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Você utilizou {percent}% das suas {cap} passagens com busca completa. Após esse limite, notas mais antigas são encontradas apenas por palavra-chave (palavras exatas, não significado). Nada é excluído.",
+	"See usage": "Ver uso",
+	Usage: "Uso",
+	"Notes: {used}": "Notas: {used}",
+	"Notes: {used} of {cap}": "Notas: {used} de {cap}",
+	"Full search: {used} of {cap} passages": "Busca completa: {used} de {cap} passagens",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Uma passagem é um trecho pesquisável de uma nota. Após esse limite, notas mais antigas são encontradas apenas por palavra-chave (palavras exatas, não significado). Nada é excluído.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			one: "Seus créditos de busca completa foram utilizados. {count} nota mais antiga foi encontrada apenas por palavra-chave (palavras exatas, não significado). Nada foi excluído. Assine para reativar a busca completa.",
+			many: "Seus créditos para busca completa foram utilizados. {count} notas mais antigas são encontradas apenas por palavra-chave (palavras exatas, não significado). Nada é excluído. Faça um upgrade para reativar a busca completa.",
+			other:
+				"Seus trechos de busca completos foram utilizados. {count} notas mais antigas foram encontradas apenas por palavra-chave (palavras exatas, não significado). Nada foi excluído. Assine para reativar a busca completa.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		one: "{count}. As notas são encontradas apenas por palavra-chave (palavras exatas, não significado).",
+		many: "{count} notas encontradas por palavra-chave (correspondência exata, não significado).",
+		other: "{count} notas encontradas por palavra-chave (palavras exatas, não significado).",
+	},
 	"All vaults, including ones you create later":
 		"Todos os cofres, incluindo os que você criar depois",
 	"All current vaults": "Todos os cofres atuais",

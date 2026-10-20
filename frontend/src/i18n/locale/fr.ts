@@ -289,6 +289,31 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Tu profites d'un essai gratuit. Paddle, notre processeur de paiement, ne permet pas de modifier ton abonnement pendant la période d'essai – ton essai se termine le {date}.",
 	Upgrade: "Mettre à niveau",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Tu as atteint ta limite de {cap} notes. Les nouvelles notes cessent de se synchroniser jusqu'à ce que tu passes à une version supérieure ou que tu en supprimes.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Tu as utilisé {percent}% de tes {cap} notes. Au-delà de {cap}, les nouvelles notes cessent de se synchroniser jusqu'à ce que tu passes à une version supérieure ou que tu en supprimes.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Tu as utilisé {percent}% de tes {cap} passages de recherche complète. Au-delà, les notes plus anciennes sont trouvées uniquement par mot-clé (mots exacts, pas le sens). Rien n'est supprimé.",
+	"See usage": "Voir l'utilisation",
+	Usage: "Utilisation",
+	"Notes: {used}": "Notes : {used}",
+	"Notes: {used} of {cap}": "Notes : {used} sur {cap}",
+	"Full search: {used} of {cap} passages": "Recherche complète : {used} sur {cap} passages",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Un passage est une partie d'une note qui peut être recherchée. Au-delà de ça, les notes plus anciennes sont trouvées uniquement par mots-clés (mots exacts, pas le sens). Rien n'est supprimé.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			one: "Tes passages de recherche complète sont épuisés. {count} note plus ancienne est trouvée par mot-clé uniquement (mots exacts, pas le sens). Rien n'est supprimé. Passe à un abonnement payant pour retrouver la recherche complète.",
+			many: "Tes passages de recherche complète sont épuisés. {count} notes plus anciennes sont trouvées par mot-clé seulement (mots exacts, pas le sens). Rien n'est supprimé. Passe à la version Pro pour retrouver la recherche complète.",
+			other:
+				"Tes passages de recherche complète sont épuisés. {count} notes plus anciennes sont trouvées par mot-clé uniquement (mots exacts, pas le sens). Rien n'est supprimé. Passe à la version Pro pour retrouver la recherche complète.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		one: "{count}. Les notes sont trouvées uniquement par mot-clé (mots exacts, pas le sens).",
+		many: "{count} notes trouvées avec les mots-clés (correspondance exacte, pas de sens).",
+		other: "{count} notes trouvées avec le mot-clé (mots exacts, pas le sens).",
+	},
 	"All vaults, including ones you create later":
 		"Tous les coffres, y compris ceux que tu crées plus tard",
 	"All current vaults": "Tous tes coffres actuels",

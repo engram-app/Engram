@@ -4,6 +4,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -69,6 +71,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -134,6 +138,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -199,6 +205,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -264,6 +272,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -329,6 +339,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -394,6 +406,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -459,6 +473,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -524,6 +540,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -589,6 +607,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -654,6 +674,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -719,6 +741,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -784,6 +808,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -849,6 +875,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -914,6 +942,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -979,6 +1009,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",
@@ -1044,6 +1076,8 @@
 		"failed": {},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
+			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
+			"{count} notes are found by keyword only (exact words, not meaning).": "{count} note is found by keyword only (exact words, not meaning).",
 			"{count} notes": "{count} note",
 			"{count} files": "{count} file",
 			"{count} minutes ago": "{count} minute ago",

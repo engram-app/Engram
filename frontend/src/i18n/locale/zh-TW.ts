@@ -261,6 +261,27 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"您正在使用免費試用版。我們的付款處理器 Paddle 不允許在試用期間變更方案 — 您的試用期將於 {date} 結束。",
 	Upgrade: "升級",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"您已達到 {cap} 個筆記的上限。除非您升級或刪除部分筆記，否則新增筆記將停止同步。",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"您已使用 {percent}% 的 {cap} 個筆記。達到 {cap} 時，新增筆記將停止同步，除非您升級或刪除部分筆記。",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"您已使用 {percent}% 的 {cap} 個可完整搜尋的段落。超過此限制，較舊的筆記僅能透過關鍵字搜尋（完全匹配的單字，而非意義）。不會刪除任何內容。",
+	"See usage": "檢視使用情況",
+	Usage: "使用情況",
+	"Notes: {used}": "筆記：{used}",
+	"Notes: {used} of {cap}": "筆記：{used} / {cap}",
+	"Full search: {used} of {cap} passages": "完整搜尋：{used} / {cap} 個段落",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"一個段落是指筆記中可以搜尋的一小部分。超過此限制，較舊的筆記僅能透過關鍵字搜尋（完全匹配的單字，而非意義）。不會刪除任何內容。",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			other:
+				"您的全文搜尋次數已用完。僅透過關鍵字搜尋 {count} 篇較舊的筆記 (僅限完全匹配的字詞，不考慮語意)。無資料被刪除。升級以恢復全文搜尋功能。",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		other: "只有符合 {count} 筆記，僅依關鍵字搜尋 (完全字面，不考慮意義)。",
+	},
 	"All vaults, including ones you create later": "所有儲存庫，包含之後您建立的",
 	"All current vaults": "所有目前儲存庫",
 	"Vaults you create later": "之後建立的儲存庫",

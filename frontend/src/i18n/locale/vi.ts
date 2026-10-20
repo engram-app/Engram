@@ -278,6 +278,27 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Bạn đang dùng bản dùng thử miễn phí. Paddle, dịch vụ thanh toán của chúng tôi, không cho phép thay đổi gói trong thời gian dùng thử — bản dùng thử của bạn sẽ kết thúc vào ngày {date}.",
 	Upgrade: "Nâng cấp",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Bạn đã đạt giới hạn {cap} ghi chú. Các ghi chú mới sẽ ngừng đồng bộ hóa cho đến khi bạn nâng cấp hoặc xóa một số.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Bạn đã sử dụng {percent}% trong tổng số {cap} ghi chú của bạn. Khi đạt {cap}, các ghi chú mới sẽ ngừng đồng bộ hóa cho đến khi bạn nâng cấp hoặc xóa một số.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Bạn đã sử dụng {percent}% trong tổng số {cap} đoạn văn có thể tìm kiếm đầy đủ. Vượt quá giới hạn này, các ghi chú cũ hơn chỉ được tìm thấy bằng từ khóa (các từ chính xác, không phải ý nghĩa). Không có gì bị xóa.",
+	"See usage": "Xem thông tin sử dụng",
+	Usage: "Thông tin sử dụng",
+	"Notes: {used}": "Ghi chú: {used}",
+	"Notes: {used} of {cap}": "Ghi chú: {used} trong {cap}",
+	"Full search: {used} of {cap} passages": "Tìm kiếm đầy đủ: {used} trong {cap} đoạn văn",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Một đoạn văn là một phần có thể tìm kiếm của một ghi chú. Vượt quá giới hạn này, các ghi chú cũ hơn chỉ được tìm thấy bằng từ khóa (các từ chính xác, không phải ý nghĩa). Không có gì bị xóa.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			other:
+				"Các đoạn văn tìm kiếm đầy đủ của bạn đã hết. {count} ghi chú cũ hơn chỉ được tìm thấy theo từ khóa (từ chính xác, không phải nghĩa). Không có gì bị xóa. Nâng cấp để kích hoạt lại tìm kiếm đầy đủ.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		other: "{count} ghi chú được tìm thấy chỉ bằng từ khóa (từ chính xác, không phải ý nghĩa).",
+	},
 	"All vaults, including ones you create later":
 		"Tất cả kho lưu trữ, bao gồm cả những kho bạn tạo sau này",
 	"All current vaults": "Tất cả các kho lưu trữ hiện tại",

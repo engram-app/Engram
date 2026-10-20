@@ -289,6 +289,33 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Ви перебуваєте на безкоштовному пробному періоді. Paddle, наш платіжний процесор, не дозволяє змінювати план під час пробної підписки — ваш пробний період закінчується {date}.",
 	Upgrade: "Оновити",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Ви досягли ліміту у {cap} заміток. Синхронізація нових заміток припиняється, поки ви не оновите підписку або не видалите деякі.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Ви використали {percent}% з вашого ліміту у {cap} заміток. Після досягнення ліміту {cap}, синхронізація нових заміток припиняється, поки ви не оновите підписку або не видалите деякі.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Ви використали {percent}% з вашого ліміту у {cap} фрагментів для повного пошуку. Після цього, старіші замітки знаходяться лише за ключовими словами (точні слова, а не значення). Нічого не видаляється.",
+	"See usage": "Переглянути використання",
+	Usage: "Використання",
+	"Notes: {used}": "Замітки: {used}",
+	"Notes: {used} of {cap}": "Замітки: {used} з {cap}",
+	"Full search: {used} of {cap} passages": "Повний пошук: {used} з {cap} фрагментів",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Фрагмент – це окрема частина замітки, яку можна шукати. Після цього, старіші замітки знаходяться лише за ключовими словами (точні слова, а не значення). Нічого не видаляється.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			one: "Ваші можливості повного пошуку вичерпано. Знайдено {count} старішу замітку лише за ключовими словами (точні слова, не значення). Нічого не видалено. Оновіть підписку, щоб відновити повний пошук.",
+			few: "Ваші можливості повного пошуку вичерпано. Знайдено {count} старіші замітки лише за ключовими словами (точні слова, не значення). Нічого не видалено. Оновіть підписку, щоб відновити повний пошук.",
+			many: "Ваші можливості повного пошуку вичерпано. Знайдено {count} старих заміток лише за ключовими словами (точні слова, не значення). Нічого не видаляється. Оновіть підписку, щоб відновити повний пошук.",
+			other:
+				"Ваші можливості повного пошуку вичерпано. {count} старіших заміток знайдено лише за ключовими словами (точні слова, не значення). Нічого не видаляється. Оновіть підписку, щоб відновити повний пошук.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		one: "Знайдено {count} замітку за ключовим словом (точні слова, не значення).",
+		few: "Знайдено {count} замітки за ключовим словом (точні слова, не значення).",
+		many: "Знайдено {count} заміток за ключовим словом (точні слова, не значення).",
+		other: "{count} Замітки знаходяться лише за ключовими словами (точні слова, не значення).",
+	},
 	"All vaults, including ones you create later":
 		"Усі сховища, включно з тими, які ви створите пізніше",
 	"All current vaults": "Усі поточні сховища",

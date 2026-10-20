@@ -41,6 +41,7 @@ import {
 	PlanCard,
 } from "./plan-cards";
 import PlanChangePanel from "./plan-change-panel";
+import { UsagePanel } from "./usage-limits";
 import { useSubscriptionActivatedEvents } from "./use-subscription-activated-events";
 
 // Time after CHECKOUT_COMPLETED we keep Paddle's own "Payment successful"
@@ -729,6 +730,8 @@ export default function BillingPage({
 					)}
 				</CurrentPlanCard>
 			)}
+
+			{!hideHeading && <UsagePanel />}
 
 			{/* showPlanSection = needsSubscription || finalizing — keeps the bridge
 			    mounted across the activation flip so it doesn't flash blank before

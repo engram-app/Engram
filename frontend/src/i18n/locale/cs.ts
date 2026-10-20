@@ -282,6 +282,33 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Používáte bezplatnou zkušební verzi. Paddle, náš platební procesor, neumožňuje změny plánu během zkušební verze – vaše zkušební verze končí dne {date}.",
 	Upgrade: "Aktualizovat",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Dosařili jste limit {cap} poznámek. Nové poznámky se nebudou synchronizovat, dokud neprovedete upgrade nebo neodstraníte některé.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Využili jste {percent}% z celkového počtu {cap} poznámek. Při dosažení {cap} se nové poznámky nebudou synchronizovat, dokud neprovedete upgrade nebo neodstraníte některé.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Využili jste {percent}% z celkového počtu {cap} pasáží pro úplné vyhledávání. Pokud překročíte toto množství, starší poznámky se budou vyhledávat pouze podle klíčových slov (přesné výrazy, ne význam). Nic se nemaže.",
+	"See usage": "Zobrazit využití",
+	Usage: "Využití",
+	"Notes: {used}": "Poznámky: {used}",
+	"Notes: {used} of {cap}": "Poznámky: {used} z {cap}",
+	"Full search: {used} of {cap} passages": "Úplné vyhledávání: {used} z {cap} pasáží",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Pasáž je jedna vyhledávací část poznámky. Pokud překročíte toto množství, starší poznámky se budou vyhledávat pouze podle klíčových slov (přesné výrazy, ne význam). Nic se nemaže.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			one: "Vaše možnosti vyhledávání jsou vyčerpány. Nalezena je {count} starší poznámka pouze podle klíčových slov (přesné výrazy, ne význam). Nic nebylo smazáno. Upgradujte pro obnovení plného vyhledávání.",
+			few: "Vaše možnosti vyhledávání jsou vyčerpány. {count} starší poznámky byly nalezeny pouze podle klíčových slov (přesné výrazy, ne význam). Nic nebylo smazáno. Upgradujte pro obnovení plného vyhledávání.",
+			many: "Vaše možnosti vyhledávání jsou vyčerpány. {count} starší poznámky jsou nalezeny pouze podle klíčových slov (přesné výrazy, ne význam). Nic není smazáno. Aktualizujte si účet a získejte zpět plné vyhledávání.",
+			other:
+				"Vaše možnosti vyhledávání jsou vyčerpány. Bylo nalezeno {count} starších poznámek pouze podle klíčových slov (přesné výrazy, ne význam). Nic nebylo smazáno. Upgradujte pro obnovení plného vyhledávání.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		one: "Nalezena {count} poznámka pouze podle zadaného klíčového slova (přesné shoda, ne význam).",
+		few: "Nalezeno {count} poznámky, které obsahují zadané klíčové slovo (přesné shoda, ne význam).",
+		many: "{count} Poznámky jsou nalezeny pouze podle klíčových slov (přesné výrazy, ne význam).",
+		other: "Nalezeno {count} poznámek pouze podle klíčových slov (přesné výrazy, ne význam).",
+	},
 	"All vaults, including ones you create later":
 		"Všechny trezory, včetně těch, které vytvoříte později",
 	"All current vaults": "Všechny aktuální trezory",

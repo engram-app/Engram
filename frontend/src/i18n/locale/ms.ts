@@ -282,6 +282,27 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Anda sedang dalam tempoh percubaan. Paddle, pemproses pembayaran kami, tidak membenarkan perubahan pelan semasa langganan dalam tempoh percubaan — tempoh percubaan anda akan tamat pada {date}.",
 	Upgrade: "Tingkatkan",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Anda telah mencapai had {cap} nota. Nota baharu berhenti disegerakkan sehingga anda meningkatkan atau menghapuskan beberapa.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Anda telah menggunakan {percent}% daripada {cap} nota anda. Pada {cap}, nota baharu berhenti disegerakkan sehingga anda meningkatkan atau menghapuskan beberapa.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Anda telah menggunakan {percent}% daripada {cap} bahagian yang boleh dicari sepenuhnya. Melebihi itu, nota lama hanya dicari berdasarkan kata kunci (kata tepat, bukan makna). Tiada apa yang dipadam.",
+	"See usage": "Lihat penggunaan",
+	Usage: "Penggunaan",
+	"Notes: {used}": "Nota: {used}",
+	"Notes: {used} of {cap}": "Nota: {used} daripada {cap}",
+	"Full search: {used} of {cap} passages": "Cari penuh: {used} daripada {cap} bahagian",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Satu bahagian ialah sebahagian daripada nota yang boleh dicari. Melebihi itu, nota lama hanya dicari berdasarkan kata kunci (kata tepat, bukan makna). Tiada apa yang dipadam.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			other:
+				"Potongan carian penuh anda telah digunakan. {count} nota lama dicari berdasarkan kata kunci sahaja (kata tepat, bukan makna). Tiada apa yang dipadam. Tingkatkan untuk mengaktifkan semula carian penuh.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		other: "{count} nota ditemui berdasarkan kata kunci sahaja (kata tepat, bukan makna).",
+	},
 	"All vaults, including ones you create later":
 		"Semua peti nota, termasuk yang anda cipta kemudian",
 	"All current vaults": "Semua peti nota semasa",

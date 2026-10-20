@@ -291,6 +291,33 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Вы используете бесплатный пробный период. Paddle, наш платежный процессор, не позволяет изменять тарифный план во время пробного периода — ваш пробный период закончится {date}.",
 	Upgrade: "Обновить",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Вы достигли лимита в {cap} заметок. Добавление новых заметок прекращается до тех пор, пока вы не обновите подписку или не удалите некоторые заметки.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Вы использовали {percent}% из {cap} ваших заметок. При достижении {cap}, добавление новых заметок прекращается до тех пор, пока вы не обновите подписку или не удалите некоторые заметки.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Вы использовали {percent}% из {cap} фрагментов, доступных для полного поиска. После этого, более старые заметки находятся только по ключевым словам (точные слова, а не смысл). Ничто не удаляется.",
+	"See usage": "Просмотреть использование",
+	Usage: "Использование",
+	"Notes: {used}": "Заметок: {used}",
+	"Notes: {used} of {cap}": "Заметок: {used} из {cap}",
+	"Full search: {used} of {cap} passages": "Фрагментов для полного поиска: {used} из {cap}",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Фрагмент – это одна из частей заметки, доступная для поиска. После этого, более старые заметки находятся только по ключевым словам (точные слова, а не смысл). Ничто не удаляется.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			one: "Ваши возможности расширенного поиска исчерпаны. {count} старая заметка найдена только по ключевым словам (точные слова, не смысл). Ничего не удалено. Обновите подписку, чтобы вернуть полный поиск.",
+			few: "Ваши возможности расширенного поиска исчерпаны. {count} старые заметки найдены только по ключевым словам (точные слова, не смысл). Ничего не удалено. Обновите подписку, чтобы вернуть полный поиск.",
+			many: "Ваш лимит поиска исчерпан. Найдено {count} старых заметок по ключевым словам (только точное соответствие, без учета смысла). Ничего не удалено. Обновите подписку, чтобы вернуть полный поиск.",
+			other:
+				"Ваши возможности расширенного поиска исчерпаны. {count} старых заметок найдены только по ключевым словам (точные слова, не смысл). Ничего не удаляется. Обновите подписку, чтобы вернуть полный поиск.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		one: "Найдено {count} заметка, содержащая указанные ключевые слова (точный текст, не смысл).",
+		few: "Найдено {count} заметки по ключевому слову (только точные слова, не смысл).",
+		many: "Найдено {count} заметок, соответствующих ключевому слову (точный текст, не смысл).",
+		other: "{count} Заметки находятся по ключевым словам (только точное соответствие).",
+	},
 	"All vaults, including ones you create later":
 		"Все хранилища, включая те, которые вы создадите позже",
 	"All current vaults": "Все текущие хранилища",

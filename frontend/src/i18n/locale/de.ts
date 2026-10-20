@@ -288,6 +288,29 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Du bist in einer kostenlosen Testphase. Paddle, unser Zahlungsdienstleister, erlaubt keine Änderungen des Abonnements während der Testphase – deine Testphase endet am {date}.",
 	Upgrade: "Upgrade",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Du hast dein Limit von {cap} Notizen erreicht. Neue Notizen werden nicht mehr synchronisiert, bis du ein Upgrade kaufst oder einige löschst.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Du hast {percent}% deiner {cap} Notizen verwendet. Bei {cap} werden neue Notizen nicht mehr synchronisiert, bis du ein Upgrade kaufst oder einige löschst.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Du hast {percent}% deiner {cap} durchsuchbaren Textabschnitte verwendet. Danach werden ältere Notizen nur noch über Stichwörter gefunden (genaue Wörter, nicht Bedeutung). Nichts wird gelöscht.",
+	"See usage": "Nutzung ansehen",
+	Usage: "Nutzung",
+	"Notes: {used}": "Notizen: {used}",
+	"Notes: {used} of {cap}": "Notizen: {used} von {cap}",
+	"Full search: {used} of {cap} passages": "Vollständige Suche: {used} von {cap} Textabschnitten",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Ein Textabschnitt ist ein durchsuchbarer Teil einer Notiz. Danach werden ältere Notizen nur noch über Stichwörter gefunden (genaue Wörter, nicht Bedeutung). Nichts wird gelöscht.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			one: "Deine Suchabfragen sind aufgebraucht. Eine ältere Notiz wurde nur anhand von Schlüsselwörtern gefunden (exakte Wörter, nicht Bedeutung). Nichts wurde gelöscht. Upgrade, um die vollständige Suche wiederherzustellen.",
+			other:
+				"Deine Suchabfragen sind aufgebraucht. {count} ältere Notizen wurden nur nach Schlüsselwörtern gefunden (exakte Wörter, nicht Bedeutung). Nichts wurde gelöscht. Upgrade, um die vollständige Suche wiederherzustellen.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		one: "{count} Notiz gefunden (nur nach exakten Wörtern).",
+		other: "{count} Notizen gefunden (nur nach Schlüsselwörtern, exakte Wörter).",
+	},
 	"All vaults, including ones you create later": "Alle Vaults, auch die, die du später erstellst",
 	"All current vaults": "Alle aktuellen Vaults",
 	"Vaults you create later": "Vaults, die du später erstellst",

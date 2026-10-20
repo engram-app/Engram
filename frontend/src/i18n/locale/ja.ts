@@ -279,6 +279,27 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"無料トライアル中です。支払い処理サービス Paddle では、トライアル期間中のプラン変更はできません。トライアルは {date} に終了します。",
 	Upgrade: "アップグレード",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"{cap}個のノートに達しました。新しいノートの同期は、アップグレードするかノートを削除するまで停止します。",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"{cap}個のノートのうち、{percent}%を使用しています。{cap}に達すると、新しいノートの同期は、アップグレードするかノートを削除するまで停止します。",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"フル検索可能な箇所は{cap}個のうち、{percent}%を使用しています。これを超えると、古いノートはキーワードでのみ検索されます（意味ではなく、完全一致）。何も削除されません。",
+	"See usage": "使用状況を確認",
+	Usage: "使用状況",
+	"Notes: {used}": "ノート: {used}個",
+	"Notes: {used} of {cap}": "ノート: {cap}個中 {used}個",
+	"Full search: {used} of {cap} passages": "フル検索: {cap}箇所中 {used}箇所",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"1つの箇所は、ノートの中で検索可能な部分です。これを超えると、古いノートはキーワードでのみ検索されます（意味ではなく、完全一致）。何も削除されません。",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			other:
+				"完全検索の利用回数が上限に達しました。{count}個の古いノートはキーワードでのみ検索可能です（意味ではなく、完全一致）。データは削除されません。完全検索を再利用するには、アップグレードしてください。",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		other: "キーワードで {count} 個のノートが見つかりました (意味ではなく、完全一致の単語)。",
+	},
 	"All vaults, including ones you create later":
 		"作成されたすべての保管庫（後で作成したものも含む）",
 	"All current vaults": "現在のすべての保管庫",

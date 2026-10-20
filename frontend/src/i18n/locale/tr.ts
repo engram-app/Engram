@@ -283,6 +283,29 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Ücretsiz bir deneme sürümündesiniz. Paddle, ödeme işlemcimiz, bir abonelik deneme süresi boyunca plan değişikliklerine izin vermiyor; denemeniz {date} tarihinde sona erecek.",
 	Upgrade: "Yükselt",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"{cap} notaya ulaştınız. Yeni notlar, yükseltme yapana veya bazılarını silene kadar senkronize olmayacaktır.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"{cap} notunuzun %{percent}'ını kullandınız. {cap} sınırında, yeni notlar senkronize olmaktan vazgeçer, yükseltme yapana veya bazılarını silene kadar.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"{cap} tam arama bölümünün %{percent}'ını kullandınız. Bu sınırın ötesinde, eski notlar yalnızca anahtar kelimeyle bulunur (tam kelimeler, anlam değil). Hiçbir şey silinmez.",
+	"See usage": "Kullanımı görüntüleyin",
+	Usage: "Kullanım",
+	"Notes: {used}": "Notlar: {used}",
+	"Notes: {used} of {cap}": "Notlar: {cap}'den {used}",
+	"Full search: {used} of {cap} passages": "Tam arama: {cap}'den {used} bölüm",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Bir bölüm, bir notun aranabilir bir parçasıdır. Bu sınırın ötesinde, eski notlar yalnızca anahtar kelimeyle bulunur (tam kelimeler, anlam değil). Hiçbir şey silinmez.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			one: "Arama hakkınızın tamamı kullanıldı. Anahtar kelimeyle (tam kelimeler, anlam değil) {count} eski not bulundu. Hiçbir şey silinmedi. Tam aramayı geri getirmek için yükseltin.",
+			other:
+				"Arama hakkınızın tamamı kullanıldı. Anahtar kelimeyle (tam kelimeler, anlam değil) {count} eski not bulundu. Hiçbir şey silinmedi. Tam aramayı geri getirmek için yükseltin.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		one: "Anahtar kelimeye göre {count} not bulundu (tam kelimeler, anlam değil).",
+		other: "Anahtar kelimeyle sadece {count} not bulundu (tam kelimeler, anlam değil).",
+	},
 	"All vaults, including ones you create later": "Tüm kasalar, daha sonra oluşturduklarınız dahil",
 	"All current vaults": "Tüm mevcut kasalar",
 	"Vaults you create later": "Daha sonra oluşturacağınız kasalar",

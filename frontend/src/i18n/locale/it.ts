@@ -284,6 +284,31 @@ export default {
 	"You're on a free trial. Paddle, our payment processor, doesn't allow plan changes while a subscription is in trial — your trial converts on {date}.":
 		"Sei in prova gratuita. Paddle, il nostro processore di pagamenti, non permette modifiche al piano durante il periodo di prova: la tua prova terminerà il {date}.",
 	Upgrade: "Aggiorna",
+	"You have reached your {cap} notes. New notes stop syncing until you upgrade or remove some.":
+		"Hai raggiunto il limite di {cap} note. Le nuove note smettono di sincronizzarsi finché non effettui un upgrade o ne elimini alcune.",
+	"You have used {percent}% of your {cap} notes. At {cap}, new notes stop syncing until you upgrade or remove some.":
+		"Hai utilizzato il {percent}% delle tue {cap} note. Superato questo limite, le nuove note smettono di sincronizzarsi finché non effettui un upgrade o ne elimini alcune.",
+	"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Hai utilizzato il {percent}% delle tue {cap} ricerche complete. Oltre questo limite, le note più vecchie vengono trovate solo per parola chiave (parole esatte, non significato). Nulla viene eliminato.",
+	"See usage": "Vedi utilizzo",
+	Usage: "Utilizzo",
+	"Notes: {used}": "Note: {used}",
+	"Notes: {used} of {cap}": "Note: {used} di {cap}",
+	"Full search: {used} of {cap} passages": "Ricerca completa: {used} di {cap} sezioni",
+	"A passage is one searchable piece of a note. Past this, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.":
+		"Una sezione è una parte ricercabile di una nota. Superato questo limite, le note più vecchie vengono trovate solo per parola chiave (parole esatte, non significato). Nulla viene eliminato.",
+	"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.":
+		{
+			one: "Hai esaurito i tentativi di ricerca completa. È stata trovata {count} nota più vecchia solo tramite la ricerca per parola chiave (parole esatte, non significato). Nessun dato è stato eliminato. Aggiorna per riattivare la ricerca completa.",
+			many: "Le tue ricerche complete sono esaurite. {count} note più vecchie sono trovate solo per parola chiave (parole esatte, non significato). Nulla viene eliminato. Aggiorna per riattivare la ricerca completa.",
+			other:
+				"I tuoi tentativi di ricerca completa sono terminati. {count} note più vecchie sono state trovate solo per parola chiave (parole esatte, non significato). Nessun dato è stato eliminato. Aggiorna per riattivare la ricerca completa.",
+		},
+	"{count} notes are found by keyword only (exact words, not meaning).": {
+		one: "{count} nota trovata tramite ricerca per parola chiave (solo corrispondenze esatte).",
+		many: "{count} note trovate tramite ricerca per parola chiave (solo corrispondenze esatte).",
+		other: "{count} note trovate tramite ricerca per parola chiave (solo corrispondenze esatte).",
+	},
 	"All vaults, including ones you create later":
 		"Tutti i vault, inclusi quelli che crei in seguito",
 	"All current vaults": "Tutti i vault attuali",
