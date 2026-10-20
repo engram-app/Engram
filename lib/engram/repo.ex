@@ -83,8 +83,9 @@ defmodule Engram.Repo do
   PostgreSQL transaction-local `app.current_tenant` (for RLS enforcement).
 
   `tenant_id` is a canonical UUID string (post PG18+UUIDv7 rework).
-  The RLS policy compares `(user_id)::text = current_setting('app.current_tenant')`,
-  so the bind value is the lower-case hyphenated UUID string.
+  The RLS policy compares `user_id = NULLIF(current_setting('app.current_tenant'), '')::uuid`
+  (cast once per statement), so the bind value must be a UUID string; '' means
+  no tenant.
 
   Wire shape: tenant + role drop are applied in ONE parameterized
   `SELECT set_config(...)` (`set_config(..., true)` is exactly SET LOCAL).
