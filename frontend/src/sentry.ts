@@ -87,9 +87,18 @@ const sentryDsn = import.meta.env.VITE_SENTRY_DSN;
 
 type SentrySdk = typeof import("@sentry/react");
 
-const earlyErrors: unknown[] = [];
-const onEarlyError = (e: ErrorEvent) => earlyErrors.push(e.error ?? e.message);
-const onEarlyRejection = (e: PromiseRejectionEvent) => earlyErrors.push(e.reason);
+// Queued with the mechanism the SDK's own global handlers would have stamped,
+// so beforeSend applies one policy to both (a non-Error rejection is dropped
+// whether it fired before or after the chunk landed).
+interface EarlyError {
+	error: unknown;
+	handler: "onerror" | "onunhandledrejection";
+}
+const earlyErrors: EarlyError[] = [];
+const onEarlyError = (e: ErrorEvent) =>
+	earlyErrors.push({ error: e.error ?? e.message, handler: "onerror" });
+const onEarlyRejection = (e: PromiseRejectionEvent) =>
+	earlyErrors.push({ error: e.reason, handler: "onunhandledrejection" });
 if (sentryDsn) {
 	window.addEventListener("error", onEarlyError);
 	window.addEventListener("unhandledrejection", onEarlyRejection);
@@ -135,8 +144,10 @@ export const sentryReady: Promise<SentrySdk | null> | null = sentryDsn
 				// backlog and retire the temporary listeners.
 				window.removeEventListener("error", onEarlyError);
 				window.removeEventListener("unhandledrejection", onEarlyRejection);
-				for (const err of earlyErrors.splice(0)) {
-					Sentry.captureException(err);
+				for (const { error, handler } of earlyErrors.splice(0)) {
+					Sentry.captureException(error, {
+						mechanism: { type: `auto.browser.global_handlers.${handler}`, handled: false },
+					});
 				}
 				return Sentry;
 			})
