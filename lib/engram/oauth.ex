@@ -1589,12 +1589,15 @@ defmodule Engram.OAuth do
   "no revoked row" (`expand_claims/1`), so that would bring the grant back.
   Expired rows are deleted one by one only in families with no revoked row,
   where no deletion can change liveness (a family left with no rows at all
-  reads as revoked). Neither changes what any grant may do, so nothing is
+  reads as revoked). Consumed, unrevoked rows are deleted 24h after their
+  use: never the family's live leaf, and never a revoked row, so liveness is
+  unchanged. None of these changes what any grant may do, so nothing is
   evicted here.
   """
   def cleanup_expired do
     code_cutoff = DateTime.utc_now(:second) |> DateTime.add(-3600, :second)
     revoked_cutoff = DateTime.utc_now(:second) |> DateTime.add(-7 * 24 * 3600, :second)
+    consumed_cutoff = DateTime.utc_now(:second) |> DateTime.add(-24 * 3600, :second)
 
     {codes, reaped} =
       from(ac in AuthorizationCode,
@@ -1632,7 +1635,21 @@ defmodule Engram.OAuth do
       )
       |> delete_tokens_locked()
 
-    {codes + revoked_tokens + expired_tokens, nil}
+    # A used token is kept for reuse detection (a replay of it revokes the
+    # family) for 24h, far past the 60s grace window, then deleted: before,
+    # every rotation left a row until the family expired. A replay after that
+    # reads as unknown and revokes nothing (accepted, 2026-10-20 audit).
+    # Revoked rows are left to the 7-day reap above: they mark the family
+    # revoked. The family's live leaf is never consumed, so liveness and
+    # `prior_connection?/3` read the same answer without these rows.
+    consumed_tokens =
+      from(rt in RefreshToken,
+        where: not is_nil(rt.consumed_at) and rt.consumed_at < ^consumed_cutoff,
+        where: is_nil(rt.revoked_at)
+      )
+      |> delete_tokens_locked()
+
+    {codes + revoked_tokens + expired_tokens + consumed_tokens, nil}
   end
 
   # A code reaped without ever being exchanged: the client never came back
