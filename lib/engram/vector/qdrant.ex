@@ -1074,11 +1074,59 @@ defmodule Engram.Vector.Qdrant do
     barrier = write_opts(%{keys: [@barrier_key], points: Enum.map(pairs, &elem(&1, 0))})
 
     instrument(:set_payload, fn ->
-      with :ok <- write(&Req.post/2, "/collections/#{col}/points/batch", batch) do
-        write(&Req.post/2, "/collections/#{col}/points/payload/delete", barrier)
+      with :ok <-
+             batch_accepted(Req.post("#{base_url()}/collections/#{col}/points/batch", batch)),
+           :ok <- write(&Req.post/2, "/collections/#{col}/points/payload/delete", barrier) do
+        verify_applied(col, pairs)
       end
     end)
   end
+
+  # Every op of the unwaited batch must be accepted ("acknowledged", or
+  # "completed" if it applied first); anything else fails the page.
+  defp batch_accepted({:ok, %{status: 200, body: %{"result" => results}}})
+       when is_list(results) do
+    case Enum.reject(
+           results,
+           &match?(%{"status" => s} when s in ["acknowledged", "completed"], &1)
+         ) do
+      [] -> :ok
+      bad -> {:error, {:batch_op_failed, Enum.map(bad, & &1["status"])}}
+    end
+  end
+
+  defp batch_accepted({:ok, %{status: status, body: body}}), do: write_error(status, body)
+  defp batch_accepted({:error, reason}), do: {:error, reason}
+
+  # The barrier proves the batch was applied in order and flushed, but not
+  # that each op succeeded at apply time (a waited per-op write reported
+  # that). So read the page back and compare: a payload that did not land
+  # fails the page, and the caller retries it (re-review N4). One retrieve
+  # of the set keys only, no vectors.
+  defp verify_applied(col, pairs) do
+    want = Map.new(pairs, fn {id, payload} -> {id, Jason.decode!(Jason.encode!(payload))} end)
+    keys = want |> Map.values() |> Enum.flat_map(&Map.keys/1) |> Enum.uniq()
+    opts = [json: %{ids: Map.keys(want), with_payload: keys, with_vector: false}] ++ req_opts()
+
+    case Req.post("#{base_url()}/collections/#{col}/points", opts) do
+      {:ok, %{status: 200, body: %{"result" => points}}} when is_list(points) ->
+        stored = Map.new(points, &{&1["id"], &1["payload"] || %{}})
+
+        case for({id, payload} <- pairs, not landed?(stored[id], want[id]), do: id) do
+          [] -> :ok
+          missing -> {:error, {:set_payloads_not_applied, missing}}
+        end
+
+      {:ok, %{status: status, body: body}} ->
+        {:error, {status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp landed?(nil, _want), do: false
+  defp landed?(stored, want), do: Enum.all?(want, fn {k, v} -> stored[k] == v end)
 
   defp write(request, path, opts) do
     case request.("#{base_url()}#{path}", opts) do

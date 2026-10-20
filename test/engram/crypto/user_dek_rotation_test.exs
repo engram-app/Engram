@@ -1358,16 +1358,35 @@ defmodule Engram.Crypto.UserDekRotationTest do
         )
       end)
 
+      stored = :ets.new(:stored, [:set, :public])
+
       for path <- ["/points/batch", "/points/payload/delete", "/points/payload"] do
         Bypass.stub(bypass, "POST", "/collections/#{collection}#{path}", fn conn ->
           {:ok, body, conn} = Plug.Conn.read_body(conn)
-          send(test_pid, {:write, path, URI.decode_query(conn.query_string), Jason.decode!(body)})
+          decoded = Jason.decode!(body)
+          send(test_pid, {:write, path, URI.decode_query(conn.query_string), decoded})
+
+          resp =
+            case decoded do
+              %{"operations" => ops} ->
+                for %{"set_payload" => %{"points" => [id], "payload" => p}} <- ops,
+                    do: :ets.insert(stored, {id, p})
+
+                Jason.encode!(%{result: Enum.map(ops, fn _ -> %{status: "acknowledged"} end)})
+
+              _ ->
+                ~s({"result":{"status":"completed"},"status":"ok"})
+            end
 
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.send_resp(200, ~s({"result":{"status":"completed"},"status":"ok"}))
+          |> Plug.Conn.send_resp(200, resp)
         end)
       end
+
+      stub_read_back(bypass, collection, fn ->
+        for {id, p} <- :ets.tab2list(stored), do: %{"id" => id, "payload" => p}
+      end)
 
       assert :ok = UserDekRotation.rotate_user(user.id)
 
@@ -1445,6 +1464,13 @@ defmodule Engram.Crypto.UserDekRotationTest do
       end)
 
       stub_barrier(bypass, collection)
+
+      stub_read_back(bypass, collection, fn ->
+        [{:body, %{"operations" => ops}}] = :ets.lookup(set_payload_calls, :body)
+
+        for %{"set_payload" => %{"points" => [id], "payload" => p}} <- ops,
+            do: %{"id" => id, "payload" => p}
+      end)
 
       assert :ok = UserDekRotation.rotate_user(user.id)
 
@@ -1595,7 +1621,12 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, ~s({"result": {"status": "acknowledged"}}))
+        |> Plug.Conn.send_resp(200, ~s({"result": [{"status": "acknowledged"}]}))
+      end)
+
+      stub_read_back(bypass, collection, fn ->
+        [{:point, p}] = :ets.lookup(new_point_ref, :point)
+        [p]
       end)
 
       # First rotation: point is under old DEK, should be re-encrypted
@@ -2302,6 +2333,15 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert event.meta[:loki_ship] == true
       assert event.meta[:user_id] == user.id
     end
+  end
+
+  # The read-back `Qdrant.set_payloads/2` checks the page against.
+  defp stub_read_back(bypass, collection, points_fun) do
+    Bypass.stub(bypass, "POST", "/collections/#{collection}/points", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => points_fun.()}))
+    end)
   end
 
   # The waited no-op barrier `Qdrant.set_payloads/2` ends each page with.

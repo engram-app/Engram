@@ -156,4 +156,59 @@ defmodule Engram.Vector.QdrantWaitTest do
       assert :ok = Qdrant.delete_points(@col, ["p1"])
     end
   end
+
+  describe "set_payloads/2 (unwaited batch + waited barrier)" do
+    @ok ~s({"result":{"status":"completed"},"status":"ok"})
+    @acked ~s({"result":[{"status":"acknowledged"},{"status":"acknowledged"}],"status":"ok"})
+    @pairs [{"p1", %{"t" => "new1"}}, {"p2", %{"t" => "new2"}}]
+
+    defp stub_set_payloads(bypass, batch_resp, stored) do
+      for {path, resp} <- [{"/points/batch", batch_resp}, {"/points/payload/delete", @ok}] do
+        Bypass.stub(bypass, "POST", "/collections/#{@col}#{path}", fn conn ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(200, resp)
+        end)
+      end
+
+      Bypass.stub(bypass, "POST", "/collections/#{@col}/points", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, Jason.encode!(%{result: stored}))
+      end)
+    end
+
+    test "applied when the barrier returns and the read-back matches", %{bypass: bypass} do
+      stub_set_payloads(bypass, @acked, [
+        %{id: "p1", payload: %{t: "new1"}},
+        %{id: "p2", payload: %{t: "new2"}}
+      ])
+
+      assert :ok = Qdrant.set_payloads(@col, @pairs)
+    end
+
+    # An op that failed at apply time is invisible to the barrier (the old
+    # waited per-op write reported it). The read-back catches it, so the
+    # caller retries the page instead of leaving a point under the old DEK
+    # (re-review N4).
+    test "a point whose payload did not land fails the page", %{bypass: bypass} do
+      stub_set_payloads(bypass, @acked, [
+        %{id: "p1", payload: %{t: "new1"}},
+        %{id: "p2", payload: %{t: "OLD"}}
+      ])
+
+      assert {:error, {:set_payloads_not_applied, ["p2"]}} = Qdrant.set_payloads(@col, @pairs)
+    end
+
+    test "a missing point fails the page too", %{bypass: bypass} do
+      stub_set_payloads(bypass, @acked, [%{id: "p1", payload: %{t: "new1"}}])
+      assert {:error, {:set_payloads_not_applied, ["p2"]}} = Qdrant.set_payloads(@col, @pairs)
+    end
+
+    test "a batch op answered with an unknown status fails the page", %{bypass: bypass} do
+      bad = ~s({"result":[{"status":"acknowledged"},{"status":"failed"}],"status":"ok"})
+      stub_set_payloads(bypass, bad, [])
+      assert {:error, {:batch_op_failed, _}} = Qdrant.set_payloads(@col, @pairs)
+    end
+  end
 end
