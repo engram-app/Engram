@@ -99,24 +99,44 @@ defmodule Engram.Search do
     end
   end
 
+  # Voyage's context window is 32k tokens and a token is at least one byte,
+  # so a query this size always fits, with room. Real queries are far
+  # shorter; one this long is a pasted document.
+  @max_query_bytes 8_192
+
+  @doc "The longest query, in bytes, `search/4` accepts."
+  def max_query_bytes, do: @max_query_bytes
+
   @doc """
-  Refuses a search input that a downstream service would refuse later:
-  `{:error, :too_many_tags}` past `Qdrant.max_ids/0` tags (one `match.any`
-  condition; Qdrant Cloud's strict `condition_max_size` 400s a bigger one).
-  Checked before the search is billed.
+  Refuses a search input that a downstream service would refuse later,
+  before the search is billed:
+
+    * `{:error, :query_too_long}` past `max_query_bytes/0`. The query embed
+      runs with `truncation: false`, so Voyage would 400 and the search lose
+      its dense leg;
+    * `{:error, :too_many_tags}` past `Qdrant.max_ids/0` tags (one
+      `match.any` condition; Qdrant Cloud's strict `condition_max_size`
+      400s a bigger one).
   """
-  @spec validate_input(term(), keyword()) :: :ok | {:error, :too_many_tags}
-  def validate_input(_query, opts) do
+  @spec validate_input(term(), keyword()) :: :ok | {:error, :query_too_long | :too_many_tags}
+  def validate_input(query, opts) do
     max_ids = Engram.Vector.Qdrant.max_ids()
 
-    case Keyword.get(opts, :tags) do
-      tags when is_list(tags) and length(tags) > max_ids -> {:error, :too_many_tags}
-      _ -> :ok
+    cond do
+      is_binary(query) and byte_size(query) > @max_query_bytes -> {:error, :query_too_long}
+      too_many?(Keyword.get(opts, :tags), max_ids) -> {:error, :too_many_tags}
+      true -> :ok
     end
   end
 
+  defp too_many?(tags, max) when is_list(tags), do: length(tags) > max
+  defp too_many?(_tags, _max), do: false
+
   @doc "The caller-facing message for a `validate_input/2` refusal, `nil` for any other reason."
   @spec input_error_message(term()) :: String.t() | nil
+  def input_error_message(:query_too_long),
+    do: "query: at most #{@max_query_bytes} bytes; search with a shorter query"
+
   def input_error_message(:too_many_tags),
     do: "tags: at most #{Engram.Vector.Qdrant.max_ids()} per search"
 

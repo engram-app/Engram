@@ -374,6 +374,21 @@ defmodule EngramWeb.McpControllerTest do
       assert tool_text(conn) =~ "vault_id"
     end
 
+    # An over-long query is a fixable caller error, not "Search unavailable."
+    test "search_notes and suggest_folder refuse an over-long query with its limit",
+         %{conn: conn} do
+      long = String.duplicate("a", Engram.Search.max_query_bytes() + 1)
+
+      for {tool, args} <- [
+            {"search_notes", %{"query" => long}},
+            {"suggest_folder", %{"description" => long}}
+          ] do
+        resp = call_tool(conn, tool, args)
+        assert_tool_error(json_response(resp, 200))
+        assert tool_text(resp) =~ "bytes", tool
+      end
+    end
+
     # Proves the fix lives at the shared dispatch choke point, not as a
     # per-tool patch that happens to cover list_folder/delete_folder/
     # create_folder/get_notes and nothing else.

@@ -32,4 +32,27 @@ defmodule Engram.SearchInputLimitsTest do
     assert Search.validate_input("iron", tags: []) == :ok
     assert Search.validate_input("iron", tags: for(i <- 1..Qdrant.max_ids(), do: "t#{i}")) == :ok
   end
+
+  # A query past Voyage's context window used to lose its dense leg (with
+  # `truncation: false` the embed 400s and search degrades to keyword-only).
+  # Refused at the boundary instead, before billing, with no embed call (the
+  # Mox embedder has no expectation, so a call fails the test).
+  test "a query over max_query_bytes is refused, unbilled and unembedded",
+       %{user: user, vault: vault} do
+    long = String.duplicate("a", Search.max_query_bytes() + 1)
+    assert Search.search(user, vault, long) == {:error, :query_too_long}
+    assert Search.validate_input(String.duplicate("a", Search.max_query_bytes()), []) == :ok
+  end
+
+  test "multi-byte text is measured in bytes" do
+    char = "é"
+    over = String.duplicate(char, div(Search.max_query_bytes(), 2) + 1)
+    assert Search.validate_input(over, []) == {:error, :query_too_long}
+  end
+
+  test "both refusals carry a caller-facing message" do
+    assert Search.input_error_message(:query_too_long) =~ "bytes"
+    assert Search.input_error_message(:too_many_tags) =~ "tags"
+    assert Search.input_error_message(:other) == nil
+  end
 end

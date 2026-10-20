@@ -366,6 +366,35 @@ defmodule Engram.Workers.ReconcileEmbeddingsTest do
       refute_enqueued(worker: EmbedNote)
     end
 
+    # An input too long for the embed model: indexed keyword-only and parked
+    # until its content changes. Not swept while unchanged (a re-send would
+    # 400 again); swept as soon as an edit lands, even if the edit's own job
+    # never ran, for every tier.
+    test "a too-long park holds until the content changes, then is swept" do
+      user = insert(:user)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+
+      held =
+        note_for(user,
+          content_hash: "abc123",
+          embed_hash: "abc123",
+          dense_indexed_hash: nil,
+          embed_retry_after: EmbedNote.parked_until_edited()
+        )
+
+      edited =
+        note_for(user,
+          content_hash: "def456",
+          embed_hash: "old",
+          dense_indexed_hash: nil,
+          embed_retry_after: EmbedNote.parked_until_edited()
+        )
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      refute_enqueued(worker: EmbedNote, args: %{"note_id" => held.id})
+      assert_enqueued(worker: EmbedNote, args: %{"note_id" => edited.id})
+    end
+
     test "a paying user's POISON cooldown still holds (only a budget park is skipped)" do
       user = insert(:user)
       insert(:subscription, user: user, tier: "pro", status: "active")

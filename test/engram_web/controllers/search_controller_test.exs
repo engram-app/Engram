@@ -25,6 +25,22 @@ defmodule EngramWeb.SearchControllerTest do
     %{conn: authed, user: user, vault: vault, bypass: bypass}
   end
 
+  describe "input limits" do
+    test "an over-long query is a 422 naming the limit", %{conn: conn} do
+      long = String.duplicate("a", Engram.Search.max_query_bytes() + 1)
+      conn = post(conn, ~p"/api/search", %{"query" => long})
+      assert %{"error" => error} = json_response(conn, 422)
+      assert error =~ "query"
+    end
+
+    test "too many tags is a 422 naming the limit", %{conn: conn} do
+      tags = for i <- 1..(Engram.Vector.Qdrant.max_ids() + 1), do: "t#{i}"
+      conn = post(conn, ~p"/api/search", %{"query" => "q", "tags" => tags})
+      assert %{"error" => error} = json_response(conn, 422)
+      assert error =~ "tags"
+    end
+  end
+
   describe "POST /search" do
     test "returns results for a valid query", %{
       conn: conn,

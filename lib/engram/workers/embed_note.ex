@@ -607,12 +607,11 @@ defmodule Engram.Workers.EmbedNote do
           {:error, :qdrant_wait_timeout} ->
             {:snooze, 30 + :rand.uniform(60)}
 
-          # A failure no retry can fix (H7: input over the model's context
-          # window). Park now, on any attempt, and stop: four more attempts
-          # would each pay a request to learn the same thing.
-          {:error, {:permanent, kind}} ->
-            :ok = park_poisoned(note, kind)
-            {:cancel, kind}
+          # Input over the model's context window (H7): no re-send can fix
+          # it. Index the note keyword-only now (zero Voyage spend) and park
+          # it until its content changes, so it is findable and never loops.
+          {:error, {:permanent, :input_too_long}} ->
+            index_keyword_only(note, decrypted_note, vault, user)
 
           {:error, reason} ->
             # Per-attempt failure (Voyage non-429 / Qdrant). Previously
@@ -653,6 +652,40 @@ defmodule Engram.Workers.EmbedNote do
     end
   end
 
+  # Chunks are capped well under the context window, so a document should
+  # never get here; if one does, it stays searchable by keyword. Logged as a
+  # warning: it means that cap no longer holds.
+  defp index_keyword_only(note, decrypted_note, vault, user) do
+    Logger.warning(
+      "embed_input_too_long_keyword_only",
+      Metadata.with_category(:warning, :search,
+        user_id: note.user_id,
+        vault_id: note.vault_id,
+        note_id: note.id
+      )
+    )
+
+    opts = [
+      reserve_tokens: fn _ -> false end,
+      release_tokens: fn _ -> :ok end,
+      in_commit: &stamp_embed_hash(note, &2, &1, :too_long)
+    ]
+
+    case Indexing.index_note_with_usage(decrypted_note, vault, user, opts) do
+      {:ok, _count, _bytes, _dense?} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # The `embed_retry_after` of a note indexed keyword-only because its input
+  # is too long for the embed model. A date no clock reaches: the park ends
+  # when the content changes (ReconcileEmbeddings sweeps an edited one), not
+  # on a cooldown, since re-sending the same content 400s again.
+  @parked_until_edited ~U[9999-01-01 00:00:00.000000Z]
+
+  @doc "The `embed_retry_after` that parks a too-long note until it is edited."
+  def parked_until_edited, do: @parked_until_edited
+
   # Optimistic lock: only set embed_hash if content_hash hasn't changed since
   # we started embedding. If it changed (concurrent edit), this is a no-op —
   # the reconciliation cron or the next debounced job will pick up the new version.
@@ -662,7 +695,7 @@ defmodule Engram.Workers.EmbedNote do
   defp stamp_embed_hash(%Note{content_hash: nil} = note, _dense?, _count),
     do: CrashGuard.clear(note, :ok)
 
-  defp stamp_embed_hash(note, dense?, chunk_count) do
+  defp stamp_embed_hash(note, dense?, chunk_count, sparse_park \\ :budget) do
     # `embed_hash` = "this content is indexed" (keyword and/or dense).
     # `dense_indexed_hash` = "this content has dense vectors in Qdrant".
     # Keeping them separate is what lets ReconcileEmbeddings backfill the
@@ -700,6 +733,14 @@ defmodule Engram.Workers.EmbedNote do
             dense_indexed_hash: note.content_hash,
             embed_model: Indexing.embed_model(),
             embed_retry_after: nil,
+            embed_budget_parked: nil
+          ]
+
+        sparse_park == :too_long ->
+          [
+            dense_indexed_hash: nil,
+            embed_model: nil,
+            embed_retry_after: @parked_until_edited,
             embed_budget_parked: nil
           ]
 

@@ -141,10 +141,15 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         # that parked it no longer applies, and waiting out the 24h would make
         # a paying user's search worse than it needs to be. A poison cooldown
         # (`embed_budget_parked` not true) still holds for everyone.
+        #
+        # And a too-long park (keyword-only, `EmbedNote.parked_until_edited/0`)
+        # ends when the content changes, not on a clock.
         |> where(
           [n],
           is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now or
-            (n.embed_budget_parked == true and exists(paid))
+            (n.embed_budget_parked == true and exists(paid)) or
+            (n.embed_retry_after == ^EmbedNote.parked_until_edited() and
+               n.embed_hash != n.content_hash)
         )
         |> order_by([n], asc: n.updated_at)
         |> limit(^remaining)
@@ -364,10 +369,16 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         # A version-stale note gets a full rebuild above, which stamps the
         # keyword version itself.
         |> where(^dynamic([n], not (^IndexVersions.stale_dynamic())))
+        # A too-long park (`EmbedNote.parked_until_edited/0`) is keyword-only
+        # by design, so its keyword vectors still refresh. ponytail: the stamp
+        # below replaces the park with the backoff, so each keyword bump costs
+        # such a note one unbilled 400 before it parks again; keep the park
+        # in the stamp if those notes ever exist in numbers.
         |> where(
           [n],
           is_nil(n.embed_retry_after) or n.embed_retry_after <= ^now or
-            (n.embed_budget_parked == true and exists(paid))
+            (n.embed_budget_parked == true and exists(paid)) or
+            n.embed_retry_after == ^EmbedNote.parked_until_edited()
         )
         |> order_by([n], asc: n.updated_at)
         |> limit(^page_size)
