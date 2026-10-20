@@ -3,9 +3,6 @@ defmodule EngramWeb.NotesController do
   use OpenApiSpex.ControllerSpecs
   alias EngramWeb.Schemas
 
-  # Cap per POST /notes/ctime; the plugin sweep chunks to this.
-  @max_ctime_batch 500
-
   alias Engram.Crypto
   alias Engram.Links
   alias Engram.Logger.Metadata
@@ -16,6 +13,9 @@ defmodule EngramWeb.NotesController do
   action_fallback EngramWeb.FallbackController
 
   require Logger
+
+  # Cap per POST /notes/ctime; the plugin sweep chunks to this.
+  @max_ctime_batch 500
 
   operation(:upsert,
     operation_id: "notes-upsert",
