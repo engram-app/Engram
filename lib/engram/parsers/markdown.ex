@@ -36,6 +36,9 @@ defmodule Engram.Parsers.Markdown do
   # that exact integer and rejects any wider contract as a supertype.
   def chunker_version, do: @chunker_version
 
+  @doc "Most bytes of `text` one chunk holds (`MAX_CHUNK` in chunker.rs)."
+  def max_chunk, do: 2_048
+
   @doc """
   Parse markdown content into indexable chunks.
 

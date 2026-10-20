@@ -163,12 +163,14 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
     ids
   end
 
-  # Floored notes: one keyword-only row (token_count NULL, no hmac) spanning
-  # `span` characters, newest last.
+  # Floored notes: keyword-only rows (token_count NULL, no hmac) spanning
+  # `span` characters, as many as `Indexing.floor_points/1` says,
+  # newest last.
   defp floor_notes(user, vault, n, tier, span, opts \\ []) do
     ids = full_notes(user, vault, n, 0, Keyword.put(opts, :dense, false))
     stamp!(user, ids, index_tier: tier, chunk_count: Keyword.get(opts, :chunk_count))
-    seed_rows!(user, vault, ids, 1, token_count: nil, context_hmac: nil, char_end: span)
+    rows = Indexing.floor_points(span)
+    seed_rows!(user, vault, ids, rows, token_count: nil, context_hmac: nil, char_end: span)
     ids
   end
 
@@ -412,6 +414,31 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
 
       assert Enum.sort(Enum.map(jobs, & &1.args["note_id"])) ==
                Enum.sort(Enum.take(floors, -promoted))
+    end
+
+    # A note over 1 MiB floors into one row per MiB. Read as "not floored
+    # yet", it was re-demoted every tick and never promoted.
+    test "a floor note of several rows promotes, and is not re-floored", %{
+      user: user,
+      vault: vault
+    } do
+      [big] = floor_notes(user, vault, 1, "floor", 3 * 1_048_576, chunk_count: 40)
+      assert points(user) == Indexing.floor_points(3 * 1_048_576)
+
+      assert {:ok, %{demoted: 0, promoted: 1}} = ReconcileEmbeddings.budget_sweep(20)
+      assert [%{args: %{"note_id" => ^big}}] = budget_jobs(key: "index_budget", value: "promote")
+    end
+
+    test "over the cap, a floor note of several rows gets no demote job", %{
+      user: user,
+      vault: vault
+    } do
+      filler(user, vault, cap() + 50)
+      [big] = floor_notes(user, vault, 1, "floor", 3 * 1_048_576)
+
+      ReconcileEmbeddings.budget_sweep(20)
+
+      refute Enum.any?(all_enqueued(worker: RebuildStaleNote), &(&1.args["note_id"] == big))
     end
 
     test "at 95% nothing promotes", %{user: user, vault: vault} do

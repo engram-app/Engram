@@ -533,12 +533,31 @@ defmodule Engram.Indexing do
     if tier in @floor_tiers, do: tier
   end
 
-  @doc """
-  The plan for a note over the Free index budget: ONE sparse-only point for
-  the whole note, so it stays keyword-searchable for one point of budget.
+  # Body bytes one floor point covers. One vector for a whole note grew with
+  # the note: a 3 MB CJK note (every bigram a term) was an 11.8 MB upsert
+  # and a 213 MB encode peak, so 10 MB passed Qdrant's 32 MiB request cap
+  # and 30 MB the worker's RAM. 1 MiB of text keeps a point near 4 MB of
+  # JSON at that density.
+  @floor_span 1_048_576
 
-  The keyword input is every chunk's `context_text` joined, so the vector
-  holds the union of the note's terms (headings and title prefix included).
+  @doc """
+  Floor points a note whose body spans `span` bytes takes (`floor_plan/2`):
+  about one per MiB, at least one. Exact as an upper bound for the body; a
+  large frontmatter block can add a point. The index budget sweep projects
+  a floor's cost with it.
+  """
+  @spec floor_points(non_neg_integer()) :: pos_integer()
+  def floor_points(span), do: div(span, @floor_span - Markdown.max_chunk()) + 1
+
+  @doc """
+  The plan for a note over the Free index budget: one sparse-only point per
+  MiB of the note's body (`floor_points/1`, so ONE for every note under
+  1 MiB), keeping it keyword-searchable for the fewest points of budget.
+
+  A point's keyword input is its chunks' `context_text` joined, so the
+  vectors hold the union of the note's terms (headings and title prefix
+  included). Chunks are packed in order, a point closing before its chunks'
+  text would pass 1 MiB.
   It has no dense vector and no display text: its payload text is `""`, and a
   hit's snippet is the note's title and path from `notes`. The row's
   `token_count` is nil, so a whole-note length never enters the vault's
@@ -547,20 +566,39 @@ defmodule Engram.Indexing do
   later full pass deletes it as stale.
   """
   def floor_plan(note, chunks) do
-    floor = %{
-      position: 0,
-      char_start: 0,
-      char_end: chunks |> Enum.map(& &1.char_end) |> Enum.max(),
-      heading_path: nil,
-      text: "",
-      embed_text: "",
-      context_text: Enum.map_join(chunks, "\n\n", & &1.context_text),
-      context_hmac: nil,
-      floor: true
-    }
+    entries =
+      chunks
+      |> Enum.chunk_while(
+        {[], 0},
+        fn chunk, {acc, bytes} ->
+          size = byte_size(chunk.text)
+
+          if acc != [] and bytes + size > @floor_span,
+            do: {:cont, Enum.reverse(acc), {[chunk], size}},
+            else: {:cont, {[chunk | acc], bytes + size}}
+        end,
+        fn
+          {[], _} -> {:cont, {[], 0}}
+          {acc, _} -> {:cont, Enum.reverse(acc), {[], 0}}
+        end
+      )
+      |> Enum.with_index(fn members, position ->
+        {:embed,
+         %{
+           position: position,
+           char_start: members |> Enum.map(& &1.char_start) |> Enum.min(),
+           char_end: members |> Enum.map(& &1.char_end) |> Enum.max(),
+           heading_path: nil,
+           text: "",
+           embed_text: "",
+           context_text: Enum.map_join(members, "\n\n", & &1.context_text),
+           context_hmac: nil,
+           floor: true
+         }}
+      end)
 
     %{
-      entries: [{:embed, floor}],
+      entries: entries,
       reused_point_ids: [],
       stale_point_ids: point_ids_for_note(note),
       # The floor chunk has no text to detect a language from.
@@ -657,8 +695,8 @@ defmodule Engram.Indexing do
     # points. Deleting first and crashing before the row write would leave the
     # next attempt happily "reusing" ids that no longer exist in Qdrant.
     #
-    # A floor plan reuses nothing, yet it skips the purge: its one point is
-    # written first and the dense points deleted only after the rows name it
+    # A floor plan reuses nothing, yet it skips the purge: its points are
+    # written first and the dense points deleted only after the rows name them
     # (`drop_replaced_points/3`). A refused write (strict mode) then leaves the
     # old index whole, and a refused delete leaves both, still searchable.
     floor? = Map.get(prepared, :index_tier) != nil

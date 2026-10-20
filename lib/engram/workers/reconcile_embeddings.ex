@@ -340,7 +340,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   user, overrides included, and never applied with billing disabled.
 
   Over 100% of the cap, the oldest full notes are demoted to the floor (one
-  keyword point each, `Indexing.floor_plan/2`): `"floor_paid"` if they had
+  keyword point per MiB of body, `Indexing.floor_plan/2`): `"floor_paid"` if they had
   dense vectors, else `"floor"`. Below 90%, floor notes are promoted back,
   newest first, while the projected count stays under 90%, and merged notes
   whose per-note cap has since risen are rebuilt at it. A `"floor_paid"` or
@@ -495,12 +495,14 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       pending = for j <- jobs, j.pending, into: %{}, do: {j.note_id, j.points}
 
       # `Indexing.points_budget_ok?/3`'s count (every chunk row), with each note at what it will
-      # hold: a floor note one point, a full note at most its per-note cap,
+      # hold: a floor note its floor points (one per MiB, `floor_points/1`), a
+      # full note at most its per-note cap,
       # and a queued promotion at its estimate.
       projected =
         Enum.reduce(notes, Repo.aggregate(Chunk, :count), fn n, acc ->
           cond do
-            n.tier != nil -> acc - (n.rows - 1)
+            floored?(n) -> acc
+            n.tier != nil -> acc - max(n.rows - Indexing.floor_points(n.span), 0)
             user.note_cap -> acc - max(n.rows - user.note_cap, 0)
             true -> acc
           end
@@ -526,7 +528,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         select: %{
           note_id: c.note_id,
           rows: count(),
-          unsized: filter(count(), is_nil(c.token_count)),
+          # Floor rows: no length and no reuse fingerprint (a merged row has
+          # the fingerprint).
+          floor_rows: filter(count(), is_nil(c.token_count) and is_nil(c.context_hmac)),
           span: max(c.char_end)
         }
       )
@@ -543,7 +547,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
         coalesce(n.embed_started_at > ^stale_before, false) or
           coalesce(n.embed_retry_after > ^now, false),
       rows: c.rows,
-      unsized: c.unsized,
+      floor_rows: c.floor_rows,
       span: c.span,
       chunk_count: n.chunk_count
     })
@@ -575,17 +579,18 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   end
 
   # Newest first, every full note kept while the account, with every note
-  # after it at one floor point, stays within the cap. The rest demote,
+  # after it at its floor points, stays within the cap. The rest demote,
   # oldest first.
   defp demote(user, notes, projected, now) do
     full = Enum.filter(notes, &is_nil(&1.tier))
     cost = &min(&1.rows, user.note_cap || &1.rows)
-    fixed = projected - Enum.sum(Enum.map(full, cost)) + length(full)
+    floor = &Indexing.floor_points(&1.span)
+    fixed = projected - Enum.sum(Enum.map(full, cost)) + Enum.sum(Enum.map(full, floor))
 
     {_kept, over} =
       Enum.reduce(full, {fixed, []}, fn n, {acc, over} ->
-        if over == [] and acc + cost.(n) - 1 <= user.cap,
-          do: {acc + cost.(n) - 1, over},
+        if over == [] and acc + cost.(n) - floor.(n) <= user.cap,
+          do: {acc + cost.(n) - floor.(n), over},
           else: {acc, [n | over]}
       end)
 
@@ -617,9 +622,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # Floor-tier notes still holding full rows: this tick's, and any whose
     # job was lost.
     unfloored =
-      for n <- notes,
-          n.tier != nil and not n.busy and (n.rows > 1 or n.unsized == 0),
-          do: n.id
+      for n <- notes, n.tier != nil and not n.busy and not floored?(n), do: n.id
 
     (stamped ++ unfloored)
     |> Enum.uniq()
@@ -670,7 +673,11 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     length(fresh)
   end
 
-  # A floor note (fully floored: one keyword row), or a merged note whose
+  # Holds only floor rows (`Indexing.floor_plan/2`): however many a large
+  # note took, none has a length or a fingerprint.
+  defp floored?(n), do: n.tier != nil and n.floor_rows == n.rows
+
+  # A floor note (fully floored: its keyword rows), or a merged note whose
   # natural chunk count now un-merges under its per-note cap (an upgrade or
   # a raised override; at or below 0.75 x cap, `Indexing.merges?/3`), which a
   # recap pass unmerges.
@@ -679,7 +686,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     est = if note_cap, do: min(est, note_cap), else: est
 
     cond do
-      n.tier != nil and n.rows == 1 and n.unsized == 1 ->
+      floored?(n) ->
         unmetered = n.tier == "floor_paid"
         [{n, %{index_budget: "promote", budget_points: est, unmetered: unmetered}}]
 
