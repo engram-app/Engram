@@ -90,15 +90,36 @@ interface Failure {
  *  second later, and the per-attempt report paged anyway. */
 const pendingReports = new WeakMap<object, Failure>();
 
-/** Report `err` once the current attempt has settled, unless a retry claims it.
- *  React Query decides to retry inside the rejection's microtasks; a timer runs
- *  after them. A caller outside React Query never claims, so it still reports. */
-function reportUnlessRetried(err: object, failure: Failure) {
+/** One run of a query's queryFn. React Query marks it `retried` when it decides
+ *  to run the queryFn again, so every request made in that run is dropped,
+ *  however the queryFn combined or wrapped their errors (Promise.all, a
+ *  rethrow). Linking by the thrown error alone missed exactly those. */
+interface QueryAttempt {
+	/** Failed attempts before this one, for the report's `attempt`. */
+	earlier: number;
+	retried: boolean;
+}
+
+// The attempt whose queryFn is running right now. A request belongs to it if
+// authFetch is CALLED synchronously inside the queryFn, which every queryFn
+// here does for its first request; one made after an `await` falls back to
+// the thrown-error link below.
+let currentQueryAttempt: QueryAttempt | null = null;
+
+/** Report `err` once the current attempt has settled, unless a retry claims it:
+ *  its query attempt is marked retried, or (outside a query attempt) React
+ *  Query discards this exact error. React Query decides to retry inside the
+ *  rejection's microtasks; a timer runs after them. A caller outside React
+ *  Query never claims, so it still reports. */
+function reportUnlessRetried(err: object, failure: Failure, queryAttempt: QueryAttempt | null) {
+	if (queryAttempt && failure.context) {
+		failure.context.attempt += queryAttempt.earlier;
+	}
 	pendingReports.set(err, failure);
 	setTimeout(() => {
 		const pending = pendingReports.get(err);
 		pendingReports.delete(err);
-		if (pending) {
+		if (pending && !queryAttempt?.retried) {
 			sendReport(pending);
 		}
 	}, 0);
@@ -115,6 +136,8 @@ async function authFetch(
 	options: RequestInit = {},
 	{ retryNetworkError = true } = {},
 ): Promise<Response> {
+	// Before the first await: only the synchronous part of a queryFn is inside it.
+	const queryAttempt = currentQueryAttempt;
 	const token = await getAuthToken();
 
 	const headers = new Headers(options.headers);
@@ -159,12 +182,16 @@ async function authFetch(
 			// the browser deliberately leaves vague.
 			const aborted = err instanceof Error && err.name === "AbortError";
 			if (!aborted && navigator.onLine && err instanceof Error) {
-				reportUnlessRetried(err, {
-					kind: "network_error",
-					method,
-					url,
-					context: networkContext(err, tryNumber, performance.now() - startedAt, offlineSince),
-				});
+				reportUnlessRetried(
+					err,
+					{
+						kind: "network_error",
+						method,
+						url,
+						context: networkContext(err, tryNumber, performance.now() - startedAt, offlineSince),
+					},
+					queryAttempt,
+				);
 			}
 			throw err;
 		}
@@ -205,7 +232,7 @@ async function authFetch(
 			body.error ?? firstValidationError(body.errors) ?? response.statusText,
 		);
 		if (response.status >= 500) {
-			reportUnlessRetried(error, { kind: `http_${response.status}`, method, url });
+			reportUnlessRetried(error, { kind: `http_${response.status}`, method, url }, queryAttempt);
 		}
 		throw error;
 	}
@@ -215,14 +242,26 @@ async function authFetch(
 
 /** The attempt that threw `err` will be retried: its failure is not final, so
  *  drop its report. The final attempt's own error reports if it fails too. */
+/** Run one attempt of a query's queryFn as `attempt` (see QueryAttempt). */
+export function runInQueryAttempt<T>(attempt: QueryAttempt, fn: () => T): T {
+	const outer = currentQueryAttempt;
+	currentQueryAttempt = attempt;
+	try {
+		return fn();
+	} finally {
+		currentQueryAttempt = outer;
+	}
+}
+
 export function discardRetriedFailure(err: unknown) {
 	if (typeof err === "object" && err !== null) {
 		pendingReports.delete(err);
 	}
 }
 
-/** React Query's earlier failed attempts of the request that threw `err`, so
- *  the final report's `attempt` counts every try, not just the last fetch. */
+/** A mutation's earlier failed attempts of the request that threw `err`, so
+ *  the final report's `attempt` counts every try, not just the last fetch.
+ *  (A query's come from its QueryAttempt.) */
 export function noteEarlierAttempts(err: unknown, earlier: number) {
 	if (typeof err === "object" && err !== null) {
 		const context = pendingReports.get(err)?.context;
@@ -246,6 +285,8 @@ export async function getAuthToken(): Promise<string | null> {
 export function setUpgradeHandler(fn: ((reason: string) => void) | null) {
 	upgradeHandler = fn;
 }
+
+export type { QueryAttempt };
 
 export class ApiError extends Error {
 	constructor(

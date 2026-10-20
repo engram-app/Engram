@@ -364,5 +364,81 @@ describe("idempotent writes retry once on a network error", () => {
 		outcomes(new TypeError("Failed to fetch"), new Response("{}", { status: 200 }));
 		await expect(api.del("/me", { password: "pw" })).rejects.toThrow();
 		expect(requests()).toBe(1);
+		// Reported once, as attempt 1 (and settled here, not in the next test).
+		await vi.waitFor(() => expect(mockError).toHaveBeenCalledTimes(1));
+		expect(mockError.mock.calls[0]?.[2]).toMatchObject({ attempt: 1 });
+	});
+});
+
+// Suppressing a retried attempt used to hinge on React Query seeing the exact
+// error authFetch threw. A queryFn that runs two requests (Promise.all) or
+// wraps the error broke that link, and a recovered attempt still paged.
+describe("retried query attempts are dropped whatever the queryFn does", () => {
+	beforeEach(() => {
+		mockError.mockClear();
+		vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
+	});
+
+	/** /a and /b fail `failures` times each, then answer 200. */
+	function failing(failures: number) {
+		const seen = new Map<string, number>();
+		globalThis.fetch = vi.fn((url: RequestInfo | URL) => {
+			const path = String(url);
+			if (path.endsWith("/api/health")) {
+				return Promise.resolve(new Response(null, { status: 200 }));
+			}
+			const n = (seen.get(path) ?? 0) + 1;
+			seen.set(path, n);
+			return n <= failures
+				? Promise.reject(new TypeError("Failed to fetch"))
+				: Promise.resolve(new Response("{}", { status: 200 }));
+		});
+	}
+
+	const both = () => Promise.all([api.get("/a"), api.get("/b")]);
+	const wrapped = () =>
+		api.get("/a").catch((err: unknown) => {
+			throw new Error("could not load a", { cause: err });
+		});
+
+	const fetchWith = (key: string, queryFn: () => Promise<unknown>) =>
+		queryClient.fetchQuery({ queryKey: ["scope-test", key], queryFn, retry: 1, retryDelay: 0 });
+
+	const settle = () => new Promise((r) => setTimeout(r, 20));
+
+	it("Promise.all of two GETs that both recover on retry reports nothing", async () => {
+		failing(1);
+		await fetchWith("all-recovers", both);
+		await settle();
+		expect(mockError).not.toHaveBeenCalled();
+	});
+
+	it("Promise.all of two GETs failing every attempt reports each once", async () => {
+		failing(99);
+		await expect(fetchWith("all-fails", both)).rejects.toThrow();
+		await vi.waitFor(() => expect(mockError).toHaveBeenCalledTimes(2));
+		await settle();
+		expect(mockError).toHaveBeenCalledTimes(2);
+		// Both scrub to the same route shape (/api/:seg); one report each.
+		expect(mockError.mock.calls.map((c) => String(c[1]))).toEqual([
+			expect.stringMatching(/^network_error GET /),
+			expect.stringMatching(/^network_error GET /),
+		]);
+		expect(mockError.mock.calls.map((c) => c[2].attempt)).toEqual([2, 2]);
+	});
+
+	it("a wrapped error that recovers on retry reports nothing", async () => {
+		failing(1);
+		await fetchWith("wrapped-recovers", wrapped);
+		await settle();
+		expect(mockError).not.toHaveBeenCalled();
+	});
+
+	it("a wrapped error failing every attempt reports once", async () => {
+		failing(99);
+		await expect(fetchWith("wrapped-fails", wrapped)).rejects.toThrow("could not load a");
+		await vi.waitFor(() => expect(mockError).toHaveBeenCalledTimes(1));
+		await settle();
+		expect(mockError).toHaveBeenCalledTimes(1);
 	});
 });
