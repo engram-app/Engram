@@ -23,6 +23,7 @@ defmodule Engram.Analytics do
 
   alias Engram.Accounts
   alias Engram.Accounts.User
+  alias Engram.Analytics.Folds
   alias Engram.Observability.PostHog
   alias Engram.Workers.PostHogErasure
 
@@ -63,8 +64,31 @@ defmodule Engram.Analytics do
     surface = Atom.to_string(surface)
     props = props |> Map.drop([:surface, "surface"]) |> Map.put(:surface, surface)
     dedupe = Keyword.get(opts, :dedupe, surface)
-    track_throttled(user, "surface_active", dedupe, @activity_window_ms, props)
+    track_folded(user, "surface_active", dedupe, @activity_window_ms, props, %{events: 1})
   end
+
+  @doc """
+  `track_throttled/5` that also counts. `counts` (`%{name => n}`) is added on
+  every call, and the event that is sent carries, and resets, the totals since
+  the previous one, so `calls` (say) stays exact while the event is throttled.
+  Counts no later event picks up are sent as `<event>_rollup` within 5
+  minutes. See `Engram.Analytics.Folds`.
+  """
+  @spec track_folded(map(), String.t(), String.t(), pos_integer(), map(), map()) :: :ok
+  def track_folded(%{id: id} = user, event, dedupe, window_ms, props, counts) do
+    if enabled?() do
+      key = {event, id, dedupe}
+      :ok = Folds.add(key, counts, props)
+
+      track_throttled(user, event, dedupe, window_ms, fn ->
+        Map.merge(props, Folds.take(key, Map.keys(counts)))
+      end)
+    else
+      :ok
+    end
+  end
+
+  def track_folded(_user, _event, _dedupe, _window_ms, _props, _counts), do: :ok
 
   @doc """
   Record that `user` was refused by plan limit `limit_key` (a 402, a refused

@@ -1085,21 +1085,21 @@ defmodule EngramWeb.McpController do
   # Product analytics, not ops telemetry: who is using MCP and which tools. Every
   # label is bounded (`tool_atom` is `:unknown` off the allowlist; `status` is a
   # fixed atom), so no client-supplied text reaches PostHog. The tool event is
-  # throttled per user and tool (1/min) so an agent loop cannot flood PostHog:
-  # it measures minutes a tool was in use, not raw call count.
+  # throttled per user, tool and client (1/min) so an agent loop cannot flood
+  # PostHog; `calls` and `errors` carry every call folded into the window, so
+  # call volume per tool per client stays exact.
   defp emit_tool_analytics(user, tool_atom, status) do
     Engram.Analytics.track_activity(user, :mcp)
+    tool = Atom.to_string(tool_atom)
+    client = current_client_family()
 
-    Engram.Analytics.track_throttled(
+    Engram.Analytics.track_folded(
       user,
       "mcp_tool_called",
-      Atom.to_string(tool_atom),
+      "#{tool}:#{client}",
       60_000,
-      %{
-        tool: Atom.to_string(tool_atom),
-        status: Atom.to_string(status),
-        client: current_client_family()
-      }
+      %{tool: tool, status: Atom.to_string(status), client: client},
+      %{calls: 1, errors: if(status == :ok, do: 0, else: 1)}
     )
   end
 

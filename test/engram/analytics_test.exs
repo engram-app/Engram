@@ -95,6 +95,20 @@ defmodule Engram.AnalyticsTest do
       refute_receive {:captured, _}, 300
     end
 
+    test "carries how many activity events each one stands for" do
+      user = insert(:user, email: "folds@example.com")
+
+      for _ <- 1..3, do: Analytics.track_activity(user, :mcp)
+      assert_receive {:captured, first}, 1_000
+      assert first["properties"]["events"] == 1
+
+      # A new window: the two throttled-away events ride on the next one.
+      EngramWeb.RateLimiter.reset_buckets!()
+      Analytics.track_activity(user, :mcp)
+      assert_receive {:captured, second}, 1_000
+      assert second["properties"]["events"] == 3
+    end
+
     test "skips a user who opted out after the struct was loaded" do
       stale = insert(:user)
       {:ok, _} = Engram.Accounts.set_analytics_opt_out(stale)

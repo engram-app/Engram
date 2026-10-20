@@ -40,6 +40,9 @@ config :engram, :boot_canary_enabled, false
 config :engram, :background_job_priority, :normal
 config :engram, :origin_stats_flush_ms, nil
 config :engram, :origin_stats_flush_on_terminate, false
+# Folded analytics counts (Engram.Analytics.Folds): tests flush by hand.
+config :engram, :analytics_folds_flush_ms, nil
+config :engram, :analytics_folds_flush_on_terminate, false
 
 # CheckpointGate inline limit raised out of the way for tests: the gate is a
 # process-global counter shared by the whole (partly async) suite, and many
