@@ -1,11 +1,24 @@
 import {
+	MutationCache,
 	type MutationCacheNotifyEvent,
+	QueryCache,
 	type QueryCacheNotifyEvent,
 	QueryClient,
 } from "@tanstack/react-query";
-import { discardRetriedFailure } from "./client";
+import { discardRetriedFailure, noteEarlierAttempts } from "./client";
 
+// A final failure's report counts React Query's earlier tries in `attempt`.
+// Both onErrors run synchronously in the rejection, before the report's timer.
+// A query's fetchFailureCount already includes the final failure; a
+// mutation's failureCount does not yet.
 const queryClient = new QueryClient({
+	queryCache: new QueryCache({
+		onError: (error, query) => noteEarlierAttempts(error, query.state.fetchFailureCount - 1),
+	}),
+	mutationCache: new MutationCache({
+		onError: (error, _variables, _context, mutation) =>
+			noteEarlierAttempts(error, mutation.state.failureCount),
+	}),
 	defaultOptions: {
 		queries: {
 			staleTime: 30_000,

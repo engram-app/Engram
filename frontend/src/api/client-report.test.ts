@@ -171,3 +171,96 @@ describe("api client reports only a request's final failure", () => {
 		expect(mockError).toHaveBeenCalledTimes(1);
 	});
 });
+
+// "Failed to fetch" says nothing about why. Three prod users (all Chrome 155)
+// lost a first attempt that never reached Cloudflare; these fields are what
+// can tell a fast refusal from a stall, a backgrounded tab, or a bad link.
+describe("network_error reports carry diagnostic context", () => {
+	const CHROME_155_UA =
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36";
+
+	beforeEach(() => {
+		mockError.mockClear();
+		vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
+		vi.spyOn(navigator, "userAgent", "get").mockReturnValue(CHROME_155_UA);
+		vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+	});
+
+	it("sends browser, attempt, timing and the browser's fixed error text", async () => {
+		globalThis.fetch = vi
+			.fn()
+			.mockRejectedValueOnce(new TypeError("Failed to fetch"))
+			.mockResolvedValueOnce(new Response(null, { status: 200 }));
+
+		await expect(api.post("/folders/batch-delete", { ids: [] })).rejects.toThrow();
+
+		await vi.waitFor(() => expect(mockError).toHaveBeenCalledTimes(1));
+		const [category, message, context] = mockError.mock.calls[0] ?? [];
+		expect(category).toBe("api_request");
+		// Byte-identical to before: the alert greps this text.
+		expect(message).toMatch(/^network_error POST \S*\/:seg$/);
+		expect(context).toEqual({
+			browser: "Chrome 155",
+			online: true,
+			attempt: 1,
+			elapsed_ms: expect.any(Number),
+			error_name: "TypeError",
+			error_message: "Failed to fetch",
+			visibility: "visible",
+		});
+	});
+
+	it("prefers userAgentData brands, and never forwards an unknown message", async () => {
+		Object.defineProperty(navigator, "userAgentData", {
+			configurable: true,
+			value: {
+				brands: [
+					{ brand: "Not=A?Brand", version: "24" },
+					{ brand: "Chromium", version: "155" },
+					{ brand: "Microsoft Edge", version: "155" },
+				],
+			},
+		});
+		Object.defineProperty(navigator, "connection", {
+			configurable: true,
+			value: { effectiveType: "3g" },
+		});
+		globalThis.fetch = vi
+			.fn()
+			.mockRejectedValueOnce(new TypeError("net::ERR_X at https://api.engram.page/me?t=secret"))
+			.mockResolvedValueOnce(new Response(null, { status: 200 }));
+
+		await expect(api.get("/me")).rejects.toThrow();
+
+		await vi.waitFor(() => expect(mockError).toHaveBeenCalledTimes(1));
+		const context = mockError.mock.calls[0]?.[2];
+		expect(context.browser).toBe("Edge 155");
+		expect(context.error_message).toBe("other");
+		expect(context.effective_type).toBe("3g");
+		Reflect.deleteProperty(navigator, "userAgentData");
+		Reflect.deleteProperty(navigator, "connection");
+	});
+
+	it("counts React Query's retries in the attempt of the final failure", async () => {
+		globalThis.fetch = vi.fn((url: RequestInfo | URL) =>
+			String(url).endsWith("/api/health")
+				? Promise.resolve(new Response(null, { status: 200 }))
+				: Promise.reject(new TypeError("Load failed")),
+		);
+
+		await expect(
+			queryClient.fetchQuery({
+				queryKey: ["report-test", "attempts"],
+				queryFn: () => api.get("/me"),
+				retry: 1,
+				retryDelay: 0,
+			}),
+		).rejects.toThrow("Load failed");
+
+		await vi.waitFor(() => expect(mockError).toHaveBeenCalledTimes(1));
+		expect(mockError.mock.calls[0]?.[2]).toMatchObject({
+			attempt: 2,
+			error_message: "Load failed",
+		});
+	});
+});
