@@ -867,8 +867,11 @@ defmodule Engram.BillingTest do
         }
       }
 
-      assert {:ok, %Subscription{status: "past_due", tier: "pro"}} =
+      assert {:ok, %Subscription{status: "past_due", tier: "pro"} = sub} =
                Billing.upsert_from_paddle_event(event)
+
+      # The forwarder reads the pre-update state to name the change.
+      assert sub.previous == %{tier: "starter", status: "trialing"}
 
       # An upgrade can lift the index cap: the backfill starts now.
       assert_enqueued(worker: Engram.Workers.ReconcileEmbeddings)
@@ -889,7 +892,10 @@ defmodule Engram.BillingTest do
         }
       }
 
-      assert {:ok, %Subscription{status: "canceled"}} = Billing.upsert_from_paddle_event(event)
+      assert {:ok, %Subscription{status: "canceled"} = sub} =
+               Billing.upsert_from_paddle_event(event)
+
+      assert sub.previous == %{tier: "starter", status: "active"}
     end
 
     # The Free stamp failing (`:not_found`) must not roll back the cancel:

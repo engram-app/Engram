@@ -18,6 +18,7 @@ defmodule Engram.Observability.EmittersTest do
 
   use EngramWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
   import Mox
 
   alias Engram.Notes
@@ -396,19 +397,267 @@ defmodule Engram.Observability.EmittersTest do
       assert body["distinct_id"] == PostHog.analytics_id(user.email)
     end
 
-    test "non-activated event types no-op (subscription.updated, subscription.canceled, ignored)" do
-      user = user_with_clerk_id()
-      sub = insert(:subscription, user: user)
+    test "subscription_started carries interval and discounted so comps can be excluded",
+         %{bypass: bypass} do
+      sub = insert(:subscription, user: user_with_clerk_id(), tier: "pro")
+      expect_capture(bypass)
 
-      for event_type <- ~w(subscription.updated subscription.canceled subscription.past_due) do
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{
+            "event_type" => "subscription.activated",
+            "data" => %{
+              "status" => "active",
+              "billing_cycle" => %{"interval" => "year", "frequency" => 1},
+              "discount" => %{"id" => "dsc_comp"},
+              "items" => [%{"price" => %{"id" => "pri_pro_annual_test"}}]
+            }
+          },
+          sub
+        )
+
+      assert_receive {:posthog_body, body}, 1_500
+      assert body["properties"]["interval"] == "year"
+      assert body["properties"]["discounted"] == true
+    end
+
+    test "subscription.created while trialing is subscription_trial_started", %{bypass: bypass} do
+      user = user_with_clerk_id()
+      sub = insert(:subscription, user: user, tier: "starter", status: "trialing")
+      expect_capture(bypass)
+
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{
+            "event_type" => "subscription.created",
+            "data" => %{
+              "status" => "trialing",
+              "billing_cycle" => %{"interval" => "month", "frequency" => 1},
+              "discount" => nil
+            }
+          },
+          sub
+        )
+
+      assert_receive {:posthog_body, body}, 1_500
+      assert body["event"] == "subscription_trial_started"
+      assert body["distinct_id"] == PostHog.analytics_id(user.email)
+      assert body["properties"]["tier"] == "starter"
+      assert body["properties"]["interval"] == "month"
+      assert body["properties"]["discounted"] == false
+    end
+
+    test "subscription.created that is not trialing sends nothing (activated covers it)" do
+      sub = insert(:subscription, user: user_with_clerk_id(), status: "active")
+
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{"event_type" => "subscription.created", "data" => %{"status" => "active"}},
+          sub
+        )
+
+      refute_receive {:posthog_body, _}, 100
+    end
+
+    for {name, prev, now, data, kind} <- [
+          {"a higher tier", %{tier: "starter", status: "active"}, {"pro", "active"}, %{},
+           "upgrade"},
+          {"a lower tier", %{tier: "pro", status: "active"}, {"starter", "active"}, %{},
+           "downgrade"},
+          {"a scheduled cancel", %{tier: "pro", status: "active"}, {"pro", "active"},
+           %{"scheduled_change" => %{"action" => "cancel"}}, "cancel_scheduled"},
+          {"a return to active", %{tier: "pro", status: "past_due"}, {"pro", "active"}, %{},
+           "reactivated"}
+        ] do
+      test "subscription.updated to #{name} is subscription_changed{#{kind}}", %{bypass: bypass} do
+        {tier, status} = unquote(Macro.escape(now))
+
+        sub = %{
+          insert(:subscription, user: user_with_clerk_id(), tier: tier, status: status)
+          | previous: unquote(Macro.escape(prev))
+        }
+
+        expect_capture(bypass)
+
         :ok =
           PostHogForwarder.forward_paddle_event(
-            %{"event_type" => event_type, "data" => %{"items" => []}},
+            %{"event_type" => "subscription.updated", "data" => unquote(Macro.escape(data))},
             sub
+          )
+
+        assert_receive {:posthog_body, body}, 1_500
+        assert body["event"] == "subscription_changed"
+        assert body["properties"]["kind"] == unquote(kind)
+        assert body["properties"]["from_tier"] == unquote(prev.tier)
+        assert body["properties"]["to_tier"] == tier
+        assert body["properties"]["status"] == status
+      end
+    end
+
+    test "subscription.updated with nothing a funnel cares about sends nothing" do
+      sub = %{
+        insert(:subscription, user: user_with_clerk_id(), tier: "pro", status: "active")
+        | previous: %{tier: "pro", status: "active"}
+      }
+
+      # A renewal moves the billing period and nothing else.
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{"event_type" => "subscription.updated", "data" => %{"scheduled_change" => nil}},
+          sub
+        )
+
+      # Trial to active is subscription.activated's event, not a reactivation.
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{"event_type" => "subscription.updated", "data" => %{}},
+          %{sub | previous: %{tier: "pro", status: "trialing"}}
+        )
+
+      refute_receive {:posthog_body, _}, 100
+    end
+
+    test "subscription.canceled is subscription_canceled with the tier it left", %{bypass: bypass} do
+      sub = %{
+        insert(:subscription, user: user_with_clerk_id(), tier: "pro", status: "canceled")
+        | previous: %{tier: "pro", status: "active"}
+      }
+
+      expect_capture(bypass)
+
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{"event_type" => "subscription.canceled", "data" => %{}},
+          sub
+        )
+
+      assert_receive {:posthog_body, body}, 1_500
+      assert body["event"] == "subscription_canceled"
+      assert body["properties"]["from_tier"] == "pro"
+      assert body["properties"]["status"] == "canceled"
+    end
+
+    test "subscription.past_due is subscription_past_due", %{bypass: bypass} do
+      sub = insert(:subscription, user: user_with_clerk_id(), tier: "starter", status: "past_due")
+      expect_capture(bypass)
+
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{"event_type" => "subscription.past_due", "data" => %{}},
+          sub
+        )
+
+      assert_receive {:posthog_body, body}, 1_500
+      assert body["event"] == "subscription_past_due"
+      assert body["properties"]["tier"] == "starter"
+    end
+
+    test "transaction.completed is payment_completed with bounded amount props", %{bypass: bypass} do
+      user = user_with_clerk_id()
+      expect_capture(bypass)
+
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{
+            "event_type" => "transaction.completed",
+            "data" => %{
+              "custom_data" => %{"user_id" => user.id},
+              "origin" => "subscription_recurring",
+              "currency_code" => "USD",
+              "discount_id" => nil,
+              "details" => %{"totals" => %{"grand_total" => "1400"}},
+              "items" => [%{"price" => %{"billing_cycle" => %{"interval" => "month"}}}]
+            }
+          },
+          :ignored
+        )
+
+      assert_receive {:posthog_body, body}, 1_500
+      assert body["event"] == "payment_completed"
+      assert body["distinct_id"] == PostHog.analytics_id(user.email)
+      props = body["properties"]
+      assert props["amount_bucket"] == "10_25"
+      assert props["currency"] == "USD"
+      assert props["interval"] == "month"
+      assert props["discounted"] == false
+      assert props["origin"] == "subscription_recurring"
+    end
+
+    test "a fully comped payment buckets as 0 and is discounted", %{bypass: bypass} do
+      user = user_with_clerk_id()
+      expect_capture(bypass)
+
+      :ok =
+        PostHogForwarder.forward_paddle_event(
+          %{
+            "event_type" => "transaction.completed",
+            "data" => %{
+              "custom_data" => %{"user_id" => user.id},
+              "origin" => "web",
+              "currency_code" => "EUR",
+              "discount_id" => "dsc_comp",
+              "details" => %{"totals" => %{"grand_total" => "0"}}
+            }
+          },
+          :ignored
+        )
+
+      assert_receive {:posthog_body, body}, 1_500
+      assert body["properties"]["amount_bucket"] == "0"
+      assert body["properties"]["discounted"] == true
+      assert body["properties"]["interval"] == nil
+    end
+
+    test "a payment with no resolvable user sends nothing" do
+      for custom <- [%{}, %{"user_id" => "not-a-uuid"}, %{"user_id" => Ecto.UUID.generate()}] do
+        :ok =
+          PostHogForwarder.forward_paddle_event(
+            %{
+              "event_type" => "transaction.completed",
+              "data" => %{"custom_data" => custom, "currency_code" => "USD"}
+            },
+            :ignored
           )
       end
 
+      refute_receive {:posthog_body, _}, 100
+    end
+
+    test "$set of plan waits for the privacy policy that announces traits", %{bypass: bypass} do
+      Engram.Legal.Seeder.seed()
+      sub = insert(:subscription, user: user_with_clerk_id(), tier: "pro", status: "past_due")
+
+      set_policy_effective = fn date ->
+        Engram.Repo.update_all(
+          from(v in Engram.Legal.TermsVersion,
+            where: v.document == "privacy_policy" and v.version == "2026-10-12"
+          ),
+          [set: [effective_date: date]],
+          skip_tenant_check: true
+        )
+      end
+
+      event = %{"event_type" => "subscription.past_due", "data" => %{}}
+
+      expect_captures(bypass)
+      set_policy_effective.(Date.add(Date.utc_today(), 1))
+      :ok = PostHogForwarder.forward_paddle_event(event, sub)
+      assert_receive {:posthog_body, before}, 1_500
+      refute Map.has_key?(before["properties"], "$set")
+
+      set_policy_effective.(Date.add(Date.utc_today(), -1))
+      :ok = PostHogForwarder.forward_paddle_event(event, sub)
+      assert_receive {:posthog_body, after_}, 1_500
+      # Dunning is still entitled (`Billing.entitled_statuses/0`).
+      assert after_["properties"]["$set"] == %{
+               "plan" => "pro",
+               "subscription_status" => "past_due"
+             }
+    end
+
+    test "unhandled event types no-op" do
       :ok = PostHogForwarder.forward_paddle_event(%{"event_type" => "transaction.paid"}, :ignored)
+      :ok = PostHogForwarder.forward_paddle_event(%{"event_type" => "subscription.paused"}, :ok)
 
       refute_receive {:posthog_body, _}, 100
     end

@@ -779,7 +779,7 @@ defmodule Engram.Billing do
               )
             end
 
-            {:ok, updated}
+            {:ok, %{updated | previous: %{tier: sub.tier, status: sub.status}}}
 
           {:error, reason} ->
             {:error, reason}
@@ -826,7 +826,7 @@ defmodule Engram.Billing do
               Engram.Auth.SessionInvalidator.disconnect_user(updated.user_id)
             end
 
-            {:ok, updated}
+            {:ok, %{updated | previous: %{tier: prev_tier, status: prev_status}}}
 
           err ->
             err

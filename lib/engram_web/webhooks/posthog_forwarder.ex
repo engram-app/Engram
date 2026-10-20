@@ -25,6 +25,8 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
   """
 
   alias Engram.Accounts
+  alias Engram.Analytics.PersonProperties
+  alias Engram.Billing.Subscription
 
   @doc """
   Forward a verified Clerk webhook event. Returns `:ok` for every input
@@ -61,38 +63,176 @@ defmodule EngramWeb.Webhooks.PostHogForwarder do
     end
   end
 
+  @intervals ~w(day week month year)
+  @origins ~w(web api subscription_recurring subscription_charge subscription_update subscription_payment_method_change)
+  @currencies ~w(USD EUR GBP JPY AUD CAD CHF HKD SGD SEK ARS BRL CLP CNY COP CZK DKK HUF ILS INR KRW MXN NOK NZD PEN PLN RUB THB TRY TWD UAH VND ZAR)
+  # Paddle amounts are strings in the lowest unit; these have no minor unit.
+  @zero_decimal ~w(JPY KRW CLP)
+  @tier_rank %{"free" => 0, "starter" => 1, "pro" => 2}
+  @lapsed ~w(past_due paused canceled)
+
   @doc """
   Forward a verified Paddle webhook event paired with the result of
-  `Engram.Billing.upsert_from_paddle_event/1`. Only `subscription.activated`
-  with a freshly-upserted Subscription row produces a PostHog event today —
-  other event types either map to a different funnel step (handled
-  elsewhere) or are pure state-sync we don't expose to product analytics.
+  `Engram.Billing.upsert_from_paddle_event/1`, as the billing lifecycle:
+
+    * `subscription.created` while trialing: `subscription_trial_started`
+    * `subscription.activated`: `subscription_started`
+    * `subscription.updated`: `subscription_changed{kind}` when the tier moved
+      (`upgrade`/`downgrade`), a cancel was scheduled (`cancel_scheduled`), or
+      a lapsed status returned to active (`reactivated`). A renewal or any
+      other state-sync update sends nothing.
+    * `subscription.canceled`, `subscription.past_due`: same names
+    * `transaction.completed`: `payment_completed` with bucketed amount
+
+  Every prop is a bounded enum, bucket or Paddle id. `interval` and
+  `discounted` separate comped (100%-off) subs from real payers.
   """
   @spec forward_paddle_event(map(), struct() | term()) :: :ok
   def forward_paddle_event(
         %{"event_type" => "subscription.activated", "data" => data},
-        %Engram.Billing.Subscription{} = sub
+        %Subscription{} = sub
       ) do
+    price_id = data |> Map.get("items", []) |> List.first(%{}) |> get_in(["price", "id"])
+
+    track_sub(
+      sub,
+      "subscription_started",
+      Map.merge(cycle_props(data), %{
+        tier: sub.tier,
+        price_id: price_id,
+        paddle_subscription_id: sub.paddle_subscription_id
+      })
+    )
+  end
+
+  def forward_paddle_event(
+        %{"event_type" => "subscription.created", "data" => %{"status" => "trialing"} = data},
+        %Subscription{} = sub
+      ) do
+    track_sub(sub, "subscription_trial_started", Map.put(cycle_props(data), :tier, sub.tier))
+  end
+
+  def forward_paddle_event(
+        %{"event_type" => "subscription.updated", "data" => data},
+        %Subscription{previous: %{tier: from, status: prev_status}} = sub
+      ) do
+    case change_kind(from, prev_status, sub, data) do
+      nil ->
+        :ok
+
+      kind ->
+        track_sub(sub, "subscription_changed", %{
+          kind: kind,
+          from_tier: from,
+          to_tier: sub.tier,
+          status: sub.status
+        })
+    end
+  end
+
+  def forward_paddle_event(%{"event_type" => "subscription.canceled"}, %Subscription{} = sub) do
+    from = if sub.previous, do: sub.previous.tier, else: sub.tier
+    track_sub(sub, "subscription_canceled", %{from_tier: from, status: sub.status})
+  end
+
+  def forward_paddle_event(%{"event_type" => "subscription.past_due"}, %Subscription{} = sub) do
+    track_sub(sub, "subscription_past_due", %{tier: sub.tier, status: sub.status})
+  end
+
+  # Paddle copies the checkout's custom_data (our user_id) onto the
+  # subscription and every renewal transaction it creates.
+  def forward_paddle_event(%{"event_type" => "transaction.completed", "data" => data}, _result) do
+    with {:ok, user_id} <- Ecto.UUID.cast(get_in(data, ["custom_data", "user_id"])),
+         %{email: email} = user when is_binary(email) and byte_size(email) > 0 <-
+           Accounts.get_user(user_id) do
+      interval =
+        data
+        |> Map.get("items", [])
+        |> List.first(%{})
+        |> get_in(["price", "billing_cycle", "interval"])
+
+      _ =
+        Engram.Analytics.track(user, "payment_completed", %{
+          amount_bucket: amount_bucket(data),
+          currency: enum(data["currency_code"], @currencies),
+          interval: enum(interval, @intervals),
+          discounted: not is_nil(data["discount_id"]),
+          origin: enum(data["origin"], @origins)
+        })
+    end
+
+    :ok
+  end
+
+  def forward_paddle_event(_event, _result), do: :ok
+
+  defp change_kind(from, prev_status, sub, data) do
+    cond do
+      get_in(data, ["scheduled_change", "action"]) == "cancel" -> "cancel_scheduled"
+      rank(sub.tier) > rank(from) -> "upgrade"
+      rank(sub.tier) < rank(from) -> "downgrade"
+      prev_status in @lapsed and sub.status == "active" -> "reactivated"
+      true -> nil
+    end
+  end
+
+  defp rank(tier), do: Map.get(@tier_rank, tier, 0)
+
+  defp cycle_props(data) do
+    %{
+      interval: enum(get_in(data, ["billing_cycle", "interval"]), @intervals),
+      discounted: not is_nil(data["discount"])
+    }
+  end
+
+  # Major-unit buckets, so a comp (0) never reads as a real payment.
+  defp amount_bucket(data) do
+    totals = get_in(data, ["details", "totals"]) || %{}
+
+    with raw when is_binary(raw) <- totals["grand_total"] || totals["total"],
+         {minor, ""} <- Integer.parse(raw) do
+      major = if data["currency_code"] in @zero_decimal, do: minor, else: div(minor, 100)
+
+      cond do
+        minor == 0 -> "0"
+        major < 10 -> "under_10"
+        major < 25 -> "10_25"
+        major < 50 -> "25_50"
+        major < 100 -> "50_100"
+        true -> "100_plus"
+      end
+    else
+      _ -> "unknown"
+    end
+  end
+
+  defp enum(value, allowed), do: if(value in allowed, do: value)
+
+  # Paddle events carry the internal user id; resolve through the
+  # Subscription row to the user. No email means no analytics id to join on,
+  # so the event is dropped rather than sent as un-funnelable noise.
+  defp track_sub(%Subscription{} = sub, event, props) do
     case Accounts.get_user(sub.user_id) do
       %{email: email} = user when is_binary(email) and byte_size(email) > 0 ->
-        price_id = data |> Map.get("items", []) |> List.first(%{}) |> get_in(["price", "id"])
-
-        _ =
-          Engram.Analytics.track(user, "subscription_started", %{
-            tier: sub.tier,
-            price_id: price_id,
-            paddle_subscription_id: sub.paddle_subscription_id
-          })
-
+        _ = Engram.Analytics.track(user, event, with_plan_traits(props, sub))
         :ok
 
       _ ->
-        # No email on the local row — there's no analytics identity to hash
-        # and join against. Drop silently rather than emit an :anon event
-        # that would land in PostHog as un-funnelable noise.
         :ok
     end
   end
 
-  def forward_paddle_event(_event, _result), do: :ok
+  # The plan rides as a person trait so it is right the moment it changes,
+  # not a day later. Traits wait for the privacy policy that announces them,
+  # same gate as the daily `PostHogPersonSync`.
+  defp with_plan_traits(props, sub) do
+    if PersonProperties.policy_in_effect?() do
+      Map.put(props, "$set", %{
+        "plan" => PersonProperties.plan(sub.tier, sub.status),
+        "subscription_status" => sub.status
+      })
+    else
+      props
+    end
+  end
 end

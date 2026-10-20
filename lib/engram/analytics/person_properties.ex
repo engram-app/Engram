@@ -117,10 +117,11 @@ defmodule Engram.Analytics.PersonProperties do
      }}
   end
 
-  # Mirrors `Billing.tier/1`: only an entitled status grants the paid tier.
-  defp plan(tier, status) when tier in ["starter", "pro"] do
+  @doc "The `plan` trait for a subscription's tier and status. Mirrors `Billing.tier/1`: only an entitled status grants the paid tier."
+  @spec plan(String.t() | nil, String.t() | nil) :: String.t()
+  def plan(tier, status) when tier in ["starter", "pro"] do
     if status in Billing.entitled_statuses(), do: tier, else: "free"
   end
 
-  defp plan(_tier, _status), do: "free"
+  def plan(_tier, _status), do: "free"
 end
