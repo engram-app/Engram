@@ -162,4 +162,32 @@ defmodule Engram.Attachments.FormatMatrixTest do
       end
     end
   end
+
+  describe "HEAD on a v2 raw show" do
+    import Mox
+
+    test "answers from row metadata, reading no segment", %{conn: conn, user: user, vault: vault} do
+      bytes = :crypto.strong_rand_bytes(100)
+      put_row(user, vault, :v2, "f/a.png", bytes)
+
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      stub_with(Engram.MockStorage, InMemory)
+      reads = :counters.new(1, [])
+
+      stub(Engram.MockStorage, :get_range, fn key, offset, len ->
+        :counters.add(reads, 1, 1)
+        InMemory.get_range(key, offset, len)
+      end)
+
+      conn = head(conn, "/api/attachments/f/a.png?raw=1")
+
+      assert conn.status == 200
+      assert conn.resp_body == ""
+      assert get_resp_header(conn, "content-length") == ["100"]
+      assert get_resp_header(conn, "accept-ranges") == ["bytes"]
+      assert :counters.get(reads, 1) == 0
+    end
+  end
 end

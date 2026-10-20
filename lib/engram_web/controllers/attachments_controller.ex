@@ -610,9 +610,17 @@ defmodule EngramWeb.AttachmentsController do
   # segments it touches. The body is trimmed to exactly the requested bytes.
   defp send_raw(conn, user, att) do
     size = att.size_bytes
+    head? = EngramWeb.Endpoint.head_request?(conn)
     conn = put_resp_header(conn, "accept-ranges", "bytes")
 
     case byte_range(get_req_header(conn, "range"), size) do
+      # HEAD: the headers from row metadata alone. Streaming the body would
+      # read and open every segment only for the adapter to discard it.
+      _ when head? ->
+        conn
+        |> put_resp_header("content-length", Integer.to_string(size))
+        |> AttachmentRawResponse.send(%{att | content: ""}, inline_safe?(att.mime_type))
+
       :full ->
         conn
         |> put_resp_header("content-length", Integer.to_string(size))
