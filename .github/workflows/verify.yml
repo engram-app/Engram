@@ -3044,12 +3044,15 @@ jobs:
           mix do ecto.create + engram.prepare_database + ecto.migrate
           # One case at a time: each peaks at up to ~250 MB and the per-case
           # memory assertion reads the node-wide peak.
+          # Streamed (tee), not printed at the end: a cancelled or timed-out
+          # run still shows every case it finished. mix's own exit code, not
+          # tee's (PIPESTATUS).
           set +e
-          mix test --warnings-as-errors --max-cases 1 --only huge test/engram/indexing_huge_notes_test.exs > huge.log 2>&1
-          rc=$?
-          cat huge.log
+          mix test --warnings-as-errors --max-cases 1 --only huge test/engram/indexing_huge_notes_test.exs 2>&1 | tee huge.log
+          rc=${PIPESTATUS[0]}
           # One `HUGE {json}` line per case: the matrix, in the job summary.
-          { echo '```'; grep '^HUGE ' huge.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          # `-o`: ExUnit's progress dots can share the line.
+          { echo '```'; grep -o 'HUGE {.*}' huge.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
 
       - name: Stop ephemeral postgres
