@@ -3263,8 +3263,19 @@ defmodule Engram.Notes do
     with {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       hmac = Crypto.hmac_field(filter_key, path)
 
-      {:ok, from(n in scoped_live(user, vault), where: n.path_hmac == ^hmac)}
+      {:ok, from(n in live_notes(user, vault), where: n.path_hmac == ^hmac)}
     end
+  end
+
+  # Live `kind = 'note'` rows. Every lookup by `path_hmac` goes through this,
+  # because the only live path index is the partial
+  # `notes_user_vault_path_v2 ... WHERE deleted_at IS NULL AND kind = 'note'`
+  # and Postgres uses it only when the query states both conditions (it does not
+  # read `notes_kind_shape_check`). Folder markers have `path_hmac IS NULL` by
+  # that CHECK, so the kind filter drops nothing a path lookup could match.
+  # NotesPathIndexPlanTest pins the plans.
+  defp live_notes(user, vault) do
+    from(n in scoped_live(user, vault), where: n.kind == "note")
   end
 
   @doc false
@@ -3284,7 +3295,7 @@ defmodule Engram.Notes do
         hmacs = Map.keys(by_hmac)
 
         query =
-          from(n in scoped_live(user, vault),
+          from(n in live_notes(user, vault),
             where: n.path_hmac in ^hmacs,
             select: {n.path_hmac, n.id}
           )
@@ -3359,7 +3370,10 @@ defmodule Engram.Notes do
 
     query =
       from(n in Note,
-        where: n.user_id == ^user.id and n.path_hmac in ^hmacs and is_nil(n.deleted_at),
+        # `kind` for the partial path index; see live_notes/2.
+        where:
+          n.user_id == ^user.id and n.path_hmac in ^hmacs and is_nil(n.deleted_at) and
+            n.kind == "note",
         select: {n.path_hmac, n.id}
       )
 
