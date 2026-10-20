@@ -194,7 +194,9 @@ defmodule Engram.Release.PreflightTest do
     result = Preflight.report(FakeRepo, applied_versions: [])
 
     refute result.pending == []
-    assert Enum.all?(result.pending, &String.starts_with?(&1.file, Application.app_dir(:engram)))
+    # One code-server call, not one per migration.
+    app_dir = Application.app_dir(:engram)
+    assert Enum.all?(result.pending, &String.starts_with?(&1.file, app_dir))
   end
 
   # print/1 had no coverage at all — it was `Mix.shell().info` until #1343 and

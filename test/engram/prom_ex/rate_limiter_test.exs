@@ -7,14 +7,15 @@ defmodule Engram.PromEx.RateLimiterTest do
   use ExUnit.Case, async: true
 
   alias Engram.PromEx.RateLimiter, as: Plugin
+  alias Engram.Test.PromExMetrics
   alias PromEx.MetricTypes.Event
 
   defp metrics do
-    Plugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+    PromExMetrics.of(Plugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
   end
 
   test "event_metrics/1 returns Event struct(s)" do
-    events = Plugin.event_metrics(otp_app: :engram) |> List.wrap()
+    events = PromExMetrics.of(Plugin) |> List.wrap()
     assert events != []
     assert Enum.all?(events, &match?(%Event{}, &1))
   end

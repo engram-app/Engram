@@ -7,9 +7,10 @@ defmodule Engram.PromEx.WebSocketTest do
   use ExUnit.Case, async: true
 
   alias Engram.PromEx.WebSocket, as: Plugin
+  alias Engram.Test.PromExMetrics
 
   defp metrics do
-    (List.wrap(Plugin.event_metrics(otp_app: :engram)) ++
+    (List.wrap(PromExMetrics.of(Plugin)) ++
        List.wrap(Plugin.polling_metrics(otp_app: :engram)))
     |> Enum.flat_map(& &1.metrics)
   end
