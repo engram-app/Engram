@@ -293,6 +293,23 @@ defmodule Engram.Indexing do
     end
   end
 
+  # `chunks.position` is a smallint.
+  @max_positions 32_767
+
+  @doc """
+  Chunks a note can store: past #{@max_positions} (`chunks.position` is a
+  smallint) they merge to fit, budget or not. A 30 MB self-host note of tiny
+  sections crashed its row insert on every attempt (CI huge-notes). Under
+  the limit the list comes back unchanged.
+  """
+  @spec fit_positions([map()], boolean()) :: [map()]
+  def fit_positions(chunks, merged?) when length(chunks) > @max_positions,
+    do: cap_chunks(chunks, @max_positions, merged?)
+
+  def fit_positions(chunks, _merged?), do: chunks
+
+  defp merged_rows?(rows), do: Enum.any?(rows, &(elem(&1, 3) != nil))
+
   @doc """
   Whether the v5 index budget is on: the per-note cap merge, the index
   points budget and its floor, the per-pass embed budget, and the 04:00
@@ -316,11 +333,13 @@ defmodule Engram.Indexing do
 
   # The pre-budget plan: one point a chunk, metered in full.
   defp plan_unbudgeted(note, chunks, content_key, opts) do
+    rows = indexed_rows(note)
+
     {dense?, plan, retained} =
       plan_within_budget(
         note,
-        indexed_rows(note),
-        chunks,
+        rows,
+        fit_positions(chunks, merged_rows?(rows)),
         content_key,
         Keyword.get(opts, :dense, true),
         opts
@@ -339,7 +358,8 @@ defmodule Engram.Indexing do
         do: chunks,
         else:
           chunks
-          |> cap_chunks(cap, Enum.any?(rows, &(elem(&1, 3) != nil)))
+          |> cap_chunks(cap, merged_rows?(rows))
+          |> fit_positions(merged_rows?(rows))
           |> within_pass_embed_budget()
 
     case forced || over_note_cap_tier(note, capped, cap) ||
