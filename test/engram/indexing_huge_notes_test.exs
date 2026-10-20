@@ -8,8 +8,12 @@ defmodule Engram.IndexingHugeNotesTest do
   ~1 KB of text carries a unique letters-only sentinel word, so "every word
   is findable" is checked exactly on the sentinels, end to end.
 
-  1 and 3 MB run everywhere. 10 and 30 MB are `@tag :huge` (excluded by
-  default; CI runs them in their own job with `--only huge`).
+  The largest size is the note-size cap itself, exactly
+  `Notes.max_note_bytes/0` (10 MiB): no entry point stores a bigger note
+  (`EngramWeb.NoteSizeCapTest`). Every size is generated to exactly its
+  byte count. 1 MB of every shape runs everywhere; the full matrix is
+  `@tag :huge` (excluded by default; CI runs it in its own job with
+  `--only huge`).
   """
   # async: false: limits_enforced is global app env, and the memory peak is
   # read node-wide.
@@ -45,7 +49,7 @@ defmodule Engram.IndexingHugeNotesTest do
   # Qdrant's default `service.max_request_size_mb` (Qdrant Cloud keeps it) is
   # 32 MiB. A request's size must not grow with the note, so the bound is a
   # quarter of that, whatever the size: it holds at 3 MB only if it holds at
-  # 30 MB.
+  # the cap.
   @qdrant_max_request 8 * @mib
 
   # Worker task: 2,048 MiB, container 1,844 MiB, `embed` queue concurrency
@@ -60,7 +64,7 @@ defmodule Engram.IndexingHugeNotesTest do
   # Wall-clock bound. EmbedNote's Oban timeout is 10 minutes and the whole
   # attempt (Voyage round trips included, ~0.3-1 s per batch in prod) must
   # fit it. Local work here excludes the network, so it may use a tenth:
-  # 6 s per MB leaves the rest of the 10 minutes for Voyage at 30 MB.
+  # 6 s per MB leaves the rest of the 10 minutes for Voyage at the cap.
   @seconds_per_mb 6
 
   # The Voyage half of that budget (Task 9.2): `Indexing`'s per-pass embed
@@ -128,11 +132,15 @@ defmodule Engram.IndexingHugeNotesTest do
     test("1 MB #{shape} headings=false paid", ctx, do: run_case(ctx))
   end
 
+  # MiB. The last is the note-size cap: a note one byte bigger is refused
+  # at every entry point, so this is the largest note indexing ever sees.
+  @cap_mb div(Engram.Notes.max_note_bytes(), @mib)
+
   # The full matrix is `:huge` (its own CI job, HUGE_TESTS=1). HUGE_MAX_MB
-  # (default 30) drops the larger sizes for a local run on a shared box.
+  # (default: the cap) drops the larger sizes for a local run on a shared box.
   @sizes Enum.filter(
-           [1, 3, 10, 30],
-           &(&1 <= String.to_integer(System.get_env("HUGE_MAX_MB", "30")))
+           [1, 3, @cap_mb],
+           &(&1 <= String.to_integer(System.get_env("HUGE_MAX_MB", "#{@cap_mb}")))
          )
 
   for size <- @sizes,
@@ -255,7 +263,8 @@ defmodule Engram.IndexingHugeNotesTest do
     %{size: size, shape: shape, headings: headings, tier: tier} = ctx
     user = tier_setup(tier, user)
     path = if shape == :canvas, do: "Huge/Board.canvas", else: "Huge/Note.md"
-    {content, sentinels} = generate(shape, size * @mib, headings, seed(ctx))
+    {content, sentinels} = generate(shape, size_bytes(size), headings, seed(ctx))
+    assert byte_size(content) == size_bytes(size)
 
     {_title, tags} = Helpers.extract_title_and_tags(content, path)
 
@@ -569,10 +578,26 @@ defmodule Engram.IndexingHugeNotesTest do
   # ---------------------------------------------------------------------------
 
   @doc false
-  def generate(shape, bytes, headings, seed) do
+  defp size_bytes(@cap_mb), do: Engram.Notes.max_note_bytes()
+  defp size_bytes(size), do: size * @mib
+
+  # Exactly `bytes`: a shape fills to at least its target, so the target
+  # shrinks by the overshoot until the body fits, and newlines pad the rest.
+  # The same seed regenerates the same units, so the shrunk body is a
+  # prefix of the first one. At the cap, one byte more would be refused.
+  def generate(shape, bytes, headings, seed), do: generate(shape, bytes, headings, seed, bytes)
+
+  defp generate(shape, bytes, headings, seed, target) do
     :rand.seed(:exsss, {seed, 7, 13})
-    {body, sentinels} = body(shape, bytes, headings)
-    {IO.iodata_to_binary(body), sentinels}
+    {body, sentinels} = body(shape, target, headings)
+
+    case IO.iodata_length(body) do
+      size when size > bytes ->
+        generate(shape, bytes, headings, seed, target - (size - bytes))
+
+      size ->
+        {IO.iodata_to_binary([body, :binary.copy("\n", bytes - size)]), sentinels}
+    end
   end
 
   # Letters-only, unique: one token to every tokenizer, never a blob.
