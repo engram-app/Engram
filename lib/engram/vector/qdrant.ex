@@ -1548,16 +1548,13 @@ defmodule Engram.Vector.Qdrant do
   def match_filter(field, value) do
     legacy = %{key: Map.fetch!(@legacy_keys, field), match: match(value)}
 
-    v5 =
-      case v5_value(field, value) do
-        nil -> nil
-        v -> %{key: PayloadKeys.short(Map.fetch!(@v5_keys, field)), match: match(v)}
-      end
+    case v5_value(field, value) do
+      nil ->
+        legacy
 
-    cond do
-      v5 == nil -> legacy
-      legacy_filter_fields?() -> %{should: [legacy, v5]}
-      true -> v5
+      v ->
+        v5 = %{key: PayloadKeys.short(Map.fetch!(@v5_keys, field)), match: match(v)}
+        if legacy_filter_fields?(), do: %{should: [legacy, v5]}, else: v5
     end
   end
 

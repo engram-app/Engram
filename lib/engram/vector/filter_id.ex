@@ -14,11 +14,10 @@ defmodule Engram.Vector.FilterId do
   alias Engram.Crypto
   alias Engram.Notes.OkfFields
 
-  @spec from_hmac(binary() | nil) :: String.t() | nil
+  @spec from_hmac(nil) :: nil
+  @spec from_hmac(<<_::128, _::_*8>>) :: String.t()
   def from_hmac(nil), do: nil
-
-  def from_hmac(<<head::binary-size(16), _rest::binary>>),
-    do: Base.encode16(head, case: :lower)
+  def from_hmac(<<_::128, _::binary>> = hmac), do: hex16(hmac)
 
   @doc "An Ecto UUID (user_id, vault_id) in the same undashed form."
   @spec uuid(String.t()) :: String.t()
@@ -45,10 +44,12 @@ defmodule Engram.Vector.FilterId do
   def value_input(value), do: "fmv:" <> norm(value)
 
   @spec attr(binary(), String.t()) :: String.t()
-  def attr(filter_key, key), do: from_hmac(key_hmac(filter_key, key))
+  def attr(filter_key, key), do: hex16(key_hmac(filter_key, key))
 
   @spec attr_value(binary(), String.t()) :: String.t()
-  def attr_value(filter_key, value), do: from_hmac(value_hmac(filter_key, value))
+  def attr_value(filter_key, value), do: hex16(value_hmac(filter_key, value))
+
+  defp hex16(<<head::binary-size(16), _rest::binary>>), do: Base.encode16(head, case: :lower)
 
   # Same canonical form as the `type` blind index, so a filter for `Draft`
   # matches `draft`.

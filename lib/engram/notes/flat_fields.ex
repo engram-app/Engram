@@ -82,7 +82,8 @@ defmodule Engram.Notes.FlatFields do
     dates: []
   }
 
-  @spec empty() :: t()
+  # No @spec on the constant accessors: dialyzer's :underspecs flags any
+  # spec wider than the literal.
   def empty, do: @empty
 
   @doc "Fields from a note's plaintext content (nil content gives `empty/0`)."
@@ -179,7 +180,6 @@ defmodule Engram.Notes.FlatFields do
   }
 
   @doc "The `{ciphertext, nonce}` column names of each encrypted flat field."
-  @spec envelope_keys() :: %{atom() => {atom(), atom()}}
   def envelope_keys, do: @envelope_keys
 
   defp envelope(dek, note_id, field, value) do
