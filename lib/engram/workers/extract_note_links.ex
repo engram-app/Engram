@@ -187,8 +187,8 @@ defmodule Engram.Workers.ExtractNoteLinks do
   # than rename+60s, when its sweep re-walked). The durable evidence for
   # every rewriting rename origin (REST tombstone-backed, CRDT
   # ciphertext-backed, folder cascade, attachment move) is the original
-  # oban_jobs row — retained 7 days by the Pruner, args already in the exact
-  # T3.2 shape (ids + b64 HMACs/ciphertext). Re-enqueue those args verbatim
+  # oban_jobs row, retained 1 day by the Pruner (the window is 10 min),
+  # args already in the exact T3.2 shape (ids + b64 HMACs/ciphertext). Re-enqueue those args verbatim
   # with the cursor reset and "sweep" => true:
   #   * "sweep" => true makes the repair chain terminate WITHOUT enqueueing
   #     another sweep (RewriteNoteLinks.maybe_enqueue_sweep/1) — one walk.

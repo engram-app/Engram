@@ -180,7 +180,11 @@ config :engram, Oban,
     crdt_checkpoint: 3
   ],
   plugins: [
-    {Oban.Plugins.Pruner, max_age: 7 * 24 * 3600},
+    # One day. The PromEx queue-count poll scans every retained row, and at
+    # 7 days it was the #1 app statement in prod (2026-10-20 audit). Nothing
+    # may rely on a completed job outliving this: ObanRetentionTest fails a
+    # worker whose unique period is longer, unless a table really dedupes it.
+    {Oban.Plugins.Pruner, max_age: 24 * 3600},
     Oban.Plugins.Lifeline,
     {
       Oban.Plugins.Cron,

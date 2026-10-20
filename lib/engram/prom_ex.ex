@@ -21,7 +21,10 @@ defmodule Engram.PromEx do
       {Engram.PromEx.Phoenix, router: EngramWeb.Router, endpoint: EngramWeb.Endpoint},
       # Not Plugins.Ecto: microsecond sums Peep can keep, no per-source histograms.
       Engram.PromEx.Ecto,
-      Plugins.Oban,
+      # 60s, not the 5s default: the poll is a `GROUP BY queue, state` over
+      # every retained oban_jobs row, the #1 app statement in prod
+      # (2026-10-20 audit). Queue depth does not need second resolution.
+      {Plugins.Oban, poll_rate: 60_000},
       # engram-app/engram-infra#340 — custom subscribers for in-house
       # telemetry events that the bundled plugins don't cover.
       Engram.PromEx.Voyage,
