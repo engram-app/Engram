@@ -351,6 +351,12 @@ defmodule Engram.PromEx.Qdrant do
           tags: [:reason]
         ),
         counter(
+          metric_prefix ++ [:strict_shape_refusal, :total],
+          event_name: [:engram, :qdrant, :strict_shape_refusal],
+          description:
+            "Writes Qdrant strict mode refused for their shape (limit, condition or filter size): a code bug."
+        ),
+        counter(
           metric_prefix ++ [:wait_timeout, :total],
           event_name: [:engram, :qdrant, :wait_timeout],
           description:

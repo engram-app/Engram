@@ -90,20 +90,46 @@ defmodule Engram.Vector.QdrantBackpressureTest do
     # limits set to trip: the breakers and the request-shape limits. Every
     # strict-mode refusal is backpressure: a retry re-embeds (and re-pays
     # Voyage) only to be refused again.
-    @strict_refusals [
+    @capacity_refusals [
       "Bad request: Max points count limit of 2 reached!",
       "Bad request: Max vector storage size limit of 0.000009536743MB reached!",
-      "Bad request: Max payload storage size limit of 0.000009536743MB reached!",
+      "Bad request: Max payload storage size limit of 0.000009536743MB reached!"
+    ]
+
+    @shape_refusals [
       ~S|Bad request: Limit exceeded 4 > 3 for "upsert limit". Help: Reduce the "upsert limit" parameter to or below 3.|,
       "Bad request: Condition size limit reached (3 > 2). Help: Reduce the size of your condition.",
       "Bad request: Filter condition limit reached (3 > 2). Help: Reduce the amount of conditions of your filter."
     ]
 
-    test "every strict-mode breaker and limit refusal is :qdrant_backpressure", %{bypass: bypass} do
-      for message <- @strict_refusals do
+    test "a capacity breaker refusal is :qdrant_backpressure", %{bypass: bypass} do
+      for message <- @capacity_refusals do
         body = Jason.encode!(%{status: %{error: message}, time: 0.0001})
         Bypass.expect_once(bypass, "PUT", "/collections/c1/points", &respond(&1, 400, body))
         assert {:error, :qdrant_backpressure} = Qdrant.upsert_points("c1", [@point]), message
+      end
+    end
+
+    # A request-shape refusal is a code bug the same request repeats forever:
+    # a snooze would hide it as capacity. It fails as a plain error (attempts
+    # count, then the poison park) and emits a strict_shape_refusal event the
+    # alert counts (review N1).
+    test "a request-shape refusal is a loud plain error, never backpressure",
+         %{bypass: bypass} do
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [[:engram, :qdrant, :strict_shape_refusal]])
+
+      for message <- @shape_refusals do
+        body = Jason.encode!(%{status: %{error: message}, time: 0.0001})
+        Bypass.expect_once(bypass, "PUT", "/collections/c1/points", &respond(&1, 400, body))
+
+        log =
+          ExUnit.CaptureLog.capture_log(fn ->
+            assert {:error, {400, _}} = Qdrant.upsert_points("c1", [@point]), message
+          end)
+
+        assert log =~ "qdrant strict-mode refused a request shape"
+        assert_received {[:engram, :qdrant, :strict_shape_refusal], ^ref, %{count: 1}, _}
       end
     end
 

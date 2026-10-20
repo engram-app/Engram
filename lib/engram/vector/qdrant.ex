@@ -851,13 +851,18 @@ defmodule Engram.Vector.Qdrant do
   # are never refused (delete ops are not "disk/memory-consuming"); deletes
   # map it anyway so a future Qdrant that does refuse them is handled alike.
   #
-  # Every other strict-mode refusal of a write is backpressure too: the
-  # breakers (`max_points_count`, the byte sizes; `check_collection_size_limit`
-  # in verification/update.rs) and the request-shape limits. A plain error
-  # makes EmbedNote retry, re-embedding (and re-paying Voyage) only to be
-  # refused again; backpressure snoozes with the vectors retained. Strings
-  # captured from 1.19.2 (qdrant_backpressure_test).
-  @backpressure ~r/(Disk usage|Resident memory usage) is at \d+% of total|Max points count limit of \d+ reached|Max (vector|payload) storage size limit of [\d.]+MB reached|Limit exceeded \d+ > \d+ for |Condition size limit reached|Filter condition limit reached/
+  # The capacity breakers are backpressure too (`max_points_count`, the byte
+  # sizes; `check_collection_size_limit` in verification/update.rs): a plain
+  # error makes EmbedNote retry, re-embedding (and re-paying Voyage) only to
+  # be refused again; backpressure snoozes with the vectors retained.
+  # Strings captured from 1.19.2 (qdrant_backpressure_test).
+  @backpressure ~r/(Disk usage|Resident memory usage) is at \d+% of total|Max points count limit of \d+ reached|Max (vector|payload) storage size limit of [\d.]+MB reached/
+
+  # A request-shape refusal (a limit, condition or filter over its strict
+  # cap) is a code bug the same request repeats forever, so it is NOT
+  # backpressure: it stays a plain error (attempts count, then the poison
+  # park), logged and counted for the alert (review N1).
+  @shape_refusal ~r/Limit exceeded \d+ > \d+ for |Condition size limit reached|Filter condition limit reached/
 
   # Qdrant 1.19+ node-wide quota (`/quotas`) refusing a write: HTTP 507, whose
   # only producer is StorageError::InsufficientStorage (src/actix/helpers.rs),
@@ -867,7 +872,18 @@ defmodule Engram.Vector.Qdrant do
   defp write_error(507, _body), do: {:error, :qdrant_backpressure}
 
   defp write_error(400, %{"status" => %{"error" => message}} = body) when is_binary(message) do
-    if message =~ @backpressure, do: {:error, :qdrant_backpressure}, else: {:error, {400, body}}
+    cond do
+      message =~ @backpressure ->
+        {:error, :qdrant_backpressure}
+
+      message =~ @shape_refusal ->
+        Logger.error("qdrant strict-mode refused a request shape: #{message}")
+        :telemetry.execute([:engram, :qdrant, :strict_shape_refusal], %{count: 1}, %{})
+        {:error, {400, body}}
+
+      true ->
+        {:error, {400, body}}
+    end
   end
 
   defp write_error(status, body), do: {:error, {status, body}}
