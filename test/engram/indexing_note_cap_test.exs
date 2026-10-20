@@ -234,6 +234,10 @@ defmodule Engram.IndexingNoteCapTest do
 
       for g <- merged do
         assert g.headings == nil and g.heading_path == nil
+        # The first member's path is the group's prefix: no breadcrumb.
+        assert String.starts_with?(g.text, hd(g.members).text)
+        assert g.section_count == g.members |> Enum.map(& &1.section_count) |> Enum.sum()
+        assert g.section_count == length(g.members)
         assert g.text =~ ~r/^Area \d+ > Topic \d+$/m
         assert IO.iodata_to_binary(g.embed_text) =~ ~r/^Area \d+ > Topic \d+$/m
       end

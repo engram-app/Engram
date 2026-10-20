@@ -692,6 +692,9 @@ defmodule Engram.Indexing do
       kind: if(prose?, do: "prose", else: first.kind),
       heading_path: nil,
       headings: nil,
+      # The sections it joins, so keyword scoring sees a merged point
+      # (plan Task 14.1); a member may itself be a min512 chunk.
+      section_count: members |> Enum.map(&Map.get(&1, :section_count, 1)) |> Enum.sum(),
       text: text,
       context_text: [prefix(first.context_text, first.text), text],
       embed_text: [prefix(first.embed_text, first.text), embed],
@@ -704,11 +707,12 @@ defmodule Engram.Indexing do
 
   # Review M2: each member's text, opened by its breadcrumb when its path
   # (title dropped) is deeper than its own heading and differs from the one
-  # before. Capped at the member's own prefix, so the group still fits the
-  # ceiling `close_groups/2` sums from the members' inputs.
-  defp with_crumbs(members) do
+  # before. The first member has none: the group's prefix is its path.
+  # Capped at the member's own prefix, so the group still fits the ceiling
+  # `close_groups/2` sums from the members' inputs.
+  defp with_crumbs([first | _] = members) do
     {out, _} =
-      Enum.map_reduce(members, nil, fn m, prev ->
+      Enum.map_reduce(members, Map.get(first, :headings), fn m, prev ->
         hs = Map.get(m, :headings)
 
         crumbed =

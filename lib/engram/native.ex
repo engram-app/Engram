@@ -118,8 +118,9 @@ defmodule Engram.Native do
 
   @doc """
   Chunks for `Engram.Parsers.Markdown.parse/2`: `[{text, context_text,
-  embed_text, headings, char_start, char_end, kind}]`, before positions;
-  `headings` is a list, title first. Splits
+  embed_text, {headings, section_count}, char_start, char_end, kind}]`,
+  before positions; `headings` is a list, title first, and `section_count`
+  the sections a min512 chunk joins (1 for one). Splits
   frontmatter itself. Valid UTF-8 only.
   """
   def chunk(content, folder, title, aliases \\ [], lead \\ nil),
