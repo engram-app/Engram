@@ -814,6 +814,8 @@ defmodule EngramWeb.Router do
     get "/settings/*path", SpaController, :index
     get "/note/*path", SpaController, :index
     get "/oauth/consent", SpaController, :index
+    # Operator insights page; the SPA shows a 404 to anyone else.
+    get "/operator", SpaController, :index
 
     # Vault-scoped SPA routes. These mirror the React subtree under
     # `/v/:slug` EXACTLY -- index and `:itemId` -- rather than a single greedy
