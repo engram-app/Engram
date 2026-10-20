@@ -6,7 +6,6 @@ import {
 	CHECKLIST_ITEMS,
 	CHECKOUT_METHODS,
 	CHECKOUT_TIERS,
-	CLIENT_KINDS,
 	type EngramEvent,
 	ERROR_CODES,
 	EVENT_SCHEMAS,
@@ -36,8 +35,6 @@ function isKind(kind: PropKind, value: unknown): boolean {
 			return isMember(CHECKOUT_TIERS, value);
 		case "mcp_client":
 			return isMember(MCP_CLIENTS, value);
-		case "client_kind":
-			return isMember(CLIENT_KINDS, value);
 		case "upgrade_source":
 			return isMember(UPGRADE_SOURCES, value);
 		case "checklist_item":
