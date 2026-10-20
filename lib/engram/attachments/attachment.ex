@@ -41,6 +41,13 @@ defmodule Engram.Attachments.Attachment do
     # T3.7 — target DEK version for in-progress rotation; nil when idle.
     field :dek_version_pending, :integer
     field :content_nonce, :binary
+    # Format v2 (`Engram.Attachments.SegmentedCipher`): content sealed in
+    # segments under a per-file key; the DEK wraps only that key.
+    field :wrapped_file_key, :binary
+    field :file_key_nonce, :binary
+    field :upload_id, Ecto.UUID
+    field :segment_size, :integer
+    field :segment_count, :integer
 
     belongs_to :user, Engram.Accounts.User
     belongs_to :vault, Engram.Vaults.Vault
@@ -71,7 +78,12 @@ defmodule Engram.Attachments.Attachment do
       :encryption_version,
       :dek_version,
       :dek_version_pending,
-      :content_nonce
+      :content_nonce,
+      :wrapped_file_key,
+      :file_key_nonce,
+      :upload_id,
+      :segment_size,
+      :segment_count
     ])
     |> validate_required([
       :user_id,
@@ -81,11 +93,37 @@ defmodule Engram.Attachments.Attachment do
       :size_bytes
     ])
     |> validate_encrypted(:path, [:path_ciphertext, :path_nonce, :path_hmac])
-    |> validate_encrypted(:content, [:content_nonce])
-    |> validate_inclusion(:encryption_version, [1])
+    |> validate_content_format()
+    |> validate_inclusion(:encryption_version, [1, 2])
     |> unique_constraint([:user_id, :vault_id, :path_hmac],
       name: :attachments_user_id_vault_id_path_hmac_index
     )
+  end
+
+  @segmented_fields [
+    :wrapped_file_key,
+    :file_key_nonce,
+    :upload_id,
+    :segment_size,
+    :segment_count
+  ]
+
+  # v1 seals the whole object under the DEK (`content_nonce`); v2 is
+  # segmented and carries the wrapped file key instead, never both.
+  defp validate_content_format(changeset) do
+    if get_field(changeset, :encryption_version) == 2 do
+      changeset
+      |> validate_encrypted(:content, @segmented_fields)
+      |> validate_number(:segment_size, greater_than: 0)
+      |> validate_number(:segment_count, greater_than: 0)
+      |> then(fn cs ->
+        if get_field(cs, :content_nonce) in [nil, ""],
+          do: cs,
+          else: add_error(cs, :content_nonce, "must be blank for segmented content")
+      end)
+    else
+      validate_encrypted(changeset, :content, [:content_nonce])
+    end
   end
 
   # Encryption invariant: the ciphertext columns for `public_field` must be
