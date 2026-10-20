@@ -363,6 +363,10 @@ defmodule Engram.Workers.ReencodeEnvelopes do
   defp body_with_bound_aad(query, :notes_content),
     do: where(query, [n], n.dek_version >= ^Crypto.row_version_aad_bound())
 
+  # Chunk text probes stay on the partial index (rows that hold text only).
+  defp body_with_bound_aad(query, name) when name in [:chunks_text, :chunks_heading],
+    do: where(query, [c], not is_nil(c.text_ciphertext))
+
   defp body_with_bound_aad(query, _name), do: query
 
   # Per sweep batch: probe the stored size of each legacy row, cut the batch

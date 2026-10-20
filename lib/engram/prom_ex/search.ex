@@ -58,14 +58,16 @@ defmodule Engram.PromEx.Search do
           description: "Searches that degraded to a single leg (embed failure).",
           tags: [:leg, :reason]
         ),
-        # Grouped-search hits dropped because their chunk row was not there
-        # (Qdrant upsert lands before the rows commit). Should stay near zero;
-        # a sustained rate means results are silently going missing.
+        # Hits dropped, by `reason`: `no_chunk_row` (Qdrant upsert lands
+        # before the rows commit; brief per edit, a sustained rate means
+        # results are silently going missing), `text_undecryptable`,
+        # `note_undecryptable`, `vault_inactive`. Alerted on as a ratio of
+        # search requests (engram-infra).
         sum(
           metric_prefix ++ [:hits_dropped, :total],
           event_name: @hit_dropped_event,
           measurement: :count,
-          description: "Search hits dropped: no chunk row, or its text does not decrypt.",
+          description: "Search hits dropped, by reason.",
           tags: [:reason]
         ),
         # Task 11.3: hits shown with empty text because neither the chunk row

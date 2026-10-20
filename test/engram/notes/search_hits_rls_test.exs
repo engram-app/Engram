@@ -67,7 +67,7 @@ defmodule Engram.Notes.SearchHitsRlsTest do
   end
 
   test "returns the user's hit with its decrypted text", %{user: user, mine: mine} do
-    assert {:returned, %{^mine => hit}} =
+    assert {:returned, {:ok, %{^mine => hit}}} =
              as_prod_role(fn -> Notes.search_hits_by_qdrant_points(user, [mine]) end),
            "no row came back: the read was filtered by RLS and the hit would drop as stale"
 
@@ -76,7 +76,7 @@ defmodule Engram.Notes.SearchHitsRlsTest do
   end
 
   test "never returns another user's point, even by its id", ctx do
-    assert {:returned, hits} =
+    assert {:returned, {:ok, hits}} =
              as_prod_role(fn ->
                Notes.search_hits_by_qdrant_points(ctx.user, [ctx.mine, ctx.theirs])
              end)
