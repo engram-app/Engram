@@ -822,6 +822,7 @@ defmodule Engram.Onboarding do
           end
 
         Vaults.WelcomeNote.seed(user, vault)
+        Vaults.track_created(user, vault, "mcp")
         _ = record_action(user.id, @connector_vault_action)
 
       {:ok, _vault, :existing} ->

@@ -71,7 +71,10 @@ defmodule EngramWeb.DeviceAuthController do
       {:ok, vault, status} ->
         # Only on :created — a re-tapped Authorize resolves to the existing
         # vault, and re-seeding there would resurrect a note the user deleted.
-        if status == :created, do: WelcomeNote.seed(user, vault)
+        if status == :created do
+          WelcomeNote.seed(user, vault)
+          Vaults.track_created(user, vault, "obsidian_sync")
+        end
 
         do_authorize(conn, user_code, user, vault.id, params["label"])
 
