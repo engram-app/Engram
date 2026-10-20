@@ -314,17 +314,34 @@ defmodule Engram.IndexingHugeNotesTest do
 
     unless floored? do
       # Sentinels are letters only, so a split on anything else finds them
-      # whole, and a word cut in two is (rightly) not found.
-      embedded = dir |> embedded_texts() |> String.split(~r/[^a-z]+/) |> MapSet.new()
-      dense_lost = Enum.reject(sentinels, &MapSet.member?(embedded, &1))
+      # whole, and a word cut in two is (rightly) not found. Only prose gets a
+      # dense vector (#2041): a sentinel in a data, frontmatter or drawing
+      # chunk is keyword-only by design, so only prose sentinels must be in a
+      # dense input.
+      embedded = dir |> embedded_texts() |> word_set()
+      prose = prose_words(content, path)
+      dense_lost = Enum.reject(sentinels, &(MapSet.member?(embedded, &1) or not MapSet.member?(prose, &1)))
 
       assert dense_lost == [],
              "#{inspect(report)}: #{length(dense_lost)}/#{length(sentinels)} sentinels " <>
                "in no dense input, first #{inspect(Enum.take(dense_lost, 3))}"
 
-      deep = List.last(sentinels)
-      assert Search.snippet(input_holding(dir, deep), deep) =~ deep
+      # The deepest sentinel with a dense input (a canvas has none).
+      case sentinels |> Enum.filter(&MapSet.member?(prose, &1)) |> List.last() do
+        nil -> :ok
+        deep -> assert Search.snippet(input_holding(dir, deep), deep) =~ deep
+      end
     end
+  end
+
+  defp word_set(text), do: text |> String.split(~r/[^a-z]+/) |> MapSet.new()
+
+  defp prose_words(content, path) do
+    content
+    |> Engram.Parsers.Markdown.parse(path)
+    |> Enum.filter(&(&1.kind == "prose"))
+    |> Enum.map_join("\n", & &1.text)
+    |> word_set()
   end
 
   defp index_opts(:floor), do: [index_tier: "floor"]

@@ -265,7 +265,7 @@ defmodule Engram.Workers.EmbedNoteBackpressureTest do
         note,
         vault,
         user,
-        opts.(fn _count, _dense? -> raise "chunk insert blew up" end)
+        opts.(fn _count, _dense?, _tier -> raise "chunk insert blew up" end)
       )
     end
 
@@ -276,7 +276,7 @@ defmodule Engram.Workers.EmbedNoteBackpressureTest do
                note,
                vault,
                user,
-               opts.(fn _count, _dense? -> :ok end)
+               opts.(fn _count, _dense?, _tier -> :ok end)
              )
 
     refute_received {:reserved, _}
