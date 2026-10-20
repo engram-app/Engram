@@ -1380,7 +1380,7 @@ export default {
 	"File exceeds your plan's size limit": "Файл превышает лимит размера вашего тарифа",
 	"Storage quota reached": "Достигнут лимит хранилища",
 	"Upgrade required": "Требуется обновление подписки",
-	"This file type is not allowed": "Этот тип файла не поддерживается",
+	"Executable files can't be uploaded": "Исполняемые файлы нельзя загружать",
 	"Upload failed": "Загрузка не удалась",
 	"Upload attachments": "Загрузить вложения",
 	"Uploading…": "Загрузка…",

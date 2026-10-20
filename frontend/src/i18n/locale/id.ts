@@ -1264,7 +1264,7 @@ export default {
 	"File exceeds your plan's size limit": "Berkas melebihi batas ukuran paket Anda",
 	"Storage quota reached": "Kuota penyimpanan telah tercapai",
 	"Upgrade required": "Peningkatan diperlukan",
-	"This file type is not allowed": "Tipe berkas ini tidak diizinkan",
+	"Executable files can't be uploaded": "File yang dapat dieksekusi tidak dapat diunggah",
 	"Upload failed": "Unggahan gagal",
 	"Upload attachments": "Unggah lampiran",
 	"Uploading…": "Mengunggah…",

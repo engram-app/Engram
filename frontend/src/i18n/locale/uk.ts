@@ -1373,7 +1373,7 @@ export default {
 	"File exceeds your plan's size limit": "Розмір файлу перевищує ліміт вашого тарифного плану",
 	"Storage quota reached": "Досягнуто ліміт сховища",
 	"Upgrade required": "Потрібне оновлення",
-	"This file type is not allowed": "Цей тип файлу заборонено",
+	"Executable files can't be uploaded": "Виконані файли не можна завантажувати",
 	"Upload failed": "Завантаження не вдалося",
 	"Upload attachments": "Завантажити вкладення",
 	"Uploading…": "Завантаження…",

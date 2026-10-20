@@ -1357,7 +1357,7 @@ export default {
 	"File exceeds your plan's size limit": "Soubor překračuje limit velikosti vašeho plánu",
 	"Storage quota reached": "Dosaženo limitu úložiště",
 	"Upgrade required": "Je vyžadována aktualizace",
-	"This file type is not allowed": "Tento typ souboru není povolen",
+	"Executable files can't be uploaded": "Soubory spustitelné nelze nahrávat",
 	"Upload failed": "Nahrávání se nezdařilo",
 	"Upload attachments": "Nahrát přílohy",
 	"Uploading…": "Nahrávání…",

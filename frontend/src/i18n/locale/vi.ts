@@ -1262,7 +1262,7 @@ export default {
 	"File exceeds your plan's size limit": "Tệp vượt quá giới hạn kích thước của gói của bạn",
 	"Storage quota reached": "Đã đạt giới hạn dung lượng lưu trữ",
 	"Upgrade required": "Cần nâng cấp",
-	"This file type is not allowed": "Loại tệp này không được phép",
+	"Executable files can't be uploaded": "Không thể tải lên các tệp thực thi",
 	"Upload failed": "Tải lên thất bại",
 	"Upload attachments": "Tải tệp đính kèm",
 	"Uploading…": "Đang tải lên…",

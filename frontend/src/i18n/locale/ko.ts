@@ -1245,7 +1245,7 @@ export default {
 	"File exceeds your plan's size limit": "파일 크기가 구독 한도를 초과했습니다",
 	"Storage quota reached": "저장 공간 제한에 도달했습니다",
 	"Upgrade required": "업그레이드가 필요합니다",
-	"This file type is not allowed": "이 파일 형식은 지원되지 않습니다",
+	"Executable files can't be uploaded": "실행 파일은 업로드할 수 없습니다",
 	"Upload failed": "업로드 실패",
 	"Upload attachments": "첨부 파일 업로드",
 	"Uploading…": "업로드 중…",

@@ -1266,7 +1266,7 @@ export default {
 	"File exceeds your plan's size limit": "Fail melebihi had saiz pakej anda",
 	"Storage quota reached": "Kuota penyimpanan telah mencapai had",
 	"Upgrade required": "Peningkatan diperlukan",
-	"This file type is not allowed": "Jenis fail ini tidak dibenarkan",
+	"Executable files can't be uploaded": "Fail boleh laksana tidak boleh dimuat naik",
 	"Upload failed": "Pemunggahan gagal",
 	"Upload attachments": "Muat naik lampiran",
 	"Uploading…": "Sedang memuat naik…",

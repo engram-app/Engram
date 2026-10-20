@@ -1265,7 +1265,7 @@ export default {
 	"File exceeds your plan's size limit": "ファイルがプランのサイズ制限を超えています",
 	"Storage quota reached": "ストレージの quota に達しました",
 	"Upgrade required": "アップグレードが必要です",
-	"This file type is not allowed": "このファイル形式は許可されていません",
+	"Executable files can't be uploaded": "実行ファイルはアップロードできません",
 	"Upload failed": "アップロードに失敗しました",
 	"Upload attachments": "添付ファイルをアップロード",
 	"Uploading…": "アップロード中…",

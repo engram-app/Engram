@@ -1326,7 +1326,7 @@ export default {
 	"File exceeds your plan's size limit": "El archivo excede el límite de tamaño de tu plan",
 	"Storage quota reached": "Límite de almacenamiento alcanzado",
 	"Upgrade required": "Se requiere una actualización",
-	"This file type is not allowed": "Este tipo de archivo no está permitido",
+	"Executable files can't be uploaded": "No se pueden subir archivos ejecutables",
 	"Upload failed": "La subida falló",
 	"Upload attachments": "Subir adjuntos",
 	"Uploading…": "Subiendo…",

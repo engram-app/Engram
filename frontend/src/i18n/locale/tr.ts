@@ -1272,7 +1272,7 @@ export default {
 	"File exceeds your plan's size limit": "Dosya, planınızın boyut sınırını aştı",
 	"Storage quota reached": "Depolama alanı doldu",
 	"Upgrade required": "Yükseltme gerekiyor",
-	"This file type is not allowed": "Bu dosya türü izin verilmiyor",
+	"Executable files can't be uploaded": "Çalıştırılabilir dosyalar yüklenemez",
 	"Upload failed": "Yükleme başarısız oldu",
 	"Upload attachments": "Ekleri yükle",
 	"Uploading…": "Yükleniyor...",

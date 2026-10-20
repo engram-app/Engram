@@ -1208,7 +1208,7 @@ export default {
 	"File exceeds your plan's size limit": "檔案超過方案的容量限制",
 	"Storage quota reached": "儲存空間已滿",
 	"Upgrade required": "需要升級",
-	"This file type is not allowed": "此檔案類型不受支援",
+	"Executable files can't be uploaded": "無法上傳可執行檔案",
 	"Upload failed": "上傳失敗",
 	"Upload attachments": "上傳附件",
 	"Uploading…": "正在上傳…",
