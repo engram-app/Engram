@@ -104,6 +104,32 @@ defmodule Engram.IndexingFloorTest do
 
     # No Mox expectation on the embedder: any call raises, which is the
     # "zero embedder calls" assertion.
+    # Review L4 (checked): `floor_points/1` projects from the chunks'
+    # `char_end`, which the chunker gives in BYTES, the unit `floor_plan/2`
+    # packs by, so a CJK note's projection is not 3x short.
+    @tag timeout: :timer.minutes(3)
+    test "a 2.5 MB CJK note's floor rows match floor_points/1 of its span", %{
+      user: user,
+      vault: vault
+    } do
+      body = String.duplicate("日本語のテキストです。漢字と仮名。\n\n", 52_000)
+      note = floor_note(user, vault, "Cjk.md", "# Cjk\n\n" <> body)
+      assert byte_size(note.content) > 2_500_000
+
+      span =
+        note.content
+        |> Engram.Parsers.Markdown.parse("Cjk.md")
+        |> Enum.map(& &1.char_end)
+        |> Enum.max()
+
+      assert span > 2_500_000
+
+      {:ok, n, 0, false} = Indexing.index_note_with_usage(note, vault, user, index_tier: "floor")
+      assert n == length(chunk_rows(note))
+      assert n <= Indexing.floor_points(span)
+      assert n >= 3
+    end
+
     test "a 3-section note writes 1 row and 1 sparse-only point, unmetered", %{
       user: user,
       vault: vault
