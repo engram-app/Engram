@@ -918,10 +918,15 @@ if config_env() == :prod do
   # unset variable on the worker service and NOTHING in the cluster drains the
   # queues — silently, since enqueues keep succeeding.
   #
-  # Plugins stay on EVERY node on purpose. Cron/Pruner/Lifeline are
-  # leader-elected through Oban's Postgres peer table, and Cron only INSERTS
-  # jobs — the worker is what runs them. Disabling plugins here would mean a
-  # web node winning leadership silently stops all cron work.
+  # Web also runs no plugins, and that is what keeps it out of the leader
+  # election. Cron/Pruner/Lifeline and the Stager's DB transaction run only on
+  # the Oban leader, and before this a web task held leadership about 49% of
+  # the time (2026-10-20 audit): leadership moved to web whenever the single
+  # worker restarted and stayed there until web redeployed. In Oban 2.24,
+  # `plugins: false` maps the peer to `Oban.Peers.Isolated, leader?: false`, so
+  # the worker (or an unset/self-host node) is the only possible leader.
+  # `Oban.insert/1` and its pg_notify are unaffected. ObanWebRolePluginsTest
+  # pins both halves.
   #
   # The worker MUST share DNS_CLUSTER_QUERY with the web nodes:
   # `Workers.CheckpointNote` guards on `CrdtRegistry.lookup/1`, which is
@@ -948,7 +953,7 @@ if config_env() == :prod do
       case role |> String.trim() |> String.downcase() do
         "web" ->
           config :engram, :node_role, :web
-          config :engram, Oban, queues: false
+          config :engram, Oban, queues: false, plugins: false
 
           # `queues: false` leaves this node unable to observe queue depth, and
           # PromEx's `:oban_queue_poll_metrics` are `last_value` gauges that
@@ -963,7 +968,11 @@ if config_env() == :prod do
           # application starts; calling into app code there is a boot-crash risk
           # for no gain. PromExObanPollGroupTest asserts this literal and that
           # function stay in agreement.
-          config :engram, Engram.PromEx, drop_metrics_groups: [:oban_queue_poll_metrics]
+          #
+          # The Installs poller is dropped too: every node reads the same
+          # install_pings count from the DB, so the worker's copy is enough.
+          config :engram, Engram.PromEx,
+            drop_metrics_groups: [:oban_queue_poll_metrics, :engram_installs_polling_metrics]
 
         "worker" ->
           # Recorded because DECLARING a role is what tells the boot check this

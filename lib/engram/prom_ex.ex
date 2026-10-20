@@ -70,19 +70,25 @@ defmodule Engram.PromEx do
   # exception) stay registered on every role: they are emitted by execution
   # rather than polled, so a web node simply produces none and no series
   # appears. There is nothing to go stale.
+  #
+  # `:engram_installs_polling_metrics` is dropped on web for a different reason:
+  # it is a DB poll whose answer is the same on every node, so the worker's copy
+  # is enough and web need not pay for it.
+  #
   # Narrow on purpose. `[atom()]` is a supertype of what this can actually
-  # return and dialyzer rejects it as `contract_supertype`. Naming the one group
-  # also makes the spec the shortest accurate description of the policy: today
-  # exactly one group is ever dropped, and widening it is a deliberate edit
-  # rather than something that happens by accident.
-  @spec drop_metrics_groups(map()) :: [:oban_queue_poll_metrics]
+  # return and dialyzer rejects it as `contract_supertype`. Naming the groups
+  # also makes the spec the shortest accurate description of the policy, and
+  # widening it is a deliberate edit rather than something that happens by
+  # accident.
+  @spec drop_metrics_groups(map()) ::
+          [] | [:oban_queue_poll_metrics | :engram_installs_polling_metrics, ...]
   def drop_metrics_groups(env \\ System.get_env()) do
     case env
          |> Map.get("ENGRAM_NODE_ROLE")
          |> to_string()
          |> String.trim()
          |> String.downcase() do
-      "web" -> [:oban_queue_poll_metrics]
+      "web" -> [:oban_queue_poll_metrics, :engram_installs_polling_metrics]
       _ -> []
     end
   end
