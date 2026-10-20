@@ -11,7 +11,7 @@ defmodule Engram.Repo.Migrations.AddNotesChunkCount do
   # `Engram.Indexing` writes it.
   def change do
     alter table(:notes) do
-      add :chunk_count, :integer
+      add :chunk_count, :bigint
     end
   end
 end
