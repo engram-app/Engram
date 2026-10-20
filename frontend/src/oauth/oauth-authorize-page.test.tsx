@@ -132,7 +132,7 @@ const connectionsState = vi.hoisted(() => {
 			redirect_uris: [],
 		},
 	];
-	return { OBSIDIAN_ONLY, current: OBSIDIAN_ONLY };
+	return { OBSIDIAN_ONLY, current: OBSIDIAN_ONLY, loading: false };
 });
 const { OBSIDIAN_ONLY } = connectionsState;
 
@@ -144,7 +144,10 @@ vi.mock("../api/queries", () => ({
 	useOnboardingStatus: () => ({ data: onboardingState.current, isLoading: false }),
 	useSetOnboardingProfile: () => ({ mutateAsync: setProfileMock }),
 	useUpdateVault: () => ({ mutateAsync: updateVaultMock }),
-	useConnections: () => ({ data: connectionsState.current, isLoading: false }),
+	useConnections: () =>
+		connectionsState.loading
+			? { data: undefined, isLoading: true }
+			: { data: connectionsState.current, isLoading: false },
 }));
 
 // A backend that supports levels echoes what it stored. These tests model one
@@ -550,6 +553,19 @@ describe("OAuthAuthorizePage", () => {
 		expect(screen.getByText(/signed in as todd@example.com/iu)).toBeInTheDocument();
 	});
 
+	// The account name is what stops an approval for the wrong account, so it
+	// sits with the title, read before the decision, not under the buttons.
+	it("shows the signed-in account in the header, above the decision", async () => {
+		fetchOAuthClient.mockResolvedValue({
+			client_id: "cli",
+			client_name: "Claude Desktop",
+			kind: "mcp",
+		});
+		renderAt(VALID_QS);
+		await screen.findByRole("heading", { name: /Claude Desktop/u });
+		expect(screen.getByText(/signed in as todd@example.com/iu).closest("header")).not.toBeNull();
+	});
+
 	it("shows the invalid-request alert when a required param is missing", () => {
 		renderAt("?client_id=cli");
 		expect(
@@ -626,6 +642,19 @@ describe("OAuthAuthorizePage", () => {
 
 		afterEach(() => {
 			window.sessionStorage.clear();
+			connectionsState.loading = false;
+		});
+
+		// The short form waits on the connections list. Showing the full picker
+		// meanwhile swapped it out from under a user already using it.
+		it("shows neither form while the connections list loads", async () => {
+			connectionsState.loading = true;
+			renderAt(VALID_QS);
+			// Past the client lookup, so "Loading" is the connections wait alone.
+			await screen.findByRole("heading", { name: /Claude Code/u });
+			expect(screen.getByText(/loading/iu)).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: /^review$/iu })).toBeNull();
+			expect(screen.queryByLabelText(/name your first vault/iu)).toBeNull();
 		});
 
 		it("asks only for the vault name, prefilled, with no vault picker", async () => {

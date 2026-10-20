@@ -628,7 +628,10 @@ export default function OAuthAuthorizePage() {
 		clientQuery.isLoading ||
 		vaultsQuery.isLoading ||
 		meQuery.isLoading ||
-		onboardingQuery.isLoading;
+		onboardingQuery.isLoading ||
+		// The first-vault form waits on this list: showing the full picker
+		// meanwhile swaps it out from under the user.
+		(resumedFromSignup && connections.isLoading);
 
 	return (
 		<AuthShell>
@@ -640,6 +643,13 @@ export default function OAuthAuthorizePage() {
 							slots={{ client: <span className="text-primary-ink">{clientName}</span> }}
 						/>
 					</h1>
+					{/* The account is what stops an approval for the wrong one, so it
+					    is read with the title, before the decision. */}
+					{meQuery.data ? (
+						<p className="truncate text-muted-foreground text-sm" title={meQuery.data.email}>
+							{t("Signed in as {email}.", { email: meQuery.data.email })}
+						</p>
+					) : null}
 					{clientQuery.data?.redirect_loopback ? (
 						<p className="text-destructive text-sm">
 							{t(
@@ -754,16 +764,11 @@ export default function OAuthAuthorizePage() {
 					</>
 				)}
 
-				{/* Who you are and where this goes: checkable, not the decision, so
-				    it sits small under the buttons. The return host is the
-				    anti-phishing fact (the app name is self-asserted, hosts are
-				    not); the metadata host only shows when it differs. */}
+				{/* Where this goes: checkable, not the decision, so it sits small
+				    under the buttons. The return host is the anti-phishing fact
+				    (the app name is self-asserted, hosts are not); the metadata
+				    host only shows when it differs. */}
 				<footer className="flex flex-col gap-0.5 text-muted-foreground text-xs">
-					{meQuery.data ? (
-						<p className="truncate" title={meQuery.data.email}>
-							{t("Signed in as {email}.", { email: meQuery.data.email })}
-						</p>
-					) : null}
 					{clientQuery.data?.client_host &&
 					clientQuery.data.client_host !== clientQuery.data.redirect_host ? (
 						<p>{t("App details from {host}.", { host: clientQuery.data.client_host })}</p>
