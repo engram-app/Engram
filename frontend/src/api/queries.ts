@@ -1347,6 +1347,24 @@ export function useBillingStatus() {
 	});
 }
 
+/** Free's refilling embed budget from `GET /billing/usage`; null when the user has none. */
+export interface EmbedBucket {
+	available: number;
+	capacity: number;
+	refill_per_day: number;
+	/** ISO timestamp the bucket is full again; null when it already is. */
+	full_at: string | null;
+}
+
+export function useEmbedBucket() {
+	return useQuery({
+		queryKey: ["billing", "usage"],
+		queryFn: () => api.get<{ usage?: { embed_bucket?: EmbedBucket | null } }>("/billing/usage"),
+		select: (data) => data?.usage?.embed_bucket ?? null,
+		staleTime: 60_000,
+	});
+}
+
 export interface BillingConfig {
 	client_token: string;
 	environment: "sandbox" | "production";

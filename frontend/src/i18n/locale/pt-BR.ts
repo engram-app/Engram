@@ -163,6 +163,13 @@ export default {
 		many: "Restam {count} dias do seu período de teste gratuito.",
 		other: "Faltam {count} dias para o fim do seu período de teste gratuito.",
 	},
+	"Indexing budget": "Orçamento de indexação",
+	"{available} of {capacity} tokens left": "Restam {available} de {capacity} tokens",
+	"Refills {perDay} a day, full again on {date}":
+		"Abastecimentos {perDay} por dia, recarregado totalmente em {date}",
+	Full: "Completo",
+	"New notes are searchable by keyword now and get full search as your budget refills.":
+		"As novas notas agora podem ser pesquisadas por palavra-chave e recebem pesquisa completa quando seu orçamento é recarregado.",
 	"Loading current connection…": "Carregando a conexão atual…",
 	"Disconnected. Retry the new connection now.": "Desconectado. Tente reconectar agora.",
 	"Couldn't disconnect. Try Settings → Connections.":
@@ -871,6 +878,8 @@ export default {
 	"{client} is connected": "{client} está conectado",
 	"Your AI tool is connected": "Sua ferramenta de IA está conectada",
 	"What will you use Engram for?": "Para que você usará o Engram?",
+	"Could not continue. Please try again.":
+		"Não foi possível continuar. Por favor, tente novamente.",
 	"Review the Terms": "Revise os Termos",
 	"privacy notice": "aviso de privacidade",
 	"What changed": "O que mudou",
@@ -883,8 +892,6 @@ export default {
 		"Eu li e concordo com os Termos de Serviço e a Política de Privacidade",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Eu li e concordo com o contrato exibido acima e o aviso de privacidade",
-	"Could not continue. Please try again.":
-		"Não foi possível continuar. Por favor, tente novamente.",
 	"Saving…": "Salvando…",
 	Continue: "Continuar",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

@@ -150,6 +150,12 @@ export default {
 	"Current Plan": "현재 요금제",
 	Free: "무료",
 	"{count} days remaining in your free trial.": { other: "무료 체험은 {count}일 남았습니다." },
+	"Indexing budget": "인덱싱 용량",
+	"{available} of {capacity} tokens left": "{available} / {capacity} 토큰 남음",
+	"Refills {perDay} a day, full again on {date}": "매일 {perDay}회 충전, {date}일에 용량 꽉 참",
+	Full: "용량 꽉 참",
+	"New notes are searchable by keyword now and get full search as your budget refills.":
+		"새 노트는 키워드로 검색 가능하며, 용량이 채워지면 전체 검색 기능을 사용할 수 있습니다.",
 	"Loading current connection…": "현재 연결 로딩 중…",
 	"Disconnected. Retry the new connection now.": "연결 해제됨. 지금 새로운 연결을 시도하세요.",
 	"Couldn't disconnect. Try Settings → Connections.":
@@ -823,6 +829,7 @@ export default {
 	"{client} is connected": "{client}이 연결되었습니다",
 	"Your AI tool is connected": "AI 도구가 연결되었습니다",
 	"What will you use Engram for?": "Engram을 어디에 사용하시겠습니까?",
+	"Could not continue. Please try again.": "계속할 수 없습니다. 다시 시도해주세요.",
 	"Review the Terms": "이용 약관 확인",
 	"privacy notice": "개인정보 처리방침",
 	"What changed": "변경 내역",
@@ -834,7 +841,6 @@ export default {
 		"이용 약관 및 개인정보 처리방침을 읽고 동의합니다",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"위 약관 및 개인정보 처리방침을 읽고 동의합니다",
-	"Could not continue. Please try again.": "계속할 수 없습니다. 다시 시도해주세요.",
 	"Saving…": "저장 중...",
 	Continue: "계속하기",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

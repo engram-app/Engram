@@ -159,6 +159,13 @@ export default {
 		many: "Rimangono {count} giorni alla fine della tua prova gratuita.",
 		other: "Rimangono {count} giorni alla fine della tua prova gratuita.",
 	},
+	"Indexing budget": "Budget di indicizzazione",
+	"{available} of {capacity} tokens left": "Rimangono {available} di {capacity} token",
+	"Refills {perDay} a day, full again on {date}":
+		"Ricariche {perDay} al giorno, pieno di nuovo il {date}",
+	Full: "Pieno",
+	"New notes are searchable by keyword now and get full search as your budget refills.":
+		"Le nuove note sono ora ricercabili per parola chiave e ottengono una ricerca completa quando il tuo budget si ricarica.",
 	"Loading current connection…": "Caricamento della connessione corrente…",
 	"Disconnected. Retry the new connection now.": "Disconnesso. Riprova a connetterti.",
 	"Couldn't disconnect. Try Settings → Connections.":
@@ -870,6 +877,7 @@ export default {
 	"{client} is connected": "{client} è connesso",
 	"Your AI tool is connected": "Il tuo strumento AI è connesso",
 	"What will you use Engram for?": "A cosa userai Engram?",
+	"Could not continue. Please try again.": "Impossibile continuare. Riprova.",
 	"Review the Terms": "Leggi i Termini",
 	"privacy notice": "Informativa sulla privacy",
 	"What changed": "Cosa è cambiato",
@@ -882,7 +890,6 @@ export default {
 		"Ho letto e accetto i Termini di servizio e l'informativa sulla privacy",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Ho letto e accetto l'accordo mostrato sopra e l'informativa sulla privacy",
-	"Could not continue. Please try again.": "Impossibile continuare. Riprova.",
 	"Saving…": "Salvataggio...",
 	Continue: "Continua",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

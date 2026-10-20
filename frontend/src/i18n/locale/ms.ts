@@ -158,6 +158,13 @@ export default {
 	"{count} days remaining in your free trial.": {
 		other: "{count} hari lagi untuk tempoh percubaan percuma anda.",
 	},
+	"Indexing budget": "Bajet pengindeksan",
+	"{available} of {capacity} tokens left": "{available} daripada {capacity} token tinggal",
+	"Refills {perDay} a day, full again on {date}":
+		"Diisi semula {perDay} sehari, penuh semula pada {date}",
+	Full: "Penuh",
+	"New notes are searchable by keyword now and get full search as your budget refills.":
+		"Nota baharu boleh dicari berdasarkan kata kunci dan akan mendapat carian penuh apabila bajet anda diisi semula.",
 	"Loading current connection…": "Memuatkan sambungan semasa…",
 	"Disconnected. Retry the new connection now.": "Tidak bersambung. Cuba sambung semula sekarang.",
 	"Couldn't disconnect. Try Settings → Connections.":
@@ -839,6 +846,7 @@ export default {
 	"{client} is connected": "{client} sedang disambungkan",
 	"Your AI tool is connected": "Alat AI anda sedang disambungkan",
 	"What will you use Engram for?": "Apa yang akan anda gunakan Engram untuk?",
+	"Could not continue. Please try again.": "Tidak dapat meneruskan. Sila cuba lagi.",
 	"Review the Terms": "Semak Terma",
 	"privacy notice": "Notis privasi",
 	"What changed": "Apa yang berubah",
@@ -850,7 +858,6 @@ export default {
 		"Saya telah membaca dan bersetuju dengan Terma Perkhidmatan dan Dasar Privasi",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Saya telah membaca dan bersetuju dengan perjanjian yang ditunjukkan di atas dan notis privasi",
-	"Could not continue. Please try again.": "Tidak dapat meneruskan. Sila cuba lagi.",
 	"Saving…": "Menyimpan…",
 	Continue: "Teruskan",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

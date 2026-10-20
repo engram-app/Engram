@@ -139,6 +139,12 @@ export default {
 	"Current Plan": "当前方案",
 	Free: "免费",
 	"{count} days remaining in your free trial.": { other: "免费试用剩余{count}天。" },
+	"Indexing budget": "索引额度",
+	"{available} of {capacity} tokens left": "剩余 {available} 个 {capacity} 个 token",
+	"Refills {perDay} a day, full again on {date}": "每日补给 {perDay} 次，将于 {date} 日恢复完整",
+	Full: "已满",
+	"New notes are searchable by keyword now and get full search as your budget refills.":
+		"新笔记现在可以通过关键词搜索，并在额度恢复时获得完整搜索功能。",
 	"Loading current connection…": "正在连接…",
 	"Disconnected. Retry the new connection now.": "已断开。立即重试连接。",
 	"Couldn't disconnect. Try Settings → Connections.": "断开失败。请尝试 设置 → 连接。",
@@ -797,6 +803,7 @@ export default {
 	"{client} is connected": "{client} 已连接",
 	"Your AI tool is connected": "你的 AI 工具已连接",
 	"What will you use Engram for?": "您将如何使用 Engram？",
+	"Could not continue. Please try again.": "无法继续。请重试。",
 	"Review the Terms": "查看条款",
 	"privacy notice": "隐私声明",
 	"What changed": "发生了什么变化",
@@ -808,7 +815,6 @@ export default {
 		"我已阅读并同意服务条款和隐私政策",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"我已阅读并同意上述协议和隐私声明",
-	"Could not continue. Please try again.": "无法继续。请重试。",
 	"Saving…": "保存中…",
 	Continue: "继续",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":
