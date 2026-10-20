@@ -182,6 +182,37 @@
             "minimum": 0,
             "type": "number"
           },
+          "fields": {
+            "description": "Optional filters on any user-added frontmatter key (all must match). op: eq, in (value is a list), gt/gte/lt/lte (numbers or ISO dates), after/before (ISO dates). A key no note has is an error.",
+            "items": {
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "op": {
+                  "default": "eq",
+                  "enum": [
+                    "eq",
+                    "in",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "after",
+                    "before"
+                  ],
+                  "type": "string"
+                },
+                "value": {}
+              },
+              "required": [
+                "key",
+                "value"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
           "folder": {
             "description": "Optional folder path to scope the search to (exact match)",
             "type": "string"
