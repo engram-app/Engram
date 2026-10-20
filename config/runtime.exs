@@ -908,6 +908,24 @@ if config_env() == :prod do
     config :engram, EngramWeb.RateLimiter, backend: :distributed_ets
   end
 
+  # Oban notifier: PG over distributed Erlang when clustered, saving the
+  # Postgres notifier's dedicated LISTEN connection on every node. Unclustered
+  # nodes (self-host, single node) keep the Postgres default, the only path
+  # between them. PG sends at once rather than on commit; Engram.Oban.SafeEngine
+  # re-announces a job inserted inside a transaction after it commits.
+  #
+  # Failure modes, none of which lose a job (jobs are rows): a node cut off
+  # from the cluster hears no inserts, and its stager falls back to waking its
+  # own producers every stage_interval (Notifier.status :solitary/:isolated ->
+  # local mode). During the rolling deploy that switches notifiers, old and new
+  # nodes cannot hear each other's notifications; a new worker that is not
+  # yet leader hears inserts only from new web nodes, and picks up the rest
+  # once the old worker exits and it takes leadership (Peers.Database, 30s
+  # election) and stages. ObanPgNotifierTest pins this branch.
+  if System.get_env("DNS_CLUSTER_QUERY") do
+    config :engram, Oban, notifier: Oban.Notifiers.PG
+  end
+
   # Node role. `queues: false` supervises no producers while leaving
   # `Oban.insert/1` fully working, so a node that holds user sockets still
   # ENQUEUES embed/index/checkpoint work but never EXECUTES it. That is the

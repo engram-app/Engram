@@ -81,7 +81,7 @@ defmodule Engram.Drainer do
 
   defp default_pause_oban do
     # local_only: true is critical. Without it Oban broadcasts the pause over
-    # the Postgres notifier to EVERY node sharing the instance, so a draining
+    # the notifier (Postgres, or PG when clustered) to EVERY node, so a draining
     # task would pause queues fleet-wide — including freshly-booted tasks during
     # a rolling deploy, which then never resume. A draining node pauses only
     # itself; survivors keep processing.

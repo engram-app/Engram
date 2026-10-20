@@ -12,7 +12,7 @@ defmodule Engram.ObanWebRolePluginsTest do
   # `normalize_peer/1` maps `plugins: false` to `Oban.Peers.Isolated` with
   # `leader?: false`, and the service plugins (Pruner/Lifeline/Cron) are not
   # added. Inserts are unaffected: they go through the engine on the Repo and
-  # notify through pg_notify, which the worker's notifier receives.
+  # notify through the notifier, which the worker's notifier receives.
   use ExUnit.Case, async: true
 
   @runtime Path.join(__DIR__, "../../config/runtime.exs")
