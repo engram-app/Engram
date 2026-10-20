@@ -281,6 +281,14 @@ defmodule Engram.LogsReemitTest do
       refute_receive {^ref, _, _}, 100
     end
 
+    # config.exs requires every metadata key we emit in :default_formatter's
+    # list; these reach Logger through Keyword.merge, where credo's
+    # MissedMetadataKeyInLoggerConfig cannot see them.
+    test "every context key is a declared formatter metadata key" do
+      declared = Application.fetch_env!(:logger, :default_formatter)[:metadata]
+      assert Logs.context_metadata_keys() -- declared == []
+    end
+
     test "a context that is not a map is ignored" do
       meta = reemit_context("browser=Chrome")
       refute Map.has_key?(meta, :browser)

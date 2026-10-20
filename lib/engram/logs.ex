@@ -80,6 +80,13 @@ defmodule Engram.Logs do
   ]
 
   @doc """
+  Metadata keys a client context can add to a re-emitted line: the
+  allowlisted fields plus `elapsed_ms_min` on a collapsed repeat. Each must
+  be declared in config.exs's `:default_formatter` metadata list.
+  """
+  def context_metadata_keys, do: Keyword.keys(@context_fields) ++ [:elapsed_ms_min]
+
+  @doc """
   Insert a batch of log entries for a user.
   Returns {:ok, count} with the number of entries inserted.
 
