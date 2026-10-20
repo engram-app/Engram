@@ -38,6 +38,11 @@ defmodule Engram.Crypto.RotationGate do
   updates that row, so a rotation starting after this check waits for the
   caller's write to commit, and its sweep then sees the row. Without it, a
   write that passed the check can still commit after the sweep went by.
+
+  With `dek_version: v`, also refuses when `users.dek_version` is no longer
+  `v`: a rotation that started AND finished after the caller read its DEK
+  leaves the lock clear, and only the version shows the key moved. Read `v`
+  with `dek_version/1` BEFORE deriving anything from the DEK.
   """
   @spec check(Ecto.UUID.t(), keyword()) ::
           :ok | {:error, :rotation_in_progress | :user_not_found}
@@ -47,15 +52,15 @@ defmodule Engram.Crypto.RotationGate do
     query =
       from(u in User,
         where: u.id == ^user_id,
-        select: {u.id, u.dek_rotation_locked_at}
+        select: {u.id, u.dek_rotation_locked_at, u.dek_version}
       )
 
     query = if opts[:share_lock], do: from(u in query, lock: "FOR SHARE"), else: query
 
     case Repo.one(query, skip_tenant_check: true) do
       nil -> {:error, :user_not_found}
-      {_id, %DateTime{}} -> {:error, :rotation_in_progress}
-      {_id, _} -> :ok
+      {_id, %DateTime{}, _version} -> {:error, :rotation_in_progress}
+      {_id, nil, version} -> same_version(opts, version)
     end
   end
 
@@ -81,6 +86,21 @@ defmodule Engram.Crypto.RotationGate do
     after
       unless previous, do: Process.delete(:engram_write_gate)
     end
+  end
+
+  defp same_version(opts, version) do
+    case Keyword.fetch(opts, :dek_version) do
+      {:ok, expected} when expected != version -> {:error, :rotation_in_progress}
+      _ -> :ok
+    end
+  end
+
+  @doc "`users.dek_version`, read fresh (bumped by every DEK rotation)."
+  @spec dek_version(Ecto.UUID.t()) :: integer() | nil
+  def dek_version(user_id) when is_binary(user_id) do
+    Repo.one(from(u in User, where: u.id == ^user_id, select: u.dek_version),
+      skip_tenant_check: true
+    )
   end
 
   @spec check_user(User.t()) :: :ok | {:error, :rotation_in_progress}

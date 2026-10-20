@@ -410,6 +410,45 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
       assert conn |> start("b.png", 10) |> json_response(201)
     end
 
+    # A rotation that already finished (lock clear, DEK version moved)
+    # between the DEK read and the write.
+    test "a rotation that completes mid-start or mid-complete is 503", %{
+      conn: conn,
+      user: user
+    } do
+      bump = fn ->
+        Repo.update_all(
+          from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          [inc: [dek_version: 1]],
+          skip_tenant_check: true
+        )
+      end
+
+      bytes = :crypto.strong_rand_bytes(100)
+      %{"upload_id" => id} = start!(conn, "a.png", byte_size(bytes))
+      assert conn |> put_part(id, 1, bytes) |> json_response(200)
+
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      stub_with(Engram.MockStorage, InMemory)
+
+      stub(Engram.MockStorage, :start_multipart, fn key ->
+        bump.()
+        InMemory.start_multipart(key)
+      end)
+
+      stub(Engram.MockStorage, :complete_multipart_upload, fn key, s3_id, parts ->
+        bump.()
+        InMemory.complete_multipart_upload(key, s3_id, parts)
+      end)
+
+      assert_rotating(start(conn, "b.png", 10))
+      assert_rotating(complete(conn, id))
+      assert [_] = rows(Upload, user)
+      assert rows(Attachment, user) == []
+    end
+
     # The request plug saw no lock; the rotation starts while the parts are
     # assembled, before the locked row write.
     test "a rotation that starts mid-complete is refused at the row write", %{

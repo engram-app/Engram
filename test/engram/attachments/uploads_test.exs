@@ -375,6 +375,103 @@ defmodule Engram.Attachments.UploadsTest do
 
   # A write that commits after DEK rotation has swept past it is wrapped under
   # the retiring key and becomes unreadable once the rotation finishes.
+  # The gate above only sees a rotation that is still running. One that
+  # acquires, sweeps and releases while a writer holds a DEK it read earlier
+  # leaves the lock clear, so the write must be refused on the DEK version.
+  describe "a DEK rotation that completes inside a write" do
+    setup do
+      bypass = Bypass.open()
+      Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
+      on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
+
+      Bypass.stub(bypass, "POST", "/collections/engram_notes/points/scroll", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"result" => %{"points" => [], "next_page_offset" => nil}})
+        )
+      end)
+
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      stub_with(Engram.MockStorage, InMemory)
+      # Rotation decrypts every vault name the user owns; the bare factory
+      # vault's is not real ciphertext, so this describe uses its own user.
+      {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
+      %{user: user, vault: Engram.Fixtures.insert_vault!(user, "RotationWindow")}
+    end
+
+    # Runs a full rotation the first time storage call `fun_name` is made,
+    # then passes the call through to InMemory.
+    defp rotate_during(user, fun_name, arity) do
+      ran = :counters.new(1, [])
+
+      hook = fn args ->
+        if :counters.get(ran, 1) == 0 do
+          :counters.add(ran, 1, 1)
+          assert :ok = Engram.Crypto.UserDekRotation.rotate_user(user.id)
+        end
+
+        apply(InMemory, fun_name, args)
+      end
+
+      fun =
+        case arity do
+          1 -> fn a -> hook.([a]) end
+          3 -> fn a, b, c -> hook.([a, b, c]) end
+        end
+
+      stub(Engram.MockStorage, fun_name, fun)
+    end
+
+    defp all(schema, user) do
+      import Ecto.Query, only: [from: 2]
+      Engram.Repo.all(from(r in schema, where: r.user_id == ^user.id), skip_tenant_check: true)
+    end
+
+    test "a single-request write is refused and stores nothing", %{user: user, vault: vault} do
+      rotate_during(user, :put, 3)
+
+      assert {:error, :rotation_in_progress} =
+               Attachments.upsert_attachment(user, vault, %{path: "doc.png", content: "v1"})
+
+      assert all(Attachment, user) == []
+
+      refute Enum.any?(:ets.tab2list(:engram_test_storage_in_memory), fn {k, _} ->
+               String.starts_with?(k, "#{user.id}/#{vault.id}/")
+             end)
+    end
+
+    test "start is refused and opens no session", %{user: user, vault: vault} do
+      rotate_during(user, :start_multipart, 1)
+
+      assert {:error, :rotation_in_progress} =
+               Uploads.start(user, vault, %{path: "a.png", size_bytes: 10, mtime: 1.0})
+
+      assert all(Upload, user) == []
+    end
+
+    test "complete is refused; the retry on the rotated session succeeds", %{
+      user: user,
+      vault: vault
+    } do
+      bytes = :crypto.strong_rand_bytes(10)
+      up = start!(user, vault, "a.png", 10)
+      {:ok, _} = Uploads.put_part(user, vault, up.id, 1, bytes)
+      rotate_during(user, :complete_multipart_upload, 3)
+
+      assert {:error, :rotation_in_progress} = Uploads.complete(user, vault, up.id)
+      assert all(Attachment, user) == []
+      assert [_] = all(Upload, user)
+
+      user = Crypto.fresh_user(user)
+      assert {:ok, att} = Uploads.complete(user, vault, up.id)
+      assert decrypt_stored(user, Engram.Repo.reload!(att, skip_tenant_check: true)) == bytes
+    end
+  end
+
   describe "while a DEK rotation holds the user" do
     defp set_rotation_lock(user, at) do
       import Ecto.Query, only: [from: 2]

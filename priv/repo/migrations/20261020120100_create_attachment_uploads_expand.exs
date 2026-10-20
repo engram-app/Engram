@@ -36,6 +36,9 @@ defmodule Engram.Repo.Migrations.CreateAttachmentUploadsExpand do
       add :s3_upload_id, :text, null: false
       add :wrapped_file_key, :binary, null: false
       add :file_key_nonce, :binary, null: false
+      # users.dek_version the key and path are sealed under. DEK rotation
+      # rewraps both and bumps it; complete refuses on a mismatch.
+      add :dek_version, :integer, null: false
       # Part number (string key) => storage ETag.
       add :parts, :map, null: false, default: %{}
       # Set once storage has assembled the parts into one object; a retried

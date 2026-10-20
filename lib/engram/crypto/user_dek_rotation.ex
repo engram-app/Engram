@@ -188,7 +188,7 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- sweep_vault_index_states(user, old_dek, new_dek, new_dek_version),
          :ok <- sweep_vault_index_update_log(user, old_dek, new_dek, new_dek_version),
          :ok <- sweep_attachments(user, old_dek, new_dek, new_filter_key, new_dek_version),
-         :ok <- sweep_attachment_uploads(user, old_dek, new_dek, new_filter_key),
+         :ok <- sweep_attachment_uploads(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_note_links(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_chunk_texts(user, old_dek, new_dek),
          :ok <- sweep_slice_sums(user, old_dek, new_dek),
@@ -860,12 +860,18 @@ defmodule Engram.Crypto.UserDekRotation do
   # next part or at complete. Rewrapped like any other DEK column; the parts
   # already in storage are sealed under the file key and stay valid.
 
-  defp sweep_attachment_uploads(%User{id: user_id}, old_dek, new_dek, new_filter_key) do
+  defp sweep_attachment_uploads(
+         %User{id: user_id},
+         old_dek,
+         new_dek,
+         new_filter_key,
+         new_dek_version
+       ) do
     TenantSweep.each_batch(user_id, Upload, fn batch_ids ->
       Repo.transaction(fn ->
         from(u in Upload, where: u.id in ^batch_ids, lock: "FOR UPDATE")
         |> Repo.all(skip_tenant_check: true)
-        |> Enum.each(&rewrap_upload(&1, old_dek, new_dek, new_filter_key))
+        |> Enum.each(&rewrap_upload(&1, old_dek, new_dek, new_filter_key, new_dek_version))
       end)
       |> case do
         {:ok, _} -> :ok
@@ -874,7 +880,7 @@ defmodule Engram.Crypto.UserDekRotation do
     end)
   end
 
-  defp rewrap_upload(%Upload{} = up, old_dek, new_dek, new_filter_key) do
+  defp rewrap_upload(%Upload{} = up, old_dek, new_dek, new_filter_key, new_dek_version) do
     key_aad = Crypto.aad_for_row(:attachments, :file_key, up.attachment_id)
     path_aad = Crypto.aad_for_row(:attachment_uploads, :path, up.id)
 
@@ -932,13 +938,12 @@ defmodule Engram.Crypto.UserDekRotation do
           []
       end
 
-    updates = key_updates ++ path_updates
-
-    # Empty only when both columns were already rotated by a prior run.
-    if updates != [],
-      do:
-        from(u in Upload, where: u.id == ^up.id)
-        |> Repo.update_all([set: updates], skip_tenant_check: true)
+    # dek_version always: complete refuses a session whose version is not
+    # the user's, so it must move even when a prior run rewrapped both.
+    from(u in Upload, where: u.id == ^up.id)
+    |> Repo.update_all([set: key_updates ++ path_updates ++ [dek_version: new_dek_version]],
+      skip_tenant_check: true
+    )
 
     :ok
   end

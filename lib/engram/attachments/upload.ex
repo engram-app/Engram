@@ -23,7 +23,8 @@ defmodule Engram.Attachments.Upload do
     :storage_key,
     :s3_upload_id,
     :wrapped_file_key,
-    :file_key_nonce
+    :file_key_nonce,
+    :dek_version
   ]
 
   schema "attachment_uploads" do
@@ -40,6 +41,8 @@ defmodule Engram.Attachments.Upload do
     field :s3_upload_id, :string
     field :wrapped_file_key, :binary
     field :file_key_nonce, :binary
+    # users.dek_version the key and path are sealed under.
+    field :dek_version, :integer
     # Part number as a string key (jsonb) => storage ETag.
     field :parts, :map, default: %{}
     field :assembled_at, :utc_datetime

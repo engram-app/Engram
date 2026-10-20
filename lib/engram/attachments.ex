@@ -62,6 +62,9 @@ defmodule Engram.Attachments do
          :ok <- MimeWhitelist.check(explicit_mime || MimeWhitelist.detect_mime(path), path),
          :ok <- validate_size(byte_size(plaintext), user),
          {:ok, user} <- Crypto.ensure_user_dek(user),
+         # Before any key is derived: commit_row/7 refuses if a rotation
+         # moved the DEK since (`RotationGate.check/2`).
+         dek_version = RotationGate.dek_version(user.id),
          {:ok, filter_key} <- Crypto.dek_filter_key(user),
          path_hmac = Crypto.hmac_field(filter_key, path),
          # Pre-lock window: probable-id read, cap check, encrypt, and the S3
@@ -111,7 +114,7 @@ defmodule Engram.Attachments do
         # T3-audit H1 — the content AAD binds the row id, so if the locked
         # re-read finds a different row holding the path, re-encrypt for its
         # id and re-PUT, to the same fresh key (rare race path only).
-        commit_row(user, vault, path, path_hmac, byte_size(plaintext), fn
+        commit_row(user, vault, path, path_hmac, byte_size(plaintext), dek_version, fn
           %Attachment{id: id} when id != att_id0 ->
             with {:ok, attrs1, ciphertext1} <- prepare.(id),
                  :ok <- store_external(key, ciphertext1, attrs1.mime_type),
@@ -141,12 +144,19 @@ defmodule Engram.Attachments do
   #
   # After commit: releases the replaced row's blob when the new write moved
   # the row to a different storage key, then broadcasts the upsert.
-  @spec commit_row(map(), map(), String.t(), binary(), non_neg_integer(), (Attachment.t() | nil ->
-                                                                             {:ok, Ecto.UUID.t(),
-                                                                              map()}
-                                                                             | {:error, term()})) ::
+  @spec commit_row(
+          map(),
+          map(),
+          String.t(),
+          binary(),
+          non_neg_integer(),
+          integer() | nil,
+          (Attachment.t() | nil ->
+             {:ok, Ecto.UUID.t(), map()}
+             | {:error, term()})
+        ) ::
           {:ok, Attachment.t()} | {:error, term()}
-  def commit_row(user, vault, path, path_hmac, size, build) do
+  def commit_row(user, vault, path, path_hmac, size, dek_version, build) do
     Repo.transaction(fn ->
       :ok = acquire_path_lock(user.id, path_hmac)
       existing = fetch_existing(user, vault.id, path_hmac)
@@ -154,7 +164,7 @@ defmodule Engram.Attachments do
 
       # Under the locks and before anything is written: a row committed after
       # a DEK rotation's sweep went by would stay under the retiring key.
-      with :ok <- rotation_gate(user),
+      with :ok <- rotation_gate(user, dek_version),
            :ok <- validate_storage_cap(user, existing, size),
            {:ok, insert_id, attrs} <- build.(existing),
            {:ok, att} <- write_row(user, existing, insert_id, attrs) do
@@ -185,13 +195,17 @@ defmodule Engram.Attachments do
 
   @doc """
   `{:error, :rotation_in_progress}` while a DEK rotation holds the user (read
-  fresh, never from a cached struct). Inside a transaction it also holds the
+  fresh, never from a cached struct), or, given `dek_version`, once one has
+  completed since the caller read that version. Inside a transaction it also holds the
   user row against a rotation starting before the caller commits
   (`RotationGate.check/2`). Fails closed on a missing user.
   """
-  @spec rotation_gate(map()) :: :ok | {:error, :rotation_in_progress}
-  def rotation_gate(user) do
-    case RotationGate.check(user.id, share_lock: Repo.in_transaction?()) do
+  @spec rotation_gate(map(), integer() | nil) :: :ok | {:error, :rotation_in_progress}
+  def rotation_gate(user, dek_version \\ nil) do
+    opts = [share_lock: Repo.in_transaction?()]
+    opts = if dek_version, do: [{:dek_version, dek_version} | opts], else: opts
+
+    case RotationGate.check(user.id, opts) do
       :ok -> :ok
       {:error, _} -> {:error, :rotation_in_progress}
     end

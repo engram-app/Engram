@@ -22,6 +22,7 @@ defmodule Engram.Attachments.Uploads do
   alias Engram.Attachments.Upload
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
+  alias Engram.Crypto.RotationGate
   alias Engram.Links
   alias Engram.Logger.Metadata
   alias Engram.Notes.PathSanitizer
@@ -70,6 +71,8 @@ defmodule Engram.Attachments.Uploads do
          :ok <- Attachments.validate_size(req.size_bytes, user),
          true <- Storage.adapter().multipart?() || {:error, :multipart_unsupported},
          {:ok, user} <- Crypto.ensure_user_dek(user),
+         # Before any key is derived; re-checked at the insert.
+         dek_version = RotationGate.dek_version(user.id),
          {:ok, filter_key} <- Crypto.dek_filter_key(user),
          {:ok, dek} <- Crypto.get_dek(user),
          path_hmac = Crypto.hmac_field(filter_key, path),
@@ -98,14 +101,16 @@ defmodule Engram.Attachments.Uploads do
           storage_key: storage_key,
           s3_upload_id: s3_upload_id,
           wrapped_file_key: wrapped,
-          file_key_nonce: key_nonce
+          file_key_nonce: key_nonce,
+          dek_version: dek_version
         })
         # Gated again inside the insert's transaction (share-locks the user
         # row): a session committed after rotation swept the sessions would
         # keep a file key and path under the retiring DEK.
         |> then(fn changeset ->
           Repo.with_tenant(user.id, fn ->
-            with :ok <- Attachments.rotation_gate(user), do: Repo.insert(changeset)
+            with :ok <- Attachments.rotation_gate(user, dek_version),
+                 do: Repo.insert(changeset)
           end)
         end)
         |> unwrap()
@@ -321,49 +326,67 @@ defmodule Engram.Attachments.Uploads do
     end
   end
 
+  # `up` was read when complete began, possibly minutes ago: a rotation that
+  # finished since rewrapped the session row, not this struct. Refused on the
+  # session's DEK version, here (before using the DEK) and again under the
+  # locks; the client's retry reads the rewrapped session.
   defp commit(user, vault, %Upload{} = up, file_key, hash) do
-    {:ok, dek} = Crypto.get_dek(user)
-    {:ok, filter_key} = Crypto.dek_filter_key(user)
-    {:ok, path} = Envelope.decrypt(up.path_ciphertext, up.path_nonce, dek, path_aad(up.id))
+    with :ok <- Attachments.rotation_gate(user, up.dek_version),
+         {:ok, dek} <- Crypto.get_dek(user),
+         {:ok, filter_key} <- Crypto.dek_filter_key(user),
+         {:ok, path} <- decrypt_path(up, dek) do
+      write_attachment(user, vault, up, path, {dek, filter_key}, file_key, hash)
+    end
+  end
+
+  defp decrypt_path(%Upload{} = up, dek) do
+    case Envelope.decrypt(up.path_ciphertext, up.path_nonce, dek, path_aad(up.id)) do
+      {:ok, path} -> {:ok, path}
+      :error -> {:error, :decrypt_failed}
+    end
+  end
+
+  defp write_attachment(user, vault, up, path, {dek, filter_key}, file_key, hash) do
     basename_hmac = Crypto.hmac_field(filter_key, Links.basename_key(path))
 
-    Attachments.commit_row(user, vault, path, up.path_hmac, up.size_bytes, fn existing ->
-      # Consumed first, in the same transaction as the row write: a duplicate
-      # concurrent complete finds it gone and rolls back.
-      with :ok <- delete_session(user, vault, up) do
-        id = commit_id(user, vault, existing, up.attachment_id)
+    Attachments.commit_row(user, vault, path, up.path_hmac, up.size_bytes, up.dek_version, fn
+      existing ->
+        # Consumed first, in the same transaction as the row write: a duplicate
+        # concurrent complete finds it gone and rolls back.
+        with :ok <- delete_session(user, vault, up) do
+          id = commit_id(user, vault, existing, up.attachment_id)
 
-        # A different row won the path since start (a single-request upload,
-        # or the claimed row was deleted): bind the file key to the winner's
-        # id. A 32-byte rewrap, not a re-encrypt.
-        {wrapped, key_nonce} =
-          if id == up.attachment_id,
-            do: {up.wrapped_file_key, up.file_key_nonce},
-            else: SegmentedCipher.wrap_key(file_key, dek, id)
+          # A different row won the path since start (a single-request upload,
+          # or the claimed row was deleted): bind the file key to the winner's
+          # id. A 32-byte rewrap, not a re-encrypt.
+          {wrapped, key_nonce} =
+            if id == up.attachment_id,
+              do: {up.wrapped_file_key, up.file_key_nonce},
+              else: SegmentedCipher.wrap_key(file_key, dek, id)
 
-        {:ok, id,
-         Map.merge(
-           %{
-             content_hash: hash,
-             mime_type: up.mime_type,
-             size_bytes: up.size_bytes,
-             mtime: up.mtime,
-             user_id: user.id,
-             vault_id: vault.id,
-             storage_key: up.storage_key,
-             deleted_at: nil,
-             encryption_version: 2,
-             dek_version: Crypto.row_version_aad_bound(),
-             content_nonce: nil,
-             wrapped_file_key: wrapped,
-             file_key_nonce: key_nonce,
-             upload_id: up.id,
-             segment_size: up.part_size,
-             segment_count: up.part_count
-           },
-           Attachments.path_attrs(dek, id, path, {up.path_hmac, basename_hmac})
-         )}
-      end
+          {:ok, id,
+           Map.merge(
+             %{
+               content_hash: hash,
+               mime_type: up.mime_type,
+               size_bytes: up.size_bytes,
+               mtime: up.mtime,
+               user_id: user.id,
+               vault_id: vault.id,
+               storage_key: up.storage_key,
+               deleted_at: nil,
+               encryption_version: 2,
+               dek_version: Crypto.row_version_aad_bound(),
+               content_nonce: nil,
+               wrapped_file_key: wrapped,
+               file_key_nonce: key_nonce,
+               upload_id: up.id,
+               segment_size: up.part_size,
+               segment_count: up.part_count
+             },
+             Attachments.path_attrs(dek, id, path, {up.path_hmac, basename_hmac})
+           )}
+        end
     end)
   end
 

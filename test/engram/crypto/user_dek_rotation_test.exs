@@ -1517,6 +1517,8 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
       sess_after = Repo.get!(Upload, sess.id, skip_tenant_check: true)
       assert {sess_after.wrapped_file_key, sess_after.file_key_nonce} == sess_key
+      # Moved even though its key was already rewrapped, or complete refuses it.
+      assert sess_after.dek_version == sess.dek_version + 1
       assert sess_after.path_ciphertext != sess.path_ciphertext
       assert {:ok, _} = Uploads.complete(reloaded, vault, sess.id)
       {:ok, fetched} = Attachments.get_attachment(reloaded, vault, "half.txt")
@@ -1544,6 +1546,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
       after_ = Repo.get!(Upload, up.id, skip_tenant_check: true)
       assert after_.wrapped_file_key != before.wrapped_file_key
+      assert after_.dek_version == before.dek_version + 1
       assert after_.path_ciphertext != before.path_ciphertext
 
       reloaded = reload_user(user)

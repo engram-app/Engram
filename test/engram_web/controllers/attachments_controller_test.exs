@@ -1396,6 +1396,32 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert live_rows(user) == []
     end
 
+    # A rotation that already finished (lock clear, DEK version moved)
+    # between the DEK read and the row write.
+    test "a rotation that completes mid-request is refused at the row write", %{
+      conn: conn,
+      user: user
+    } do
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      stub_with(Engram.MockStorage, InMemory)
+
+      stub(Engram.MockStorage, :put, fn k, bin, opts ->
+        Repo.update_all(
+          from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          [inc: [dek_version: 1]],
+          skip_tenant_check: true
+        )
+
+        InMemory.put(k, bin, opts)
+      end)
+
+      resp = upload(conn)
+      assert %{"error" => "rotation_in_progress"} = json_response(resp, 503)
+      assert live_rows(user) == []
+    end
+
     test "a refused overwrite leaves the existing attachment readable", %{
       conn: conn,
       user: user
