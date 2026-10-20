@@ -159,12 +159,16 @@ export default {
 		other: "{count} hari lagi untuk tempoh percubaan percuma anda.",
 	},
 	"Indexing budget": "Bajet pengindeksan",
-	"{available} of {capacity} tokens left": "{available} daripada {capacity} token tinggal",
-	"Refills {perDay} a day, full again on {date}":
-		"Diisi semula {perDay} sehari, penuh semula pada {date}",
-	Full: "Penuh",
-	"New notes are searchable by keyword now and get full search as your budget refills.":
-		"Nota baharu boleh dicari berdasarkan kata kunci dan akan mendapat carian penuh apabila bajet anda diisi semula.",
+	"{available} of {capacity} tokens left": "{available} daripada {capacity} token yang tinggal",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Mengisi semula {perDay} token sehari. Penuh semula pada {date}.",
+	"All tokens are available.": "Semua token tersedia.",
+	"{count} notes have keyword search only, until {date}.": {
+		other: "{count} nota hanya mempunyai carian kata kunci, sehingga {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		other: "{count} nota hanya mempunyai carian kata kunci, sehingga bajet diisi semula.",
+	},
 	"Loading current connection…": "Memuatkan sambungan semasa…",
 	"Disconnected. Retry the new connection now.": "Tidak bersambung. Cuba sambung semula sekarang.",
 	"Couldn't disconnect. Try Settings → Connections.":

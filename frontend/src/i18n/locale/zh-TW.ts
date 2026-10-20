@@ -142,10 +142,15 @@ export default {
 	"{count} days remaining in your free trial.": { other: "您的免費試用期還剩 {count} 天。" },
 	"Indexing budget": "索引配額",
 	"{available} of {capacity} tokens left": "剩餘 {available} 個 {capacity} 個 token",
-	"Refills {perDay} a day, full again on {date}": "每日補充 {perDay} 個，於 {date} 恢復完整",
-	Full: "已滿額",
-	"New notes are searchable by keyword now and get full search as your budget refills.":
-		"新的筆記現在可以使用關鍵字搜尋，並在配額補充時享有完整的搜尋功能。",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"每日額滿 {perDay} 個 token。於 {date} 再次額滿。",
+	"All tokens are available.": "所有 Token 皆可用。",
+	"{count} notes have keyword search only, until {date}.": {
+		other: "{count} 筆記僅支援關鍵字搜尋，直到 {date}。",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		other: "{count} 筆記僅支援關鍵字搜尋，直到預算恢復。",
+	},
 	"Loading current connection…": "正在載入連線…",
 	"Disconnected. Retry the new connection now.": "已斷線。立即重新連線。",
 	"Couldn't disconnect. Try Settings → Connections.": "斷線失敗。請嘗試「設定」→「連線」。",

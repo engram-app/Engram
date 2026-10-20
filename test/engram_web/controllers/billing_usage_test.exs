@@ -82,7 +82,9 @@ defmodule EngramWeb.BillingUsageTest do
                "available" => 6_000_000,
                "capacity" => 6_000_000,
                "refill_per_day" => 16_438,
-               "full_at" => nil
+               "full_at" => nil,
+               "parked_notes" => 0,
+               "parked_ready_at" => nil
              }
     end
 

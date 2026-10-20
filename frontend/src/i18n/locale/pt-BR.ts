@@ -165,11 +165,19 @@ export default {
 	},
 	"Indexing budget": "Orçamento de indexação",
 	"{available} of {capacity} tokens left": "Restam {available} de {capacity} tokens",
-	"Refills {perDay} a day, full again on {date}":
-		"Abastecimentos {perDay} por dia, recarregado totalmente em {date}",
-	Full: "Completo",
-	"New notes are searchable by keyword now and get full search as your budget refills.":
-		"As novas notas agora podem ser pesquisadas por palavra-chave e recebem pesquisa completa quando seu orçamento é recarregado.",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Recarrega {perDay} tokens por dia. Completamente cheio novamente em {date}.",
+	"All tokens are available.": "Todos os tokens estão disponíveis.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count}. As notas têm apenas busca por palavra-chave, até {date}.",
+		many: "{count} notas têm apenas busca por palavra-chave, até {date}.",
+		other: "{count} notas têm busca por palavra-chave apenas, até {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "{count}. As notas têm busca por palavra-chave, até que o seu crédito seja reposto.",
+		many: "{count} notas têm apenas busca por palavra-chave, até que o crédito seja reposto.",
+		other: "{count} notas têm busca por palavra-chave, até que o limite seja reabastecido.",
+	},
 	"Loading current connection…": "Carregando a conexão atual…",
 	"Disconnected. Retry the new connection now.": "Desconectado. Tente reconectar agora.",
 	"Couldn't disconnect. Try Settings → Connections.":

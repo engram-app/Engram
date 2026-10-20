@@ -163,11 +163,17 @@ export default {
 	},
 	"Indexing budget": "Indexierungsbudget",
 	"{available} of {capacity} tokens left": "{available} von {capacity} Token übrig",
-	"Refills {perDay} a day, full again on {date}":
-		"Nachfüllung {perDay} pro Tag, wieder voll am {date}",
-	Full: "Voll",
-	"New notes are searchable by keyword now and get full search as your budget refills.":
-		"Neue Notizen sind jetzt durchsuchbar und erhalten eine vollständige Suche, sobald dein Budget aufgefüllt ist.",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Füllt {perDay} Token pro Tag auf. Wieder voll am {date}.",
+	"All tokens are available.": "Alle Token sind verfügbar.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} Notiz hat nur Stichwortsuche, bis {date}.",
+		other: "{count} Notizen haben nur eine Stichwortsuche, bis {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "Eine Notiz hat nur eine Stichwortsuche, bis das Guthaben wieder aufgefüllt ist.",
+		other: "{count} Notizen haben nur eine Stichwortsuche, bis das Guthaben wieder aufgefüllt ist.",
+	},
 	"Loading current connection…": "Verbindung wird aufgebaut…",
 	"Disconnected. Retry the new connection now.":
 		"Verbindung getrennt. Versuche die neue Verbindung jetzt.",

@@ -139,12 +139,17 @@ export default {
 	"Current Plan": "当前方案",
 	Free: "免费",
 	"{count} days remaining in your free trial.": { other: "免费试用剩余{count}天。" },
-	"Indexing budget": "索引额度",
+	"Indexing budget": "索引配额",
 	"{available} of {capacity} tokens left": "剩余 {available} 个 {capacity} 个 token",
-	"Refills {perDay} a day, full again on {date}": "每日补给 {perDay} 次，将于 {date} 日恢复完整",
-	Full: "已满",
-	"New notes are searchable by keyword now and get full search as your budget refills.":
-		"新笔记现在可以通过关键词搜索，并在额度恢复时获得完整搜索功能。",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"每日补充 {perDay} 个 token。将于 {date} 再次充满。",
+	"All tokens are available.": "所有令牌可用。",
+	"{count} notes have keyword search only, until {date}.": {
+		other: "{count} 笔记仅支持关键词搜索，直到 {date}。",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		other: "{count} 笔记仅支持关键词搜索，直到预算恢复。",
+	},
 	"Loading current connection…": "正在连接…",
 	"Disconnected. Retry the new connection now.": "已断开。立即重试连接。",
 	"Couldn't disconnect. Try Settings → Connections.": "断开失败。请尝试 设置 → 连接。",

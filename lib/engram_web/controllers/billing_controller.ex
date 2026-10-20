@@ -1,6 +1,8 @@
 defmodule EngramWeb.BillingController do
   use EngramWeb, :controller
 
+  import Ecto.Query
+
   alias Engram.Attachments
   alias Engram.Billing
   alias Engram.Billing.Subscriptions
@@ -86,25 +88,43 @@ defmodule EngramWeb.BillingController do
   defp used_limit(used, limit), do: %{used: used, limit: cap_json(limit)}
 
   # Free's refilling embed budget, so the limit is never invisible: what is
-  # left, how fast it comes back, and when it is full again (nil = full now).
-  # nil for a user with no bucket (paid, self-host, a -1 override). An empty
-  # bucket does not stop indexing: new notes are keyword-searchable at once and
-  # get full search as tokens refill.
+  # left, how fast it comes back, when it is full again (nil = full now), how
+  # many notes wait on it keyword-only, and when they will all fit
+  # (`parked_ready_at`, nil = on the next sweep). nil for a user with no bucket
+  # (paid, self-host, a -1 override). A 0 override is a bucket too: an empty
+  # one, which must still be shown.
   defp embed_bucket(user) do
     case Billing.cap(user, :embed_token_bucket) do
-      cap when is_integer(cap) and cap > 0 ->
+      cap when is_integer(cap) and cap >= 0 ->
+        now = DateTime.utc_now()
         available = UsageMeters.bucket_available(user.id, cap)
+        {parked, need} = parked_notes(user)
 
         %{
           available: available,
           capacity: cap,
           refill_per_day: div(cap * 86_400, UsageMeters.bucket_refill_seconds()),
-          full_at: UsageMeters.bucket_full_at(available, cap, DateTime.utc_now())
+          full_at: UsageMeters.bucket_full_at(available, cap, now),
+          parked_notes: parked,
+          parked_ready_at:
+            if(parked > 0, do: UsageMeters.bucket_ready_at(available, need, cap, now))
         }
 
       _ ->
         nil
     end
+  end
+
+  # Tenant-scoped: `notes` is under FORCE RLS.
+  defp parked_notes(user) do
+    Engram.Repo.with_tenant!(user.id, fn ->
+      Engram.Repo.one(
+        from(n in Engram.Notes.Note,
+          where: n.kind == "note" and is_nil(n.deleted_at) and n.embed_budget_parked == true,
+          select: {count(n.id), type(coalesce(sum(n.embed_budget_need), 0), :integer)}
+        )
+      )
+    end)
   end
 
   # Strict match, deliberately. `storage_usage/1` only fails on a DB error, and
