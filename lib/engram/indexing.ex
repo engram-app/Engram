@@ -2531,15 +2531,17 @@ defmodule Engram.Indexing do
         end
       )
 
+    text? = v5? or chunk_text_write?()
+
     with {:ok, reversed, _spent} <- prepared,
-         {:ok, dek} <- if(v5_format?, do: Crypto.get_dek(user), else: {:ok, nil}) do
+         {:ok, dek} <- if(v5_format? or text?, do: Crypto.get_dek(user), else: {:ok, nil}) do
       built = Enum.reverse(reversed)
       qdrant_points = for(%{point: p} <- built, p != nil, do: p)
 
       {:ok,
        %{
          note: note,
-         chunk_rows: chunk_rows(plan.entries, built, dek, v5? or chunk_text_write?()),
+         chunk_rows: chunk_rows(plan.entries, built, dek, text?),
          qdrant_points: qdrant_points,
          point_kinds: for(%{kind: k, dense?: d} <- built, do: {k, d}),
          # Straight from the plan, not re-derived from `built`. Two independent
