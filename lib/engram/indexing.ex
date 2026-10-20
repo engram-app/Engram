@@ -544,8 +544,11 @@ defmodule Engram.Indexing do
     * `text`: the members' `text` joined with "\n\n"
     * `context_text` / `embed_text`: its first member's prefix + that text,
       exactly what the chunker gives a single chunk with that text
-    * `heading_path`: nil. It spans sections, so its first member's heading
-      would label a hit wrongly (review L5); Task 13.1 adds breadcrumbs
+    * `heading_path` and `headings`: nil. It spans sections, so its first
+      member's heading would label a hit wrongly (review L5). Instead a
+      member under other parents than the one before it opens with a
+      breadcrumb line, `A > B` (its path without the title), as the
+      chunker's min512 merge does
     * `kind`: "prose" if any member is, else its first member's
     * `char_start` of its first member to the largest `char_end` (a
       frontmatter chunk has `char_end` 0)
@@ -672,12 +675,13 @@ defmodule Engram.Indexing do
   # hold every member; its dense input (`embed_text`) only the prose ones,
   # so a table or a drawing inside a prose group never reaches Voyage.
   defp merge_group([first | _] = members) do
-    text = Enum.map_join(members, "\n\n", & &1.text)
+    members = with_crumbs(members)
+    text = Enum.map_join(members, "\n\n", & &1.crumbed)
     prose? = Enum.any?(members, &(&1.kind == "prose"))
 
     embed =
       if prose?,
-        do: members |> Enum.filter(&(&1.kind == "prose")) |> Enum.map_join("\n\n", & &1.text),
+        do: members |> Enum.filter(&(&1.kind == "prose")) |> Enum.map_join("\n\n", & &1.crumbed),
         else: text
 
     # iodata, prefix + text: binaries, the two inputs were two more copies
@@ -687,15 +691,46 @@ defmodule Engram.Indexing do
     Map.merge(first, %{
       kind: if(prose?, do: "prose", else: first.kind),
       heading_path: nil,
+      headings: nil,
       text: text,
       context_text: [prefix(first.context_text, first.text), text],
       embed_text: [prefix(first.embed_text, first.text), embed],
       char_end: members |> Enum.map(& &1.char_end) |> Enum.max(),
       token_count: members |> Enum.map(&UsageMeters.estimate_tokens(&1.text)) |> Enum.sum(),
       merged: true,
-      members: members
+      members: Enum.map(members, &Map.delete(&1, :crumbed))
     })
   end
+
+  # Review M2: each member's text, opened by its breadcrumb when its path
+  # (title dropped) is deeper than its own heading and differs from the one
+  # before. Capped at the member's own prefix, so the group still fits the
+  # ceiling `close_groups/2` sums from the members' inputs.
+  defp with_crumbs(members) do
+    {out, _} =
+      Enum.map_reduce(members, nil, fn m, prev ->
+        hs = Map.get(m, :headings)
+
+        crumbed =
+          case hs do
+            [_title, _, _ | _] when hs != prev ->
+              room = byte_size(m.embed_text) - byte_size(m.text) - 2
+              crumb = hs |> tl() |> Enum.join(" > ") |> valid_prefix(room)
+              if crumb == "", do: m.text, else: crumb <> "\n" <> m.text
+
+            _ ->
+              m.text
+          end
+
+        {Map.put(m, :crumbed, crumbed), hs}
+      end)
+
+    out
+  end
+
+  defp valid_prefix(s, max) when byte_size(s) <= max, do: s
+  defp valid_prefix(_s, max) when max <= 0, do: ""
+  defp valid_prefix(s, max), do: s |> binary_part(0, max) |> String.chunk(:valid) |> hd()
 
   # The chunker builds each input as `prefix <> "\n\n" <> text`.
   # A copy, so the member's whole input is not kept alive by its prefix.
