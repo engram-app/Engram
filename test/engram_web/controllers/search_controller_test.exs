@@ -409,14 +409,17 @@ defmodule EngramWeb.SearchControllerTest do
         {:ok, body, c} = Plug.Conn.read_body(c)
         decoded = Jason.decode!(body)
         # diversity > 0 triggers the MMR path: Search requests dense vectors from
-        # Qdrant so MMR can compare cosine similarity between candidates.
         # Qdrant so MMR can compare cosine similarity between candidates; they
-        # come with the fused points' retrieve, not the legs.
+        # come in a retrieve of the pool, not with the legs.
         assert length(decoded["searches"]) == 2
         refute Enum.any?(decoded["searches"], &Map.has_key?(&1, "with_vector"))
 
         # Return a valid point with a dense vector so the MMR pipeline succeeds.
-        points = [diverse_chunk(user, vault, "mmr-1", 0.9, [1.0, 0.0], "MMR result")]
+        # Two, so MMR has a pool to diversify (one hit fetches no vectors).
+        points = [
+          diverse_chunk(user, vault, "mmr-1", 0.9, [1.0, 0.0], "MMR result"),
+          diverse_chunk(user, vault, "mmr-2", 0.8, [0.0, 1.0], "MMR second")
+        ]
 
         c
         |> Plug.Conn.put_resp_content_type("application/json")

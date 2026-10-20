@@ -1540,17 +1540,13 @@ defmodule Engram.Vector.Qdrant do
       using: "dense",
       filter: build_tenant_filter(search_opts),
       limit: Keyword.get(search_opts, :limit, 5),
-      with_payload: result_payload(search_opts)
+      with_payload: result_payload_for(search_opts)
     }
 
-    base
-    |> then(fn b ->
-      case quantization_params(search_opts) do
-        nil -> b
-        params -> Map.put(b, :params, params)
-      end
-    end)
-    |> maybe_with_vector(search_opts)
+    case quantization_params(search_opts) do
+      nil -> base
+      params -> Map.put(base, :params, params)
+    end
   end
 
   # Per-query quantization params. full_precision bypasses binary quant
@@ -1566,12 +1562,6 @@ defmodule Engram.Vector.Qdrant do
       true ->
         nil
     end
-  end
-
-  defp maybe_with_vector(body, search_opts) do
-    if Keyword.get(search_opts, :with_vector, false),
-      do: Map.put(body, :with_vector, ["dense"]),
-      else: body
   end
 
   # -- Dual-format filters (Task 15.4) -----------------------------------
@@ -1811,9 +1801,8 @@ defmodule Engram.Vector.Qdrant do
       using: "keyword",
       filter: build_tenant_filter(search_opts),
       limit: Keyword.get(search_opts, :limit, 5),
-      with_payload: result_payload(search_opts)
+      with_payload: result_payload_for(search_opts)
     }
-    |> maybe_with_vector(search_opts)
   end
 
   # Qdrant's own RRF default, kept so fused scores read as before.
@@ -1826,9 +1815,11 @@ defmodule Engram.Vector.Qdrant do
   them arbitrarily). `sparse` is `%{indices, values}`. Tenant filter is
   applied to BOTH legs (load-bearing: the sparse inverted index is global).
   Each leg fetches `:limit` ids and scores only; the fused `:limit` points
-  then come back in one retrieve with the payload fields results use, and
-  the dense vector only when `:with_vector` asks (MMR). The legs carrying
-  payload and vectors returned up to 2x the bytes for points fusion drops.
+  then come back in one retrieve with the payload fields results use, or
+  with none and no retrieve at all when search reads them from Postgres
+  (`:chunk_text_read`). No vectors: MMR fetches its pool's (`retrieve/3`).
+  The legs carrying payload and vectors returned up to 2x the bytes for
+  points fusion drops.
   """
   def hybrid_search(col \\ nil, dense, sparse, search_opts) do
     col = col || collection()
@@ -1843,7 +1834,7 @@ defmodule Engram.Vector.Qdrant do
              |> Enum.map(fn leg -> Enum.map(leg, &%{id: &1.qdrant_id, score: &1.score}) end)
              |> Fusion.rrf(@rrf_k)
              |> Enum.take(limit),
-           {:ok, points} <- retrieve(col, Enum.map(fused, & &1.id), search_opts) do
+           {:ok, points} <- fused_points(col, Enum.map(fused, & &1.id), search_opts) do
         by_id = Map.new(points, &{&1.qdrant_id, &1})
 
         # A point deleted between the legs and the retrieve is dropped.
@@ -1852,26 +1843,68 @@ defmodule Engram.Vector.Qdrant do
     end)
   end
 
-  # The payload keys `search_results/1` reads; nothing else is fetched, on
-  # every search path (Task 15.7). `u` only marks a v5 point (its AAD is
-  # implied bound), so it is asked for only with the v5 format on. With
-  # `:chunk_text_read` on, search takes each hit's vault from its chunk row
-  # (the filter already scopes it), so `vault_id` is not fetched.
-  @result_payload ~w(text title heading_path source_path tags text_nonce
-                     title_nonce heading_path_nonce aad_version)
+  # The payload keys `search_results/1` reads for a hit's text and display
+  # fields (Task 15.7). `u` only marks a v5 point (its AAD is implied bound),
+  # so it is asked for only with the v5 format on.
+  @text_payload ~w(text title heading_path source_path tags text_nonce
+                   title_nonce heading_path_nonce aad_version)
+
+  @doc """
+  THE payload include list of every search path (Task 15.8), by where the
+  hits' text is read from:
+
+    * `:payload` (`:chunk_text_read` off): the text keys and `vault_id`.
+    * `:postgres` (`:chunk_text_read` on): nothing. The chunk row holds the
+      text, heading and vault, and the note row the display fields.
+    * `:fallback`: the text keys, for the hits whose chunk row has no text
+      (rows written before the text columns); the row gives the vault.
+
+  Never `true`.
+  """
+  @spec result_payload(:payload | :postgres | :fallback) :: [String.t()] | false
+  def result_payload(:payload), do: ["vault_id" | result_payload(:fallback)]
+  def result_payload(:postgres), do: false
+
+  def result_payload(:fallback),
+    do: if(v5_payload_format?(), do: @text_payload ++ ["u"], else: @text_payload)
 
   # `:chunk_text_read` comes from the caller's search opts, read ONCE per
   # request by `Engram.Search`, so the keys asked for here and how search
   # reads the hits never disagree mid-flip.
-  defp result_payload(search_opts) do
-    keys = if v5_payload_format?(), do: @result_payload ++ ["u"], else: @result_payload
-    if Keyword.get(search_opts, :chunk_text_read, false), do: keys, else: ["vault_id" | keys]
+  defp result_payload_for(search_opts),
+    do:
+      result_payload(
+        if Keyword.get(search_opts, :chunk_text_read, false), do: :postgres, else: :payload
+      )
+
+  # With nothing to fetch, the fused ids are the result: a point deleted
+  # since the legs has no chunk row either, and search drops it there.
+  defp fused_points(col, ids, search_opts) do
+    case result_payload_for(search_opts) do
+      false -> {:ok, Enum.map(ids, &%{qdrant_id: &1})}
+      keys -> do_retrieve(col, ids, with_payload: keys)
+    end
   end
 
-  defp retrieve(_col, [], _search_opts), do: {:ok, []}
+  @doc """
+  The given points, as search results without scores: `:with_payload` an
+  include list (default `false`), `:with_vector` true for the dense vector
+  (MMR's pool, Task 15.8). A missing point is left out.
+  """
+  @spec retrieve(String.t() | nil, [String.t()], keyword()) :: {:ok, [map()]} | {:error, term()}
+  def retrieve(col \\ nil, ids, opts),
+    do: instrument(:retrieve, fn -> do_retrieve(col || collection(), ids, opts) end)
 
-  defp retrieve(col, ids, search_opts) do
-    body = maybe_with_vector(%{ids: ids, with_payload: result_payload(search_opts)}, search_opts)
+  defp do_retrieve(_col, [], _opts), do: {:ok, []}
+
+  defp do_retrieve(col, ids, opts) do
+    body = %{ids: ids, with_payload: Keyword.get(opts, :with_payload, false)}
+
+    body =
+      if Keyword.get(opts, :with_vector, false),
+        do: Map.put(body, :with_vector, ["dense"]),
+        else: body
+
     do_query(col, "/points", [json: body] ++ req_opts(:search), &{:ok, search_results(&1)})
   end
 
@@ -1946,7 +1979,7 @@ defmodule Engram.Vector.Qdrant do
       using: "dense",
       filter: Map.put(build_tenant_filter(search_opts), :must_not, has_ids(point_ids)),
       limit: Keyword.get(search_opts, :limit, 5),
-      with_payload: result_payload(search_opts)
+      with_payload: result_payload_for(search_opts)
     }
     |> then(fn b ->
       case quantization_params(search_opts) do
@@ -1954,7 +1987,6 @@ defmodule Engram.Vector.Qdrant do
         params -> Map.put(b, :params, params)
       end
     end)
-    |> maybe_with_vector(search_opts)
   end
 
   # One `has_id` per `max_ids/0` ids: `not A and not B` is `not (A or B)`, and

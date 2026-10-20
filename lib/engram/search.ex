@@ -472,10 +472,10 @@ defmodule Engram.Search do
     group? = Keyword.get(opts, :group_by_note, false)
     profile = SearchProfile.resolve(user)
     # Caller `:diversity` opt overrides the profile default; nil → profile
-    # default. Clamped to [0.0, 1.0]. diversity > 0 ⇒ MMR pass ⇒ we need the
-    # dense vectors back from Qdrant.
+    # default. Clamped to [0.0, 1.0]. diversity > 0 ⇒ MMR pass over a pool,
+    # whose dense vectors are fetched once the pool is known (`mmr_vectors/3`).
     diversity = clamp_diversity(Keyword.get(opts, :diversity), profile.diversity)
-    need_vectors? = diversity > 0.0
+    diversify? = diversity > 0.0
 
     # Over-fetch a candidate pool whenever we'll rerank (per-plan) OR diversify,
     # so MMR has more than `limit` to choose from. `candidate_pool` defaults to
@@ -487,11 +487,11 @@ defmodule Engram.Search do
     # at diversity 0, where it must not be starved down to `limit` chunks).
     # A similar_to query is `{:similar, ids}`, not text: nothing to rerank against.
     rerank_for_user? = reranker_active?() and profile.reranker and is_binary(query)
-    fetch_limit = if group? or rerank_for_user? or need_vectors?, do: pool, else: limit
+    fetch_limit = if group? or rerank_for_user? or diversify?, do: pool, else: limit
     # Keep the whole pool through the reranker when diversifying or grouping so
     # MMR / collapse can see it; otherwise the reranker cuts straight to `limit`
     # (unchanged chunk-path behavior).
-    rerank_keep = if group? or need_vectors?, do: pool, else: limit
+    rerank_keep = if group? or diversify?, do: pool, else: limit
 
     read? = chunk_text_read?()
 
@@ -502,38 +502,18 @@ defmodule Engram.Search do
           |> then(&put_vault_filter(&1, vault, opts))
           |> Keyword.merge(phase_b_kw)
           |> Keyword.merge(date_bounds)
-          |> Keyword.put(:with_vector, need_vectors?)
           |> Keyword.put(:full_precision, profile.full_precision)
           |> Keyword.put(:chunk_text_read, read?)
 
         with {:ok, candidates} <- run_legs(mode, user, query, search_opts, profile),
              {:ok, {candidates, hits}} <- postgres_hits(candidates, user, read?),
+             {:ok, candidates} <- payload_fallback(candidates, hits),
              vaults_by_id = load_candidate_vaults(user, vault, candidates),
              {:ok, decrypted} <- decrypt_candidates(candidates, user, vaults_by_id, hits) do
           rerank_module = if rerank_for_user?, do: reranker(), else: Engram.Rerankers.None
 
           with {:ok, ranked} <- rerank_module.rerank(query, decrypted, rerank_keep) do
-            if group? do
-              # Rehydrate the WHOLE pool BEFORE grouping — collapse_to_notes keys
-              # on the decrypted source_path, so it must be filled in first. Then
-              # diversify at note granularity.
-              notes = collapse_to_notes(rehydrate_display_fields(ranked, user, hits))
-
-              final =
-                if need_vectors? do
-                  MMR.rerank(notes, limit, diversity)
-                else
-                  notes |> Enum.sort_by(& &1.score, :desc) |> Enum.take(limit)
-                end
-
-              {:ok, final}
-            else
-              # Rehydrate BEFORE the MMR pass so a soft-deleted hit is dropped
-              # while the pool can still backfill its slot. Dropping after left
-              # a page short of `limit` (#1608).
-              live = rehydrate_display_fields(ranked, user, hits)
-              {:ok, MMR.rerank(live, limit, diversity)}
-            end
+            ranked |> rehydrate_display_fields(user, hits) |> diversify(group?, limit, diversity)
           end
         end
 
@@ -544,6 +524,51 @@ defmodule Engram.Search do
         # defensive empty.
         {:ok, []}
     end
+  end
+
+  # The page from the rehydrated pool. Rehydrate comes first: a soft-deleted
+  # hit is dropped while the pool can still backfill its slot (dropping after
+  # left a page short of `limit`, #1608), and collapse_to_notes keys on the
+  # decrypted source_path. Grouped, diversity runs at note granularity.
+  defp diversify(live, true = _group?, limit, diversity) do
+    with {:ok, live} <- mmr_vectors(live, diversity, note_count(live)) do
+      notes = collapse_to_notes(live)
+
+      if diversity > 0.0,
+        do: {:ok, MMR.rerank(notes, limit, diversity)},
+        else: {:ok, notes |> Enum.sort_by(& &1.score, :desc) |> Enum.take(limit)}
+    end
+  end
+
+  defp diversify(live, false, limit, diversity) do
+    with {:ok, live} <- mmr_vectors(live, diversity, length(live)),
+         do: {:ok, MMR.rerank(live, limit, diversity)}
+  end
+
+  # MMR's dense vectors, for the pool it reranks and nothing else (Task
+  # 15.8): fetched after the reranker and the dropped hits, never on the
+  # ranked query, and not at all at diversity 0 or with one candidate (one
+  # note, grouped), where MMR returns the relevance order.
+  defp mmr_vectors(pool, diversity, candidates) when diversity > 0.0 and candidates > 1 do
+    ids = for %{qdrant_id: id} <- pool, do: id
+
+    with {:ok, points} <- Qdrant.retrieve(collection(), ids, with_vector: true) do
+      vectors = Map.new(points, &{&1.qdrant_id, &1[:vector]})
+      {:ok, Enum.map(pool, &put_vector(&1, vectors[&1[:qdrant_id]]))}
+    end
+  end
+
+  defp mmr_vectors(pool, _diversity, _candidates), do: {:ok, pool}
+
+  defp put_vector(hit, nil), do: hit
+  defp put_vector(hit, vector), do: Map.put(hit, :vector, vector)
+
+  # The notes `collapse_to_notes/1` makes of these chunks.
+  defp note_count(chunks) do
+    chunks
+    |> Enum.reject(&is_nil(Map.get(&1, :source_path)))
+    |> Enum.uniq_by(&{Map.get(&1, :vault_id), &1.source_path})
+    |> length()
   end
 
   # nil → use the profile default; a number is clamped to [0.0, 1.0] and forced
@@ -799,6 +824,23 @@ defmodule Engram.Search do
   end
 
   defp bump(counts, reason), do: Map.update(counts, reason, 1, &(&1 + 1))
+
+  # With `:chunk_text_read` on the ranked query fetches no payload; the hits
+  # whose chunk row has no text (rows written before the text columns) get
+  # their payload text keys here, in one retrieve of just those points. A
+  # point gone since the query keeps its hit with empty text, as a payload
+  # with no text always has.
+  defp payload_fallback(candidates, nil), do: {:ok, candidates}
+
+  defp payload_fallback(candidates, hits) do
+    ids = for c <- candidates, is_nil(hits[c.qdrant_id].text), do: c.qdrant_id
+    keys = Qdrant.result_payload(:fallback)
+
+    with {:ok, points} <- Qdrant.retrieve(collection(), ids, with_payload: keys) do
+      by_id = Map.new(points, &{&1.qdrant_id, &1})
+      {:ok, Enum.map(candidates, &Map.merge(Map.get(by_id, &1.qdrant_id, %{}), &1))}
+    end
+  end
 
   # One counter for every reason (`engram_prom_ex_search_hits_dropped_total`).
   # The orphan window is expected on every edit, so it logs at debug; the
