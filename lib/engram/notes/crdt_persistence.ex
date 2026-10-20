@@ -196,6 +196,24 @@ defmodule Engram.Notes.CrdtPersistence do
   @impl true
   def update_v1(state, update, name, doc), do: append_update(state, update, name, doc)
 
+  # A row this big is a whole body inserted through the room (genesis
+  # fallback, a reseed), not a keystroke: checkpoint now, so it folds into the
+  # snapshot in seconds rather than after the settle delay, as the
+  # append-failure path below does.
+  @big_update_bytes 65_536
+
+  # The append's update size (PromEx `crdt_update_bytes`), the only view of
+  # the log's write stream: the table keeps just the unfolded survivors.
+  defp note_appended(bytes) do
+    :telemetry.execute([:engram, :crdt, :update_appended], %{bytes: bytes}, %{})
+
+    with true <- bytes > @big_update_bytes,
+         pid when is_pid(pid) <- Process.get(:crdt_timer_pid),
+         do: send(pid, :tick)
+
+    :ok
+  end
+
   defp append_update(
          %{user_id: user_id, vault_id: vault_id, note_id: note_id} = state,
          update,
@@ -216,6 +234,7 @@ defmodule Engram.Notes.CrdtPersistence do
       # checkpoint of this room may prune it (see known_tail_ids/0). Only a
       # room: a direct call's `doc` is whatever the caller passed.
       if in_room?(), do: remember_tail_id(row_id)
+      :ok = note_appended(byte_size(update))
 
       # Fan out the update to every device on this vault over the single
       # per-vault sync channel (the `document.updated` model). This is
