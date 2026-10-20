@@ -21,7 +21,10 @@ defmodule Engram.Repo.Migrations.RlsPoliciesCompareUuid do
              crdt_update_log note_links vault_index_states vault_index_update_log
              account_exports note_revisions subscriptions)
 
-  @uuid "user_id = (SELECT NULLIF(current_setting('app.current_tenant', true), '')::uuid)"
+  # The inner SELECT is for splinter's auth_rls_initplan lint, which looks for
+  # the literal `select current_setting(`; the outer one is the initplan that
+  # casts once per statement.
+  @uuid "user_id = (SELECT NULLIF((SELECT current_setting('app.current_tenant', true)), '')::uuid)"
   @text "(user_id)::text = (SELECT current_setting('app.current_tenant', true))"
 
   def up, do: alter(@uuid)
