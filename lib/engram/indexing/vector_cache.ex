@@ -45,6 +45,7 @@ defmodule Engram.Indexing.VectorCache do
   import Ecto.Query
 
   alias Engram.Crypto.Envelope
+  alias Engram.Indexing.VectorCache.Entry
   alias Engram.Repo
 
   @version "v1"
@@ -53,6 +54,30 @@ defmodule Engram.Indexing.VectorCache do
   @touch_after_days 1
   @retention_days 30
   @max_rows_per_user 400_000
+
+  # One statement: the hits, and a touch of those not used within a day.
+  @get_many_sql """
+  WITH hit AS (
+    SELECT key, vector_ciphertext, vector_nonce, last_used_at
+    FROM #{@table} WHERE user_id = $1 AND key = ANY($2)
+  ), touch AS (
+    UPDATE #{@table} e SET last_used_at = now() FROM hit
+    WHERE e.user_id = $1 AND e.key = hit.key
+      AND hit.last_used_at < now() - make_interval(days => #{@touch_after_days})
+  )
+  SELECT key, vector_ciphertext, vector_nonce FROM hit
+  """
+
+  # Five array parameters whatever the row count.
+  @put_many_sql """
+  INSERT INTO #{@table} (user_id, key, note_id, vector_ciphertext, vector_nonce)
+  SELECT $1, k, $2, c, n FROM unnest($3::bytea[], $4::bytea[], $5::bytea[]) AS t(k, c, n)
+  ON CONFLICT (user_id, key) DO UPDATE
+    SET vector_ciphertext = EXCLUDED.vector_ciphertext,
+        vector_nonce = EXCLUDED.vector_nonce,
+        note_id = EXCLUDED.note_id,
+        last_used_at = now()
+  """
 
   @type key :: <<_::256>>
   @type digest :: <<_::256>>
@@ -109,21 +134,9 @@ defmodule Engram.Indexing.VectorCache do
   def get_many(_user_id, _dek, []), do: %{}
 
   def get_many(user_id, <<_::256>> = dek, keys) when is_list(keys) do
-    sql = """
-    WITH hit AS (
-      SELECT key, vector_ciphertext, vector_nonce, last_used_at
-      FROM #{@table} WHERE user_id = $1 AND key = ANY($2)
-    ), touch AS (
-      UPDATE #{@table} e SET last_used_at = now() FROM hit
-      WHERE e.user_id = $1 AND e.key = hit.key
-        AND hit.last_used_at < now() - make_interval(days => #{@touch_after_days})
-    )
-    SELECT key, vector_ciphertext, vector_nonce FROM hit
-    """
-
     {:ok, %{rows: rows}} =
       Repo.with_tenant(user_id, fn ->
-        Repo.query!(sql, [Ecto.UUID.dump!(user_id), Enum.uniq(keys)])
+        Repo.query!(@get_many_sql, [Ecto.UUID.dump!(user_id), Enum.uniq(keys)])
       end)
 
     hits =
@@ -151,16 +164,6 @@ defmodule Engram.Indexing.VectorCache do
   def put_many(_user_id, _note_id, _dek, []), do: :ok
 
   def put_many(user_id, note_id, <<_::256>> = dek, entries) do
-    sql = """
-    INSERT INTO #{@table} (user_id, key, note_id, vector_ciphertext, vector_nonce)
-    SELECT $1, k, $2, c, n FROM unnest($3::bytea[], $4::bytea[], $5::bytea[]) AS t(k, c, n)
-    ON CONFLICT (user_id, key) DO UPDATE
-      SET vector_ciphertext = EXCLUDED.vector_ciphertext,
-          vector_nonce = EXCLUDED.vector_nonce,
-          note_id = EXCLUDED.note_id,
-          last_used_at = now()
-    """
-
     uid = Ecto.UUID.dump!(user_id)
     nid = note_id && Ecto.UUID.dump!(note_id)
 
@@ -176,7 +179,9 @@ defmodule Engram.Indexing.VectorCache do
         end)
         |> unzip3()
 
-      Repo.with_tenant!(user_id, fn -> Repo.query!(sql, [uid, nid, keys, cts, nonces]) end)
+      Repo.with_tenant!(user_id, fn ->
+        Repo.query!(@put_many_sql, [uid, nid, keys, cts, nonces])
+      end)
 
       :telemetry.execute(
         [:engram, :vector_cache, :write],
@@ -202,8 +207,8 @@ defmodule Engram.Indexing.VectorCache do
   defp rotate_loop(user_id, old_dek, new_dek, new_content_key, after_key) do
     rows =
       Repo.with_tenant!(user_id, fn ->
-        from(e in @table,
-          where: e.user_id == type(^user_id, :binary_id) and e.key > ^after_key,
+        from(e in Entry,
+          where: e.user_id == ^user_id and e.key > ^after_key,
           order_by: e.key,
           limit: 500,
           select: {e.key, e.note_id, e.vector_ciphertext, e.vector_nonce}
@@ -227,20 +232,25 @@ defmodule Engram.Indexing.VectorCache do
           end
         end)
 
-      uid = Ecto.UUID.dump!(user_id)
-
       inserts =
         for {key, note_id, digest, f16} <- moved do
           {ct, nonce} = Envelope.encrypt(digest <> f16, new_dek, aad(user_id, key))
-          %{user_id: uid, key: key, note_id: note_id, vector_ciphertext: ct, vector_nonce: nonce}
+
+          %{
+            user_id: user_id,
+            key: key,
+            note_id: note_id,
+            vector_ciphertext: ct,
+            vector_nonce: nonce
+          }
         end
 
       # Insert before delete: a crash in between leaves the old row, which the
       # next run re-keys again (`on_conflict: :nothing`) and then deletes.
       Repo.with_tenant!(user_id, fn ->
-        Repo.insert_all(@table, inserts, on_conflict: :nothing)
+        Repo.insert_all(Entry, inserts, on_conflict: :nothing)
 
-        from(e in @table, where: e.user_id == type(^user_id, :binary_id) and e.key in ^gone)
+        from(e in Entry, where: e.user_id == ^user_id and e.key in ^gone)
         |> Repo.delete_all()
       end)
 
