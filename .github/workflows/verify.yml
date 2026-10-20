@@ -1224,17 +1224,21 @@ jobs:
             git init -q plugin-src
             cd plugin-src
           fi
-          # Re-point origin every run: the embedded app token is single-run.
+          # The plain public URL matches the runners' git-cache insteadOf
+          # (git_cdn on FastRaid :8095, homelab runner_vm role), as
+          # actions/checkout does. Direct GitHub is bandwidth-shaped per shared
+          # NAT IP: a token URL skipped the cache and took up to 885 s (p50 3 s),
+          # twice hanging until cancelled (run 39375387565, PR #2072). The last
+          # try goes direct with the token, in case the cache cannot serve the
+          # SHA. Shallow: nothing reads plugin history. Under 10 KB/s for 20 s
+          # aborts a try.
           git remote remove origin 2>/dev/null || true
-          git remote add origin \
-            "https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git"
-          # Shallow, stall-aborting, retried. A full-history fetch with no
-          # timeout took up to 885 s on some runners (p50 3 s) and twice hung
-          # until the job was cancelled (runs 39375387565, PR #2072). Nothing
-          # here reads plugin history. Under 10 KB/s for 20 s aborts the try.
+          git remote add origin https://github.com/engram-app/Engram-obsidian.git
           for attempt in 1 2 3; do
+            url=origin
+            [ "$attempt" = 3 ] && url="https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git"
             GIT_HTTP_LOW_SPEED_LIMIT=10000 GIT_HTTP_LOW_SPEED_TIME=20 \
-              git fetch --depth=1 origin "$PLUGIN_SHA" && break
+              git fetch --depth=1 "$url" "$PLUGIN_SHA" && break
             [ "$attempt" = 3 ] && { echo "::error::plugin fetch failed 3 times"; exit 1; }
             echo "::warning::plugin fetch attempt $attempt stalled or failed; retrying"
             sleep 5
@@ -1905,17 +1909,21 @@ jobs:
             git init -q plugin-src
             cd plugin-src
           fi
-          # Re-point origin every run: the embedded app token is single-run.
+          # The plain public URL matches the runners' git-cache insteadOf
+          # (git_cdn on FastRaid :8095, homelab runner_vm role), as
+          # actions/checkout does. Direct GitHub is bandwidth-shaped per shared
+          # NAT IP: a token URL skipped the cache and took up to 885 s (p50 3 s),
+          # twice hanging until cancelled (run 39375387565, PR #2072). The last
+          # try goes direct with the token, in case the cache cannot serve the
+          # SHA. Shallow: nothing reads plugin history. Under 10 KB/s for 20 s
+          # aborts a try.
           git remote remove origin 2>/dev/null || true
-          git remote add origin \
-            "https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git"
-          # Shallow, stall-aborting, retried. A full-history fetch with no
-          # timeout took up to 885 s on some runners (p50 3 s) and twice hung
-          # until the job was cancelled (runs 39375387565, PR #2072). Nothing
-          # here reads plugin history. Under 10 KB/s for 20 s aborts the try.
+          git remote add origin https://github.com/engram-app/Engram-obsidian.git
           for attempt in 1 2 3; do
+            url=origin
+            [ "$attempt" = 3 ] && url="https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git"
             GIT_HTTP_LOW_SPEED_LIMIT=10000 GIT_HTTP_LOW_SPEED_TIME=20 \
-              git fetch --depth=1 origin "$PLUGIN_SHA" && break
+              git fetch --depth=1 "$url" "$PLUGIN_SHA" && break
             [ "$attempt" = 3 ] && { echo "::error::plugin fetch failed 3 times"; exit 1; }
             echo "::warning::plugin fetch attempt $attempt stalled or failed; retrying"
             sleep 5
@@ -2430,16 +2438,21 @@ jobs:
           else
             rm -rf plugin-src; git init -q plugin-src; cd plugin-src
           fi
+          # The plain public URL matches the runners' git-cache insteadOf
+          # (git_cdn on FastRaid :8095, homelab runner_vm role), as
+          # actions/checkout does. Direct GitHub is bandwidth-shaped per shared
+          # NAT IP: a token URL skipped the cache and took up to 885 s (p50 3 s),
+          # twice hanging until cancelled (run 39375387565, PR #2072). The last
+          # try goes direct with the token, in case the cache cannot serve the
+          # SHA. Shallow: nothing reads plugin history. Under 10 KB/s for 20 s
+          # aborts a try.
           git remote remove origin 2>/dev/null || true
-          git remote add origin \
-            "https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git"
-          # Shallow, stall-aborting, retried. A full-history fetch with no
-          # timeout took up to 885 s on some runners (p50 3 s) and twice hung
-          # until the job was cancelled (runs 39375387565, PR #2072). Nothing
-          # here reads plugin history. Under 10 KB/s for 20 s aborts the try.
+          git remote add origin https://github.com/engram-app/Engram-obsidian.git
           for attempt in 1 2 3; do
+            url=origin
+            [ "$attempt" = 3 ] && url="https://x-access-token:${GH_TOKEN}@github.com/engram-app/Engram-obsidian.git"
             GIT_HTTP_LOW_SPEED_LIMIT=10000 GIT_HTTP_LOW_SPEED_TIME=20 \
-              git fetch --depth=1 origin "$PLUGIN_SHA" && break
+              git fetch --depth=1 "$url" "$PLUGIN_SHA" && break
             [ "$attempt" = 3 ] && { echo "::error::plugin fetch failed 3 times"; exit 1; }
             echo "::warning::plugin fetch attempt $attempt stalled or failed; retrying"
             sleep 5
