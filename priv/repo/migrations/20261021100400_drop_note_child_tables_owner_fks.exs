@@ -8,8 +8,9 @@ defmodule Engram.Repo.Migrations.DropNoteChildTablesOwnerFks do
   # and the tenant filters read them. NoteChildTablesFkTest proves the vault
   # and account deletes still remove the rows.
   #
-  # Indexes: crdt_update_log (user_id), note_revisions (user_id) and
-  # (vault_id) go with their FKs (3 and 4 prod scans for the revision ones;
+  # Indexes (dropped CONCURRENTLY by the next migration, 20261021100410):
+  # crdt_update_log (user_id), note_revisions (user_id) and (vault_id) go
+  # with their FKs (3 and 4 prod scans for the revision ones;
   # the log's user index served only per-user discovery over a table pruned
   # at every checkpoint). crdt_update_log (vault_id) stays: the sync
   # quiescence endpoint counts a vault's pending updates by it.
@@ -24,16 +25,9 @@ defmodule Engram.Repo.Migrations.DropNoteChildTablesOwnerFks do
     drop constraint(:crdt_update_log, "crdt_update_log_vault_id_fkey")
     drop constraint(:note_revisions, "note_revisions_user_id_fkey")
     drop constraint(:note_revisions, "note_revisions_vault_id_fkey")
-    drop_if_exists index(:crdt_update_log, [:user_id])
-    drop_if_exists index(:note_revisions, [:user_id])
-    drop_if_exists index(:note_revisions, [:vault_id])
   end
 
   def down do
-    create_if_not_exists index(:crdt_update_log, [:user_id])
-    create_if_not_exists index(:note_revisions, [:user_id])
-    create_if_not_exists index(:note_revisions, [:vault_id])
-
     for {table, col, ref} <- [
           {"crdt_update_log", "user_id", "users"},
           {"crdt_update_log", "vault_id", "vaults"},
