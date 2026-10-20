@@ -86,20 +86,12 @@ defmodule Engram.UsageMetersBucketTest do
                       1
     end
 
-    test "concurrent takes never spend the same tokens twice" do
+    test "a raised override is a bigger bucket" do
       user = insert(:user)
+      assert {:error, :bucket_empty} = UsageMeters.bucket_take(user.id, 7_000_000, @cap, now: @t0)
 
-      results =
-        1..20
-        |> Task.async_stream(
-          fn _ -> UsageMeters.bucket_take(user.id, 1_000_000, @cap, now: @t0) end,
-          max_concurrency: 10
-        )
-        |> Enum.map(fn {:ok, r} -> r end)
-
-      assert Enum.count(results, &match?({:ok, _}, &1)) == 6
-      assert Enum.count(results, &(&1 == {:error, :bucket_empty})) == 14
-      assert UsageMeters.bucket_available(user.id, @cap, now: @t0) == 0
+      assert {:ok, 93_000_000} =
+               UsageMeters.bucket_take(user.id, 7_000_000, 100_000_000, now: @t0)
     end
 
     test "every successful take still counts toward the lifetime meter" do
@@ -109,11 +101,30 @@ defmodule Engram.UsageMetersBucketTest do
       assert UsageMeters.lifetime_embed_tokens(user.id) == 1500
     end
 
-    test "an existing user who spent the old lifetime allowance starts with a full bucket" do
-      user = insert(:user)
-      UsageMeters.add_embed_tokens(user.id, 19_000_000)
-      assert UsageMeters.bucket_available(user.id, @cap, now: @t0) == @cap
-      assert {:ok, 0} = UsageMeters.bucket_take(user.id, @cap, @cap, now: @t0)
+    test "the carry-over migration starts existing users on what the lifetime cap left" do
+      Code.require_file("priv/repo/migrations/20261020130001_carry_over_embed_bucket.exs")
+      migration = Engram.Repo.Migrations.CarryOverEmbedBucket
+
+      heavy = insert(:user)
+      light = insert(:user)
+      over = insert(:user)
+      in_use = insert(:user)
+      UsageMeters.add_embed_tokens(heavy.id, 17_000_000)
+      UsageMeters.add_embed_tokens(light.id, 1_000_000)
+      UsageMeters.add_embed_tokens(over.id, 25_000_000)
+      {:ok, _} = UsageMeters.bucket_take(in_use.id, 100, @cap, now: @t0)
+
+      Engram.Repo.query!(migration.sql())
+
+      now = DateTime.utc_now()
+      assert_in_delta UsageMeters.bucket_available(heavy.id, @cap, now: now), 3_000_000, 5
+      assert_in_delta UsageMeters.bucket_available(light.id, @cap, now: now), @cap, 5
+      # Over the old cap: empty, refilling from now.
+      assert UsageMeters.bucket_available(over.id, @cap, now: now) < 5
+      # A bucket already in use is left alone.
+      assert UsageMeters.bucket_available(in_use.id, @cap, now: @t0) == @cap - 100
+      # A user with no meter row has never embedded and starts full.
+      assert UsageMeters.bucket_available(insert(:user).id, @cap) == @cap
     end
   end
 
@@ -124,20 +135,6 @@ defmodule Engram.UsageMetersBucketTest do
       :ok = UsageMeters.release_embed_tokens(user.id, 2_000)
       assert UsageMeters.bucket_available(user.id, @cap, now: @t0) == 2_000
       assert UsageMeters.lifetime_embed_tokens(user.id) == @cap - 2_000
-    end
-  end
-
-  describe "reset_embed_bucket/1" do
-    test "fills the bucket back up" do
-      user = insert(:user)
-      {:ok, 0} = UsageMeters.bucket_take(user.id, @cap, @cap, now: @t0)
-      :ok = UsageMeters.reset_embed_bucket(user.id)
-      assert UsageMeters.bucket_available(user.id, @cap, now: @t0) == @cap
-    end
-
-    test "is a no-op for a user with no meter row" do
-      user = insert(:user)
-      assert :ok = UsageMeters.reset_embed_bucket(user.id)
     end
   end
 

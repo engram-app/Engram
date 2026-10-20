@@ -877,7 +877,7 @@ defmodule Engram.BillingTest do
       assert_enqueued(worker: Engram.Workers.ReconcileEmbeddings)
     end
 
-    test "a downgrade from paid starts with a full embed bucket" do
+    test "a trial then a cancel mints no embed tokens" do
       user = insert(:user)
       {:ok, 0} = Engram.UsageMeters.bucket_take(user.id, 6_000_000, 6_000_000)
 
@@ -885,7 +885,7 @@ defmodule Engram.BillingTest do
         "event_type" => "subscription.created",
         "data" => %{
           "id" => "sub_bucket_1",
-          "status" => "active",
+          "status" => "trialing",
           "customer_id" => "ctm_bucket_1",
           "items" => [%{"price" => %{"id" => "pri_starter_monthly_test"}}],
           "current_billing_period" => %{"ends_at" => "2026-07-01T00:00:00Z"},
@@ -904,7 +904,8 @@ defmodule Engram.BillingTest do
 
       user = Engram.Repo.reload!(user, skip_tenant_check: true)
       assert Billing.tier(user) == :free
-      assert Engram.UsageMeters.bucket_available(user.id, 6_000_000) == 6_000_000
+      # Only wall-clock refill (~0.19 tokens/s), never a fresh 6M.
+      assert Engram.UsageMeters.bucket_available(user.id, 6_000_000) < 100
     end
 
     test "subscription.canceled marks the row canceled" do
