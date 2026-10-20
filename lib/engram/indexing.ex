@@ -689,6 +689,35 @@ defmodule Engram.Indexing do
     end
   end
 
+  @doc "The account's search points: its `chunks` rows, one per Qdrant point."
+  @spec point_count(Ecto.UUID.t()) :: non_neg_integer()
+  def point_count(user_id) do
+    {:ok, n} =
+      Repo.with_tenant(user_id, fn ->
+        Repo.one(from(c in Chunk, where: c.user_id == ^user_id, select: count()))
+      end)
+
+    n
+  end
+
+  @doc "How many of the account's notes are on keyword-only search (a floor tier)."
+  @spec floor_note_count(Ecto.UUID.t()) :: non_neg_integer()
+  def floor_note_count(user_id) do
+    {:ok, n} =
+      Repo.with_tenant(user_id, fn ->
+        Repo.one(
+          from(n in Note,
+            where:
+              n.user_id == ^user_id and n.kind == "note" and is_nil(n.deleted_at) and
+                n.index_tier in @floor_tiers,
+            select: count()
+          )
+        )
+      end)
+
+    n
+  end
+
   @doc """
   The floor tier a pass over `note` uses, or nil for a full pass.
   `opts[:index_tier]` wins over the note's own `index_tier`, so a caller can

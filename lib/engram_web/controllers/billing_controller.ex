@@ -68,6 +68,12 @@ defmodule EngramWeb.BillingController do
         # this; `limit: nil` (uncapped) hides it there. Every stored note is
         # searchable, so `used` is the stored count.
         indexed_notes: %{used: meters.notes, limit: nil},
+        # The v5 index budget (review H3, "no invisible limits"): the
+        # account's search points against `index_points_cap` (null while the
+        # budget is off, `Indexing.budget_enabled?/0`), and how many notes
+        # are on keyword-only search (the floor tier).
+        index_points: index_points(user),
+        floor_notes: Engram.Indexing.floor_note_count(user.id),
         # `used` is nil on purpose. The budget lives in the cluster-synced ETS
         # counter (`EngramWeb.RateLimiter`), which is a Hammer bucket with no
         # read-without-spend API — asking how much is left must not consume any.
@@ -82,6 +88,11 @@ defmodule EngramWeb.BillingController do
   end
 
   defp used_limit(used, limit), do: %{used: used, limit: cap_json(limit)}
+
+  defp index_points(user) do
+    limit = if Engram.Indexing.budget_enabled?(), do: Billing.cap(user, :index_points_cap)
+    used_limit(Engram.Indexing.point_count(user.id), limit)
+  end
 
   # Strict match, deliberately. `storage_usage/1` only fails on a DB error, and
   # reporting `used: 0` there would tell the user they have their whole quota

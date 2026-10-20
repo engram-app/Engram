@@ -6,6 +6,8 @@ defmodule EngramWeb.BillingUsageTest do
   """
   use EngramWeb.ConnCase, async: false
 
+  import Ecto.Query
+
   alias Engram.UsageMeters
 
   setup %{conn: conn} do
@@ -74,5 +76,52 @@ defmodule EngramWeb.BillingUsageTest do
     body = usage(conn)
 
     assert body["usage"]["indexed_notes"] == %{"used" => 2_500, "limit" => nil}
+  end
+
+  # Review H3: the v5 index budget is visible. `index_points` pairs the
+  # account's points (chunk rows) with its cap, which is null while the
+  # budget is off; `floor_notes` counts notes on keyword-only search.
+  describe "index budget" do
+    setup %{user: user} do
+      vault =
+        Engram.Repo.one!(from(v in Engram.Vaults.Vault, where: v.user_id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      %{vault: vault}
+    end
+
+    test "reports points used, no limit and no floor notes while the budget is off", %{conn: conn} do
+      body = usage(conn)
+      assert body["usage"]["index_points"] == %{"used" => 0, "limit" => nil}
+      assert body["usage"]["floor_notes"] == 0
+    end
+
+    test "with the budget on: the Free cap, real points and floor notes", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      Engram.IndexBudgetHelpers.enable_index_budget()
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "F.md", content: "x"})
+
+      {:ok, _} =
+        Engram.Repo.with_tenant(user.id, fn ->
+          Engram.Repo.query!(
+            "INSERT INTO chunks (note_id, user_id, vault_id, position, char_start, char_end, qdrant_point_id, created_at) " <>
+              "SELECT $1, $2, $3, g, 0, 1, gen_random_uuid(), now() FROM generate_series(1, 7) g",
+            [Ecto.UUID.dump!(note.id), Ecto.UUID.dump!(user.id), Ecto.UUID.dump!(vault.id)]
+          )
+
+          Engram.Repo.update_all(
+            from(n in Engram.Notes.Note, where: n.id == ^note.id),
+            set: [index_tier: "floor"]
+          )
+        end)
+
+      body = usage(conn)
+      assert body["usage"]["index_points"] == %{"used" => 7, "limit" => 12_000}
+      assert body["usage"]["floor_notes"] == 1
+    end
   end
 end
