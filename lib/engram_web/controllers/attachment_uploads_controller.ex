@@ -71,7 +71,8 @@ defmodule EngramWeb.AttachmentUploadsController do
       "Stores part `n` (1-based) as raw `application/octet-stream` bytes. Every part is " <>
         "exactly `part_size` bytes except the last, which is the remainder; any other size " <>
         "returns 422 `bad_part_size` and a part number outside the session returns 422 " <>
-        "`bad_part_number`. Re-sending a part replaces it. A body that stalls returns 408.",
+        "`bad_part_number`. Re-sending a part replaces it. A body that stalls returns 408. " <>
+        "A session that already completed returns 409 `upload_completed`.",
     tags: ["Attachments"],
     parameters: [
       id: @id_param,
@@ -92,6 +93,8 @@ defmodule EngramWeb.AttachmentUploadsController do
            "`retry-after` seconds.", "application/json", Schemas.MessageError},
       ok: {"Part stored", "application/json", Schemas.AttachmentUploadPart},
       not_found: {"No such upload", "application/json", Schemas.Error},
+      conflict:
+        {"`upload_completed`: the session already completed", "application/json", Schemas.Error},
       request_timeout:
         {"Body stalled before it finished", "application/json", Schemas.MessageError},
       unprocessable_entity: {"Bad part number or size", "application/json", Schemas.Error},
@@ -107,7 +110,7 @@ defmodule EngramWeb.AttachmentUploadsController do
     # Everything that can refuse without the body goes first, so an unknown
     # or foreign session is answered unread.
     with {:ok, n} <- part_number(n),
-         {:ok, _} <- Uploads.status(user, vault, id),
+         {:ok, %{completed: false}} <- Uploads.status(user, vault, id),
          :ok <- check_declared_length(conn, limit),
          {:ok, bytes, conn} <- read_part(conn, limit) do
       case Uploads.put_part(user, vault, id, n, bytes) do
@@ -115,6 +118,7 @@ defmodule EngramWeb.AttachmentUploadsController do
         {:error, reason} -> refuse(conn, reason)
       end
     else
+      {:ok, %{completed: true}} -> refuse(conn, :upload_completed)
       {:halt, conn} -> conn
       {:error, reason} -> refuse(conn, reason)
     end
@@ -123,7 +127,9 @@ defmodule EngramWeb.AttachmentUploadsController do
   operation(:status,
     operation_id: "attachment-uploads-status",
     summary: "Which parts the server holds",
-    description: "For a client resuming an upload: the part numbers already stored.",
+    description:
+      "For a client resuming an upload: the part numbers already stored, and `completed` " <>
+        "once complete committed the session (complete again returns the attachment).",
     tags: ["Attachments"],
     parameters: [id: @id_param],
     responses: [
@@ -146,7 +152,9 @@ defmodule EngramWeb.AttachmentUploadsController do
       "Assembles the parts into a live attachment and answers like `POST /api/attachments`. " <>
         "Returns 409 `missing_parts` (with the part numbers) while any part is missing, the " <>
         "session staying resumable, and 402 `attachments_quota_exceeded` when the file no " <>
-        "longer fits the quota, the session then being dropped.",
+        "longer fits the quota, the session then being dropped. Safe to retry: once committed, " <>
+        "a repeat complete returns the same attachment (404 if it was since deleted or " <>
+        "overwritten).",
     tags: ["Attachments"],
     parameters: [id: @id_param],
     responses: [
@@ -171,7 +179,9 @@ defmodule EngramWeb.AttachmentUploadsController do
   operation(:abort,
     operation_id: "attachment-uploads-abort",
     summary: "Abandon a chunked upload",
-    description: "Drops the session and its stored parts. Idempotent.",
+    description:
+      "Drops the session and its stored parts. Idempotent. A completed session is left " <>
+        "untouched (the attachment keeps its bytes).",
     tags: ["Attachments"],
     parameters: [id: @id_param],
     responses: [no_content: "Dropped"]
@@ -286,6 +296,9 @@ defmodule EngramWeb.AttachmentUploadsController do
 
   defp refuse(conn, reason) when reason in [:bad_part_number, :bad_part_size],
     do: conn |> put_status(422) |> json(%{error: Atom.to_string(reason)})
+
+  defp refuse(conn, :upload_completed),
+    do: conn |> put_status(409) |> json(%{error: "upload_completed"})
 
   defp refuse(conn, {:missing_parts, missing}),
     do: conn |> put_status(409) |> json(%{error: "missing_parts", missing: missing})

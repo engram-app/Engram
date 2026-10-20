@@ -276,9 +276,13 @@ defmodule EngramWeb.Schemas.AttachmentUploadStatus do
     properties: %{
       done: %Schema{type: :array, items: %Schema{type: :integer}},
       part_count: %Schema{type: :integer},
-      part_size: %Schema{type: :integer}
+      part_size: %Schema{type: :integer},
+      completed: %Schema{
+        type: :boolean,
+        description: "Complete already committed; complete again returns the attachment."
+      }
     },
-    required: [:done, :part_count, :part_size]
+    required: [:done, :part_count, :part_size, :completed]
   })
 end
 

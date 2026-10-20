@@ -221,6 +221,76 @@ describe("uploadInParts", () => {
 			expect(del).not.toHaveBeenCalled();
 		});
 
+		// The first complete committed but its response was lost; a retry that
+		// 404s must not be reported until the status check has had its say.
+		it("after an unknown outcome, a 404 on the retry defers to a final status check", async () => {
+			let completes = 0;
+			post.mockImplementation((path: string) => {
+				if (path === "/attachment-uploads") {
+					return Promise.resolve({ upload_id: "u1", part_size: PART, part_count: 1 });
+				}
+				completes += 1;
+				if (completes === 1) {
+					return Promise.reject(new TypeError("network"));
+				}
+				return completes === 2
+					? Promise.reject(new ApiError(404, "not_found"))
+					: Promise.resolve({ attachment: row });
+			});
+			get
+				.mockResolvedValueOnce({ done: [1], part_count: 1, part_size: PART, completed: false })
+				.mockResolvedValue({ done: [1], part_count: 1, part_size: PART, completed: true });
+
+			const out = await uploadInParts(bigFile(PART + 1), "big.bin", { backoffMs: 0 });
+
+			expect(out).toEqual({ attachment: row });
+			expect(get).toHaveBeenCalledTimes(2);
+			expect(completeCalls()).toHaveLength(3);
+			expect(del).not.toHaveBeenCalled();
+		});
+
+		it("a 404 that the final status check confirms is reported, once", async () => {
+			let completes = 0;
+			post.mockImplementation((path: string) => {
+				if (path === "/attachment-uploads") {
+					return Promise.resolve({ upload_id: "u1", part_size: PART, part_count: 1 });
+				}
+				completes += 1;
+				return completes === 1
+					? Promise.reject(new TypeError("network"))
+					: Promise.reject(new ApiError(404, "not_found"));
+			});
+			get.mockResolvedValue({ done: [1], part_count: 1, part_size: PART, completed: false });
+
+			await expect(
+				uploadInParts(bigFile(PART + 1), "big.bin", { backoffMs: 0 }),
+			).rejects.toMatchObject({ status: 404 });
+			expect(completeCalls()).toHaveLength(3);
+		});
+
+		it("a status with completed: true resolves by calling complete once more", async () => {
+			let completes = 0;
+			post.mockImplementation((path: string) => {
+				if (path === "/attachment-uploads") {
+					return Promise.resolve({ upload_id: "u1", part_size: PART, part_count: 1 });
+				}
+				completes += 1;
+				// 524: the edge gave up on a complete that went on to commit.
+				return completes === 1
+					? Promise.reject(new ApiError(524, "timeout"))
+					: Promise.resolve({ attachment: row });
+			});
+			get.mockResolvedValue({ done: [], part_count: 1, part_size: PART, completed: true });
+
+			const out = await uploadInParts(bigFile(PART + 1), "big.bin", { backoffMs: 0 });
+
+			expect(out).toEqual({ attachment: row });
+			expect(completeCalls()).toHaveLength(2);
+			// completed wins over `done`: no part is sent again.
+			expect(putRaw).toHaveBeenCalledTimes(1);
+			expect(del).not.toHaveBeenCalled();
+		});
+
 		it("DELETEs after a definite terminal refusal on complete", async () => {
 			post.mockImplementation((path: string) =>
 				path === "/attachment-uploads"

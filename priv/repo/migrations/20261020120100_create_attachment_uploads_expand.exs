@@ -8,8 +8,9 @@ defmodule Engram.Repo.Migrations.CreateAttachmentUploadsExpand do
   # writers) and prefer-bigint-over-int (part_size, part_count).
   #
   # phase/expand: new table, no backfill. One row per in-flight chunked
-  # attachment upload (`Engram.Attachments.Uploads`); deleted when the upload
-  # completes or aborts. Ciphertext only: the path is sealed under the DEK and
+  # attachment upload (`Engram.Attachments.Uploads`); deleted on abort, kept
+  # (completed_at set) for a day after it completes so a retried complete gets
+  # the committed attachment. Ciphertext only: the path is sealed under the DEK and
   # the per-file key is DEK-wrapped, so nothing here is plaintext.
   #
   # RLS mirrors note_revisions: tenant-scoped on user_id, ENABLE + FORCE,
@@ -44,6 +45,10 @@ defmodule Engram.Repo.Migrations.CreateAttachmentUploadsExpand do
       # Set once storage has assembled the parts into one object; a retried
       # complete skips re-assembly (the multipart upload no longer exists).
       add :assembled_at, :timestamptz
+      # Set in the transaction that commits the attachment (`attachment_id`
+      # is then the committed row). A completed session is never written
+      # again, only read by a repeat complete and dropped by the expiry sweep.
+      add :completed_at, :timestamptz
 
       add :inserted_at, :timestamptz, null: false, default: fragment("now()")
       add :updated_at, :timestamptz, null: false, default: fragment("now()")

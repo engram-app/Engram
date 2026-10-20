@@ -715,8 +715,10 @@ defmodule Engram.MCP.Handlers do
              bytes except the last. Re-sending a part replaces it.
           3. POST #{base}/api/attachment-uploads/<upload_id>/complete
              -> 200 with the attachment. 409 missing_parts lists what to resend.
+             Safe to retry: once committed, complete returns the same attachment.
           To resume after an interruption, GET #{base}/api/attachment-uploads/<upload_id>
-          (returns done, part_count, part_size), send the missing parts, then complete.
+          (returns done, part_count, part_size, completed), send the missing parts, then
+          complete. completed: true means it already committed; complete again.
           DELETE the same URL to abandon an upload. Idle uploads expire after 24 hours.
         """
         |> String.trim_trailing()

@@ -150,7 +150,7 @@ defmodule Engram.Attachments.UploadsTest do
       assert decrypt_stored(user, att) == bytes
       refute String.contains?(stored_blob(att), binary_part(bytes, 0, 64))
 
-      assert {:error, :not_found} = Uploads.status(user, vault, up.id)
+      assert {:ok, %{completed: true, done: [1, 2, 3]}} = Uploads.status(user, vault, up.id)
       assert {:ok, [%{path: "videos/clip.mp4"}]} = Attachments.list_attachments(user, vault)
     end
 
@@ -269,6 +269,39 @@ defmodule Engram.Attachments.UploadsTest do
       assert live.version == att.version
       assert live.seq == att.seq
       assert InMemory.exists?(att.storage_key)
+    end
+
+    # The duplicate a client sends after its first complete timed out can
+    # arrive while that first one is still running. The loser rolls back,
+    # then answers with what the winner committed rather than 404.
+    test "a complete that loses the race to a concurrent one returns its attachment", %{
+      user: user,
+      vault: vault,
+      up: up,
+      bytes: bytes
+    } do
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      stub_with(Engram.MockStorage, InMemory)
+      raced = :counters.new(1, [])
+      parent = self()
+
+      # The loser is mid read-back when the winner commits.
+      stub(Engram.MockStorage, :get_range, fn key, offset, len ->
+        if :counters.get(raced, 1) == 0 do
+          :counters.add(raced, 1, 1)
+          send(parent, {:winner, Uploads.complete(user, vault, up.id)})
+        end
+
+        InMemory.get_range(key, offset, len)
+      end)
+
+      assert {:ok, loser} = Uploads.complete(user, vault, up.id)
+      assert_received {:winner, {:ok, winner}}
+      assert loser.id == winner.id
+      assert loser.version == winner.version
+      assert decrypt_stored(user, loser) == bytes
     end
 
     test "a single-request upload over a chunked one replaces it cleanly", %{
@@ -563,6 +596,88 @@ defmodule Engram.Attachments.UploadsTest do
 
       assert {:ok, _} =
                Attachments.upsert_attachment(user, vault, %{path: "doc.png", content: "v1"})
+    end
+  end
+
+  # A client whose complete timed out after the server committed retries it.
+  # The session is kept, marked completed, so the retry gets the attachment.
+  describe "a completed session" do
+    setup %{user: user, vault: vault} do
+      bytes = :crypto.strong_rand_bytes(10)
+      up = start!(user, vault, "doc.png", byte_size(bytes))
+      put_all(user, vault, up, bytes)
+      {:ok, att} = Uploads.complete(user, vault, up.id)
+      %{bytes: bytes, up: up, att: att}
+    end
+
+    test "a repeat complete returns the committed attachment", %{
+      user: user,
+      vault: vault,
+      up: up,
+      att: att
+    } do
+      assert {:ok, %Attachment{} = again} = Uploads.complete(user, vault, up.id)
+      assert again.id == att.id
+      assert again.path == "doc.png"
+      assert again.version == att.version
+      assert again.seq == att.seq
+    end
+
+    test "status reports completed", %{user: user, vault: vault, up: up} do
+      assert {:ok, %{completed: true}} = Uploads.status(user, vault, up.id)
+    end
+
+    test "a repeat complete after a move returns the moved attachment", %{
+      user: user,
+      vault: vault,
+      up: up,
+      att: att
+    } do
+      {:ok, _} = Attachments.move_attachment(user, vault, "doc.png", "moved.png")
+      assert {:ok, %{id: id, path: "moved.png"}} = Uploads.complete(user, vault, up.id)
+      assert id == att.id
+    end
+
+    test "a repeat complete after the attachment was deleted is :not_found", %{
+      user: user,
+      vault: vault,
+      up: up
+    } do
+      :ok = Attachments.delete_attachment(user, vault, "doc.png")
+      assert {:error, :not_found} = Uploads.complete(user, vault, up.id)
+    end
+
+    test "a repeat complete after an overwrite is :not_found", %{
+      user: user,
+      vault: vault,
+      up: up
+    } do
+      {:ok, _} = Attachments.upsert_attachment(user, vault, %{path: "doc.png", content: "newer"})
+      assert {:error, :not_found} = Uploads.complete(user, vault, up.id)
+    end
+
+    test "put_part is refused", %{user: user, vault: vault, up: up, bytes: bytes} do
+      assert {:error, :upload_completed} = Uploads.put_part(user, vault, up.id, 1, bytes)
+    end
+
+    test "abort touches neither storage nor the attachment", %{
+      user: user,
+      vault: vault,
+      up: up,
+      att: att,
+      bytes: bytes
+    } do
+      assert :ok = Uploads.abort(user, vault, up.id)
+      assert InMemory.exists?(att.storage_key)
+      assert decrypt_stored(user, att) == bytes
+      assert {:ok, %{completed: true}} = Uploads.status(user, vault, up.id)
+    end
+
+    test "a stale in-flight struct cannot commit it again", %{user: user, vault: vault, up: up} do
+      stale = Repo.get!(Upload, up.id, skip_tenant_check: true)
+
+      assert {:error, :not_found} =
+               Uploads.complete_session(user, vault, %{stale | completed_at: nil})
     end
   end
 

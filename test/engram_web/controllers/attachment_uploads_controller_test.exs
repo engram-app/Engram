@@ -93,7 +93,31 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
 
       row = Repo.get!(Attachment, att["id"], skip_tenant_check: true)
       assert decrypt_stored(user, row) == bytes
-      assert conn |> get("/api/attachment-uploads/#{id}") |> json_response(404)
+
+      assert %{"completed" => true, "done" => [1, 2]} =
+               conn |> get("/api/attachment-uploads/#{id}") |> json_response(200)
+    end
+
+    # The first complete committed but its response was lost (a ~100 s edge
+    # timeout); the client retries and must not read that as a failure.
+    test "a completed session: complete repeats, PUT is 409, DELETE is a no-op", %{
+      conn: conn,
+      user: user
+    } do
+      %{"upload_id" => id} = start!(conn, "a.png", 10)
+      assert conn |> put_part(id, 1, "0123456789") |> json_response(200)
+      assert %{"attachment" => att} = conn |> complete(id) |> json_response(200)
+
+      assert %{"attachment" => ^att} = conn |> complete(id) |> json_response(200)
+
+      assert %{"error" => "upload_completed"} =
+               conn |> put_part(id, 1, "0123456789") |> json_response(409)
+
+      assert conn |> delete("/api/attachment-uploads/#{id}") |> response(204)
+      row = Repo.get!(Attachment, att["id"], skip_tenant_check: true)
+      assert is_nil(row.deleted_at)
+      assert decrypt_stored(user, row) == "0123456789"
+      assert %{"attachment" => ^att} = conn |> complete(id) |> json_response(200)
     end
 
     test "DELETE drops the session, idempotently", %{conn: conn} do

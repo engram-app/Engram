@@ -58,9 +58,10 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * Upload `file` through the resumable parts protocol. The server picks the part
  * size. Every request retries transient failures (3 times, backing off). After a
  * failed part or a failed complete the server is asked which parts it holds, so
- * only missing parts are sent again. A failure drops the server session, best
- * effort, except when a complete attempt may have committed (outcome unknown):
- * deleting then could discard a finished upload.
+ * only missing parts are sent again. Complete is idempotent on the server: a
+ * status that says `completed` resolves with one more complete. A failure drops
+ * the server session, best effort, except when a complete attempt may have
+ * committed (outcome unknown).
  */
 export async function uploadInParts(
 	file: File,
@@ -93,10 +94,11 @@ export async function uploadInParts(
 		await sleep(delayFor(err, attempt, backoffMs), signal);
 	}
 
-	async function status(): Promise<number[]> {
+	/** `completed`: complete already committed; complete again returns the attachment. */
+	async function status(): Promise<{ done: number[]; completed?: boolean }> {
 		for (let attempt = 0; ; attempt++) {
 			try {
-				return (await api.get<{ done: number[] }>(base)).done;
+				return await api.get<{ done: number[]; completed?: boolean }>(base);
 			} catch (err) {
 				await backOff(err, attempt);
 			}
@@ -111,7 +113,7 @@ export async function uploadInParts(
 				return;
 			} catch (err) {
 				await backOff(err, attempt);
-				if ((await status()).includes(n)) {
+				if ((await status()).done.includes(n)) {
 					return;
 				}
 			}
@@ -120,20 +122,36 @@ export async function uploadInParts(
 
 	// 409 missing_parts is the one 4xx that resending fixes.
 	const isMissingParts = (err: unknown) => err instanceof ApiError && err.status === 409;
+	const isNotFound = (err: unknown) => err instanceof ApiError && err.status === 404;
 	const terminalOnComplete = (err: unknown) => isTerminal(err) && !isMissingParts(err);
+	const postComplete = () =>
+		api.post<{ attachment: AttachmentSummary }>(`${base}/complete`, undefined, { signal });
 
 	async function complete(): Promise<{ attachment: AttachmentSummary }> {
+		// Sticky: an attempt that ended with no answer may still be committing
+		// on the server after a later status check said the session was open.
+		let earlierAttemptUnanswered = false;
 		for (let attempt = 0; ; attempt++) {
 			try {
-				return await api.post<{ attachment: AttachmentSummary }>(`${base}/complete`, undefined, {
-					signal,
-				});
+				return await postComplete();
 			} catch (err) {
 				// A refusal with a status proves nothing committed; anything else may have.
 				completeOutcomeUnknown = !(err instanceof ApiError || err instanceof LimitExceededError);
-				await backOff(err, attempt, terminalOnComplete);
-				const done = await status();
-				// The session answered, so complete did not commit it.
+				// A 404 after an attempt that may have committed is not a verdict
+				// yet: one final status check below decides.
+				if (earlierAttemptUnanswered && isNotFound(err)) {
+					earlierAttemptUnanswered = false;
+				} else {
+					earlierAttemptUnanswered ||= completeOutcomeUnknown;
+					await backOff(err, attempt, terminalOnComplete);
+				}
+				const { done, completed } = await status();
+				// Committed (perhaps by an attempt whose response was lost): a
+				// repeat complete returns the attachment.
+				if (completed) {
+					return await postComplete();
+				}
+				// The session answered open, so complete did not commit it.
 				completeOutcomeUnknown = false;
 				for (let n = 1; n <= part_count; n++) {
 					if (!done.includes(n)) {

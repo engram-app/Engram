@@ -869,7 +869,13 @@ defmodule Engram.Crypto.UserDekRotation do
        ) do
     TenantSweep.each_batch(user_id, Upload, fn batch_ids ->
       Repo.transaction(fn ->
-        from(u in Upload, where: u.id in ^batch_ids, lock: "FOR UPDATE")
+        # Completed sessions are skipped: nothing reads their key or path
+        # again (a repeat complete reads the committed row), and their file
+        # key may be bound to a claimed id the commit replaced.
+        from(u in Upload,
+          where: u.id in ^batch_ids and is_nil(u.completed_at),
+          lock: "FOR UPDATE"
+        )
         |> Repo.all(skip_tenant_check: true)
         |> Enum.each(&rewrap_upload(&1, old_dek, new_dek, new_filter_key, new_dek_version))
       end)

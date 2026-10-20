@@ -97,4 +97,26 @@ defmodule Engram.Workers.AttachmentUploadExpiryTest do
     refute exists?(a)
     refute exists?(b)
   end
+
+  # A completed session is kept so a retried complete gets its attachment;
+  # its blob is the live attachment's, so expiry drops only the row.
+  test "a completed session idle 25h is dropped with no storage call; 23h is kept", ctx do
+    old = start!(ctx.user, ctx.vault, "old.png")
+    new = start!(ctx.user, ctx.vault, "new.png")
+
+    for up <- [old, new] do
+      {:ok, _} = Uploads.put_part(ctx.user, ctx.vault, up.id, 1, "0123456789")
+      {:ok, _} = Uploads.complete(ctx.user, ctx.vault, up.id)
+    end
+
+    age!(old, 25)
+    age!(new, 23)
+
+    expect(Engram.MockStorage, :delete, 0, fn _ -> :ok end)
+    expect(Engram.MockStorage, :abort_multipart_upload, 0, fn _, _ -> :ok end)
+    assert :ok = perform_job(AttachmentUploadExpiry, %{})
+    refute exists?(old)
+    assert exists?(new)
+    assert InMemory.exists?(old.storage_key)
+  end
 end

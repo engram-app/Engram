@@ -1407,6 +1407,29 @@ defmodule Engram.Crypto.UserDekRotationTest do
           skip_tenant_check: true
         )
 
+    # A completed session is kept for a retried complete. Its file key is
+    # bound to the id claimed at start, which a v1 upload that took the path
+    # first replaces at commit; rotation must not try to rewrap it.
+    test "a completed session whose commit id moved does not fail the sweep", %{
+      user: user,
+      vault: vault
+    } do
+      bytes = :crypto.strong_rand_bytes(3000)
+      {:ok, up} = Uploads.start(user, vault, %{path: "raced.txt", size_bytes: 3000, mtime: 1.0})
+      {:ok, _} = Uploads.put_part(user, vault, up.id, 1, bytes)
+      {:ok, v1} = Attachments.upsert_attachment(user, vault, %{path: "raced.txt", content: "v1"})
+      {:ok, att} = Uploads.complete(user, vault, up.id)
+      assert att.id == v1.id
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      {:ok, fetched} = Attachments.get_attachment(reload_user(user), vault, "raced.txt")
+      assert {:segments, stream} = fetched.content
+      assert stream |> Enum.map(fn {:ok, b} -> b end) |> IO.iodata_to_binary() == bytes
+      assert {:ok, %{id: id}} = Uploads.complete(reload_user(user), vault, up.id)
+      assert id == att.id
+    end
+
     test "rewraps only the file key; the blob is untouched and still downloads", %{
       user: user,
       vault: vault

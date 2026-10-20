@@ -46,6 +46,8 @@ defmodule Engram.Attachments.Upload do
     # Part number as a string key (jsonb) => storage ETag.
     field :parts, :map, default: %{}
     field :assembled_at, :utc_datetime
+    # Set when complete committed; `attachment_id` is then the committed row.
+    field :completed_at, :utc_datetime
 
     belongs_to :user, Engram.Accounts.User
     belongs_to :vault, Engram.Vaults.Vault

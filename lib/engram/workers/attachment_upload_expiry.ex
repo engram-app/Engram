@@ -2,8 +2,10 @@ defmodule Engram.Workers.AttachmentUploadExpiry do
   @moduledoc """
   Hourly sweep of abandoned chunked-upload sessions. A session idle for 24h
   (`put_part` bumps `updated_at`, so active uploads are kept) is dropped
-  through `Uploads.expire/1`: the row is consumed first, then the multipart
-  upload is aborted (or the assembled object deleted). Storage failures are
+  through `Uploads.expire/1`: the row is deleted first, then the multipart
+  upload is aborted (or the assembled object deleted). A completed session
+  (kept so a retried complete gets its attachment) loses only its row, 24h
+  after it completed: its blob is the attachment's. Storage failures are
   logged and skipped; the bucket lifecycle rule is the backstop.
   """
   use Oban.Worker, queue: :maintenance, max_attempts: 3

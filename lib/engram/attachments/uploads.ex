@@ -136,6 +136,7 @@ defmodule Engram.Attachments.Uploads do
           {:ok, %{part: pos_integer()}}
           | {:error,
              :not_found
+             | :upload_completed
              | :bad_part_number
              | :bad_part_size
              | :rotation_in_progress
@@ -145,6 +146,7 @@ defmodule Engram.Attachments.Uploads do
 
     with :ok <- Attachments.rotation_gate(user),
          {:ok, up} <- fetch(user, vault, upload_id),
+         :ok <- if(up.completed_at, do: {:error, :upload_completed}, else: :ok),
          :ok <- check_part(up, n, byte_size(bytes)),
          {:ok, file_key} <- file_key(user, up, up.attachment_id),
          sealed = SegmentedCipher.seal_segment(bytes, file_key, up.id, n - 1, up.part_count),
@@ -153,7 +155,7 @@ defmodule Engram.Attachments.Uploads do
       {count, _} =
         Repo.with_tenant(user.id, fn ->
           from(u in scoped(user, vault),
-            where: u.id == ^up.id,
+            where: u.id == ^up.id and is_nil(u.completed_at),
             update: [
               set: [
                 parts:
@@ -176,13 +178,28 @@ defmodule Engram.Attachments.Uploads do
     end
   end
 
-  @doc "Which parts the server holds, for a client resuming an upload."
+  @doc """
+  Which parts the server holds, for a client resuming an upload, and whether
+  complete already committed it (then complete again returns the attachment).
+  """
   @spec status(map(), map(), Ecto.UUID.t()) ::
-          {:ok, %{done: [pos_integer()], part_count: pos_integer(), part_size: pos_integer()}}
+          {:ok,
+           %{
+             done: [pos_integer()],
+             part_count: pos_integer(),
+             part_size: pos_integer(),
+             completed: boolean()
+           }}
           | {:error, :not_found}
   def status(user, vault, upload_id) do
     with {:ok, up} <- fetch(user, vault, upload_id) do
-      {:ok, %{done: done(up), part_count: up.part_count, part_size: up.part_size}}
+      {:ok,
+       %{
+         done: done(up),
+         part_count: up.part_count,
+         part_size: up.part_size,
+         completed: not is_nil(up.completed_at)
+       }}
     end
   end
 
@@ -190,6 +207,11 @@ defmodule Engram.Attachments.Uploads do
   Assembles the parts and commits the live attachment. Refused while parts are
   missing (the session stays resumable) or when the file no longer fits the
   quota (the session and its blob are dropped).
+
+  Idempotent: the commit marks the session completed instead of deleting it,
+  so a client whose first complete timed out after the commit gets the same
+  attachment from a retry. `:not_found` once that attachment was deleted or
+  overwritten since.
   """
   @spec complete(map(), map(), Ecto.UUID.t()) ::
           {:ok, Attachment.t()}
@@ -202,8 +224,46 @@ defmodule Engram.Attachments.Uploads do
   def complete(user, vault, upload_id) do
     user = Crypto.fresh_user(user)
 
-    with {:ok, up} <- fetch(user, vault, upload_id),
-         do: complete_session(user, vault, up)
+    case fetch(user, vault, upload_id) do
+      {:ok, %Upload{completed_at: %DateTime{}} = up} ->
+        committed(user, vault, up)
+
+      {:ok, up} ->
+        with {:error, :not_found} <- complete_session(user, vault, up),
+             do: lost_race(user, vault, upload_id)
+
+      err ->
+        err
+    end
+  end
+
+  # A concurrent complete committed the session while this one ran (its
+  # write rolled back): answer with that attachment. Still :not_found when
+  # an abort got there first.
+  defp lost_race(user, vault, upload_id) do
+    case fetch(user, vault, upload_id) do
+      {:ok, %Upload{completed_at: %DateTime{}} = up} -> committed(user, vault, up)
+      _ -> {:error, :not_found}
+    end
+  end
+
+  # The attachment a completed session committed, read fresh: still live and
+  # still holding this upload's blob (an overwrite moves it to a fresh key, a
+  # move keeps it).
+  defp committed(user, vault, %Upload{} = up) do
+    Repo.with_tenant(user.id, fn ->
+      Repo.one(
+        from(a in Attachments.scoped_live(user, vault),
+          where: a.id == ^up.attachment_id and a.storage_key == ^up.storage_key
+        )
+      )
+    end)
+    |> unwrap()
+    |> case do
+      {:ok, %Attachment{} = att} -> Crypto.maybe_decrypt_attachment_fields(att, user)
+      {:ok, nil} -> {:error, :not_found}
+      err -> err
+    end
   end
 
   @doc false
@@ -232,7 +292,10 @@ defmodule Engram.Attachments.Uploads do
     end
   end
 
-  @doc "Drops a session and whatever storage holds for it. Idempotent."
+  @doc """
+  Drops a session and whatever storage holds for it. Idempotent; a completed
+  session is left alone (its blob is the committed attachment's).
+  """
   @spec abort(map(), map(), Ecto.UUID.t()) :: :ok
   def abort(user, vault, upload_id) do
     case fetch(user, vault, upload_id) do
@@ -246,6 +309,16 @@ defmodule Engram.Attachments.Uploads do
   `abort/3`, so a concurrent `complete/3` and the sweep cannot both act.
   """
   @spec expire(Upload.t()) :: :ok
+  # A completed session's blob is the committed attachment's: the row only.
+  def expire(%Upload{completed_at: %DateTime{}} = up) do
+    {:ok, _} =
+      Repo.with_tenant(up.user_id, fn ->
+        Repo.delete_all(from(u in Upload, where: u.id == ^up.id and not is_nil(u.completed_at)))
+      end)
+
+    :ok
+  end
+
   def expire(%Upload{} = up), do: drop(%{id: up.user_id}, %{id: up.vault_id}, up)
 
   # -- Private --
@@ -358,11 +431,12 @@ defmodule Engram.Attachments.Uploads do
 
     Attachments.commit_row(user, vault, path, up.path_hmac, up.size_bytes, up.dek_version, fn
       existing ->
-        # Consumed first, in the same transaction as the row write: a duplicate
-        # concurrent complete finds it gone and rolls back.
-        with :ok <- delete_session(user, vault, up) do
-          id = commit_id(user, vault, existing, up.attachment_id)
+        id = commit_id(user, vault, existing, up.attachment_id)
 
+        # Marked completed first, in the same transaction as the row write: a
+        # duplicate concurrent complete (or an abort that got there first)
+        # finds no open session and rolls back.
+        with :ok <- mark_completed(user, vault, up, id) do
           # A different row won the path since start (a single-request upload,
           # or the claimed row was deleted): bind the file key to the winner's
           # id. A 32-byte rewrap, not a re-encrypt.
@@ -412,25 +486,26 @@ defmodule Engram.Attachments.Uploads do
   end
 
   defp refuse(user, vault, upload_id, err) do
-    # Already consumed by another caller: nothing left to drop.
+    # Already dropped or completed by another caller: nothing left to drop.
     _ = with {:ok, up} <- fetch(user, vault, upload_id), do: drop(user, vault, up)
     err
   end
 
   # Before assembly there is a multipart upload to abort; after it, an
   # object to delete. Deleting is harmless when nothing was assembled.
-  # Storage is touched only by the caller that consumed the session: a stale
-  # duplicate must not delete a blob a committed row now uses.
+  # Storage is touched only by the caller whose delete removed the session
+  # row (never a completed one): a stale duplicate must not delete a blob a
+  # committed row now uses.
   defp drop(user, vault, %Upload{} = up) do
     # Storage cleanup is best-effort and logs its own failures; a session
-    # another caller consumed is theirs to clean up.
+    # another caller dropped is theirs to clean up.
     _ =
       with :ok <- delete_session(user, vault, up) do
         if is_nil(up.assembled_at) do
           _ = abort_storage(up.storage_key, up.s3_upload_id)
           delete_object(up.storage_key)
         else
-          # Belt and braces: a live row never shares a consumed session's key.
+          # Belt and braces: a live row never shares a dropped session's key.
           unless referenced?(user, vault, up.storage_key), do: delete_object(up.storage_key)
         end
       end
@@ -450,11 +525,31 @@ defmodule Engram.Attachments.Uploads do
     found?
   end
 
-  # `{:error, :not_found}` when another caller already consumed the session,
-  # so a duplicate complete rolls back instead of committing twice.
+  # `{:error, :not_found}` when another caller already completed or dropped
+  # the session, so a duplicate complete rolls back instead of committing twice.
+  defp mark_completed(user, vault, %Upload{id: id}, attachment_id) do
+    now = DateTime.utc_now(:second)
+
+    Repo.with_tenant(user.id, fn ->
+      Repo.update_all(
+        from(u in scoped(user, vault), where: u.id == ^id and is_nil(u.completed_at)),
+        set: [completed_at: now, attachment_id: attachment_id, updated_at: now]
+      )
+    end)
+    |> unwrap()
+    |> case do
+      {:ok, {1, _}} -> :ok
+      {:ok, {0, _}} -> {:error, :not_found}
+    end
+  end
+
+  # `{:error, :not_found}` when another caller already dropped the session or
+  # complete committed it (a completed session's blob is the attachment's).
   defp delete_session(user, vault, %Upload{id: id}) do
     Repo.with_tenant(user.id, fn ->
-      Repo.delete_all(from(u in scoped(user, vault), where: u.id == ^id))
+      Repo.delete_all(
+        from(u in scoped(user, vault), where: u.id == ^id and is_nil(u.completed_at))
+      )
     end)
     |> unwrap()
     |> case do
