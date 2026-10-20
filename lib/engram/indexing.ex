@@ -215,7 +215,7 @@ defmodule Engram.Indexing do
          |> Map.put(:dense?, dense? and deferred == 0)
          |> Map.put(:deferred_tokens, deferred)
          |> Map.put(:okf_healed?, okf_healed?)
-         |> Map.put(:retain, if(dense? and texts != [], do: {retained_key(note, texts), vectors}))}
+         |> Map.put(:retain, if(dense?, do: retention(note, plan, texts, vectors)))}
       else
         {:error, :no_dek} = err ->
           emit_no_dek_telemetry(note)
@@ -889,7 +889,9 @@ defmodule Engram.Indexing do
   # Third element: dense vectors an earlier attempt already paid for but did
   # not commit (`retain/1`, held across the commit). A hit skips the
   # reservation AND the embed, so a retry after any post-embed failure is
-  # charged once.
+  # charged once. A partial pass is retained under the FULL plan's key, with
+  # `<<>>` for each chunk it deferred, so its retry finds it and rebuilds the
+  # same partial plan (`partial_from_retained/5`).
   defp plan_within_budget(note, chunks, content_key, false, _opts),
     do: {false, plan_chunks(note, chunks, content_key, false), nil}
 
@@ -900,7 +902,9 @@ defmodule Engram.Indexing do
 
     case {retained(note, texts), texts |> text_bytes() |> UsageMeters.estimate_tokens()} do
       {{:ok, vectors}, _tokens} ->
-        {true, plan, vectors}
+        if <<>> in vectors,
+          do: partial_from_retained(note, chunks, content_key, plan, vectors),
+          else: {true, plan, vectors}
 
       {:miss, 0} ->
         {true, plan, nil}
@@ -913,10 +917,11 @@ defmodule Engram.Indexing do
   end
 
   # The whole pass did not fit. Never drop a dense vector the note already has
-  # for that: reused dense chunks keep their points, the new chunks that fit
-  # what is left are embedded (in note order), and only the rest are planned
-  # keyword-only. Their fingerprints differ (sparse), so the next pass re-plans
-  # them dense. `deferred_tokens` is what they still need, for the park.
+  # for that: reused dense chunks keep their points, the new prose chunks that
+  # fit what is left are embedded (in note order; a new non-prose chunk is
+  # never embedded, so it is skipped, not a stop), and only the rest are
+  # planned keyword-only. Their fingerprints differ (sparse), so the next pass
+  # re-plans them dense. `deferred_tokens` is what they still need, for the park.
   defp partial_plan(note, chunks, content_key, plan, opts) do
     available = Keyword.get(opts, :budget_available, fn -> 0 end).()
     reserve = Keyword.get(opts, :reserve_tokens, fn _tokens -> true end)
@@ -925,12 +930,14 @@ defmodule Engram.Indexing do
       plan.entries
       |> Enum.with_index()
       |> Enum.reduce({MapSet.new(), available}, fn
-        {{:embed, chunk}, i}, {fit, left} ->
+        {{:embed, chunk}, i}, {fit, left} = acc ->
           need = UsageMeters.estimate_tokens(chunk.embed_text)
 
-          if dense_chunk?(chunk, true) and need <= left,
-            do: {MapSet.put(fit, i), left - need},
-            else: {fit, 0}
+          cond do
+            not dense_chunk?(chunk, true) -> acc
+            need <= left -> {MapSet.put(fit, i), left - need}
+            true -> {fit, 0}
+          end
 
         _reuse, acc ->
           acc
@@ -944,6 +951,25 @@ defmodule Engram.Indexing do
 
     fit = if fit_tokens > 0 and reserve.(fit_tokens), do: fit, else: MapSet.new()
 
+    {true, flag_partial(note, chunks, content_key, plan, fit), nil}
+  end
+
+  # A retry of a partial pass: the retained vectors (full plan order, `<<>>`
+  # for a deferred chunk) say which chunks it embedded. Already paid for, so
+  # no reservation and no embed.
+  defp partial_from_retained(note, chunks, content_key, plan, retained) do
+    fit =
+      plan
+      |> dense_entry_indexes()
+      |> Enum.zip(retained)
+      |> Enum.reject(fn {_i, vector} -> vector == <<>> end)
+      |> MapSet.new(&elem(&1, 0))
+
+    {true, flag_partial(note, chunks, content_key, plan, fit),
+     Enum.reject(retained, &(&1 == <<>>))}
+  end
+
+  defp flag_partial(note, chunks, content_key, plan, fit) do
     flagged =
       plan.entries
       |> Enum.zip(chunks)
@@ -963,9 +989,40 @@ defmodule Engram.Indexing do
       |> text_bytes()
       |> UsageMeters.estimate_tokens()
 
-    {true, Map.put(plan_chunks(note, flagged, content_key, true), :deferred_tokens, deferred),
-     nil}
+    full = dense_entry_indexes(plan)
+
+    note
+    |> plan_chunks(flagged, content_key, true)
+    |> Map.merge(%{
+      deferred_tokens: deferred,
+      retain_texts: embed_texts(plan),
+      retain_mask: Enum.map(full, &MapSet.member?(fit, &1))
+    })
   end
+
+  # Indexes into `plan.entries` of the chunks `embed_texts/1` sends, in order.
+  defp dense_entry_indexes(plan) do
+    for {{:embed, chunk}, i} <- Enum.with_index(plan.entries),
+        dense_chunk?(chunk, plan.dense?),
+        do: i
+  end
+
+  # What `retain/1` holds for a pass: the vectors under the key its retry will
+  # look up. A partial pass is keyed by the full plan, `<<>>` marking each
+  # deferred chunk.
+  defp retention(_note, _plan, [], _vectors), do: nil
+
+  defp retention(note, %{retain_mask: mask, retain_texts: full}, _texts, vectors) do
+    {spread, []} =
+      Enum.map_reduce(mask, vectors, fn
+        true, [v | rest] -> {v, rest}
+        false, rest -> {<<>>, rest}
+      end)
+
+    {retained_key(note, full), spread}
+  end
+
+  defp retention(note, _plan, texts, vectors), do: {retained_key(note, texts), vectors}
 
   defp retained_or_embed(nil, dense?, texts, opts), do: embed_or_release(dense?, texts, opts)
   defp retained_or_embed(vectors, _dense?, _texts, _opts), do: {:ok, vectors}
