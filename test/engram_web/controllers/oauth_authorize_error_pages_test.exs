@@ -77,5 +77,15 @@ defmodule EngramWeb.OAuthAuthorizeErrorPagesTest do
       assert conn.status == 400
       assert conn.resp_body =~ "invalid_client"
     end
+
+    test "a bare GET (a crawler, not a client) renders a noindex pointer page", %{conn: conn} do
+      conn = get(conn, "/oauth/authorize")
+
+      assert conn.status == 400
+      assert ["text/html" <> _] = get_resp_header(conn, "content-type")
+      assert get_resp_header(conn, "x-robots-tag") == ["noindex"]
+      assert conn.resp_body =~ "https://engram.page/docs/mcp"
+      refute conn.resp_body =~ "Authorization error"
+    end
   end
 end

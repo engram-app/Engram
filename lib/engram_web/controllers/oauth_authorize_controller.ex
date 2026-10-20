@@ -32,6 +32,21 @@ defmodule EngramWeb.OAuthAuthorizeController do
   @forwarded_params ~w(client_id redirect_uri response_type code_challenge
                        code_challenge_method scope state resource)
 
+  # 2026-10-20: Amazonbot loaded the bare URL and its `client_id_missing`
+  # refusal paged on-call through `mcp-connector-refused`. A request carrying
+  # none of client_id, response_type and redirect_uri is a crawler or a curious
+  # human, not a connect attempt: it gets a pointer page, no refusal line and
+  # no analytics. Any one of them keeps the old path, because a client that
+  # dropped its client_id is exactly what should page.
+  def show(conn, params)
+      when not is_map_key(params, "client_id") and
+             not is_map_key(params, "response_type") and
+             not is_map_key(params, "redirect_uri") do
+    conn
+    |> put_resp_header("x-robots-tag", "noindex")
+    |> render_error(400, :not_a_connect_attempt, nil)
+  end
+
   def show(conn, params) do
     case OAuth.validate_authorization_request(params) do
       {:ok, validated} ->
