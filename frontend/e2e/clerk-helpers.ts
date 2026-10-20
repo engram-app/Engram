@@ -28,13 +28,16 @@ export function loadAuthState(): AuthState {
  *
  * global-setup's probes confirm the user resolves on ONE Clerk replica, but a
  * later `clerk.signIn` can hit a lagging one and still throw "No user found"
- * (#455). That is eventual consistency, not a logic bug, so it is retried on a
- * ~20s budget. Any other error is real and rethrows immediately.
+ * (#455). That is eventual consistency, not a logic bug. Clerk's test
+ * instance also rate-limits sign-ins shared by every concurrent CI run, and a
+ * "Too Many Requests" there is the same kind of transient (e2e-browser on
+ * PR #2074, two onboarding-ftux tests). Both retry with backoff on a ~30s
+ * budget. Any other error is real and rethrows immediately.
  */
 export async function clerkSignIn(page: Page, email: string, landOn = "/"): Promise<void> {
 	await page.goto("/sign-in/");
 
-	const deadline = Date.now() + 20_000;
+	const deadline = Date.now() + 30_000;
 	let backoff = 500;
 	let lastErr: unknown;
 	let signedIn = false;
@@ -50,7 +53,7 @@ export async function clerkSignIn(page: Page, email: string, landOn = "/"): Prom
 			await clerk.signIn({ page, emailAddress: email });
 			signedIn = true;
 		} catch (err) {
-			if (!/No user found/iu.test(String(err))) {
+			if (!/No user found|Too Many Requests/iu.test(String(err))) {
 				throw err;
 			}
 			lastErr = err;
