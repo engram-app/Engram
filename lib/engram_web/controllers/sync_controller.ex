@@ -63,8 +63,18 @@ defmodule EngramWeb.SyncController do
     json(conn, %{
       change_seq: current,
       pending_crdt_updates: pending_updates,
-      pending_checkpoints: Engram.Jobs.pending_for_vault(Engram.Workers.CheckpointNote, vault.id)
+      pending_checkpoints: unheld_checkpoints(vault.id)
     })
+  end
+
+  # A checkpoint whose note has a live room snoozes until the room closes
+  # (CheckpointNote), so it changes nothing a client can wait for; a note left
+  # open in an editor would hold it pending all session. Same rule as
+  # `pending_crdt_updates`, which the e2e barrier already ignores.
+  defp unheld_checkpoints(vault_id) do
+    Engram.Workers.CheckpointNote
+    |> Engram.Jobs.pending_note_ids_for_vault(vault_id)
+    |> Enum.count(&(is_binary(&1) and Engram.Notes.CrdtRegistry.lookup(&1) == nil))
   end
 
   def manifest(conn, params) do

@@ -65,6 +65,44 @@ defmodule EngramWeb.SyncControllerTest do
       assert body["pending_checkpoints"] == 1
       assert body["change_seq"] > 0
     end
+
+    # A checkpoint for a note with a live room snoozes until the room closes
+    # (CheckpointNote), and a note open in an editor keeps its room for the
+    # whole session. Counting it held the e2e barrier pending past its 60 s
+    # deadline (test_101, four branches on 2026-10-20) with nothing owed.
+    test "does not count a checkpoint deferred to a live room", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      for path <- ["Q/cold.md", "Q/open.md"] do
+        post(conn, "/api/notes", %{path: path, content: "# x", mtime: 1_000.0})
+      end
+
+      ids =
+        conn
+        |> get("/api/sync/manifest")
+        |> json_response(200)
+        |> Map.get("notes")
+        |> Map.new(&{&1["path"], &1["id"]})
+
+      for note_id <- Map.values(ids) do
+        {:ok, _} =
+          %{"user_id" => user.id, "vault_id" => vault.id, "note_id" => note_id}
+          |> Engram.Workers.CheckpointNote.new(schedule_in: 60)
+          |> Oban.insert()
+      end
+
+      # Stand-in for the live room: CrdtRegistry.lookup/1 resolves the :global
+      # name, and a real room would need the sandbox handed to it.
+      room = spawn(fn -> Process.sleep(:infinity) end)
+      :yes = :global.register_name({:crdt_doc, ids["Q/open.md"]}, room)
+      on_exit(fn -> Process.exit(room, :kill) end)
+
+      body = conn |> get("/api/sync/quiescence") |> json_response(200)
+
+      assert body["pending_checkpoints"] == 1
+    end
   end
 
   describe "GET /sync/manifest" do
