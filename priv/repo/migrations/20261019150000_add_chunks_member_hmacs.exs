@@ -10,7 +10,7 @@ defmodule Engram.Repo.Migrations.AddChunksMemberHmacs do
   # `Engram.Indexing` writes it.
   def change do
     alter table(:chunks) do
-      add :member_hmacs, {:array, :string}
+      add :member_hmacs, {:array, :text}
     end
   end
 end
