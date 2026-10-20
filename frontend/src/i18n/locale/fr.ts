@@ -162,20 +162,20 @@ export default {
 		other: "Il te reste {count} jours pour ta période d'essai gratuite.",
 	},
 	"Indexing budget": "Budget d'indexation",
-	"{available} of {capacity} tokens left": "{available} jetons restants sur {capacity}",
+	"{available} of {capacity} tokens left": "{available} de {capacity} jetons restants",
 	"Refills {perDay} tokens a day. Full again on {date}.":
 		"Remplit {perDay} jetons par jour. Rechargement complet le {date}.",
 	"All tokens are available.": "Tous les jetons sont disponibles.",
 	"{count} notes have keyword search only, until {date}.": {
-		one: "{count}. Les notes ont uniquement la recherche par mots-clés, jusqu'à {date}.",
-		many: "{count} notes ont uniquement la recherche par mots-clés, jusqu'à {date}.",
-		other: "{count} notes ont uniquement la recherche par mots-clés, jusqu'à {date}.",
+		one: "{count} note ne peut être trouvée qu'avec la recherche par mots-clés, jusqu'au {date}.",
+		many: "{count} notes ne sont accessibles qu'avec la recherche par mots-clés, jusqu'au {date}.",
+		other: "{count} notes ne sont accessibles qu'avec la recherche par mots-clés, jusqu'au {date}.",
 	},
 	"{count} notes have keyword search only, until the budget refills.": {
-		one: "{count}. Les notes ont une recherche par mots-clés, jusqu'à ce que le budget soit reconstitué.",
-		many: "{count} de notes avec recherche par mots-clés uniquement, jusqu'à ce que le budget soit reconstitué.",
+		one: "{count} note ne peut être trouvée qu'avec la recherche par mot-clé, jusqu'à ce que le budget soit reconstitué.",
+		many: "{count} notes ne sont accessibles qu'avec la recherche par mots-clés, jusqu'à ce que le budget soit reconstitué.",
 		other:
-			"{count} notes ont une recherche par mots-clés uniquement, jusqu'à ce que le budget soit reconstitué.",
+			"{count} notes ne sont accessibles qu'avec la recherche par mot-clé, jusqu'à ce que le budget soit reconstitué.",
 	},
 	"Loading current connection…": "Chargement de la connexion actuelle…",
 	"Disconnected. Retry the new connection now.":

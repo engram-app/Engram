@@ -181,6 +181,9 @@
 			"Manage your profile, password, and account.": "Gère ton profil, ton mot de passe et ton compte."
 		},
 		"descriptions": {
+			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
+			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
+			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -315,6 +318,9 @@
 			"Manage your profile, password, and account.": "プロフィール、パスワード、アカウントを管理します。"
 		},
 		"descriptions": {
+			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
+			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
+			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -516,6 +522,9 @@
 			"Manage your profile, password, and account.": "Gerencie seu perfil, sua senha e sua conta."
 		},
 		"descriptions": {
+			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
+			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
+			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -717,6 +726,9 @@
 			"Manage your profile, password, and account.": "管理你的资料、密码和账号。"
 		},
 		"descriptions": {
+			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
+			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
+			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -784,6 +796,9 @@
 			"Manage your profile, password, and account.": "管理你的個人資料、密碼與帳號。"
 		},
 		"descriptions": {
+			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
+			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
+			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -985,6 +1000,9 @@
 			"Manage your profile, password, and account.": "Profilinizi, şifrenizi ve hesabınızı yönetin."
 		},
 		"descriptions": {
+			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
+			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
+			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"3,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",

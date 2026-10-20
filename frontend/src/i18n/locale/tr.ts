@@ -158,17 +158,18 @@ export default {
 		other: "Ücretsiz denemenize {count} gün kaldı.",
 	},
 	"Indexing budget": "İndeksleme kotası",
-	"{available} of {capacity} tokens left": "{available} {capacity} adet belirteç kaldı",
+	"{available} of {capacity} tokens left": "{available} {capacity} token kaldı",
 	"Refills {perDay} tokens a day. Full again on {date}.":
 		"Günde {perDay} token doldurur. {date} tarihinde tekrar dolacaktır.",
 	"All tokens are available.": "Tüm jetonlar kullanılabilir.",
 	"{count} notes have keyword search only, until {date}.": {
-		one: "{count} not, yalnızca anahtar kelime aramasına izin veriyor, {date} tarihine kadar.",
-		other: "{count} not, yalnızca anahtar kelime aramasına izin veriyor, {date} tarihine kadar.",
+		one: "{count} not, yalnızca anahtar kelime aramasıyla bulunabilir, {date} tarihine kadar.",
+		other: "{count} not, yalnızca anahtar kelime aramasıyla bulunabilir, {date} tarihine kadar.",
 	},
 	"{count} notes have keyword search only, until the budget refills.": {
-		one: "{count} not için anahtar kelime araması mevcut, bakiye dolana kadar.",
-		other: "{count} not, bütçe dolana kadar sadece anahtar kelime araması yapar.",
+		one: "{count} not, yalnızca anahtar kelime aramasıyla bulunabilir, indeksleme bütçesi dolana kadar.",
+		other:
+			"{count} not, yalnızca anahtar kelime aramasıyla bulunabilir, indeksleme bütçesi dolana kadar.",
 	},
 	"Loading current connection…": "Bağlantı yükleniyor…",
 	"Disconnected. Retry the new connection now.":

@@ -145,7 +145,7 @@ export default {
 		"每日补充 {perDay} 个 token。将于 {date} 再次充满。",
 	"All tokens are available.": "所有令牌可用。",
 	"{count} notes have keyword search only, until {date}.": {
-		other: "{count} 笔记仅支持关键词搜索，直到 {date}。",
+		other: "{count} 笔记仅支持关键词搜索，截至 {date}。",
 	},
 	"{count} notes have keyword search only, until the budget refills.": {
 		other: "{count} 笔记仅支持关键词搜索，直到预算恢复。",

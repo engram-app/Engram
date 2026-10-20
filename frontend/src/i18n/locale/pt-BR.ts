@@ -164,19 +164,20 @@ export default {
 		other: "Faltam {count} dias para o fim do seu período de teste gratuito.",
 	},
 	"Indexing budget": "Orçamento de indexação",
-	"{available} of {capacity} tokens left": "Restam {available} de {capacity} tokens",
+	"{available} of {capacity} tokens left": "{available} de {capacity} tokens restantes",
 	"Refills {perDay} tokens a day. Full again on {date}.":
 		"Recarrega {perDay} tokens por dia. Completamente cheio novamente em {date}.",
 	"All tokens are available.": "Todos os tokens estão disponíveis.",
 	"{count} notes have keyword search only, until {date}.": {
-		one: "{count}. As notas têm apenas busca por palavra-chave, até {date}.",
-		many: "{count} notas têm apenas busca por palavra-chave, até {date}.",
-		other: "{count} notas têm busca por palavra-chave apenas, até {date}.",
+		one: "{count} nota tem busca por palavra-chave apenas, até {date}.",
+		many: "{count} notas têm busca por palavra-chave apenas, até {date}.",
+		other: "{count} notas podem ser encontradas apenas por busca por palavra-chave, até {date}.",
 	},
 	"{count} notes have keyword search only, until the budget refills.": {
-		one: "{count}. As notas têm busca por palavra-chave, até que o seu crédito seja reposto.",
-		many: "{count} notas têm apenas busca por palavra-chave, até que o crédito seja reposto.",
-		other: "{count} notas têm busca por palavra-chave, até que o limite seja reabastecido.",
+		one: "{count} nota só pode ser encontrada por busca por palavra-chave, até que o limite seja reabastecido.",
+		many: "{count} notas podem ser encontradas apenas por busca por palavra-chave, até que o limite seja reabastecido.",
+		other:
+			"{count} notas podem ser encontradas apenas por busca por palavra-chave, até que o limite seja reabastecido.",
 	},
 	"Loading current connection…": "Carregando a conexão atual…",
 	"Disconnected. Retry the new connection now.": "Desconectado. Tente reconectar agora.",
