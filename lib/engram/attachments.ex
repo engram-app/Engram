@@ -711,10 +711,18 @@ defmodule Engram.Attachments do
     # and rolled the whole folder rename back, so a revoked attachments grant
     # read as "you cannot rename a folder". Gate the user-initiated entry
     # points (`move_attachment/4`, `batch_move/4`); leave the cascade alone.
-    with :ok <- Billing.check_feature(user, :attachments_enabled) do
+    with :ok <- Billing.check_feature(user, :attachments_enabled),
+         :ok <- check_move_target(new_path) do
       do_move_attachment(user, vault, old_path, new_path)
     end
   end
+
+  # The executable blocklist on user moves: a rename is a write of the new
+  # path, so notes.txt -> evil.exe must meet the same gate as an upload.
+  # Folder renames (`rename_folder/4`) keep every basename and so cannot
+  # change an extension; they stay ungated, like the plan gate above.
+  defp check_move_target(new_path),
+    do: MimeWhitelist.check(nil, PathSanitizer.sanitize(new_path))
 
   defp do_move_attachment(user, vault, old_path, new_path) do
     old_path = PathSanitizer.sanitize(old_path)
@@ -930,7 +938,8 @@ defmodule Engram.Attachments do
 
     # User-initiated, so it carries its own gate — `move_pairs/4` runs the
     # UNGATED mover (see `move_attachment/4`) because `rename_folder/4` shares it.
-    with :ok <- Billing.check_feature(user, :attachments_enabled) do
+    with :ok <- Billing.check_feature(user, :attachments_enabled),
+         :ok <- Enum.find_value(pairs, :ok, &blocked_target/1) do
       # This surface tags conflict/not_found with the offending path so the REST
       # controller can name it in the 409/404 body (`{:conflict, path}`).
       case move_pairs(user, vault, pairs, &tag_move_error/2) do
@@ -962,6 +971,16 @@ defmodule Engram.Attachments do
         count -> count
       end
     end)
+  end
+
+  # nil when the pair's target passes the blocklist (`Enum.find_value/3`).
+  # A batch keeps basenames, so this refuses only a file stored while the
+  # bypass was on; refused all-or-nothing, like the rest of the batch.
+  defp blocked_target({_old, new_path}) do
+    case check_move_target(new_path) do
+      :ok -> nil
+      err -> err
+    end
   end
 
   # `batch_move/4`'s error shape: tag the offending path onto conflict/not_found,

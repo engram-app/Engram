@@ -343,8 +343,8 @@ defmodule EngramWeb.AttachmentsController do
     summary: "Rename / move an attachment",
     description:
       "Moves the attachment from `old_path` to `new_path`. Requires a plan with attachments " <>
-        "enabled (402 otherwise). Returns 404 when the source is missing and 409 when the target " <>
-        "path already exists.",
+        "enabled (402 otherwise). Returns 404 when the source is missing, 409 when the target " <>
+        "path already exists, and 415 when the new path has an executable extension.",
     tags: ["Attachments"],
     request_body: {"Old + new path", "application/json", Schemas.RenameRequest, required: true},
     responses: [
@@ -352,7 +352,9 @@ defmodule EngramWeb.AttachmentsController do
       payment_required:
         {"Attachments require a paid plan", "application/json", Schemas.LimitError},
       not_found: {"No such attachment", "application/json", Schemas.MessageError},
-      conflict: {"Target exists", "application/json", Schemas.MessageError}
+      conflict: {"Target exists", "application/json", Schemas.MessageError},
+      unsupported_media_type:
+        {"New path has an executable extension", "application/json", Schemas.MimeRejected}
     ]
   )
 
@@ -374,6 +376,9 @@ defmodule EngramWeb.AttachmentsController do
 
       {:error, :feature_not_available} ->
         attachments_disabled(conn)
+
+      {:error, {:extension_not_allowed, ext}} ->
+        conn |> put_status(415) |> json(%{error: "extension_not_allowed", extension: ext})
 
       {:error, reason} = error when reason in [:conflict, :not_found] ->
         error
@@ -398,6 +403,9 @@ defmodule EngramWeb.AttachmentsController do
         {"Attachments require a paid plan", "application/json", Schemas.LimitError},
       not_found: {"An item was not found", "application/json", Schemas.BatchItemError},
       conflict: {"An item conflicts at target", "application/json", Schemas.BatchItemError},
+      unsupported_media_type:
+        {"An item has an executable extension (stored while the self-host bypass was on)",
+         "application/json", Schemas.MimeRejected},
       unprocessable_entity: {"Target path cleans to nothing", "application/json", Schemas.Error}
     ]
   )
@@ -429,6 +437,9 @@ defmodule EngramWeb.AttachmentsController do
 
       {:error, {:not_found, p}} ->
         conn |> put_status(404) |> json(%{error: "not_found", item_path: p})
+
+      {:error, {:extension_not_allowed, ext}} ->
+        conn |> put_status(415) |> json(%{error: "extension_not_allowed", extension: ext})
 
       {:error, _} = error ->
         error

@@ -102,6 +102,23 @@ defmodule Engram.MCP.HandlersWriteContractTest do
 
       assert msg =~ "not found"
     end
+
+    test "move_attachment refuses a rename onto an executable extension", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} =
+        Engram.Attachments.upsert_attachment(user, vault, %{path: "notes.txt", content: "MZ"})
+
+      assert {:error, msg} =
+               Handlers.handle("move_attachment", user, vault, %{
+                 "old_path" => "notes.txt",
+                 "new_path" => "evil.exe"
+               })
+
+      assert msg =~ ".exe"
+      assert msg =~ "not allowed"
+    end
   end
 
   describe "successes carry their payload" do

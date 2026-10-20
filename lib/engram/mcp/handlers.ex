@@ -661,6 +661,9 @@ defmodule Engram.MCP.Handlers do
       {:error, :feature_not_available} ->
         {:error, "attachments_enabled: not on your plan"}
 
+      {:error, {:extension_not_allowed, ext}} ->
+        {:error, "Executable file type not allowed: #{ext}"}
+
       # Catch-all (Bug 2): move_attachment's crypto `with` head can return an
       # arbitrary {:error, reason}; without this clause it CaseClauseError'd → 500.
       {:error, reason} ->

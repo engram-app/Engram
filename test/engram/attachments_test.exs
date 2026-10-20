@@ -1241,6 +1241,63 @@ defmodule Engram.AttachmentsTest do
     end
   end
 
+  # A rename is a write of the new path: without the gate, upload notes.txt
+  # and rename it to evil.exe. Folder renames keep every basename, so they
+  # cannot change an extension and stay ungated.
+  describe "the executable blocklist on moves" do
+    setup %{user: user, vault: vault} do
+      Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+      put_attachment(user, vault, "notes.txt")
+
+      prev = Application.get_env(:engram, :attachment_mime_bypass)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:engram, :attachment_mime_bypass, prev),
+          else: Application.delete_env(:engram, :attachment_mime_bypass)
+      end)
+
+      :ok
+    end
+
+    # A file stored while an operator had the bypass on (or before the list
+    # grew to cover it).
+    defp legacy_blocked!(user, vault, path) do
+      Application.put_env(:engram, :attachment_mime_bypass, true)
+      put_attachment(user, vault, path)
+      Application.delete_env(:engram, :attachment_mime_bypass)
+    end
+
+    test "a rename onto a blocked extension is refused and moves nothing", %{
+      user: user,
+      vault: vault
+    } do
+      for target <- ["evil.exe", "evil.exe.", "dir/EVIL.EXE "] do
+        assert {:error, {:extension_not_allowed, ".exe"}} =
+                 Attachments.move_attachment(user, vault, "notes.txt", target),
+               inspect(target)
+      end
+
+      assert live_paths(user, vault) == ["notes.txt"]
+    end
+
+    test "a batch move of a blocked file is refused", %{user: user, vault: vault} do
+      legacy_blocked!(user, vault, "tool.exe")
+
+      assert {:error, {:extension_not_allowed, ".exe"}} =
+               Attachments.batch_move(user, vault, ["notes.txt", "tool.exe"], "dir")
+
+      assert live_paths(user, vault) == ["notes.txt", "tool.exe"]
+    end
+
+    test "a folder rename still moves a blocked file it holds", %{user: user, vault: vault} do
+      legacy_blocked!(user, vault, "Docs/tool.exe")
+
+      assert {:ok, 1} = Attachments.rename_folder(user, vault, "Docs", "Archive")
+      assert "Archive/tool.exe" in live_paths(user, vault)
+    end
+  end
+
   describe "rename_folder/4 (attachment cascade)" do
     test "moves nested attachments under the folder, preserving structure", %{
       user: user,

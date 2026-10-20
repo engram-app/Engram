@@ -9,14 +9,14 @@ deferred but the milestone trigger is documented here.
 ## Phase 1 - shipped
 
 **Module:** `Engram.Storage.MimeWhitelist`
-**Enforced in:** `Engram.Attachments.upsert_attachment/3`, so REST, MCP, Oban and console callers all hit it. `AttachmentsController` also checks it to shape the 415, after the Free-tier text-only gate (402).
+**Enforced in:** `Engram.Attachments.upsert_attachment/3`, `Engram.Attachments.Uploads.start/3`, and the user moves (`move_attachment/4`, `batch_move/4`: a rename onto `.exe` is a write too), so REST, MCP, Oban and console callers all hit it. `AttachmentsController` also checks it to shape the 415, after the Free-tier text-only gate (402).
 **Normalization:** decisions use `MimeWhitelist.normalize/1` (params stripped, trimmed, downcased); `\n`, `\r` and `\0` are rejected before normalizing. The stored MIME is the uploader's exact string.
-**Rule:** every file type is accepted EXCEPT executables, judged on the file's last extension (case-insensitive), whatever `mime_type` the client claims. `blocked_extensions/0` returns the list.
+**Rule:** every file type is accepted EXCEPT executables, judged on the file's last extension (case-insensitive, after stripping trailing dots and spaces, which Windows drops on write: `evil.exe.` is saved as `evil.exe`), whatever `mime_type` the client claims. `blocked_extensions/0` returns the list.
 **Rejection status:** HTTP 415 `{"error": "extension_not_allowed", "extension": ".exe"}`; a `mime_type` containing `\n`, `\r` or `\0` is HTTP 422 `{"error": "invalid_mime_type"}` (it is stored verbatim and would 500 on every read).
 
 ### Executable blocklist (extensions)
 
-`.exe`, `.dll`, `.com`, `.scr`, `.bat`, `.cmd`, `.vbs`, `.vbe`, `.ps1`, `.psm1`, `.msi`, `.msp`, `.app`, `.dmg`, `.pkg`, `.deb`, `.rpm`, `.apk`, `.ipa`, `.jar`, `.class`, `.sh`, `.bash`, `.zsh`, `.fish`, `.so`, `.dylib`, `.lnk`, `.reg`, `.hta`, `.cpl`, `.gadget`, `.iso`, `.msix`, `.msixbundle`, `.appx`, `.appxbundle`, `.appimage`, `.run`, `.xpi`, `.crx`.
+`.exe`, `.dll`, `.com`, `.scr`, `.bat`, `.cmd`, `.vbs`, `.vbe`, `.ps1`, `.psm1`, `.msi`, `.msp`, `.app`, `.dmg`, `.pkg`, `.deb`, `.rpm`, `.apk`, `.ipa`, `.jar`, `.class`, `.sh`, `.bash`, `.zsh`, `.fish`, `.so`, `.dylib`, `.lnk`, `.reg`, `.hta`, `.cpl`, `.gadget`, `.iso`, `.msix`, `.msixbundle`, `.appx`, `.appxbundle`, `.appimage`, `.run`, `.xpi`, `.crx`, `.pif`, `.wsf`, `.wsh`, `.jse`, `.msc`, `.scf`, `.url`, `.application`, `.appref-ms`, `.settingcontent-ms`, `.chm`.
 
 Why a blocklist: an allowlist silently failed legitimate vault files and an attachment is just bytes we never execute, so only double-click executables are refused. Large files are covered by `attachment-chunked-upload.md`.
 

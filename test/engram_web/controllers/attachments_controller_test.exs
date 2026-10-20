@@ -1166,6 +1166,26 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
       assert json_response(conn, 404)["error"] == "not_found"
     end
+
+    test "onto an executable extension → 415, nothing moves", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{path: "notes.txt", content: "MZ"})
+
+      assert %{"error" => "extension_not_allowed", "extension" => ".exe"} =
+               conn
+               |> post("/api/attachments/rename", %{
+                 "old_path" => "notes.txt",
+                 "new_path" => "evil.exe."
+               })
+               |> json_response(415)
+
+      {:ok, metas} = Attachments.list_attachments(Engram.Repo.reload!(user), vault)
+      assert Enum.map(metas, & &1.path) == ["notes.txt"]
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -1250,6 +1270,37 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
       {:ok, metas} = Attachments.list_attachments(Engram.Repo.reload!(user), vault)
       assert Enum.map(metas, & &1.path) == ["keep/a.png"]
+    end
+  end
+
+  describe "POST /attachments/batch-move of a blocked file" do
+    setup do
+      prev = Application.get_env(:engram, :attachment_mime_bypass)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:engram, :attachment_mime_bypass, prev),
+          else: Application.delete_env(:engram, :attachment_mime_bypass)
+      end)
+    end
+
+    test "is 415 and moves nothing", %{conn: conn, user: user, vault: vault} do
+      # Stored while an operator had the bypass on.
+      Application.put_env(:engram, :attachment_mime_bypass, true)
+      {:ok, _} = Attachments.upsert_attachment(user, vault, %{path: "tool.exe", content: "MZ"})
+      Application.delete_env(:engram, :attachment_mime_bypass)
+
+      assert %{"error" => "extension_not_allowed", "extension" => ".exe"} =
+               conn
+               |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
+               |> post("/api/attachments/batch-move", %{
+                 "paths" => ["tool.exe"],
+                 "target_folder" => "bin"
+               })
+               |> json_response(415)
+
+      {:ok, metas} = Attachments.list_attachments(Engram.Repo.reload!(user), vault)
+      assert Enum.map(metas, & &1.path) == ["tool.exe"]
     end
   end
 
