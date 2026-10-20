@@ -54,12 +54,16 @@ defmodule Engram.Analytics do
   @doc """
   Record that `user` was active on `surface`. Emits `surface_active` at most
   once per user and surface per 5-minute fixed window (cluster-shared limiter).
-  `props` can never override `surface`.
+  `props` can never override `surface`. `:dedupe` gives an activity its own
+  window within a surface, so a frequent one (browsing) cannot mask a rarer
+  one (editing) that shares the surface.
   """
-  @spec track_activity(map(), surface(), map()) :: :ok
-  def track_activity(user, surface, props \\ %{}) when surface in @surfaces do
-    props = props |> Map.drop([:surface, "surface"]) |> Map.put(:surface, Atom.to_string(surface))
-    track_throttled(user, "surface_active", Atom.to_string(surface), @activity_window_ms, props)
+  @spec track_activity(map(), surface(), map(), keyword()) :: :ok
+  def track_activity(user, surface, props \\ %{}, opts \\ []) when surface in @surfaces do
+    surface = Atom.to_string(surface)
+    props = props |> Map.drop([:surface, "surface"]) |> Map.put(:surface, surface)
+    dedupe = Keyword.get(opts, :dedupe, surface)
+    track_throttled(user, "surface_active", dedupe, @activity_window_ms, props)
   end
 
   @doc """

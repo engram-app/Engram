@@ -1991,10 +1991,17 @@ defmodule EngramWeb.CrdtChannel do
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new()
 
+    client_type = socket.assigns[:client_type]
+
+    # The web editor shares surface "web" with browsing; its own window keeps
+    # an edit from being throttled away by a page load a minute earlier.
+    opts = if client_type == "web", do: [dedupe: "web_editor"], else: []
+
     Engram.Analytics.track_activity(
       socket.assigns.current_user,
-      activity_surface(socket.assigns[:client_type]),
-      props
+      activity_surface(client_type),
+      props,
+      opts
     )
   end
 

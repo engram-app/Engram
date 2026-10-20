@@ -3426,6 +3426,42 @@ defmodule EngramWeb.CrdtChannelTest do
       assert body["properties"]["surface"] == "web"
     end
 
+    # Browsing (the Clerk plug) and editing share surface "web"; a shared
+    # throttle let whichever came first in the window hide the other.
+    test "web editor activity is not masked by web browsing in the same window", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, note} =
+        Notes.upsert_note(user, vault, %{"path" => "Notes/m.md", "content" => "base"},
+          actor: "api"
+        )
+
+      Engram.Analytics.track_activity(user, :web)
+
+      {:ok, _, joined} =
+        subscribe_and_join(
+          user_socket(user),
+          EngramWeb.CrdtChannel,
+          "crdt:#{user.id}:#{vault.id}",
+          %{
+            "crdt_proto" => 2,
+            "client_type" => "web"
+          }
+        )
+
+      Sandbox.allow(Repo, self(), joined.channel_pid)
+
+      frame = client_sync_update(joined, note.id, "MASK-")
+      ref = push(joined, "crdt_doc_update", %{"doc_id" => note.id, "b64" => Base.encode64(frame)})
+      assert_reply ref, :ok, %{doc_id: _}, 3000
+
+      Process.sleep(400)
+      active = Enum.filter(drain_posthog([]), &(&1["event"] == "surface_active"))
+      assert length(active) == 2
+      assert Enum.any?(active, &(&1["properties"]["client_type"] == "web"))
+    end
+
     test "creating a note over crdt_create is obsidian_sync activity", %{socket: socket} do
       ref =
         push(socket, "crdt_create", %{"doc_id" => Ecto.UUID.generate(), "path" => "Notes/new.md"})
