@@ -266,9 +266,15 @@ defmodule Engram.Indexing do
 
   @floor_tiers ["floor", "floor_paid"]
 
-  # A pass that changes how the note is grouped: it writes before it deletes.
+  # A pass that changes how the note is grouped writes before it deletes,
+  # and with the budget on every pass does (review L1): purging by path
+  # filter first let a stale pass, about to roll back as superseded, wipe
+  # the newer edit's points. Deleting only after the locked content check
+  # commits closes that. Off, passes keep their pre-budget order.
   defp regroup?(note, plan),
-    do: merged?(plan) or Map.get(note, :index_tier) != nil or Map.get(note, :chunk_count) != nil
+    do:
+      budget_enabled?() or merged?(plan) or Map.get(note, :index_tier) != nil or
+        Map.get(note, :chunk_count) != nil
 
   defp merged?(plan), do: Enum.any?(plan.entries, &Map.get(entry_chunk(&1), :merged, false))
 

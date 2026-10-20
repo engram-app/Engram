@@ -900,6 +900,38 @@ defmodule Engram.IndexingNoteCapTest do
       assert {:error, :superseded} = Indexing.commit_index(prepared)
       assert rows_for(note) == []
     end
+
+    # Review L1: checked before the purge too. A stale pass that purged by
+    # path filter first wiped the newer edit's points, then rolled back.
+    test "deletes nothing from Qdrant", %{user: user, vault: vault} do
+      note = insert_note(user, vault, sections(10))
+      stub_embedder()
+      {:ok, prepared} = Indexing.prepare_index(note, %Engram.Vaults.Vault{}, user)
+
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.update_all(from(n in Note, where: n.id == ^note.id),
+            set: [content_hash: "newer-edit"]
+          )
+        end)
+
+      bypass = Bypass.open()
+      ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+      parent = self()
+
+      Bypass.stub(bypass, :any, :any, fn conn ->
+        send(parent, {:qdrant, conn.method, conn.request_path})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": true}))
+      end)
+
+      _ = deletes()
+
+      assert {:error, :superseded} = Indexing.commit_index(prepared)
+      assert deletes() == 0
+    end
   end
 
   # Review M4: a recap or promotion writes its new points before it deletes
