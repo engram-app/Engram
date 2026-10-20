@@ -206,29 +206,24 @@ defmodule Engram.UsageMeters do
 
   @doc "When a bucket holding `available` of `capacity` is full again; nil when it already is."
   @spec bucket_full_at(non_neg_integer(), non_neg_integer(), DateTime.t()) :: DateTime.t() | nil
-  def bucket_full_at(available, capacity, %DateTime{}) when available >= capacity, do: nil
-
-  def bucket_full_at(available, capacity, %DateTime{} = now) do
-    missing = capacity - available
-    seconds = div(missing * @bucket_refill_seconds + capacity - 1, capacity)
-    DateTime.add(now, seconds, :second)
-  end
+  def bucket_full_at(available, capacity, %DateTime{} = now),
+    do: bucket_ready_at(available, capacity, capacity, now)
 
   @doc """
-  Refills the bucket to full. Called when a subscription becomes paid, so a
-  later downgrade to Free starts with the whole allowance instead of whatever
-  was left before the upgrade.
+  When a bucket of `capacity` holding `available` reaches `need` (capped at
+  the capacity); nil when it already holds it, or never refills.
   """
-  @spec reset_embed_bucket(Ecto.UUID.t()) :: :ok
-  def reset_embed_bucket(user_id) when is_binary(user_id) do
-    {_, _} =
-      Repo.update_all(
-        from(m in Meter, where: m.user_id == ^user_id),
-        [set: [embed_bucket_tokens: nil, embed_bucket_at: nil]],
-        skip_tenant_check: true
-      )
+  @spec bucket_ready_at(non_neg_integer(), non_neg_integer(), non_neg_integer(), DateTime.t()) ::
+          DateTime.t() | nil
+  def bucket_ready_at(available, need, capacity, %DateTime{} = now) do
+    target = min(need, capacity)
 
-    :ok
+    if available >= target or capacity <= 0 do
+      nil
+    else
+      seconds = div((target - available) * @bucket_refill_seconds + capacity - 1, capacity)
+      DateTime.add(now, seconds, :second)
+    end
   end
 
   defp rate(capacity), do: capacity / @bucket_refill_seconds
