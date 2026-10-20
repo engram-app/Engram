@@ -19,6 +19,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
   alias Engram.Repo
   alias Engram.Test.LogCapture
+  alias Engram.Vector.FilterId
   alias Engram.Vector.Qdrant
   alias Yex.Sync.SharedDoc
 
@@ -958,9 +959,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert open.(:status, raw.status_ciphertext, raw.status_nonce) == {:ok, "Draft"}
       assert open.(:author, raw.author_ciphertext, raw.author_nonce) == {:ok, "alice"}
       assert open.(:source, raw.source_ciphertext, raw.source_nonce) == {:ok, ~s(["https://a"])}
-      assert raw.status_hmac == Engram.Vector.FilterId.value_hmac(new_fk, "draft")
-      assert raw.author_hmac == Engram.Vector.FilterId.value_hmac(new_fk, "alice")
-      refute raw.status_hmac == Engram.Vector.FilterId.value_hmac(fk, "draft")
+      assert raw.status_hmac == FilterId.value_hmac(new_fk, "draft")
+      assert raw.author_hmac == FilterId.value_hmac(new_fk, "alice")
+      refute raw.status_hmac == FilterId.value_hmac(fk, "draft")
     end
   end
 

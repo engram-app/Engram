@@ -17,11 +17,11 @@ defmodule Engram.Indexing.PayloadV5 do
   strings to keep a point small.
   """
 
+  import Engram.Vector.PayloadKeys, only: [short: 1]
+
   alias Engram.Notes.FlatFields
   alias Engram.Notes.OkfFields
   alias Engram.Vector.FilterId
-
-  import Engram.Vector.PayloadKeys, only: [short: 1]
 
   @file_src 1
   @server_src 2

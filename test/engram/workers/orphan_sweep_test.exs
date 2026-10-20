@@ -1,8 +1,8 @@
 defmodule Engram.Workers.OrphanSweepTest do
   use Engram.DataCase, async: false
+  use Oban.Testing, repo: Engram.Repo
 
   import Engram.QdrantFilterView
-  use Oban.Testing, repo: Engram.Repo
 
   alias Engram.Storage
   alias Engram.Test.LogCapture
