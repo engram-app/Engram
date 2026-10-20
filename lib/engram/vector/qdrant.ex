@@ -1539,7 +1539,7 @@ defmodule Engram.Vector.Qdrant do
       using: "dense",
       filter: build_tenant_filter(search_opts),
       limit: Keyword.get(search_opts, :limit, 5),
-      with_payload: true
+      with_payload: result_payload()
     }
 
     base
@@ -1803,7 +1803,7 @@ defmodule Engram.Vector.Qdrant do
       using: "keyword",
       filter: build_tenant_filter(search_opts),
       limit: Keyword.get(search_opts, :limit, 5),
-      with_payload: true
+      with_payload: result_payload()
     }
     |> maybe_with_vector(search_opts)
   end
@@ -1844,16 +1844,23 @@ defmodule Engram.Vector.Qdrant do
     end)
   end
 
-  # The payload keys `search_results/1` reads; nothing else is fetched.
-  @result_payload ~w(text title heading_path source_path tags vault_id text_nonce
+  # The payload keys `search_results/1` reads; nothing else is fetched, on
+  # every search path (Task 15.7). `u` only marks a v5 point (its AAD is
+  # implied bound), so it is asked for only with the v5 format on. With
+  # `:chunk_text_read` on, search takes each hit's vault from its chunk row
+  # (the filter already scopes it), so `vault_id` is not fetched.
+  @result_payload ~w(text title heading_path source_path tags text_nonce
                      title_nonce heading_path_nonce aad_version)
+
+  defp result_payload do
+    keys = if v5_payload_format?(), do: @result_payload ++ ["u"], else: @result_payload
+    if ServiceConfig.get(:chunk_text_read, false), do: keys, else: ["vault_id" | keys]
+  end
 
   defp retrieve(_col, [], _search_opts), do: {:ok, []}
 
   defp retrieve(col, ids, search_opts) do
-    # `u` only marks a v5 point (its AAD is implied bound, Task 15.7).
-    keys = if v5_payload_format?(), do: @result_payload ++ ["u"], else: @result_payload
-    body = maybe_with_vector(%{ids: ids, with_payload: keys}, search_opts)
+    body = maybe_with_vector(%{ids: ids, with_payload: result_payload()}, search_opts)
     do_query(col, "/points", [json: body] ++ req_opts(:search), &{:ok, search_results(&1)})
   end
 
@@ -1928,7 +1935,7 @@ defmodule Engram.Vector.Qdrant do
       using: "dense",
       filter: Map.put(build_tenant_filter(search_opts), :must_not, has_ids(point_ids)),
       limit: Keyword.get(search_opts, :limit, 5),
-      with_payload: true
+      with_payload: result_payload()
     }
     |> then(fn b ->
       case quantization_params(search_opts) do

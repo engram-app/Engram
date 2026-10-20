@@ -206,6 +206,87 @@ defmodule Engram.Notes do
   end
 
   @doc """
+  Task 11.3: everything a search hit shows, from Postgres, in ONE
+  tenant-scoped query keyed by the hits' point ids: the chunk row's vault and
+  encrypted text and heading, and the note's display fields. A point id with
+  no chunk row is absent (a stale point the caller drops); a soft-deleted
+  note maps to `:deleted`; a row whose text or note does not decrypt maps to
+  `:undecryptable`. `text`/`heading_path` are nil when the row was written
+  without them (the caller falls back to the payload).
+  """
+  @spec search_hits_by_qdrant_points(Engram.Accounts.User.t(), [String.t()]) ::
+          %{String.t() => map() | :deleted | :undecryptable}
+  def search_hits_by_qdrant_points(_user, []), do: %{}
+
+  def search_hits_by_qdrant_points(user, qdrant_ids) when is_list(qdrant_ids) do
+    uuids =
+      for id <- qdrant_ids, is_binary(id), {:ok, u} <- [Ecto.UUID.cast(id)], uniq: true, do: u
+
+    {:ok, rows} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.all(
+          from(c in Chunk,
+            join: n in ^notes_only(),
+            on: n.id == c.note_id,
+            where: c.qdrant_point_id in ^uuids,
+            select:
+              {map(c, [
+                 :qdrant_point_id,
+                 :vault_id,
+                 :text_ciphertext,
+                 :text_nonce,
+                 :heading_ciphertext,
+                 :heading_nonce
+               ]), struct(n, @note_meta_fields)}
+          )
+        )
+      end)
+
+    {chunks, notes} = Enum.unzip(rows)
+
+    dek =
+      with true <- Enum.any?(chunks, & &1.text_ciphertext),
+           {:ok, dek} <- Crypto.get_dek(user),
+           do: dek,
+           else: (_ -> nil)
+
+    notes
+    |> Crypto.decrypt_notes_batch(user)
+    |> Enum.zip(chunks)
+    |> Map.new(fn {decrypted, chunk} ->
+      qid = to_string(chunk.qdrant_point_id)
+      {qid, search_hit(decrypted, chunk, dek, qid)}
+    end)
+  end
+
+  defp search_hit({:ok, %{deleted_at: %DateTime{}}}, _chunk, _dek, _qid), do: :deleted
+  defp search_hit({:error, _}, _chunk, _dek, _qid), do: :undecryptable
+
+  defp search_hit({:ok, note}, chunk, dek, qid) do
+    text =
+      cond do
+        is_nil(chunk.text_ciphertext) -> :none
+        is_binary(dek) -> Crypto.decrypt_chunk_text(chunk, dek, qid)
+        true -> :error
+      end
+
+    hit = %{
+      vault_id: to_string(chunk.vault_id),
+      source_path: note.path,
+      title: note.title,
+      tags: note.tags || [],
+      text: nil,
+      heading_path: nil
+    }
+
+    case text do
+      {:ok, {text, heading}} -> %{hit | text: text, heading_path: heading}
+      :none -> hit
+      :error -> :undecryptable
+    end
+  end
+
+  @doc """
   Mints a new note primary key app-side as a v7 UUID string.
 
   Used at the context boundary so the id is available before INSERT —

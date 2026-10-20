@@ -472,7 +472,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
               char_start: 0,
               char_end: 1,
               qdrant_point_id: point_id,
-              created_at: DateTime.utc_now() |> DateTime.truncate(:second)
+              created_at: DateTime.utc_now(:second)
             },
             Crypto.encrypt_chunk_text(text, "H#{pos}", old_dek, point_id)
           )
