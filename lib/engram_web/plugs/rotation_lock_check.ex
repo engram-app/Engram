@@ -44,7 +44,7 @@ defmodule EngramWeb.Plugs.RotationLockCheck do
 
           # REST: the write's own tenant transaction reads the lock in its
           # tenant_enter (RotationGate.gated/1), one round trip fewer, and a
-          # locked user's write raises RotationInProgress (503) before it
+          # locked user's write raises RotationInProgressError (503) before it
           # writes anything.
           true ->
             gate_request(conn)

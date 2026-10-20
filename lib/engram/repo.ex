@@ -312,7 +312,7 @@ defmodule Engram.Repo do
               source: "tenant_enter"
             )
 
-          if gated? and List.last(row), do: raise(Engram.Crypto.RotationInProgress)
+          if gated? and List.last(row), do: raise(Engram.Crypto.RotationInProgressError)
 
           result = fun.()
 

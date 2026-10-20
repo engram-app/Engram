@@ -40,7 +40,7 @@ defmodule EngramWeb.Plugs.RotationLockCheckCacheTest do
       assert Enum.filter(qs, &(&1.caller =~ "RotationLockCheck")) == []
 
       # The write's own transaction sees the DB lock and refuses.
-      assert_raise Engram.Crypto.RotationInProgress, fn ->
+      assert_raise Engram.Crypto.RotationInProgressError, fn ->
         Engram.Repo.with_tenant(user.id, fn -> :write end)
       end
 
@@ -53,7 +53,7 @@ defmodule EngramWeb.Plugs.RotationLockCheckCacheTest do
 
     test "a refused write renders the halt's body" do
       assert EngramWeb.ErrorJSON.render("503.json", %{
-               reason: %Engram.Crypto.RotationInProgress{}
+               reason: %Engram.Crypto.RotationInProgressError{}
              }) == %{error: "rotation_in_progress"}
     end
 
@@ -115,7 +115,7 @@ defmodule EngramWeb.Plugs.RotationLockCheckCacheTest do
       |> assign(:current_user, user)
       |> RotationLockCheck.call([])
 
-      assert_raise Engram.Crypto.RotationInProgress, fn ->
+      assert_raise Engram.Crypto.RotationInProgressError, fn ->
         Engram.Repo.with_tenant(user.id, fn -> :write end)
       end
     end

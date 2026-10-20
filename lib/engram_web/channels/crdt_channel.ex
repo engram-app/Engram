@@ -401,7 +401,7 @@ defmodule EngramWeb.CrdtChannel do
       case Notes.genesis_crdt_note(user, vault, note_id, path,
              origin: socket.assigns[:client_type],
              seed: seed,
-             body: with({:ok, doc} <- body, do: doc, else: (_ -> nil))
+             body: body_doc(body)
            ) do
         # A bulk import creates notes without ever sending an edit frame, so
         # count the create itself or an import-only user never shows as active.
@@ -969,6 +969,9 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   defp genesis_body(_b64, _path), do: {:error, :b64_not_binary}
+
+  defp body_doc({:ok, doc}), do: doc
+  defp body_doc({:error, _}), do: nil
 
   # A fresh row inserted with the genesis body (Notes.genesis_insert_bare/7):
   # nothing left to write. Inside the row transaction, after the insert: the

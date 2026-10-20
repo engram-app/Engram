@@ -138,7 +138,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
         # The lock is read fresh, not off `user` (the `:user` cache learns of
         # a lock taken on another node only when its eviction lands): `gated/1`
         # reads it in the checkpoint transaction's own tenant_enter, and a
-        # locked user raises RotationInProgress before anything is written
+        # locked user raises RotationInProgressError before anything is written
         # (do_checkpoint's rescue reports :skipped). Skipping prunes nothing,
         # so every edit stays in the tail-WAL and replays on the next bind.
         RotationGate.gated(fn -> do_checkpoint(user, user_id, vault_id, note_id, live, opts) end)
@@ -353,7 +353,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
         :skipped
     end
   rescue
-    Engram.Crypto.RotationInProgress ->
+    Engram.Crypto.RotationInProgressError ->
       Logger.warning(
         "crdt checkpoint skipped — dek rotation in progress note_id=#{note_id}",
         Metadata.with_category(:warning, :sync, note_id: note_id)

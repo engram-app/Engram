@@ -17,7 +17,7 @@ defmodule EngramWeb.ErrorJSON do
   # "Not Found".
   # Same body as RotationLockCheck's halt, for a write refused in its own
   # tenant transaction (Engram.Crypto.RotationGate.gated/1).
-  def render("503.json", %{reason: %Engram.Crypto.RotationInProgress{}}),
+  def render("503.json", %{reason: %Engram.Crypto.RotationInProgressError{}}),
     do: %{error: "rotation_in_progress"}
 
   def render(template, _assigns) do

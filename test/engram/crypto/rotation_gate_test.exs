@@ -48,7 +48,7 @@ defmodule Engram.Crypto.RotationGateTest do
     test "a tenant transaction for a locked user raises before fun runs", %{user: user} do
       lock_user!(user.id)
 
-      assert_raise Engram.Crypto.RotationInProgress, fn ->
+      assert_raise Engram.Crypto.RotationInProgressError, fn ->
         RotationGate.gated(fn ->
           Repo.with_tenant(user.id, fn -> send(self(), :ran) end)
         end)
