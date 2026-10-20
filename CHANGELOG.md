@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.58.1](https://github.com/engram-app/Engram/compare/0.58.0...0.58.1) (2026-10-20)
+
+
+### Bug Fixes
+
+* **ci:** run every CI Postgres on tmpfs ([#2071](https://github.com/engram-app/Engram/issues/2071)) ([15078e4](https://github.com/engram-app/Engram/commit/15078e437fcee4916d414c945a25dcb64f8b9d9d))
+* **logs:** GET /api/logs since no longer drops same-second rows ([#2072](https://github.com/engram-app/Engram/issues/2072)) ([6c3a44e](https://github.com/engram-app/Engram/commit/6c3a44e60830e9c94883d2d04c8bfdc265de821f))
+* root-cause the week's Sentry errors and alert noise ([#2073](https://github.com/engram-app/Engram/issues/2073)) ([ccf8dcc](https://github.com/engram-app/Engram/commit/ccf8dcc6006d0527a10e1920234dd339fba194c8))
+* **search:** no-rebuild hardening before chunker v5 ([#2066](https://github.com/engram-app/Engram/issues/2066)) ([68c73fd](https://github.com/engram-app/Engram/commit/68c73fd27ba498d22dcc95d4ec390fcf6c9f84c0))
+
+
+### Performance Improvements
+
+* **e2e:** replace fixed sleeps with quiescence barrier ([#2052](https://github.com/engram-app/Engram/issues/2052)) ([ceba394](https://github.com/engram-app/Engram/commit/ceba39407ebd244ba45dfe55c54eac12e913ff5b))
+
 ## [0.58.0](https://github.com/engram-app/Engram/compare/0.57.0...0.58.0) (2026-10-20)
 
 
