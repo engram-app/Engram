@@ -114,14 +114,26 @@ defmodule Engram.Attachments do
         # T3-audit H1 — the content AAD binds the row id, so if the locked
         # re-read finds a different row holding the path, re-encrypt for its
         # id and re-PUT, to the same fresh key (rare race path only).
-        commit_row(user, vault, path, path_hmac, byte_size(plaintext), dek_version, fn
-          %Attachment{id: id} when id != att_id0 ->
-            with {:ok, attrs1, ciphertext1} <- prepare.(id),
-                 :ok <- store_external(key, ciphertext1, attrs1.mime_type),
-                 do: {:ok, id, attrs1}
+        reprepare = fn id ->
+          with {:ok, attrs1, ciphertext1} <- prepare.(id),
+               :ok <- store_external(key, ciphertext1, attrs1.mime_type),
+               do: {:ok, id, attrs1}
+        end
 
-          _ ->
-            {:ok, att_id0, attrs0}
+        deleting_blob_on_raise(user, vault, key, fn ->
+          commit_row(user, vault, path, path_hmac, byte_size(plaintext), dek_version, fn
+            %Attachment{id: id} when id != att_id0 ->
+              reprepare.(id)
+
+            # The row read before the lock was deleted (or moved) since: its
+            # id stays taken by the tombstone, so a fresh row needs a fresh
+            # id (as `Uploads` does for a claimed id).
+            nil when not is_nil(existing0) ->
+              reprepare.(Ecto.UUID.generate())
+
+            _ ->
+              {:ok, att_id0, attrs0}
+          end)
         end)
         |> tap(fn
           {:ok, _} -> :ok
@@ -129,6 +141,23 @@ defmodule Engram.Attachments do
         end)
       end
     end
+  end
+
+  # A raise in the locked write (a storage client error on the re-PUT, a
+  # constraint) must not orphan the fresh blob. Deleted only while no row
+  # points at it, so a raise after the commit cannot reach a live blob.
+  defp deleting_blob_on_raise(user, vault, key, fun) do
+    fun.()
+  rescue
+    e ->
+      unless blob_referenced?(user, vault, key), do: delete_external(key)
+      reraise e, __STACKTRACE__
+  end
+
+  defp blob_referenced?(user, vault, key) do
+    Repo.with_tenant!(user.id, fn ->
+      Repo.exists?(from(a in scoped(user, vault), where: a.storage_key == ^key))
+    end)
   end
 
   @doc false

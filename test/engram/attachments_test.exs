@@ -1122,6 +1122,47 @@ defmodule Engram.AttachmentsTest do
       assert blobs(user, vault) == Enum.sort([a.storage_key, other.storage_key])
       assert content(user, vault, "a.txt") == :binary.copy("a", 10)
     end
+
+    # The tombstone keeps the deleted row's id, so writing under it raised
+    # Ecto.ConstraintError and orphaned the fresh blob.
+    test "the live row deleted before the lock: a fresh row, readable, no orphan blob", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, a} = upsert(user, vault, "a.txt", "original")
+      during_first_put(fn -> :ok = Attachments.delete_attachment(user, vault, "a.txt") end)
+
+      assert {:ok, b} = upsert(user, vault, "a.txt", "replacement")
+      refute b.id == a.id
+      assert content(user, vault, "a.txt") == "replacement"
+      assert blobs(user, vault) == [b.storage_key]
+    end
+
+    test "a raise after the PUT still deletes the fresh blob", %{user: user, vault: vault} do
+      {:ok, _} = upsert(user, vault, "a.txt", "original")
+      puts = :counters.new(1, [])
+
+      # First PUT: the row is deleted under it. Second (the re-PUT for a fresh
+      # id, inside the locked transaction): storage raises.
+      Mox.stub(Engram.MockStorage, :put, fn key, bin, opts ->
+        :counters.add(puts, 1, 1)
+
+        case :counters.get(puts, 1) do
+          1 ->
+            :ok = InMemory.put(key, bin, opts)
+            :ok = Attachments.delete_attachment(user, vault, "a.txt")
+
+          _ ->
+            raise "storage exploded"
+        end
+      end)
+
+      assert_raise RuntimeError, "storage exploded", fn ->
+        upsert(user, vault, "a.txt", "replacement")
+      end
+
+      assert blobs(user, vault) == []
+    end
   end
 
   describe "note_changed broadcast (kind=attachment)" do
