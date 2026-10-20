@@ -75,7 +75,7 @@ defmodule Engram.Adv1760Test do
     assert first > 0
 
     # Leave half a note of budget: plenty for one re-embedded section (~1/6).
-    UsageMeters.add_embed_tokens(user.id, 20_000_000 - first - div(first, 2))
+    UsageMeters.bucket_take(user.id, 6_000_000 - first - div(first, 2), 6_000_000)
 
     {:ok, _} =
       Notes.upsert_note(
@@ -115,7 +115,7 @@ defmodule Engram.Adv1760Test do
       )
 
     # Room for one note (x1.5 slack for chunk-prefix overhead), not two.
-    UsageMeters.add_embed_tokens(user.id, 20_000_000 - div(per_note * 3, 2))
+    UsageMeters.bucket_take(user.id, 6_000_000 - div(per_note * 3, 2), 6_000_000)
 
     stub(Engram.MockEmbedder, :embed_texts, fn texts ->
       if Process.get(:nested) == nil do
@@ -128,8 +128,8 @@ defmodule Engram.Adv1760Test do
 
     assert :ok = perform_job(EmbedNote, %{note_id: a.id})
 
-    assert UsageMeters.lifetime_embed_tokens(user.id) <= 20_000_000,
-           "lifetime cap overshot: #{UsageMeters.lifetime_embed_tokens(user.id)}"
+    assert UsageMeters.lifetime_embed_tokens(user.id) <= 6_000_000,
+           "embed bucket overspent: #{UsageMeters.lifetime_embed_tokens(user.id)}"
   end
 
   # FLAW: park_over_budget/stamp_embed_hash set embed_retry_after 24h out, and
@@ -139,7 +139,7 @@ defmodule Engram.Adv1760Test do
   test "an upgrade backfills dense vectors on budget-parked notes without a 24h wait",
        %{user: user, vault: vault} do
     note = Engram.Fixtures.insert_note!(user, vault, %{path: "P.md", content: "# P\n\nbody"})
-    UsageMeters.add_embed_tokens(user.id, 20_000_000)
+    UsageMeters.bucket_take(user.id, 6_000_000, 6_000_000)
 
     from(n in Note, where: n.id == ^note.id)
     |> Repo.update_all(

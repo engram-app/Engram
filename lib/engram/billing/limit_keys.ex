@@ -78,9 +78,15 @@ defmodule Engram.Billing.LimitKeys do
       type: :integer,
       defaults: %{free: 10_485_760, starter: 209_715_200, pro: 524_288_000}
     },
-    lifetime_embed_token_cap: %{
+    # Free's Voyage budget: the CAPACITY of a token bucket that refills
+    # continuously at one capacity per 365 days (`UsageMeters.bucket_take/4`),
+    # so 6M up front and ~16.4k a day after. Replaces the 20M LIFETIME cap,
+    # which spent once and then stopped embedding a Free user forever. An empty
+    # bucket never stops indexing: the pass runs keyword-only and the note is
+    # re-embedded densely as tokens refill. nil (paid) = no bucket.
+    embed_token_bucket: %{
       type: :integer,
-      defaults: %{free: 20_000_000, starter: nil, pro: nil}
+      defaults: %{free: 6_000_000, starter: nil, pro: nil}
     },
     # Free gets 2 so the tier can actually DEMONSTRATE sync — laptop + phone is
     # the floor for an Obsidian user, and a 1-device free tier can never show
@@ -97,7 +103,7 @@ defmodule Engram.Billing.LimitKeys do
     device_swap_cooldown_hours: %{type: :integer, defaults: %{free: 24, starter: 0, pro: 0}},
     reranker_enabled: %{type: :boolean, defaults: %{free: false, starter: false, pro: true}},
     # No `search_semantic_enabled` key: semantic search is every tier's. Free is
-    # bounded by `notes_cap`, `lifetime_embed_token_cap` and
+    # bounded by `notes_cap`, `embed_token_bucket` and
     # `ai_searches_per_day`, not by a feature flag.
     # API KEYS WORK EVERYWHERE, ON EVERY TIER (#1974). A personal API key may
     # call every route (REST, MCP, the sync sockets) on Free, Starter and Pro,

@@ -92,28 +92,41 @@ defmodule Engram.Workers.DailySnapshotTest do
     refute user_row(user).web_edited
   end
 
-  test "the embed budget is a share of the user's cap, override included" do
+  test "the embed budget is the share of the user's bucket spent, override included" do
     free = insert(:user)
     comped = insert(:user)
+    fresh = insert(:user)
+    at = DateTime.utc_now()
 
     Repo.insert_all("usage_meters", [
       %{
         user_id: Ecto.UUID.dump!(free.id),
         lifetime_embed_tokens: 10_000_000,
+        embed_bucket_tokens: 3_000_000.0,
+        embed_bucket_at: at,
         notes_count: 0,
-        updated_at: DateTime.utc_now()
+        updated_at: at
       },
       %{
         user_id: Ecto.UUID.dump!(comped.id),
         lifetime_embed_tokens: 10_000_000,
+        embed_bucket_tokens: 30_000_000.0,
+        embed_bucket_at: at,
         notes_count: 0,
-        updated_at: DateTime.utc_now()
+        updated_at: at
+      },
+      # Spent the old lifetime allowance, never took from the bucket: full.
+      %{
+        user_id: Ecto.UUID.dump!(fresh.id),
+        lifetime_embed_tokens: 19_000_000,
+        notes_count: 0,
+        updated_at: at
       }
     ])
 
     insert(:user_limit_override,
       user: comped,
-      key: "lifetime_embed_token_cap",
+      key: "embed_token_bucket",
       value: %{"v" => 40_000_000}
     )
 
@@ -122,6 +135,7 @@ defmodule Engram.Workers.DailySnapshotTest do
     assert user_row(free).embed_tokens_used == 10_000_000
     assert user_row(free).embed_budget_pct == 50.0
     assert user_row(comped).embed_budget_pct == 25.0
+    assert user_row(fresh).embed_budget_pct == 0.0
   end
 
   test "snapshots each live vault's size, by id only" do

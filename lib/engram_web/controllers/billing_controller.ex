@@ -58,11 +58,9 @@ defmodule EngramWeb.BillingController do
             storage_used_bytes(user),
             Billing.cap(user, :attachment_bytes_cap)
           ),
-        lifetime_embed_tokens:
-          used_limit(
-            meters.lifetime_embed_tokens,
-            Billing.cap(user, :lifetime_embed_token_cap)
-          ),
+        # COMPAT SHIM: the lifetime cap is gone (Free has the refilling
+        # `embed_bucket` below), so this is a plain counter with no limit.
+        lifetime_embed_tokens: used_limit(meters.lifetime_embed_tokens, nil),
         # COMPAT SHIM, remove in a later contract PR. Plugins from before the
         # search-coverage cap removal render a "Notes searchable" row from
         # this; `limit: nil` (uncapped) hides it there. Every stored note is

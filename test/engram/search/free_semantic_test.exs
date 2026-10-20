@@ -100,7 +100,7 @@ defmodule Engram.Search.FreeSemanticTest do
   # default must be hybrid, whose keyword leg still reaches those notes.
   test "an over-budget Free user's suggest_folder still gets folders from BM25",
        %{bypass: bypass, user: user, vault: vault} do
-    Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
+    Engram.UsageMeters.bucket_take(user.id, 6_000_000, 6_000_000)
 
     Engram.MockEmbedder
     |> expect(:embed_texts, fn _texts, _opts -> {:ok, [List.duplicate(0.1, 3)]} end)
