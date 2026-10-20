@@ -183,6 +183,25 @@
 
 - [ ] Add an `AbortIncompleteMultipartUpload` lifecycle rule (7 days) to the prod and staging attachment buckets in `engram-infra` Terraform; plan output shows only that change. Commit `feat: abort stale attachment multipart uploads`.
 
+### Task 11: Web app upload error states and progress
+
+Added 2026-10-19 at the user's request. Same states and English copy as plugin plan Task 7.
+
+**Files:**
+- Modify: `frontend/src/viewer/attachment-upload/upload-dialog.tsx`, `upload-files.ts`, `provider.tsx`; reuse the existing upgrade dialog (`frontend/src/billing/upgrade-dialog-provider*`) for upgrade links
+- Test: `upload-dialog.test.tsx`, `upload-files.test.ts`
+
+**Interfaces:**
+- Consumes: `uploadInParts(..., {onProgress})` and the error mapping in `frontend/src/api/chunked-upload.ts` (Task 8); backend error bodies (415 `extension_not_allowed`, 402 `file_too_large` / `attachments_quota_exceeded`, 429 `too_many_uploads`, 503 `rotation_in_progress`, network).
+
+- [ ] **Step 1: Failing tests**, one per state, each rendered once per file (not repeated per retry) and cleared when the file succeeds:
+  - 415 → "Executable files don't sync."
+  - 402 `file_too_large` → "This file is over your plan's size limit." + an "Upgrade" action that opens the upgrade dialog
+  - 402 `attachments_quota_exceeded` → "Your storage is full." + "Upgrade"
+  - 429 / 503 / network while retrying → "Waiting to retry" (not a failure); a terminal network failure after retries → "Upload failed. Try again." + a retry action
+  - progress: a chunked upload shows a percentage driven by `onProgress`; a single-request upload shows indeterminate progress
+- [ ] **Step 2: Run** `cd frontend && bun run test -- upload-dialog upload-files` → FAIL. **Step 3: Implement** with semantic HTML (`<progress>`, `<output>`/`role="status"` live region for state changes), no new deps. New strings English-only, then `I18N_OLLAMA_URL=http://10.0.20.214:11434 bun run i18n:translate`. No em dashes. **Step 4: Run** → PASS + lint + tsc. **Step 5: Commit** `feat(web): attachment upload error states and progress`.
+
 ## Verification before PR
 
 - [ ] `mise exec -- mix format --check-formatted && mise exec -- mix credo --strict && mise exec -- mix dialyzer`
