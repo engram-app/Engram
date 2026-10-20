@@ -1255,6 +1255,39 @@ defmodule Engram.Workers.EmbedNoteTest do
       refute_receive {:captured, %{"event" => "limit_hit"}}, 300
     end
 
+    test "the empty-bucket warning fires once per user per day, not per note",
+         %{bypass: bypass, user: user, vault: vault, note: note} do
+      EngramWeb.RateLimiter.reset_buckets!()
+      Engram.UsageMeters.bucket_take(user.id, 6_000_000, 6_000_000)
+      stub_qdrant(bypass)
+
+      handler = "budget-exhausted-#{System.unique_integer()}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler,
+        [:engram, :abuse, :embed_budget_exhausted],
+        fn _, _, _, _ -> send(test_pid, :budget_exhausted) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      others =
+        for i <- 1..3 do
+          Engram.Fixtures.insert_note!(user, vault, %{path: "Test/N#{i}.md", content: "# N#{i}"})
+        end
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          for n <- [note | others], do: assert(:ok = perform_job(EmbedNote, %{note_id: n.id}))
+        end)
+
+      assert_received :budget_exhausted
+      refute_received :budget_exhausted
+      assert length(String.split(log, "embed-token bucket empty")) == 2
+    end
+
     test "proceeds and increments the counter on success",
          %{bypass: bypass, user: user, note: note} do
       Engram.MockEmbedder

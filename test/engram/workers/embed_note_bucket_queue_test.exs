@@ -1,7 +1,7 @@
 defmodule Engram.Workers.EmbedNoteBucketQueueTest do
   # The Free embed bucket as a queue: partial passes keep existing dense
-  # vectors, parked notes wait FIFO with their need, and ReconcileEmbeddings
-  # wakes them oldest first only when they fit.
+  # vectors, parked notes wait with their need, and ReconcileEmbeddings wakes
+  # them first-fit by age (the oldest gets any remainder, so it cannot starve).
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
 
@@ -83,6 +83,23 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
   end
 
   defp reload(note), do: Repo.get!(Note, note.id, skip_tenant_check: true)
+
+  defp park!(note, at, need) do
+    Repo.update_all(
+      from(n in Note, where: n.id == ^note.id),
+      [
+        set: [
+          embed_hash: note.content_hash,
+          dense_indexed_hash: nil,
+          embed_retry_after: EmbedNote.parked_until_edited(),
+          embed_budget_parked: true,
+          embed_budget_parked_at: at,
+          embed_budget_need: need
+        ]
+      ],
+      skip_tenant_check: true
+    )
+  end
 
   defp edit(user, vault, note, content) do
     {:ok, _} =
@@ -173,31 +190,60 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
       assert parked.embed_budget_parked == true
       assert_in_delta parked.embed_budget_need, 2 * one_chunk, one_chunk
     end
+
+    test "a new non-prose chunk does not stop later prose from fitting",
+         %{user: user, vault: vault} do
+      csv = fn seed ->
+        rows = Enum.map_join(0..39, "\n", &"#{&1},#{&1 * seed}.25,#{rem(&1 * 31, 97)},2026-10-01")
+        "## Data\n\nid,value,count,date\n" <> rows
+      end
+
+      content = fn seed, edited ->
+        "# Big\n\n" <>
+          Enum.map_join([1, :data, 3, 4], "\n\n", fn
+            :data ->
+              csv.(seed)
+
+            i ->
+              if i in edited,
+                do: String.replace(section(i), "## Section", "## Edited"),
+                else: section(i)
+          end)
+      end
+
+      note =
+        Engram.Fixtures.insert_note!(user, vault, %{path: "Big.md", content: content.(7, [])})
+
+      assert Enum.any?(
+               Engram.Parsers.Markdown.parse(content.(7, []), "Big.md"),
+               &(&1.kind == "data")
+             )
+
+      capture_embeds()
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+      _ = embedded()
+
+      # Room for one of the two edited prose chunks; the edited data chunk
+      # comes first in the note and is never embedded.
+      one_chunk = UsageMeters.estimate_tokens(section(1))
+      set_bucket(user.id, one_chunk + div(one_chunk, 2))
+      edit(user, vault, note, content.(11, [3, 4]))
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      assert [sent] = embedded()
+      assert sent =~ "Edited 3"
+    end
   end
 
   describe "the parked queue" do
-    test "new work queues behind an older parked note, and refill wakes them oldest first",
+    test "new work queues behind the backlog; the wake is first-fit by age",
          %{user: user, vault: vault} do
       older =
         Engram.Fixtures.insert_note!(user, vault, %{path: "Old.md", content: "# Old\n\nold words"})
 
       hour_ago = DateTime.add(DateTime.utc_now(), -3600, :second)
-
-      Repo.update_all(
-        from(n in Note, where: n.id == ^older.id),
-        [
-          set: [
-            embed_hash: older.content_hash,
-            dense_indexed_hash: nil,
-            embed_retry_after: EmbedNote.parked_until_edited(),
-            embed_budget_parked: true,
-            embed_budget_parked_at: hour_ago,
-            embed_budget_need: 700_000
-          ]
-        ],
-        skip_tenant_check: true
-      )
-
+      park!(older, hour_ago, 700_000)
       set_bucket(user.id, 600_000)
 
       newer =
@@ -212,18 +258,63 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
       assert queued.embed_budget_parked == true
       assert DateTime.compare(queued.embed_budget_parked_at, hour_ago) == :gt
 
-      # 600k < the head's 700k: nothing wakes, and the small newer note may not
-      # jump the queue.
+      # 600k < the head's 700k: the head is skipped, so the small newer note
+      # wakes, and the head gets what is left for a partial pass.
       assert :ok = perform_job(ReconcileEmbeddings, %{})
-      assert reload(older).embed_budget_parked == true
-      assert reload(newer).embed_budget_parked == true
-
-      # Refill: both fit, oldest first.
-      set_bucket(user.id, 800_000)
-      assert :ok = perform_job(ReconcileEmbeddings, %{})
-      assert reload(older).embed_budget_parked == nil
       assert reload(newer).embed_budget_parked == nil
-      assert_enqueued(worker: EmbedNote, args: %{"note_id" => older.id})
+      assert reload(older).embed_budget_parked == nil
+      assert_enqueued(worker: EmbedNote, args: %{"note_id" => newer.id})
+
+      [head_job] = all_enqueued(worker: EmbedNote, args: %{"note_id" => older.id})
+      # The bucket refills ~0.2 tokens a second while the test runs.
+      assert_in_delta head_job.args["budget_cap"], 600_000 - queued.embed_budget_need, 5
+    end
+
+    test "the wake is a no-op on an empty bucket", %{user: user, vault: vault} do
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "A.md", content: "# A\n\nwords"})
+      park!(note, DateTime.utc_now(), 10)
+      set_bucket(user.id, 0)
+
+      assert :ok = perform_job(ReconcileEmbeddings, %{})
+      assert reload(note).embed_budget_parked == true
+      refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
+    end
+
+    test "a woken note spends even while an older note still waits",
+         %{user: user, vault: vault} do
+      older = Engram.Fixtures.insert_note!(user, vault, %{path: "O.md", content: "# O\n\nold"})
+      woken = Engram.Fixtures.insert_note!(user, vault, %{path: "W.md", content: "# W\n\nnew"})
+      now = DateTime.utc_now()
+      park!(older, DateTime.add(now, -60, :second), 700_000)
+      park!(woken, now, 10)
+
+      Repo.update_all(
+        from(n in Note, where: n.id == ^woken.id),
+        [set: [embed_budget_parked: nil]],
+        skip_tenant_check: true
+      )
+
+      assert EmbedNote.queue_blocked?(reload(woken)) == false
+      assert EmbedNote.queue_blocked?(reload(older)) == false
+    end
+
+    test "a budget-capped head pass embeds no more than its cap", %{user: user, vault: vault} do
+      note = dense_note(user, vault, 10)
+      one_chunk = UsageMeters.estimate_tokens(section(1))
+      set_bucket(user.id, 10 * one_chunk)
+      edit(user, vault, note, edit_sections(10, [2, 5, 8]))
+
+      capture_embeds()
+
+      assert :ok =
+               perform_job(EmbedNote, %{
+                 note_id: note.id,
+                 user_id: user.id,
+                 budget_cap: one_chunk + div(one_chunk, 2)
+               })
+
+      assert length(embedded()) == 1
+      assert reload(note).embed_budget_parked == true
     end
 
     test "end to end: an empty bucket parks, refill re-queues, and the pass goes dense",
@@ -257,6 +348,36 @@ defmodule Engram.Workers.EmbedNoteBucketQueueTest do
       assert done.dense_indexed_hash == done.content_hash
       assert is_nil(done.embed_budget_parked_at)
       assert is_nil(done.embed_budget_need)
+    end
+  end
+
+  describe "ReconcileEmbeddings.fitting/2 (oldest first, first fit)" do
+    test "the oldest note that fits wakes first" do
+      assert ReconcileEmbeddings.fitting([{:a, 100}, {:b, 50}, {:c, 50}], 120) == [{:a, nil}]
+    end
+
+    test "a note that does not fit is skipped; smaller ones behind it wake" do
+      assert ReconcileEmbeddings.fitting([{:a, 50}, {:b, 900}, {:c, 40}, {:d, 30}], 100) ==
+               [{:a, nil}, {:c, nil}]
+    end
+
+    test "the oldest, skipped, still gets what is left, so it cannot starve" do
+      assert ReconcileEmbeddings.fitting([{:a, 700}, {:b, 100}, {:c, 600}], 600) ==
+               [{:a, 500}, {:b, nil}]
+    end
+
+    test "nothing wakes on an empty bucket, and nothing partial on a spent one" do
+      assert ReconcileEmbeddings.fitting([{:a, 700}], 0) == []
+      assert ReconcileEmbeddings.fitting([{:a, 700}, {:b, 100}], 100) == [{:b, nil}]
+    end
+
+    test "a legacy park with no need recorded wakes once anything is left" do
+      assert ReconcileEmbeddings.fitting([{:a, nil}], 1) == [{:a, nil}]
+    end
+
+    test "unmetered wakes everything" do
+      assert ReconcileEmbeddings.fitting([{:a, 700}, {:b, nil}], :unmetered) ==
+               [{:a, nil}, {:b, nil}]
     end
   end
 

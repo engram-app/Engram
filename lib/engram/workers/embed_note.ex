@@ -102,6 +102,7 @@ defmodule Engram.Workers.EmbedNote do
 
     case load(args, old_path_hmac_b64) do
       {:run, note, user, vault, opts} ->
+        opts = if cap = args["budget_cap"], do: [{:budget_cap, cap} | opts], else: opts
         run_and_stamp(note, user, vault, old_path_hmac_b64, job, opts)
 
       other ->
@@ -216,7 +217,7 @@ defmodule Engram.Workers.EmbedNote do
             {:discard, "vault #{note.vault_id} not found for note #{note.id}"}
 
           %Vault{} = vault ->
-            {:run, note, user, vault, with_queue_position(note, opts)}
+            {:run, note, user, vault, with_queue_position(note, user, opts)}
         end
     end
   end
@@ -331,22 +332,29 @@ defmodule Engram.Workers.EmbedNote do
   # stays keyword-searchable. The reservation IS the charge (#1618: what Voyage
   # is sent, nothing more); a failed embed gives it back.
   #
-  # FIFO behind the parked backlog: while an older note of this user waits on
-  # the bucket, this pass spends nothing (`queue_blocked?/1`) and its new
-  # chunks queue up keyword-only behind it, so refill drains oldest first. A
-  # refused or partly-fitting pass keeps every dense vector the note already
-  # has (`Indexing` re-plans only the new chunks).
+  # Queued behind the parked backlog: while another note of this user waits on
+  # the bucket, a new pass spends nothing (`queue_blocked?/1`) and its new
+  # chunks join the queue keyword-only; ReconcileEmbeddings decides who wakes.
+  # A woken head note spends at most its `:budget_cap`. A refused or
+  # partly-fitting pass keeps every dense vector the note already has
+  # (`Indexing` re-plans only the new chunks).
   defp budget_opts(user, opts, false) do
     case Billing.effective_limit(user, :embed_token_bucket) do
       cap when is_integer(cap) and cap >= 0 ->
         blocked? = Keyword.get(opts, :queued_behind, false)
+        limit = Keyword.get(opts, :budget_cap)
 
         [
           reserve_tokens: fn tokens ->
-            not blocked? and match?({:ok, _}, UsageMeters.bucket_take(user.id, tokens, cap))
+            not blocked? and (is_nil(limit) or tokens <= limit) and
+              match?({:ok, _}, UsageMeters.bucket_take(user.id, tokens, cap))
           end,
           budget_available: fn ->
-            if blocked?, do: 0, else: UsageMeters.bucket_available(user.id, cap)
+            cond do
+              blocked? -> 0
+              limit -> min(limit, UsageMeters.bucket_available(user.id, cap))
+              true -> UsageMeters.bucket_available(user.id, cap)
+            end
           end,
           release_tokens: &UsageMeters.release_embed_tokens(user.id, &1)
         ]
@@ -424,20 +432,33 @@ defmodule Engram.Workers.EmbedNote do
 
   # Read here, inside `load/2`'s tenant transaction (the inner `with_tenant!`
   # is re-entrant), so the budget check costs no transaction of its own.
-  # Maintenance passes are unmetered and never wait.
-  defp with_queue_position(note, opts) do
-    if Keyword.get(opts, :maintenance, false),
+  # Only a metered pass can wait: maintenance, a known-spent backfill and a
+  # user with no bucket (paid, a -1 override) skip the query.
+  defp with_queue_position(note, user, opts) do
+    if opts[:maintenance] || opts[:budget_spent] || not free_bucket?(user),
       do: opts,
       else: Keyword.put(opts, :queued_behind, queue_blocked?(note))
   end
 
+  defp free_bucket?(user) do
+    case Billing.effective_limit(user, :embed_token_bucket) do
+      cap when is_integer(cap) and cap >= 0 -> true
+      _ -> false
+    end
+  end
+
   @doc """
   True when another of the user's notes waits on the embed bucket ahead of
-  `note`: any waiting note for one that is not queued, an older one for a note
-  that is (its `embed_budget_parked_at` is its place). Woken notes
-  (`embed_budget_parked` cleared) do not block, so a note that keeps failing
-  after waking cannot stall the queue.
+  `note`: any waiting note for one that is not queued, an older one for a
+  waiting note (its `embed_budget_parked_at` is its place). A note
+  ReconcileEmbeddings woke (`embed_budget_parked` cleared, place kept) is never
+  blocked: the wake is first fit, so it may run while an older, bigger note
+  still waits. Woken notes do not block others either, so a note that keeps
+  failing after waking cannot stall the queue.
   """
+  def queue_blocked?(%Note{embed_budget_parked: nil, embed_budget_parked_at: %DateTime{}}),
+    do: false
+
   def queue_blocked?(%Note{} = note) do
     Repo.with_tenant!(note.user_id, fn ->
       base =
@@ -464,9 +485,20 @@ defmodule Engram.Workers.EmbedNote do
     end)
   end
 
+  # The usage endpoint shows the bucket, but nothing pushes it at the user,
+  # so product analytics hears it here or not at all. Once a day per user, for
+  # the log and telemetry too: a Free user writing behind a backlog parks every
+  # note, and each wake that re-parks one would fire again.
   defp budget_exhausted(%{id: user_id} = user) do
-    # The usage endpoint shows the bucket, but nothing pushes it at the user,
-    # so product analytics hears it here or not at all. Once a day per user.
+    case EngramWeb.RateLimiter.hit("embed_budget_exhausted:#{user_id}", :timer.hours(24), 1) do
+      {:allow, _} -> report_budget_exhausted(user)
+      _deny -> :ok
+    end
+
+    false
+  end
+
+  defp report_budget_exhausted(%{id: user_id} = user) do
     Engram.Analytics.track_limit_hit(
       user,
       :embed_token_bucket,
@@ -487,8 +519,6 @@ defmodule Engram.Workers.EmbedNote do
         reason_label: :embed_budget_exhausted
       )
     )
-
-    false
   end
 
   # A budget-parked note waits with no clock: `embed_retry_after` is the
@@ -925,6 +955,10 @@ defmodule Engram.Workers.EmbedNote do
       if opts[:old_path_hmac],
         do: Map.put(args, :old_path_hmac, opts[:old_path_hmac]),
         else: args
+
+    # The oldest parked note, woken with only what is left after the notes
+    # that fit (`ReconcileEmbeddings`): its pass may spend no more than this.
+    args = if opts[:budget_cap], do: Map.put(args, :budget_cap, opts[:budget_cap]), else: args
 
     new(
       args,
