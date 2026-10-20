@@ -229,6 +229,38 @@ defmodule Engram.SearchChunkTextSourceTest do
     assert [{%{count: 1}, %{reason: :text_undecryptable}}] = events
   end
 
+  test "a mixed page counts a payload-fallback hit that fails to decrypt", ctx do
+    good = Ecto.UUID.generate()
+    legacy = Ecto.UUID.generate()
+    insert_chunk!(ctx, good, 0, "Ferritin good.")
+    insert_chunk!(ctx, legacy, 1)
+
+    garbled =
+      update_in(legacy_point(ctx, legacy, "x", 0.95)["payload"]["text"], fn _ ->
+        Base.encode64(:crypto.strong_rand_bytes(40))
+      end)
+
+    answer(ctx, [garbled, v5_point(ctx, good, 0.9)])
+
+    {{result, events}, _log} =
+      with_log(fn -> with_event([:engram, :search, :hit_dropped], fn -> search(ctx) end) end)
+
+    assert {:ok, [%{text: "Ferritin good."}]} = result
+    assert [{%{count: 1}, %{reason: :payload_undecryptable}}] = events
+  end
+
+  test "every candidate on the Postgres read path counts toward search hits", ctx do
+    live = Ecto.UUID.generate()
+    insert_chunk!(ctx, live, 0, "Ferritin live.")
+    answer(ctx, [v5_point(ctx, Ecto.UUID.generate(), 0.95), v5_point(ctx, live, 0.9)])
+
+    {{result, events}, _log} =
+      with_log(fn -> with_event([:engram, :search, :hits], fn -> search(ctx) end) end)
+
+    assert {:ok, [_]} = result
+    assert [{%{count: 2}, _}] = events
+  end
+
   defp corrupt_text!(ctx, point_id) do
     {:ok, _} =
       Repo.with_tenant(ctx.user.id, fn ->
