@@ -1,5 +1,7 @@
+import { MutationObserver } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "./client";
+import { queryClient } from "./query-client";
 
 const mockError = vi.hoisted(() => vi.fn());
 vi.mock("../observability/remote-log", () => ({
@@ -48,7 +50,8 @@ describe("api client reports broken requests to the log pipe", () => {
 
 		await expect(api.get("/folders")).rejects.toBeInstanceOf(ApiError);
 
-		expect(mockError).toHaveBeenCalledTimes(1);
+		// Deferred one tick: a caller that retries gets to claim the failure first.
+		await vi.waitFor(() => expect(mockError).toHaveBeenCalledTimes(1));
 		expect(String(mockError.mock.calls[0]?.[1])).toMatch(/^http_500 GET /);
 	});
 
@@ -57,6 +60,7 @@ describe("api client reports broken requests to the log pipe", () => {
 
 		await expect(api.get("/folders")).rejects.toBeInstanceOf(ApiError);
 
+		await new Promise((r) => setTimeout(r, 0));
 		expect(mockError).not.toHaveBeenCalled();
 	});
 
@@ -65,6 +69,7 @@ describe("api client reports broken requests to the log pipe", () => {
 
 		await expect(api.get("/folders")).rejects.toThrow("aborted");
 
+		await new Promise((r) => setTimeout(r, 0));
 		expect(mockError).not.toHaveBeenCalled();
 	});
 
@@ -74,6 +79,7 @@ describe("api client reports broken requests to the log pipe", () => {
 
 		await expect(api.get("/folders")).rejects.toThrow("Failed to fetch");
 
+		await new Promise((r) => setTimeout(r, 0));
 		expect(mockError).not.toHaveBeenCalled();
 	});
 
@@ -101,5 +107,67 @@ describe("api client reports broken requests to the log pipe", () => {
 		await new Promise((r) => setTimeout(r, 0));
 		expect(globalThis.fetch).toHaveBeenCalledTimes(4);
 		expect(mockError).not.toHaveBeenCalled();
+	});
+});
+
+// 2026-10-20 a user's five boot GETs failed once and succeeded on React Query's
+// retry a second later. They saw nothing, but every attempt was reported and
+// the alert paged. Only a request's FINAL failure is someone's problem.
+describe("api client reports only a request's final failure", () => {
+	beforeEach(() => {
+		mockError.mockClear();
+		vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
+	});
+
+	function okJson() {
+		return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+	}
+
+	it("does not report a query that fails once and succeeds on retry", async () => {
+		globalThis.fetch = vi
+			.fn()
+			.mockRejectedValueOnce(new TypeError("Failed to fetch"))
+			.mockResolvedValue(okJson());
+
+		await queryClient.fetchQuery({
+			queryKey: ["report-test", "recovers"],
+			queryFn: () => api.get("/me"),
+			retry: 1,
+			retryDelay: 0,
+		});
+
+		await new Promise((r) => setTimeout(r, 10));
+		expect(mockError).not.toHaveBeenCalled();
+	});
+
+	it("reports a query that fails every attempt exactly once", async () => {
+		respond(503);
+
+		await expect(
+			queryClient.fetchQuery({
+				queryKey: ["report-test", "fails"],
+				queryFn: () => api.get("/me"),
+				retry: 1,
+				retryDelay: 0,
+			}),
+		).rejects.toBeInstanceOf(ApiError);
+
+		await vi.waitFor(() => expect(mockError).toHaveBeenCalledTimes(1));
+		await new Promise((r) => setTimeout(r, 10));
+		expect(mockError).toHaveBeenCalledTimes(1);
+		expect(String(mockError.mock.calls[0]?.[1])).toMatch(/^http_503 GET /);
+	});
+
+	it("reports a failed mutation once", async () => {
+		respond(500);
+
+		const mutation = new MutationObserver(queryClient, {
+			mutationFn: () => api.post("/folders/batch-delete", { ids: [] }),
+		});
+		await expect(mutation.mutate()).rejects.toBeInstanceOf(ApiError);
+
+		await vi.waitFor(() => expect(mockError).toHaveBeenCalledTimes(1));
+		await new Promise((r) => setTimeout(r, 10));
+		expect(mockError).toHaveBeenCalledTimes(1);
 	});
 });

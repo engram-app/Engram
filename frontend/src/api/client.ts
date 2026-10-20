@@ -74,6 +74,23 @@ async function reportIfApiReachable(method: string, url: string) {
 	}
 }
 
+/** Reports waiting on whether the caller will retry, keyed by the thrown error.
+ *  React Query retries a failed query, and a retry that succeeds is invisible to
+ *  the user: 2026-10-20 one user's five boot GETs failed once, all succeeded a
+ *  second later, and the per-attempt report paged anyway. */
+const pendingReports = new WeakMap<object, () => void>();
+
+/** Report `err` once the current attempt has settled, unless a retry claims it.
+ *  React Query decides to retry inside the rejection's microtasks; a timer runs
+ *  after them. A caller outside React Query never claims, so it still reports. */
+function reportUnlessRetried(err: object, report: () => void) {
+	pendingReports.set(err, report);
+	setTimeout(() => {
+		pendingReports.get(err)?.();
+		pendingReports.delete(err);
+	}, 0);
+}
+
 async function authFetch(path: string, options: RequestInit = {}): Promise<Response> {
 	const token = await getAuthToken();
 
@@ -107,16 +124,13 @@ async function authFetch(path: string, options: RequestInit = {}): Promise<Respo
 		// ours. Everything else (CORS, DNS, TLS, connection reset) is a TypeError
 		// the browser deliberately leaves vague.
 		const aborted = err instanceof Error && err.name === "AbortError";
-		if (!aborted && navigator.onLine) {
-			reportIfApiReachable(method, url);
+		if (!aborted && navigator.onLine && err instanceof Error) {
+			reportUnlessRetried(err, () => reportIfApiReachable(method, url));
 		}
 		throw err;
 	}
 
 	if (!response.ok) {
-		if (response.status >= 500) {
-			reportFailure(`http_${response.status}`, method, url);
-		}
 		const body = await response.json().catch(() => ({}));
 		// EngramWeb.Plugs.RequireOnboarding's 403 shape. Every caller routes
 		// through this one function, so this is the single place that can see
@@ -139,13 +153,25 @@ async function authFetch(path: string, options: RequestInit = {}): Promise<Respo
 				body.upgrade_url ?? null,
 			);
 		}
-		throw new ApiError(
+		const error = new ApiError(
 			response.status,
 			body.error ?? firstValidationError(body.errors) ?? response.statusText,
 		);
+		if (response.status >= 500) {
+			reportUnlessRetried(error, () => reportFailure(`http_${response.status}`, method, url));
+		}
+		throw error;
 	}
 
 	return response;
+}
+
+/** The attempt that threw `err` will be retried: its failure is not final, so
+ *  drop its report. The final attempt's own error reports if it fails too. */
+export function discardRetriedFailure(err: unknown) {
+	if (typeof err === "object" && err !== null) {
+		pendingReports.delete(err);
+	}
 }
 
 export function setTokenGetter(getter: () => Promise<string | null>) {
