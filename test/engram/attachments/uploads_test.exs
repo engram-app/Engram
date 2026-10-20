@@ -6,6 +6,7 @@ defmodule Engram.Attachments.UploadsTest do
   import Engram.RlsCase
   import Mox
 
+  alias Ecto.Adapters.SQL.Sandbox
   alias Engram.Attachments
   alias Engram.Attachments.Attachment
   alias Engram.Attachments.SegmentedCipher
@@ -87,6 +88,175 @@ defmodule Engram.Attachments.UploadsTest do
       Uploads.start(user, vault, %{path: "a.exe", size_bytes: 10, mtime: 1.0})
       assert Repo.aggregate(Upload, :count, skip_tenant_check: true) == 0
     end
+  end
+
+  # An open session holds its parts in storage before complete counts them,
+  # and a client that re-PUTs a part keeps it from ever expiring. So start
+  # counts open sessions' declared sizes against the quota, and caps how many
+  # one user may hold.
+  describe "start/3 and open sessions" do
+    defp quota!(user, bytes),
+      do:
+        insert(:user_limit_override,
+          user: user,
+          key: "attachment_bytes_cap",
+          value: %{"v" => bytes}
+        )
+
+    defp unlimited!(user) do
+      insert(:user_limit_override, user: user, key: "max_file_bytes", value: %{"v" => -1})
+      quota!(user, -1)
+    end
+
+    test "an open session's declared size counts against the quota", %{user: user, vault: vault} do
+      quota!(user, 10 * @mib)
+      _open = start!(user, vault, "a.bin", 10 * @mib)
+
+      assert {:error, {:storage_cap_reached, 0, cap}} =
+               Uploads.start(user, vault, %{path: "b.bin", size_bytes: 10 * @mib, mtime: 1.0})
+
+      assert cap == 10 * @mib
+    end
+
+    test "a completed session no longer counts", %{user: user, vault: vault} do
+      quota!(user, 20)
+      up = start!(user, vault, "a.bin", 10)
+      put_all(user, vault, up, :crypto.strong_rand_bytes(10))
+      assert {:ok, _} = Uploads.complete(user, vault, up.id)
+
+      # 10 live + 10 new fits 20; counting the completed session too would not.
+      assert {:ok, _} = Uploads.start(user, vault, %{path: "b.bin", size_bytes: 10, mtime: 1.0})
+    end
+
+    test "an aborted session no longer counts", %{user: user, vault: vault} do
+      quota!(user, 10)
+      up = start!(user, vault, "a.bin", 10)
+      :ok = Uploads.abort(user, vault, up.id)
+      assert {:ok, _} = Uploads.start(user, vault, %{path: "b.bin", size_bytes: 10, mtime: 1.0})
+    end
+
+    test "a fifth open session is refused, across vaults", %{user: user, vault: vault} do
+      unlimited!(user)
+      other = insert(:vault, user: user)
+      for i <- 1..3, do: start!(user, vault, "f#{i}.bin", 10)
+      fourth = start!(user, other, "f4.bin", 10)
+
+      assert {:error, :too_many_uploads} =
+               Uploads.start(user, vault, %{path: "f5.bin", size_bytes: 10, mtime: 1.0})
+
+      assert Repo.aggregate(Upload, :count, skip_tenant_check: true) == 4
+
+      # Completing one frees its slot.
+      put_all(user, other, fourth, :crypto.strong_rand_bytes(10))
+      assert {:ok, _} = Uploads.complete(user, other, fourth.id)
+      assert {:ok, _} = Uploads.start(user, vault, %{path: "f5.bin", size_bytes: 10, mtime: 1.0})
+    end
+
+    # Two concurrent starts must not both pass the capacity check. Same shape
+    # as the quota-lock test below: a second connection holds the lock.
+    test "start waits on the per-user start lock", %{user: user, vault: vault} do
+      parent = self()
+
+      holder =
+        spawn_link(fn ->
+          :ok = Sandbox.checkout(Repo)
+
+          Repo.transaction(fn ->
+            Repo.advisory_lock!("attachment_upload_start:" <> user.id)
+            send(parent, :held)
+            receive do: (:release -> :ok)
+          end)
+
+          Sandbox.checkin(Repo)
+          send(parent, :released)
+        end)
+
+      assert_receive :held, 2_000
+
+      starter =
+        Task.async(fn ->
+          Uploads.start(user, vault, %{path: "a.bin", size_bytes: 10, mtime: 1.0})
+        end)
+
+      refute Task.yield(starter, 300), "start did not wait for the start lock"
+      send(holder, :release)
+      assert_receive :released, 2_000
+      assert {:ok, %Upload{}} = Task.await(starter, 10_000)
+    end
+
+    test "another user's open sessions do not count", %{user: user, vault: vault} do
+      unlimited!(user)
+      {:ok, other} = Crypto.ensure_user_dek(insert(:user))
+      other_vault = insert(:vault, user: other)
+      for i <- 1..4, do: start!(other, other_vault, "f#{i}.bin", 10)
+
+      assert {:ok, _} = Uploads.start(user, vault, %{path: "a.bin", size_bytes: 10, mtime: 1.0})
+    end
+  end
+
+  # S3 allows at most 10_000 parts. With max_file_bytes unlimited (the
+  # self-host default) nothing else bounds part_count: a large enough size
+  # also overflowed the int4 column and raised after the multipart started.
+  describe "start/3 part-count ceiling" do
+    setup %{user: user} do
+      insert(:user_limit_override, user: user, key: "max_file_bytes", value: %{"v" => -1})
+      insert(:user_limit_override, user: user, key: "attachment_bytes_cap", value: %{"v" => -1})
+      :ok
+    end
+
+    test "exactly 10_000 parts is accepted", %{user: user, vault: vault} do
+      up = start!(user, vault, "big.bin", 10_000 * @part)
+      assert up.part_count == 10_000
+    end
+
+    test "one byte more is file_too_large", %{user: user, vault: vault} do
+      assert {:error, {:too_large, max}} =
+               Uploads.start(user, vault, %{
+                 path: "big.bin",
+                 size_bytes: 10_000 * @part + 1,
+                 mtime: 1.0
+               })
+
+      assert max == 10_000 * @part
+    end
+
+    test "a size past int4 parts is refused, not raised", %{user: user, vault: vault} do
+      assert {:error, {:too_large, _}} =
+               Uploads.start(user, vault, %{
+                 path: "big.bin",
+                 size_bytes: 3_000_000_000 * @part,
+                 mtime: 1.0
+               })
+    end
+  end
+
+  test "a raise after the multipart started still aborts it", %{user: user, vault: vault} do
+    prev = Application.get_env(:engram, :storage)
+    Application.put_env(:engram, :storage, Engram.MockStorage)
+    on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+    stub_with(Engram.MockStorage, InMemory)
+    test = self()
+
+    # The vault vanishes between the multipart start and the insert, so the
+    # insert raises on the foreign key.
+    stub(Engram.MockStorage, :start_multipart, fn key ->
+      Repo.delete_all(from(v in Engram.Vaults.Vault, where: v.id == ^vault.id),
+        skip_tenant_check: true
+      )
+
+      InMemory.start_multipart(key)
+    end)
+
+    stub(Engram.MockStorage, :abort_multipart_upload, fn key, id ->
+      send(test, {:aborted, key})
+      InMemory.abort_multipart_upload(key, id)
+    end)
+
+    assert_raise Ecto.ConstraintError, fn ->
+      Uploads.start(user, vault, %{path: "a.bin", size_bytes: 10, mtime: 1.0})
+    end
+
+    assert_received {:aborted, _key}
   end
 
   describe "put_part/5" do
@@ -391,7 +561,7 @@ defmodule Engram.Attachments.UploadsTest do
 
       holder =
         spawn_link(fn ->
-          :ok = Ecto.Adapters.SQL.Sandbox.checkout(Repo)
+          :ok = Sandbox.checkout(Repo)
 
           Repo.transaction(fn ->
             Repo.advisory_lock!(Attachments.quota_lock_id(user.id))
@@ -399,7 +569,7 @@ defmodule Engram.Attachments.UploadsTest do
             receive do: (:release -> :ok)
           end)
 
-          Ecto.Adapters.SQL.Sandbox.checkin(Repo)
+          Sandbox.checkin(Repo)
           send(parent, :released)
         end)
 

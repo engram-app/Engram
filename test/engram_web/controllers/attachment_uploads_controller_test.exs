@@ -207,6 +207,14 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
                conn |> start("a.png", 10) |> json_response(402)
     end
 
+    test "a fifth open session is 429 too_many_uploads", %{conn: conn} do
+      for i <- 1..4, do: start!(conn, "f#{i}.bin", 10)
+
+      refused = start(conn, "f5.bin", 10)
+      assert %{"error" => "too_many_uploads"} = json_response(refused, 429)
+      assert get_resp_header(refused, "retry-after") == ["10"]
+    end
+
     test "a missing size is 422", %{conn: conn} do
       assert conn |> post("/api/attachment-uploads", %{path: "a.png"}) |> json_response(422)
     end
@@ -316,28 +324,44 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
     end
   end
 
-  # Review Focus 4. Sequential: the concurrent case is Uploads' lock test.
-  test "two sessions that fit alone but not together: the second complete is 402", %{
+  # Review Focus 4. Two uploads that fit alone but not together cannot both
+  # land. Open sessions count at start, so the second is refused there.
+  test "two sessions that fit alone but not together: the second start is 402", %{
     conn: conn,
     user: user
   } do
     insert(:user_limit_override, user: user, key: "attachment_bytes_cap", value: %{"v" => 1000})
-    a = :crypto.strong_rand_bytes(600)
-    b = :crypto.strong_rand_bytes(600)
-
-    %{"upload_id" => id_a} = start!(conn, "a.png", 600)
-    %{"upload_id" => id_b} = start!(conn, "b.png", 600)
-    assert conn |> put_part(id_a, 1, a) |> json_response(200)
-    assert conn |> put_part(id_b, 1, b) |> json_response(200)
-    key_b = session(id_b).storage_key
-
-    assert conn |> complete(id_a) |> json_response(200)
+    _ = start!(conn, "a.png", 600)
 
     assert %{"reason" => "attachments_quota_exceeded"} =
-             conn |> complete(id_b) |> json_response(402)
+             conn |> start("b.png", 600) |> json_response(402)
+  end
 
-    refute InMemory.exists?(key_b)
-    assert conn |> get("/api/attachment-uploads/#{id_b}") |> json_response(404)
+  # Single-request uploads do not count open sessions, so complete still
+  # re-checks against live usage.
+  test "a single-request upload that fills the quota first: complete is 402", %{
+    conn: conn,
+    user: user,
+    vault: vault
+  } do
+    insert(:user_limit_override, user: user, key: "attachment_bytes_cap", value: %{"v" => 1000})
+    a = :crypto.strong_rand_bytes(600)
+
+    %{"upload_id" => id_a} = start!(conn, "a.png", 600)
+    assert conn |> put_part(id_a, 1, a) |> json_response(200)
+    key_a = session(id_a).storage_key
+
+    {:ok, _} =
+      Attachments.upsert_attachment(user, vault, %{
+        path: "b.png",
+        content: :crypto.strong_rand_bytes(600)
+      })
+
+    assert %{"reason" => "attachments_quota_exceeded"} =
+             conn |> complete(id_a) |> json_response(402)
+
+    refute InMemory.exists?(key_a)
+    assert conn |> get("/api/attachment-uploads/#{id_a}") |> json_response(404)
     assert used(user) == 600
   end
 

@@ -28,7 +28,10 @@ defmodule EngramWeb.AttachmentUploadsController do
     description:
       "Opens a resumable upload for a file of `size_bytes`, refused up front with the same " <>
         "responses as `POST /api/attachments` (402 plan, size or quota, 415 executable " <>
-        "extension, 422 invalid `mime_type`). Then PUT each part and complete. A storage " <>
+        "extension, 422 invalid `mime_type`). The user's other open sessions count against " <>
+        "the quota at their declared sizes, at most 4 may be open (429 `too_many_uploads`), " <>
+        "and a file over 10,000 parts is 402 `file_too_large` on every plan. Then PUT each " <>
+        "part and complete. A storage " <>
         "backend without multipart support (self-host database storage) returns 501.",
     tags: ["Attachments"],
     request_body:
@@ -44,6 +47,10 @@ defmodule EngramWeb.AttachmentUploadsController do
         {"Executable extension not allowed", "application/json", Schemas.MimeRejected},
       unprocessable_entity:
         {"Missing size or path, or invalid mime_type", "application/json", Schemas.Error},
+      too_many_requests:
+        {"`too_many_uploads`: the user already holds the maximum open sessions (4); retry " <>
+           "after `retry-after` seconds, once one completes or is aborted", "application/json",
+         Schemas.Error},
       not_implemented:
         {"Storage backend has no multipart support", "application/json", Schemas.MessageError},
       bad_gateway: {"Storage backend failure", "application/json", Schemas.MessageError}
@@ -287,6 +294,14 @@ defmodule EngramWeb.AttachmentUploadsController do
         cap,
         used
       )
+
+  # Retryable: another session completing or being aborted frees a slot.
+  defp refuse(conn, :too_many_uploads),
+    do:
+      conn
+      |> put_resp_header("retry-after", "10")
+      |> put_status(429)
+      |> json(%{error: "too_many_uploads"})
 
   defp refuse(conn, :multipart_unsupported),
     do: conn |> put_status(501) |> json(%{error: "multipart_unsupported"})

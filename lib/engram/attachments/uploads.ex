@@ -5,9 +5,10 @@ defmodule Engram.Attachments.Uploads do
   content format v2 (`Engram.Attachments.SegmentedCipher`).
 
   Each part is sealed as one segment under a per-file key before it reaches
-  storage, so no plaintext is ever stored. Nothing counts against the quota
-  until `complete/3`, which re-checks it against live usage under the same
-  per-path lock single-request uploads take (`Attachments.commit_row/6`).
+  storage, so no plaintext is ever stored. `start/3` counts the user's open
+  sessions against the quota at their declared sizes; `complete/3` re-checks
+  it against live usage under the same per-path lock single-request uploads
+  take (`Attachments.commit_row/7`).
 
   The blob key is per upload (`Storage.object_key/3` on the upload id), never
   shared with the row it replaces, so a refused or abandoned upload can be
@@ -35,6 +36,14 @@ defmodule Engram.Attachments.Uploads do
   # 8 MiB: above S3's 5 MiB non-final-part minimum, small enough to retry cheaply.
   @part_size 8_388_608
 
+  # S3's part-number ceiling. Bounds part_count when max_file_bytes is
+  # unlimited (the self-host default), where nothing else would.
+  @max_parts 10_000
+
+  # Open (not completed) sessions one user may hold. Each holds its parts in
+  # storage before complete counts them, and a re-PUT keeps it from expiring.
+  @max_open_sessions 4
+
   # No @spec: literal body (dialyzer contract_supertype; same as Envelope.tag_bytes/0).
   def part_size, do: @part_size
 
@@ -50,6 +59,11 @@ defmodule Engram.Attachments.Uploads do
   @doc """
   Opens an upload session for a file of `size_bytes`. Refuses up front what
   `complete/3` would refuse, so a client never sends parts for nothing.
+
+  The user's other open sessions count against the quota at their declared
+  sizes, and at most #{@max_open_sessions} may be open at once
+  (`:too_many_uploads`), checked again under the per-user quota lock at the
+  insert. A file over #{@max_parts} parts is `{:too_large, max}` on every plan.
   """
   @spec start(map(), map(), map()) ::
           {:ok, Upload.t()}
@@ -58,6 +72,7 @@ defmodule Engram.Attachments.Uploads do
              | :invalid_mime
              | {:too_large, integer()}
              | {:storage_cap_reached, integer(), integer()}
+             | :too_many_uploads
              | :multipart_unsupported
              | :rotation_in_progress
              | {:storage, term()}
@@ -69,6 +84,7 @@ defmodule Engram.Attachments.Uploads do
          mime = req[:mime_type] || MimeWhitelist.detect_mime(path),
          :ok <- MimeWhitelist.check(mime, path),
          :ok <- Attachments.validate_size(req.size_bytes, user),
+         :ok <- validate_part_count(req.size_bytes),
          true <- Storage.adapter().multipart?() || {:error, :multipart_unsupported},
          {:ok, user} <- Crypto.ensure_user_dek(user),
          # Before any key is derived; re-checked at the insert.
@@ -77,7 +93,9 @@ defmodule Engram.Attachments.Uploads do
          {:ok, dek} <- Crypto.get_dek(user),
          path_hmac = Crypto.hmac_field(filter_key, path),
          existing = Attachments.fetch_existing(user, vault.id, path_hmac),
-         :ok <- Attachments.validate_storage_cap(user, existing, req.size_bytes) do
+         # Early refusal before the multipart starts; authoritative under the
+         # lock at the insert.
+         :ok <- check_capacity(user, existing, req.size_bytes) do
       id = Ecto.UUID.generate()
       att_id = if existing, do: existing.id, else: Ecto.UUID.generate()
       {wrapped, key_nonce} = SegmentedCipher.wrap_key(SegmentedCipher.new_file_key(), dek, att_id)
@@ -85,46 +103,92 @@ defmodule Engram.Attachments.Uploads do
       storage_key = Storage.object_key(user.id, vault.id, id)
 
       with {:ok, s3_upload_id} <- start_multipart(storage_key) do
-        %Upload{id: id}
-        |> Upload.changeset(%{
-          user_id: user.id,
-          vault_id: vault.id,
-          attachment_id: att_id,
-          path_hmac: path_hmac,
-          path_ciphertext: path_ct,
-          path_nonce: path_n,
-          mime_type: mime,
-          size_bytes: req.size_bytes,
-          mtime: req[:mtime],
-          part_size: @part_size,
-          part_count: div(req.size_bytes + @part_size - 1, @part_size),
-          storage_key: storage_key,
-          s3_upload_id: s3_upload_id,
-          wrapped_file_key: wrapped,
-          file_key_nonce: key_nonce,
-          dek_version: dek_version
-        })
-        # Gated again inside the insert's transaction (share-locks the user
-        # row): a session committed after rotation swept the sessions would
-        # keep a file key and path under the retiring DEK.
-        |> then(fn changeset ->
-          Repo.with_tenant(user.id, fn ->
-            with :ok <- Attachments.rotation_gate(user, dek_version),
-                 do: Repo.insert(changeset)
-          end)
+        aborting_on_failure(storage_key, s3_upload_id, fn ->
+          %Upload{id: id}
+          |> Upload.changeset(%{
+            user_id: user.id,
+            vault_id: vault.id,
+            attachment_id: att_id,
+            path_hmac: path_hmac,
+            path_ciphertext: path_ct,
+            path_nonce: path_n,
+            mime_type: mime,
+            size_bytes: req.size_bytes,
+            mtime: req[:mtime],
+            part_size: @part_size,
+            part_count: div(req.size_bytes + @part_size - 1, @part_size),
+            storage_key: storage_key,
+            s3_upload_id: s3_upload_id,
+            wrapped_file_key: wrapped,
+            file_key_nonce: key_nonce,
+            dek_version: dek_version
+          })
+          |> insert_session(user, existing, dek_version)
         end)
-        |> unwrap()
-        |> case do
-          {:ok, upload} ->
-            {:ok, upload}
-
-          {:error, _} = err ->
-            # Best-effort; abort_storage logs its own failure.
-            _ = abort_storage(storage_key, s3_upload_id)
-            err
-        end
       end
     end
+  end
+
+  # Gated again inside the insert's transaction (share-locks the user row): a
+  # session committed after rotation swept the sessions would keep a file key
+  # and path under the retiring DEK.
+  defp insert_session(changeset, user, existing, dek_version) do
+    Repo.with_tenant(user.id, fn ->
+      # Serializes one user's starts, so two cannot both pass the capacity
+      # check. Its own key, not the quota lock: a start need not wait on a
+      # complete, whose commit moves a session's bytes from open to live in
+      # one transaction (counted either way).
+      :ok = Repo.advisory_lock!("attachment_upload_start:" <> user.id)
+
+      with :ok <- Attachments.rotation_gate(user, dek_version),
+           :ok <-
+             check_capacity(user, existing, Ecto.Changeset.get_field(changeset, :size_bytes)),
+           do: Repo.insert(changeset)
+    end)
+    |> unwrap()
+  end
+
+  # Runs `insert` (the session row write) and aborts the multipart upload it
+  # was opened for on any refusal or raise, so storage never keeps an upload
+  # no session row points at.
+  defp aborting_on_failure(storage_key, s3_upload_id, insert) do
+    case insert.() do
+      {:ok, upload} ->
+        {:ok, upload}
+
+      {:error, _} = err ->
+        # Best-effort; abort_storage logs its own failure.
+        _ = abort_storage(storage_key, s3_upload_id)
+        err
+    end
+  rescue
+    e ->
+      _ = abort_storage(storage_key, s3_upload_id)
+      reraise e, __STACKTRACE__
+  end
+
+  defp validate_part_count(size) when size > @max_parts * @part_size,
+    do: {:error, {:too_large, @max_parts * @part_size}}
+
+  defp validate_part_count(_size), do: :ok
+
+  # The quota with the user's open sessions counted at their declared sizes,
+  # and the open-session cap. `existing` is the live row at the path, whose
+  # size the write replaces (as for any upload).
+  defp check_capacity(user, existing, size) do
+    {:ok, {count, pending}} =
+      Repo.with_tenant(user.id, fn ->
+        Repo.one(
+          from(u in Upload,
+            where: u.user_id == ^user.id and is_nil(u.completed_at),
+            select: {count(u.id), type(coalesce(sum(u.size_bytes), 0), :integer)}
+          )
+        )
+      end)
+
+    if count >= @max_open_sessions,
+      do: {:error, :too_many_uploads},
+      else: Attachments.validate_storage_cap(user, existing, size + pending)
   end
 
   @doc """

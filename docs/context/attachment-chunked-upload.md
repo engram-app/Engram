@@ -27,18 +27,19 @@ lives in an `uploads/` folder.
 
 | Call | Success | Notes |
 |---|---|---|
-| `POST /api/attachment-uploads` json `{path, size_bytes, mime_type?}` | 201 `{upload_id, part_size, part_count}` | Same up-front refusals as the raw route. Clients must use the returned `part_size`. |
+| `POST /api/attachment-uploads` json `{path, size_bytes, mime_type?}` | 201 `{upload_id, part_size, part_count}` | Same up-front refusals as the raw route, plus the open-session limits below. Clients must use the returned `part_size`. |
 | `PUT /api/attachment-uploads/:id/parts/:n` (n from 1), octet-stream | 200 `{part}` | Every part is exactly `part_size` bytes except the last. Re-sending a part replaces it. 409 `upload_completed` once completed. |
 | `GET /api/attachment-uploads/:id` | 200 `{done, part_count, part_size, completed}` | Resume: send what is not in `done`. `completed: true`: call complete again for the attachment. |
 | `POST /api/attachment-uploads/:id/complete` | 200 `{attachment}` | Idempotent: a repeat on a completed session returns the same attachment, read fresh (404 if it was deleted or overwritten since). |
 | `DELETE /api/attachment-uploads/:id` | 204 | Idempotent; an unknown, foreign or completed id is also 204 and touches nothing (a completed session's blob is the attachment's). |
 
-Status codes by failure: 402 plan, size or quota; 404 unknown or foreign upload
+Status codes by failure: 402 plan, size or quota (a file over 10,000 parts is
+402 `file_too_large` on every plan); 404 unknown or foreign upload
 (tenant-scoped, checked before the part body is read); 408 stalled body; 409
 `missing_parts` with `missing: [..]` on complete, 409 `upload_completed` on a
 part PUT to a completed session; 415 executable extension; 422
 `bad_part_size` (an over-size part is 422, not 413), `bad_part_number`,
-`invalid_mime_type`; 501 `multipart_unsupported` (self-host database storage
+`invalid_mime_type`; 429 `too_many_uploads` with `retry-after: 10` on start; 501 `multipart_unsupported` (self-host database storage
 has no multipart; the MCP tool omits `uploads_url` there); 502 storage failure; 503 `rotation_in_progress` with
 `retry-after`.
 
@@ -91,6 +92,23 @@ reveals upload progress.
 - **HEAD on a v2 raw show** is answered from the row (content-length, no
   storage reads); `EngramWeb.Endpoint.head_request?/1` recovers the verb
   `Plug.Head` rewrites.
+- **Open sessions count at start.** An open session's parts sit in storage
+  before complete counts them, and re-PUTting a part bumps `updated_at`, so
+  the expiry sweep never fires on a session kept alive. Start therefore counts
+  the user's open (not completed) sessions at their declared `size_bytes`
+  against the quota, and caps them at 4 per user across vaults
+  (`:too_many_uploads`, 429). Both checks run again under a per-user start
+  lock (`attachment_upload_start:<user_id>`, not the quota lock, so a start
+  never waits on a complete) at the insert. Complete still re-checks the
+  quota against live usage, since a single-request upload does not count
+  open sessions. The web client retries a 429 on start (and only that: a
+  start whose answer was lost may have opened a session, and a resend would
+  hold a second slot).
+- **10,000 parts at most** (S3's ceiling). With `max_file_bytes` unlimited
+  (the self-host default) nothing else bounds `part_count`; a large enough
+  size also overflowed the int4 column and raised after the multipart had
+  started. Start refuses `size_bytes > 10_000 * part_size` as `{:too_large,
+  max}`, and any refusal or raise after the multipart starts aborts it.
 - **Expiry.** `AttachmentUploadExpiry` sweeps sessions idle for 24 h and aborts
   their S3 multipart uploads. A completed session loses only its row, 24 h
   after completing. Vault purge (`CleanupVault`) also drops session blobs and
