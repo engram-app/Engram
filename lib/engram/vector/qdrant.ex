@@ -1034,13 +1034,17 @@ defmodule Engram.Vector.Qdrant do
   Patch (overwrite-or-add) the given payload keys on the listed point ids.
   Vectors are untouched — this is the cost-free path for re-shaping payloads
   without re-running the embedder. Empty `point_ids` is a no-op.
+
+  Ids that name no point are skipped, not an error: the ids come from
+  `chunks` rows, and an orphaned row must not fail a refresh. A `points`
+  list answers 404 for a missing id; a `has_id` filter does not.
   """
   def set_payload(col \\ nil, point_ids, payload)
   def set_payload(_col, [], _payload), do: :ok
 
   def set_payload(col, point_ids, payload) when is_list(point_ids) and is_map(payload) do
     col = col || collection()
-    opts = write_opts(%{points: point_ids, payload: payload})
+    opts = write_opts(%{filter: ids_filter(point_ids), payload: payload})
 
     instrument(:set_payload, fn ->
       case Req.post("#{base_url()}/collections/#{col}/points/payload", opts) do
@@ -1604,6 +1608,10 @@ defmodule Engram.Vector.Qdrant do
 
     %{searches: [dense_leg, sparse_leg]}
   end
+
+  # Any of the ids (`should` is OR), one `has_id` per `@max_ids`.
+  defp ids_filter(point_ids),
+    do: %{should: point_ids |> Enum.chunk_every(@max_ids) |> Enum.map(&%{has_id: &1})}
 
   @doc """
   The ids among `point_ids` whose points hold a `dense` vector. A recommend
