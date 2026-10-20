@@ -132,6 +132,9 @@ defmodule Engram.Crypto.Envelope do
   # definition of the AAD shape, and are built once at compile time.
   @policy [
             {:notes, :content, :zstd},
+            # Also crdt_update_log: its rows are encrypted under the
+            # notes:crdt_state AAD (Crypto.encrypt_crdt_state/3), so the tail
+            # is zstd too though no entry names it.
             {:notes, :crdt_state, :zstd},
             {:vault_index_states, :state, :zstd},
             {:vault_index_update_log, :update, :zstd},
