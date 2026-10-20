@@ -333,6 +333,15 @@ case qdrant_switch.("QDRANT_MANAGE_QUOTAS") do
   on? -> config :engram, :qdrant_manage_quotas, on?
 end
 
+# true = the keyword leg computes IDF over the user's own points (Qdrant
+# 1.19+, users with >= :tenant_idf_min_points points). Default false: it
+# changes keyword ranking, so it is flipped at v5 go time, and false here
+# turns it off again without a deploy.
+case qdrant_switch.("TENANT_IDF") do
+  nil -> :ok
+  on? -> config :engram, :tenant_idf, on?
+end
+
 # false = EmbedNote never pauses for Qdrant pressure before paying Voyage.
 case qdrant_switch.("QDRANT_BACKPRESSURE_PREFLIGHT") do
   nil -> :ok

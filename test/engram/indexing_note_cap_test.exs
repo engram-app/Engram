@@ -25,10 +25,13 @@ defmodule Engram.IndexingNoteCapTest do
 
   setup :verify_on_exit!
 
-  # `n` one-line sections, one chunk each; `last` goes in the final section.
+  # Over 512 B, so the chunker's min512 merge leaves a section alone.
+  @pad String.duplicate("lorem ipsum dolor ", 30)
+
+  # `n` sections, one chunk each; `last` goes in the final section.
   defp sections(n, last \\ "") do
     "# Big\n\n" <>
-      Enum.map_join(1..n, "\n\n", fn i -> "## S#{i}\n\nsection#{i} body text here." end) <>
+      Enum.map_join(1..n, "\n\n", fn i -> "## S#{i}\n\nsection#{i} body text here. #{@pad}" end) <>
       last
   end
 
@@ -215,6 +218,31 @@ defmodule Engram.IndexingNoteCapTest do
                prefix.(first.embed_text, first.text) <> first_group.text
     end
 
+    # Review M2: a capped note keeps every member's parents, and a merged
+    # point names no section.
+    test "a merged group carries its members' breadcrumbs" do
+      body =
+        Enum.map_join(1..200, "\n\n", fn i ->
+          "## Area #{div(i, 10)}\n\n### Topic #{i}\n\nbody #{i} #{@pad}"
+        end)
+
+      chunks = Markdown.parse("# Big\n\n" <> body, "Big.md")
+      assert length(chunks) > 128
+      groups = Indexing.cap_chunks(chunks, 128)
+      merged = Enum.filter(groups, &Map.get(&1, :merged, false))
+      assert merged != []
+
+      for g <- merged do
+        assert g.headings == nil and g.heading_path == nil
+        # The first member's path is the group's prefix: no breadcrumb.
+        assert String.starts_with?(g.text, hd(g.members).text)
+        assert g.section_count == g.members |> Enum.map(& &1.section_count) |> Enum.sum()
+        assert g.section_count == length(g.members)
+        assert g.text =~ ~r/^Area \d+ > Topic \d+$/m
+        assert IO.iodata_to_binary(g.embed_text) =~ ~r/^Area \d+ > Topic \d+$/m
+      end
+    end
+
     test "under the cap the list is returned unchanged" do
       chunks = Markdown.parse(sections(100), "Big.md")
       assert length(chunks) == 100
@@ -225,7 +253,7 @@ defmodule Engram.IndexingNoteCapTest do
 
   # A numeric table: the chunker calls it "data" (keyword-only, #2041).
   defp table(i) do
-    rows = for r <- 1..10, do: "| #{r} | #{4_810 + r * 37 + i} | #{r * 3} | #{rem(r, 4)}.#{i} |"
+    rows = for r <- 1..18, do: "| #{r} | #{4_810 + r * 37 + i} | #{r * 3} | #{rem(r, 4)}.#{i} |"
     Enum.join(["| id | value | count | rate |", "|---|---|---|---|" | rows], "\n")
   end
 
@@ -237,7 +265,7 @@ defmodule Engram.IndexingNoteCapTest do
           i = run * 1_000 + j
 
           if rem(run, 2) == 1,
-            do: "## P#{i}\n\nprose#{i} sentence about the topic here.",
+            do: "## P#{i}\n\nprose#{i} sentence about the topic here. #{@pad}",
             else: "## T#{i}\n\n#{table(i)}"
         end)
       end)
@@ -558,9 +586,17 @@ defmodule Engram.IndexingNoteCapTest do
     # stored point has (reuse matches by fingerprint over those inputs, by
     # multiplicity), so that is the embedder-call count per step.
     test "growing 500 -> 1,000 chunks one at a time regroups at most once" do
+      # Each section is its own chunk, so an n-section note parses to the
+      # first n chunks of this one: parsed once, not 500 times (each section
+      # is now over 512 B, so 500 parses outlived the test timeout).
+      all = Markdown.parse(sections(1_000), "Big.md")
+      assert length(all) == 1_000
+      same = &Enum.map(&1, fn c -> {c.text, c.context_text, c.embed_text, c.kind} end)
+      assert same.(Enum.take(all, 600)) == same.(Markdown.parse(sections(600), "Big.md"))
+
       inputs = fn n ->
-        sections(n)
-        |> Markdown.parse("Big.md")
+        all
+        |> Enum.take(n)
         |> Indexing.cap_chunks(128)
         |> Enum.map(&{&1.context_text, &1.embed_text})
       end

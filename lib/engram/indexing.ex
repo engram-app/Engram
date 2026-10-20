@@ -236,7 +236,7 @@ defmodule Engram.Indexing do
          {:ok, vectors} <- retained_or_embed(retained, dense?, plan, texts, opts),
          :ok <- ensure_one_vector_per_text(vectors, texts, note),
          :ok = collect_garbage(n),
-         avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id),
+         avgdl = avgdl(note.user_id, note.vault_id),
          {:ok, prepared} <-
            build_prepared(note, user, plan, vectors, filter_key, avgdl) do
       # What the embedder was actually sent (#1618): reused chunks and
@@ -451,13 +451,13 @@ defmodule Engram.Indexing do
     budget = Application.get_env(:engram, :max_pass_embed_bytes, @max_pass_embed_bytes)
 
     {chunks, _used} =
-      Enum.map_reduce(chunks, 0, fn
-        %{kind: "prose"} = chunk, used ->
+      Enum.map_reduce(chunks, 0, fn chunk, used ->
+        if Markdown.dense_kind?(chunk.kind) do
           used = used + IO.iodata_length(chunk.embed_text)
           {if(used > budget, do: Map.put(chunk, :sparse_only, true), else: chunk), used}
-
-        chunk, used ->
+        else
           {chunk, used}
+        end
       end)
 
     chunks
@@ -548,8 +548,11 @@ defmodule Engram.Indexing do
     * `text`: the members' `text` joined with "\n\n"
     * `context_text` / `embed_text`: its first member's prefix + that text,
       exactly what the chunker gives a single chunk with that text
-    * `heading_path`: nil. It spans sections, so its first member's heading
-      would label a hit wrongly (review L5); Task 13.1 adds breadcrumbs
+    * `heading_path` and `headings`: nil. It spans sections, so its first
+      member's heading would label a hit wrongly (review L5). Instead a
+      member under other parents than the one before it opens with a
+      breadcrumb line, `A > B` (its path without the title), as the
+      chunker's min512 merge does
     * `kind`: "prose" if any member is, else its first member's
     * `char_start` of its first member to the largest `char_end` (a
       frontmatter chunk has `char_end` 0)
@@ -665,7 +668,9 @@ defmodule Engram.Indexing do
     |> Enum.concat()
   end
 
-  defp frontmatter?(chunk), do: chunk.kind == "frontmatter"
+  # Never a group member: frontmatter, and the chunks whose dense input is
+  # not their text (property notes, canvas cards).
+  defp frontmatter?(chunk), do: chunk.kind in ~w(frontmatter frontmatter_dense canvas_dense)
 
   defp merge_group([single]), do: single
 
@@ -674,12 +679,13 @@ defmodule Engram.Indexing do
   # hold every member; its dense input (`embed_text`) only the prose ones,
   # so a table or a drawing inside a prose group never reaches Voyage.
   defp merge_group([first | _] = members) do
-    text = Enum.map_join(members, "\n\n", & &1.text)
+    members = with_crumbs(members)
+    text = Enum.map_join(members, "\n\n", & &1.crumbed)
     prose? = Enum.any?(members, &(&1.kind == "prose"))
 
     embed =
       if prose?,
-        do: members |> Enum.filter(&(&1.kind == "prose")) |> Enum.map_join("\n\n", & &1.text),
+        do: members |> Enum.filter(&(&1.kind == "prose")) |> Enum.map_join("\n\n", & &1.crumbed),
         else: text
 
     # iodata, prefix + text: binaries, the two inputs were two more copies
@@ -689,15 +695,50 @@ defmodule Engram.Indexing do
     Map.merge(first, %{
       kind: if(prose?, do: "prose", else: first.kind),
       heading_path: nil,
+      headings: nil,
+      # The sections it joins, so keyword scoring sees a merged point
+      # (plan Task 14.1); a member may itself be a min512 chunk.
+      section_count: members |> Enum.map(&Map.get(&1, :section_count, 1)) |> Enum.sum(),
       text: text,
       context_text: [prefix(first.context_text, first.text), text],
       embed_text: [prefix(first.embed_text, first.text), embed],
       char_end: members |> Enum.map(& &1.char_end) |> Enum.max(),
       token_count: members |> Enum.map(&UsageMeters.estimate_tokens(&1.text)) |> Enum.sum(),
       merged: true,
-      members: members
+      members: Enum.map(members, &Map.delete(&1, :crumbed))
     })
   end
+
+  # Review M2: each member's text, opened by its breadcrumb when its path
+  # (title dropped) is deeper than its own heading and differs from the one
+  # before. The first member has none: the group's prefix is its path.
+  # Capped at the member's own prefix, so the group still fits the ceiling
+  # `close_groups/2` sums from the members' inputs.
+  defp with_crumbs([first | _] = members) do
+    {out, _} =
+      Enum.map_reduce(members, Map.get(first, :headings), fn m, prev ->
+        hs = Map.get(m, :headings)
+
+        crumbed =
+          case hs do
+            [_title, _, _ | _] when hs != prev ->
+              room = byte_size(m.embed_text) - byte_size(m.text) - 2
+              crumb = hs |> tl() |> Enum.join(" > ") |> valid_prefix(room)
+              if crumb == "", do: m.text, else: crumb <> "\n" <> m.text
+
+            _ ->
+              m.text
+          end
+
+        {Map.put(m, :crumbed, crumbed), hs}
+      end)
+
+    out
+  end
+
+  defp valid_prefix(s, max) when byte_size(s) <= max, do: s
+  defp valid_prefix(_s, max) when max <= 0, do: ""
+  defp valid_prefix(s, max), do: s |> binary_part(0, max) |> String.chunk(:valid) |> hd()
 
   # The chunker builds each input as `prefix <> "\n\n" <> text`.
   # A copy, so the member's whole input is not kept alive by its prefix.
@@ -2063,7 +2104,7 @@ defmodule Engram.Indexing do
   end
 
   defp dense_chunk?(chunk, dense?),
-    do: dense? and chunk.kind == "prose" and not Map.get(chunk, :sparse_only, false)
+    do: dense? and Markdown.dense_kind?(chunk.kind) and not Map.get(chunk, :sparse_only, false)
 
   # A merged chunk's point holds a length-capped keyword vector and no
   # `avgdl` length, so it never matches an unmerged chunk with the same
@@ -2150,25 +2191,55 @@ defmodule Engram.Indexing do
     out
   end
 
-  # Floor and merged chunks encode length-capped (`cap_doc_len`), the rest
-  # as usual: one call each, results in `chunks` order.
+  # One encode call per distinct `sparse_opts/1` (plain chunks, merged
+  # groups, floor points), results back in `chunks` order. The plain group
+  # calls the /4 arity: test doubles implement only that one.
   defp encode_sparse(chunks, filter_key, avgdl, language) do
-    {capped, plain} = Enum.split_with(chunks, &capped_length?/1)
-    texts = &Enum.map(&1, fn chunk -> chunk.context_text end)
+    chunks
+    |> Enum.with_index()
+    |> Enum.group_by(fn {chunk, _i} -> sparse_opts(chunk) end)
+    |> Enum.flat_map(fn {opts, group} ->
+      texts = Enum.map(group, fn {chunk, _i} -> chunk.context_text end)
 
-    capped_vectors =
-      if capped == [],
-        do: [],
-        else:
-          KeywordIndex.module().encode_documents(texts.(capped), filter_key, avgdl, language,
-            cap_doc_len: true
-          )
+      vectors =
+        if opts == [],
+          do: KeywordIndex.module().encode_documents(texts, filter_key, avgdl, language),
+          else: KeywordIndex.module().encode_documents(texts, filter_key, avgdl, language, opts)
 
-    plain_vectors =
-      KeywordIndex.module().encode_documents(texts.(plain), filter_key, avgdl, language)
-
-    restitch(chunks, &capped_length?/1, capped_vectors, plain_vectors)
+      Enum.zip_with(group, vectors, fn {_chunk, i}, vector -> {i, vector} end)
+    end)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.map(&elem(&1, 1))
   end
+
+  @doc """
+  Keyword encoder options for a chunk (plan Task 14.1). Floor and capped
+  groups encode length-capped (`cap_doc_len`). When the v5 layout is
+  written (`:write_v5_layout`), a chunk joining more than one section
+  (`section_count > 1`: a v5 min512 chunk or a capped group) scores with
+  BM25 `b` = `ServiceConfig.get(:bm25_b_merged, 0.25)`; everything else, and
+  every v3 write, keeps the encoder's 0.75, byte-identical to before.
+  """
+  @spec sparse_opts(map()) :: keyword()
+  def sparse_opts(chunk) do
+    cap = if capped_length?(chunk), do: [cap_doc_len: true], else: []
+
+    # The same flag as `Qdrant.write_v5_layout?/0` (PR-15b); switch to that
+    # accessor when both are on one branch.
+    if Engram.ServiceConfig.get(:write_v5_layout, false) == true and
+         Map.get(chunk, :section_count, 1) > 1,
+       do: cap ++ [b: Engram.ServiceConfig.get(:bm25_b_merged, 0.25)],
+       else: cap
+  end
+
+  @doc """
+  The vault's BM25 `avgdl`, the one source every keyword encode reads.
+  Today the cached `KeywordIndex.Stats.avgdl/2`.
+  """
+  # ponytail: Task 16 pins avgdl for the v5 pass here (spec K2, H14): the
+  # `rebuild_manifest_vaults.avgdl` row when one exists, else this value.
+  @spec avgdl(Ecto.UUID.t(), Ecto.UUID.t()) :: float()
+  def avgdl(user_id, vault_id), do: Engram.KeywordIndex.Stats.avgdl(user_id, vault_id)
 
   # Both inputs: `context_text` (keyword vector, payload) and `embed_text`
   # (dense vector). They are capped separately, so past 512 bytes of
@@ -2283,7 +2354,7 @@ defmodule Engram.Indexing do
           {:ok, 0, unmatched}
 
         {matched, unmatched} ->
-          avgdl = Engram.KeywordIndex.Stats.avgdl(note.user_id, note.vault_id)
+          avgdl = avgdl(note.user_id, note.vault_id)
           language = note_language(chunks)
           sparse = encode_sparse(Enum.map(matched, &elem(&1, 0)), filter_key, avgdl, language)
 
@@ -2667,6 +2738,7 @@ defmodule Engram.Indexing do
     case Path.extname(path) do
       ".canvas" -> "canvas"
       ".base" -> "base"
+      _ when kind == "frontmatter_dense" -> "frontmatter"
       _ when kind in ~w(prose data frontmatter drawing) -> kind
       _ -> "prose"
     end
