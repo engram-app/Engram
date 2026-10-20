@@ -47,9 +47,6 @@ import {
 	stashPendingAuthorization,
 } from "./pending-authorization";
 
-// The tab an approval opens while the client finishes connecting: the app
-// root, which lands on the active vault.
-const VAULT_URL = ROUTES.HOME;
 // A Terms update also sends existing accounts through the wizard and back, so
 // "resumed from the wizard" alone is not a signup. A vault provisioned within
 // the day is. ponytail: wall-clock age; a skewed client clock can misjudge it,
@@ -437,10 +434,6 @@ export default function OAuthAuthorizePage() {
 	) => {
 		setSubmitting(true);
 		setSubmitError(null);
-		// Every approval opens the vault, so the user lands in it while the
-		// client finishes connecting. Before any await: a popup blocker refuses
-		// a tab opened outside the click.
-		const vaultTab = window.open(VAULT_URL, "_blank");
 
 		// Obsidian's device-code flow is a different surface (device-link-page.tsx,
 		// plugin_connect_*) — this event name says "mcp" and must mean it.
@@ -502,15 +495,13 @@ export default function OAuthAuthorizePage() {
 			// If swapping, disconnect the existing connection of the same kind
 			// first so the consent call doesn't 402. Mirrors the /link page swap
 			// shape — the confirm modal already named what's about to disconnect.
-			// After the tab opened (a popup blocker refuses one opened past an
-			// await), before consent: a failed rename stops the connect, and says
-			// it was the name, not the authorization.
+			// Before consent: a failed rename stops the connect, and says it was
+			// the name, not the authorization.
 			if (firstVaultChoice?.rename) {
 				try {
 					await updateVault.mutateAsync({ id: firstVaultChoice.id, name: firstVaultChoice.rename });
 					renamedTo.current = firstVaultChoice.rename;
 				} catch (err) {
-					vaultTab?.close();
 					// 422 is the name itself (the changeset refused it); anything
 					// else is the network or the server, not the user's choice.
 					setSubmitError(
@@ -565,7 +556,6 @@ export default function OAuthAuthorizePage() {
 					),
 				);
 				track("mcp_connect_failed", { client: mcpClient, reason: "unknown" });
-				vaultTab?.close();
 				setSubmitting(false);
 				return;
 			}
@@ -573,19 +563,11 @@ export default function OAuthAuthorizePage() {
 			if (isMcp && grantsCode) {
 				track("mcp_connect_succeeded", { client: mcpClient });
 			}
-			// A 200 can still carry a refusal (`?error=`): nothing will connect.
-			if (!grantsCode) {
-				vaultTab?.close();
-			} else if (vaultTab === null) {
-				// Blocked (every in-app/auth webview does): the client comes first.
-				track(
-					"vault_tab_blocked",
-					isMcp ? { client_kind: "mcp", client: mcpClient } : { client_kind: "obsidian" },
-				);
-			}
+			// This tab is the client handoff and nothing may compete with it: a
+			// second tab takes the foreground on mobile and the suspended consent
+			// tab never redirects (#2003 dropped Android redemption to 0/11).
 			window.location.assign(redirect_uri);
 		} catch (e: unknown) {
-			vaultTab?.close();
 			if (swappedFromName) {
 				// Disconnect succeeded but consent did not — user is now at 0
 				// connections instead of 1. Make that visible.

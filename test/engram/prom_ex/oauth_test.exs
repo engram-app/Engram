@@ -20,7 +20,25 @@ defmodule Engram.PromEx.OAuthTest do
     assert %Telemetry.Metrics.Counter{} = m
     assert m.name == [:engram, :prom_ex, :oauth, :token, :total]
     assert m.event_name == [:engram, :oauth, :token]
-    assert m.tags == [:grant_type, :result, :reason]
+    assert m.tags == [:grant_type, :result, :reason, :client, :client_agent]
+  end
+
+  # Codes minted at consent vs `authorization_code` tokens issued, per client,
+  # is the redemption ratio: a consent page that never hands back to the
+  # client (#2003 on mobile) shows up as mints with no exchanges.
+  test "declares engram_prom_ex_oauth_consent_total by client" do
+    assert m = Enum.find(metrics(), &(&1.event_name == [:engram, :oauth, :consent]))
+    assert %Telemetry.Metrics.Counter{} = m
+    assert m.name == [:engram, :prom_ex, :oauth, :consent, :total]
+    assert m.tags == [:client, :device]
+  end
+
+  # The direct unredeemed signal: a code the client never exchanged.
+  test "declares engram_prom_ex_oauth_code_expired_total by client" do
+    assert m = Enum.find(metrics(), &(&1.event_name == [:engram, :oauth, :code_expired]))
+    assert %Telemetry.Metrics.Counter{} = m
+    assert m.name == [:engram, :prom_ex, :oauth, :code_expired, :total]
+    assert m.tags == [:client]
   end
 
   test "declares engram_prom_ex_cimd_fetch_total and no duration histogram" do

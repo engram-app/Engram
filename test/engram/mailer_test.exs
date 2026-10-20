@@ -253,6 +253,79 @@ defmodule Engram.MailerTest do
 
   # The riskiest localized paths: a translated sentence with a user-supplied
   # var, the translated changelog nested in another sentence, and ISO dates.
+  describe "send_connected/3" do
+    setup do
+      %{user: insert(:user, email: "c@example.com", display_name: "Ada")}
+    end
+
+    defp connected_html(user, client_name) do
+      parent = self()
+
+      expect(Engram.Email.ProviderMock, :send, fn _to, subject, html, _opts ->
+        send(parent, {:sent, subject, html})
+        :ok
+      end)
+
+      assert :ok = Mailer.send_connected(user, client_name, "https://app.example.test/")
+      assert_received {:sent, subject, html}
+      {subject, html}
+    end
+
+    test "leads with the heading, then what the client can do", %{user: user} do
+      {subject, html} = connected_html(user, "ChatGPT")
+      assert subject == "ChatGPT is connected to Engram"
+      assert html =~ ~r/font-size:22px[^>]*>\s*(<[^>]+>\s*)*ChatGPT is connected</
+      assert html =~ "Hi Ada,"
+      assert html =~ "ChatGPT can now use the vaults you chose in your Engram account."
+      assert html =~ "Ask ChatGPT to save a note, and it shows up in your vault."
+      assert html =~ ~s(href="https://app.example.test/")
+      refute html =~ "Open your vault any time"
+      refute html =~ "is now connected to your Engram account"
+      refute html =~ "—"
+    end
+
+    # The security line sits under the card, after the sign-off, as one
+    # sentence with the link inside it.
+    test "the disconnect line is below the card, with its link", %{user: user} do
+      {_subject, html} = connected_html(user, "ChatGPT")
+      [before_sign_off, after_sign_off] = String.split(html, "The Engram team", parts: 2)
+      refute before_sign_off =~ "If you didn&#39;t connect"
+      assert after_sign_off =~ "If you didn&#39;t connect ChatGPT,"
+
+      assert after_sign_off =~
+               ~r{<a href="https://app.example.test/#settings/connections" style="color:#7c3aed;">disconnect it in your connections</a>\.}
+
+      [footer, _tagline] = String.split(after_sign_off, "Your notes are your AI", parts: 2)
+      assert footer =~ "disconnect it in your connections"
+    end
+
+    test "a client with no name reads as your AI tool", %{user: user} do
+      {subject, html} = connected_html(user, nil)
+      assert subject == "Your AI tool is connected to Engram"
+      assert html =~ "Your AI tool is connected"
+      assert html =~ "Your AI tool can now use the vaults you chose in your Engram account."
+      assert html =~ "Ask your AI tool to save a note, and it shows up in your vault."
+      assert html =~ "If you didn&#39;t connect this tool,"
+    end
+
+    # The link survives translation: `{link}` is a placeholder in the key.
+    test "a translated email keeps the link inside its sentence" do
+      user = insert(:user, email: "d@example.com", locale: "de")
+      {_subject, html} = connected_html(user, "ChatGPT")
+      assert html =~ "ChatGPT ist verbunden"
+      assert html =~ ~s(<a href="https://app.example.test/#settings/connections")
+      refute html =~ "{link}"
+      refute html =~ "\uE000"
+    end
+
+    test "the client name is escaped everywhere, the link is not", %{user: user} do
+      {_subject, html} = connected_html(user, "<b>x</b>")
+      refute html =~ "<b>x</b>"
+      assert html =~ "&lt;b&gt;x&lt;/b&gt;"
+      assert html =~ ~s(<a href="https://app.example.test/#settings/connections")
+    end
+  end
+
   describe "localized (de)" do
     test "legal notice: translated subject, changelog and ISO date" do
       user = insert(:user, email: "u@example.com", locale: "de")

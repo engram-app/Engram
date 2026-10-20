@@ -3,13 +3,30 @@ defmodule Engram.PromEx.OAuth do
   PromEx plugin for the OAuth token endpoint (#1974).
 
     * `[:engram, :oauth, :token]` → `engram_prom_ex_oauth_token_total`, tags
-      `[:grant_type, :result, :reason]`. Emitted once per `/oauth/token`
-      request by `EngramWeb.OAuthTokenController`.
+      `[:grant_type, :result, :reason, :client, :client_agent]`. Emitted once
+      per `/oauth/token` request by `EngramWeb.OAuthTokenController`.
+
+    * `[:engram, :oauth, :consent]` → `engram_prom_ex_oauth_consent_total`, tags
+      `[:client, :device]`, one per code minted at consent
+      (`EngramWeb.OAuthAuthorizeController.consent/2`). Divided into the token
+      counter's `grant_type="authorization_code", result="issued"` per client it
+      is the redemption ratio: a consent page that never hands back to the
+      client shows as mints with no exchanges.
+
+    * `[:engram, :oauth, :code_expired]` →
+      `engram_prom_ex_oauth_code_expired_total`, tag `[:client]`, one
+      per code reaped unredeemed by `Engram.OAuth.cleanup_expired/0` (hourly,
+      so it lags expiry by up to two hours).
 
   Every tag is a closed atom set:
 
     * `grant_type`: `:authorization_code | :refresh_token | :other | :missing`
     * `result`: `:issued | :rejected`
+    * `client`: the `Engram.Analytics.McpClient` family (a fixed string set,
+      `"other"` for anything unknown)
+    * `client_agent`: `McpClient.agent/2`, `"codex"` / `"chatgpt"` by the token
+      request's User-Agent, else the `client` family
+    * `device`: `Engram.Analytics.Device`, `"mobile" | "desktop" | "unknown"`
     * `reason`: `:none` on success; otherwise an `Engram.OAuth.grant_reason()`
       or one of the controller's own: `:refresh_token_missing`,
       `:unsupported_grant_type`, `:grant_type_missing`, `:token_persist_failed`,
@@ -28,7 +45,8 @@ defmodule Engram.PromEx.OAuth do
       `Engram.OAuth.Cimd.Jwks.aud_form()`, `client` the bounded
       `Engram.Analytics.McpClient.host_family/1` of the CIMD host (exact match).
 
-  Cardinality contract: never the client id, host or user agent. Those live on
+  Cardinality contract: `client` is only ever a family label; never the client
+  id, host or user agent. Those live on
   the `oauth_token_rejected` / `mcp_cimd_fetch_failed` log lines.
   """
 
@@ -47,7 +65,19 @@ defmodule Engram.PromEx.OAuth do
           metric_prefix ++ [:token, :total],
           event_name: [:engram, :oauth, :token],
           description: "OAuth token-endpoint outcomes by grant type, result and reason.",
-          tags: [:grant_type, :result, :reason]
+          tags: [:grant_type, :result, :reason, :client, :client_agent]
+        ),
+        counter(
+          metric_prefix ++ [:consent, :total],
+          event_name: [:engram, :oauth, :consent],
+          description: "Authorization codes minted at consent, per client family and device.",
+          tags: [:client, :device]
+        ),
+        counter(
+          metric_prefix ++ [:code_expired, :total],
+          event_name: [:engram, :oauth, :code_expired],
+          description: "Authorization codes that expired without being exchanged.",
+          tags: [:client]
         ),
         counter(
           cimd_prefix ++ [:fetch, :total],

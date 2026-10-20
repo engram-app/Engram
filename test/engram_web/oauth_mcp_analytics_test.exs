@@ -13,6 +13,7 @@ defmodule EngramWeb.OAuthMcpAnalyticsTest do
   import Engram.OAuthHelpers, only: [code_from_redirect: 1, pkce_pair: 0]
   import Mox
 
+  alias Engram.Auth.Providers.Local
   alias Engram.OAuth
   alias Engram.OAuth.Cimd.FetcherMock
   alias Engram.OAuth.Cimd.Jwks
@@ -108,7 +109,7 @@ defmodule EngramWeb.OAuthMcpAnalyticsTest do
   test "consent emits mcp_oauth_granted with client and scopes", %{client: client, user: user} do
     user = ensure_external_id(user)
     insert(:vault, user: user)
-    {:ok, token} = Engram.Auth.Providers.Local.issue_access_token(user.external_id, user.email)
+    {:ok, token} = Local.issue_access_token(user.external_id, user.email)
     {_verifier, challenge} = pkce_pair()
 
     build_conn()
@@ -121,6 +122,106 @@ defmodule EngramWeb.OAuthMcpAnalyticsTest do
     assert e["properties"]["client"] == "claude"
     assert e["properties"]["registration"] == "dcr"
     assert e["properties"]["scopes_granted"] == ["mcp"]
+    # No User-Agent on this request.
+    assert e["properties"]["device"] == "unknown"
+    assert e["properties"]["grant_id"] =~ ~r/^[0-9a-f]{16}$/
+  end
+
+  @iphone "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+
+  # The exact join: the grant id on mcp_oauth_granted is the one on the
+  # exchange of that code, and never the code itself.
+  test "grant_id joins a mobile consent to its exchange", %{client: client, user: user} do
+    user = ensure_external_id(user)
+    insert(:vault, user: user)
+    {:ok, token} = Local.issue_access_token(user.external_id, user.email)
+    {verifier, challenge} = pkce_pair()
+
+    %{"redirect_uri" => redirect} =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{token}")
+      |> put_req_header("user-agent", @iphone)
+      |> post("/api/oauth/authorize/consent", authorize_params(client, challenge))
+      |> json_response(200)
+
+    code = code_from_redirect(redirect)
+
+    build_conn()
+    |> put_req_header("user-agent", "codex-mcp-client/0.46.0")
+    |> post("/oauth/token", %{
+      "grant_type" => "authorization_code",
+      "code" => code,
+      "redirect_uri" => @redirect,
+      "client_id" => client.client_id,
+      "code_verifier" => verifier
+    })
+    |> json_response(200)
+
+    events = drain()
+    granted = event(events, "mcp_oauth_granted")
+    issued = event(events, "mcp_oauth_token_issued")
+    assert granted["properties"]["device"] == "mobile"
+    assert issued["properties"]["client_agent"] == "codex"
+    assert is_binary(granted["properties"]["grant_id"])
+    assert issued["properties"]["grant_id"] == granted["properties"]["grant_id"]
+    refute granted["properties"]["grant_id"] =~ code
+  end
+
+  test "a refused exchange of a known code carries its grant_id", %{client: client, user: user} do
+    {_verifier, challenge} = pkce_pair()
+    json_response(exchange(client, mint_code(client, user, challenge), "wrong-verifier"), 400)
+
+    e = event(drain(), "mcp_oauth_token_failed")
+    assert e["properties"]["grant_id"] =~ ~r/^[0-9a-f]{16}$/
+    assert e["properties"]["client_agent"] == "claude"
+  end
+
+  test "a refused refresh carries reason and client_agent", %{client: client} do
+    build_conn()
+    |> put_req_header("user-agent", "openai-connectors-oauth/1.0")
+    |> post("/oauth/token", %{
+      "grant_type" => "refresh_token",
+      "refresh_token" => "engram_oauth_rt_nope",
+      "client_id" => client.client_id
+    })
+    |> json_response(400)
+
+    e = event(drain(), "mcp_oauth_token_failed")
+    assert e["properties"]["grant_type"] == "refresh_token"
+    assert e["properties"]["reason"] == "refresh_token_unknown"
+    assert e["properties"]["client_agent"] == "chatgpt"
+    refute Map.has_key?(e["properties"], "grant_id")
+  end
+
+  # engram_prom_ex_oauth_consent_total: one per minted code, by client family.
+  test "consent emits one [:engram, :oauth, :consent] event with the client family", %{
+    client: client,
+    user: user
+  } do
+    test_pid = self()
+    handler = "oauth-consent-test-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler,
+      [:engram, :oauth, :consent],
+      fn _e, measurements, meta, _ -> send(test_pid, {:oauth_consent, measurements, meta}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    user = ensure_external_id(user)
+    insert(:vault, user: user)
+    {:ok, token} = Local.issue_access_token(user.external_id, user.email)
+    {_verifier, challenge} = pkce_pair()
+
+    build_conn()
+    |> put_req_header("authorization", "Bearer #{token}")
+    |> post("/api/oauth/authorize/consent", authorize_params(client, challenge))
+    |> json_response(200)
+
+    assert_received {:oauth_consent, %{count: 1}, %{client: "claude", device: "unknown"}}
+    refute_received {:oauth_consent, _, _}
   end
 
   test "a successful exchange emits mcp_oauth_token_issued for the user", %{
@@ -133,12 +234,14 @@ defmodule EngramWeb.OAuthMcpAnalyticsTest do
     e = event(drain(), "mcp_oauth_token_issued")
     assert e["distinct_id"] == PostHog.analytics_id(user.email)
 
-    assert Map.take(e["properties"], ~w(grant_type client auth_method jwks_source)) == %{
-             "grant_type" => "authorization_code",
-             "client" => "claude",
-             "auth_method" => "none",
-             "jwks_source" => "none"
-           }
+    assert Map.take(e["properties"], ~w(grant_type client client_agent auth_method jwks_source)) ==
+             %{
+               "grant_type" => "authorization_code",
+               "client" => "claude",
+               "client_agent" => "claude",
+               "auth_method" => "none",
+               "jwks_source" => "none"
+             }
   end
 
   test "a failed exchange emits mcp_oauth_token_failed, attributed to the code's user", %{
@@ -327,5 +430,35 @@ defmodule EngramWeb.OAuthMcpAnalyticsTest do
     for secret <- [code, verifier, rt, at] do
       refute wire =~ secret
     end
+  end
+
+  # Review of #2061: the code's grant_id lives in the request process too, and
+  # a keep-alive connection reuses it. A code exchange that never reached the
+  # controller's analytics (here: called directly, as a crashed request would
+  # leave it) must not lend its grant_id to the next request's failure.
+  test "a stale grant_id does not leak into the next request", %{client: client, user: user} do
+    {_verifier, challenge} = pkce_pair()
+    code = mint_code(client, user, challenge)
+
+    {:error, _} =
+      OAuth.exchange_authorization_code(%{
+        "code" => code,
+        "redirect_uri" => @redirect,
+        "client_id" => client.client_id,
+        "code_verifier" => "wrong"
+      })
+
+    # No code at all: the exchange never finds one of its own.
+    post(build_conn(), "/oauth/token", %{
+      "grant_type" => "authorization_code",
+      "redirect_uri" => @redirect,
+      "client_id" => client.client_id,
+      "code_verifier" => "v"
+    })
+    |> json_response(400)
+
+    e = event(drain(), "mcp_oauth_token_failed")
+    assert e["properties"]["reason"] == "code_missing"
+    refute Map.has_key?(e["properties"], "grant_id")
   end
 end

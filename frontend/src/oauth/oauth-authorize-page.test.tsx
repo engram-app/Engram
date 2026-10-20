@@ -267,12 +267,6 @@ function approve() {
 	fireEvent.click(screen.getByRole("button", { name: /^approve$/iu }));
 }
 
-// Approve opens the vault in a new tab; by default that tab opens. Tests about
-// the tab itself (and the blocked case) stub window.open themselves.
-beforeEach(() => {
-	vi.spyOn(window, "open").mockImplementation(() => ({ close: vi.fn() }) as unknown as Window);
-});
-
 afterEach(() => {
 	vi.clearAllMocks();
 	vaultsState.current = DEFAULT_VAULTS;
@@ -422,122 +416,94 @@ describe("OAuthAuthorizePage onboarding bounce", () => {
 	});
 });
 
-// Every approval opens the vault in a new tab, so the user lands in it while
-// the client finishes connecting in this one.
-describe("OAuthAuthorizePage vault tab on Approve", () => {
+// Approve hands this tab straight back to the client. A second tab (#2003's
+// vault tab) took the foreground on mobile, the consent tab was suspended, and
+// the client never got its code: Android 0/11, iOS 2/19 redeemed.
+describe("OAuthAuthorizePage hands consent back to the client", () => {
 	const CLIENT = {
 		client_id: "cli",
 		client_name: "ChatGPT",
 		kind: "mcp" as const,
 		slug: "chatgpt",
 	};
-	const openedTab = () => ({ close: vi.fn() }) as unknown as Window;
 
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
 
-	it("opens one vault tab on Approve", async () => {
+	it("redirects to the client and opens no tab", async () => {
 		fetchOAuthClient.mockResolvedValue(CLIENT);
 		consentRedirectsTo("https://app/cb?code=ok");
 		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
-		const open = vi.spyOn(window, "open").mockImplementation(openedTab);
+		const open = vi.spyOn(window, "open").mockImplementation(() => null);
 
 		renderAt(VALID_QS);
 		await screen.findByRole("button", { name: /^review$/iu });
 		approve();
 
-		// Synchronously, inside the click: a popup blocker refuses a tab opened
-		// after the consent request resolves.
-		expect(open).toHaveBeenCalledTimes(1);
-		expect(open).toHaveBeenCalledWith("/", "_blank");
 		await waitFor(() => expect(assign).toHaveBeenCalledWith("https://app/cb?code=ok"));
+		expect(open).not.toHaveBeenCalled();
 	});
 
-	it("opens one tab for a double click", async () => {
-		fetchOAuthClient.mockResolvedValue(CLIENT);
-		consentRedirectsTo("https://app/cb?code=ok");
-		vi.spyOn(window.location, "assign").mockImplementation(() => {});
-		const open = vi.spyOn(window, "open").mockImplementation(openedTab);
-
-		renderAt(VALID_QS);
-		await screen.findByRole("button", { name: /^review$/iu });
-		fireEvent.click(screen.getByRole("button", { name: /^review$/iu }));
-		const approveButton = screen.getByRole("button", { name: /^approve$/iu });
-		fireEvent.click(approveButton);
-		fireEvent.click(approveButton);
-
-		expect(open).toHaveBeenCalledTimes(1);
-	});
-
-	it("closes the tab when the consent fails", async () => {
-		fetchOAuthClient.mockResolvedValue(CLIENT);
-		postOAuthConsent.mockRejectedValueOnce(new Error("boom"));
-		const close = vi.fn();
-		vi.spyOn(window, "open").mockReturnValue({ close } as unknown as Window);
-
-		renderAt(VALID_QS);
-		await screen.findByRole("button", { name: /^review$/iu });
-		approve();
-
-		await waitFor(() => expect(close).toHaveBeenCalled());
-	});
-
-	// The backend answers some failures with a 200 and an error redirect.
-	it("closes the tab when consent comes back as an error redirect", async () => {
+	it("passes a refusal redirect through and opens no tab", async () => {
 		fetchOAuthClient.mockResolvedValue(CLIENT);
 		consentRedirectsTo("https://app/cb?error=server_error&state=xyz");
 		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
-		const close = vi.fn();
-		vi.spyOn(window, "open").mockReturnValue({ close } as unknown as Window);
+		const open = vi.spyOn(window, "open").mockImplementation(() => null);
 
 		renderAt(VALID_QS);
 		await screen.findByRole("button", { name: /^review$/iu });
 		approve();
 
-		await waitFor(() => expect(assign).toHaveBeenCalled());
-		expect(close).toHaveBeenCalled();
+		await waitFor(() =>
+			expect(assign).toHaveBeenCalledWith("https://app/cb?error=server_error&state=xyz"),
+		);
+		expect(open).not.toHaveBeenCalled();
 		// A refusal connected nothing: it must not count as a success.
 		expect(mockTrack).not.toHaveBeenCalledWith("mcp_connect_succeeded", expect.anything());
 	});
 
-	// Blocked (every in-app/auth webview): the client comes first, so hand
-	// straight back to it with no interstitial.
-	it("redirects at once when the popup is blocked", async () => {
+	it("opens no tab when consent fails", async () => {
 		fetchOAuthClient.mockResolvedValue(CLIENT);
-		consentRedirectsTo("https://app/cb?code=ok");
+		postOAuthConsent.mockRejectedValueOnce(new Error("boom"));
 		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
-		vi.spyOn(window, "open").mockReturnValue(null);
+		const open = vi.spyOn(window, "open").mockImplementation(() => null);
 
 		renderAt(VALID_QS);
 		await screen.findByRole("button", { name: /^review$/iu });
 		approve();
 
-		await waitFor(() => expect(assign).toHaveBeenCalledWith("https://app/cb?code=ok"));
-		expect(mockTrack).toHaveBeenCalledWith("vault_tab_blocked", {
-			client_kind: "mcp",
-			client: "chatgpt",
-		});
+		await waitFor(() => expect(postOAuthConsent).toHaveBeenCalled());
+		expect(open).not.toHaveBeenCalled();
+		expect(assign).not.toHaveBeenCalled();
 	});
 
-	// An Obsidian device is not an MCP client: recording it as one ("other")
-	// would hide which kind of approval the blocker hit.
-	it("records an Obsidian approval's blocked tab as obsidian", async () => {
+	it("redirects to the client and opens no tab after a device swap", async () => {
+		billingState.current = {
+			caps: { obsidian_connections: 2, vaults: null },
+			current_connections: { obsidian: 2 },
+			device_swap_cooldown_remaining_hours: null,
+		};
 		fetchOAuthClient.mockResolvedValue({
 			client_id: "cli",
-			client_name: "Obsidian",
+			client_name: "Claude Desktop",
 			kind: "obsidian",
 		});
+		apiDel.mockResolvedValue(undefined);
 		consentRedirectsTo("https://app/cb?code=ok");
 		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
-		vi.spyOn(window, "open").mockReturnValue(null);
+		const open = vi.spyOn(window, "open").mockImplementation(() => null);
 
 		renderAt(VALID_QS);
-		await screen.findByRole("button", { name: /^review$/iu });
+		await screen.findByText(/Approving will disconnect/iu);
 		approve();
+		fireEvent.click(
+			await screen.findByRole("button", { name: /disconnect & connect Claude Desktop/iu }),
+		);
 
 		await waitFor(() => expect(assign).toHaveBeenCalledWith("https://app/cb?code=ok"));
-		expect(mockTrack).toHaveBeenCalledWith("vault_tab_blocked", { client_kind: "obsidian" });
+		expect(apiDel).toHaveBeenCalledWith("/connections/device/existing-obsidian-id");
+		expect(open).not.toHaveBeenCalled();
 	});
 });
 
@@ -740,14 +706,13 @@ describe("OAuthAuthorizePage", () => {
 		};
 
 		it("asks for a different name when the server rejects it (422)", async () => {
-			const close = vi.fn();
-			vi.spyOn(window, "open").mockReturnValue({ close } as unknown as Window);
+			const open = vi.spyOn(window, "open").mockImplementation(() => null);
 			updateVaultMock.mockRejectedValueOnce(new ApiError(422, "invalid"));
 			renderAt(VALID_QS);
 			await renameTo("Northwind");
 			expect(await screen.findByRole("alert")).toHaveTextContent(/try a different name/iu);
 			expect(postOAuthConsent).not.toHaveBeenCalled();
-			expect(close).toHaveBeenCalled();
+			expect(open).not.toHaveBeenCalled();
 			expect(screen.getByRole("button", { name: /^approve$/iu })).toBeEnabled();
 		});
 

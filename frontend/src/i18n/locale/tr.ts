@@ -830,6 +830,8 @@ export default {
 	"Name this connection {optional}": "Bu bağlantıya {optional} adını verin",
 	"Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
 		"Ücretsiz planınızın cihaz limiti {count}. {client} ile bağlanmak, {name} ile bağlantıyı kesecek ve bu uygulamanın Engram'e erişimi sona erecek.",
+	"{client} is connected": "{client} bağlı",
+	"Your AI tool is connected": "Yapay zeka aracınız bağlı",
 	"What will you use Engram for?": "Engram uygulamasını ne için kullanacaksınız?",
 	"Review the Terms": "Şartları inceleyin",
 	"privacy notice": "Gizlilik bildirimi",

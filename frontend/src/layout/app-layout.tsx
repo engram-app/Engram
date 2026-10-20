@@ -7,6 +7,7 @@ import { useT } from "@/i18n/locale-provider";
 import { useBillingStatus } from "../api/queries";
 import { useChannel } from "../api/use-channel";
 import { LegalNoticeBanner } from "../legal/legal-notice-banner";
+import { useConnectionCreatedNotice } from "../oauth/use-connection-created-notice";
 import { AttachmentUploadProvider } from "../viewer/attachment-upload/provider";
 import { ActiveEditorProvider } from "../viewer/editor/active-editor-context";
 import { preloadNoteChunks } from "../viewer/note-chunks";
@@ -150,6 +151,7 @@ function TrialBanner() {
 
 function AppLayoutInner() {
 	useChannel();
+	useConnectionCreatedNotice();
 	const isDesktop = useMediaQuery("(min-width: 768px)");
 	return isDesktop ? <DesktopLayout /> : <MobileLayout />;
 }

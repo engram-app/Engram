@@ -892,6 +892,8 @@ export default {
 	"Name this connection {optional}": "Nazwij to połączenie {optional}",
 	"Your Free plan's device limit is {count}. Connecting {client} will disconnect {name}, which will stop having access to your Engram.":
 		"Limit urządzeń w Twoim planie Free to {count}. Połączenie z {client} spowoduje odłączenie {name}, które straci dostęp do Twojego Engram.",
+	"{client} is connected": "{client} jest połączone",
+	"Your AI tool is connected": "Twoje narzędzie AI jest połączone",
 	"What will you use Engram for?": "Do czego użyjesz Engram?",
 	"Review the Terms": "Zapoznaj się z regulaminem",
 	"privacy notice": "polityka prywatności",

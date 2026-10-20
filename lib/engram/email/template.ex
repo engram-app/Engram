@@ -17,10 +17,14 @@ defmodule Engram.Email.Template do
   Wrap a body MJML fragment in the shared layout and compile to responsive HTML.
   Returns `{:error, reason}` on a compilation failure rather than raising, so a
   single bad render is a per-recipient failure (not an aborted broadcast).
+
+  `footer:` is optional small print (already-escaped HTML) set below the card,
+  above the tagline: muted, centered, 12px.
   """
-  @spec render(String.t(), Engram.I18n.locale()) :: {:ok, String.t()} | {:error, term()}
-  def render(body_mjml, locale \\ "en") when is_binary(body_mjml) do
-    Mjml.to_html(layout(body_mjml, locale))
+  @spec render(String.t(), Engram.I18n.locale(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def render(body_mjml, locale \\ "en", opts \\ []) when is_binary(body_mjml) do
+    Mjml.to_html(layout(body_mjml, locale, Keyword.get(opts, :footer)))
   end
 
   @doc "HTML-escape an untrusted value before interpolating it into MJML."
@@ -38,7 +42,7 @@ defmodule Engram.Email.Template do
   # /api/email -> 404. engram.page serves the asset reliably from public/.
   @mark_url "https://engram.page/engram-mark.png"
 
-  defp layout(body, locale) do
+  defp layout(body, locale, footer) do
     mark_url = @mark_url
     tagline = esc(Engram.I18n.t(locale, "Your notes are your AI's memory."))
 
@@ -62,13 +66,26 @@ defmodule Engram.Email.Template do
             #{body}
           </mj-column>
         </mj-section>
-        <mj-section padding="16px 0">
+        #{footer_section(footer)}
+        <mj-section padding="#{if footer, do: "4px 0 16px", else: "16px 0"}">
           <mj-column>
             <mj-text font-size="12px" color="#{Tokens.text_muted()}" align="center">#{tagline}</mj-text>
           </mj-column>
         </mj-section>
       </mj-body>
     </mjml>
+    """
+  end
+
+  defp footer_section(nil), do: ""
+
+  defp footer_section(footer) do
+    """
+    <mj-section padding="16px 24px 0">
+      <mj-column>
+        <mj-text font-size="12px" line-height="1.5" color="#{Tokens.text_muted()}" align="center">#{footer}</mj-text>
+      </mj-column>
+    </mj-section>
     """
   end
 end

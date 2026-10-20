@@ -56,6 +56,18 @@ let serverJitterMs: number | null = null;
 let socket: Socket | null = null;
 let channel: Channel | null = null;
 let crdtChannel: Channel | null = null;
+let userChannel: Channel | null = null;
+
+/** `connection_created` from the server (a user's first connection of a client). */
+interface ConnectionCreatedPayload {
+	client_name: string | null;
+	kind: string;
+}
+
+// Subscribers to `connection_created`, served from `user:{id}` on THIS socket so
+// the notice shares its fresh-token params, onError refresh and jittered backoff.
+const connectionCreatedListeners = new Set<(p: ConnectionCreatedPayload) => void>();
+
 // Durable, acked, bounded outbound queue for terminal CRDT ops (create/delete)
 // — issue #1030. Instantiated per connection; ops issued while the topic isn't
 // joined are held and delivered on reconnect instead of being dropped.
@@ -571,6 +583,16 @@ export async function connectChannel({
 	const topic = `sync:${userId}:${vaultId}`;
 	channel = socket.channel(topic);
 
+	userChannel = socket.channel(`user:${userId}`);
+	userChannel.on("connection_created", (payload: ConnectionCreatedPayload) => {
+		for (const listener of connectionCreatedListeners) {
+			listener(payload);
+		}
+	});
+	userChannel.join().receive("error", (resp: unknown) => {
+		console.error("user channel join failed", resp);
+	});
+
 	channel.on("note_changed", (payload: NoteChangedPayload) => {
 		handleNoteChanged(payload, queryClient, vaultId);
 	});
@@ -962,6 +984,10 @@ export function disconnectChannel() {
 		crdtChannel = null;
 	}
 	stopCrdtSession();
+	if (userChannel) {
+		userChannel.leave();
+		userChannel = null;
+	}
 	if (channel) {
 		channel.leave();
 		channel = null;
@@ -970,4 +996,12 @@ export function disconnectChannel() {
 		socket.disconnect();
 		socket = null;
 	}
+}
+
+/** Subscribes to `connection_created`; returns the unsubscribe. */
+export function onConnectionCreated(listener: (p: ConnectionCreatedPayload) => void): () => void {
+	connectionCreatedListeners.add(listener);
+	return () => {
+		connectionCreatedListeners.delete(listener);
+	};
 }

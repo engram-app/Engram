@@ -11,7 +11,10 @@
 		},
 		"descriptions": {
 			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
-			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email.",
+			"disconnect it in your connections": "Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
+			"If you didn't connect {client}, {link}.": "Security note in an email: a condition, 'if it was not you who connected the app {client}', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+			"If you didn't connect this tool, {link}.": "Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is."
 		}
 	},
 	"es": {
@@ -26,7 +29,10 @@
 		},
 		"descriptions": {
 			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
-			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email.",
+			"disconnect it in your connections": "Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
+			"If you didn't connect {client}, {link}.": "Security note in an email: a condition, 'if it was not you who connected the app {client}', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+			"If you didn't connect this tool, {link}.": "Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is."
 		}
 	},
 	"fr": {
@@ -41,7 +47,10 @@
 		},
 		"descriptions": {
 			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
-			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email.",
+			"disconnect it in your connections": "Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
+			"If you didn't connect {client}, {link}.": "Security note in an email: a condition, 'if it was not you who connected the app {client}', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+			"If you didn't connect this tool, {link}.": "Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is."
 		}
 	},
 	"it": {
@@ -56,7 +65,10 @@
 		},
 		"descriptions": {
 			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
-			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email.",
+			"disconnect it in your connections": "Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
+			"If you didn't connect {client}, {link}.": "Security note in an email: a condition, 'if it was not you who connected the app {client}', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+			"If you didn't connect this tool, {link}.": "Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is."
 		}
 	},
 	"ja": {
@@ -71,7 +83,10 @@
 		},
 		"descriptions": {
 			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
-			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email.",
+			"disconnect it in your connections": "Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
+			"If you didn't connect {client}, {link}.": "Security note in an email: a condition, 'if it was not you who connected the app {client}', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+			"If you didn't connect this tool, {link}.": "Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is."
 		}
 	},
 	"ko": {
@@ -86,7 +101,10 @@
 		},
 		"descriptions": {
 			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
-			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email.",
+			"disconnect it in your connections": "Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
+			"If you didn't connect {client}, {link}.": "Security note in an email: a condition, 'if it was not you who connected the app {client}', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+			"If you didn't connect this tool, {link}.": "Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is."
 		}
 	},
 	"ms": {
@@ -101,7 +119,10 @@
 		},
 		"descriptions": {
 			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
-			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email.",
+			"disconnect it in your connections": "Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
+			"If you didn't connect {client}, {link}.": "Security note in an email: a condition, 'if it was not you who connected the app {client}', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+			"If you didn't connect this tool, {link}.": "Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is."
 		}
 	},
 	"pt-BR": {
@@ -116,7 +137,10 @@
 		},
 		"descriptions": {
 			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
-			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email.",
+			"disconnect it in your connections": "Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
+			"If you didn't connect {client}, {link}.": "Security note in an email: a condition, 'if it was not you who connected the app {client}', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+			"If you didn't connect this tool, {link}.": "Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is."
 		}
 	},
 	"ru": {
@@ -131,7 +155,10 @@
 		},
 		"descriptions": {
 			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
-			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email.",
+			"disconnect it in your connections": "Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
+			"If you didn't connect {client}, {link}.": "Security note in an email: a condition, 'if it was not you who connected the app {client}', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+			"If you didn't connect this tool, {link}.": "Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is."
 		}
 	},
 	"vi": {
@@ -146,7 +173,10 @@
 		},
 		"descriptions": {
 			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
-			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email.",
+			"disconnect it in your connections": "Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
+			"If you didn't connect {client}, {link}.": "Security note in an email: a condition, 'if it was not you who connected the app {client}', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+			"If you didn't connect this tool, {link}.": "Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is."
 		}
 	},
 	"zh-CN": {
@@ -161,7 +191,10 @@
 		},
 		"descriptions": {
 			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
-			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email.",
+			"disconnect it in your connections": "Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
+			"If you didn't connect {client}, {link}.": "Security note in an email: a condition, 'if it was not you who connected the app {client}', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+			"If you didn't connect this tool, {link}.": "Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is."
 		}
 	},
 	"zh-TW": {
@@ -176,7 +209,10 @@
 		},
 		"descriptions": {
 			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
-			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email.",
+			"disconnect it in your connections": "Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
+			"If you didn't connect {client}, {link}.": "Security note in an email: a condition, 'if it was not you who connected the app {client}', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+			"If you didn't connect this tool, {link}.": "Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is."
 		}
 	},
 	"id": {
@@ -191,7 +227,10 @@
 		},
 		"descriptions": {
 			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
-			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email.",
+			"disconnect it in your connections": "Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
+			"If you didn't connect {client}, {link}.": "Security note in an email: a condition, 'if it was not you who connected the app {client}', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+			"If you didn't connect this tool, {link}.": "Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is."
 		}
 	},
 	"pl": {
@@ -206,7 +245,10 @@
 		},
 		"descriptions": {
 			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
-			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email.",
+			"disconnect it in your connections": "Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
+			"If you didn't connect {client}, {link}.": "Security note in an email: a condition, 'if it was not you who connected the app {client}', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+			"If you didn't connect this tool, {link}.": "Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is."
 		}
 	},
 	"tr": {
@@ -221,7 +263,10 @@
 		},
 		"descriptions": {
 			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
-			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email.",
+			"disconnect it in your connections": "Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
+			"If you didn't connect {client}, {link}.": "Security note in an email: a condition, 'if it was not you who connected the app {client}', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+			"If you didn't connect this tool, {link}.": "Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is."
 		}
 	},
 	"cs": {
@@ -236,7 +281,10 @@
 		},
 		"descriptions": {
 			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
-			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email.",
+			"disconnect it in your connections": "Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
+			"If you didn't connect {client}, {link}.": "Security note in an email: a condition, 'if it was not you who connected the app {client}', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+			"If you didn't connect this tool, {link}.": "Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is."
 		}
 	},
 	"uk": {
@@ -251,7 +299,10 @@
 		},
 		"descriptions": {
 			"Hi,": "Email greeting with no name. Warm, at the same politeness level as the rest of the email.",
-			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email."
+			"Hi {name},": "Email greeting by first name. Warm, at the same politeness level as the rest of the email.",
+			"disconnect it in your connections": "Link text in the middle of a sentence, after a comma: an instruction to disconnect the app on the connections page. Lower case, an imperative.",
+			"If you didn't connect {client}, {link}.": "Security note in an email: a condition, 'if it was not you who connected the app {client}', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is.",
+			"If you didn't connect this tool, {link}.": "Security note in an email: a condition, 'if it was not you who connected this AI tool', then {link}, which is a lower-case instruction to disconnect it. Keep {link} where it is."
 		}
 	}
 }
