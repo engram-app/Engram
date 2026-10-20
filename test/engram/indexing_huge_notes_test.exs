@@ -46,9 +46,10 @@ defmodule Engram.IndexingHugeNotesTest do
   # Worker task: 2,048 MiB, container 1,844 MiB, `embed` queue concurrency
   # 5 (engram-infra main/envs/prod/ecs.tf). With ~600 MB of node baseline,
   # five concurrent embeds get ~250 MB each. A pass may hold at most that:
-  # the job process's heap plus the binaries it references, sampled. The
-  # node-wide peak is logged too, but it also carries this test's Bypass
-  # server and every other process, so it is not what is asserted.
+  # the job process's heap plus the binaries it references (the note struct
+  # included, ciphertext and plaintext), sampled. The node-wide peak is logged
+  # too, but it also carries this test's Bypass server and every other
+  # process, so it is not what is asserted.
   @per_job_memory 250 * @mib
 
   # Wall-clock bound. EmbedNote's Oban timeout is 10 minutes and the whole
@@ -56,6 +57,13 @@ defmodule Engram.IndexingHugeNotesTest do
   # fit it. Local work here excludes the network, so it may use a tenth:
   # 6 s per MB leaves the rest of the 10 minutes for Voyage at 30 MB.
   @seconds_per_mb 6
+
+  # The Voyage half of that budget (Task 9.2): `Indexing`'s per-pass embed
+  # budget sends at most 12 MiB, and at the slowest measured ~3 s a full
+  # batch, 160 requests is 8 minutes. This fake Voyage answers at once, so
+  # the request count stands in for its wall time.
+  @pass_embed_bytes 12 * @mib
+  @max_voyage_requests 160
 
   @shapes ~w(paragraph tiny_sections small_sections table code_fence mixed_blobs
              cjk_emoji long_lines nested_lists wikilinks frontmatter duplicates canvas
@@ -291,14 +299,22 @@ defmodule Engram.IndexingHugeNotesTest do
     assert micros <= @seconds_per_mb * size * 1_000_000,
            "#{inspect(report)}: over #{@seconds_per_mb * size} s"
 
-    assert Process.get(:job_peak) <= @per_job_memory, "#{inspect(report)}: job over 250 MB"
+    assert Process.get(:job_peak) <= @per_job_memory,
+           "#{inspect(report)}: job over 250 MB"
 
     for bytes <- qdrant_sizes(dir) do
       assert bytes <= @qdrant_max_request,
              "#{inspect(report)}: a #{bytes}-byte Qdrant request is over 8 MiB"
     end
 
-    for {count, request_bytes, max_input} <- voyage_calls(dir) do
+    voyage = voyage_calls(dir)
+    sent = voyage |> Enum.map(&elem(&1, 1)) |> Enum.sum()
+    assert sent <= @pass_embed_bytes, "#{inspect(report)}: #{sent} bytes to Voyage in one pass"
+
+    assert length(voyage) <= @max_voyage_requests,
+           "#{inspect(report)}: #{length(voyage)} Voyage requests in one pass"
+
+    for {count, request_bytes, max_input} <- voyage do
       assert count <= @voyage_inputs
       assert request_bytes <= @voyage_request_tokens, "#{inspect(report)}: Voyage batch"
       assert max_input <= @voyage_input_tokens, "#{inspect(report)}: Voyage input"
@@ -382,13 +398,24 @@ defmodule Engram.IndexingHugeNotesTest do
   # level before the call.
   # ---------------------------------------------------------------------------
 
+  # The pass runs in its own process, as in an Oban job: the job peak is that
+  # process alone, not this test's generator data. `Task` carries $callers,
+  # so the sandbox and Mox stubs reach it.
   defp measure_peak(fun) do
     :erlang.garbage_collect()
     base = :erlang.memory(:total)
     parent = self()
-    sampler = spawn_link(fn -> sample(parent, base, 0) end)
-    result = fun.()
-    send(sampler, :stop)
+
+    task =
+      Task.async(fn ->
+        receive do: (:go -> :ok)
+        fun.()
+      end)
+
+    sampler = spawn_link(fn -> sample(task.pid, base, 0) end)
+    send(task.pid, :go)
+    result = Task.await(task, :infinity)
+    send(sampler, {:stop, parent})
 
     receive do
       {:peak, peak, job} ->
@@ -405,7 +432,7 @@ defmodule Engram.IndexingHugeNotesTest do
     job = if rem(n, 10) == 0, do: max(job, job_bytes(parent)), else: job
 
     receive do
-      :stop -> send(parent, {:peak, peak, max(job, job_bytes(parent))})
+      {:stop, to} -> send(to, {:peak, peak, job})
     after
       2 -> sample(parent, peak, job, n + 1)
     end
@@ -539,7 +566,18 @@ defmodule Engram.IndexingHugeNotesTest do
   defp letters(n) when n < 26, do: <<?a + n>>
   defp letters(n), do: letters(div(n, 26) - 1) <> <<?a + rem(n, 26)>>
 
-  @vocab List.to_tuple(for i <- 0..3_999, do: "w" <> Integer.to_string(i * 7919, 36))
+  # Letters only: a word with digits is not a word to the chunker's data
+  # classifier (#2041), and a vocabulary of them made every "prose" shape
+  # keyword-only data, so the matrix never reached Voyage.
+  # Base 26 with its digits 0-9 spelled q-z: still one distinct word each.
+  @vocab List.to_tuple(
+           for i <- 0..3_999,
+               do:
+                 "w" <>
+                   (Integer.to_string(i * 7_919, 26)
+                    |> String.downcase()
+                    |> String.replace(~r/[0-9]/, &<<?q + String.to_integer(&1)>>))
+         )
 
   defp word, do: elem(@vocab, :rand.uniform(4_000) - 1)
 
