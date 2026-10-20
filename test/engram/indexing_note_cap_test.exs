@@ -488,7 +488,10 @@ defmodule Engram.IndexingNoteCapTest do
       note = insert_note(user, vault, "# Huger\n\n" <> body, "Huger.md")
       assert byte_size(note.content) > 128 * 30_000
 
-      assert {:ok, 1, 0, false} = Indexing.index_note_with_usage(note, vault, user)
+      # Keyword-only, one point per MiB of body (`Indexing.floor_plan/2`).
+      points = Indexing.floor_points(byte_size(note.content))
+      assert {:ok, n, 0, false} = Indexing.index_note_with_usage(note, vault, user)
+      assert n > 1 and n <= points
       assert reload(note).index_tier == "floor"
     end
 

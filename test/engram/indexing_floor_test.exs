@@ -124,6 +124,41 @@ defmodule Engram.IndexingFloorTest do
       assert UsageMeters.lifetime_embed_tokens(user.id) == before
     end
 
+    # One vector for the whole note was unbounded: a 3 MB CJK note floored
+    # into an 11.8 MB upsert and a 213 MB peak, so 10 MB passed Qdrant's
+    # 32 MiB request cap and 30 MB the worker's RAM.
+    test "a note over 1 MiB floors into one keyword point per MiB of body", %{
+      user: user,
+      vault: vault
+    } do
+      words = for i <- 1..400_000, do: "w" <> String.downcase(Integer.to_string(i, 36))
+      content = words |> Enum.chunk_every(50) |> Enum.map_join("\n\n", &Enum.join(&1, " "))
+      assert byte_size(content) > 2 * 1_048_576 and byte_size(content) < 3 * 1_048_576
+      note = floor_note(user, vault, "Big.md", content)
+
+      {:ok, prepared} = Indexing.prepare_index(note, vault, user, index_tier: "floor")
+
+      # ~2.4 MB of text, packed into points of at most 1 MiB.
+      assert length(prepared.qdrant_points) == 3
+      assert length(prepared.qdrant_points) <= Indexing.floor_points(byte_size(content))
+      assert Enum.all?(prepared.qdrant_points, &(Map.keys(&1.vector) == ["keyword"]))
+
+      {:ok, key} = Crypto.dek_filter_key(user)
+
+      dims =
+        for p <- prepared.qdrant_points,
+            d <- QdrantSparse.unpack(p.vector["keyword"]).indices,
+            into: MapSet.new(),
+            do: d
+
+      assert Enum.reject(Enum.take_every(words, 97), &(QdrantSparse.dim(key, &1) in dims)) == []
+
+      assert {:ok, 3, 0, false} =
+               Indexing.index_note_with_usage(note, vault, user, index_tier: "floor")
+
+      assert Enum.all?(chunk_rows(note), &(is_nil(&1.token_count) and is_nil(&1.context_hmac)))
+    end
+
     test "the floor vector carries every section's terms", %{user: user, vault: vault} do
       note = floor_note(user, vault)
       {:ok, prepared} = Indexing.prepare_index(note, vault, user, index_tier: "floor")
