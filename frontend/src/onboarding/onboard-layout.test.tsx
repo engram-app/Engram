@@ -50,24 +50,49 @@ function renderAt(path: string, steps: Steps) {
 const SAAS: Steps = ["agreement", "billing", "heard", "vault"];
 const SELF: Steps = ["vault"];
 
-// Interrupting an OAuth flow for signup is fine, but it has to stay legible:
-// the user should know whose authorization is waiting, and be able to refuse
-// in a way the client actually hears (access_denied), rather than closing a
-// tab the client waits on forever.
 // Mid-OAuth signup shows no "Connecting {app}" bar: it cluttered the wizard,
-// and the consent screen at the end names the app anyway.
+// and the consent screen at the end names the app anyway. It still offers a
+// refusal the client actually hears (access_denied), rather than a tab the
+// client waits on forever.
 describe("OnboardLayout pending authorization", () => {
+	const PARKED = "?redirect_uri=https://app/cb&state=xyz";
+
 	afterEach(() => {
 		window.sessionStorage.clear();
+		vi.restoreAllMocks();
 	});
 
 	it("shows no connecting bar while an authorization is parked", () => {
-		stashPendingAuthorization("?redirect_uri=https://app/cb&state=xyz");
+		stashPendingAuthorization(PARKED, true);
 
 		renderAt("/onboard/heard", SAAS);
 
 		expect(screen.queryByText(/connecting/iu)).toBeNull();
+	});
+
+	it("offers no Cancel when the redirect was never confirmed", () => {
+		stashPendingAuthorization(PARKED);
+
+		renderAt("/onboard/heard", SAAS);
+
 		expect(screen.queryByRole("button", { name: /cancel connection/iu })).toBeNull();
+	});
+
+	it("offers no Cancel when no authorization is pending", () => {
+		renderAt("/onboard/heard", SAAS);
+
+		expect(screen.queryByRole("button", { name: /cancel connection/iu })).toBeNull();
+	});
+
+	it("reports access_denied to the client and drops the parked request", () => {
+		stashPendingAuthorization(PARKED, true);
+		const assign = vi.spyOn(window.location, "assign").mockImplementation(() => {});
+
+		renderAt("/onboard/heard", SAAS);
+		fireEvent.click(screen.getByRole("button", { name: /cancel connection/iu }));
+
+		expect(assign).toHaveBeenCalledWith("https://app/cb?error=access_denied&state=xyz");
+		expect(window.sessionStorage.getItem("engram:pending-oauth")).toBeNull();
 	});
 });
 

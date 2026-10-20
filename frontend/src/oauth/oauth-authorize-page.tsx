@@ -201,7 +201,7 @@ export default function OAuthAuthorizePage() {
 		// `onboardingDoneTarget()` already falls back to "/" when nothing was
 		// parked. Reading it into state here would also mean an effect that
 		// synchronously sets state, which the render-compiler lint rejects.
-		stashPendingAuthorization(location.search);
+		stashPendingAuthorization(location.search, redirectVerified);
 
 		// Connecting a tool IS the answer to "which tools do you use", so the
 		// questionnaire is pre-answered instead of asked. An unattributable
@@ -242,6 +242,7 @@ export default function OAuthAuthorizePage() {
 		clientQuery.isLoading,
 		clientQuery.isError,
 		redirectRefused,
+		redirectVerified,
 		location.search,
 		navigate,
 		onboarding,

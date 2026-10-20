@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
 	clearPendingAuthorization,
 	peekPendingAuthorization,
+	pendingCancelUrl,
 	stashPendingAuthorization,
 	stashPendingDeviceLink,
 } from "./pending-authorization";
@@ -18,6 +19,7 @@ describe("pending authorization stash", () => {
 
 		expect(peekPendingAuthorization()).toEqual({
 			returnTo: `/oauth/consent${SEARCH}`,
+			redirectVerified: false,
 		});
 	});
 
@@ -29,6 +31,7 @@ describe("pending authorization stash", () => {
 
 		expect(peekPendingAuthorization()).toEqual({
 			returnTo: "/link?code=ENGR-7X4K",
+			redirectVerified: false,
 		});
 	});
 
@@ -94,5 +97,75 @@ describe("pending authorization stash", () => {
 
 			expect(peekPendingAuthorization()).toBeNull();
 		});
+	});
+});
+
+// OAuth 2.1 wants a refusal to reach the client as a standards-compliant
+// error, not a browser tab the user closes. Abandoning setup mid-detour is a
+// refusal, so it has to be able to say so.
+describe("pendingCancelUrl", () => {
+	beforeEach(() => {
+		window.sessionStorage.clear();
+	});
+
+	it("is null when nothing is pending", () => {
+		expect(pendingCancelUrl()).toBeNull();
+	});
+
+	// There is no OAuth client waiting on a refusal behind a device link.
+	it("is null for a parked device link", () => {
+		stashPendingDeviceLink("ENGR-7X4K");
+
+		expect(pendingCancelUrl()).toBeNull();
+	});
+
+	// The parked query string is anyone's to write: no backend confirmation of
+	// the redirect, no Cancel, or it is an open redirect.
+	it("is null when the redirect was never confirmed as registered", () => {
+		stashPendingAuthorization(SEARCH);
+
+		expect(pendingCancelUrl()).toBeNull();
+	});
+
+	it("sends access_denied back to the client with the original state", () => {
+		stashPendingAuthorization(SEARCH, true);
+
+		expect(pendingCancelUrl()).toBe("https://app/cb?error=access_denied&state=xyz");
+	});
+
+	it("appends to a redirect that already has a query", () => {
+		stashPendingAuthorization("?redirect_uri=https://app/cb%3Fa%3D1&state=xyz", true);
+
+		expect(pendingCancelUrl()).toBe("https://app/cb?a=1&error=access_denied&state=xyz");
+	});
+
+	// RFC 9207 §2: an error response carries `iss` too.
+	it("carries iss when the server sent one", () => {
+		stashPendingAuthorization(
+			"?redirect_uri=https://app/cb&state=xyz&iss=https%3A%2F%2Fmcp.engram.page",
+			true,
+		);
+
+		expect(pendingCancelUrl()).toBe(
+			"https://app/cb?error=access_denied&state=xyz&iss=https%3A%2F%2Fmcp.engram.page",
+		);
+	});
+
+	it("omits state when the request carried none", () => {
+		stashPendingAuthorization("?redirect_uri=https://app/cb", true);
+
+		expect(pendingCancelUrl()).toBe("https://app/cb?error=access_denied");
+	});
+
+	it("is null when the parked request has no redirect_uri", () => {
+		stashPendingAuthorization("?client_id=cli&state=xyz", true);
+
+		expect(pendingCancelUrl()).toBeNull();
+	});
+
+	it("refuses a script-executing redirect", () => {
+		stashPendingAuthorization("?redirect_uri=javascript:alert(1)&state=xyz", true);
+
+		expect(pendingCancelUrl()).toBeNull();
 	});
 });

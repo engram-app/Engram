@@ -23,6 +23,14 @@ import { ROUTES } from "../routes";
 
 const KEY = "engram:pending-oauth";
 
+// A cancel navigates via `window.location.assign`, so the boundary that matters
+// is not http-vs-custom-scheme. Native OAuth clients legitimately register
+// custom schemes (`cursor://`, `vscode://`) and DCR admits them. What must
+// never reach `location.assign` is a script-executing scheme. Host trust is
+// decided upstream, against the client's registered redirect_uris.
+const ABSOLUTE_URI = /^[a-z][a-z0-9+.-]*:/iu;
+const SCRIPT_SCHEME = /^(?:javascript|data|vbscript|blob|file):/iu;
+
 // The two screens that can be interrupted by the wizard: OAuth consent, and
 // /link for a plugin-first signup. Both sit outside OnboardingGate.
 function isResumablePath(path: string): boolean {
@@ -56,12 +64,16 @@ export interface PendingAuthorization {
 	/** The full consent URL, query string included, so `state` and the PKCE
 	 *  challenge survive the detour and the original request is honored. */
 	returnTo: string;
+	/** The backend confirmed `redirect_uri` is one the client registered.
+	 *  Without it there is no Cancel: the parked query string is anyone's to
+	 *  write, so its redirect is an open redirect until proven otherwise. */
+	redirectVerified: boolean;
 }
 
 /** True when the request was actually parked. Callers MUST NOT promise a
  *  return trip on a false. */
-export function stashPendingAuthorization(search: string): boolean {
-	return stash({ returnTo: `${ROUTES.OAUTH_CONSENT}${search}` });
+export function stashPendingAuthorization(search: string, redirectVerified = false): boolean {
+	return stash({ returnTo: `${ROUTES.OAUTH_CONSENT}${search}`, redirectVerified });
 }
 
 /** Parks a device-link code (possibly empty) so the wizard returns to /link
@@ -70,7 +82,7 @@ export function stashPendingDeviceLink(code: string): boolean {
 	const returnTo = code
 		? `${ROUTES.DEVICE_LINK}?${new URLSearchParams({ code }).toString()}`
 		: ROUTES.DEVICE_LINK;
-	return stash({ returnTo });
+	return stash({ returnTo, redirectVerified: false });
 }
 
 export function peekPendingAuthorization(): PendingAuthorization | null {
@@ -99,10 +111,42 @@ export function peekPendingAuthorization(): PendingAuthorization | null {
 			return null;
 		}
 
-		return { returnTo: parsed.returnTo };
+		const redirectVerified = "redirectVerified" in parsed && parsed.redirectVerified === true;
+		return { returnTo: parsed.returnTo, redirectVerified };
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * Where to send the client when the user abandons setup instead of finishing.
+ * OAuth 2.1 expects an interrupted authorization to end in `access_denied`
+ * carrying the original `state`, not a tab the user closes. Null when there is
+ * nowhere verified to report to.
+ */
+export function pendingCancelUrl(): string | null {
+	const pending = peekPendingAuthorization();
+	if (!pending?.redirectVerified) {
+		return null;
+	}
+
+	const query = new URLSearchParams(pending.returnTo.split("?").slice(1).join("?"));
+	const redirectUri = query.get("redirect_uri")?.trim();
+	if (!redirectUri || SCRIPT_SCHEME.test(redirectUri) || !ABSOLUTE_URI.test(redirectUri)) {
+		return null;
+	}
+
+	const answer = new URLSearchParams({ error: "access_denied" });
+	const state = query.get("state");
+	if (state) {
+		answer.set("state", state);
+	}
+	// RFC 9207 §2: error responses carry `iss` too, when the server sent one.
+	const iss = query.get("iss");
+	if (iss) {
+		answer.set("iss", iss);
+	}
+	return `${redirectUri}${redirectUri.includes("?") ? "&" : "?"}${answer.toString()}`;
 }
 
 export function clearPendingAuthorization(): void {

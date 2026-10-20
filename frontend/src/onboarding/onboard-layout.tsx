@@ -1,4 +1,4 @@
-import { LogOut } from "lucide-react";
+import { LogOut, X } from "lucide-react";
 import { useEffect } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { useAuthAdapter } from "../auth/use-auth-adapter";
 import AuthShell from "../layout/auth-shell";
 import LoadingScreen from "../layout/loading-screen";
 import { isMember } from "../lib/is-member";
+import { clearPendingAuthorization, pendingCancelUrl } from "../oauth/pending-authorization";
 
 const STEP_PATHS: OnboardingStep[] = ["agreement", "billing", "heard", "vault"];
 
@@ -66,6 +67,16 @@ export default function OnboardLayout() {
 	const total = data.steps.length;
 	const counter = index >= 0 ? t("Step {step} of {total}", { step: index + 1, total }) : null;
 
+	// A user pulled in here mid-OAuth can refuse in a way the waiting client
+	// hears. Null when the refusal has nowhere verified to go: no button then.
+	const cancelUrl = pendingCancelUrl();
+	const cancelPending = () => {
+		if (cancelUrl) {
+			clearPendingAuthorization();
+			window.location.assign(cancelUrl);
+		}
+	};
+
 	return (
 		<AuthShell
 			navLabel={t("Onboarding")}
@@ -75,16 +86,30 @@ export default function OnboardLayout() {
 				) : null
 			}
 			trailing={
-				<Button
-					type="button"
-					variant="ghost"
-					size="icon"
-					aria-label={t("Sign out")}
-					title={t("Sign out")}
-					onClick={() => logout()}
-				>
-					<LogOut aria-hidden="true" />
-				</Button>
+				<>
+					{cancelUrl ? (
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							aria-label={t("Cancel connection")}
+							title={t("Cancel connection")}
+							onClick={cancelPending}
+						>
+							<X aria-hidden="true" />
+						</Button>
+					) : null}
+					<Button
+						type="button"
+						variant="ghost"
+						size="icon"
+						aria-label={t("Sign out")}
+						title={t("Sign out")}
+						onClick={() => logout()}
+					>
+						<LogOut aria-hidden="true" />
+					</Button>
+				</>
 			}
 		>
 			<Outlet />
