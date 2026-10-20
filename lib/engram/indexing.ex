@@ -75,6 +75,9 @@ defmodule Engram.Indexing do
       hashes here, so the stamp shares the index write's transaction instead
       of opening its own. `index_tier` is the tier this pass used: `floor_tier/2`,
       or a floor tier when a full pass would overrun `points_budget_ok?/3`.
+    * `:keep_dense`: a maintenance pass. If the plan would floor a note
+      that has dense vectors now (over a budget, not a forced floor), return
+      `{:error, :over_budget}` and leave its index as it is.
     * `:index_tier`: overrides the note's own `index_tier` (see
       `floor_tier/2`). `"floor"` / `"floor_paid"` take the floor path
       (`floor_plan/2`); an explicit `nil` asks for a full pass, which still
@@ -339,8 +342,19 @@ defmodule Engram.Indexing do
         {nil, dense?, plan, retained}
 
       tier ->
-        {tier, false, floor_plan(note, chunks), nil}
+        if !forced and Keyword.get(opts, :keep_dense, false) and dense_now?(note),
+          do: {:error, :over_budget},
+          else: {tier, false, floor_plan(note, chunks), nil}
     end
+  end
+
+  # Review M2: a maintenance pass (`keep_dense: true`, a version rebuild or a
+  # recap) over budget keeps a note's dense points instead of flooring it:
+  # the floor deletes vectors a later promotion pays to rebuild. The note
+  # keeps its old index; the budget sweep decides demotions.
+  defp dense_now?(note) do
+    dense = Map.get(note, :dense_indexed_hash)
+    dense != nil and dense == Map.get(note, :embed_hash)
   end
 
   # Dense bytes one pass may send Voyage (chunker v5 Task 9.2). The pass must

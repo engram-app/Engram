@@ -276,6 +276,30 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
     end
   end
 
+  # Review M2: a maintenance pass (a version rebuild, a recap) over budget
+  # keeps a dense note's points rather than flooring it: the floor would
+  # delete vectors a later promotion pays to rebuild.
+  describe "a maintenance pass over budget" do
+    test "keeps the dense note's points and changes nothing", %{
+      user: user,
+      vault: vault,
+      note: note
+    } do
+      stub_embedder()
+      assert :ok = embed(note)
+      ids = Enum.map(rows_for(note), & &1.qdrant_point_id)
+      seed_points(user, vault, 12_600)
+      {:ok, note} = Crypto.maybe_decrypt_note_fields(reload(note), user)
+      edited = %{note | content: note.content <> "\n\n## More\n\nnew section here."}
+
+      assert {:error, :over_budget} =
+               Indexing.index_note_with_usage(edited, vault, user, keep_dense: true)
+
+      assert Enum.map(rows_for(note), & &1.qdrant_point_id) == ids
+      assert reload(note).index_tier == nil
+    end
+  end
+
   describe "other tiers" do
     test "billing disabled at 100,000: full", %{user: user, vault: vault, note: note} do
       with_limits_enforced(false)

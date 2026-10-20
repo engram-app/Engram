@@ -642,7 +642,7 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
     end
   end
 
-  describe "every path that drops dense vectors stamps floor_paid" do
+  describe "every path that drops dense vectors stamps floor_paid, maintenance drops none" do
     setup %{user: user, vault: vault} do
       stub_embedder()
       note = Engram.Fixtures.insert_note!(user, vault, %{path: "Five.md", content: @content})
@@ -675,7 +675,13 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
       assert reload(note).index_tier == "floor_paid"
     end
 
-    test "a version rebuild over the points budget", %{user: user, note: note} do
+    # Review M2: maintenance never floors a dense note; it keeps its points
+    # and the sweep's demotion (above) is the one path that drops them.
+    test "a version rebuild over the points budget keeps the dense points", %{
+      user: user,
+      note: note
+    } do
+      ids = Enum.map(rows_for(note), & &1.qdrant_point_id)
       cap_override(user, "index_points_cap", 3)
 
       {:ok, _} =
@@ -684,17 +690,18 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
         end)
 
       assert :ok = perform_job(RebuildStaleNote, %{"note_id" => note.id, "user_id" => user.id})
-      assert [%{token_count: nil}] = rows_for(note)
-      assert reload(note).index_tier == "floor_paid"
+      assert Enum.map(rows_for(note), & &1.qdrant_point_id) == ids
+      assert reload(note).index_tier == nil
     end
 
-    test "a re-merge that floors", %{user: user, vault: vault} do
+    test "a re-merge that would floor keeps the dense points", %{user: user, vault: vault} do
       big = Enum.map_join(1..400, "\n\n", &"Paragraph #{&1} #{String.duplicate("word ", 20)}")
       note = Engram.Fixtures.insert_note!(user, vault, %{path: "Big.md", content: big})
       assert :ok = perform_job(EmbedNote, %{"note_id" => note.id, "user_id" => user.id})
       assert reload(note).dense_indexed_hash != nil
 
-      # One point for ~40 KB: past the merged-point ceiling, so it floors.
+      ids = Enum.map(rows_for(note), & &1.qdrant_point_id)
+      # One point for ~40 KB: past the merged-point ceiling, so it would floor.
       cap_override(user, "note_points_cap", 1)
 
       assert :ok =
@@ -704,8 +711,8 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
                  "recap" => true
                })
 
-      assert [%{token_count: nil}] = rows_for(note)
-      assert reload(note).index_tier == "floor_paid"
+      assert Enum.map(rows_for(note), & &1.qdrant_point_id) == ids
+      assert reload(note).index_tier == nil
     end
   end
 

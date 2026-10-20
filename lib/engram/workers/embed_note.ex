@@ -151,13 +151,13 @@ defmodule Engram.Workers.EmbedNote do
           # never grants dense vectors the cap refused. `run_and_stamp`
           # re-stamps both versions, so this matches at most once per bump.
           version_stale?(note) ->
-            load_for_run(note, maintenance: note.dense_indexed_hash == hash)
+            load_for_run(note, maintenance: note.dense_indexed_hash == hash, keep_dense: true)
 
           # Holds more chunks than its tier's per-note cap (ReconcileEmbeddings
           # found it): re-merge it, unmetered. It already has dense vectors, so
           # this is our maintenance, never a second charge.
           args["recap"] == true and note.dense_indexed_hash == hash ->
-            load_for_run(note, maintenance: true)
+            load_for_run(note, maintenance: true, keep_dense: true)
 
           # Current content, chunker and model, with dense vectors: skip.
           note.dense_indexed_hash == hash ->
@@ -603,7 +603,8 @@ defmodule Engram.Workers.EmbedNote do
         # inside the chunk-row transaction (`:in_commit`).
         index_opts =
           budget ++
-            Keyword.take(opts, [:index_tier]) ++ [in_commit: &stamp_embed_hash(note, &2, &1, &3)]
+            Keyword.take(opts, [:index_tier, :keep_dense]) ++
+            [in_commit: &stamp_embed_hash(note, &2, &1, &3)]
 
         case Indexing.index_note_with_usage(decrypted_note, vault, user, index_opts) do
           {:ok, _count, _embedded_bytes, _dense?} ->
@@ -636,6 +637,12 @@ defmodule Engram.Workers.EmbedNote do
           # A newer edit replaced the content this pass planned from; that
           # edit's own job indexes it. Nothing failed.
           {:error, :superseded} ->
+            :ok
+
+          # A maintenance pass over budget kept the note's dense points
+          # (`keep_dense`): nothing failed, and the budget sweep, not this
+          # job, decides whether the note floors.
+          {:error, :over_budget} ->
             :ok
 
           {:error, reason} ->
