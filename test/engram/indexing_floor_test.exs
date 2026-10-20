@@ -273,7 +273,9 @@ defmodule Engram.IndexingFloorTest do
         assert [%{token_count: nil}] = chunk_rows(note)
 
         for _tick <- 1..2 do
-          assert :ok = perform_job(ReconcileEmbeddings, %{})
+          # Off the 04:00 UTC re-verify hour: the budget sweep there would
+          # rightly promote this under-budget floor note (CI ran into it).
+          assert :ok = perform_job(ReconcileEmbeddings, %{}, scheduled_at: off_hour_tick())
           refute_enqueued(worker: EmbedNote, args: %{"note_id" => note.id})
           refute_enqueued(worker: RebuildStaleNote, args: %{"note_id" => note.id})
 
@@ -434,4 +436,6 @@ defmodule Engram.IndexingFloorTest do
       assert second.score < first.score
     end
   end
+
+  defp off_hour_tick, do: DateTime.new!(Date.utc_today(), ~T[12:02:00])
 end
