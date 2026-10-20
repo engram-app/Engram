@@ -1,3 +1,4 @@
+import { LOCALES } from "../i18n/locales";
 import { isMember } from "../lib/is-member";
 import { captureError } from "../sentry";
 import { analyticsClient } from "./client";
@@ -50,6 +51,10 @@ function isKind(kind: PropKind, value: unknown): boolean {
 			return isMember(ERROR_CODES, value);
 		case "gate_reasons":
 			return Array.isArray(value) && value.every((v) => isMember(GATE_REASONS, v));
+		case "language_tag":
+			return typeof value === "string" && LANGUAGE_TAG.test(value);
+		case "locale":
+			return isMember(LOCALES, value);
 		case "language_tags":
 			return (
 				Array.isArray(value) && value.every((v) => typeof v === "string" && LANGUAGE_TAG.test(v))

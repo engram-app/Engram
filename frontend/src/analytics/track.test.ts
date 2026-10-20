@@ -123,6 +123,7 @@ describe("track onboarding interaction events", () => {
 		["vault_source_picked", { source: "fresh" }],
 		["plugin_listing_opened", {}],
 		["browser_languages_unsupported", { languages: ["ar", "he-IL", "zh-Hant-HK"] }],
+		["browser_translation_detected", { to: "zh-CN", app_locale: "en" }],
 	] as const)("allows %s %j", (event, props) => {
 		track(event, props);
 		expect(posthog.capture).toHaveBeenCalledWith(event, props);
@@ -141,6 +142,8 @@ describe("track onboarding interaction events", () => {
 		["any property on the listing click", "plugin_listing_opened", { url: "https://x.example" }],
 		["free text as a language", "browser_languages_unsupported", { languages: ["My journal"] }],
 		["a single language, not a list", "browser_languages_unsupported", { languages: "ar" }],
+		["free text as the target", "browser_translation_detected", { to: "hello world" }],
+		["an unshipped app locale", "browser_translation_detected", { app_locale: "ar" }],
 	] as const)("rejects %s", (_label, event, props) => {
 		track(event, props);
 		expect(posthog.capture).not.toHaveBeenCalled();

@@ -20,7 +20,8 @@ export type EngramEvent =
 	| "checklist_action"
 	| "vault_source_picked"
 	| "plugin_listing_opened"
-	| "browser_languages_unsupported";
+	| "browser_languages_unsupported"
+	| "browser_translation_detected";
 
 /** Mirrors Engram.Onboarding.gate/2's next_step. One state machine, not two. */
 export type OnboardingStep = "agreement" | "billing" | "heard" | "vault" | "done";
@@ -122,7 +123,9 @@ export type PropKind =
 	| "vault_source"
 	| "error_code"
 	| "gate_reasons"
+	| "language_tag"
 	| "language_tags"
+	| "locale"
 	| "boolean"
 	| "number";
 
@@ -157,4 +160,6 @@ export const EVENT_SCHEMAS: Record<EngramEvent, Record<string, PropKind>> = {
 	plugin_listing_opened: {},
 	// navigator.languages entries no app locale serves: which languages to add.
 	browser_languages_unsupported: { languages: "language_tags" },
+	// The browser translated the page: into which language, from which locale.
+	browser_translation_detected: { to: "language_tag", app_locale: "locale" },
 };

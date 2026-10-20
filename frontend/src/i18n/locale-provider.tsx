@@ -10,6 +10,7 @@ import {
 	useState,
 } from "react";
 import { captureError } from "../sentry";
+import { setDocumentLang, watchTranslation } from "./browser-language";
 import { LOCALES, type Locale, resolveLocale } from "./locales";
 import { getStoredLocale, setStoredLocale } from "./storage";
 import {
@@ -106,8 +107,15 @@ function LocaleProvider({
 	const renderedLocale = loaded?.locale ?? "en";
 	// Layout effect: lang must change in the same commit as the text it describes.
 	useLayoutEffect(() => {
-		document.documentElement.lang = renderedLocale;
+		setDocumentLang(renderedLocale);
 	}, [renderedLocale]);
+
+	// Browser page translation: reported once per target (see watchTranslation).
+	const localeRef = useRef(locale);
+	useLayoutEffect(() => {
+		localeRef.current = locale;
+	}, [locale]);
+	useEffect(() => watchTranslation(() => localeRef.current), []);
 
 	const setLocale = useCallback(
 		(next: Locale) => {
