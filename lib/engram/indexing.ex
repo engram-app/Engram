@@ -9,12 +9,16 @@ defmodule Engram.Indexing do
   import Ecto.Query
 
   alias Engram.Crypto
+  alias Engram.Indexing.PayloadV5
+  alias Engram.Indexing.PointId
   alias Engram.Indexing.RetainedVectors
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Chunk
+  alias Engram.Notes.FlatFields
   alias Engram.Notes.Frontmatter
   alias Engram.Notes.Note
+  alias Engram.Notes.NoteAttr
   alias Engram.Notes.OkfFields
   alias Engram.Parsers.Markdown
   alias Engram.Repo
@@ -1021,6 +1025,7 @@ defmodule Engram.Indexing do
 
           stamp_payload_hash(note, payload_hash)
           stamp_okf_timestamp(prepared)
+          stamp_flat_fields(prepared)
           in_commit.(length(chunk_rows))
         end)
 
@@ -1233,11 +1238,16 @@ defmodule Engram.Indexing do
       acc ->
         case v do
           v when is_binary(v) -> acc + byte_size(v) + 32
-          v when is_list(v) -> acc + Enum.sum(Enum.map(v, &(byte_size(to_string(&1)) + 4))) + 32
+          v when is_list(v) -> acc + Enum.sum(Enum.map(v, &element_json_bytes/1)) + 32
           _ -> acc + 48
         end
     end
   end
+
+  # A v5 long-tail entry (`%{"k" => id, "v" => id}`) is a small object: two
+  # 32-char ids and framing, under 80 B.
+  defp element_json_bytes(e) when is_map(e), do: 80
+  defp element_json_bytes(e), do: byte_size(to_string(e)) + 4
 
   # Nothing reusable — every chunk is being rebuilt, so keep the belt-and-
   # braces purge this path has always run: by point id, AND by the path_hmac
@@ -2477,8 +2487,16 @@ defmodule Engram.Indexing do
         note_language(Enum.map(plan.entries, &entry_chunk/1))
       end)
 
-    note_payload = note_payload(note)
-    ctx = {note, user, note_payload, now}
+    # ONE extraction of the v5 flat frontmatter fields, two sinks: the
+    # `notes` columns and `note_attrs` rows (the source of truth, written in
+    # the chunk-row transaction by `stamp_flat_fields/1`) and, once
+    # `:write_v5_layout` is on, the v5 Qdrant payload.
+    flat = FlatFields.extract(note.content, filter_key)
+    v5? = write_v5_layout?()
+    note_payload = if v5?, do: PayloadV5.build(note, flat), else: note_payload(note)
+    ctx = {note, user, note_payload, now, v5?}
+
+    ordinals = PointId.ordinals(Enum.map(plan.entries, &entry_chunk(&1).context_hmac))
 
     # The whole note in one call so the encoder can share per-note work (the
     # token -> dim memo) across chunks. One sparse vector per :embed entry, in
@@ -2496,34 +2514,38 @@ defmodule Engram.Indexing do
 
     prepared =
       Enum.reduce_while(
-        plan.entries,
+        Enum.zip(plan.entries, ordinals),
         {:ok, [], Enum.zip(entry_vectors(plan, vectors), sparse)},
         fn
-          entry, {:ok, acc, pending} ->
-            case build_entry(entry, ctx, pending) do
+          {entry, ordinal}, {:ok, acc, pending} ->
+            case build_entry(entry, {ctx, ordinal}, pending) do
               {:ok, built, rest} -> {:cont, {:ok, [built | acc], rest}}
               {:error, _reason} = err -> {:halt, err}
             end
         end
       )
 
-    with {:ok, reversed, _spent} <- prepared do
+    with {:ok, reversed, _spent} <- prepared,
+         {:ok, dek} <- Crypto.get_dek(user) do
       built = Enum.reverse(reversed)
+      qdrant_points = for(%{point: p} <- built, p != nil, do: p)
 
       {:ok,
        %{
          note: note,
          chunk_rows: Enum.map(built, & &1.row),
-         qdrant_points: for(%{point: p} <- built, p != nil, do: p),
+         qdrant_points: qdrant_points,
          point_kinds: for(%{kind: k, dense?: d} <- built, do: {k, d}),
          # Straight from the plan, not re-derived from `built`. Two independent
          # derivations of the same list is how "reused" and "not deleted" drift
          # apart, and the drift is silent: an id in one list but not the other
          # is either a stray or a row pointing at nothing.
          reused_point_ids: plan.reused_point_ids,
-         stale_point_ids: plan.stale_point_ids,
+         stale_point_ids: unrewritten(plan.stale_point_ids, qdrant_points, v5?),
          note_payload: note_payload,
-         payload_hash: payload_hash(note_payload)
+         payload_hash: payload_hash(note_payload),
+         flat_columns: FlatFields.columns(flat, dek, note.id),
+         attr_rows: FlatFields.attr_rows(flat, note)
        }}
     end
   end
@@ -2531,15 +2553,17 @@ defmodule Engram.Indexing do
   # A reused chunk costs nothing but a row: no embed, no tokenizer pass, no
   # encryption. Its `token_count` rides along from the row it replaces rather
   # than being recomputed from text that has not changed.
-  defp build_entry({:reuse, chunk, point_id, tokens}, {note, _u, _p, now}, pending) do
+  defp build_entry({:reuse, chunk, point_id, tokens}, {{note, _u, _p, now, _v5}, _ord}, pending) do
     {:ok, %{row: chunk_row(note, chunk, point_id, tokens, now), point: nil}, pending}
   end
 
   # `doc_len` is the raw token count from the same tokenization pass as the
   # sparse vector, also persisted as `chunks.token_count`.
-  defp build_entry({:embed, chunk}, ctx, [{vector, {sparse, doc_len}} | rest]) do
-    {note, user, note_payload, now} = ctx
-    point_id = Ecto.UUID.generate()
+  defp build_entry({:embed, chunk}, {ctx, ordinal}, [{vector, {sparse, doc_len}} | rest]) do
+    {note, user, note_payload, now, v5?} = ctx
+
+    point_id =
+      if v5?, do: PointId.v5(note.id, chunk.context_hmac, ordinal), else: Ecto.UUID.generate()
 
     # `chunk_index` used to live here. Nothing ever read it, and dropping it is
     # what lets a reused point be refreshed for the whole note in ONE
@@ -2552,7 +2576,14 @@ defmodule Engram.Indexing do
         text: chunk.text
       })
 
-    case Crypto.encrypt_qdrant_payload(base_payload, user, collection(), point_id) do
+    # A v5 point carries filter fields and ids only: its text, title and
+    # heading live in Postgres (Task 11), so there is nothing to encrypt.
+    encrypted =
+      if v5?,
+        do: {:ok, note_payload},
+        else: Crypto.encrypt_qdrant_payload(base_payload, user, collection(), point_id)
+
+    case encrypted do
       {:ok, payload} ->
         # Omit the dense named vector entirely when there is none — Qdrant
         # rejects a null vector, and a partial named-vector upsert is the
@@ -2646,6 +2677,39 @@ defmodule Engram.Indexing do
       fm_created: note.fm_created && DateTime.to_unix(note.fm_created)
     }
   end
+
+  # UUIDv5 ids and the text-free payload (Task 15.1/15.3), off until PR-17:
+  # until then every write keeps random ids and payload text.
+  defp write_v5_layout?, do: Application.get_env(:engram, :write_v5_layout, false)
+
+  # A deterministic id can equal a stale id of the previous pass (same
+  # fingerprint and ordinal, not reused because the plan regrouped). The point
+  # was just rewritten, so deleting it as stale would delete the new point.
+  defp unrewritten(stale, _points, false), do: stale
+
+  defp unrewritten(stale, points, true) do
+    written = MapSet.new(points, & &1.id)
+    Enum.reject(stale, &MapSet.member?(written, &1))
+  end
+
+  # Inside the chunk-row transaction, from the same extraction as the payload.
+  # Every column is set (an absent key clears it) and the note's rows are
+  # replaced wholesale, like the chunk rows.
+  defp stamp_flat_fields(%{note: note, flat_columns: columns, attr_rows: rows}) do
+    {_, _} =
+      Repo.update_all(from(n in Note, where: n.kind == "note" and n.id == ^note.id), set: columns)
+
+    Repo.delete_all(from(a in NoteAttr, where: a.note_id == ^note.id), skip_tenant_check: true)
+
+    _ =
+      rows
+      |> Enum.chunk_every(@insert_batch)
+      |> Enum.each(&Repo.insert_all(NoteAttr, &1, skip_tenant_check: true))
+
+    :ok
+  end
+
+  defp stamp_flat_fields(_prepared), do: :ok
 
   # Plaintext inputs, not the stored payload: nothing here is encrypted, but
   # comparing what we would write against a stamp avoids reading Qdrant back.

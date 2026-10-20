@@ -39,6 +39,7 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Logger.Metadata
   alias Engram.Notes.CrdtUpdateLog
   alias Engram.Repo
+  alias Engram.Vector.FilterId
   alias Engram.Vector.Qdrant
 
   require Logger
@@ -1265,7 +1266,16 @@ defmodule Engram.Crypto.UserDekRotation do
       {:type, :type_ciphertext, :type_nonce, :type_hmac,
        &Engram.Notes.OkfFields.normalize_type/1},
       {:description, :description_ciphertext, :description_nonce, nil, nil},
-      {:resource, :resource_ciphertext, :resource_nonce, nil, nil}
+      {:resource, :resource_ciphertext, :resource_nonce, nil, nil},
+      # v5 flat frontmatter fields (`Engram.Notes.FlatFields`). `source` is a
+      # JSON list whose `src_hmac` array, like the `note_attrs` rows, is
+      # rewritten by the re-index the new content-hash key already forces.
+      {:status, :status_ciphertext, :status_nonce, :status_hmac, &FilterId.value_input/1},
+      {:author, :author_ciphertext, :author_nonce, :author_hmac, &FilterId.value_input/1},
+      {:reviewed_by, :reviewed_by_ciphertext, :reviewed_by_nonce, :rev_by_hmac,
+       &FilterId.value_input/1},
+      {:project, :project_ciphertext, :project_nonce, :proj_hmac, &FilterId.value_input/1},
+      {:source, :source_ciphertext, :source_nonce, nil, nil}
     ]
 
     base_updates =

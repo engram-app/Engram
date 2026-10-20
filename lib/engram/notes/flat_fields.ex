@@ -19,6 +19,8 @@ defmodule Engram.Notes.FlatFields do
   differ only for a note that sets conflicting keys.
   """
 
+  alias Engram.Crypto
+  alias Engram.Crypto.Envelope
   alias Engram.Notes.Frontmatter
   alias Engram.Notes.FrontmatterAttrs
   alias Engram.Notes.OkfFields
@@ -126,6 +128,69 @@ defmodule Engram.Notes.FlatFields do
       fm_due: unix(OkfFields.parse_date_value(v["due"], :lenient)),
       fm_priority: if(is_number(v["priority"]), do: v["priority"] / 1)
     })
+  end
+
+  @doc """
+  The `notes` columns for `flat`: blind indexes and plaintext numbers as
+  stored, exact values encrypted under `dek` with AAD
+  `aad_for_row(:notes, <field>, note_id)` (`source` as one JSON list). Every
+  column is present, so an absent key clears what an earlier pass stored.
+  """
+  @spec columns(t(), <<_::256>>, Ecto.UUID.t()) :: keyword()
+  def columns(flat, dek, note_id) do
+    source = if flat.source != [], do: Jason.encode!(flat.source)
+
+    [
+      status_hmac: flat.status_hmac,
+      author_hmac: flat.author_hmac,
+      rev_by_hmac: flat.rev_by_hmac,
+      proj_hmac: flat.proj_hmac,
+      src_hmac: if(flat.src_hmac != [], do: flat.src_hmac),
+      fm_updated: flat.fm_updated,
+      fm_reviewed: flat.fm_reviewed,
+      fm_expires: flat.fm_expires,
+      fm_due: flat.fm_due,
+      fm_priority: flat.fm_priority
+    ] ++
+      envelope(dek, note_id, :status, flat.status) ++
+      envelope(dek, note_id, :author, flat.author) ++
+      envelope(dek, note_id, :reviewed_by, flat.reviewed_by) ++
+      envelope(dek, note_id, :project, flat.project) ++
+      envelope(dek, note_id, :source, source)
+  end
+
+  @doc "The `note_attrs` rows for `flat` (one per long-tail value)."
+  @spec attr_rows(t(), %{id: Ecto.UUID.t(), user_id: Ecto.UUID.t()}) :: [map()]
+  def attr_rows(flat, %{id: note_id, user_id: user_id}) do
+    row = &Map.merge(%{note_id: note_id, user_id: user_id, key_hmac: &1}, &2)
+
+    for(%{k: k, v: v} <- flat.attrs, do: row.(k, %{value_hmac: v})) ++
+      for(%{k: k, n: n} <- flat.nums, do: row.(k, %{value_num: n})) ++
+      for(%{k: k, t: t} <- flat.dates, do: row.(k, %{value_date: t}))
+  end
+
+  # Explicit atoms per field (no runtime atom building).
+  @envelope_keys %{
+    status: {:status_ciphertext, :status_nonce},
+    author: {:author_ciphertext, :author_nonce},
+    reviewed_by: {:reviewed_by_ciphertext, :reviewed_by_nonce},
+    project: {:project_ciphertext, :project_nonce},
+    source: {:source_ciphertext, :source_nonce}
+  }
+
+  @doc "The `{ciphertext, nonce}` column names of each encrypted flat field."
+  @spec envelope_keys() :: %{atom() => {atom(), atom()}}
+  def envelope_keys, do: @envelope_keys
+
+  defp envelope(dek, note_id, field, value) do
+    {ct_key, nonce_key} = Map.fetch!(@envelope_keys, field)
+
+    {ct, nonce} =
+      if value,
+        do: Envelope.encrypt(value, dek, Crypto.aad_for_row(:notes, field, note_id)),
+        else: {nil, nil}
+
+    [{ct_key, ct}, {nonce_key, nonce}]
   end
 
   # OKF `verified` is a list of `{by, at}`; the most recent entry with a

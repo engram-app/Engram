@@ -30,7 +30,12 @@ defmodule Engram.Vector.FilterId do
 
   @doc "Full HMAC of a frontmatter string value (Postgres `*_hmac`, `value_hmac`)."
   @spec value_hmac(binary(), String.t()) :: binary()
-  def value_hmac(filter_key, value), do: Crypto.hmac_field(filter_key, "fmv:" <> norm(value))
+  def value_hmac(filter_key, value), do: Crypto.hmac_field(filter_key, value_input(value))
+
+  @doc false
+  # The HMAC input of a value, for DEK rotation's recompute (`hmac_field/2`).
+  @spec value_input(String.t()) :: String.t()
+  def value_input(value), do: "fmv:" <> norm(value)
 
   @spec attr(binary(), String.t()) :: String.t()
   def attr(filter_key, key), do: from_hmac(key_hmac(filter_key, key))

@@ -920,6 +920,48 @@ defmodule Engram.Crypto.UserDekRotationTest do
       {:ok, new_filter_key} = Crypto.dek_filter_key(reloaded_user)
       assert raw.type_hmac == Crypto.hmac_field(new_filter_key, "playbook")
     end
+
+    test "rotation rewraps the v5 flat columns and recomputes their blind indexes",
+         %{user: user, vault: vault} do
+      content = "---\nstatus: Draft\nauthor: alice\nsource: [https://a]\n---\nbody\n"
+
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/flat.md", "content" => content},
+          actor: "api"
+        )
+
+      # What the indexing pass writes (`Indexing.stamp_flat_fields/1`).
+      user = Repo.get!(Engram.Accounts.User, user.id)
+      {:ok, fk} = Crypto.dek_filter_key(user)
+      {:ok, dek} = Crypto.get_dek(user)
+      flat = Engram.Notes.FlatFields.extract(content, fk)
+
+      Repo.update_all(
+        from(n in Engram.Notes.Note, where: n.id == ^note.id),
+        [set: Engram.Notes.FlatFields.columns(flat, dek, note.id)],
+        skip_tenant_check: true
+      )
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded = Repo.get!(Engram.Accounts.User, user.id)
+      {:ok, new_fk} = Crypto.dek_filter_key(reloaded)
+      {:ok, new_dek} = Crypto.get_dek(reloaded)
+
+      raw =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      open = fn field, ct, nonce ->
+        Envelope.decrypt(ct, nonce, new_dek, Crypto.aad_for_row(:notes, field, note.id))
+      end
+
+      assert open.(:status, raw.status_ciphertext, raw.status_nonce) == {:ok, "Draft"}
+      assert open.(:author, raw.author_ciphertext, raw.author_nonce) == {:ok, "alice"}
+      assert open.(:source, raw.source_ciphertext, raw.source_nonce) == {:ok, ~s(["https://a"])}
+      assert raw.status_hmac == Engram.Vector.FilterId.value_hmac(new_fk, "draft")
+      assert raw.author_hmac == Engram.Vector.FilterId.value_hmac(new_fk, "alice")
+      refute raw.status_hmac == Engram.Vector.FilterId.value_hmac(fk, "draft")
+    end
   end
 
   describe "rotate_user/1 — attachments sweep" do
