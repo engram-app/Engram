@@ -191,13 +191,13 @@ defmodule Engram.Adv1760Test do
     test_pid = self()
     stub(Engram.MockEmbedder, :embed_texts, fn texts, _opts -> vectors(texts) end)
 
-    Bypass.stub(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+    Bypass.stub(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
       {:ok, raw, conn} = Plug.Conn.read_body(conn)
       send(test_pid, {:qdrant_body, raw})
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, ~s({"result": []}))
+      |> Plug.Conn.send_resp(200, ~s({"result":[{"points":[]},{"points":[]}]}))
     end)
 
     # The exact opts `suggest_folder` / `auto_place_folder` send.
