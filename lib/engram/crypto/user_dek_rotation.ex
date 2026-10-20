@@ -36,8 +36,11 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Crypto
   alias Engram.Crypto.{DekCache, Envelope, MigrationRunner, RotationLock, TenantSweep}
   alias Engram.Crypto.KeyProvider.Resolver
+  alias Engram.Indexing
+  alias Engram.Indexing.PayloadV5
   alias Engram.Logger.Metadata
   alias Engram.Notes.CrdtUpdateLog
+  alias Engram.Notes.FlatFields
   alias Engram.Repo
   alias Engram.Vector.FilterId
   alias Engram.Vector.Qdrant
@@ -185,7 +188,7 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- sweep_note_links(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_qdrant(user, old_dek, new_dek),
          :ok <- clear_chunk_context_hmacs(user),
-         :ok <- clear_note_attrs(user),
+         :ok <- resync_index_keys(user, new_dek, new_filter_key),
          :ok <- final_flip(user, new_dek_version, new_wrapped) do
       Logger.info(
         "T3.7 per-user DEK rotation complete",
@@ -898,19 +901,126 @@ defmodule Engram.Crypto.UserDekRotation do
   # `Indexing.forget_chunk_reuse_for_user/1` (account soft-delete). There the
   # key is unchanged, so a surviving hmac matches and the reused id names a
   # point that is gone.
-  # `note_attrs` holds only HMACs under the OLD filter key and no plaintext to
-  # recompute them from, so the rows are dropped; the re-index the new
-  # content-hash key forces rewrites them under the new key. Unlike
-  # `clear_chunk_context_hmacs/1` this IS needed for correctness: a stale row
-  # would never match a filter built with the new key.
-  defp clear_note_attrs(%User{id: user_id}) do
-    {:ok, {_count, _}} =
+  # Every filter key derives from the DEK (`Crypto.dek_filter_key/1`), so a
+  # rotation changes every HMAC a Qdrant filter matches on: `path/folder/
+  # tags/type_hmac` on v3 points, the short ids on v5 points, and the
+  # `note_attrs` rows. Nothing re-indexes after a rotation, and a re-index
+  # would re-embed every chunk (the content-hash key rotates too, so no
+  # fingerprint matches), so the keys are rewritten here from the rotated
+  # rows and the decrypted frontmatter. No embedder call: a rotation costs $0
+  # in Voyage. Runs after `sweep_notes` (which recomputed the row HMACs).
+  defp resync_index_keys(%User{id: user_id}, new_dek, new_filter_key) do
+    TenantSweep.each_batch(
+      user_id,
+      Engram.Notes.Note,
+      fn batch_ids -> resync_batch(user_id, batch_ids, new_dek, new_filter_key) end,
+      fun_in_tenant: false
+    )
+  end
+
+  defp resync_batch(user_id, batch_ids, new_dek, new_filter_key) do
+    v5? = Qdrant.v5_payload_format?()
+
+    {:ok, {notes, points_by_note}} =
       Repo.with_tenant(user_id, fn ->
-        Repo.delete_all(from(a in Engram.Notes.NoteAttr, where: a.user_id == ^user_id))
+        notes = Repo.all(from(n in Engram.Notes.Note, where: n.id in ^batch_ids))
+
+        points =
+          from(c in Engram.Notes.Chunk,
+            where: c.note_id in ^batch_ids and not is_nil(c.qdrant_point_id),
+            select: {c.note_id, c.qdrant_point_id}
+          )
+          |> Repo.all()
+          |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+
+        {notes, points}
+      end)
+
+    flats =
+      if v5?, do: Map.new(notes, &{&1.id, flat_fields(&1, new_dek, new_filter_key)}), else: %{}
+
+    with :ok <- rewrite_note_attrs(user_id, notes, flats, new_dek) do
+      v5_ids = v5_point_ids(points_by_note |> Map.values() |> List.flatten(), v5?)
+      resync_points(notes, points_by_note, flats, v5_ids)
+    end
+  end
+
+  defp flat_fields(note, new_dek, new_filter_key) do
+    aad = Crypto.aad_for_row(:notes, :content, note.id)
+
+    case note.content_ciphertext &&
+           Envelope.decrypt(note.content_ciphertext, note.content_nonce, new_dek, aad) do
+      {:ok, content} -> FlatFields.extract(content, new_filter_key)
+      _ -> FlatFields.empty()
+    end
+  end
+
+  # `note_attrs` holds only HMACs, so the rows are rebuilt from the decrypted
+  # frontmatter under the new key (dropped when the v5 format is off: any
+  # leftover row is under the old key and could never match).
+  defp rewrite_note_attrs(user_id, notes, flats, new_dek) do
+    ids = Enum.map(notes, & &1.id)
+
+    {:ok, _} =
+      Repo.with_tenant(user_id, fn ->
+        Repo.delete_all(from(a in Engram.Notes.NoteAttr, where: a.note_id in ^ids))
+
+        for note <- notes, flat = flats[note.id], flat != nil do
+          {_, _} =
+            Repo.update_all(from(n in Engram.Notes.Note, where: n.id == ^note.id),
+              set: FlatFields.columns(flat, new_dek, note.id)
+            )
+
+          Repo.insert_all(Engram.Notes.NoteAttr, FlatFields.attr_rows(flat, note))
+        end
       end)
 
     :ok
   end
+
+  defp v5_point_ids(_ids, false), do: MapSet.new()
+  defp v5_point_ids([], _v5?), do: MapSet.new()
+
+  defp v5_point_ids(ids, true) do
+    ids
+    |> Enum.chunk_every(Qdrant.max_ids())
+    |> Enum.reduce(MapSet.new(), fn batch, acc ->
+      filter = %{must: [%{has_id: batch}], must_not: [%{is_empty: %{key: "u"}}]}
+
+      case Qdrant.scroll(Qdrant.collection_name(),
+             filter: filter,
+             with_payload: false,
+             limit: length(batch)
+           ) do
+        {:ok, %{points: points}} -> Enum.into(points, acc, & &1["id"])
+        _ -> acc
+      end
+    end)
+  end
+
+  # v3 points take the rotated row's legacy HMAC keys (merged: their text
+  # stays); v5 points get their whole payload rebuilt and REPLACED. The
+  # payload is note-level, so each note costs one call per format.
+  defp resync_points(notes, points_by_note, flats, v5_ids) do
+    col = Qdrant.collection_name()
+
+    Enum.reduce_while(notes, :ok, fn note, :ok ->
+      ids = Map.get(points_by_note, note.id, [])
+      {v5, legacy} = Enum.split_with(ids, &MapSet.member?(v5_ids, &1))
+
+      with :ok <- Qdrant.set_payload(col, legacy, Indexing.legacy_note_payload(note)),
+           :ok <- overwrite_v5(col, v5, note, flats[note.id]) do
+        {:cont, :ok}
+      else
+        err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp overwrite_v5(_col, [], _note, _flat), do: :ok
+
+  defp overwrite_v5(col, ids, note, flat),
+    do: Qdrant.overwrite_payload(col, ids, PayloadV5.build(note, flat || FlatFields.empty()))
 
   defp clear_chunk_context_hmacs(%User{id: user_id}) do
     # `chunks` carries FORCE ROW LEVEL SECURITY. Unscoped, this matches zero

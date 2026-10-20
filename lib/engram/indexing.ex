@@ -2673,6 +2673,10 @@ defmodule Engram.Indexing do
   # tree + tags. Display values (path/title/tags) are rehydrated from the
   # `notes` row at search time, keyed by the chunk's note_id. The *_hmac fields
   # carry all filter load (folder/tags/path scoping) without exposing plaintext.
+  @doc false
+  # The legacy note-level payload, for DEK rotation's filter-key resync.
+  def legacy_note_payload(note), do: note_payload(note)
+
   defp note_payload(note) do
     %{
       user_id: to_string(note.user_id),

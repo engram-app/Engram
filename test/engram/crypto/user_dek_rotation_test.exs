@@ -977,6 +977,118 @@ defmodule Engram.Crypto.UserDekRotationTest do
     end
   end
 
+  # Every filter key derives from the DEK, so a rotation must rewrite the
+  # HMACs Qdrant filters on, or a type/tag/folder filter built with the new
+  # key silently matches nothing. Nothing re-indexes after a rotation, and it
+  # must not: a re-index would re-embed (the content-hash key rotates too).
+  describe "rotate_user/1 - Qdrant filter keys follow the new key, $0 in Voyage" do
+    setup %{user: user} do
+      vault = Engram.Fixtures.insert_vault!(user, "KeysVault")
+      content = "---\ntype: Playbook\ntags: [ops]\nstatus: draft\nmood: calm\n---\nbody\n"
+
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/keys.md", "content" => content},
+          actor: "api"
+        )
+
+      point = Ecto.UUID.generate()
+
+      Repo.insert!(
+        %Engram.Notes.Chunk{
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          position: 0,
+          char_start: 0,
+          char_end: 4,
+          qdrant_point_id: point
+        },
+        skip_tenant_check: true
+      )
+
+      # No embed, ever: the rotation must not reach the embedder.
+      Mox.expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("embed during rotation") end)
+
+      {:ok, note: note, point: point}
+    end
+
+    defp capture_payload_writes(test_pid, v5_points \\ []) do
+      bypass = Bypass.open()
+      Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+
+      Bypass.stub(bypass, "POST", "/collections/engram_notes/points/scroll", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:scroll, Jason.decode!(body)})
+        points = v5_points
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"result" => %{"points" => points, "next_page_offset" => nil}})
+        )
+      end)
+
+      Bypass.stub(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:set, Jason.decode!(body)})
+        Plug.Conn.send_resp(conn, 200, ~s({"result": {"status": "completed"}, "status": "ok"}))
+      end)
+
+      Bypass.stub(bypass, "PUT", "/collections/engram_notes/points/payload", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:overwrite, Jason.decode!(body)})
+        Plug.Conn.send_resp(conn, 200, ~s({"result": {"status": "completed"}, "status": "ok"}))
+      end)
+
+      bypass
+    end
+
+    test "a v3 point gets the new type, tag and path HMACs", %{
+      user: user,
+      note: note,
+      point: point
+    } do
+      capture_payload_writes(self())
+      assert :ok = UserDekRotation.rotate_user(user.id)
+      Mox.verify!()
+
+      {:ok, new_fk} = Crypto.dek_filter_key(Repo.get!(Engram.Accounts.User, user.id))
+
+      raw =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      assert_received {:set, %{"points" => [^point], "payload" => payload}}
+      # Exactly what a type / tag filter built after the rotation sends.
+      assert payload["type_hmac"] == Base.encode64(Crypto.hmac_field(new_fk, "playbook"))
+      assert payload["tags_hmac"] == [Base.encode64(Crypto.hmac_field(new_fk, "ops"))]
+      assert payload["path_hmac"] == Base.encode64(raw.path_hmac)
+    end
+
+    test "a v5 point is rebuilt under the new key and note_attrs rewritten from the frontmatter",
+         %{user: user, note: note, point: point} do
+      Engram.ServiceConfig.put_override(:v5_payload_format, true)
+      capture_payload_writes(self(), [%{"id" => point}])
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+      Mox.verify!()
+
+      {:ok, new_fk} = Crypto.dek_filter_key(Repo.get!(Engram.Accounts.User, user.id))
+      assert_received {:overwrite, %{"points" => [^point], "payload" => p}}
+      refute_received {:set, %{"points" => [^point]}}
+      assert p["y"] == FilterId.from_hmac(Crypto.hmac_field(new_fk, "playbook"))
+      assert p["s"] == FilterId.attr_value(new_fk, "draft")
+
+      assert p["at"] == [
+               %{"k" => FilterId.attr(new_fk, "mood"), "v" => FilterId.attr_value(new_fk, "calm")}
+             ]
+
+      [row] = Repo.all(from(a in NoteAttr, where: a.note_id == ^note.id), skip_tenant_check: true)
+      assert row.key_hmac == FilterId.key_hmac(new_fk, "mood")
+      assert row.value_hmac == FilterId.value_hmac(new_fk, "calm")
+    end
+  end
+
   describe "rotate_user/1 — attachments sweep" do
     test "happy path: attachment blob re-encrypted under new DEK (legacy v1 fixture)", %{
       user: user
