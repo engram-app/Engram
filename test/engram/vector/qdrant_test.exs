@@ -813,34 +813,34 @@ defmodule Engram.Vector.QdrantTest do
   end
 
   describe "hybrid_search_body/3 — body builder (no HTTP)" do
-    test "sets with_vector at top level when requested" do
+    test "sets with_vector on both legs when requested" do
       dense = List.duplicate(0.1, 4)
       sparse = %{indices: [1, 2], values: [0.5, 0.3]}
       body = Qdrant.hybrid_search_body(dense, sparse, user_id: "u1", with_vector: true)
-      assert body.with_vector == ["dense"]
+      assert Enum.map(body.searches, & &1.with_vector) == [["dense"], ["dense"]]
     end
 
-    test "does not set with_vector at top level by default" do
+    test "does not set with_vector on either leg by default" do
       dense = List.duplicate(0.1, 4)
       sparse = %{indices: [1, 2], values: [0.5, 0.3]}
       body = Qdrant.hybrid_search_body(dense, sparse, user_id: "u1")
-      refute Map.has_key?(body, :with_vector)
+      refute Enum.any?(body.searches, &Map.has_key?(&1, :with_vector))
     end
 
-    test "puts quantization params on dense prefetch leg only when full_precision" do
+    test "puts quantization params on the dense leg only when full_precision" do
       dense = List.duplicate(0.1, 4)
       sparse = %{indices: [1, 2], values: [0.5, 0.3]}
       body = Qdrant.hybrid_search_body(dense, sparse, user_id: "u1", full_precision: true)
-      [dense_leg, sparse_leg] = body.prefetch
+      [dense_leg, sparse_leg] = body.searches
       assert dense_leg.params.quantization == %{ignore: true}
       refute Map.has_key?(sparse_leg, :params)
     end
 
-    test "puts rescore params on dense prefetch leg only (default binary quant)" do
+    test "puts rescore params on the dense leg only (default binary quant)" do
       dense = List.duplicate(0.1, 4)
       sparse = %{indices: [1, 2], values: [0.5, 0.3]}
       body = Qdrant.hybrid_search_body(dense, sparse, user_id: "u1")
-      [dense_leg, sparse_leg] = body.prefetch
+      [dense_leg, sparse_leg] = body.searches
       assert dense_leg.params.quantization == %{rescore: true, oversampling: 3.0}
       refute Map.has_key?(sparse_leg, :params)
     end
@@ -850,7 +850,7 @@ defmodule Engram.Vector.QdrantTest do
       dense = List.duplicate(0.1, 4)
       sparse = %{indices: [1, 2], values: [0.5, 0.3]}
       body = Qdrant.hybrid_search_body(dense, sparse, user_id: "u1")
-      [dense_leg, sparse_leg] = body.prefetch
+      [dense_leg, sparse_leg] = body.searches
       refute Map.has_key?(dense_leg, :params)
       refute Map.has_key?(sparse_leg, :params)
     end

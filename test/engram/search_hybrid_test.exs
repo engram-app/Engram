@@ -5,6 +5,7 @@ defmodule Engram.SearchHybridTest do
   import Ecto.Query
 
   alias Engram.Crypto.DekCache
+  alias Engram.QdrantStub
   alias Engram.Search
   alias Engram.ServiceConfig
 
@@ -62,20 +63,20 @@ defmodule Engram.SearchHybridTest do
       }
     }
 
-    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       json = Jason.decode!(body)
-      assert json["query"]["fusion"] == "rrf"
-      assert length(json["prefetch"]) == 2
+      assert Enum.map(json["searches"], & &1["using"]) == ["dense", "keyword"]
+      assert length(json["searches"]) == 2
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, Jason.encode!(fused))
+      |> Plug.Conn.send_resp(200, Jason.encode!(QdrantStub.batch(fused)))
     end)
 
     assert {:ok, [hit]} = Search.search(user, vault, "paddle_api_key", mode: :hybrid)
     assert hit.text == "PADDLE_API_KEY rotation"
-    assert_in_delta hit.score, 0.0163, 1.0e-6
+    assert hit.score == QdrantStub.rrf(0)
   end
 
   # The default is what MCP's `suggest_folder` and note auto-placement get,
@@ -86,14 +87,14 @@ defmodule Engram.SearchHybridTest do
     Engram.MockEmbedder
     |> expect(:embed_texts, fn ["x"], _opts -> {:ok, [[0.1, 0.2, 0.3]]} end)
 
-    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query", fn conn ->
+    Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       json = Jason.decode!(body)
-      assert Enum.map(json["prefetch"], & &1["using"]) |> Enum.sort() == ["dense", "keyword"]
+      assert Enum.map(json["searches"], & &1["using"]) |> Enum.sort() == ["dense", "keyword"]
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, ~s({"result":[]}))
+      |> Plug.Conn.send_resp(200, ~s({"result":[{"points":[]},{"points":[]}]}))
     end)
 
     assert {:ok, []} = Search.search(user, vault, "x")

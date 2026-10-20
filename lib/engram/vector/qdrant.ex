@@ -20,6 +20,7 @@ defmodule Engram.Vector.Qdrant do
   """
 
   alias Engram.Logger.Metadata
+  alias Engram.Search.Fusion
   alias Engram.ServiceConfig
   alias Engram.Vector.QdrantLayout
 
@@ -1294,16 +1295,34 @@ defmodule Engram.Vector.Qdrant do
     |> maybe_with_vector(search_opts)
   end
 
+  # Qdrant's own RRF default, kept so fused scores read as before.
+  @rrf_k 2
+
   @doc """
-  Hybrid search: dense + keyword prefetches fused server-side by RRF in one
-  request. `sparse` is `%{indices, values}`. Tenant filter is applied to BOTH
-  legs (load-bearing — the sparse inverted index is global).
+  Hybrid search: the dense and keyword legs run as one `/points/query/batch`
+  request and are fused here by `Engram.Search.Fusion.rrf/2` (k = 2), so
+  fused-score ties break the same way every time (server-side RRF orders
+  them arbitrarily). `sparse` is `%{indices, values}`. Tenant filter is
+  applied to BOTH legs (load-bearing: the sparse inverted index is global).
+  Each leg fetches `:limit` points; the fused list is cut back to `:limit`.
   """
   def hybrid_search(col \\ nil, dense, sparse, search_opts) do
     col = col || collection()
+    limit = Keyword.get(search_opts, :limit, 5)
 
     instrument(:hybrid_search, fn ->
-      do_search(col, [json: hybrid_search_body(dense, sparse, search_opts)] ++ req_opts(:search))
+      opts = [json: hybrid_search_body(dense, sparse, search_opts)] ++ req_opts(:search)
+
+      with {:ok, legs} <- do_query(col, "/points/query/batch", opts, &batch_results/1) do
+        fused =
+          legs
+          |> Enum.map(fn leg -> Enum.map(leg, &Map.put(&1, :id, &1.qdrant_id)) end)
+          |> Fusion.rrf(@rrf_k)
+          |> Enum.take(limit)
+          |> Enum.map(&Map.delete(&1, :id))
+
+        {:ok, fused}
+      end
     end)
   end
 
@@ -1313,29 +1332,26 @@ defmodule Engram.Vector.Qdrant do
     limit = Keyword.get(search_opts, :limit, 5)
 
     dense_leg =
-      %{query: dense, using: "dense", filter: filter, limit: limit}
+      %{query: dense, using: "dense", filter: filter, limit: limit, with_payload: true}
       |> then(fn leg ->
         case quantization_params(search_opts) do
           nil -> leg
           params -> Map.put(leg, :params, params)
         end
       end)
+      |> maybe_with_vector(search_opts)
 
-    %{
-      prefetch: [
-        dense_leg,
-        %{
-          query: %{indices: sparse.indices, values: sparse.values},
-          using: "keyword",
-          filter: filter,
-          limit: limit
-        }
-      ],
-      query: %{fusion: "rrf"},
-      limit: limit,
-      with_payload: true
-    }
-    |> maybe_with_vector(search_opts)
+    sparse_leg =
+      %{
+        query: %{indices: sparse.indices, values: sparse.values},
+        using: "keyword",
+        filter: filter,
+        limit: limit,
+        with_payload: true
+      }
+      |> maybe_with_vector(search_opts)
+
+    %{searches: [dense_leg, sparse_leg]}
   end
 
   @doc """
@@ -1392,17 +1408,24 @@ defmodule Engram.Vector.Qdrant do
   # per search, ten times the MMR pass that consumes it.
   # The `qdrant.query` span covers the HTTP call only, with no attributes
   # (the body holds the query vector and tenant filter).
-  defp do_search(col, opts) do
+  defp do_search(col, opts), do: do_query(col, "/points/query", opts, &{:ok, search_results(&1)})
+
+  # `/points/query/batch` answers a list of `%{"points" => [...]}`, one per
+  # request in order; it comes back as a list of hit lists.
+  defp batch_results(result) when is_list(result), do: {:ok, Enum.map(result, &search_results/1)}
+  defp batch_results(other), do: {:error, {200, other}}
+
+  defp do_query(col, path, opts, parse) do
     resp =
       Tracer.with_span "qdrant.query" do
-        Req.post("#{base_url()}/collections/#{col}/points/query", opts ++ [decode_body: false])
+        Req.post("#{base_url()}/collections/#{col}#{path}", opts ++ [decode_body: false])
         |> Engram.Observability.Otel.mark_http_result()
       end
 
     case resp do
       {:ok, %{status: 200, body: raw}} when is_binary(raw) ->
         case Engram.Native.json_decode(raw) do
-          {:ok, %{"result" => result}} -> {:ok, search_results(result)}
+          {:ok, %{"result" => result}} -> parse.(result)
           {:ok, other} -> {:error, {200, other}}
           {:error, _} -> {:error, {200, raw}}
         end
