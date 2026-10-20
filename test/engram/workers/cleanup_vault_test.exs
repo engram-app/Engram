@@ -254,6 +254,73 @@ defmodule Engram.Workers.CleanupVaultTest do
       assert UsageMeters.notes_count(user.id) == 0
     end
 
+    # A big vault used to go in ONE transaction: every chunk, note (with its
+    # cascades) and attachment under one snapshot, past the checkout timeout,
+    # rolled back and retried forever (2026-10-20 audit, P1-8). Rows now go in
+    # id-ordered batches, each committed with its share of the counter, so a
+    # retry resumes from what is left.
+    test "deletes a vault bigger than one batch, a batch per transaction", %{
+      bypass: bypass,
+      user: user,
+      vault: vault
+    } do
+      stub_qdrant(bypass)
+      Application.put_env(:engram, :cleanup_vault_batch_size, 2)
+      on_exit(fn -> Application.delete_env(:engram, :cleanup_vault_batch_size) end)
+
+      notes = for _ <- 1..4, do: insert(:note, user: user, vault: vault)
+      insert(:note, user: user, vault: vault, deleted_at: DateTime.utc_now())
+      for _ <- 1..3, do: insert(:attachment, user: user, vault: vault)
+
+      for n <- notes do
+        %Chunk{
+          note_id: n.id,
+          vault_id: vault.id,
+          user_id: user.id,
+          position: 0,
+          char_start: 0,
+          char_end: 10,
+          qdrant_point_id: Ecto.UUID.generate()
+        }
+        |> Repo.insert!(skip_tenant_check: true)
+      end
+
+      # Setup seeded one live note too: 5 live.
+      assert UsageMeters.recount_notes!(user.id) == 5
+
+      {:ok, rows} = Repo.with_tenant(user.id, fn -> Repo.aggregate(Note, :count) end)
+      assert rows == 6
+
+      {_, queries} =
+        Engram.QueryRecorder.record(fn ->
+          assert :ok = CleanupVault.perform_cleanup(vault.id, user.id)
+        end)
+
+      deleting_notes =
+        queries
+        |> Engram.QueryRecorder.transactions()
+        |> Enum.count(fn stmts -> Enum.any?(stmts, &(&1 =~ ~s(DELETE FROM "notes"))) end)
+
+      # 6 notes at 2 per batch is 3 batches; the final transaction is a 4th.
+      assert deleting_notes >= 4, Engram.QueryRecorder.format(queries)
+
+      assert UsageMeters.notes_count(user.id) == 0
+
+      refute Repo.exists?(from(n in Note, where: n.vault_id == ^vault.id),
+               skip_tenant_check: true
+             )
+
+      refute Repo.exists?(from(a in Attachment, where: a.vault_id == ^vault.id),
+               skip_tenant_check: true
+             )
+
+      refute Repo.exists?(from(c in Chunk, where: c.vault_id == ^vault.id),
+               skip_tenant_check: true
+             )
+
+      refute Repo.get(Vault, vault.id, skip_tenant_check: true)
+    end
+
     test "hard-deletes chunks associated with notes", %{
       bypass: bypass,
       user: user,

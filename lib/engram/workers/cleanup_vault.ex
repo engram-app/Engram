@@ -6,10 +6,13 @@ defmodule Engram.Workers.CleanupVault do
   or doesn't exist, the job is a no-op.
 
   Cleanup order:
-  1. Collect storage keys from DB (before deleting rows)
-  2. Qdrant points (best-effort, non-fatal)
-  3. DB records in a transaction: chunks → notes → attachments → api_key_vaults → vault
-  4. Storage blobs (post-commit, best-effort) — only after DB is authoritative
+  1. Qdrant points (best-effort, non-fatal)
+  2. Chunks, then notes, then attachments in id-ordered batches, each its own
+     transaction (attachment blobs deleted after each batch commits)
+  3. One transaction for the remainder: chunks, notes, attachments, keys,
+     grants, api_key_vaults, the vault row
+  4. Remaining storage blobs (post-commit, best-effort), only after the DB is
+     authoritative
   """
 
   # Deliberately NO Oban `unique` key: a restore-then-re-delete cycle needs a
@@ -180,12 +183,24 @@ defmodule Engram.Workers.CleanupVault do
   # ---------------------------------------------------------------------------
 
   defp run_cleanup(vault) do
-    # Collect storage keys BEFORE deleting DB rows
-    storage_keys = collect_storage_keys(vault)
-
-    # Qdrant is best-effort — okay to do before DB transaction since
-    # Qdrant points are derived data that can be re-indexed
+    # Qdrant is best-effort, so okay before the DB deletes: points are derived
+    # data that can be re-indexed.
     delete_qdrant_points(vault)
+
+    # The bulk of the rows first, in id-ordered batches, each its own committed
+    # transaction. One transaction over a big vault (every chunk, note with its
+    # cascades, attachment) ran past the checkout timeout, rolled back, and was
+    # retried forever (2026-10-20 audit, P1-8). Each batch commits its own
+    # share of the notes counter and deletes its blobs after commit, so a
+    # retry after a crash resumes from whatever is left and double-counts
+    # nothing. The final transaction below then handles the small remainder
+    # (normally nothing) exactly as before.
+    delete_batches(vault, Chunk, [:id], fn _rows -> :ok end)
+    delete_batches(vault, Note, [:id, :kind, :deleted_at], &dec_live_notes(vault, &1))
+    delete_batches(vault, Attachment, [:id, :storage_key], fn _rows -> :ok end, &blob_keys/1)
+
+    # Collect storage keys BEFORE deleting the remaining DB rows
+    storage_keys = collect_storage_keys(vault)
 
     # DB transaction: delete all rows, making DB authoritative.
     #
@@ -283,6 +298,49 @@ defmodule Engram.Workers.CleanupVault do
     )
 
     :ok
+  end
+
+  defp batch_size, do: Application.get_env(:engram, :cleanup_vault_batch_size, 2_000)
+
+  # Deletes `schema` rows of `vault`, `batch_size()` at a time in id order,
+  # until a batch comes back short. `in_txn` runs inside each batch's
+  # transaction with the deleted rows; `after_commit` after it commits.
+  defp delete_batches(vault, schema, fields, in_txn, after_commit \\ fn _rows -> :ok end) do
+    vault_id = vault.id
+    size = batch_size()
+
+    {:ok, rows} =
+      Repo.with_tenant(vault.user_id, fn ->
+        ids =
+          from(r in schema,
+            where: r.vault_id == ^vault_id,
+            order_by: r.id,
+            limit: ^size,
+            select: r.id
+          )
+
+        {_n, rows} =
+          from(r in schema, where: r.id in subquery(ids), select: map(r, ^fields))
+          |> Repo.delete_all()
+
+        :ok = in_txn.(rows)
+        rows
+      end)
+
+    after_commit.(rows)
+    if length(rows) == size, do: delete_batches(vault, schema, fields, in_txn, after_commit)
+    :ok
+  end
+
+  # Soft-deleted notes were decremented at soft-delete time; folder markers
+  # are not counted.
+  defp dec_live_notes(vault, rows) do
+    live = Enum.count(rows, &(&1.kind == "note" and is_nil(&1.deleted_at)))
+    UsageMeters.dec_notes_count(vault.user_id, live)
+  end
+
+  defp blob_keys(rows) do
+    rows |> Enum.map(& &1.storage_key) |> Enum.reject(&is_nil/1) |> delete_storage_blobs()
   end
 
   # Runs BEFORE the delete transaction, so it needs its own scope. Unscoped it
