@@ -1,0 +1,69 @@
+defmodule Engram.PromEx.ZeroInitTest do
+  @moduledoc """
+  The alerted counters exist at 0 from boot. Prometheus' `increase()` needs a
+  prior sample, so a series whose first sample is 1 never pages: an isolated
+  failure after a deploy went unseen (engram-infra #1525 review).
+  """
+  use ExUnit.Case, async: true
+
+  alias Engram.PromEx.ZeroInit
+
+  defp series_line?(scrape, metric, labels) do
+    scrape
+    |> String.split("\n")
+    |> Enum.any?(fn line ->
+      String.starts_with?(line, metric <> "{") and
+        Enum.all?(labels, fn {k, v} -> line =~ ~s(#{k}="#{v}") end)
+    end)
+  end
+
+  test "every alerted series is on /metrics after start" do
+    scrape = PromEx.get_metrics(Engram.PromEx)
+
+    for {metric, labels} <- ZeroInit.prometheus_series() do
+      assert series_line?(scrape, metric, labels),
+             "missing #{metric} #{inspect(labels)} on /metrics"
+    end
+  end
+
+  test "the boot emit adds 0 to each series" do
+    ref = make_ref()
+    test = self()
+    events = ZeroInit.series() |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+
+    :telemetry.attach_many(
+      "zero-init-#{inspect(ref)}",
+      events,
+      fn event, measurements, meta, _ -> send(test, {ref, event, measurements, meta}) end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach("zero-init-#{inspect(ref)}") end)
+
+    ZeroInit.run()
+
+    for {event, measurements, meta} <- ZeroInit.series() do
+      assert Enum.all?(Map.values(measurements), &(&1 == 0))
+      assert_receive {^ref, ^event, ^measurements, ^meta}
+    end
+  end
+
+  test "covers each status and outcome the v5 alerts select" do
+    labels = Enum.map(ZeroInit.prometheus_series(), &elem(&1, 1))
+    statuses = for %{status: s} <- labels, uniq: true, do: s
+    outcomes = for %{outcome: o} <- labels, uniq: true, do: o
+
+    assert Enum.sort(statuses) ==
+             Enum.sort(~w(requeue_failed remap_failed after_flip both_deks_failed))
+
+    assert "drifted" in outcomes and "rewritten" in outcomes
+  end
+
+  test "starts after PromEx, so its handlers are attached" do
+    children = Engram.Application.children(Application.fetch_env!(:engram, Oban))
+    prom_ex = Enum.find_index(children, &(&1 == Engram.PromEx))
+    zero = Enum.find_index(children, &(&1 == ZeroInit))
+
+    assert prom_ex && zero && zero > prom_ex
+  end
+end
