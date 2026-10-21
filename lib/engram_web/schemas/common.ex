@@ -16,6 +16,12 @@ defmodule EngramWeb.Schemas.Note do
       content: %Schema{type: :string},
       content_hash: %Schema{type: :string, nullable: true},
       mtime: %Schema{type: :number, format: :float, description: "Client mtime (epoch seconds)"},
+      ctime: %Schema{
+        type: :number,
+        format: :float,
+        nullable: true,
+        description: "Client file creation time (epoch seconds)"
+      },
       updated_at: %Schema{type: :string, format: :"date-time", nullable: true},
       type: %Schema{
         type: :string,
@@ -163,6 +169,7 @@ defmodule EngramWeb.Schemas.NoteMeta do
       version: %Schema{type: :integer, nullable: true},
       content_hash: %Schema{type: :string, nullable: true},
       mtime: %Schema{type: :number, format: :float},
+      ctime: %Schema{type: :number, format: :float, nullable: true},
       updated_at: %Schema{type: :string, format: :"date-time", nullable: true},
       parse_status: %Schema{
         type: :string,

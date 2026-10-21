@@ -1012,6 +1012,58 @@
         "x-struct": "Elixir.EngramWeb.Schemas.SearchRequest",
         "x-validate": null
       },
+      "SetCtimesRequest": {
+        "example": {
+          "entries": [
+            {
+              "ctime": 1.7294e9,
+              "path": "Projects/plan.md"
+            },
+            {
+              "ctime": 1729486400.5,
+              "path": "Inbox/idea.md"
+            }
+          ]
+        },
+        "properties": {
+          "entries": {
+            "items": {
+              "properties": {
+                "ctime": {
+                  "description": "Epoch seconds",
+                  "format": "float",
+                  "type": "number",
+                  "x-struct": null,
+                  "x-validate": null
+                },
+                "path": {
+                  "type": "string",
+                  "x-struct": null,
+                  "x-validate": null
+                }
+              },
+              "required": [
+                "path",
+                "ctime"
+              ],
+              "type": "object",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "maxItems": 500,
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "title": "SetCtimesRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.SetCtimesRequest",
+        "x-validate": null
+      },
       "DeleteAccountRequest": {
         "example": {
           "password": "correct horse battery staple"
@@ -1138,6 +1190,23 @@
         "title": "UploadAttachmentRequest",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.UploadAttachmentRequest",
+        "x-validate": null
+      },
+      "UpdatedCount": {
+        "properties": {
+          "updated": {
+            "example": 3,
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "updated"
+        ],
+        "title": "UpdatedCount",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.UpdatedCount",
         "x-validate": null
       },
       "MessageError": {
@@ -1501,6 +1570,14 @@
             "x-struct": null,
             "x-validate": null
           },
+          "ctime": {
+            "description": "Client file creation time (epoch seconds). Optional; omitted by older plugins.",
+            "format": "float",
+            "nullable": true,
+            "type": "number",
+            "x-struct": null,
+            "x-validate": null
+          },
           "folder": {
             "nullable": true,
             "type": "string",
@@ -1602,6 +1679,14 @@
           "content_hash": {
             "nullable": true,
             "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "ctime": {
+            "description": "Client file creation time (epoch seconds)",
+            "format": "float",
+            "nullable": true,
+            "type": "number",
             "x-struct": null,
             "x-validate": null
           },
@@ -2721,6 +2806,13 @@
           "content_hash": {
             "nullable": true,
             "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "ctime": {
+            "format": "float",
+            "nullable": true,
+            "type": "number",
             "x-struct": null,
             "x-validate": null
           },
@@ -5336,6 +5428,51 @@
         "summary": "List active connections",
         "tags": [
           "Connections"
+        ]
+      }
+    },
+    "/api/notes/ctime": {
+      "post": {
+        "callbacks": {},
+        "description": "Sets `ctime` on existing notes that have none, matched by path. Never touches content, version or sync state, and never overwrites an existing ctime, so it is idempotent. At most 500 entries per call; unknown paths are skipped.",
+        "operationId": "notes-set-ctimes",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCtimesRequest"
+              }
+            }
+          },
+          "description": "Path + ctime pairs",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatedCount"
+                }
+              }
+            },
+            "description": "Updated count"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid entries"
+          }
+        },
+        "summary": "Fill client file creation times (bulk, metadata-only)",
+        "tags": [
+          "Notes"
         ]
       }
     },

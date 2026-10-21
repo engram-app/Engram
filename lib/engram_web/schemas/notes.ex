@@ -22,6 +22,13 @@ defmodule EngramWeb.Schemas.UpsertNoteRequest do
       path: %Schema{type: :string},
       content: %Schema{type: :string},
       mtime: %Schema{type: :number, format: :float},
+      ctime: %Schema{
+        type: :number,
+        format: :float,
+        nullable: true,
+        description:
+          "Client file creation time (epoch seconds). Optional; omitted by older plugins."
+      },
       version: %Schema{type: :integer, nullable: true},
       base_hash: %Schema{
         type: :string,
@@ -156,5 +163,50 @@ defmodule EngramWeb.Schemas.BatchMoveNotesRequest do
       ],
       "target_folder_id" => "7c8d9e0f-1a2b-3c4d-5e6f-7a8b9c0d1e2f"
     }
+  })
+end
+
+defmodule EngramWeb.Schemas.SetCtimesRequest do
+  @moduledoc false
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "SetCtimesRequest",
+    type: :object,
+    properties: %{
+      entries: %Schema{
+        type: :array,
+        maxItems: 500,
+        items: %Schema{
+          type: :object,
+          properties: %{
+            path: %Schema{type: :string},
+            ctime: %Schema{type: :number, format: :float, description: "Epoch seconds"}
+          },
+          required: [:path, :ctime]
+        }
+      }
+    },
+    required: [:entries],
+    example: %{
+      "entries" => [
+        %{"path" => "Projects/plan.md", "ctime" => 1_729_400_000.0},
+        %{"path" => "Inbox/idea.md", "ctime" => 1_729_486_400.5}
+      ]
+    }
+  })
+end
+
+defmodule EngramWeb.Schemas.UpdatedCount do
+  @moduledoc false
+  alias OpenApiSpex.Schema
+  require OpenApiSpex
+
+  OpenApiSpex.schema(%{
+    title: "UpdatedCount",
+    type: :object,
+    properties: %{updated: %Schema{type: :integer, example: 3}},
+    required: [:updated]
   })
 end

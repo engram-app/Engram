@@ -14,6 +14,9 @@ defmodule EngramWeb.NotesController do
 
   require Logger
 
+  # Cap per POST /notes/ctime; the plugin sweep chunks to this.
+  @max_ctime_batch 500
+
   operation(:upsert,
     operation_id: "notes-upsert",
     summary: "Create or update a note",
@@ -516,6 +519,54 @@ defmodule EngramWeb.NotesController do
   # a retry returns the cached 200 but does NOT re-broadcast. Tracked as a
   # follow-up (after-commit hook).
 
+  operation(:set_ctimes,
+    operation_id: "notes-set-ctimes",
+    summary: "Fill client file creation times (bulk, metadata-only)",
+    description:
+      "Sets `ctime` on existing notes that have none, matched by path. Never touches content, " <>
+        "version or sync state, and never overwrites an existing ctime, so it is idempotent. " <>
+        "At most #{@max_ctime_batch} entries per call; unknown paths are skipped.",
+    tags: ["Notes"],
+    request_body:
+      {"Path + ctime pairs", "application/json", Schemas.SetCtimesRequest, required: true},
+    responses: [
+      ok: {"Updated count", "application/json", Schemas.UpdatedCount},
+      bad_request: {"Invalid entries", "application/json", Schemas.Error}
+    ]
+  )
+
+  def set_ctimes(conn, %{"entries" => entries})
+      when is_list(entries) and length(entries) <= @max_ctime_batch do
+    user = conn.assigns.current_user
+    vault = conn.assigns.current_vault
+
+    case parse_ctime_entries(entries) do
+      :error ->
+        conn |> put_status(400) |> json(%{error: "invalid_entries"})
+
+      {:ok, parsed} ->
+        with {:ok, n} <- Notes.set_client_ctimes(user, vault, parsed) do
+          json(conn, %{updated: n})
+        end
+    end
+  end
+
+  def set_ctimes(conn, _params) do
+    conn
+    |> put_status(400)
+    |> json(%{error: "entries must be a list of at most #{@max_ctime_batch}"})
+  end
+
+  defp parse_ctime_entries(entries) do
+    Enum.reduce_while(entries, {:ok, []}, fn
+      %{"path" => p, "ctime" => c}, {:ok, acc} when is_binary(p) and is_number(c) and c > 0 ->
+        {:cont, {:ok, [%{path: p, ctime: c} | acc]}}
+
+      _, _ ->
+        {:halt, :error}
+    end)
+  end
+
   operation(:batch_delete,
     operation_id: "notes-batch-delete",
     summary: "Delete notes by id (idempotent)",
@@ -689,6 +740,7 @@ defmodule EngramWeb.NotesController do
       # The hash is keyed server-side (HMAC); clients treat it as opaque.
       content_hash: note.content_hash,
       mtime: note.mtime,
+      ctime: note.ctime,
       updated_at: note.updated_at,
       type: note.type,
       description: note.description,

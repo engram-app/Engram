@@ -63,6 +63,7 @@ defmodule Engram.Notes.Note do
     field :embed_started_hash, :string
     field :embed_crashes, :integer
     field :mtime, :float
+    field :ctime, :float
     field :deleted_at, :utc_datetime_usec
     field :content_ciphertext, :binary
     field :content_nonce, :binary
@@ -173,6 +174,7 @@ defmodule Engram.Notes.Note do
         :dek_version,
         :content_hash,
         :mtime,
+        :ctime,
         :user_id,
         :vault_id,
         :deleted_at,

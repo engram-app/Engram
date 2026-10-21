@@ -655,6 +655,7 @@ defmodule EngramWeb.Router do
     # Notes CRUD
     post "/notes/rename", NotesController, :rename
     post "/notes/append", NotesController, :append
+    post "/notes/ctime", NotesController, :set_ctimes
     post "/notes", NotesController, :upsert
     get "/notes/changes", NotesController, :changes
     get "/notes/by-id/:id", NotesController, :show_by_id
