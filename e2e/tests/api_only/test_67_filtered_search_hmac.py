@@ -92,7 +92,7 @@ class TestFilteredSearchOnEncryptedVault:
 
         # 3. Wait for the embed worker to land all three in Qdrant
         for path, _, _ in note_specs:
-            wait_for_qdrant_indexed(vault_id, path_hmacs[path], path, timeout=90)
+            wait_for_qdrant_indexed(vault_id, path_hmacs[path], path)
             # Search rehydrates hits from chunk rows, which commit AFTER the
             # Qdrant upsert; a hit with no row yet is dropped.
             wait_for_chunks_committed(vault_id, path_hmacs[path], path, timeout=90)
