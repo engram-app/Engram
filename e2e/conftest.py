@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from helpers.api import ApiClient
+from helpers.clerk import e2e_email
 from helpers.auth_provider import get_auth_provider, ClerkAuthProvider
 from helpers.cdp import SIMULATED_SWITCH_VAULT_ID
 from helpers.billing import grant_test_plan
@@ -383,7 +384,7 @@ def sync_user(ts, auth_provider, sync_password):
 
     Returns: (email, provider_user_id, api_key)
     """
-    email = f"e2e-sync-{ts}+clerk_test@example.com"
+    email = e2e_email("sync", ts)
     provider_user_id, api_key = auth_provider.provision_user(email, sync_password)
     # Lift api_rps_cap (30/s on every tier, #1974) and the Free caps before
     # any api-key-authed request hits the user — mirrors
@@ -398,7 +399,7 @@ def isolation_user(ts, auth_provider):
 
     Returns: (email, provider_user_id, api_key)
     """
-    email = f"e2e-iso-{ts}+clerk_test@example.com"
+    email = e2e_email("iso", ts)
     password = secrets.token_urlsafe(32)
     provider_user_id, api_key = auth_provider.provision_user(email, password)
     grant_test_plan(email)
@@ -423,7 +424,7 @@ def resumed_user(ts, auth_provider):
     # local part must stay <= 64 (RFC 5321) or Clerk create_user 422s. With
     # "+clerk_test" that budgets ~9 chars for the prefix (e2e-sync-/e2e-iso-
     # sit right at the ceiling); "e2e-rsm-" keeps us at 63.
-    email = f"e2e-rsm-{ts}+clerk_test@example.com"
+    email = e2e_email("rsm", ts)
     password = secrets.token_urlsafe(32)
     provider_user_id, api_key = auth_provider.provision_user(email, password)
     grant_test_plan(email)

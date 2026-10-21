@@ -51,7 +51,7 @@ import requests
 
 from helpers.api import ApiClient
 from helpers.billing import grant_test_plan
-from helpers.clerk import ClerkClient
+from helpers.clerk import ClerkClient, e2e_email
 from helpers.clerk_auth import provision_clerk_user
 
 logger = logging.getLogger(__name__)
@@ -170,7 +170,7 @@ def test_cancel_pro_to_free_over_limit():
 
     # ── 1. Provision user; resolve numeric user_id via grant_test_plan ──
     clerk = ClerkClient(CLERK_SECRET)
-    email = f"e2e-cancel-free-{_ts()}+clerk_test@example.com"
+    email = e2e_email("cancel-free", _ts())
     password = secrets.token_urlsafe(32)
     _clerk_user_id, _clerk_auth, api_key = provision_clerk_user(
         clerk, email, password, API_URL,

@@ -48,6 +48,28 @@ class ClerkPropagationTimeout(RuntimeError):
     readiness probe's wall-clock budget."""
 
 
+_CLERK_TEST_TAG = "+clerk_test"
+_EMAIL_LOCAL_MAX = 64  # RFC 5321; Clerk 422s form_param_format_invalid beyond it
+
+
+def e2e_email(label: str, ts: str, domain: str = "example.com") -> str:
+    """Build an e2e Clerk test email whose local part is <= 64 chars.
+
+    Shape: ``e2e-{label}-{ts}+clerk_test@{domain}``. Keeps the ``e2e-`` prefix
+    (reaper / is_e2e_clerk_email) and the ``ts`` suffix intact (the run/job/
+    worker sweeps and age-gate parse it). Only the human label is shrunk to
+    fit; ``ts`` supplies uniqueness. Raises if even a 1-char label won't fit.
+    """
+    budget = _EMAIL_LOCAL_MAX - len(_CLERK_TEST_TAG)
+    over = len(f"e2e-{label}-{ts}") - budget
+    if over > 0:
+        label = label[: max(1, len(label) - over)]
+    local = f"e2e-{label}-{ts}"
+    if len(local) > budget:
+        raise ValueError(f"e2e email local part too long ({len(local)} > {budget}): {local}")
+    return f"{local}{_CLERK_TEST_TAG}@{domain}"
+
+
 class ClerkQuotaError(RuntimeError):
     """Clerk refused a request because the shared dev instance is out of
     quota or rate limit (infra, not a product bug)."""

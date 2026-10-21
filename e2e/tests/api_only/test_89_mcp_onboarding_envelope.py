@@ -42,7 +42,7 @@ from datetime import datetime
 import pytest
 import requests
 
-from helpers.clerk import ClerkClient
+from helpers.clerk import ClerkClient, e2e_email
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ pytestmark = pytest.mark.skipif(
 def test_mcp_onboarding_refusal_is_jsonrpc_shaped():
     clerk = ClerkClient(CLERK_SECRET)
     ts = datetime.now().strftime("%Y%m%d%H%M%S%f")
-    email = f"e2e-onboarding-envelope-{ts}+clerk_test@example.com"
+    email = e2e_email("onboarding-envelope", ts)
 
     clerk_user_id = clerk.create_user(email, secrets.token_urlsafe(32))
     try:

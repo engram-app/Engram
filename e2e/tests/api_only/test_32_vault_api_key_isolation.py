@@ -24,7 +24,7 @@ import pytest
 
 from helpers.api import ApiClient
 from helpers.billing import grant_test_plan
-from helpers.clerk import ClerkClient
+from helpers.clerk import ClerkClient, e2e_email
 from helpers.clerk_auth import provision_clerk_user
 from helpers.crypto_probe import (
     latest_note_path_hmac,
@@ -70,7 +70,7 @@ def _register_test_user(ts: int):
     in Engram via the real auth pipeline (Clerk JWT → find_or_create).
     """
     clerk_client = ClerkClient(CLERK_SECRET)
-    email = f"e2e-vault-iso-{ts}+clerk_test@example.com"
+    email = e2e_email("vault-iso", ts)
     password = secrets.token_urlsafe(32)
 
     clerk_user_id, _clerk_auth, api_key = provision_clerk_user(
