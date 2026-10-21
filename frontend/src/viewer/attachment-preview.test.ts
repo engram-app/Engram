@@ -73,8 +73,9 @@ describe("parseCsv", () => {
 
 describe("formatBytes", () => {
 	test("picks a unit", () => {
-		expect(formatBytes(0, "en")).toBe("0 byte");
-		expect(formatBytes(512, "en")).toBe("512 byte");
+		expect(formatBytes(0, "en")).toBe("0 bytes");
+		expect(formatBytes(1, "en")).toBe("1 byte");
+		expect(formatBytes(512, "en")).toBe("512 bytes");
 		expect(formatBytes(1536, "en")).toBe("1.5 kB");
 		expect(formatBytes(10 * 1024 * 1024, "en")).toBe("10 MB");
 	});

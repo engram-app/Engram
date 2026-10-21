@@ -187,6 +187,8 @@ export function formatBytes(bytes: number, locale?: string): string {
 	return new Intl.NumberFormat(locale, {
 		style: "unit",
 		unit: UNITS[unit],
+		// Short bytes read "685 byte"; the long form pluralizes ("685 bytes").
+		unitDisplay: unit === 0 ? "long" : "short",
 		maximumFractionDigits: unit === 0 ? 0 : 1,
 	}).format(value);
 }
