@@ -662,7 +662,7 @@ defmodule Engram.Crypto do
 
     case Envelope.decrypt(note.tags_ciphertext, note.tags_nonce, dek, tags_aad) do
       {:ok, tags_bin} ->
-        {:ok, %{note | tags: :erlang.binary_to_term(tags_bin, [:safe])}}
+        {:ok, %{note | tags: Engram.Notes.TagsTerm.decode!(tags_bin)}}
 
       :error ->
         {:error, :decrypt_failed}
