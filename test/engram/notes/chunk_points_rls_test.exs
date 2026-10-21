@@ -113,4 +113,58 @@ defmodule Engram.Notes.ChunkPointsRlsTest do
 
     assert text == "Body of #{ctx.a.user.id}."
   end
+
+  # The hybrid slice path (checksum only, no envelope): its point-row count
+  # and the note content are read in the tenant too. Unscoped, the content
+  # query matches nothing under FORCE RLS.
+  test "search slices a checksum-only point's text under the enforced policy", ctx do
+    content = "# Iron\n\nFerritin levels are low."
+    vault = Repo.get!(Engram.Vaults.Vault, ctx.a.note.vault_id, skip_tenant_check: true)
+
+    {:ok, note} =
+      Notes.upsert_note(
+        ctx.a.user,
+        vault,
+        %{"path" => "s.md", "content" => content, "mtime" => 1.0},
+        actor: "api"
+      )
+
+    [{0, %{text: text}}] = Enum.to_list(Engram.Indexing.display_chunks(content, "s.md", 1))
+    {:ok, dek} = Crypto.get_dek(ctx.a.user)
+    ck = Crypto.dek_content_hash_key_from_bytes(dek)
+    id = Ecto.UUID.generate()
+
+    Repo.insert_all(
+      Chunk,
+      [
+        %{
+          note_id: note.id,
+          user_id: ctx.a.user.id,
+          vault_id: note.vault_id,
+          position: 0,
+          char_start: 0,
+          char_end: 1,
+          qdrant_point_id: id,
+          created_at: DateTime.utc_now(:second)
+        }
+      ],
+      skip_tenant_check: true
+    )
+
+    Repo.insert!(
+      %ChunkPoint{
+        point_id: id,
+        note_id: note.id,
+        user_id: ctx.a.user.id,
+        position: 0,
+        slice_sum: Engram.Indexing.text_sum(ck, text)
+      },
+      skip_tenant_check: true
+    )
+
+    assert {:returned, {:ok, %{^id => %{text: ^text} = hit}}} =
+             as_prod_role(fn -> Notes.search_hits_by_qdrant_points(ctx.a.user, [id]) end)
+
+    refute Map.get(hit, :stale, false)
+  end
 end
