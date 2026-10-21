@@ -97,6 +97,15 @@ it("keeps the extension when renaming", () => {
 	expect(screen.getByText(".zip")).toBeInTheDocument();
 });
 
+it.each([0, 1])("clicking a file name (%i: header, title) opens rename", (which) => {
+	mockAttachments = [att({ id: "zip-1", path: "a.zip", mime_type: "application/zip" })];
+	renderAt("zip-1");
+	const names = screen.getAllByTitle("Click to rename");
+	expect(names).toHaveLength(2);
+	fireEvent.click(names[which] as HTMLElement);
+	expect(screen.getByRole("textbox")).toHaveValue("a");
+});
+
 it("fetches the bytes when Download is clicked on a card-only file", async () => {
 	mockAttachments = [att({ id: "zip-1", path: "a.zip", mime_type: "application/zip" })];
 	const getBlob = vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["x"]));

@@ -9,7 +9,7 @@ import { whenLoaded } from "@/lib/when-loaded";
 import { ApiError, api, isNotFound } from "../api/client";
 import { useAttachments } from "../api/queries";
 import { useRightToolSlot } from "../layout/right-tools-context";
-import { AttachmentDetails } from "./attachment-details";
+import { AttachmentDetails, AttachmentName } from "./attachment-details";
 import { opensInline, previewKind } from "./attachment-preview";
 import { AttachmentTextPreview } from "./attachment-text-preview";
 import BacklinksPanel from "./backlinks-panel";
@@ -39,6 +39,8 @@ export default function AttachmentPage() {
 	const kind = att ? previewKind(path, mime, att.size_bytes) : null;
 	const rawPath = `/attachments/${encodePathSegments(path)}?raw=1`;
 
+	// Which name is in rename mode: the pinned header, or the title on the page.
+	const [renamingAt, setRenamingAt] = useState<"header" | "title" | null>(null);
 	const [blob, setBlob] = useState<Blob | null>(null);
 	const [url, setUrl] = useState<string | null>(null);
 	// 'missing' = real 404; 'failed' = transient (5xx/network) — don't conflate.
@@ -184,6 +186,9 @@ export default function AttachmentPage() {
 						kind={kind}
 						inlineUrl={url && opensInline(mime) ? url : null}
 						onDownload={download}
+						renaming={renamingAt === "title"}
+						onRename={() => setRenamingAt("title")}
+						onRenameDone={() => setRenamingAt(null)}
 					/>
 				</article>
 			</PreviewColumn>
@@ -196,7 +201,15 @@ export default function AttachmentPage() {
 			<DocumentHeader
 				folder={path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : undefined}
 				title={path}
-				name={<span className="min-w-0 truncate font-medium">{filename}</span>}
+				name={
+					<AttachmentName
+						path={path}
+						editing={renamingAt === "header"}
+						onEdit={() => setRenamingAt("header")}
+						onDone={() => setRenamingAt(null)}
+						className="-mx-1 truncate px-1 font-medium"
+					/>
+				}
 				// Always rendered, disabled until the bytes land: an icon button is taller
 				// than the bare text row, so mounting it late made the header jump.
 				actions={
