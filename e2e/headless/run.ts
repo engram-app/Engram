@@ -588,6 +588,31 @@ async function main(): Promise<void> {
 		}
 	});
 
+	// REPRO 2 — same, but the creating device is OFFLINE when the fresh device
+	// edits (no live room observer): the staging 0.59.0 shape.
+	const offPath = "Headless/FreshDeviceOffline.md";
+	await scenario("fresh device edits a note whose creator is offline (no duplication)", async () => {
+		const c = await Replica.boot(session, `C${Date.now()}`, rootDir);
+		await barrier.synced(c);
+		await c.createNote(offPath, freshC1);
+		await serverHas(offPath, barrier.sha256(freshC1));
+		c.disconnect();
+		const d = await Replica.boot(session, `E${Date.now()}`, rootDir);
+		await barrier.synced(d);
+		await barrier.noteVisible(d, offPath, barrier.sha256(freshC1));
+		await d.editNote(offPath, freshC2);
+		try {
+			await serverHas(offPath, barrier.sha256(freshC2));
+		} catch (e) {
+			const r = await fetch(`${API_URL}/notes/${encodeURIComponent(offPath)}`, {
+				headers: { Authorization: `Bearer ${session.token}`, "X-Vault-ID": session.vaultId },
+			});
+			throw new Error(`${(e as Error).message}; server content=${JSON.stringify(((await r.json()) as { content?: string }).content)}`);
+		} finally {
+			d.disconnect();
+		}
+	});
+
 	// GREEN 6 — stale head after room recreate (#285). Kill the note's CRDT room
 	// via the backend_rpc terminate_room seam; a subsequent edit recreates the
 	// room with a NEW head; a replica that reconnects MUST read that new head,
