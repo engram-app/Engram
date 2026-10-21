@@ -156,7 +156,10 @@ defmodule Engram.FreeLiteDocEmbedsTest do
     end
   end
 
-  defp drain_bucket(user), do: UsageMeters.bucket_take(user.id, 6_000_000, 6_000_000)
+  defp drain_bucket(user) do
+    left = UsageMeters.bucket_available(user.id, 6_000_000)
+    {:ok, _} = UsageMeters.bucket_take(user.id, left, 6_000_000)
+  end
 
   describe "the plan picks the doc model" do
     setup do: saas!()
