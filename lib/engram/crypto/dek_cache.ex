@@ -28,9 +28,9 @@ defmodule Engram.Crypto.DekCache do
   # A claim reads as a miss to `get/1`; this expiry only lets the sweep reap
   # the claim of a loader that crashed.
   @pending_ms 60_000
-  # How long `claim_or_await/1` waits on another loader before claiming over
-  # it (`:dek_await_ms`). Bounds a caller behind a stalled KMS call (ExAws
-  # retries with backoff).
+  # How long `claim_or_await/1` waits on another loader before failing with
+  # `:dek_load_timeout` (`:dek_await_ms`). Bounds a caller behind a stalled
+  # KMS call (ExAws retries with backoff).
   @await_ms 15_000
   @sweep_interval_ms :timer.minutes(5)
 
