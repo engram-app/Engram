@@ -277,7 +277,7 @@ defmodule Engram.Rebuild do
   optimization). Unreadable health counts as behind. Only while `on`: off
   and `dry_run` never gate, and never call Qdrant here.
   """
-  @spec gate() :: :ok | {:snooze, pos_integer()}
+  @spec gate() :: :ok | {:snooze, 30}
   def gate do
     cond do
       mode() != :on -> :ok
