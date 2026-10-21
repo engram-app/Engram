@@ -216,7 +216,14 @@ defmodule Engram.Indexing do
 
         case commit_index(
                prepared,
-               &run_in_commit(note, opts, &1, prepared.dense?, prepared.index_tier)
+               &run_in_commit(
+                 note,
+                 opts,
+                 &1,
+                 prepared.dense?,
+                 prepared.index_tier,
+                 prepared.held_model
+               )
              ) do
           {:ok, count} ->
             forget_retained(prepared.retain)
@@ -324,7 +331,8 @@ defmodule Engram.Indexing do
          okf_healed?: okf_healed?,
          write_first: regroup?(note, plan),
          retain: if(dense? and texts != [], do: {retained_key(note, texts), vectors}),
-         chunk_count: chunk_count
+         chunk_count: chunk_count,
+         held_model: held_model(plan.entries, dense?)
        })}
     else
       {:error, :no_dek} = err ->
@@ -990,10 +998,19 @@ defmodule Engram.Indexing do
 
   # Re-entrant inside commit_index/2's chunk transaction; on the purge path it
   # opens one of its own.
-  defp run_in_commit(note, opts, chunk_count, dense?, index_tier) do
+  # A 4-arity `in_commit` also gets the pass's `held_model/2`.
+  defp run_in_commit(note, opts, chunk_count, dense?, index_tier, held_model \\ nil) do
     case Keyword.get(opts, :in_commit) do
-      nil -> :ok
-      fun -> Repo.with_tenant!(note.user_id, fn -> fun.(chunk_count, dense?, index_tier) end)
+      nil ->
+        :ok
+
+      fun when is_function(fun, 4) ->
+        Repo.with_tenant!(note.user_id, fn ->
+          fun.(chunk_count, dense?, index_tier, held_model)
+        end)
+
+      fun ->
+        Repo.with_tenant!(note.user_id, fn -> fun.(chunk_count, dense?, index_tier) end)
     end
   end
 
@@ -2542,14 +2559,19 @@ defmodule Engram.Indexing do
         fn {_hmac, point_id, tokens} -> {point_id, tokens} end
       )
 
+    models = [nil | reuse_models()]
+
     {entries, _left} =
       Enum.map_reduce(Enum.zip(chunks, alts), by_hmac, fn {chunk, others}, acc ->
-        case Enum.find([chunk.context_hmac | others], &match?([_ | _], Map.get(acc, &1))) do
+        candidates = Enum.zip([chunk.context_hmac | others], models)
+
+        case Enum.find(candidates, fn {hmac, _} -> match?([_ | _], Map.get(acc, hmac)) end) do
           nil ->
             {{:embed, chunk}, acc}
 
-          hmac ->
+          {hmac, model} ->
             [{point_id, tokens} | rest] = Map.fetch!(acc, hmac)
+            chunk = if model, do: Map.put(chunk, :vector_model, model), else: chunk
             {{:reuse, %{chunk | context_hmac: hmac}, point_id, tokens}, Map.put(acc, hmac, rest)}
         end
       end)
@@ -3200,6 +3222,30 @@ defmodule Engram.Indexing do
 
   defp entry_chunk({:reuse, chunk, _point_id, _tokens}), do: chunk
   defp entry_chunk({:embed, chunk}), do: chunk
+
+  # The cheapest model among the dense vectors the pass leaves stored, for
+  # `notes.embed_model`: a Free note that kept every voyage-4-large vector
+  # stays stamped large, so a later upgrade re-embeds nothing. A kept or
+  # copied vector names its model (`:vector_model`, set by `plan_chunks/4`
+  # on a higher-tier match); anything else (fresh, cached, mean-pooled)
+  # counts as the pass model, the conservative side. nil off per-plan or
+  # with no dense vector: the caller's model applies.
+  defp held_model(entries, dense?) do
+    held =
+      for entry <- entries,
+          dense_chunk?(entry_chunk(entry), dense?),
+          do: vector_model(entry)
+
+    if EmbedModels.per_plan?() and held != [], do: Enum.min_by(held, &EmbedModels.price/1)
+  end
+
+  defp vector_model({:reuse, chunk, _point_id, _tokens}),
+    do: Map.get(chunk, :vector_model) || pass_model()
+
+  defp vector_model({:embed, %{vector: _} = chunk}),
+    do: Map.get(chunk, :vector_model) || pass_model()
+
+  defp vector_model({:embed, _chunk}), do: pass_model()
 
   # Encrypt-first: build payloads + encrypt in memory BEFORE any mutation.
   # If any chunk's encryption fails, no Postgres row or Qdrant point is touched
