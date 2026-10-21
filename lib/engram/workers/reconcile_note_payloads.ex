@@ -262,7 +262,10 @@ defmodule Engram.Workers.ReconcileNotePayloads do
             do: dynamic([n], n.content_hash == ^note.content_hash),
             else: dynamic([n], is_nil(n.content_hash))
 
-        from(n in Note, where: n.id == ^note.id and is_nil(n.payload_hash), where: ^same_content)
+        from(n in Note,
+          where: n.kind == "note" and n.id == ^note.id and is_nil(n.payload_hash),
+          where: ^same_content
+        )
         |> Repo.update_all(set: [payload_hash: @undecryptable])
       end)
 
