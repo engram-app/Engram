@@ -278,8 +278,13 @@ defmodule Engram.Workers.DataMigrationsRunnerTest do
   end
 
   test "perform runs every registered migration" do
-    # KeyAliases runs only once the v5 payload format is on.
-    Engram.ServiceConfig.put_override(:v5_payload_format, true)
+    # KeyAliases runs only while the v5 rebuild is on.
+    Engram.ServiceConfig.put_override(:write_v5_layout, true)
+    Engram.ServiceConfig.put_override(:index_rebuild, "on")
+    # `on` needs an open ledger (no budget reads as halted).
+    Engram.Cache.clear_local(:rebuild)
+    Repo.query!("DELETE FROM rebuild_ledger")
+    Engram.Rebuild.set_budget(1_000_000)
     assert :ok = perform_job(DataMigrationsRunner, %{})
 
     # Every pass leaves a ledger row: mark_done/2 on :done, note_open/2 on :more.

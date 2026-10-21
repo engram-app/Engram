@@ -97,13 +97,23 @@ defmodule Engram.Workers.HealKeyAliasesTest do
   end
 
   # The plain deploy: every row is unstamped, and a heal re-chunks the note
-  # under the unstamped v5 chunker (paid Voyage). Until v5 go time the v5
-  # rebuild owns that re-read, so the migration must not run at all.
-  test "the migration is off until the v5 payload format is on", ctx do
+  # under the unstamped v5 chunker (paid Voyage). It runs only while the v5
+  # rebuild is `on`, where the ledger meters what it spends; the payload
+  # format alone (it can be flipped first) is not enough.
+  test "the migration is off until the v5 rebuild is on", ctx do
     _ = indexed(ctx, "---\n種類: 会議\n---\n# A\n", nil)
 
     refute Migration.enabled?()
     Engram.ServiceConfig.put_override(:v5_payload_format, true)
+    refute Migration.enabled?()
+
+    Engram.ServiceConfig.put_override(:write_v5_layout, true)
+    Engram.ServiceConfig.put_override(:index_rebuild, "on")
+    # `on` needs an open ledger (no budget reads as halted).
+    Engram.Cache.clear_local(:rebuild)
+    Repo.query!("DELETE FROM rebuild_ledger")
+    Engram.Rebuild.set_budget(1_000_000)
+    assert Engram.Rebuild.mode() == :on
     assert Migration.enabled?()
   end
 

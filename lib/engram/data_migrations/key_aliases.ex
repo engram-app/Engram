@@ -6,10 +6,13 @@ defmodule Engram.DataMigrations.KeyAliases do
   note stamped with another version. The name carries the version, so a
   regenerated table is a new, not-done migration.
 
-  Off (skipped by the runner, never marked done) until the v5 payload format
-  is on: before that every row is unstamped, a heal re-chunks the note under
-  the unstamped v5 chunker and pays Voyage, and the v5 rebuild re-reads
-  every note anyway (`EmbedNote` stamps the version on a full pass).
+  Off (skipped by the runner, never marked done) unless the v5 rebuild is
+  `on` (`Engram.Rebuild.mode/0`), where the ledger meters what its
+  re-indexes spend. Before that every row is unstamped and a heal re-chunks
+  the note under the unstamped v5 chunker and pays Voyage; the v5 rebuild
+  re-reads every note anyway (`EmbedNote` stamps the version on a full
+  pass). The payload format flag alone can be flipped first, so it is not
+  the gate. A later regenerated table heals in the next `on` window.
   """
   @behaviour Engram.DataMigration
 
@@ -23,7 +26,7 @@ defmodule Engram.DataMigrations.KeyAliases do
   def version, do: 1
 
   @impl true
-  def enabled?, do: Engram.Vector.Qdrant.v5_payload_format?()
+  def enabled?, do: Engram.Rebuild.mode() == :on
 
   @impl true
   def run_pass do
