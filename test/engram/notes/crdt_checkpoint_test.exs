@@ -537,7 +537,10 @@ defmodule Engram.Notes.CrdtCheckpointTest do
     {:ok, stored_doc} = CrdtBridge.doc_from_state(stored)
     assert byte_size(stored) >= 500_000
     assert CrdtBridge.client_count(stored_doc) >= 1_000
-    assert Yex.encode_state_vector!(stored_doc) == Yex.encode_state_vector!(doc)
+    # Same lineage both ways: neither holds an op the other lacks. (State-vector
+    # bytes are hash-map ordered, so compare by diff, not by encoding.)
+    assert {:ok, <<0, 0>>} = Yex.encode_state_as_update(stored_doc, Yex.encode_state_vector!(doc))
+    assert {:ok, <<0, 0>>} = Yex.encode_state_as_update(doc, Yex.encode_state_vector!(stored_doc))
 
     # The room keeps editing the doc it already holds.
     :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), body <> "BETA")

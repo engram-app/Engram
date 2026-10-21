@@ -107,7 +107,7 @@ Do not re-derive these. Both obvious directions have holes:
 | `crdt_checkpoint_timer.ex` | live room keeps editing the old lineage |
 | `crdt_persistence.ex` (unbind) | watermark prune lets tail rows written *during* the encode survive and replay onto the new lineage at next bind |
 | `workers/checkpoint_note.ex` | overflow path from unbind; a room may have re-bound before the job runs |
-| `crdt_channel.ex` (genesis) | (stale as of 2026-10-21: genesis now applies the client's own frame and folds row + tail; it mints no server lineage) |
+| `crdt_channel.ex` (genesis) | (no longer applies: genesis now applies the client's own frame and folds row + tail; it mints no server lineage) |
 
 Plus a rebind race with no guard: a client binding a new room mid-unbind loads
 the PRE-flatten state, then the unbind commits the flattened one. `snapshot_fence/2`
