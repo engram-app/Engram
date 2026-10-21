@@ -27,6 +27,7 @@ defmodule Engram.Notes do
     Frontmatter,
     Helpers,
     Identity,
+    Keys,
     Note,
     OkfFields,
     PathSanitizer,
@@ -39,6 +40,7 @@ defmodule Engram.Notes do
   alias Engram.Sync.Broadcast
   alias Engram.Telemetry
   alias Engram.UsageMeters
+  alias Engram.Vaults.Vault
 
   alias Engram.Workers.{
     DeleteNoteIndex,
@@ -472,7 +474,11 @@ defmodule Engram.Notes do
   end
 
   defp folder_markers_by_hmac_query(user, vault, hmacs) do
-    from(n in scoped(user, vault), where: n.kind == "folder" and n.folder_hmac in ^hmacs)
+    from(n in scoped(user, vault),
+      where: n.kind == "folder",
+      where: ^Keys.in_any(:folder, hmacs),
+      where: ^Keys.kind_match(:folder)
+    )
   end
 
   # Shared by the single and batch creates. `seq_fun` is only called when a
@@ -514,7 +520,9 @@ defmodule Engram.Notes do
     row =
       Repo.one(
         from(n in scoped(user, vault),
-          where: n.kind == "folder" and n.folder_hmac == ^folder_hmac
+          where: n.kind == "folder",
+          where: ^Keys.eq(:folder, folder_hmac),
+          where: ^Keys.kind_match(:folder)
         )
       )
 
@@ -3392,7 +3400,7 @@ defmodule Engram.Notes do
     with {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       hmac = Crypto.hmac_field(filter_key, path)
 
-      {:ok, from(n in live_notes(user, vault), where: n.path_hmac == ^hmac)}
+      {:ok, from(n in live_notes(user, vault), where: ^Keys.eq(:path, hmac))}
     end
   end
 
@@ -3404,7 +3412,7 @@ defmodule Engram.Notes do
   # that CHECK, so the kind filter drops nothing a path lookup could match.
   # NotesPathIndexPlanTest pins the plans.
   defp live_notes(user, vault) do
-    from(n in scoped_live(user, vault), where: n.kind == "note")
+    from(n in scoped_live(user, vault), where: n.kind == "note", where: ^Keys.kind_match(:note))
   end
 
   @doc false
@@ -3425,7 +3433,7 @@ defmodule Engram.Notes do
 
         query =
           from(n in live_notes(user, vault),
-            where: n.path_hmac in ^hmacs,
+            where: ^Keys.in_any(:path, hmacs),
             select: {n.path_hmac, n.id}
           )
 
@@ -3455,8 +3463,9 @@ defmodule Engram.Notes do
 
         Repo.exists?(
           from(n in scoped(user, vault_id),
+            where: ^Keys.eq(:path, hmac),
             where:
-              n.path_hmac == ^hmac and n.kind == "note" and not is_nil(n.deleted_at) and
+              n.kind == "note" and not is_nil(n.deleted_at) and
                 n.deleted_at >= ^cutoff and n.content_hash == ^content_hash
           )
         )
@@ -3500,16 +3509,24 @@ defmodule Engram.Notes do
     query =
       from(n in Note,
         # `kind` for the partial path index; see live_notes/2.
-        where:
-          n.user_id == ^user.id and n.path_hmac in ^hmacs and is_nil(n.deleted_at) and
-            n.kind == "note",
+        where: n.user_id == ^user.id and is_nil(n.deleted_at) and n.kind == "note",
+        where: ^Keys.in_any(:path, hmacs),
+        where: ^Keys.kind_match(:note),
         select: {n.path_hmac, n.id}
       )
 
+    # Every path index leads with vault_id, so an all-vaults lookup names the
+    # user's vaults rather than scanning their notes.
     query =
       case vault do
-        %{id: vault_id} -> from(n in query, where: n.vault_id == ^vault_id)
-        _ -> query
+        %{id: vault_id} ->
+          from(n in query, where: n.vault_id == ^vault_id)
+
+        _ ->
+          from(n in query,
+            where:
+              n.vault_id in subquery(from(v in Vault, where: v.user_id == ^user.id, select: v.id))
+          )
       end
 
     rows =
@@ -5085,11 +5102,15 @@ defmodule Engram.Notes do
       {:ok, _filter_key} ->
         {:ok, dek} = Crypto.get_dek(user)
 
+        # notes_type (vault_id, type_id) is partial on `type_id IS NOT NULL`:
+        # only typed notes (about 5%) are read.
+        type_col = Keys.col(:type)
+
         raw = fn ->
           Repo.all(
             from(n in scoped_live(user, vault),
-              where: not is_nil(n.type_hmac) and not is_nil(n.type_ciphertext),
-              distinct: [asc: n.type_hmac],
+              where: not is_nil(field(n, ^type_col)) and not is_nil(n.type_ciphertext),
+              distinct: [asc: field(n, ^type_col)],
               select: {n.id, n.dek_version, n.type_ciphertext, n.type_nonce}
             )
           )
@@ -5642,7 +5663,8 @@ defmodule Engram.Notes do
           Repo.with_tenant(user.id, fn ->
             Repo.all(
               from(n in scoped_live(user, vault),
-                where: n.kind == "note" and n.folder_hmac == ^target_hmac,
+                where: n.kind == "note",
+                where: ^Keys.eq(:folder, target_hmac),
                 order_by: [asc: n.id],
                 select: struct(n, @note_meta_fields)
               )
@@ -5773,7 +5795,7 @@ defmodule Engram.Notes do
     # Unwrap once so the caller can branch on a plain boolean.
     {:ok, exists?} =
       Repo.with_tenant(user.id, fn ->
-        Repo.exists?(from(n in scoped_live(user, vault), where: n.folder_hmac == ^target_hmac))
+        Repo.exists?(from(n in scoped_live(user, vault), where: ^Keys.eq(:folder, target_hmac)))
       end)
 
     exists?
@@ -5798,7 +5820,7 @@ defmodule Engram.Notes do
       Repo.with_tenant!(user.id, fn ->
         Repo.all(
           from(n in scoped_live(user, vault),
-            where: n.folder_hmac in ^hmacs,
+            where: ^Keys.in_any(:folder, hmacs),
             select: struct(n, @note_meta_fields)
           )
         )
@@ -6501,6 +6523,7 @@ defmodule Engram.Notes do
 
     from(n in Note,
       where: n.id in ^ids and n.folder_hmac in ^hmacs and is_nil(n.deleted_at),
+      # By primary key: the hmac is a fence on the row's folder, not a lookup.
       select: n.id
     )
   end

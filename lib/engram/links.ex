@@ -46,6 +46,7 @@ defmodule Engram.Links do
   alias Engram.Crypto.Envelope
   alias Engram.Links.NoteLink
   alias Engram.Logger.DecryptFailure
+  alias Engram.Notes.Keys
   alias Engram.Notes.Note
   alias Engram.Repo
 
@@ -104,6 +105,24 @@ defmodule Engram.Links do
   defmacrop keys_current(stamp, nonce) do
     quote do: fragment(unquote(@keys_current_sql), unquote(stamp), unquote(nonce))
   end
+
+  # The same test on wave 3's `notes.link_keys_v` (the trigger's smallint
+  # reading of the stamp, major * 100 + minor), inlined for the same reason:
+  # `notes_link_keys_stale` carries this literal.
+  @link_keys_code @link_keys_version
+                  |> String.split(".")
+                  |> then(fn [major, minor | _] ->
+                    String.to_integer(major) * 100 + String.to_integer(minor)
+                  end)
+  @keys_v_stale_sql "? IS DISTINCT FROM #{@link_keys_code}"
+  @keys_v_current_sql "? = #{@link_keys_code}"
+
+  defmacrop keys_v_stale(v), do: quote(do: fragment(unquote(@keys_v_stale_sql), unquote(v)))
+  defmacrop keys_v_current(v), do: quote(do: fragment(unquote(@keys_v_current_sql), unquote(v)))
+
+  @doc false
+  # The Unicode version code `notes.link_keys_v` holds for current keys.
+  def link_keys_code, do: @link_keys_code
 
   @doc """
   The link resolution keys a note or attachment row stores for `path`:
@@ -491,7 +510,9 @@ defmodule Engram.Links do
     from(n in Note,
       where:
         n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
-          n.basename_hmac in ^hmacs and is_nil(n.deleted_at),
+          is_nil(n.deleted_at),
+      where: ^Keys.in_any(:basename, hmacs),
+      where: ^Keys.kind_match(:note),
       select: %{
         id: n.id,
         basename_hmac: n.basename_hmac,
@@ -640,7 +661,9 @@ defmodule Engram.Links do
         from(n in Note,
           where:
             n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
-              n.basename_hmac == ^hmac and is_nil(n.deleted_at),
+              is_nil(n.deleted_at),
+          where: ^Keys.eq(:basename, hmac),
+          where: ^Keys.kind_match(:note),
           select: count(n.id)
         ),
         skip_tenant_check: true
@@ -1013,7 +1036,77 @@ defmodule Engram.Links do
   #
   # `table` tags the row (1 notes, 2 attachments). Runs inside the caller's
   # tenant transaction.
-  defp candidate_queries(user_id, vault_id, keys, table) do
+  defp candidate_queries(user_id, vault_id, keys, :notes) do
+    if Keys.ids?(),
+      do: note_candidate_queries(user_id, vault_id, keys),
+      else: hmac_candidate_queries(user_id, vault_id, keys, :notes)
+  end
+
+  defp candidate_queries(user_id, vault_id, keys, :attachments),
+    do: hmac_candidate_queries(user_id, vault_id, keys, :attachments)
+
+  # The three parts on wave 3's notes keys (`notes_link_keys_stale`,
+  # `notes_path_ci`, `notes_basename`): 16-byte ids, the int2 key version,
+  # and the shortest length index-only from `notes_basename`. Same rows as
+  # the HMAC form; the projection keeps `basename_hmac` for the grouping.
+  defp note_candidate_queries(user_id, vault_id, keys) do
+    to_ids = &Enum.map(&1, fn hmac -> Keys.id(hmac) end)
+
+    {hmacs, path_keys, bare} =
+      {to_ids.(keys.hmacs), to_ids.(keys.path_keys), to_ids.(keys.bare_hmacs)}
+
+    live =
+      from(c in Note,
+        where:
+          c.user_id == ^user_id and c.vault_id == ^vault_id and is_nil(c.deleted_at) and
+            c.kind == "note" and not c.is_folder,
+        select: %{
+          table: fragment("?::integer", 1),
+          id: c.id,
+          basename_hmac: c.basename_hmac,
+          path_ciphertext: c.path_ciphertext,
+          path_nonce: c.path_nonce,
+          dek_version: c.dek_version
+        }
+      )
+
+    stale =
+      where(
+        live,
+        [c],
+        c.basename_id in type(^hmacs, {:array, Ecto.UUID}) and not is_nil(c.basename_id) and
+          keys_v_stale(c.link_keys_v)
+      )
+
+    pathed =
+      where(
+        live,
+        [c],
+        c.path_ci_id in type(^path_keys, {:array, Ecto.UUID}) and
+          c.basename_id in type(^hmacs, {:array, Ecto.UUID}) and keys_v_current(c.link_keys_v)
+      )
+
+    shortest_len =
+      from(m in Note,
+        where:
+          m.user_id == ^user_id and m.vault_id == ^vault_id and
+            m.basename_id in type(^bare, {:array, Ecto.UUID}) and is_nil(m.deleted_at) and
+            m.kind == "note" and not m.is_folder and keys_v_current(m.link_keys_v),
+        group_by: m.basename_id,
+        select: %{basename_id: m.basename_id, len: min(m.path_len)}
+      )
+
+    shortest =
+      join(live, :inner, [c], s in subquery(shortest_len),
+        on:
+          c.basename_id == s.basename_id and c.path_len == s.len and
+            keys_v_current(c.link_keys_v)
+      )
+
+    [stale, pathed, shortest]
+  end
+
+  defp hmac_candidate_queries(user_id, vault_id, keys, table) do
     {schema, tag} = if table == :notes, do: {Note, 1}, else: {Attachment, 2}
 
     live =
