@@ -86,6 +86,43 @@ defmodule Engram.ReleaseTest do
     end
   end
 
+  # #2128: web and worker boot migrators ran one CONCURRENTLY migration at
+  # the same time and deadlocked. The lock must make a second migrator wait.
+  describe "with_migration_lock/3" do
+    test "a second caller waits until the first one finishes" do
+      parent = self()
+
+      first =
+        Task.async(fn ->
+          Release.with_migration_lock(Repo.config(), fn ->
+            send(parent, :first_in)
+            receive do: (:release -> :first_done)
+          end)
+        end)
+
+      assert_receive :first_in, 5_000
+
+      second =
+        Task.async(fn ->
+          Release.with_migration_lock(Repo.config(), fn -> send(parent, :second_in) end, 50)
+        end)
+
+      refute_receive :second_in, 300
+      send(first.pid, :release)
+      assert Task.await(first) == :first_done
+      assert_receive :second_in, 5_000
+      Task.await(second)
+    end
+
+    test "releases the lock when the function raises" do
+      assert_raise RuntimeError, fn ->
+        Release.with_migration_lock(Repo.config(), fn -> raise "boom" end)
+      end
+
+      assert Release.with_migration_lock(Repo.config(), fn -> :ok end, 50) == :ok
+    end
+  end
+
   describe "reset_baseline/0" do
     # It replays every migration when it fires, so it must open the migrator's
     # session like migrate/0 does: the app Repo's lock_timeout would fail a
