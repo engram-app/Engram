@@ -2703,11 +2703,27 @@ export function useBatchMoveAttachments() {
 		},
 		// Batch moves are fire-and-forget (.mutate, no caller .catch) — surface
 		// failures here, matching the note/folder batch hooks.
-		onError: (err, _vars, ctx) => {
+		onError: (err, { paths, target_folder }, ctx) => {
 			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
-			if (!joinRefused(err, t)) {
-				notify.error(t("Batch move failed."));
+			if (joinRefused(err, t)) {
+				return;
 			}
+			// 409: a file of that name is already in the target. The server refuses
+			// the whole batch (nothing moves), like Obsidian's "Destination file
+			// already exists", so say which name when there is only one.
+			if (err instanceof ApiError && err.status === 409) {
+				const [only] = paths;
+				notify.error(
+					paths.length === 1 && only
+						? t("{folder} already has a file named {name}.", {
+								folder: target_folder || t("Vault root"),
+								name: baseOf(only),
+							})
+						: t("Nothing was moved: a file with the same name is already there."),
+				);
+				return;
+			}
+			notify.error(t("Batch move failed."));
 		},
 	});
 }

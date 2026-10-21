@@ -2334,6 +2334,32 @@ describe("optimistic attachment rename / move / delete", () => {
 	});
 });
 
+describe("moving onto a taken name", () => {
+	it("names the file and folder when one file is refused", async () => {
+		post.mockRejectedValue(new ApiError(409, "conflict"));
+		const { result } = renderHook(() => useBatchMoveAttachments(), { wrapper });
+		await act(async () => {
+			await result.current
+				.mutateAsync({ paths: ["a/song.flac"], target_folder: "music" })
+				.catch(() => undefined);
+		});
+		expect(toast.error).toHaveBeenCalledWith("music already has a file named song.flac.");
+	});
+
+	it("says a name is taken when a batch is refused", async () => {
+		post.mockRejectedValue(new ApiError(409, "conflict"));
+		const { result } = renderHook(() => useBatchMoveAttachments(), { wrapper });
+		await act(async () => {
+			await result.current
+				.mutateAsync({ paths: ["a.png", "b.png"], target_folder: "" })
+				.catch(() => undefined);
+		});
+		expect(toast.error).toHaveBeenCalledWith(
+			"Nothing was moved: a file with the same name is already there.",
+		);
+	});
+});
+
 describe("useBatchMoveAttachments", () => {
 	it("POSTs paths + target_folder with UUID X-Idempotency-Key header", async () => {
 		post.mockResolvedValue({ moved: 2 });
