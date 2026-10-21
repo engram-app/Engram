@@ -188,6 +188,11 @@ defmodule Engram.Logger.LogCallComplianceTest do
   # has to be put in scope or written down here with a reason. That turns an
   # omission into a decision.
   @out_of_scope [
+    # The v5 rebuild switch, manifest and ledger: token counts, point counts
+    # and avgdl per note/vault id. No content, path, title or query, no
+    # Logger call. (Its dry-run worker, which decrypts notes, is in workers/.)
+    "lib/engram/rebuild.ex",
+    "lib/engram/rebuild/",
     # Pure function from conn assigns to an actor string ("api:<key id>" or
     # "sync"). No Logger call, never touches content, path, title or a query.
     "lib/engram_web/write_actor.ex",

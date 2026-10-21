@@ -6,6 +6,11 @@ defmodule Engram.DataMigrations.IndexVersions do
   content-current note is left on an old version, so the reconcile cron can
   stop scanning for them. The name carries the three versions: bumping any
   of them is a new, not-done migration.
+
+  The versions are `Engram.Rebuild.target_versions/0`: the build's while
+  `INDEX_REBUILD=on`, else the pinned pre-v5 versions (today's build, so
+  `off` changes nothing). A stamp bump past the pins renames nothing and
+  rebuilds nothing until the switch is `on`, which reopens the migration.
   """
   @behaviour Engram.DataMigration
 
@@ -13,16 +18,16 @@ defmodule Engram.DataMigrations.IndexVersions do
 
   alias Engram.DataMigrations
   alias Engram.Indexing
-  alias Engram.KeywordIndex
   alias Engram.Notes.Note
-  alias Engram.Parsers.Markdown
+  alias Engram.Rebuild
   alias Engram.Vaults.Vault
 
   @impl true
-  def name,
-    do:
-      "index_versions:chunker=#{Markdown.chunker_version()},keyword=#{KeywordIndex.version()}," <>
-        "model=#{Indexing.embed_model() || "none"}"
+  def name do
+    {chunker, keyword} = Rebuild.target_versions()
+
+    "index_versions:chunker=#{chunker},keyword=#{keyword},model=#{Indexing.embed_model() || "none"}"
+  end
 
   @impl true
   def version, do: 1
@@ -36,9 +41,11 @@ defmodule Engram.DataMigrations.IndexVersions do
   # stale note inside a cooldown still needs its rebuild.
   @impl true
   def run_pass do
+    versions = Rebuild.target_versions()
+
     stale =
       content_current_notes()
-      |> where(^dynamic([n], ^stale_dynamic() or ^keyword_stale_dynamic()))
+      |> where(^dynamic([n], ^stale_dynamic(versions) or ^keyword_stale_dynamic(versions)))
       |> select(1)
       |> DataMigrations.any_row?()
 
@@ -66,9 +73,9 @@ defmodule Engram.DataMigrations.IndexVersions do
   @doc """
   Notes on an older chunker, or with dense vectors from another embed model.
   A chunker newer than this build counts as current (forward compatible).
+  `{chunker, keyword}` defaults to `Rebuild.target_versions/0`.
   """
-  def stale_dynamic do
-    chunker = Markdown.chunker_version()
+  def stale_dynamic({chunker, _keyword} \\ Rebuild.target_versions()) do
     # `<`, not `!=`: a stamp from a NEWER release is current. A rollback would
     # otherwise rebuild every note a newer chunker indexed, and the roll
     # forward would rebuild them all again.
@@ -96,9 +103,9 @@ defmodule Engram.DataMigrations.IndexVersions do
   @doc """
   Notes whose keyword vectors predate `KeywordIndex.version/0`. A newer stamp
   counts as current, for the same rollback reason as the chunker.
+  `{chunker, keyword}` defaults to `Rebuild.target_versions/0`.
   """
-  def keyword_stale_dynamic do
-    version = KeywordIndex.version()
+  def keyword_stale_dynamic({_chunker, version} \\ Rebuild.target_versions()) do
     dynamic([n], is_nil(n.keyword_version) or n.keyword_version < ^version)
   end
 end

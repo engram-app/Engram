@@ -156,6 +156,8 @@ defmodule Engram.Workers.ReencodeEnvelopes do
       nonce: :update_nonce,
       aad: {:vault_index_update_log, :update, :id}
     }
+    # No chunk display envelope: it is written per index pass under the
+    # policy in force, and only for notes over the display threshold.
   ]
 
   @impl Oban.Worker

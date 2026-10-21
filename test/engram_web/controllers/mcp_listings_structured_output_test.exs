@@ -13,7 +13,7 @@ defmodule EngramWeb.McpListingsStructuredOutputTest do
   alias Engram.MCP.Handlers
   alias Engram.MCP.Tools
 
-  @converted ~w(search_notes list_folders list_folder list_tags)
+  @converted ~w(search_notes list_folders list_folder list_tags list_fields)
 
   setup do
     user = insert(:user)
@@ -55,6 +55,41 @@ defmodule EngramWeb.McpListingsStructuredOutputTest do
       assert {:ok, _text, %{"tags" => tags}} = Handlers.handle("list_tags", user, vault, %{})
       assert is_list(tags)
       for t <- tags, do: assert(is_binary(t["name"]) and is_integer(t["count"]))
+    end
+  end
+
+  describe "list_fields" do
+    test "empty branch still carries the key", %{user: user, vault: vault} do
+      assert {:ok, text, %{"fields" => []}} = Handlers.handle("list_fields", user, vault, %{})
+      assert text =~ "No fields"
+    end
+
+    test "populated branch: names, kinds, counts, ranges and values", %{user: user, vault: vault} do
+      Engram.FieldCatalogHelpers.write_indexed!(
+        user,
+        vault,
+        "a.md",
+        "---\nstatus: draft\npriority: 3\ndue: 2026-11-01\n---\nbody\n"
+      )
+
+      assert {:ok, text, %{"fields" => fields}} =
+               Handlers.handle("list_fields", user, vault, %{})
+
+      by_name = Map.new(fields, &{&1["name"], &1})
+
+      assert %{
+               "kinds" => ["string"],
+               "note_count" => 1,
+               "list" => false,
+               "values" => [%{"value" => "draft", "count" => 1}]
+             } = by_name["status"]
+
+      assert %{"number_range" => %{"min" => 3.0, "max" => 3.0}} = by_name["priority"]
+      assert %{"date_range" => %{"min" => "2026-11-01"}} = by_name["due"]
+      assert text =~ "status"
+      assert text =~ "draft"
+      # Tells the agent how to use what it found.
+      assert text =~ "search_notes"
     end
   end
 

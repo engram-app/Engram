@@ -35,7 +35,6 @@ defmodule Engram.Workers.RefreshKeywordVectors do
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
-  alias Engram.Parsers.Markdown
   alias Engram.Repo
   alias Engram.Vector.Qdrant
   alias Engram.Workers.BackgroundPriority
@@ -84,7 +83,8 @@ defmodule Engram.Workers.RefreshKeywordVectors do
 
   # Only an OLDER (or missing) stamp is the chunker rebuild's. A newer one,
   # after a rollback, is left alone by the rebuild, so it is ours to report.
-  defp stale_chunker?(v), do: is_nil(v) or v < Markdown.chunker_version()
+  # Against `Rebuild.target_versions/0`, as every version check.
+  defp stale_chunker?(v), do: is_nil(v) or v < elem(Engram.Rebuild.target_versions(), 0)
 
   # Every point now carries the current keyword encoding, so the note leaves
   # ReconcileEmbeddings' keyword sweep. Guarded on the content it read: an edit

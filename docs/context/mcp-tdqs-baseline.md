@@ -1,6 +1,6 @@
 # MCP TDQS lint gate and hosted score
 
-_Last verified: 2026-09-26 (mcp-tdqs@0.2.0, `mcp-tools.json` 17 tools, spec 1.3; issue #1767)_
+_Last verified: 2026-10-20 (mcp-tdqs@0.2.0, `mcp-tools.json` 20 tools, spec 1.3; issue #1767)_
 
 ## What This Is
 
@@ -16,7 +16,7 @@ TDQS lint job goes red.
 npx -y mcp-tdqs@0.2.0 lint --file mcp-tools.json --server-name engram --fail-on warning
 ```
 
-Recorded baseline (2026-09-26, 17 tools, specification 1.3):
+Recorded baseline (2026-10-20, 20 tools, specification 1.3):
 
 ```
 0 errors, 0 warnings, 0 notes

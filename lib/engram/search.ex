@@ -529,10 +529,10 @@ defmodule Engram.Search do
     group? = Keyword.get(opts, :group_by_note, false)
     profile = SearchProfile.resolve(user)
     # Caller `:diversity` opt overrides the profile default; nil → profile
-    # default. Clamped to [0.0, 1.0]. diversity > 0 ⇒ MMR pass ⇒ we need the
-    # dense vectors back from Qdrant.
+    # default. Clamped to [0.0, 1.0]. diversity > 0 ⇒ MMR pass ⇒ the pool
+    # query brings the dense vectors back with it (one call).
     diversity = clamp_diversity(Keyword.get(opts, :diversity), profile.diversity)
-    need_vectors? = diversity > 0.0
+    diversify? = diversity > 0.0
 
     # Over-fetch a candidate pool whenever we'll rerank (per-plan) OR diversify,
     # so MMR has more than `limit` to choose from. `candidate_pool` defaults to
@@ -544,11 +544,13 @@ defmodule Engram.Search do
     # at diversity 0, where it must not be starved down to `limit` chunks).
     # A similar_to query is `{:similar, ids}`, not text: nothing to rerank against.
     rerank_for_user? = reranker_active?() and profile.reranker and is_binary(query)
-    fetch_limit = if group? or rerank_for_user? or need_vectors?, do: pool, else: limit
+    fetch_limit = if group? or rerank_for_user? or diversify?, do: pool, else: limit
     # Keep the whole pool through the reranker when diversifying or grouping so
     # MMR / collapse can see it; otherwise the reranker cuts straight to `limit`
     # (unchanged chunk-path behavior).
-    rerank_keep = if group? or need_vectors?, do: pool, else: limit
+    rerank_keep = if group? or diversify?, do: pool, else: limit
+
+    read? = chunk_text_read?()
 
     case translate_phase_b_filters(user, folder, tags, type) do
       {:ok, phase_b_kw} ->
@@ -558,43 +560,20 @@ defmodule Engram.Search do
           |> Keyword.merge(phase_b_kw)
           |> Keyword.merge(date_bounds)
           |> Keyword.put(:attr_filters, Keyword.get(opts, :attr_filters, []))
-          |> Keyword.put(:with_vector, need_vectors?)
+          |> Keyword.put(:with_vector, diversify?)
           |> Keyword.put(:full_precision, profile.full_precision)
+          |> Keyword.put(:chunk_text_read, read?)
           |> Keyword.put(:tenant_idf, mode in [:keyword, :hybrid] and tenant_idf?(user))
 
         with {:ok, candidates} <- run_legs(mode, user, query, search_opts, profile),
+             {:ok, {candidates, hits}} <- postgres_hits(candidates, user, read?),
+             {:ok, candidates} <- payload_fallback(candidates, hits, user),
              vaults_by_id = load_candidate_vaults(user, vault, candidates),
-             {:ok, decrypted} <-
-               Engram.Crypto.decrypt_qdrant_candidates(
-                 candidates,
-                 user,
-                 vaults_by_id,
-                 collection()
-               ) do
+             {:ok, decrypted} <- decrypt_candidates(candidates, user, vaults_by_id, hits) do
           rerank_module = if rerank_for_user?, do: reranker(), else: Engram.Rerankers.None
 
           with {:ok, ranked} <- rerank_module.rerank(query, decrypted, rerank_keep) do
-            if group? do
-              # Rehydrate the WHOLE pool BEFORE grouping — collapse_to_notes keys
-              # on the decrypted source_path, so it must be filled in first. Then
-              # diversify at note granularity.
-              notes = collapse_to_notes(rehydrate_display_fields(ranked, user))
-
-              final =
-                if need_vectors? do
-                  MMR.rerank(notes, limit, diversity)
-                else
-                  notes |> Enum.sort_by(& &1.score, :desc) |> Enum.take(limit)
-                end
-
-              {:ok, final}
-            else
-              # Rehydrate BEFORE the MMR pass so a soft-deleted hit is dropped
-              # while the pool can still backfill its slot. Dropping after left
-              # a page short of `limit` (#1608).
-              live = rehydrate_display_fields(ranked, user)
-              {:ok, MMR.rerank(live, limit, diversity)}
-            end
+            ranked |> rehydrate_display_fields(user, hits) |> diversify(group?, limit, diversity)
           end
         end
 
@@ -606,6 +585,20 @@ defmodule Engram.Search do
         {:ok, []}
     end
   end
+
+  # The page from the rehydrated pool. Rehydrate comes first: a soft-deleted
+  # hit is dropped while the pool can still backfill its slot (dropping after
+  # left a page short of `limit`, #1608), and collapse_to_notes keys on the
+  # decrypted source_path. Grouped, diversity runs at note granularity.
+  defp diversify(live, true = _group?, limit, diversity) do
+    notes = collapse_to_notes(live)
+
+    if diversity > 0.0,
+      do: {:ok, MMR.rerank(notes, limit, diversity)},
+      else: {:ok, notes |> Enum.sort_by(& &1.score, :desc) |> Enum.take(limit)}
+  end
+
+  defp diversify(live, false, limit, diversity), do: {:ok, MMR.rerank(live, limit, diversity)}
 
   # nil → use the profile default; a number is clamped to [0.0, 1.0] and forced
   # to a float (MMR's diversity==0.0 short-circuit relies on a float compare);
@@ -863,6 +856,164 @@ defmodule Engram.Search do
     end
   end
 
+  # Task 11.3: off until the v5 rollout; off, search reads exactly as before.
+  # Read ONCE per request (`do_search/4`) and carried in the search opts, so
+  # the Qdrant key list and how the hits are read never disagree mid-flip.
+  defp chunk_text_read?, do: Engram.ServiceConfig.get(:chunk_text_read, false)
+
+  # With `:chunk_text_read` on: ONE query for every candidate's chunk row
+  # (vault, text, heading) and note display fields, keyed by point id. The
+  # vault comes from the row, not the payload (Task 15.7: Qdrant no longer
+  # returns `vault_id`).
+  #
+  # - No row: a stale point. Qdrant is written before the rows commit, so
+  #   every edit opens a short window, and a crash leaves one until
+  #   OrphanSweep reaps it. Dropped and counted (`no_chunk_row`), debug log.
+  # - Soft-deleted note: dropped (#1608), as rehydrate does.
+  # - Text or note row that does not decrypt: dropped and counted under its
+  #   own reason. If that leaves nothing, the search fails `:decrypt_failed`
+  #   (a DEK or KMS outage), as the payload decrypt always has, rather than
+  #   answering an empty page.
+  defp postgres_hits(candidates, _user, false), do: {:ok, {candidates, nil}}
+
+  defp postgres_hits(candidates, user, true) do
+    ids = Enum.map(candidates, & &1[:qdrant_id])
+    # The denominator of the hits_dropped / text_missing ratio alert.
+    :telemetry.execute([:engram, :search, :hits], %{count: length(ids)}, %{})
+
+    with {:ok, hits} <- Engram.Notes.search_hits_by_qdrant_points(user, ids) do
+      {kept, dropped} =
+        Enum.reduce(candidates, {[], %{}}, fn c, {kept, dropped} ->
+          case Map.get(hits, c[:qdrant_id]) do
+            %{vault_id: vault_id} -> {[Map.put(c, :vault_id, vault_id) | kept], dropped}
+            nil -> {kept, bump(dropped, :no_chunk_row)}
+            :deleted -> {kept, dropped}
+            undecryptable -> {kept, bump(dropped, undecryptable)}
+          end
+        end)
+
+      for {reason, count} <- dropped, do: emit_hit_dropped(reason, count, user)
+
+      undecryptable? =
+        Map.has_key?(dropped, :text_undecryptable) or Map.has_key?(dropped, :note_undecryptable)
+
+      if kept == [] and undecryptable?,
+        do: {:error, :decrypt_failed},
+        else: {:ok, {Enum.reverse(kept), hits}}
+    end
+  end
+
+  defp bump(counts, reason), do: Map.update(counts, reason, 1, &(&1 + 1))
+
+  # With `:chunk_text_read` on the ranked query fetches no payload; the hits
+  # whose chunk row has no text (rows written before the text columns) get
+  # their payload text keys here, in one retrieve of just those points (none
+  # when every row has its text). A point deleted since the query is dropped
+  # and counted (`point_gone`), as main never returned it. A failed retrieve
+  # fails the search, as a failed query does.
+  defp payload_fallback(candidates, nil, _user), do: {:ok, candidates}
+
+  defp payload_fallback(candidates, hits, user) do
+    case for(c <- candidates, is_nil(hits[c.qdrant_id].text), do: c.qdrant_id) do
+      [] -> {:ok, candidates}
+      ids -> merge_fallback(candidates, ids, user)
+    end
+  end
+
+  defp merge_fallback(candidates, ids, user) do
+    keys = Qdrant.result_payload(:fallback)
+
+    with {:ok, points} <- Qdrant.retrieve(collection(), ids, with_payload: keys) do
+      by_id = Map.new(points, &{&1.qdrant_id, &1})
+      wanted = MapSet.new(ids)
+
+      {gone, kept} =
+        Enum.split_with(
+          candidates,
+          &(&1.qdrant_id in wanted and not is_map_key(by_id, &1.qdrant_id))
+        )
+
+      if gone != [], do: emit_hit_dropped(:point_gone, length(gone), user)
+      {:ok, Enum.map(kept, &Map.merge(Map.get(by_id, &1.qdrant_id, %{}), &1))}
+    end
+  end
+
+  # One counter for every reason (`engram_prom_ex_search_hits_dropped_total`).
+  # The orphan windows (a stale point, a point deleted mid-search) are
+  # expected on every edit, so they log at debug; the others are real faults.
+  defp emit_hit_dropped(reason, count, user) do
+    :telemetry.execute([:engram, :search, :hit_dropped], %{count: count}, %{reason: reason})
+
+    meta =
+      Metadata.with_category(:warning, :search, user_id: user.id, reason: reason, count: count)
+
+    case reason do
+      :no_chunk_row -> Logger.debug("search dropped #{count} hit(s): no chunk row", meta)
+      :point_gone -> Logger.debug("search dropped #{count} hit(s): point gone", meta)
+      _ -> Logger.warning("search dropped #{count} hit(s): #{reason}", meta)
+    end
+  end
+
+  defp decrypt_candidates(candidates, user, vaults_by_id, nil),
+    do: Engram.Crypto.decrypt_qdrant_candidates(candidates, user, vaults_by_id, collection())
+
+  # Postgres text first; a row written before the text columns falls back to
+  # the payload (v3/v4 points); a row with neither keeps its hit, with empty
+  # text, counted as `text_missing` (the title and path still show).
+  #
+  # The vault check the payload decrypt applies (`decrypt_one/4`) applies
+  # here first, to every hit: a hit whose row vault is not an active vault of
+  # this search (soft-deleted, or not asked for) is dropped (`vault_inactive`).
+  defp decrypt_candidates(candidates, user, vaults_by_id, hits) do
+    {candidates, inactive} = Enum.split_with(candidates, &Map.has_key?(vaults_by_id, &1.vault_id))
+    if inactive != [], do: emit_hit_dropped(:vault_inactive, length(inactive), user)
+
+    {from_payload, rest} =
+      Enum.split_with(
+        candidates,
+        &(is_nil(hits[&1.qdrant_id].text) and Map.has_key?(&1, :text_nonce))
+      )
+
+    payload =
+      Engram.Crypto.decrypt_qdrant_candidates(from_payload, user, vaults_by_id, collection())
+
+    by_id =
+      case payload do
+        {:ok, decrypted} -> Map.new(decrypted, &{&1.qdrant_id, &1})
+        {:error, _} -> %{}
+      end
+
+    # A fallback hit the payload decrypt did not return is gone from the
+    # page, whether the whole batch errored or one point failed.
+    lost = length(from_payload) - map_size(by_id)
+    if lost > 0, do: emit_hit_dropped(:payload_undecryptable, lost, user)
+
+    missing = Enum.count(rest, &is_nil(hits[&1.qdrant_id].text))
+
+    if missing > 0,
+      do: :telemetry.execute([:engram, :search, :text_missing], %{count: missing}, %{})
+
+    result =
+      Enum.flat_map(candidates, fn c ->
+        case hits[c.qdrant_id] do
+          %{text: nil} when is_map_key(c, :text_nonce) ->
+            List.wrap(by_id[c.qdrant_id])
+
+          %{text: text, heading_path: heading} ->
+            [
+              c
+              |> Map.drop([:title, :text_nonce, :title_nonce, :heading_path_nonce])
+              |> Map.merge(%{text: text || "", heading_path: heading})
+            ]
+        end
+      end)
+
+    case {result, payload} do
+      {[], {:error, _} = err} -> err
+      _ -> {:ok, result}
+    end
+  end
+
   # Single-vault search: return the passed-in vault directly — no extra DB query.
   # Cross-vault search (vault=nil): batch-load only the vaults referenced by candidates.
   defp load_candidate_vaults(_user, %Engram.Vaults.Vault{id: id} = v, _candidates),
@@ -886,14 +1037,21 @@ defmodule Engram.Search do
   # whose note is soft-deleted IS dropped: its points outlive the delete until
   # DeleteNoteIndex succeeds, and they must not answer searches meanwhile
   # (#1608).
-  defp rehydrate_display_fields([], _user), do: []
+  #
+  # With `:chunk_text_read` on, the fields were already loaded with the text
+  # (`postgres_hits/2`), so this is a lookup, not a second query.
+  defp rehydrate_display_fields([], _user, _hits), do: []
 
-  defp rehydrate_display_fields(results, user) do
+  defp rehydrate_display_fields(results, user, nil) do
     qdrant_ids =
       results |> Enum.map(&Map.get(&1, :qdrant_id)) |> Enum.reject(&is_nil/1)
 
-    fields_by_qid = Engram.Notes.display_fields_by_qdrant_points(user, qdrant_ids)
+    apply_display_fields(results, Engram.Notes.display_fields_by_qdrant_points(user, qdrant_ids))
+  end
 
+  defp rehydrate_display_fields(results, _user, hits), do: apply_display_fields(results, hits)
+
+  defp apply_display_fields(results, fields_by_qid) do
     Enum.flat_map(results, fn result ->
       case Map.get(fields_by_qid, Map.get(result, :qdrant_id)) do
         %{source_path: source_path, title: title, tags: tags} ->

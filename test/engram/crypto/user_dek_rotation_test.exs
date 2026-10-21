@@ -45,6 +45,12 @@ defmodule Engram.Crypto.UserDekRotationTest do
       )
     end)
 
+    # resync_index_keys set_payloads every chunk's point, so a test that seeds
+    # chunk rows reaches this route even with no points in Qdrant.
+    Bypass.stub(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
+      Plug.Conn.send_resp(conn, 200, ~s({"result": {"status": "completed"}, "status": "ok"}))
+    end)
+
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture(dek_version: 1)
     {:ok, user: user}
   end
@@ -447,6 +453,123 @@ defmodule Engram.Crypto.UserDekRotationTest do
         Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^a.id), skip_tenant_check: true)
 
       refute reloaded.content_ciphertext == old_ct
+    end
+  end
+
+  # Task 11.1: chunk text is encrypted under the DEK and bound to the point id.
+  # Left out of the rotation, it decrypts until the old key is retired, then
+  # every search hit loses its text.
+  describe "rotate_user/1 - chunk text" do
+    test "chunk text re-encrypts under the new DEK, still bound to its point", %{user: user} do
+      vault = Engram.Fixtures.insert_vault!(user, "ChunkTextVault")
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "c.md", content: "c"})
+      {:ok, old_dek} = Crypto.get_dek(user)
+
+      rows =
+        for {text, pos} <- [{"first", 0}, {"second", 1}, {"third", 2}] do
+          point_id = Ecto.UUID.generate()
+
+          Map.merge(
+            %{point_id: point_id, note_id: note.id, user_id: user.id, position: pos},
+            Map.put(
+              Crypto.encrypt_chunk_text(text, "H#{pos}", old_dek, point_id),
+              :slice_sum,
+              42 + pos
+            )
+          )
+        end
+
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.insert_all(Engram.Notes.ChunkPoint, rows, skip_tenant_check: true)
+        end)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      {:ok, new_dek} = Crypto.get_dek(reloaded_user)
+      refute new_dek == old_dek
+
+      {:ok, stored} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(
+            from(c in Engram.Notes.ChunkPoint, where: c.note_id == ^note.id, order_by: c.position)
+          )
+        end)
+
+      assert [{"first", "H0"}, {"second", "H1"}, {"third", "H2"}] =
+               Enum.map(stored, fn c ->
+                 {:ok, pair} = Crypto.decrypt_chunk_text(c, new_dek, c.point_id)
+                 pair
+               end)
+
+      assert Enum.all?(
+               stored,
+               &(Crypto.decrypt_chunk_text(&1, old_dek, &1.point_id) == :error)
+             )
+
+      # The checksum is keyed: re-summed under the new key from the text.
+      new_ck = Crypto.dek_content_hash_key_from_bytes(new_dek)
+
+      assert Enum.map(stored, & &1.slice_sum) ==
+               Enum.map(~w(first second third), &Engram.Indexing.text_sum(new_ck, &1))
+    end
+
+    test "a checksum-only row is re-summed under the new DEK, so search still shows it",
+         %{user: user} do
+      vault = Engram.Fixtures.insert_vault!(user, "SliceVault")
+      content = "# Iron\n\nFerritin levels are low."
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "s.md", content: content})
+      {:ok, old_dek} = Crypto.get_dek(user)
+      old_ck = Crypto.dek_content_hash_key_from_bytes(old_dek)
+      [{0, %{text: text}}] = Enum.to_list(Engram.Indexing.display_chunks(content, "s.md", 1))
+      point_id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.insert!(%Engram.Notes.Chunk{
+            note_id: note.id,
+            user_id: user.id,
+            vault_id: vault.id,
+            position: 0,
+            char_start: 0,
+            char_end: byte_size(text),
+            qdrant_point_id: point_id
+          })
+
+          Repo.insert!(%Engram.Notes.ChunkPoint{
+            point_id: point_id,
+            note_id: note.id,
+            user_id: user.id,
+            position: 0,
+            slice_sum: Engram.Indexing.text_sum(old_ck, text)
+          })
+        end)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded_user =
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      {:ok, new_dek} = Crypto.get_dek(reloaded_user)
+      new_ck = Crypto.dek_content_hash_key_from_bytes(new_dek)
+
+      {:ok, [stored]} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.all(from(c in Engram.Notes.ChunkPoint, where: c.note_id == ^note.id))
+        end)
+
+      assert stored.slice_sum == Engram.Indexing.text_sum(new_ck, text)
+
+      {:ok, hits} = Engram.Notes.search_hits_by_qdrant_points(reloaded_user, [point_id])
+      assert %{text: ^text} = hit = hits[point_id]
+      refute Map.get(hit, :stale, false)
     end
   end
 

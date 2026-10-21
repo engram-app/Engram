@@ -16,6 +16,11 @@ defmodule Engram.PromEx.Indexing do
 
   Metrics:
 
+    * `engram_prom_ex_indexing_rebuild_halted_total` and
+      `engram_prom_ex_indexing_rebuild_drift_parked_total`: the v5 rebuild
+      ledger halt (once per off transition) and drift parks (`Engram.Rebuild`).
+    * `engram_prom_ex_indexing_rebuild_meter_failed_total`: live ledger debits
+      that failed and were carried to the end of the rebuild job.
     * `engram_prom_ex_indexing_repath_total` — counter of repath events by
       `:outcome`. Alert on `:fallback` / `:missing_points` rate; the `:ok` rate
       is the "renames took the cheap path" signal.
@@ -63,6 +68,9 @@ defmodule Engram.PromEx.Indexing do
   @repath_stop_event [:engram, :indexing, :repath, :stop]
   @link_rewrite_failed_event [:engram, :links, :rewrite, :failed]
   @stale_points_leaked_event [:engram, :indexing, :stale_points_leaked]
+  @rebuild_halted_event [:engram, :rebuild, :halted]
+  @rebuild_drift_event [:engram, :rebuild, :drift_parked]
+  @rebuild_meter_failed_event [:engram, :rebuild, :meter_failed]
   @maintenance_embed_event [:engram, :embed, :maintenance]
   @points_written_event [:engram, :indexing, :points_written]
   @keys_skipped_event [:engram, :frontmatter_keys, :skipped]
@@ -161,6 +169,24 @@ defmodule Engram.PromEx.Indexing do
             "Vector cache rows not written (DEK rotation running or DEK moved on, " <>
               "or the note was deleted mid-embed): vectors a retry pays for again.",
           tags: [:reason]
+        ),
+        counter(
+          metric_prefix ++ [:rebuild, :halted, :total],
+          event_name: @rebuild_halted_event,
+          description:
+            "v5 rebuild ledger halts: once per off transition, when a debit passes the budget."
+        ),
+        counter(
+          metric_prefix ++ [:rebuild, :drift_parked, :total],
+          event_name: @rebuild_drift_event,
+          description:
+            "v5 rebuild notes parked for costing over 1.5x their estimate and 50k tokens."
+        ),
+        counter(
+          metric_prefix ++ [:rebuild, :meter_failed, :total],
+          event_name: @rebuild_meter_failed_event,
+          description:
+            "v5 rebuild ledger debits that failed live and were carried to the job's end."
         )
       ]
     )

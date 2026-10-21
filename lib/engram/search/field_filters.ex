@@ -22,7 +22,8 @@ defmodule Engram.Search.FieldFilters do
 
   Values: a string or boolean is an exact match; a number compares as a
   number (a quoted YAML number is a string and matches as one); an ISO date
-  or datetime compares as a date. Date bounds: a bare date is the whole UTC
+  or datetime compares as a date, except on a named exact field, which holds
+  every string as text. Date bounds: a bare date is the whole UTC
   day, so `eq` matches that day, `after`/`gte` start at it, `before`/`lt`
   end before it, `gt` starts the next day and `lte` ends with it; a
   datetime bound is that instant (`after` is `>=`, `before` is `<`).
@@ -244,11 +245,13 @@ defmodule Engram.Search.FieldFilters do
 
   # -- values ---------------------------------------------------------------
 
+  # Named exact fields hold every string as text, date-shaped ones included
+  # (`project: 2026-01-01`), so no string is read as a date here.
   defp exact_values("eq", value, key),
-    do: if(exact?(value), do: {:ok, [value]}, else: invalid(key))
+    do: if(text?(value), do: {:ok, [value]}, else: invalid(key))
 
   defp exact_values("in", values, key),
-    do: if(Enum.all?(values, &exact?/1), do: {:ok, values}, else: invalid(key))
+    do: if(Enum.all?(values, &text?/1), do: {:ok, values}, else: invalid(key))
 
   defp exact_values(_op, _value, key), do: invalid(key)
 
@@ -302,6 +305,9 @@ defmodule Engram.Search.FieldFilters do
   defp number?(v), do: (is_integer(v) and abs(v) < 1.0e308) or is_float(v)
 
   defp exact?(v), do: (is_binary(v) and v != "" and not date(v)) or is_boolean(v)
+
+  # A number too: the field holds `status: 2` as the text "2".
+  defp text?(v), do: (is_binary(v) and v != "") or is_boolean(v) or is_number(v)
 
   defp stable?(v), do: is_binary(v) and OkfFields.normalize_type(v) == "stable"
 

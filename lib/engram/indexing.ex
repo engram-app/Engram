@@ -16,6 +16,8 @@ defmodule Engram.Indexing do
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Chunk
+  alias Engram.Notes.ChunkPoint
+  alias Engram.Notes.FieldCatalog
   alias Engram.Notes.FlatFields
   alias Engram.Notes.Frontmatter
   alias Engram.Notes.FrontmatterKeys
@@ -987,10 +989,12 @@ defmodule Engram.Indexing do
     )
   end
 
-  # Rows per chunk `insert_all`. A row binds 10 parameters (chunk_row/5) against
-  # the protocol's 65535 cap, which leaves room for 6553; 3000 is a deliberate
-  # half-margin (as Links' @insert_chunk) so a new column cannot silently
-  # re-arm the overflow. Prod hit it at 73040 params (7,304 chunks, one note).
+  # Rows per chunk `insert_all`. A row binds 15 parameters (chunk_row/5 plus
+  # the four chunk-text columns) against the protocol's 65535 cap, which
+  # leaves room for 4369; 3000 keeps a margin (as Links' @insert_chunk) so a
+  # new column cannot silently re-arm the overflow. Prod hit it at 73040
+  # params (7,304 chunks, one note). The text columns add bytes, not
+  # parameters: a batch carries at most the note's own text.
   @insert_batch 3000
 
   @doc """
@@ -1096,6 +1100,8 @@ defmodule Engram.Indexing do
           |> Enum.chunk_every(@insert_batch)
           |> Enum.each(&Repo.insert_all(Chunk, &1, skip_tenant_check: true))
 
+          write_point_rows(note, Map.get(prepared, :point_rows))
+
           stamp_payload_hash(note, payload_hash)
           stamp_okf_timestamp(prepared)
           stamp_flat_fields(prepared)
@@ -1114,6 +1120,18 @@ defmodule Engram.Indexing do
         {:ok, length(chunk_rows)}
       end
     end
+  end
+
+  # Delete-then-insert per note, like `chunks`; nil (text off) leaves the
+  # note's `chunk_points` as they are.
+  defp write_point_rows(_note, nil), do: :ok
+
+  defp write_point_rows(note, rows) do
+    Repo.delete_all(from(p in ChunkPoint, where: p.note_id == ^note.id), skip_tenant_check: true)
+
+    rows
+    |> Enum.chunk_every(@insert_batch)
+    |> Enum.each(&Repo.insert_all(ChunkPoint, &1, skip_tenant_check: true))
   end
 
   # Every point of the note now carries `note_payload`: upserted ones were
@@ -1589,6 +1607,7 @@ defmodule Engram.Indexing do
       {:ok, _} =
         Repo.with_tenant(note.user_id, fn ->
           Repo.delete_all(from(c in Chunk, where: c.note_id == ^note.id))
+          Repo.delete_all(from(p in ChunkPoint, where: p.note_id == ^note.id))
         end)
 
       :ok
@@ -1832,20 +1851,24 @@ defmodule Engram.Indexing do
   # user is charged for when that text is sent. Only what Voyage is sent
   # counts, so a keyword-only chunk or group has no entry.
   defp changed_bytes_per_text(plan, rows) do
-    known =
-      MapSet.new(
-        for {hmac, _point_id, _tokens, members} <- rows,
-            h <- [hmac && short_hmac(hmac) | members || []],
-            h != nil,
-            do: h
-      )
-
+    known = known_hmacs(rows)
     new? = &(not MapSet.member?(known, &1))
 
     for {:embed, chunk} <- plan.entries,
         dense_chunk?(chunk, plan.dense?),
         do: chunk |> changed_bytes(new?) |> Enum.sum()
   end
+
+  # Every short fingerprint the stored rows hold, a point's own or a merged
+  # point's members'.
+  defp known_hmacs(rows),
+    do:
+      MapSet.new(
+        for {hmac, _point_id, _tokens, members} <- rows,
+            h <- [hmac && short_hmac(hmac) | members || []],
+            h != nil,
+            do: h
+      )
 
   defp changed_bytes(%{merged: true, member_bytes: bytes, member_hmacs: hmacs}, new?),
     do: for({b, h} <- Enum.zip(bytes, hmacs), new?.(h), do: b)
@@ -2446,13 +2469,138 @@ defmodule Engram.Indexing do
   end
 
   @doc """
-  The vault's BM25 `avgdl`, the one source every keyword encode reads.
-  Today the cached `KeywordIndex.Stats.avgdl/2`.
+  The vault's BM25 `avgdl`, the one source every keyword encode reads: the
+  cached `KeywordIndex.Stats.avgdl/2`, except while the v5 rebuild is `on`,
+  when it is the value the dry run pinned (`rebuild_manifest_vaults`, spec
+  K2, H14), so a note indexed at the end of the pass is normalized like one
+  indexed at its start. A vault with no pin keeps the live value.
   """
-  # ponytail: Task 16 pins avgdl for the v5 pass here (spec K2, H14): the
-  # `rebuild_manifest_vaults.avgdl` row when one exists, else this value.
   @spec avgdl(Ecto.UUID.t(), Ecto.UUID.t()) :: float()
-  def avgdl(user_id, vault_id), do: Engram.KeywordIndex.Stats.avgdl(user_id, vault_id)
+  def avgdl(user_id, vault_id) do
+    pinned = if Engram.Rebuild.mode() == :on, do: Engram.Rebuild.pinned_avgdl(user_id, vault_id)
+
+    case pinned do
+      avgdl when is_float(avgdl) -> avgdl
+      nil -> Engram.KeywordIndex.Stats.avgdl(user_id, vault_id)
+    end
+  end
+
+  @doc """
+  The v5 rebuild dry run's estimate for one note: what a rebuild pass would
+  write and send Voyage, from the same parse, cap plan and reuse
+  fingerprints as `prepare_index/4`, with no Voyage and no Qdrant call.
+
+    * `est_tokens`: estimated tokens of the dense texts Voyage would be sent
+      (vector cache hits are not counted: an upper bound).
+    * `new_points`: points that need a new vector (or are keyword-only).
+    * `reused_points`: points whose fingerprint is unchanged (vector copied).
+    * `mean_pooled_points`: merged groups whose members all have a stored
+      vector (C13, the normalized mean): no tokens.
+    * `dl_sum`, `dl_count`: keyword lengths of the planned points that
+      count toward `avgdl` (not merged, not floor).
+
+  Planned with `version_rebuild_opts/1`, the opts the version rebuild
+  runs with, so the estimate and the pass agree on what is dense. `note` is
+  decrypted.
+  """
+  @spec rebuild_estimate(map(), map()) :: {:ok, %{atom() => non_neg_integer()}} | {:error, term()}
+  def rebuild_estimate(note, user) do
+    zero = %{
+      est_tokens: 0,
+      new_points: 0,
+      reused_points: 0,
+      mean_pooled_points: 0,
+      dl_sum: 0,
+      dl_count: 0
+    }
+
+    with {:ok, content_key} <- Crypto.dek_content_hash_key(user) do
+      case Markdown.parse(note.content || "", note.path) do
+        [] -> {:ok, zero}
+        chunks -> {:ok, estimate_chunks(note, user, chunks, content_key, zero)}
+      end
+    end
+  end
+
+  defp estimate_chunks(note, user, chunks, content_key, zero) do
+    rows = indexed_rows(note)
+    merged? = merged_rows?(rows)
+
+    capped =
+      if budget_enabled?(),
+        do: chunks |> cap_chunks(note_points_cap(user), merged?) |> fit_positions(merged?),
+        else: fit_positions(chunks, merged?)
+
+    # As `prepare_index/4` plans it: dense unless the opts say otherwise.
+    dense? = Keyword.get(version_rebuild_opts(note), :dense, true)
+    plan = plan_chunks(capped, rows, content_key, dense?)
+
+    # C13 averages each member's OWN stored vector: a fingerprint that lives
+    # only as a member of a merged point has none, so it is not counted, and
+    # a note that never had dense vectors (nil hash) has none at all.
+    known =
+      if Map.get(note, :dense_indexed_hash) == nil,
+        do: MapSet.new(),
+        else: standalone_hmacs(rows)
+
+    Enum.reduce(plan.entries, zero, fn entry, acc ->
+      chunk = entry_chunk(entry)
+      acc = count_length(acc, chunk)
+
+      case entry do
+        {:reuse, _chunk, _point_id, _tokens} ->
+          %{acc | reused_points: acc.reused_points + 1}
+
+        {:embed, %{merged: true, member_hmacs: hmacs}} when hmacs != [] ->
+          if dense_chunk?(chunk, dense?) and Enum.all?(hmacs, &MapSet.member?(known, &1)),
+            do: %{acc | mean_pooled_points: acc.mean_pooled_points + 1},
+            else: embed_estimate(acc, chunk, dense?)
+
+        {:embed, _chunk} ->
+          embed_estimate(acc, chunk, dense?)
+      end
+    end)
+  end
+
+  @doc """
+  The opts a version rebuild (`EmbedNote`, `RebuildStaleNote`) indexes a
+  content-current note with, shared with `rebuild_estimate/2`: our
+  maintenance (unmetered) when the note's dense vectors are for its current
+  content, and its dense points are kept.
+  """
+  @spec version_rebuild_opts(map()) :: keyword()
+  def version_rebuild_opts(note) do
+    hash = Map.get(note, :content_hash)
+    [maintenance: hash != nil and Map.get(note, :dense_indexed_hash) == hash, keep_dense: true]
+  end
+
+  defp standalone_hmacs(rows),
+    do:
+      MapSet.new(
+        for {hmac, point_id, _tokens, nil} <- rows,
+            hmac != nil and point_id != nil,
+            do: short_hmac(hmac)
+      )
+
+  defp embed_estimate(acc, chunk, dense?) do
+    tokens =
+      if dense_chunk?(chunk, dense?),
+        do: UsageMeters.estimate_tokens(IO.iodata_length(chunk.embed_text)),
+        else: 0
+
+    %{acc | new_points: acc.new_points + 1, est_tokens: acc.est_tokens + tokens}
+  end
+
+  # The same raw keyword length `chunks.token_count` stores (`build_entry/3`).
+  defp count_length(acc, chunk) do
+    if capped_length?(chunk) do
+      acc
+    else
+      text = IO.iodata_to_binary(chunk.context_text)
+      {_tokens, len} = Engram.KeywordIndex.Tokenizer.tokens_with_len(text)
+      %{acc | dl_sum: acc.dl_sum + len, dl_count: acc.dl_count + 1}
+    end
+  end
 
   # Both inputs: `context_text` (keyword vector, payload) and `embed_text`
   # (dense vector). They are capped separately, so past 512 bytes of
@@ -2821,8 +2969,18 @@ defmodule Engram.Indexing do
         end
       )
 
+    text? = v5? or chunk_text_write?()
+
+    mode =
+      cond do
+        not text? -> :none
+        display_ct?(note) -> :sealed
+        true -> :sum
+      end
+
     with {:ok, reversed, _spent} <- prepared,
-         {:ok, _dek} <- if(v5_format?, do: Crypto.get_dek(user), else: {:ok, nil}) do
+         {:ok, dek} <-
+           if(v5_format? or mode != :none, do: Crypto.get_dek(user), else: {:ok, nil}) do
       built = Enum.reverse(reversed)
       qdrant_points = for(%{point: p} <- built, p != nil, do: p)
 
@@ -2830,6 +2988,7 @@ defmodule Engram.Indexing do
        %{
          note: note,
          chunk_rows: Enum.map(built, & &1.row),
+         point_rows: point_rows(plan.entries, built, dek, mode),
          qdrant_points: qdrant_points,
          point_kinds: for(%{kind: k, dense?: d} <- built, do: {k, d}),
          # Straight from the plan, not re-derived from `built`. Two independent
@@ -2862,6 +3021,93 @@ defmodule Engram.Indexing do
         flat
     end
   end
+
+  # Task 11.2, hybrid (notes-chunks-hyperopt 2.4/2.4b): with text on, every
+  # point also gets a `chunk_points` row (written in the same transaction as
+  # its `chunks` row, `commit_index/2`) carrying `slice_sum`, the checksum of
+  # its chunk's display text; search derives the text from the note content
+  # (`display_chunks/3`). Only a note at or over `display_ct_threshold/0` also
+  # stores the text and heading, sealed as ONE envelope bound to the point
+  # id, so a hit there never decrypts and re-chunks the whole note. A reused
+  # point is sealed afresh from the chunk in hand: rows are rewritten
+  # wholesale anyway. nil: text off, `chunk_points` untouched.
+  defp point_rows(_entries, _built, _dek, :none), do: nil
+
+  defp point_rows(entries, built, dek, mode) do
+    ck = Crypto.dek_content_hash_key_from_bytes(dek)
+
+    Enum.zip_with(entries, built, fn entry, %{row: row} ->
+      chunk = entry_chunk(entry)
+
+      point = %{
+        point_id: row.qdrant_point_id,
+        note_id: row.note_id,
+        user_id: row.user_id,
+        char_start: row.char_start,
+        char_end: row.char_end,
+        token_count: row.token_count,
+        slice_sum: text_sum(ck, chunk.text),
+        position: row.position,
+        member_fps: member_fps(row.member_hmacs),
+        display_ct: nil
+      }
+
+      if mode == :sealed, do: Map.merge(point, seal(chunk, dek, row)), else: point
+    end)
+  end
+
+  # The 16-hex member fingerprint prefixes as 8 raw bytes each, concatenated.
+  defp member_fps(nil), do: nil
+  defp member_fps(hexes), do: Enum.map_join(hexes, &Base.decode16!(&1, case: :mixed))
+
+  defp seal(chunk, dek, row),
+    do: Crypto.encrypt_chunk_text(chunk.text, chunk.heading_path, dek, row.qdrant_point_id)
+
+  # Design owner, 2026-10-21: 32 KB bounds the search re-chunk of one hit
+  # note to ~8 ms (~0.19-0.26 ms/KB measured), <= ~0.4 s at limit 50.
+  @display_ct_threshold 32 * 1024
+
+  defp display_ct?(note), do: byte_size(note.content || "") >= @display_ct_threshold
+
+  @doc "Notes whose plaintext content is at least this many bytes store each chunk's display envelope."
+  def display_ct_threshold, do: @display_ct_threshold
+
+  @doc """
+  A chunk's display-text checksum, as a signed int4 for the column: the
+  first 4 bytes of HMAC-SHA256 under the user's content-hash subkey
+  (`Crypto.dek_content_hash_key/1`, the key of every other fingerprint).
+  Keyed, so someone reading the table cannot confirm a guessed short text;
+  a DEK rotation re-sums every row (`UserDekRotation`).
+  """
+  @spec text_sum(binary(), iodata()) :: integer()
+  def text_sum(content_key, text) do
+    <<sum::signed-32, _rest::binary>> = :crypto.mac(:hmac, :sha256, content_key, text)
+    sum
+  end
+
+  @doc """
+  The chunks search shows for a note, by position: what the indexing pass
+  built from this content, for a note holding `row_count` rows. A merged
+  note is regrouped the way `resparse_note/2` does (`merged_like/2`, from
+  the stored row count). A position missing from the map, or a chunk whose
+  `text_sum/2` differs from the row's, means the note changed since it was
+  indexed.
+  """
+  @spec display_chunks(binary(), String.t(), non_neg_integer()) :: %{
+          non_neg_integer() => %{text: binary(), heading_path: term()}
+        }
+  def display_chunks(content, path, row_count) do
+    chunks = Markdown.parse(content, path)
+
+    chunks =
+      (row_count < length(chunks) and merged_like(chunks, row_count)) || chunks
+
+    Map.new(chunks, &{&1.position, Map.take(&1, [:text, :heading_path])})
+  end
+
+  # Off until the v5 rollout turns it on; the v5 layout writes text
+  # regardless, since its payload has none.
+  defp chunk_text_write?, do: Engram.ServiceConfig.get(:chunk_text_write, false)
 
   # A reused chunk costs nothing but a row: no embed, no tokenizer pass, no
   # encryption. Its `token_count` rides along from the row it replaces rather
@@ -3046,10 +3292,24 @@ defmodule Engram.Indexing do
   # key leaves no row.
   defp stamp_flat_fields(%{note: note, attr_rows: rows}) do
     :ok = hold_key_ids!(note, rows)
-    Repo.delete_all(from(a in NoteAttr, where: a.note_id == ^note.id))
+
+    {_n, old} =
+      Repo.delete_all(
+        from(a in NoteAttr,
+          where: a.note_id == ^note.id,
+          select: {a.key_id, a.ord, a.h, a.n, a.d}
+        )
+      )
+
     _ = rows |> Enum.chunk_every(@insert_batch) |> Enum.each(&Repo.insert_all(NoteAttr, &1))
 
-    :ok
+    # The field catalog is cached on change_seq, which this pass does not
+    # move, so a pass that changed the rows evicts it (after this transaction
+    # commits). Most re-index passes leave the frontmatter alone: no eviction,
+    # no cluster broadcast.
+    if MapSet.new(old) != MapSet.new(rows, &{&1.key_id, &1.ord, &1.h, &1.n, &1.d}),
+      do: FieldCatalog.evict(note.vault_id),
+      else: :ok
   end
 
   defp stamp_flat_fields(_prepared), do: :ok

@@ -579,6 +579,13 @@ if budget = System.get_env("INDEX_BUDGET_ENABLED") do
   config :engram, :index_budget_enabled, budget == "true"
 end
 
+# The one-time v5 index rebuild switch (`Engram.Rebuild`, chunker v5 Task
+# 16.1): `off` (default), `dry_run` or `on`. Off, a stamp bump rebuilds
+# nothing and nothing reads the rebuild tables.
+if rebuild = System.get_env("INDEX_REBUILD") do
+  config :engram, :index_rebuild, rebuild
+end
+
 # The encrypted per-user vector cache (`Engram.Indexing.VectorCache`, chunker
 # v5 Task 12): a text is paid to Voyage once. Off by default; off, the embed
 # path never reads or writes `embedding_cache`.

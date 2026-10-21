@@ -682,7 +682,8 @@ defmodule Engram.Vector.QdrantTest do
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
 
-        assert decoded["with_payload"] == true
+        # Task 15.7: no payload unless the caller names the keys.
+        assert decoded["with_payload"] == false
         assert decoded["with_vector"] == false
         assert decoded["limit"] == 200
 

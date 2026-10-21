@@ -50,6 +50,7 @@ defmodule Engram.Workers.EmbedNote do
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
+  alias Engram.Rebuild
   alias Engram.Repo
   alias Engram.ServiceConfig
   alias Engram.UsageMeters
@@ -150,8 +151,14 @@ defmodule Engram.Workers.EmbedNote do
           # sparse-only note stays on the normal budget, so a version bump
           # never grants dense vectors the cap refused. `run_and_stamp`
           # re-stamps both versions, so this matches at most once per bump.
+          #
+          # While the v5 rebuild is `on`, its tokens go through the ledger
+          # (`rebuild: true`, see `index/5`).
           version_stale?(note) ->
-            load_for_run(note, maintenance: note.dense_indexed_hash == hash, keep_dense: true)
+            load_for_run(
+              note,
+              Indexing.version_rebuild_opts(note) ++ [rebuild: Rebuild.mode() == :on]
+            )
 
           # Holds more chunks than its tier's per-note cap (ReconcileEmbeddings
           # found it): re-merge it, unmetered. It already has dense vectors, so
@@ -379,13 +386,16 @@ defmodule Engram.Workers.EmbedNote do
   cannot name its model (nil).
   """
   def version_stale?(%Note{} = note) do
-    chunker_stale?(note.chunker_version) or model_stale?(note, Indexing.embed_model())
+    {chunker, _keyword} = Rebuild.target_versions()
+    chunker_stale?(note.chunker_version, chunker) or model_stale?(note, Indexing.embed_model())
   end
 
   # Explicit nil: Erlang orders numbers below atoms, so `nil < 3` is false.
   # A newer chunker counts as current (see `IndexVersions.stale_dynamic/0`).
-  defp chunker_stale?(nil), do: true
-  defp chunker_stale?(version), do: version < @chunker_version
+  # The target is `Rebuild.target_versions/0`'s: the pin while the v5
+  # rebuild is not `on`, so a stamp bump alone rebuilds nothing.
+  defp chunker_stale?(nil, _target), do: true
+  defp chunker_stale?(version, target), do: version < target
 
   defp model_stale?(_note, nil), do: false
 
@@ -606,9 +616,15 @@ defmodule Engram.Workers.EmbedNote do
             Keyword.take(opts, [:index_tier, :keep_dense]) ++
             [in_commit: &stamp_embed_hash(note, &2, &1, &3)]
 
-        case Indexing.index_note_with_usage(decrypted_note, vault, user, index_opts) do
+        case index(note, decrypted_note, vault, user, index_opts, opts) do
           {:ok, _count, _embedded_bytes, _dense?} ->
             :ok
+
+          # The v5 rebuild left `on` (halted, or switched off) after this job
+          # was routed: no Voyage call. Re-routed later, it either skips (the
+          # note is no longer behind the target) or runs again under `on`.
+          {:error, :rebuild_paused} ->
+            {:snooze, 300}
 
           # Voyage 429 — back off without burning an Oban attempt. Voyage's
           # paid-tier RPM is finite; without this guard five consecutive
@@ -700,6 +716,24 @@ defmodule Engram.Workers.EmbedNote do
         )
 
         {:error, reason}
+    end
+  end
+
+  # A version rebuild under `on` re-checks the mode right before Voyage and
+  # charges what it sent to the ledger (`Rebuild.spend/2`), which also parks
+  # a note that drifted past its estimate. Everything else indexes as is.
+  defp index(note, decrypted_note, vault, user, index_opts, opts) do
+    cond do
+      not Keyword.get(opts, :rebuild, false) ->
+        Indexing.index_note_with_usage(decrypted_note, vault, user, index_opts)
+
+      Rebuild.mode() == :on ->
+        Rebuild.spend(note, fn ->
+          Indexing.index_note_with_usage(decrypted_note, vault, user, index_opts)
+        end)
+
+      true ->
+        {:error, :rebuild_paused}
     end
   end
 
