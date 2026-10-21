@@ -54,6 +54,12 @@ defmodule Engram.Rebuild do
   @meter_key {__MODULE__, :tokens}
 
   @type mode :: :off | :dry_run | :on
+  # A note or any map naming one and its owner (a `%Note{}` qualifies).
+  @type note_ref :: %{
+          required(:id) => Ecto.UUID.t(),
+          required(:user_id) => Ecto.UUID.t(),
+          optional(atom()) => any()
+        }
 
   @spec mode() :: mode()
   def mode do
@@ -202,8 +208,7 @@ defmodule Engram.Rebuild do
   just its id: the estimate is a tenant row. A note with no estimate counts
   as estimated at 0.
   """
-  @spec check_note(%{id: Ecto.UUID.t(), user_id: Ecto.UUID.t()}, non_neg_integer()) ::
-          :ok | {:park, :rebuild_drift}
+  @spec check_note(note_ref(), non_neg_integer()) :: :ok | {:park, :rebuild_drift}
   def check_note(_note, actual) when actual <= @drift_floor, do: :ok
 
   def check_note(%{id: note_id, user_id: user_id}, actual) do
@@ -250,7 +255,11 @@ defmodule Engram.Rebuild do
   nil) on a later run is a note whose planning crashed the node: the dry run
   never plans it again and counts it as skipped.
   """
-  @spec put_pending(Ecto.UUID.t(), %{id: Ecto.UUID.t(), vault_id: Ecto.UUID.t()}) :: :ok
+  @spec put_pending(Ecto.UUID.t(), %{
+          required(:id) => Ecto.UUID.t(),
+          required(:vault_id) => Ecto.UUID.t(),
+          optional(atom()) => any()
+        }) :: :ok
   def put_pending(user_id, note) do
     upsert(user_id, [
       %{
