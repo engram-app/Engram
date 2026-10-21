@@ -69,6 +69,26 @@ defmodule Engram.NotesTest do
       assert stored_ctime(note.id) == 500.0
     end
 
+    # A rename re-pushes the same id at the new path (delete old, push new),
+    # possibly from a device whose copy carries its own ctime: same rule.
+    test "an id-keyed move keeps the stored ctime", %{user: user, vault: vault} do
+      id = UUIDv7.generate()
+      attrs = %{"id" => id, "path" => "mv-a.md", "content" => "one", "ctime" => 500.0}
+      {:ok, _} = Notes.upsert_note(user, vault, attrs, actor: "api")
+      :ok = Notes.delete_note(user, vault, "mv-a.md")
+
+      {:ok, moved} =
+        Notes.upsert_note(
+          user,
+          vault,
+          %{"id" => id, "path" => "mv-b.md", "content" => "one", "ctime" => 900.0},
+          actor: "api"
+        )
+
+      assert moved.path == "mv-b.md"
+      assert stored_ctime(id) == 500.0
+    end
+
     test "an update fills a ctime the note never had", %{user: user, vault: vault} do
       {:ok, _} =
         Notes.upsert_note(user, vault, %{"path" => "ct4.md", "content" => "one", "mtime" => 1.0},

@@ -2187,13 +2187,17 @@ defmodule Engram.Notes do
              prior.vault_id,
              sanitized_path
            ) do
-      merged_attrs = %{
-        base_attrs
-        | content: crdt.merged_text,
-          title: crdt.title,
-          tags: crdt.tags,
-          content_hash: crdt.content_hash
-      }
+      merged_attrs =
+        keep_stored_ctime(
+          %{
+            base_attrs
+            | content: crdt.merged_text,
+              title: crdt.title,
+              tags: crdt.tags,
+              content_hash: crdt.content_hash
+          },
+          prior
+        )
 
       with {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, prior.id) do
         phase_b =
