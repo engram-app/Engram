@@ -76,7 +76,7 @@
 
 **Files:**
 - Create: `lib/engram/attachments/segmented_cipher.ex`
-- Create: `priv/repo/migrations/20261020120000_add_segmented_attachment_columns_expand.exs`
+- Create: `priv/repo/migrations/20261021160000_add_segmented_attachment_columns_expand.exs`
 - Modify: `lib/engram/attachments/attachment.ex` (fields + changeset), `lib/engram/crypto/envelope.ex:133-145` only if a new AAD prefix needs a policy entry
 - Test: `test/engram/attachments/segmented_cipher_test.exs`, `test/engram/attachments/attachment_test.exs`
 
@@ -97,7 +97,7 @@
 ### Task 4: Uploads table + context
 
 **Files:**
-- Create: `priv/repo/migrations/20261020120100_create_attachment_uploads_expand.exs`, `lib/engram/attachments/upload.ex` (schema), `lib/engram/attachments/uploads.ex` (context)
+- Create: `priv/repo/migrations/20261021160100_create_attachment_uploads_expand.exs`, `lib/engram/attachments/upload.ex` (schema), `lib/engram/attachments/uploads.ex` (context)
 - Modify: `lib/engram/repo.ex:18` (`@tenant_tables`), `lib/engram/attachments.ex` (extract the locked row write from `upsert_attachment/3` into `commit_row/…` reused by v1 and v2; behaviour unchanged)
 - Test: `test/engram/attachments/uploads_test.exs`
 
