@@ -71,6 +71,13 @@ defmodule Engram.NotesPathIndexPlanTest do
   test "the delete-wins resurrection check uses the tombstone path index", %{user: u, vault: v} do
     :ok = Notes.delete_note(u, v, "A.md")
 
+    # Tombstones enough that the planner weighs selectivity: with one, every
+    # `deleted_at IS NOT NULL` partial index is a one-page tie, and which one
+    # wins (`notes_path_tomb` matches on vault_id alone here) flipped with
+    # the test order on CI.
+    now = DateTime.utc_now()
+    for _ <- 1..200, do: insert(:note, user: u, vault: v, deleted_at: now)
+
     {_, queries} =
       QueryRecorder.record(fn ->
         Notes.upsert_note(u, v, %{"path" => "A.md", "content" => "a"}, actor: "api")
