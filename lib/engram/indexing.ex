@@ -3069,6 +3069,8 @@ defmodule Engram.Indexing do
           Repo.all(
             from(k in Engram.Notes.FrontmatterKey,
               where: k.user_id == ^note.user_id and k.key_id in ^ids,
+              # One lock order everywhere, so two lockers never deadlock.
+              order_by: k.key_id,
               select: k.key_id,
               lock: "FOR KEY SHARE"
             )

@@ -249,8 +249,6 @@ defmodule Engram.Notes.FrontmatterKeys do
   end
 
   defp reap_candidates(repo, user_id, min_age_s) do
-    vault_ids = repo.all(from(v in Vault, where: v.user_id == ^user_id, select: v.id))
-
     max_id =
       repo.one(from(k in FrontmatterKey, where: k.user_id == ^user_id, select: max(k.key_id))) ||
         @first_user_id
@@ -259,15 +257,17 @@ defmodule Engram.Notes.FrontmatterKeys do
       from(k in FrontmatterKey,
         as: :key,
         where: k.user_id == ^user_id and k.key_id < ^max_id,
-        where: not exists(used(vault_ids, :h)),
-        where: not exists(used(vault_ids, :n)),
-        where: not exists(used(vault_ids, :d))
+        where: not exists(used(user_id, :h)),
+        where: not exists(used(user_id, :n)),
+        where: not exists(used(user_id, :d))
       )
 
     candidates =
       unused
       |> where([k], k.inserted_at < ago(^min_age_s, "second"))
       |> select([k], k.key_id)
+      # Same lock order as `Indexing.hold_key_ids!/2`.
+      |> order_by([k], k.key_id)
       |> lock("FOR UPDATE")
       |> repo.all()
 
@@ -279,9 +279,11 @@ defmodule Engram.Notes.FrontmatterKeys do
     end
   end
 
-  defp used(vault_ids, col) do
+  defp used(user_id, col) do
+    vault_ids = from(v in Vault, where: v.user_id == ^user_id, select: v.id)
+
     from(a in NoteAttr,
-      where: a.vault_id in ^vault_ids and a.key_id == parent_as(:key).key_id,
+      where: a.vault_id in subquery(vault_ids) and a.key_id == parent_as(:key).key_id,
       where: not is_nil(field(a, ^col)),
       select: 1
     )
