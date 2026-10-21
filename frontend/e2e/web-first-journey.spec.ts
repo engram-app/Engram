@@ -42,18 +42,29 @@ test.describe("Website-first: a new user signs up on the web", () => {
 			{ type: "targets", description: "ci,staging" },
 		],
 	}, async ({ page }) => {
+		// Terms and the heard-from question only exist where billing is on (SaaS,
+		// staging); the CI stack runs billing off, so its wizard is the vault step
+		// alone. Each step runs when the wizard shows it.
+		const onboardStep = () => new URL(page.url()).pathname;
+
 		await test.step("sign-in", async () => {
 			await clerkSignIn(page, (pending as { email: string }).email, "/");
-			await page.waitForURL(/\/onboard\/agreement/u, { timeout: 25_000 });
+			await page.waitForURL(/\/onboard\//u, { timeout: 25_000 });
 		});
 
 		await test.step("terms", async () => {
+			if (onboardStep() !== "/onboard/agreement") {
+				return;
+			}
 			await page.getByLabel(/I have read and agree/iu).click();
 			await page.getByRole("button", { name: /^continue$/iu }).click();
-			await page.waitForURL(/\/onboard\/heard/u, { timeout: 25_000 });
+			await page.waitForURL(/\/onboard\/(?:heard|vault)/u, { timeout: 25_000 });
 		});
 
 		await test.step("heard", async () => {
+			if (onboardStep() !== "/onboard/heard") {
+				return;
+			}
 			await page.getByRole("radio", { name: "Search engine" }).click();
 			await page.getByRole("button", { name: /^continue$/iu }).click();
 			await page.waitForURL(/\/onboard\/vault/u, { timeout: 25_000 });
