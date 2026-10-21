@@ -104,6 +104,8 @@ defmodule Engram.Logger.LogCallComplianceTest do
     # is a hash of a note id and a chunk fingerprint.
     "lib/engram/indexing/payload_v5.ex",
     "lib/engram/indexing/point_id.ex",
+    # Encrypted Voyage vectors keyed by an HMAC of note text (and its schema).
+    "lib/engram/indexing/vector_cache",
     "lib/engram/crypto.ex",
     "lib/engram_web/controllers/attachments_controller.ex",
     "lib/engram/backfill/",

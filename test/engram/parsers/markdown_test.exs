@@ -35,6 +35,183 @@ defmodule Engram.Parsers.MarkdownTest do
   # parse/2 — basic structure
   # ---------------------------------------------------------------------------
 
+  describe "parse/2 v5 structure" do
+    test "the heading path is a list too, and a heading may hold the separator" do
+      body = String.duplicate("word ", 120)
+      [chunk] = Markdown.parse("# X\n## A > B\n#{body}", "X.md")
+      assert chunk.headings == ["X", "A > B"]
+      assert chunk.heading_path == "X > A > B"
+    end
+
+    test "small sections join into one chunk" do
+      assert [_one] = Markdown.parse("## A\nalpha\n## B\nbeta\n", "T.md")
+    end
+  end
+
+  describe "parse/2 aliases in the prefix" do
+    defp embed_prefix(%{embed_text: e, text: t}),
+      do: binary_part(e, 0, byte_size(e) - byte_size(t) - 2)
+
+    defp first_prefix(content, path \\ "T.md"),
+      do: content |> Markdown.parse(path) |> hd() |> embed_prefix()
+
+    # B3
+    test "every alias form reaches the prefix" do
+      for fm <- [
+            "aliases: [A, B]",
+            "aliases:\n  - A\n  - B",
+            "aliases: A\nalias: B",
+            "alias: [A, B]"
+          ] do
+        assert first_prefix("---\n#{fm}\n---\nbody") == "T (aka A, B)", fm
+      end
+    end
+
+    # B4
+    test "a comma scalar is one alias" do
+      assert first_prefix("---\naliases: a, b\n---\nbody") == "T (aka a, b)"
+    end
+
+    # B5
+    test "numbers count, nulls maps and blanks do not" do
+      assert Markdown.aliases(%{"aliases" => [2024, nil, %{"a" => "b"}, ""]}, "T") == ["2024"]
+    end
+
+    # B7
+    test "aliases equal to the title or each other are dropped" do
+      assert Markdown.aliases(%{"aliases" => ["T", "t", " T "]}, "T") == []
+      assert Markdown.aliases(%{"aliases" => ["Ab", "aB", "c"]}, "T") == ["Ab", "c"]
+    end
+
+    # B9
+    test "a BOM before the fence still reads the aliases" do
+      chunks = Markdown.parse("\uFEFF---\naliases: [x]\n---\nbody", "T.md")
+      assert embed_prefix(hd(chunks)) == "T (aka x)"
+      assert Enum.map(chunks, & &1.heading_path) == ["T", "frontmatter"]
+    end
+
+    # B1
+    test "bad YAML still chunks, with no aliases" do
+      chunks = Markdown.parse("---\naliases: [x\n  bad: : :\n---\nbody", "T.md")
+      assert [%{text: "body"} = c | _] = chunks
+      assert embed_prefix(c) == "T"
+    end
+  end
+
+  describe "parse/2 canvas and property notes" do
+    # F12
+    test "a canvas's card text is the dense input of its first chunk" do
+      card = String.duplicate("launch plan review ", 50)
+      nodes = for i <- 1..3, do: %{"id" => "n#{i}", "type" => "text", "text" => "#{i} #{card}"}
+      nodes = nodes ++ [%{"id" => "f", "type" => "file", "file" => "Other.md"}]
+      json = Jason.encode!(%{"nodes" => nodes, "edges" => []})
+      assert byte_size(json) > 2_900
+
+      chunks = Markdown.parse(json, "Board.canvas")
+      assert [first | rest] = chunks
+      assert first.kind == "canvas_dense"
+      assert Enum.all?(rest, &(&1.kind == "data"))
+      assert length(chunks) == length(Engram.Native.chunk(json, "", "Board"))
+      cards = String.replace_prefix(first.embed_text, "Board\n\n", "")
+      assert byte_size(cards) <= 2_048
+      assert cards =~ "1 launch plan" and String.valid?(cards)
+      refute cards =~ "Other.md"
+    end
+
+    test "a canvas with no text cards stays keyword-only" do
+      json = Jason.encode!(%{"nodes" => [%{"id" => "f", "type" => "file", "file" => "a.md"}]})
+      assert Enum.all?(Markdown.parse(json, "B.canvas"), &(&1.kind == "data"))
+    end
+
+    # B8
+    test "a property-only note is one dense chunk" do
+      assert [%{kind: "frontmatter_dense", embed_text: e}] =
+               Markdown.parse("---\nproject: zanzibar\n---\n", "Plan.md")
+
+      assert e == "Plan\n\nzanzibar"
+    end
+  end
+
+  describe "parse/2 description lead" do
+    @two_sections "## A\n#{String.duplicate("alpha ", 100)}\n## B\n#{String.duplicate("beta ", 120)}"
+
+    test "type and description lead the first chunk only" do
+      fm = "---\ntype: Playbook\ndescription: Restore a backup\n---\n"
+      [c0, c1, %{kind: "frontmatter"}] = Markdown.parse(fm <> @two_sections, "T.md")
+      assert String.starts_with?(c0.embed_text, "T > A\nPlaybook: Restore a backup\n\n## A")
+      assert String.starts_with?(c0.context_text, "T > A\nPlaybook: Restore a backup\n\n")
+      assert String.starts_with?(c1.embed_text, "T > B\n\n## B")
+    end
+
+    test "a long description is one line cut at 200 bytes" do
+      desc = String.duplicate("é long words ", 100)
+      lead = Markdown.lead(%{"description" => "line one\n" <> desc})
+      assert byte_size(lead) <= 200 and String.valid?(lead)
+      assert String.starts_with?(lead, "line one é long")
+    end
+
+    test "a type alone adds nothing" do
+      assert Markdown.lead(%{"type" => "Playbook"}) == nil
+      [c0 | _] = Markdown.parse("---\ntype: Playbook\n---\n" <> @two_sections, "T.md")
+      assert String.starts_with?(c0.embed_text, "T > A\n\n## A")
+    end
+
+    test "trust, lifecycle, filter keys and dates never reach a dense input" do
+      fm = """
+      ---
+      tags: [tagzz]
+      resource: reszz
+      generated: {by: "human:genzz", at: "2026-08-21T10:00:00Z"}
+      verified: verzz
+      status: statzz
+      stale_after: 2027-01-01
+      sources: [srczz]
+      created: 2026-01-02
+      ---
+      """
+
+      for content <- [fm <> @two_sections, fm] do
+        embeds =
+          content
+          |> Markdown.parse("T.md")
+          |> Enum.filter(&Markdown.dense_kind?(&1.kind))
+          |> Enum.map_join("\n", & &1.embed_text)
+
+        assert embeds != ""
+        refute embeds =~ ~r/zz|2026|2027/, embeds
+      end
+    end
+  end
+
+  describe "parse/2 review fixes (PR #2084)" do
+    test "a merged chunk counts its sections" do
+      [c] = Markdown.parse("## A\nalpha\n## B\nbeta\n", "T.md")
+      assert c.section_count in [1, 2]
+
+      assert Enum.all?(
+               Markdown.parse("## A\n#{String.duplicate("x ", 400)}", "T.md"),
+               &(&1.section_count == 1)
+             )
+    end
+
+    test "a long type is cut to 64 bytes in the lead" do
+      lead = Markdown.lead(%{"type" => String.duplicate("t", 500), "description" => "d"})
+      assert lead == String.duplicate("t", 64) <> ": d"
+    end
+  end
+
+  describe "parse/2 malformed input" do
+    # D6: parse/2 scrubs invalid UTF-8 before the NIF, so the note still
+    # indexes (a replacement char per bad sequence); the NIF alone refuses
+    # it with an ArgumentError, never a panic.
+    test "invalid UTF-8 is scrubbed, not a crash" do
+      bad = "## A\nbefore " <> <<0xFF, 0xFE>> <> " after"
+      assert [%{text: text}] = Markdown.parse(bad, "T.md")
+      assert String.valid?(text) and text =~ "before" and text =~ "after"
+      assert_raise ArgumentError, fn -> Engram.Native.chunk(bad, "", "T") end
+    end
+  end
+
   describe "parse/2 basic structure" do
     test "returns list of chunks" do
       chunks = Markdown.parse(@simple_note, "Test/Hello World.md")
@@ -90,7 +267,19 @@ defmodule Engram.Parsers.MarkdownTest do
     end
 
     test "subsections include parent headings" do
-      chunks = Markdown.parse(@simple_note, "Test/Hello World.md")
+      # Sections of 512 B and over stay apart (min512), so each has its path.
+      filler = String.duplicate("word ", 110)
+
+      note =
+        String.replace(
+          @simple_note,
+          "Content of section one.",
+          "Content of section one. #{filler}"
+        )
+
+      note = String.replace(note, "This is the intro paragraph.", "Intro. #{filler}")
+      note = String.replace(note, "Content of section two.", "Content of section two. #{filler}")
+      chunks = Markdown.parse(note, "Test/Hello World.md")
       section_one = Enum.find(chunks, &String.contains?(&1.text, "Content of section one"))
       assert section_one.heading_path == "Hello World > Section One"
     end

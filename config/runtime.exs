@@ -333,6 +333,15 @@ case qdrant_switch.("QDRANT_MANAGE_QUOTAS") do
   on? -> config :engram, :qdrant_manage_quotas, on?
 end
 
+# true = the keyword leg computes IDF over the user's own points (Qdrant
+# 1.19+, users with >= :tenant_idf_min_points points). Default false: it
+# changes keyword ranking, so it is flipped at v5 go time, and false here
+# turns it off again without a deploy.
+case qdrant_switch.("TENANT_IDF") do
+  nil -> :ok
+  on? -> config :engram, :tenant_idf, on?
+end
+
 # false = EmbedNote never pauses for Qdrant pressure before paying Voyage.
 case qdrant_switch.("QDRANT_BACKPRESSURE_PREFLIGHT") do
   nil -> :ok
@@ -568,6 +577,13 @@ end
 # Off until the v5 pass completes; turned on with the v5 stamp.
 if budget = System.get_env("INDEX_BUDGET_ENABLED") do
   config :engram, :index_budget_enabled, budget == "true"
+end
+
+# The encrypted per-user vector cache (`Engram.Indexing.VectorCache`, chunker
+# v5 Task 12): a text is paid to Voyage once. Off by default; off, the embed
+# path never reads or writes `embedding_cache`.
+if cache = System.get_env("VECTOR_CACHE_ENABLED") do
+  config :engram, :vector_cache_enabled, cache == "true"
 end
 
 if pacing = System.get_env("FANOUT_PACING_ENABLED") do

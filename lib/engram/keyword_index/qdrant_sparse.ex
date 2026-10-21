@@ -53,6 +53,11 @@ defmodule Engram.KeywordIndex.QdrantSparse do
   # time scale with it.
   @query_chars 4096
 
+  # A capped document is scored as if it were at most `@cap_len_avgdls` x
+  # avgdl long (review M3): capped at avgdl it had no length penalty at all,
+  # so a 1 MB floor point beat a short exact chunk on tf saturation alone.
+  @cap_len_avgdls 3
+
   # Vectors come back PACKED (u32 LE indices ascending, f64 LE values) so a
   # note's worth sits off-heap; see `Engram.Native` for the memory accounting.
   #
@@ -61,34 +66,39 @@ defmodule Engram.KeywordIndex.QdrantSparse do
   # encoder moved to Rust, and still do.
   #
   # `cap_doc_len: true` normalizes each document as if it were at most 3 x
-  # `avgdl` long (BM25 with `min(doc_len, 3 * avgdl)`). Floor and merged
-  # points use it: a whole note in one vector would otherwise be buried by
-  # length normalization under every short chunk, and with no penalty at all
-  # it would outrank them. A longer document is encoded a second time with
-  # `avgdl = doc_len / 3`; the NIF has no length knob, and that second pass
-  # is one point's text.
+  # `avgdl` long (BM25 with `min(doc_len, 3 * avgdl)`). Floor points and
+  # capped groups use it: a whole note in one vector would otherwise be
+  # buried by length normalization under every short chunk, and with no
+  # penalty at all it would outrank them.
+  #
+  # `b:` (default 0.75) is BM25's length weight, in [0, 1] (the NIF wrapper
+  # refuses anything else). Merged v5 groups
+  # use a smaller one (plan Task 14.1): at 0.75 a 30 KB group sits 10 to 50x
+  # above `avgdl` and is buried on the leg exact queries need.
+  #
+  # Both go to the NIF, so every document is one encode. The defaults encode
+  # exactly as before the options existed.
   @impl Engram.KeywordIndex
   def encode_documents(texts, filter_key, avgdl, language, opts \\ [])
       when byte_size(filter_key) == 32 and is_number(avgdl) and avgdl > 0 do
     lang = Tokenizer.lang(language)
+    b = Keyword.get(opts, :b, 0.75)
+    cap = if Keyword.get(opts, :cap_doc_len, false), do: @cap_len_avgdls
 
-    encoded =
-      texts
-      |> calls()
-      |> Enum.flat_map(fn batch ->
-        for {indices, values, doc_len} <-
-              Engram.Native.encode_documents(
-                Enum.map(batch, &IO.iodata_to_binary/1),
-                filter_key,
-                avgdl / 1,
-                lang
-              ),
-            do: {%{indices: indices, values: values}, doc_len}
-      end)
-
-    if Keyword.get(opts, :cap_doc_len, false),
-      do: Enum.zip_with(texts, encoded, &cap_doc_len(&1, &2, filter_key, avgdl, lang)),
-      else: encoded
+    texts
+    |> calls()
+    |> Enum.flat_map(fn batch ->
+      for {indices, values, doc_len} <-
+            Engram.Native.encode_documents(
+              Enum.map(batch, &IO.iodata_to_binary/1),
+              filter_key,
+              avgdl / 1,
+              lang,
+              b: b,
+              cap: cap
+            ),
+          do: {%{indices: indices, values: values}, doc_len}
+    end)
   end
 
   # Batches of at most `@docs_per_call` texts and `@bytes_per_call` bytes;
@@ -112,28 +122,6 @@ defmodule Engram.KeywordIndex.QdrantSparse do
     )
   end
 
-  # A capped document is scored as if it were at most `@cap_len_avgdls` x
-  # avgdl long (review M3): capped at avgdl it had no length penalty at all,
-  # so a 1 MB floor point beat a short exact chunk on tf saturation alone.
-  # Re-encoding with avgdl = doc_len / 3 makes the length ratio exactly 3.
-  @cap_len_avgdls 3
-
-  defp cap_doc_len(text, {_vector, doc_len} = encoded, filter_key, avgdl, lang) do
-    if doc_len > @cap_len_avgdls * avgdl do
-      [{indices, values, ^doc_len}] =
-        Engram.Native.encode_documents(
-          [IO.iodata_to_binary(text)],
-          filter_key,
-          doc_len / @cap_len_avgdls,
-          lang
-        )
-
-      {%{indices: indices, values: values}, doc_len}
-    else
-      encoded
-    end
-  end
-
   @impl Engram.KeywordIndex
   def encode_query(query, filter_key, language) when byte_size(filter_key) == 32 do
     {indices, values} =
@@ -144,7 +132,7 @@ defmodule Engram.KeywordIndex.QdrantSparse do
     %{indices: indices, values: values}
   end
 
-  @doc "Packed sparse vector (see `encode_documents/4`) back to plain lists."
+  @doc "Packed sparse vector (see `encode_documents/5`) back to plain lists."
   @spec unpack(Engram.KeywordIndex.packed_sparse()) :: Engram.KeywordIndex.sparse()
   def unpack(%{indices: indices, values: values}) do
     %{

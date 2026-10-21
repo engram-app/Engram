@@ -560,6 +560,7 @@ defmodule Engram.Search do
           |> Keyword.put(:attr_filters, Keyword.get(opts, :attr_filters, []))
           |> Keyword.put(:with_vector, need_vectors?)
           |> Keyword.put(:full_precision, profile.full_precision)
+          |> Keyword.put(:tenant_idf, mode in [:keyword, :hybrid] and tenant_idf?(user))
 
         with {:ok, candidates} <- run_legs(mode, user, query, search_opts, profile),
              vaults_by_id = load_candidate_vaults(user, vault, candidates),
@@ -713,6 +714,57 @@ defmodule Engram.Search do
   defp error_label({status, _body}) when is_integer(status), do: "http_#{status}"
   defp error_label(reason) when is_atom(reason), do: to_string(reason)
   defp error_label(_), do: "unknown"
+
+  @doc """
+  Whether the keyword leg computes IDF over this user's points only (spec
+  K4). Off unless `:tenant_idf` is set (default false, `TENANT_IDF`; it
+  changes keyword ranking, so it is flipped at v5 go time). Then: Qdrant
+  >= 1.19.0 (older servers reject the param) and at least
+  `ServiceConfig.get(:tenant_idf_min_points, 1_000)` points, below which a
+  per-tenant N is noise.
+
+  Neither input is read per search. The version is cached 5 minutes,
+  unreadable included (as unknown, so < 1.19, with one warning per probe);
+  the count 10 minutes per user. A failed count falls back to global IDF.
+  """
+  @spec tenant_idf?(map()) :: boolean()
+  def tenant_idf?(user) do
+    Engram.ServiceConfig.get(:tenant_idf, false) == true and
+      tenant_idf_version?() and
+      tenant_points(user) >= Engram.ServiceConfig.get(:tenant_idf_min_points, 1_000)
+  end
+
+  defp tenant_idf_version? do
+    version =
+      Engram.Cache.fetch(:tenant_idf_version, Qdrant.base_url(), fn ->
+        case Qdrant.cached_server_version() do
+          %Version{} = v ->
+            v
+
+          nil ->
+            Logger.warning("tenant idf: qdrant version unknown, using global idf")
+            :unknown
+        end
+      end)
+
+    match?(%Version{}, version) and Version.compare(version, "1.19.0") != :lt
+  end
+
+  # ponytail: nothing evicts this on re-index; the count only feeds a
+  # threshold, so up to 10 minutes stale is fine. Evict from the indexing
+  # commit if the threshold ever needs to be exact.
+  defp tenant_points(user) do
+    Engram.Cache.fetch(:tenant_points, user.id, fn ->
+      Engram.Indexing.point_count(user.id)
+    end)
+  rescue
+    e in [DBConnection.ConnectionError, Postgrex.Error, MatchError] ->
+      Logger.warning("tenant idf: point count failed, using global idf",
+        reason: Metadata.safe_reason(e)
+      )
+
+      0
+  end
 
   defp sparse_query(user, query) do
     case Engram.Crypto.dek_filter_key(user) do

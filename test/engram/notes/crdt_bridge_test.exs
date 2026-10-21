@@ -72,6 +72,14 @@ defmodule Engram.Notes.CrdtBridgeTest do
   end
 
   describe "ingest_plaintext/2" do
+    test "a BOM note round-trips byte-identical (PR #2084 review H3)" do
+      bom = "\uFEFF---\ntitle: Hi\n---\nbody\n"
+      doc = CrdtBridge.new_doc()
+      :ok = CrdtBridge.ingest_plaintext(doc, bom)
+      assert CrdtBridge.text_of(doc) == bom
+      assert Engram.Notes.Frontmatter.split(bom) == {nil, bom}
+    end
+
     test "splits frontmatter into the map/order and body into the text" do
       doc = CrdtBridge.new_doc()
       :ok = CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\n---\nbody\n")
@@ -200,6 +208,17 @@ defmodule Engram.Notes.CrdtBridgeTest do
       text = Yex.Doc.get_text(doc, CrdtBridge.text_name())
       Yex.Text.insert(text, 0, str)
       doc
+    end
+
+    # PR #2084 review H3: the chunker reads a BOM note's frontmatter, but the
+    # shared splitter must not, or every such note's body is rewritten on the
+    # next room bind and broadcast to every device.
+    test "a BOM note is not normalized: no key lifted, body byte-identical" do
+      bom = "\uFEFF---\ntitle: Hi\n---\nbody\n"
+      doc = CrdtBridge.new_doc() |> seed_body(bom)
+      assert :ok = CrdtBridge.normalize_doc(doc)
+      assert CrdtBridge.frontmatter_of(doc) == {[], %{}}
+      assert CrdtBridge.body_of(doc) == bom
     end
 
     test "lifts a single leading fence into the Y.Map and strips it from the body" do
