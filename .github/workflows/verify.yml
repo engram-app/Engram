@@ -4810,11 +4810,25 @@ jobs:
     # 16-28 min e2e-browser the PR's wall-clock even though `ci` ignored its
     # result. record-pass waits on them instead, so the e2e marker still means
     # "e2e passed".
-    needs: [fingerprint, version-check, unit-tests, lint, frontend-lint, e2e-lint, storage-database, migration-gates, static-checks]
+    # prebuild-* are here so their failure is visible: a gate whose prebuild
+    # failed reports `skipped`, which GitHub counts as a passing required check
+    # and the loop below would wave through.
+    needs: [fingerprint, prebuild-mix, prebuild-ci-image, version-check, unit-tests, lint, frontend-lint, e2e-lint, storage-database, migration-gates, static-checks]
     runs-on: [self-hosted, linux, x64, isolated]
     steps:
       - name: Check required jobs
         run: |
+          # A failed prebuild drags unit-tests/lint/storage-database/
+          # migration-gates into `skipped`, i.e. green required checks that ran
+          # nothing. The merge queue would land that commit unattended.
+          for pair in "prebuild-mix=${{ needs.prebuild-mix.result }}" "prebuild-ci-image=${{ needs.prebuild-ci-image.result }}"; do
+            case "${pair#*=}" in
+              failure|cancelled)
+                echo "::error::${pair%=*} ${pair#*=}: the gates that need it skipped without running"
+                exit 1 ;;
+            esac
+          done
+
           VC="${{ needs.version-check.result }}"
           UT="${{ needs.unit-tests.result }}"
           LN="${{ needs.lint.result }}"
