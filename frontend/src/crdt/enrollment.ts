@@ -21,7 +21,7 @@ export class CrdtEnrollment {
 			return;
 		}
 		this.enrolled.add(noteId);
-		void this.startSync(noteId);
+		this.startSync(noteId);
 	}
 
 	reset(noteId: string): void {
