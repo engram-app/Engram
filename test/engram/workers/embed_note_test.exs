@@ -1508,4 +1508,48 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert {:cancel, :isolated_after_node_death} = perform_job(EmbedNote, args(note))
     end
   end
+
+  # Model per plan (`Engram.EmbedModels`): the owner's plan picks the doc model
+  # Voyage is sent, and the stamp names the same one.
+  describe "model per plan" do
+    setup do
+      prev = Map.new([:billing_enabled, :embed_model], &{&1, Application.get_env(:engram, &1)})
+      Application.put_env(:engram, :billing_enabled, true)
+      Application.put_env(:engram, :embed_model, "voyage-4-large")
+
+      on_exit(fn ->
+        for {k, v} <- prev,
+            do:
+              if(v == nil,
+                do: Application.delete_env(:engram, k),
+                else: Application.put_env(:engram, k, v)
+              )
+      end)
+    end
+
+    for {tier, model} <- [{nil, "voyage-4-lite"}, {"pro", "voyage-4-large"}] do
+      test "a #{tier || "free"} owner's note embeds and stamps #{model}", %{
+        bypass: bypass,
+        user: user,
+        note: note
+      } do
+        if unquote(tier),
+          do: insert(:subscription, user: user, tier: unquote(tier), status: "active")
+
+        me = self()
+
+        Engram.MockEmbedder
+        |> expect(:embed_texts, fn texts, opts ->
+          send(me, {:model, opts[:model]})
+          {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+        end)
+
+        stub_qdrant(bypass)
+
+        assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+        assert_received {:model, unquote(model)}
+        assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_model == unquote(model)
+      end
+    end
+  end
 end

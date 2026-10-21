@@ -9,6 +9,7 @@ defmodule Engram.Indexing do
   import Ecto.Query
 
   alias Engram.Crypto
+  alias Engram.EmbedModels
   alias Engram.Indexing.PayloadV5
   alias Engram.Indexing.PointId
   alias Engram.Indexing.RetainedVectors
@@ -109,11 +110,37 @@ defmodule Engram.Indexing do
 
     # One re-resolve when the reaper deleted a key id mid-pass
     # (`hold_key_ids!/2`); the retained vectors make the retry Voyage-free.
-    case index_once(note, vault, user, opts) do
-      {:error, :frontmatter_keys_gone} -> index_once(note, vault, user, opts)
-      other -> other
+    with_pass_model(user, opts, fn ->
+      case index_once(note, vault, user, opts) do
+        {:error, :frontmatter_keys_gone} -> index_once(note, vault, user, opts)
+        other -> other
+      end
+    end)
+  end
+
+  @pass_model_key {__MODULE__, :pass_model}
+
+  # The doc model of this pass, by the owner's plan (`Engram.EmbedModels`):
+  # `opts[:doc_model]` (EmbedNote stamps the same one) or resolved here.
+  # Held in the process for the pass, so every reuse key (retained vectors,
+  # vector cache, fingerprints) and the Voyage request name the same model.
+  # Off per-plan nothing is set and `embed_model/0` applies, as before.
+  defp with_pass_model(user, opts, fun) do
+    if EmbedModels.per_plan?() do
+      prev = Process.put(@pass_model_key, opts[:doc_model] || EmbedModels.doc_model(user))
+
+      try do
+        fun.()
+      after
+        if prev, do: Process.put(@pass_model_key, prev), else: Process.delete(@pass_model_key)
+      end
+    else
+      fun.()
     end
   end
+
+  # The model this pass embeds with: the plan's, else the build's.
+  defp pass_model, do: Process.get(@pass_model_key) || embed_model()
 
   defp index_once(note, vault, user, opts) do
     case prepare_index(note, vault, user, opts) do
@@ -2002,7 +2029,7 @@ defmodule Engram.Indexing do
   # text (30 MB at 30 MB) just to hash it.
   defp retained_key(note, texts) do
     lengths = Enum.map(texts, &[Integer.to_string(IO.iodata_length(&1)), ":", &1])
-    {note.id, :crypto.hash(:sha256, [to_string(embed_model()), "\n" | lengths])}
+    {note.id, :crypto.hash(:sha256, [to_string(pass_model()), "\n" | lengths])}
   end
 
   defp retained(_note, []), do: :miss
@@ -2127,7 +2154,7 @@ defmodule Engram.Indexing do
           dek: dek,
           dek_version: user.dek_version || 1,
           content_key: content_key,
-          key_opts: [model: embed_model(), dims: dims, dtype: "float", input_type: "document"]
+          key_opts: [model: pass_model(), dims: dims, dtype: "float", input_type: "document"]
         }
 
         {:ok, Keyword.put(opts, :vector_cache, cache)}
@@ -2402,7 +2429,10 @@ defmodule Engram.Indexing do
     texts = Enum.map(texts, &IO.iodata_to_binary/1)
 
     case Enum.reject(
-           [model: doc_embed_model(), purpose: opts[:embed_purpose]],
+           [
+             model: Process.get(@pass_model_key) || doc_embed_model(),
+             purpose: opts[:embed_purpose]
+           ],
            &is_nil(elem(&1, 1))
          ) do
       [] -> embedder().embed_texts(texts)
@@ -2695,10 +2725,16 @@ defmodule Engram.Indexing do
       dl_count: 0
     }
 
+    # The owner's plan model: the reuse fingerprints name it, as in the pass.
     with {:ok, content_key} <- Crypto.dek_content_hash_key(user) do
       case Markdown.parse(note.content || "", note.path) do
-        [] -> {:ok, zero}
-        chunks -> {:ok, estimate_chunks(note, user, chunks, content_key, zero)}
+        [] ->
+          {:ok, zero}
+
+        chunks ->
+          with_pass_model(user, [], fn ->
+            {:ok, estimate_chunks(note, user, chunks, content_key, zero)}
+          end)
       end
     end
   end
@@ -2802,7 +2838,7 @@ defmodule Engram.Indexing do
   # embedder sends its own default, and a reuse fingerprint that names no
   # model would reuse old-model vectors after a default change, under a new
   # model stamp. (Prod sets DOC_EMBED_MODEL, so its model part is unchanged.)
-  defp fingerprint_prefix(true), do: "dense:#{embed_model()}/embed_text\n"
+  defp fingerprint_prefix(true), do: "dense:#{pass_model()}/embed_text\n"
   defp fingerprint_prefix(false), do: "sparse\n"
 
   # `embed_text`, not `context_text`: no folder, which is a filter key, not

@@ -25,6 +25,14 @@ defmodule Engram.Rebuild do
   Resuming `on` after `off` needs nothing: the per-note version stamps say
   what is left.
 
+  ## Pricing by plan
+
+  The manifest records each note's plan doc model (`Engram.EmbedModels`),
+  and the budget and every debit count cost in voyage-4-large tokens: a
+  Free note's voyage-4-lite tokens weigh a sixth (`EmbedModels.large_tokens/2`).
+  So `budget_tokens` times $0.12/M is the pass's budget in dollars. The
+  drift park and the token bucket count raw tokens.
+
   ## The v5 layout guard (Task 16.4)
 
   `on` reads `:on` only while new points are written in the v5 layout
@@ -58,6 +66,7 @@ defmodule Engram.Rebuild do
   alias Engram.Backfill.TenantScan
   alias Engram.Billing
   alias Engram.Cache
+  alias Engram.EmbedModels
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
@@ -269,10 +278,18 @@ defmodule Engram.Rebuild do
   end
 
   @doc false
-  def handle_tokens(_event, %{total_tokens: tokens}, _meta, _config) when is_integer(tokens) do
+  # The ledger debits cost, in voyage-4-large tokens (`EmbedModels.large_tokens/2`):
+  # a Free note's lite tokens cost a sixth. The drift check and the token
+  # bucket count raw tokens.
+  def handle_tokens(_event, %{total_tokens: tokens}, meta, _config) when is_integer(tokens) do
     case Process.get(@meter_key) do
-      nil -> :ok
-      {total, undebited} -> Process.put(@meter_key, {total + tokens, undebited + meter(tokens)})
+      nil ->
+        :ok
+
+      {total, undebited} ->
+        # A malformed (negative) count stays as is, so `debit/1` refuses it.
+        cost = if tokens >= 0, do: EmbedModels.large_tokens(tokens, meta[:model]), else: tokens
+        Process.put(@meter_key, {total + tokens, undebited + meter(tokens, cost)})
     end
 
     :ok
@@ -286,14 +303,14 @@ defmodule Engram.Rebuild do
   # here: a failed debit is logged, counted (`[:engram, :rebuild,
   # :meter_failed]`) and carried to `spend/2`'s own debit at the end, which
   # does raise.
-  defp meter(tokens) do
+  defp meter(tokens, cost) do
     _ = tpm_debit(tokens)
-    _ = debit(tokens)
+    _ = debit(cost)
     0
   rescue
-    e -> meter_failed(tokens, :error, Metadata.safe_reason(e))
+    e -> meter_failed(cost, :error, Metadata.safe_reason(e))
   catch
-    kind, reason -> meter_failed(tokens, kind, Metadata.safe_reason(reason))
+    kind, reason -> meter_failed(cost, kind, Metadata.safe_reason(reason))
   end
 
   defp meter_failed(tokens, kind, reason) do
@@ -317,9 +334,15 @@ defmodule Engram.Rebuild do
   and `dry_run` never gate, and never call Qdrant here.
   """
   @spec gate() :: :ok | {:snooze, 30}
-  def gate do
+  def gate, do: if(mode() == :on, do: pace(), else: :ok)
+
+  @doc """
+  `gate/0`'s checks in any mode: a plan-upgrade re-embed
+  (`Engram.EmbedModels`) is paced like the pass even when it is off.
+  """
+  @spec pace() :: :ok | {:snooze, 30}
+  def pace do
     cond do
-      mode() != :on -> :ok
       not tpm_room?() -> gated(:tokens)
       not qdrant_ready?() -> gated(:qdrant)
       true -> :ok
@@ -519,7 +542,7 @@ defmodule Engram.Rebuild do
           on_conflict:
             {:replace,
              [:vault_id, :est_tokens, :new_points, :reused_points, :mean_pooled_points] ++
-               [:dl_sum, :dl_count, :planned_at]},
+               [:dl_sum, :dl_count, :planned_at, :model]},
           conflict_target: :note_id
         )
       end)
@@ -575,9 +598,11 @@ defmodule Engram.Rebuild do
             conflict_target: :vault_id
           )
 
-        from(m in Manifest, select: coalesce(sum(m.est_tokens), 0))
-        |> repo.one()
-        |> to_integer()
+        # Priced per note at its plan's model (`EmbedModels.large_tokens/2`).
+        from(m in Manifest, group_by: m.model, select: {m.model, coalesce(sum(m.est_tokens), 0)})
+        |> repo.all()
+        |> Enum.map(fn {model, tokens} -> EmbedModels.large_tokens(to_integer(tokens), model) end)
+        |> Enum.sum()
       end)
       |> Enum.sum()
 

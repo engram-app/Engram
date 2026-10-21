@@ -101,6 +101,24 @@ if config_env() == :dev do
   config :logger, level: String.to_existing_atom(System.get_env("LOG_LEVEL", "debug"))
 end
 
+# Model per plan (SaaS, billing on): `{DOC,QUERY}_EMBED_MODEL_{FREE,STARTER,PRO}`.
+# Unset or blank reads the default (`Engram.EmbedModels.plan_defaults/0`):
+# Free voyage-4-lite, Starter and Pro voyage-4-large. Self-host ignores them.
+plan_models = fn prefix ->
+  Map.new(
+    [free: "voyage-4-lite", starter: "voyage-4-large", pro: "voyage-4-large"],
+    fn {plan, default} ->
+      case System.get_env("#{prefix}_#{String.upcase(to_string(plan))}", "") |> String.trim() do
+        "" -> {plan, default}
+        model -> {plan, model}
+      end
+    end
+  )
+end
+
+config :engram, :plan_doc_embed_models, plan_models.("DOC_EMBED_MODEL")
+config :engram, :plan_query_embed_models, plan_models.("QUERY_EMBED_MODEL")
+
 if config_env() != :test do
   # Storage backend. Default "s3" is the SaaS/prod path (AWS S3) and the
   # standard self-host path (MinIO). "database" is a self-host-only convenience

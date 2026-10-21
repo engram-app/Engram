@@ -16,7 +16,9 @@ defmodule Engram.Workers.RebuildStaleNote do
   `embed` slot a user's edit is waiting for. Every Voyage call here is
   `purpose: :maintenance`: never retried once it may have been billed (H6).
   While the v5 pass is `on`, each job first passes `Engram.Rebuild.gate/0`
-  (the maintenance token bucket and the Qdrant optimizer backlog).
+  (the maintenance token bucket and the Qdrant optimizer backlog). A plan
+  upgrade's re-embed (`upgrade: true`, `Engram.EmbedModels`) passes the same
+  checks (`Rebuild.pace/0`) in every mode.
   """
   use Oban.Worker,
     queue: :rebuild,
@@ -30,6 +32,10 @@ defmodule Engram.Workers.RebuildStaleNote do
   def timeout(job), do: EmbedNote.timeout(job)
 
   @impl Oban.Worker
+  def perform(%Oban.Job{args: %{"upgrade" => true}} = job) do
+    with :ok <- Rebuild.pace(), do: EmbedNote.perform(job)
+  end
+
   def perform(%Oban.Job{} = job) do
     with :ok <- Rebuild.gate(), do: EmbedNote.perform(job)
   end
