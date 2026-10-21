@@ -262,7 +262,9 @@ defmodule Engram.Vector.FilterRoundtripTest do
     d =
       Qdrant.attr_filter(key_id("launch"), {:d, gte: DateTime.to_unix(~U[2026-11-01 00:00:00Z])})
 
-    assert count(col, %{must: [n]}) == 2
+    # The module shares one collection, so count per tenant, never globally.
+    ua = %{key: "u", match: %{value: FilterId.uuid(a.user_id)}}
+    assert count(col, %{must: [ua, n]}) == 1
     assert count(col, %{must: [ub, n]}) == 1
     assert count(col, %{must: [ub, d]}) == 1
 
