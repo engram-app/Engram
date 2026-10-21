@@ -201,7 +201,11 @@ defmodule Engram.Release do
     for repo <- repos() do
       # A sibling task may be migrating: wait on its locks, don't fail boot.
       :ok = use_migrator_session(repo)
-      {:ok, _, _} = Ecto.Migrator.with_repo(repo, &do_prepare_database/1)
+
+      {:ok, _, _} =
+        Ecto.Migrator.with_repo(repo, fn repo ->
+          with_migration_lock(repo.config(), fn -> do_prepare_database(repo) end)
+        end)
     end
 
     :ok
@@ -389,7 +393,11 @@ defmodule Engram.Release do
     for repo <- repos() do
       # It replays every migration when it fires: same session as migrate/0.
       :ok = use_migrator_session(repo)
-      {:ok, _, _} = Ecto.Migrator.with_repo(repo, &do_reset_baseline/1)
+
+      {:ok, _, _} =
+        Ecto.Migrator.with_repo(repo, fn repo ->
+          with_migration_lock(repo.config(), fn -> do_reset_baseline(repo) end)
+        end)
     end
 
     :ok
