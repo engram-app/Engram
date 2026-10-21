@@ -1523,8 +1523,13 @@ jobs:
 
       # always(): an api_only failure above must not mask the Obsidian suite's
       # signal (the job still fails on the failed step).
+      # Test steps use !cancelled(), not always(): always() also runs them after
+      # a cancel (a superseded push), the suite outlives the runner's cancel
+      # grace, the job is force-killed, and Tear down / the Clerk reaper never
+      # run. That leaked 15 e2e stacks on SlowRaid for up to 3 days (2026-10-20).
+      # !cancelled() still runs them after an earlier step FAILS.
       - name: Wait for plugin + Playwright
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           echo "Waiting for plugin build..."
           for i in $(seq 1 300); do
@@ -1555,7 +1560,7 @@ jobs:
       # Guards helper logic like the Clerk session-create retry budget (#869).
       # always(): keep this guard's signal even if the api step failed.
       - name: "Harness unit tests"
-        if: always()
+        if: ${{ !cancelled() }}
         working-directory: e2e/unit
         run: python3 -m pytest . -v --no-header -p no:cacheprovider
 
@@ -1566,7 +1571,7 @@ jobs:
         # Not plain always(): with no backend every test errors and the suite
         # blames the first one ("INFRA DEAD ... first seen in test_51"). The
         # failed stack step is the real signal (9 such jobs in 14 days).
-        if: always() && steps.stack.outcome == 'success'
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' }}
         working-directory: e2e
         # -n 1 --dist=loadfile: SINGLE worker (default). Under -n 2, two workers
         # each drive their own Obsidian instance doing live Clerk auth + CRDT
@@ -2201,7 +2206,7 @@ jobs:
       # always(): a local-auth API failure above must not mask the CRDT suite's
       # signal (the job still fails on the failed step).
       - name: Wait for plugin + Playwright
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           echo "Waiting for plugin build..."
           for i in $(seq 1 300); do
@@ -2232,7 +2237,7 @@ jobs:
       # ------------------------------------------------------------------
       - name: "Run CRDT E2E tests"
         # Requires the stack: see "Run Obsidian E2E tests".
-        if: always() && steps.stack.outcome == 'success' && needs.fingerprint.outputs.e2e-target-suite != 'local'
+        if: ${{ !cancelled() && steps.stack.outcome == 'success' && needs.fingerprint.outputs.e2e-target-suite != 'local' }}
         working-directory: e2e
         # Single-process (no -n): the CRDT suite runs serially. It stays green
         # this way, and is the stability reference the e2e-clerk suite above now
