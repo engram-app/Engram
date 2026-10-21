@@ -3,8 +3,7 @@ defmodule Engram.FreeLiteDocEmbedsTest do
   Free notes embed with voyage-4-lite ahead of the v5 umbrella: the doc model
   follows the owner's plan (`Engram.EmbedModels`, copied from
   feat/chunker-v5) only with `EMBED_MODELS_PER_PLAN=true` and billing on.
-  Unset, every plan keeps today's one model. The same switch moves paid
-  QUERIES to voyage-4-large (`SearchProfile`); Free queries stay lite.
+  Unset, every plan keeps today's one model. Queries are untouched.
 
   async: false: flips the global `:billing_enabled` / `:embed_model` /
   `:embed_models_per_plan` env.
@@ -22,8 +21,6 @@ defmodule Engram.FreeLiteDocEmbedsTest do
   alias Engram.Notes.Chunk
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
-  alias Engram.QdrantStub
-  alias Engram.Search
   alias Engram.Search.SearchProfile
   alias Engram.UsageMeters
   alias Engram.Workers.EmbedNote
@@ -37,7 +34,7 @@ defmodule Engram.FreeLiteDocEmbedsTest do
   setup do
     prev =
       Map.new(
-        [:billing_enabled, :embed_model, :embed_models_per_plan, :query_embed_model],
+        [:billing_enabled, :embed_model, :embed_models_per_plan],
         &{&1, Application.get_env(:engram, &1)}
       )
 
@@ -169,6 +166,12 @@ defmodule Engram.FreeLiteDocEmbedsTest do
 
       for tier <- ["starter", "pro"],
           do: assert(EmbedModels.doc_model(paid_user(tier)) == @large)
+    end
+
+    # Queries stay on the one global model (prod voyage-4-lite) for every plan.
+    test "the switch does not change any plan's query model" do
+      for user <- [free_user(), paid_user()],
+          do: assert(SearchProfile.resolve(user).query_model == nil)
     end
 
     test "acceptable/1: Free keeps lite or large, paid needs large" do
@@ -403,81 +406,8 @@ defmodule Engram.FreeLiteDocEmbedsTest do
     end
   end
 
-  # Prod sets QUERY_EMBED_MODEL=voyage-4-lite for every plan today.
-  describe "the searcher's plan picks the query model" do
-    setup do
-      saas!()
-      Application.put_env(:engram, :query_embed_model, @lite)
-
-      bypass = Bypass.open()
-      Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
-      QdrantStub.stub_retrieve(bypass)
-
-      Bypass.stub(bypass, "POST", "/collections/engram_notes/points/query/batch", fn conn ->
-        conn
-        |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.send_resp(200, ~s({"result":[{"points":[]},{"points":[]}]}))
-      end)
-
-      test_pid = self()
-
-      stub(Engram.MockEmbedder, :embed_texts, fn [_query], opts ->
-        send(test_pid, {:query_model, opts[:model]})
-        {:ok, [List.duplicate(0.1, 3)]}
-      end)
-
-      :ok
-    end
-
-    defp search_model(user) do
-      assert {:ok, _} = Search.search(user, insert(:vault, user: user), "iron panel")
-      assert_received {:query_model, model}
-      model
-    end
-
-    test "per plan: Free queries with lite, Starter and Pro with large" do
-      assert SearchProfile.resolve(free_user()).query_model == @lite
-      assert search_model(free_user()) == @lite
-
-      for tier <- ["starter", "pro"] do
-        assert SearchProfile.resolve(paid_user(tier)).query_model == @large
-        assert search_model(paid_user(tier)) == @large
-      end
-    end
-
-    test "unset, every plan queries with the global lite model" do
-      Application.delete_env(:engram, :embed_models_per_plan)
-
-      for user <- [free_user(), paid_user()] do
-        assert SearchProfile.resolve(user).query_model == nil
-        assert search_model(user) == @lite
-      end
-    end
-
-    test "self-host queries with the global model, even with the switch set" do
-      Application.put_env(:engram, :billing_enabled, false)
-      assert SearchProfile.resolve(paid_user()).query_model == nil
-      assert search_model(paid_user()) == @lite
-    end
-
-    # No query-vector or result cache on the search path: the same query,
-    # back to back, embeds again with each searcher's own model.
-    test "the same query is never served across plans" do
-      free = free_user()
-      paid = paid_user()
-
-      assert Enum.map([free, paid, free, paid], &search_model/1) == [@lite, @large, @lite, @large]
-    end
-
-    test "a search_query_model override still wins" do
-      user = free_user()
-      insert(:user_limit_override, user: user, key: "search_query_model", value: %{"v" => @large})
-      assert SearchProfile.resolve(user).query_model == @large
-    end
-  end
-
   describe "runtime.exs per-plan env" do
-    @vars for p <- ~w(FREE STARTER PRO), k <- ~w(DOC QUERY), do: "#{k}_EMBED_MODEL_#{p}"
+    @vars for p <- ~w(FREE STARTER PRO), do: "DOC_EMBED_MODEL_#{p}"
 
     setup do
       prev = Map.new(["EMBED_MODELS_PER_PLAN" | @vars], &{&1, System.get_env(&1)})
@@ -498,18 +428,15 @@ defmodule Engram.FreeLiteDocEmbedsTest do
     test "unset configures nothing, and per-plan stays off" do
       assert read(:embed_models_per_plan) == nil
       assert read(:plan_doc_embed_models) == %{}
-      assert read(:plan_query_embed_models) == %{}
     end
 
-    test "EMBED_MODELS_PER_PLAN=true and the per-plan vars turn it on" do
+    test "EMBED_MODELS_PER_PLAN=true and DOC_EMBED_MODEL_FREE turn it on" do
       System.put_env("EMBED_MODELS_PER_PLAN", "true")
       System.put_env("DOC_EMBED_MODEL_FREE", " voyage-4-lite ")
       System.put_env("DOC_EMBED_MODEL_STARTER", "  ")
-      System.put_env("QUERY_EMBED_MODEL_PRO", "voyage-4-large")
 
       assert read(:embed_models_per_plan) == true
       assert read(:plan_doc_embed_models) == %{free: "voyage-4-lite"}
-      assert read(:plan_query_embed_models) == %{pro: "voyage-4-large"}
     end
   end
 end

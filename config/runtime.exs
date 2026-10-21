@@ -102,7 +102,7 @@ if config_env() == :dev do
 end
 
 # Model per plan (SaaS, billing on, `EMBED_MODELS_PER_PLAN=true`):
-# `{DOC,QUERY}_EMBED_MODEL_{FREE,STARTER,PRO}`.
+# `DOC_EMBED_MODEL_{FREE,STARTER,PRO}`. Queries keep `QUERY_EMBED_MODEL`.
 # Only the set ones are configured; an unset or blank plan reads its default
 # in `Engram.EmbedModels` (`plan_defaults/0`, the one copy: Free
 # voyage-4-lite, Starter and Pro voyage-4-large). Self-host ignores them.
@@ -121,7 +121,6 @@ if per_plan = System.get_env("EMBED_MODELS_PER_PLAN") do
 end
 
 config :engram, :plan_doc_embed_models, plan_models.("DOC_EMBED_MODEL")
-config :engram, :plan_query_embed_models, plan_models.("QUERY_EMBED_MODEL")
 
 if config_env() != :test do
   # Storage backend. Default "s3" is the SaaS/prod path (AWS S3) and the

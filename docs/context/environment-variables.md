@@ -91,7 +91,6 @@ Live. Covers every var `config/runtime.exs` reads (`Engram.EnvVarDocsTest` fails
 | `DOC_EMBED_MODEL` | falls back to `EMBED_MODEL` | Asymmetric: doc-indexing model. |
 | `QUERY_EMBED_MODEL` | falls back to `EMBED_MODEL` | Asymmetric: query model. |
 | `DOC_EMBED_MODEL_FREE` / `DOC_EMBED_MODEL_STARTER` / `DOC_EMBED_MODEL_PRO` | `voyage-4-lite` / `voyage-4-large` / `voyage-4-large` | SaaS (billing on) only: doc model by the note owner's plan (`Engram.EmbedModels`). Unset or blank reads the default. Self-host ignores them. |
-| `QUERY_EMBED_MODEL_FREE` / `QUERY_EMBED_MODEL_STARTER` / `QUERY_EMBED_MODEL_PRO` | `voyage-4-lite` / `voyage-4-large` / `voyage-4-large` | SaaS (billing on) only: query model by the searching user's plan. A `search_query_model` override wins. |
 | `EMBED_429_SNOOZE_SECONDS` | `60` | Voyage-429 snooze (worker reschedules without burning an attempt). |
 | `EMBED_SETTLE_SECONDS` | `30` | Settle debounce — a note must sit unedited this long before it embeds, collapsing a burst of saves into one Voyage call. Higher = cheaper, staler index. |
 | `EMBED_SETTLE_MAX_WAIT_SECONDS` | `300` | Starvation ceiling — a continuously-edited note embeds at most this long after its first pending edit. Keep **>** `EMBED_SETTLE_SECONDS`. |
@@ -192,7 +191,7 @@ Paddle is the Merchant-of-Record. Server keys gate API calls; the client token f
 |----------|---------|---------|
 | `ENGRAM_LIMITS_ENFORCED` | derived (`clerk` + Paddle key) | `true`/`false` override of plan-limit enforcement. |
 | `ENGRAM_<TIER>_<KEY>` | unset | Per-tier limit overrides (e.g. `ENGRAM_FREE_MAX_NOTES`); names come from `LimitKeys.env_var_names/0`. |
-| `EMBED_MODELS_PER_PLAN` | `false` | `true` (SaaS, billing on) picks the doc and query model by plan (`Engram.EmbedModels`: Free voyage-4-lite, Starter/Pro voyage-4-large, overridable per plan with `{DOC,QUERY}_EMBED_MODEL_{FREE,STARTER,PRO}`). Off, every plan uses `DOC_EMBED_MODEL` / `QUERY_EMBED_MODEL` as before v5. Turn on in the v5 go sequence. |
+| `EMBED_MODELS_PER_PLAN` | `false` | `true` (SaaS, billing on) picks the DOC model by the note owner's plan (`Engram.EmbedModels`: Free voyage-4-lite, Starter/Pro voyage-4-large, overridable per plan with `DOC_EMBED_MODEL_{FREE,STARTER,PRO}`). Off, every plan uses `DOC_EMBED_MODEL` as before. Queries always use `QUERY_EMBED_MODEL`. |
 | `ATTACHMENT_MIME_BYPASS` | off (gate ON) | `true` disables the MIME/extension whitelist. |
 | `ATTACHMENT_MIME_ALLOWLIST_EXTRA` | unset | Comma-sep extra allowed MIMEs without disabling the gate. |
 | `RATE_LIMIT_AUTH_OVERRIDE` | ignored unless `CI=true` | Auth-limiter override for CI/E2E only. |
