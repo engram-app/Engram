@@ -284,6 +284,34 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert reload(note).payload_hash == nil
   end
 
+  # A v5 note whose row no longer decrypts cannot be healed. Left NULL, the
+  # daily re-check would requeue its user forever; it is marked (never
+  # deleted), counted, and skipped by the re-check until a pass rewrites it.
+  test "an undecryptable v5 note is marked, counted, and not re-picked", ctx do
+    for id <- point_ids(ctx.stale),
+        do: Agent.update(ctx.store, &put_in(&1.points[id], %{"u" => "x", "y" => "b2xk"}))
+
+    {1, _} =
+      Repo.update_all(
+        from(n in Note, where: n.id == ^ctx.stale.id),
+        [set: [content_ciphertext: :crypto.strong_rand_bytes(48)]],
+        skip_tenant_check: true
+      )
+
+    ref =
+      :telemetry_test.attach_event_handlers(self(), [[:engram, :indexing, :payload_reconcile]])
+
+    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+    assert_receive {[:engram, :indexing, :payload_reconcile], ^ref, %{count: 1},
+                    %{outcome: :skipped_v5}}
+
+    assert reload(ctx.stale).payload_hash == ReconcileNotePayloads.undecryptable_stamp()
+    assert Repo.exists?(from(n in Note, where: n.id == ^ctx.stale.id), skip_tenant_check: true)
+    assert Agent.get(ctx.store, & &1.overwrites) == []
+    assert NotePayloadStamps.run_pass() == :done
+  end
+
   # Once done, the migration re-checks daily on the existing runner cron, so
   # a row a lost race unstamped is healed without waiting for an edit.
   test "a done migration reopens for a row unstamped later", ctx do

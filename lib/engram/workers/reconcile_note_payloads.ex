@@ -22,7 +22,11 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   Both layouts. A v3 point gets `expected_note_payload/1` merged in; a v5
   point (#2087's short-key layout) gets `expected_v5_payload/2`, built from
   the decrypted note as a pass builds it, and REPLACED (`overwrite_payload`).
-  A v5 note that does not decrypt is left unstamped (`skipped_v5`).
+  A v5 note that does not decrypt cannot be healed: it is counted
+  (`skipped_v5`) and marked with `undecryptable_stamp/0` in `payload_hash`,
+  so the daily re-check does not requeue its user forever. Never deleted;
+  the stamp matches no real hash, so the note's next index pass refreshes
+  its points and stamps the real one.
 
   Every note row is read fresh per batch, so an edit that commits after a
   rotation's flip is healed with its own keys, and one whose index already
@@ -241,6 +245,30 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     end)
   end
 
+  @undecryptable "undecryptable"
+
+  @doc """
+  The `payload_hash` of a note the heal could not decrypt. Not a SHA-256
+  (a real stamp is 32 bytes), so it never vouches for any payload.
+  """
+  def undecryptable_stamp, do: @undecryptable
+
+  # CAS on the row as read: an edit since then re-indexes (and stamps) it.
+  defp mark_undecryptable(note) do
+    {:ok, {_, _}} =
+      Repo.with_tenant(note.user_id, fn ->
+        same_content =
+          if note.content_hash,
+            do: dynamic([n], n.content_hash == ^note.content_hash),
+            else: dynamic([n], is_nil(n.content_hash))
+
+        from(n in Note, where: n.id == ^note.id and is_nil(n.payload_hash), where: ^same_content)
+        |> Repo.update_all(set: [payload_hash: @undecryptable])
+      end)
+
+    :ok
+  end
+
   defp heal_notes(user, notes, points, stored, counts) do
     Enum.reduce_while(notes, {:ok, counts}, fn note, {:ok, counts} ->
       present = for id <- Map.get(points, note.id, []), Map.has_key?(stored, id), do: id
@@ -248,8 +276,12 @@ defmodule Engram.Workers.ReconcileNotePayloads do
       counts = bump(counts, :checked)
 
       case plan_note(user, note, v5_ids, v3_ids, stored) do
-        {:ok, writes, payload} -> heal_note(note, payload, writes, counts)
-        :skip -> {:cont, {:ok, bump(counts, :skipped_v5)}}
+        {:ok, writes, payload} ->
+          heal_note(note, payload, writes, counts)
+
+        :skip ->
+          mark_undecryptable(note)
+          {:cont, {:ok, bump(counts, :skipped_v5)}}
       end
     end)
   end
