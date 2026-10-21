@@ -17,13 +17,8 @@ defmodule Engram.Notes.FrontmatterAttrs do
   """
 
   alias Engram.Notes.FrontmatterDate
+  alias Engram.Notes.KeyAliases
   alias Engram.Vector.FilterId
-
-  # First-class keys, their aliases (top-level heads of the nested ones) and
-  # the dense-prefix keys.
-  @skip MapSet.new(~w(type tags status author generated reviewed_by verified source resource
-                      sources project created date updated modified timestamp reviewed
-                      expires stale_after due priority title aliases description))
 
   @max_entries 64
   @max_string 256
@@ -39,7 +34,12 @@ defmodule Engram.Notes.FrontmatterAttrs do
   def extract(values, filter_key) do
     entries =
       values
-      |> Enum.reject(fn {key, _} -> MapSet.member?(@skip, String.downcase(key)) end)
+      # First-class keys, their English aliases and the dense-prefix keys:
+      # the shared field table (`KeyAliases.english/0`), so a field added
+      # there is never also indexed as a user-added key.
+      |> Enum.reject(fn {key, _} ->
+        MapSet.member?(KeyAliases.english(), String.downcase(key))
+      end)
       |> Enum.sort_by(&elem(&1, 0))
       |> Enum.flat_map(fn {key, value} -> entries(key, value) end)
 
