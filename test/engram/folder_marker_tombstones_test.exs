@@ -8,9 +8,13 @@ defmodule Engram.FolderMarkerTombstonesTest do
 
   alias Engram.Notes
 
+  # The factory user has no DEK, and delete_folder_marker/3 (unlike create)
+  # does not mint one, so it needs a user that already holds it.
   setup do
     user = insert(:user)
-    vault = insert(:vault, user: user)
+    insert(:user_limit_override, user: user, key: "vaults_cap", value: %{"v" => -1})
+    {:ok, user} = Engram.Crypto.ensure_user_dek(user)
+    {:ok, vault, _} = Engram.Vaults.register_vault(user, "Test", Ecto.UUID.generate())
     %{user: user, vault: vault}
   end
 
