@@ -332,13 +332,22 @@ describe("FolderTree (HT)", () => {
 	});
 
 	it.each([
-		["Delete", { key: "Delete", code: "Delete" }],
-		["Cmd+Backspace", { key: "Backspace", code: "Backspace", metaKey: true }],
-	])("%s on the selected row asks to delete it", async (_name, keys) => {
+		["Delete", [{ key: "Delete", code: "Delete" }]],
+		// A keyboard sends the modifier as its own keydown first.
+		[
+			"Cmd+Backspace",
+			[
+				{ key: "Meta", code: "MetaLeft", metaKey: true },
+				{ key: "Backspace", code: "Backspace", metaKey: true },
+			],
+		],
+	])("%s on the selected row asks to delete it", async (_name, presses) => {
 		renderTree();
 		const projects = await screen.findByRole("treeitem", { name: "Projects" });
 		fireEvent.click(projects);
-		fireEvent.keyDown(projects, keys);
+		for (const keys of presses) {
+			fireEvent.keyDown(projects, keys);
+		}
 		expect(await screen.findByRole("dialog")).toHaveTextContent(/delete/iu);
 		// Only asks: nothing is deleted until the user confirms.
 		expect(batchDeleteFoldersMutate).not.toHaveBeenCalled();

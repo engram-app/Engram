@@ -26,6 +26,18 @@ interface Deps {
 	scrollParentRef: React.RefObject<HTMLDivElement | null>;
 	onRenameCommit: (itemId: string, newName: string) => void;
 	onMove: (sourceIds: string[], targetItemId: string) => void;
+	/** Delete key on the selection (or the focused row). Should confirm first. */
+	onDelete: (itemIds: string[]) => void;
+}
+
+// The rows a Delete key acts on: the selection, else the row with focus.
+function deleteTargets(tree: {
+	getSelectedItems: () => ItemInstance<Data>[];
+	getFocusedItem: () => ItemInstance<Data>;
+}): string[] {
+	const selected = tree.getSelectedItems().map((i) => i.getId());
+	const ids = selected.length > 0 ? selected : [tree.getFocusedItem().getId()];
+	return ids.filter((id) => id !== ROOT_ID);
 }
 
 // Loader-side data: HT stores LoaderItem as the per-item `T`.
@@ -162,6 +174,20 @@ export function useEngramTree(deps: Deps) {
 			if (move) {
 				deps.onMove(move.ids, move.dest);
 			}
+		},
+		// Delete everywhere; Cmd+Backspace too, since a Mac keyboard has no
+		// Delete key. Plain Backspace stays off: it is too easy to press by habit.
+		hotkeys: {
+			customDelete: {
+				hotkey: "Delete",
+				handler: (_e, t) => deps.onDelete(deleteTargets(t)),
+			},
+			customDeleteMac: {
+				// The library's only Cmd matcher also takes Ctrl, so Ctrl+Backspace
+				// deletes too; it still asks first.
+				hotkey: "metaorcontrol+Backspace",
+				handler: (_e, t) => deps.onDelete(deleteTargets(t)),
+			},
 		},
 		features: [
 			syncDataLoaderFeature,

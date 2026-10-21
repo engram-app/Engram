@@ -25,7 +25,6 @@ import { cn } from "@/lib/utils";
 import {
 	type AttachmentSummary,
 	useBatchDeleteAttachments,
-	useBatchMoveAttachments,
 	useFolders,
 	useRenameAttachment,
 } from "../api/queries";
@@ -37,6 +36,7 @@ import {
 	type PreviewKind,
 } from "./attachment-preview";
 import { DeleteConfirm } from "./tree-actions/delete-confirm";
+import { useAttachmentMove } from "./tree-actions/move-clash";
 import { MoveDialog } from "./tree-actions/move-dialog";
 import { RenameInput } from "./tree-actions/rename-input";
 
@@ -130,7 +130,7 @@ export function AttachmentDetails({
 	const { slug } = useParams();
 	const navigate = useNavigate();
 	const { data: folders } = useFolders();
-	const move = useBatchMoveAttachments();
+	const move = useAttachmentMove();
 	const remove = useBatchDeleteAttachments();
 	const [mode, setMode] = useState<"move" | "delete" | null>(null);
 
@@ -208,7 +208,7 @@ export function AttachmentDetails({
 					nodes={[{ kind: "file", path: att.path }]}
 					onPick={(target) => {
 						setMode(null);
-						move.mutate({ paths: [att.path], target_folder: target });
+						move.move([att.path], target);
 					}}
 					onCancel={() => setMode(null)}
 				/>
@@ -224,6 +224,7 @@ export function AttachmentDetails({
 					onCancel={() => setMode(null)}
 				/>
 			) : null}
+			{move.dialog}
 		</section>
 	);
 }
