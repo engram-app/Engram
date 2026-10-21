@@ -20,19 +20,23 @@ defmodule Engram.IndexingChunkTextTest do
 
   @path "Health/Iron Panel.md"
 
+  # Each section is padded past the v5 chunker's 512-byte coalesce floor,
+  # so the three sections stay three chunks.
+  @pad String.duplicate("Reference ranges and units vary by lab. ", 15)
+
   defp content(ferritin_body) do
     """
     # Iron Panel
 
-    Intro paragraph.
+    Intro paragraph. #{@pad}
 
     ## Ferritin
 
-    #{ferritin_body}
+    #{ferritin_body} #{@pad}
 
     ## Transferrin
 
-    Transferrin saturation is normal.
+    Transferrin saturation is normal. #{@pad}
     """
   end
 
