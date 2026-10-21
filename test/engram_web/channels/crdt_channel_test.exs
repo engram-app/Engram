@@ -540,9 +540,9 @@ defmodule EngramWeb.CrdtChannelTest do
       user: user,
       vault: vault
     } do
-      # #846: a client retry re-sends the create. The create-time checkpoint
-      # flattens the doc to a fresh server lineage, so a naive re-apply APPENDS
-      # rather than merging as a no-op and the body doubles.
+      # #846: a client retry re-sends the create. When the create-time
+      # checkpoint seeded a fresh server lineage, a naive re-apply APPENDED
+      # rather than merging as a no-op and the body doubled. Pins idempotency.
       id = Ecto.UUID.generate()
       frame = frame_for_content("once")
       payload = %{"doc_id" => id, "path" => "Notes/retry.md", "b64" => frame}

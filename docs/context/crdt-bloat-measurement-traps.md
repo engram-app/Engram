@@ -143,9 +143,8 @@ at the worker instead of at the schedule.
   return zero rows and "0 notes, ratio 0" is indistinguishable from a healthy
   empty database — a lying oracle whose gauges would be believed. Same guard and
   reasoning as `Engram.Workers.OrphanSweep`.
-- The checkpoint sample is taken **pre-flatten** on purpose, so #1707 reads the
-  bloat the gate is meant to catch rather than what a previous flatten already
-  reclaimed. Today the gate never fires, so the two readings are equal.
+- The checkpoint flatten is gone (#958, 0.60.1): it minted a rival lineage.
+  The sample is the stored state; there is no pre/post-flatten distinction.
 - `@bloat_threshold` (5) in the sweep must match the `le` bucket on the `>5x`
   panel of the engram-crdt dashboard. Changing one without the other makes them
   disagree silently.

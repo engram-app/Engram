@@ -151,8 +151,8 @@ defmodule Engram.Notes.CrdtTransportTest do
 
       # The fallback: the client's full state applies and the two converge.
       # Converge, not "hello world": the client's history and the server's are
-      # unrelated, so the merged body can hold both copies (rival lineages,
-      # see LineageAudit). This pins that no acked edit is lost and both sides
+      # unrelated, so the merged body can hold both copies (rival lineages).
+      # This pins that no acked edit is lost and both sides
       # agree.
       {:ok, whole} = Yex.encode_state_as_update(client)
       assert {:ok, _} = CrdtTransport.apply_update(user, vault, note.id, whole)

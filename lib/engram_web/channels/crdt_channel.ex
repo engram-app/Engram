@@ -1385,12 +1385,11 @@ defmodule EngramWeb.CrdtChannel do
     end
   end
 
-  # #846, the detached twin of seed_genesis_if_empty/3. The room path guards its
-  # apply on the doc still being empty because the create-time checkpoint
-  # FLATTENS the doc to a fresh server lineage: re-applying the client's original
-  # lineage afterwards no longer merges as a no-op, Yjs APPENDS it, and the body
-  # doubles. `crdt_create` is idempotent and clients do retry it, so the detached
-  # path needs the same guard — taken against the row, which is the durable
+  # #846. The create-time checkpoint used to seed a fresh server lineage, so
+  # re-applying the client's original lineage on a retry APPENDED instead of
+  # merging as a no-op, and the body doubled. Genesis now keeps the client's
+  # lineage, but `crdt_create` is idempotent and clients do retry it, so the
+  # guard stays — taken against the row, which is the durable
   # equivalent of the room's in-memory doc. `row_content` and `prune_ids` both
   # come from `fold_row_and_tail/4`, read as late as possible: a value read
   # earlier could be stale by the time this dispatches. The write itself is
@@ -1467,8 +1466,7 @@ defmodule EngramWeb.CrdtChannel do
   end
 
   # A crafted update can abort inside the y_ex NIF — either by raising (caught
-  # below) or, per its room-path twin `seed_genesis_if_empty/3`, by exiting the
-  # calling process (caught here too, same discipline). Contain it: a bad frame
+  # below) or by exiting the calling process (caught here too, same discipline). Contain it: a bad frame
   # costs this note its seed (the client re-sends over crdt_msg), never the
   # channel.
   defp apply_detached(update) do
@@ -1489,8 +1487,8 @@ defmodule EngramWeb.CrdtChannel do
   catch
     :exit, reason ->
       # Never log the raw exit reason: a NIF abort can carry the offending Yjs
-      # frame bytes in its payload. safe_exit_reason/1 is the same bounded
-      # projection seed_genesis_if_empty/3 uses for this exact failure class.
+      # frame bytes in its payload. safe_exit_reason/1 is the bounded
+      # projection for this exact failure class.
       Logger.warning(
         "crdt genesis detached seed apply exited",
         Metadata.with_category(:warning, :sync, reason: Metadata.safe_exit_reason(reason))

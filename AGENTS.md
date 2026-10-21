@@ -561,7 +561,7 @@ Grouped index into `docs/context/`. Each entry is a trigger → doc; read the do
 - The per-vault index room (`filemeta_v0`): wire, projection onto `notes.path_*`, why it drains with no off switch → `docs/context/crdt-index-room.md`
 - A CRDT room won't go away, resident rooms climb, or tuning `CRDT_IDLE_EXIT_MS`/`CRDT_MAX_RESIDENT_ROOMS` → `docs/context/crdt-room-lifetime-and-drain.md`
 - Background worker processed stale note content (facade vs `authoritative_content`) → `docs/context/worker-reads-stale-content-facade.md`
-- Measuring CRDT doc bloat, deciding whether to reopen the flatten gate (#1707 closed: prod ratio 1.01), or reading the engram-crdt dashboard → `docs/context/crdt-bloat-measurement-traps.md`
+- Measuring CRDT doc bloat, or reading the engram-crdt dashboard (the checkpoint flatten was removed in 0.60.1 because it doubles bodies; never reintroduce a server reset) → `docs/context/crdt-bloat-measurement-traps.md`
 - Note content doubled or interleaved, or the server holds a note TWICE (one-encoder invariant, frontmatter re-seed, flatten boundary #958) → `docs/context/crdt-lineage-doubling.md`
 - Note version history, the outbox write path, adding a content-write path or an MCP write tool → `docs/context/note-revisions-history.md`
 - Every `crdt_create` returns `create_failed` on a NEW vault, or a create leg drops a re-minted note id → `docs/context/crdt-create-cross-vault-id-reuse.md`
