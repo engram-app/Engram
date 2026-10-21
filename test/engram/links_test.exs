@@ -486,6 +486,43 @@ defmodule Engram.LinksTest do
       assert [_] = Links.backlinks_for_attachment(user, other.id, att.id)
       assert Links.backlinks_for_attachment(user, vault.id, att.id) == []
     end
+
+    test "never reaches another user's or another vault's links on a shared name", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, intruder} = Engram.Fixtures.user_with_dek_fixture()
+      theirs = insert(:vault, user: intruder)
+      other = insert(:vault, user: user)
+
+      link = fn owner, v, note_path ->
+        n = Engram.Fixtures.insert_note!(owner, v, %{path: note_path})
+
+        :ok =
+          Links.replace_links(owner, v, n.id, [
+            %{target: "shared.pdf", alias: nil, anchor: nil, link_type: "embed", position: 0}
+          ])
+
+        n
+      end
+
+      att = Engram.Fixtures.insert_attachment!(user, vault, %{path: "shared.pdf"})
+      mine = link.(user, vault, "Mine.md")
+      _same_user_other_vault = link.(user, other, "Elsewhere.md")
+      _ = Engram.Fixtures.insert_attachment!(user, other, %{path: "shared.pdf"})
+
+      their_att = Engram.Fixtures.insert_attachment!(intruder, theirs, %{path: "shared.pdf"})
+      _ = link.(intruder, theirs, "Theirs.md")
+
+      assert [%{source_note_id: id}] = Links.backlinks_for_attachment(user, vault.id, att.id)
+      assert id == mine.id
+
+      # Another user's attachment id, asked through this user's vault or theirs.
+      assert Links.backlinks_for_attachment(user, vault.id, their_att.id) == []
+      assert Links.backlinks_for_attachment(user, theirs.id, their_att.id) == []
+      assert Links.backlinks_for_attachment(intruder, theirs.id, att.id) == []
+      assert Links.backlinks_for_attachment(intruder, vault.id, att.id) == []
+    end
   end
 
   describe "backlinks_for_note/2" do
