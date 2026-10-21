@@ -15,6 +15,7 @@ defmodule Engram.PromEx.IndexingKindTest do
   alias Engram.Notes
   alias Engram.PromEx.Indexing, as: IndexingPlugin
   alias Engram.ServiceConfig
+  alias Engram.Test.PromExMetrics
 
   @event [:engram, :indexing, :points_written]
 
@@ -131,7 +132,7 @@ defmodule Engram.PromEx.IndexingKindTest do
   test "the counter is registered with closed-enum tags" do
     metric =
       [otp_app: :engram]
-      |> IndexingPlugin.event_metrics()
+      |> then(&PromExMetrics.of(IndexingPlugin, &1))
       |> Map.fetch!(:metrics)
       |> Enum.find(&(&1.event_name == @event))
 

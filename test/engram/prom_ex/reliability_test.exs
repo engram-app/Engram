@@ -10,10 +10,11 @@ defmodule Engram.PromEx.ReliabilityTest do
   use ExUnit.Case, async: true
 
   alias Engram.PromEx.Reliability, as: Plugin
+  alias Engram.Test.PromExMetrics
   alias PromEx.MetricTypes.Event
 
   defp metrics do
-    Plugin.event_metrics(otp_app: :engram) |> List.wrap() |> Enum.flat_map(& &1.metrics)
+    PromExMetrics.of(Plugin) |> List.wrap() |> Enum.flat_map(& &1.metrics)
   end
 
   defp counter_for(event_name) do
@@ -33,7 +34,7 @@ defmodule Engram.PromEx.ReliabilityTest do
 
   describe "event_metrics/1" do
     test "returns Event struct(s) prefixed [:engram, :prom_ex, :reliability]" do
-      events = Plugin.event_metrics(otp_app: :engram) |> List.wrap()
+      events = PromExMetrics.of(Plugin) |> List.wrap()
       assert Enum.all?(events, &match?(%Event{}, &1))
       assert Enum.any?(metrics(), fn m -> Enum.at(m.name, 2) == :reliability end)
     end

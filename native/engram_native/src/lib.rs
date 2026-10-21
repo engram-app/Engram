@@ -30,7 +30,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 const K1: f64 = 1.2;
-const B: f64 = 0.75;
 // Same bound and reason as QdrantSparse's @memo_max.
 const MEMO_MAX: usize = 20_000;
 
@@ -41,16 +40,33 @@ fn dim(key: &[u8], token: &str) -> u32 {
     u32::from_be_bytes([out[0], out[1], out[2], out[3]])
 }
 
+/// BM25 length options. `b` is the length weight (0.75 for every v3 point);
+/// `cap`, when set, scores a document as if it were at most `cap` x avgdl
+/// long (floor points and capped groups use 3.0).
+#[derive(Clone, Copy)]
+struct Bm25 {
+    avgdl: f64,
+    b: f64,
+    cap: Option<f64>,
+}
+
 /// One chunk -> (u32 LE indices sorted ascending, f64 LE values, raw doc_len).
 fn encode(
     text: &str,
     key: &[u8],
-    avgdl: f64,
+    bm25: Bm25,
     lang: Option<&str>,
     memo: &mut HashMap<String, u32>,
 ) -> (Vec<u8>, Vec<u8>, usize) {
     let (tokens, doc_len) = tokenizer::tokens_with_len(text, lang);
-    let norm = (1.0 - B) + B * (doc_len as f64) / avgdl;
+    // Uncapped, this is the exact expression the encoder always used, so a
+    // b 0.75 uncapped vector is bit-identical to before the options existed.
+    let len = doc_len as f64;
+    let len = match bm25.cap {
+        Some(cap) if len > cap * bm25.avgdl => cap * bm25.avgdl,
+        _ => len,
+    };
+    let norm = (1.0 - bm25.b) + bm25.b * len / bm25.avgdl;
 
     let mut tf: HashMap<&str, u32> = HashMap::new();
     for t in &tokens {
@@ -98,14 +114,17 @@ fn encode_documents_nif<'a>(
     key: Binary<'a>,
     avgdl: f64,
     lang: Option<String>,
+    b: f64,
+    cap: Option<f64>,
 ) -> (Vec<(Binary<'a>, Binary<'a>, usize)>, usize) {
+    let bm25 = Bm25 { avgdl, b, cap };
     memory::measured(|| {
         let mut memo = HashMap::new();
         texts
             .iter()
             .map(|t| {
                 let text = String::from_utf8_lossy(t.as_slice());
-                let (i, v, n) = encode(&text, key.as_slice(), avgdl, lang.as_deref(), &mut memo);
+                let (i, v, n) = encode(&text, key.as_slice(), bm25, lang.as_deref(), &mut memo);
                 (to_binary(env, &i), to_binary(env, &v), n)
             })
             .collect()

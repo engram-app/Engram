@@ -10,12 +10,13 @@ defmodule Engram.PromEx.IndexingTest do
   use ExUnit.Case, async: true
 
   alias Engram.PromEx.Indexing
+  alias Engram.Test.PromExMetrics
 
   @repath_stop_event [:engram, :indexing, :repath, :stop]
   @link_rewrite_failed_event [:engram, :links, :rewrite, :failed]
 
   test "event_metrics/1 maps the repath :stop event to outcome-tagged metrics" do
-    built = Indexing.event_metrics(otp_app: :engram)
+    built = PromExMetrics.of(Indexing)
     metrics = built.metrics
 
     assert metrics != [], "plugin should register at least one metric"
@@ -46,7 +47,7 @@ defmodule Engram.PromEx.IndexingTest do
   end
 
   test "event_metrics/1 maps the link-rewrite :failed event to a reason-tagged counter" do
-    built = Indexing.event_metrics(otp_app: :engram)
+    built = PromExMetrics.of(Indexing)
     metrics = built.metrics
 
     link_rewrite_metrics = Enum.filter(metrics, &(&1.event_name == @link_rewrite_failed_event))
@@ -63,7 +64,7 @@ defmodule Engram.PromEx.IndexingTest do
   # Version rebuilds are never charged to a user's cap, so this sum is the only
   # record of that spend. It must read the event EmbedNote emits.
   test "event_metrics/1 sums maintenance embed tokens from EmbedNote's event" do
-    built = Indexing.event_metrics(otp_app: :engram)
+    built = PromExMetrics.of(Indexing)
 
     assert [metric] =
              Enum.filter(built.metrics, &(&1.event_name == [:engram, :embed, :maintenance]))

@@ -29,13 +29,15 @@ defmodule Engram.KeywordIndex do
               language :: atom() | nil
             ) :: [{packed_sparse(), doc_len :: non_neg_integer()}]
 
-  # Optional: only the floor index calls it, and test doubles implement /4.
+  # Optional: only floor points and merged v5 chunks call it, and test
+  # doubles implement /4.
   @optional_callbacks encode_documents: 5
 
   @doc """
   `encode_documents/4` with options. `cap_doc_len: true` length-normalizes
-  each document as if it were at most `avgdl` long (the floor index's one
-  whole-note vector).
+  each document as if it were at most 3 x `avgdl` long (floor points and
+  capped groups). `b:` (default 0.75) is the BM25 length weight; merged v5
+  chunks use a smaller one (`Engram.Indexing.sparse_opts/1`).
   """
   @callback encode_documents(
               texts :: [iodata()],

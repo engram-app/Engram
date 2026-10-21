@@ -66,7 +66,8 @@ defmodule Engram.Vector.Qdrant do
   @doc "Largest point batch one upsert or vector update sends."
   def max_write_batch, do: @max_write_batch
 
-  defp base_url, do: ServiceConfig.get(:qdrant_url, @default_url)
+  @doc "The Qdrant base URL this node talks to (a cache key for per-server values)."
+  def base_url, do: ServiceConfig.get(:qdrant_url, @default_url)
   defp collection, do: ServiceConfig.get(:qdrant_collection, @default_collection)
 
   @doc "Returns the configured Qdrant collection name (env-var-driven)."
@@ -1539,7 +1540,26 @@ defmodule Engram.Vector.Qdrant do
       limit: Keyword.get(search_opts, :limit, 5),
       with_payload: true
     }
+    |> maybe_tenant_idf(search_opts)
     |> maybe_with_vector(search_opts)
+  end
+
+  # `tenant_idf: true` (Qdrant >= 1.19.0, see `Engram.Search.tenant_idf?/1`)
+  # computes the keyword leg's IDF over the user's own points instead of the
+  # whole shard. Sparse dims are already HMAC-keyed per user, so a term's
+  # document count n is already per tenant; what changes is N, from the
+  # shard to the user's points, which compresses the IDF of terms common in
+  # the user's own vault toward 0. Independent of the retrieval filter.
+  # ponytail: matches the v3 `user_id` key; PR-15b's short key `u` must be
+  # matched too (reuse build_tenant_filter's user clause) once it lands.
+  defp maybe_tenant_idf(leg, search_opts) do
+    if Keyword.get(search_opts, :tenant_idf, false) do
+      user = %{key: "user_id", match: %{value: Keyword.fetch!(search_opts, :user_id)}}
+      idf = %{idf: %{corpus: %{must: [user]}}}
+      Map.update(leg, :params, idf, &Map.merge(&1, idf))
+    else
+      leg
+    end
   end
 
   # Qdrant's own RRF default, kept so fused scores read as before.
@@ -1611,7 +1631,7 @@ defmodule Engram.Vector.Qdrant do
       with_payload: false
     }
 
-    %{searches: [dense_leg, sparse_leg]}
+    %{searches: [dense_leg, maybe_tenant_idf(sparse_leg, search_opts)]}
   end
 
   @doc """
