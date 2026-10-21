@@ -29,13 +29,21 @@ defmodule Engram.NotesHotAppendTest do
       n
     end
 
+    page = fn ->
+      %{rows: [[ctid]]} =
+        Repo.query!("SELECT ctid::text FROM notes WHERE id = $1", [Ecto.UUID.dump!(note.id)])
+
+      ctid
+    end
+
     before = hot.()
+    ctid_before = page.()
 
     Repo.query!(
       "UPDATE notes SET crdt_head = NULL WHERE id = $1 AND kind = 'note' AND crdt_head IS NOT NULL",
       [Ecto.UUID.dump!(note.id)]
     )
 
-    assert hot.() == before + 1
+    assert hot.() == before + 1, "ctid #{ctid_before} -> #{page.()}"
   end
 end
