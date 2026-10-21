@@ -96,7 +96,7 @@ defmodule Engram.DataMigrations.NoteSplit do
   defp batches(batch, step, after_id, n, rounds) do
     case step.(after_id) do
       ids when length(ids) < batch -> n + length(ids)
-      ids -> batches(batch, step, Enum.max(ids), n + batch, rounds + 1)
+      ids -> batches(batch, step, Enum.max(ids), n + length(ids), rounds + 1)
     end
   end
 
@@ -136,11 +136,17 @@ defmodule Engram.DataMigrations.NoteSplit do
 
   # ONE statement: the ids subquery and the touch. Returns the touched ids;
   # lowercase uuid strings sort as their bytes do, so the max is the keyset.
+  #
+  # `= ANY(ARRAY(...))`, not `IN (...)`: Postgres may plan an IN subquery as a
+  # semi-join it RESCANS per outer row, and a rescan of LIMIT .. FOR UPDATE
+  # SKIP LOCKED skips the rows this statement already updated and returns the
+  # next ones, so one batch touched more than its limit and the keyset jumped
+  # past rows. ARRAY(...) is an InitPlan, evaluated exactly once.
   defp touch(repo, needing) do
     {_count, ids} =
       repo.update_all(
         from(n in Note,
-          where: n.id in subquery(needing),
+          where: fragment("? = ANY(ARRAY(?))", n.id, subquery(needing)),
           update: [set: [kind: fragment("kind")]],
           select: n.id
         ),

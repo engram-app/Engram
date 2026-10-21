@@ -18,7 +18,8 @@ defmodule Engram.PromEx.ZeroInitTest do
   end
 
   test "every alerted series is on /metrics after start" do
-    scrape = PromEx.get_metrics(Engram.PromEx)
+    # get_metrics/1 returns iodata.
+    scrape = Engram.PromEx |> PromEx.get_metrics() |> IO.iodata_to_binary()
 
     for {metric, labels} <- ZeroInit.prometheus_series() do
       assert series_line?(scrape, metric, labels),
