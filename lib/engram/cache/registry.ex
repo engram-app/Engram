@@ -137,6 +137,9 @@ defmodule Engram.Cache.Registry do
     # a new key instead of invalidating this one, on every node at once. The
     # TTL only reaps the keys a write left behind.
     %{name: :vault_scan, ttl: 600_000, cache_nil: false, evict_match: :key, pg_channel: nil},
+    # Whether every notes row carries wave 3's 16-byte ids (Engram.Notes.Keys);
+    # the NoteSplit ledger, read at most once a minute per node.
+    %{name: :note_split, ttl: 60_000, cache_nil: false, evict_match: :key, pg_channel: nil},
     # Legal floor / current version / hash per document; evicted on publish.
     %{
       name: :legal_version,

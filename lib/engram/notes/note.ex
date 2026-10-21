@@ -121,6 +121,22 @@ defmodule Engram.Notes.Note do
     field :parse_status, :string, default: "ok"
     field :parse_reason, :map
 
+    # Wave 3 narrow keys (migration 20261021110000). Written ONLY by the
+    # `notes_derive_core_keys` trigger from the columns above, never cast or
+    # put by the app; lookups filter on them through Engram.Notes.Keys.
+    field :path_id, :binary_id
+    field :folder_id, :binary_id
+    field :basename_id, :binary_id
+    field :path_ci_id, :binary_id
+    field :type_id, :binary_id
+    field :tag_ids, {:array, :binary_id}
+    field :is_folder, :boolean
+    field :key_version, :integer
+    field :path_len, :integer
+    field :parse_code, :integer
+    field :link_keys_v, :integer
+    field :content_digest, :binary
+
     belongs_to :user, Engram.Accounts.User
     belongs_to :vault, Engram.Vaults.Vault
     has_many :chunks, Engram.Notes.Chunk
