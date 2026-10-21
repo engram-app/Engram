@@ -1348,8 +1348,8 @@ export function useBillingStatus() {
 }
 
 // GET /billing/usage, the slice the usage meter and the embed-bucket row read.
-// `limit: null` is uncapped (`index_points` is uncapped while the v5 index
-// budget is off).
+// `limit: null` is uncapped. `index_points` and `floor_notes` are present only
+// while the v5 index budget is on.
 export interface UsageEntry {
 	used: number;
 	limit: number | null;
@@ -1372,9 +1372,9 @@ export interface BillingUsage {
 	tier: string;
 	usage: {
 		notes: UsageEntry;
-		index_points: UsageEntry;
+		index_points?: UsageEntry;
 		// Notes on keyword-only search (the floor tier).
-		floor_notes: number;
+		floor_notes?: number;
 		embed_bucket?: EmbedBucket | null;
 	};
 }

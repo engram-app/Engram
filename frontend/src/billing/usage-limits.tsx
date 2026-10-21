@@ -1,19 +1,30 @@
 import { Link } from "react-router";
 import { useT } from "@/i18n/locale-provider";
 import type { UIText } from "@/i18n/ui-text";
-import { type BillingUsage, type UsageEntry, useBillingUsage } from "../api/queries";
+import {
+	type BillingUsage,
+	type UsageEntry,
+	useBillingConfig,
+	useBillingUsage,
+} from "../api/queries";
 import { SettingsSectionCard } from "../settings/account/section-card";
 
 // No invisible limits (review H3 of #2067): the notes cap and the v5 search
 // passage budget are shown where they are spent, and a banner says what
 // happens before and after either one binds. "Passages" are search points;
 // past the passage budget older notes drop to keyword-only search (the floor
-// tier), and nothing is deleted.
+// tier), and nothing is deleted. Both exist only with the v5 limits
+// (`/billing/config` `plan_limits`, INDEX_BUDGET_ENABLED): before them the
+// app is main's, with no banner, no panel and no usage request.
 
 const WARN_AT = 0.8;
 
-function percent({ used, limit }: UsageEntry): number | null {
-	return limit ? Math.floor((100 * used) / limit) : null;
+function percent(entry: UsageEntry | undefined): number | null {
+	return entry?.limit ? Math.floor((100 * entry.used) / entry.limit) : null;
+}
+
+function useV5Limits(): boolean {
+	return useBillingConfig().data?.plan_limits === "v5";
 }
 
 type T = ReturnType<typeof useT>;
@@ -43,7 +54,9 @@ function notices(usage: BillingUsage["usage"], { t, tn }: Pick<T, "t" | "tn">): 
 
 	const pointsPct = percent(points);
 
-	if (usage.floor_notes > 0) {
+	const floor = usage.floor_notes ?? 0;
+
+	if (floor > 0) {
 		out.push(
 			tn(
 				{
@@ -51,14 +64,14 @@ function notices(usage: BillingUsage["usage"], { t, tn }: Pick<T, "t" | "tn">): 
 					other:
 						"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
 				},
-				usage.floor_notes,
+				floor,
 			),
 		);
 	} else if (pointsPct !== null && pointsPct >= WARN_AT * 100) {
 		out.push(
 			t(
 				"You have used {percent}% of your {cap} full-search passages. Past that, older notes are found by keyword only (exact words, not meaning). Nothing is deleted.",
-				{ percent: pointsPct, cap: points.limit ?? 0 },
+				{ percent: pointsPct, cap: points?.limit ?? 0 },
 			),
 		);
 	}
@@ -66,7 +79,7 @@ function notices(usage: BillingUsage["usage"], { t, tn }: Pick<T, "t" | "tn">): 
 	return out;
 }
 
-export function UsageBanner() {
+function Banner() {
 	const { t, tn } = useT();
 	const { data } = useBillingUsage();
 	if (!data) {
@@ -93,13 +106,13 @@ export function UsageBanner() {
 	);
 }
 
-export function UsagePanel() {
+function Panel() {
 	const { t, tn } = useT();
 	const { data } = useBillingUsage();
 	if (!data) {
 		return null;
 	}
-	const { notes, index_points: points, floor_notes: floor } = data.usage;
+	const { notes, index_points: points, floor_notes: floor = 0 } = data.usage;
 
 	return (
 		<SettingsSectionCard title={t("Usage")}>
@@ -109,7 +122,7 @@ export function UsagePanel() {
 						? t("Notes: {used}", { used: notes.used })
 						: t("Notes: {used} of {cap}", { used: notes.used, cap: notes.limit })}
 				</li>
-				{points.limit === null ? null : (
+				{!points || points.limit === null ? null : (
 					<li>
 						{t("Full search: {used} of {cap} passages", { used: points.used, cap: points.limit })}
 						<p className="text-muted-foreground">
@@ -133,4 +146,12 @@ export function UsagePanel() {
 			</ul>
 		</SettingsSectionCard>
 	);
+}
+
+export function UsageBanner() {
+	return useV5Limits() ? <Banner /> : null;
+}
+
+export function UsagePanel() {
+	return useV5Limits() ? <Panel /> : null;
 }

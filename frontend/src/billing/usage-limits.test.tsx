@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,6 +29,15 @@ function Wrapper({ children }: { children: ReactNode }) {
 	);
 }
 
+// `/billing/config` reports which limit set is enforced; the banner and the
+// panel exist only with the v5 one (INDEX_BUDGET_ENABLED), as on main
+// before it.
+function serve(body: BillingUsage, limits: "v5" | "legacy" = "v5") {
+	get.mockImplementation((path: string) =>
+		Promise.resolve(path === "/billing/config" ? { plan_limits: limits } : body),
+	);
+}
+
 function usage(over: Partial<BillingUsage["usage"]> = {}): BillingUsage {
 	return {
 		tier: "free",
@@ -43,7 +52,7 @@ function usage(over: Partial<BillingUsage["usage"]> = {}): BillingUsage {
 
 describe("UsagePanel", () => {
 	it("shows notes and search passages against their caps", async () => {
-		get.mockResolvedValue(usage());
+		serve(usage());
 		render(<UsagePanel />, { wrapper: Wrapper });
 
 		expect(await screen.findByText("Notes: 100 of 2000")).toBeTruthy();
@@ -51,7 +60,7 @@ describe("UsagePanel", () => {
 	});
 
 	it("hides the passages row while there is no passages limit", async () => {
-		get.mockResolvedValue(usage({ index_points: { used: 600, limit: null } }));
+		serve(usage({ index_points: { used: 600, limit: null } }));
 		render(<UsagePanel />, { wrapper: Wrapper });
 
 		expect(await screen.findByText("Notes: 100 of 2000")).toBeTruthy();
@@ -59,7 +68,7 @@ describe("UsagePanel", () => {
 	});
 
 	it("says how many notes are keyword-only", async () => {
-		get.mockResolvedValue(usage({ floor_notes: 3 }));
+		serve(usage({ floor_notes: 3 }));
 		render(<UsagePanel />, { wrapper: Wrapper });
 
 		expect(
@@ -70,14 +79,14 @@ describe("UsagePanel", () => {
 
 describe("UsageBanner", () => {
 	it("is silent well under every cap", async () => {
-		get.mockResolvedValue(usage());
+		serve(usage());
 		const { container } = render(<UsageBanner />, { wrapper: Wrapper });
 		await screen.findByTestId("usage-banner-ready");
 		expect(container.querySelector("aside")).toBeNull();
 	});
 
 	it("warns at 80% of the notes cap and says what happens at it", async () => {
-		get.mockResolvedValue(usage({ notes: { used: 1700, limit: 2000 } }));
+		serve(usage({ notes: { used: 1700, limit: 2000 } }));
 		render(<UsageBanner />, { wrapper: Wrapper });
 
 		expect(
@@ -88,7 +97,7 @@ describe("UsageBanner", () => {
 	});
 
 	it("explains keyword-only search when the passages are full", async () => {
-		get.mockResolvedValue(usage({ index_points: { used: 12_000, limit: 12_000 }, floor_notes: 4 }));
+		serve(usage({ index_points: { used: 12_000, limit: 12_000 }, floor_notes: 4 }));
 		render(<UsageBanner />, { wrapper: Wrapper });
 
 		expect(
@@ -96,5 +105,22 @@ describe("UsageBanner", () => {
 				"Your full-search passages are used up. 4 older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
 			),
 		).toBeTruthy();
+	});
+});
+
+describe("with the legacy limits (INDEX_BUDGET_ENABLED off)", () => {
+	it("renders neither banner nor panel, and never asks for usage", async () => {
+		serve(usage({ notes: { used: 2900, limit: 3000 } }), "legacy");
+		const { container } = render(
+			<>
+				<UsageBanner />
+				<UsagePanel />
+			</>,
+			{ wrapper: Wrapper },
+		);
+
+		await waitFor(() => expect(get).toHaveBeenCalledWith("/billing/config"));
+		expect(container.innerHTML).toBe("");
+		expect(get).not.toHaveBeenCalledWith("/billing/usage");
 	});
 });

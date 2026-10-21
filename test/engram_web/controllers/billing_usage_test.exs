@@ -97,10 +97,12 @@ defmodule EngramWeb.BillingUsageTest do
       %{vault: vault}
     end
 
-    test "reports points used, no limit and no floor notes while the budget is off", %{conn: conn} do
+    # Budget off is main's response: no points or floor fields, so no
+    # count over the user's chunks on every call.
+    test "omits points and floor notes while the budget is off", %{conn: conn} do
       body = usage(conn)
-      assert body["usage"]["index_points"] == %{"used" => 0, "limit" => nil}
-      assert body["usage"]["floor_notes"] == 0
+      refute Map.has_key?(body["usage"], "index_points")
+      refute Map.has_key?(body["usage"], "floor_notes")
     end
 
     test "with the budget on: the Free cap, real points and floor notes", %{
