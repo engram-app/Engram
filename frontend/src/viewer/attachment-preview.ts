@@ -192,3 +192,26 @@ export function formatBytes(bytes: number, locale?: string): string {
 		maximumFractionDigits: unit === 0 ? 0 : 1,
 	}).format(value);
 }
+
+// "report.final.pdf" -> { stem: "report.final", ext: ".pdf" }. A dotfile or a
+// bare name has no extension.
+export function fileStem(path: string): { stem: string; ext: string } {
+	const name = path.split("/").pop() ?? path;
+	const dot = name.lastIndexOf(".");
+	return dot <= 0 ? { stem: name, ext: "" } : { stem: name.slice(0, dot), ext: name.slice(dot) };
+}
+
+// Rename keeps the folder and the extension; only the stem changes, so a file
+// cannot become a different type by rename. Null = nothing to send.
+export function attachmentRenamePath(path: string, nextStem: string): string | null {
+	const { stem, ext } = fileStem(path);
+	let next = nextStem.trim();
+	if (ext && next.toLowerCase().endsWith(ext.toLowerCase())) {
+		next = next.slice(0, -ext.length);
+	}
+	if (!next || next.includes("/") || next === stem) {
+		return null;
+	}
+	const folder = path.includes("/") ? path.slice(0, path.lastIndexOf("/") + 1) : "";
+	return `${folder}${next}${ext}`;
+}

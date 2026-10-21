@@ -1,13 +1,22 @@
 import { Link, useParams } from "react-router";
 import { useT } from "@/i18n/locale-provider";
-import { useBacklinks } from "../api/queries";
+import { useAttachmentBacklinks, useBacklinks } from "../api/queries";
 import { noteName } from "../lib/note-name";
 import { noteHref } from "../routes";
 
-export default function BacklinksPanel({ noteId }: { noteId: string | null }) {
+// Notes linking to a note, or (given `attachmentId`) to an attachment.
+export default function BacklinksPanel({
+	noteId = null,
+	attachmentId = null,
+}: {
+	noteId?: string | null;
+	attachmentId?: string | null;
+}) {
 	const { t } = useT();
 	const { slug } = useParams();
-	const { data, isLoading } = useBacklinks(noteId);
+	const noteLinks = useBacklinks(attachmentId ? null : noteId);
+	const attachmentLinks = useAttachmentBacklinks(attachmentId);
+	const { data, isLoading } = attachmentId ? attachmentLinks : noteLinks;
 
 	if (isLoading) {
 		return null;

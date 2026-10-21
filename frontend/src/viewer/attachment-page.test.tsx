@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { ApiError, api } from "../api/client";
 import type { AttachmentSummary } from "../api/queries";
+import { RightToolsProvider } from "../layout/right-tools-context";
 import AttachmentPage from "./attachment-page";
 
 // Stub the heavy pdf.js viewer — this suite only verifies routing-by-mime, not
@@ -49,11 +50,13 @@ beforeEach(() => {
 
 function renderAt(id: string) {
 	return render(
-		<MemoryRouter initialEntries={[`/v/work/${id}`]}>
-			<Routes>
-				<Route path="/v/:slug/:itemId" element={<AttachmentPage />} />
-			</Routes>
-		</MemoryRouter>,
+		<RightToolsProvider>
+			<MemoryRouter initialEntries={[`/v/work/${id}`]}>
+				<Routes>
+					<Route path="/v/:slug/:itemId" element={<AttachmentPage />} />
+				</Routes>
+			</MemoryRouter>
+		</RightToolsProvider>,
 	);
 }
 
@@ -77,15 +80,21 @@ it("shows the file card for a type with no preview, without fetching its bytes",
 	mockAttachments = [
 		att({ id: "zip-1", path: "stuff/a.zip", mime_type: "application/zip", size_bytes: 1536 }),
 	];
-	mockBacklinks = [{ source_note_id: "n-1", source_path: "Inbox/Plan.md", source_title: null }];
 	const getBlob = vi.spyOn(api, "getBlob");
 	renderAt("zip-1");
 	expect(screen.getByRole("heading", { name: "a.zip" })).toBeInTheDocument();
 	expect(screen.getByText("1.5 kB")).toBeInTheDocument();
 	expect(screen.getByText("application/zip")).toBeInTheDocument();
-	expect(screen.getByRole("link", { name: "Plan" })).toHaveAttribute("href", "/v/work/n-1");
 	expect(screen.queryByRole("link", { name: /open in new tab/iu })).not.toBeInTheDocument();
 	expect(getBlob).not.toHaveBeenCalled();
+});
+
+it("keeps the extension when renaming", () => {
+	mockAttachments = [att({ id: "zip-1", path: "a.zip", mime_type: "application/zip" })];
+	renderAt("zip-1");
+	fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+	expect(screen.getByRole("textbox")).toHaveValue("a");
+	expect(screen.getByText(".zip")).toBeInTheDocument();
 });
 
 it("fetches the bytes when Download is clicked on a card-only file", async () => {
@@ -94,12 +103,6 @@ it("fetches the bytes when Download is clicked on a card-only file", async () =>
 	renderAt("zip-1");
 	fireEvent.click(screen.getByRole("button", { name: "Download" }));
 	await waitFor(() => expect(getBlob).toHaveBeenCalledWith("/attachments/a.zip?raw=1"));
-});
-
-it("says no notes link to the file when nothing does", () => {
-	mockAttachments = [att({ id: "zip-1", path: "a.zip", mime_type: "application/zip" })];
-	renderAt("zip-1");
-	expect(screen.getByText(/no notes link to this file yet/iu)).toBeInTheDocument();
 });
 
 it("previews a text file as read-only text", async () => {

@@ -1,5 +1,5 @@
 import { Download } from "lucide-react";
-import { lazy, type ReactNode, Suspense, useEffect, useState } from "react";
+import { lazy, type ReactNode, Suspense, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
@@ -8,9 +8,11 @@ import { encodePathSegments } from "@/lib/path";
 import { whenLoaded } from "@/lib/when-loaded";
 import { ApiError, api, isNotFound } from "../api/client";
 import { useAttachments } from "../api/queries";
+import { useRightToolSlot } from "../layout/right-tools-context";
 import { AttachmentDetails } from "./attachment-details";
 import { opensInline, previewKind } from "./attachment-preview";
 import { AttachmentTextPreview } from "./attachment-text-preview";
+import BacklinksPanel from "./backlinks-panel";
 import { DocumentHeader } from "./document-header";
 import { DocumentSurface } from "./document-surface";
 import LoadingPane from "./loading-pane";
@@ -88,6 +90,10 @@ export default function AttachmentPage() {
 			}
 		};
 	}, [path, kind, rawPath]);
+
+	// Same right-rail Backlinks panel a note gets.
+	const backlinksNode = useMemo(() => (id ? <BacklinksPanel attachmentId={id} /> : null), [id]);
+	useRightToolSlot("backlinks", backlinksNode);
 
 	// Previewed files already hold their bytes; the rest fetch them on click.
 	async function download() {
@@ -171,7 +177,7 @@ export default function AttachmentPage() {
 			)
 		) : (
 			<PreviewColumn>
-				<article className="mx-auto flex max-w-3xl flex-col gap-4 p-4">
+				<article className="flex flex-col gap-6 p-6">
 					{preview}
 					<AttachmentDetails
 						att={att}

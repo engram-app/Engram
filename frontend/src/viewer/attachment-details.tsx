@@ -15,22 +15,25 @@ import {
 	Trash2,
 } from "lucide-react";
 import { useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { useNavigate, useParams } from "react-router";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
 import { formatDate } from "@/lib/format-date";
 import { intlLocale } from "@/lib/intl-locale";
 import {
 	type AttachmentSummary,
-	useAttachmentBacklinks,
 	useBatchDeleteAttachments,
 	useBatchMoveAttachments,
 	useFolders,
 	useRenameAttachment,
 } from "../api/queries";
-import { noteName } from "../lib/note-name";
-import { noteHref, vaultRootHref } from "../routes";
-import { formatBytes, type PreviewKind } from "./attachment-preview";
+import { vaultRootHref } from "../routes";
+import {
+	attachmentRenamePath,
+	fileStem,
+	formatBytes,
+	type PreviewKind,
+} from "./attachment-preview";
 import { DeleteConfirm } from "./tree-actions/delete-confirm";
 import { MoveDialog } from "./tree-actions/move-dialog";
 import { RenameInput } from "./tree-actions/rename-input";
@@ -54,45 +57,50 @@ interface Props {
 	onDownload: () => void;
 }
 
-// The file card under (or, for files with no preview, instead of) the preview:
-// what the file is, the actions on it, and the notes that point at it.
+// File details under (or, for files with no preview, instead of) the preview:
+// what the file is and the actions on it. Notes linking here are in the right
+// rail's Backlinks panel, as for a note.
 export function AttachmentDetails({ att, kind, inlineUrl, onDownload }: Props) {
 	const { t, renderedLocale } = useT();
 	const { slug } = useParams();
 	const navigate = useNavigate();
 	const { data: folders } = useFolders();
-	const { data: backlinks } = useAttachmentBacklinks(att.id);
 	const rename = useRenameAttachment();
 	const move = useBatchMoveAttachments();
 	const remove = useBatchDeleteAttachments();
 	const [mode, setMode] = useState<"rename" | "move" | "delete" | null>(null);
 
 	const filename = att.path.split("/").pop() ?? att.path;
+	const { stem, ext } = fileStem(att.path);
 	const folder = att.path.includes("/") ? att.path.slice(0, att.path.lastIndexOf("/")) : "";
 	const Icon = ARCHIVE.test(filename) ? FileArchive : kind ? KIND_ICONS[kind] : File;
 	const fmtLocale = intlLocale(renderedLocale);
 
 	return (
-		<section aria-label={t("File details")} className="flex flex-col gap-4 rounded-lg border p-4">
+		<section aria-label={t("File details")} className="flex flex-col gap-4">
 			<header className="flex items-center gap-3">
 				<Icon className="size-10 shrink-0 text-muted-foreground" aria-hidden="true" />
 				{mode === "rename" ? (
-					<RenameInput
-						initial={filename}
-						kind="file"
-						commitOnBlur
-						onCommit={(next) => {
-							setMode(null);
-							const name = next.trim();
-							if (name && name !== filename) {
-								rename.mutate({
-									old_path: att.path,
-									new_path: folder ? `${folder}/${name}` : name,
-								});
-							}
-						}}
-						onCancel={() => setMode(null)}
-					/>
+					// Only the name is editable; the extension stays, so a rename never
+					// changes what kind of file this is.
+					<span className="flex min-w-0 items-baseline gap-0.5">
+						<RenameInput
+							initial={stem}
+							kind="file"
+							commitOnBlur
+							onCommit={(next) => {
+								setMode(null);
+								const newPath = attachmentRenamePath(att.path, next);
+								if (newPath) {
+									rename.mutate({ old_path: att.path, new_path: newPath });
+								}
+							}}
+							onCancel={() => setMode(null)}
+						/>
+						<span className="text-muted-foreground" translate="no">
+							{ext}
+						</span>
+					</span>
 				) : (
 					<h2 className="min-w-0 break-all font-semibold text-lg" translate="no">
 						{filename}
@@ -141,33 +149,12 @@ export function AttachmentDetails({ att, kind, inlineUrl, onDownload }: Props) {
 					</Button>
 				</li>
 				<li>
-					<Button variant="outline" onClick={() => setMode("delete")}>
+					<Button variant="destructive" onClick={() => setMode("delete")}>
 						<Trash2 data-icon="inline-start" aria-hidden="true" />
 						{t("Delete")}
 					</Button>
 				</li>
 			</menu>
-
-			<nav aria-label={t("Linked from")} className="text-sm">
-				<h3 className="mb-1 font-medium text-muted-foreground">{t("Linked from")}</h3>
-				{backlinks === undefined ? null : backlinks.length === 0 ? (
-					<p className="text-muted-foreground">{t("No notes link to this file yet.")}</p>
-				) : (
-					<ul>
-						{backlinks.map((b) => (
-							<li key={b.source_note_id}>
-								<Link
-									to={noteHref(slug, b.source_note_id)}
-									className="hover:underline"
-									translate="no"
-								>
-									{b.source_title ?? noteName(b.source_path)}
-								</Link>
-							</li>
-						))}
-					</ul>
-				)}
-			</nav>
 
 			{mode === "move" ? (
 				<MoveDialog

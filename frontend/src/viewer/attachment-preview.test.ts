@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
+	attachmentRenamePath,
+	fileStem,
 	formatBytes,
 	MEDIA_PREVIEW_MAX_BYTES,
 	opensInline,
@@ -82,5 +84,32 @@ describe("formatBytes", () => {
 		expect(formatBytes(512, "en")).toBe("512 byte");
 		expect(formatBytes(1536, "en")).toBe("1.5 kB");
 		expect(formatBytes(10 * 1024 * 1024, "en")).toBe("10 MB");
+	});
+});
+
+describe("extension-locked rename", () => {
+	test("fileStem splits the extension off", () => {
+		expect(fileStem("a/report.final.pdf")).toEqual({ stem: "report.final", ext: ".pdf" });
+		expect(fileStem("Makefile")).toEqual({ stem: "Makefile", ext: "" });
+		expect(fileStem(".env")).toEqual({ stem: ".env", ext: "" });
+	});
+
+	test("keeps the folder and the extension", () => {
+		expect(attachmentRenamePath("files/a.zip", "b")).toBe("files/b.zip");
+		expect(attachmentRenamePath("a.zip", "  b  ")).toBe("b.zip");
+	});
+
+	test("a typed matching extension is not doubled", () => {
+		expect(attachmentRenamePath("a.zip", "b.ZIP")).toBe("b.zip");
+	});
+
+	test("a different typed extension stays part of the name", () => {
+		expect(attachmentRenamePath("a.zip", "b.exe")).toBe("b.exe.zip");
+	});
+
+	test("null when nothing changes or the name is empty or has a slash", () => {
+		expect(attachmentRenamePath("a.zip", "a")).toBeNull();
+		expect(attachmentRenamePath("a.zip", "   ")).toBeNull();
+		expect(attachmentRenamePath("a.zip", "x/y")).toBeNull();
 	});
 });
