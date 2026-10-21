@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { captureServerFeatures, resetServerFeatures } from "@/api/server-features";
 import { AttachmentUploadProvider, useAttachmentUpload } from "./provider";
 
 const mutateAsync = vi.fn();
@@ -37,6 +38,28 @@ function fileDragEvent(type: string, withFiles: boolean) {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	resetServerFeatures();
+});
+
+describe("AttachmentUploadProvider executables", () => {
+	function pick(container: HTMLElement, files: File[]) {
+		const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+		fireEvent.change(input, { target: { files } });
+	}
+
+	it("refuses an executable from the picker before the dialog opens", () => {
+		captureServerFeatures({ features: { blocked_extensions: [".appimage"] } });
+		const { container } = render(<AttachmentUploadProvider>{null}</AttachmentUploadProvider>);
+		pick(container, [new File(["x"], "Tool.AppImage")]);
+		expect(screen.queryByTestId("dialog")).toBeNull();
+	});
+
+	it("opens the dialog with only the files that can sync", async () => {
+		captureServerFeatures({ features: { blocked_extensions: [".appimage"] } });
+		const { container } = render(<AttachmentUploadProvider>{null}</AttachmentUploadProvider>);
+		pick(container, [new File(["x"], "Tool.AppImage"), new File(["x"], "ok.pdf")]);
+		await waitFor(() => expect(screen.getByTestId("dialog")).toHaveTextContent(/^ok\.pdf$/u));
+	});
 });
 
 describe("AttachmentUploadProvider", () => {

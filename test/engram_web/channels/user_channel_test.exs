@@ -50,7 +50,8 @@ defmodule EngramWeb.UserChannelTest do
                raw_attachment_download: true,
                crdt_diff_refusal: true,
                chunked_attachment_upload: true,
-               attachment_part_size: 8_388_608
+               attachment_part_size: 8_388_608,
+               blocked_extensions: Engram.Billing.advertised_blocked_extensions()
              }
     end
 

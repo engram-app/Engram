@@ -10,6 +10,7 @@ import type { Translate } from "@/i18n/translate";
 import { cn } from "@/lib/utils";
 import { FolderPicker } from "./folder-picker";
 import { type UploadFailure, uploadFailure } from "./upload-failure";
+import { withoutBlocked } from "./upload-files";
 
 // "waiting" = the upload layer is backing off before a retry; not a failure.
 type RowStatus = "pending" | "uploading" | "waiting" | "done" | "error";
@@ -121,7 +122,7 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 	}
 
 	function addFiles(picked: FileList | null) {
-		const more = Array.from(picked ?? []);
+		const more = withoutBlocked(Array.from(picked ?? []), t);
 		if (more.length > 0) {
 			setRows((r) => [...r, ...more.map((file): Row => ({ file, status: "pending" }))]);
 		}

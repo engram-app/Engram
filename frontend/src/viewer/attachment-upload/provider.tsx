@@ -3,7 +3,7 @@ import { useAttachments, useFolders, useUploadAttachment } from "@/api/queries";
 import { useStableT } from "@/i18n/locale-provider";
 import { notify } from "@/lib/notify";
 import { AttachmentUploadDialog } from "./upload-dialog";
-import { uploadFilesTo } from "./upload-files";
+import { uploadFilesTo, withoutBlocked } from "./upload-files";
 
 interface UploadApi {
 	// The Upload button's path: opens the OS picker, then the dialog to choose a
@@ -50,21 +50,27 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 
 	// No files → open the OS picker (the dialog opens once files are chosen, so
 	// the button never flashes an empty dialog). Files present → open directly.
-	const openUpload = useCallback((dropped?: File[], defaultFolder = "") => {
-		setPendingFolder(defaultFolder);
-		if (dropped && dropped.length > 0) {
-			setFiles(dropped);
-		} else {
-			pickerRef.current?.click();
-		}
-	}, []);
+	const openUpload = useCallback(
+		(dropped?: File[], defaultFolder = "") => {
+			setPendingFolder(defaultFolder);
+			if (!dropped || dropped.length === 0) {
+				pickerRef.current?.click();
+				return;
+			}
+			const allowed = withoutBlocked(dropped, t);
+			if (allowed.length > 0) {
+				setFiles(allowed);
+			}
+		},
+		[t],
+	);
 
 	const uploadFiles = useCallback(
 		async (dropped: File[], folder: string) => {
 			const done = await uploadFilesTo({
 				upload: upload.mutateAsync,
 				existing: attachments ?? [],
-				files: dropped,
+				files: withoutBlocked(dropped, t),
 				folder,
 				t,
 			});
@@ -128,7 +134,9 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 				multiple
 				hidden
 				onChange={(e) => {
-					const picked = Array.from(e.target.files ?? []);
+					// Executables are refused here, before the dialog: choosing a folder
+					// for a file that can never upload would only waste the user's time.
+					const picked = withoutBlocked(Array.from(e.target.files ?? []), t);
 					e.target.value = "";
 					if (picked.length > 0) {
 						setFiles(picked);

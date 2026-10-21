@@ -242,6 +242,8 @@ defmodule Engram.BillingTest do
 
       Application.put_env(:engram, :attachment_mime_bypass, true)
       assert Billing.plan_state(build(:user)).blocked_extensions == []
+      # The web app reads the same list off the sync features.
+      assert EngramWeb.UserChannel.features().blocked_extensions == []
     end
 
     test "free user: all MIME types allowed, numeric caps present" do

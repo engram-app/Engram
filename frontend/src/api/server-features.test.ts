@@ -1,5 +1,10 @@
-import { beforeEach, expect, it } from "vitest";
-import { attachmentPartSize, captureServerFeatures, resetServerFeatures } from "./server-features";
+import { beforeEach, describe, expect, it, test } from "vitest";
+import {
+	attachmentPartSize,
+	captureServerFeatures,
+	isBlockedFileName,
+	resetServerFeatures,
+} from "./server-features";
 
 beforeEach(resetServerFeatures);
 
@@ -20,4 +25,27 @@ it("is null when chunked is off, and ignores malformed replies", () => {
 	expect(attachmentPartSize()).toBeNull();
 	captureServerFeatures(undefined);
 	expect(attachmentPartSize()).toBeNull();
+});
+
+describe("isBlockedFileName", () => {
+	test("allows everything until the server sends its list", () => {
+		expect(isBlockedFileName("a.exe")).toBe(false);
+	});
+
+	test("matches the last extension the way the server does", () => {
+		captureServerFeatures({ features: { blocked_extensions: [".exe", ".appimage"] } });
+		expect(isBlockedFileName("Tool.AppImage")).toBe(true);
+		expect(isBlockedFileName("evil.exe.")).toBe(true);
+		expect(isBlockedFileName("evil.exe  ")).toBe(true);
+		expect(isBlockedFileName("notes.txt.exe")).toBe(true);
+		expect(isBlockedFileName("setup.exe.zip")).toBe(false);
+		expect(isBlockedFileName(".exe")).toBe(false);
+		expect(isBlockedFileName("photo.png")).toBe(false);
+	});
+
+	test("an older server without the list keeps the previous one", () => {
+		captureServerFeatures({ features: { blocked_extensions: [".exe"] } });
+		captureServerFeatures({ features: { raw_attachment_upload: true } });
+		expect(isBlockedFileName("a.exe")).toBe(true);
+	});
 });

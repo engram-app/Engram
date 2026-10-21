@@ -1,7 +1,8 @@
 import { beforeEach, expect, test, vi } from "vitest";
 import { ApiError, LimitExceededError } from "@/api/client";
+import { captureServerFeatures, resetServerFeatures } from "@/api/server-features";
 import { englishT } from "@/i18n/translate";
-import { uploadFilesTo } from "./upload-files";
+import { uploadFilesTo, withoutBlocked } from "./upload-files";
 
 const toastError = vi.fn();
 vi.mock("sonner", () => ({ toast: { error: (m: string) => toastError(m) } }));
@@ -95,4 +96,12 @@ test("characters that break a [[wikilink]] target are replaced in the uploaded n
 		t: englishT,
 	});
 	expect(upload.mock.calls[0]?.[0].path).toBe("shot -2 -a--b-c.png");
+});
+
+test("withoutBlocked drops executables with one toast each and keeps the rest", () => {
+	captureServerFeatures({ features: { blocked_extensions: [".appimage"] } });
+	const kept = withoutBlocked([f("a.png"), f("Tool.AppImage")], englishT);
+	expect(kept.map((x) => x.name)).toEqual(["a.png"]);
+	expect(toastError).toHaveBeenCalledWith("Tool.AppImage: Executable files don't sync.");
+	resetServerFeatures();
 });

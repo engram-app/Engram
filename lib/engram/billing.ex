@@ -399,9 +399,12 @@ defmodule Engram.Billing do
     }
   end
 
-  # Under ATTACHMENT_MIME_BYPASS the server accepts executables, so clients
-  # must not be told to refuse them.
-  defp advertised_blocked_extensions do
+  @doc """
+  Extensions clients should refuse before uploading. Empty under
+  ATTACHMENT_MIME_BYPASS, where the server accepts executables.
+  """
+  @spec advertised_blocked_extensions() :: [String.t()]
+  def advertised_blocked_extensions do
     if Engram.Storage.MimeWhitelist.bypass?(),
       do: [],
       else: Engram.Storage.MimeWhitelist.blocked_extensions()

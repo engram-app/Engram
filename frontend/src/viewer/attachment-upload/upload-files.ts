@@ -1,4 +1,5 @@
 import { LimitExceededError } from "@/api/client";
+import { isBlockedFileName } from "@/api/server-features";
 import type { Translate } from "@/i18n/translate";
 import { notify } from "@/lib/notify";
 import { uniqueAttachmentName } from "../attachment-blob";
@@ -71,4 +72,21 @@ export async function uploadFilesTo(opts: {
 		}
 	}
 	return done;
+}
+
+/**
+ * Drop the files the server would refuse as executables, with one toast each,
+ * BEFORE any dialog or request: picking an AppImage must not walk the user
+ * through choosing a folder only to fail at Upload.
+ */
+export function withoutBlocked(files: File[], t: Translate): File[] {
+	return files.filter((file) => {
+		if (!isBlockedFileName(file.name)) {
+			return true;
+		}
+		notify.error(
+			t("{name}: {reason}", { name: file.name, reason: t("Executable files don't sync.") }),
+		);
+		return false;
+	});
 }
