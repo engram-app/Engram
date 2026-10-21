@@ -16,7 +16,8 @@ defmodule Engram.Notes.Keys do
   """
   import Ecto.Query
 
-  alias Engram.DataMigrations
+  alias Engram.DataMigrations.Entry
+  alias Engram.Repo
 
   @cols %{
     path: {:path_hmac, :path_id},
@@ -32,8 +33,18 @@ defmodule Engram.Notes.Keys do
   @doc "True once every row carries its ids (the `note_split` ledger is done)."
   @spec ids?() :: boolean()
   def ids? do
+    # Read from the ledger table itself, not `DataMigrations.done?/2`, whose
+    # `true` is kept for the node's lifetime: a re-verify that reopens the
+    # migration (rows found without ids) must turn the ids off on every node
+    # within the minute, or lookups would miss rows that exist.
     Engram.Cache.fetch(:note_split, :done, fn ->
-      DataMigrations.done?(Engram.DataMigrations.NoteSplit.name(), 1)
+      Repo.exists?(
+        from(e in Entry,
+          where:
+            e.name == ^Engram.DataMigrations.NoteSplit.name() and e.version >= 1 and
+              not is_nil(e.completed_at)
+        )
+      )
     end)
   end
 
@@ -84,4 +95,7 @@ defmodule Engram.Notes.Keys do
   @doc "The 16-byte id of an HMAC, as the uuid string Ecto binds."
   @spec id(binary()) :: Ecto.UUID.t()
   def id(<<head::binary-16, _::binary>>), do: Ecto.UUID.load!(head)
+  # A malformed key (a corrupt job arg) matches no row, as its HMAC did; a
+  # real HMAC is 32 bytes, and none derives the all-zero id.
+  def id(_short), do: "00000000-0000-0000-0000-000000000000"
 end

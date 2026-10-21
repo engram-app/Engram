@@ -49,6 +49,8 @@ defmodule Engram.Repo.Migrations.ExpandNotesCoreKeys do
   end
 
   def down do
+    # See NotesSplitTriggers.down: the ledger goes with the columns.
+    execute "DELETE FROM data_migrations WHERE name = 'note_split'"
     execute "ALTER TABLE notes RESET (fillfactor)"
 
     alter table(:notes) do

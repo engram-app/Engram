@@ -1047,7 +1047,7 @@ defmodule Engram.Links do
 
   # The three parts on wave 3's notes keys (`notes_link_keys_stale`,
   # `notes_path_ci`, `notes_basename`): 16-byte ids, the int2 key version,
-  # and the shortest length index-only from `notes_basename`. Same rows as
+  # and the shortest length from `notes_basename`. Same rows as
   # the HMAC form; the projection keeps `basename_hmac` for the grouping.
   defp note_candidate_queries(user_id, vault_id, keys) do
     to_ids = &Enum.map(&1, fn hmac -> Keys.id(hmac) end)
