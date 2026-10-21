@@ -1,3 +1,5 @@
+import { rlog } from "../observability/remote-log";
+
 export class CrdtEnrollment {
 	private readonly enrolled = new Set<string>();
 	private readonly startSync: (noteId: string) => Promise<void>;
@@ -21,7 +23,13 @@ export class CrdtEnrollment {
 			return;
 		}
 		this.enrolled.add(noteId);
-		this.startSync(noteId);
+		// A rejection would otherwise be unhandled. Note id only, no content.
+		this.startSync(noteId).catch((err: unknown) => {
+			rlog().warn(
+				"crdt",
+				`enroll startSync failed note=${noteId} error=${err instanceof Error ? err.name : "unknown"}`,
+			);
+		});
 	}
 
 	reset(noteId: string): void {

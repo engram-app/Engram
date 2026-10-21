@@ -12,7 +12,9 @@ interface Session {
 	channel: CrdtChannel;
 	enrollment: CrdtEnrollment;
 	awareness: Map<string, Awareness>;
-	/** note_ids currently open in the editor (via openDoc / closeDoc). */
+	/** note_ids currently open in the editor (via openDoc / closeDoc). Gates
+	 *  enrollIfLive (a background note never materializes a Y.Doc) and the
+	 *  epoch bump in stopCrdtSession. */
 	openNoteIds: Set<string>;
 }
 
@@ -182,7 +184,7 @@ export async function openDoc(
 		// closeDoc/stop ran during the await. Do NOT delete the open marker: an
 		// epoch bump means closeDoc already removed it (or the session is dead),
 		// and a same-note reopen (openDoc B) may have re-added its OWN marker in
-		// between — deleting here would strip B's open marker.
+		// between — deleting here would make enrollIfLive drop B's live note.
 		return null;
 	}
 	let awareness = s.awareness.get(noteId);
