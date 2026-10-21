@@ -1,6 +1,11 @@
 import { setupClerkTestingToken } from "@clerk/testing/playwright";
 import { devices, expect, type Page, test } from "@playwright/test";
-import { clerkSignIn, createUnonboardedUser, deleteClerkUser, loadAuthState } from "./clerk-helpers";
+import {
+	clerkSignIn,
+	createUnonboardedUser,
+	deleteClerkUser,
+	loadAuthState,
+} from "./clerk-helpers";
 
 /**
  * An MCP-first signup completes onboarding and resumes the authorization.
