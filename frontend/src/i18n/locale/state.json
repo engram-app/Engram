@@ -1,7 +1,10 @@
 {
 	"de": {
 		"translator": "861e3a5f",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21",
+			"These files are over the {limit} upload limit on your {plan} plan.": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -25,12 +28,18 @@
 			"{count} attachments": "{count} attachment",
 			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
 			"Uploaded {count} files": "Uploaded {count} file",
+			"Files too large": "File too large",
+			"There isn't enough room left on your {plan} plan for these files.": "There isn't enough room left on your {plan} plan for this file.",
+			"There isn't enough room left on this server for these files.": "There isn't enough room left on this server for this file.",
+			"These files are over this server's {limit} upload limit.": "This file is over this server's {limit} upload limit.",
 			"Copied {count} wikilinks": "Copied wikilink",
 			"Move {count} items to…": "Move {count} item to…",
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Notiz",
@@ -98,12 +107,19 @@
 			"{count} attachments": "{count} attachment",
 			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
 			"Uploaded {count} files": "Uploaded {count} file",
+			"Files too large": "File too large",
+			"There isn't enough room left on your {plan} plan for these files.": "There isn't enough room left on your {plan} plan for this file.",
+			"There isn't enough room left on this server for these files.": "There isn't enough room left on this server for this file.",
+			"These files are over the {limit} upload limit on your {plan} plan.": "This file is over the {limit} upload limit on your {plan} plan.",
+			"These files are over this server's {limit} upload limit.": "This file is over this server's {limit} upload limit.",
 			"Copied {count} wikilinks": "Copied wikilink",
 			"Move {count} items to…": "Move {count} item to…",
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Nota",
@@ -147,7 +163,9 @@
 	},
 	"fr": {
 		"translator": "1e9aab3e",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -171,12 +189,19 @@
 			"{count} attachments": "{count} attachment",
 			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
 			"Uploaded {count} files": "Uploaded {count} file",
+			"Files too large": "File too large",
+			"There isn't enough room left on your {plan} plan for these files.": "There isn't enough room left on your {plan} plan for this file.",
+			"There isn't enough room left on this server for these files.": "There isn't enough room left on this server for this file.",
+			"These files are over the {limit} upload limit on your {plan} plan.": "This file is over the {limit} upload limit on your {plan} plan.",
+			"These files are over this server's {limit} upload limit.": "This file is over this server's {limit} upload limit.",
 			"Copied {count} wikilinks": "Copied wikilink",
 			"Move {count} items to…": "Move {count} item to…",
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Note",
@@ -223,7 +248,9 @@
 	},
 	"it": {
 		"translator": "bc8c6e7e",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -247,12 +274,19 @@
 			"{count} attachments": "{count} attachment",
 			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
 			"Uploaded {count} files": "Uploaded {count} file",
+			"Files too large": "File too large",
+			"There isn't enough room left on your {plan} plan for these files.": "There isn't enough room left on your {plan} plan for this file.",
+			"There isn't enough room left on this server for these files.": "There isn't enough room left on this server for this file.",
+			"These files are over the {limit} upload limit on your {plan} plan.": "This file is over the {limit} upload limit on your {plan} plan.",
+			"These files are over this server's {limit} upload limit.": "This file is over this server's {limit} upload limit.",
 			"Copied {count} wikilinks": "Copied wikilink",
 			"Move {count} items to…": "Move {count} item to…",
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Nota",
@@ -320,12 +354,19 @@
 			"{count} attachments": "{count} attachment",
 			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
 			"Uploaded {count} files": "Uploaded {count} file",
+			"Files too large": "File too large",
+			"There isn't enough room left on your {plan} plan for these files.": "There isn't enough room left on your {plan} plan for this file.",
+			"There isn't enough room left on this server for these files.": "There isn't enough room left on this server for this file.",
+			"These files are over the {limit} upload limit on your {plan} plan.": "This file is over the {limit} upload limit on your {plan} plan.",
+			"These files are over this server's {limit} upload limit.": "This file is over this server's {limit} upload limit.",
 			"Copied {count} wikilinks": "Copied wikilink",
 			"Move {count} items to…": "Move {count} item to…",
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "ノート",
@@ -396,12 +437,19 @@
 			"{count} attachments": "{count} attachment",
 			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
 			"Uploaded {count} files": "Uploaded {count} file",
+			"Files too large": "File too large",
+			"There isn't enough room left on your {plan} plan for these files.": "There isn't enough room left on your {plan} plan for this file.",
+			"There isn't enough room left on this server for these files.": "There isn't enough room left on this server for this file.",
+			"These files are over the {limit} upload limit on your {plan} plan.": "This file is over the {limit} upload limit on your {plan} plan.",
+			"These files are over this server's {limit} upload limit.": "This file is over this server's {limit} upload limit.",
 			"Copied {count} wikilinks": "Copied wikilink",
 			"Move {count} items to…": "Move {count} item to…",
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "노트",
@@ -445,7 +493,9 @@
 	},
 	"ms": {
 		"translator": "8729e02e",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -469,12 +519,19 @@
 			"{count} attachments": "{count} attachment",
 			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
 			"Uploaded {count} files": "Uploaded {count} file",
+			"Files too large": "File too large",
+			"There isn't enough room left on your {plan} plan for these files.": "There isn't enough room left on your {plan} plan for this file.",
+			"There isn't enough room left on this server for these files.": "There isn't enough room left on this server for this file.",
+			"These files are over the {limit} upload limit on your {plan} plan.": "This file is over the {limit} upload limit on your {plan} plan.",
+			"These files are over this server's {limit} upload limit.": "This file is over this server's {limit} upload limit.",
 			"Copied {count} wikilinks": "Copied wikilink",
 			"Move {count} items to…": "Move {count} item to…",
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Nota",
@@ -518,7 +575,9 @@
 	},
 	"pt-BR": {
 		"translator": "bc28769b",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -542,12 +601,19 @@
 			"{count} attachments": "{count} attachment",
 			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
 			"Uploaded {count} files": "Uploaded {count} file",
+			"Files too large": "File too large",
+			"There isn't enough room left on your {plan} plan for these files.": "There isn't enough room left on your {plan} plan for this file.",
+			"There isn't enough room left on this server for these files.": "There isn't enough room left on this server for this file.",
+			"These files are over the {limit} upload limit on your {plan} plan.": "This file is over the {limit} upload limit on your {plan} plan.",
+			"These files are over this server's {limit} upload limit.": "This file is over this server's {limit} upload limit.",
 			"Copied {count} wikilinks": "Copied wikilink",
 			"Move {count} items to…": "Move {count} item to…",
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Nota",
@@ -594,7 +660,9 @@
 	},
 	"ru": {
 		"translator": "02588615",
-		"failed": {},
+		"failed": {
+			"{folder} already has files with these {count} names": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -618,12 +686,18 @@
 			"{count} attachments": "{count} attachment",
 			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
 			"Uploaded {count} files": "Uploaded {count} file",
+			"Files too large": "File too large",
+			"There isn't enough room left on your {plan} plan for these files.": "There isn't enough room left on your {plan} plan for this file.",
+			"There isn't enough room left on this server for these files.": "There isn't enough room left on this server for this file.",
+			"These files are over the {limit} upload limit on your {plan} plan.": "This file is over the {limit} upload limit on your {plan} plan.",
+			"These files are over this server's {limit} upload limit.": "This file is over this server's {limit} upload limit.",
 			"Copied {count} wikilinks": "Copied wikilink",
 			"Move {count} items to…": "Move {count} item to…",
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Заметка",
@@ -667,7 +741,9 @@
 	},
 	"vi": {
 		"translator": "231582ae",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -691,12 +767,19 @@
 			"{count} attachments": "{count} attachment",
 			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
 			"Uploaded {count} files": "Uploaded {count} file",
+			"Files too large": "File too large",
+			"There isn't enough room left on your {plan} plan for these files.": "There isn't enough room left on your {plan} plan for this file.",
+			"There isn't enough room left on this server for these files.": "There isn't enough room left on this server for this file.",
+			"These files are over the {limit} upload limit on your {plan} plan.": "This file is over the {limit} upload limit on your {plan} plan.",
+			"These files are over this server's {limit} upload limit.": "This file is over this server's {limit} upload limit.",
 			"Copied {count} wikilinks": "Copied wikilink",
 			"Move {count} items to…": "Move {count} item to…",
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Ghi chú",
@@ -764,12 +847,19 @@
 			"{count} attachments": "{count} attachment",
 			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
 			"Uploaded {count} files": "Uploaded {count} file",
+			"Files too large": "File too large",
+			"There isn't enough room left on your {plan} plan for these files.": "There isn't enough room left on your {plan} plan for this file.",
+			"There isn't enough room left on this server for these files.": "There isn't enough room left on this server for this file.",
+			"These files are over the {limit} upload limit on your {plan} plan.": "This file is over the {limit} upload limit on your {plan} plan.",
+			"These files are over this server's {limit} upload limit.": "This file is over this server's {limit} upload limit.",
 			"Copied {count} wikilinks": "Copied wikilink",
 			"Move {count} items to…": "Move {count} item to…",
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "笔记",
@@ -840,12 +930,19 @@
 			"{count} attachments": "{count} attachment",
 			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
 			"Uploaded {count} files": "Uploaded {count} file",
+			"Files too large": "File too large",
+			"There isn't enough room left on your {plan} plan for these files.": "There isn't enough room left on your {plan} plan for this file.",
+			"There isn't enough room left on this server for these files.": "There isn't enough room left on this server for this file.",
+			"These files are over the {limit} upload limit on your {plan} plan.": "This file is over the {limit} upload limit on your {plan} plan.",
+			"These files are over this server's {limit} upload limit.": "This file is over this server's {limit} upload limit.",
 			"Copied {count} wikilinks": "Copied wikilink",
 			"Move {count} items to…": "Move {count} item to…",
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "筆記",
@@ -892,7 +989,9 @@
 	},
 	"id": {
 		"translator": "cbb1fdff",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -916,12 +1015,19 @@
 			"{count} attachments": "{count} attachment",
 			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
 			"Uploaded {count} files": "Uploaded {count} file",
+			"Files too large": "File too large",
+			"There isn't enough room left on your {plan} plan for these files.": "There isn't enough room left on your {plan} plan for this file.",
+			"There isn't enough room left on this server for these files.": "There isn't enough room left on this server for this file.",
+			"These files are over the {limit} upload limit on your {plan} plan.": "This file is over the {limit} upload limit on your {plan} plan.",
+			"These files are over this server's {limit} upload limit.": "This file is over this server's {limit} upload limit.",
 			"Copied {count} wikilinks": "Copied wikilink",
 			"Move {count} items to…": "Move {count} item to…",
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Catatan",
@@ -965,7 +1071,10 @@
 	},
 	"pl": {
 		"translator": "83e5a7f5",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21",
+			"{folder} already has files with these {count} names": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -989,12 +1098,18 @@
 			"{count} attachments": "{count} attachment",
 			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
 			"Uploaded {count} files": "Uploaded {count} file",
+			"Files too large": "File too large",
+			"There isn't enough room left on your {plan} plan for these files.": "There isn't enough room left on your {plan} plan for this file.",
+			"There isn't enough room left on this server for these files.": "There isn't enough room left on this server for this file.",
+			"These files are over the {limit} upload limit on your {plan} plan.": "This file is over the {limit} upload limit on your {plan} plan.",
+			"These files are over this server's {limit} upload limit.": "This file is over this server's {limit} upload limit.",
 			"Copied {count} wikilinks": "Copied wikilink",
 			"Move {count} items to…": "Move {count} item to…",
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Notatka",
@@ -1062,12 +1177,19 @@
 			"{count} attachments": "{count} attachment",
 			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
 			"Uploaded {count} files": "Uploaded {count} file",
+			"Files too large": "File too large",
+			"There isn't enough room left on your {plan} plan for these files.": "There isn't enough room left on your {plan} plan for this file.",
+			"There isn't enough room left on this server for these files.": "There isn't enough room left on this server for this file.",
+			"These files are over the {limit} upload limit on your {plan} plan.": "This file is over the {limit} upload limit on your {plan} plan.",
+			"These files are over this server's {limit} upload limit.": "This file is over this server's {limit} upload limit.",
 			"Copied {count} wikilinks": "Copied wikilink",
 			"Move {count} items to…": "Move {count} item to…",
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Not",
@@ -1114,7 +1236,10 @@
 	},
 	"cs": {
 		"translator": "8cd06f57",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21",
+			"{folder} already has files with these {count} names": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -1138,12 +1263,18 @@
 			"{count} attachments": "{count} attachment",
 			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
 			"Uploaded {count} files": "Uploaded {count} file",
+			"Files too large": "File too large",
+			"There isn't enough room left on your {plan} plan for these files.": "There isn't enough room left on your {plan} plan for this file.",
+			"There isn't enough room left on this server for these files.": "There isn't enough room left on this server for this file.",
+			"These files are over the {limit} upload limit on your {plan} plan.": "This file is over the {limit} upload limit on your {plan} plan.",
+			"These files are over this server's {limit} upload limit.": "This file is over this server's {limit} upload limit.",
 			"Copied {count} wikilinks": "Copied wikilink",
 			"Move {count} items to…": "Move {count} item to…",
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Poznámka",
@@ -1187,7 +1318,10 @@
 	},
 	"uk": {
 		"translator": "4cd2bf55",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21",
+			"{folder} already has files with these {count} names": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -1211,12 +1345,18 @@
 			"{count} attachments": "{count} attachment",
 			"Uploaded {count} files to {folder}": "Uploaded {count} file to {folder}",
 			"Uploaded {count} files": "Uploaded {count} file",
+			"Files too large": "File too large",
+			"There isn't enough room left on your {plan} plan for these files.": "There isn't enough room left on your {plan} plan for this file.",
+			"There isn't enough room left on this server for these files.": "There isn't enough room left on this server for this file.",
+			"These files are over the {limit} upload limit on your {plan} plan.": "This file is over the {limit} upload limit on your {plan} plan.",
+			"These files are over this server's {limit} upload limit.": "This file is over this server's {limit} upload limit.",
 			"Copied {count} wikilinks": "Copied wikilink",
 			"Move {count} items to…": "Move {count} item to…",
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Замітка",

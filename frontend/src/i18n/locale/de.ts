@@ -7,8 +7,10 @@ export default {
 		"Änderungen können nicht gespeichert werden: Dein Konto kann derzeit nicht synchronisiert werden.",
 	"A note with that name already exists.": "Eine Notiz mit diesem Namen existiert bereits.",
 	"A folder with that name already exists.": "Ein Ordner mit diesem Namen existiert bereits.",
+	"A file with that name already exists.": "Eine Datei mit diesem Namen existiert bereits.",
 	"Note no longer exists.": "Die Notiz existiert nicht mehr.",
 	"Folder no longer exists.": "Der Ordner existiert nicht mehr.",
+	"File no longer exists.": "Die Datei existiert nicht mehr.",
 	"Rename failed.": "Umbenennen fehlgeschlagen.",
 	"Delete failed.": "Löschen fehlgeschlagen.",
 	"Reconnecting — can't create notes while offline.":
@@ -23,6 +25,11 @@ export default {
 	"Failed to duplicate.": "Duplizieren fehlgeschlagen.",
 	"Batch delete failed.": "Fehler beim Löschen mehrerer Elemente.",
 	"Batch move failed.": "Fehler beim Verschieben mehrerer Elemente.",
+	"{folder} already has a file named {name}.":
+		"{folder} hat bereits eine Datei mit dem Namen {name}.",
+	"Vault root": "Vault-Wurzel",
+	"Nothing was moved: a file with the same name is already there.":
+		"Nichts wurde verschoben: eine Datei mit demselben Namen ist bereits vorhanden.",
 	"Couldn't load sign-in": "Anmeldung konnte nicht geladen werden",
 	"The sign-in service didn't load. Check your connection, then reload the page.":
 		"Der Anmeldedienst konnte nicht geladen werden. Überprüfe deine Verbindung und lade die Seite neu.",
@@ -1269,14 +1276,13 @@ export default {
 	"Theme: light": "Design: hell",
 	"Theme: dark": "Design: dunkel",
 	"Theme: system": "Design: System",
+	"Click to rename": "Zum Umbenennen anklicken",
 	"File details": "Dateiinformationen",
 	Size: "Größe",
-	"Vault root": "Vault-Wurzel",
+	"Downloading…": "Herunterladen…",
 	"Open in new tab": "In neuem Tab öffnen",
 	Rename: "Umbenennen",
 	"Move to…": "Verschieben nach…",
-	"Linked from": "Verlinkt von",
-	"No notes link to this file yet.": "Noch keine Notizen verlinken diese Datei.",
 	"Upgrade to view attachments": "Upgrade, um Anhänge anzuzeigen",
 	"Missing attachment: {path}": "Fehlende Datei: {path}",
 	"Couldn't load {path} (temporarily unavailable)":
@@ -1288,13 +1294,26 @@ export default {
 	"{filename} no longer exists.": "{filename} existiert nicht mehr.",
 	"Couldn't load {filename} — it may be temporarily unavailable.":
 		"{filename} konnte nicht geladen werden – es ist möglicherweise vorübergehend nicht verfügbar.",
+	"Loading {filename}": "Lade {filename}",
+	"Loading {filename}…": "Lade {filename}…",
+	"{received} of {total}": "{received} von {total}",
+	"This browser can't preview {filename}. Download it to open it.":
+		"Dieser Browser kann {filename} nicht anzeigen. Lade sie herunter, um sie zu öffnen.",
+	"Downloading {filename}…": "Herunterladen von {filename}…",
 	"Download {filename}": "{filename} herunterladen",
+	"Showing the first {size}.": "Zeigt die ersten {size}.",
 	"Showing the first {count} rows.": "Zeigt die ersten {count} Zeilen.",
+	"Excalidraw drawing": "Excalidraw-Zeichnung",
+	"Open it in Obsidian with the Excalidraw plugin to see and edit the drawing.":
+		"Öffne sie in Obsidian mit dem Excalidraw-Plugin, um die Zeichnung anzuzeigen und zu bearbeiten.",
+	"Text in this drawing": "Text in dieser Zeichnung",
 	"/ (root)": "/ (Wurzel)",
 	"Search folders": "Ordner durchsuchen",
 	"Search folders…": "Ordner durchsuchen…",
 	"Destination folder": "Zielordner",
 	"No folders match": "Keine Ordner gefunden",
+	"Couldn't check your vault's files, so nothing was uploaded. Try again.":
+		"Fehler beim Überprüfen der Dateien in deinem Vault, daher wurde nichts hochgeladen. Versuche es erneut.",
 	file: "Datei",
 	"Uploaded {name} to {folder}": "{name} wurde in {folder} hochgeladen",
 	"Uploaded {name}": "{name} wurde hochgeladen",
@@ -1327,6 +1346,26 @@ export default {
 	"Executable files don't sync.": "Ausführbare Dateien werden nicht synchronisiert.",
 	"Upload failed. Try again.": "Upload fehlgeschlagen. Versuche es erneut.",
 	"{name}: {reason}": "{name}: {reason}",
+	"Not enough storage": "Nicht genügend Speicherplatz",
+	"Storage used": "Speicherplatz verwendet",
+	"{used} of {cap}": "{used} von {cap}",
+	"Compare plans": "Pläne vergleichen",
+	"Upload limit by plan": "Upload-Limit pro Plan",
+	"Storage by plan": "Speicherplatz pro Plan",
+	"No limit": "Keine Begrenzung",
+	"Files too large": { one: "Datei zu groß", other: "Dateien zu groß" },
+	"There isn't enough room left on your {plan} plan for these files.": {
+		one: "Es ist nicht mehr genug Speicherplatz auf deinem {plan}-Abonnement für diese Datei.",
+		other: "Es ist nicht mehr genug Speicherplatz auf deinem {plan}-Abonnement für diese Dateien.",
+	},
+	"There isn't enough room left on this server for these files.": {
+		one: "Auf diesem Server ist nicht mehr genügend Speicherplatz für diese Datei.",
+		other: "Auf diesem Server ist nicht mehr genügend Speicherplatz für diese Dateien.",
+	},
+	"These files are over this server's {limit} upload limit.": {
+		one: "Diese Datei überschreitet die {limit} Upload-Größenbeschränkung dieses Servers.",
+		other: "Diese Dateien überschreiten die Upload-Grenze von {limit} für diesen Server.",
+	},
 	"No backlinks yet": "Noch keine Rückverweise",
 	"Failed to load notes.": "Fehler beim Laden der Notizen.",
 	"No notes in this folder.": "Keine Notizen in diesem Ordner.",
@@ -1371,7 +1410,6 @@ export default {
 	"No notes yet.": "Noch keine Notizen.",
 	"Copied {count} wikilinks": { one: "Kopierter Wikilink", other: "{count} Wikilinks kopiert" },
 	"Rename note": "Notiz umbenennen",
-	"Click to rename": "Zum Umbenennen anklicken",
 	"Note text": "Notiztext",
 	"Note options": "Notiz-Optionen",
 	"Open tools": "Tools öffnen",
@@ -1578,6 +1616,24 @@ export default {
 	"Delete {path}/ and {count} items?": {
 		one: "Löschen von {path}/ und {count} Element?",
 		other: "Löschen von {path}/ und {count} Elementen?",
+	},
+	"{folder} already has a file named {name}":
+		"{folder} hat bereits eine Datei mit dem Namen {name}",
+	"Give the file you're moving a new name.":
+		"Gib der Datei, die du verschiebst, einen neuen Namen.",
+	"New name": "Neuer Name",
+	"That name is taken too.": "Dieser Name ist ebenfalls vergeben.",
+	Move: "Verschieben",
+	"Keep both to move them with a number added to the name.":
+		"Behalte beide und verschiebe sie, indem du eine Zahl zum Namen hinzufügst.",
+	"Keep both": "Behalte beide",
+	"{folder} already has files with these {count} names": {
+		one: "{folder} hat bereits eine Datei mit diesem Namen",
+		other: "{folder} hat bereits Dateien mit diesen {count} Namen",
+	},
+	"These {count} files would share a name with others in {folder}": {
+		one: "Diese Datei hätte den gleichen Namen wie eine andere in {folder}",
+		other: "Diese {count} Dateien hätten den gleichen Namen wie andere in {folder}",
 	},
 	"Rename file": "Datei umbenennen",
 	"Rename folder": "Ordner umbenennen",
