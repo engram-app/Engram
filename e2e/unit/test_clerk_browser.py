@@ -70,6 +70,16 @@ def test_retries_eventual_consistency_404(monkeypatch):
     assert len(client.session.calls) == 3
 
 
+def test_non_json_404_raises_http_error():
+    r = requests.Response()
+    r.status_code = 404
+    r._content = b"<html>Not Found</html>"
+    client = _Client(r)
+    with pytest.raises(requests.HTTPError):
+        clerk_sign_in_url(client, "u", "http://app.test", "/link")
+    assert len(client.session.calls) == 1
+
+
 def test_other_errors_raise_immediately():
     client = _Client(_resp(422, {"errors": [{"code": "form_param_missing"}]}))
     with pytest.raises(requests.HTTPError):

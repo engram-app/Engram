@@ -65,6 +65,14 @@ def test_hard_cap_bounds_an_alive_job(monkeypatch, clock):
     assert 100 <= clock["now"] <= 102
 
 
+def test_default_hard_cap_fits_under_pytest_timeout(monkeypatch, clock):
+    # pytest.ini kills a test at 180s; the named TimeoutError must fire first.
+    script(monkeypatch, clock, states=[("executing", "")])
+    with pytest.raises(TimeoutError, match="executing"):
+        cp.wait_for_qdrant_indexed(VID, HMAC, timeout=30)
+    assert clock["now"] <= 125
+
+
 def test_completed_without_point_times_out(monkeypatch, clock):
     script(monkeypatch, clock, states=[("completed", "")])
     with pytest.raises(TimeoutError, match="completed"):

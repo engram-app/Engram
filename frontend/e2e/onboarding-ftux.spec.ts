@@ -53,6 +53,9 @@ async function expectChecklist(page: Page): Promise<void> {
 let pending: { email: string; id: string } | null = null;
 
 test.describe("FTUX happy path", () => {
+	// Clerk sign-in alone may retry for 30s; the 30s global default cannot ride that out.
+	test.setTimeout(90_000);
+
 	const skip = loadAuthState().skipped || !process.env.E2E_CLERK_SECRET_KEY;
 
 	test.skip(() => skip, "E2E_CLERK_SECRET_KEY not set — skipping Clerk FTUX test");

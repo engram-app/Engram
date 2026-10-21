@@ -52,6 +52,11 @@ class MemoryProvider implements OAuthClientProvider {
 	private info?: OAuthClientInformationMixed;
 	private saved?: OAuthTokens;
 	private verifier = "";
+	private readonly oauthState = `e2e-state-${Math.random().toString(36).slice(2)}`;
+
+	state(): string {
+		return this.oauthState;
+	}
 
 	get redirectUrl(): string {
 		return REDIRECT_URI;
@@ -99,6 +104,9 @@ class MemoryProvider implements OAuthClientProvider {
 }
 
 test.describe("MCP-first: a new user connects an AI app", () => {
+	// Clerk sign-in alone may retry for 30s; the 30s global default cannot ride that out.
+	test.setTimeout(90_000);
+
 	const skip = loadAuthState().skipped || !process.env.E2E_CLERK_SECRET_KEY;
 	let pending: { email: string; id: string } | null = null;
 
@@ -121,7 +129,8 @@ test.describe("MCP-first: a new user connects an AI app", () => {
 		tag: ["@canary"],
 		annotation: [
 			{ type: "cadence", description: "hourly" },
-			{ type: "targets", description: "ci,staging" },
+			// staging is added in the canary phase, once the heard step and the staging Clerk testing token are handled.
+			{ type: "targets", description: "ci" },
 		],
 	}, async ({ page }) => {
 		const provider = new MemoryProvider();
@@ -137,7 +146,7 @@ test.describe("MCP-first: a new user connects an AI app", () => {
 
 		// 2. The user: sign in, onboard, approve.
 		const code = await test.step("sign-in-onboard-approve", () =>
-			approveAsNewUser(page, (pending as { email: string }).email, authorize));
+			approveAsNewUser(page, (pending as { email: string }).email, authorize, provider.state()));
 
 		// 3. The app finishes the exchange and works.
 		await test.step("token-exchange-and-tools", async () => {
@@ -180,7 +189,12 @@ async function connect(provider: MemoryProvider): Promise<Client> {
 }
 
 /** Sign in mid-authorization, finish onboarding, approve; returns the code. */
-async function approveAsNewUser(page: Page, email: string, authorize: URL): Promise<string> {
+async function approveAsNewUser(
+	page: Page,
+	email: string,
+	authorize: URL,
+	expectedState: string,
+): Promise<string> {
 	await clerkSignIn(page, email, authorize.toString());
 
 	// /oauth/authorize 302s to the SPA's consent page, which bounces an
@@ -198,7 +212,7 @@ async function approveAsNewUser(page: Page, email: string, authorize: URL): Prom
 
 	const callback = new URL(page.url());
 	expect(callback.searchParams.get("error")).toBeNull();
-	expect(callback.searchParams.get("state")).toBe(authorize.searchParams.get("state"));
+	expect(callback.searchParams.get("state")).toBe(expectedState);
 	const code = callback.searchParams.get("code");
 	expect(code).toBeTruthy();
 	return code as string;

@@ -183,7 +183,7 @@ def wait_for_qdrant_indexed(
     path_hmac_b64: str,
     path: str | None = None,
     timeout: float = 30.0,
-    hard_cap: float = 300.0,
+    hard_cap: float = 120.0  # < pytest-timeout 180s so this error fires first,
 ) -> None:
     """Wait for a Qdrant point whose `path_hmac` matches, following the EmbedNote job.
 
