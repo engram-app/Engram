@@ -80,6 +80,23 @@ defmodule Engram.Vector.QdrantFilterTest do
       refute Qdrant.v5_payload_format?()
     end
 
+    test "writing the v5 layout implies reading chunk text from Postgres" do
+      refute Qdrant.chunk_text_read?()
+
+      ServiceConfig.put_override(:write_v5_layout, true)
+      assert Qdrant.chunk_text_read?()
+
+      # An explicit off cannot hide v5 points (they store no text in Qdrant).
+      ServiceConfig.put_override(:chunk_text_read, false)
+      assert Qdrant.chunk_text_read?()
+
+      ServiceConfig.put_override(:write_v5_layout, false)
+      refute Qdrant.chunk_text_read?()
+
+      ServiceConfig.put_override(:chunk_text_read, true)
+      assert Qdrant.chunk_text_read?()
+    end
+
     test "with the v5 format off, filters are legacy-only" do
       ServiceConfig.put_override(:v5_payload_format, false)
       assert Qdrant.match_filter(:user, @uuid) == %{key: "user_id", match: %{value: @uuid}}
