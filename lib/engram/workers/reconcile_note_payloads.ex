@@ -67,6 +67,7 @@ defmodule Engram.Workers.ReconcileNotePayloads do
 
   @batch_size 200
   @event [:engram, :indexing, :payload_reconcile]
+  @cancelled_event [:engram, :indexing, :payload_reconcile_cancelled]
   @zero %{checked: 0, drifted: 0, rewritten: 0, skipped_v5: 0}
   @budget_ms 30_000
   # Between batches, so a large vault never saturates Qdrant.
@@ -181,13 +182,18 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   defp answer(user_id, reason) do
     result = qdrant_answer(reason)
 
+    # The hourly re-check retries a cancelled user, so a refusal no fix has
+    # cleared cancels once an hour forever: this counter is what alerts on it.
+    if match?({:cancel, _}, result),
+      do: :telemetry.execute(@cancelled_event, %{count: 1}, %{http_status: http_status(reason)})
+
     if match?({tag, _} when tag in [:error, :cancel], result) do
       Logger.warning(
         "note payload reconcile failed",
         Metadata.with_category(:warning, :oban,
           user_id: user_id,
           reason_label: Metadata.safe_reason(reason),
-          answer: elem(result, 0)
+          result: elem(result, 0)
         )
       )
     end
