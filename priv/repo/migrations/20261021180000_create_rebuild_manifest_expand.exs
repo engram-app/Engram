@@ -74,8 +74,8 @@ defmodule Engram.Repo.Migrations.CreateRebuildManifestExpand do
       execute(
         """
         CREATE POLICY tenant_isolation_#{table} ON #{table}
-          USING (user_id::text = (SELECT current_setting('app.current_tenant', true)))
-          WITH CHECK (user_id::text = (SELECT current_setting('app.current_tenant', true)))
+          USING (user_id = (SELECT NULLIF((SELECT current_setting('app.current_tenant', true)), '')::uuid))
+          WITH CHECK (user_id = (SELECT NULLIF((SELECT current_setting('app.current_tenant', true)), '')::uuid))
         """,
         "DROP POLICY IF EXISTS tenant_isolation_#{table} ON #{table}"
       )

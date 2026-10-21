@@ -67,8 +67,8 @@ defmodule Engram.Repo.Migrations.CreateChunkPointsExpand do
     execute(
       """
       CREATE POLICY tenant_isolation_chunk_points ON chunk_points
-        USING (user_id::text = (SELECT current_setting('app.current_tenant', true)))
-        WITH CHECK (user_id::text = (SELECT current_setting('app.current_tenant', true)))
+        USING (user_id = (SELECT NULLIF((SELECT current_setting('app.current_tenant', true)), '')::uuid))
+        WITH CHECK (user_id = (SELECT NULLIF((SELECT current_setting('app.current_tenant', true)), '')::uuid))
       """,
       "DROP POLICY IF EXISTS tenant_isolation_chunk_points ON chunk_points"
     )
