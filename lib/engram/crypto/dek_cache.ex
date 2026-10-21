@@ -381,7 +381,8 @@ defmodule Engram.Crypto.DekCache do
 
         Enum.each(waiters, fn from ->
           GenServer.reply(from, reply)
-          if match?({:ok, _}, reply), do: emit_lookup(:coalesced)
+          # A DEK or the loader's error both spare this caller an unwrap.
+          if reply != :retry, do: emit_lookup(:coalesced)
         end)
 
         %{state | waiters: rest}

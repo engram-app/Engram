@@ -336,6 +336,28 @@ defmodule Engram.Crypto.DekCacheTest do
       assert_receive {[:engram, :crypto, :dek_cache], ^ref, %{count: 1}, %{outcome: :coalesced}}
     end
 
+    # The waiter shared the loader's one failed unwrap; counting it keeps
+    # `miss - coalesced` equal to unwrap attempts during a KMS failure burst.
+    test "a waiter served the loader's error emits outcome :coalesced" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :crypto, :dek_cache]])
+      {:claimed, token} = DekCache.claim_or_await(1)
+      waiter = park_waiter(1)
+
+      :ok = DekCache.release(1, token, :kms_throttled)
+      {:error, :kms_throttled} = Task.await(waiter)
+      assert_receive {[:engram, :crypto, :dek_cache], ^ref, %{count: 1}, %{outcome: :coalesced}}
+    end
+
+    test "a waiter woken with :retry does not emit :coalesced" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :crypto, :dek_cache]])
+      {:claimed, _token} = DekCache.claim_or_await(1)
+      waiter = park_waiter(1)
+
+      DekCache.invalidate(1)
+      :retry = Task.await(waiter)
+      refute_receive {[:engram, :crypto, :dek_cache], ^ref, _, %{outcome: :coalesced}}
+    end
+
     test "a DEK found by claim_or_await itself emits outcome :coalesced" do
       DekCache.put(1, @dek)
       ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :crypto, :dek_cache]])
