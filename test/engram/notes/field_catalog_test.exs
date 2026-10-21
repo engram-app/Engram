@@ -151,6 +151,20 @@ defmodule Engram.Notes.FieldCatalogTest do
     assert Enum.sort(Enum.map(field(fields, "source").values, & &1.value)) == ["1.5", "2024"]
   end
 
+  # One-note values tie on count; breaking the tie on the sample note keeps
+  # every key's samples on the same lowest-id notes, so a cold catalog
+  # decrypts ~50 notes, not 50 per key.
+  test "tied values share sample notes across keys", %{user: user, vault: vault} do
+    for i <- 1..60,
+        do: write_indexed!(user, vault, "n#{i}.md", "---\nurl: u#{i}\nref: r#{i}\n---\nb\n")
+
+    [_stats, {sql, params}] = FieldCatalog.explain_queries(vault.id)
+    rows = Repo.with_tenant!(user.id, fn -> Repo.query!(sql, params).rows end)
+
+    assert length(rows) == 100
+    assert rows |> Enum.map(&List.last/1) |> Enum.uniq() |> length() == 50
+  end
+
   test "the cache answers until the vault's change_seq moves", %{user: user, vault: vault} do
     note = seed!(user, vault)
     {:ok, first} = FieldCatalog.list(user, vault)
