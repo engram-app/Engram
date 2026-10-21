@@ -5,9 +5,11 @@ import {
 	applyFolderMarkers,
 	applyNoteEvents,
 	isUnder,
+	moveAttachments,
 	moveFolders,
 	moveNotes,
 	movesAcrossFolders,
+	removeAttachments,
 	removeFolders,
 	removeNotes,
 	renameFolders,
@@ -354,5 +356,29 @@ describe("applyFolderMarkers", () => {
 		const before = structuredClone(TREE);
 		applyFolderMarkers(TREE, [{ id: "m-new", name: "New" }]);
 		expect(TREE).toEqual(before);
+	});
+});
+
+describe("attachment patches", () => {
+	const tree: VaultTree = {
+		folders: [],
+		notes: [],
+		attachments: [att("a1", "a.zip"), att("a2", "pics/b.png")],
+	};
+
+	it("moveAttachments re-paths by old path and keeps the id", () => {
+		const next = moveAttachments(tree, [{ oldPath: "a.zip", newPath: "files/c.zip" }]);
+		expect(next.attachments.map((a) => [a.id, a.path])).toEqual([
+			["a1", "files/c.zip"],
+			["a2", "pics/b.png"],
+		]);
+	});
+
+	it("moveAttachments with no match returns the same tree", () => {
+		expect(moveAttachments(tree, [{ oldPath: "nope", newPath: "x" }])).toBe(tree);
+	});
+
+	it("removeAttachments drops by path", () => {
+		expect(removeAttachments(tree, ["pics/b.png"]).attachments.map((a) => a.id)).toEqual(["a1"]);
 	});
 });

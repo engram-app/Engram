@@ -44,10 +44,12 @@ import {
 	dirOf as folderOf,
 	isUnder,
 	joinPath,
+	moveAttachments,
 	moveFolders,
 	moveNotes,
 	movesAcrossFolders,
 	type NoteEvent,
+	removeAttachments,
 	removeFolders,
 	removeNotes,
 	renameFolders,
@@ -2630,19 +2632,35 @@ export function useBatchMoveFolders() {
 	});
 }
 
+// Attachment rename/move/delete patch the tree up front, like notes: the
+// page, tree and pickers all read it, so the change shows on commit and rolls
+// back if the server refuses.
 export function useRenameAttachment() {
+	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<
 		{ renamed: boolean; old_path: string; new_path: string },
 		ApiError,
-		{ old_path: string; new_path: string }
+		{ old_path: string; new_path: string },
+		TreeContext
 	>({
 		mutationFn: (vars) =>
 			api.post<{ renamed: boolean; old_path: string; new_path: string }>(
 				"/attachments/rename",
 				vars,
 			),
+		onMutate: async ({ old_path, new_path }) => {
+			const tree = await snapshotTree(qc, vaultId);
+			const patched = patchTree(qc, vaultId, (prev) =>
+				moveAttachments(prev, [{ oldPath: old_path, newPath: new_path }]),
+			);
+			return { tree, patched };
+		},
+		onError: (err, _vars, ctx) => {
+			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
+			renameErrorToast(err, "file", t);
+		},
 		onSettled: () => {
 			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
@@ -2654,13 +2672,28 @@ export function useBatchMoveAttachments() {
 	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
-	return useMutation<{ moved: number }, ApiError, { paths: string[]; target_folder: string }>({
+	return useMutation<
+		{ moved: number },
+		ApiError,
+		{ paths: string[]; target_folder: string },
+		TreeContext
+	>({
 		mutationFn: ({ paths, target_folder }) =>
 			api.post<{ moved: number }>(
 				"/attachments/batch-move",
 				{ paths, target_folder },
 				idempotencyHeaders(),
 			),
+		onMutate: async ({ paths, target_folder }) => {
+			const tree = await snapshotTree(qc, vaultId);
+			const patched = patchTree(qc, vaultId, (prev) =>
+				moveAttachments(
+					prev,
+					paths.map((p) => ({ oldPath: p, newPath: joinPath(target_folder, baseOf(p)) })),
+				),
+			);
+			return { tree, patched };
+		},
 		onSettled: () => {
 			// Reconcile on both paths: a lost ack (server committed, client saw a
 			// network error) leaves the attachments shown at their old paths until
@@ -2670,7 +2703,8 @@ export function useBatchMoveAttachments() {
 		},
 		// Batch moves are fire-and-forget (.mutate, no caller .catch) — surface
 		// failures here, matching the note/folder batch hooks.
-		onError: (err) => {
+		onError: (err, _vars, ctx) => {
+			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
 			if (!joinRefused(err, t)) {
 				notify.error(t("Batch move failed."));
 			}
@@ -2682,17 +2716,22 @@ export function useBatchDeleteAttachments() {
 	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
-	return useMutation<{ deleted: number }, ApiError, { paths: string[] }>({
+	return useMutation<{ deleted: number }, ApiError, { paths: string[] }, TreeContext>({
 		mutationFn: ({ paths }) =>
 			api.post<{ deleted: number }>("/attachments/batch-delete", { paths }, idempotencyHeaders()),
+		onMutate: async ({ paths }) => {
+			const tree = await snapshotTree(qc, vaultId);
+			const patched = patchTree(qc, vaultId, (prev) => removeAttachments(prev, paths));
+			return { tree, patched };
+		},
 		onSettled: () => {
-			// Reconcile on both paths: no optimistic removal here, so a lost ack
-			// (server committed, client saw a network error) would otherwise leave
-			// the deleted attachments visible until an unrelated refetch.
+			// Reconcile on both paths: a lost ack (server committed, client saw a
+			// network error) must not leave the tree showing the restored rows.
 			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 		},
-		onError: (err) => {
+		onError: (err, _vars, ctx) => {
+			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
 			if (!joinRefused(err, t)) {
 				notify.error(t("Batch delete failed."));
 			}

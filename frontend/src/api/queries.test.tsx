@@ -2279,6 +2279,61 @@ describe("useRenameAttachment", () => {
 	});
 });
 
+describe("optimistic attachment rename / move / delete", () => {
+	const seed = () =>
+		qc.setQueryData(["vault-tree", "42"], {
+			folders: [],
+			notes: [],
+			attachments: [
+				{
+					id: "a1",
+					path: "a.zip",
+					mime_type: "application/zip",
+					size_bytes: 1,
+					mtime: 0,
+					updated_at: "s",
+				},
+			],
+			change_seq: 1,
+		});
+	const paths = () => readSeededTree().attachments.map((x) => x.path);
+
+	it("re-paths before the server answers, and rolls back on refusal", async () => {
+		seed();
+		let reject: (e: unknown) => void = () => {};
+		post.mockReturnValue(
+			new Promise((_r, rj) => {
+				reject = rj;
+			}),
+		);
+		const { result } = renderHook(() => useRenameAttachment(), { wrapper });
+		act(() => {
+			result.current.mutate({ old_path: "a.zip", new_path: "b.zip" });
+		});
+		await waitFor(() => expect(paths()).toEqual(["b.zip"]));
+		await act(async () => {
+			reject(new ApiError(409, "conflict"));
+		});
+		await waitFor(() => expect(paths()).toEqual(["a.zip"]));
+	});
+
+	it("moves and deletes before the server answers", async () => {
+		seed();
+		post.mockReturnValue(new Promise(() => undefined));
+		const move = renderHook(() => useBatchMoveAttachments(), { wrapper });
+		act(() => {
+			move.result.current.mutate({ paths: ["a.zip"], target_folder: "files" });
+		});
+		await waitFor(() => expect(paths()).toEqual(["files/a.zip"]));
+
+		const del = renderHook(() => useBatchDeleteAttachments(), { wrapper });
+		act(() => {
+			del.result.current.mutate({ paths: ["files/a.zip"] });
+		});
+		await waitFor(() => expect(paths()).toEqual([]));
+	});
+});
+
 describe("useBatchMoveAttachments", () => {
 	it("POSTs paths + target_folder with UUID X-Idempotency-Key header", async () => {
 		post.mockResolvedValue({ moved: 2 });
