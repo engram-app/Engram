@@ -275,6 +275,25 @@ defmodule Engram.IndexingV5RebuildTest do
     assert attrs.() == fresh
   end
 
+  # A note written with a localized key before the alias table existed was
+  # indexed with it as a user key; the rebuild's re-extraction maps it.
+  test "the rebuild re-extraction maps a localized key to its named field", ctx do
+    note = insert_note(ctx.user, ctx.vault, "---\n状態: draft\n---\n# Big\n\nbody. #{@pad}")
+    assert {:ok, _, _, true} = Indexing.index_note_with_usage(note, ctx.vault, ctx.user)
+    tenant(ctx.user, fn -> Repo.delete_all(from(a in NoteAttr, where: a.note_id == ^note.id)) end)
+
+    assert {:ok, _, _, true} = rebuild(note, ctx.vault, ctx.user)
+    {:ok, fk} = Crypto.dek_filter_key(ctx.user)
+    status = Engram.Notes.FrontmatterKeys.named_id(:status)
+
+    assert [%{key_id: ^status, h: h}] =
+             tenant(ctx.user, fn ->
+               Repo.all(from(a in NoteAttr, where: a.note_id == ^note.id))
+             end)
+
+    assert h == Engram.Vector.FilterId.value_hmac(fk, "draft")
+  end
+
   test "the Voyage-paid stamp: set when Voyage returns, cleared by the commit", ctx do
     note = indexed(ctx)
     drop_dense(ctx.store)

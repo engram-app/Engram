@@ -38,6 +38,18 @@ defmodule Engram.Notes.KeyAliasesTest do
       assert KeyAliases.canonical("resource") == nil
     end
 
+    test "a word two fields share in one locale is dropped for both" do
+      # it ships `scadenza` for both expires and due.
+      it = "frontend/src/i18n/locale/keys/it.json" |> File.read!() |> Jason.decode!()
+      assert it["expires"] == it["due"]
+      assert KeyAliases.canonical(it["due"]) == nil
+      assert KeyAliases.canonical("expires") == "expires"
+    end
+
+    test "the table is versioned by its content" do
+      assert is_integer(KeyAliases.version()) and KeyAliases.version() > 0
+    end
+
     test "no alias points at an English key name" do
       english = ~w(type tags status author reviewed_by source project created updated reviewed
                    expires due priority description resource sources date timestamp modified
@@ -106,6 +118,7 @@ defmodule Engram.Notes.KeyAliasesTest do
     }
 
     [chunk0 | _] = Markdown.parse(content, "n.md")
+
     {Markdown.lead(OkfFields.values(Frontmatter.parse(block))), PayloadV5.build(note, flat),
      chunk0.embed_text}
   end

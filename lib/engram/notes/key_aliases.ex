@@ -14,8 +14,13 @@ defmodule Engram.Notes.KeyAliases do
   Matching folds NFKC then lower case on both sides (`OkfFields.normalize_type/1`),
   so `ｔｙｐｅ`, `Type` and `種類` are all `type`. A localized name equal to
   an English key (`status`, `resource`, `title`, ...) is ignored, so it can
-  never point an English key at another field; a name two fields share goes
-  to the first in locale order (`Engram.I18n.locales/0`), then field order.
+  never point an English key at another field. A word two fields share in
+  ONE locale (it `scadenza`) is dropped for both there; English keys always
+  work. A word shared across locales goes to the first locale in order
+  (`Engram.I18n.locales/0`), then field order.
+
+  The table is versioned by a content hash (`version/0`); a regenerated
+  catalog heals existing notes (`Engram.DataMigrations.KeyAliases`).
 
   `tags` has no aliases: Obsidian reads only `tags` as tags, and the tag
   index follows it.
@@ -44,21 +49,50 @@ defmodule Engram.Notes.KeyAliases do
 
   @dir Path.expand("../../../frontend/src/i18n/locale/keys", __DIR__)
 
-  @catalogs (for code <- Engram.I18n.locales() -- ["en"] do
-               path = Path.join(@dir, "#{code}.json")
-               @external_resource path
-               if File.exists?(path), do: path |> File.read!() |> Jason.decode!(), else: %{}
-             end)
+  # Per locale (in order), per field, its names. A LIST: the shape and the
+  # matcher take synonyms; the pipeline ships one word per field.
+  @table (for code <- Engram.I18n.locales() -- ["en"] do
+            path = Path.join(@dir, "#{code}.json")
+            @external_resource path
+            catalog =
+              if File.exists?(path), do: path |> File.read!() |> Jason.decode!(), else: %{}
 
-  # Normalized alias => {field, locale rank}; the first locale, then field, wins.
-  @aliases (for {catalog, rank} <- Enum.with_index(@catalogs),
-                field <- @fields,
-                is_binary(catalog[field]),
-                norm = OkfFields.normalize_type(catalog[field]),
-                not MapSet.member?(@english, norm),
-                reduce: %{} do
-              acc -> Map.put_new(acc, norm, {field, rank})
+            {code, Map.new(@fields, &{&1, catalog |> Map.get(&1) |> List.wrap()})}
+          end)
+
+  # Normalized alias => {field, locale rank}. Within one locale a word two
+  # fields share (it `scadenza` for expires AND due) is dropped for both:
+  # English still works. Across locales the first in order, then field, wins.
+  @aliases (for {{_code, names}, rank} <- Enum.with_index(@table), reduce: %{} do
+              acc ->
+                pairs =
+                  for field <- @fields,
+                      name <- names[field],
+                      is_binary(name),
+                      norm = OkfFields.normalize_type(name),
+                      not MapSet.member?(@english, norm),
+                      uniq: true,
+                      do: {norm, field}
+
+                shared =
+                  pairs |> Enum.frequencies_by(&elem(&1, 0)) |> Map.filter(&(elem(&1, 1) > 1))
+
+                for {norm, field} <- pairs, not Map.has_key?(shared, norm), reduce: acc do
+                  acc -> Map.put_new(acc, norm, {field, rank})
+                end
             end)
+
+  # The table's version: a content hash, so a regenerated catalog that moves
+  # any alias is a new version and `Engram.DataMigrations.KeyAliases` heals.
+  @version (
+             <<v::31, _::bitstring>> =
+               :crypto.hash(:sha256, :erlang.term_to_binary(Enum.sort(@aliases)))
+
+             v
+           )
+
+  @doc "The alias table's version (stamped on `notes.key_alias_version`)."
+  def version, do: @version
 
   # ponytail: plain, Capitalized and UPPER spellings only; a fullwidth or
   # mIxEd-case key misses the prefilter (its chunk lead line), nothing else.

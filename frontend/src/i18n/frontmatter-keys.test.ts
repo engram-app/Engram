@@ -48,6 +48,21 @@ describe("frontmatter key aliases", () => {
 		expect(canonicalKey("Projekt", bad)).toBe("project");
 	});
 
+	it("drops a word two fields share in one locale, for both", () => {
+		const it_ = buildAliases({ it: { expires: "scadenza", due: "scadenza", type: "tipo" } }, [
+			"it",
+		]);
+		expect(canonicalKey("scadenza", it_)).toBeUndefined();
+		expect(canonicalKey("tipo", it_)).toBe("type");
+		expect(canonicalKey("due", it_)).toBe("due");
+	});
+
+	it("takes a list of names per field", () => {
+		const listed = buildAliases({ de: { type: ["Art", "Typ"] } }, ["de"]);
+		expect(canonicalKey("art", listed)).toBe("type");
+		expect(canonicalKey("TYP", listed)).toBe("type");
+	});
+
 	it("gives a shared word to the first locale in order", () => {
 		const shared = buildAliases({ cs: { status: "Stav" }, de: { type: "stav" } }, ["cs", "de"]);
 		expect(canonicalKey("stav", shared)).toBe("status");

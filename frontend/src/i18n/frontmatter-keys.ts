@@ -8,7 +8,6 @@
 // `tags` is left out on purpose: Obsidian reads only `tags` as tags, so a
 // localized alias would give a note tags its tag pane does not show.
 
-import type { Catalog } from "./core/core";
 import type { Locale } from "./locales";
 
 const NOTE =
@@ -64,20 +63,36 @@ function normalizeKey(name: string): string {
 	return name.normalize("NFKC").toLowerCase();
 }
 
-/** Normalized alias to its English field. First locale (in `order`) wins, then field order. */
+// Per field, its names in one locale. A list: the shape and the matcher take
+// synonyms; the pipeline ships one word per field (the catalog's string).
+type KeyCatalog = Readonly<Record<string, unknown>>;
+
+function namesOf(catalog: KeyCatalog | undefined, field: FieldKey): string[] {
+	const value = catalog?.[field];
+	const names = Array.isArray(value) ? value : [value];
+	return names.filter((n): n is string => typeof n === "string");
+}
+
+/** Normalized alias to its English field. A word two fields share in ONE locale
+ *  (it `scadenza`) is dropped for both there, English still works; across
+ *  locales the first in `order`, then field order, wins. Mirrors KeyAliases. */
 function buildAliases(
-	catalogs: Partial<Record<Locale, Catalog>>,
+	catalogs: Partial<Record<Locale, KeyCatalog>>,
 	order: readonly Locale[],
 ): Map<string, FieldKey> {
 	const aliases = new Map<string, FieldKey>();
 	for (const code of order) {
-		for (const field of FIELD_KEYS) {
-			const local = catalogs[code]?.[field];
-			if (typeof local !== "string") {
-				continue;
-			}
-			const norm = normalizeKey(local);
-			if (!(ENGLISH.has(norm) || aliases.has(norm))) {
+		const pairs = FIELD_KEYS.flatMap((field) =>
+			namesOf(catalogs[code], field)
+				.map((name) => [normalizeKey(name), field] as const)
+				.filter(([norm]) => !ENGLISH.has(norm)),
+		);
+		const fieldsOf = new Map<string, Set<FieldKey>>();
+		for (const [norm, field] of pairs) {
+			fieldsOf.set(norm, (fieldsOf.get(norm) ?? new Set()).add(field));
+		}
+		for (const [norm, field] of pairs) {
+			if ((fieldsOf.get(norm)?.size ?? 0) === 1 && !aliases.has(norm)) {
 				aliases.set(norm, field);
 			}
 		}
@@ -96,5 +111,5 @@ function isFieldKey(name: string): name is FieldKey {
 	return Object.hasOwn(FIELDS, name);
 }
 
-export type { FieldKey };
+export type { FieldKey, KeyCatalog };
 export { buildAliases, canonicalKey, FIELD_KEYS, KEY_DESCRIPTIONS, KEY_ENTRIES, normalizeKey };
