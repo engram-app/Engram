@@ -1141,15 +1141,19 @@ defmodule Engram.Indexing do
   # The note's index is committed, so a Voyage payment for it is spent:
   # a later rebuild pass may pay again.
   defp clear_rebuild_paid(%{note: note} = prepared) do
-    if Map.get(prepared, :rebuild?) or Map.get(note, :rebuild_paid_at) != nil do
-      {_, _} =
-        Repo.update_all(
-          from(n in Note,
-            where: n.kind == "note" and n.id == ^note.id and not is_nil(n.rebuild_paid_at)
-          ),
-          set: [rebuild_paid_at: nil]
-        )
-    end
+    if Map.get(prepared, :rebuild?, false) or Map.get(note, :rebuild_paid_at) != nil,
+      do: unstamp_rebuild_paid(note),
+      else: :ok
+  end
+
+  defp unstamp_rebuild_paid(note) do
+    {_, _} =
+      Repo.update_all(
+        from(n in Note,
+          where: n.kind == "note" and n.id == ^note.id and not is_nil(n.rebuild_paid_at)
+        ),
+        set: [rebuild_paid_at: nil]
+      )
 
     :ok
   end

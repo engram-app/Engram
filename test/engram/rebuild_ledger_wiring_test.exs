@@ -37,16 +37,22 @@ defmodule Engram.RebuildLedgerWiringTest do
     bypass = Bypass.open()
     ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
 
-    # A green, caught-up collection for `Rebuild.gate/0`; every write succeeds.
+    # A green, caught-up collection for `Rebuild.gate/0`; every write succeeds,
+    # and every point read back holds a dense vector (the v5 rebuild copies
+    # it, Task 16.3).
     col = "/collections/#{Engram.Vector.Qdrant.collection_name()}"
     green = ~s({"result": {"status": "green", "optimizer_status": "ok"}, "status": "ok"})
     idle = ~s({"result": {"summary": {"queued_points": 0}, "running": []}, "status": "ok"})
+    points = col <> "/points"
 
     Bypass.stub(bypass, :any, :any, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+
       body =
         case {conn.method, conn.request_path} do
           {"GET", ^col} -> green
           {"GET", path} when path == col <> "/optimizations" -> idle
+          {"POST", ^points} -> read_back(raw)
           _ -> ~s({"result": true, "status": "ok"})
         end
 
@@ -300,6 +306,12 @@ defmodule Engram.RebuildLedgerWiringTest do
     refute_received :voyage_call
     assert Rebuild.ledger().spent_tokens == 0
     assert reload(note).chunker_version == Markdown.chunker_version()
+  end
+
+  defp read_back(raw) do
+    ids = Jason.decode!(raw)["ids"]
+    result = for id <- ids, do: %{id: id, vector: %{dense: [0.1, 0.2, 0.3]}}
+    Jason.encode!(%{result: result, status: "ok"})
   end
 
   defp flush_voyage_calls do
