@@ -28,6 +28,12 @@ defmodule Engram.NotesTest do
   # class; every reject/rewrite/conflict must leave a queryable server trace.
   # ---------------------------------------------------------------------------
 
+  defp stored_ctime(id),
+    do:
+      Repo.one(from(n in Engram.Notes.Note, where: n.id == ^id, select: n.ctime),
+        skip_tenant_check: true
+      )
+
   describe "client ctime" do
     test "is stored on create and kept when a later push omits it", %{user: user, vault: vault} do
       attrs = %{"path" => "ct.md", "content" => "one", "mtime" => 1.0, "ctime" => 500.0}
@@ -41,6 +47,77 @@ defmodule Engram.NotesTest do
         )
 
       assert note.ctime == 500.0
+    end
+
+    # ctime is the file's creation time. Another device's local copy has its
+    # own ctime (when it synced the file down), so an edit pushed from it
+    # must not replace the stored one. Same NULL-only rule as
+    # set_client_ctimes/3 (POST /notes/ctime).
+    test "an update keeps the stored ctime", %{user: user, vault: vault} do
+      attrs = %{"path" => "ct3.md", "content" => "one", "mtime" => 1.0, "ctime" => 500.0}
+      {:ok, _} = Notes.upsert_note(user, vault, attrs, actor: "api")
+
+      {:ok, note} =
+        Notes.upsert_note(
+          user,
+          vault,
+          %{"path" => "ct3.md", "content" => "two", "mtime" => 2.0, "ctime" => 900.0},
+          actor: "api"
+        )
+
+      assert note.ctime == 500.0
+      assert stored_ctime(note.id) == 500.0
+    end
+
+    # A rename re-pushes the same id at the new path (delete old, push new),
+    # possibly from a device whose copy carries its own ctime: same rule.
+    test "an id-keyed move keeps the stored ctime", %{user: user, vault: vault} do
+      id = UUIDv7.generate()
+      attrs = %{"id" => id, "path" => "mv-a.md", "content" => "one", "ctime" => 500.0}
+      {:ok, _} = Notes.upsert_note(user, vault, attrs, actor: "api")
+      :ok = Notes.delete_note(user, vault, "mv-a.md")
+
+      {:ok, moved} =
+        Notes.upsert_note(
+          user,
+          vault,
+          %{"id" => id, "path" => "mv-b.md", "content" => "one", "ctime" => 900.0},
+          actor: "api"
+        )
+
+      assert moved.path == "mv-b.md"
+      assert stored_ctime(id) == 500.0
+    end
+
+    test "an update fills a ctime the note never had", %{user: user, vault: vault} do
+      {:ok, _} =
+        Notes.upsert_note(user, vault, %{"path" => "ct4.md", "content" => "one", "mtime" => 1.0},
+          actor: "api"
+        )
+
+      {:ok, note} =
+        Notes.upsert_note(
+          user,
+          vault,
+          %{"path" => "ct4.md", "content" => "two", "mtime" => 2.0, "ctime" => 700.0},
+          actor: "api"
+        )
+
+      assert stored_ctime(note.id) == 700.0
+    end
+
+    test "a ctime that is not a number > 0 is ignored", %{user: user, vault: vault} do
+      for {bad, i} <- Enum.with_index(["abc", 0, -5, true]) do
+        {:ok, note} =
+          Notes.upsert_note(
+            user,
+            vault,
+            %{"path" => "bad#{i}.md", "content" => "x", "mtime" => 1.0, "ctime" => bad},
+            actor: "api"
+          )
+
+        assert stored_ctime(note.id) == nil
+      end
     end
 
     test "is nil when never sent", %{user: user, vault: vault} do

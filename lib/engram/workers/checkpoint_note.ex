@@ -60,10 +60,12 @@ defmodule Engram.Workers.CheckpointNote do
   def retime_snoozed(note_id) do
     run_at = DateTime.add(DateTime.utc_now(), @room_exit_delay_s, :second)
 
+    # The queue makes Oban's (state, queue, priority, scheduled_at, id) index
+    # usable; without it this scanned every scheduled job on each room exit.
     {count, _} =
       from(j in Oban.Job,
         where: j.worker == ^inspect(__MODULE__),
-        where: j.state == "scheduled",
+        where: j.state == "scheduled" and j.queue == "crdt_checkpoint",
         where: j.scheduled_at > ^run_at,
         where: fragment("? ->> 'note_id'", j.args) == ^to_string(note_id)
       )

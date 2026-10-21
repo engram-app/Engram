@@ -8,9 +8,23 @@ defmodule Engram.Repo.Migrations.AddEmbedBudgetNextToNotesExpand do
   that embeds nothing. Nullable, no backfill: NULL reads as 512 tokens.
   """
 
-  def change do
+  # up/down, not change: a rollback replays `change` in reverse, so the
+  # SET LOCAL would run after the DROP COLUMN it is meant to guard.
+  def up do
+    # Fail fast instead of queueing ACCESS EXCLUSIVE behind a long transaction:
+    # the migrator session drops the app's lock_timeout (Release.migrator_config),
+    # and a queued ADD COLUMN blocks every read and write of the table behind it.
+    # SET LOCAL ends with this migration's transaction; a failed boot retries.
+    execute "SET LOCAL lock_timeout = '5s'"
+
     alter table(:notes) do
       add :embed_budget_next, :bigint
+    end
+  end
+
+  def down do
+    alter table(:notes) do
+      remove :embed_budget_next
     end
   end
 end
