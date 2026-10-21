@@ -1,14 +1,19 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { setupClerkTestingToken } from "@clerk/testing/playwright";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type {
 	OAuthClientInformationMixed,
 	OAuthClientMetadata,
 	OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { setupClerkTestingToken } from "@clerk/testing/playwright";
 import { expect, type Page, test } from "@playwright/test";
-import { clerkSignIn, createUnonboardedUser, deleteClerkUser, loadAuthState } from "./clerk-helpers";
+import {
+	clerkSignIn,
+	createUnonboardedUser,
+	deleteClerkUser,
+	loadAuthState,
+} from "./clerk-helpers";
 
 /**
  * The MCP-first path, end to end, the way a real connector walks it.
@@ -123,7 +128,11 @@ test.describe("MCP-first: a new user connects an AI app", () => {
 		expect(provider.clientInformation()?.client_id, "DCR returned no client_id").toBeTruthy();
 
 		// 2. The user: sign in, onboard, approve.
-		const code = await approveAsNewUser(page, (pending as { email: string }).email, authorize as URL);
+		const code = await approveAsNewUser(
+			page,
+			(pending as { email: string }).email,
+			authorize as URL,
+		);
 
 		// 3. The app finishes the exchange and works.
 		await new StreamableHTTPClientTransport(MCP_URL, { authProvider: provider }).finishAuth(code);

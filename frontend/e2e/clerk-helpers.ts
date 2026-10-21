@@ -8,6 +8,7 @@ import type { Page } from "@playwright/test";
 // comment); it shares only loadAuthState.
 
 const AUTH_STATE_PATH = path.join(__dirname, ".auth-state.json");
+const CLERK_API = "https://api.clerk.com/v1";
 
 export interface AuthState {
 	email: string;
@@ -69,8 +70,6 @@ export async function clerkSignIn(page: Page, email: string, landOn = "/"): Prom
 	await page.goto(landOn);
 }
 
-const CLERK_API = "https://api.clerk.com/v1";
-
 /**
  * A fresh Clerk user with NO onboarding performed. The onboarding specs
  * consume it: finishing the wizard is the thing under test, so each attempt
@@ -80,7 +79,9 @@ const CLERK_API = "https://api.clerk.com/v1";
  * sit on different read replicas (#455), but `clerkSignIn` already rides that
  * out: it retries on "No user found" with backoff.
  */
-export async function createUnonboardedUser(prefix = "e2e-browser-pending"): Promise<{ email: string; id: string }> {
+export async function createUnonboardedUser(
+	prefix = "e2e-browser-pending",
+): Promise<{ email: string; id: string }> {
 	const ts = Date.now();
 	const email = `${prefix}-${ts}@test.com`;
 
