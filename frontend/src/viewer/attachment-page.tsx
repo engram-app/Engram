@@ -231,6 +231,18 @@ export default function AttachmentPage() {
 		}
 	}
 
+	const details = (
+		<AttachmentDetails
+			att={att}
+			kind={kind}
+			inlineUrl={url && opensInline(mime) ? url : null}
+			onDownload={download}
+			renaming={renamingAt === "title"}
+			onRename={() => setRenamingAt("title")}
+			onRenameDone={() => setRenamingAt(null)}
+		/>
+	);
+
 	const body =
 		kind === "pdf" && !error ? (
 			// The PDF viewer owns its scroll and fills the page; no card under it.
@@ -241,18 +253,17 @@ export default function AttachmentPage() {
 			) : (
 				<LoadingPane />
 			)
+		) : (kind === "text" || kind === "csv") && !error && !unrenderable ? (
+			// Text and tables fill the page and scroll INSIDE their own frame, so a
+			// long file never scrolls the details and buttons away.
+			<article className="flex min-h-0 flex-1 flex-col gap-6 p-6">
+				{details}
+				{preview}
+			</article>
 		) : (
 			<PreviewColumn>
 				<article className="flex flex-col gap-6 p-6">
-					<AttachmentDetails
-						att={att}
-						kind={kind}
-						inlineUrl={url && opensInline(mime) ? url : null}
-						onDownload={download}
-						renaming={renamingAt === "title"}
-						onRename={() => setRenamingAt("title")}
-						onRenameDone={() => setRenamingAt(null)}
-					/>
+					{details}
 					{preview}
 				</article>
 			</PreviewColumn>

@@ -4,6 +4,7 @@ import { useT } from "@/i18n/locale-provider";
 import { intlLocale } from "@/lib/intl-locale";
 import { formatBytes, parseCsv, TEXT_PREVIEW_MAX_BYTES } from "./attachment-preview";
 
+// Data rows shown, not counting the header.
 const MAX_ROWS = 500;
 
 // Read-only text and CSV preview. Only the first TEXT_PREVIEW_MAX_BYTES are
@@ -42,10 +43,9 @@ export function AttachmentTextPreview({
 	}
 	if (!csv) {
 		return (
-			<figure className="flex flex-col gap-1">
+			<figure className="flex min-h-0 flex-1 flex-col gap-1">
 				<ScrollArea
-					className="rounded-lg border bg-muted/40"
-					viewportClassName="max-h-[70vh]"
+					className="min-h-0 flex-1 rounded-lg border bg-muted/40"
 					viewportLabel={filename}
 				>
 					{/* w-max: long lines scroll sideways instead of wrapping. */}
@@ -64,15 +64,11 @@ export function AttachmentTextPreview({
 			</figure>
 		);
 	}
-	const rows = parseCsv(text, filename.toLowerCase().endsWith(".tsv") ? "\t" : ",", MAX_ROWS + 1);
+	const rows = parseCsv(text, filename.toLowerCase().endsWith(".tsv") ? "\t" : ",", MAX_ROWS + 2);
 	const [head, ...body] = rows;
 	return (
-		<figure className="flex flex-col gap-1">
-			<ScrollArea
-				className="rounded-lg border"
-				viewportClassName="max-h-[70vh]"
-				viewportLabel={filename}
-			>
+		<figure className="flex min-h-0 flex-1 flex-col gap-1">
+			<ScrollArea className="min-h-0 flex-1 rounded-lg border" viewportLabel={filename}>
 				{/* w-max: wide tables scroll sideways; min-w-full: narrow ones fill. */}
 				<table className="w-max min-w-full text-xs" translate="no">
 					{head ? (
@@ -88,7 +84,7 @@ export function AttachmentTextPreview({
 						</thead>
 					) : null}
 					<tbody>
-						{body.slice(0, MAX_ROWS - 1).map((r, i) => (
+						{body.slice(0, MAX_ROWS).map((r, i) => (
 							// biome-ignore lint/suspicious/noArrayIndexKey: rows have no identity beyond position.
 							<tr key={i} className="even:bg-muted/30">
 								{r.map((c, j) => (
@@ -103,7 +99,7 @@ export function AttachmentTextPreview({
 				</table>
 				<ScrollBar orientation="horizontal" />
 			</ScrollArea>
-			{rows.length > MAX_ROWS ? (
+			{body.length > MAX_ROWS ? (
 				<figcaption className="text-muted-foreground text-xs">
 					{t("Showing the first {count} rows.", { count: MAX_ROWS })}
 				</figcaption>

@@ -138,7 +138,7 @@ export function AttachmentDetails({
 	const fmtLocale = intlLocale(renderedLocale);
 
 	return (
-		<section aria-label={t("File details")} className="flex flex-col gap-4">
+		<section aria-label={t("File details")} className="flex shrink-0 flex-col gap-4">
 			<header className="flex items-center gap-3">
 				<Icon className="size-10 shrink-0 text-muted-foreground" aria-hidden="true" />
 				<h2 className="min-w-0 font-semibold text-lg">

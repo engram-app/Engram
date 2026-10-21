@@ -131,6 +131,15 @@ it("previews a CSV as a table", async () => {
 	expect(screen.getByRole("cell", { name: "apple" })).toBeInTheDocument();
 });
 
+it("shows 500 data rows under the header, then says it stopped", async () => {
+	const csv = ["h", ...Array.from({ length: 600 }, (_, i) => String(i))].join("\n");
+	mockAttachments = [att({ id: "c-2", path: "big.csv", mime_type: "text/csv" })];
+	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob([csv]));
+	const { container } = renderAt("c-2");
+	expect(await screen.findByText(/showing the first 500 rows/iu)).toBeInTheDocument();
+	expect(container.querySelectorAll("tbody tr")).toHaveLength(500);
+});
+
 it("plays audio natively", async () => {
 	mockAttachments = [att({ id: "a-1", path: "s.mp3", mime_type: "audio/mpeg" })];
 	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["x"], { type: "audio/mpeg" }));
