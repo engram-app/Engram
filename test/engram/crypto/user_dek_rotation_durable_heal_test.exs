@@ -314,6 +314,23 @@ defmodule Engram.Crypto.UserDekRotationDurableHealTest do
       assert_received {@row_failed, ^ref, %{count: 1}, %{table: :qdrant, status: :guard_rebuild}}
     end
 
+    # A RebuildStaleNote already pending for the note rebuilds it too (its
+    # chunker_version is NULLed here): an EmbedNote beside it would pay twice.
+    test "queues no EmbedNote beside a pending RebuildStaleNote", ctx do
+      unreadable = text_point(ctx.point, ctx.user, :crypto.strong_rand_bytes(32))
+      stub_qdrant(sweep: [unreadable])
+
+      {:ok, _} =
+        Oban.insert(
+          Engram.Workers.RebuildStaleNote.new(%{note_id: ctx.note.id, user_id: ctx.user.id})
+        )
+
+      assert :ok = perform_job(RotationTextGuard, guard_args(ctx))
+
+      assert raw(ctx.note).chunker_version == nil
+      refute_enqueued(worker: EmbedNote, args: %{note_id: ctx.note.id})
+    end
+
     test "resumes at its scroll cursor instead of rescanning from page 1", ctx do
       unreadable = text_point(ctx.point, ctx.user, :crypto.strong_rand_bytes(32))
       test = self()

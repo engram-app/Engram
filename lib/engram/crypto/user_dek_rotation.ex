@@ -1457,8 +1457,11 @@ defmodule Engram.Crypto.UserDekRotation do
         ids
       end)
 
+    # A pending RebuildStaleNote rebuilds the note too (chunker_version is
+    # NULL now), so an EmbedNote beside it would pay Voyage twice.
     ids
     |> EmbedNote.reject_already_queued(EmbedNote.backfill_priority())
+    |> then(&Engram.Jobs.reject_pending(Engram.Workers.RebuildStaleNote, &1))
     |> Enum.chunk_every(500)
     |> Enum.each(fn batch ->
       Oban.insert_all(

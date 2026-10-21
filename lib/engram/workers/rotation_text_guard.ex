@@ -6,7 +6,7 @@ defmodule Engram.Workers.RotationTextGuard do
   retired DEK, which is never persisted. So the flip commits this job with
   itself, scheduled past the sweep, and the process cancels it once its own
   sweep is done. If the node dies in between, this runs and checks every
-  point of the user under the current DEK (`UserDekRotation.verify_point_text/1`):
+  point of the user under the current DEK (`UserDekRotation.verify_point_text/3`):
   a note whose text no longer opens is rebuilt (unmetered maintenance), an
   orphan point is deleted. Nothing readable is touched, so a run that finds
   the sweep finished costs reads only.
