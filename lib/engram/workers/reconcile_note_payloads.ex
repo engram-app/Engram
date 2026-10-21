@@ -37,7 +37,8 @@ defmodule Engram.Workers.ReconcileNotePayloads do
   Rate-limited: one batch of 200 notes costs one scroll per 2048 points plus
   a `set_payload` per drifted note, with a pause between batches, on the
   single-slot `crdt_backfill` lane. Qdrant refusals and unapplied waits
-  snooze. Each hop logs its counts and emits
+  snooze; a 4xx (a request Qdrant refuses on every attempt) cancels the job
+  once, logged with its status, and the hourly re-check retries the user. Each hop logs its counts and emits
   `[:engram, :indexing, :payload_reconcile]` per outcome
   (`Engram.PromEx.Indexing`).
   """
@@ -169,24 +170,54 @@ defmodule Engram.Workers.ReconcileNotePayloads do
             heal(user, List.last(notes).id, deadline, counts)
           end
         else
-          {:error, reason, counts} -> {qdrant_answer(reason), counts}
-          {:error, reason} -> {qdrant_answer(reason), counts}
+          {:error, reason, counts} -> {answer(user_id, reason), counts}
+          {:error, reason} -> {answer(user_id, reason), counts}
         end
     end
   end
 
+  # One line per failed hop with the reason's class (status and tag, never a
+  # body, an id list or note content), then the Oban answer.
+  defp answer(user_id, reason) do
+    result = qdrant_answer(reason)
+
+    if match?({tag, _} when tag in [:error, :cancel], result) do
+      Logger.warning(
+        "note payload reconcile failed",
+        Metadata.with_category(:warning, :oban,
+          user_id: user_id,
+          reason_label: Metadata.safe_reason(reason),
+          answer: elem(result, 0)
+        )
+      )
+    end
+
+    result
+  end
+
   # As every other Qdrant writer: refusal and an unapplied wait are snoozes,
   # not attempts (five of those and the job is discarded into the same
-  # pressure).
+  # pressure). A 4xx Qdrant refusal (a filter on an unindexed key, a bad
+  # request shape) fails the same way on every attempt: cancel once, the
+  # hourly re-check retries the user after a fix ships (#2138). A 5xx or a
+  # transport error (timeout) keeps Oban's backoff.
   defp qdrant_answer(:rotation_in_progress), do: {:snooze, 60}
   defp qdrant_answer(:user_not_found), do: :ok
   defp qdrant_answer(:qdrant_backpressure), do: Qdrant.backpressure_snooze(:refused)
   defp qdrant_answer(:qdrant_wait_timeout), do: Qdrant.wait_timeout_snooze()
 
-  defp qdrant_answer({:qdrant_scroll, status, _body}) when status in [429, 503, 507],
-    do: Qdrant.backpressure_snooze(:refused)
+  defp qdrant_answer(reason) do
+    case http_status(reason) do
+      status when status in [429, 503, 507] -> Qdrant.backpressure_snooze(:refused)
+      status when status in 400..499 -> {:cancel, reason}
+      _ -> {:error, reason}
+    end
+  end
 
-  defp qdrant_answer(reason), do: {:error, reason}
+  # `scroll/2` and the payload writes (`write_error/2`) tag a refusal differently.
+  defp http_status({:qdrant_scroll, status, _body}) when is_integer(status), do: status
+  defp http_status({status, _body}) when is_integer(status), do: status
+  defp http_status(_reason), do: nil
 
   defp batch(user_id, after_id) do
     query =
@@ -225,16 +256,13 @@ defmodule Engram.Workers.ReconcileNotePayloads do
     |> Enum.chunk_every(Qdrant.max_ids())
     |> Enum.reduce_while({:ok, %{}}, fn chunk, {:ok, acc} ->
       case Qdrant.scroll(Qdrant.collection_name(),
-             filter: %{
-               must: [%{has_id: chunk}],
-               # v3 points carry `user_id`; v5 ones carry `u` (an encoded id)
-               # instead. Both must come back, or a v5 note reads as "all
-               # points gone" and is stamped out of the v5 heal's reach.
-               should: [
-                 %{key: "user_id", match: %{value: user_id}},
-                 %{must_not: [%{is_empty: %{key: "u"}}]}
-               ]
-             },
+             # The tenant condition every reader uses: `user_id` alone while
+             # the v5 format is off, `user_id` OR `u` once it is on. Never a
+             # hand-built `u` condition: strict mode answers 400 to a filter
+             # on an unindexed key, and `u` is only indexed with v5 on
+             # (#2138). A v5 point exists only with v5 on, so both layouts
+             # still come back.
+             filter: %{must: [%{has_id: chunk}, Qdrant.match_filter(:user, user_id)]},
              with_payload: keys,
              limit: length(chunk)
            ) do
@@ -356,16 +384,8 @@ defmodule Engram.Workers.ReconcileNotePayloads do
         stamp(note, payload, true)
         {:cont, {:ok, bump(counts, :rewritten)}}
 
+      # Logged once, with its class, where the hop answers Oban (`answer/2`).
       {:error, reason} ->
-        Logger.warning(
-          "note payload reconcile: payload write failed",
-          Metadata.with_category(:warning, :search,
-            user_id: note.user_id,
-            note_id: note.id,
-            reason_label: Metadata.safe_reason(reason)
-          )
-        )
-
         {:halt, {:error, reason, counts}}
     end
   end
