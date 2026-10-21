@@ -30,12 +30,13 @@ defmodule Engram.Workers.HealKeyAliases do
   alias Engram.Accounts.User
   alias Engram.Backfill.TenantScan
   alias Engram.Crypto
+  alias Engram.Crypto.RotationGate
   alias Engram.DataMigrations.IndexVersions
   alias Engram.Notes
   alias Engram.Notes.{FlatFields, Frontmatter, FrontmatterKeys, KeyAliases, NoteAttr, OkfFields}
   alias Engram.Repo
   alias Engram.Vector.Qdrant
-  alias Engram.Workers.RebuildStaleNote
+  alias Engram.Workers.{EmbedNote, RebuildStaleNote}
 
   @batch 200
 
@@ -44,7 +45,10 @@ defmodule Engram.Workers.HealKeyAliases do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"user_id" => user_id} = args}) do
+    # A heal re-encrypts the OKF fields: under a DEK a rotation is replacing
+    # they would not decrypt afterwards, so it waits the rotation out.
     with %User{} = user <- Repo.get(User, user_id),
+         :ok <- RotationGate.check_user(user),
          {:ok, fk} <- Crypto.dek_filter_key(user) do
       notes = Repo.with_tenant!(user_id, fn -> Repo.all(page(user_id, args["after"])) end)
       Enum.each(notes, &heal(&1, user, fk))
@@ -52,6 +56,7 @@ defmodule Engram.Workers.HealKeyAliases do
       continue(user_id, notes)
     else
       nil -> :ok
+      {:error, :rotation_in_progress} -> {:snooze, 60}
       {:error, _} = err -> err
     end
   end
@@ -72,8 +77,13 @@ defmodule Engram.Workers.HealKeyAliases do
         if Repo.exists?(where(stale(), [n], n.user_id == ^uid)), do: [uid], else: []
       end)
 
+    executing = TenantScan.executing_user_ids(__MODULE__)
+
     # One insert per user: Oban's Basic engine ignores `unique` in insert_all.
-    for uid <- user_ids, do: {:ok, _} = Oban.insert(new(%{"user_id" => uid}))
+    for uid <- user_ids,
+        not MapSet.member?(executing, uid),
+        do: {:ok, _} = Oban.insert(new(%{"user_id" => uid}))
+
     length(user_ids)
   end
 
@@ -140,8 +150,10 @@ defmodule Engram.Workers.HealKeyAliases do
       Repo.update_all(cas(note), set: Map.to_list(okf))
     end)
 
+    # The lowest priority, as the reconcile sweep queues an upgrade: never
+    # ahead of the v5 pass's jobs (priority 0 would jump all of them).
     args = %{note_id: note.id, user_id: note.user_id, upgrade: true, key_aliases: true}
-    {:ok, _} = Oban.insert(RebuildStaleNote.new(args))
+    {:ok, _} = Oban.insert(RebuildStaleNote.new(args, priority: EmbedNote.backfill_priority()))
   end
 
   defp stamp(note) do

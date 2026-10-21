@@ -82,7 +82,7 @@ defmodule Engram.Workers.BackfillLinkKeys do
   @spec enqueue_missing() :: non_neg_integer()
   def enqueue_missing do
     user_ids = TenantScan.flat_map_users(fn uid -> if missing?(uid), do: [uid], else: [] end)
-    executing = executing_user_ids()
+    executing = TenantScan.executing_user_ids(__MODULE__)
 
     # One insert per user: Oban's Basic engine ignores `unique` in insert_all.
     for uid <- user_ids,
@@ -118,15 +118,6 @@ defmodule Engram.Workers.BackfillLinkKeys do
 
   defp candidates_only(query, _schema),
     do: where(query, [r], not is_nil(r.basename_hmac) and not is_nil(r.path_ciphertext))
-
-  defp executing_user_ids do
-    from(j in Oban.Job,
-      where: j.worker == ^inspect(__MODULE__) and j.state == "executing",
-      select: fragment("?->>'user_id'", j.args)
-    )
-    |> Repo.all()
-    |> MapSet.new()
-  end
 
   # `{:more, table_index, after_id}` when the budget ran out first.
   defp fill(_user_id, _dek, _deadline, index, _after_id) when index >= length(@tables), do: :done

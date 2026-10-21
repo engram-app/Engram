@@ -55,6 +55,47 @@ defmodule Engram.Workers.HealKeyAliasesTest do
     assert Map.delete(after_, :key_alias_version) == Map.delete(before, :key_alias_version)
   end
 
+  # Review of #2126: the heal re-encrypts type/description/resource. Written
+  # under a DEK a rotation is replacing, they would be unreadable afterwards.
+  test "snoozes while the user's DEK rotation holds the lock, writing nothing", ctx do
+    affected = indexed(ctx, "---\n種類: 会議\n---\n# A\n", nil)
+
+    Repo.update_all(from(u in Engram.Accounts.User, where: u.id == ^ctx.user.id),
+      set: [dek_rotation_locked_at: DateTime.utc_now()]
+    )
+
+    assert {:snooze, 60} = perform_job(HealKeyAliases, %{"user_id" => ctx.user.id})
+    assert row(affected).type_hmac == nil
+    assert row(affected).key_alias_version == 1
+    refute_enqueued(worker: RebuildStaleNote)
+  end
+
+  # The re-index is maintenance: it queues behind the v5 pass, not ahead of it.
+  test "queues the re-index at backfill priority", ctx do
+    affected = indexed(ctx, "---\n種類: 会議\n---\n# A\n", nil)
+    assert :ok = perform_job(HealKeyAliases, %{"user_id" => ctx.user.id})
+
+    assert_enqueued(
+      worker: RebuildStaleNote,
+      args: %{note_id: affected.id},
+      priority: Engram.Workers.EmbedNote.backfill_priority()
+    )
+  end
+
+  # A chain inserts its own successor while it executes, so `unique` cannot
+  # stop a second chain for that user: the enqueue skips executing users.
+  test "enqueue_missing skips a user whose chain is executing", ctx do
+    _ = indexed(ctx, "---\ntype: x\n---\n# C\n", "x")
+
+    {:ok, job} = Oban.insert(HealKeyAliases.new(%{"user_id" => ctx.user.id}))
+    Repo.update_all(from(j in Oban.Job, where: j.id == ^job.id), set: [state: "executing"])
+
+    _ = HealKeyAliases.enqueue_missing()
+
+    assert [_only] =
+             Repo.all(from(j in Oban.Job, where: j.worker == "Engram.Workers.HealKeyAliases"))
+  end
+
   test "the migration is done once every note is read under the current table", ctx do
     assert Migration in DataMigrationsRunner.migrations()
     assert Migration.name() == "key_aliases:#{KeyAliases.version()}"
