@@ -26,9 +26,9 @@ defmodule Engram.Native.ChunkerTest do
     end
   end
 
-  # Held at 3 until the bundled one-time re-chunk ships; see markdown.ex.
-  test "chunker_version is 3: prod rebuilds once, with the bundled re-chunk" do
-    assert Markdown.chunker_version() == 3
+  # Stamped 5 by the bundled one-time re-chunk (PR-17); see markdown.ex.
+  test "chunker_version is 5: prod rebuilds once, with the bundled re-chunk" do
+    assert Markdown.chunker_version() == 5
   end
 
   # Over 512 B: the min512 merge (chunker v5) leaves such a section alone,
