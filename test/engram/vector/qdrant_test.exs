@@ -1,6 +1,8 @@
 defmodule Engram.Vector.QdrantTest do
   use ExUnit.Case, async: true
 
+  import Engram.QdrantFilterView
+
   import ExUnit.CaptureLog
 
   alias Engram.ServiceConfig
@@ -113,7 +115,9 @@ defmodule Engram.Vector.QdrantTest do
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
 
-        assert decoded["points"] == ["uuid-1", "uuid-2"]
+        # A has_id filter, not a `points` list: a missing id must not 404.
+        assert decoded["filter"] == %{"should" => [%{"has_id" => ["uuid-1", "uuid-2"]}]}
+        refute Map.has_key?(decoded, "points")
         assert decoded["payload"]["path_hmac"] == "AAAA"
         assert decoded["payload"]["folder_hmac"] == "BBBB"
         assert decoded["payload"]["tags_hmac"] == ["TTTT"]
@@ -127,6 +131,24 @@ defmodule Engram.Vector.QdrantTest do
 
       payload = %{path_hmac: "AAAA", folder_hmac: "BBBB", tags_hmac: ["TTTT"]}
       assert :ok = Qdrant.set_payload("test_col", ["uuid-1", "uuid-2"], payload)
+    end
+
+    test "splits a long id list into has_id conditions of max_ids each", %{bypass: bypass} do
+      ids = for i <- 1..(Qdrant.max_ids() + 1), do: "uuid-#{i}"
+
+      Bypass.expect_once(bypass, "POST", "/collections/test_col/points/payload", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        %{"filter" => %{"should" => conds}} = Jason.decode!(body)
+
+        assert Enum.map(conds, &length(&1["has_id"])) == [Qdrant.max_ids(), 1]
+        assert Enum.flat_map(conds, & &1["has_id"]) == ids
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, ~s({"result": {"status": "acknowledged"}}))
+      end)
+
+      assert :ok = Qdrant.set_payload("test_col", ids, %{path_hmac: "x"})
     end
 
     test "returns :ok on empty point list without HTTP call", %{bypass: bypass} do
@@ -204,7 +226,7 @@ defmodule Engram.Vector.QdrantTest do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/delete", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        conditions = decoded["filter"]["must"]
+        conditions = legacy_view(decoded["filter"]["must"])
         keys = Enum.map(conditions, & &1["key"])
 
         assert length(conditions) == 2
@@ -249,7 +271,7 @@ defmodule Engram.Vector.QdrantTest do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/delete", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        keys = Enum.map(decoded["filter"]["must"], & &1["key"])
+        keys = Enum.map(legacy_view(decoded["filter"]["must"]), & &1["key"])
 
         refute "source_path" in keys
 
@@ -271,7 +293,7 @@ defmodule Engram.Vector.QdrantTest do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/delete", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        conditions = decoded["filter"]["must"]
+        conditions = legacy_view(decoded["filter"]["must"])
         keys = Enum.map(conditions, & &1["key"])
         assert "user_id" in keys
         assert "vault_id" in keys
@@ -333,7 +355,7 @@ defmodule Engram.Vector.QdrantTest do
         assert decoded["exact"] == true
         # Tenant triple is mandatory (#755) — a regression dropping user_id or
         # vault_id would silently count across tenants.
-        must = decoded["filter"]["must"]
+        must = legacy_view(decoded["filter"]["must"])
         assert %{"key" => "user_id", "match" => %{"value" => "7"}} in must
         assert %{"key" => "vault_id", "match" => %{"value" => "9"}} in must
         assert %{"key" => "path_hmac", "match" => %{"value" => "oldp=="}} in must
@@ -448,7 +470,7 @@ defmodule Engram.Vector.QdrantTest do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        conditions = decoded["filter"]["must"]
+        conditions = legacy_view(decoded["filter"]["must"])
 
         cond = Enum.find(conditions, &(&1["key"] == "folder_hmac"))
         assert cond, "expected a folder_hmac filter, got #{inspect(conditions)}"
@@ -473,7 +495,7 @@ defmodule Engram.Vector.QdrantTest do
       Bypass.expect_once(bypass, "POST", "/collections/test_col/points/query", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         decoded = Jason.decode!(body)
-        conditions = decoded["filter"]["must"]
+        conditions = legacy_view(decoded["filter"]["must"])
 
         cond = Enum.find(conditions, &(&1["key"] == "tags_hmac"))
         assert cond, "expected a tags_hmac filter, got #{inspect(conditions)}"
@@ -664,7 +686,7 @@ defmodule Engram.Vector.QdrantTest do
         assert decoded["with_vector"] == false
         assert decoded["limit"] == 200
 
-        filter = decoded["filter"]["must"]
+        filter = legacy_view(decoded["filter"]["must"])
         assert length(filter) == 1
         assert hd(filter)["key"] == "user_id"
         assert hd(filter)["match"]["value"] == 42
@@ -913,7 +935,7 @@ defmodule Engram.Vector.QdrantTest do
 
         assert decoded["payload"] == %{"path_hmac" => "newp==", "folder_hmac" => "newf=="}
 
-        must = decoded["filter"]["must"]
+        must = legacy_view(decoded["filter"]["must"])
         assert %{"key" => "user_id", "match" => %{"value" => "7"}} in must
         assert %{"key" => "vault_id", "match" => %{"value" => "9"}} in must
         assert %{"key" => "path_hmac", "match" => %{"value" => "oldp=="}} in must
@@ -952,7 +974,7 @@ defmodule Engram.Vector.QdrantTest do
     test "scopes the PATCH to the caller's user_id/vault_id (no cross-tenant)", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
-        must = Jason.decode!(body)["filter"]["must"]
+        must = legacy_view(Jason.decode!(body)["filter"]["must"])
 
         assert %{"key" => "user_id", "match" => %{"value" => "7"}} in must
         assert %{"key" => "vault_id", "match" => %{"value" => "9"}} in must

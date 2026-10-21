@@ -1,6 +1,8 @@
 defmodule Engram.IndexingTest do
   use Engram.DataCase, async: false
 
+  import Engram.QdrantFilterView
+
   import Mox
 
   alias Engram.Crypto.DekCache
@@ -751,7 +753,7 @@ defmodule Engram.IndexingTest do
       assert {:ok, _} = Indexing.index_note(decrypted, vault)
 
       assert_received {:delete_filter, body}
-      must = body["filter"]["must"]
+      must = legacy_view(body["filter"]["must"])
 
       path_hmac_clause = Enum.find(must, fn c -> c["key"] == "path_hmac" end)
       assert path_hmac_clause, "expected delete filter to key on path_hmac, got: #{inspect(must)}"
@@ -851,7 +853,7 @@ defmodule Engram.IndexingTest do
         assert decoded["payload"]["folder_hmac"] == Base.encode64(<<4, 5, 6>>)
 
         assert %{"key" => "path_hmac", "match" => %{"value" => ^old_b64}} =
-                 Enum.find(decoded["filter"]["must"], &(&1["key"] == "path_hmac"))
+                 Enum.find(legacy_view(decoded["filter"]["must"]), &(&1["key"] == "path_hmac"))
 
         Plug.Conn.send_resp(conn, 200, ~s({"result": true}))
       end)
@@ -868,7 +870,7 @@ defmodule Engram.IndexingTest do
 
       Bypass.expect_once(bypass, "POST", "/collections/engram_notes/points/count", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
-        must = Jason.decode!(body)["filter"]["must"]
+        must = legacy_view(Jason.decode!(body)["filter"]["must"])
 
         # The wrapper must forward the full tenant triple to Qdrant (#755).
         assert %{"key" => "user_id", "match" => %{"value" => to_string(user.id)}} in must

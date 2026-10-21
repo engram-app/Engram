@@ -434,11 +434,23 @@ export default {
 	"a list, or one name": "eine Liste oder ein Name",
 	"Topics. Browsable and searchable across the vault.":
 		"Themen. Durchsuchbar und über den gesamten Vault verfügbar.",
-	"A one-line summary of the note.": "Eine kurze Zusammenfassung der Notiz.",
-	"The thing the note is about — usually a URL.": "Worum es in der Notiz geht – meist eine URL.",
+	"Where the note stands, such as draft or stable.":
+		"Wo sich die Notiz befindet, z. B. Entwurf oder stabil.",
+	"Who wrote the note, a person or an agent.":
+		"Wer die Notiz erstellt hat, eine Person oder ein Agent.",
+	"Who last checked the note.": "Wer die Notiz zuletzt überprüft hat.",
+	"What the note is based on, usually a URL.":
+		"Worauf sich die Notiz bezieht, normalerweise eine URL.",
+	"The project the note belongs to.": "Das Projekt, zu dem die Notiz gehört.",
 	"a date (YYYY-MM-DD)": "ein Datum (YYYY-MM-DD)",
 	"When the note came into being.": "Wann die Notiz erstellt wurde.",
 	"When it last changed.": "Wann sie zuletzt geändert wurde.",
+	"When it was last checked.": "Wann die Notiz zuletzt überprüft wurde.",
+	"When the note goes out of date.": "Wann die Notiz veraltet ist.",
+	"When the work in the note is due.": "Wann die Arbeit in der Notiz fällig ist.",
+	"a number": "eine Zahl",
+	"How much the note matters, as a number.": "Wie wichtig die Notiz ist, als Zahl.",
+	"A one-line summary of the note.": "Eine kurze Zusammenfassung der Notiz.",
 	"Link Obsidian Vault": "Obsidian Vault verknüpfen",
 	"Please sign in to link your Obsidian vault.":
 		"Melde dich an, um deinen Obsidian Vault zu verknüpfen.",
@@ -1349,6 +1361,8 @@ export default {
 	"{what} Wants {expectsLabel}.": "{what} möchte {expectsLabel}.",
 	"also accepts {aliases}": "akzeptiert auch {aliases}",
 	or: "oder",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Ein verschachtelter Name wie {example} kann hier oder in Obsidian nicht bearbeitet werden; nur eine direkte Bearbeitung, MCP, oder eine KI schreibt ihn.",
 	Properties: "Eigenschaften",
 	"About properties": "Über Eigenschaften",
 	"Property name": "Name der Eigenschaft",

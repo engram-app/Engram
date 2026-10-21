@@ -291,4 +291,55 @@ defmodule Engram.Indexing.CommitIndexRlsTest do
              """
     end
   end
+
+  describe "the v5 flat-field writes under enforced RLS" do
+    setup %{note: note, user: user, vault: vault} do
+      Engram.ServiceConfig.put_override(:v5_payload_format, true)
+
+      content =
+        "---\nstatus: draft\nmood: calm\n---\n# Commit Index\n\nBody text that yields a chunk.\n"
+
+      {:ok, note} =
+        Notes.upsert_note(
+          user,
+          vault,
+          %{"path" => note.path, "content" => content},
+          actor: "api"
+        )
+
+      {:ok, note: note}
+    end
+
+    test "commit_index writes note_attrs as engram_app",
+         %{bypass: bypass, note: note, vault: vault, user: user} do
+      status_id = Engram.Notes.FrontmatterKeys.named_id(:status)
+      stub_qdrant(bypass)
+      prepared = prepare!(note, vault, user)
+      assert [_ | _] = prepared.attr_rows
+
+      outcome =
+        as_prod_role(fn ->
+          {:ok, _} = Indexing.commit_index(prepared)
+
+          # Read back under the same role, scoped to the owner: the rows passed
+          # the WITH CHECK, and only the owner's tenant sees them.
+          {:ok, counts} =
+            Repo.with_tenant(note.user_id, fn ->
+              {Repo.one(from(a in Engram.Notes.NoteAttr, select: count(a.note_id))),
+               Repo.one(
+                 from(a in Engram.Notes.NoteAttr,
+                   where: a.note_id == ^note.id and a.key_id == ^status_id,
+                   select: a.h
+                 )
+               )}
+            end)
+
+          counts
+        end)
+
+      assert {:returned, {rows, status_hmac}} = outcome
+      assert rows > 0
+      assert is_binary(status_hmac)
+    end
+  end
 end

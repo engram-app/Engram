@@ -421,11 +421,21 @@ export default {
 	"a list, or one name": "một danh sách hoặc một tên",
 	"Topics. Browsable and searchable across the vault.":
 		"Chủ đề. Có thể duyệt và tìm kiếm trong toàn kho lưu trữ.",
-	"A one-line summary of the note.": "Tóm tắt một dòng của ghi chú.",
-	"The thing the note is about — usually a URL.": "Nội dung của ghi chú – thường là một URL.",
+	"Where the note stands, such as draft or stable.":
+		"Vị trí của ghi chú, ví dụ: bản nháp hoặc đã hoàn thiện.",
+	"Who wrote the note, a person or an agent.": "Ai đã viết ghi chú, một người hoặc một tác nhân.",
+	"Who last checked the note.": "Ai đã kiểm tra ghi chú lần cuối.",
+	"What the note is based on, usually a URL.": "Nguồn gốc của ghi chú, thường là một URL.",
+	"The project the note belongs to.": "Dự án mà ghi chú thuộc về.",
 	"a date (YYYY-MM-DD)": "một ngày (YYYY-MM-DD)",
 	"When the note came into being.": "Thời điểm ghi chú được tạo.",
 	"When it last changed.": "Thời điểm ghi chú được thay đổi lần cuối.",
+	"When it was last checked.": "Thời điểm kiểm tra ghi chú lần cuối.",
+	"When the note goes out of date.": "Thời điểm ghi chú trở nên lỗi thời.",
+	"When the work in the note is due.": "Thời hạn hoàn thành công việc trong ghi chú.",
+	"a number": "một số",
+	"How much the note matters, as a number.": "Mức độ quan trọng của ghi chú, dưới dạng một số.",
+	"A one-line summary of the note.": "Tóm tắt một dòng của ghi chú.",
 	"Link Obsidian Vault": "Liên kết Kho lưu trữ Obsidian",
 	"Please sign in to link your Obsidian vault.":
 		"Vui lòng đăng nhập để liên kết Kho lưu trữ Obsidian của bạn.",
@@ -1310,6 +1320,8 @@ export default {
 	"{what} Wants {expectsLabel}.": "{what} muốn {expectsLabel}.",
 	"also accepts {aliases}": "cũng chấp nhận {aliases}",
 	or: "hoặc",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Một tên có cấu trúc như {example} không thể chỉnh sửa ở đây hoặc trong Obsidian; chỉ có thể chỉnh sửa trực tiếp, MCP, hoặc được viết bởi AI.",
 	Properties: "Thuộc tính",
 	"About properties": "Về thuộc tính",
 	"Property name": "Tên thuộc tính",

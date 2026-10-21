@@ -17,8 +17,13 @@ defmodule Engram.Crypto.UserDekRotationTest do
     VaultIndexUpdateLog
   }
 
+  alias Engram.Notes.FlatFields
+  alias Engram.Notes.FrontmatterKey
+  alias Engram.Notes.FrontmatterKeys
+  alias Engram.Notes.NoteAttr
   alias Engram.Repo
   alias Engram.Test.LogCapture
+  alias Engram.Vector.FilterId
   alias Engram.Vector.Qdrant
   alias Yex.Sync.SharedDoc
 
@@ -919,6 +924,198 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
       {:ok, new_filter_key} = Crypto.dek_filter_key(reloaded_user)
       assert raw.type_hmac == Crypto.hmac_field(new_filter_key, "playbook")
+    end
+
+    # M2: a dictionary row neither DEK opens fails the rotation like the other
+    # DB sweeps; skipping it would leave an old-key HMAC that resolves to a
+    # second id for the same key.
+    test "a dictionary row neither DEK decrypts fails the rotation", %{user: user} do
+      Repo.insert_all(
+        FrontmatterKey,
+        [
+          %{
+            user_id: user.id,
+            key_id: 64,
+            key_hmac: :crypto.strong_rand_bytes(32),
+            name_ct: :crypto.strong_rand_bytes(24),
+            name_nonce: :crypto.strong_rand_bytes(12)
+          }
+        ],
+        skip_tenant_check: true
+      )
+
+      assert_raise RuntimeError, ~r/sweep_frontmatter_keys: decrypt failed/, fn ->
+        UserDekRotation.rotate_user(user.id)
+      end
+    end
+
+    test "rotation keeps every frontmatter key id, rekeys the dictionary, rewraps names",
+         %{user: user, vault: vault} do
+      content = "---\nstatus: Draft\nMood: calm\nrating: 4\n---\nbody\n"
+
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/flat.md", "content" => content},
+          actor: "api"
+        )
+
+      # What the indexing pass writes (`Indexing.stamp_flat_fields/1`).
+      user = Repo.get!(Engram.Accounts.User, user.id)
+      {:ok, fk} = Crypto.dek_filter_key(user)
+      {:ok, dek} = Crypto.get_dek(user)
+      flat = FlatFields.extract(content, fk)
+      {ids, 0} = FrontmatterKeys.resolve(user.id, dek, flat.names)
+      flat = FlatFields.put_key_ids(flat, ids)
+      Repo.insert_all(NoteAttr, FlatFields.attr_rows(flat, note), skip_tenant_check: true)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      reloaded = Repo.get!(Engram.Accounts.User, user.id)
+      {:ok, new_fk} = Crypto.dek_filter_key(reloaded)
+      {:ok, new_dek} = Crypto.get_dek(reloaded)
+
+      keys =
+        Repo.all(from(k in FrontmatterKey, where: k.user_id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      by_id = Map.new(keys, &{&1.key_id, &1})
+      assert Map.keys(by_id) |> Enum.sort() == ids |> Map.values() |> Enum.sort()
+
+      mood = by_id[ids[FilterId.key_hmac(fk, "mood")]]
+      assert mood.key_hmac == FilterId.key_hmac(new_fk, "mood")
+      assert FrontmatterKeys.name(mood, new_dek) == {:ok, "Mood"}
+
+      # note_attrs held old-key HMACs; with the v5 format off nothing rebuilds
+      # them, so they are dropped.
+      assert Repo.all(from(a in NoteAttr, where: a.note_id == ^note.id),
+               skip_tenant_check: true
+             ) == []
+    end
+  end
+
+  # Every filter key derives from the DEK, so a rotation must rewrite the
+  # HMACs Qdrant filters on, or a type/tag/folder filter built with the new
+  # key silently matches nothing. Nothing re-indexes after a rotation, and it
+  # must not: a re-index would re-embed (the content-hash key rotates too).
+  describe "rotate_user/1 - Qdrant filter keys follow the new key, $0 in Voyage" do
+    setup %{user: user} do
+      vault = Engram.Fixtures.insert_vault!(user, "KeysVault")
+      content = "---\ntype: Playbook\ntags: [ops]\nstatus: draft\nmood: calm\n---\nbody\n"
+
+      {:ok, note} =
+        Engram.Notes.upsert_note(user, vault, %{"path" => "rot/keys.md", "content" => content},
+          actor: "api"
+        )
+
+      point = Ecto.UUID.generate()
+
+      Repo.insert!(
+        %Engram.Notes.Chunk{
+          note_id: note.id,
+          user_id: user.id,
+          vault_id: vault.id,
+          position: 0,
+          char_start: 0,
+          char_end: 4,
+          qdrant_point_id: point
+        },
+        skip_tenant_check: true
+      )
+
+      # No embed, ever: the rotation must not reach the embedder.
+      Mox.expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("embed during rotation") end)
+
+      {:ok, note: note, point: point}
+    end
+
+    defp capture_payload_writes(test_pid, v5_points \\ []) do
+      bypass = Bypass.open()
+      Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
+
+      Bypass.stub(bypass, "POST", "/collections/engram_notes/points/scroll", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:scroll, Jason.decode!(body)})
+        points = v5_points
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{"result" => %{"points" => points, "next_page_offset" => nil}})
+        )
+      end)
+
+      Bypass.stub(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:set, Jason.decode!(body)})
+        Plug.Conn.send_resp(conn, 200, ~s({"result": {"status": "completed"}, "status": "ok"}))
+      end)
+
+      Bypass.stub(bypass, "PUT", "/collections/engram_notes/points/payload", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:overwrite, Jason.decode!(body)})
+        Plug.Conn.send_resp(conn, 200, ~s({"result": {"status": "completed"}, "status": "ok"}))
+      end)
+
+      bypass
+    end
+
+    test "a v3 point gets the new type, tag and path HMACs", %{
+      user: user,
+      note: note,
+      point: point
+    } do
+      capture_payload_writes(self())
+      assert :ok = UserDekRotation.rotate_user(user.id)
+      Mox.verify!()
+
+      {:ok, new_fk} = Crypto.dek_filter_key(Repo.get!(Engram.Accounts.User, user.id))
+
+      raw =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      assert_received {:set,
+                       %{
+                         "filter" => %{"should" => [%{"has_id" => [^point]}]},
+                         "payload" => payload
+                       }}
+
+      # Exactly what a type / tag filter built after the rotation sends.
+      assert payload["type_hmac"] == Base.encode64(Crypto.hmac_field(new_fk, "playbook"))
+      assert payload["tags_hmac"] == [Base.encode64(Crypto.hmac_field(new_fk, "ops"))]
+      assert payload["path_hmac"] == Base.encode64(raw.path_hmac)
+    end
+
+    test "a v5 point is rebuilt under the new key and note_attrs rewritten from the frontmatter",
+         %{user: user, note: note, point: point} do
+      Engram.ServiceConfig.put_override(:v5_payload_format, true)
+      capture_payload_writes(self(), [%{"id" => point}])
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+      Mox.verify!()
+
+      {:ok, new_fk} = Crypto.dek_filter_key(Repo.get!(Engram.Accounts.User, user.id))
+
+      assert_received {:overwrite,
+                       %{"filter" => %{"should" => [%{"has_id" => [^point]}]}, "payload" => p}}
+
+      refute_received {:set, %{"filter" => %{"should" => [%{"has_id" => [^point]}]}}}
+      assert p["y"] == FilterId.from_hmac(Crypto.hmac_field(new_fk, "playbook"))
+      assert p["s"] == FilterId.attr_value(new_fk, "draft")
+
+      [mood] =
+        Repo.all(from(k in FrontmatterKey, where: k.user_id == ^user.id),
+          skip_tenant_check: true
+        )
+
+      assert mood.key_hmac == FilterId.key_hmac(new_fk, "mood")
+      assert p["fa"] == [%{"k" => mood.key_id, "h" => FilterId.attr_value(new_fk, "calm")}]
+
+      rows = Repo.all(from(a in NoteAttr, where: a.note_id == ^note.id), skip_tenant_check: true)
+      assert Enum.find(rows, &(&1.key_id == mood.key_id)).h == FilterId.value_hmac(new_fk, "calm")
+
+      assert Enum.find(rows, &(&1.key_id == FrontmatterKeys.named_id(:status))).h ==
+               FilterId.value_hmac(new_fk, "draft")
     end
   end
 

@@ -27,16 +27,18 @@ function isTaken(doc: Y.Doc, key: string): boolean {
 	return frontmatterMaps(doc).values.has(key) || rawMap(doc).has(key);
 }
 
-// The Open Knowledge Format fields, and what each one buys you -- the source
-// for the `?` panel beside the Properties heading. These are the keys Engram
-// READS rather than merely stores: `Engram.Notes.OkfFields.extract/1` lifts
-// type/description/resource/timestamp/created into their own indexed columns,
-// and `type` feeds the search filter's suggestions via GET /types. `tags` is
-// OKF too, indexed by its own path (list_tags).
+// The fields Engram READS rather than merely stores, and what each one buys
+// you -- the source for the field highlight and the `?` panel beside the
+// Properties heading. Spec 3.3b (flat schema): our own FLAT keys, each a
+// typed search filter (`filterable`), plus `description`, which is embedded
+// but not a filter. `Engram.Notes.FlatFields` and `OkfFields` read them.
 //
-// The aliases are not cosmetic: okf_fields.ex accepts `modified`/`updated` for
-// timestamp and `date` for created, so a note using `updated:` IS indexed.
-// Listing only the canonical names would tell the user the opposite.
+// The aliases are not cosmetic: the backend reads OKF's names too (`date` for
+// created, `modified`/`timestamp`/`generated.at` for updated, `resource` for
+// source ...), and the flat key wins when a note has both. Listing only the
+// flat names would tell the user an aliased note is not indexed. Nested
+// aliases (`generated.at`, `verified[].by`) cannot be edited as a property
+// here or in Obsidian; only a raw edit, MCP or an AI writes them.
 // What the backend can actually read out of a date field. `parse_datetime/1`
 // tries DateTime.from_iso8601 then Date.from_iso8601 and nothing else, so a
 // plain date works and a datetime works ONLY with an offset. Notably the
@@ -51,6 +53,9 @@ export const OKF_FIELD_HELP: ReadonlyArray<{
 	expects: readonly PropertyType[];
 	expectsLabel: MsgKey;
 	what: MsgKey;
+	/** A typed search filter once the v5 payload format is on (spec 3.3b).
+	 *  Data only: the panel claims no filter until search has one (#2083). */
+	filterable?: true;
 }> = [
 	{
 		key: "type",
@@ -58,6 +63,7 @@ export const OKF_FIELD_HELP: ReadonlyArray<{
 		expects: ["text"],
 		expectsLabel: msg("text"),
 		what: msg("What kind of note this is. Search can filter on it."),
+		filterable: true,
 	},
 	{
 		key: "tags",
@@ -67,6 +73,95 @@ export const OKF_FIELD_HELP: ReadonlyArray<{
 		expects: ["list", "text"],
 		expectsLabel: msg("a list, or one name"),
 		what: msg("Topics. Browsable and searchable across the vault."),
+		filterable: true,
+	},
+	{
+		key: "status",
+		aliases: [],
+		expects: ["text"],
+		expectsLabel: msg("text"),
+		what: msg("Where the note stands, such as draft or stable."),
+		filterable: true,
+	},
+	{
+		key: "author",
+		aliases: ["generated.by"],
+		expects: ["text"],
+		expectsLabel: msg("text"),
+		what: msg("Who wrote the note, a person or an agent."),
+		filterable: true,
+	},
+	{
+		key: "reviewed_by",
+		aliases: ["verified[].by"],
+		expects: ["text"],
+		expectsLabel: msg("text"),
+		what: msg("Who last checked the note."),
+		filterable: true,
+	},
+	{
+		key: "source",
+		aliases: ["resource", "sources[]"],
+		expects: ["list", "text"],
+		expectsLabel: msg("a list, or one name"),
+		what: msg("What the note is based on, usually a URL."),
+		filterable: true,
+	},
+	{
+		key: "project",
+		aliases: [],
+		expects: ["text"],
+		expectsLabel: msg("text"),
+		what: msg("The project the note belongs to."),
+		filterable: true,
+	},
+	{
+		key: "created",
+		aliases: ["date"],
+		expects: ["date", "datetime"],
+		expectsLabel: msg("a date (YYYY-MM-DD)"),
+		what: msg("When the note came into being."),
+		filterable: true,
+	},
+	{
+		key: "updated",
+		aliases: ["modified", "timestamp", "generated.at"],
+		expects: ["date", "datetime"],
+		expectsLabel: msg("a date (YYYY-MM-DD)"),
+		what: msg("When it last changed."),
+		filterable: true,
+	},
+	{
+		key: "reviewed",
+		aliases: ["verified[].at"],
+		expects: ["date", "datetime"],
+		expectsLabel: msg("a date (YYYY-MM-DD)"),
+		what: msg("When it was last checked."),
+		filterable: true,
+	},
+	{
+		key: "expires",
+		aliases: ["stale_after"],
+		expects: ["date", "datetime"],
+		expectsLabel: msg("a date (YYYY-MM-DD)"),
+		what: msg("When the note goes out of date."),
+		filterable: true,
+	},
+	{
+		key: "due",
+		aliases: [],
+		expects: ["date", "datetime"],
+		expectsLabel: msg("a date (YYYY-MM-DD)"),
+		what: msg("When the work in the note is due."),
+		filterable: true,
+	},
+	{
+		key: "priority",
+		aliases: [],
+		expects: ["number"],
+		expectsLabel: msg("a number"),
+		what: msg("How much the note matters, as a number."),
+		filterable: true,
 	},
 	{
 		key: "description",
@@ -75,28 +170,17 @@ export const OKF_FIELD_HELP: ReadonlyArray<{
 		expectsLabel: msg("text"),
 		what: msg("A one-line summary of the note."),
 	},
-	{
-		key: "resource",
-		aliases: [],
-		expects: ["text"],
-		expectsLabel: msg("text"),
-		what: msg("The thing the note is about — usually a URL."),
-	},
-	{
-		key: "created",
-		aliases: ["date"],
-		expects: ["date", "datetime"],
-		expectsLabel: msg("a date (YYYY-MM-DD)"),
-		what: msg("When the note came into being."),
-	},
-	{
-		key: "timestamp",
-		aliases: ["modified", "updated"],
-		expects: ["date", "datetime"],
-		expectsLabel: msg("a date (YYYY-MM-DD)"),
-		what: msg("When it last changed."),
-	},
 ];
+
+/** The flat key an alias stands for; `undefined` for a flat key or an unknown name. */
+export function okfAliasOf(name: string): string | undefined {
+	return OKF_FIELD_HELP.find((f) => f.aliases.includes(name))?.key;
+}
+
+/** A nested OKF alias (`generated.at`, `verified[].by`): not editable as a property. */
+export function isNestedAlias(name: string): boolean {
+	return name.includes(".") || name.endsWith("[]");
+}
 
 export const CONTENT_KEY = "content";
 export const FRONTMATTER_KEY = "frontmatter";
@@ -310,7 +394,10 @@ export function isOkfMatch(key: string, type: PropertyType, value: unknown): boo
 	if (field === undefined || !field.expects.includes(type)) {
 		return false;
 	}
-	if (field.key === "tags") {
+	if (field.expects.includes("number")) {
+		return typeof value === "number" && Number.isFinite(value);
+	}
+	if (field.key === "tags" || field.key === "source") {
 		// `helpers.ex` accepts a YAML list AND a bare inline scalar, so both index.
 		if (Array.isArray(value)) {
 			return value.some((v) => String(v).trim() !== "");

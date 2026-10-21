@@ -451,11 +451,21 @@ export default {
 	"a list, or one name": "список или одно имя",
 	"Topics. Browsable and searchable across the vault.":
 		"Темы. Можно просматривать и искать по всему хранилищу.",
-	"A one-line summary of the note.": "Краткое описание заметки.",
-	"The thing the note is about — usually a URL.": "Тема заметки — обычно URL.",
+	"Where the note stands, such as draft or stable.":
+		"Где находится заметка, например, черновик или стабильная версия.",
+	"Who wrote the note, a person or an agent.": "Кто автор заметки, человек или агент.",
+	"Who last checked the note.": "Кто последний раз проверял заметку.",
+	"What the note is based on, usually a URL.": "На чём основана заметка, обычно URL.",
+	"The project the note belongs to.": "Проект, к которому относится заметка.",
 	"a date (YYYY-MM-DD)": "дата (ГГГГ-ММ-ДД)",
 	"When the note came into being.": "Дата создания заметки.",
 	"When it last changed.": "Дата последнего изменения.",
+	"When it was last checked.": "Когда заметка была последний раз проверена.",
+	"When the note goes out of date.": "Когда заметка устаревает.",
+	"When the work in the note is due.": "Когда работа, описанная в заметке, должна быть выполнена.",
+	"a number": "число",
+	"How much the note matters, as a number.": "Насколько важна заметка, в виде числа.",
+	"A one-line summary of the note.": "Краткое описание заметки.",
 	"Link Obsidian Vault": "Подключить хранилище Obsidian",
 	"Please sign in to link your Obsidian vault.":
 		"Пожалуйста, войдите, чтобы подключить ваше хранилище Obsidian.",
@@ -1428,6 +1438,8 @@ export default {
 	"{what} Wants {expectsLabel}.": "{what} хочет {expectsLabel}.",
 	"also accepts {aliases}": "также принимает {aliases}",
 	or: "или",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Вложенное имя, такое как {example}, нельзя редактировать здесь или в Obsidian; редактирование возможно только напрямую, MCP, или с помощью ИИ.",
 	Properties: "Свойства",
 	"About properties": "О свойствах",
 	"Property name": "Имя свойства",

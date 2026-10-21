@@ -1,4 +1,4 @@
-# priv/repo/migrations/20261020090000_create_embedding_cache_expand.exs
+# priv/repo/migrations/20261021160004_create_embedding_cache_expand.exs
 defmodule Engram.Repo.Migrations.CreateEmbeddingCacheExpand do
   use Ecto.Migration
 

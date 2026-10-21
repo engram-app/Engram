@@ -151,6 +151,54 @@ defmodule Engram.Crypto.QdrantPayloadTest do
       refute Map.has_key?(out, :text_nonce)
     end
 
+    # Task 15.7: a v5 point stores no `aad_version`; its format implies the
+    # bound AAD. v4 points keep reading through their stored value.
+    test "a v5 point with no aad_version decrypts with the bound AAD", %{
+      user: user,
+      enc_candidate: enc,
+      vaults_by_id: vaults
+    } do
+      v5 = enc |> Map.delete(:aad_version) |> Map.put(:format, :v5)
+
+      assert {:ok, [out]} =
+               Crypto.decrypt_qdrant_candidates([v5], user, vaults, "test_collection")
+
+      assert out.text == "secret"
+    end
+
+    test "a v5 point with a swapped id still fails", %{
+      user: user,
+      enc_candidate: enc,
+      vaults_by_id: vaults
+    } do
+      v5 = enc |> Map.delete(:aad_version) |> Map.merge(%{format: :v5, qdrant_id: "qid-2"})
+
+      assert {:error, :decrypt_failed} =
+               Crypto.decrypt_qdrant_candidates([v5], user, vaults, "test_collection")
+    end
+
+    test "a v4 point decrypts through its stored aad_version", %{
+      user: user,
+      enc_candidate: enc,
+      vaults_by_id: vaults
+    } do
+      assert enc.aad_version >= 2
+      refute Map.has_key?(enc, :format)
+      assert {:ok, [_]} = Crypto.decrypt_qdrant_candidates([enc], user, vaults, "test_collection")
+    end
+
+    test "a legacy point with neither key reads with the empty AAD", %{
+      user: user,
+      enc_candidate: enc,
+      vaults_by_id: vaults
+    } do
+      # Bound ciphertext under the empty AAD must fail: the point is legacy-shaped.
+      legacy = Map.delete(enc, :aad_version)
+
+      assert {:error, :decrypt_failed} =
+               Crypto.decrypt_qdrant_candidates([legacy], user, vaults, "test_collection")
+    end
+
     test "AAD-bound candidate FAILS to decrypt under wrong collection (T3.6)", %{
       user: user,
       enc_candidate: enc,

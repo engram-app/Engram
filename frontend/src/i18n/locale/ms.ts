@@ -425,12 +425,20 @@ export default {
 	"a list, or one name": "senarai, atau satu nama",
 	"Topics. Browsable and searchable across the vault.":
 		"Tajuk. Boleh dilayari dan dicari dalam peti nota.",
-	"A one-line summary of the note.": "Ringkasan satu baris nota tersebut.",
-	"The thing the note is about — usually a URL.":
-		"Perkara yang nota ini bicarakan – biasanya satu URL.",
+	"Where the note stands, such as draft or stable.": "Lokasi nota, seperti draf atau stabil.",
+	"Who wrote the note, a person or an agent.": "Siapa yang menulis nota, seseorang atau agen.",
+	"Who last checked the note.": "Siapa yang terakhir menyemak nota.",
+	"What the note is based on, usually a URL.": "Berasaskan apa nota ini, biasanya URL.",
+	"The project the note belongs to.": "Projek tempat nota ini berada.",
 	"a date (YYYY-MM-DD)": "satu tarikh (YYYY-MM-DD)",
 	"When the note came into being.": "Bilanya nota ini dicipta.",
 	"When it last changed.": "Bilanya ia diubah terakhir.",
+	"When it was last checked.": "Bila ia terakhir disemak.",
+	"When the note goes out of date.": "Bila nota ini menjadi tidak relevan.",
+	"When the work in the note is due.": "Bila kerja dalam nota ini perlu disiapkan.",
+	"a number": "sebuah nombor",
+	"How much the note matters, as a number.": "Seberapa pentingnya nota ini, sebagai nombor.",
+	"A one-line summary of the note.": "Ringkasan satu baris nota tersebut.",
 	"Link Obsidian Vault": "Pautkan Peti Nota Obsidian",
 	"Please sign in to link your Obsidian vault.":
 		"Sila log masuk untuk pautkan Peti Nota Obsidian anda.",
@@ -1316,6 +1324,8 @@ export default {
 	"{what} Wants {expectsLabel}.": "{what} mahu {expectsLabel}.",
 	"also accepts {aliases}": "juga menerima {aliases}",
 	or: "atau",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Nama bersarang seperti {example} tidak boleh diedit di sini atau dalam Obsidian; hanya editan asas, MCP, atau AI yang menulisnya.",
 	Properties: "Sifat",
 	"About properties": "Mengenai sifat",
 	"Property name": "Nama sifat",

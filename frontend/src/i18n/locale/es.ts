@@ -435,11 +435,21 @@ export default {
 	"a list, or one name": "una lista, o un nombre",
 	"Topics. Browsable and searchable across the vault.":
 		"Temas. Se pueden explorar y buscar en toda la bóveda.",
-	"A one-line summary of the note.": "Un resumen de una línea de la nota.",
-	"The thing the note is about — usually a URL.": "De qué trata la nota, normalmente una URL.",
+	"Where the note stands, such as draft or stable.":
+		"Dónde se encuentra la nota, como borrador o versión estable.",
+	"Who wrote the note, a person or an agent.": "Quién escribió la nota, una persona o un agente.",
+	"Who last checked the note.": "Quién revisó la nota por última vez.",
+	"What the note is based on, usually a URL.": "En qué se basa la nota, generalmente una URL.",
+	"The project the note belongs to.": "El proyecto al que pertenece la nota.",
 	"a date (YYYY-MM-DD)": "Una fecha (AAAA-MM-DD)",
 	"When the note came into being.": "Cuándo se creó la nota.",
 	"When it last changed.": "Cuándo se modificó por última vez.",
+	"When it was last checked.": "Cuándo se revisó la nota por última vez.",
+	"When the note goes out of date.": "Cuándo la nota caduca.",
+	"When the work in the note is due.": "Cuándo vence el trabajo de la nota.",
+	"a number": "un número",
+	"How much the note matters, as a number.": "Cuánta importancia tiene la nota, como un número.",
+	"A one-line summary of the note.": "Un resumen de una línea de la nota.",
 	"Link Obsidian Vault": "Vincular bóveda de Obsidian",
 	"Please sign in to link your Obsidian vault.":
 		"Inicia sesión para vincular tu bóveda de Obsidian.",
@@ -1374,6 +1384,8 @@ export default {
 	"{what} Wants {expectsLabel}.": "{what} quiere {expectsLabel}.",
 	"also accepts {aliases}": "también acepta {aliases}",
 	or: "o",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Un nombre anidado como {example} no se puede editar aquí ni en Obsidian; solo se puede editar directamente, MCP, o un asistente de IA lo escribe.",
 	Properties: "Propiedades",
 	"About properties": "Acerca de las propiedades",
 	"Property name": "Nombre de la propiedad",

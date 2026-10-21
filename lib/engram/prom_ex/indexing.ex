@@ -42,6 +42,11 @@ defmodule Engram.PromEx.Indexing do
       Sizes each embed-less lever. `drawing` stays 0 while drawing data is
       dropped; canvas and base are labelled from the note path.
 
+    * `engram_prom_ex_indexing_frontmatter_keys_skipped_total`: new
+      user-added frontmatter keys left out of the payload and `note_attrs`
+      because the user is at the per-user key cap (`FrontmatterKeys.cap/0`).
+      Untagged. Expected flat zero; a sustained rate means a user (or a
+      generator) is minting keys.
     * `engram_prom_ex_indexing_vector_cache_{hits,misses,written_bytes}_total`:
       the vector cache (`Engram.Indexing.VectorCache`). Hit rate is
       hits / (hits + misses); written bytes sizes the table. Untagged.
@@ -60,6 +65,7 @@ defmodule Engram.PromEx.Indexing do
   @stale_points_leaked_event [:engram, :indexing, :stale_points_leaked]
   @maintenance_embed_event [:engram, :embed, :maintenance]
   @points_written_event [:engram, :indexing, :points_written]
+  @keys_skipped_event [:engram, :frontmatter_keys, :skipped]
   @vector_cache_lookup_event [:engram, :vector_cache, :lookup]
   @vector_cache_write_event [:engram, :vector_cache, :write]
   @vector_cache_skipped_event [:engram, :vector_cache, :skipped]
@@ -120,6 +126,14 @@ defmodule Engram.PromEx.Indexing do
             "Qdrant points written by a commit (reused excluded), by chunk kind and " <>
               "whether the point carries a dense vector.",
           tags: [:kind, :dense]
+        ),
+        sum(
+          metric_prefix ++ [:frontmatter_keys_skipped, :total],
+          event_name: @keys_skipped_event,
+          measurement: :count,
+          description:
+            "New user-added frontmatter keys skipped at the per-user key cap " <>
+              "(left out of the payload and note_attrs, never an indexing error)."
         ),
         sum(
           metric_prefix ++ [:vector_cache, :hits, :total],

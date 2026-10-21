@@ -7,7 +7,9 @@ import {
 	FRONTMATTER_KEY,
 	frontmatterMaps,
 	isOkfMatch,
+	OKF_FIELD_HELP,
 	ORDER_KEY,
+	okfAliasOf,
 	rawMap,
 	readRaws,
 	readRows,
@@ -296,6 +298,82 @@ describe("isOkfMatch", () => {
 		["TAGS", "list", ["a"]],
 		["Created", "date", "2026-08-29"],
 	] as const)("%s as %s = %o is NOT indexed", (key, type, value) => {
+		expect(isOkfMatch(key, type, value)).toBe(false);
+	});
+});
+
+// Spec 3.3b: the flat v5 keys the backend indexes as filters, and the OKF
+// aliases it reads for them (flat key wins).
+describe("OKF_FIELD_HELP filterable keys", () => {
+	const FILTERABLE = [
+		"type",
+		"tags",
+		"status",
+		"author",
+		"reviewed_by",
+		"source",
+		"project",
+		"created",
+		"updated",
+		"reviewed",
+		"expires",
+		"due",
+		"priority",
+	];
+	const ALIASES: Record<string, string> = {
+		"generated.by": "author",
+		"verified[].by": "reviewed_by",
+		resource: "source",
+		"sources[]": "source",
+		date: "created",
+		modified: "updated",
+		timestamp: "updated",
+		"generated.at": "updated",
+		"verified[].at": "reviewed",
+		stale_after: "expires",
+	};
+
+	test("every flat key has an entry marked filterable", () => {
+		for (const key of FILTERABLE) {
+			expect(OKF_FIELD_HELP.find((f) => f.key === key)?.filterable, key).toBe(true);
+		}
+		expect(
+			OKF_FIELD_HELP.filter((f) => f.filterable)
+				.map((f) => f.key)
+				.sort(),
+		).toEqual([...FILTERABLE].sort());
+	});
+
+	test("every alias points at its flat key", () => {
+		for (const [alias, key] of Object.entries(ALIASES)) {
+			expect(okfAliasOf(alias), alias).toBe(key);
+		}
+		expect(okfAliasOf("status")).toBeUndefined();
+	});
+
+	test("title, aliases and description are not filterable", () => {
+		for (const key of ["title", "aliases", "description"]) {
+			expect(OKF_FIELD_HELP.find((f) => f.key === key)?.filterable ?? false, key).toBe(false);
+		}
+	});
+
+	test.each([
+		["status", "text", "draft"],
+		["project", "text", "apollo"],
+		["source", "list", ["https://a"]],
+		["resource", "text", "https://a"],
+		["due", "date", "2026-11-01"],
+		["stale_after", "datetime", "2026-11-01T00:00:00Z"],
+		["priority", "number", 2],
+	] as const)("%s as %s = %o is highlighted", (key, type, value) => {
+		expect(isOkfMatch(key, type, value)).toBe(true);
+	});
+
+	test.each([
+		["priority", "text", "high"],
+		["status", "text", ""],
+		["due", "text", "soon"],
+	] as const)("%s as %s = %o is NOT highlighted", (key, type, value) => {
 		expect(isOkfMatch(key, type, value)).toBe(false);
 	});
 });

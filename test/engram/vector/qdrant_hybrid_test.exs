@@ -1,6 +1,8 @@
 defmodule Engram.Vector.QdrantHybridTest do
   use ExUnit.Case, async: true
 
+  import Engram.QdrantFilterView
+
   alias Engram.ServiceConfig
   alias Engram.Vector.Qdrant
 
@@ -25,8 +27,8 @@ defmodule Engram.Vector.QdrantHybridTest do
       assert kw["query"]["indices"] == [7]
       assert dense["limit"] == 5 and kw["limit"] == 5
       refute Map.has_key?(json, "prefetch")
-      assert dense["filter"]["must"] |> Enum.any?(&(&1["key"] == "user_id"))
-      assert kw["filter"]["must"] |> Enum.any?(&(&1["key"] == "user_id"))
+      assert legacy_view(dense["filter"]["must"]) |> Enum.any?(&(&1["key"] == "user_id"))
+      assert legacy_view(kw["filter"]["must"]) |> Enum.any?(&(&1["key"] == "user_id"))
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
@@ -128,7 +130,7 @@ defmodule Engram.Vector.QdrantHybridTest do
     Bypass.expect_once(bypass, "POST", "/collections/c1/points/query", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       json = Jason.decode!(body)
-      must = json["filter"]["must"]
+      must = legacy_view(json["filter"]["must"])
       assert Enum.any?(must, &(&1["key"] == "user_id" and &1["match"]["value"] == "u1"))
       assert Enum.any?(must, &(&1["key"] == "vault_id" and &1["match"]["value"] == "v1"))
 

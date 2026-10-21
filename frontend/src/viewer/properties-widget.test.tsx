@@ -586,6 +586,14 @@ describe("the Properties help panel", () => {
 		expect(panel).toHaveTextContent("updated");
 	});
 
+	// `filterable` is data only: no search or MCP filter exists for these
+	// fields until Engram#2083, so the panel must not claim one.
+	test("says who can write a nested alias and claims no filter yet", async () => {
+		const panel = await openHelp();
+		expect(within(panel).queryByText("filterable")).toBeNull();
+		expect(panel).toHaveTextContent("only a raw edit, MCP or an AI");
+	});
+
 	// NOT asserted here: that clicking the `?` leaves the block expanded.
 	// happy-dom toggles a <details> for a click on a <button> inside its
 	// <summary>; no real browser does, because the button is the innermost

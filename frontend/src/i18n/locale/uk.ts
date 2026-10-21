@@ -448,11 +448,21 @@ export default {
 	"a list, or one name": "список або одне ім'я",
 	"Topics. Browsable and searchable across the vault.":
 		"Теми. Можна переглядати та шукати у всьому сховищі.",
-	"A one-line summary of the note.": "Короткий опис замітки.",
-	"The thing the note is about — usually a URL.": "Те, про що йдеться в замінітці — зазвичай URL.",
+	"Where the note stands, such as draft or stable.":
+		"Місцезнаходження замітки, наприклад, чернетка або остаточна версія.",
+	"Who wrote the note, a person or an agent.": "Хто написав замітку, особа або агент.",
+	"Who last checked the note.": "Хто востаннє перевірив замітку.",
+	"What the note is based on, usually a URL.": "На чому базується замітка, зазвичай URL.",
+	"The project the note belongs to.": "Проєкт, до якого належить замітка.",
 	"a date (YYYY-MM-DD)": "дата (РРРР-ММ-ДД)",
 	"When the note came into being.": "Коли було створено замітки.",
 	"When it last changed.": "Коли востаннє було змінено.",
+	"When it was last checked.": "Коли востаннє було перевірено.",
+	"When the note goes out of date.": "Коли замітка стає неактуальною.",
+	"When the work in the note is due.": "Коли потрібно завершити роботу над заміткою.",
+	"a number": "число",
+	"How much the note matters, as a number.": "Наскільки важлива замітка, числом.",
+	"A one-line summary of the note.": "Короткий опис замітки.",
 	"Link Obsidian Vault": "Посилання на Obsidian сховище",
 	"Please sign in to link your Obsidian vault.":
 		"Будь ласка, увійдіть, щоб підключити ваше Obsidian сховище.",
@@ -1420,6 +1430,8 @@ export default {
 	"{what} Wants {expectsLabel}.": "{what} хоче {expectsLabel}.",
 	"also accepts {aliases}": "також приймає {aliases}",
 	or: "або",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Вкладене ім'я, таке як {example}, не можна редагувати тут або в Obsidian; редагування можливе лише вручну, MCP, або за допомогою ШІ.",
 	Properties: "Властивості",
 	"About properties": "Про властивості",
 	"Property name": "Назва властивості",

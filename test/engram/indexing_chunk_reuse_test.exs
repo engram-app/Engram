@@ -257,7 +257,13 @@ defmodule Engram.IndexingChunkReuseTest do
       assert reused_ids != [], "the body chunks must be reused"
 
       patch = set_payloads(ctx.recorder)
-      assert [%{body: %{"points" => points, "payload" => payload}}] = patch
+
+      assert [
+               %{
+                 body: %{"filter" => %{"should" => [%{"has_id" => points}]}, "payload" => payload}
+               }
+             ] =
+               patch
 
       assert Enum.sort(points) == Enum.sort(reused_ids)
 
@@ -292,7 +298,10 @@ defmodule Engram.IndexingChunkReuseTest do
 
       assert upserts(ctx.recorder) == []
       all_ids = note |> chunk_rows() |> Enum.map(& &1.qdrant_point_id)
-      assert [%{body: %{"points" => points}}] = set_payloads(ctx.recorder)
+
+      assert [%{body: %{"filter" => %{"should" => [%{"has_id" => points}]}}}] =
+               set_payloads(ctx.recorder)
+
       assert Enum.sort(points) == Enum.sort(all_ids)
     end
   end

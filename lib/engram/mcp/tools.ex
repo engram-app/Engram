@@ -410,6 +410,30 @@ defmodule Engram.MCP.Tools do
             "description" =>
               "Optional frontmatter type to filter by (e.g. 'Playbook', 'Reference'); case-insensitive"
           },
+          "fields" => %{
+            "type" => "array",
+            "description" =>
+              "Optional filters on any frontmatter key, all must match: user-added keys " <>
+                "and the built-in status, author, reviewed_by, source, project, type, tags " <>
+                "(exact) and created, updated, reviewed, expires, due, priority (range). " <>
+                "op: eq, in (a list, at most 100), gt/gte/lt/lte (numbers or ISO dates), " <>
+                "after/before (ISO dates; a bare date is the whole UTC day). A quoted " <>
+                "number is text. created/updated fall back to the note's real times when " <>
+                "the key is missing. A key no note has is an error.",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "key" => %{"type" => "string"},
+                "op" => %{
+                  "type" => "string",
+                  "enum" => ~w(eq in gt gte lt lte after before),
+                  "default" => "eq"
+                },
+                "value" => %{}
+              },
+              "required" => ["key", "value"]
+            }
+          },
           "created_after" => %{
             "type" => "string",
             "description" =>

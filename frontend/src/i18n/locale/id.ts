@@ -424,12 +424,20 @@ export default {
 	"a list, or one name": "daftar, atau satu nama",
 	"Topics. Browsable and searchable across the vault.":
 		"Topik. Dapat dijelajahi dan dicari di seluruh vault.",
-	"A one-line summary of the note.": "Ringkasan satu baris dari catatan tersebut.",
-	"The thing the note is about — usually a URL.":
-		"Hal yang dibahas dalam catatan — biasanya sebuah URL.",
+	"Where the note stands, such as draft or stable.": "Posisi catatan, seperti draf atau stabil.",
+	"Who wrote the note, a person or an agent.": "Siapa yang menulis catatan, orang atau agen.",
+	"Who last checked the note.": "Siapa yang terakhir memeriksa catatan.",
+	"What the note is based on, usually a URL.": "Dasar dari catatan, biasanya sebuah URL.",
+	"The project the note belongs to.": "Proyek tempat catatan berada.",
 	"a date (YYYY-MM-DD)": "tanggal (YYYY-MM-DD)",
 	"When the note came into being.": "Kapan catatan ini dibuat.",
 	"When it last changed.": "Kapan terakhir kali diubah.",
+	"When it was last checked.": "Kapan terakhir kali diperiksa.",
+	"When the note goes out of date.": "Kapan catatan menjadi usang.",
+	"When the work in the note is due.": "Kapan pekerjaan dalam catatan harus diselesaikan.",
+	"a number": "sebuah angka",
+	"How much the note matters, as a number.": "Seberapa pentingnya catatan, sebagai angka.",
+	"A one-line summary of the note.": "Ringkasan satu baris dari catatan tersebut.",
 	"Link Obsidian Vault": "Tautkan Obsidian Vault",
 	"Please sign in to link your Obsidian vault.":
 		"Silakan masuk untuk menautkan Obsidian vault Anda.",
@@ -1314,6 +1322,8 @@ export default {
 	"{what} Wants {expectsLabel}.": "{what} menginginkan {expectsLabel}.",
 	"also accepts {aliases}": "juga menerima {aliases}",
 	or: "atau",
+	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
+		"Nama bertingkat seperti {example} tidak dapat diedit di sini atau di Obsidian; hanya pengeditan langsung, MCP, atau AI yang menuliskannya.",
 	Properties: "Properti",
 	"About properties": "Tentang properti",
 	"Property name": "Nama properti",
