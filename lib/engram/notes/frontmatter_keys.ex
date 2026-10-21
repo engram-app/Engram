@@ -31,12 +31,14 @@ defmodule Engram.Notes.FrontmatterKeys do
 
   import Ecto.Query
 
+  alias Engram.Accounts.User
   alias Engram.Crypto
   alias Engram.Crypto.Envelope
   alias Engram.Notes.FrontmatterKey
   alias Engram.Notes.NoteAttr
   alias Engram.Repo
   alias Engram.ServiceConfig
+  alias Engram.Vaults.Vault
   alias Engram.Vector.FilterId
 
   @named %{
@@ -204,32 +206,85 @@ defmodule Engram.Notes.FrontmatterKeys do
   @doc """
   Delete every user's dictionary rows that no `note_attrs` row uses, older
   than a day, except each user's highest id (so ids stay monotonic). Runs on
-  `Repo.maintenance()` (it spans tenants). Returns the number deleted.
+  `Repo.maintenance()` (it spans tenants), one short transaction per user.
+  Returns the number deleted.
+
+  Per user: the user row is read `FOR SHARE` and a user mid DEK rotation is
+  skipped (the rotation sweep rewrites these rows; `RotationLock.acquire/1`
+  then waits for this transaction). Candidates are locked `FOR UPDATE`,
+  which waits for any index pass holding them `FOR KEY SHARE`
+  (`Indexing.hold_key_ids!/2`), and the DELETE re-checks with a fresh
+  snapshot, so a key that pass just wrote survives. The "is it used" probe
+  is scoped by the user's vault ids and the key, one NOT EXISTS per value
+  column, so each is served by its partial `(vault_id, key_id, h|n|d)` index
+  instead of a scan of `note_attrs`.
   """
   @spec reap_unused(non_neg_integer()) :: non_neg_integer()
   def reap_unused(min_age_s \\ @reap_min_age_s) do
-    highest =
-      from(m in FrontmatterKey,
-        where: m.user_id == parent_as(:key).user_id,
-        select: max(m.key_id)
-      )
+    repo = Repo.maintenance()
 
-    used =
-      from(a in NoteAttr,
-        where: a.user_id == parent_as(:key).user_id and a.key_id == parent_as(:key).key_id,
-        select: 1
-      )
+    Repo.cross_tenant(fn ->
+      from(k in FrontmatterKey, distinct: true, select: k.user_id)
+      |> repo.all()
+      |> Enum.reduce(0, fn user_id, acc -> acc + reap_user(repo, user_id, min_age_s) end)
+    end)
+  end
 
-    query =
+  defp reap_user(repo, user_id, min_age_s) do
+    {:ok, n} =
+      repo.transaction(fn ->
+        case repo.one(
+               from(u in User,
+                 where: u.id == ^user_id,
+                 select: {u.id, u.dek_rotation_locked_at},
+                 lock: "FOR SHARE"
+               )
+             ) do
+          {_id, nil} -> reap_candidates(repo, user_id, min_age_s)
+          _rotating_or_gone -> 0
+        end
+      end)
+
+    n
+  end
+
+  defp reap_candidates(repo, user_id, min_age_s) do
+    vault_ids = repo.all(from(v in Vault, where: v.user_id == ^user_id, select: v.id))
+
+    max_id =
+      repo.one(from(k in FrontmatterKey, where: k.user_id == ^user_id, select: max(k.key_id))) ||
+        @first_user_id
+
+    unused =
       from(k in FrontmatterKey,
         as: :key,
-        where: k.inserted_at < ago(^min_age_s, "second"),
-        where: k.key_id < subquery(highest),
-        where: not exists(used)
+        where: k.user_id == ^user_id and k.key_id < ^max_id,
+        where: not exists(used(vault_ids, :h)),
+        where: not exists(used(vault_ids, :n)),
+        where: not exists(used(vault_ids, :d))
       )
 
-    {n, _} = Repo.cross_tenant(fn -> Repo.maintenance().delete_all(query) end)
-    n
+    candidates =
+      unused
+      |> where([k], k.inserted_at < ago(^min_age_s, "second"))
+      |> select([k], k.key_id)
+      |> lock("FOR UPDATE")
+      |> repo.all()
+
+    if candidates == [] do
+      0
+    else
+      {n, _} = unused |> where([k], k.key_id in ^candidates) |> repo.delete_all()
+      n
+    end
+  end
+
+  defp used(vault_ids, col) do
+    from(a in NoteAttr,
+      where: a.vault_id in ^vault_ids and a.key_id == parent_as(:key).key_id,
+      where: not is_nil(field(a, ^col)),
+      select: 1
+    )
   end
 
   defp select_ids(user_id, hmacs) do

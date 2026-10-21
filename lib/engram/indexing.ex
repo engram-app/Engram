@@ -103,6 +103,15 @@ defmodule Engram.Indexing do
     # is one `subscriptions` query. The join folds it into this fetch. See #1502.
     user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
 
+    # One re-resolve when the reaper deleted a key id mid-pass
+    # (`hold_key_ids!/2`); the retained vectors make the retry Voyage-free.
+    case index_once(note, vault, user, opts) do
+      {:error, :frontmatter_keys_gone} -> index_once(note, vault, user, opts)
+      other -> other
+    end
+  end
+
+  defp index_once(note, vault, user, opts) do
     case prepare_index(note, vault, user, opts) do
       {:ok, :no_chunks} ->
         case Crypto.get_dek(user) do
@@ -2762,6 +2771,7 @@ defmodule Engram.Indexing do
   # The note's rows are replaced wholesale, like the chunk rows, so an absent
   # key leaves no row.
   defp stamp_flat_fields(%{note: note, attr_rows: rows}) do
+    :ok = hold_key_ids!(note, rows)
     Repo.delete_all(from(a in NoteAttr, where: a.note_id == ^note.id))
     _ = rows |> Enum.chunk_every(@insert_batch) |> Enum.each(&Repo.insert_all(NoteAttr, &1))
 
@@ -2769,6 +2779,29 @@ defmodule Engram.Indexing do
   end
 
   defp stamp_flat_fields(_prepared), do: :ok
+
+  # The user-key ids this pass writes were resolved before the Voyage call, so
+  # the daily reaper may have deleted one since (a key back after a day with no
+  # note using it). FOR KEY SHARE holds every one until commit, which blocks
+  # the reaper's FOR UPDATE; if one is already gone the pass rolls back and
+  # `index_note_with_usage/4` re-resolves once (new id, never the dead one).
+  defp hold_key_ids!(note, rows) do
+    ids = for(%{key_id: id} <- rows, id >= FrontmatterKeys.first_user_id(), do: id) |> Enum.uniq()
+
+    held =
+      if ids == [],
+        do: [],
+        else:
+          Repo.all(
+            from(k in Engram.Notes.FrontmatterKey,
+              where: k.user_id == ^note.user_id and k.key_id in ^ids,
+              select: k.key_id,
+              lock: "FOR KEY SHARE"
+            )
+          )
+
+    if length(held) < length(ids), do: Repo.rollback(:frontmatter_keys_gone), else: :ok
+  end
 
   # Plaintext inputs, not the stored payload: nothing here is encrypted, but
   # comparing what we would write against a stamp avoids reading Qdrant back.

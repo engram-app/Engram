@@ -418,7 +418,8 @@ defmodule Engram.MCP.Tools do
                 "(exact) and created, updated, reviewed, expires, due, priority (range). " <>
                 "op: eq, in (a list, at most 100), gt/gte/lt/lte (numbers or ISO dates), " <>
                 "after/before (ISO dates; a bare date is the whole UTC day). A quoted " <>
-                "number is text. A key no note has is an error.",
+                "number is text. created/updated fall back to the note's real times when " <>
+                "the key is missing. A key no note has is an error.",
             "items" => %{
               "type" => "object",
               "properties" => %{
