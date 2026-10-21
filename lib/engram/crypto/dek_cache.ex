@@ -29,7 +29,8 @@ defmodule Engram.Crypto.DekCache do
   # the claim of a loader that crashed.
   @pending_ms 60_000
   # How long `claim_or_await/1` waits on another loader before claiming over
-  # it. Bounds a caller behind a stalled KMS call (ExAws retries with backoff).
+  # it (`:dek_await_ms`). Bounds a caller behind a stalled KMS call (ExAws
+  # retries with backoff).
   @await_ms 15_000
   @sweep_interval_ms :timer.minutes(5)
 
@@ -89,15 +90,11 @@ defmodule Engram.Crypto.DekCache do
   The slot reads as a miss until `put_if_claimed/3`. Any invalidate, local or
   a peer's `dek_evict`, deletes the claim, so a DEK unwrapped from a blob read
   before a rotation's flip is never stored over it. The returned token
-  identifies this claim; a later claim replaces it.
+  identifies this claim; a later claim replaces it. The caller is monitored
+  as the claim's loader (see `claim_or_await/1`).
   """
   @spec claim(user_id :: String.t()) :: reference()
-  def claim(user_id) do
-    token = make_ref()
-    expires_at = :erlang.system_time(:millisecond) + @pending_ms
-    :ok = GenServer.call(__MODULE__, {:put, user_id, {@pending, token}, expires_at})
-    token
-  end
+  def claim(user_id), do: GenServer.call(__MODULE__, {:claim, user_id})
 
   @doc """
   Single-flight entry for a `get/1` miss. Returns the cached DEK, claims a free
@@ -105,27 +102,33 @@ defmodule Engram.Crypto.DekCache do
   holds the claim, waits for that loader's DEK. Without the wait every
   concurrent miss unwrapped on its own: one KMS Decrypt per caller.
 
-  `:retry` means the claim ended without a DEK (loader released it, died, or
-  an invalidate landed) and the caller should ask again. The loader is
-  monitored, so a crashed loader wakes its waiters instead of leaving them on
-  the claim until it expires.
+  `{:error, reason}` is the loader's own failure, handed to every waiter so a
+  failing KMS costs one call per burst, not one per caller. `:retry` means the
+  claim ended without a DEK or an error (loader died, or an invalidate
+  landed) and the caller should ask again. Loaders are monitored, so a
+  crashed loader wakes its waiters instead of leaving them on the claim until
+  it expires. A loader asking again for its own claim claims over rather
+  than wait on itself.
   """
   @spec claim_or_await(user_id :: String.t()) ::
-          {:ok, <<_::256>>} | {:claimed, reference()} | :retry
+          {:ok, <<_::256>>} | {:claimed, reference()} | {:error, term()} | :retry
   def claim_or_await(user_id) do
-    GenServer.call(__MODULE__, {:claim_or_await, user_id}, @await_ms)
+    await_ms = Application.get_env(:engram, :dek_await_ms, @await_ms)
+    GenServer.call(__MODULE__, {:claim_or_await, user_id}, await_ms)
   catch
-    # ponytail: a loader stuck past @await_ms; claim over it rather than hang.
-    # Its late put_if_claimed then reads :stale.
+    # A loader stuck past the await budget: claim over it (monitored) rather
+    # than hang. Its late put_if_claimed then reads :stale.
     :exit, {:timeout, _} -> {:claimed, claim(user_id)}
   end
 
   @doc """
-  Drops `token`'s claim after a failed load, waking waiters with `:retry`.
-  A no-op if the claim was already replaced or invalidated.
+  Drops `token`'s claim after a failed load, failing its waiters with
+  `{:error, reason}`. A no-op if the claim was already replaced or
+  invalidated: the waiters then belong to whoever holds the slot now.
   """
-  @spec release(user_id :: String.t(), token :: reference()) :: :ok
-  def release(user_id, token), do: GenServer.call(__MODULE__, {:release, user_id, token})
+  @spec release(user_id :: String.t(), token :: reference(), reason :: term()) :: :ok
+  def release(user_id, token, reason),
+    do: GenServer.call(__MODULE__, {:release, user_id, token, reason})
 
   @doc """
   Stores `dek` only if `token`'s claim is still in the slot. `:stale` means an
@@ -190,7 +193,7 @@ defmodule Engram.Crypto.DekCache do
 
     schedule_sweep()
     # waiters: user_id => callers parked on that user's claim.
-    # loaders: monitor ref => {user_id, token} of a claim_or_await claimer.
+    # loaders: monitor ref => {user_id, token, pid} of each claim's holder.
     {:ok, %{waiters: %{}, loaders: %{}}}
   end
 
@@ -201,29 +204,46 @@ defmodule Engram.Crypto.DekCache do
   end
 
   @impl true
+  def handle_call({:claim, user_id}, {pid, _}, state) do
+    {token, state} = new_claim(state, user_id, pid)
+    {:reply, token, state}
+  end
+
+  @impl true
   def handle_call({:claim_or_await, user_id}, {pid, _} = from, state) do
     now = :erlang.system_time(:millisecond)
 
     case :ets.lookup(@table, user_id) do
-      [{^user_id, {@pending, _token}, expires_at}] when now < expires_at ->
-        {:noreply, %{state | waiters: Map.update(state.waiters, user_id, [from], &[from | &1])}}
+      [{^user_id, {@pending, token}, expires_at}] when now < expires_at ->
+        if loader?(state, user_id, token, pid) do
+          {token, state} = new_claim(state, user_id, pid)
+          {:reply, {:claimed, token}, state}
+        else
+          {:noreply, %{state | waiters: Map.update(state.waiters, user_id, [from], &[from | &1])}}
+        end
 
       [{^user_id, dek, expires_at}] when is_binary(dek) and now < expires_at ->
+        # Filled between the caller's get/1 miss and this call: an unwrap
+        # saved, same as a served waiter.
+        emit_lookup(:coalesced)
         {:reply, {:ok, dek}, state}
 
       _ ->
-        token = make_ref()
-        :ets.insert(@table, {user_id, {@pending, token}, now + @pending_ms})
-        state = settle(state, user_id)
-        mref = Process.monitor(pid)
-        {:reply, {:claimed, token}, put_in(state.loaders[mref], {user_id, token})}
+        {token, state} = new_claim(state, user_id, pid)
+        {:reply, {:claimed, token}, state}
     end
   end
 
   @impl true
-  def handle_call({:release, user_id, token}, _from, state) do
-    :ets.match_delete(@table, {user_id, {@pending, token}, :_})
-    {:reply, :ok, settle(state, user_id)}
+  def handle_call({:release, user_id, token, reason}, _from, state) do
+    case :ets.lookup(@table, user_id) do
+      [{^user_id, {@pending, ^token}, _}] ->
+        :ets.delete(@table, user_id)
+        {:reply, :ok, settle(state, user_id, {:error, reason})}
+
+      _ ->
+        {:reply, :ok, settle(state, user_id)}
+    end
   end
 
   @impl true
@@ -307,7 +327,7 @@ defmodule Engram.Crypto.DekCache do
   @impl true
   def handle_info({:DOWN, mref, :process, _pid, _reason}, state) do
     case Map.pop(state.loaders, mref) do
-      {{user_id, token}, loaders} ->
+      {{user_id, token, _pid}, loaders} ->
         :ets.match_delete(@table, {user_id, {@pending, token}, :_})
         {:noreply, settle(%{state | loaders: loaders}, user_id)}
 
@@ -320,20 +340,32 @@ defmodule Engram.Crypto.DekCache do
   @impl true
   def handle_info({:cache_sync, _other}, state), do: {:noreply, state}
 
+  defp new_claim(state, user_id, pid) do
+    token = make_ref()
+    expires_at = :erlang.system_time(:millisecond) + @pending_ms
+    :ets.insert(@table, {user_id, {@pending, token}, expires_at})
+    state = settle(state, user_id)
+    {token, put_in(state.loaders[Process.monitor(pid)], {user_id, token, pid})}
+  end
+
+  defp loader?(state, user_id, token, pid),
+    do: Enum.any?(state.loaders, fn {_, loader} -> loader == {user_id, token, pid} end)
+
   # Reconciles waiters and loaders with `user_id`'s slot after any mutation.
-  # Slot holds a DEK: serve every waiter. Slot empty: wake them with :retry.
-  # Slot still claimed: waiters keep waiting on whoever holds it now. Loaders
-  # whose claim is no longer the one in the slot are demonitored either way.
-  defp settle(state, user_id) do
+  # Slot holds a DEK: serve every waiter. Slot empty: wake them with `empty`
+  # (`:retry`, or the releasing loader's error). Slot still claimed: waiters
+  # keep waiting on whoever holds it now. Loaders whose claim is no longer
+  # the one in the slot are demonitored either way.
+  defp settle(state, user_id, empty \\ :retry) do
     current =
       case :ets.lookup(@table, user_id) do
         [{^user_id, {@pending, token}, _}] -> {:pending, token}
         [{^user_id, dek, _}] -> {:ok, dek}
-        [] -> :retry
+        [] -> empty
       end
 
     {done, loaders} =
-      Map.split_with(state.loaders, fn {_mref, {uid, token}} ->
+      Map.split_with(state.loaders, fn {_mref, {uid, token, _pid}} ->
         uid == user_id and current != {:pending, token}
       end)
 
@@ -349,7 +381,7 @@ defmodule Engram.Crypto.DekCache do
 
         Enum.each(waiters, fn from ->
           GenServer.reply(from, reply)
-          if reply != :retry, do: emit_lookup(:coalesced)
+          if match?({:ok, _}, reply), do: emit_lookup(:coalesced)
         end)
 
         %{state | waiters: rest}
@@ -357,7 +389,7 @@ defmodule Engram.Crypto.DekCache do
   end
 
   defp settle_all(state) do
-    user_ids = Map.keys(state.waiters) ++ Enum.map(state.loaders, fn {_, {uid, _}} -> uid end)
+    user_ids = Map.keys(state.waiters) ++ Enum.map(state.loaders, fn {_, {uid, _, _}} -> uid end)
     user_ids |> Enum.uniq() |> Enum.reduce(state, &settle(&2, &1))
   end
 

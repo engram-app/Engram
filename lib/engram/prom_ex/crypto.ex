@@ -74,7 +74,8 @@ defmodule Engram.PromEx.Crypto do
         counter(
           metric_prefix ++ [:dek_cache, :total],
           event_name: @dek_cache_event,
-          description: "DekCache lookups by outcome (hit | miss).",
+          description:
+            "DekCache lookups by outcome (hit | miss | coalesced); unwraps = miss - coalesced.",
           tags: [:outcome]
         ),
         last_value(
