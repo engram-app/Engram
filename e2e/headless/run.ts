@@ -613,6 +613,44 @@ async function main(): Promise<void> {
 		}
 	});
 
+	// REPRO 3 — the fresh device sits behind a 200 ms inbound link (a real
+	// internet round trip). On localhost the room handshake wins the race with
+	// the first edit; over a network it may not (staging: 8/8 doubled).
+	const slowPath = "Headless/FreshDeviceSlowLink.md";
+	await scenario("fresh device on a 200ms link edits an existing note (no duplication)", async () => {
+		await a.createNote(slowPath, freshC1);
+		await serverHas(slowPath, barrier.sha256(freshC1));
+		const Native = globalThis.WebSocket;
+		class SlowInbound extends Native {
+			set onmessage(fn: ((ev: MessageEvent) => void) | null) {
+				super.onmessage = fn ? (ev: MessageEvent) => setTimeout(() => fn.call(this, ev), 200) : null;
+			}
+			get onmessage() {
+				return super.onmessage;
+			}
+		}
+		globalThis.WebSocket = SlowInbound as typeof WebSocket;
+		let d: Replica;
+		try {
+			d = await Replica.boot(session, `S${Date.now()}`, rootDir);
+		} finally {
+			globalThis.WebSocket = Native;
+		}
+		await barrier.synced(d);
+		await barrier.noteVisible(d, slowPath, barrier.sha256(freshC1));
+		await d.editNote(slowPath, freshC2);
+		try {
+			await serverHas(slowPath, barrier.sha256(freshC2));
+		} catch (e) {
+			const r = await fetch(`${API_URL}/notes/${encodeURIComponent(slowPath)}`, {
+				headers: { Authorization: `Bearer ${session.token}`, "X-Vault-ID": session.vaultId },
+			});
+			throw new Error(`${(e as Error).message}; server content=${JSON.stringify(((await r.json()) as { content?: string }).content)}`);
+		} finally {
+			d.disconnect();
+		}
+	});
+
 	// GREEN 6 — stale head after room recreate (#285). Kill the note's CRDT room
 	// via the backend_rpc terminate_room seam; a subsequent edit recreates the
 	// room with a NEW head; a replica that reconnects MUST read that new head,
