@@ -35,7 +35,9 @@ def _playwright(doc):
                 for t in spec.get("tests", [])
                 for a in t.get("annotations", [])
             }
-            targets = [t for t in ann.get("targets", "").split(",") if t]
+            targets = [
+                t.strip() for t in ann.get("targets", "").split(",") if t.strip()
+            ]
             yield (
                 spec["title"],
                 "playwright",

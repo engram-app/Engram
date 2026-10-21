@@ -7,8 +7,11 @@ which the `scenario_steps` fixture (e2e/conftest.py) binds to the node's
 
 from __future__ import annotations
 
+import json
+import os
 import time
 from contextlib import contextmanager
+from pathlib import Path
 
 # ponytail: one global, the suite is serial; per-task contextvar if tests ever run concurrently.
 _active: list | None = None
@@ -41,3 +44,21 @@ def timed_step(name: str):
         ok = True
     finally:
         _active.append({"step": name, "seconds": time.monotonic() - start, "ok": ok})
+
+
+def pytest_collection_modifyitems(items):
+    """Write canary marker args for scripts/list_scenarios.py.
+
+    Only active when SCENARIO_COLLECT_OUT names a path; a normal run is untouched.
+    Accepts `canary("hourly", ["ci"])` and `canary(cadence=..., targets=...)`.
+    """
+    out = os.environ.get("SCENARIO_COLLECT_OUT")
+    if not out:
+        return
+    entries = []
+    for item in items:
+        marker = item.get_closest_marker("canary")
+        if marker is not None:
+            bound = dict(zip(("cadence", "targets"), marker.args)) | marker.kwargs
+            entries.append({"nodeid": item.nodeid, **bound})
+    Path(out).write_text(json.dumps(entries))

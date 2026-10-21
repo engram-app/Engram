@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -125,3 +126,47 @@ def test_timed_step_records_ok_and_failure():
     assert props == [("steps", steps)]
     assert [(s["step"], s["ok"]) for s in steps] == [("a", True), ("b", False)]
     assert all(s["seconds"] >= 0 for s in steps)
+
+
+def test_collection_hook_binds_positional_and_keyword_marker_args(tmp_path):
+    (tmp_path / "pytest.ini").write_text(
+        "[pytest]\nmarkers =\n    canary(cadence, targets)\n"
+    )
+    (tmp_path / "test_sample.py").write_text(
+        "import pytest\n\n"
+        '@pytest.mark.canary("hourly", ["ci"])\ndef test_pos(): pass\n\n'
+        '@pytest.mark.canary(cadence="daily", targets=["staging"])\ndef test_kw(): pass\n\n'
+        "def test_plain(): pass\n"
+    )
+    out = tmp_path / "out.json"
+    env = {
+        **os.environ,
+        "SCENARIO_COLLECT_OUT": str(out),
+        "PYTHONPATH": str(SCRIPT.parent.parent),
+    }
+    r = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "-p",
+            "helpers.scenario",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert json.loads(out.read_text()) == [
+        {"nodeid": "test_sample.py::test_pos", "cadence": "hourly", "targets": ["ci"]},
+        {
+            "nodeid": "test_sample.py::test_kw",
+            "cadence": "daily",
+            "targets": ["staging"],
+        },
+    ]
