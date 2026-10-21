@@ -294,7 +294,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   # Dense notes only: a sparse-only note reaches the dense backfill (term 2 of
   # the main sweep), whose pass caps it.
   defp sweep_over_note_cap(now) do
-    tier_caps = Map.new([:free, :starter, :pro], &{&1, Billing.tier_limit(&1, :note_points_cap)})
+    tier_caps = by_tier(:note_points_cap)
 
     # Every tier `:unlimited` is enforcement off (self-host): nothing to do.
     unless Enum.all?(Map.values(tier_caps), &(&1 == :unlimited)) do
@@ -502,15 +502,18 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     end
   end
 
+  # `key`'s plan limit per tier: env override, else default.
+  defp by_tier(key),
+    do: Map.new(Engram.Billing.LimitKeys.tiers(), &{&1, Billing.tier_limit(&1, key)})
+
   defp budget_caps do
-    by_tier = fn key -> Map.new([:free, :starter, :pro], &{&1, Billing.tier_limit(&1, key)}) end
-    index = by_tier.(:index_points_cap)
+    index = by_tier(:index_points_cap)
 
     if Enum.all?(Map.values(index), &(&1 == :unlimited)),
       do: :off,
       else: %{
         index: {index, Map.new(Billing.active_overrides(:index_points_cap))},
-        note: {by_tier.(:note_points_cap), Map.new(Billing.active_overrides(:note_points_cap))}
+        note: {by_tier(:note_points_cap), Map.new(Billing.active_overrides(:note_points_cap))}
       }
   end
 
@@ -1153,7 +1156,15 @@ defmodule Engram.Workers.ReconcileEmbeddings do
           into: MapSet.new(),
           do: r.id
 
-    fresh = reject_pending(Enum.map(rows, &{&1.id, &1.user_id}), RebuildStaleNote)
+    # Pending under EITHER worker: an EmbedNote for a version-stale note (a
+    # DEK rotation's text guard queues those) rebuilds it too, and two jobs
+    # would pay Voyage twice for one note.
+    fresh =
+      rows
+      |> Enum.map(&{&1.id, &1.user_id})
+      |> reject_pending(RebuildStaleNote)
+      |> reject_pending(EmbedNote)
+
     {upgrade, version} = Enum.split_with(fresh, &MapSet.member?(upgrades, elem(&1, 0)))
     by_user = Enum.group_by(version, &elem(&1, 1), &elem(&1, 0))
 

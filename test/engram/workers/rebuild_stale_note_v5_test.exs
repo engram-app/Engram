@@ -101,6 +101,17 @@ defmodule Engram.Workers.RebuildStaleNoteV5Test do
       )
     end)
 
+    # As if indexed long ago: the upsert's own debounced embed already ran. A
+    # pending EmbedNote would rebuild the note itself, so the sweep would
+    # (rightly) queue no RebuildStaleNote beside it.
+    Repo.delete_all(
+      from(j in Oban.Job,
+        where:
+          j.worker == "Engram.Workers.EmbedNote" and
+            fragment("?->>'note_id'", j.args) == ^note.id
+      )
+    )
+
     note
   end
 
