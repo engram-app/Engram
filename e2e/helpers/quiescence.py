@@ -17,9 +17,9 @@ whole session vault, and a note another test left open in an editor holds its
 updates in a live room until that room checkpoints. It is reported on timeout.
 
 `deferred_checkpoints` is NOT a settle condition either: it counts checkpoints
-held by a live room (the room materializes the note itself on exit) and ones
-snoozed 60s behind a live room or key rotation, which stay snoozed after the
-room exits. Waiting on it would outlast the deadline. It is reported on timeout.
+held by a live room (the room materializes the note itself on exit). A snoozed checkpoint whose room has exited IS pending: it still owes
+the notes.content write, and the room exit re-times it to run ~5s later. It is
+reported on timeout.
 """
 
 from __future__ import annotations

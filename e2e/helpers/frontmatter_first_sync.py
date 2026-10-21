@@ -108,7 +108,7 @@ async def first_sync_shapes(
     # checkpoint (a CheckpointNote from room-shutdown overflow or a link
     # rewrite, or a room's own checkpoint). The barrier waits for no runnable
     # checkpoint job AND for this device's catch-up cursor to pass the seq it
-    # bumps; a job held by or snoozed behind a live room is deferred, not
+    # bumps; a job held by a live room is deferred, not
     # waited on.
     await await_quiescent(cdp, api_sync)
 

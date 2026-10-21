@@ -84,6 +84,83 @@ defmodule Engram.Notes.CrdtCheckpointBackpressureTest do
     end
   end
 
+  # Review of the quiescence fix: CheckpointNote is unique per note across
+  # `:incomplete` states, so a job snoozed 60 s behind a live room ABSORBS the
+  # enqueue a later room exit makes. That exit's edits then sat unmaterialized
+  # until the snooze ran out (~65 s). A room exit, either path, must pull the
+  # snoozed job forward to just after the room is gone.
+  describe "a room exit with a snoozed checkpoint pending" do
+    defp snoozed_job(user, vault, note) do
+      {:ok, job} =
+        %{"user_id" => user.id, "vault_id" => vault.id, "note_id" => note.id}
+        |> CheckpointNote.new()
+        |> Oban.insert()
+
+      later = DateTime.add(DateTime.utc_now(), 60, :second)
+      job |> Ecto.Changeset.change(state: "scheduled", scheduled_at: later) |> Repo.update!()
+    end
+
+    defp checkpoint_jobs(note) do
+      Repo.all(
+        from(j in Oban.Job,
+          where: j.worker == ^inspect(CheckpointNote),
+          where: fragment("? ->> 'note_id'", j.args) == ^to_string(note.id)
+        )
+      )
+    end
+
+    defp soon?(%DateTime{} = at),
+      do: DateTime.diff(at, DateTime.utc_now(), :second) <= CheckpointNote.room_exit_delay_s()
+
+    test "overflow path: re-times the snoozed job instead of leaving it at +60 s", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+      snoozed_job(user, vault, note)
+
+      prev = Application.get_env(:engram, :checkpoint_inline_limit)
+      Application.put_env(:engram, :checkpoint_inline_limit, 1)
+      on_exit(fn -> Application.put_env(:engram, :checkpoint_inline_limit, prev) end)
+      assert CheckpointGate.acquire() == true
+
+      :ok =
+        CrdtPersistence.unbind(
+          state(%{user_id: user.id, vault_id: vault.id, note_id: note.id}),
+          "d",
+          edited_doc(user, note, "before AFTER")
+        )
+
+      assert [job] = checkpoint_jobs(note)
+      assert soon?(job.scheduled_at)
+    end
+
+    test "inline path: re-times the snoozed job instead of leaving it at +60 s", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+      snoozed_job(user, vault, note)
+
+      :ok =
+        CrdtPersistence.unbind(
+          state(%{user_id: user.id, vault_id: vault.id, note_id: note.id}),
+          "d",
+          edited_doc(user, note, "before AFTER")
+        )
+
+      assert [job] = checkpoint_jobs(note)
+      assert soon?(job.scheduled_at)
+    end
+
+    test "inline path with no pending job enqueues nothing", ctx do
+      %{user: user, vault: vault, note: note} = ctx
+
+      :ok =
+        CrdtPersistence.unbind(
+          state(%{user_id: user.id, vault_id: vault.id, note_id: note.id}),
+          "d",
+          edited_doc(user, note, "before AFTER")
+        )
+
+      assert checkpoint_jobs(note) == []
+    end
+  end
+
   describe "CheckpointNote worker" do
     test "rebuilds the doc from the durable tail-log and materializes the edit", ctx do
       %{user: user, vault: vault, note: note} = ctx

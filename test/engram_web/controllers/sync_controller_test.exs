@@ -102,10 +102,18 @@ defmodule EngramWeb.SyncControllerTest do
     end
 
     # CheckpointNote snoozes (back to `scheduled`) for 60 s while the note's room
-    # is live or a key rotation runs. That is deferred by design, not unsettled
-    # work, so a 60 s e2e barrier must not wait on it.
-    test "a snoozed checkpoint is deferred, not pending", %{conn: conn, user: user, vault: vault} do
-      checkpoint_job(user, vault.id, Ecto.UUID.generate(), "scheduled")
+    # is live or a key rotation runs. Behind a live room that is deferred: the
+    # room materializes the note itself, and a room exit re-times the job.
+    test "a checkpoint snoozed behind a live room is deferred", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      note_id = Ecto.UUID.generate()
+      checkpoint_job(user, vault.id, note_id, "scheduled")
+      room = spawn(fn -> Process.sleep(:infinity) end)
+      :yes = :global.register_name({:crdt_doc, note_id}, room)
+      on_exit(fn -> Process.exit(room, :kill) end)
 
       body = conn |> get("/api/sync/quiescence") |> json_response(200)
 
@@ -113,10 +121,10 @@ defmodule EngramWeb.SyncControllerTest do
       assert body["deferred_checkpoints"] == 1
     end
 
-    # Run 39403472535 (test_101): the job snoozed while the room was live, then
-    # the room idle-exited (5 s in CI). With no room left the room check alone
-    # counts it, and it sits `scheduled` for up to ~65 s, past the deadline.
-    test "a snoozed checkpoint whose room already closed is deferred", %{
+    # Review of #2085: the job is unique per note across `:incomplete` states,
+    # so a snoozed job absorbs the enqueue a later room exit makes. Once that
+    # room is gone the job still owes a notes.content write, so it is pending.
+    test "a snoozed checkpoint with no live room and no rotation is owed", %{
       conn: conn,
       user: user,
       vault: vault
@@ -127,11 +135,11 @@ defmodule EngramWeb.SyncControllerTest do
 
       body = conn |> get("/api/sync/quiescence") |> json_response(200)
 
-      assert body["pending_checkpoints"] == 0
-      assert body["deferred_checkpoints"] == 1
+      assert body["pending_checkpoints"] == 1
+      assert body["deferred_checkpoints"] == 0
     end
 
-    test "available and retryable checkpoints are pending; other vaults are not counted", %{
+    test "room-free incomplete checkpoints are pending; other vaults are not", %{
       conn: conn,
       user: user,
       vault: vault
@@ -145,8 +153,8 @@ defmodule EngramWeb.SyncControllerTest do
 
       body = conn |> get("/api/sync/quiescence") |> json_response(200)
 
-      assert body["pending_checkpoints"] == 2
-      assert body["deferred_checkpoints"] == 1
+      assert body["pending_checkpoints"] == 3
+      assert body["deferred_checkpoints"] == 0
     end
   end
 

@@ -45,8 +45,8 @@ defmodule EngramWeb.SyncController do
       "The vault's `change_seq` plus how many CRDT updates still await their " <>
         "checkpoint. A client whose catch-up cursor has reached `change_seq` while " <>
         "both counts are 0 has seen every change the server will make on its own. " <>
-        "`deferred_checkpoints` (snoozed, or held by a live room) is reported but " <>
-        "is not owed work.",
+        "`deferred_checkpoints` (held by a live room) is reported but is not " <>
+        "owed work.",
     responses: [ok: {"Sync quiescence", "application/json", Schemas.SyncQuiescenceResponse}]
   )
 
@@ -72,31 +72,22 @@ defmodule EngramWeb.SyncController do
     })
   end
 
-  # A checkpoint is owed only if it can run now AND its note has no live room.
-  # The rest is deferred by design, and the barrier must not wait on it:
-  #   - `scheduled`: CheckpointNote snoozed 60 s behind a live room or a key
-  #     rotation (nothing inserts one scheduled). It stays scheduled for up to
-  #     ~65 s even after the room exits, so the room check alone misses it.
-  #   - a live room: CheckpointNote will snooze, and the room materializes the
-  #     note itself on exit; a note open in an editor holds it all session.
-  # Same rule as `pending_crdt_updates`, which the e2e barrier already ignores.
+  # A checkpoint is owed unless a live room holds it: CheckpointNote snoozes
+  # while one is up, and the room materializes the note itself on exit (and
+  # re-times the job; see `CheckpointNote`). A `scheduled` (snoozed) job with
+  # no live room is still owed: the job is unique per note, so it absorbed the
+  # enqueue of a room exit that has since happened. A key rotation also snoozes
+  # it, but this endpoint answers 503 for the whole rotation.
   defp checkpoint_counts(vault_id) do
-    runnable =
+    note_ids =
       Engram.Jobs.pending_note_ids_for_vault(
         Engram.Workers.CheckpointNote,
         vault_id,
-        ~w(available executing retryable)
+        ~w(available executing retryable scheduled)
       )
 
-    snoozed =
-      Engram.Jobs.pending_note_ids_for_vault(
-        Engram.Workers.CheckpointNote,
-        vault_id,
-        ~w(scheduled)
-      )
-
-    owed = Enum.count(runnable, &(is_binary(&1) and Engram.Notes.CrdtRegistry.lookup(&1) == nil))
-    {owed, length(runnable) - owed + length(snoozed)}
+    owed = Enum.count(note_ids, &(is_binary(&1) and Engram.Notes.CrdtRegistry.lookup(&1) == nil))
+    {owed, length(note_ids) - owed}
   end
 
   def manifest(conn, params) do
