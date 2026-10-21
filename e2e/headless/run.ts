@@ -563,6 +563,31 @@ async function main(): Promise<void> {
 		await barrier.noteVisible(b, fanoutPath, barrier.sha256(fanoutEdit)); // live delta fans out
 	});
 
+	// REPRO (staging gate 0.59.0) — a FRESH device catches up an existing note,
+	// then edits it once. The server must hold exactly the edit, not the old
+	// body plus the edit (observed on staging 0.59.0: content doubled).
+	const freshPath = "Headless/FreshDevice.md";
+	const freshC1 = "# fresh\n\nfirst body line.\n";
+	const freshC2 = "# fresh\n\nfirst body line.\nsecond line from a fresh device.\n";
+	await scenario("fresh device edits an existing note (no duplication)", async () => {
+		await a.createNote(freshPath, freshC1);
+		await serverHas(freshPath, barrier.sha256(freshC1));
+		const d = await Replica.boot(session, `D${Date.now()}`, rootDir);
+		await barrier.synced(d);
+		await barrier.noteVisible(d, freshPath, barrier.sha256(freshC1));
+		await d.editNote(freshPath, freshC2);
+		try {
+			await serverHas(freshPath, barrier.sha256(freshC2));
+		} catch (e) {
+			const r = await fetch(`${API_URL}/notes/${encodeURIComponent(freshPath)}`, {
+				headers: { Authorization: `Bearer ${session.token}`, "X-Vault-ID": session.vaultId },
+			});
+			throw new Error(`${(e as Error).message}; server content=${JSON.stringify(((await r.json()) as { content?: string }).content)}`);
+		} finally {
+			d.disconnect();
+		}
+	});
+
 	// GREEN 6 — stale head after room recreate (#285). Kill the note's CRDT room
 	// via the backend_rpc terminate_room seam; a subsequent edit recreates the
 	// room with a NEW head; a replica that reconnects MUST read that new head,
