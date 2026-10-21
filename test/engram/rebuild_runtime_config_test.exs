@@ -104,7 +104,9 @@ defmodule Engram.RebuildRuntimeConfigTest do
 
     # Only with LEGACY_FILTER_FIELDS=false (PR-18): unset or true refuses.
     System.put_env("QDRANT_TENANT_GRAPH", "true")
-    assert_raise RuntimeError, ~r/QDRANT_TENANT_GRAPH=true needs LEGACY_FILTER_FIELDS=false/,
+
+    assert_raise RuntimeError,
+                 ~r/QDRANT_TENANT_GRAPH=true needs LEGACY_FILTER_FIELDS=false/,
                  &read_runtime/0
 
     System.put_env("LEGACY_FILTER_FIELDS", "true")

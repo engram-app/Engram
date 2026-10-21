@@ -25,24 +25,26 @@ defmodule Engram.Parsers.Markdown do
   #     normalised, content-anchored splits (#1594), `embed_text` (#1621).
   # 4: wrapped base64 and hex blobs stripped, and a per-chunk `kind`: a
   #     frontmatter chunk is keyword-only, so it no longer holds a dense vector.
-  #     NOT stamped yet: held at 3 so prod rebuilds once, when the bundled
-  #     re-chunk lands (embed-less, merge cap, storage move). Until then the
-  #     v4 chunker applies to new and edited notes only.
-  # Unstamped, rides the next bump (the bundled v5 rebuild): a run with no
-  # space is cut between words, never inside one (`word_split` in Rust).
-  # Also unstamped, same bump: the lead line reads `description`/`type` under
-  # any casing or a localized name (`説明`, `種類`; `KeyAliases`).
-  @chunker_version 3
+  #     Never stamped: held at 3 so prod rebuilds once, at 5.
+  # 5: the bundled one-time v5 rebuild (chunker v5 plan, PR-17): everything
+  #     in 4, plus a run with no space cut between words (`word_split` in
+  #     Rust) and the lead line read under any casing or localized key
+  #     (`KeyAliases`). The bump alone rebuilds nothing: until
+  #     `INDEX_REBUILD=on`, `Engram.Rebuild.target_versions/0` stays at the
+  #     pins (3), so no note is version-stale.
+  @chunker_version 5
 
   @data_exts [".canvas", ".base"]
 
   @doc """
   Version of the chunking algorithm in this build (#1620).
 
-  Stamped onto `notes.chunker_version` by `EmbedNote` after a successful index
-  and compared there on the next pass: a note carrying anything else — including
-  NULL, meaning it was indexed before this stamp existed — is rebuilt rather
-  than skipped, which is how a chunker fix reaches notes nobody edits.
+  Not read directly as a stamp or a staleness target: `EmbedNote` stamps and
+  every version check compares `Engram.Rebuild.target_versions/0`, which is
+  this build's version only while `INDEX_REBUILD=on` and the pins otherwise.
+  A note below the target, or NULL (indexed before the stamp existed), is
+  rebuilt rather than skipped, which is how a chunker fix reaches notes
+  nobody edits.
   """
   # No @spec: the body is a literal, so dialyzer narrows the success typing to
   # that exact integer and rejects any wider contract as a supertype.

@@ -200,6 +200,11 @@ Paddle is the Merchant-of-Record. Server keys gate API calls; the client token f
 | `BM25_B_MERGED` | `0.25` | BM25 `b` (length normalization) for merged, capped chunks (`Indexing`). A number from 0 to 1; anything else refuses to boot. |
 | `TENANT_IDF_MIN_POINTS` | `1000` | Points a user needs before `TENANT_IDF` computes keyword IDF over that user's own points (`Search`). A non-negative integer. |
 | `LEGACY_FILTER_FIELDS` | `true` | `true`: every Qdrant filter also matches the v3 `*_hmac` payload fields, so points from before the v5 pass still filter. Set `false` only after the pass has rewritten every point (PR-18). |
+| `WRITE_V5_LAYOUT` | `false` | `true`: new points are written in the v5 layout (UUIDv5 ids, short-key v5 payload); implies `V5_PAYLOAD_FORMAT`. `INDEX_REBUILD=on` reads `off` without it. |
+| `V5_PAYLOAD_FORMAT` | `false` | `true`: the collection gets the v5 payload indexes (short keys, `PayloadKeys`) and the scans that read payload keys accept both formats, so readers are ready before any v5 point is written. Implied by `WRITE_V5_LAYOUT`. |
+| `CHUNK_TEXT_WRITE` | `false` | `true`: every index writes each chunk's encrypted text to Postgres (`chunks`), in the same transaction as the points. On whenever `WRITE_V5_LAYOUT` is. |
+| `CHUNK_TEXT_READ` | `false` | `true`: search reads chunk text from Postgres in one query per page instead of the Qdrant payload. Turn on after `CHUNK_TEXT_WRITE` has filled the table. |
+| `QDRANT_TENANT_GRAPH` | `false` | `true`: the layout reconcile moves the collection to per-tenant HNSW (`m: 0`, `payload_m: 16`). Only after the v5 pass and drop-legacy-fields (PR-18): boot refuses it unless `LEGACY_FILTER_FIELDS=false`. |
 | `VECTOR_CACHE_ENABLED` | `false` | `true` turns on the short-lived encrypted per-user vector cache (`Engram.Indexing.VectorCache`, table `embedding_cache`): a dense text is paid to Voyage once across retries, crashes and the v5 rebuild window, and cache hits are never charged to the embed meter. Off, the embed path never reads or writes the table. Rows expire 72 h after insert (hourly batched prune). |
 | `ATTACHMENT_MIME_BYPASS` | off (gate ON) | `true` disables the executable-extension blocklist. |
 | `RATE_LIMIT_AUTH_OVERRIDE` | ignored unless `CI=true` | Auth-limiter override for CI/E2E only. |

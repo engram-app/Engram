@@ -401,6 +401,31 @@ case qdrant_switch.("LEGACY_FILTER_FIELDS") do
   on? -> config :engram, :legacy_filter_fields, on?
 end
 
+# The v5 layout switches (chunker v5 plan), all off by default; unset leaves
+# the key unconfigured so the code default (off, today's behaviour) applies.
+# WRITE_V5_LAYOUT implies the v5 payload format (`Qdrant.v5_payload_format?/0`)
+# and is what `INDEX_REBUILD=on` requires (`Rebuild.mode/0` reads `off`
+# without it).
+for {var, key} <- [
+      {"WRITE_V5_LAYOUT", :write_v5_layout},
+      {"V5_PAYLOAD_FORMAT", :v5_payload_format},
+      {"CHUNK_TEXT_WRITE", :chunk_text_write},
+      {"CHUNK_TEXT_READ", :chunk_text_read},
+      {"QDRANT_TENANT_GRAPH", :qdrant_tenant_graph}
+    ] do
+  case qdrant_switch.(var) do
+    nil -> :ok
+    on? -> config :engram, key, on?
+  end
+end
+
+# The per-tenant HNSW graph only after drop-legacy-fields (PR-18): with legacy
+# points left, one user would be two disconnected subgraphs.
+if qdrant_switch.("QDRANT_TENANT_GRAPH") == true and
+     qdrant_switch.("LEGACY_FILTER_FIELDS") != false do
+  raise "QDRANT_TENANT_GRAPH=true needs LEGACY_FILTER_FIELDS=false (after the v5 pass, PR-18)"
+end
+
 # Comma-separated user ids the v5 pass rebuilds last (`Rebuild.rebuild_order/1`).
 if last_users = System.get_env("REBUILD_LAST_USERS") do
   ids =
