@@ -565,4 +565,15 @@ defmodule Engram.QueryBudgetTest do
       end)
     end
   end
+
+  # The v5 rebuild-ledger gauge polls on a timer in its own process; a tick
+  # inside a measured window made "REST POST notes create" read 17 of 16.
+  # The recorder drops the poller's read, never a request path's.
+  test "the recorder skips the ledger poller's read, not a direct one" do
+    {_, polled} = QueryRecorder.record(&Engram.PromEx.Indexing.execute_rebuild_ledger/0)
+    {_, direct} = QueryRecorder.record(&Engram.Rebuild.ledger/0)
+
+    refute Enum.any?(polled, &(&1.source == "rebuild_ledger"))
+    assert Enum.any?(direct, &(&1.source == "rebuild_ledger"))
+  end
 end
