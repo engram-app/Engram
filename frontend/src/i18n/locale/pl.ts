@@ -166,22 +166,22 @@ export default {
 		other: "Pozostało {count} dnia w bezpłatnym okresie próbnym.",
 	},
 	"Indexing budget": "Budżet indeksowania",
-	"{available} of {capacity} tokens left": "Pozostało {available} z {capacity} tokenów",
+	"{available} of {capacity} tokens left": "{available} z {capacity} tokenów pozostało",
 	"Refills {perDay} tokens a day. Full again on {date}.":
 		"Odzyskuje {perDay} tokenów dziennie. Pełny stan na {date}.",
 	"All tokens are available.": "Wszystkie tokeny są dostępne.",
 	"{count} notes have keyword search only, until {date}.": {
 		one: "{count} notatka ma tylko wyszukiwanie po słowach kluczowych, do {date}.",
-		few: "{count} notatki mają tylko wyszukiwanie po słowach kluczowych, do czasu {date}.",
-		many: "{count} notatek ma tylko wyszukiwanie po słowach kluczowych, do {date}.",
-		other: "{count} Notatki mają tylko wyszukiwanie po słowach kluczowych, do czasu {date}.",
+		few: "{count} notatki są dostępne tylko przez wyszukiwanie słów kluczowych, do {date}.",
+		many: "{count} notatek można znaleźć tylko za pomocą wyszukiwania po słowach kluczowych, do {date}.",
+		other: "{count} Notatki przeszukiwane tylko po słowach kluczowych do {date}.",
 	},
 	"{count} notes have keyword search only, until the budget refills.": {
-		one: "Wyszukiwanie po słowach kluczowych działa tylko dla jednej notatki, do momentu uzupełnienia budżetu.",
-		few: "{count} notatki mają tylko wyszukiwanie po słowach kluczowych, do momentu uzupełnienia budżetu.",
-		many: "{count} notatek ma tylko wyszukiwanie po słowach kluczowych, do momentu uzupełnienia budżetu.",
+		one: "{count} notatka jest dostępna tylko przez wyszukiwanie słów kluczowych, do momentu uzupełnienia limitu.",
+		few: "{count} notatki można znaleźć tylko za pomocą wyszukiwania po słowach kluczowych, do momentu uzupełnienia limitu.",
+		many: "{count} notatek można znaleźć tylko za pomocą wyszukiwania po słowach kluczowych, do momentu uzupełnienia limitu.",
 		other:
-			"{count} Notatki mają tylko wyszukiwanie po słowach kluczowych, do momentu uzupełnienia budżetu.",
+			"{count} Notatki przeszukiwane są tylko po słowach kluczowych, do momentu uzupełnienia limitu.",
 	},
 	"Loading current connection…": "Ładowanie aktualnego połączenia…",
 	"Disconnected. Retry the new connection now.": "Rozłączono. Spróbuj ponownie połączyć się.",
@@ -1403,43 +1403,30 @@ export default {
 	"Executable files don't sync.": "Pliki wykonywalne nie są synchronizowane.",
 	"Upload failed. Try again.": "Wgranie nie powiodło się. Spróbuj ponownie.",
 	"{name}: {reason}": "{name}: {reason}",
+	"Files too large": "Pliki za duże",
 	"Not enough storage": "Za mało miejsca",
+	"There isn't enough room left on your {plan} plan for this file.":
+		"Nie ma wystarczającej ilości miejsca w Twoim planie {plan} dla tego pliku.",
+	"There isn't enough room left on your {plan} plan for these files.":
+		"Nie ma wystarczającej ilości miejsca w Twoim planie {plan} dla tych plików.",
+	"There isn't enough room left on this server for this file.":
+		"Nie ma wystarczającej ilości miejsca na tym serwerze dla tego pliku.",
+	"There isn't enough room left on this server for these files.":
+		"Nie ma wystarczającej ilości miejsca na tym serwerze dla tych plików.",
+	"This file is over the {limit} upload limit on your {plan} plan.":
+		"Ten plik przekracza limit przesyłania {limit} w Twoim planie {plan}.",
+	"These files are over the {limit} upload limit on your {plan} plan.":
+		"Te pliki przekraczają limit przesyłania {limit} w Twoim planie {plan}.",
+	"This file is over this server's {limit} upload limit.":
+		"Ten plik przekracza limit przesyłania {limit} na tym serwerze.",
+	"These files are over this server's {limit} upload limit.":
+		"Te pliki przekraczają limit przesyłania {limit} na tym serwerze.",
 	"Storage used": "Użyte miejsce",
 	"{used} of {cap}": "{used} z {cap}",
 	"Compare plans": "Porównaj plany",
 	"Upload limit by plan": "Limit przesyłania plików w zależności od planu",
 	"Storage by plan": "Przestrzeń dyskowa w zależności od planu",
 	"No limit": "Brak limitu",
-	"Files too large": {
-		one: "Plik za duży",
-		few: "Pliki za duże",
-		many: "Pliki za duże",
-		other: "Pliki za duże",
-	},
-	"There isn't enough room left on your {plan} plan for these files.": {
-		one: "Nie ma wystarczająco miejsca w twoim planie {plan} dla tego pliku.",
-		few: "Nie ma wystarczająco miejsca w twoim planie {plan} dla tych plików.",
-		many: "Nie ma wystarczająco miejsca w twoim planie {plan} dla tych plików.",
-		other: "Nie ma wystarczająco miejsca w twoim planie {plan} dla tych plików.",
-	},
-	"There isn't enough room left on this server for these files.": {
-		one: "Na tym serwerze nie ma wystarczającej ilości miejsca dla tego pliku.",
-		few: "Na tym serwerze nie ma wystarczającej ilości miejsca dla tych plików.",
-		many: "Na tym serwerze nie ma wystarczającej ilości miejsca dla tych plików.",
-		other: "Na tym serwerze nie ma wystarczającej ilości miejsca dla tych plików.",
-	},
-	"These files are over the {limit} upload limit on your {plan} plan.": {
-		one: "Ten plik przekracza limit {limit} w Twoim planie {plan}.",
-		few: "Te pliki przekraczają limit {limit} w Twoim planie {plan}.",
-		many: "Te pliki przekraczają limit {limit} w Twoim planie {plan}.",
-		other: "Te pliki przekraczają limit {limit} w Twoim planie {plan}.",
-	},
-	"These files are over this server's {limit} upload limit.": {
-		one: "Ten plik przekracza limit {limit} dla przesyłania na tym serwerze.",
-		few: "Te pliki przekraczają limit {limit} przesyłanych plików na tym serwerze.",
-		many: "Te pliki przekraczają limit {limit} przesyłanych plików na tym serwerze.",
-		other: "Te pliki przekraczają limit {limit} przesyłanych plików na tym serwerze.",
-	},
 	"No backlinks yet": "Brak linków zwrotnych",
 	"Failed to load notes.": "Nie udało się załadować notatek.",
 	"No notes in this folder.": "Brak notatek w tym folderze.",

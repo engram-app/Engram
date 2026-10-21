@@ -171,21 +171,22 @@ export default {
 		other: "До окончания бесплатного пробного периода осталось {count} дня.",
 	},
 	"Indexing budget": "Лимит индексации",
-	"{available} of {capacity} tokens left": "Осталось {available} из {capacity} токенов",
+	"{available} of {capacity} tokens left": "{available} из {capacity} токенов осталось",
 	"Refills {perDay} tokens a day. Full again on {date}.":
 		"Пополняет {perDay} токенов в день. Пополнение до {date}.",
 	"All tokens are available.": "Все токены доступны.",
 	"{count} notes have keyword search only, until {date}.": {
-		one: "{count} заметка поддерживает только поиск по ключевым словам, до {date}.",
-		few: "{count} заметки имеют только поиск по ключевым словам, до {date}.",
-		many: "{count} заметок имеют только поиск по ключевым словам, до {date}.",
-		other: "{count} Заметки поддерживают поиск по ключевым словам, но только до {date}.",
+		one: "{count} заметка доступны только через поиск по ключевым словам, до {date}.",
+		few: "{count} заметки доступны только через поиск по ключевым словам, до {date}.",
+		many: "{count} заметок доступны только через поиск по ключевым словам, до {date}.",
+		other: "{count}: Поиск по ключевым словам доступен только до {date}.",
 	},
 	"{count} notes have keyword search only, until the budget refills.": {
-		one: "{count} заметка поддерживает только поиск по ключевым словам, пока не будет пополнен лимит.",
-		few: "Для {count} заметок доступен только поиск по ключевым словам, пока не будет пополнен лимит.",
-		many: "{count} заметок доступны только для поиска по ключевым словам, пока не будет пополнен лимит.",
-		other: "{count}: Поиск по ключевым словам доступен только до пополнения бюджета.",
+		one: "{count} заметка доступны только через поиск по ключевым словам, пока не будет восстановлен лимит.",
+		few: "{count} заметки доступны только через поиск по ключевым словам, пока не будет восстановлен лимит.",
+		many: "{count} заметок доступны только через поиск по ключевым словам, пока не будет восстановлен лимит.",
+		other:
+			"{count} Заметки доступны только через поиск по ключевым словам, пока не будет восстановлен лимит.",
 	},
 	"Loading current connection…": "Загрузка текущего подключения…",
 	"Disconnected. Retry the new connection now.": "Отключено. Повторите подключение.",
@@ -1421,7 +1422,24 @@ export default {
 	"Executable files don't sync.": "Исполняемые файлы не синхронизируются.",
 	"Upload failed. Try again.": "Ошибка при отправке. Попробуйте еще раз.",
 	"{name}: {reason}": "{name}: {reason}",
+	"Files too large": "Файлы слишком большие",
 	"Not enough storage": "Недостаточно места",
+	"There isn't enough room left on your {plan} plan for this file.":
+		"На вашем плане {plan} недостаточно места для этого файла.",
+	"There isn't enough room left on your {plan} plan for these files.":
+		"На вашем плане {plan} недостаточно места для этих файлов.",
+	"There isn't enough room left on this server for this file.":
+		"На этом сервере недостаточно места для этого файла.",
+	"There isn't enough room left on this server for these files.":
+		"На этом сервере недостаточно места для этих файлов.",
+	"This file is over the {limit} upload limit on your {plan} plan.":
+		"Размер этого файла превышает лимит загрузки {limit} на вашем плане {plan}.",
+	"These files are over the {limit} upload limit on your {plan} plan.":
+		"Размер этих файлов превышает лимит загрузки {limit} на вашем плане {plan}.",
+	"This file is over this server's {limit} upload limit.":
+		"Размер этого файла превышает лимит загрузки {limit} для этого сервера.",
+	"These files are over this server's {limit} upload limit.":
+		"Размер этих файлов превышает лимит загрузки {limit} для этого сервера.",
 	"Storage used": "Используемое место",
 	"{used} of {cap}": "{used} из {cap}",
 	"Compare plans": "Сравнить тарифы",
@@ -1429,36 +1447,6 @@ export default {
 	"Storage by plan": "Объем хранилища по тарифу",
 	"No limit": "Без ограничений",
 	OK: "ОК",
-	"Files too large": {
-		one: "Файлы слишком большие",
-		few: "Файлы слишком большие",
-		many: "Файлы слишком большие",
-		other: "Файлы слишком большие",
-	},
-	"There isn't enough room left on your {plan} plan for these files.": {
-		one: "На вашем плане {plan} недостаточно места для этих файлов.",
-		few: "На вашем плане {plan} недостаточно места для этих файлов.",
-		many: "На вашем плане {plan} недостаточно места для этих файлов.",
-		other: "На вашем плане {plan} недостаточно места для этих файлов.",
-	},
-	"There isn't enough room left on this server for these files.": {
-		one: "На этом сервере недостаточно места для этих файлов.",
-		few: "На этом сервере недостаточно места для этих файлов.",
-		many: "На этом сервере недостаточно места для этих файлов.",
-		other: "На этом сервере недостаточно места для этих файлов.",
-	},
-	"These files are over the {limit} upload limit on your {plan} plan.": {
-		one: "Эти файлы превышают лимит загрузки в {limit} для вашего тарифного плана {plan}.",
-		few: "Эти файлы превышают лимит загрузки в {limit} для вашего тарифного плана {plan}.",
-		many: "Эти файлы превышают лимит загрузки в {limit} для вашего тарифного плана {plan}.",
-		other: "Эти файлы превышают лимит загрузки в {limit} для вашего тарифного плана {plan}.",
-	},
-	"These files are over this server's {limit} upload limit.": {
-		one: "Эти файлы превышают лимит загрузки в {limit} на этом сервере.",
-		few: "Эти файлы превышают лимит загрузки в {limit} на этом сервере.",
-		many: "Эти файлы превышают лимит загрузки в {limit} на этом сервере.",
-		other: "Эти файлы превышают лимит загрузки в {limit} на этом сервере.",
-	},
 	"No backlinks yet": "Обратных ссылок пока нет",
 	"Failed to load notes.": "Не удалось загрузить заметки.",
 	"No notes in this folder.": "В этой папке нет заметок.",

@@ -1308,7 +1308,24 @@ export default {
 	"Executable files don't sync.": "実行ファイルは同期されません。",
 	"Upload failed. Try again.": "アップロードに失敗しました。再試行してください。",
 	"{name}: {reason}": "{name}: {reason}",
+	"Files too large": "ファイルが大きすぎます",
 	"Not enough storage": "ストレージ容量が不足しています",
+	"There isn't enough room left on your {plan} plan for this file.":
+		"{plan}プランの空き容量が不足しています。",
+	"There isn't enough room left on your {plan} plan for these files.":
+		"{plan}プランの空き容量が不足しています。",
+	"There isn't enough room left on this server for this file.":
+		"このサーバーの空き容量が不足しています。",
+	"There isn't enough room left on this server for these files.":
+		"このサーバーの空き容量が不足しています。",
+	"This file is over the {limit} upload limit on your {plan} plan.":
+		"このファイルは、{plan}プランの{limit}のアップロード制限を超えています。",
+	"These files are over the {limit} upload limit on your {plan} plan.":
+		"これらのファイルは、{plan}プランの{limit}のアップロード制限を超えています。",
+	"This file is over this server's {limit} upload limit.":
+		"このファイルは、このサーバーの{limit}のアップロード制限を超えています。",
+	"These files are over this server's {limit} upload limit.":
+		"これらのファイルは、このサーバーの{limit}のアップロード制限を超えています。",
 	"Storage used": "使用済みストレージ",
 	"{used} of {cap}": "{used} / {cap}",
 	"Compare plans": "料金プランを比較",
@@ -1316,19 +1333,6 @@ export default {
 	"Storage by plan": "プランごとのストレージ容量",
 	"No limit": "制限なし",
 	OK: "了解",
-	"Files too large": { other: "ファイルが大きすぎます" },
-	"There isn't enough room left on your {plan} plan for these files.": {
-		other: "{plan}プランの空き容量が不足しています。",
-	},
-	"There isn't enough room left on this server for these files.": {
-		other: "このサーバーの空き容量が不足しています。",
-	},
-	"These files are over the {limit} upload limit on your {plan} plan.": {
-		other: "これらのファイルは、{plan}プランの{limit}のアップロード制限を超えています。",
-	},
-	"These files are over this server's {limit} upload limit.": {
-		other: "これらのファイルは、このサーバーのアップロード制限 {limit} を超えています。",
-	},
 	"No backlinks yet": "まだバックリンクはありません",
 	"Failed to load notes.": "ノートの読み込みに失敗しました。",
 	"No notes in this folder.": "このフォルダにはノートがありません。",

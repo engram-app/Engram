@@ -82,7 +82,7 @@ export function UploadLimitDialog({
 	billingEnabled,
 	onClose,
 }: Props) {
-	const { t, tn, renderedLocale } = useT();
+	const { t, renderedLocale } = useT();
 	const openBilling = useOpenBilling("paywall");
 	const fmt = (n: number) => formatBytes(n, intlLocale(renderedLocale));
 	const plan = t(TIER_NAMES[tier]);
@@ -106,45 +106,31 @@ export function UploadLimitDialog({
 	const showPlans =
 		billingEnabled && tiers.length > 1 && tiers.slice(1).some((x) => x.value !== undefined);
 
+	// One file or several, not a count: these sentences never show a number,
+	// so each wording is its own string rather than a plural.
+	const oneTooLarge = tooLarge.length === 1;
+	const oneNoRoom = noRoom.length === 1;
 	const title = sizeCase
-		? tn({ one: "File too large", other: "Files too large" }, tooLarge.length)
+		? oneTooLarge
+			? t("File too large")
+			: t("Files too large")
 		: t("Not enough storage");
 	const limit = current === null ? "" : fmt(current);
 	const roomDescription = billingEnabled
-		? tn(
-				{
-					one: "There isn't enough room left on your {plan} plan for this file.",
-					other: "There isn't enough room left on your {plan} plan for these files.",
-				},
-				noRoom.length,
-				{ plan },
-			)
-		: tn(
-				{
-					one: "There isn't enough room left on this server for this file.",
-					other: "There isn't enough room left on this server for these files.",
-				},
-				noRoom.length,
-			);
-	const description = sizeCase
-		? billingEnabled
-			? tn(
-					{
-						one: "This file is over the {limit} upload limit on your {plan} plan.",
-						other: "These files are over the {limit} upload limit on your {plan} plan.",
-					},
-					tooLarge.length,
-					{ limit, plan },
-				)
-			: tn(
-					{
-						one: "This file is over this server's {limit} upload limit.",
-						other: "These files are over this server's {limit} upload limit.",
-					},
-					tooLarge.length,
-					{ limit },
-				)
-		: roomDescription;
+		? oneNoRoom
+			? t("There isn't enough room left on your {plan} plan for this file.", { plan })
+			: t("There isn't enough room left on your {plan} plan for these files.", { plan })
+		: oneNoRoom
+			? t("There isn't enough room left on this server for this file.")
+			: t("There isn't enough room left on this server for these files.");
+	const sizeDescription = billingEnabled
+		? oneTooLarge
+			? t("This file is over the {limit} upload limit on your {plan} plan.", { limit, plan })
+			: t("These files are over the {limit} upload limit on your {plan} plan.", { limit, plan })
+		: oneTooLarge
+			? t("This file is over this server's {limit} upload limit.", { limit })
+			: t("These files are over this server's {limit} upload limit.", { limit });
+	const description = sizeCase ? sizeDescription : roomDescription;
 	const roomId = useId();
 	const Icon = sizeCase ? FileWarning : HardDrive;
 

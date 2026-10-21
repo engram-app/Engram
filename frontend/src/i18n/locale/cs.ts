@@ -165,21 +165,22 @@ export default {
 		other: "Zbývá {count} dní vaší bezplatné zkušební verze.",
 	},
 	"Indexing budget": "Limit indexování",
-	"{available} of {capacity} tokens left": "Zbývá {available} z {capacity} tokenů",
+	"{available} of {capacity} tokens left": "{available} z {capacity} tokenů zbývá",
 	"Refills {perDay} tokens a day. Full again on {date}.":
 		"Doplňuje {perDay} tokenů denně. Opět plné {date}.",
 	"All tokens are available.": "Všechny tokeny jsou k dispozici.",
 	"{count} notes have keyword search only, until {date}.": {
-		one: "{count} poznámka má pouze vyhledávání klíčových slov, do {date}.",
-		few: "{count} poznámky mají vyhledávání pouze podle klíčových slov, do {date}.",
-		many: "{count} Poznámky umožňují pouze vyhledávání podle klíčových slov, do {date}.",
-		other: "{count} poznámek má pouze vyhledávání podle klíčových slov, do {date}.",
+		one: "{count} poznámka je dostupná pouze pomocí vyhledávání klíčových slov, do {date}.",
+		few: "{count} poznámky jsou dostupné pouze pomocí vyhledávání klíčových slov, do {date}.",
+		many: "{count} Poznámky umožňují vyhledávání pouze podle klíčových slov, do {date}.",
+		other: "{count} poznámek je možné vyhledat pouze pomocí klíčových slov, do {date}.",
 	},
 	"{count} notes have keyword search only, until the budget refills.": {
-		one: "Pro jednu poznámku je vyhledávání klíčových slov dostupné pouze do vyčerpání kreditu.",
-		few: "{count} poznámky mají vyhledávání pouze podle klíčových slov, dokud se nevyčerpá limit.",
-		many: "{count} Poznámky umožňují vyhledávání podle klíčových slov, dokud se nevyčerpá limit.",
-		other: "{count} poznámek má vyhledávání pouze podle klíčových slov, dokud se nevyčerpá limit.",
+		one: "{count} poznámka je dostupná pouze pomocí vyhledávání klíčových slov, dokud se nevyčerpá limit.",
+		few: "{count} poznámky jsou dostupné pouze pomocí vyhledávání klíčových slov, dokud se nevyčerpá limit.",
+		many: "{count} Poznámky lze vyhledávat pouze pomocí klíčových slov, dokud se nevyčerpá limit.",
+		other:
+			"{count} poznámek je možné vyhledat pouze pomocí klíčových slov, dokud se nevyčerpá limit.",
 	},
 	"Loading current connection…": "Načítám aktuální připojení…",
 	"Disconnected. Retry the new connection now.": "Odpojeno. Zkuste znovu připojit.",
@@ -1400,43 +1401,30 @@ export default {
 	"Executable files don't sync.": "Spustitelné soubory se nesynchronizují.",
 	"Upload failed. Try again.": "Nahrání selhalo. Zkuste to znovu.",
 	"{name}: {reason}": "{name}: {reason}",
+	"Files too large": "Soubory jsou příliš velké",
 	"Not enough storage": "Nedostatek místa",
+	"There isn't enough room left on your {plan} plan for this file.":
+		"Na vašem plánu {plan} není dostatek místa pro tento soubor.",
+	"There isn't enough room left on your {plan} plan for these files.":
+		"Na vašem plánu {plan} není dostatek místa pro tyto soubory.",
+	"There isn't enough room left on this server for this file.":
+		"Na tomto serveru není dostatek místa pro tento soubor.",
+	"There isn't enough room left on this server for these files.":
+		"Na tomto serveru není dostatek místa pro tyto soubory.",
+	"This file is over the {limit} upload limit on your {plan} plan.":
+		"Tento soubor překračuje limit nahrávání {limit} ve vašem plánu {plan}.",
+	"These files are over the {limit} upload limit on your {plan} plan.":
+		"Tyto soubory překračují limit nahrávání {limit} ve vašem plánu {plan}.",
+	"This file is over this server's {limit} upload limit.":
+		"Tento soubor překračuje limit nahrávání {limit} tohoto serveru.",
+	"These files are over this server's {limit} upload limit.":
+		"Tyto soubory překračují limit nahrávání {limit} tohoto serveru.",
 	"Storage used": "Použité úložiště",
 	"{used} of {cap}": "{used} z {cap}",
 	"Compare plans": "Porovnat plány",
 	"Upload limit by plan": "Limit nahrávání podle plánu",
 	"Storage by plan": "Úložiště podle plánu",
 	"No limit": "Bez limitu",
-	"Files too large": {
-		one: "Soubor je příliš velký",
-		few: "Soubory jsou příliš velké",
-		many: "Soubory jsou příliš velké",
-		other: "Soubory jsou příliš velké",
-	},
-	"There isn't enough room left on your {plan} plan for these files.": {
-		one: "Na vašem {plan} tarifu nezbylo dost místa pro tento soubor.",
-		few: "Na vašem plánu {plan} už není dost místa pro tyto soubory.",
-		many: "Na vašem plánu {plan} nezbylo dost místa pro tyto soubory.",
-		other: "Na vašem plánu {plan} nezbylo dost místa pro tyto soubory.",
-	},
-	"There isn't enough room left on this server for these files.": {
-		one: "Na tomto serveru už není dostatek místa pro tento soubor.",
-		few: "Na tomto serveru už není dostatek místa pro tyto soubory.",
-		many: "Na tomto serveru už není dostatek místa pro tyto soubory.",
-		other: "Na tomto serveru už není dostatek místa pro tyto soubory.",
-	},
-	"These files are over the {limit} upload limit on your {plan} plan.": {
-		one: "Tento soubor překračuje limit {limit} pro váš tarif {plan}.",
-		few: "Tyto soubory překračují limit {limit} pro váš tarif {plan}.",
-		many: "Tyto soubory překračují limit {limit} pro váš tarif {plan}.",
-		other: "Tyto soubory překračují limit {limit} pro váš tarif {plan}.",
-	},
-	"These files are over this server's {limit} upload limit.": {
-		one: "Tento soubor překračuje limit {limit} pro nahrávání na tomto serveru.",
-		few: "Tyto soubory překračují limit {limit} pro nahrávání na tento server.",
-		many: "Tyto soubory překračují limit {limit} pro nahrávání na tento server.",
-		other: "Tyto soubory překračují limit {limit} pro nahrávání na tento server.",
-	},
 	"No backlinks yet": "Zatím žádné zpětné odkazy",
 	"Failed to load notes.": "Nepodařilo se načíst poznámky.",
 	"No notes in this folder.": "V této složce nejsou žádné poznámky.",

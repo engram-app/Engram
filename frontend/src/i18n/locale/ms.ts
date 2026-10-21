@@ -165,15 +165,16 @@ export default {
 		other: "{count} hari lagi untuk tempoh percubaan percuma anda.",
 	},
 	"Indexing budget": "Bajet pengindeksan",
-	"{available} of {capacity} tokens left": "{available} daripada {capacity} token yang tinggal",
+	"{available} of {capacity} tokens left": "{available} daripada {capacity} token tinggal",
 	"Refills {perDay} tokens a day. Full again on {date}.":
 		"Mengisi semula {perDay} token sehari. Penuh semula pada {date}.",
 	"All tokens are available.": "Semua token tersedia.",
 	"{count} notes have keyword search only, until {date}.": {
-		other: "{count} nota hanya mempunyai carian kata kunci, sehingga {date}.",
+		other: "{count} nota hanya boleh dicari menggunakan carian kata kunci, sehingga {date}.",
 	},
 	"{count} notes have keyword search only, until the budget refills.": {
-		other: "{count} nota hanya mempunyai carian kata kunci, sehingga bajet diisi semula.",
+		other:
+			"{count} nota hanya boleh dicari menggunakan carian kata kunci, sehingga bajet diisi semula.",
 	},
 	"Loading current connection…": "Memuatkan sambungan semasa…",
 	"Disconnected. Retry the new connection now.": "Tidak bersambung. Cuba sambung semula sekarang.",
@@ -1307,26 +1308,30 @@ export default {
 	"Executable files don't sync.": "Fail boleh laksana tidak akan disegerakkan.",
 	"Upload failed. Try again.": "Muat naik gagal. Cuba lagi.",
 	"{name}: {reason}": "{name}: {reason}",
+	"Files too large": "Fail terlalu besar",
 	"Not enough storage": "Kekurangan ruang penyimpanan",
+	"There isn't enough room left on your {plan} plan for this file.":
+		"Tidak cukup ruang yang tinggal dalam langganan {plan} anda untuk fail ini.",
+	"There isn't enough room left on your {plan} plan for these files.":
+		"Tidak cukup ruang yang tinggal dalam langganan {plan} anda untuk fail-fail ini.",
+	"There isn't enough room left on this server for this file.":
+		"Tidak cukup ruang yang tinggal pada pelayan ini untuk fail ini.",
+	"There isn't enough room left on this server for these files.":
+		"Tidak cukup ruang yang tinggal pada pelayan ini untuk fail-fail ini.",
+	"This file is over the {limit} upload limit on your {plan} plan.":
+		"Fail ini melebihi had muat naik {limit} dalam langganan {plan} anda.",
+	"These files are over the {limit} upload limit on your {plan} plan.":
+		"Fail-fail ini melebihi had muat naik {limit} dalam langganan {plan} anda.",
+	"This file is over this server's {limit} upload limit.":
+		"Fail ini melebihi had muat naik {limit} pelayan ini.",
+	"These files are over this server's {limit} upload limit.":
+		"Fail-fail ini melebihi had muat naik {limit} pelayan ini.",
 	"Storage used": "Ruang penyimpanan yang digunakan",
 	"{used} of {cap}": "{used} daripada {cap}",
 	"Compare plans": "Bandingkan pelan",
 	"Upload limit by plan": "Had muat naik mengikut pelan",
 	"Storage by plan": "Ruang simpanan mengikut pelan",
 	"No limit": "Tiada had",
-	"Files too large": { other: "Fail terlalu besar" },
-	"There isn't enough room left on your {plan} plan for these files.": {
-		other: "Tiada ruang yang cukup pada pelan {plan} anda untuk fail ini.",
-	},
-	"There isn't enough room left on this server for these files.": {
-		other: "Tidak cukup ruang di pelayan ini untuk fail ini.",
-	},
-	"These files are over the {limit} upload limit on your {plan} plan.": {
-		other: "Fail ini melebihi had muat naik {limit} pada langganan {plan} anda.",
-	},
-	"These files are over this server's {limit} upload limit.": {
-		other: "Fail-fail ini melebihi had muat naik {limit} pelayan ini.",
-	},
 	"No backlinks yet": "Tiada pautan balik setakat ini",
 	"Failed to load notes.": "Gagal memuat nota.",
 	"No notes in this folder.": "Tiada nota dalam folder ini.",

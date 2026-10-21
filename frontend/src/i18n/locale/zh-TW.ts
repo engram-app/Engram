@@ -1249,7 +1249,24 @@ export default {
 	"Executable files don't sync.": "可執行檔案不會同步。",
 	"Upload failed. Try again.": "上傳失敗。請重試。",
 	"{name}: {reason}": "{name}: {reason}",
+	"Files too large": "檔案過大",
 	"Not enough storage": "儲存空間不足",
+	"There isn't enough room left on your {plan} plan for this file.":
+		"您的 {plan} 方案剩餘空間不足，無法上傳此檔案。",
+	"There isn't enough room left on your {plan} plan for these files.":
+		"您的 {plan} 方案剩餘空間不足，無法上傳這些檔案。",
+	"There isn't enough room left on this server for this file.":
+		"此伺服器剩餘空間不足，無法上傳此檔案。",
+	"There isn't enough room left on this server for these files.":
+		"此伺服器剩餘空間不足，無法上傳這些檔案。",
+	"This file is over the {limit} upload limit on your {plan} plan.":
+		"此檔案超過您 {plan} 方案的 {limit} 上傳限制。",
+	"These files are over the {limit} upload limit on your {plan} plan.":
+		"這些檔案超過您 {plan} 方案的 {limit} 上傳限制。",
+	"This file is over this server's {limit} upload limit.":
+		"此檔案超過此伺服器的 {limit} 上傳限制。",
+	"These files are over this server's {limit} upload limit.":
+		"這些檔案超過此伺服器的 {limit} 上傳限制。",
 	"Storage used": "已使用的儲存空間",
 	"{used} of {cap}": "{used}，共 {cap}",
 	"Compare plans": "比較方案",
@@ -1257,19 +1274,6 @@ export default {
 	"Storage by plan": "各方案的儲存空間",
 	"No limit": "無限制",
 	OK: "確定",
-	"Files too large": { other: "檔案過大" },
-	"There isn't enough room left on your {plan} plan for these files.": {
-		other: "您的 {plan} 方案儲存空間已滿，無法上傳這些檔案。",
-	},
-	"There isn't enough room left on this server for these files.": {
-		other: "此伺服器空間已滿，無法儲存這些檔案。",
-	},
-	"These files are over the {limit} upload limit on your {plan} plan.": {
-		other: "這些檔案超過您 {plan} 方案的 {limit} 上傳限制。",
-	},
-	"These files are over this server's {limit} upload limit.": {
-		other: "這些檔案超過此伺服器的 {limit} 上傳限制。",
-	},
 	"No backlinks yet": "尚未有反向連結",
 	"Failed to load notes.": "載入筆記失敗。",
 	"No notes in this folder.": "此資料夾沒有筆記。",

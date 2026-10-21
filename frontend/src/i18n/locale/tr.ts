@@ -1313,7 +1313,24 @@ export default {
 	"Executable files don't sync.": "Çalıştırılabilir dosyalar senkronize edilmiyor.",
 	"Upload failed. Try again.": "Yükleme başarısız oldu. Lütfen tekrar deneyin.",
 	"{name}: {reason}": "{name}: {reason}",
+	"Files too large": "Dosyalar çok büyük",
 	"Not enough storage": "Yeterli depolama alanı yok",
+	"There isn't enough room left on your {plan} plan for this file.":
+		"Bu dosya için {plan} planınızda yeterli alan kalmadı.",
+	"There isn't enough room left on your {plan} plan for these files.":
+		"Bu dosyalar için {plan} planınızda yeterli alan kalmadı.",
+	"There isn't enough room left on this server for this file.":
+		"Bu dosya için bu sunucuda yeterli alan kalmadı.",
+	"There isn't enough room left on this server for these files.":
+		"Bu dosyalar için bu sunucuda yeterli alan kalmadı.",
+	"This file is over the {limit} upload limit on your {plan} plan.":
+		"Bu dosya, {plan} planınızdaki {limit} yükleme sınırını aştı.",
+	"These files are over the {limit} upload limit on your {plan} plan.":
+		"Bu dosyalar, {plan} planınızdaki {limit} yükleme sınırını aştı.",
+	"This file is over this server's {limit} upload limit.":
+		"Bu dosya, bu sunucunun {limit} yükleme sınırını aştı.",
+	"These files are over this server's {limit} upload limit.":
+		"Bu dosyalar, bu sunucunun {limit} yükleme sınırını aştı.",
 	"Storage used": "Kullanılan depolama alanı",
 	"{used} of {cap}": "{used}, {cap} içinde",
 	"Compare plans": "Planları karşılaştır",
@@ -1321,23 +1338,6 @@ export default {
 	"Storage by plan": "Plana göre depolama alanı",
 	"No limit": "Sınırlama yok",
 	OK: "Tamam",
-	"Files too large": { one: "Dosya çok büyük", other: "Dosyalar çok büyük" },
-	"There isn't enough room left on your {plan} plan for these files.": {
-		one: "{plan} planınızda bu dosya için yeterli alan kalmadı.",
-		other: "{plan} planınızda bu dosyalar için yeterli alan kalmadı.",
-	},
-	"There isn't enough room left on this server for these files.": {
-		one: "Bu dosyayı sunucuda yer yok.",
-		other: "Bu sunucuda bu dosyalar için yeterli alan kalmadı.",
-	},
-	"These files are over the {limit} upload limit on your {plan} plan.": {
-		one: "Bu dosya, {plan} planınızdaki {limit} yükleme sınırını aştı.",
-		other: "Bu dosyalar, {plan} planınızdaki {limit} yükleme sınırını aşıyor.",
-	},
-	"These files are over this server's {limit} upload limit.": {
-		one: "Bu dosya, bu sunucunun {limit} yükleme sınırı aşımındadır.",
-		other: "Bu dosyalar, sunucunun {limit} yükleme sınırı aşıyor.",
-	},
 	"No backlinks yet": "Henüz geri bağlantı yok",
 	"Failed to load notes.": "Notlar yüklenemedi.",
 	"No notes in this folder.": "Bu klasörde not yok.",

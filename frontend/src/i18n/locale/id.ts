@@ -164,16 +164,15 @@ export default {
 		other: "Sisa {count} hari dalam uji coba gratis Anda.",
 	},
 	"Indexing budget": "Kuota pengindeksan",
-	"{available} of {capacity} tokens left": "Tersisa {available} dari {capacity} token",
+	"{available} of {capacity} tokens left": "{available} dari {capacity} token tersisa",
 	"Refills {perDay} tokens a day. Full again on {date}.":
 		"Mengisi ulang {perDay} token per hari. Penuh kembali pada {date}.",
 	"All tokens are available.": "Semua token tersedia.",
 	"{count} notes have keyword search only, until {date}.": {
-		other: "{count} catatan hanya memiliki pencarian berdasarkan kata kunci, hingga {date}.",
+		other: "{count} catatan hanya dapat dicari dengan kata kunci, hingga {date}.",
 	},
 	"{count} notes have keyword search only, until the budget refills.": {
-		other:
-			"{count} catatan hanya memiliki pencarian berdasarkan kata kunci, sampai anggaran terisi kembali.",
+		other: "{count} catatan hanya dapat dicari dengan kata kunci, sampai anggaran terisi kembali.",
 	},
 	"Loading current connection…": "Memuat koneksi saat ini…",
 	"Disconnected. Retry the new connection now.": "Terputus. Coba sambungkan kembali sekarang.",
@@ -1305,26 +1304,31 @@ export default {
 	"Executable files don't sync.": "File yang dapat dieksekusi tidak disinkronkan.",
 	"Upload failed. Try again.": "Unggah gagal. Coba lagi.",
 	"{name}: {reason}": "{name}: {reason}",
+	"Files too large": "Berkas terlalu besar",
 	"Not enough storage": "Ruang penyimpanan tidak cukup",
+	"There isn't enough room left on your {plan} plan for this file.":
+		"Tidak ada cukup ruang tersisa di paket {plan} Anda untuk berkas ini.",
+	"There isn't enough room left on your {plan} plan for these files.":
+		"Tidak ada cukup ruang tersisa di paket {plan} Anda untuk berkas-berkas ini.",
+	"There isn't enough room left on this server for this file.":
+		"Tidak ada cukup ruang tersisa di server ini untuk berkas ini.",
+	"There isn't enough room left on this server for these files.":
+		"Tidak ada cukup ruang tersisa di server ini untuk berkas-berkas ini.",
+	"This file is over the {limit} upload limit on your {plan} plan.":
+		"Berkas ini melebihi batas unggah {limit} pada paket {plan} Anda.",
+	"These files are over the {limit} upload limit on your {plan} plan.":
+		"Berkas-berkas ini melebihi batas unggah {limit} pada paket {plan} Anda.",
+	"This file is over this server's {limit} upload limit.":
+		"Berkas ini melebihi batas unggah {limit} server ini.",
+	"These files are over this server's {limit} upload limit.":
+		"Berkas-berkas ini melebihi batas unggah {limit} server ini.",
 	"Storage used": "Ruang penyimpanan yang digunakan",
 	"{used} of {cap}": "{used} dari {cap}",
 	"Compare plans": "Bandingkan paket",
 	"Upload limit by plan": "Batas unggah per paket",
 	"Storage by plan": "Penyimpanan per paket",
 	"No limit": "Tanpa batas",
-	"Files too large": { other: "Berkas terlalu besar" },
-	"There isn't enough room left on your {plan} plan for these files.": {
-		other: "Tidak ada cukup ruang tersisa di paket {plan} Anda untuk file-file ini.",
-	},
-	"There isn't enough room left on this server for these files.": {
-		other: "Ruang penyimpanan di server ini tidak mencukupi untuk file-file ini.",
-	},
-	"These files are over the {limit} upload limit on your {plan} plan.": {
-		other: "File-file ini melebihi batas unggah {limit} pada paket {plan} Anda.",
-	},
-	"These files are over this server's {limit} upload limit.": {
-		other: "File-file ini melebihi batas unggah {limit} server ini.",
-	},
+	OK: "Oke",
 	"No backlinks yet": "Belum ada backlink",
 	"Failed to load notes.": "Gagal memuat catatan.",
 	"No notes in this folder.": "Tidak ada catatan di folder ini.",

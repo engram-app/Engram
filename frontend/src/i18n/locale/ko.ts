@@ -163,10 +163,10 @@ export default {
 		"하루 {perDay} 토큰을 충전합니다. {date}에 다시 가득 찹니다.",
 	"All tokens are available.": "모든 토큰이 사용 가능합니다.",
 	"{count} notes have keyword search only, until {date}.": {
-		other: "{count} 노트는 {date}까지 키워드 검색만 지원합니다.",
+		other: "{count}개의 노트는 {date}까지 키워드 검색만 지원합니다.",
 	},
 	"{count} notes have keyword search only, until the budget refills.": {
-		other: "{count} 노트는 예산이 충전될 때까지 키워드 검색만 지원합니다.",
+		other: "{count} 노트는 인덱싱 예산이 채워질 때까지 키워드 검색만 지원합니다.",
 	},
 	"Loading current connection…": "현재 연결 로딩 중…",
 	"Disconnected. Retry the new connection now.": "연결 해제됨. 지금 새로운 연결을 시도하세요.",
@@ -1288,7 +1288,24 @@ export default {
 	"Executable files don't sync.": "실행 파일은 동기화되지 않습니다.",
 	"Upload failed. Try again.": "업로드 실패. 다시 시도하세요.",
 	"{name}: {reason}": "{name}: {reason}",
+	"Files too large": "파일 크기가 너무 큽니다",
 	"Not enough storage": "저장 공간이 부족합니다",
+	"There isn't enough room left on your {plan} plan for this file.":
+		"{plan} 요금제에 이 파일을 저장할 공간이 부족합니다.",
+	"There isn't enough room left on your {plan} plan for these files.":
+		"{plan} 요금제에 이 파일들을 저장할 공간이 부족합니다.",
+	"There isn't enough room left on this server for this file.":
+		"이 서버에 이 파일을 저장할 공간이 부족합니다.",
+	"There isn't enough room left on this server for these files.":
+		"이 서버에 이 파일들을 저장할 공간이 부족합니다.",
+	"This file is over the {limit} upload limit on your {plan} plan.":
+		"이 파일은 {plan} 요금제의 {limit} 용량 제한을 초과합니다.",
+	"These files are over the {limit} upload limit on your {plan} plan.":
+		"이 파일들은 {plan} 요금제의 {limit} 용량 제한을 초과합니다.",
+	"This file is over this server's {limit} upload limit.":
+		"이 파일은 이 서버의 {limit} 용량 제한을 초과합니다.",
+	"These files are over this server's {limit} upload limit.":
+		"이 파일들은 이 서버의 {limit} 용량 제한을 초과합니다.",
 	"Storage used": "사용된 저장 공간",
 	"{used} of {cap}": "{used} / {cap}",
 	"Compare plans": "요금제 비교",
@@ -1296,19 +1313,6 @@ export default {
 	"Storage by plan": "요금제별 저장 공간",
 	"No limit": "제한 없음",
 	OK: "확인",
-	"Files too large": { other: "파일 크기가 너무 큽니다" },
-	"There isn't enough room left on your {plan} plan for these files.": {
-		other: "{plan} 플랜에 더 이상 공간이 부족합니다.",
-	},
-	"There isn't enough room left on this server for these files.": {
-		other: "이 서버에 더 이상 공간이 없습니다.",
-	},
-	"These files are over the {limit} upload limit on your {plan} plan.": {
-		other: "이 파일들은 {plan} 요금제에서 설정된 {limit} 용량 제한을 초과합니다.",
-	},
-	"These files are over this server's {limit} upload limit.": {
-		other: "이 파일들은 서버의 {limit} 업로드 제한을 초과합니다.",
-	},
 	"No backlinks yet": "아직 백링크가 없습니다",
 	"Failed to load notes.": "노트 불러오기 실패.",
 	"No notes in this folder.": "이 폴더에 노트가 없습니다.",

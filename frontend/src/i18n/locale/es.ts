@@ -168,19 +168,20 @@ export default {
 		other: "Quedan {count} días en tu prueba gratuita.",
 	},
 	"Indexing budget": "Presupuesto de indexación",
-	"{available} of {capacity} tokens left": "Te quedan {available} de {capacity} tokens",
+	"{available} of {capacity} tokens left": "{available} de {capacity} tokens restantes",
 	"Refills {perDay} tokens a day. Full again on {date}.":
 		"Recarga {perDay} tokens al día. Se recarga completamente el {date}.",
 	"All tokens are available.": "Todos los tokens están disponibles.",
 	"{count} notes have keyword search only, until {date}.": {
-		one: "{count} nota tiene búsqueda por palabras clave solo, hasta {date}.",
-		many: "{count} notas tienen solo búsqueda por palabra clave, hasta {date}.",
-		other: "{count} notas tienen solo búsqueda por palabra clave, hasta {date}.",
+		one: "{count} nota solo tiene búsqueda por palabra clave, hasta el {date}.",
+		many: "{count} notas solo con búsqueda por palabra clave, hasta {date}.",
+		other: "{count} notas solo tienen búsqueda por palabra clave, hasta el {date}.",
 	},
 	"{count} notes have keyword search only, until the budget refills.": {
-		one: "{count} nota tiene búsqueda por palabras clave, hasta que se recargue el crédito.",
-		many: "{count} notas tienen solo búsqueda por palabra clave, hasta que se recargue el presupuesto.",
-		other: "{count} notas tienen búsqueda por palabra clave, hasta que se recargue el crédito.",
+		one: "{count} nota solo se puede encontrar por búsqueda de palabras clave, hasta que se recargue el presupuesto.",
+		many: "{count} notas solo con búsqueda por palabra clave, hasta que se recargue el presupuesto.",
+		other:
+			"{count} notas solo se pueden buscar por palabra clave, hasta que se recargue el presupuesto.",
 	},
 	"Loading current connection…": "Cargando la conexión actual…",
 	"Disconnected. Retry the new connection now.": "Desconectado. Intenta conectar de nuevo.",
@@ -1369,7 +1370,24 @@ export default {
 	"Executable files don't sync.": "Los archivos ejecutables no se sincronizan.",
 	"Upload failed. Try again.": "Error al subir. Inténtalo de nuevo.",
 	"{name}: {reason}": "{name}: {reason}",
+	"Files too large": "Archivos demasiado grandes",
 	"Not enough storage": "Espacio de almacenamiento insuficiente",
+	"There isn't enough room left on your {plan} plan for this file.":
+		"No hay suficiente espacio restante en tu plan {plan} para este archivo.",
+	"There isn't enough room left on your {plan} plan for these files.":
+		"No hay suficiente espacio restante en tu plan {plan} para estos archivos.",
+	"There isn't enough room left on this server for this file.":
+		"No hay suficiente espacio restante en este servidor para este archivo.",
+	"There isn't enough room left on this server for these files.":
+		"No hay suficiente espacio restante en este servidor para estos archivos.",
+	"This file is over the {limit} upload limit on your {plan} plan.":
+		"Este archivo supera el límite de subida de {limit} de tu plan {plan}.",
+	"These files are over the {limit} upload limit on your {plan} plan.":
+		"Estos archivos superan el límite de subida de {limit} de tu plan {plan}.",
+	"This file is over this server's {limit} upload limit.":
+		"Este archivo supera el límite de subida de {limit} de este servidor.",
+	"These files are over this server's {limit} upload limit.":
+		"Estos archivos superan el límite de subida de {limit} de este servidor.",
 	"Storage used": "Espacio de almacenamiento utilizado",
 	"{used} of {cap}": "{used} de {cap}",
 	"Compare plans": "Comparar planes",
@@ -1377,31 +1395,6 @@ export default {
 	"Storage by plan": "Almacenamiento por plan",
 	"No limit": "Sin límite",
 	OK: "Aceptar",
-	"Files too large": {
-		one: "Archivo demasiado grande",
-		many: "Archivos demasiado grandes",
-		other: "Archivos demasiado grandes",
-	},
-	"There isn't enough room left on your {plan} plan for these files.": {
-		one: "No hay suficiente espacio en tu plan {plan} para este archivo.",
-		many: "No hay suficiente espacio en tu plan {plan} para estos archivos.",
-		other: "No hay suficiente espacio en tu plan {plan} para estos archivos.",
-	},
-	"There isn't enough room left on this server for these files.": {
-		one: "No queda espacio suficiente en este servidor para este archivo.",
-		many: "No queda suficiente espacio en este servidor para estos archivos.",
-		other: "No queda suficiente espacio en este servidor para estos archivos.",
-	},
-	"These files are over the {limit} upload limit on your {plan} plan.": {
-		one: "Este archivo supera el límite de {limit} en tu plan {plan}.",
-		many: "Estos archivos superan el límite de {limit} en tu plan {plan}.",
-		other: "Estos archivos superan el límite de {limit} en tu plan {plan}.",
-	},
-	"These files are over this server's {limit} upload limit.": {
-		one: "Este archivo supera el límite de {limit} de carga de este servidor.",
-		many: "Estos archivos superan el límite de {limit} de carga de este servidor.",
-		other: "Estos archivos superan el límite de {limit} de carga de este servidor.",
-	},
 	"No backlinks yet": "Aún no hay enlaces entrantes",
 	"Failed to load notes.": "No se pudieron cargar las notas.",
 	"No notes in this folder.": "No hay notas en esta carpeta.",

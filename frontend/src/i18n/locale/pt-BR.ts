@@ -1362,38 +1362,30 @@ export default {
 	"Executable files don't sync.": "Arquivos executáveis não são sincronizados.",
 	"Upload failed. Try again.": "Envio falhou. Tente novamente.",
 	"{name}: {reason}": "{name}: {reason}",
+	"Files too large": "Arquivos muito grandes",
 	"Not enough storage": "Espaço de armazenamento insuficiente",
+	"There isn't enough room left on your {plan} plan for this file.":
+		"Não há espaço suficiente no seu plano {plan} para este arquivo.",
+	"There isn't enough room left on your {plan} plan for these files.":
+		"Não há espaço suficiente no seu plano {plan} para estes arquivos.",
+	"There isn't enough room left on this server for this file.":
+		"Não há espaço suficiente neste servidor para este arquivo.",
+	"There isn't enough room left on this server for these files.":
+		"Não há espaço suficiente neste servidor para estes arquivos.",
+	"This file is over the {limit} upload limit on your {plan} plan.":
+		"Este arquivo excede o limite de upload de {limit} do seu plano {plan}.",
+	"These files are over the {limit} upload limit on your {plan} plan.":
+		"Estes arquivos excedem o limite de upload de {limit} do seu plano {plan}.",
+	"This file is over this server's {limit} upload limit.":
+		"Este arquivo excede o limite de upload de {limit} deste servidor.",
+	"These files are over this server's {limit} upload limit.":
+		"Estes arquivos excedem o limite de upload de {limit} deste servidor.",
 	"Storage used": "Espaço de armazenamento utilizado",
 	"{used} of {cap}": "{used} de {cap}",
 	"Compare plans": "Compare os planos",
 	"Upload limit by plan": "Limite de upload por plano",
 	"Storage by plan": "Armazenamento por plano",
 	"No limit": "Sem limite",
-	"Files too large": {
-		one: "Arquivos muito grandes",
-		many: "Arquivos muito grandes",
-		other: "Arquivos muito grandes",
-	},
-	"There isn't enough room left on your {plan} plan for these files.": {
-		one: "Não há espaço suficiente no seu plano {plan} para esses arquivos.",
-		many: "Não há espaço suficiente no seu plano {plan} para esses arquivos.",
-		other: "Não há espaço suficiente no seu plano {plan} para esses arquivos.",
-	},
-	"There isn't enough room left on this server for these files.": {
-		one: "Não há espaço suficiente neste servidor para esses arquivos.",
-		many: "Não há espaço suficiente neste servidor para esses arquivos.",
-		other: "Não há espaço suficiente neste servidor para esses arquivos.",
-	},
-	"These files are over the {limit} upload limit on your {plan} plan.": {
-		one: "Esses arquivos excedem o limite de {limit} no seu plano {plan}.",
-		many: "Esses arquivos excedem o limite de {limit} no seu plano {plan}.",
-		other: "Esses arquivos excedem o limite de {limit} no seu plano {plan}.",
-	},
-	"These files are over this server's {limit} upload limit.": {
-		one: "Esses arquivos excedem o limite de {limit} para uploads neste servidor.",
-		many: "Esses arquivos excedem o limite de {limit} para uploads neste servidor.",
-		other: "Esses arquivos excedem o limite de {limit} para uploads neste servidor.",
-	},
 	"No backlinks yet": "Ainda não há links inversos",
 	"Failed to load notes.": "Falha ao carregar as notas.",
 	"No notes in this folder.": "Não há notas nesta pasta.",

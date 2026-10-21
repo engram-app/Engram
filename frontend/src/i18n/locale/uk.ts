@@ -169,21 +169,22 @@ export default {
 		other: "До кінця безкоштовного пробного періоду залишилося {count} дні.",
 	},
 	"Indexing budget": "Обсяг індексування",
-	"{available} of {capacity} tokens left": "Залишилося {available} з {capacity} токенів",
+	"{available} of {capacity} tokens left": "{available} з {capacity} токенів залишилося",
 	"Refills {perDay} tokens a day. Full again on {date}.":
 		"Поповнює {perDay} токенів на день. Поповнення відбудеться знову {date}.",
 	"All tokens are available.": "Усі токени доступні.",
 	"{count} notes have keyword search only, until {date}.": {
-		one: "{count} замітка має лише пошук за ключовими словами, до {date}.",
-		few: "{count} замітки мають лише пошук за ключовими словами, до {date}.",
-		many: "{count} заміток мають лише пошук за ключовими словами, до {date}.",
-		other: "{count} Замітки мають лише пошук за ключовими словами, до {date}.",
+		one: "{count} замітка доступна лише за ключовими словами, до {date}.",
+		few: "{count} замітки доступні лише через пошук за ключовими словами, до {date}.",
+		many: "{count} заміток доступні лише через пошук за ключовими словами, до {date}.",
+		other: "{count} Замітки мають лише пошук за ключовими словами до {date}.",
 	},
 	"{count} notes have keyword search only, until the budget refills.": {
-		one: "{count} замітка має лише пошук за ключовими словами, поки не буде відновлено бюджет.",
-		few: "Для {count} заміток доступний лише пошук за ключовими словами, поки не буде відновлено бюджет.",
-		many: "{count} заміток мають лише пошук за ключовими словами, поки не буде відновлено бюджет.",
-		other: "{count} Замітки мають лише пошук за ключовими словами, поки не буде відновлено бюджет.",
+		one: "{count} замітка доступна лише за ключовими словами, доки не буде відновлено ліміт.",
+		few: "{count} замітки доступні лише за ключовими словами, доки не буде відновлено ліміт.",
+		many: "{count} заміток доступні лише через пошук за ключовими словами, доки не буде відновлено ліміт.",
+		other:
+			"{count} Замітки доступні лише через пошук за ключовими словами, доки не буде відновлено ліміт.",
 	},
 	"Loading current connection…": "Завантаження поточного з'єднання…",
 	"Disconnected. Retry the new connection now.": "Відключено. Спробуйте повторно підключитися.",
@@ -1415,43 +1416,30 @@ export default {
 	"Executable files don't sync.": "Виконані файли не синхронізуються.",
 	"Upload failed. Try again.": "Помилка завантаження. Спробуйте ще раз.",
 	"{name}: {reason}": "{name}: {reason}",
+	"Files too large": "Файли занадто великі",
 	"Not enough storage": "Недостатньо місця для зберігання",
+	"There isn't enough room left on your {plan} plan for this file.":
+		"Недостатньо місця у вашому плані {plan} для цього файлу.",
+	"There isn't enough room left on your {plan} plan for these files.":
+		"Недостатньо місця у вашому плані {plan} для цих файлів.",
+	"There isn't enough room left on this server for this file.":
+		"Недостатньо місця на цьому сервері для цього файлу.",
+	"There isn't enough room left on this server for these files.":
+		"Недостатньо місця на цьому сервері для цих файлів.",
+	"This file is over the {limit} upload limit on your {plan} plan.":
+		"Цей файл перевищує ліміт завантаження {limit} у вашому плані {plan}.",
+	"These files are over the {limit} upload limit on your {plan} plan.":
+		"Ці файли перевищують ліміт завантаження {limit} у вашому плані {plan}.",
+	"This file is over this server's {limit} upload limit.":
+		"Цей файл перевищує ліміт завантаження {limit} для цього сервера.",
+	"These files are over this server's {limit} upload limit.":
+		"Ці файли перевищують ліміт завантаження {limit} для цього сервера.",
 	"Storage used": "Використано місце для зберігання",
 	"{used} of {cap}": "{used} з {cap}",
 	"Compare plans": "Порівняти плани",
 	"Upload limit by plan": "Обмеження завантаження за планом",
 	"Storage by plan": "Обсяг пам'яті за планом",
 	"No limit": "Без обмежень",
-	"Files too large": {
-		one: "Файли занадто великі",
-		few: "Файли занадто великі",
-		many: "Файли занадто великі",
-		other: "Файли занадто великі",
-	},
-	"There isn't enough room left on your {plan} plan for these files.": {
-		one: "На вашому плані {plan} недостатньо місця для цих файлів.",
-		few: "На вашому плані {plan} недостатньо місця для цих файлів.",
-		many: "На вашому плані {plan} недостатньо місця для цих файлів.",
-		other: "На вашому плані {plan} недостатньо місця для цих файлів.",
-	},
-	"There isn't enough room left on this server for these files.": {
-		one: "На цьому сервері недостатньо місця для цих файлів.",
-		few: "На цьому сервері недостатньо місця для цих файлів.",
-		many: "На цьому сервері недостатньо місця для цих файлів.",
-		other: "На цьому сервері недостатньо місця для цих файлів.",
-	},
-	"These files are over the {limit} upload limit on your {plan} plan.": {
-		one: "Ці файли перевищують ліміт завантаження у {limit} на вашому плані {plan}.",
-		few: "Ці файли перевищують ліміт завантаження у {limit} для вашого плану {plan}.",
-		many: "Ці файли перевищують ліміт завантаження у {limit} для вашого плану {plan}.",
-		other: "Ці файли перевищують ліміт завантаження у {limit} на вашому плані {plan}.",
-	},
-	"These files are over this server's {limit} upload limit.": {
-		one: "Ці файли перевищують ліміт завантаження {limit} на цьому сервері.",
-		few: "Ці файли перевищують ліміт завантаження {limit} на цьому сервері.",
-		many: "Ці файли перевищують ліміт завантаження {limit} на цьому сервері.",
-		other: "Ці файли перевищують ліміт завантаження {limit} на цьому сервері.",
-	},
 	"No backlinks yet": "Поки немає зворотних посилань",
 	"Failed to load notes.": "Не вдалося завантажити заміток.",
 	"No notes in this folder.": "У цій папці немає заміток.",

@@ -169,17 +169,18 @@ export default {
 		other: "Noch {count} Tage in deiner kostenlosen Testphase.",
 	},
 	"Indexing budget": "Indexierungsbudget",
-	"{available} of {capacity} tokens left": "{available} von {capacity} Token übrig",
+	"{available} of {capacity} tokens left": "{available} von {capacity} Tokens übrig",
 	"Refills {perDay} tokens a day. Full again on {date}.":
 		"Füllt {perDay} Token pro Tag auf. Wieder voll am {date}.",
 	"All tokens are available.": "Alle Token sind verfügbar.",
 	"{count} notes have keyword search only, until {date}.": {
-		one: "{count} Notiz hat nur Stichwortsuche, bis {date}.",
-		other: "{count} Notizen haben nur eine Stichwortsuche, bis {date}.",
+		one: "{count} Notiz ist nur über die Stichwortsuche verfügbar, bis {date}.",
+		other: "{count} Notizen sind nur über die Stichwortsuche verfügbar, bis zum {date}.",
 	},
 	"{count} notes have keyword search only, until the budget refills.": {
-		one: "Eine Notiz hat nur eine Stichwortsuche, bis das Guthaben wieder aufgefüllt ist.",
-		other: "{count} Notizen haben nur eine Stichwortsuche, bis das Guthaben wieder aufgefüllt ist.",
+		one: "{count} Notiz ist nur über die Stichwortsuche verfügbar, bis das Budget aufgefüllt ist.",
+		other:
+			"{count} Notizen sind nur über die Stichwortsuche verfügbar, bis das Budget aufgefüllt ist.",
 	},
 	"Loading current connection…": "Verbindung wird aufgebaut…",
 	"Disconnected. Retry the new connection now.":
@@ -1346,26 +1347,30 @@ export default {
 	"Executable files don't sync.": "Ausführbare Dateien werden nicht synchronisiert.",
 	"Upload failed. Try again.": "Upload fehlgeschlagen. Versuche es erneut.",
 	"{name}: {reason}": "{name}: {reason}",
+	"Files too large": "Dateien zu groß",
 	"Not enough storage": "Nicht genügend Speicherplatz",
+	"There isn't enough room left on your {plan} plan for this file.":
+		"Es ist nicht genügend Speicherplatz auf deinem {plan}-Abonnement für diese Datei.",
+	"There isn't enough room left on your {plan} plan for these files.":
+		"Es ist nicht genügend Speicherplatz auf deinem {plan}-Abonnement für diese Dateien.",
+	"There isn't enough room left on this server for this file.":
+		"Es ist nicht genügend Speicherplatz auf diesem Server für diese Datei.",
+	"There isn't enough room left on this server for these files.":
+		"Es ist nicht genügend Speicherplatz auf diesem Server für diese Dateien.",
+	"This file is over the {limit} upload limit on your {plan} plan.":
+		"Diese Datei überschreitet die Upload-Grenze von {limit} in deinem {plan}-Abonnement.",
+	"These files are over the {limit} upload limit on your {plan} plan.":
+		"Diese Dateien überschreiten die Upload-Grenze von {limit} in deinem {plan}-Abonnement.",
+	"This file is over this server's {limit} upload limit.":
+		"Diese Datei überschreitet die Upload-Grenze von {limit} auf diesem Server.",
+	"These files are over this server's {limit} upload limit.":
+		"Diese Dateien überschreiten die Upload-Grenze von {limit} auf diesem Server.",
 	"Storage used": "Speicherplatz verwendet",
 	"{used} of {cap}": "{used} von {cap}",
 	"Compare plans": "Pläne vergleichen",
 	"Upload limit by plan": "Upload-Limit pro Plan",
 	"Storage by plan": "Speicherplatz pro Plan",
 	"No limit": "Keine Begrenzung",
-	"Files too large": { one: "Datei zu groß", other: "Dateien zu groß" },
-	"There isn't enough room left on your {plan} plan for these files.": {
-		one: "Es ist nicht mehr genug Speicherplatz auf deinem {plan}-Abonnement für diese Datei.",
-		other: "Es ist nicht mehr genug Speicherplatz auf deinem {plan}-Abonnement für diese Dateien.",
-	},
-	"There isn't enough room left on this server for these files.": {
-		one: "Auf diesem Server ist nicht mehr genügend Speicherplatz für diese Datei.",
-		other: "Auf diesem Server ist nicht mehr genügend Speicherplatz für diese Dateien.",
-	},
-	"These files are over this server's {limit} upload limit.": {
-		one: "Diese Datei überschreitet die {limit} Upload-Größenbeschränkung dieses Servers.",
-		other: "Diese Dateien überschreiten die Upload-Grenze von {limit} für diesen Server.",
-	},
 	"No backlinks yet": "Noch keine Rückverweise",
 	"Failed to load notes.": "Fehler beim Laden der Notizen.",
 	"No notes in this folder.": "Keine Notizen in diesem Ordner.",

@@ -160,15 +160,15 @@ export default {
 		other: "Còn {count} ngày trong thời gian dùng thử miễn phí của bạn.",
 	},
 	"Indexing budget": "Ngân sách lập chỉ mục",
-	"{available} of {capacity} tokens left": "Còn {available} trong số {capacity} token",
+	"{available} of {capacity} tokens left": "{available} trong {capacity} token còn lại",
 	"Refills {perDay} tokens a day. Full again on {date}.":
 		"Tái nạp {perDay} token mỗi ngày. Đủ token lại vào lúc {date}.",
 	"All tokens are available.": "Tất cả mã thông báo đều khả dụng.",
 	"{count} notes have keyword search only, until {date}.": {
-		other: "{count} ghi chú chỉ hỗ trợ tìm kiếm theo từ khóa, cho đến {date}.",
+		other: "{count} ghi chú chỉ tìm kiếm theo từ khóa, đến {date}.",
 	},
 	"{count} notes have keyword search only, until the budget refills.": {
-		other: "{count} ghi chú chỉ có tìm kiếm theo từ khóa, cho đến khi tài khoản được nạp lại.",
+		other: "{count} ghi chú chỉ tìm kiếm theo từ khóa, cho đến khi hết ngân sách.",
 	},
 	"Loading current connection…": "Đang tải kết nối hiện tại…",
 	"Disconnected. Retry the new connection now.": "Đã ngắt kết nối. Thử kết nối mới ngay bây giờ.",
@@ -1304,26 +1304,30 @@ export default {
 	"Executable files don't sync.": "Các tệp thực thi không được đồng bộ hóa.",
 	"Upload failed. Try again.": "Tải lên thất bại. Thử lại.",
 	"{name}: {reason}": "{name}: {reason}",
+	"Files too large": "Tệp quá lớn",
 	"Not enough storage": "Không đủ dung lượng",
+	"There isn't enough room left on your {plan} plan for this file.":
+		"Không đủ dung lượng còn lại trong gói {plan} của bạn cho tệp này.",
+	"There isn't enough room left on your {plan} plan for these files.":
+		"Không đủ dung lượng còn lại trong gói {plan} của bạn cho các tệp này.",
+	"There isn't enough room left on this server for this file.":
+		"Không đủ dung lượng còn lại trên máy chủ này cho tệp này.",
+	"There isn't enough room left on this server for these files.":
+		"Không đủ dung lượng còn lại trên máy chủ này cho các tệp này.",
+	"This file is over the {limit} upload limit on your {plan} plan.":
+		"Tệp này vượt quá giới hạn tải lên {limit} của gói {plan} của bạn.",
+	"These files are over the {limit} upload limit on your {plan} plan.":
+		"Các tệp này vượt quá giới hạn tải lên {limit} của gói {plan} của bạn.",
+	"This file is over this server's {limit} upload limit.":
+		"Tệp này vượt quá giới hạn tải lên {limit} của máy chủ này.",
+	"These files are over this server's {limit} upload limit.":
+		"Các tệp này vượt quá giới hạn tải lên {limit} của máy chủ này.",
 	"Storage used": "Dung lượng đã sử dụng",
 	"{used} of {cap}": "{used} trong {cap}",
 	"Compare plans": "So sánh các gói",
 	"Upload limit by plan": "Giới hạn tải lên theo gói",
 	"Storage by plan": "Dung lượng lưu trữ theo gói",
 	"No limit": "Không giới hạn",
-	"Files too large": { other: "Tệp quá lớn" },
-	"There isn't enough room left on your {plan} plan for these files.": {
-		other: "Không còn đủ dung lượng trên gói {plan} của bạn cho các tệp này.",
-	},
-	"There isn't enough room left on this server for these files.": {
-		other: "Không đủ dung lượng trên máy chủ này cho các tệp này.",
-	},
-	"These files are over the {limit} upload limit on your {plan} plan.": {
-		other: "Các tệp này vượt quá giới hạn tải lên {limit} của gói {plan} của bạn.",
-	},
-	"These files are over this server's {limit} upload limit.": {
-		other: "Các tệp này vượt quá giới hạn tải lên {limit} của máy chủ này.",
-	},
 	"No backlinks yet": "Chưa có liên kết đến",
 	"Failed to load notes.": "Không thể tải ghi chú.",
 	"No notes in this folder.": "Không có ghi chú nào trong thư mục này.",
