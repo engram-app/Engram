@@ -55,14 +55,44 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Every input reaches the shell through env: and is quoted, never pasted
+      # into `run:` (this runner step holds the Clerk secret).
+      - name: Validate inputs
+        env:
+          API: ${{ inputs.api }}
+          DURATION: ${{ inputs.duration }}
+          STEADY: ${{ inputs.steady }}
+          BURST: ${{ inputs.burst }}
+          BURST_AT: ${{ inputs.burst_at }}
+          PURGE_AT: ${{ inputs.purge_at }}
+          PLUGIN_REF: ${{ inputs.plugin_ref }}
+        run: |
+          for v in DURATION BURST_AT PURGE_AT; do
+            [[ "${!v}" =~ ^[0-9]{1,6}$ ]] || { echo "::error::$v must be an integer"; exit 1; }
+          done
+          for v in STEADY BURST; do
+            [[ "${!v}" =~ ^[0-9]{1,3}(\.[0-9]{1,2})?$ ]] || { echo "::error::$v must be a number"; exit 1; }
+          done
+          [[ "$PLUGIN_REF" =~ ^[A-Za-z0-9._/-]{1,100}$ ]] || { echo "::error::bad plugin_ref"; exit 1; }
+          [[ "$API" =~ ^https?://[A-Za-z0-9.:-]+(/[A-Za-z0-9._/-]*)?$ ]] || { echo "::error::bad api URL"; exit 1; }
+          # sim.py also refuses any host outside its staging allowlist.
+
       - name: Checkout plugin
+        env:
+          PLUGIN_REF: ${{ inputs.plugin_ref }}
         run: |
           rm -rf plugin-src
-          git clone --depth=1 --branch "${{ inputs.plugin_ref }}" https://github.com/engram-app/Engram-obsidian.git plugin-src
+          git clone --depth=1 --branch "$PLUGIN_REF" https://github.com/engram-app/Engram-obsidian.git plugin-src
 
       - name: Install deps
+        env:
+          BUN_VERSION: "1.3.11"
         run: |
-          if [ ! -x "$HOME/.bun/bin/bun" ]; then curl -fsSL https://bun.sh/install | bash; fi
+          # Pinned: a persistent $HOME would otherwise keep whatever version
+          # an unpinned install fetched first.
+          if [ "$("$HOME/.bun/bin/bun" --version 2>/dev/null)" != "$BUN_VERSION" ]; then
+            curl -fsSL https://bun.sh/install | bash -s "bun-v$BUN_VERSION"
+          fi
           export PATH="$HOME/.bun/bin:$PATH"
           (cd plugin-src && bun install --frozen-lockfile --registry http://10.0.20.214:4873)
           python3 -m venv .venv-load
@@ -72,12 +102,18 @@ jobs:
         env:
           STAGING_CLERK_SECRET_KEY: ${{ secrets.STAGING_CLERK_SECRET_KEY }}
           ENGRAM_PLUGIN_SRC: ${{ github.workspace }}/plugin-src
+          API: ${{ inputs.api }}
+          DURATION: ${{ inputs.duration }}
+          STEADY: ${{ inputs.steady }}
+          BURST: ${{ inputs.burst }}
+          BURST_AT: ${{ inputs.burst_at }}
+          PURGE_AT: ${{ inputs.purge_at }}
         run: |
           export PATH="$HOME/.bun/bin:$PATH"
-          .venv-load/bin/python e2e/load/sim.py --api "${{ inputs.api }}" \
-            --duration "${{ inputs.duration }}" --steady "${{ inputs.steady }}" \
-            --burst "${{ inputs.burst }}" --burst-at "${{ inputs.burst_at }}" \
-            --purge-at "${{ inputs.purge_at }}" --out load-out
+          .venv-load/bin/python e2e/load/sim.py --api "$API" \
+            --duration "$DURATION" --steady "$STEADY" \
+            --burst "$BURST" --burst-at "$BURST_AT" \
+            --purge-at "$PURGE_AT" --out load-out
           cat load-out/summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload results
@@ -85,5 +121,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: staging-load-${{ github.run_id }}
-          path: load-out/
+          # sim.py keeps the CRDT config (live API keys) out of load-out/;
+          # the exclusion is the second layer, since this repo is public.
+          path: |
+            load-out/
+            !load-out/crdt_cfg.json
           retention-days: 30

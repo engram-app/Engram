@@ -23,6 +23,8 @@ See e2e/load/README.md for the one-time limit grant and the spend guard.
 from __future__ import annotations
 
 import argparse
+import atexit
+import contextlib
 import base64
 import json
 import math
@@ -30,6 +32,7 @@ import os
 import random
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -45,6 +48,7 @@ import requests  # noqa: E402
 from websockets.sync.client import connect as ws_connect  # noqa: E402
 
 from helpers.clerk import ClerkClient  # noqa: E402
+from load.guards import SpendGuard, check_clerk_key, check_target  # noqa: E402
 from helpers.clerk_auth import ClerkAuth  # noqa: E402
 
 # --------------------------------------------------------------------------
@@ -366,6 +370,7 @@ def provision(acct: Account, clerk: ClerkClient, run_id: str) -> None:
     acct.user_id = (
         acct.s(vault=False).get(f"{acct.api}/me", timeout=30).json()["user"]["id"]
     )
+    revoke_device_families(acct, clerk)  # families a crashed earlier run left behind
     # OAuth device family for refresh rotation. /auth/device* shares a
     # 10/min per-IP bucket (rate_limit_auth), so pace and retry.
     d = post_retry(
@@ -391,6 +396,20 @@ def provision(acct: Account, clerk: ClerkClient, run_id: str) -> None:
         acct.refresh = t.get("refresh_token", "")
 
 
+def revoke_device_families(acct: Account, clerk: ClerkClient) -> int:
+    """Revoke every Obsidian device family on the account (the sim mints one per run)."""
+    j = requests.Session()
+    j.auth = ClerkAuth(clerk, acct.clerk_id)
+    n = 0
+    r = j.get(f"{acct.api}/connections", timeout=30)
+    for c in r.json() if r.ok else []:
+        if c.get("kind") == "obsidian" and c.get("family_id"):
+            n += j.delete(
+                f"{acct.api}/connections/device/{c['family_id']}", timeout=30
+            ).ok
+    return n
+
+
 def post_retry(
     sess: requests.Session, url: str, payload: dict, timeout: int = 60, tries: int = 12
 ) -> requests.Response:
@@ -402,8 +421,8 @@ def post_retry(
     return r
 
 
-def seed(acct: Account, rec: Recorder) -> int:
-    """Idempotent: writes only paths the manifest lacks. Returns est. embed tokens written."""
+def plan_seed(acct: Account) -> tuple[list, list, int]:
+    """What the manifest lacks: (notes todo, attachments todo, est. embed tokens)."""
     s = acct.s()
     man = s.get(f"{acct.api}/sync/manifest", timeout=120).json()
     have = {n.get("path") for n in man.get("notes", [])}
@@ -428,12 +447,38 @@ def seed(acct: Account, rec: Recorder) -> int:
         for k in range(5):
             want.pop(f"Churn/F1/m{k}.md", None)
         acct.folder_flip = True
-    todo = [(p, i, b) for p, (i, b) in want.items() if p not in have]
-    tokens = 0
+    todo = [
+        (p, b if b is not None else note_body(acct.idx, i, acct.n_notes))
+        for p, (i, b) in want.items()
+        if p not in have
+    ]
+    atts = [
+        k
+        for k in range(n_attachments(acct.n_notes))
+        if f"Attachments/a{k:03d}.png" not in have_att
+    ]
+    return todo, atts, sum(est_tokens(b) for _, b in todo)
+
+
+def seed(
+    acct: Account, rec: Recorder, guard: SpendGuard, plan: tuple | None = None
+) -> int:
+    """Idempotent: writes only what the manifest lacks, each note only if the
+    spend guard has room for it. Returns est. embed tokens written."""
+    s = acct.s()
+    todo, atts, _ = plan or plan_seed(acct)
 
     def put(item):
-        p, i, b = item
-        body = b if b is not None else note_body(acct.idx, i, acct.n_notes)
+        p, body = item
+        if not guard.take(est_tokens(body)):
+            rec.rec(
+                "seed_note",
+                0,
+                "spend_cap",
+                False,
+                "spend guard: cap reached, not written",
+            )
+            return 0
         t0 = time.time()
         r = post_retry(
             s, f"{acct.api}/notes", {"path": p, "content": body, "mtime": time.time()}
@@ -449,10 +494,8 @@ def seed(acct: Account, rec: Recorder) -> int:
 
     with ThreadPoolExecutor(6) as ex:
         tokens = sum(ex.map(put, todo))
-    for k in range(n_attachments(acct.n_notes)):
+    for k in atts:
         p = f"Attachments/a{k:03d}.png"
-        if p in have_att:
-            continue
         t0 = time.time()
         r = post_retry(
             s,
@@ -580,7 +623,20 @@ def ws_catchup_walk(
         return True, f"pages={pages} rows={rows}"
 
 
+# Embed tokens one op writes (est_tokens of its bodies). Only content writes
+# embed; attachments and moves do not.
+WRITE_TOKENS = {
+    "rest_push": 20,
+    "delete_restore": 40,
+    "mcp_write_note": 20,
+    "mcp_edit_note": 15,
+}
+
+
 def run_op(op: str, acct: Account, rng: random.Random, args, rec: Recorder) -> None:
+    if op in WRITE_TOKENS and not args.guard.take(WRITE_TOKENS[op]):
+        rec.rec(op, 0, "spend_cap", False, "spend guard: cap reached, not sent")
+        return
     s = acct.s()
     api = acct.api
     t0 = time.time()
@@ -788,7 +844,9 @@ def mult(t: float, a) -> float:
     return a.steady
 
 
-def purge_cycle(acct: Account, clerk: ClerkClient, rec: Recorder) -> None:
+def purge_cycle(
+    acct: Account, clerk: ClerkClient, rec: Recorder, guard: SpendGuard
+) -> None:
     """Delete + purge one vault mid-run, check restore is refused, re-create it."""
     acct.paused.set()
     try:
@@ -849,16 +907,21 @@ def purge_cycle(acct: Account, clerk: ClerkClient, rec: Recorder) -> None:
             timeout=30,
         )
         acct.vault_id = r.json().get("id") or r.json().get("vault", {}).get("id")
-        seed(acct, rec)
+        seed(acct, rec, guard)
     finally:
         acct.paused.clear()
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    # Deliberately NOT defaulted from ENGRAM_API_URL: the headless e2e harness
+    # reads that variable, and a stray export must not pick the load target.
+    ap.add_argument("--api", default="https://staging.engram.page/api")
     ap.add_argument(
-        "--api",
-        default=os.environ.get("ENGRAM_API_URL", "https://staging.engram.page/api"),
+        "--i-know-this-is-not-staging",
+        dest="allow_any_host",
+        action="store_true",
+        help="allow a target outside the staging allowlist (never prod)",
     )
     ap.add_argument(
         "--prefix", default="load-sim", help="account email prefix; stable across runs"
@@ -875,7 +938,13 @@ def main() -> int:
         "--max-seed-tokens",
         type=int,
         default=12_000_000,
-        help="spend guard: refuse to seed more than this",
+        help="spend guard: refuse to start a seed whose missing notes estimate more than this",
+    )
+    ap.add_argument(
+        "--max-embed-tokens",
+        type=int,
+        default=20_000_000,
+        help="spend guard: running cap on est. embed tokens for the whole run (seed, purge re-seed, traffic)",
     )
     ap.add_argument("--seed-only", action="store_true")
     ap.add_argument(
@@ -887,6 +956,10 @@ def main() -> int:
     ap.add_argument("--workers", type=int, default=24)
     ap.add_argument("--out", default=os.environ.get("LOAD_OUT", "load-out"))
     args = ap.parse_args()
+    check_target(args.api, args.allow_any_host)
+    clerk_key = os.environ.get("STAGING_CLERK_SECRET_KEY", "")
+    check_clerk_key(clerk_key)
+    args.guard = SpendGuard(args.max_embed_tokens)
     args.ws = (
         args.api.replace("https://", "wss://")
         .replace("http://", "ws://")
@@ -897,7 +970,7 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     rec = Recorder(out / "ops.jsonl")
     run_id = time.strftime("%Y%m%d%H%M%S")
-    clerk = ClerkClient(os.environ["STAGING_CLERK_SECRET_KEY"])
+    clerk = ClerkClient(clerk_key)
 
     accts = [Account(i, args.api, args.prefix) for i in range(args.accounts)]
     with ThreadPoolExecutor(5) as ex:
@@ -921,23 +994,33 @@ def main() -> int:
 
     if args.provision_only:
         return 0
-    est = estimate_seed_tokens()
+    # Spend guard, BEFORE anything is written: estimate only what is missing.
+    with ThreadPoolExecutor(4) as ex:
+        plans = dict(zip([a.idx for a in accts], ex.map(plan_seed, accts)))
+    missing = sum(p[2] for p in plans.values())
     print(
-        f"[sim] full-corpus embed estimate {est / 1e6:.2f}M tokens (only missing notes are written)",
+        f"[sim] seed needs ~{missing / 1e6:.2f}M est embed tokens "
+        f"(full corpus {estimate_seed_tokens() / 1e6:.2f}M; cap {args.max_seed_tokens / 1e6:.1f}M)",
         flush=True,
     )
+    if missing > args.max_seed_tokens:
+        print(
+            "[sim] spend guard: seed estimate over --max-seed-tokens, nothing written",
+            flush=True,
+        )
+        return 2
     t0 = time.time()
     with ThreadPoolExecutor(4) as ex:
         seeded = sum(
-            ex.map(lambda a: seed(a, rec), sorted(accts, key=lambda a: -a.n_notes))
+            ex.map(
+                lambda a: seed(a, rec, args.guard, plans[a.idx]),
+                sorted(accts, key=lambda a: -a.n_notes),
+            )
         )
     print(
         f"[sim] seeded ~{seeded / 1e6:.2f}M est tokens in {time.time() - t0:.0f}s",
         flush=True,
     )
-    if seeded > args.max_seed_tokens:
-        print("[sim] spend guard tripped", flush=True)
-        return 2
     if args.seed_only:
         return 0
 
@@ -970,15 +1053,22 @@ def main() -> int:
             "out": str((out / "crdt_ops.jsonl").resolve()),
             "apiUrl": args.api,
         }
-        (out / "crdt_cfg.json").write_text(json.dumps(cfg))
-        env = {**os.environ, "ENGRAM_API_URL": args.api, "E2E_DELIVERY_TIMEOUT": "60"}
+        # The config carries live API keys: a 0600 tempfile OUTSIDE --out (which
+        # CI uploads as an artifact), deleted once the CRDT process exits.
+        fd, crdt_cfg = tempfile.mkstemp(prefix="load-crdt-", suffix=".json")
+        with os.fdopen(fd, "w") as f:
+            json.dump(cfg, f)
+        # The plugin code bun imports comes from another repo's ref: it gets no Clerk key.
+        env = {k: v for k, v in os.environ.items() if k != "STAGING_CLERK_SECRET_KEY"}
+        env.update(ENGRAM_API_URL=args.api, E2E_DELIVERY_TIMEOUT="60")
+        atexit.register(lambda: contextlib.suppress(OSError)(os.unlink)(crdt_cfg))
         crdt = subprocess.Popen(
             [
                 "bun",
                 "--preload",
                 str(E2E / "headless/preload.ts"),
                 str(HERE / "crdt_load.ts"),
-                str(out / "crdt_cfg.json"),
+                crdt_cfg,
             ],
             env=env,
             stdout=open(out / "crdt.log", "w"),
@@ -1033,7 +1123,9 @@ def main() -> int:
         t = time.time() - start
         if purge_acct and purge_th is None and t >= args.purge_at:
             purge_th = threading.Thread(
-                target=purge_cycle, args=(purge_acct, clerk, rec), daemon=True
+                target=purge_cycle,
+                args=(purge_acct, clerk, rec, args.guard),
+                daemon=True,
             )
             purge_th.start()
         if t - last >= 300:
@@ -1048,6 +1140,10 @@ def main() -> int:
             crdt.wait(timeout=600)
         except subprocess.TimeoutExpired:
             crdt.kill()
+        with contextlib.suppress(OSError):
+            os.unlink(crdt_cfg)
+    for a in accts:  # don't leave this run's device families live
+        revoke_device_families(a, clerk)
     a = args
     windows = [
         ("all", start, end + 600),

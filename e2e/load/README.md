@@ -43,13 +43,27 @@ e2e/load/server_probe.sh probe-out 60 9000   # alongside, from a host with SSH t
 Output: `load-out/summary.md` (p50/p95/p99 and errors per op, per phase),
 `summary.json`, raw `ops.jsonl` + `crdt_ops.jsonl`.
 
+## Safety
+
+- **Target allowlist.** `--api` defaults to staging and must be a host in
+  `guards.STAGING_HOSTS` (staging, the FastRaid LAN host, localhost);
+  anything else needs `--i-know-this-is-not-staging`. It is never read from
+  `ENGRAM_API_URL`. A `sk_live_` Clerk key is refused.
+- **Secrets.** The CRDT config (live API keys) goes to a 0600 tempfile
+  outside `--out` and is deleted after the run; the artifact upload also
+  excludes it. The bun child gets no Clerk key. Each run revokes the
+  accounts' earlier API keys and device families, and its own at the end.
+
 ## Spend guard
 
 Staging embeds with real Voyage (`voyage-4-large`, $0.12/M tokens). The full
 corpus is about 4.4M tokens (~$0.53) and is written once: later runs seed only
-what the manifest lacks. Traffic writes reuse content, so a 2 h run adds well
-under 3M tokens. `--max-seed-tokens` (default 12M) aborts a seed that would
-write more. The mid-run purge re-seeds one 1k vault (~0.3M tokens) per run.
+what the manifest lacks. Before anything is written, the sim estimates the
+missing notes and stops if that exceeds `--max-seed-tokens` (12M). A running
+cap, `--max-embed-tokens` (20M, ~$2.40), is reserved before every embedding
+write (seed, the purge re-seed, traffic pushes and MCP writes); writes past it
+are skipped and recorded as `spend_cap`. CRDT edits run in the bun process and
+are not counted; they are tiny (a few dozen tokens per edit).
 
 ## Limits the sim needs
 
