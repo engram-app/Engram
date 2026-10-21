@@ -165,20 +165,8 @@ def _backend_alive() -> bool:
         return True
 
 
-def pytest_collection_modifyitems(items):
-    """Write canary marker kwargs for scripts/list_scenarios.py.
-
-    Only active when SCENARIO_COLLECT_OUT names a path; a normal run is untouched.
-    """
-    out = os.environ.get("SCENARIO_COLLECT_OUT")
-    if not out:
-        return
-    entries = []
-    for item in items:
-        marker = item.get_closest_marker("canary")
-        if marker is not None:
-            entries.append({"nodeid": item.nodeid, **marker.kwargs})
-    Path(out).write_text(json.dumps(entries))
+# Hook lives in helpers.scenario so a stack-free unit test can load it as a plugin.
+from helpers.scenario import pytest_collection_modifyitems  # noqa: E402,F401
 
 
 @pytest.fixture
