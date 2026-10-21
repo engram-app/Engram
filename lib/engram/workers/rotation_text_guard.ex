@@ -39,6 +39,10 @@ defmodule Engram.Workers.RotationTextGuard do
   @doc "How long after the flip the guard runs (its `schedule_in`)."
   def delay_seconds, do: @delay_seconds
 
+  # One user's points, read a page at a time: minutes at most.
+  @impl Oban.Worker
+  def timeout(_job), do: :timer.minutes(10)
+
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"user_id" => user_id, "dek_version" => version}}) do
     case Repo.get(User, user_id) do
