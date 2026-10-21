@@ -78,7 +78,7 @@ function imp(rel: string): Promise<any> {
 // Error carrying `.status` on >=400 unless `throw:false` (callers classify on
 // .status for 402/401/404/409).
 // ---------------------------------------------------------------------------
-async function realRequestUrl(opts: {
+export async function realRequestUrl(opts: {
 	url: string;
 	method?: string;
 	headers?: Record<string, string>;
@@ -104,7 +104,7 @@ async function realRequestUrl(opts: {
 // (both replicas = two devices on ONE account + ONE vault, so they share the
 // crdt:<user>:<vault> room). Mirrors e2e/helpers/auth_provider.py LocalAuthProvider.
 // ---------------------------------------------------------------------------
-interface Session {
+export interface Session {
 	token: string;
 	userId: string;
 	vaultId: string;
@@ -218,7 +218,7 @@ async function setupSession(): Promise<Session> {
 // scheduler/clock/socket — real global WebSocket + real fetch + real time).
 // Every `main.ts:NNNN` citation names the line transcribed.
 // ---------------------------------------------------------------------------
-class Replica {
+export class Replica {
 	readonly id: string;
 	readonly vaultDir: string;
 	// biome-ignore lint/suspicious/noExplicitAny: cross-repo dynamic types.
@@ -601,7 +601,10 @@ async function main(): Promise<void> {
 	process.exit(0);
 }
 
-main().catch((e) => {
-	console.error("[headless] fatal:", e);
-	process.exit(1);
-});
+// Importable (e2e/load/crdt_load.ts reuses Replica); runs only as the entry point.
+if (import.meta.main) {
+	main().catch((e) => {
+		console.error("[headless] fatal:", e);
+		process.exit(1);
+	});
+}
