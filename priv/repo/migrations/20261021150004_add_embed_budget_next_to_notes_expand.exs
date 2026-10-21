@@ -9,6 +9,12 @@ defmodule Engram.Repo.Migrations.AddEmbedBudgetNextToNotesExpand do
   """
 
   def change do
+    # Fail fast instead of queueing ACCESS EXCLUSIVE behind a long transaction:
+    # the migrator session drops the app's lock_timeout (Release.migrator_config),
+    # and a queued ADD COLUMN blocks every read and write of the table behind it.
+    # SET LOCAL ends with this migration's transaction; a failed boot retries.
+    execute "SET LOCAL lock_timeout = '5s'", "SET LOCAL lock_timeout = '5s'"
+
     alter table(:notes) do
       add :embed_budget_next, :bigint
     end
