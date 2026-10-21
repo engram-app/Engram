@@ -33,9 +33,13 @@ def clerk_sign_in_url(client, user_id: str, app_base: str, redirect_path: str) -
         )
         if resp.ok:
             break
-        lagging = resp.status_code == 404 and any(
-            e.get("code") == "resource_not_found" for e in resp.json().get("errors", [])
-        )
+        lagging = False
+        if resp.status_code == 404:
+            try:
+                errors = resp.json().get("errors", [])
+            except ValueError:  # non-JSON 404 (proxy/HTML): a plain HTTP error
+                errors = []
+            lagging = any(e.get("code") == "resource_not_found" for e in errors)
         if not lagging or time.monotonic() >= deadline:
             resp.raise_for_status()
         time.sleep(1)

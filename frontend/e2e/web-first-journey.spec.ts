@@ -22,6 +22,9 @@ const NOTE_TITLE = "First note";
 const NOTE_BODY = "Hello from the web";
 
 test.describe("Website-first: a new user signs up on the web", () => {
+	// Clerk sign-in alone may retry for 30s; the 30s global default cannot ride that out.
+	test.setTimeout(90_000);
+
 	const skip = loadAuthState().skipped || !process.env.E2E_CLERK_SECRET_KEY;
 	let pending: { email: string; id: string } | null = null;
 

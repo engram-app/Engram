@@ -122,6 +122,7 @@ export default defineConfig({
 					{
 						command: "mix phx.server",
 						cwd: "..",
+						// A locally reused server (reuseExistingServer) must have ENGRAM_FRONTEND_URL set, or mcp-first fails with a relative redirect.
 						// See the "local" project's Phoenix webServer entry above (#964).
 						url: `http://localhost:${CLERK_BACKEND_PORT}/api/health/deep`,
 						timeout: 120_000,

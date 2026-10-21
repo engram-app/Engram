@@ -108,10 +108,10 @@ async def _sign_in_and_link(sign_in_url: str, clerk_client, vault_name: str) -> 
                     await page.wait_for_url(lambda u: "/onboard/agreement" not in u, timeout=25_000)
                     continue
                 if time.monotonic() >= deadline:
-                    raise AssertionError(f"never reached the /link Sync button; at {page.url}")
+                    raise AssertionError(f"never reached the /link Sync button; at {urlsplit(page.url).path}")
                 await asyncio.sleep(0.5)
 
-            assert urlsplit(page.url).path == "/link", f"Sync button off /link: {page.url}"
+            assert urlsplit(page.url).path == "/link", f"Sync button off /link: {urlsplit(page.url).path}"
             # The plugin sent its vault name with the device code; a first vault
             # is offered as a new vault seeded with exactly that name.
             suggested = await page.get_by_label("New vault name").input_value()
@@ -122,7 +122,8 @@ async def _sign_in_and_link(sign_in_url: str, clerk_client, vault_name: str) -> 
             await browser.close()
 
 
-@pytest.mark.canary(cadence="hourly", targets=["ci", "staging"])
+# staging joins in the canary phase, once the heard step and the staging Clerk testing token are handled.
+@pytest.mark.canary(cadence="hourly", targets=["ci"])
 @pytest.mark.asyncio
 async def test_plugin_first_journey(fresh_unlinked_instance, clerk_client, ts, scenario_steps):
     inst = fresh_unlinked_instance

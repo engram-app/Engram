@@ -86,7 +86,7 @@ export async function clerkSignIn(page: Page, email: string, landOn = "/"): Prom
 export async function createUnonboardedUser(
 	prefix = "e2e-browser-pending",
 ): Promise<{ email: string; id: string }> {
-	const ts = Date.now();
+	const ts = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 	const email = `${prefix}-${ts}@test.com`;
 
 	const resp = await fetch(`${CLERK_API}/users`, {
