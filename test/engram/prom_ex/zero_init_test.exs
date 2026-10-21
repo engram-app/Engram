@@ -72,6 +72,15 @@ defmodule Engram.PromEx.ZeroInitTest do
     assert "drifted" in outcomes and "rewritten" in outcomes
   end
 
+  test "covers the reconcile cancel statuses the alert selects" do
+    statuses =
+      for {"engram_prom_ex_indexing_payload_reconcile_cancelled_total", %{http_status: s}} <-
+            ZeroInit.prometheus_series(),
+          do: s
+
+    assert "400" in statuses
+  end
+
   test "starts after PromEx, so its handlers are attached" do
     children = Engram.Application.children(Application.fetch_env!(:engram, Oban))
     prom_ex = Enum.find_index(children, &(&1 == Engram.PromEx))

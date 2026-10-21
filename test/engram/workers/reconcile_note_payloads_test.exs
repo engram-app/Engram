@@ -440,8 +440,12 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
   # A request Qdrant will refuse on every retry is cancelled once, with its
   # status logged, instead of five redacted `:error` attempts.
+  # A cancel is retried by the hourly re-check, so a refusal that never clears
+  # would cancel once an hour forever. The counter is what an alert sees.
   test "a permanent scroll refusal cancels the job and logs its status", ctx do
     Agent.update(ctx.store, &%{&1 | scroll_status: 400})
+    event = [:engram, :indexing, :payload_reconcile_cancelled]
+    ref = :telemetry_test.attach_event_handlers(self(), [event])
 
     log =
       ExUnit.CaptureLog.capture_log(fn ->
@@ -453,6 +457,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert log =~ ":qdrant_scroll 400"
     refute log =~ ctx.stale.id
     assert reload(ctx.stale).payload_hash == nil
+    assert_receive {^event, ^ref, %{count: 1}, %{http_status: 400}}
   end
 
   test "a transient scroll error (503) snoozes, a 500 fails for a backoff", ctx do
