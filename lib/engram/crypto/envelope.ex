@@ -142,7 +142,7 @@ defmodule Engram.Crypto.Envelope do
   def split_merged(_), do: :error
 
   @doc "The merged layout `split_merged/1` reads."
-  @spec merge(binary(), binary()) :: binary()
+  @spec merge(<<_::96>> | <<_::104>>, binary()) :: binary()
   def merge(<<1, _::binary-12>> = nonce, ct), do: nonce <> ct
   def merge(<<_::binary-12>> = nonce, ct), do: <<0>> <> nonce <> ct
 
