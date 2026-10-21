@@ -3,7 +3,7 @@
 _Last verified: 2026-10-03_
 
 ## Status
-`scripts/mcp-conformance.sh` works and **is wired into CI**: `cron.yml` runs the `mcp-conformance` job daily at 05:40 UTC over a two-cell matrix — staging (`stages: spec,oauth`) and prod (`stages: spec`). It passes.
+`scripts/mcp-conformance.sh` works and **is wired into CI**: `cron.yml` runs the `mcp-conformance` job daily at 03:15 UTC over a two-cell matrix — staging (`stages: spec,oauth`) and prod (`stages: spec`). It passes.
 
 Note what that matrix reaches. **The OAuth/CIMD stage runs against staging only**; prod gets the RFC 9728 assertions and nothing else, deliberately, because the OAuth stage performs real DCR and CIMD registrations that write client rows.
 

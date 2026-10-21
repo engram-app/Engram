@@ -804,8 +804,8 @@ jobs:
     # `heavy`, for the same reason verify.yml pins unit-tests there (#355): a
     # cold `mix compile` of the whole app saturates a VM for minutes, and on a
     # generic slot it lands next to e2e suites whose delivery budgets are
-    # timing-bounded. 07:40 also keeps it clear of the 06:00 nightly e2e
-    # convergence run — an earlier draft sat 10 minutes inside it.
+    # timing-bounded. The 03:15 daily run keeps it clear of verify.yml's 06:00
+    # nightly e2e convergence run — an earlier draft sat 10 minutes inside it.
     runs-on: [self-hosted, linux, x64, isolated, heavy]
     # deps.get against hex.pm and a cold compile are both open-ended; the
     # vendor HTTP itself is bounded at 5s inside HttpFetcher. Without this the
@@ -965,7 +965,7 @@ jobs:
 
             // The title is also the dedup key, so it must not assert something
             // the run did not establish. The test distinguishes these cases in
-            // its own message; a transient 503 at 07:40 filing "we refuse this
+            // its own message; a transient 503 on the daily run filing "we refuse this
             // vendor" would leave a standing, factually wrong issue that a
             // later real refusal merely updates.
             const refused = log.includes('we would REFUSE')
@@ -1131,12 +1131,16 @@ jobs:
           tar -xzf "$RUNNER_TEMP/advisory-db.tgz" -C "$RUNNER_TEMP/advisory-db" --strip-components=1
           "$RUNNER_TEMP/cargo-audit-x86_64-unknown-linux-musl-v$v/cargo-audit" audit \
             --db "$RUNNER_TEMP/advisory-db" --no-fetch --deny warnings
+        # --no-fetch also skips the crates.io index update, so the yanked-crate
+        # check reads the local sparse-index cache. The cargo test step above
+        # just populated it with every crate in Cargo.lock, so it stays on.
 
   alert-cron-failure:
     # A timeout reports as `cancelled`; native-deep timed out daily for a
     # week without one alert. Scheduled runs are never cancelled otherwise.
     if: always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
     needs:
+      - when
       - e2e-orphans
       - obsidian-update
       - plan-triage
@@ -1158,7 +1162,7 @@ jobs:
           [ -n "$WEBHOOK" ] || { echo "No alerts webhook configured — skipping."; exit 0; }
           # Name the jobs that actually failed; a bare "cron failed" would
           # send you to the run page to find out which of eight it was.
-          FAILED=$(printf '%s' "$RESULTS" | jq -r 'to_entries|map(select(.value.result=="failure"))|map(.key)|join(", ")')
+          FAILED=$(printf '%s' "$RESULTS" | jq -r 'to_entries|map(select(.value.result=="failure" or .value.result=="cancelled"))|map(.key)|join(", ")')
           CONTENT="**CRON FAILED** \`${GITHUB_REPOSITORY}\`
           Jobs: ${FAILED:-unknown}
           ${RUN_URL}"

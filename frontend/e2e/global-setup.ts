@@ -208,7 +208,7 @@ const E2E_PREFIXES = ["e2e-browser-"];
 // 2026-07-14: every [clerk] test failed "No user found with email" whenever
 // a second run's globalSetup fired mid-run — impossible in the old
 // single-runner world, routine with a multi-runner pool). Same 1h belt the
-// hourly reaper (e2e/scripts/cleanup_clerk_users.py --older-than 1h) wears.
+// per-run reaper (e2e/scripts/cleanup_clerk_users.py --older-than 1h) wears.
 const CLEANUP_MIN_AGE_MS = 60 * 60 * 1000;
 
 async function cleanupOrphanedClerkUsers(secretKey: string) {
