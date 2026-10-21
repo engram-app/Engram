@@ -41,35 +41,62 @@ defmodule Engram.DataMigrations.NoteSplit do
   def reverify?, do: true
 
   @impl true
-  def run_pass do
-    touched =
+  def run_pass, do: run_pass([])
+
+  @doc false
+  # `batch:` overrides the batch size (tests page over a few rows).
+  def run_pass(opts) do
+    batch = Keyword.get(opts, :batch, @batch)
+
+    {touched, left?} =
       case Repo.maintenance() do
         Repo ->
-          TenantScan.user_ids()
-          |> Enum.map(fn user_id ->
-            batches(fn after_id ->
-              Repo.with_tenant!(user_id, fn -> touch(Repo, needing(user_id, after_id)) end)
+          users = TenantScan.user_ids()
+
+          touched =
+            users
+            |> Enum.map(fn user_id ->
+              batches(batch, fn after_id ->
+                Repo.with_tenant!(user_id, fn ->
+                  touch(Repo, needing(user_id, after_id, batch))
+                end)
+              end)
             end)
-          end)
-          |> Enum.sum()
+            |> Enum.sum()
+
+          left? = fn ->
+            Enum.any?(users, fn user_id ->
+              Repo.with_tenant!(user_id, fn -> left?(Repo, user_id) end)
+            end)
+          end
+
+          {touched, left?}
 
         maintenance ->
-          batches(fn after_id -> touch(maintenance, needing(nil, after_id)) end)
+          {batches(batch, fn after_id -> touch(maintenance, needing(nil, after_id, batch)) end),
+           fn -> left?(maintenance, nil) end}
       end
 
-    if touched == 0, do: :done, else: {:more, rows: touched}
+    # SKIP LOCKED passes over a row a writer holds, so a pass that touched
+    # nothing has not proven the table clean. Only an unlocked look that finds
+    # no row left closes the ledger; until then the ids stay off.
+    cond do
+      touched > 0 -> {:more, rows: touched}
+      left?.() -> {:more, rows: 0}
+      true -> :done
+    end
   end
 
   # Runs `step` from an id keyset until a batch comes back short or the pass's
   # budget is spent, so each batch reads on from the last instead of rescanning
   # the rows already fixed.
-  defp batches(step, after_id \\ nil, n \\ 0, rounds \\ 0)
-  defp batches(_step, _after_id, n, @max_batches), do: n
+  defp batches(batch, step, after_id \\ nil, n \\ 0, rounds \\ 0)
+  defp batches(_batch, _step, _after_id, n, @max_batches), do: n
 
-  defp batches(step, after_id, n, rounds) do
+  defp batches(batch, step, after_id, n, rounds) do
     case step.(after_id) do
-      ids when length(ids) < @batch -> n + length(ids)
-      ids -> batches(step, Enum.max(ids), n + @batch, rounds + 1)
+      ids when length(ids) < batch -> n + length(ids)
+      ids -> batches(batch, step, Enum.max(ids), n + batch, rounds + 1)
     end
   end
 
@@ -77,7 +104,22 @@ defmodule Engram.DataMigrations.NoteSplit do
   # tenants, and a user's multi-row write (a folder rename, a batch push)
   # locks in its own order. A row a writer holds is skipped, not waited on;
   # that write fires the triggers itself, and a later pass takes any it left.
-  defp needing(user_id, after_id) do
+  defp needing(user_id, after_id, batch) do
+    q =
+      from(n in unfixed(user_id),
+        order_by: field(n, :id),
+        select: field(n, :id),
+        limit: ^batch,
+        lock: "FOR UPDATE SKIP LOCKED"
+      )
+
+    if after_id, do: where(q, [n], field(n, :id) > type(^after_id, Ecto.UUID)), else: q
+  end
+
+  # Any row still needing work, locked or not: no lock, so a held row counts.
+  defp left?(repo, user_id), do: repo.exists?(unfixed(user_id))
+
+  defp unfixed(user_id) do
     q =
       from(n in "notes",
         as: :n,
@@ -86,14 +128,9 @@ defmodule Engram.DataMigrations.NoteSplit do
             (field(n, :kind) == "note" and
                not exists(
                  from(b in "note_bodies", where: b.note_id == parent_as(:n).id, select: 1)
-               )),
-        order_by: field(n, :id),
-        select: field(n, :id),
-        limit: @batch,
-        lock: "FOR UPDATE SKIP LOCKED"
+               ))
       )
 
-    q = if after_id, do: where(q, [n], field(n, :id) > type(^after_id, Ecto.UUID)), else: q
     if user_id, do: where(q, [n], field(n, :user_id) == type(^user_id, Ecto.UUID)), else: q
   end
 

@@ -55,6 +55,32 @@ defmodule Engram.Notes.NoteKeysTest do
     assert id == note.id
   end
 
+  test "the ids go off when another node reopens the ledger" do
+    :ok = DataMigrations.mark_done("note_split", 1)
+    # This node has seen it done: `done?/2` keeps that for the node's lifetime.
+    assert DataMigrations.done?("note_split", 1)
+    Engram.Cache.clear_local(:note_split)
+    assert Keys.ids?()
+
+    # Another node's re-verify reopens it: the row changes, this node's
+    # cached `done?/2` term does not. The ids must still go off here.
+    Engram.Repo.query!("UPDATE data_migrations SET completed_at = NULL WHERE name = 'note_split'")
+    assert DataMigrations.done?("note_split", 1)
+    Engram.Cache.clear_local(:note_split)
+    refute Keys.ids?()
+  end
+
+  test "a passed mode picks the column, not the cache" do
+    hmac = :crypto.strong_rand_bytes(32)
+    refute Keys.ids?()
+
+    assert inspect(Keys.eq(:path, hmac, true)) =~ "path_id"
+    assert inspect(Keys.in_any(:folder, [hmac], true)) =~ "folder_id"
+    assert inspect(Keys.eq(:path, hmac, false)) =~ "path_hmac"
+    assert inspect(Keys.kind_match(:note, true)) =~ "is_folder"
+    assert inspect(Keys.kind_match(:note, false)) == inspect(dynamic(true))
+  end
+
   # One test, seeded once: the plans only mean something on a vault big
   # enough that selectivity, not a tiny table's cost ties, picks the index
   # (as NotesPathIndexPlanTest). The decoys' ciphertext is not real; only the

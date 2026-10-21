@@ -474,10 +474,12 @@ defmodule Engram.Notes do
   end
 
   defp folder_markers_by_hmac_query(user, vault, hmacs) do
+    ids? = Keys.ids?()
+
     from(n in scoped(user, vault),
       where: n.kind == "folder",
-      where: ^Keys.in_any(:folder, hmacs),
-      where: ^Keys.kind_match(:folder)
+      where: ^Keys.in_any(:folder, hmacs, ids?),
+      where: ^Keys.kind_match(:folder, ids?)
     )
   end
 
@@ -517,12 +519,14 @@ defmodule Engram.Notes do
   end
 
   defp find_folder_marker(user, vault, folder_hmac) do
+    ids? = Keys.ids?()
+
     row =
       Repo.one(
         from(n in scoped(user, vault),
           where: n.kind == "folder",
-          where: ^Keys.eq(:folder, folder_hmac),
-          where: ^Keys.kind_match(:folder)
+          where: ^Keys.eq(:folder, folder_hmac, ids?),
+          where: ^Keys.kind_match(:folder, ids?)
         )
       )
 
@@ -3400,7 +3404,8 @@ defmodule Engram.Notes do
     with {:ok, filter_key} <- Crypto.dek_filter_key(user) do
       hmac = Crypto.hmac_field(filter_key, path)
 
-      {:ok, from(n in live_notes(user, vault), where: ^Keys.eq(:path, hmac))}
+      ids? = Keys.ids?()
+      {:ok, from(n in live_notes(user, vault, ids?), where: ^Keys.eq(:path, hmac, ids?))}
     end
   end
 
@@ -3411,8 +3416,11 @@ defmodule Engram.Notes do
   # read `notes_kind_shape_check`). Folder markers have `path_hmac IS NULL` by
   # that CHECK, so the kind filter drops nothing a path lookup could match.
   # NotesPathIndexPlanTest pins the plans.
-  defp live_notes(user, vault) do
-    from(n in scoped_live(user, vault), where: n.kind == "note", where: ^Keys.kind_match(:note))
+  defp live_notes(user, vault, ids?) do
+    from(n in scoped_live(user, vault),
+      where: n.kind == "note",
+      where: ^Keys.kind_match(:note, ids?)
+    )
   end
 
   @doc false
@@ -3430,10 +3438,11 @@ defmodule Engram.Notes do
       {:ok, filter_key} ->
         by_hmac = Map.new(paths, fn path -> {Crypto.hmac_field(filter_key, path), path} end)
         hmacs = Map.keys(by_hmac)
+        ids? = Keys.ids?()
 
         query =
-          from(n in live_notes(user, vault),
-            where: ^Keys.in_any(:path, hmacs),
+          from(n in live_notes(user, vault, ids?),
+            where: ^Keys.in_any(:path, hmacs, ids?),
             select: {n.path_hmac, n.id}
           )
 
@@ -3505,13 +3514,14 @@ defmodule Engram.Notes do
       |> Map.new(fn p -> {Crypto.hmac_field(filter_key, p), p} end)
 
     hmacs = Map.keys(hmac_to_path)
+    ids? = Keys.ids?()
 
     query =
       from(n in Note,
         # `kind` for the partial path index; see live_notes/2.
         where: n.user_id == ^user.id and is_nil(n.deleted_at) and n.kind == "note",
-        where: ^Keys.in_any(:path, hmacs),
-        where: ^Keys.kind_match(:note),
+        where: ^Keys.in_any(:path, hmacs, ids?),
+        where: ^Keys.kind_match(:note, ids?),
         select: {n.path_hmac, n.id}
       )
 

@@ -56,26 +56,32 @@ defmodule Engram.Notes.Keys do
   @spec value(kind(), binary()) :: binary()
   def value(kind, hmac) when is_binary(hmac), do: kind |> pick() |> elem(1) |> then(& &1.(hmac))
 
-  @doc "`binding.<kind> == hmac`, on the ids when they are complete."
-  @spec eq(kind(), binary()) :: Ecto.Query.dynamic_expr()
-  def eq(kind, hmac) do
-    {column, to_value} = pick(kind)
+  @doc """
+  `binding.<kind> == hmac`, on the ids when they are complete.
+
+  A query that also uses `kind_match/2` passes one `ids?()` read to both, so
+  the filter and the partial-index predicate agree even if the cache turns
+  over between the two calls.
+  """
+  @spec eq(kind(), binary(), boolean()) :: Ecto.Query.dynamic_expr()
+  def eq(kind, hmac, ids? \\ ids?()) do
+    {column, to_value} = pick(kind, ids?)
     value = to_value.(hmac)
     dynamic([n], field(n, ^column) == ^value)
   end
 
   @doc "`binding.<kind> IN hmacs`, on the ids when they are complete."
-  @spec in_any(kind(), [binary()]) :: Ecto.Query.dynamic_expr()
-  def in_any(kind, hmacs) when is_list(hmacs) do
-    {column, to_value} = pick(kind)
+  @spec in_any(kind(), [binary()], boolean()) :: Ecto.Query.dynamic_expr()
+  def in_any(kind, hmacs, ids? \\ ids?()) when is_list(hmacs) do
+    {column, to_value} = pick(kind, ids?)
     values = Enum.map(hmacs, to_value)
     dynamic([n], field(n, ^column) in ^values)
   end
 
   # One read of the switch per call, so a column and its value always agree.
-  defp pick(kind) do
+  defp pick(kind, ids? \\ ids?()) do
     {hmac_col, id_col} = Map.fetch!(@cols, kind)
-    if ids?(), do: {id_col, &id/1}, else: {hmac_col, & &1}
+    if ids?, do: {id_col, &id/1}, else: {hmac_col, & &1}
   end
 
   @doc """
@@ -83,10 +89,10 @@ defmodule Engram.Notes.Keys do
   notes, `is_folder` for markers), so a query on the ids can use them.
   `true` while the ids are incomplete: the HMAC indexes key on `kind`.
   """
-  @spec kind_match(:note | :folder) :: Ecto.Query.dynamic_expr()
-  def kind_match(kind) do
+  @spec kind_match(:note | :folder, boolean()) :: Ecto.Query.dynamic_expr()
+  def kind_match(kind, ids? \\ ids?()) do
     cond do
-      not ids?() -> dynamic(true)
+      not ids? -> dynamic(true)
       kind == :note -> dynamic([n], not field(n, :is_folder))
       kind == :folder -> dynamic([n], field(n, :is_folder))
     end

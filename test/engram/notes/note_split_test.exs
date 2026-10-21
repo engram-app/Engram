@@ -4,10 +4,8 @@ defmodule Engram.Notes.NoteSplitTest do
   # and the NoteSplit data migration fills rows written before them.
   use Engram.DataCase, async: true
 
-  alias Engram.DataMigrations
   alias Engram.DataMigrations.NoteSplit
   alias Engram.Notes
-  alias Engram.Notes.Keys
   alias Engram.Repo
 
   setup do
@@ -191,23 +189,18 @@ defmodule Engram.Notes.NoteSplitTest do
 
       assert :done = NoteSplit.run_pass()
     end
-  end
 
-  describe "Keys.ids?" do
-    test "follows the ledger both ways, within its cache" do
-      on_exit(fn -> Engram.Cache.clear_local(:note_split) end)
-      Engram.Cache.clear_local(:note_split)
-      refute Keys.ids?()
+    test "keyset-pages across batches without rescanning", %{user: u, vault: v} do
+      notes = for p <- ~w(p1.md p2.md p3.md), do: write!(u, v, p, p)
 
-      :ok = DataMigrations.mark_done("note_split", 1)
-      Engram.Cache.clear_local(:note_split)
-      assert Keys.ids?()
+      for n <- notes do
+        Repo.query!("DELETE FROM note_bodies WHERE note_id = $1", [Ecto.UUID.dump!(n.id)])
+      end
 
-      # A re-verify that finds rows without ids reopens it: the ids go off
-      # once the cache turns over, on every node, not at the next restart.
-      :ok = DataMigrations.reopen("note_split", 1)
-      Engram.Cache.clear_local(:note_split)
-      refute Keys.ids?()
+      # Batches of 2: a full batch, then a short one that ends the pass.
+      assert {:more, rows: 3} = NoteSplit.run_pass(batch: 2)
+      assert Enum.all?(notes, &row(&1.id)["has_body"])
+      assert :done = NoteSplit.run_pass(batch: 2)
     end
   end
 end

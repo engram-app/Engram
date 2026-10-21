@@ -507,12 +507,14 @@ defmodule Engram.Links do
   # hmacs, one query per table. `fetch_decrypted_candidates/5` is the
   # single-hmac projection of this.
   defp fetch_candidates_by_hmac(user, vault, hmacs, :notes, dek) do
+    ids? = Keys.ids?()
+
     from(n in Note,
       where:
         n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
           is_nil(n.deleted_at),
-      where: ^Keys.in_any(:basename, hmacs),
-      where: ^Keys.kind_match(:note),
+      where: ^Keys.in_any(:basename, hmacs, ids?),
+      where: ^Keys.kind_match(:note, ids?),
       select: %{
         id: n.id,
         basename_hmac: n.basename_hmac,
@@ -655,6 +657,7 @@ defmodule Engram.Links do
 
   defp do_live_basename_count(user, vault, key, filter_key) do
     hmac = Crypto.hmac_field(filter_key, key)
+    ids? = Keys.ids?()
 
     notes =
       Repo.one(
@@ -662,8 +665,8 @@ defmodule Engram.Links do
           where:
             n.user_id == ^user.id and n.vault_id == ^vault.id and n.kind == "note" and
               is_nil(n.deleted_at),
-          where: ^Keys.eq(:basename, hmac),
-          where: ^Keys.kind_match(:note),
+          where: ^Keys.eq(:basename, hmac, ids?),
+          where: ^Keys.kind_match(:note, ids?),
           select: count(n.id)
         ),
         skip_tenant_check: true
