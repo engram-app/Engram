@@ -687,8 +687,14 @@
             "x-struct": null,
             "x-validate": null
           },
+          "deferred_checkpoints": {
+            "description": "Unfinished checkpoint jobs that are not owed: snoozed behind a live room or key rotation, or held by a live room that materializes the note itself.",
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
           "pending_checkpoints": {
-            "description": "Unfinished checkpoint jobs for this vault's notes, excluding notes with a live room (those wait for the room to close).",
+            "description": "Checkpoint jobs for this vault's notes that can run now (queued, running or retrying) and whose note has no live room.",
             "type": "integer",
             "x-struct": null,
             "x-validate": null
@@ -703,7 +709,8 @@
         "required": [
           "change_seq",
           "pending_crdt_updates",
-          "pending_checkpoints"
+          "pending_checkpoints",
+          "deferred_checkpoints"
         ],
         "title": "SyncQuiescenceResponse",
         "type": "object",
@@ -4897,7 +4904,7 @@
     "/api/sync/quiescence": {
       "get": {
         "callbacks": {},
-        "description": "The vault's `change_seq` plus how many CRDT updates still await their checkpoint. A client whose catch-up cursor has reached `change_seq` while both counts are 0 has seen every change the server will make on its own.",
+        "description": "The vault's `change_seq` plus how many CRDT updates still await their checkpoint. A client whose catch-up cursor has reached `change_seq` while both counts are 0 has seen every change the server will make on its own. `deferred_checkpoints` (snoozed, or held by a live room) is reported but is not owed work.",
         "operationId": "sync-quiescence",
         "parameters": [],
         "responses": {
