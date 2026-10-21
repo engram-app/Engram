@@ -23,7 +23,14 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   setup do
     {:ok, store} =
       Agent.start_link(fn ->
-        %{points: %{}, upserts: 0, set_payloads: [], on_scroll: nil, payload_status: 200}
+        %{
+          points: %{},
+          upserts: 0,
+          set_payloads: [],
+          overwrites: [],
+          on_scroll: nil,
+          payload_status: 200
+        }
       end)
 
     bypass = Bypass.open()
@@ -123,22 +130,27 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert counts == %{checked: 2, drifted: 1, rewritten: 1, skipped_v5: 0}
   end
 
-  # #2087's short-key layout: the legacy keys are absent, so a v3 compare
-  # would read every such point as drifted and merge v3 keys onto it.
-  test "a v5-shaped point is never written and its note is left for the v5 heal", ctx do
+  # #2087's short-key layout. Healed with the v5 payload, REPLACED (a v3
+  # merge would leave the layouts mixed), and stamped with its hash. Before
+  # #2067 this note was skipped and left unstamped, so a rotation left every
+  # v5 point on the retired key for good.
+  test "a v5-shaped point is replaced with the v5 payload and its note stamped", ctx do
     for id <- point_ids(ctx.stale),
         do: Agent.update(ctx.store, &put_in(&1.points[id], %{"u" => "x", "y" => "b2xk"}))
 
-    ref =
-      :telemetry_test.attach_event_handlers(self(), [[:engram, :indexing, :payload_reconcile]])
-
+    expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("embed during reconcile") end)
     assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
 
-    assert_receive {[:engram, :indexing, :payload_reconcile], ^ref, %{count: 1},
-                    %{outcome: :skipped_v5}}
+    {:ok, plain} = Crypto.maybe_decrypt_note_fields(reload(ctx.stale), ctx.user)
+    {:ok, v5} = Indexing.expected_v5_payload(plain, ctx.user)
+    want = v5 |> Jason.encode!() |> Jason.decode!()
+
+    assert [ids] = Agent.get(ctx.store, & &1.overwrites)
+    assert Enum.sort(ids) == Enum.sort(point_ids(ctx.stale))
+    for id <- ids, do: assert(Agent.get(ctx.store, &Map.fetch!(&1.points, id)) == want)
 
     assert Agent.get(ctx.store, & &1.set_payloads) == []
-    assert reload(ctx.stale).payload_hash == nil
+    assert reload(ctx.stale).payload_hash == Indexing.note_payload_hash(v5)
     assert reload(ctx.healthy).payload_hash
   end
 
@@ -292,6 +304,16 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
               end)
 
             %{s | points: points, set_payloads: [ids | s.set_payloads]}
+          end)
+
+          %{"status" => "completed"}
+
+        {"PUT", "/collections/engram_notes/points/payload"} ->
+          ids = for %{"has_id" => ids} <- body["filter"]["should"], id <- ids, do: id
+
+          Agent.update(store, fn s ->
+            points = Enum.reduce(ids, s.points, &Map.put(&2, &1, body["payload"]))
+            %{s | points: points, overwrites: [ids | s.overwrites]}
           end)
 
           %{"status" => "completed"}

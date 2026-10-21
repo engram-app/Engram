@@ -45,8 +45,8 @@ defmodule Engram.Crypto.UserDekRotationTest do
       )
     end)
 
-    # resync_index_keys set_payloads every chunk's point, so a test that seeds
-    # chunk rows reaches this route even with no points in Qdrant.
+    # The payload heal (`ReconcileNotePayloads`) set_payloads a drifted
+    # point when a test drains it.
     Bypass.stub(bypass, "POST", "/collections/engram_notes/points/payload", fn conn ->
       Plug.Conn.send_resp(conn, 200, ~s({"result": {"status": "completed"}, "status": "ok"}))
     end)
@@ -1151,14 +1151,14 @@ defmodule Engram.Crypto.UserDekRotationTest do
       {:ok, note: note, point: point}
     end
 
-    defp capture_payload_writes(test_pid, v5_points \\ []) do
+    # `points`: what Qdrant holds for the note, as the payload heal reads it.
+    defp capture_payload_writes(test_pid, points) do
       bypass = Bypass.open()
       Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
 
       Bypass.stub(bypass, "POST", "/collections/engram_notes/points/scroll", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:scroll, Jason.decode!(body)})
-        points = v5_points
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
@@ -1188,8 +1188,14 @@ defmodule Engram.Crypto.UserDekRotationTest do
       note: note,
       point: point
     } do
-      capture_payload_writes(self())
+      capture_payload_writes(self(), [
+        %{"id" => point, "payload" => %{"user_id" => user.id, "type_hmac" => "b2xk"}}
+      ])
+
       assert :ok = UserDekRotation.rotate_user(user.id)
+      # Not in the rotating process: the flip commits the heal (#2067 delta).
+      refute_received {:set, %{"filter" => %{"should" => [%{"has_id" => [^point]}]}}}
+      assert :ok = perform_job(Engram.Workers.ReconcileNotePayloads, %{"user_id" => user.id})
       Mox.verify!()
 
       {:ok, new_fk} = Crypto.dek_filter_key(Repo.get!(Engram.Accounts.User, user.id))
@@ -1212,9 +1218,12 @@ defmodule Engram.Crypto.UserDekRotationTest do
     test "a v5 point is rebuilt under the new key and note_attrs rewritten from the frontmatter",
          %{user: user, note: note, point: point} do
       Engram.ServiceConfig.put_override(:v5_payload_format, true)
-      capture_payload_writes(self(), [%{"id" => point}])
+
+      capture_payload_writes(self(), [%{"id" => point, "payload" => %{"u" => "x", "y" => "b2xk"}}])
 
       assert :ok = UserDekRotation.rotate_user(user.id)
+      refute_received {:overwrite, _}
+      assert :ok = perform_job(Engram.Workers.ReconcileNotePayloads, %{"user_id" => user.id})
       Mox.verify!()
 
       {:ok, new_fk} = Crypto.dek_filter_key(Repo.get!(Engram.Accounts.User, user.id))
@@ -2722,8 +2731,9 @@ defmodule Engram.Crypto.UserDekRotationTest do
       # For Postgrex.Error we verify the clause by ensuring the pattern is
       # unreachable from rotate_user in unit tests (it requires a real DB error),
       # so we test the adjacent new clause: {status, body} integer-status tuple.
-      # The existing "sweep returns error when scroll fails" test exercises
-      # {:qdrant_scroll, 503, body} → "qdrant_scroll_failed" (tested above).
+      # A scroll failure no longer fails the rotation (it is reported after the
+      # flip, #2101), so {:qdrant_scroll, 503, body} reaches classify_reason/1
+      # only as a requeue reason_label.
       #
       # The http_{status} clause is exercised by a raw {500, body} tuple if Qdrant
       # returns it (pre-scroll wrapper). We confirm that pattern with a direct
@@ -2894,8 +2904,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
     stored = :ets.new(:stored_skip, [:set, :public])
 
-    # `/points/payload`: the post-flip filter-key resync of the note's point.
-    for path <- ["/points/batch", "/points/payload/delete", "/points/delete", "/points/payload"] do
+    for path <- ["/points/batch", "/points/payload/delete", "/points/delete"] do
       Bypass.stub(bypass, "POST", "/collections/#{collection}#{path}", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
 

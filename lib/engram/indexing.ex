@@ -3738,6 +3738,21 @@ defmodule Engram.Indexing do
   @spec expected_note_payload(Note.t()) :: map()
   def expected_note_payload(note), do: note_payload(note)
 
+  @doc """
+  The v5 note-level payload `note`'s v5 points must carry: `PayloadV5.build/2`
+  over the frontmatter filter fields, extracted and keyed exactly as a pass
+  does (`build_prepared/6`). For `ReconcileNotePayloads`. `note` is
+  decrypted; `{:error, :no_dek}` when `user` has none.
+  """
+  @spec expected_v5_payload(Note.t(), Engram.Accounts.User.t()) ::
+          {:ok, map()} | {:error, :no_dek}
+  def expected_v5_payload(note, user) do
+    with {:ok, filter_key} <- Crypto.dek_filter_key(user) do
+      flat = (note.content || "") |> FlatFields.extract(filter_key) |> with_key_ids(note, user)
+      {:ok, PayloadV5.build(note, flat)}
+    end
+  end
+
   @doc "The `notes.payload_hash` value for `payload` (see `stamp_payload_hash/2`)."
   @spec note_payload_hash(map()) :: binary()
   def note_payload_hash(payload), do: payload_hash(payload)
@@ -3779,10 +3794,6 @@ defmodule Engram.Indexing do
   # tree + tags. Display values (path/title/tags) are rehydrated from the
   # `notes` row at search time, keyed by the chunk's note_id. The *_hmac fields
   # carry all filter load (folder/tags/path scoping) without exposing plaintext.
-  @doc false
-  # The legacy note-level payload, for DEK rotation's filter-key resync.
-  def legacy_note_payload(note), do: note_payload(note)
-
   defp note_payload(note) do
     %{
       user_id: to_string(note.user_id),
