@@ -8,8 +8,10 @@ Clerk Backend API docs: https://clerk.com/docs/reference/backend-api
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import random
+import re
 import time
 
 import requests
@@ -45,6 +47,11 @@ _SESSION_CREATE_MAX_BACKOFF = 4.0
 class ClerkPropagationTimeout(RuntimeError):
     """Raised when Clerk's POST /sessions still 404s the user after the
     readiness probe's wall-clock budget."""
+
+
+class ClerkQuotaError(RuntimeError):
+    """Clerk refused a request because the shared dev instance is out of
+    quota or rate limit (infra, not a product bug)."""
 
 
 class ClerkClient:
@@ -108,11 +115,13 @@ class ClerkClient:
         network hiccup) failed mid-setup, causing pytest-rerunfailures
         to re-invoke provision_user with the same email.
         """
-        # Strip the `+clerk_test` plus-tag (or any plus-tag) before deriving
-        # the username — Clerk rejects `+` in usernames with 422
-        # form_username_invalid, which would otherwise surface as a
-        # confusing "create_user failed" error.
-        username = email.split("@")[0].split("+")[0]
+        # Clerk usernames: [a-z0-9_-], <=64 chars. The sanitized local part is
+        # a readable prefix; a hash of the FULL email makes it unique (emails
+        # differing only after "+" used to collide: 400 username_exists) and
+        # deterministic (retries hit the form_identifier_exists reuse path).
+        base = re.sub(r"[^a-z0-9_-]", "", email.split("@")[0].split("+")[0].lower())
+        digest = hashlib.sha256(email.lower().encode()).hexdigest()[:10]
+        username = f"{base[:53]}-{digest}"
         resp = self.session.post(
             f"{self.base_url}/users",
             json={
@@ -134,6 +143,12 @@ class ClerkClient:
             logger.error(
                 "Clerk says %s is taken but lookup found nothing: %s",
                 email, resp.text,
+            )
+        quota_code = self._quota_code(resp)
+        if quota_code is not None:
+            raise ClerkQuotaError(
+                f"Clerk quota: POST /users for {email} refused with "
+                f"{resp.status_code} {quota_code}: {resp.text}"
             )
         if not resp.ok:
             logger.error("Clerk create_user failed for %s: %s %s", email, resp.status_code, resp.text)
@@ -219,6 +234,26 @@ class ClerkClient:
             )
             time.sleep(sleep_for)
             backoff = min(backoff * 2, _SESSION_READY_MAX_BACKOFF)
+
+    @staticmethod
+    def _quota_code(resp: requests.Response) -> str | None:
+        """Error code if resp is a quota/rate-limit refusal, else None.
+
+        429 (after urllib3 retries are spent) always counts. 400/422 count
+        when an errors[].code mentions quota or limit (conservative match:
+        no real Clerk quota code has been captured in logs yet).
+        """
+        try:
+            codes = [e.get("code", "") for e in resp.json().get("errors", [])]
+        except ValueError:
+            codes = []
+        if resp.status_code == 429:
+            return codes[0] if codes else "rate_limited"
+        if resp.status_code in (400, 422):
+            for code in codes:
+                if "quota" in code or "limit" in code:
+                    return code
+        return None
 
     @staticmethod
     def _is_identifier_taken(resp: requests.Response) -> bool:
