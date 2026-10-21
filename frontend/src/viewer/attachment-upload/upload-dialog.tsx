@@ -7,6 +7,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useConfig } from "@/config-context";
 import { useT } from "@/i18n/locale-provider";
 import type { Translate } from "@/i18n/translate";
+import { cn } from "@/lib/utils";
 import { FolderPicker } from "./folder-picker";
 import { type UploadFailure, uploadFailure } from "./upload-failure";
 
@@ -133,7 +134,11 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 			<DialogContent
 				aria-describedby={undefined}
 				showCloseButton={false}
-				className="flex h-[min(36rem,85vh)] max-w-xl flex-col gap-0 p-0 sm:max-w-xl"
+				className={cn(
+					"flex max-w-xl flex-col gap-0 p-0 sm:max-w-xl",
+					// Tall only when there is a folder list to scroll.
+					folders.length > 0 && "h-[min(36rem,85vh)]",
+				)}
 			>
 				<header className="flex items-center justify-between border-border border-b px-4 py-3">
 					<DialogTitle className="text-sm">{t("Upload attachments")}</DialogTitle>
@@ -142,19 +147,23 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 					</Button>
 				</header>
 
-				{folders.length > 0 && (
-					<section className="flex min-h-0 flex-1 flex-col px-4 py-3">
-						<h3 className="mb-2 font-semibold text-base text-foreground">
-							{t("Destination folder")}
-						</h3>
+				<section className="flex min-h-0 flex-1 flex-col px-4 py-3">
+					<h3 className="mb-2 font-semibold text-base text-foreground">
+						{t("Destination folder")}
+					</h3>
+					{folders.length > 0 ? (
 						<FolderPicker
 							folders={folders.map((f) => f.name)}
 							value={folder}
 							onChange={setFolder}
 							className="flex-1"
 						/>
-					</section>
-				)}
+					) : (
+						<p className="text-muted-foreground text-sm">
+							{t("No folders yet. Files go to the top of your vault.")}
+						</p>
+					)}
+				</section>
 
 				<ScrollArea className="shrink-0 border-border border-t" viewportClassName="max-h-40">
 					<ul className="px-4">

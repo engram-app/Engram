@@ -711,6 +711,8 @@ defmodule EngramWeb.Router do
     get "/attachments/changes", AttachmentsController, :changes
     # rename must come before *path wildcard so it is not swallowed
     post "/attachments/rename", AttachmentsController, :rename
+    # Before the `*path` catch-all, which would otherwise swallow it.
+    get "/attachments/by-id/:id/backlinks", AttachmentsController, :backlinks
     get "/attachments/*path", AttachmentsController, :show
     delete "/attachments/*path", AttachmentsController, :delete
 

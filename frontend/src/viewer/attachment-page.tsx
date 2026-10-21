@@ -3,10 +3,14 @@ import { lazy, type ReactNode, Suspense, useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
+import { notify } from "@/lib/notify";
 import { encodePathSegments } from "@/lib/path";
 import { whenLoaded } from "@/lib/when-loaded";
 import { ApiError, api, isNotFound } from "../api/client";
 import { useAttachments } from "../api/queries";
+import { AttachmentDetails } from "./attachment-details";
+import { opensInline, previewKind } from "./attachment-preview";
+import { AttachmentTextPreview } from "./attachment-text-preview";
 import { DocumentHeader } from "./document-header";
 import { DocumentSurface } from "./document-surface";
 import LoadingPane from "./loading-pane";
@@ -19,8 +23,9 @@ const PdfView = lazy(() => whenLoaded(import("./pdf-view")));
 // Read-only preview for a single attachment, routed by uuid (/attachment/:id) —
 // like notes, so the URL survives a rename/move. Resolves the id to its path +
 // mime from the already-loaded attachments list (the tree sidebar keeps it
-// warm), then streams raw bytes (?raw=1) as a typed Blob so the browser renders
-// images / PDFs natively; unsupported types fall back to a download link.
+// warm). Previewable files (see previewKind) stream their raw bytes (?raw=1) as
+// a typed Blob for a native or text preview; everything else gets the file card
+// alone and fetches its bytes only when the user downloads.
 export default function AttachmentPage() {
 	const { t } = useT();
 	const { itemId: id } = useParams();
@@ -29,7 +34,10 @@ export default function AttachmentPage() {
 	const path = att?.path ?? "";
 	const filename = path.split("/").pop() ?? path;
 	const mime = att?.mime_type ?? "";
+	const kind = att ? previewKind(path, mime, att.size_bytes) : null;
+	const rawPath = `/attachments/${encodePathSegments(path)}?raw=1`;
 
+	const [blob, setBlob] = useState<Blob | null>(null);
 	const [url, setUrl] = useState<string | null>(null);
 	// 'missing' = real 404; 'failed' = transient (5xx/network) — don't conflate.
 	const [error, setError] = useState<"missing" | "failed" | null>(null);
@@ -39,24 +47,26 @@ export default function AttachmentPage() {
 	const [seededPath, setSeededPath] = useState(path);
 	if (seededPath !== path) {
 		setSeededPath(path);
+		setBlob(null);
 		setUrl(null);
 		setError(null);
 	}
 
 	useEffect(() => {
-		if (!path) {
+		if (!path || kind === null) {
 			return;
 		}
 		let revoke: string | null = null;
 		let cancelled = false;
 		api
-			.getBlob(`/attachments/${encodePathSegments(path)}?raw=1`)
-			.then((blob) => {
+			.getBlob(rawPath)
+			.then((fetched) => {
 				if (cancelled) {
 					return;
 				}
-				const objectUrl = URL.createObjectURL(blob);
+				const objectUrl = URL.createObjectURL(fetched);
 				revoke = objectUrl;
+				setBlob(fetched);
 				setUrl(objectUrl);
 			})
 			.catch((err) => {
@@ -77,7 +87,31 @@ export default function AttachmentPage() {
 				URL.revokeObjectURL(revoke);
 			}
 		};
-	}, [path]);
+	}, [path, kind, rawPath]);
+
+	// Previewed files already hold their bytes; the rest fetch them on click.
+	async function download() {
+		let href = url;
+		if (!href) {
+			try {
+				href = URL.createObjectURL(await api.getBlob(rawPath));
+			} catch (err) {
+				if (!(err instanceof ApiError)) {
+					console.error("attachment download failed", err);
+				}
+				notify.error(t("Couldn't download {filename}. Try again.", { filename }));
+				return;
+			}
+		}
+		const a = document.createElement("a");
+		a.href = href;
+		a.download = filename;
+		a.click();
+		if (href !== url) {
+			// After the click has handed the blob to the download manager.
+			setTimeout(() => URL.revokeObjectURL(href), 0);
+		}
+	}
 
 	// Attachment list still loading and the id isn't resolved yet.
 	if (!att && isLoading) {
@@ -92,44 +126,62 @@ export default function AttachmentPage() {
 		);
 	}
 
-	let body: ReactNode;
+	let preview: ReactNode = null;
 	if (error) {
-		body = (
-			<p className="p-6 text-destructive text-sm">
+		preview = (
+			<p className="text-destructive text-sm">
 				{error === "missing"
 					? t("{filename} no longer exists.", { filename })
 					: t("Couldn't load {filename} — it may be temporarily unavailable.", { filename })}
 			</p>
 		);
-	} else if (!url) {
-		body = <LoadingPane />;
-	} else if (mime.startsWith("image/")) {
-		body = (
+	} else if (kind !== null && !(url && blob)) {
+		preview = <LoadingPane />;
+	} else if (url && blob) {
+		if (kind === "image") {
+			preview = (
+				<img
+					draggable={false}
+					src={url}
+					alt={filename}
+					className="mx-auto max-w-full rounded shadow-md"
+					style={{ maxWidth: 800 }}
+				/>
+			);
+		} else if (kind === "audio") {
+			// biome-ignore lint/a11y/useMediaCaption: user files ship no caption track to attach.
+			preview = <audio controls src={url} className="w-full" />;
+		} else if (kind === "video") {
+			// biome-ignore lint/a11y/useMediaCaption: user files ship no caption track to attach.
+			preview = <video controls src={url} className="max-h-[70vh] w-full rounded bg-black" />;
+		} else if (kind === "text" || kind === "csv") {
+			preview = <AttachmentTextPreview blob={blob} csv={kind === "csv"} filename={filename} />;
+		}
+	}
+
+	const body =
+		kind === "pdf" && !error ? (
+			// The PDF viewer owns its scroll and fills the page; no card under it.
+			url ? (
+				<Suspense fallback={<LoadingPane />}>
+					<PdfView url={url} filename={filename} />
+				</Suspense>
+			) : (
+				<LoadingPane />
+			)
+		) : (
 			<PreviewColumn>
-				<div className="flex w-full justify-center p-4">
-					<img
-						draggable={false}
-						src={url}
-						alt={filename}
-						className="max-w-full rounded shadow-md"
-						style={{ maxWidth: 800 }}
+				<article className="mx-auto flex max-w-3xl flex-col gap-4 p-4">
+					{preview}
+					<AttachmentDetails
+						att={att}
+						kind={kind}
+						inlineUrl={url && opensInline(mime) ? url : null}
+						onDownload={download}
 					/>
-				</div>
+				</article>
 			</PreviewColumn>
 		);
-	} else if (mime === "application/pdf") {
-		body = (
-			<Suspense fallback={<LoadingPane />}>
-				<PdfView url={url} filename={filename} />
-			</Suspense>
-		);
-	} else {
-		body = (
-			<p className="p-6 text-muted-foreground text-sm">
-				{t("Preview not supported for {filename}. Use Download above to save it.", { filename })}
-			</p>
-		);
-	}
 
 	// Same surface and header as a note, so an attachment reads as a page in the
 	// vault rather than replacing the document view.
@@ -142,28 +194,15 @@ export default function AttachmentPage() {
 				// Always rendered, disabled until the bytes land: an icon button is taller
 				// than the bare text row, so mounting it late made the header jump.
 				actions={
-					url ? (
-						<Button variant="ghost" size="icon" asChild>
-							<a
-								href={url}
-								download={filename}
-								aria-label={t("Download {filename}", { filename })}
-								title={t("Download")}
-							>
-								<Download className="size-4" />
-							</a>
-						</Button>
-					) : (
-						<Button
-							variant="ghost"
-							size="icon"
-							disabled
-							aria-label={t("Download")}
-							title={t("Download")}
-						>
-							<Download className="size-4" />
-						</Button>
-					)
+					<Button
+						variant="ghost"
+						size="icon"
+						onClick={download}
+						aria-label={t("Download {filename}", { filename })}
+						title={t("Download")}
+					>
+						<Download className="size-4" />
+					</Button>
 				}
 			/>
 			{body}

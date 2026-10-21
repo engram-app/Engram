@@ -3550,6 +3550,52 @@
         ]
       }
     },
+    "/api/attachments/by-id/{id}/backlinks": {
+      "get": {
+        "callbacks": {},
+        "description": "Notes that link to or embed the attachment with the given UUID, one row per note. Empty when no such attachment exists in this vault.",
+        "operationId": "attachments-backlinks",
+        "parameters": [
+          {
+            "description": "Attachment UUID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Backlinks"
+                }
+              }
+            },
+            "description": "Backlinks"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid UUID"
+          }
+        },
+        "summary": "Notes linking to an attachment",
+        "tags": [
+          "Attachments"
+        ]
+      }
+    },
     "/api/attachments/*path": {
       "delete": {
         "callbacks": {},

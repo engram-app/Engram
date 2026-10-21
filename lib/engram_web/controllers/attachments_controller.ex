@@ -9,6 +9,7 @@ defmodule EngramWeb.AttachmentsController do
 
   alias Engram.Attachments
   alias Engram.Billing
+  alias Engram.Links
   alias Engram.Storage.MimeWhitelist
 
   action_fallback EngramWeb.FallbackController
@@ -546,6 +547,32 @@ defmodule EngramWeb.AttachmentsController do
         )
 
         conn |> put_status(500) |> json(%{error: "failed to list attachments"})
+    end
+  end
+
+  operation(:backlinks,
+    operation_id: "attachments-backlinks",
+    summary: "Notes linking to an attachment",
+    description:
+      "Notes that link to or embed the attachment with the given UUID, one row per note. " <>
+        "Empty when no such attachment exists in this vault.",
+    tags: ["Attachments"],
+    parameters: [id: [in: :path, type: :string, required: true, description: "Attachment UUID"]],
+    responses: [
+      ok: {"Backlinks", "application/json", Schemas.Backlinks},
+      bad_request: {"Invalid UUID", "application/json", Schemas.Error}
+    ]
+  )
+
+  def backlinks(conn, %{"id" => id_str}) do
+    case Ecto.UUID.cast(id_str) do
+      {:ok, id} ->
+        user = conn.assigns.current_user
+        vault = conn.assigns.current_vault
+        json(conn, %{backlinks: Links.backlinks_for_attachment(user, vault.id, id)})
+
+      :error ->
+        conn |> put_status(400) |> json(%{error: "invalid id"})
     end
   end
 

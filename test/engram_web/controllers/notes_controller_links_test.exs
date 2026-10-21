@@ -41,6 +41,27 @@ defmodule EngramWeb.NotesControllerLinksTest do
     end
   end
 
+  describe "GET /api/attachments/by-id/:id/backlinks" do
+    test "returns the notes that embed the attachment", %{conn: conn, user: user, vault: vault} do
+      att = Engram.Fixtures.insert_attachment!(user, vault, %{path: "files/a.zip"})
+
+      {:ok, source} =
+        Engram.Notes.upsert_note(user, vault, %{path: "S.md", content: "![[a.zip]]", mtime: 1.0},
+          actor: "api"
+        )
+
+      :ok = perform_job(ExtractNoteLinks, %{note_id: source.id, user_id: user.id})
+
+      body = conn |> get(~p"/api/attachments/by-id/#{att.id}/backlinks") |> json_response(200)
+      assert [%{"source_note_id" => sid, "source_path" => "S.md"}] = body["backlinks"]
+      assert sid == source.id
+    end
+
+    test "400 on a malformed id", %{conn: conn} do
+      assert conn |> get(~p"/api/attachments/by-id/nope/backlinks") |> json_response(400)
+    end
+  end
+
   describe "GET /api/notes/by-id/:id/backlinks" do
     test "returns the inverse edges with source path/title", %{
       conn: conn,

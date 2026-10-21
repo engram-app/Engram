@@ -990,6 +990,19 @@ export function useBacklinks(noteId: string | null) {
 	});
 }
 
+// "Linked from" on the attachment page: notes that link to or embed the file,
+// one row per note (the server dedupes).
+export function useAttachmentBacklinks(attachmentId: string | null) {
+	const vaultId = useActiveVaultId();
+	return useQuery({
+		queryKey: ["attachment-backlinks", vaultId, attachmentId],
+		queryFn: () =>
+			api.get<{ backlinks: Backlink[] }>(`/attachments/by-id/${attachmentId}/backlinks`),
+		enabled: attachmentId !== null,
+		select: (d) => d.backlinks,
+	});
+}
+
 export function useUpdateNote() {
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
