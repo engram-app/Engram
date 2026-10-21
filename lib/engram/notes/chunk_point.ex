@@ -5,7 +5,7 @@ defmodule Engram.Notes.ChunkPoint do
   same transaction, behind `:chunk_text_write`; read behind
   `:chunk_text_read`.
 
-  `slice_sum` is the CRC32 of the chunk's display text (`Indexing.text_sum/1`);
+  `slice_sum` is the keyed checksum of the chunk's display text (`Indexing.text_sum/2`);
   search re-derives a small note's chunk from its content and checks it.
   `display_ct` holds the text and heading in ONE envelope
   (`Crypto.encrypt_chunk_text/4`), only for notes over

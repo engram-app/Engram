@@ -127,6 +127,24 @@ defmodule Engram.IndexingChunkTextTest do
       refute text =~ "Transferrin saturation"
     end
 
+    test "the checksum is keyed per user: the same note under two users sums differently",
+         ctx do
+      other = insert(:user)
+      other_vault = insert(:vault, user: other)
+      mine = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
+      theirs = put_note(other, other_vault, "Ferritin levels are low.")
+      assert {:ok, _} = Indexing.index_note(mine, ctx.vault)
+      assert {:ok, _} = Indexing.index_note(theirs, other_vault)
+
+      mine_sums = Enum.map(points(mine), & &1.slice_sum)
+      theirs_sums = Enum.map(points(theirs), & &1.slice_sum)
+      assert length(mine_sums) == length(theirs_sums)
+      assert Enum.zip(mine_sums, theirs_sums) |> Enum.all?(fn {a, b} -> a != b end)
+
+      # Still the display path's own check: both show their text, not stale.
+      assert Enum.any?(texts(mine, ctx.user), fn {t, _} -> t =~ "Ferritin levels are low." end)
+    end
+
     test "a note over the threshold (300 KB) stores display_ct and displays from it", ctx do
       filler = String.duplicate("Iron stores and lab values. ", 11_000)
       big = content("Ferritin levels are low.") <> "\n## Appendix\n\n" <> filler

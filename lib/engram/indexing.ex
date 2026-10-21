@@ -2976,7 +2976,7 @@ defmodule Engram.Indexing do
 
     with {:ok, reversed, _spent} <- prepared,
          {:ok, dek} <-
-           if(v5_format? or mode == :sealed, do: Crypto.get_dek(user), else: {:ok, nil}) do
+           if(v5_format? or mode != :none, do: Crypto.get_dek(user), else: {:ok, nil}) do
       built = Enum.reverse(reversed)
       qdrant_points = for(%{point: p} <- built, p != nil, do: p)
 
@@ -3030,6 +3030,8 @@ defmodule Engram.Indexing do
   defp point_rows(_entries, _built, _dek, :none), do: nil
 
   defp point_rows(entries, built, dek, mode) do
+    ck = Crypto.dek_content_hash_key_from_bytes(dek)
+
     Enum.zip_with(entries, built, fn entry, %{row: row} ->
       chunk = entry_chunk(entry)
 
@@ -3040,7 +3042,7 @@ defmodule Engram.Indexing do
         char_start: row.char_start,
         char_end: row.char_end,
         token_count: row.token_count,
-        slice_sum: text_sum(chunk.text),
+        slice_sum: text_sum(ck, chunk.text),
         position: row.position,
         member_fps: member_fps(row.member_hmacs),
         display_ct: nil
@@ -3065,12 +3067,15 @@ defmodule Engram.Indexing do
   def display_ct_threshold, do: @display_ct_threshold
 
   @doc """
-  A chunk's display-text checksum: CRC32, as a signed int4 for the column.
-  Unkeyed, so a DEK rotation leaves it alone.
+  A chunk's display-text checksum, as a signed int4 for the column: the
+  first 4 bytes of HMAC-SHA256 under the user's content-hash subkey
+  (`Crypto.dek_content_hash_key/1`, the key of every other fingerprint).
+  Keyed, so someone reading the table cannot confirm a guessed short text;
+  a DEK rotation re-sums every row (`UserDekRotation`).
   """
-  @spec text_sum(binary()) :: integer()
-  def text_sum(text) do
-    <<sum::signed-32>> = <<:erlang.crc32(text)::32>>
+  @spec text_sum(binary(), iodata()) :: integer()
+  def text_sum(content_key, text) do
+    <<sum::signed-32, _rest::binary>> = :crypto.mac(:hmac, :sha256, content_key, text)
     sum
   end
 
@@ -3079,7 +3084,7 @@ defmodule Engram.Indexing do
   built from this content, for a note holding `row_count` rows. A merged
   note is regrouped the way `resparse_note/2` does (`merged_like/2`, from
   the stored row count). A position missing from the map, or a chunk whose
-  `text_sum/1` differs from the row's, means the note changed since it was
+  `text_sum/2` differs from the row's, means the note changed since it was
   indexed.
   """
   @spec display_chunks(binary(), String.t(), non_neg_integer()) :: %{

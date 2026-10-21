@@ -188,6 +188,7 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- sweep_attachments(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_note_links(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_chunk_texts(user, old_dek, new_dek),
+         :ok <- sweep_slice_sums(user, old_dek, new_dek),
          :ok <- sweep_qdrant(user, old_dek, new_dek),
          :ok <- clear_chunk_context_hmacs(user),
          :ok <- Engram.Indexing.VectorCache.rotate(to_string(user_id), old_dek, new_dek),
@@ -1100,7 +1101,10 @@ defmodule Engram.Crypto.UserDekRotation do
     sets =
       case Crypto.decrypt_chunk_text(chunk, old_dek, chunk.point_id) do
         {:ok, {text, heading}} ->
-          Map.to_list(Crypto.encrypt_chunk_text(text, heading, new_dek, chunk.point_id))
+          new_ck = Crypto.dek_content_hash_key_from_bytes(new_dek)
+
+          Map.to_list(Crypto.encrypt_chunk_text(text, heading, new_dek, chunk.point_id)) ++
+            [slice_sum: Indexing.text_sum(new_ck, text)]
 
         :error ->
           case Crypto.decrypt_chunk_text(chunk, new_dek, chunk.point_id) do
@@ -1122,6 +1126,84 @@ defmodule Engram.Crypto.UserDekRotation do
       end
 
     write_chunk_text(chunk.point_id, sets)
+  end
+
+  # `slice_sum` is keyed by the content-hash subkey (`Indexing.text_sum/2`),
+  # so every checksum-only row is re-summed under the new key from the text
+  # search would show for it: the note content (already swept, so under the
+  # new DEK) re-chunked as the read path does (`Indexing.display_chunks/3`).
+  # An envelope row was re-summed with its rewrap above. A floor row's text
+  # is "" by construction (never re-derived). Resumable: a row already
+  # re-summed recomputes to the same value. A note that does not decrypt
+  # keeps its row as is; search then shows it stale or not at all, and its
+  # next index pass writes a fresh sum. ponytail: one UPDATE per row; a
+  # rotation is rare. Batch it with a VALUES join if rotations get large.
+  defp sweep_slice_sums(%User{id: user_id}, old_dek, new_dek) do
+    old_floor = Indexing.text_sum(Crypto.dek_content_hash_key_from_bytes(old_dek), "")
+    new_ck = Crypto.dek_content_hash_key_from_bytes(new_dek)
+    new_floor = Indexing.text_sum(new_ck, "")
+
+    TenantSweep.each_batch(user_id, Engram.Notes.ChunkPoint, fn batch_ids ->
+      rows =
+        from(c in Engram.Notes.ChunkPoint,
+          where: c.point_id in ^batch_ids and is_nil(c.display_ct) and not is_nil(c.slice_sum),
+          select: %{
+            point_id: c.point_id,
+            note_id: c.note_id,
+            position: c.position,
+            sum: c.slice_sum
+          }
+        )
+        |> Repo.all(skip_tenant_check: true)
+
+      derived = rows |> Enum.map(& &1.note_id) |> Enum.uniq() |> derived_display(new_dek)
+
+      Enum.each(rows, fn row ->
+        sum =
+          cond do
+            row.sum in [old_floor, new_floor] ->
+              new_floor
+
+            text = get_in(derived, [row.note_id, row.position, :text]) ->
+              Indexing.text_sum(new_ck, text)
+
+            true ->
+              row.sum
+          end
+
+        if sum != row.sum, do: write_chunk_text(row.point_id, slice_sum: sum)
+      end)
+    end)
+  end
+
+  # note_id => %{position => %{text, heading_path}}, for the notes that decrypt.
+  defp derived_display([], _dek), do: %{}
+
+  defp derived_display(note_ids, dek) do
+    from(n in Engram.Notes.Note,
+      where: n.id in ^note_ids,
+      select:
+        {n.id, n.content_ciphertext, n.content_nonce, n.path_ciphertext, n.path_nonce,
+         fragment("(SELECT count(*) FROM chunk_points p WHERE p.note_id = ?)", n.id)}
+    )
+    |> Repo.all(skip_tenant_check: true)
+    |> Enum.flat_map(fn {id, content_ct, content_nonce, path_ct, path_nonce, count} ->
+      with true <- is_binary(content_ct) and is_binary(path_ct),
+           {:ok, content} <-
+             Envelope.decrypt(
+               content_ct,
+               content_nonce,
+               dek,
+               Crypto.aad_for_row(:notes, :content, id)
+             ),
+           {:ok, path} <-
+             Envelope.decrypt(path_ct, path_nonce, dek, Crypto.aad_for_row(:notes, :path, id)) do
+        [{id, Indexing.display_chunks(content, path, count)}]
+      else
+        _ -> []
+      end
+    end)
+    |> Map.new()
   end
 
   defp write_chunk_text(_id, nil), do: :ok

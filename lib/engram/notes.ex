@@ -266,22 +266,24 @@ defmodule Engram.Notes do
     with {:ok, dek} <- hits_dek(user, rows) do
       {chunks, notes} = Enum.unzip(rows)
       decrypted = Crypto.decrypt_notes_batch(notes, user)
-      derived = derived_chunks(user, Enum.zip(chunks, decrypted))
+      ck = dek && Crypto.dek_content_hash_key_from_bytes(dek)
+      derived = derived_chunks(user, Enum.zip(chunks, decrypted), ck)
 
       {:ok,
        decrypted
        |> Enum.zip(chunks)
        |> Map.new(fn {note, chunk} ->
          qid = to_string(chunk.qdrant_point_id)
-         {qid, search_hit(note, chunk, {dek, derived})}
+         {qid, search_hit(note, chunk, {dek, ck, derived})}
        end)
        |> tap(&emit_text_stale/1)}
     end
   end
 
-  # The DEK only when a row holds an envelope; a failed load is the search's error.
+  # The DEK only when a row holds an envelope or a (keyed) checksum; a failed
+  # load is the search's error.
   defp hits_dek(user, rows) do
-    if Enum.any?(rows, fn {c, _n} -> c.display_ct end) do
+    if Enum.any?(rows, fn {c, _n} -> c.display_ct || c.slice_sum end) do
       case Crypto.get_dek(user) do
         {:ok, dek} -> {:ok, dek}
         {:error, _} -> {:error, :decrypt_failed}
@@ -293,18 +295,18 @@ defmodule Engram.Notes do
 
   # Rows that slice their text: a checksum, no envelope, not a floor point
   # (its display text is "" by construction, see `Indexing.floor_plan/2`).
-  defp slices?(%{display_ct: nil, slice_sum: sum}),
-    do: is_integer(sum) and sum != Engram.Indexing.text_sum("")
+  defp slices?(%{display_ct: nil, slice_sum: sum}, ck),
+    do: is_integer(sum) and sum != Engram.Indexing.text_sum(ck, "")
 
-  defp slices?(_chunk), do: false
+  defp slices?(_chunk, _ck), do: false
 
   # note_id => %{position => chunk} | :error, for the hit notes whose rows
   # slice. One query: each note's content and its point-row count (the merge
   # the rows were built with, as `Indexing.resparse_note/2` reads it).
-  defp derived_chunks(user, pairs) do
+  defp derived_chunks(user, pairs, ck) do
     paths =
       for {%{note_id: id} = c, {:ok, %{deleted_at: nil, path: path}}} <- pairs,
-          slices?(c),
+          slices?(c, ck),
           into: %{},
           do: {id, path}
 
@@ -351,7 +353,7 @@ defmodule Engram.Notes do
   defp search_hit({:ok, %{deleted_at: %DateTime{}}}, _chunk, _keys), do: :deleted
   defp search_hit({:error, _}, _chunk, _keys), do: :note_undecryptable
 
-  defp search_hit({:ok, note}, chunk, {dek, derived}) do
+  defp search_hit({:ok, note}, chunk, {dek, ck, derived}) do
     hit = %{
       vault_id: to_string(note.vault_id),
       source_path: note.path,
@@ -361,7 +363,7 @@ defmodule Engram.Notes do
       heading_path: nil
     }
 
-    case display_text(chunk, dek, derived) do
+    case display_text(chunk, dek, ck, derived) do
       {:ok, {text, heading}} ->
         %{hit | text: text, heading_path: heading}
 
@@ -376,13 +378,13 @@ defmodule Engram.Notes do
     end
   end
 
-  defp display_text(%{display_ct: ct} = chunk, dek, _derived) when is_binary(ct),
+  defp display_text(%{display_ct: ct} = chunk, dek, _ck, _derived) when is_binary(ct),
     do: Crypto.decrypt_chunk_text(chunk, dek, to_string(chunk.qdrant_point_id))
 
-  defp display_text(%{slice_sum: nil}, _dek, _derived), do: :none
+  defp display_text(%{slice_sum: nil}, _dek, _ck, _derived), do: :none
 
-  defp display_text(chunk, _dek, derived) do
-    if slices?(chunk) do
+  defp display_text(chunk, _dek, ck, derived) do
+    if slices?(chunk, ck) do
       case Map.fetch!(derived, chunk.note_id) do
         :error ->
           :error
@@ -390,7 +392,9 @@ defmodule Engram.Notes do
         by_position ->
           case Map.get(by_position, chunk.position) do
             %{text: text, heading_path: heading} ->
-              tag = if Engram.Indexing.text_sum(text) == chunk.slice_sum, do: :ok, else: :stale
+              tag =
+                if Engram.Indexing.text_sum(ck, text) == chunk.slice_sum, do: :ok, else: :stale
+
               {tag, {text, heading}}
 
             # The note lost this position since its index: nothing to show

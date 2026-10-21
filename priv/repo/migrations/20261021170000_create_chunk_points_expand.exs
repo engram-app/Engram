@@ -19,7 +19,8 @@ defmodule Engram.Repo.Migrations.CreateChunkPointsExpand do
   # ordinal). user_id is the RLS column only: no FK, no index; a user delete
   # reaches these rows through note_id (notes cascade from users).
   #
-  #   * slice_sum: CRC32 of the chunk's display text. Search re-derives a
+  #   * slice_sum: keyed checksum of the chunk's display text (first 4
+  #     bytes of HMAC-SHA256 under the user's content-hash subkey). Search re-derives a
   #     small note's chunk from its content and checks it.
   #   * member_fps: a merged point's member fingerprints, 8-byte prefixes
   #     concatenated.

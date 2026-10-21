@@ -90,7 +90,8 @@ defmodule Engram.SearchChunkTextSourceTest do
         })
         |> Repo.insert!()
 
-        insert_point!(ctx, point_id, pos, slice_sum: Engram.Indexing.text_sum(text))
+        ck = Crypto.dek_content_hash_key_from_bytes(ctx.dek)
+        insert_point!(ctx, point_id, pos, slice_sum: Engram.Indexing.text_sum(ck, text))
       end)
   end
 
