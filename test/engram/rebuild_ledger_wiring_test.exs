@@ -182,6 +182,81 @@ defmodule Engram.RebuildLedgerWiringTest do
     assert Rebuild.ledger().spent_tokens == 77
   end
 
+  @handler "engram-rebuild-token-meter"
+
+  defp meter_attached?,
+    do:
+      Enum.any?(
+        :telemetry.list_handlers([:engram, :voyage, :embed, :tokens]),
+        &(&1.id == @handler)
+      )
+
+  defp tokens(n),
+    do: :telemetry.execute([:engram, :voyage, :embed, :tokens], %{total_tokens: n}, %{})
+
+  # `:telemetry` detaches a handler that raises, for good: every later
+  # rebuild on the node would then go unmetered. A malformed count makes
+  # `debit/1` raise a FunctionClauseError, which is not a DB error.
+  test "a debit that raises keeps the meter attached; the next response is debited live",
+       %{note: note} do
+    Rebuild.set_budget(10_000)
+    me = self()
+
+    :ok =
+      :telemetry.attach(
+        "meter-failed-probe",
+        [:engram, :rebuild, :meter_failed],
+        fn _event, m, _meta, _ -> send(me, {:meter_failed, m.tokens}) end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach("meter-failed-probe") end)
+
+    assert :done =
+             Rebuild.spend(note, fn ->
+               tokens(-1)
+               tokens(10)
+               send(me, {:mid, Rebuild.ledger().spent_tokens, meter_attached?()})
+               :done
+             end)
+
+    assert_received {:meter_failed, -1}
+    assert_received {:mid, 10, true}
+    assert meter_attached?()
+    assert Rebuild.ledger().spent_tokens == 10
+  end
+
+  # A debit that fails for a while (the ledger is unreachable for the first
+  # response) is charged when the rebuild ends.
+  test "a failed live debit is charged when the rebuild ends", %{note: note} do
+    Rebuild.set_budget(10_000)
+    me = self()
+
+    assert :done =
+             Rebuild.spend(note, fn ->
+               Repo.query!("ALTER TABLE rebuild_ledger RENAME TO rebuild_ledger_away")
+               tokens(5)
+               Repo.query!("ALTER TABLE rebuild_ledger_away RENAME TO rebuild_ledger")
+               tokens(10)
+               send(me, {:mid, Rebuild.ledger().spent_tokens})
+               :done
+             end)
+
+    assert_received {:mid, 10}
+    assert Rebuild.ledger().spent_tokens == 15
+    assert meter_attached?()
+  end
+
+  test "spend re-attaches a meter that went missing before calling Voyage", %{note: note} do
+    Rebuild.set_budget(10_000)
+    :ok = :telemetry.detach(@handler)
+    refute meter_attached?()
+
+    assert :ok = Rebuild.spend(note, fn -> tokens(7) end)
+    assert meter_attached?()
+    assert Rebuild.ledger().spent_tokens == 7
+  end
+
   test "an indexed note whose content did not change rebuilds with 0 Voyage calls", ctx do
     %{note: note, user: user} = ctx
     Rebuild.set_budget(10_000)

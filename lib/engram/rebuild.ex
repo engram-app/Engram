@@ -167,8 +167,16 @@ defmodule Engram.Rebuild do
   past its timeout and a node can die, and neither runs an `after`. Then
   the drift check: a note that cost over its limit is parked until edited.
   """
-  @spec spend(Note.t(), (-> result)) :: result when result: term()
+  @spec spend(Note.t(), (-> result)) :: result | {:error, :rebuild_paused}
+        when result: term()
   def spend(%Note{} = note, fun) do
+    # No meter, no Voyage: an unmetered rebuild would never halt.
+    if attach() in [:ok, {:error, :already_exists}],
+      do: metered(note, fun),
+      else: {:error, :rebuild_paused}
+  end
+
+  defp metered(note, fun) do
     Process.put(@meter_key, {0, 0})
 
     try do
@@ -181,8 +189,10 @@ defmodule Engram.Rebuild do
   end
 
   @doc false
-  # Attached once at boot. Telemetry handlers run in the emitting process,
+  # Attached at boot, and again by `spend/2` if it went missing (`:telemetry`
+  # detaches a handler that raises). Handlers run in the emitting process,
   # so this counts only the tokens of the process inside `spend/2`.
+  @spec attach() :: :ok | {:error, :already_exists}
   def attach do
     :telemetry.attach(
       "engram-rebuild-token-meter",
@@ -205,14 +215,30 @@ defmodule Engram.Rebuild do
   def handle_tokens(_event, _measurements, _meta, _config), do: :ok
 
   # The tokens left for `spend/2` to debit: 0 once this debit landed. A
-  # handler that raises is detached by `:telemetry` for good, which would
-  # stop metering on this node, so a failed debit is not raised here; it is
-  # carried and retried (and raised) by `spend/2`'s own debit.
+  # handler that raises or exits is detached by `:telemetry` for good, and
+  # every later rebuild on the node would go unmetered, so NOTHING escapes
+  # here: a failed debit is logged, counted (`[:engram, :rebuild,
+  # :meter_failed]`) and carried to `spend/2`'s own debit at the end, which
+  # does raise.
   defp meter(tokens) do
     _ = debit(tokens)
     0
   rescue
-    _e in [DBConnection.ConnectionError, Postgrex.Error] -> tokens
+    e -> meter_failed(tokens, :error, Metadata.safe_reason(e))
+  catch
+    kind, reason -> meter_failed(tokens, kind, Metadata.safe_reason(reason))
+  end
+
+  defp meter_failed(tokens, kind, reason) do
+    :telemetry.execute([:engram, :rebuild, :meter_failed], %{count: 1, tokens: tokens}, %{})
+
+    Logger.error(
+      "rebuild_meter_debit_failed",
+      Metadata.with_category(:error, :oban, kind: kind, reason: reason, total_count: tokens)
+    )
+
+    # A malformed (negative) count carries nothing.
+    max(tokens, 0)
   end
 
   @doc """
