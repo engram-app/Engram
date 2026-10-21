@@ -193,8 +193,9 @@ defmodule Engram.Notes.Utf8BackfillTest do
       note = %Note{content: secret, title: "Biopsy results", path: "Medical/biopsy.md"}
 
       # The struct really does carry plaintext, so this measures the filter
-      # rather than an empty base. `structs: false` bypasses the schema's `limit: :infinity`: the default cap of 50 keys truncates the map in atom-hash order, so the test flaked by load order.
+      # rather than an empty base. `structs: false` bypasses the schema's
       # `redact: true` Inspect impl, which now hides it from a plain inspect.
+      # `limit: :infinity`: the default 50-key cap truncates in atom-hash order, which flaked by load order.
       assert inspect(note, structs: false, limit: :infinity) =~ "biopsy"
 
       assert Utf8Backfill.format_reason({:error, :version_conflict, note}) == "version_conflict"
