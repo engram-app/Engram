@@ -33,6 +33,7 @@ defmodule Engram.Notes.NoteAttrsRlsTest do
               user_id: user.id,
               vault_id: vault.id,
               key_id: 64,
+              ord: 0,
               h: FilterId.value_hmac(fk, "draft")
             }
           ],
@@ -117,6 +118,7 @@ defmodule Engram.Notes.NoteAttrsRlsTest do
                      user_id: b.user.id,
                      vault_id: b.vault.id,
                      key_id: 64,
+                     ord: 0,
                      n: 1.0
                    }
                  ],

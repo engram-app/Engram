@@ -244,6 +244,77 @@ defmodule Engram.Vector.FilterRoundtripTest do
     assert count(col, %{must: [u, eq.("b", 1)]}) == 0
   end
 
+  # `n` / `d` are plaintext and the user-key ids start at 64 for everyone, so
+  # the tenant clause alone keeps two users' equal numbers apart.
+  test "cross tenant: plaintext n / d at the same key id never cross", %{col: col} do
+    a = tenant()
+    b = tenant()
+
+    :ok =
+      Qdrant.upsert_points(col, [
+        v5_point(a, "rating: 4\nlaunch: 2026-11-01\n"),
+        v5_point(b, "rating: 4\nlaunch: 2026-11-01\n")
+      ])
+
+    ub = %{key: "u", match: %{value: FilterId.uuid(b.user_id)}}
+    n = Qdrant.attr_filter(key_id("rating"), {:n, gte: 4})
+
+    d =
+      Qdrant.attr_filter(key_id("launch"), {:d, gte: DateTime.to_unix(~U[2026-11-01 00:00:00Z])})
+
+    assert count(col, %{must: [n]}) == 2
+    assert count(col, %{must: [ub, n]}) == 1
+    assert count(col, %{must: [ub, d]}) == 1
+
+    gone = tenant()
+    ug = %{key: "u", match: %{value: FilterId.uuid(gone.user_id)}}
+    assert count(col, %{must: [ug, n]}) == 0
+    assert count(col, %{must: [ug, d]}) == 0
+  end
+
+  # H1 against the real payload: each named field's `fields` condition
+  # matches the point that carries it and not the one that does not.
+  test "named-field filters match what v5 writes", %{col: col} do
+    t = tenant()
+
+    yaml =
+      "status: draft\nauthor: alice\nreviewed_by: bob\nproject: apollo\nsource: [https://a]\n" <>
+        "created: 2026-03-01T09:00:00Z\nupdated: 2026-04-01T10:00:00Z\nreviewed: 2026-04-02T00:00:00Z\n" <>
+        "expires: 2026-12-01\ndue: 2026-11-01\npriority: 2\n"
+
+    :ok = Qdrant.upsert_points(col, [v5_point(t, yaml), v5_point(t, "")])
+    u = %{key: "u", match: %{value: FilterId.uuid(t.user_id)}}
+
+    hits = fn filter ->
+      {:ok, [c]} = Engram.Search.FieldFilters.to_conditions(t.user_id, t.fk, [filter])
+      count(col, %{must: [u, c]})
+    end
+
+    for {key, op, value} <- [
+          {"status", "eq", "Draft"},
+          {"author", "eq", "alice"},
+          {"reviewed_by", "eq", "bob"},
+          {"project", "eq", "apollo"},
+          {"source", "eq", "https://a"},
+          {"resource", "in", ["https://a", "x"]},
+          {"created", "after", "2026-03-01"},
+          {"date", "after", "2026-02-28"},
+          {"updated", "eq", "2026-04-01"},
+          {"modified", "gte", "2026-04-01T10:00:00Z"},
+          {"reviewed", "lte", "2026-04-02"},
+          {"expires", "eq", "2026-12-01"},
+          {"stale_after", "after", "2026-11-30"},
+          {"due", "before", "2026-11-02"},
+          {"priority", "gte", 2}
+        ] do
+      assert hits.(%{"key" => key, "op" => op, "value" => value}) == 1, "#{key} #{op}"
+    end
+
+    # The default status matches the note that sets none (stored as no key).
+    assert hits.(%{"key" => "status", "value" => "stable"}) == 1
+    assert hits.(%{"key" => "due", "op" => "after", "value" => "2026-11-02"}) == 0
+  end
+
   test "cross tenant: the same status never matches the other user", %{col: col} do
     a = tenant()
     b = tenant()

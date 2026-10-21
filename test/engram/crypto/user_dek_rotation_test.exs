@@ -926,6 +926,29 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert raw.type_hmac == Crypto.hmac_field(new_filter_key, "playbook")
     end
 
+    # M2: a dictionary row neither DEK opens fails the rotation like the other
+    # DB sweeps; skipping it would leave an old-key HMAC that resolves to a
+    # second id for the same key.
+    test "a dictionary row neither DEK decrypts fails the rotation", %{user: user} do
+      Repo.insert_all(
+        FrontmatterKey,
+        [
+          %{
+            user_id: user.id,
+            key_id: 64,
+            key_hmac: :crypto.strong_rand_bytes(32),
+            name_ct: :crypto.strong_rand_bytes(24),
+            name_nonce: :crypto.strong_rand_bytes(12)
+          }
+        ],
+        skip_tenant_check: true
+      )
+
+      assert_raise RuntimeError, ~r/sweep_frontmatter_keys: decrypt failed/, fn ->
+        UserDekRotation.rotate_user(user.id)
+      end
+    end
+
     test "rotation keeps every frontmatter key id, rekeys the dictionary, rewraps names",
          %{user: user, vault: vault} do
       content = "---\nstatus: Draft\nMood: calm\nrating: 4\n---\nbody\n"

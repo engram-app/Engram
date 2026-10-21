@@ -79,22 +79,80 @@ defmodule Engram.Notes.FrontmatterKeysTest do
     assert length(rows(u.id)) == 1
   end
 
-  test "rotation keeps every id, rekeys the HMAC and keeps the name readable",
-       %{user: u, dek: dek, fk: fk} do
-    {ids, 0} = FrontmatterKeys.resolve(u.id, dek, names(fk, ~w(Mood rating)))
-    new_dek = :crypto.strong_rand_bytes(32)
-    new_fk = Crypto.dek_filter_key_from_bytes(new_dek)
+  defp attr!(user, key_id) do
+    vault = insert(:vault, user: user)
+    note = insert(:note, user: user, vault: vault)
 
-    assert :ok = FrontmatterKeys.rotate(u.id, dek, new_dek, new_fk)
-    # Idempotent: a second run (rows already under the new DEK) changes nothing.
-    assert :ok = FrontmatterKeys.rotate(u.id, dek, new_dek, new_fk)
+    Repo.insert_all(
+      Engram.Notes.NoteAttr,
+      [%{note_id: note.id, user_id: user.id, vault_id: vault.id, key_id: key_id, ord: 0, n: 1.0}],
+      skip_tenant_check: true
+    )
+  end
 
-    by_id = Map.new(rows(u.id), &{&1.key_id, &1})
-    assert Map.keys(by_id) |> Enum.sort() == ids |> Map.values() |> Enum.sort()
+  defp age!(user_id) do
+    Repo.query!(
+      "UPDATE frontmatter_keys SET inserted_at = now() - interval '2 days' WHERE user_id = $1",
+      [Ecto.UUID.dump!(user_id)]
+    )
+  end
 
-    mood = by_id[ids[FilterId.key_hmac(fk, "mood")]]
-    assert mood.key_hmac == FilterId.key_hmac(new_fk, "mood")
-    assert FrontmatterKeys.name(mood, new_dek) == {:ok, "Mood"}
-    assert FrontmatterKeys.name(mood, dek) == :error
+  describe "reap_unused/1 (M3: ids never reused, cap counts live keys)" do
+    test "deletes old unused keys, keeps used ones, young ones and the highest id",
+         %{user: u, dek: dek, fk: fk} do
+      {ids, 0} = FrontmatterKeys.resolve(u.id, dek, names(fk, ~w(a b c d)))
+      id = &ids[FilterId.key_hmac(fk, &1)]
+      attr!(u, id.("b"))
+      age!(u.id)
+      {_, 0} = FrontmatterKeys.resolve(u.id, dek, names(fk, ["young"]))
+
+      # a, c and d go; b is used, and `young` is both too new and the highest.
+      assert FrontmatterKeys.reap_unused() == 3
+      assert Enum.map(rows(u.id), & &1.key_id) == Enum.sort([id.("b"), 68])
+    end
+
+    test "a reaped id is never handed out again", %{user: u, dek: dek, fk: fk} do
+      {ids, 0} = FrontmatterKeys.resolve(u.id, dek, names(fk, ~w(a b)))
+      [reaped] = for name <- ~w(a b), ids[FilterId.key_hmac(fk, name)] == 64, do: name
+      age!(u.id)
+      assert FrontmatterKeys.reap_unused() == 1
+      assert Enum.map(rows(u.id), & &1.key_id) == [65]
+
+      {again, 0} = FrontmatterKeys.resolve(u.id, dek, names(fk, [reaped]))
+      assert again[FilterId.key_hmac(fk, reaped)] == 66
+    end
+
+    test "reaping frees cap space", %{user: u, dek: dek, fk: fk} do
+      ServiceConfig.put_override(:frontmatter_key_cap, 2)
+      {_, 0} = FrontmatterKeys.resolve(u.id, dek, names(fk, ~w(a b)))
+      assert {_, 1} = FrontmatterKeys.resolve(u.id, dek, names(fk, ["c"]))
+      assert FrontmatterKeys.at_limit?(u.id)
+
+      age!(u.id)
+      assert FrontmatterKeys.reap_unused() == 1
+      refute FrontmatterKeys.at_limit?(u.id)
+      assert {ids, 0} = FrontmatterKeys.resolve(u.id, dek, names(fk, ["c"]))
+      assert map_size(ids) == 1
+    end
+  end
+
+  test "at the smallint max new keys are skipped and counted", %{user: u, dek: dek, fk: fk} do
+    {ct, nonce} =
+      Engram.Crypto.Envelope.encrypt("top", dek, FrontmatterKeys.name_aad(u.id, 32_767))
+
+    Repo.insert_all(
+      FrontmatterKey,
+      [%{user_id: u.id, key_id: 32_767, key_hmac: "top", name_ct: ct, name_nonce: nonce}],
+      skip_tenant_check: true
+    )
+
+    assert {ids, 1} = FrontmatterKeys.resolve(u.id, dek, names(fk, ["new"]))
+    assert ids == %{}
+    assert FrontmatterKeys.at_limit?(u.id)
+  end
+
+  test "the cap is clamped to what a smallint id can hold" do
+    ServiceConfig.put_override(:frontmatter_key_cap, 1_000_000)
+    assert FrontmatterKeys.cap() == 32_767 - 64 + 1
   end
 end
