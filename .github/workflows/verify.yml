@@ -3859,7 +3859,11 @@ jobs:
     # (~20s); ~3min on a PR that touches migrations.
     # Enforced by the `ci` aggregate — the three standalone predecessor
     # jobs' results were never actually checked anywhere.
-    if: github.event_name == 'push' && github.ref != 'refs/heads/main'
+    # Runs in the merge queue too: without strict up-to-date, the queue commit
+    # is the first tree where a drop meets lib/ code merged after the PR
+    # branched, so the branch-push run alone no longer proves it. The queue
+    # diffs against merge_group.base_sha (DIFF_BASE), its parent.
+    if: (github.event_name == 'push' && github.ref != 'refs/heads/main') || github.event_name == 'merge_group'
     runs-on: [self-hosted, linux, x64, isolated]
     needs: [fingerprint, prebuild-mix]
     permissions:
@@ -3900,7 +3904,7 @@ jobs:
           # the gates ran on non-migration PRs. Compute the base
           # explicitly and fail loud if it can't, rather than guessing. (#718)
           git fetch -q origin main
-          base=$(git merge-base FETCH_HEAD HEAD)
+          base=$(git merge-base "${{ github.event.merge_group.base_sha || 'FETCH_HEAD' }}" HEAD)
           if [ -z "$base" ]; then
             echo "::error::Could not compute merge-base with origin/main — cannot determine migration touches."
             exit 1
@@ -4012,7 +4016,7 @@ jobs:
         id: list
         run: |
           git fetch -q --depth=1 origin main || true
-          BASE_REF="origin/main" \
+          BASE_REF="$DIFF_BASE" \
             bash priv/repo/list_new_migrations.sh > /tmp/new-migrations.txt
           if [ ! -s /tmp/new-migrations.txt ]; then
             echo "::error::migration drops detected but no migrations newer than base ref"
