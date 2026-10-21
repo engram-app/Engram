@@ -216,6 +216,8 @@ defmodule Engram.Crypto do
   def fresh_user(%User{encrypted_dek: nil} = user), do: Engram.Repo.reload!(user)
   def fresh_user(%User{} = user), do: user
 
+  @dek_load_retries 2
+
   @doc """
   Returns the plaintext DEK for a user, unwrapping via the provider if not cached.
   """
@@ -230,12 +232,43 @@ defmodule Engram.Crypto do
         {:ok, dek}
 
       :miss ->
-        # Claim BEFORE reading the blob: a flip that commits after the read
-        # invalidates the slot, and put_if_claimed then refuses to store the
-        # retired DEK this call unwrapped.
-        token = DekCache.claim(user_id)
-        unwrap_and_cache(user_id, token, wrapped_dek(user))
+        load_dek(user, @dek_load_retries)
     end
+  end
+
+  # Single flight: one caller per node unwraps, concurrent misses wait for its
+  # DEK or share its error. A `:retry` (loader died, or an invalidate landed)
+  # asks again; past the budget the caller fails rather than claim over the
+  # holder, so contention never turns into competing unwraps.
+  defp load_dek(user, retries) do
+    case DekCache.claim_or_await(user.id) do
+      {:ok, dek} -> {:ok, dek}
+      {:error, _} = err -> err
+      {:claimed, token} -> load_claimed(user, token)
+      :retry when retries > 0 -> load_dek(user, retries - 1)
+      :retry -> {:error, :dek_load_contended}
+    end
+  end
+
+  # Claim BEFORE reading the blob: a flip that commits after the read
+  # invalidates the slot, and put_if_claimed then refuses to store the
+  # retired DEK this call unwrapped. A raise (DB error in wrapped_dek, a
+  # provider bug) must release too: callers that rescue keep the loader
+  # alive, so its monitor would never fire and waiters would sit out the
+  # await budget.
+  defp load_claimed(%User{id: user_id} = user, token) do
+    case unwrap_and_cache(user_id, token, wrapped_dek(user)) do
+      {:ok, _dek} = ok ->
+        ok
+
+      {:error, reason} = err ->
+        :ok = DekCache.release(user_id, token, reason)
+        err
+    end
+  catch
+    kind, reason ->
+      :ok = DekCache.release(user_id, token, :dek_load_crashed)
+      :erlang.raise(kind, reason, __STACKTRACE__)
   end
 
   # The wrapped DEK as the DB holds it NOW, not as the caller's struct does:
@@ -637,7 +670,7 @@ defmodule Engram.Crypto do
 
     case Envelope.decrypt(note.tags_ciphertext, note.tags_nonce, dek, tags_aad) do
       {:ok, tags_bin} ->
-        {:ok, %{note | tags: :erlang.binary_to_term(tags_bin, [:safe])}}
+        {:ok, %{note | tags: Engram.Notes.TagsTerm.decode!(tags_bin)}}
 
       :error ->
         {:error, :decrypt_failed}

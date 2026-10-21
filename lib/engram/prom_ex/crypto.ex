@@ -5,8 +5,10 @@ defmodule Engram.PromEx.Crypto do
   Subscribes to:
 
     * `[:engram, :crypto, :dek_cache]` — `%{count: 1}`, metadata
-      `%{outcome: :hit | :miss}`. A miss pairs with a provider unwrap
-      (network RPC under AwsKms), so the hit/miss ratio is the leading
+      `%{outcome: :hit | :miss | :coalesced}`. `:coalesced` is a miss that
+      waited for another caller's in-flight unwrap and got its DEK or its
+      error, so `miss - coalesced` is the number of provider unwrap attempts
+      (network RPC under AwsKms), the leading
       indicator of unwrap cost on the read path.
     * `[:engram, :envelope, :compression_gate]`: `%{allowed: 0 | 1}`,
       emitted by `Engram.Crypto.CompressionGate` on every verdict change.
@@ -73,7 +75,8 @@ defmodule Engram.PromEx.Crypto do
         counter(
           metric_prefix ++ [:dek_cache, :total],
           event_name: @dek_cache_event,
-          description: "DekCache lookups by outcome (hit | miss).",
+          description:
+            "DekCache lookups by outcome (hit | miss | coalesced); unwraps = miss - coalesced.",
           tags: [:outcome]
         ),
         last_value(
