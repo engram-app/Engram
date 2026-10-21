@@ -586,6 +586,7 @@ defmodule EngramWeb.VaultAccessAttackTest do
     {:get, "/api/sync/quiescence"},
     {:get, "/api/attachments"},
     {:get, "/api/attachments/changes"},
+    {:get, "/api/attachments/by-id/:id/backlinks"},
     {:get, "/api/attachments/*path"},
     {:get, "/api/logs"},
     {:get, "/api/embed-status"}
