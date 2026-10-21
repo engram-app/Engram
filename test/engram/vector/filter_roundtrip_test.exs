@@ -91,6 +91,7 @@ defmodule Engram.Vector.FilterRoundtripTest do
     }
 
     flat = FlatFields.extract("---\n" <> yaml <> "---\nbody\n", t.fk)
+    flat = FlatFields.put_key_ids(flat, key_ids(t))
 
     %{
       id: Ecto.UUID.generate(),
@@ -98,6 +99,18 @@ defmodule Engram.Vector.FilterRoundtripTest do
       payload: PayloadV5.build(note, flat)
     }
   end
+
+  # The per-user dictionary ids (`FrontmatterKeys`) without a database: a
+  # fixed list, the same for every tenant, which is exactly the case the
+  # cross-tenant test needs (equal ids, different users).
+  @user_keys ~w(phase other rating launch a b)
+  defp key_ids(t),
+    do:
+      @user_keys
+      |> Enum.with_index(64)
+      |> Map.new(fn {k, i} -> {FilterId.key_hmac(t.fk, k), i} end)
+
+  defp key_id(name), do: 64 + Enum.find_index(@user_keys, &(&1 == name))
 
   defp ids(col, opts) do
     {:ok, hits} = Qdrant.search(col, @vector, [limit: 10] ++ opts)
@@ -199,21 +212,109 @@ defmodule Engram.Vector.FilterRoundtripTest do
     assert ids(col, user_id: t.user_id, vault_id: t.vault_id) == [new.id]
   end
 
-  test "nested long-tail filters match within one element", %{col: col} do
+  test "nested user-key filters match within one element", %{col: col} do
     t = tenant()
     draft = v5_point(t, "phase: draft\nrating: 4.5\nlaunch: 2026-11-01\n")
     other = v5_point(t, "phase: stable\nother: draft\nrating: 3\nlaunch: 2027-01-01\n")
     :ok = Qdrant.upsert_points(col, [draft, other])
 
-    k = &FilterId.attr(t.fk, &1)
     v = &FilterId.attr_value(t.fk, &1)
     u = %{key: "u", match: %{value: FilterId.uuid(t.user_id)}}
+    f = fn name, value -> Qdrant.attr_filter(key_id(name), value) end
 
-    assert count(col, %{must: [u, Qdrant.attr_filter(k.("phase"), v.("draft"))]}) == 1
-    assert count(col, %{must: [u, Qdrant.num_range(k.("rating"), gte: 4)]}) == 1
+    assert count(col, %{must: [u, f.("phase", {:h, v.("draft")})]}) == 1
+    assert count(col, %{must: [u, f.("phase", {:h, [v.("draft"), v.("stable")]})]}) == 2
+    assert count(col, %{must: [u, f.("rating", {:n, gte: 4})]}) == 1
 
     lt = DateTime.to_unix(~U[2026-12-01 00:00:00Z])
-    assert count(col, %{must: [u, Qdrant.date_range(k.("launch"), lt: lt)]}) == 1
+    assert count(col, %{must: [u, f.("launch", {:d, lt: lt})]}) == 1
+  end
+
+  # The key and its value must match in the SAME fa entry: `a: 1, b: 5`
+  # is not a note where `a = 5`.
+  test "a value under another key never matches", %{col: col} do
+    t = tenant()
+    :ok = Qdrant.upsert_points(col, [v5_point(t, "a: 1\nb: 5\n")])
+    u = %{key: "u", match: %{value: FilterId.uuid(t.user_id)}}
+    eq = fn name, n -> Qdrant.attr_filter(key_id(name), {:n, gte: n, lte: n}) end
+
+    assert count(col, %{must: [u, eq.("a", 1)]}) == 1
+    assert count(col, %{must: [u, eq.("b", 5)]}) == 1
+    assert count(col, %{must: [u, eq.("a", 5)]}) == 0
+    assert count(col, %{must: [u, eq.("b", 1)]}) == 0
+  end
+
+  # `n` / `d` are plaintext and the user-key ids start at 64 for everyone, so
+  # the tenant clause alone keeps two users' equal numbers apart.
+  test "cross tenant: plaintext n / d at the same key id never cross", %{col: col} do
+    a = tenant()
+    b = tenant()
+
+    :ok =
+      Qdrant.upsert_points(col, [
+        v5_point(a, "rating: 4\nlaunch: 2026-11-01\n"),
+        v5_point(b, "rating: 4\nlaunch: 2026-11-01\n")
+      ])
+
+    ub = %{key: "u", match: %{value: FilterId.uuid(b.user_id)}}
+    n = Qdrant.attr_filter(key_id("rating"), {:n, gte: 4})
+
+    d =
+      Qdrant.attr_filter(key_id("launch"), {:d, gte: DateTime.to_unix(~U[2026-11-01 00:00:00Z])})
+
+    # The module shares one collection, so count per tenant, never globally.
+    ua = %{key: "u", match: %{value: FilterId.uuid(a.user_id)}}
+    assert count(col, %{must: [ua, n]}) == 1
+    assert count(col, %{must: [ub, n]}) == 1
+    assert count(col, %{must: [ub, d]}) == 1
+
+    gone = tenant()
+    ug = %{key: "u", match: %{value: FilterId.uuid(gone.user_id)}}
+    assert count(col, %{must: [ug, n]}) == 0
+    assert count(col, %{must: [ug, d]}) == 0
+  end
+
+  # H1 against the real payload: each named field's `fields` condition
+  # matches the point that carries it and not the one that does not.
+  test "named-field filters match what v5 writes", %{col: col} do
+    t = tenant()
+
+    yaml =
+      "status: draft\nauthor: alice\nreviewed_by: bob\nproject: apollo\nsource: [https://a]\n" <>
+        "created: 2026-03-01T09:00:00Z\nupdated: 2026-04-01T10:00:00Z\nreviewed: 2026-04-02T00:00:00Z\n" <>
+        "expires: 2026-12-01\ndue: 2026-11-01\npriority: 2\n"
+
+    :ok = Qdrant.upsert_points(col, [v5_point(t, yaml), v5_point(t, "")])
+    u = %{key: "u", match: %{value: FilterId.uuid(t.user_id)}}
+
+    hits = fn filter ->
+      {:ok, [c]} = Engram.Search.FieldFilters.to_conditions(t.user_id, t.fk, [filter])
+      count(col, %{must: [u, c]})
+    end
+
+    for {key, op, value} <- [
+          {"status", "eq", "Draft"},
+          {"author", "eq", "alice"},
+          {"reviewed_by", "eq", "bob"},
+          {"project", "eq", "apollo"},
+          {"source", "eq", "https://a"},
+          {"resource", "in", ["https://a", "x"]},
+          {"created", "after", "2026-03-01"},
+          {"date", "after", "2026-02-28"},
+          {"updated", "eq", "2026-04-01"},
+          {"modified", "gte", "2026-04-01T10:00:00Z"},
+          {"reviewed", "lte", "2026-04-02"},
+          {"expires", "eq", "2026-12-01"},
+          {"stale_after", "after", "2026-11-30"},
+          {"due", "before", "2026-11-02"},
+          {"priority", "gte", 2}
+        ] do
+      assert hits.(%{"key" => key, "op" => op, "value" => value}) == 1, "#{key} #{op}"
+    end
+
+    # The default status matches the note that sets none (stored as no key).
+    assert hits.(%{"key" => "status", "value" => "stable"}) == 1
+    assert hits.(%{"key" => "due", "op" => "after", "value" => "2026-11-02"}) == 0
   end
 
   test "cross tenant: the same status never matches the other user", %{col: col} do
@@ -230,18 +331,14 @@ defmodule Engram.Vector.FilterRoundtripTest do
     assert count(col, %{must: [ua, s]}) == 1
     assert count(col, %{must: [s]}) == 1
 
-    assert count(col, %{
-             must: [
-               ua,
-               Qdrant.attr_filter(
-                 FilterId.attr(a.fk, "phase"),
-                 FilterId.attr_value(a.fk, "draft")
-               )
-             ]
-           }) == 1
+    # Both users have `phase` at the SAME key id; the value id differs per
+    # user and the tenant condition separates them.
+    phase = Qdrant.attr_filter(key_id("phase"), {:h, FilterId.attr_value(a.fk, "draft")})
+    assert count(col, %{must: [ua, phase]}) == 1
 
     ub = %{key: "u", match: %{value: FilterId.uuid(b.user_id)}}
     assert count(col, %{must: [ub, s]}) == 0
+    assert count(col, %{must: [ub, phase]}) == 0
   end
 
   defp qdrant_url do

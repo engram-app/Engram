@@ -182,6 +182,37 @@
             "minimum": 0,
             "type": "number"
           },
+          "fields": {
+            "description": "Optional filters on any frontmatter key, all must match: user-added keys and the built-in status, author, reviewed_by, source, project, type, tags (exact) and created, updated, reviewed, expires, due, priority (range). op: eq, in (a list, at most 100), gt/gte/lt/lte (numbers or ISO dates), after/before (ISO dates; a bare date is the whole UTC day). A quoted number is text. created/updated fall back to the note's real times when the key is missing. A key no note has is an error.",
+            "items": {
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "op": {
+                  "default": "eq",
+                  "enum": [
+                    "eq",
+                    "in",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "after",
+                    "before"
+                  ],
+                  "type": "string"
+                },
+                "value": {}
+              },
+              "required": [
+                "key",
+                "value"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
           "folder": {
             "description": "Optional folder path to scope the search to (exact match)",
             "type": "string"

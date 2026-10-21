@@ -9,9 +9,10 @@ defmodule Engram.Notes.NoteFieldsTest do
   import Mox
 
   alias Engram.Crypto
-  alias Engram.Crypto.Envelope
   alias Engram.Indexing
   alias Engram.Notes
+  alias Engram.Notes.FrontmatterKey
+  alias Engram.Notes.FrontmatterKeys
   alias Engram.Notes.Note
   alias Engram.Notes.NoteAttr
   alias Engram.Repo
@@ -91,89 +92,170 @@ defmodule Engram.Notes.NoteFieldsTest do
     Repo.all(from(a in NoteAttr, where: a.note_id == ^note_id), skip_tenant_check: true)
   end
 
-  defp decrypt!(user, note, field, ct, nonce) do
-    {:ok, dek} = Crypto.get_dek(user)
-    {:ok, plain} = Envelope.decrypt(ct, nonce, dek, Crypto.aad_for_row(:notes, field, note.id))
-    plain
+  defp named(field), do: FrontmatterKeys.named_id(field)
+
+  defp dictionary(user_id),
+    do:
+      Repo.all(from(k in FrontmatterKey, where: k.user_id == ^user_id, order_by: k.key_id),
+        skip_tenant_check: true
+      )
+
+  # key_hmac -> key_id for this user's user-added keys.
+  defp ids(user_id), do: Map.new(dictionary(user_id), &{&1.key_hmac, &1.key_id})
+
+  # 2026-10-20 Postgres scale audit: no frontmatter field lives on `notes`.
+  test "notes carries no flat-field columns" do
+    cols =
+      Repo.query!("SELECT column_name FROM information_schema.columns WHERE table_name = 'notes'").rows
+      |> List.flatten()
+
+    for c <- ~w(status_hmac status_ciphertext author_hmac rev_by_hmac src_hmac proj_hmac
+                fm_updated fm_reviewed fm_expires fm_due fm_priority),
+        do: refute(c in cols, c)
   end
 
-  test "each exact key stores its blind index and an encrypted value", %{user: user, vault: vault} do
-    {note, user} = index!(user, vault, @full)
-    {:ok, fk} = Crypto.dek_filter_key(user)
-
-    assert note.status_hmac == FilterId.value_hmac(fk, "draft")
-    assert note.author_hmac == FilterId.value_hmac(fk, "alice")
-    assert note.rev_by_hmac == FilterId.value_hmac(fk, "bob")
-    assert note.proj_hmac == FilterId.value_hmac(fk, "apollo")
-
-    assert note.src_hmac == [
-             FilterId.value_hmac(fk, "https://a"),
-             FilterId.value_hmac(fk, "https://b")
-           ]
-
-    assert decrypt!(user, note, :status, note.status_ciphertext, note.status_nonce) == "draft"
-    assert decrypt!(user, note, :author, note.author_ciphertext, note.author_nonce) == "alice"
-
-    assert decrypt!(user, note, :reviewed_by, note.reviewed_by_ciphertext, note.reviewed_by_nonce) ==
-             "bob"
-
-    assert decrypt!(user, note, :project, note.project_ciphertext, note.project_nonce) == "apollo"
-
-    assert Jason.decode!(decrypt!(user, note, :source, note.source_ciphertext, note.source_nonce)) ==
-             ["https://a", "https://b"]
-  end
-
-  test "each date and number column stores the plaintext value", %{user: user, vault: vault} do
-    {note, _user} = index!(user, vault, @full)
-    assert note.fm_updated == DateTime.to_unix(~U[2026-04-01 10:00:00Z])
-    assert note.fm_reviewed == DateTime.to_unix(~U[2026-04-02 00:00:00Z])
-    assert note.fm_expires == DateTime.to_unix(~U[2026-12-01 00:00:00Z])
-    assert note.fm_due == DateTime.to_unix(~U[2026-11-01 00:00:00Z])
-    assert note.fm_priority == 2.0
-  end
-
-  test "the long tail lands in note_attrs", %{user: user, vault: vault} do
+  test "named fields land in note_attrs under their reserved ids", %{user: user, vault: vault} do
     {note, user} = index!(user, vault, @full)
     {:ok, fk} = Crypto.dek_filter_key(user)
     rows = attrs(note.id)
 
-    assert Enum.all?(rows, &(&1.user_id == user.id))
-    by_key = Map.new(rows, &{&1.key_hmac, &1})
-    assert by_key[FilterId.key_hmac(fk, "mood")].value_hmac == FilterId.value_hmac(fk, "calm")
-    assert by_key[FilterId.key_hmac(fk, "rating")].value_num == 4.5
+    assert Enum.all?(rows, &(&1.user_id == user.id and &1.vault_id == vault.id))
 
-    assert by_key[FilterId.key_hmac(fk, "launch")].value_date ==
+    h = fn field -> for r <- rows, r.key_id == named(field), do: r.h end
+    d = fn field -> for r <- rows, r.key_id == named(field), do: r.d end
+
+    assert h.(:status) == [FilterId.value_hmac(fk, "draft")]
+    assert h.(:author) == [FilterId.value_hmac(fk, "alice")]
+    assert h.(:reviewed_by) == [FilterId.value_hmac(fk, "bob")]
+    assert h.(:project) == [FilterId.value_hmac(fk, "apollo")]
+
+    assert Enum.sort(h.(:source)) ==
+             Enum.sort([
+               FilterId.value_hmac(fk, "https://a"),
+               FilterId.value_hmac(fk, "https://b")
+             ])
+
+    assert d.(:updated) == [DateTime.to_unix(~U[2026-04-01 10:00:00Z])]
+    assert d.(:reviewed) == [DateTime.to_unix(~U[2026-04-02 00:00:00Z])]
+    assert d.(:expires) == [DateTime.to_unix(~U[2026-12-01 00:00:00Z])]
+    assert d.(:due) == [DateTime.to_unix(~U[2026-11-01 00:00:00Z])]
+    assert for(r <- rows, r.key_id == named(:priority), do: r.n) == [2.0]
+  end
+
+  test "user-added keys get dictionary ids; numbers and dates stay plaintext",
+       %{user: user, vault: vault} do
+    {note, user} = index!(user, vault, @full)
+    {:ok, fk} = Crypto.dek_filter_key(user)
+    {:ok, dek} = Crypto.get_dek(user)
+    ids = ids(user.id)
+    by_id = for r <- attrs(note.id), r.key_id >= 64, into: %{}, do: {r.key_id, r}
+
+    mood = ids[FilterId.key_hmac(fk, "mood")]
+    assert by_id[mood].h == FilterId.value_hmac(fk, "calm")
+    assert by_id[ids[FilterId.key_hmac(fk, "rating")]].n == 4.5
+
+    assert by_id[ids[FilterId.key_hmac(fk, "launch")]].d ==
              DateTime.to_unix(~U[2026-10-01 00:00:00Z])
 
-    assert map_size(by_key) == 3
+    assert map_size(by_id) == 3
+
+    # The dictionary holds the key only as an HMAC plus the encrypted name.
+    names = for k <- dictionary(user.id), do: elem(FrontmatterKeys.name(k, dek), 1)
+    assert Enum.sort(names) == ~w(launch mood rating)
   end
 
-  test "the flat key wins over its alias, as in the payload", %{user: user, vault: vault} do
-    content = "---\nauthor: alice\ngenerated:\n  by: \"agent:x\"\n---\n# T\n\nBody text here.\n"
-    {note, user} = index!(user, vault, content)
-    {:ok, fk} = Crypto.dek_filter_key(user)
-    assert note.author_hmac == FilterId.value_hmac(fk, "alice")
+  test "past the key cap a new key is skipped, never an error", %{user: user, vault: vault} do
+    Engram.ServiceConfig.put_override(:frontmatter_key_cap, 2)
+    {note, _user} = index!(user, vault, @full)
+
+    assert length(dictionary(user.id)) == 2
+    assert length(for r <- attrs(note.id), r.key_id >= 64, do: r) == 2
   end
 
-  test "an absent key leaves the column NULL and writes no row", %{user: user, vault: vault} do
+  # N1: an id resolved before the Voyage call may be reaped before commit.
+  describe "a reaper racing an index pass" do
+    defp age_keys!(user_id) do
+      Repo.query!(
+        "UPDATE frontmatter_keys SET inserted_at = now() - interval '2 days' WHERE user_id = $1",
+        [Ecto.UUID.dump!(user_id)]
+      )
+    end
+
+    # `phase` used, then unused, aged, and not the user's highest id.
+    defp reapable_phase!(user, vault) do
+      {_note, user} = index!(user, vault, "---\nphase: beta\n---\n# Fields\n\nBody one.\n")
+      {:ok, fk} = Crypto.dek_filter_key(user)
+      {:ok, dek} = Crypto.get_dek(user)
+
+      {_, 0} =
+        FrontmatterKeys.resolve(user.id, dek, %{FilterId.key_hmac(fk, "zz_top") => "zz_top"})
+
+      {_note, user} = index!(user, vault, "# Fields\n\nBody two.\n")
+      age_keys!(user.id)
+      phase = ids(user.id)[FilterId.key_hmac(fk, "phase")]
+      {user, fk, phase}
+    end
+
+    defp dangling(user_id, note_id) do
+      known = user_id |> dictionary() |> MapSet.new(& &1.key_id)
+      for r <- attrs(note_id), r.key_id >= 64, not MapSet.member?(known, r.key_id), do: r.key_id
+    end
+
+    test "commit refuses an id reaped after it was resolved", %{user: user, vault: vault} do
+      {user, _fk, phase} = reapable_phase!(user, vault)
+
+      {:ok, note} =
+        Notes.upsert_note(
+          user,
+          vault,
+          %{"path" => "F/Fields.md", "content" => "---\nphase: beta\n---\n# F\n\nBody three.\n"},
+          actor: "api"
+        )
+
+      {:ok, prepared} = Indexing.prepare_index(note, vault, user)
+      assert FrontmatterKeys.reap_unused() >= 1
+      refute phase in Enum.map(dictionary(user.id), & &1.key_id)
+
+      assert Indexing.commit_index(prepared) == {:error, :frontmatter_keys_gone}
+    end
+
+    test "the pass re-resolves once and never writes a dead id", %{user: user, vault: vault} do
+      {user, fk, phase} = reapable_phase!(user, vault)
+
+      # The reaper runs while the pass is embedding, i.e. after `resolve`.
+      stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+        _ = FrontmatterKeys.reap_unused()
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      {:ok, note} =
+        Notes.upsert_note(
+          user,
+          vault,
+          %{"path" => "F/Fields.md", "content" => "---\nphase: beta\n---\n# F\n\nBody four.\n"},
+          actor: "api"
+        )
+
+      assert {:ok, _, _, _} = Indexing.index_note_with_usage(note, vault, user)
+
+      new_phase = ids(user.id)[FilterId.key_hmac(fk, "phase")]
+      assert new_phase > phase
+      assert dangling(user.id, note.id) == []
+      assert Enum.any?(attrs(note.id), &(&1.key_id == new_phase))
+    end
+  end
+
+  test "an absent key writes no row", %{user: user, vault: vault} do
     {note, _user} = index!(user, vault, "# Plain\n\nBody text with no frontmatter.\n")
-
-    for col <- ~w(status_hmac author_hmac rev_by_hmac proj_hmac src_hmac status_ciphertext
-                  fm_updated fm_reviewed fm_expires fm_due fm_priority)a,
-        do: assert(is_nil(Map.fetch!(note, col)), "#{col}")
-
     assert attrs(note.id) == []
   end
 
-  test "removing a key clears its column and its rows", %{user: user, vault: vault} do
+  test "removing a key removes its rows", %{user: user, vault: vault} do
     {note, _user} = index!(user, vault, @full)
-    assert note.status_hmac != nil and attrs(note.id) != []
+    assert Enum.any?(attrs(note.id), &(&1.key_id == named(:status)))
 
     {note, _user} = index!(user, vault, "---\nauthor: alice\n---\n# Fields\n\nBody text again.\n")
-    assert note.status_hmac == nil and note.status_ciphertext == nil
-    assert note.fm_due == nil and note.src_hmac == nil
-    assert note.author_hmac != nil
-    assert attrs(note.id) == []
+    assert Enum.map(attrs(note.id), & &1.key_id) == [named(:author)]
   end
 
   test "with the v5 format off, a pass writes nothing new to Postgres", %{
@@ -182,11 +264,8 @@ defmodule Engram.Notes.NoteFieldsTest do
   } do
     Engram.ServiceConfig.put_override(:v5_payload_format, false)
     {note, _user} = index!(user, vault, @full)
-
-    for col <- ~w(status_hmac author_hmac src_hmac fm_updated fm_due fm_priority)a,
-        do: assert(is_nil(Map.fetch!(note, col)), "#{col}")
-
     assert attrs(note.id) == []
+    assert dictionary(user.id) == []
   end
 
   describe "Postgres and the v5 Qdrant payload agree" do
@@ -196,51 +275,42 @@ defmodule Engram.Notes.NoteFieldsTest do
     end
 
     test "field for field", %{user: user, vault: vault} do
-      {note, _user} = index!(user, vault, @full)
+      {note, user} = index!(user, vault, @full)
+      {:ok, fk} = Crypto.dek_filter_key(user)
       assert_received {:upsert, body}
       %{"points" => [%{"payload" => p, "id" => id} | _]} = Jason.decode!(body)
-
-      assert p["s"] == FilterId.from_hmac(note.status_hmac)
-      assert p["a"] == FilterId.from_hmac(note.author_hmac)
-      assert p["r"] == FilterId.from_hmac(note.rev_by_hmac)
-      assert p["j"] == FilterId.from_hmac(note.proj_hmac)
-      assert p["o"] == Enum.map(note.src_hmac, &FilterId.from_hmac/1)
-      assert p["p"] == FilterId.from_hmac(note.path_hmac)
-      assert p["f"] == FilterId.from_hmac(note.folder_hmac)
-      assert p["u"] == FilterId.uuid(note.user_id)
-      assert p["up"] == note.fm_updated
-      assert p["rd"] == note.fm_reviewed
-      assert p["ex"] == div(note.fm_expires, 86_400)
-      assert p["du"] == div(note.fm_due, 86_400)
-      assert p["pr"] == note.fm_priority
-
       rows = attrs(note.id)
+      one = fn field -> Enum.find(rows, &(&1.key_id == named(field))) end
 
-      assert Enum.sort(p["at"]) ==
-               Enum.sort(
-                 for r <- rows,
-                     r.value_hmac,
-                     do: %{
-                       "k" => FilterId.from_hmac(r.key_hmac),
-                       "v" => FilterId.from_hmac(r.value_hmac)
-                     }
-               )
+      assert p["s"] == FilterId.from_hmac(one.(:status).h)
+      assert p["a"] == FilterId.from_hmac(one.(:author).h)
+      assert p["r"] == FilterId.from_hmac(one.(:reviewed_by).h)
+      assert p["j"] == FilterId.from_hmac(one.(:project).h)
+      assert p["up"] == one.(:updated).d
+      assert p["rd"] == one.(:reviewed).d
+      assert p["ex"] == div(one.(:expires).d, 86_400)
+      assert p["du"] == div(one.(:due).d, 86_400)
+      assert p["pr"] == one.(:priority).n
+      assert p["u"] == FilterId.uuid(note.user_id)
 
-      assert p["nm"] ==
-               for(
-                 r <- rows,
-                 r.value_num,
-                 do: %{"k" => FilterId.from_hmac(r.key_hmac), "n" => r.value_num}
-               )
+      # `fa` mirrors the user-key rows: same key id, same value.
+      user_rows = for r <- rows, r.key_id >= 64, do: r
 
-      assert p["dt"] ==
-               for(
-                 r <- rows,
-                 r.value_date,
-                 do: %{"k" => FilterId.from_hmac(r.key_hmac), "t" => r.value_date}
-               )
+      expected =
+        for r <- user_rows do
+          cond do
+            r.h -> %{"k" => r.key_id, "h" => FilterId.from_hmac(r.h)}
+            r.n -> %{"k" => r.key_id, "n" => r.n}
+            r.d -> %{"k" => r.key_id, "d" => r.d}
+          end
+        end
 
-      # Deterministic v5 id, no text in the payload.
+      assert Enum.sort(p["fa"]) == Enum.sort(expected)
+      refute Map.has_key?(p, "at") or Map.has_key?(p, "nm") or Map.has_key?(p, "dt")
+      # No key name or key HMAC in the payload: only small integer ids.
+      for %{"k" => k} <- p["fa"], do: assert(is_integer(k))
+      refute inspect(p) =~ FilterId.attr(fk, "mood")
+
       assert String.at(id, 14) == "5"
       refute Map.has_key?(p, "text")
     end

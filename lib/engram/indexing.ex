@@ -18,6 +18,7 @@ defmodule Engram.Indexing do
   alias Engram.Notes.Chunk
   alias Engram.Notes.FlatFields
   alias Engram.Notes.Frontmatter
+  alias Engram.Notes.FrontmatterKeys
   alias Engram.Notes.Note
   alias Engram.Notes.NoteAttr
   alias Engram.Notes.OkfFields
@@ -103,6 +104,15 @@ defmodule Engram.Indexing do
     # is one `subscriptions` query. The join folds it into this fetch. See #1502.
     user = user || Engram.Accounts.get_user_with_subscription!(note.user_id)
 
+    # One re-resolve when the reaper deleted a key id mid-pass
+    # (`hold_key_ids!/2`); the retained vectors make the retry Voyage-free.
+    case index_once(note, vault, user, opts) do
+      {:error, :frontmatter_keys_gone} -> index_once(note, vault, user, opts)
+      other -> other
+    end
+  end
+
+  defp index_once(note, vault, user, opts) do
     case prepare_index(note, vault, user, opts) do
       {:ok, :no_chunks} ->
         case Crypto.get_dek(user) do
@@ -179,8 +189,11 @@ defmodule Engram.Indexing do
   Phase 1 of the indexing pipeline. Parses the note, calls the embedder, and
   builds the encrypted Qdrant payloads + chunk row inserts in memory.
 
-  Performs **no** DB writes — safe to call without a transaction. Lets the
-  slow Voyage AI HTTP call run outside any Postgres connection.
+  Writes no index rows. Its one DB write (v5 format on) is the frontmatter
+  key dictionary (`FrontmatterKeys.resolve/3`), committed in its own short
+  transaction, so this must NOT run inside a caller's transaction: the
+  dictionary's advisory lock would then be held across the slow Voyage AI
+  HTTP call, which is meant to run outside any Postgres connection.
 
   Returns:
     * `{:ok, :no_chunks}` — note has no parseable chunks; caller must still
@@ -2887,15 +2900,21 @@ defmodule Engram.Indexing do
         note_language(Enum.map(plan.entries, &entry_chunk/1))
       end)
 
-    # ONE extraction of the v5 flat frontmatter fields, two sinks: the
-    # `notes` columns and `note_attrs` rows (the source of truth, written in
-    # the chunk-row transaction by `stamp_flat_fields/1`) and, once
-    # `:write_v5_layout` is on, the v5 Qdrant payload.
-    # Both behind flags that are off, so with them off a pass does exactly
-    # what main does: no extraction, no Postgres writes, the v3 payload.
+    # ONE extraction of the v5 frontmatter filter fields, two sinks: the
+    # `note_attrs` rows (the source of truth, written in the chunk-row
+    # transaction by `stamp_flat_fields/1`) and, once `:write_v5_layout` is
+    # on, the v5 Qdrant payload. User-added keys get their per-user
+    # dictionary ids first (allocated here, committed on their own: an id
+    # for a key whose pass then fails is harmless). Both behind flags that
+    # are off, so with them off a pass does exactly what main does: no
+    # extraction, no Postgres writes, the v3 payload.
     v5_format? = Qdrant.v5_payload_format?()
     v5? = write_v5_layout?()
-    flat = if v5_format?, do: FlatFields.extract(note.content, filter_key)
+
+    flat =
+      if v5_format?,
+        do: note.content |> FlatFields.extract(filter_key) |> with_key_ids(note, user)
+
     note_payload = if v5?, do: PayloadV5.build(note, flat), else: note_payload(note)
     ctx = {note, user, note_payload, now, v5?}
 
@@ -2954,11 +2973,7 @@ defmodule Engram.Indexing do
        }
        |> then(fn p ->
          if v5_format?,
-           do:
-             Map.merge(p, %{
-               flat_columns: FlatFields.columns(flat, dek, note.id),
-               attr_rows: FlatFields.attr_rows(flat, note)
-             }),
+           do: Map.put(p, :attr_rows, FlatFields.attr_rows(flat, note)),
            else: p
        end)}
     end
@@ -2987,6 +3002,19 @@ defmodule Engram.Indexing do
   # Off until the v5 rollout turns it on; the v5 layout writes text
   # regardless, since its payload has none.
   defp chunk_text_write?, do: Engram.ServiceConfig.get(:chunk_text_write, false)
+
+  # Past the per-user cap a new key is skipped (left out of the payload and
+  # `note_attrs`, counted by `FrontmatterKeys`), never an indexing error.
+  defp with_key_ids(flat, note, user) do
+    case Crypto.get_dek(user) do
+      {:ok, dek} ->
+        {ids, _skipped} = FrontmatterKeys.resolve(note.user_id, dek, flat.names)
+        FlatFields.put_key_ids(flat, ids)
+
+      _no_dek ->
+        flat
+    end
+  end
 
   # A reused chunk costs nothing but a row: no embed, no tokenizer pass, no
   # encryption. Its `token_count` rides along from the row it replaces rather
@@ -3167,12 +3195,10 @@ defmodule Engram.Indexing do
   end
 
   # Inside the chunk-row transaction, from the same extraction as the payload.
-  # Every column is set (an absent key clears it) and the note's rows are
-  # replaced wholesale, like the chunk rows.
-  defp stamp_flat_fields(%{note: note, flat_columns: columns, attr_rows: rows}) do
-    {_, _} =
-      Repo.update_all(from(n in Note, where: n.kind == "note" and n.id == ^note.id), set: columns)
-
+  # The note's rows are replaced wholesale, like the chunk rows, so an absent
+  # key leaves no row.
+  defp stamp_flat_fields(%{note: note, attr_rows: rows}) do
+    :ok = hold_key_ids!(note, rows)
     Repo.delete_all(from(a in NoteAttr, where: a.note_id == ^note.id))
     _ = rows |> Enum.chunk_every(@insert_batch) |> Enum.each(&Repo.insert_all(NoteAttr, &1))
 
@@ -3180,6 +3206,31 @@ defmodule Engram.Indexing do
   end
 
   defp stamp_flat_fields(_prepared), do: :ok
+
+  # The user-key ids this pass writes were resolved before the Voyage call, so
+  # the daily reaper may have deleted one since (a key back after a day with no
+  # note using it). FOR KEY SHARE holds every one until commit, which blocks
+  # the reaper's FOR UPDATE; if one is already gone the pass rolls back and
+  # `index_note_with_usage/4` re-resolves once (new id, never the dead one).
+  defp hold_key_ids!(note, rows) do
+    ids = for(%{key_id: id} <- rows, id >= FrontmatterKeys.first_user_id(), do: id) |> Enum.uniq()
+
+    held =
+      if ids == [],
+        do: [],
+        else:
+          Repo.all(
+            from(k in Engram.Notes.FrontmatterKey,
+              where: k.user_id == ^note.user_id and k.key_id in ^ids,
+              # One lock order everywhere, so two lockers never deadlock.
+              order_by: k.key_id,
+              select: k.key_id,
+              lock: "FOR KEY SHARE"
+            )
+          )
+
+    if length(held) < length(ids), do: Repo.rollback(:frontmatter_keys_gone), else: :ok
+  end
 
   # Plaintext inputs, not the stored payload: nothing here is encrypted, but
   # comparing what we would write against a stamp avoids reading Qdrant back.

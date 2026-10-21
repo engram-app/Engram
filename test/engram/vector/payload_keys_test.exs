@@ -35,9 +35,7 @@ defmodule Engram.Vector.PayloadKeysTest do
              fm_expires: "ex",
              fm_due: "du",
              fm_priority: "pr",
-             fm_attrs: "at",
-             fm_nums: "nm",
-             fm_dates: "dt",
+             fm_attrs: "fa",
              fm_timestamp_src: "us",
              fm_created_src: "cs"
            }

@@ -182,15 +182,6 @@
       },
       "points": 0
     },
-    "at[].k": {
-      "data_type": "uuid",
-      "params": {
-        "type": "uuid",
-        "on_disk": true,
-        "enable_hnsw": false
-      },
-      "points": 0
-    },
     "type_hmac": {
       "data_type": "keyword",
       "params": {
@@ -266,31 +257,10 @@
       },
       "points": 0
     },
-    "dt[].k": {
-      "data_type": "uuid",
-      "params": {
-        "type": "uuid",
-        "on_disk": true,
-        "enable_hnsw": false
-      },
-      "points": 0
-    },
     "p": {
       "data_type": "uuid",
       "params": {
         "type": "uuid",
-        "on_disk": true,
-        "enable_hnsw": false
-      },
-      "points": 0
-    },
-    "dt[].t": {
-      "data_type": "integer",
-      "params": {
-        "type": "integer",
-        "lookup": false,
-        "range": true,
-        "is_principal": null,
         "on_disk": true,
         "enable_hnsw": false
       },
@@ -329,24 +299,6 @@
       },
       "points": 0
     },
-    "at[].v": {
-      "data_type": "uuid",
-      "params": {
-        "type": "uuid",
-        "on_disk": true,
-        "enable_hnsw": false
-      },
-      "points": 0
-    },
-    "nm[].k": {
-      "data_type": "uuid",
-      "params": {
-        "type": "uuid",
-        "on_disk": true,
-        "enable_hnsw": false
-      },
-      "points": 0
-    },
     "f": {
       "data_type": "uuid",
       "params": {
@@ -356,10 +308,43 @@
       },
       "points": 0
     },
-    "nm[].n": {
+    "fa[].k": {
+      "data_type": "integer",
+      "params": {
+        "type": "integer",
+        "lookup": true,
+        "range": false,
+        "is_principal": null,
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "fa[].h": {
+      "data_type": "keyword",
+      "params": {
+        "type": "keyword",
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "fa[].n": {
       "data_type": "float",
       "params": {
         "type": "float",
+        "is_principal": null,
+        "on_disk": true,
+        "enable_hnsw": false
+      },
+      "points": 0
+    },
+    "fa[].d": {
+      "data_type": "integer",
+      "params": {
+        "type": "integer",
+        "lookup": false,
+        "range": true,
         "is_principal": null,
         "on_disk": true,
         "enable_hnsw": false

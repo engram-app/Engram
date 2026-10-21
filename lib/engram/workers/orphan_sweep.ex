@@ -118,6 +118,9 @@ defmodule Engram.Workers.OrphanSweep do
     s3_deleted = sweep_s3(live_ids)
     points_deleted = sweep_point_orphans()
     notes_flagged = sweep_missing_points(force: Map.get(args, "force", false))
+    # Frontmatter keys no note uses any more: frees per-user cap space (ids
+    # are never reused, see `FrontmatterKeys.reap_unused/1`).
+    keys_reaped = Engram.Notes.FrontmatterKeys.reap_unused()
 
     :telemetry.execute(
       [:engram, :orphan_sweep, :result],
@@ -125,7 +128,8 @@ defmodule Engram.Workers.OrphanSweep do
         qdrant_users_swept: qdrant_deleted,
         s3_prefixes_swept: s3_deleted,
         qdrant_points_swept: points_deleted,
-        notes_flagged_for_reindex: notes_flagged
+        notes_flagged_for_reindex: notes_flagged,
+        frontmatter_keys_reaped: keys_reaped
       },
       %{}
     )
@@ -138,7 +142,8 @@ defmodule Engram.Workers.OrphanSweep do
           qdrant_users_swept: qdrant_deleted,
           s3_prefixes_swept: s3_deleted,
           qdrant_points_swept: points_deleted,
-          notes_flagged_for_reindex: notes_flagged
+          notes_flagged_for_reindex: notes_flagged,
+          frontmatter_keys_reaped: keys_reaped
         }
       )
     )

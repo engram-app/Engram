@@ -112,31 +112,6 @@ defmodule Engram.Notes.Note do
     # no note content.
     field :crdt_head, :string
 
-    # v5 flat frontmatter fields (spec 3.3b), written by the indexing pass
-    # (`Engram.Notes.FlatFields`), never by `changeset/2`. Blind index under
-    # the filter key plus the value under the DEK (AAD per field); dates unix
-    # seconds, plaintext. NULL = key absent.
-    field :status_hmac, :binary
-    field :status_ciphertext, :binary
-    field :status_nonce, :binary
-    field :author_hmac, :binary
-    field :author_ciphertext, :binary
-    field :author_nonce, :binary
-    field :rev_by_hmac, :binary
-    field :reviewed_by_ciphertext, :binary
-    field :reviewed_by_nonce, :binary
-    field :src_hmac, {:array, :binary}
-    field :source_ciphertext, :binary
-    field :source_nonce, :binary
-    field :proj_hmac, :binary
-    field :project_ciphertext, :binary
-    field :project_nonce, :binary
-    field :fm_updated, :integer
-    field :fm_reviewed, :integer
-    field :fm_expires, :integer
-    field :fm_due, :integer
-    field :fm_priority, :float
-
     field :type_ciphertext, :binary
     field :type_nonce, :binary
     field :type_hmac, :binary
