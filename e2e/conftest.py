@@ -704,7 +704,6 @@ def fresh_unlinked_instance():
     inst = ObsidianInstance(
         name="Unlinked",
         vault_path=Path(f"{VAULT_PREFIX}-plugin-first"),
-        cdp_port=RESUMED_CDP_PORT_A,
         display=f":{RESUMED_DISPLAY_BASE}",
         api_url=API_URL,
         api_key="",
