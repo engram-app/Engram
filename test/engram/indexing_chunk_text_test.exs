@@ -168,6 +168,52 @@ defmodule Engram.IndexingChunkTextTest do
       assert heading =~ "Ferritin"
     end
 
+    # The display threshold is on the note's plaintext size at index time:
+    # 32 KB and above store `display_ct`; below re-chunks at search.
+    defp sized(bytes) do
+      head = content("Ferritin levels are low.") <> "\n## Appendix\n\n"
+      filler = String.duplicate("Iron stores and lab values. ", div(bytes, 28) + 1)
+      head <> binary_part(filler, 0, bytes - byte_size(head))
+    end
+
+    # Search must not need the content: corrupt it, then read the hits.
+    defp corrupt_content(note, user) do
+      {:ok, _} =
+        Repo.with_tenant(user.id, fn ->
+          Repo.update_all(from(n in Engram.Notes.Note, where: n.id == ^note.id),
+            set: [content_ciphertext: :crypto.strong_rand_bytes(64)]
+          )
+        end)
+    end
+
+    test "a note of exactly 32 KB stores display_ct and displays from it", ctx do
+      assert Indexing.display_ct_threshold() == 32 * 1024
+      note = put_note(ctx.user, ctx.vault, nil, sized(32 * 1024))
+      assert byte_size(note.content) == 32 * 1024
+      assert {:ok, _count} = Indexing.index_note(note, ctx.vault)
+
+      assert Enum.all?(points(note), &(is_binary(&1.display_ct) and is_integer(&1.slice_sum)))
+
+      corrupt_content(note, ctx.user)
+      pairs = texts(note, ctx.user)
+      assert {_text, heading} = Enum.find(pairs, fn {t, _} -> t =~ "Ferritin levels are low." end)
+      assert heading =~ "Ferritin"
+    end
+
+    test "a note of 32 KB minus 1 byte stores checksums only and displays from content", ctx do
+      note = put_note(ctx.user, ctx.vault, nil, sized(32 * 1024 - 1))
+      assert byte_size(note.content) == 32 * 1024 - 1
+      assert {:ok, _count} = Indexing.index_note(note, ctx.vault)
+
+      assert Enum.all?(points(note), &(is_integer(&1.slice_sum) and is_nil(&1.display_ct)))
+
+      pairs = texts(note, ctx.user)
+      assert {text, heading} = Enum.find(pairs, fn {t, _} -> t =~ "Ferritin levels are low." end)
+      assert heading =~ "Ferritin"
+      refute Enum.any?(pairs, fn {t, _} -> t == nil end)
+      refute text =~ "Transferrin saturation"
+    end
+
     test "a sparse-only (budget-parked) pass also writes text", ctx do
       note = put_note(ctx.user, ctx.vault, "Ferritin levels are low.")
 

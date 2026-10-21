@@ -216,7 +216,7 @@ defmodule Engram.Notes do
   hit and falls back to the payload; PR-18 moves the base to `chunk_points`.
 
   Display text (hybrid, notes-chunks-hyperopt 2.4b), from `chunk_points`:
-    * a row with `display_ct` (a note over the display threshold) opens it;
+    * a row with `display_ct` (a note at or over the display threshold) opens it;
     * a row with only `slice_sum` re-derives its chunk from the note content,
       decrypted once per note, chunked once per note
       (`Engram.Indexing.display_chunks/3`), at the row's position. The

@@ -839,8 +839,8 @@ defmodule Engram.Crypto do
 
   @doc """
   Seals a chunk's display text and heading for its `chunks` row as ONE
-  envelope, `display_ct` (Task 11.1, hybrid design: only notes over
-  `Engram.Indexing.display_ct_threshold/0` store one; smaller notes slice
+  envelope, `display_ct` (Task 11.1, hybrid design: only notes at or over
+  `Engram.Indexing.display_ct_threshold/0` (32 KB) store one; smaller notes slice
   their text from the note content). Layout: `<<nonce_len::8, nonce,
   ciphertext>>`, the plaintext JSON `{"h": heading, "t": text}`, zstd per the
   envelope policy. AAD binds the column and the point id

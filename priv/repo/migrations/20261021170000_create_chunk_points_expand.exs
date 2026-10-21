@@ -25,7 +25,7 @@ defmodule Engram.Repo.Migrations.CreateChunkPointsExpand do
   #   * member_fps: a merged point's member fingerprints, 8-byte prefixes
   #     concatenated.
   #   * display_ct: the text and heading in ONE envelope, only for notes whose
-  #     plaintext is over 256 KB at index time. STORAGE EXTERNAL: stored
+  #     plaintext is at least 32 KB at index time. STORAGE EXTERNAL: stored
   #     out of line uncompressed, as it is already zstd inside the envelope.
   def change do
     create table(:chunk_points, primary_key: false, options: "WITH (fillfactor = 100)") do

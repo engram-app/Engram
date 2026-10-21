@@ -3026,7 +3026,7 @@ defmodule Engram.Indexing do
   # point also gets a `chunk_points` row (written in the same transaction as
   # its `chunks` row, `commit_index/2`) carrying `slice_sum`, the checksum of
   # its chunk's display text; search derives the text from the note content
-  # (`display_chunks/3`). Only a note over `display_ct_threshold/0` also
+  # (`display_chunks/3`). Only a note at or over `display_ct_threshold/0` also
   # stores the text and heading, sealed as ONE envelope bound to the point
   # id, so a hit there never decrypts and re-chunks the whole note. A reused
   # point is sealed afresh from the chunk in hand: rows are rewritten
@@ -3063,11 +3063,13 @@ defmodule Engram.Indexing do
   defp seal(chunk, dek, row),
     do: Crypto.encrypt_chunk_text(chunk.text, chunk.heading_path, dek, row.qdrant_point_id)
 
-  @display_ct_threshold 256 * 1024
+  # Design owner, 2026-10-21: 32 KB bounds the search re-chunk of one hit
+  # note to ~8 ms (~0.19-0.26 ms/KB measured), <= ~0.4 s at limit 50.
+  @display_ct_threshold 32 * 1024
 
-  defp display_ct?(note), do: byte_size(note.content || "") > @display_ct_threshold
+  defp display_ct?(note), do: byte_size(note.content || "") >= @display_ct_threshold
 
-  @doc "Notes whose content is over this many bytes store each chunk's display envelope."
+  @doc "Notes whose plaintext content is at least this many bytes store each chunk's display envelope."
   def display_ct_threshold, do: @display_ct_threshold
 
   @doc """

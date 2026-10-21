@@ -8,8 +8,8 @@ defmodule Engram.Notes.ChunkPoint do
   `slice_sum` is the keyed checksum of the chunk's display text (`Indexing.text_sum/2`);
   search re-derives a small note's chunk from its content and checks it.
   `display_ct` holds the text and heading in ONE envelope
-  (`Crypto.encrypt_chunk_text/4`), only for notes over
-  `Indexing.display_ct_threshold/0`. `member_fps`: a merged point's member
+  (`Crypto.encrypt_chunk_text/4`), only for notes at or over
+  `Indexing.display_ct_threshold/0` (32 KB). `member_fps`: a merged point's member
   fingerprints, 8-byte prefixes concatenated.
   """
   use Ecto.Schema
