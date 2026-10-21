@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { clerk } from "@clerk/testing/playwright";
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 // Shared by the Clerk specs. clerk-auth.spec.ts keeps its own no-retry sign-in
 // on purpose (a "No user found" there must surface immediately, see its
@@ -9,6 +9,10 @@ import type { Page } from "@playwright/test";
 
 const AUTH_STATE_PATH = path.join(__dirname, ".auth-state.json");
 const CLERK_API = "https://api.clerk.com/v1";
+
+function onboardStep(page: Page): string {
+	return new URL(page.url()).pathname;
+}
 
 export interface AuthState {
 	email: string;
@@ -123,4 +127,74 @@ export async function deleteClerkUser(id: string): Promise<void> {
 			}
 		})
 		.catch((err) => console.warn(`clerk teardown errored for ${id}: ${String(err)}`));
+}
+
+/**
+ * Where the SPA and the API live. The CI stack serves them on local ports; a
+ * staging or prod-canary run points E2E_APP_URL / E2E_API_URL at the real hosts.
+ */
+export const APP_URL =
+	process.env.E2E_APP_URL ?? `http://localhost:${process.env.PW_CLERK_VITE_PORT ?? "5174"}`;
+export const API_URL =
+	process.env.E2E_API_URL ?? `http://localhost:${process.env.PW_CLERK_BACKEND_PORT ?? "4001"}`;
+
+/**
+ * Which stack the run targets. Only the CI stack runs billing off; every other
+ * target (staging, prod canary) shows the terms and heard-from steps.
+ */
+export const E2E_TARGET = process.env.E2E_TARGET ?? "ci";
+
+/** Terms step. Runs when the wizard shows it; mandatory off the CI target. */
+export async function acceptTerms(page: Page): Promise<void> {
+	if (E2E_TARGET !== "ci") {
+		expect(onboardStep(page)).toBe("/onboard/agreement");
+	} else if (onboardStep(page) !== "/onboard/agreement") {
+		return;
+	}
+	await page.getByLabel(/I have read and agree/iu).click();
+	await page.getByRole("button", { name: /^continue$/iu }).click();
+	await page.waitForURL(/\/onboard\/(?:heard|vault)/u, { timeout: 25_000 });
+}
+
+/** How-did-you-hear step. Same rule as the terms step. */
+export async function answerHeard(page: Page): Promise<void> {
+	if (E2E_TARGET !== "ci") {
+		expect(onboardStep(page)).toBe("/onboard/heard");
+	} else if (onboardStep(page) !== "/onboard/heard") {
+		return;
+	}
+	await page.getByRole("radio", { name: "Search engine" }).click();
+	await page.getByRole("button", { name: /^continue$/iu }).click();
+	await page.waitForURL(/\/onboard\/vault/u, { timeout: 25_000 });
+}
+
+/** Vault step, "starting fresh" branch; resolves once the app shell is up. */
+export async function createWizardVault(page: Page, vaultName: string): Promise<void> {
+	await page.getByRole("button", { name: /starting fresh/iu }).click();
+	await page.getByLabel("Vault name").fill(vaultName);
+	await page.getByRole("button", { name: /create vault & continue/iu }).click();
+	await expect(page.getByRole("navigation", { name: "App navigation" })).toBeVisible({
+		timeout: 25_000,
+	});
+}
+
+/** Walk the whole wizard for a freshly signed-in, un-onboarded user. */
+export async function completeWebOnboarding(page: Page, vaultName: string): Promise<void> {
+	await page.waitForURL(/\/onboard\//u, { timeout: 25_000 });
+	await acceptTerms(page);
+	await answerHeard(page);
+	await createWizardVault(page, vaultName);
+}
+
+/** Bearer token and active vault the SPA itself sends, for direct API calls. */
+export async function spaApiHeaders(page: Page): Promise<Record<string, string>> {
+	const token = await page.evaluate(() =>
+		(
+			window as unknown as {
+				Clerk?: { session?: { getToken: () => Promise<string | null> } };
+			}
+		).Clerk?.session?.getToken(),
+	);
+	const vaultId = await page.evaluate(() => localStorage.getItem("engram.activeVaultId"));
+	return { Authorization: `Bearer ${token}`, ...(vaultId ? { "X-Vault-ID": vaultId } : {}) };
 }
