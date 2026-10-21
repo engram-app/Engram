@@ -437,6 +437,14 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
       assert get_resp_header(resp, "retry-after") == ["60"]
     end
 
+    # A lock taken after the request plug ran is caught by the write's own
+    # tenant transaction, which raises (rendered as the same 503).
+    defp assert_rotating_raised(request) do
+      {503, headers, body} = assert_error_sent(503, request)
+      assert %{"error" => "rotation_in_progress"} = Jason.decode!(body)
+      assert {"retry-after", "60"} in headers
+    end
+
     test "start, put_part and complete are 503 and write nothing; all succeed once cleared", %{
       conn: conn,
       user: user
@@ -517,7 +525,7 @@ defmodule EngramWeb.AttachmentUploadsControllerTest do
         InMemory.complete_multipart_upload(key, s3_id, parts)
       end)
 
-      assert_rotating(complete(conn, id))
+      assert_rotating_raised(fn -> complete(conn, id) end)
       assert rows(Attachment, user) == []
       assert [_] = rows(Upload, user)
     end

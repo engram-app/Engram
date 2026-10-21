@@ -1441,9 +1441,11 @@ defmodule EngramWeb.AttachmentsControllerTest do
         InMemory.put(key, bin, opts)
       end)
 
-      resp = upload(conn)
-      assert %{"error" => "rotation_in_progress"} = json_response(resp, 503)
-      assert get_resp_header(resp, "retry-after") == ["60"]
+      # The write's own tenant transaction sees the lock and raises, rendered
+      # as the same 503 the request plug answers with.
+      {503, headers, body} = assert_error_sent(503, fn -> upload(conn) end)
+      assert %{"error" => "rotation_in_progress"} = Jason.decode!(body)
+      assert {"retry-after", "60"} in headers
       assert live_rows(user) == []
     end
 
@@ -1490,8 +1492,12 @@ defmodule EngramWeb.AttachmentsControllerTest do
         InMemory.put(k, bin, opts)
       end)
 
-      resp = post(conn, "/api/attachments", %{path: "r.png", content_base64: @updated_base64})
-      assert %{"error" => "rotation_in_progress"} = json_response(resp, 503)
+      {503, _headers, body} =
+        assert_error_sent(503, fn ->
+          post(conn, "/api/attachments", %{path: "r.png", content_base64: @updated_base64})
+        end)
+
+      assert %{"error" => "rotation_in_progress"} = Jason.decode!(body)
       assert [%{storage_key: ^key}] = live_rows(user)
 
       set_rotation_lock(user, nil)
