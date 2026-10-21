@@ -1181,10 +1181,15 @@ defmodule Engram.Indexing do
           in_commit.(length(chunk_rows))
         end)
 
-      # Lost to a newer pass after PATCHing reused points: that pass may have
-      # stamped a payload our PATCH just replaced, so the stamp no longer
-      # vouches for the points. NULL makes the note's next pass refresh them.
-      if committed == {:error, :superseded} and refresh_ids != [],
+      # Lost to a newer pass after writing points it shares with it: PATCHed
+      # reused points, or (v5 layout, deterministic ids) upserted ones. That
+      # pass may have stamped a payload our write just replaced, so the stamp
+      # no longer vouches for the points. NULL makes them refreshed. (v3
+      # upserts are fresh random ids: strays for OrphanSweep, never shared.)
+      shared_write? =
+        refresh_ids != [] or (Map.get(prepared, :v5_layout?, false) and qdrant_points != [])
+
+      if committed == {:error, :superseded} and shared_write?,
         do: unstamp_payload_hash(note)
 
       with {:ok, _} <- committed,

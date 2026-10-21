@@ -30,6 +30,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           overwrites: [],
           on_scroll: nil,
           on_write: nil,
+          on_upsert: nil,
           payload_status: 200
         }
       end)
@@ -246,6 +247,56 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert reload(ctx.healthy).payload_hash == nil
   end
 
+  # Under the v5 layout point ids are deterministic, so a losing pass can
+  # UPSERT over the very points the winning pass wrote (not only PATCH
+  # reused ones). Those points then hold the older filter fields.
+  test "a superseded v5 pass that upserted points leaves the row unstamped", ctx do
+    Engram.ServiceConfig.put_override(:write_v5_layout, true)
+    vault = Repo.get!(Engram.Vaults.Vault, ctx.healthy.vault_id, skip_tenant_check: true)
+
+    # Never indexed, so the pass embeds and upserts every point.
+    {:ok, note} =
+      Notes.upsert_note(
+        ctx.user,
+        vault,
+        %{"path" => "Ops/Fresh.md", "content" => "---\ntype: Runbook\n---\n# F\n\nNew.\n"},
+        actor: "api"
+      )
+
+    id = note.id
+
+    Agent.update(ctx.store, fn s ->
+      %{
+        s
+        | on_upsert: fn ->
+            Repo.update_all(
+              from(n in Note, where: n.id == ^id),
+              [set: [content_hash: "edited", payload_hash: "stamped-by-the-edit"]],
+              skip_tenant_check: true
+            )
+          end
+      }
+    end)
+
+    {:ok, plain} = Crypto.maybe_decrypt_note_fields(reload(note), ctx.user)
+
+    assert {:error, :superseded} = Indexing.index_note(plain, vault)
+    assert reload(note).payload_hash == nil
+  end
+
+  # Once done, the migration re-checks daily on the existing runner cron, so
+  # a row a lost race unstamped is healed without waiting for an edit.
+  test "a done migration reopens for a row unstamped later", ctx do
+    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+    assert NotePayloadStamps.run_pass() == :done
+    Indexing.unstamp_payload_hash(reload(ctx.stale))
+
+    # The runner re-runs a done migration's pass daily only if it opts in.
+    assert NotePayloadStamps.reverify?()
+    assert {:more, users: 1} = NotePayloadStamps.run_pass()
+    assert_enqueued(worker: ReconcileNotePayloads, args: %{"user_id" => ctx.user.id})
+  end
+
   test "a rotation that starts mid-job snoozes it before any write", ctx do
     uid = ctx.user.id
 
@@ -356,6 +407,8 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     result =
       case {conn.method, conn.request_path} do
         {"PUT", "/collections/engram_notes/points"} ->
+          if hook = Agent.get(store, & &1.on_upsert), do: hook.()
+
           Agent.update(store, fn s ->
             points = Map.new(body["points"], &{&1["id"], &1["payload"]})
             %{s | points: Map.merge(s.points, points), upserts: s.upserts + 1}
