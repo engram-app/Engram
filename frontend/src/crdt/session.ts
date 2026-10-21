@@ -12,8 +12,7 @@ interface Session {
 	channel: CrdtChannel;
 	enrollment: CrdtEnrollment;
 	awareness: Map<string, Awareness>;
-	/** note_ids currently open in the editor (via openDoc / closeDoc). Used to
-	 *  guard flattenIfBloated so a live editor doc is never destroyed. */
+	/** note_ids currently open in the editor (via openDoc / closeDoc). */
 	openNoteIds: Set<string>;
 }
 
@@ -120,14 +119,6 @@ export function startCrdtSession(opts: StartSessionOpts): void {
 	const enrollment = new CrdtEnrollment({
 		startSync: (id) => channel.startSync(id),
 		resetSync: (id) => channel.resetSync(id),
-		onAfterEnroll: (id) => {
-			// Skip flatten while the doc is open in an editor -- destroying and
-			// rebuilding the Y.Doc would leave the editor bound to a dead doc.
-			if (openNoteIds.has(id)) {
-				return Promise.resolve();
-			}
-			return manager.flattenIfBloated(id).then(() => undefined);
-		},
 	});
 	session = {
 		vaultId: opts.vaultId,
@@ -191,7 +182,7 @@ export async function openDoc(
 		// closeDoc/stop ran during the await. Do NOT delete the open marker: an
 		// epoch bump means closeDoc already removed it (or the session is dead),
 		// and a same-note reopen (openDoc B) may have re-added its OWN marker in
-		// between — deleting here would strip B's flattenIfBloated protection.
+		// between — deleting here would strip B's open marker.
 		return null;
 	}
 	let awareness = s.awareness.get(noteId);
