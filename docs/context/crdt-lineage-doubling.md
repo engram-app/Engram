@@ -1,13 +1,13 @@
 # CRDT lineage doubling — why the same edit must be encoded exactly once
 
-_Last verified: 2026-10-03_
+_Last verified: 2026-10-21_
 
 **Status:** three distinct mechanisms share this symptom.
 1. **Dual-encoder** (server): fixed 2026-07-02 (PR #846). Everything below
    through "Debugging recipe" describes this one.
-2. **Flatten boundary** (#958): OPEN, reproduced. See "Second mechanism".
-   Latent today: the flatten gate effectively never fires (#1707 closed, prod
-   bloat ratio 1.01).
+2. **Flatten boundary** (#958): FIXED 2026-10-21 by REMOVING the checkpoint
+   flatten (0.60.1). It never fired in prod (30 days, 53k checkpoints, max
+   100-500 client ids) and was a reset, not a merge. See "Second mechanism".
 3. **Idempotent write that still mints ops** (plugin frontmatter re-seed):
    fixed in Engram-obsidian#464. See "Third mechanism".
 
@@ -72,7 +72,7 @@ of this is the third mechanism below.
 3. The MERGE-DIAG line `snapshot="…2" tail_doc="…22"` is the smoking gun shape.
 4. Revert the diag commit before merge.
 
-## Second mechanism: the flatten boundary (#958, OPEN)
+## Second mechanism: the flatten boundary (#958, FIXED by removal)
 
 _Added 2026-08-18._
 
@@ -85,10 +85,10 @@ against `main` on 2026-08-18:
 [3] after post-flatten checkpoint:  "ALPHA BETAALPHA"   <- expected "ALPHA BETA"
 ```
 
-`maybe_flatten` (`crdt_checkpoint.ex`) is a RESET, not a merge: it replaces the
-doc with a fresh single-client one. The call site persists only the flattened
-`state` and **discards `_flat_doc`**, so the row moves to a new lineage while the
-live room keeps running the old one. The next `union_with_row_state` folds two
+`maybe_flatten` (`crdt_checkpoint.ex`, removed in 0.60.1) was a RESET, not a
+merge: it replaced the doc with a fresh single-client one. The call site
+persisted only the flattened `state` and **discarded `_flat_doc`**, so the row
+moved to a new lineage while the live room kept running the old one. The next `union_with_row_state` folds two
 disjoint lineages, and every old-lineage struct integrates as new content.
 
 This does not violate the one-encoder invariant above. It violates the *other*
@@ -107,24 +107,34 @@ Do not re-derive these. Both obvious directions have holes:
 | `crdt_checkpoint_timer.ex` | live room keeps editing the old lineage |
 | `crdt_persistence.ex` (unbind) | watermark prune lets tail rows written *during* the encode survive and replay onto the new lineage at next bind |
 | `workers/checkpoint_note.ex` | overflow path from unbind; a room may have re-bound before the job runs |
-| `crdt_channel.ex` (genesis) | already known to double, see below |
+| `crdt_channel.ex` (genesis) | (no longer applies: genesis now applies the client's own frame and folds row + tail; it mints no server lineage) |
 
 Plus a rebind race with no guard: a client binding a new room mid-unbind loads
 the PRE-flatten state, then the unbind commits the flattened one. `snapshot_fence/2`
 does not catch it, because a bind is not a write.
 
-**"Detect disjoint lineage (client-id sets) and skip the union."** Cheap to
-detect, but it **false-positives on genesis**: `crdt_channel.ex` states the
-create-time checkpoint flattens to a fresh server lineage while the client frame
-keeps its own, so a healthy new note legitimately presents disjoint lineages. A
-blanket skip-or-abort would freeze them. That path is currently handled by
-*avoidance* (do not re-checkpoint a `:skipped` create), not at the seam.
+**"Detect disjoint lineage (client-id sets) and skip the union."** In 2026-08
+this false-positived on genesis, which then seeded a fresh server lineage. As of
+2026-10-21 genesis keeps the client's lineage (`apply_detached` →
+`fold_row_and_tail` → `seed_against`), so that objection no longer holds; the
+Phase 0 objection below still does.
 
 Skipping the union is also not free when detection is right: Phase 0 exists
 because a room that missed a `deliver_out` is BEHIND committed writes, and
 skipping there re-opens the 2026-07-07 data-loss class (MCP appends erased).
 
-### Recommended direction
+### Resolution (2026-10-21)
+
+The flatten is gone: the checkpoint persists the union state as-is, whatever
+its size or client count. A doc past 1,000 client ids keeps a state vector of
+about 10 bytes per client, which is cheaper than any lineage-epoch protocol.
+Do not reintroduce a server-side reset (new doc + `ingest_plaintext` of the
+projection) anywhere: every such site mints a rival lineage. The web
+`flattenIfBloated` is being removed for the same reason, and a read-only
+rival-lineage detector is being added, both in #2113. Regression test: `crdt_checkpoint_test.exs`, "a big
+many-client doc keeps its lineage across checkpoints".
+
+### Recommended direction (superseded by removal)
 
 Record the lineage reset instead of inferring it. A lineage epoch on the row,
 bumped on every flatten, lets the union distinguish "the live doc predates this
@@ -138,11 +148,11 @@ seam today.
 
 ### Reproducing it
 
-Do not commit the repro (it asserts buggy behaviour). Shape: checkpoint a doc
-normally, then `CrdtBridge.flatten` the row state and write it back directly
-(mirroring what `maybe_flatten` + `checkpoint_write` persist), then edit the
-ORIGINAL doc and checkpoint again. The flatten ceilings (500KB AND 1000
-client-ids) are not needed to demonstrate the mechanism.
+Shape of the 2026-08 repro: checkpoint a doc normally, then reseed the row state
+as a fresh lineage (new doc + `ingest_plaintext(project_doc(doc))`, as
+`reseed_stored!` in `crdt_transport_test.exs` does) and write it back, then edit
+the ORIGINAL doc and checkpoint again. The committed regression test drives the
+real thresholds instead (see "Resolution").
 
 ## Third mechanism: an idempotent write that still mints ops
 

@@ -57,14 +57,12 @@ defmodule Engram.Notes.CrdtCheckpoint do
   @quarantine_tail_depth 500
 
   # #1706. The shape of `crdt_state` against the text it encodes was entirely
-  # unobserved, so every storage estimate in the history workstream — and the
-  # flatten gate in #1707 — was a guess.
+  # unobserved, so every storage estimate in the history workstream was a guess.
   #
   # Two of the three values are locals the checkpoint already holds. The third,
-  # `client_count/1`, is a real call into a bang NIF, and it is NEW work on this
-  # path: it used to be reachable only past `should_flatten?/2`'s 500 KB arm,
-  # which staging says is never true. Cheap (it decodes one leading varint), but
-  # cheap is not the same as infallible — see `emit_doc_stats/3`.
+  # `client_count/1`, is a real call into a bang NIF. Cheap (it decodes one
+  # leading varint), but cheap is not the same as infallible — see
+  # `emit_doc_stats/3`.
   @doc_event [:engram, :crdt, :checkpoint_doc]
 
   @doc """
@@ -438,8 +436,7 @@ defmodule Engram.Notes.CrdtCheckpoint do
          :ok <- ensure_projection_safe(note, text),
          {:ok, raw_state} <- encode(union_doc),
          :ok <- emit_doc_stats(union_doc, raw_state, text),
-         {_flat_doc, state} <- maybe_flatten(union_doc, raw_state, note_id),
-         {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(state, user, note_id),
+         {:ok, {ct, nonce}} <- Crypto.encrypt_crdt_state(raw_state, user, note_id),
          {:ok, key} <- Crypto.dek_content_hash_key(user) do
       content_hash = Crypto.hmac_content_hash(key, text)
 
@@ -481,16 +478,11 @@ defmodule Engram.Notes.CrdtCheckpoint do
 
   # Structural (non-markdown, e.g. `.canvas`) checkpoint. The doc keeps its data
   # in Y.Maps, not the markdown content Y.Text — so `text_of` would project ""
-  # and clobber notes.content, and `maybe_flatten` would reseed via project_doc
-  # and DESTROY the structure. So persist the Yjs snapshot opaquely (union-folded
+  # and clobber notes.content. So persist the Yjs snapshot opaquely (union-folded
   # for monotonicity, same as markdown), prune the tail, and leave
   # content/title/tags/version/seq untouched: notes.content is vestigial for
   # canvas — a new device rebuilds the board from the persisted Yjs deltas
   # (spec 2026-07-23). Returns equal hashes so the caller skips embed + announce.
-  #
-  # ponytail: no structural flatten yet. A canvas that crosses the client-id
-  # ceiling keeps its full state vector; add a structural (nodes/edges-preserving)
-  # flatten in Phase 2 if a real board ever hits it.
   defp do_structural_checkpoint(note, vault_id, note_id, live_state, prune, user) do
     if legacy_row?(note) do
       {:skip, :legacy_row_needs_rebind}
@@ -724,12 +716,6 @@ defmodule Engram.Notes.CrdtCheckpoint do
     :ok
   end
 
-  # Measured on the PRE-flatten state deliberately: post-flatten bytes are what
-  # the gate already reclaimed, and #1707 has to tune that gate against the
-  # bloat it is meant to catch. Today the gate never fires, so the two are
-  # equal; once it does, only this reading still answers "how bloated do docs
-  # get before we act".
-  #
   # NO metadata. note_id / vault_id / user_id are unbounded labels (2026-07-02
   # cardinality audit) — the distribution is the whole answer here.
   defp do_emit_doc_stats(%Yex.Doc{} = doc, state, text) do
@@ -751,25 +737,6 @@ defmodule Engram.Notes.CrdtCheckpoint do
     }
 
     :telemetry.execute(@doc_event, measurements, %{})
-  end
-
-  # When BOTH the byte-size AND the client-ID thresholds are crossed, replace
-  # the live doc with a fresh single-client reset (text preserved). Returns a
-  # {doc, state} tuple in both branches so the caller's `with` chain is uniform.
-  defp maybe_flatten(%Yex.Doc{} = doc, state, note_id) do
-    if CrdtBridge.should_flatten?(state, doc) do
-      Logger.info(
-        "crdt flatten note_id=#{note_id} state_bytes=#{byte_size(state)} clients=#{CrdtBridge.client_count(doc)}",
-        Metadata.with_category(:info, :sync, note_id: note_id)
-      )
-
-      case CrdtBridge.flatten(doc) do
-        {:ok, %{doc: flat_doc, state: flat_state}} -> {flat_doc, flat_state}
-        {:error, _} -> {doc, state}
-      end
-    else
-      {doc, state}
-    end
   end
 
   @doc """

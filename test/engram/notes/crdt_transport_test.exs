@@ -99,18 +99,21 @@ defmodule Engram.Notes.CrdtTransportTest do
     end
   end
 
-  # The checkpoint's flatten (big, many-client docs) replaces the stored doc
-  # with a fresh lineage: the structs a client's state vector names are gone.
-  # A room-free delivery diffed against that pre-flatten vector then has
+  # A stored doc on a lineage the client never saw (the checkpoint flatten did
+  # this before #958 removed it) lacks the structs a client's state vector
+  # names. A room-free delivery diffed against that vector then has
   # missing dependencies, and yrs parks it as pending rather than applying it.
   # Acknowledging that told the client "delivered" for an edit the server does
   # not hold; it is refused instead, so the client resends its full state.
   describe "apply_update/5 with missing dependencies" do
-    defp flatten_stored!(user, vault, note) do
+    # Re-seeds the stored state as a fresh lineage with the same text.
+    defp reseed_stored!(user, vault, note) do
       {:ok, %{update: full}} = CrdtTransport.read_delta(user, vault, note.id, nil)
       doc = CrdtBridge.new_doc()
       :ok = Yex.apply_update(doc, full)
-      {:ok, %{state: flat}} = CrdtBridge.flatten(doc)
+      fresh = CrdtBridge.new_doc()
+      :ok = CrdtBridge.ingest_plaintext(fresh, CrdtBridge.project_doc(doc))
+      {:ok, flat} = Yex.encode_state_as_update(fresh)
       {:ok, {ct, nonce}} = Engram.Crypto.encrypt_crdt_state(flat, user, note.id)
 
       Repo.with_tenant!(user.id, fn ->
@@ -120,14 +123,14 @@ defmodule Engram.Notes.CrdtTransportTest do
       end)
     end
 
-    test "a diff against a pre-flatten state vector is refused, and nothing of it is kept",
+    test "a diff against a state vector from another lineage is refused, and nothing of it is kept",
          %{user: user, vault: vault} do
       {:ok, note} =
         Notes.upsert_note(user, vault, %{path: "F/A.md", content: "hello"}, actor: "api")
 
       on_exit(fn -> CrdtRegistry.terminate_room(note.id) end)
 
-      # The client holds the pre-flatten lineage and edits on top of it.
+      # The client holds the old lineage and edits on top of it.
       {:ok, %{update: full}} = CrdtTransport.read_delta(user, vault, note.id, nil)
       client = CrdtBridge.new_doc()
       :ok = Yex.apply_update(client, full)
@@ -135,7 +138,7 @@ defmodule Engram.Notes.CrdtTransportTest do
       CrdtBridge.ingest_plaintext(client, "hello world")
       {:ok, diff} = Yex.encode_state_as_update(client, acked_sv)
 
-      flatten_stored!(user, vault, note)
+      reseed_stored!(user, vault, note)
 
       assert {:error, :missing_dependencies} =
                CrdtTransport.apply_update(user, vault, note.id, diff)
@@ -147,11 +150,10 @@ defmodule Engram.Notes.CrdtTransportTest do
       assert CrdtBridge.body_of(probe) == "hello"
 
       # The fallback: the client's full state applies and the two converge.
-      # Converge, not "hello world": after a flatten the client's history and
-      # the server's are unrelated, so the merged body can hold both copies
-      # (the flatten's known doubling risk, CrdtCheckpoint.maybe_flatten). That
-      # is the flatten's to fix (a client reset); this pins that no acked edit
-      # is lost and both sides agree.
+      # Converge, not "hello world": the client's history and the server's are
+      # unrelated, so the merged body can hold both copies (rival lineages).
+      # This pins that no acked edit is lost and both sides
+      # agree.
       {:ok, whole} = Yex.encode_state_as_update(client)
       assert {:ok, _} = CrdtTransport.apply_update(user, vault, note.id, whole)
       {:ok, %{update: after_}} = CrdtTransport.read_delta(user, vault, note.id, nil)

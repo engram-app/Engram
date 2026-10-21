@@ -290,8 +290,8 @@ defmodule Engram.Notes.CrdtTransport do
     end)
   end
 
-  # A delivery diffed against a state vector the doc no longer has (the
-  # checkpoint's flatten replaced the lineage) has missing dependencies, and
+  # A delivery diffed against a state vector the doc no longer has (a stored
+  # lineage the client never saw) has missing dependencies, and
   # yrs parks those structs as pending instead of applying them. Acknowledged,
   # the client would drop an edit the server does not hold; refused, it
   # resends its full state, which carries its own dependencies. Pending
