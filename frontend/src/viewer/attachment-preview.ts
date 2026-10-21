@@ -89,6 +89,17 @@ function extOf(path: string): string {
 	return dot <= 0 ? name.replace(/^\./u, "") : name.slice(dot + 1);
 }
 
+// Types a browser renders without running script. Raster images only: an SVG
+// is an image/* type that can carry script.
+const INERT_IMAGES = new Set([
+	"image/png",
+	"image/jpeg",
+	"image/gif",
+	"image/webp",
+	"image/avif",
+	"image/bmp",
+]);
+
 const UNITS = ["byte", "kilobyte", "megabyte", "gigabyte"] as const;
 
 export type PreviewKind = "image" | "pdf" | "audio" | "video" | "csv" | "text" | "excalidraw";
@@ -121,17 +132,17 @@ export function previewKind(path: string, mime: string): PreviewKind | null {
 }
 
 // A blob: URL runs in OUR origin, so opening an HTML or SVG blob in a tab would
-// execute the file's script with the user's session. Allow only types the
-// browser renders without script.
+// execute the file's script with the user's session. The stored type is
+// whatever the uploader sent ("image/svg+xml; charset=utf-8" included), so it
+// is canonicalised first, the same way the server's MimeWhitelist does, and
+// then checked against an allowlist rather than a denylist.
 export function opensInline(mime: string): boolean {
-	if (mime === "image/svg+xml") {
-		return false;
-	}
+	const type = mime.split(";")[0]?.trim().toLowerCase() ?? "";
 	return (
-		mime === "application/pdf" ||
-		mime.startsWith("audio/") ||
-		mime.startsWith("video/") ||
-		mime.startsWith("image/")
+		type === "application/pdf" ||
+		INERT_IMAGES.has(type) ||
+		type.startsWith("audio/") ||
+		type.startsWith("video/")
 	);
 }
 

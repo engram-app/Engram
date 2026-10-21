@@ -41,6 +41,16 @@ describe("opensInline", () => {
 		expect(opensInline("application/xhtml+xml")).toBe(false);
 		expect(opensInline("")).toBe(false);
 	});
+
+	test("parameters, case and padding cannot sneak an SVG or HTML through", () => {
+		expect(opensInline("image/svg+xml; charset=utf-8")).toBe(false);
+		expect(opensInline("image/svg+xml ")).toBe(false);
+		expect(opensInline("IMAGE/SVG+XML")).toBe(false);
+		expect(opensInline("text/html; charset=utf-8")).toBe(false);
+		expect(opensInline("image/x-unknown-but-scripty")).toBe(false);
+		expect(opensInline(" Image/PNG; foo=bar")).toBe(true);
+		expect(opensInline("Application/PDF")).toBe(true);
+	});
 });
 
 describe("parseCsv", () => {

@@ -242,7 +242,8 @@ export default function AttachmentPage() {
 		<AttachmentDetails
 			att={att}
 			kind={kind}
-			inlineUrl={url && opensInline(mime) ? url : null}
+			// Both the stored type and the bytes' actual type must be inert.
+			inlineUrl={url && blob && opensInline(mime) && opensInline(blob.type) ? url : null}
 			onDownload={download}
 			renaming={renamingAt === "title"}
 			onRename={() => setRenamingAt("title")}
