@@ -14,7 +14,9 @@ defmodule EngramWeb.FieldsControllerTest do
   test "GET /api/fields lists the vault's fields", %{conn: conn, user: user, vault: vault} do
     write_indexed!(user, vault, "a.md", "---\nstatus: draft\nrating: 4\n---\nbody\n")
 
-    assert %{"fields" => fields} = conn |> get("/api/fields") |> json_response(200)
+    assert %{"fields" => fields, "filterable" => false} =
+             conn |> get("/api/fields") |> json_response(200)
+
     by_name = Map.new(fields, &{&1["name"], &1})
 
     assert %{"kinds" => ["string"], "note_count" => 1, "values" => [%{"value" => "draft"}]} =
@@ -36,6 +38,11 @@ defmodule EngramWeb.FieldsControllerTest do
 
   defp assert_schema(fields, title) do
     spec = EngramWeb.ApiSpec.spec()
-    OpenApiSpex.TestAssertions.assert_schema(%{"fields" => fields}, title, spec)
+
+    OpenApiSpex.TestAssertions.assert_schema(
+      %{"fields" => fields, "filterable" => false},
+      title,
+      spec
+    )
   end
 end

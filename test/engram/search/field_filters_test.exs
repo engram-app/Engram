@@ -84,6 +84,19 @@ defmodule Engram.Search.FieldFiltersTest do
                %{key: "a", match: %{any: [v.("a"), v.("b")]}}
     end
 
+    # A named exact field stores every string as a value HMAC, date-shaped
+    # ones too (a `project: 2026-01-01`), so the filter must match them as
+    # text; the field catalog lists such values.
+    test "a date-shaped string on a named exact field is an exact match", ctx do
+      v = &FilterId.attr_value(ctx.fk, &1)
+
+      assert one(ctx, %{"key" => "project", "value" => "2026-01-01"}) ==
+               %{key: "j", match: %{value: v.("2026-01-01")}}
+
+      assert one(ctx, %{"key" => "source", "op" => "in", "value" => ["2026-01-01", "x"]}) ==
+               %{key: "o", match: %{any: [v.("2026-01-01"), v.("x")]}}
+    end
+
     test "status stable is the default: it matches a missing s", ctx do
       assert one(ctx, %{"key" => "status", "value" => "Stable"}) == %{is_empty: %{key: "s"}}
 

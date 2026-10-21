@@ -38,7 +38,7 @@ defmodule Engram.Notes.FieldCatalogRlsTest do
   end
 
   test "CONTROL: engram_app with no tenant sees zero rows" do
-    assert length(Repo.all(NoteAttr, skip_tenant_check: true)) > 0
+    assert [_ | _] = Repo.all(NoteAttr, skip_tenant_check: true)
     assert length(Repo.all(FrontmatterKey, skip_tenant_check: true)) == 2
     assert {:returned, []} = as_prod_role(fn -> Repo.all(NoteAttr, skip_tenant_check: true) end)
 
@@ -58,5 +58,20 @@ defmodule Engram.Notes.FieldCatalogRlsTest do
     FieldCatalog.evict(b.vault.id)
 
     assert {:returned, {:ok, []}} = as_prod_role(fn -> FieldCatalog.list(a.user, b.vault) end)
+  end
+
+  # The test above stops at the vault's seq row. These run the catalog's own
+  # aggregates on b's vault under a's tenant: RLS on note_attrs alone must
+  # hide b's rows. The superuser run is the control that b's rows exist.
+  test "the aggregates return no rows of another tenant's vault", %{a: a, b: b} do
+    for {sql, params} <- FieldCatalog.explain_queries(b.vault.id) do
+      assert [_ | _] = Repo.query!(sql, params).rows
+
+      assert {:returned, []} =
+               as_prod_role(fn ->
+                 Repo.query!("SELECT set_config('app.current_tenant', $1, true)", [a.user.id])
+                 Repo.query!(sql, params).rows
+               end)
+    end
   end
 end

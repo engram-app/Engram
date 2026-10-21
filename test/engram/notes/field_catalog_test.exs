@@ -165,6 +165,40 @@ defmodule Engram.Notes.FieldCatalogTest do
     assert field(after_write, "fresh")
   end
 
+  test "a new seq replaces the vault's entry instead of adding one", %{user: user, vault: vault} do
+    seed!(user, vault)
+    {:ok, _} = FieldCatalog.list(user, vault)
+    write_indexed!(user, vault, "d.md", "---\nfresh: yes\n---\nbody\n")
+    {:ok, _} = FieldCatalog.list(user, vault)
+
+    table = Engram.Cache.Registry.table(:field_catalog)
+    assert [_one] = :ets.match_object(table, {{vault.id, :_}, :_, :_})
+  end
+
+  test "a catalog built while a decrypt failed is not cached", %{user: user, vault: vault} do
+    write_indexed!(user, vault, "a.md", "---\nmood: calm\n---\nbody\n")
+    key = Repo.one!(Engram.Notes.FrontmatterKey, skip_tenant_check: true)
+    good = Map.take(key, [:name_ct, :name_nonce])
+
+    set = fn fields ->
+      Repo.update_all(
+        Ecto.Query.where(Engram.Notes.FrontmatterKey, user_id: ^user.id),
+        [set: Map.to_list(fields)],
+        skip_tenant_check: true
+      )
+    end
+
+    set.(%{name_ct: "garbage-ciphertext"})
+    FieldCatalog.evict(vault.id)
+
+    log = capture_log(fn -> assert {:ok, []} = FieldCatalog.list(user, vault) end)
+    assert log =~ "field_catalog_key_decrypt_failed"
+
+    # Repaired without a seq move: the partial result must not be served.
+    set.(good)
+    assert {:ok, [%{name: "mood"}]} = FieldCatalog.list(user, vault)
+  end
+
   test "a user without a DEK has no fields", %{vault: vault} do
     assert {:ok, []} = FieldCatalog.list(insert(:user), vault)
   end

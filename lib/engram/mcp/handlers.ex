@@ -766,7 +766,8 @@ defmodule Engram.MCP.Handlers do
     do:
       v
       |> to_string()
-      |> String.replace(["|", "\r", "\n"], fn
+      |> String.replace(["\\", "|", "\r", "\n"], fn
+        "\\" -> "\\\\"
         "|" -> "\\|"
         _ -> " "
       end)

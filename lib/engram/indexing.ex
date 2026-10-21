@@ -3047,12 +3047,24 @@ defmodule Engram.Indexing do
   # key leaves no row.
   defp stamp_flat_fields(%{note: note, attr_rows: rows}) do
     :ok = hold_key_ids!(note, rows)
-    Repo.delete_all(from(a in NoteAttr, where: a.note_id == ^note.id))
+
+    {_n, old} =
+      Repo.delete_all(
+        from(a in NoteAttr,
+          where: a.note_id == ^note.id,
+          select: {a.key_id, a.ord, a.h, a.n, a.d}
+        )
+      )
+
     _ = rows |> Enum.chunk_every(@insert_batch) |> Enum.each(&Repo.insert_all(NoteAttr, &1))
 
     # The field catalog is cached on change_seq, which this pass does not
-    # move; the eviction runs once this transaction commits.
-    FieldCatalog.evict(note.vault_id)
+    # move, so a pass that changed the rows evicts it (after this transaction
+    # commits). Most re-index passes leave the frontmatter alone: no eviction,
+    # no cluster broadcast.
+    if MapSet.new(old) != MapSet.new(rows, &{&1.key_id, &1.ord, &1.h, &1.n, &1.d}),
+      do: FieldCatalog.evict(note.vault_id),
+      else: :ok
   end
 
   defp stamp_flat_fields(_prepared), do: :ok
