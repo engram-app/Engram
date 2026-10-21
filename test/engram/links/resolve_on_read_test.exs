@@ -200,7 +200,7 @@ defmodule Engram.Links.ResolveOnReadTest do
 
     ids = [ctx.source.id, a.id, b.id, c.id, d.id, d_src.id, missing]
 
-    for opts <- [[], [limit: 1], [distinct_sources: true]] do
+    for opts <- [[], [limit: 1], [distinct_sources: true], [limit: 1, distinct_sources: true]] do
       assert Links.backlinks_for_notes(ctx.user, ids, opts) ==
                Map.new(ids, &{&1, Links.backlinks_for_note(ctx.user, &1, opts)})
     end
