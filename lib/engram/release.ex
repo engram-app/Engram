@@ -212,7 +212,60 @@ defmodule Engram.Release do
 
     for repo <- repos() do
       :ok = use_migrator_session(repo)
-      {:ok, _, _} = Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :up, all: true))
+
+      {:ok, _, _} =
+        Ecto.Migrator.with_repo(repo, fn repo ->
+          with_migration_lock(repo.config(), fn -> Ecto.Migrator.run(repo, :up, all: true) end)
+        end)
+    end
+  end
+
+  # Every web and worker task migrates on boot. Ecto's own migration lock
+  # skips each `@disable_migration_lock` migration, which is every
+  # CONCURRENTLY index build, so two tasks booting together ran the same
+  # build and Postgres deadlocked them (#2128). One advisory lock, held by a
+  # dedicated idle session around the whole run, makes the next migrator
+  # wait and then find nothing pending.
+  #
+  # The waiter polls `pg_try_advisory_lock` instead of blocking in
+  # `pg_advisory_lock`: a blocked statement holds a snapshot, and the
+  # holder's CONCURRENTLY build waits on every open snapshot, so the two
+  # would wait on each other forever with no deadlock error.
+  @migration_lock_key 2_128_000_001
+
+  @doc false
+  @spec with_migration_lock(keyword(), (-> result), pos_integer()) :: result when result: term()
+  def with_migration_lock(config, fun, retry_ms \\ 2_000) do
+    {:ok, conn} =
+      config
+      |> Keyword.drop([:pool, :pool_size, :parameters])
+      |> Keyword.put(:pool_size, 1)
+      |> Postgrex.start_link()
+
+    try do
+      await_migration_lock(conn, retry_ms, true)
+      fun.()
+    after
+      # Closing the session releases the lock, even if `fun` raised.
+      GenServer.stop(conn)
+    end
+  end
+
+  defp await_migration_lock(conn, retry_ms, first?) do
+    case Postgrex.query!(conn, "SELECT pg_try_advisory_lock($1)", [@migration_lock_key]) do
+      %{rows: [[true]]} ->
+        :ok
+
+      _ ->
+        if first?,
+          do:
+            Logger.info(
+              "another task is migrating; waiting for the migration lock",
+              Metadata.with_category(:info, :boot, [])
+            )
+
+        Process.sleep(retry_ms)
+        await_migration_lock(conn, retry_ms, false)
     end
   end
 
