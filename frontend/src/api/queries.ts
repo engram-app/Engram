@@ -91,7 +91,8 @@ const selectAllNotes = (tree: VaultTree): NoteSummary[] => tree.notes.map(treeNo
 
 // `ManifestNote` is `{ id, path }`; the tree rows carry those plus timestamps,
 // which callers ignore.
-const selectManifest = (tree: VaultTree) => ({ notes: tree.notes });
+// Attachments ride along for `[[` autocomplete, which links files as well as notes.
+const selectManifest = (tree: VaultTree) => ({ notes: tree.notes, attachments: tree.attachments });
 
 // Single source for the by-id note fetch used by useNote's queryFn.
 function fetchNoteById(id: string): Promise<Note> {

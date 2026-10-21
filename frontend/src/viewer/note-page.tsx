@@ -254,13 +254,16 @@ export default function NotePage() {
 		},
 		[navigate, slug, wikiMap, createWikiTarget],
 	);
-	// `[[` autocomplete's candidate list. Read through a ref, not a useMemo keyed
+	// `[[` autocomplete's candidate list: notes and attachments. Read through a ref, not a useMemo keyed
 	// on manifest, so this callback's identity NEVER changes -- the manifest
 	// query refetches on its own staleTime, and a new function identity there
 	// would fire NoteEditor's decorationsCompartment.reconfigure effect for
 	// every refetch with no UI change to show for it (same onView/onShortcutRef
 	// reasoning documented in note-editor.tsx).
-	const manifestPaths = useMemo(() => manifest?.notes.map((n) => n.path) ?? [], [manifest]);
+	const manifestPaths = useMemo(
+		() => [...(manifest?.notes ?? []), ...(manifest?.attachments ?? [])].map((n) => n.path),
+		[manifest],
+	);
 	const manifestPathsRef = useRef<string[]>([]);
 	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Writing during render is the point: it keeps the callback identity stable so the consuming effect does not re-fire on every render. See the comment above.
 	manifestPathsRef.current = manifestPaths;
