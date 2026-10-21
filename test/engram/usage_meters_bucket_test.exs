@@ -102,7 +102,7 @@ defmodule Engram.UsageMetersBucketTest do
     end
 
     test "the carry-over migration starts existing users on what the lifetime cap left" do
-      Code.require_file("priv/repo/migrations/20261020130001_carry_over_embed_bucket.exs")
+      Code.require_file("priv/repo/migrations/20261021150002_carry_over_embed_bucket.exs")
       migration = Engram.Repo.Migrations.CarryOverEmbedBucket
 
       heavy = insert(:user)
