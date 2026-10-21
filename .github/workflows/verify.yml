@@ -1360,6 +1360,7 @@ jobs:
               touch "${MARKER_PREFIX}-stack-failed.marker"
             fi
           ) > "${MARKER_PREFIX}-stack.log" 2>&1 &
+          echo $! > "${MARKER_PREFIX}-stack.pid"
           echo "CI stack build started (PID $!)"
 
           # --- Plugin build (background) ---
@@ -1521,7 +1522,7 @@ jobs:
           QDRANT_COLLECTION: ${{ env.QDRANT_COLLECTION }}
           OLLAMA_URL: http://10.0.20.214:11434
 
-      # always(): an api_only failure above must not mask the Obsidian suite's
+      # !cancelled(): an api_only failure above must not mask the Obsidian suite's
       # signal (the job still fails on the failed step).
       # Test steps use !cancelled(), not always(): always() also runs them after
       # a cancel (a superseded push), the suite outlives the runner's cancel
@@ -1558,7 +1559,7 @@ jobs:
       # Harness unit tests (stack-free): e2e/unit has its own pytest rootdir
       # so e2e/conftest.py (Obsidian/auth session fixtures) never loads.
       # Guards helper logic like the Clerk session-create retry budget (#869).
-      # always(): keep this guard's signal even if the api step failed.
+      # !cancelled(): keep this guard's signal even if the api step failed.
       - name: "Harness unit tests"
         if: ${{ !cancelled() }}
         working-directory: e2e/unit
@@ -1642,6 +1643,9 @@ jobs:
       # immediately; this step + cron mop up crashed-run orphans frequently.
       - name: Reap stale Clerk orphans (>1h)
         if: always()
+        # Deletes users one at a time. A slow Clerk must not eat the cancel
+        # grace before Tear down below runs.
+        timeout-minutes: 2
         env:
           E2E_CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
         run: |
@@ -1724,6 +1728,16 @@ jobs:
           DISPLAY_MIN: ${{ steps.display.outputs.min }}
           DISPLAY_MAX: ${{ steps.display.outputs.max }}
         run: |
+          # Stop the background stack bring-up first. A cancel during "Wait for
+          # CI stack" otherwise races it: its `up --wait` (or the retry's second
+          # attempt) recreates containers after the `down` below. Freeze it so
+          # it spawns nothing new, then KILL the whole tree.
+          tree() { echo "$1"; for c in $(pgrep -P "$1"); do tree "$c"; done; }
+          # Skipped once a marker exists: the subshell has exited, the pid may be reused.
+          if [ -f "${MARKER_PREFIX}-stack.pid" ] && [ ! -f "${MARKER_PREFIX}-stack.marker" ] && [ ! -f "${MARKER_PREFIX}-stack-failed.marker" ]; then
+            pid="$(cat "${MARKER_PREFIX}-stack.pid")"
+            kill -STOP "$pid" 2>/dev/null && kill -KILL $(tree "$pid") 2>/dev/null || true
+          fi
           # Delete this run's Qdrant collection on SlowRaid
           curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
           # Kill only this run's Obsidian/Xvfb processes (scoped by config dir)
@@ -2040,6 +2054,7 @@ jobs:
               touch "${MARKER_PREFIX}-stack-failed.marker"
             fi
           ) > "${MARKER_PREFIX}-stack.log" 2>&1 &
+          echo $! > "${MARKER_PREFIX}-stack.pid"
           echo "CI stack build started (PID $!)"
 
           # --- Plugin build (background) ---
@@ -2203,7 +2218,7 @@ jobs:
           python3 -m pytest tests/api_only/local/ tests/api_only/test_61_auth_agnostic.py \
             "${K_ARGS[@]}" -v --timeout=600 -p no:cacheprovider --no-header
 
-      # always(): a local-auth API failure above must not mask the CRDT suite's
+      # !cancelled(): a local-auth API failure above must not mask the CRDT suite's
       # signal (the job still fails on the failed step).
       - name: Wait for plugin + Playwright
         if: ${{ !cancelled() }}
@@ -2325,6 +2340,16 @@ jobs:
           DISPLAY_MIN: ${{ steps.display.outputs.min }}
           DISPLAY_MAX: ${{ steps.display.outputs.max }}
         run: |
+          # Stop the background stack bring-up first. A cancel during "Wait for
+          # CI stack" otherwise races it: its `up --wait` (or the retry's second
+          # attempt) recreates containers after the `down` below. Freeze it so
+          # it spawns nothing new, then KILL the whole tree.
+          tree() { echo "$1"; for c in $(pgrep -P "$1"); do tree "$c"; done; }
+          # Skipped once a marker exists: the subshell has exited, the pid may be reused.
+          if [ -f "${MARKER_PREFIX}-stack.pid" ] && [ ! -f "${MARKER_PREFIX}-stack.marker" ] && [ ! -f "${MARKER_PREFIX}-stack-failed.marker" ]; then
+            pid="$(cat "${MARKER_PREFIX}-stack.pid")"
+            kill -STOP "$pid" 2>/dev/null && kill -KILL $(tree "$pid") 2>/dev/null || true
+          fi
           # Delete this run's Qdrant collection on SlowRaid
           curl -sf -X DELETE "http://10.0.20.201:6333/collections/${QDRANT_COLLECTION}" > /dev/null 2>&1 || true
           # Kill only this run's Obsidian/Xvfb processes (scoped by config dir)
