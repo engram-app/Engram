@@ -136,14 +136,19 @@ defmodule Engram.Links.LinksRlsTest do
                "was filtered by RLS, so every rename-repair probe would enqueue for nothing"
     end
 
-    test "batched reads return the same edges", %{user: user, source: source, target: target} do
+    # Identity, not a count: an RLS-filtered candidate read leaves the edge in
+    # place but resolves it dangling, which a `[_]` match would still accept.
+    test "batched reads resolve the edge to its target",
+         %{user: user, source: source, target: target} do
       assert {:returned, links} = as_prod_role(fn -> Links.links_for_notes(user, [source.id]) end)
-      assert [_] = Map.fetch!(links, source.id)
+      target_id = target.id
+      assert [%{target_note_id: ^target_id}] = Map.fetch!(links, source.id)
 
       assert {:returned, backlinks} =
                as_prod_role(fn -> Links.backlinks_for_notes(user, [target.id]) end)
 
-      assert [_] = Map.fetch!(backlinks, target.id)
+      source_id = source.id
+      assert [%{source_note_id: ^source_id}] = Map.fetch!(backlinks, target.id)
     end
 
     test "live_basename_count/3 counts the live note", %{user: user, vault: vault} do
