@@ -25,28 +25,32 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
 
   setup :verify_on_exit!
 
+  # Over 512 B: the chunker's min512 merge (v5) leaves each section alone,
+  # so every section is still its own chunk.
+  @pad String.duplicate("filler words here ", 30)
+
   @content """
   # Five
 
   ## One
 
-  Alpha section text.
+  Alpha section text. #{@pad}
 
   ## Two
 
-  Bravo section text.
+  Bravo section text. #{@pad}
 
   ## Three
 
-  Charlie section text.
+  Charlie section text. #{@pad}
 
   ## Four
 
-  Delta section text.
+  Delta section text. #{@pad}
 
   ## Five
 
-  Echo section text.
+  Echo section text. #{@pad}
   """
 
   # Fake Qdrant: `status` is the collection status, `refuse` (:upsert or
@@ -669,7 +673,7 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
     test "an edit over the points budget", %{user: user, vault: vault, note: note} do
       cap_override(user, "index_points_cap", 3)
       {:ok, edited} = Crypto.maybe_decrypt_note_fields(note, user)
-      edited = %{edited | content: @content <> "\n## Six\n\nFoxtrot section text.\n"}
+      edited = %{edited | content: @content <> "\n## Six\n\nFoxtrot section text. #{@pad}\n"}
 
       assert {:ok, 1, 0, false} = Indexing.index_note_with_usage(edited, vault, user, [])
       assert reload(note).index_tier == "floor_paid"

@@ -28,29 +28,33 @@ defmodule Engram.Workers.EmbedNotePointsBudgetTest do
 
   setup :verify_on_exit!
 
+  # Over 512 B: the chunker's min512 merge (v5) leaves each section alone,
+  # so every section is still its own chunk.
+  @pad String.duplicate("filler words here ", 30)
+
   # Five sections, so five chunks on a full pass.
   @content """
   # Five
 
   ## One
 
-  Alpha section text.
+  Alpha section text. #{@pad}
 
   ## Two
 
-  Bravo section text.
+  Bravo section text. #{@pad}
 
   ## Three
 
-  Charlie section text.
+  Charlie section text. #{@pad}
 
   ## Four
 
-  Delta section text.
+  Delta section text. #{@pad}
 
   ## Five
 
-  Echo section text.
+  Echo section text. #{@pad}
   """
 
   setup do

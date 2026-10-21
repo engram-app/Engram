@@ -24,21 +24,25 @@ defmodule Engram.IndexingFloorTest do
 
   setup :verify_on_exit!
 
+  # Over 512 B: the chunker's min512 merge (v5) leaves each section alone,
+  # so every section is still its own chunk.
+  @pad String.duplicate("filler words here ", 30)
+
   # Three sections; "zymurgy" appears only in the last one.
   @content """
   # Brewing
 
   ## Grain
 
-  Malted barley and wheat, milled coarse.
+  Malted barley and wheat, milled coarse. #{@pad}
 
   ## Water
 
-  Soft water, low in carbonate.
+  Soft water, low in carbonate. #{@pad}
 
   ## Yeast
 
-  Zymurgy is the study of fermentation.
+  Zymurgy is the study of fermentation. #{@pad}
   """
 
   defp floor_note(user, vault, path \\ "Brew/Notes.md", content \\ @content) do

@@ -886,11 +886,15 @@ defmodule Engram.IndexingTest do
     end
   end
 
+  # Over 512 B: the chunker's min512 merge (v5) leaves each section alone,
+  # so every section is still its own chunk.
+  @pad String.duplicate("filler words here ", 30)
+
   # Markdown with `n` distinct heading sections — each becomes at least one
   # chunk under the heading-aware chunker.
   defp big_sectioned_content(n) do
     Enum.map_join(1..n, "\n\n", fn i ->
-      "## Section #{i}\n\nParagraph for section #{i} with enough words to be a real chunk."
+      "## Section #{i}\n\nParagraph for section #{i} with enough words to be a real chunk. #{@pad}"
     end)
   end
 

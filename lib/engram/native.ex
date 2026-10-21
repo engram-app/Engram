@@ -55,7 +55,7 @@ defmodule Engram.Native do
     {:link_extract, :link_extract_nif, :link_extract_dirty_nif, 2},
     {:note_title, :note_title_nif, :note_title_dirty_nif, 1},
     {:note_meta, :note_meta_nif, :note_meta_dirty_nif, 1},
-    {:chunk, :chunk_nif, :chunk_dirty_nif, 3},
+    {:chunk, :chunk_nif, :chunk_dirty_nif, 5},
     {:frontmatter_split, :frontmatter_split_nif, :frontmatter_split_dirty_nif, 1},
     {:frontmatter_parse, :frontmatter_parse_nif, :frontmatter_parse_dirty_nif, 1},
     {:text_diff, :text_diff_nif, :text_diff_dirty_nif, 2},
@@ -118,10 +118,13 @@ defmodule Engram.Native do
 
   @doc """
   Chunks for `Engram.Parsers.Markdown.parse/2`: `[{text, context_text,
-  heading_path, char_start, char_end}]`, before positions. Splits
+  embed_text, {headings, section_count}, char_start, char_end, kind}]`,
+  before positions; `headings` is a list, title first, and `section_count`
+  the sections a min512 chunk joins (1 for one). Splits
   frontmatter itself. Valid UTF-8 only.
   """
-  def chunk(content, folder, title), do: sized(:chunk, content, [content, folder, title])
+  def chunk(content, folder, title, aliases \\ [], lead \\ nil),
+    do: sized(:chunk, content, [content, folder, title, aliases, lead])
 
   @doc """
   Frontmatter fence offsets for `Engram.Notes.Frontmatter.split/1`:
