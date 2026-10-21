@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
 import { parseCsv } from "./attachment-preview";
 
@@ -35,20 +36,30 @@ export function AttachmentTextPreview({
 	}
 	if (!csv) {
 		return (
-			<pre
-				className="max-h-[70vh] overflow-auto rounded-lg border bg-muted/40 p-4 font-mono text-xs"
-				translate="no"
+			<ScrollArea
+				className="rounded-lg border bg-muted/40"
+				viewportClassName="max-h-[70vh]"
+				viewportLabel={filename}
 			>
-				{text}
-			</pre>
+				{/* w-max: long lines scroll sideways instead of wrapping. */}
+				<pre className="w-max min-w-full p-4 font-mono text-xs" translate="no">
+					{text}
+				</pre>
+				<ScrollBar orientation="horizontal" />
+			</ScrollArea>
 		);
 	}
 	const rows = parseCsv(text, filename.toLowerCase().endsWith(".tsv") ? "\t" : ",", MAX_ROWS + 1);
 	const [head, ...body] = rows;
 	return (
 		<figure className="flex flex-col gap-1">
-			<div className="max-h-[70vh] overflow-auto rounded-lg border">
-				<table className="w-full text-xs" translate="no">
+			<ScrollArea
+				className="rounded-lg border"
+				viewportClassName="max-h-[70vh]"
+				viewportLabel={filename}
+			>
+				{/* w-max: wide tables scroll sideways; min-w-full: narrow ones fill. */}
+				<table className="w-max min-w-full text-xs" translate="no">
 					{head ? (
 						<thead className="sticky top-0 bg-muted">
 							<tr>
@@ -75,7 +86,8 @@ export function AttachmentTextPreview({
 						))}
 					</tbody>
 				</table>
-			</div>
+				<ScrollBar orientation="horizontal" />
+			</ScrollArea>
 			{rows.length > MAX_ROWS ? (
 				<figcaption className="text-muted-foreground text-xs">
 					{t("Showing the first {count} rows.", { count: MAX_ROWS })}
