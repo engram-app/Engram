@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
-import { parseCsv } from "./attachment-preview";
+import { intlLocale } from "@/lib/intl-locale";
+import { formatBytes, parseCsv, TEXT_PREVIEW_MAX_BYTES } from "./attachment-preview";
 
 const MAX_ROWS = 500;
 
-// Read-only text and CSV preview. The blob is already capped by
-// TEXT_PREVIEW_MAX_BYTES, so reading it whole is bounded.
+// Read-only text and CSV preview. Only the first TEXT_PREVIEW_MAX_BYTES are
+// read and rendered: "Preview anyway" can hand this a much larger file, and a
+// <pre> holding 100 MB of text freezes the tab.
 export function AttachmentTextPreview({
 	blob,
 	csv,
@@ -16,16 +18,20 @@ export function AttachmentTextPreview({
 	csv: boolean;
 	filename: string;
 }) {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
+	const truncated = blob.size > TEXT_PREVIEW_MAX_BYTES;
 	const [text, setText] = useState<string | null>(null);
 
 	useEffect(() => {
 		let cancelled = false;
-		blob.text().then((s) => {
-			if (!cancelled) {
-				setText(s);
-			}
-		});
+		blob
+			.slice(0, TEXT_PREVIEW_MAX_BYTES)
+			.text()
+			.then((s) => {
+				if (!cancelled) {
+					setText(s);
+				}
+			});
 		return () => {
 			cancelled = true;
 		};
@@ -36,17 +42,26 @@ export function AttachmentTextPreview({
 	}
 	if (!csv) {
 		return (
-			<ScrollArea
-				className="rounded-lg border bg-muted/40"
-				viewportClassName="max-h-[70vh]"
-				viewportLabel={filename}
-			>
-				{/* w-max: long lines scroll sideways instead of wrapping. */}
-				<pre className="w-max min-w-full p-4 font-mono text-xs" translate="no">
-					{text}
-				</pre>
-				<ScrollBar orientation="horizontal" />
-			</ScrollArea>
+			<figure className="flex flex-col gap-1">
+				<ScrollArea
+					className="rounded-lg border bg-muted/40"
+					viewportClassName="max-h-[70vh]"
+					viewportLabel={filename}
+				>
+					{/* w-max: long lines scroll sideways instead of wrapping. */}
+					<pre className="w-max min-w-full p-4 font-mono text-xs" translate="no">
+						{text}
+					</pre>
+					<ScrollBar orientation="horizontal" />
+				</ScrollArea>
+				{truncated ? (
+					<figcaption className="text-muted-foreground text-xs">
+						{t("Showing the first {size}.", {
+							size: formatBytes(TEXT_PREVIEW_MAX_BYTES, intlLocale(renderedLocale)),
+						})}
+					</figcaption>
+				) : null}
+			</figure>
 		);
 	}
 	const rows = parseCsv(text, filename.toLowerCase().endsWith(".tsv") ? "\t" : ",", MAX_ROWS + 1);

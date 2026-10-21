@@ -3,6 +3,7 @@ import { lazy, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } 
 import { useParams } from "react-router";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
+import { intlLocale } from "@/lib/intl-locale";
 import { notify } from "@/lib/notify";
 import { encodePathSegments } from "@/lib/path";
 import { whenLoaded } from "@/lib/when-loaded";
@@ -10,7 +11,7 @@ import { ApiError, api, isNotFound } from "../api/client";
 import { useAttachments } from "../api/queries";
 import { useRightToolSlot } from "../layout/right-tools-context";
 import { AttachmentDetails, AttachmentName } from "./attachment-details";
-import { opensInline, previewKind } from "./attachment-preview";
+import { formatBytes, opensInline, overPreviewCap, previewKind } from "./attachment-preview";
 import { AttachmentTextPreview } from "./attachment-text-preview";
 import BacklinksPanel from "./backlinks-panel";
 import { DocumentHeader } from "./document-header";
@@ -29,14 +30,22 @@ const PdfView = lazy(() => whenLoaded(import("./pdf-view")));
 // a typed Blob for a native or text preview; everything else gets the file card
 // alone and fetches its bytes only when the user downloads.
 export default function AttachmentPage() {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
 	const { itemId: id } = useParams();
 	const { data: attachments, isLoading } = useAttachments();
 	const att = attachments?.find((a) => a.id === id);
 	const path = att?.path ?? "";
 	const filename = path.split("/").pop() ?? path;
 	const mime = att?.mime_type ?? "";
-	const kind = att ? previewKind(path, mime, att.size_bytes) : null;
+	const fileKind = att ? previewKind(path, mime) : null;
+	// Over its cap, a preview loads only once the user asks for it.
+	const [forcePreview, setForcePreview] = useState(false);
+	const capped =
+		fileKind !== null &&
+		att !== undefined &&
+		overPreviewCap(fileKind, att.size_bytes) &&
+		!forcePreview;
+	const kind = capped ? null : fileKind;
 	const rawPath = `/attachments/${encodePathSegments(path)}?raw=1`;
 	// The bytes are keyed by WHAT the file is, not where it lives: a rename or
 	// move changes the path but not the content, so it must not refetch them.
@@ -61,6 +70,7 @@ export default function AttachmentPage() {
 	if (seededKey !== contentKey) {
 		setSeededKey(contentKey);
 		setUnrenderable(false);
+		setForcePreview(false);
 		setBlob(null);
 		setUrl(null);
 		setError(null);
@@ -164,7 +174,18 @@ export default function AttachmentPage() {
 	}
 
 	let preview: ReactNode = null;
-	if (error) {
+	if (capped) {
+		preview = (
+			<p className="flex flex-wrap items-center gap-2 text-muted-foreground text-sm">
+				{t("{filename} is too large to preview here.", { filename })}
+				<Button variant="outline" size="sm" onClick={() => setForcePreview(true)}>
+					{t("Preview anyway ({size})", {
+						size: formatBytes(att.size_bytes, intlLocale(renderedLocale)),
+					})}
+				</Button>
+			</p>
+		);
+	} else if (error) {
 		preview = (
 			<p className="text-destructive text-sm">
 				{error === "missing"

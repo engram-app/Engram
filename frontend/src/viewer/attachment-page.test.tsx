@@ -270,12 +270,17 @@ it("says so when the browser can't render the file", async () => {
 	}
 });
 
-it("skips the preview past the size cap", () => {
+it("says a file is too large to preview, and loads it on request", async () => {
 	mockAttachments = [
 		att({ id: "v-1", path: "big.mp4", mime_type: "video/mp4", size_bytes: 200 * 1024 * 1024 }),
 	];
-	const getBlob = vi.spyOn(api, "getBlob");
-	renderAt("v-1");
-	expect(screen.getByRole("heading", { name: "big.mp4" })).toBeInTheDocument();
+	const getBlob = vi
+		.spyOn(api, "getBlob")
+		.mockResolvedValueOnce(new Blob(["x"], { type: "video/mp4" }));
+	const { container } = renderAt("v-1");
+	expect(screen.getByText(/big\.mp4 is too large to preview here/iu)).toBeInTheDocument();
 	expect(getBlob).not.toHaveBeenCalled();
+	fireEvent.click(screen.getByRole("button", { name: /preview anyway/iu }));
+	await waitFor(() => expect(container.querySelector("video")).toHaveAttribute("src", "blob:fake"));
+	expect(getBlob).toHaveBeenCalledTimes(1);
 });

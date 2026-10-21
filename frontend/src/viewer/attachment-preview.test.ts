@@ -5,6 +5,7 @@ import {
 	formatBytes,
 	MEDIA_PREVIEW_MAX_BYTES,
 	opensInline,
+	overPreviewCap,
 	parseCsv,
 	previewKind,
 	TEXT_PREVIEW_MAX_BYTES,
@@ -12,29 +13,30 @@ import {
 
 describe("previewKind", () => {
 	test("routes by mime first", () => {
-		expect(previewKind("a/pic.bin", "image/png", 10)).toBe("image");
-		expect(previewKind("doc.pdf", "application/pdf", 10)).toBe("pdf");
-		expect(previewKind("song.mp3", "audio/mpeg", 10)).toBe("audio");
-		expect(previewKind("clip.mp4", "video/mp4", 10)).toBe("video");
-		expect(previewKind("data.json", "application/json", 10)).toBe("text");
+		expect(previewKind("a/pic.bin", "image/png")).toBe("image");
+		expect(previewKind("doc.pdf", "application/pdf")).toBe("pdf");
+		expect(previewKind("song.mp3", "audio/mpeg")).toBe("audio");
+		expect(previewKind("clip.mp4", "video/mp4")).toBe("video");
+		expect(previewKind("data.json", "application/json")).toBe("text");
 	});
 
 	test("falls back to the extension when mime is generic", () => {
-		expect(previewKind("app.LOG", "application/octet-stream", 10)).toBe("text");
-		expect(previewKind("cfg/config.yaml", "", 10)).toBe("text");
-		expect(previewKind("table.csv", "application/octet-stream", 10)).toBe("csv");
-		expect(previewKind("table.tsv", "text/tab-separated-values", 10)).toBe("csv");
+		expect(previewKind("app.LOG", "application/octet-stream")).toBe("text");
+		expect(previewKind("cfg/config.yaml", "")).toBe("text");
+		expect(previewKind("table.csv", "application/octet-stream")).toBe("csv");
+		expect(previewKind("table.tsv", "text/tab-separated-values")).toBe("csv");
 	});
 
 	test("no preview for unknown binaries", () => {
-		expect(previewKind("snatchlist.zip", "application/zip", 10)).toBeNull();
-		expect(previewKind("noext", "", 10)).toBeNull();
+		expect(previewKind("snatchlist.zip", "application/zip")).toBeNull();
+		expect(previewKind("noext", "")).toBeNull();
 	});
 
-	test("no preview past the size caps", () => {
-		expect(previewKind("big.txt", "text/plain", TEXT_PREVIEW_MAX_BYTES + 1)).toBeNull();
-		expect(previewKind("big.mp4", "video/mp4", MEDIA_PREVIEW_MAX_BYTES + 1)).toBeNull();
-		expect(previewKind("ok.txt", "text/plain", TEXT_PREVIEW_MAX_BYTES)).toBe("text");
+	test("size caps are separate from the kind", () => {
+		expect(overPreviewCap("text", TEXT_PREVIEW_MAX_BYTES + 1)).toBe(true);
+		expect(overPreviewCap("csv", TEXT_PREVIEW_MAX_BYTES)).toBe(false);
+		expect(overPreviewCap("video", MEDIA_PREVIEW_MAX_BYTES + 1)).toBe(true);
+		expect(overPreviewCap("image", MEDIA_PREVIEW_MAX_BYTES)).toBe(false);
 	});
 });
 
