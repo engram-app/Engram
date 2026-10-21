@@ -864,7 +864,7 @@ defmodule Engram.Search do
   # Task 11.3: off until the v5 rollout; off, search reads exactly as before.
   # Read ONCE per request (`do_search/4`) and carried in the search opts, so
   # the Qdrant key list and how the hits are read never disagree mid-flip.
-  defp chunk_text_read?, do: Engram.ServiceConfig.get(:chunk_text_read, false)
+  defp chunk_text_read?, do: Qdrant.chunk_text_read?()
 
   # With `:chunk_text_read` on: ONE query for every candidate's chunk row
   # (vault, text, heading) and note display fields, keyed by point id. The

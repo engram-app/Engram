@@ -404,7 +404,8 @@ end
 # The v5 layout switches (chunker v5 plan), all off by default; unset leaves
 # the key unconfigured so the code default (off, today's behaviour) applies.
 # WRITE_V5_LAYOUT implies the v5 payload format (`Qdrant.v5_payload_format?/0`)
-# and is what `INDEX_REBUILD=on` requires (`Rebuild.mode/0` reads `off`
+# and chunk text reads (`Qdrant.chunk_text_read?/0`; v5 points hold no text
+# in Qdrant), and is what `INDEX_REBUILD=on` requires (`Rebuild.mode/0` reads `off`
 # without it).
 for {var, key} <- [
       {"WRITE_V5_LAYOUT", :write_v5_layout},

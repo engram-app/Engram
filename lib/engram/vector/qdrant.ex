@@ -1644,6 +1644,16 @@ defmodule Engram.Vector.Qdrant do
   @doc "Whether new points are written in the v5 layout (UUIDv5 ids, v5 payload)."
   @spec write_v5_layout?() :: boolean()
   def write_v5_layout?, do: ServiceConfig.get(:write_v5_layout, false) == true
+  @doc """
+  Whether search reads chunk text from Postgres. Writing the v5 layout IMPLIES
+  it (same pattern as `v5_payload_format?/0`): v5 points store no text in
+  Qdrant, so with it off their hits would be dropped and edited notes would
+  vanish from search. `CHUNK_TEXT_READ=false` cannot override that.
+  """
+  @spec chunk_text_read?() :: boolean()
+  def chunk_text_read?,
+    do: ServiceConfig.get(:chunk_text_read, false) == true or write_v5_layout?()
+
   defp legacy_filter_fields?, do: ServiceConfig.get(:legacy_filter_fields, true)
 
   @doc """
