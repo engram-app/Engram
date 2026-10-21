@@ -446,8 +446,32 @@ export const api = {
 		return res.json();
 	},
 
-	async getBlob(path: string): Promise<Blob> {
+	/** `onProgress` gets the bytes received so far, as they arrive. */
+	async getBlob(path: string, onProgress?: (received: number) => void): Promise<Blob> {
 		const res = await authFetch(path);
-		return res.blob();
+		return onProgress ? readWithProgress(res, onProgress) : res.blob();
 	},
 };
+
+/** Read a response body into a Blob, reporting the bytes received so far. */
+export function readWithProgress(
+	res: Response,
+	onProgress: (received: number) => void,
+): Promise<Blob> {
+	const type = res.headers.get("content-type") ?? "";
+	if (!res.body) {
+		return Promise.resolve(new Blob([], { type }));
+	}
+	let received = 0;
+	// Count bytes as they pass through; the browser still assembles the Blob.
+	const counter = new TransformStream<Uint8Array, Uint8Array>({
+		transform(chunk, controller) {
+			received += chunk.byteLength;
+			onProgress(received);
+			controller.enqueue(chunk);
+		},
+	});
+	return new Response(res.body.pipeThrough(counter), {
+		headers: { "content-type": type },
+	}).blob();
+}

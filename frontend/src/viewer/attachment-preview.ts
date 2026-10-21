@@ -93,10 +93,8 @@ const UNITS = ["byte", "kilobyte", "megabyte", "gigabyte"] as const;
 
 export type PreviewKind = "image" | "pdf" | "audio" | "video" | "csv" | "text";
 
-// Previews read the whole file into memory before rendering, so a cap keeps a
-// 500 MB file from being pulled down just to look at its page. Past it the
-// page says so and loads the preview only when asked.
-export const MEDIA_PREVIEW_MAX_BYTES = 100 * 1024 * 1024;
+// Text previews render only this much: a <pre> or table holding 100 MB of
+// text freezes the tab. Everything else previews at any size.
 export const TEXT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
 
 export function previewKind(path: string, mime: string): PreviewKind | null {
@@ -116,12 +114,6 @@ export function previewKind(path: string, mime: string): PreviewKind | null {
 		kind = "text";
 	}
 	return kind;
-}
-
-/** True when loading this preview would pull more than its cap into memory. */
-export function overPreviewCap(kind: PreviewKind, size: number): boolean {
-	const cap = kind === "csv" || kind === "text" ? TEXT_PREVIEW_MAX_BYTES : MEDIA_PREVIEW_MAX_BYTES;
-	return size > cap;
 }
 
 // A blob: URL runs in OUR origin, so opening an HTML or SVG blob in a tab would

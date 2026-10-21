@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { ApiError, api } from "../api/client";
@@ -65,7 +65,7 @@ it("renders an <img> for an image attachment, fetching bytes by path", async () 
 	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["x"], { type: "image/png" }));
 	renderAt("img-1");
 	await waitFor(() => expect(screen.getByRole("img")).toBeInTheDocument());
-	expect(api.getBlob).toHaveBeenCalledWith("/attachments/img/a.png?raw=1");
+	expect(api.getBlob).toHaveBeenCalledWith("/attachments/img/a.png?raw=1", expect.any(Function));
 });
 
 it("renders the pdf.js viewer for a pdf attachment", async () => {
@@ -279,17 +279,23 @@ it("says so when the browser can't render the file", async () => {
 	}
 });
 
-it("says a file is too large to preview, and loads it on request", async () => {
+it("loads a large file without asking, showing progress", async () => {
 	mockAttachments = [
 		att({ id: "v-1", path: "big.mp4", mime_type: "video/mp4", size_bytes: 200 * 1024 * 1024 }),
 	];
-	const getBlob = vi
-		.spyOn(api, "getBlob")
-		.mockResolvedValueOnce(new Blob(["x"], { type: "video/mp4" }));
+	let finish: (b: Blob) => void = () => undefined;
+	vi.spyOn(api, "getBlob").mockImplementationOnce((_path, onProgress) => {
+		onProgress?.(50 * 1024 * 1024);
+		return new Promise((r) => {
+			finish = r;
+		});
+	});
 	const { container } = renderAt("v-1");
-	expect(screen.getByText(/big\.mp4 is too large to preview here/iu)).toBeInTheDocument();
-	expect(getBlob).not.toHaveBeenCalled();
-	fireEvent.click(screen.getByRole("button", { name: /preview anyway/iu }));
+	const bar = await screen.findByRole("progressbar", { name: /loading big\.mp4/iu });
+	expect(bar).toHaveAttribute("value", String(50 * 1024 * 1024));
+	expect(screen.queryByRole("button", { name: /preview anyway/iu })).not.toBeInTheDocument();
+	await act(async () => {
+		finish(new Blob(["x"], { type: "video/mp4" }));
+	});
 	await waitFor(() => expect(container.querySelector("video")).toHaveAttribute("src", "blob:fake"));
-	expect(getBlob).toHaveBeenCalledTimes(1);
 });

@@ -11,7 +11,7 @@ import { ApiError, api, isNotFound } from "../api/client";
 import { useAttachments } from "../api/queries";
 import { useRightToolSlot } from "../layout/right-tools-context";
 import { AttachmentDetails, AttachmentName } from "./attachment-details";
-import { formatBytes, opensInline, overPreviewCap, previewKind } from "./attachment-preview";
+import { formatBytes, opensInline, previewKind } from "./attachment-preview";
 import { AttachmentTextPreview } from "./attachment-text-preview";
 import BacklinksPanel from "./backlinks-panel";
 import { DocumentHeader } from "./document-header";
@@ -37,15 +37,7 @@ export default function AttachmentPage() {
 	const path = att?.path ?? "";
 	const filename = path.split("/").pop() ?? path;
 	const mime = att?.mime_type ?? "";
-	const fileKind = att ? previewKind(path, mime) : null;
-	// Over its cap, a preview loads only once the user asks for it.
-	const [forcePreview, setForcePreview] = useState(false);
-	const capped =
-		fileKind !== null &&
-		att !== undefined &&
-		overPreviewCap(fileKind, att.size_bytes) &&
-		!forcePreview;
-	const kind = capped ? null : fileKind;
+	const kind = att ? previewKind(path, mime) : null;
 	const rawPath = `/attachments/${encodePathSegments(path)}?raw=1`;
 	// The bytes are keyed by WHAT the file is, not where it lives: a rename or
 	// move changes the path but not the content, so it must not refetch them.
@@ -61,6 +53,8 @@ export default function AttachmentPage() {
 	const [url, setUrl] = useState<string | null>(null);
 	// 'missing' = real 404; 'failed' = transient (5xx/network) — don't conflate.
 	const [error, setError] = useState<"missing" | "failed" | null>(null);
+	// Bytes of the preview received so far, for the progress bar.
+	const [received, setReceived] = useState(0);
 	// The browser refused to render the bytes (HEIC in Chrome, MKV, ...).
 	const [unrenderable, setUnrenderable] = useState(false);
 
@@ -70,7 +64,7 @@ export default function AttachmentPage() {
 	if (seededKey !== contentKey) {
 		setSeededKey(contentKey);
 		setUnrenderable(false);
-		setForcePreview(false);
+		setReceived(0);
 		setBlob(null);
 		setUrl(null);
 		setError(null);
@@ -83,7 +77,11 @@ export default function AttachmentPage() {
 		let revoke: string | null = null;
 		let cancelled = false;
 		api
-			.getBlob(rawPathRef.current)
+			.getBlob(rawPathRef.current, (n) => {
+				if (!cancelled) {
+					setReceived(n);
+				}
+			})
 			.then((fetched) => {
 				if (cancelled) {
 					return;
@@ -174,18 +172,7 @@ export default function AttachmentPage() {
 	}
 
 	let preview: ReactNode = null;
-	if (capped) {
-		preview = (
-			<p className="flex flex-wrap items-center gap-2 text-muted-foreground text-sm">
-				{t("{filename} is too large to preview here.", { filename })}
-				<Button variant="outline" size="sm" onClick={() => setForcePreview(true)}>
-					{t("Preview anyway ({size})", {
-						size: formatBytes(att.size_bytes, intlLocale(renderedLocale)),
-					})}
-				</Button>
-			</p>
-		);
-	} else if (error) {
+	if (error) {
 		preview = (
 			<p className="text-destructive text-sm">
 				{error === "missing"
@@ -194,7 +181,25 @@ export default function AttachmentPage() {
 			</p>
 		);
 	} else if (kind !== null && !(url && blob)) {
-		preview = <LoadingPane />;
+		const fmt = (n: number) => formatBytes(n, intlLocale(renderedLocale));
+		preview = (
+			// Centered in the space the preview will fill, so it reads as the
+			// preview loading rather than a stray control.
+			<div
+				role="status"
+				className="flex min-h-[40vh] flex-col items-center justify-center gap-2 text-muted-foreground text-sm"
+			>
+				<progress
+					aria-label={t("Loading {filename}", { filename })}
+					value={received}
+					max={att.size_bytes || undefined}
+					className="h-1.5 w-full max-w-md appearance-none overflow-hidden rounded-full bg-foreground/15 [&::-moz-progress-bar]:bg-primary [&::-webkit-progress-bar]:bg-foreground/15 [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:bg-primary"
+				/>
+				{received === 0
+					? t("Loading {filename}…", { filename })
+					: t("{received} of {total}", { received: fmt(received), total: fmt(att.size_bytes) })}
+			</div>
+		);
 	} else if (unrenderable) {
 		preview = (
 			<p className="text-muted-foreground text-sm">
@@ -209,7 +214,7 @@ export default function AttachmentPage() {
 					draggable={false}
 					src={url}
 					alt={filename}
-					className="max-w-full rounded shadow-md"
+					className="mx-auto block max-w-full rounded shadow-md"
 					style={{ maxWidth: 800 }}
 				/>
 			);

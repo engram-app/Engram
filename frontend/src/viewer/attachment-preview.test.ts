@@ -3,12 +3,9 @@ import {
 	attachmentRenamePath,
 	fileStem,
 	formatBytes,
-	MEDIA_PREVIEW_MAX_BYTES,
 	opensInline,
-	overPreviewCap,
 	parseCsv,
 	previewKind,
-	TEXT_PREVIEW_MAX_BYTES,
 } from "./attachment-preview";
 
 describe("previewKind", () => {
@@ -30,13 +27,6 @@ describe("previewKind", () => {
 	test("no preview for unknown binaries", () => {
 		expect(previewKind("snatchlist.zip", "application/zip")).toBeNull();
 		expect(previewKind("noext", "")).toBeNull();
-	});
-
-	test("size caps are separate from the kind", () => {
-		expect(overPreviewCap("text", TEXT_PREVIEW_MAX_BYTES + 1)).toBe(true);
-		expect(overPreviewCap("csv", TEXT_PREVIEW_MAX_BYTES)).toBe(false);
-		expect(overPreviewCap("video", MEDIA_PREVIEW_MAX_BYTES + 1)).toBe(true);
-		expect(overPreviewCap("image", MEDIA_PREVIEW_MAX_BYTES)).toBe(false);
 	});
 });
 
