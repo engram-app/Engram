@@ -109,27 +109,42 @@ function RenameToMove({
 
 function KeepBoth({
 	pending,
+	inFolder,
 	onKeepBoth,
 	onCancel,
 }: {
 	pending: Pending;
+	/** Names already in the target folder, lowercased. */
+	inFolder: Set<string>;
 	onKeepBoth: () => void;
 	onCancel: () => void;
 }) {
 	const { t, tn } = useT();
 	const folder = pending.target || t("Vault root");
+	// A clash can also be between two files in this move, which the folder
+	// does not hold at all.
+	const allInFolder = pending.clashes.every((path) => inFolder.has(lower(baseOf(path))));
 	return (
 		<Dialog open onOpenChange={(open) => !open && onCancel()}>
 			<DialogContent showCloseButton={false}>
 				<DialogTitle className="text-sm">
-					{tn(
-						{
-							one: "{folder} already has a file with this name",
-							other: "{folder} already has files with these {count} names",
-						},
-						pending.clashes.length,
-						{ folder },
-					)}
+					{allInFolder
+						? tn(
+								{
+									one: "{folder} already has a file with this name",
+									other: "{folder} already has files with these {count} names",
+								},
+								pending.clashes.length,
+								{ folder },
+							)
+						: tn(
+								{
+									one: "This file would share a name with another in {folder}",
+									other: "These {count} files would share a name with others in {folder}",
+								},
+								pending.clashes.length,
+								{ folder },
+							)}
 				</DialogTitle>
 				<DialogDescription className="text-xs">
 					{t("Keep both to move them with a number added to the name.")}
@@ -245,6 +260,7 @@ export function useAttachmentMove(): {
 		) : (
 			<KeepBoth
 				pending={pending}
+				inFolder={namesIn(pending.target, attachments)}
 				onKeepBoth={() => keepBoth(pending)}
 				onCancel={() => setPending(null)}
 			/>

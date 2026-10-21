@@ -145,6 +145,23 @@ describe("useAttachmentMove", () => {
 		expect(rename).toHaveBeenCalledWith({ old_path: "b/x.png", new_path: "c/x 2.png" });
 	});
 
+	it("Keep both says the folder has the name when it does", () => {
+		mockAttachments = [{ path: "a/x.png" }, { path: "a/y.png" }, { path: "c/x.png" }];
+		const { hook, ui } = setup();
+		act(() => hook.result.current.move(["a/x.png", "a/y.png"], "c"));
+		ui();
+		expect(screen.getByText("c already has a file with this name")).toBeInTheDocument();
+	});
+
+	it("Keep both does not blame the folder for two moved files sharing a name", () => {
+		mockAttachments = [{ path: "a/x.png" }, { path: "b/x.png" }];
+		const { hook, ui } = setup();
+		act(() => hook.result.current.move(["a/x.png", "b/x.png"], "c"));
+		ui();
+		expect(screen.queryByText(/already has/iu)).not.toBeInTheDocument();
+		expect(screen.getByText("This file would share a name with another in c")).toBeInTheDocument();
+	});
+
 	it("Cancel moves nothing", () => {
 		mockAttachments = [{ path: "a/song.flac" }, { path: "music/song.flac" }];
 		const { hook, ui } = setup();
