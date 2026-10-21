@@ -46,6 +46,7 @@ defmodule Engram.Notes.Note do
     field :chunker_version, :integer
     field :keyword_version, :integer
     field :embed_model, :string
+    field :key_alias_version, :integer
     # Hash of the note-level Qdrant payload last written to this note's
     # points; see `Engram.Indexing.commit_index/2`. NULL = unknown, refresh.
     field :payload_hash, :binary

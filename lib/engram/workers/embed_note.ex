@@ -174,6 +174,13 @@ defmodule Engram.Workers.EmbedNote do
           args["recap"] == true and note.dense_indexed_hash == hash ->
             load_for_run(note, maintenance: true, keep_dense: true)
 
+          # The key alias table moved and this note's frontmatter now reads
+          # differently (`Engram.Workers.HealKeyAliases`): a pass that reuses
+          # every unchanged vector (0 Voyage) and refreshes the payload; only a
+          # changed chunk-0 lead line (a type/description alias) re-embeds.
+          args["key_aliases"] == true ->
+            load_for_run(note, Indexing.version_rebuild_opts(note))
+
           # Current content, chunker and model, with dense vectors: skip.
           note.dense_indexed_hash == hash ->
             :ok
@@ -658,7 +665,12 @@ defmodule Engram.Workers.EmbedNote do
         index_opts =
           budget ++
             Keyword.take(opts, [:index_tier, :keep_dense, :embed_purpose, :rebuild]) ++
-            [doc_model: model, in_commit: &stamp_embed_hash(note, &2, &1, &3, :budget, model)]
+            [
+              doc_model: model,
+              # `&4`: the cheapest model among the vectors the note keeps
+              # (`Indexing.held_model/2`), so kept large vectors stamp large.
+              in_commit: &stamp_embed_hash(note, &2, &1, &3, :budget, &4 || model)
+            ]
 
         case index(note, decrypted_note, vault, user, index_opts, opts) do
           {:ok, _count, _embedded_bytes, _dense?} ->
@@ -921,7 +933,9 @@ defmodule Engram.Workers.EmbedNote do
       [
         embed_hash: note.content_hash,
         chunker_version: @chunker_version,
-        keyword_version: Engram.KeywordIndex.version()
+        keyword_version: Engram.KeywordIndex.version(),
+        # A full pass read the frontmatter under the current key alias table.
+        key_alias_version: Engram.Notes.KeyAliases.version()
       ] ++ set
 
     # Tenant-scoped: same filtered-UPDATE class as `maybe_mark_poison/3`.
