@@ -874,6 +874,17 @@ if phx_hosts do
     url: [host: phx_hosts.canonical_host, port: url_port, scheme: scheme]
 end
 
+# Absolute base URL of the frontend (SPA) host. After the saas eject the SPA
+# lives on a different origin (app.engram.page) than the backend it reaches
+# on api./mcp.engram.page, so the OAuth /authorize flow must 302 the consent
+# page there absolutely instead of relative. Unset on self-host (same-origin
+# → relative redirect). See EngramWeb.OAuthAuthorizeController.redirect_to_spa.
+# Read in every env, not only prod: the browser e2e runs the same split
+# (Phoenix and the Vite SPA on different ports) to test the MCP-first path.
+if url = System.get_env("ENGRAM_FRONTEND_URL") do
+  config :engram, :frontend_base_url, url
+end
+
 if config_env() == :prod do
   # Boot-time guard against shipping a release whose index.html references
   # bundle hashes that don't exist on disk (stale Docker layer cache, etc).
@@ -1260,15 +1271,6 @@ if config_env() == :prod do
   # /.well-known/openai-apps-challenge. See EngramWeb.WellKnownController.
   if token = System.get_env("OPENAI_APPS_CHALLENGE") do
     config :engram, :openai_apps_challenge, String.trim(token)
-  end
-
-  # Absolute base URL of the frontend (SPA) host. After the saas eject the SPA
-  # lives on a different origin (app.engram.page) than the backend it reaches
-  # on api./mcp.engram.page, so the OAuth /authorize flow must 302 the consent
-  # page there absolutely instead of relative. Unset on self-host (same-origin
-  # → relative redirect). See EngramWeb.OAuthAuthorizeController.redirect_to_spa.
-  if url = System.get_env("ENGRAM_FRONTEND_URL") do
-    config :engram, :frontend_base_url, url
   end
 
   # No `https:`/`force_ssl` endpoint config by design: TLS terminates at the

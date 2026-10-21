@@ -65,7 +65,7 @@ export default defineConfig({
 		{
 			name: "clerk",
 			testMatch:
-				/\/(?:clerk-auth|onboarding-ftux|oauth-consent-onboarding|i18n-onboarding-clerk)\.spec\.ts$/u,
+				/\/(?:clerk-auth|onboarding-ftux|oauth-consent-onboarding|mcp-first-journey|i18n-onboarding-clerk)\.spec\.ts$/u,
 			use: {
 				baseURL: `http://localhost:${CLERK_VITE_PORT}`,
 			},
@@ -140,6 +140,10 @@ export default defineConfig({
 							CLERK_JWKS_URL: process.env.CLERK_JWKS_URL ?? "",
 							CLERK_ISSUER: process.env.CLERK_ISSUER ?? "",
 							CLERK_PUBLISHABLE_KEY: clerkPublishableKey,
+							// The saas split: Phoenix and the SPA on different origins, so
+							// /oauth/authorize 302s to the SPA's consent page absolutely.
+							// mcp-first-journey.spec.ts drives a real MCP client through it.
+							ENGRAM_FRONTEND_URL: `http://localhost:${CLERK_VITE_PORT}`,
 						},
 					},
 					{
