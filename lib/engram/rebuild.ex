@@ -24,18 +24,59 @@ defmodule Engram.Rebuild do
 
   Resuming `on` after `off` needs nothing: the per-note version stamps say
   what is left.
+
+  ## Pricing by plan
+
+  The manifest records each note's plan doc model (`Engram.EmbedModels`),
+  and the budget and every debit count cost in voyage-4-large tokens: a
+  Free note's voyage-4-lite tokens weigh a sixth (`EmbedModels.large_tokens/2`).
+  So `budget_tokens` times $0.12/M is the pass's budget in dollars. The
+  drift park and the token bucket count raw tokens.
+
+  ## The v5 layout guard (Task 16.4)
+
+  `on` reads `:on` only while new points are written in the v5 layout
+  (`Qdrant.write_v5_layout?/0`, which implies `:v5_payload_format`), and a
+  dry run seals only then. Otherwise `on` reads `:off` and logs one warning
+  per node: a rebuilt v5 point would get an old-format payload merged onto
+  it by the note's next ordinary edit.
+
+  ## Other writers while `on` (Task 16.4)
+
+  A DEK rotation (`RotateUserDek`) snoozes an hour and writes nothing, and a
+  bulk repath (a folder rename moving over 100 notes) snoozes an hour; a
+  single-note rename still repaths. The recap cron (`IndexCapMaintenance`)
+  is already a no-op.
+
+  ## Pacing (Task 16.2)
+
+  While `on`, each `RebuildStaleNote` job waits (`gate/0`) for two things:
+  room in the maintenance token bucket (150,000 Voyage tokens a minute,
+  debited by each response's `usage.total_tokens`), and a Qdrant that is
+  keeping up (green, optimizer ok, at most 100 queued updates and
+  `:rebuild_max_queued_points` points awaiting optimization). The
+  reconcile sweep queues the pass by `rebuild_order/1`: paid users first,
+  then active Free users smallest first, then inactive Free, and the users
+  in `:rebuild_last_users` (the whales) last.
   """
 
   import Ecto.Query
 
+  alias Engram.Accounts
   alias Engram.Backfill.TenantScan
+  alias Engram.Billing
   alias Engram.Cache
+  alias Engram.EmbedModels
   alias Engram.KeywordIndex
   alias Engram.Logger.Metadata
   alias Engram.Notes.Note
   alias Engram.Parsers.Markdown
   alias Engram.Rebuild.{Manifest, ManifestVault}
   alias Engram.Repo
+  alias Engram.ServiceConfig
+  alias Engram.UsageMeters
+  alias Engram.Vector.Qdrant
+  alias EngramWeb.RateLimiter
 
   require Logger
 
@@ -52,6 +93,17 @@ defmodule Engram.Rebuild do
   @drift_floor 50_000
 
   @meter_key {__MODULE__, :tokens}
+  @paced_key {__MODULE__, :paced}
+
+  # The maintenance token bucket (spec pass guard): Voyage tokens a minute.
+  @tpm_key "voyage_maintenance_tpm"
+  @tpm_tokens 150_000
+  @tpm_window_ms 60_000
+  # What a gated job snoozes, and the Qdrant update-queue ceiling.
+  @gate_snooze 30
+  @max_update_queue 100
+  # "Active" Free users for the order: seen within this many days.
+  @active_days 30
 
   @type mode :: :off | :dry_run | :on
   # A note or any map naming one and its owner (a `%Note{}` qualifies).
@@ -63,11 +115,35 @@ defmodule Engram.Rebuild do
 
   @spec mode() :: mode()
   def mode do
-    case Engram.ServiceConfig.get(:index_rebuild, "off") do
+    case ServiceConfig.get(:index_rebuild, "off") do
       "dry_run" -> :dry_run
-      "on" -> if halted?(), do: :off, else: :on
+      "on" -> on_mode()
       _off -> :off
     end
+  end
+
+  defp on_mode do
+    cond do
+      halted?() -> :off
+      not Qdrant.write_v5_layout?() -> v5_layout_off()
+      true -> :on
+    end
+  end
+
+  @v5_warned_key {__MODULE__, :v5_layout_off_warned}
+
+  # `:off`, logging once per node: `mode/0` runs on every embed.
+  defp v5_layout_off do
+    unless :persistent_term.get(@v5_warned_key, false) do
+      :persistent_term.put(@v5_warned_key, true)
+
+      Logger.warning(
+        "rebuild_v5_layout_off",
+        Metadata.with_category(:warning, :oban)
+      )
+    end
+
+    :off
   end
 
   @doc "`{chunker, keyword}` versions of this build."
@@ -89,7 +165,7 @@ defmodule Engram.Rebuild do
     if mode() == :on do
       {chunker, keyword}
     else
-      {pin_chunker, pin_keyword} = Engram.ServiceConfig.get(:rebuild_pinned_versions, @pinned)
+      {pin_chunker, pin_keyword} = ServiceConfig.get(:rebuild_pinned_versions, @pinned)
       {min(chunker, pin_chunker), min(keyword, pin_keyword)}
     end
   end
@@ -203,10 +279,19 @@ defmodule Engram.Rebuild do
   end
 
   @doc false
-  def handle_tokens(_event, %{total_tokens: tokens}, _meta, _config) when is_integer(tokens) do
+  # The ledger debits cost, in voyage-4-large tokens (`EmbedModels.large_tokens/2`):
+  # a Free note's lite tokens cost a sixth. The drift check and the token
+  # bucket count raw tokens.
+  def handle_tokens(_event, %{total_tokens: tokens}, meta, _config) when is_integer(tokens) do
     case Process.get(@meter_key) do
-      nil -> :ok
-      {total, undebited} -> Process.put(@meter_key, {total + tokens, undebited + meter(tokens)})
+      nil ->
+        _ = if Process.get(@paced_key), do: paced_debit(tokens)
+        :ok
+
+      {total, undebited} ->
+        # A malformed (negative) count stays as is, so `debit/1` refuses it.
+        cost = if tokens >= 0, do: EmbedModels.large_tokens(tokens, meta[:model]), else: tokens
+        Process.put(@meter_key, {total + tokens, undebited + meter(tokens, cost)})
     end
 
     :ok
@@ -220,13 +305,14 @@ defmodule Engram.Rebuild do
   # here: a failed debit is logged, counted (`[:engram, :rebuild,
   # :meter_failed]`) and carried to `spend/2`'s own debit at the end, which
   # does raise.
-  defp meter(tokens) do
-    _ = debit(tokens)
+  defp meter(tokens, cost) do
+    _ = tpm_debit(tokens)
+    _ = debit(cost)
     0
   rescue
-    e -> meter_failed(tokens, :error, Metadata.safe_reason(e))
+    e -> meter_failed(cost, :error, Metadata.safe_reason(e))
   catch
-    kind, reason -> meter_failed(tokens, kind, Metadata.safe_reason(reason))
+    kind, reason -> meter_failed(cost, kind, Metadata.safe_reason(reason))
   end
 
   defp meter_failed(tokens, kind, reason) do
@@ -239,6 +325,145 @@ defmodule Engram.Rebuild do
 
     # A malformed (negative) count carries nothing.
     max(tokens, 0)
+  end
+
+  @doc """
+  `:ok`, or `{:snooze, 30}` while the pass must wait: the maintenance token
+  bucket is spent for this minute, or Qdrant is behind (not green, optimizer
+  not ok, more than 100 queued updates, or more than
+  `:rebuild_max_queued_points` (default 50,000) points awaiting
+  optimization). Unreadable health counts as behind. Only while `on`: off
+  and `dry_run` never gate, and never call Qdrant here.
+  """
+  @spec gate() :: :ok | {:snooze, 30}
+  def gate, do: if(mode() == :on, do: pace(), else: :ok)
+
+  @doc """
+  Runs `fun` with its Voyage tokens debited from the maintenance token
+  bucket, as a metered rebuild's are, but not from the ledger: a plan
+  upgrade's re-embed outside `on` (`Engram.EmbedModels`), so a whale's
+  upgrade cannot spike Voyage.
+  """
+  @spec paced((-> result)) :: result when result: term()
+  def paced(fun) do
+    _ = attach()
+    prev = Process.put(@paced_key, true)
+
+    try do
+      fun.()
+    after
+      if prev, do: Process.put(@paced_key, prev), else: Process.delete(@paced_key)
+    end
+  end
+
+  # Never raises: a raising handler is detached for good.
+  defp paced_debit(tokens) do
+    _ = tpm_debit(tokens)
+    :ok
+  rescue
+    e -> meter_failed(tokens, :error, Metadata.safe_reason(e))
+  catch
+    kind, reason -> meter_failed(tokens, kind, Metadata.safe_reason(reason))
+  end
+
+  @doc """
+  `gate/0`'s checks in any mode: a plan-upgrade re-embed
+  (`Engram.EmbedModels`) is paced like the pass even when it is off.
+  """
+  @spec pace() :: :ok | {:snooze, 30}
+  def pace do
+    cond do
+      not tpm_room?() -> gated(:tokens)
+      not qdrant_ready?() -> gated(:qdrant)
+      true -> :ok
+    end
+  end
+
+  # A check costs the bucket 1 token (Hammer has no read without a hit).
+  defp tpm_room?,
+    do: match?({:allow, _}, RateLimiter.hit(@tpm_key, @tpm_window_ms, @tpm_tokens, :voyage_embed))
+
+  defp tpm_debit(0), do: :ok
+
+  defp tpm_debit(tokens),
+    do: RateLimiter.hit(@tpm_key, @tpm_window_ms, @tpm_tokens, :voyage_embed, tokens)
+
+  defp qdrant_ready? do
+    col = Qdrant.collection_name()
+
+    case Qdrant.collection_info(col, :search) do
+      {:ok, %{"status" => "green", "optimizer_status" => "ok"} = info} ->
+        (get_in(info, ["update_queue", "length"]) || 0) <= @max_update_queue and
+          optimizer_caught_up?(col)
+
+      _ ->
+        false
+    end
+  end
+
+  defp optimizer_caught_up?(col) do
+    case Qdrant.optimizations(col) do
+      {:ok, %{"summary" => %{"queued_points" => queued}}} when is_integer(queued) ->
+        queued <= ServiceConfig.get(:rebuild_max_queued_points, 50_000)
+
+      # Before Qdrant 1.17 there is no endpoint: status and update queue gate.
+      {:error, :unsupported} ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
+  defp gated(reason) do
+    :telemetry.execute([:engram, :rebuild, :gated], %{count: 1}, %{reason: reason})
+    {:snooze, @gate_snooze}
+  end
+
+  @doc """
+  The pass order of `user_ids`, each with the Oban priority its rebuild jobs
+  get: 6 paid, 7 Free active within 30 days, 8 other Free, 9 the users in
+  `:rebuild_last_users` (the whales, last whatever their plan). Within a
+  class the smaller account (`usage_meters.notes_count`) goes first.
+  """
+  @spec rebuild_order([Ecto.UUID.t()]) :: [{Ecto.UUID.t(), 6..9}]
+  def rebuild_order(user_ids) do
+    user_ids = Enum.uniq(user_ids)
+    whales = MapSet.new(ServiceConfig.get(:rebuild_last_users, []))
+    since = DateTime.add(DateTime.utc_now(), -@active_days * 86_400, :second)
+
+    # `usage_meters` is not a tenant table (`UsageMeters.last_active_at/1`).
+    meters =
+      from(m in UsageMeters.Meter,
+        where: m.user_id in ^user_ids,
+        select: {m.user_id, {m.last_active_at, m.notes_count}}
+      )
+      |> Repo.all(skip_tenant_check: true)
+      |> Map.new()
+
+    user_ids
+    |> Enum.map(fn id ->
+      {active_at, notes} = Map.get(meters, id, {nil, 0})
+      {id, priority(id, whales, active_at, since), notes || 0}
+    end)
+    |> Enum.sort_by(fn {_id, priority, notes} -> {priority, notes} end)
+    |> Enum.map(fn {id, priority, _notes} -> {id, priority} end)
+  end
+
+  defp priority(id, whales, active_at, since) do
+    cond do
+      MapSet.member?(whales, id) -> 9
+      paid?(id) -> 6
+      active_at != nil and DateTime.compare(active_at, since) != :lt -> 7
+      true -> 8
+    end
+  end
+
+  defp paid?(user_id) do
+    case Accounts.get_user_with_subscription(user_id) do
+      nil -> false
+      user -> Billing.paid?(user)
+    end
   end
 
   @doc """
@@ -263,12 +488,7 @@ defmodule Engram.Rebuild do
   # Parked like a too-long note: until its content changes. Tokens only in
   # the log: they are counts, not content.
   defp park_drift(note, tokens) do
-    {:ok, _} =
-      Repo.with_tenant(note.user_id, fn ->
-        Repo.update_all(from(n in Note, where: n.kind == "note" and n.id == ^note.id),
-          set: [embed_retry_after: Engram.Workers.EmbedNote.parked_until_edited()]
-        )
-      end)
+    park_until_edited(note)
 
     :telemetry.execute([:engram, :rebuild, :drift_parked], %{count: 1, tokens: tokens}, %{})
 
@@ -276,6 +496,35 @@ defmodule Engram.Rebuild do
       "rebuild_drift_parked",
       Metadata.with_category(:warning, :oban, note_id: note.id, total_count: tokens)
     )
+  end
+
+  @doc """
+  Parks a note whose rebuild was about to pay Voyage a second time for the
+  same content (`notes.rebuild_paid_at` set, chunker v5 Task 16.3), until
+  edited. Returns `{:error, :rebuild_double_pay}`.
+  """
+  @spec park_double_pay(note_ref()) :: {:error, :rebuild_double_pay}
+  def park_double_pay(note) do
+    park_until_edited(note)
+    :telemetry.execute([:engram, :rebuild, :double_pay_parked], %{count: 1}, %{})
+
+    Logger.warning(
+      "rebuild_double_pay_parked",
+      Metadata.with_category(:warning, :oban, note_id: note.id)
+    )
+
+    {:error, :rebuild_double_pay}
+  end
+
+  defp park_until_edited(note) do
+    {:ok, _} =
+      Repo.with_tenant(note.user_id, fn ->
+        Repo.update_all(from(n in Note, where: n.kind == "note" and n.id == ^note.id),
+          set: [embed_retry_after: Engram.Workers.EmbedNote.parked_until_edited()]
+        )
+      end)
+
+    :ok
   end
 
   @doc "Upserts one user's planned manifest rows (`note_id`, `vault_id`, counts)."
@@ -323,7 +572,7 @@ defmodule Engram.Rebuild do
           on_conflict:
             {:replace,
              [:vault_id, :est_tokens, :new_points, :reused_points, :mean_pooled_points] ++
-               [:dl_sum, :dl_count, :planned_at]},
+               [:dl_sum, :dl_count, :planned_at, :model]},
           conflict_target: :note_id
         )
       end)
@@ -340,9 +589,19 @@ defmodule Engram.Rebuild do
   late seal cannot move a running pass's avgdl. Per tenant, as
   `ReconcileEmbeddings` scans.
   """
-  @spec seal() :: {:ok, non_neg_integer()} | {:error, :not_dry_run}
+  @spec seal() :: {:ok, non_neg_integer()} | {:error, :not_dry_run | :v5_layout_off}
   def seal do
-    if mode() == :dry_run, do: do_seal(), else: {:error, :not_dry_run}
+    cond do
+      mode() != :dry_run ->
+        {:error, :not_dry_run}
+
+      not Qdrant.write_v5_layout?() ->
+        _ = v5_layout_off()
+        {:error, :v5_layout_off}
+
+      true ->
+        do_seal()
+    end
   end
 
   defp do_seal do
@@ -369,9 +628,11 @@ defmodule Engram.Rebuild do
             conflict_target: :vault_id
           )
 
-        from(m in Manifest, select: coalesce(sum(m.est_tokens), 0))
-        |> repo.one()
-        |> to_integer()
+        # Priced per note at its plan's model (`EmbedModels.large_tokens/2`).
+        from(m in Manifest, group_by: m.model, select: {m.model, coalesce(sum(m.est_tokens), 0)})
+        |> repo.all()
+        |> Enum.map(fn {model, tokens} -> EmbedModels.large_tokens(to_integer(tokens), model) end)
+        |> Enum.sum()
       end)
       |> Enum.sum()
 

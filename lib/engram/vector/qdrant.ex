@@ -466,6 +466,20 @@ defmodule Engram.Vector.Qdrant do
     end)
   end
 
+  @doc """
+  `GET /collections/{col}/optimizations` (Qdrant >= 1.17): running and queued
+  optimizations; `summary.queued_points` is the backlog the v5 pass gates on.
+  Older servers answer 404 -> `{:error, :unsupported}`.
+  """
+  def optimizations(col) do
+    instrument(:optimizations, fn ->
+      case get_result("/collections/#{col}/optimizations", :search) do
+        {:error, {404, _}} -> {:error, :unsupported}
+        other -> other
+      end
+    end)
+  end
+
   defp get_result(path, purpose) do
     case Req.get(base_url() <> path, req_opts(purpose)) do
       {:ok, %{status: 200, body: %{"result" => result}}} -> {:ok, result}

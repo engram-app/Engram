@@ -6104,6 +6104,9 @@ defmodule Engram.Notes do
                 Enum.map(real_note_updates, fn {n, _, _, _, _} -> n.id end)
               )
 
+            # A rename this large is maintenance: it waits out the v5 rebuild.
+            bulk_repath? = length(real_note_updates) > RepathNoteIndex.bulk_threshold()
+
             # Side effects outside the transaction — broadcast + reindex + link
             # rewrite fan-out. T3.2 — hmac-only args, never plaintext.
             # Marker rows have no path / no embedding / no basename, skip everything.
@@ -6113,7 +6116,10 @@ defmodule Engram.Notes do
 
               _ =
                 Enqueue.enqueue(
-                  RepathNoteIndex.new_debounced(note.id, user.id, old_path_hmac: old_path_hmac),
+                  RepathNoteIndex.new_debounced(note.id, user.id,
+                    old_path_hmac: old_path_hmac,
+                    bulk: bulk_repath?
+                  ),
                   "repath_note_index"
                 )
 

@@ -99,14 +99,7 @@ defmodule Engram.Workers.ReconcileEmbeddings do
     # `tier` filter is load-bearing: `subscriptions.tier` accepts "free" while
     # `status` DEFAULTS to "trialing", so matching on status alone would treat
     # a Free user as paying.
-    paid =
-      from(s in Engram.Billing.Subscription,
-        where:
-          s.user_id == parent_as(:note).user_id and
-            s.status in ^Engram.Billing.entitled_statuses() and
-            s.tier in ["starter", "pro"],
-        select: 1
-      )
+    paid = IndexVersions.owner_paid()
 
     # 3. indexed at its current content by an older chunker, or with dense
     #    vectors from another embed model. #1620 kept this cron off
@@ -201,8 +194,9 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       # folder marker can never get an embed cooldown stamped even if the subquery
       # changed. Also satisfies NotesScopeLintTest (kind filter on the from/Note).
       {_count, rows} =
-        from(n in Note, where: n.kind == "note" and n.id in subquery(eligible))
-        # The columns `EmbedNote.version_stale?/1` reads, to route each note.
+        from(n in Note, as: :note, where: n.kind == "note" and n.id in subquery(eligible))
+        # The columns `EmbedNote.version_stale?/2` reads, to route each note,
+        # and the owner's plan for its model term.
         |> select([n], %{
           id: n.id,
           user_id: n.user_id,
@@ -210,7 +204,8 @@ defmodule Engram.Workers.ReconcileEmbeddings do
           content_hash: n.content_hash,
           dense_indexed_hash: n.dense_indexed_hash,
           chunker_version: n.chunker_version,
-          embed_model: n.embed_model
+          embed_model: n.embed_model,
+          paid: exists(paid)
         })
         # Clears the budget-park flag with it: the #897 backoff must hold for
         # this note even for a paying user, or a crash mid-embed re-selects it
@@ -1014,22 +1009,43 @@ defmodule Engram.Workers.ReconcileEmbeddings do
   end
 
   defp version_rebuild?(%{embed_hash: hash, content_hash: hash} = row) when hash != nil,
-    do: EmbedNote.version_stale?(struct(Note, row))
+    do: EmbedNote.version_stale?(struct(Note, row), Map.get(row, :paid))
 
   defp version_rebuild?(_row), do: false
 
   defp enqueue_rebuilds([]), do: 0
 
+  # In `Rebuild.rebuild_order/1` order, at its per-user priority (paid
+  # first, whales last). ponytail: "smallest first" holds within a page;
+  # across pages only the priority classes order the queue.
+  #
+  # A note stale by its model alone (a plan upgrade, `Engram.EmbedModels`)
+  # goes last: `upgrade: true` at backfill priority, paced by the rebuild's
+  # gate even when the pass is not `on`.
   defp enqueue_rebuilds(rows) do
+    upgrades =
+      for r <- rows,
+          EmbedNote.model_only_stale?(struct(Note, r), Map.get(r, :paid)),
+          into: MapSet.new(),
+          do: r.id
+
     fresh = reject_pending(Enum.map(rows, &{&1.id, &1.user_id}), RebuildStaleNote)
+    {upgrade, version} = Enum.split_with(fresh, &MapSet.member?(upgrades, elem(&1, 0)))
+    by_user = Enum.group_by(version, &elem(&1, 1), &elem(&1, 0))
 
     _ =
       Oban.insert_all(
-        Enum.map(fresh, fn {note_id, user_id} ->
+        for {user_id, priority} <- Rebuild.rebuild_order(Map.keys(by_user)),
+            note_id <- Map.fetch!(by_user, user_id) do
           RebuildStaleNote.new(%{note_id: to_string(note_id), user_id: user_id},
-            priority: EmbedNote.backfill_priority()
+            priority: priority
           )
-        end)
+        end ++
+          for {note_id, user_id} <- upgrade do
+            RebuildStaleNote.new(%{note_id: to_string(note_id), user_id: user_id, upgrade: true},
+              priority: EmbedNote.backfill_priority()
+            )
+          end
       )
 
     length(fresh)

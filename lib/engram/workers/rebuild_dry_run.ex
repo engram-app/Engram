@@ -88,7 +88,8 @@ defmodule Engram.Workers.RebuildDryRun do
 
         :ok
 
-      {:error, :not_dry_run} ->
+      # Left unsealed: `Rebuild.seal/0` logged the v5 layout warning.
+      {:error, reason} when reason in [:not_dry_run, :v5_layout_off] ->
         :ok
     end
   end
@@ -153,7 +154,13 @@ defmodule Engram.Workers.RebuildDryRun do
 
     with {:ok, note} <- Crypto.maybe_decrypt_note_fields(note, user),
          {:ok, est} <- Indexing.rebuild_estimate(note, user) do
-      Rebuild.put_manifest(user.id, [Map.merge(est, %{note_id: note.id, vault_id: note.vault_id})])
+      Rebuild.put_manifest(user.id, [
+        Map.merge(est, %{
+          note_id: note.id,
+          vault_id: note.vault_id,
+          model: Engram.EmbedModels.doc_model(user)
+        })
+      ])
     else
       # Left pending: counted as skipped at the seal, estimated at 0 by
       # `Rebuild.check_note/2`.
