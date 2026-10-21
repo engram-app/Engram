@@ -1,8 +1,7 @@
 defmodule Engram.Workers.ExtractNoteLinksRepairIndexTest do
   @moduledoc """
   `ExtractNoteLinks.recent_rename_job_args/3` (#648 lever 2, bind-time rename
-  repair) runs whenever a freshly-extracted edge lands DANGLING — an ordinary
-  authoring pattern (link-before-target-exists), not a rare path — and
+  repair) runs on every extraction that writes links, and
   filters `oban_jobs` by worker + `args->>'old_basename_hmac'` (any state,
   completed included — the repair evidence contract). Without a supporting
   index that's a scan of the whole RewriteNoteLinks backlog on every such

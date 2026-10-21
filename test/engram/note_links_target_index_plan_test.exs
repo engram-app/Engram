@@ -29,25 +29,36 @@ defmodule Engram.NoteLinksTargetIndexPlanTest do
           _ -> {nil, nil}
         end
 
-      Repo.insert!(
-        %NoteLink{
-          user_id: user.id,
-          vault_id: vault.id,
-          source_note_id: source.id,
-          target_note_id: note_id,
-          target_attachment_id: att_id,
-          target_text_ciphertext: "x",
-          target_text_nonce: "n",
-          target_basename_hmac: :crypto.strong_rand_bytes(32),
-          link_type: "wikilink",
-          position: 0
-        },
-        skip_tenant_check: true
-      )
+      link =
+        Repo.insert!(
+          %NoteLink{
+            user_id: user.id,
+            vault_id: vault.id,
+            source_note_id: source.id,
+            target_text_ciphertext: "x",
+            target_text_nonce: "n",
+            target_basename_hmac: :crypto.strong_rand_bytes(32),
+            link_type: "wikilink",
+            position: 0
+          },
+          skip_tenant_check: true
+        )
+
+      # The schema no longer maps the target columns (they are dropped once no
+      # release reads them), so the resolved ones are set in SQL.
+      if note_id || att_id do
+        Repo.query!(
+          "UPDATE note_links SET target_note_id = $1, target_attachment_id = $2 WHERE id = $3",
+          [dump(note_id), dump(att_id), dump(link.id)]
+        )
+      end
     end
 
     :ok
   end
+
+  defp dump(nil), do: nil
+  defp dump(id), do: Ecto.UUID.dump!(id)
 
   defp plan(sql), do: QueryPlan.generic_plan(sql, analyze: ["note_links"], bitmapscan: false)
 
