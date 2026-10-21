@@ -556,6 +556,16 @@ Same Xeon at load 52 (other agents), `mix run`, us per call, best of 7:
 `frame_class_b64/1`'s 4-character prefix decode stays on `Base`: at 3 bytes
 the NIF does not win.
 
+### Rival-lineage audit (`yjs_root_inserts`, 2026-10-20)
+
+`Engram.Notes.LineageAudit` (read-only, run via `bin/engram rpc`) counts the
+clients that own a ROOT insert (no origin, no right origin) in a note's body.
+More than one is a doubled note (the fresh-device seed, plugin #619). y_ex
+and yrs keep `Item.origin` private, so `yjs_lineage.rs` walks the stored v1
+update with yrs's public `DecoderV1` + `ItemContent::decode`, the same steps
+as `Update::decode`. `yrs` is pinned to y_ex's minor (0.25). Always dirty: an
+ops audit, never on a request path.
+
 ## The memory standard
 
 BEAM tooling (`:erlang.memory/0`, `max_heap_size`, recon_alloc) cannot see a

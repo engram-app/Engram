@@ -14,6 +14,7 @@ mod text_diff;
 mod tokenizer;
 mod vectors;
 mod yaml;
+mod yjs_lineage;
 
 // Under `cargo test` it counts over the system allocator (see memory.rs).
 #[global_allocator]
@@ -600,6 +601,15 @@ fn md_outline_nif(content: &str) -> NifResult<(Option<outline::Outline>, usize)>
         Err(outline::Refused::TooComplex) => Ok((None, peak)),
         Err(outline::Refused::BadSourcepos) => Err(Error::BadArg),
     }
+}
+
+/// `Engram.Notes.LineageAudit`: `(client, utf16_len)` of every root insert
+/// into the root type `root` (see yjs_lineage.rs), `None` for an update that
+/// does not decode. Always dirty: an ops audit over whole stored docs.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn yjs_root_inserts_nif(update: Binary, root: &str) -> (Option<Vec<(u64, u32)>>, usize) {
+    let (r, peak) = memory::measured(|| yjs_lineage::root_inserts(update.as_slice(), root));
+    (r.ok(), peak)
 }
 
 rustler::atoms! { none, zstd, auto, reschedule }

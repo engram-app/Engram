@@ -81,6 +81,7 @@ defmodule Engram.Native do
     dense_json_nif: 1,
     sparse_json_nif: 2,
     md_outline_nif: 1,
+    yjs_root_inserts_nif: 2,
     envelope_counts_nif: 0,
     name_index_build_nif: 4,
     name_index_search_nif: 3,
@@ -202,6 +203,21 @@ defmodule Engram.Native do
   """
   def md_outline(text) when is_binary(text),
     do: call(:md_outline, text, %{dirty: true}, fn -> md_outline_nif(text) end)
+
+  @doc """
+  `{client, utf16_len}` for every ROOT insert (no origin, no right origin:
+  written into an empty sequence) into the root type `root` of a Yjs v1
+  update, or `:error` when it does not decode. More than one client means
+  rival lineages. Read-only audit, `Engram.Notes.LineageAudit`. Always dirty.
+  """
+  def yjs_root_inserts(update, root) when is_binary(update) and is_binary(root) do
+    case call(:yjs_root_inserts, update, %{dirty: true}, fn ->
+           yjs_root_inserts_nif(update, root)
+         end) do
+      nil -> :error
+      roots -> {:ok, roots}
+    end
+  end
 
   @doc """
   The UTF-16 offset (the unit of every `Yex.Text` offset) of each byte
