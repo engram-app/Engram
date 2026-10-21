@@ -18,7 +18,8 @@ defmodule Engram.Workers.RebuildStaleNote do
   While the v5 pass is `on`, each job first passes `Engram.Rebuild.gate/0`
   (the maintenance token bucket and the Qdrant optimizer backlog). A plan
   upgrade's re-embed (`upgrade: true`, `Engram.EmbedModels`) passes the same
-  checks (`Rebuild.pace/0`) in every mode.
+  checks (`Rebuild.pace/0`) in every mode, and its Voyage tokens debit the
+  bucket (`Rebuild.paced/1`).
   """
   use Oban.Worker,
     queue: :rebuild,
@@ -33,7 +34,7 @@ defmodule Engram.Workers.RebuildStaleNote do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"upgrade" => true}} = job) do
-    with :ok <- Rebuild.pace(), do: EmbedNote.perform(job)
+    with :ok <- Rebuild.pace(), do: Rebuild.paced(fn -> EmbedNote.perform(job) end)
   end
 
   def perform(%Oban.Job{} = job) do

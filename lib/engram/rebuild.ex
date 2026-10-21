@@ -93,6 +93,7 @@ defmodule Engram.Rebuild do
   @drift_floor 50_000
 
   @meter_key {__MODULE__, :tokens}
+  @paced_key {__MODULE__, :paced}
 
   # The maintenance token bucket (spec pass guard): Voyage tokens a minute.
   @tpm_key "voyage_maintenance_tpm"
@@ -284,6 +285,7 @@ defmodule Engram.Rebuild do
   def handle_tokens(_event, %{total_tokens: tokens}, meta, _config) when is_integer(tokens) do
     case Process.get(@meter_key) do
       nil ->
+        _ = if Process.get(@paced_key), do: paced_debit(tokens)
         :ok
 
       {total, undebited} ->
@@ -335,6 +337,34 @@ defmodule Engram.Rebuild do
   """
   @spec gate() :: :ok | {:snooze, 30}
   def gate, do: if(mode() == :on, do: pace(), else: :ok)
+
+  @doc """
+  Runs `fun` with its Voyage tokens debited from the maintenance token
+  bucket, as a metered rebuild's are, but not from the ledger: a plan
+  upgrade's re-embed outside `on` (`Engram.EmbedModels`), so a whale's
+  upgrade cannot spike Voyage.
+  """
+  @spec paced((-> result)) :: result when result: term()
+  def paced(fun) do
+    _ = attach()
+    prev = Process.put(@paced_key, true)
+
+    try do
+      fun.()
+    after
+      if prev, do: Process.put(@paced_key, prev), else: Process.delete(@paced_key)
+    end
+  end
+
+  # Never raises: a raising handler is detached for good.
+  defp paced_debit(tokens) do
+    _ = tpm_debit(tokens)
+    :ok
+  rescue
+    e -> meter_failed(tokens, :error, Metadata.safe_reason(e))
+  catch
+    kind, reason -> meter_failed(tokens, kind, Metadata.safe_reason(reason))
+  end
 
   @doc """
   `gate/0`'s checks in any mode: a plan-upgrade re-embed
