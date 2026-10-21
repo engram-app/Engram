@@ -230,4 +230,180 @@ defmodule Engram.Crypto.DekCacheTest do
       assert :ok = DekCache.put_if_claimed(1, new, @dek)
     end
   end
+
+  # Single flight: while one loader holds the claim, other callers wait for its
+  # DEK instead of each unwrapping (one KMS Decrypt per caller before).
+  describe "claim_or_await/1" do
+    test "a free slot is claimed; a cached DEK is returned" do
+      assert {:claimed, token} = DekCache.claim_or_await(1)
+      assert :ok = DekCache.put_if_claimed(1, token, @dek)
+      assert {:ok, @dek} = DekCache.claim_or_await(1)
+    end
+
+    test "a waiter gets the loader's DEK without claiming" do
+      {:claimed, token} = DekCache.claim_or_await(1)
+      waiter = park_waiter(1)
+
+      assert :ok = DekCache.put_if_claimed(1, token, @dek)
+      assert {:ok, @dek} = Task.await(waiter)
+    end
+
+    test "a waiter gets the loader's error when the loader releases with one" do
+      {:claimed, token} = DekCache.claim_or_await(1)
+      waiter = park_waiter(1)
+
+      assert :ok = DekCache.release(1, token, :kms_throttled)
+      assert {:error, :kms_throttled} = Task.await(waiter)
+      assert :miss = DekCache.get(1)
+    end
+
+    test "a release of a replaced claim does not fail the new loader's waiters" do
+      {:claimed, old} = DekCache.claim_or_await(1)
+      new = DekCache.claim(1)
+      waiter = park_waiter(1)
+
+      assert :ok = DekCache.release(1, old, :kms_throttled)
+      refute Task.yield(waiter, 0)
+      assert :ok = DekCache.put_if_claimed(1, new, @dek)
+      assert {:ok, @dek} = Task.await(waiter)
+    end
+
+    test "a waiter retries when the slot is invalidated mid-load" do
+      {:claimed, token} = DekCache.claim_or_await(1)
+      waiter = park_waiter(1)
+
+      DekCache.invalidate(1)
+      assert :retry = Task.await(waiter)
+      assert :stale = DekCache.put_if_claimed(1, token, @dek)
+    end
+
+    test "a waiter retries when a peer dek_evict lands mid-load" do
+      {:claimed, _token} = DekCache.claim_or_await(1)
+      waiter = park_waiter(1)
+
+      send(DekCache, {:cache_sync, {:dek_evict, 1}})
+      assert :retry = Task.await(waiter)
+    end
+
+    test "a waiter retries and the slot clears when the loader dies" do
+      loader = hold_claim(1, &DekCache.claim_or_await/1)
+      waiter = park_waiter(1)
+
+      Process.exit(loader, :kill)
+      assert :retry = Task.await(waiter)
+      assert {:claimed, _} = DekCache.claim_or_await(1)
+    end
+
+    test "a claim/1 loader is monitored too" do
+      loader = hold_claim(1, &DekCache.claim/1)
+      waiter = park_waiter(1)
+
+      Process.exit(loader, :kill)
+      assert :retry = Task.await(waiter)
+    end
+
+    test "the loader asking again claims over instead of waiting on itself" do
+      {:claimed, old} = DekCache.claim_or_await(1)
+      assert {:claimed, new} = DekCache.claim_or_await(1)
+      assert new != old
+    end
+
+    test "a waiter past the await budget claims over, monitored" do
+      Application.put_env(:engram, :dek_await_ms, 50)
+      on_exit(fn -> Application.delete_env(:engram, :dek_await_ms) end)
+      {:claimed, old} = DekCache.claim_or_await(1)
+
+      waiter =
+        Task.async(fn ->
+          {:claimed, token} = DekCache.claim_or_await(1)
+          token
+        end)
+
+      token = Task.await(waiter)
+      assert token != old
+      # The claim-over is monitored: its loader (the finished task) is gone,
+      # so the slot is cleared rather than left claimed for @pending_ms.
+      await(fn -> :ets.lookup(:engram_dek_cache, 1) == [] end)
+    end
+
+    test "a served waiter emits outcome :coalesced" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :crypto, :dek_cache]])
+      {:claimed, token} = DekCache.claim_or_await(1)
+      waiter = park_waiter(1)
+
+      :ok = DekCache.put_if_claimed(1, token, @dek)
+      {:ok, @dek} = Task.await(waiter)
+      assert_receive {[:engram, :crypto, :dek_cache], ^ref, %{count: 1}, %{outcome: :coalesced}}
+    end
+
+    # The waiter shared the loader's one failed unwrap; counting it keeps
+    # `miss - coalesced` equal to unwrap attempts during a KMS failure burst.
+    test "a waiter served the loader's error emits outcome :coalesced" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :crypto, :dek_cache]])
+      {:claimed, token} = DekCache.claim_or_await(1)
+      waiter = park_waiter(1)
+
+      :ok = DekCache.release(1, token, :kms_throttled)
+      {:error, :kms_throttled} = Task.await(waiter)
+      assert_receive {[:engram, :crypto, :dek_cache], ^ref, %{count: 1}, %{outcome: :coalesced}}
+    end
+
+    test "a waiter woken with :retry does not emit :coalesced" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :crypto, :dek_cache]])
+      {:claimed, _token} = DekCache.claim_or_await(1)
+      waiter = park_waiter(1)
+
+      DekCache.invalidate(1)
+      :retry = Task.await(waiter)
+      refute_receive {[:engram, :crypto, :dek_cache], ^ref, _, %{outcome: :coalesced}}
+    end
+
+    test "a DEK found by claim_or_await itself emits outcome :coalesced" do
+      DekCache.put(1, @dek)
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :crypto, :dek_cache]])
+
+      {:ok, @dek} = DekCache.claim_or_await(1)
+      assert_receive {[:engram, :crypto, :dek_cache], ^ref, %{count: 1}, %{outcome: :coalesced}}
+    end
+  end
+
+  # A task parked on user_id's claim; returns once the owner holds it as a waiter.
+  defp park_waiter(user_id) do
+    before = waiter_count(user_id)
+    task = Task.async(fn -> DekCache.claim_or_await(user_id) end)
+    await(fn -> waiter_count(user_id) > before end)
+    task
+  end
+
+  # A process that claims user_id via `claim_fun` and holds it until killed.
+  defp hold_claim(user_id, claim_fun) do
+    test = self()
+
+    pid =
+      spawn(fn ->
+        claim_fun.(user_id)
+        send(test, {:holding, self()})
+        Process.sleep(:infinity)
+      end)
+
+    assert_receive {:holding, ^pid}
+    pid
+  end
+
+  defp waiter_count(user_id),
+    do: :sys.get_state(DekCache).waiters |> Map.get(user_id, []) |> length()
+
+  defp await(fun, tries \\ 500) do
+    cond do
+      fun.() ->
+        :ok
+
+      tries == 0 ->
+        flunk("condition never held")
+
+      true ->
+        Process.sleep(1)
+        await(fun, tries - 1)
+    end
+  end
 end

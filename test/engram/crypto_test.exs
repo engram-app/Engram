@@ -639,7 +639,7 @@ defmodule Engram.CryptoTest do
 
       Application.put_env(:engram, :aws_kms_client, Engram.AwsKmsMock)
 
-      table = :ets.new(:dual_read_stub, [:set, :public])
+      table = :ets.new(:dual_read_stub, [:set, :public, :named_table])
 
       stub(Engram.AwsKmsMock, :encrypt, fn pt, _ ->
         ct = :crypto.strong_rand_bytes(48)
@@ -708,6 +708,114 @@ defmodule Engram.CryptoTest do
       )
     end
 
+    # Concurrent misses for one user used to each call KMS: a claimed slot read
+    # as a miss, every caller claimed over the last, and all but one cached
+    # nothing. Prod paid ~1:1 KMS Decrypts per cache miss under bursts.
+    test "concurrent misses for one user make ONE KMS Decrypt" do
+      user = make_user_with_provider!(Engram.Crypto.KeyProvider.AwsKms)
+      Application.put_env(:engram, :key_provider, Engram.Crypto.KeyProvider.AwsKms)
+
+      calls = :counters.new(1, [])
+      table = :ets.whereis(:dual_read_stub)
+
+      stub(Engram.AwsKmsMock, :decrypt, fn ct, _ ->
+        :counters.add(calls, 1, 1)
+        Process.sleep(100)
+        [{^ct, pt}] = :ets.lookup(table, ct)
+        {:ok, pt}
+      end)
+
+      deks =
+        1..20
+        |> Enum.map(fn _ -> Task.async(fn -> Crypto.get_dek(user) end) end)
+        |> Task.await_many(5_000)
+
+      assert [{:ok, <<_::256>>}] = Enum.uniq(deks)
+      assert :counters.get(calls, 1) == 1
+    end
+
+    test "a failing unwrap fails every waiter with its error, in ONE KMS call" do
+      user = make_user_with_provider!(Engram.Crypto.KeyProvider.AwsKms)
+      Application.put_env(:engram, :key_provider, Engram.Crypto.KeyProvider.AwsKms)
+      calls = :counters.new(1, [])
+      test = self()
+
+      stub(Engram.AwsKmsMock, :decrypt, fn _ct, _ ->
+        :counters.add(calls, 1, 1)
+        send(test, {:unwrapping, self()})
+        receive do: (:fail -> {:error, :throttled})
+      end)
+
+      loader = Task.async(fn -> Crypto.get_dek(user) end)
+      assert_receive {:unwrapping, loader_pid}
+      waiters = Enum.map(1..9, fn _ -> Task.async(fn -> Crypto.get_dek(user) end) end)
+      await(fn -> waiter_count(user.id) == 9 end)
+
+      send(loader_pid, :fail)
+
+      assert [{:error, :kms_throttled}] = Enum.uniq(Task.await_many([loader | waiters]))
+      assert :counters.get(calls, 1) == 1
+      assert {:claimed, _} = DekCache.claim_or_await(user.id)
+    end
+
+    test "a raising loader releases its claim and fails its waiters" do
+      user = make_user_with_provider!(Engram.Crypto.KeyProvider.AwsKms)
+      Application.put_env(:engram, :key_provider, Engram.Crypto.KeyProvider.AwsKms)
+      test = self()
+
+      stub(Engram.AwsKmsMock, :decrypt, fn _ct, _ ->
+        send(test, {:unwrapping, self()})
+        receive do: (:raise -> raise DBConnection.ConnectionError, "boom")
+      end)
+
+      loader =
+        Task.async(fn ->
+          try do
+            Crypto.get_dek(user)
+          rescue
+            DBConnection.ConnectionError -> :raised
+          end
+        end)
+
+      assert_receive {:unwrapping, loader_pid}
+      waiter = Task.async(fn -> Crypto.get_dek(user) end)
+      await(fn -> waiting?(user.id) end)
+
+      send(loader_pid, :raise)
+      assert :raised = Task.await(loader)
+      assert {:error, :dek_load_crashed} = Task.await(waiter)
+      # Released, not left claimed: the next caller claims at once.
+      assert {:claimed, _} = DekCache.claim_or_await(user.id)
+    end
+
+    test "a waiter gives up after the retry budget instead of claiming over" do
+      user = make_user_with_provider!(Engram.Crypto.KeyProvider.AwsKms)
+      Application.put_env(:engram, :key_provider, Engram.Crypto.KeyProvider.AwsKms)
+      stub(Engram.AwsKmsMock, :decrypt, fn _, _ -> flunk("waiter must not unwrap") end)
+
+      holder = hold_claim(user.id)
+      waiter = Task.async(fn -> Crypto.get_dek(user) end)
+
+      # Each round: the holder dies and, in the same owner turn, a new holder
+      # claims before the waiter's retry arrives, so the waiter parks again.
+      holder =
+        Enum.reduce(1..2, holder, fn _, prev ->
+          await(fn -> waiting?(user.id) end)
+          :sys.suspend(DekCache)
+          Process.exit(prev, :kill)
+          await(fn -> queue_len() >= 1 end)
+          next = spawn_holder(user.id)
+          await(fn -> queue_len() >= 2 end)
+          :sys.resume(DekCache)
+          assert_receive {:holding, ^next}
+          next
+        end)
+
+      await(fn -> waiting?(user.id) end)
+      Process.exit(holder, :kill)
+      assert {:error, :dek_load_contended} = Task.await(waiter)
+    end
+
     test "cache hit short-circuits identify_from_blob — no lazy enqueue on cache hit" do
       user = make_user_with_provider!(Engram.Crypto.KeyProvider.Local)
       Application.put_env(:engram, :key_provider, Engram.Crypto.KeyProvider.AwsKms)
@@ -762,6 +870,46 @@ defmodule Engram.CryptoTest do
 
       refute Crypto.format_dek_error({:kms_decrypt_failed, %{secret: "sk-live-abc123"}}) =~
                "sk-live"
+    end
+  end
+
+  defp hold_claim(user_id) do
+    pid = spawn_holder(user_id)
+    assert_receive {:holding, ^pid}
+    pid
+  end
+
+  defp spawn_holder(user_id) do
+    test = self()
+
+    spawn(fn ->
+      {:claimed, _} = DekCache.claim_or_await(user_id)
+      send(test, {:holding, self()})
+      Process.sleep(:infinity)
+    end)
+  end
+
+  defp waiting?(user_id), do: waiter_count(user_id) > 0
+
+  defp waiter_count(user_id),
+    do: :sys.get_state(DekCache).waiters |> Map.get(user_id, []) |> length()
+
+  defp queue_len do
+    {:message_queue_len, n} = Process.info(Process.whereis(DekCache), :message_queue_len)
+    n
+  end
+
+  defp await(fun, tries \\ 500) do
+    cond do
+      fun.() ->
+        :ok
+
+      tries == 0 ->
+        flunk("condition never held")
+
+      true ->
+        Process.sleep(1)
+        await(fun, tries - 1)
     end
   end
 end
