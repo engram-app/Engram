@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.59.0](https://github.com/engram-app/Engram/compare/0.58.1...0.59.0) (2026-10-21)
+
+
+### Features
+
+* **analytics:** funnel tracking and customer insights ([#2027](https://github.com/engram-app/Engram/issues/2027)) ([94053d4](https://github.com/engram-app/Engram/commit/94053d4be1425e7b8c69f964243e52c6de01d356))
+
+
+### Bug Fixes
+
+* **ci:** fetch the plugin through the runner git cache ([#2074](https://github.com/engram-app/Engram/issues/2074)) ([08864d2](https://github.com/engram-app/Engram/commit/08864d231714336efb6b830b7fa45e165d6d68a0))
+* **e2e:** quiescence ignores checkpoints held by a live room ([#2096](https://github.com/engram-app/Engram/issues/2096)) ([973190f](https://github.com/engram-app/Engram/commit/973190f966c611810bd5610a818b66fdef501b9f))
+* **frontend:** keep the operator page off initial JS ([#2080](https://github.com/engram-app/Engram/issues/2080)) ([e864e22](https://github.com/engram-app/Engram/commit/e864e22ea39f1fd8b9eee39fa0b62a236390bb86))
+
+
+### Performance Improvements
+
+* **db:** scale wave 1 - Oban off web, index fixes, retention, timeouts ([#2088](https://github.com/engram-app/Engram/issues/2088)) ([485c722](https://github.com/engram-app/Engram/commit/485c72206f94724c20a8854e1164ec7b4ec5a40a))
+
 ## [0.58.1](https://github.com/engram-app/Engram/compare/0.58.0...0.58.1) (2026-10-20)
 
 
