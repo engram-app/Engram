@@ -255,9 +255,7 @@ defmodule Engram.PromEx.Crdt do
           event_name: @update_event,
           measurement: :bytes,
           description: "Yjs update size per CRDT update-log append, before encryption.",
-          reporter_options: [
-            buckets: [64, 256, 1_024, 4_096, 16_384, 65_536, 262_144, 1_048_576, 5_242_880]
-          ]
+          reporter_options: Buckets.opts(Engram.PromEx.Crdt.UpdateBytesBuckets)
         ),
         # The other half of the flatten gate. `should_flatten?/2` requires 1,000
         # distinct client IDs AND 500 KB; this says whether any real doc ever
@@ -580,6 +578,21 @@ end
 defmodule Engram.PromEx.Crdt.ContentBytesBuckets do
   @moduledoc false
   use Engram.PromEx.Buckets, [500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000]
+end
+
+defmodule Engram.PromEx.Crdt.UpdateBytesBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [
+    64,
+    256,
+    1_024,
+    4_096,
+    16_384,
+    65_536,
+    262_144,
+    1_048_576,
+    5_242_880
+  ]
 end
 
 defmodule Engram.PromEx.Crdt.ClientCountBuckets do

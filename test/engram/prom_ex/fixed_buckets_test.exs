@@ -62,6 +62,17 @@ defmodule Engram.PromEx.FixedBucketsTest do
       500_000
     ],
     "engram_prom_ex_crdt_checkpoint_doc_client_count" => [1, 2, 5, 10, 25, 50, 100, 500, 1_000],
+    "engram_prom_ex_crdt_update_bytes" => [
+      64,
+      256,
+      1_024,
+      4_096,
+      16_384,
+      65_536,
+      262_144,
+      1_048_576,
+      5_242_880
+    ],
     "engram_prom_ex_mcp_tool_duration_milliseconds" => [
       5,
       10,
