@@ -53,7 +53,7 @@ describe("UploadLimitDialog", () => {
 			screen.getByRole("heading", { level: 1, name: "Not enough storage" }),
 		).toBeInTheDocument();
 		expect(screen.getByRole("dialog")).toHaveTextContent("1,000 MB of 1 GB");
-		expect(screen.getByRole("meter", { name: "Storage used" })).toBeInTheDocument();
+		expect(screen.getByRole("progressbar", { name: "Storage used" })).toBeInTheDocument();
 		const plans = within(screen.getByRole("region", { name: "Compare plans" }));
 		expect(plans.getByText("10 GB")).toBeInTheDocument();
 		expect(plans.getByText("50 GB")).toBeInTheDocument();

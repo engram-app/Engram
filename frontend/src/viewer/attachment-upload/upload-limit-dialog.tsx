@@ -173,12 +173,13 @@ export function UploadLimitDialog({
 								{t("{used} of {cap}", { used: fmt(limits.usedBytes), cap: fmt(limits.storageCap) })}
 							</span>
 						</p>
-						<meter
+						{/* <progress>, not <meter>: Chrome colours a meter green/yellow/red by
+						    its own rules and ignores the theme. */}
+						<progress
 							aria-label={t("Storage used")}
-							min={0}
 							max={limits.storageCap}
 							value={limits.usedBytes}
-							className="h-1.5 w-full appearance-none overflow-hidden rounded-full bg-foreground/10 [&::-moz-meter-bar]:bg-destructive [&::-webkit-meter-bar]:rounded-full [&::-webkit-meter-bar]:border-0 [&::-webkit-meter-bar]:bg-foreground/10 [&::-webkit-meter-optimum-value]:bg-destructive"
+							className="h-1.5 w-full appearance-none overflow-hidden rounded-full bg-foreground/15 [&::-moz-progress-bar]:bg-primary [&::-webkit-progress-bar]:bg-foreground/15 [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:bg-primary"
 						/>
 					</section>
 				) : null}
