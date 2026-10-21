@@ -639,7 +639,7 @@ defmodule Engram.CryptoTest do
 
       Application.put_env(:engram, :aws_kms_client, Engram.AwsKmsMock)
 
-      table = :ets.new(:dual_read_stub, [:set, :public])
+      table = :ets.new(:dual_read_stub, [:set, :public, :named_table])
 
       stub(Engram.AwsKmsMock, :encrypt, fn pt, _ ->
         ct = :crypto.strong_rand_bytes(48)
@@ -706,6 +706,32 @@ defmodule Engram.CryptoTest do
         worker: Engram.Workers.MigrateUserProvider,
         args: %{"user_id" => user.id, "target_provider" => "local"}
       )
+    end
+
+    # Concurrent misses for one user used to each call KMS: a claimed slot read
+    # as a miss, every caller claimed over the last, and all but one cached
+    # nothing. Prod paid ~1:1 KMS Decrypts per cache miss under bursts.
+    test "concurrent misses for one user make ONE KMS Decrypt" do
+      user = make_user_with_provider!(Engram.Crypto.KeyProvider.AwsKms)
+      Application.put_env(:engram, :key_provider, Engram.Crypto.KeyProvider.AwsKms)
+
+      calls = :counters.new(1, [])
+      table = :ets.whereis(:dual_read_stub)
+
+      stub(Engram.AwsKmsMock, :decrypt, fn ct, _ ->
+        :counters.add(calls, 1, 1)
+        Process.sleep(100)
+        [{^ct, pt}] = :ets.lookup(table, ct)
+        {:ok, pt}
+      end)
+
+      deks =
+        1..20
+        |> Enum.map(fn _ -> Task.async(fn -> Crypto.get_dek(user) end) end)
+        |> Task.await_many(5_000)
+
+      assert [{:ok, <<_::256>>}] = Enum.uniq(deks)
+      assert :counters.get(calls, 1) == 1
     end
 
     test "cache hit short-circuits identify_from_blob — no lazy enqueue on cache hit" do

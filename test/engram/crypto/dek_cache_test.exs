@@ -230,4 +230,79 @@ defmodule Engram.Crypto.DekCacheTest do
       assert :ok = DekCache.put_if_claimed(1, new, @dek)
     end
   end
+
+  # Single flight: while one loader holds the claim, other callers wait for its
+  # DEK instead of each unwrapping (one KMS Decrypt per caller before).
+  describe "claim_or_await/1" do
+    test "a free slot is claimed; a cached DEK is returned" do
+      assert {:claimed, token} = DekCache.claim_or_await(1)
+      assert :ok = DekCache.put_if_claimed(1, token, @dek)
+      assert {:ok, @dek} = DekCache.claim_or_await(1)
+    end
+
+    test "a waiter gets the loader's DEK without claiming" do
+      {:claimed, token} = DekCache.claim_or_await(1)
+      waiter = Task.async(fn -> DekCache.claim_or_await(1) end)
+      refute Task.yield(waiter, 50)
+
+      assert :ok = DekCache.put_if_claimed(1, token, @dek)
+      assert {:ok, @dek} = Task.await(waiter)
+    end
+
+    test "a waiter retries when the loader releases its claim" do
+      {:claimed, token} = DekCache.claim_or_await(1)
+      waiter = Task.async(fn -> DekCache.claim_or_await(1) end)
+      refute Task.yield(waiter, 50)
+
+      DekCache.release(1, token)
+      assert :retry = Task.await(waiter)
+      assert :miss = DekCache.get(1)
+    end
+
+    test "a waiter retries when the slot is invalidated mid-load" do
+      {:claimed, token} = DekCache.claim_or_await(1)
+      waiter = Task.async(fn -> DekCache.claim_or_await(1) end)
+      refute Task.yield(waiter, 50)
+
+      DekCache.invalidate(1)
+      assert :retry = Task.await(waiter)
+      assert :stale = DekCache.put_if_claimed(1, token, @dek)
+    end
+
+    test "a waiter retries when a peer dek_evict lands mid-load" do
+      {:claimed, _token} = DekCache.claim_or_await(1)
+      waiter = Task.async(fn -> DekCache.claim_or_await(1) end)
+      refute Task.yield(waiter, 50)
+
+      send(DekCache, {:cache_sync, {:dek_evict, 1}})
+      assert :retry = Task.await(waiter)
+    end
+
+    test "a waiter retries and the slot clears when the loader dies" do
+      loader =
+        spawn(fn ->
+          {:claimed, _} = DekCache.claim_or_await(1)
+          receive do: (:never -> :ok)
+        end)
+
+      Process.sleep(20)
+      waiter = Task.async(fn -> DekCache.claim_or_await(1) end)
+      refute Task.yield(waiter, 50)
+
+      Process.exit(loader, :kill)
+      assert :retry = Task.await(waiter)
+      assert {:claimed, _} = DekCache.claim_or_await(1)
+    end
+
+    test "a served waiter emits outcome :coalesced" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:engram, :crypto, :dek_cache]])
+      {:claimed, token} = DekCache.claim_or_await(1)
+      waiter = Task.async(fn -> DekCache.claim_or_await(1) end)
+      refute Task.yield(waiter, 50)
+
+      :ok = DekCache.put_if_claimed(1, token, @dek)
+      {:ok, @dek} = Task.await(waiter)
+      assert_receive {[:engram, :crypto, :dek_cache], ^ref, %{count: 1}, %{outcome: :coalesced}}
+    end
+  end
 end

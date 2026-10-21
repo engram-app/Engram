@@ -216,6 +216,8 @@ defmodule Engram.Crypto do
   def fresh_user(%User{encrypted_dek: nil} = user), do: Engram.Repo.reload!(user)
   def fresh_user(%User{} = user), do: user
 
+  @dek_load_retries 2
+
   @doc """
   Returns the plaintext DEK for a user, unwrapping via the provider if not cached.
   """
@@ -230,11 +232,34 @@ defmodule Engram.Crypto do
         {:ok, dek}
 
       :miss ->
-        # Claim BEFORE reading the blob: a flip that commits after the read
-        # invalidates the slot, and put_if_claimed then refuses to store the
-        # retired DEK this call unwrapped.
-        token = DekCache.claim(user_id)
-        unwrap_and_cache(user_id, token, wrapped_dek(user))
+        load_dek(user, @dek_load_retries)
+    end
+  end
+
+  # Single flight: one caller per node unwraps, concurrent misses wait for its
+  # DEK. A `:retry` (loader failed, died, or an invalidate landed) asks again;
+  # past the budget the caller claims over and loads on its own, so a failing
+  # KMS costs each caller a bounded number of rounds, not an unbounded queue.
+  defp load_dek(user, retries) do
+    case DekCache.claim_or_await(user.id) do
+      {:ok, dek} -> {:ok, dek}
+      {:claimed, token} -> load_claimed(user, token)
+      :retry when retries > 0 -> load_dek(user, retries - 1)
+      :retry -> load_claimed(user, DekCache.claim(user.id))
+    end
+  end
+
+  # Claim BEFORE reading the blob: a flip that commits after the read
+  # invalidates the slot, and put_if_claimed then refuses to store the
+  # retired DEK this call unwrapped.
+  defp load_claimed(%User{id: user_id} = user, token) do
+    case unwrap_and_cache(user_id, token, wrapped_dek(user)) do
+      {:ok, _dek} = ok ->
+        ok
+
+      {:error, _} = err ->
+        :ok = DekCache.release(user_id, token)
+        err
     end
   end
 
