@@ -183,33 +183,43 @@ defmodule Engram.RebuildLedgerWiringTest do
   end
 
   test "an indexed note whose content did not change rebuilds with 0 Voyage calls", ctx do
-    %{note: note, user: user, vault: vault} = ctx
+    %{note: note, user: user} = ctx
     Rebuild.set_budget(10_000)
+    me = self()
 
     stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+      send(me, :voyage_call)
       {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
     end)
 
-    assert {:ok, _count} = Engram.Indexing.index_note(note, vault, user)
+    # A first, real index through the worker (content changed): dense.
+    stamp = fn set ->
+      Repo.with_tenant!(user.id, fn ->
+        Repo.update_all(from(n in Note, where: n.id == ^note.id), set: set)
+      end)
+    end
 
-    Repo.with_tenant!(user.id, fn ->
-      Repo.update_all(from(n in Note, where: n.id == ^note.id),
-        set: [
-          embed_hash: note.content_hash,
-          dense_indexed_hash: note.content_hash,
-          chunker_version: elem(@pins, 0),
-          keyword_version: elem(@pins, 1)
-        ]
-      )
-    end)
+    stamp.(embed_hash: nil, dense_indexed_hash: nil)
+    assert :ok = perform_job(EmbedNote, %{"note_id" => note.id, "user_id" => user.id})
+    assert_received :voyage_call
+    assert reload(note).dense_indexed_hash == note.content_hash
 
-    expect(Engram.MockEmbedder, :embed_texts, 0, fn _ ->
-      flunk("Voyage called on unchanged text")
-    end)
+    # Then only the index version moves: the rebuild reuses every vector.
+    stamp.(chunker_version: elem(@pins, 0), keyword_version: elem(@pins, 1))
+    flush_voyage_calls()
 
     assert :ok = rebuild(note)
+    refute_received :voyage_call
     assert Rebuild.ledger().spent_tokens == 0
     assert reload(note).chunker_version == Markdown.chunker_version()
+  end
+
+  defp flush_voyage_calls do
+    receive do
+      :voyage_call -> flush_voyage_calls()
+    after
+      0 -> :ok
+    end
   end
 
   test "with the switch off the job rebuilds nothing and spends nothing", %{note: note} do
