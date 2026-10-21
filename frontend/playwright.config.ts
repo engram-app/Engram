@@ -65,7 +65,7 @@ export default defineConfig({
 		{
 			name: "clerk",
 			testMatch:
-				/\/(?:clerk-auth|onboarding-ftux|oauth-consent-onboarding|mcp-first-journey|i18n-onboarding-clerk)\.spec\.ts$/u,
+				/\/(?:clerk-auth|onboarding-ftux|oauth-consent-onboarding|mcp-first-journey|web-first-journey|i18n-onboarding-clerk)\.spec\.ts$/u,
 			use: {
 				baseURL: `http://localhost:${CLERK_VITE_PORT}`,
 			},
