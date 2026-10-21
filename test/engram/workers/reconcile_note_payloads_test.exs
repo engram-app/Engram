@@ -16,6 +16,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   alias Engram.Indexing
   alias Engram.Notes
   alias Engram.Notes.{Chunk, Note}
+  alias Engram.Vector.{FilterId, QdrantLayout}
   alias Engram.Workers.ReconcileNotePayloads
 
   setup :verify_on_exit!
@@ -31,7 +32,9 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
           on_scroll: nil,
           on_write: nil,
           on_upsert: nil,
-          payload_status: 200
+          payload_status: 200,
+          scroll_status: nil,
+          v5_indexes: false
         }
       end)
 
@@ -140,7 +143,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   # (the function under test): drift between the heal and the pass, or an
   # overwrite that drops a key the pass writes, fails here.
   test "a v5-shaped point is replaced with exactly what a v5 pass writes", ctx do
-    Engram.ServiceConfig.put_override(:write_v5_layout, true)
+    v5_on(ctx)
     vault = Repo.get!(Engram.Vaults.Vault, ctx.stale.vault_id, skip_tenant_check: true)
     {:ok, plain} = Crypto.maybe_decrypt_note_fields(reload(ctx.stale), ctx.user)
     assert {:ok, _} = Indexing.index_note(plain, vault)
@@ -153,7 +156,7 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
 
     # A rotation left the points on the retired key, and the stamp NULL.
     for id <- ids,
-        do: Agent.update(ctx.store, &put_in(&1.points[id], %{"u" => "x", "y" => "b2xk"}))
+        do: Agent.update(ctx.store, &put_in(&1.points[id], retired_v5(ctx)))
 
     {1, _} =
       Repo.update_all(from(n in Note, where: n.id == ^ctx.stale.id), [set: [payload_hash: nil]],
@@ -288,8 +291,10 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   # daily re-check would requeue its user forever; it is marked (never
   # deleted), counted, and skipped by the re-check until a pass rewrites it.
   test "an undecryptable v5 note is marked, counted, and not re-picked", ctx do
+    v5_on(ctx)
+
     for id <- point_ids(ctx.stale),
-        do: Agent.update(ctx.store, &put_in(&1.points[id], %{"u" => "x", "y" => "b2xk"}))
+        do: Agent.update(ctx.store, &put_in(&1.points[id], retired_v5(ctx)))
 
     {1, _} =
       Repo.update_all(
@@ -316,8 +321,10 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
   # the note stays NULL (the daily re-check still covers it) and the job
   # fails so Oban backs off.
   test "a transient key failure marks nothing and fails the job", ctx do
+    v5_on(ctx)
+
     for id <- point_ids(ctx.stale),
-        do: Agent.update(ctx.store, &put_in(&1.points[id], %{"u" => "x", "y" => "b2xk"}))
+        do: Agent.update(ctx.store, &put_in(&1.points[id], retired_v5(ctx)))
 
     {1, _} =
       Repo.update_all(
@@ -419,6 +426,62 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     assert NotePayloadStamps.run_pass() == :done
   end
 
+  # #2138: prod has no `u` index until the v5 format is on, and Qdrant
+  # Cloud's strict mode (`unindexed_filtering_retrieve: false`) answers 400
+  # to any filter on an unindexed key. The fake refuses the same way, so a
+  # read filter naming `u` while v5 is off fails every test above; this one
+  # pins prod's exact state (legacy points, v5 off).
+  test "the payload read filters only on indexed keys while v5 is off", ctx do
+    refute Engram.Vector.Qdrant.v5_payload_format?()
+    assert :ok = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+    assert reload(ctx.stale).payload_hash
+    assert reload(ctx.healthy).payload_hash
+  end
+
+  # A request Qdrant will refuse on every retry is cancelled once, with its
+  # status logged, instead of five redacted `:error` attempts.
+  test "a permanent scroll refusal cancels the job and logs its status", ctx do
+    Agent.update(ctx.store, &%{&1 | scroll_status: 400})
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:cancel, {:qdrant_scroll, 400, _}} =
+                 perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+      end)
+
+    assert log =~ "note payload reconcile failed"
+    assert log =~ ":qdrant_scroll 400"
+    refute log =~ ctx.stale.id
+    assert reload(ctx.stale).payload_hash == nil
+  end
+
+  test "a transient scroll error (503) snoozes, a 500 fails for a backoff", ctx do
+    Agent.update(ctx.store, &%{&1 | scroll_status: 503})
+    assert {:snooze, _} = perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+
+    Agent.update(ctx.store, &%{&1 | scroll_status: 500})
+
+    assert {:error, {:qdrant_scroll, 500, _}} =
+             perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+  end
+
+  test "a permanent payload-write refusal cancels the job", ctx do
+    Agent.update(ctx.store, &%{&1 | payload_status: 422})
+
+    assert {:cancel, {422, _}} =
+             perform_job(ReconcileNotePayloads, %{"user_id" => ctx.user.id})
+  end
+
+  # The v5 format on, as prod runs it after the rebuild: `u` is indexed.
+  defp v5_on(ctx) do
+    Engram.ServiceConfig.put_override(:write_v5_layout, true)
+    Agent.update(ctx.store, &%{&1 | v5_indexes: true})
+  end
+
+  # A v5 point a rotation left on the retired key. `u` is the tenant id, not
+  # an HMAC, so a rotation never changes it.
+  defp retired_v5(ctx), do: %{"u" => FilterId.uuid(ctx.user.id), "y" => "b2xk"}
+
   defp reload(note),
     do: Repo.one!(from(n in Note, where: n.id == ^note.id), skip_tenant_check: true)
 
@@ -432,11 +495,36 @@ defmodule Engram.Workers.ReconcileNotePayloadsTest do
     {:ok, body, conn} = Plug.Conn.read_body(conn, length: 10_000_000)
     body = if body == "", do: %{}, else: Jason.decode!(body)
     status = Agent.get(store, & &1.payload_status)
+    scroll_status = Agent.get(store, & &1.scroll_status)
+    scroll? = String.ends_with?(conn.request_path, "/points/scroll")
 
-    if status != 200 and String.ends_with?(conn.request_path, "/points/payload"),
-      do: Plug.Conn.send_resp(conn, status, "{}"),
-      else: fake_reply(conn, store, body)
+    cond do
+      status != 200 and String.ends_with?(conn.request_path, "/points/payload") ->
+        Plug.Conn.send_resp(conn, status, "{}")
+
+      scroll? and scroll_status != nil ->
+        Plug.Conn.send_resp(conn, scroll_status, "{}")
+
+      scroll? and unindexed(body["filter"], Agent.get(store, & &1.v5_indexes)) != [] ->
+        # Qdrant Cloud strict mode, `unindexed_filtering_retrieve: false`.
+        Plug.Conn.send_resp(conn, 400, ~s({"status":{"error":"Bad request: Index required"}}))
+
+      true ->
+        fake_reply(conn, store, body)
+    end
   end
+
+  defp unindexed(filter, v5?) do
+    indexed = for {key, _} <- QdrantLayout.payload_indexes(nil, v5?), do: key
+    filter |> filter_keys() |> Enum.reject(&(&1 in indexed))
+  end
+
+  defp filter_keys(%{"key" => key}), do: [key]
+  defp filter_keys(%{"is_empty" => %{"key" => key}}), do: [key]
+  defp filter_keys(%{"is_null" => %{"key" => key}}), do: [key]
+
+  defp filter_keys(%{} = filter),
+    do: for(k <- ~w(must should must_not), c <- filter[k] || [], key <- filter_keys(c), do: key)
 
   defp filter?(id, payload, filter) do
     Enum.all?(filter["must"] || [], &condition?(id, payload, &1)) and
