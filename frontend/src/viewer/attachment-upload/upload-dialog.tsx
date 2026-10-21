@@ -10,7 +10,7 @@ import type { Translate } from "@/i18n/translate";
 import { cn } from "@/lib/utils";
 import { FolderPicker } from "./folder-picker";
 import { type UploadFailure, uploadFailure } from "./upload-failure";
-import { withoutBlocked } from "./upload-files";
+import { claimUploadPath, withoutBlocked } from "./upload-files";
 
 // "waiting" = the upload layer is backing off before a retry; not a failure.
 type RowStatus = "pending" | "uploading" | "waiting" | "done" | "error";
@@ -20,10 +20,17 @@ interface Row {
 	error?: UploadFailure;
 	/** 0-100 for a parts upload; undefined = indeterminate (single request). */
 	pct?: number;
+	/** Vault path claimed on the first attempt; cleared if the folder changes. */
+	path?: string;
 }
+
+// Stable default, so an omitted prop is not a new array every render.
+const NO_ATTACHMENTS: readonly { path: string }[] = [];
 
 interface Props {
 	initialFiles: File[];
+	/** The vault's attachments, so a new upload never takes an existing name. */
+	existing?: readonly { path: string }[];
 	folders: { name: string }[];
 	// Pre-selected destination (e.g. the folder the user is browsing); '' = root.
 	defaultFolder?: string;
@@ -61,12 +68,23 @@ function statusText(row: Row, t: Translate): string {
 const patch = (rows: Row[], i: number, next: Partial<Row>): Row[] =>
 	rows.map((row, idx) => (idx === i ? { ...row, ...next } : row));
 
-export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, onClose }: Props) {
+export function AttachmentUploadDialog({
+	initialFiles,
+	existing = NO_ATTACHMENTS,
+	folders,
+	defaultFolder,
+	onClose,
+}: Props) {
 	const { t } = useT();
 	const [rows, setRows] = useState<Row[]>(() =>
 		initialFiles.map((file): Row => ({ file, status: "pending" })),
 	);
-	const [folder, setFolder] = useState(defaultFolder ?? ""); // '' = vault root
+	const [folder, setFolderState] = useState(defaultFolder ?? ""); // '' = vault root
+	// A new destination drops any path claimed for the old one.
+	const setFolder = (next: string) => {
+		setFolderState(next);
+		setRows((r) => r.map((row) => (row.status === "done" ? row : { ...row, path: undefined })));
+	};
 	const [busy, setBusy] = useState(false);
 	const addRef = useRef<HTMLInputElement>(null);
 	const upload = useUploadAttachment();
@@ -78,9 +96,11 @@ export function AttachmentUploadDialog({ initialFiles, folders, defaultFolder, o
 		if (!row || row.status === "done") {
 			return;
 		}
-		setRows((r) => patch(r, i, { status: "uploading", error: undefined, pct: undefined }));
+		// Claimed once: a retry reuses it, so a failed first attempt that did land
+		// on the server is replaced rather than duplicated under a second name.
+		const path = row.path ?? claimUploadPath(existing, folder, row.file.name);
+		setRows((r) => patch(r, i, { status: "uploading", error: undefined, pct: undefined, path }));
 		try {
-			const path = folder ? `${folder}/${row.file.name}` : row.file.name;
 			await upload.mutateAsync({
 				path,
 				file: row.file,

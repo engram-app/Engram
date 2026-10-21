@@ -146,6 +146,7 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 			{files !== null && (
 				<AttachmentUploadDialog
 					initialFiles={files}
+					existing={attachments}
 					folders={folders.map((f) => ({ name: f.name }))}
 					defaultFolder={pendingFolder}
 					onClose={() => setFiles(null)}

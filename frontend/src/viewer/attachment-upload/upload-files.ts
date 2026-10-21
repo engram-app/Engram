@@ -48,20 +48,11 @@ export async function uploadFilesTo(opts: {
 	t: Translate;
 }): Promise<string[]> {
 	const { t } = opts;
-	const taken = [...opts.existing, ...reservedPaths(Date.now())];
 	const done: string[] = [];
 	for (const file of opts.files) {
-		// Names are unique per folder, so compare against this folder's files only.
-		const prefix = opts.folder ? `${opts.folder}/` : "";
-		const inFolder = taken
-			.filter((a) => a.path.startsWith(prefix) && !a.path.slice(prefix.length).includes("/"))
-			.map((a) => ({ path: a.path.slice(prefix.length) }));
-		const name = uniqueAttachmentName(inFolder, safeName(file.name));
-		const path = opts.folder ? `${opts.folder}/${name}` : name;
-		reserved.set(path, Date.now());
+		const path = claimUploadPath(opts.existing, opts.folder, file.name);
 		try {
 			await opts.upload({ path, file });
-			taken.push({ path });
 			done.push(path);
 		} catch (err) {
 			if (!(err instanceof LimitExceededError)) {
@@ -89,4 +80,33 @@ export function withoutBlocked(files: File[], t: Translate): File[] {
 		);
 		return false;
 	});
+}
+
+/**
+ * The vault path a new upload of `fileName` into `folder` ("" = root) goes to,
+ * reserved so the next claim in this tab cannot pick it too. A taken name gets
+ * a number ("song 1.flac"), the way Obsidian names a duplicate, because the
+ * server UPSERTS by path: reusing a name silently replaces that file. The one
+ * rule for every upload path (drop, Upload dialog).
+ */
+export function claimUploadPath(
+	existing: readonly { path: string }[],
+	folder: string,
+	fileName: string,
+): string {
+	const taken = [...existing, ...reservedPaths(Date.now())];
+	// Names are unique per folder, so compare against this folder's files only.
+	const prefix = folder ? `${folder}/` : "";
+	const inFolder = taken
+		.filter((a) => a.path.startsWith(prefix) && !a.path.slice(prefix.length).includes("/"))
+		.map((a) => ({ path: a.path.slice(prefix.length) }));
+	const name = uniqueAttachmentName(inFolder, safeName(fileName));
+	const path = folder ? `${folder}/${name}` : name;
+	reserved.set(path, Date.now());
+	return path;
+}
+
+/** Test seam: forget every reservation. */
+export function resetReservedPaths(): void {
+	reserved.clear();
 }

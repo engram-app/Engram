@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, LimitExceededError } from "@/api/client";
 import { AttachmentUploadDialog } from "./upload-dialog";
+import { resetReservedPaths } from "./upload-files";
 
 const showUpgrade = vi.fn();
 vi.mock("@/billing/upgrade-dialog-provider", () => ({ useUpgradeDialog: () => ({ showUpgrade }) }));
@@ -18,6 +19,7 @@ function file(name: string, type = "text/plain") {
 }
 
 beforeEach(() => {
+	resetReservedPaths();
 	mutateAsync.mockReset();
 	showUpgrade.mockReset();
 	billingEnabled = true;
@@ -52,6 +54,39 @@ describe("AttachmentUploadDialog", () => {
 				expect.objectContaining({ path: "docs/a.txt", file: expect.any(File) }),
 			),
 		);
+	});
+
+	it("never overwrites: a taken name gets a number, and so does a repeat in one batch", async () => {
+		mutateAsync.mockResolvedValue({ attachment: { id: "x", path: "x" } });
+		render(
+			<AttachmentUploadDialog
+				initialFiles={[file("song.flac"), file("song.flac")]}
+				existing={[{ path: "song.flac" }, { path: "docs/song.flac" }]}
+				folders={[]}
+				onClose={() => {}}
+			/>,
+		);
+		clickUpload();
+		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(2));
+		expect(mutateAsync.mock.calls.map((c) => c[0].path)).toEqual(["song 1.flac", "song 2.flac"]);
+	});
+
+	it("a retry keeps the name the first attempt picked", async () => {
+		mutateAsync.mockRejectedValueOnce(new Error("network")).mockResolvedValue({
+			attachment: { id: "x", path: "x" },
+		});
+		render(
+			<AttachmentUploadDialog
+				initialFiles={[file("song.flac")]}
+				existing={[{ path: "song.flac" }]}
+				folders={[]}
+				onClose={() => {}}
+			/>,
+		);
+		clickUpload();
+		fireEvent.click(await screen.findByRole("button", { name: /try again/iu }));
+		await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(2));
+		expect(mutateAsync.mock.calls.map((c) => c[0].path)).toEqual(["song 1.flac", "song 1.flac"]);
 	});
 
 	it("uploads to root when no folder is picked", async () => {
