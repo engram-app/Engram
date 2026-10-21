@@ -188,7 +188,13 @@ defmodule EngramWeb.Schemas.SetCtimesRequest do
         }
       }
     },
-    required: [:entries]
+    required: [:entries],
+    example: %{
+      "entries" => [
+        %{"path" => "Projects/plan.md", "ctime" => 1_729_400_000.0},
+        %{"path" => "Inbox/idea.md", "ctime" => 1_729_486_400.5}
+      ]
+    }
   })
 end
 

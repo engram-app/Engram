@@ -1013,6 +1013,18 @@
         "x-validate": null
       },
       "SetCtimesRequest": {
+        "example": {
+          "entries": [
+            {
+              "ctime": 1.7294e9,
+              "path": "Projects/plan.md"
+            },
+            {
+              "ctime": 1729486400.5,
+              "path": "Inbox/idea.md"
+            }
+          ]
+        },
         "properties": {
           "entries": {
             "items": {
