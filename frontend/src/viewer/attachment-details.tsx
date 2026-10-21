@@ -67,6 +67,8 @@ interface Props {
 	/** Set once the bytes are in memory; Open in new tab needs it. */
 	inlineUrl: string | null;
 	onDownload: () => void;
+	/** A download is fetching the bytes; another click would start a second one. */
+	downloading: boolean;
 	renaming: boolean;
 	onRename: () => void;
 	onRenameDone: () => void;
@@ -122,6 +124,7 @@ export function AttachmentDetails({
 	kind,
 	inlineUrl,
 	onDownload,
+	downloading,
 	renaming,
 	onRename,
 	onRenameDone,
@@ -167,9 +170,9 @@ export function AttachmentDetails({
 
 			<menu className="flex flex-wrap gap-2">
 				<li>
-					<Button onClick={onDownload}>
+					<Button onClick={onDownload} disabled={downloading}>
 						<Download data-icon="inline-start" aria-hidden="true" />
-						{t("Download")}
+						{downloading ? t("Downloading…") : t("Download")}
 					</Button>
 				</li>
 				{inlineUrl ? (

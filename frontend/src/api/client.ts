@@ -446,12 +446,55 @@ export const api = {
 		return res.json();
 	},
 
-	/** `onProgress` gets the bytes received so far, as they arrive. */
-	async getBlob(path: string, onProgress?: (received: number) => void): Promise<Blob> {
-		const res = await authFetch(path);
+	/** `onProgress` gets the bytes received so far, as they arrive. `maxBytes`
+	 *  stops the download once that many bytes arrived. `signal` aborts the
+	 *  request and the body read. */
+	async getBlob(
+		path: string,
+		opts: {
+			onProgress?: (received: number) => void;
+			signal?: AbortSignal;
+			maxBytes?: number;
+		} = {},
+	): Promise<Blob> {
+		const { onProgress, signal, maxBytes } = opts;
+		const res = await authFetch(path, { signal });
+		if (maxBytes !== undefined) {
+			return readHead(res, maxBytes, onProgress);
+		}
 		return onProgress ? readWithProgress(res, onProgress) : res.blob();
 	},
 };
+
+/** Read at most the first `maxBytes` of a response body, then cancel the rest.
+ *  Not a Range request: the server ignores Range on single-part files and
+ *  answers 416 for an empty one. */
+export function readHead(
+	res: Response,
+	maxBytes: number,
+	onProgress?: (received: number) => void,
+): Promise<Blob> {
+	const type = res.headers.get("content-type") ?? "";
+	if (!res.body) {
+		return Promise.resolve(new Blob([], { type }));
+	}
+	let received = 0;
+	// Terminating the transform cancels the body upstream: the rest of the
+	// file is never downloaded.
+	const cap = new TransformStream<Uint8Array, Uint8Array>({
+		transform(chunk, controller) {
+			controller.enqueue(chunk.subarray(0, maxBytes - received));
+			received += chunk.byteLength;
+			onProgress?.(received);
+			if (received >= maxBytes) {
+				controller.terminate();
+			}
+		},
+	});
+	return new Response(res.body.pipeThrough(cap), {
+		headers: { "content-type": type },
+	}).blob();
+}
 
 /** Read a response body into a Blob, reporting the bytes received so far. */
 export function readWithProgress(

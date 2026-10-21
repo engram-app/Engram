@@ -7,6 +7,7 @@ import {
 	opensInline,
 	parseCsv,
 	previewKind,
+	readTextHead,
 } from "./attachment-preview";
 
 describe("previewKind", () => {
@@ -159,5 +160,17 @@ describe("Excalidraw", () => {
 	test("anything else yields no text", () => {
 		expect(excalidrawTexts("not json")).toEqual([]);
 		expect(excalidrawTexts("{}")).toEqual([]);
+	});
+});
+
+describe("readTextHead", () => {
+	test("drops a character the byte cap cut in half instead of showing U+FFFD", async () => {
+		// "é" is two bytes; a cap of 2 keeps "a" and the first byte of "é".
+		const blob = new Blob(["aé"]);
+		expect(await readTextHead(blob, 2)).toBe("a");
+	});
+
+	test("keeps a whole file under the cap", async () => {
+		expect(await readTextHead(new Blob(["héllo"]), 100)).toBe("héllo");
 	});
 });

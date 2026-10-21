@@ -1,10 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { Link, MemoryRouter, Route, Routes } from "react-router";
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { ApiError, api } from "../api/client";
 import type { AttachmentSummary } from "../api/queries";
 import { RightToolsProvider } from "../layout/right-tools-context";
 import AttachmentPage from "./attachment-page";
+import { TEXT_PREVIEW_MAX_BYTES } from "./attachment-preview";
 
 // Stub the heavy pdf.js viewer — this suite only verifies routing-by-mime, not
 // pdf.js rendering (covered in pdf-view.test.tsx).
@@ -65,7 +66,10 @@ it("renders an <img> for an image attachment, fetching bytes by path", async () 
 	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["x"], { type: "image/png" }));
 	renderAt("img-1");
 	await waitFor(() => expect(screen.getByRole("img")).toBeInTheDocument());
-	expect(api.getBlob).toHaveBeenCalledWith("/attachments/img/a.png?raw=1", expect.any(Function));
+	expect(api.getBlob).toHaveBeenCalledWith(
+		"/attachments/img/a.png?raw=1",
+		expect.objectContaining({ onProgress: expect.any(Function), signal: expect.any(AbortSignal) }),
+	);
 });
 
 it("renders the pdf.js viewer for a pdf attachment", async () => {
@@ -280,14 +284,10 @@ it("puts the file details and actions above the preview", async () => {
 it("says so when the browser can't render the file", async () => {
 	mockAttachments = [att({ id: "h-1", path: "IMG_1.heic", mime_type: "image/heic" })];
 	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["x"], { type: "image/heic" }));
-	HTMLImageElement.prototype.decode = vi.fn().mockRejectedValue(new Error("EncodingError"));
-	try {
-		renderAt("h-1");
-		expect(await screen.findByText(/this browser can't preview IMG_1.heic/iu)).toBeInTheDocument();
-		expect(screen.queryByRole("img")).not.toBeInTheDocument();
-	} finally {
-		Reflect.deleteProperty(HTMLImageElement.prototype, "decode");
-	}
+	renderAt("h-1");
+	fireEvent.error(await screen.findByRole("img"));
+	expect(await screen.findByText(/this browser can't preview IMG_1.heic/iu)).toBeInTheDocument();
+	expect(screen.queryByRole("img")).not.toBeInTheDocument();
 });
 
 it("loads a large file without asking, showing progress", async () => {
@@ -295,8 +295,8 @@ it("loads a large file without asking, showing progress", async () => {
 		att({ id: "v-1", path: "big.mp4", mime_type: "video/mp4", size_bytes: 200 * 1024 * 1024 }),
 	];
 	let finish: (b: Blob) => void = () => undefined;
-	vi.spyOn(api, "getBlob").mockImplementationOnce((_path, onProgress) => {
-		onProgress?.(50 * 1024 * 1024);
+	vi.spyOn(api, "getBlob").mockImplementationOnce((_path, opts) => {
+		opts?.onProgress?.(50 * 1024 * 1024);
 		return new Promise((r) => {
 			finish = r;
 		});
@@ -309,4 +309,102 @@ it("loads a large file without asking, showing progress", async () => {
 		finish(new Blob(["x"], { type: "video/mp4" }));
 	});
 	await waitFor(() => expect(container.querySelector("video")).toHaveAttribute("src", "blob:fake"));
+});
+
+it("aborts the preview download when the page goes away", async () => {
+	mockAttachments = [att({ id: "v-1", path: "big.mp4", mime_type: "video/mp4" })];
+	let signal: AbortSignal | undefined;
+	vi.spyOn(api, "getBlob").mockImplementationOnce((_path, opts) => {
+		signal = opts?.signal;
+		return new Promise(() => undefined);
+	});
+	const { unmount } = renderAt("v-1");
+	await waitFor(() => expect(signal).toBeDefined());
+	expect(signal?.aborted).toBe(false);
+	unmount();
+	expect(signal?.aborted).toBe(true);
+});
+
+it.each([
+	["logs/app.log", "text/plain"],
+	["t.csv", "text/csv"],
+	["Plan.excalidraw", "application/octet-stream"],
+])("reads only the first preview bytes of %s", async (path, mime) => {
+	mockAttachments = [att({ id: "t-1", path, mime_type: mime, size_bytes: 1024 ** 3 })];
+	const getBlob = vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["x"]));
+	renderAt("t-1");
+	await waitFor(() =>
+		expect(getBlob).toHaveBeenCalledWith(
+			expect.any(String),
+			// One byte past the cap, so the preview can tell the file was cut.
+			expect.objectContaining({ maxBytes: TEXT_PREVIEW_MAX_BYTES + 1 }),
+		),
+	);
+});
+
+it("loads a whole image, with no byte cap", async () => {
+	mockAttachments = [att({ id: "i-1", path: "a.png", mime_type: "image/png" })];
+	const getBlob = vi
+		.spyOn(api, "getBlob")
+		.mockResolvedValueOnce(new Blob(["x"], { type: "image/png" }));
+	renderAt("i-1");
+	await screen.findByRole("img");
+	expect(getBlob.mock.calls[0]?.[1]?.maxBytes).toBeUndefined();
+});
+
+it("throttles progress updates and keeps the live region text static", async () => {
+	mockAttachments = [att({ id: "v-1", path: "big.mp4", mime_type: "video/mp4", size_bytes: 1000 })];
+	vi.spyOn(api, "getBlob").mockImplementationOnce((_path, opts) => {
+		opts?.onProgress?.(100);
+		opts?.onProgress?.(200);
+		opts?.onProgress?.(300);
+		return new Promise(() => undefined);
+	});
+	renderAt("v-1");
+	const bar = await screen.findByRole("progressbar", { name: /loading big\.mp4/iu });
+	expect(bar).toHaveAttribute("value", "100");
+	expect(screen.getByRole("status")).toHaveTextContent(/^Loading big\.mp4…$/u);
+});
+
+it("disables Download and says it is busy while a download runs", async () => {
+	mockAttachments = [att({ id: "zip-1", path: "a.zip", mime_type: "application/zip" })];
+	let finish: (b: Blob) => void = () => undefined;
+	const getBlob = vi.spyOn(api, "getBlob").mockImplementationOnce(
+		() =>
+			new Promise((r) => {
+				finish = r;
+			}),
+	);
+	renderAt("zip-1");
+	fireEvent.click(screen.getByRole("button", { name: "Download a.zip" }));
+	const busy = await screen.findByRole("button", { name: "Downloading a.zip…" });
+	expect(busy).toBeDisabled();
+	fireEvent.click(busy);
+	expect(getBlob).toHaveBeenCalledTimes(1);
+	await act(async () => {
+		finish(new Blob(["x"]));
+	});
+	expect(await screen.findByRole("button", { name: "Download a.zip" })).toBeEnabled();
+});
+
+it("closes the rename box when another file opens", async () => {
+	mockAttachments = [
+		att({ id: "a-1", path: "a.zip", mime_type: "application/zip" }),
+		att({ id: "b-1", path: "b.zip", mime_type: "application/zip" }),
+	];
+	render(
+		<RightToolsProvider>
+			<MemoryRouter initialEntries={["/v/work/a-1"]}>
+				<Link to="/v/work/b-1">next</Link>
+				<Routes>
+					<Route path="/v/:slug/:itemId" element={<AttachmentPage />} />
+				</Routes>
+			</MemoryRouter>
+		</RightToolsProvider>,
+	);
+	fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+	expect(screen.getByRole("textbox")).toHaveValue("a");
+	fireEvent.click(screen.getByRole("link", { name: "next" }));
+	expect(await screen.findByRole("heading", { name: "b.zip" })).toBeInTheDocument();
+	expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
 });

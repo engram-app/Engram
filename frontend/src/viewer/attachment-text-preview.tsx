@@ -7,6 +7,7 @@ import {
 	excalidrawTexts,
 	formatBytes,
 	parseCsv,
+	readTextHead,
 	TEXT_PREVIEW_MAX_BYTES,
 } from "./attachment-preview";
 
@@ -14,8 +15,8 @@ import {
 const MAX_ROWS = 500;
 
 // Read-only text and CSV preview. Only the first TEXT_PREVIEW_MAX_BYTES are
-// read and rendered: "Preview anyway" can hand this a much larger file, and a
-// <pre> holding 100 MB of text freezes the tab.
+// rendered: a <pre> holding 100 MB of text freezes the tab. The page fetches
+// one byte more than that, so a blob past the cap means the file was cut.
 export function AttachmentTextPreview({
 	blob,
 	csv,
@@ -31,14 +32,11 @@ export function AttachmentTextPreview({
 
 	useEffect(() => {
 		let cancelled = false;
-		blob
-			.slice(0, TEXT_PREVIEW_MAX_BYTES)
-			.text()
-			.then((s) => {
-				if (!cancelled) {
-					setText(s);
-				}
-			});
+		readTextHead(blob, TEXT_PREVIEW_MAX_BYTES).then((s) => {
+			if (!cancelled) {
+				setText(s);
+			}
+		});
 		return () => {
 			cancelled = true;
 		};
@@ -122,14 +120,11 @@ export function ExcalidrawPreview({ blob }: { blob: Blob }) {
 
 	useEffect(() => {
 		let cancelled = false;
-		blob
-			.slice(0, TEXT_PREVIEW_MAX_BYTES)
-			.text()
-			.then((s) => {
-				if (!cancelled) {
-					setTexts(excalidrawTexts(s));
-				}
-			});
+		readTextHead(blob, TEXT_PREVIEW_MAX_BYTES).then((s) => {
+			if (!cancelled) {
+				setTexts(excalidrawTexts(s));
+			}
+		});
 		return () => {
 			cancelled = true;
 		};

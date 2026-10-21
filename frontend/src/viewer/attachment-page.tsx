@@ -11,7 +11,12 @@ import { ApiError, api, isNotFound } from "../api/client";
 import { useAttachments } from "../api/queries";
 import { useRightToolSlot } from "../layout/right-tools-context";
 import { AttachmentDetails, AttachmentName } from "./attachment-details";
-import { formatBytes, opensInline, previewKind } from "./attachment-preview";
+import {
+	formatBytes,
+	opensInline,
+	previewKind,
+	TEXT_PREVIEW_MAX_BYTES,
+} from "./attachment-preview";
 import { AttachmentTextPreview, ExcalidrawPreview } from "./attachment-text-preview";
 import BacklinksPanel from "./backlinks-panel";
 import { DocumentHeader } from "./document-header";
@@ -22,6 +27,10 @@ import PreviewColumn from "./preview-column";
 // pdf.js is heavy — only pull its chunk when a PDF is actually opened, never
 // for image/other previews.
 const PdfView = lazy(() => whenLoaded(import("./pdf-view")));
+
+// Progress repaints at most this often: a stream chunk is ~64 KB, so a 1 GB
+// file would otherwise re-render the page ~16k times.
+const PROGRESS_INTERVAL_MS = 250;
 
 // Read-only preview for a single attachment, routed by uuid (/attachment/:id) —
 // like notes, so the URL survives a rename/move. Resolves the id to its path +
@@ -48,7 +57,13 @@ export default function AttachmentPage() {
 	rawPathRef.current = rawPath;
 
 	// Which name is in rename mode: the pinned header, or the title on the page.
-	const [renamingAt, setRenamingAt] = useState<"header" | "title" | null>(null);
+	// Tied to the file it was opened on, so moving to another file closes it
+	// instead of carrying the old draft over to the new name.
+	const [renaming, setRenaming] = useState<{ id: string; at: "header" | "title" } | null>(null);
+	const renamingAt = renaming && renaming.id === att?.id ? renaming.at : null;
+	const setRenamingAt = (at: "header" | "title" | null) =>
+		setRenaming(at && att ? { id: att.id, at } : null);
+	const [downloading, setDownloading] = useState(false);
 	const [blob, setBlob] = useState<Blob | null>(null);
 	const [url, setUrl] = useState<string | null>(null);
 	// 'missing' = real 404; 'failed' = transient (5xx/network) — don't conflate.
@@ -76,11 +91,22 @@ export default function AttachmentPage() {
 		}
 		let revoke: string | null = null;
 		let cancelled = false;
+		let shownAt = Number.NEGATIVE_INFINITY;
+		const abort = new AbortController();
+		// Text previews show only the head of the file, so only the head is read.
+		// One byte past the cap tells the preview the file was cut.
+		const capped = kind === "text" || kind === "csv" || kind === "excalidraw";
 		api
-			.getBlob(rawPathRef.current, (n) => {
-				if (!cancelled) {
-					setReceived(n);
-				}
+			.getBlob(rawPathRef.current, {
+				signal: abort.signal,
+				maxBytes: capped ? TEXT_PREVIEW_MAX_BYTES + 1 : undefined,
+				onProgress: (n) => {
+					const now = performance.now();
+					if (!cancelled && now - shownAt >= PROGRESS_INTERVAL_MS) {
+						shownAt = now;
+						setReceived(n);
+					}
+				},
 			})
 			.then((fetched) => {
 				if (cancelled) {
@@ -105,30 +131,12 @@ export default function AttachmentPage() {
 			});
 		return () => {
 			cancelled = true;
+			abort.abort();
 			if (revoke) {
 				URL.revokeObjectURL(revoke);
 			}
 		};
 	}, [contentKey, kind]);
-
-	// The browser may not decode the format (HEIC in Chrome). Probe it off-DOM
-	// so a failure shows a message instead of a broken image.
-	useEffect(() => {
-		if (kind !== "image" || !url) {
-			return;
-		}
-		let cancelled = false;
-		const probe = new Image();
-		probe.src = url;
-		probe.decode?.().catch(() => {
-			if (!cancelled) {
-				setUnrenderable(true);
-			}
-		});
-		return () => {
-			cancelled = true;
-		};
-	}, [kind, url]);
 
 	// Same right-rail Backlinks panel a note gets.
 	const backlinksNode = useMemo(() => (id ? <BacklinksPanel attachmentId={id} /> : null), [id]);
@@ -138,6 +146,7 @@ export default function AttachmentPage() {
 	async function download() {
 		let href = url;
 		if (!href) {
+			setDownloading(true);
 			try {
 				href = URL.createObjectURL(await api.getBlob(rawPath));
 			} catch (err) {
@@ -146,6 +155,8 @@ export default function AttachmentPage() {
 				}
 				notify.error(t("Couldn't download {filename}. Try again.", { filename }));
 				return;
+			} finally {
+				setDownloading(false);
 			}
 		}
 		const a = document.createElement("a");
@@ -182,22 +193,31 @@ export default function AttachmentPage() {
 		);
 	} else if (kind !== null && !(url && blob)) {
 		const fmt = (n: number) => formatBytes(n, intlLocale(renderedLocale));
+		// A text preview reads only its head, so the bar fills to that.
+		const total =
+			kind === "text" || kind === "csv" || kind === "excalidraw"
+				? Math.min(att.size_bytes, TEXT_PREVIEW_MAX_BYTES)
+				: att.size_bytes;
 		preview = (
 			// Centered in the space the preview will fill, so it reads as the
 			// preview loading rather than a stray control.
-			<div
-				role="status"
-				className="flex min-h-[40vh] flex-col items-center justify-center gap-2 text-muted-foreground text-sm"
-			>
+			<div className="flex min-h-[40vh] flex-col items-center justify-center gap-2 text-muted-foreground text-sm">
 				<progress
 					aria-label={t("Loading {filename}", { filename })}
 					value={received}
-					max={att.size_bytes || undefined}
+					max={total || undefined}
 					className="h-1.5 w-full max-w-md appearance-none overflow-hidden rounded-full bg-foreground/15 [&::-moz-progress-bar]:bg-primary [&::-webkit-progress-bar]:bg-foreground/15 [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:bg-primary"
 				/>
-				{received === 0
-					? t("Loading {filename}…", { filename })
-					: t("{received} of {total}", { received: fmt(received), total: fmt(att.size_bytes) })}
+				{/* Static, so a screen reader announces it once; the bar carries the value. */}
+				<p role="status">{t("Loading {filename}…", { filename })}</p>
+				{received > 0 ? (
+					<p aria-hidden="true">
+						{t("{received} of {total}", {
+							received: fmt(Math.min(received, total)),
+							total: fmt(total),
+						})}
+					</p>
+				) : null}
 			</div>
 		);
 	} else if (unrenderable) {
@@ -207,11 +227,15 @@ export default function AttachmentPage() {
 			</p>
 		);
 	} else if (url && blob) {
+		// The browser may not decode the format (HEIC in Chrome, MKV, ...): say so
+		// instead of showing a broken image or a dead player.
 		const onRenderError = () => setUnrenderable(true);
 		if (kind === "image") {
 			preview = (
+				// biome-ignore lint/a11y/noNoninteractiveElementInteractions: onError reports a decode failure, it is not a user interaction.
 				<img
 					draggable={false}
+					onError={onRenderError}
 					src={url}
 					alt={filename}
 					className="mx-auto block max-w-full rounded shadow-md"
@@ -245,6 +269,7 @@ export default function AttachmentPage() {
 			// Both the stored type and the bytes' actual type must be inert.
 			inlineUrl={url && blob && opensInline(mime) && opensInline(blob.type) ? url : null}
 			onDownload={download}
+			downloading={downloading}
 			renaming={renamingAt === "title"}
 			onRename={() => setRenamingAt("title")}
 			onRenameDone={() => setRenamingAt(null)}
@@ -300,8 +325,13 @@ export default function AttachmentPage() {
 						variant="ghost"
 						size="icon"
 						onClick={download}
-						aria-label={t("Download {filename}", { filename })}
-						title={t("Download")}
+						disabled={downloading}
+						aria-label={
+							downloading
+								? t("Downloading {filename}…", { filename })
+								: t("Download {filename}", { filename })
+						}
+						title={downloading ? t("Downloading…") : t("Download")}
 					>
 						<Download className="size-4" />
 					</Button>

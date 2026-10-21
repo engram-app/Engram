@@ -108,6 +108,13 @@ export type PreviewKind = "image" | "pdf" | "audio" | "video" | "csv" | "text" |
 // text freezes the tab. Everything else previews at any size.
 export const TEXT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
 
+/** The first `maxBytes` of a file as text. Decoded as a stream, so a character
+ *  the cap cut in half stays in the decoder and is dropped, not shown as U+FFFD. */
+export async function readTextHead(blob: Blob, maxBytes: number): Promise<string> {
+	const bytes = await blob.slice(0, maxBytes).arrayBuffer();
+	return new TextDecoder().decode(bytes, { stream: true });
+}
+
 export function previewKind(path: string, mime: string): PreviewKind | null {
 	const ext = extOf(path);
 	let kind: PreviewKind | null = null;
