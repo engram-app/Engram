@@ -112,10 +112,7 @@ defmodule Engram.Notes.CrdtCheckpointTest do
 
   # ── #1706: CRDT doc bloat telemetry ───────────────────────────────────────
   # Everything in the history/DB-growth workstream is guessed until the shape of
-  # `crdt_state` vs the text it encodes is visible. The measurement is taken on
-  # the PRE-flatten state on purpose: post-flatten bytes are what the gate
-  # already reclaimed, and #1707 has to tune that gate against the bloat it is
-  # supposed to catch.
+  # `crdt_state` vs the text it encodes is visible.
   # A tick in flight when a delete commits reads the row after the delete's
   # seq bump, so the seq fence alone matched and the checkpoint materialized
   # content, bumped seq and enqueued jobs for the trashed note.

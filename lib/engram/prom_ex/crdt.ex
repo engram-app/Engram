@@ -216,9 +216,6 @@ defmodule Engram.PromEx.Crdt do
         # how far it runs ahead of the text it encodes. Untagged and
         # distribution-only: the whole question is the SHAPE across notes, and
         # note_id / vault_id are unbounded labels (2026-07-02 audit).
-        #
-        # Emitted pre-flatten, so the gate rework in #1707 reads the bloat it is
-        # supposed to catch rather than what a previous flatten already took.
         distribution(
           metric_prefix ++ [:checkpoint_doc, :bloat_ratio],
           event_name: @doc_event,
@@ -236,7 +233,7 @@ defmodule Engram.PromEx.Crdt do
           metric_prefix ++ [:checkpoint_doc, :state_bytes],
           event_name: @doc_event,
           measurement: :state_bytes,
-          description: "Encoded Yjs v1 state size per markdown checkpoint, before flatten.",
+          description: "Encoded Yjs v1 state size per markdown checkpoint.",
           reporter_options: Buckets.opts(Engram.PromEx.Crdt.StateBytesBuckets)
         ),
         distribution(
@@ -257,9 +254,8 @@ defmodule Engram.PromEx.Crdt do
           description: "Yjs update size per CRDT update-log append, before encryption.",
           reporter_options: Buckets.opts(Engram.PromEx.Crdt.UpdateBytesBuckets)
         ),
-        # The other half of the flatten gate. `should_flatten?/2` requires 1,000
-        # distinct client IDs AND 500 KB; this says whether any real doc ever
-        # approaches either.
+        # Distinct client IDs per doc. The checkpoint no longer flattens (#958),
+        # so this is the only signal for state-vector growth.
         distribution(
           metric_prefix ++ [:checkpoint_doc, :client_count],
           event_name: @doc_event,

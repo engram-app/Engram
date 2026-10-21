@@ -1,13 +1,13 @@
 # CRDT lineage doubling — why the same edit must be encoded exactly once
 
-_Last verified: 2026-10-03_
+_Last verified: 2026-10-21_
 
 **Status:** three distinct mechanisms share this symptom.
 1. **Dual-encoder** (server): fixed 2026-07-02 (PR #846). Everything below
    through "Debugging recipe" describes this one.
-2. **Flatten boundary** (#958): OPEN, reproduced. See "Second mechanism".
-   Latent today: the flatten gate effectively never fires (#1707 closed, prod
-   bloat ratio 1.01).
+2. **Flatten boundary** (#958): FIXED 2026-10-21 by REMOVING the checkpoint
+   flatten (0.60.1). It never fired in prod (30 days, 53k checkpoints, max
+   100-500 client ids) and was a reset, not a merge. See "Second mechanism".
 3. **Idempotent write that still mints ops** (plugin frontmatter re-seed):
    fixed in Engram-obsidian#464. See "Third mechanism".
 
@@ -72,7 +72,7 @@ of this is the third mechanism below.
 3. The MERGE-DIAG line `snapshot="…2" tail_doc="…22"` is the smoking gun shape.
 4. Revert the diag commit before merge.
 
-## Second mechanism: the flatten boundary (#958, OPEN)
+## Second mechanism: the flatten boundary (#958, FIXED by removal)
 
 _Added 2026-08-18._
 
@@ -124,7 +124,18 @@ Skipping the union is also not free when detection is right: Phase 0 exists
 because a room that missed a `deliver_out` is BEHIND committed writes, and
 skipping there re-opens the 2026-07-07 data-loss class (MCP appends erased).
 
-### Recommended direction
+### Resolution (2026-10-21)
+
+The flatten is gone: the checkpoint persists the union state as-is, whatever
+its size or client count. A doc past 1,000 client ids keeps a state vector of
+about 10 bytes per client, which is cheaper than any lineage-epoch protocol.
+Do not reintroduce a server-side reset (new doc + `ingest_plaintext` of the
+projection) anywhere: every such site mints a rival lineage, the class
+`Engram.Notes.LineageAudit` detects. The web `flattenIfBloated` was removed for
+the same reason (#2113). Regression test: `crdt_checkpoint_test.exs`, "a big
+many-client doc keeps its lineage across checkpoints".
+
+### Recommended direction (superseded by removal)
 
 Record the lineage reset instead of inferring it. A lineage epoch on the row,
 bumped on every flatten, lets the union distinguish "the live doc predates this

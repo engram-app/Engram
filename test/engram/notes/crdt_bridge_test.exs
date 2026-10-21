@@ -186,15 +186,6 @@ defmodule Engram.Notes.CrdtBridgeTest do
     end
   end
 
-  describe "flatten/1 preserves frontmatter" do
-    test "flattened doc keeps frontmatter and body" do
-      doc = CrdtBridge.new_doc()
-      :ok = CrdtBridge.ingest_plaintext(doc, "---\ntitle: Hi\n---\nbody\n")
-      {:ok, %{doc: flat}} = CrdtBridge.flatten(doc)
-      assert CrdtBridge.text_of(flat) == "---\ntitle: Hi\n---\nbody\n"
-    end
-  end
-
   describe "normalize_doc/1" do
     defp seed_body(doc, str) do
       text = Yex.Doc.get_text(doc, CrdtBridge.text_name())
