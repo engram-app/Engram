@@ -65,7 +65,7 @@ has it:
 - **Per-PR conformance gate** (`test_88_mcp_conformance.py`, `GATED_STAGES = "spec"` against the CI stack): the client
   genuinely dials `localhost:4000`, so the port genuinely belongs in the URL.
 - **Nightly conformance** against staging *would* have caught it (its `case "$advertised"`
-  accepts only `$TARGET_URL` or `$ORIGIN`), but it runs 05:40 UTC and the change merged at
+  accepts only `$TARGET_URL` or `$ORIGIN`), but it runs 03:15 UTC and the change merged at
   10:12 UTC.
 
 Reproducing it in a test means moving the canonical URL, which Phoenix caches in ETS at
