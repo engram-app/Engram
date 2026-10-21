@@ -257,7 +257,16 @@ export function excalidrawTexts(source: string): string[] {
 				: [],
 		);
 	} catch {
-		// Not JSON: the plugin's markdown form, read below.
+		// Not JSON: a raw drawing cut at the preview cap, or the plugin's
+		// markdown form, read below.
+	}
+	if (source.trimStart().startsWith("{")) {
+		// Only text elements carry a "text" key. Each match is a complete JSON
+		// string literal, so JSON.parse decodes its escapes.
+		return [...source.matchAll(/"text"\s*:\s*(?<literal>"(?:[^"\\]|\\.)*")/gu)].flatMap((m) => {
+			const text: unknown = JSON.parse(m.groups?.literal ?? '""');
+			return typeof text === "string" && text.trim() ? [text.trim()] : [];
+		});
 	}
 	const lines = source.split("\n");
 	const start = lines.findIndex((l) => l.trim() === "# Text Elements");

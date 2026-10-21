@@ -157,6 +157,12 @@ describe("Excalidraw", () => {
 		expect(excalidrawTexts(md)).toEqual(["Hello Excalidraw", "Second"]);
 	});
 
+	test("a raw drawing cut at the preview cap still lists its text", () => {
+		const cut =
+			'{"type":"excalidraw","elements":[{"type":"text","text":"Hello \\"there\\"","originalText":"x"},{"type":"text","text":"World"}],"files":{"a":{"dataURL":"data:image/png;base64,AAA';
+		expect(excalidrawTexts(cut)).toEqual(['Hello "there"', "World"]);
+	});
+
 	test("anything else yields no text", () => {
 		expect(excalidrawTexts("not json")).toEqual([]);
 		expect(excalidrawTexts("{}")).toEqual([]);
