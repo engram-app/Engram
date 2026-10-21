@@ -356,8 +356,7 @@ export class Replica {
 			settings.apiKey,
 			session.userId,
 			settings.vaultId,
-			settings.enableCrdt,
-			id, // deviceId -> WS device_id param
+			id, // deviceId -> WS device_id param (ctor: baseUrl, apiKey, userId, vaultId, deviceId)
 		);
 		noteStream = channel;
 
@@ -468,6 +467,11 @@ export class Replica {
 	async goOnline(): Promise<void> {
 		await this.channel.connect();
 	}
+	/** The device id this replica's socket URL carries (`device_id`). */
+	get socketDeviceId(): unknown {
+		return this.channel.deviceId;
+	}
+
 	disconnect(): void {
 		this.channel.disconnect();
 	}
@@ -511,6 +515,16 @@ async function main(): Promise<void> {
 	const b = await Replica.boot(session, "B", rootDir);
 	await scenario("handshake: A+B join + complete catch-up", async () => {
 		await Promise.all([barrier.synced(a), barrier.synced(b)]);
+	});
+
+	// Each replica is its own device: a stray positional arg once made every
+	// replica connect with device_id=true, so they all looked like one device.
+	await scenario("each replica's socket carries its own device id", async () => {
+		for (const r of [a, b]) {
+			if (r.socketDeviceId !== r.id) {
+				throw new Error(`replica ${r.id} socket device_id=${String(r.socketDeviceId)}`);
+			}
+		}
 	});
 
 	// GREEN 2 — A's create persists server-side over the real CRDT protocol.
