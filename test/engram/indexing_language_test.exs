@@ -22,6 +22,13 @@ defmodule Engram.IndexingLanguageTest do
       QdrantSparse.encode_documents(texts, filter_key, avgdl, language)
     end
 
+    # Merged v5 chunks (section_count > 1) encode with a `b:` option.
+    @impl true
+    def encode_documents(texts, filter_key, avgdl, language, opts) do
+      for _ <- texts, do: send(self(), {:encode_document_language, language})
+      QdrantSparse.encode_documents(texts, filter_key, avgdl, language, opts)
+    end
+
     @impl true
     def encode_query(query, filter_key, language),
       do: QdrantSparse.encode_query(query, filter_key, language)

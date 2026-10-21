@@ -634,6 +634,12 @@ defmodule Engram.Workers.EmbedNote do
           {:error, :index_tier_changed} ->
             {:snooze, 5}
 
+          # Vector cache on and the note's cache misses exceed one pass's
+          # embed budget: this pass embedded and cached its share, the next
+          # finds it as hits and embeds the rest. Not a failure.
+          {:error, :embed_continues} ->
+            {:snooze, 1}
+
           # A newer edit replaced the content this pass planned from; that
           # edit's own job indexes it. Nothing failed.
           {:error, :superseded} ->
@@ -718,6 +724,10 @@ defmodule Engram.Workers.EmbedNote do
 
     case Indexing.index_note_with_usage(decrypted_note, vault, user, opts) do
       {:ok, _count, _bytes, _dense?} -> :ok
+      # A refused reservation still runs dense when it would charge nothing
+      # (index budget on, every changed chunk already known). Past the pass
+      # embed budget that pass continues like any other: snooze, no attempt.
+      {:error, :embed_continues} -> {:snooze, 1}
       {:error, reason} -> {:error, reason}
     end
   end

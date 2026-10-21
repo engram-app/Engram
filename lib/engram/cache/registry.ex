@@ -154,6 +154,19 @@ defmodule Engram.Cache.Registry do
     # moves only on a Qdrant upgrade; the TTL bounds how long a tick after one
     # gates guards on the old version.
     %{name: :qdrant_version, ttl: 600_000, cache_nil: false, evict_match: :key, pg_channel: nil},
+    # Qdrant base URL => server Version, or :unknown when unreadable, for the
+    # search path's tenant IDF gate (Search.tenant_idf?/1). Unknown is cached
+    # too, so a search probes `GET /` at most once per TTL.
+    %{
+      name: :tenant_idf_version,
+      ttl: 300_000,
+      cache_nil: false,
+      evict_match: :key,
+      pg_channel: nil
+    },
+    # user_id => the account's point count, for the tenant IDF threshold. A
+    # soft value (it only feeds a >= 1,000 test), TTL-only.
+    %{name: :tenant_points, ttl: 600_000, cache_nil: false, evict_match: :key, pg_channel: nil},
     # {note_id, embed key} => dense vectors Voyage was paid for, held across
     # the commit so a retry after any failure (backpressure, a raise) reuses
     # them instead of paying again. Evicted on a successful commit. Byte cap

@@ -31,12 +31,16 @@ defmodule Engram.Native.ChunkerTest do
     assert Markdown.chunker_version() == 3
   end
 
+  # Over 512 B: the min512 merge (chunker v5) leaves such a section alone,
+  # so these tests still see one chunk per section.
+  @pad String.duplicate("filler words ", 45)
+
   # #1616: the four section bugs, fixed under one version bump (each bump is a
   # corpus rebuild).
   describe "section boundaries" do
     test "a # line inside a code block is not a heading" do
       content =
-        "# Setup\n\nRun this:\n\n```sh\n# install deps\nmix deps.get\n```\n\n### Next\n\nmore"
+        "# Setup\n\nRun this: #{@pad}\n\n```sh\n# install deps\nmix deps.get\n```\n\n### Next\n\nmore #{@pad}"
 
       chunks = Markdown.parse(content, "a/Setup.md")
       assert Enum.map(chunks, & &1.heading_path) == ["Setup", "Setup > Next"]
@@ -44,7 +48,9 @@ defmodule Engram.Native.ChunkerTest do
     end
 
     test "an H1 after the first keeps its own text in the heading path" do
-      content = "# Chapter One\n\nfirst\n\n# Chapter Two\n\nsecond\n\n## Part\n\nthird"
+      content =
+        "# Chapter One\n\nfirst #{@pad}\n\n# Chapter Two\n\nsecond #{@pad}\n\n## Part\n\nthird #{@pad}"
+
       paths = content |> Markdown.parse("Book.md") |> Enum.map(& &1.heading_path)
 
       assert paths == [
@@ -76,7 +82,7 @@ defmodule Engram.Native.ChunkerTest do
     end
 
     test "setext headings split sections" do
-      content = "Title\n=====\n\nintro\n\nSection\n-------\n\nbody"
+      content = "Title\n=====\n\nintro #{@pad}\n\nSection\n-------\n\nbody #{@pad}"
       paths = content |> Markdown.parse("Doc.md") |> Enum.map(& &1.heading_path)
       # "Title" is not the note's title ("Doc"), so it stays in the path.
       assert paths == ["Doc > Title", "Doc > Title > Section"]
@@ -111,14 +117,14 @@ defmodule Engram.Native.ChunkerTest do
             "![i](data:image/png;base64," <>
               Base.encode64(:crypto.strong_rand_bytes(1_500_000)) <> ")"
           ] do
-        {_chunks, peak} = Engram.Native.chunk_dirty_nif(content, "f", "T")
+        {_chunks, peak} = Engram.Native.chunk_dirty_nif(content, "f", "T", [], nil)
         # Measured 0.5-1.8x; 3x catches a regression the 10x standard would not.
         assert peak <= 3 * byte_size(content), "#{peak} for #{binary_part(content, 0, 20)}"
       end
     end
 
     test "repeated calls leak nothing" do
-      args = ["---\ntags: [a]\n---\n# A\n\ntext `c`\n\n## B\n\nmore", "f", "T"]
+      args = ["---\ntags: [a]\n---\n# A\n\ntext `c`\n\n## B\n\nmore", "f", "T", ["x"], "lead"]
       Engram.NativeLeak.assert_no_leak(fn -> apply(Engram.Native, :chunk_nif, args) end)
     end
 

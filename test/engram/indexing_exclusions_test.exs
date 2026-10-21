@@ -1,7 +1,8 @@
 defmodule Engram.IndexingExclusionsTest do
   @moduledoc """
-  Embed less: `.canvas` and `.base` notes are keyword-only (no Voyage calls,
-  no metered tokens), and an Excalidraw note's drawing data leaves the index
+  Embed less: `.base` notes are keyword-only (no Voyage calls, no metered
+  tokens), a `.canvas` embeds only its text cards (one dense point, chunker
+  v5 F12), and an Excalidraw note's drawing data leaves the index
   while its text elements stay searchable and embedded.
   """
   use Engram.DataCase, async: true
@@ -80,7 +81,19 @@ defmodule Engram.IndexingExclusionsTest do
     QdrantSparse.dim(key, token) in indices
   end
 
-  for {path, content} <- [{"Board.canvas", @canvas}, {"Tasks.base", @base}] do
+  test "a canvas embeds its text cards once, in its first point", ctx do
+    note = put_note(ctx, "Board.canvas", @canvas)
+    assert {:ok, prepared} = Indexing.prepare_index(note, ctx.vault, ctx.user)
+
+    assert_received {:embedded, [sent]}
+    assert sent =~ "Zanzibar launch plan"
+    refute sent =~ ~s("nodes")
+    assert [point] = prepared.qdrant_points
+    assert Map.has_key?(point.vector, "dense")
+    assert has_dim?(point, ctx.user, "zanzibar")
+  end
+
+  for {path, content} <- [{"Tasks.base", @base}] do
     test "#{path} is keyword-only: no embed, no metered tokens", ctx do
       note = put_note(ctx, unquote(path), unquote(content))
       test_pid = self()
