@@ -528,7 +528,10 @@ class ObsidianInstance:
         # the modal flow (those tests call cdp.reset_sync_gate() afterward).
         # Accept the gate now so the engine starts in production steady-state:
         # ready, unblocked, no modal.
-        await cdp.accept_sync_gate()
+        # An unlinked instance (no api_key) has no vault and no gate yet: its
+        # user meets the first-sync modal after linking, which is the journey.
+        if self.api_key:
+            await cdp.accept_sync_gate()
 
     def _enable_plugin_via_cdp(self) -> None:
         """Sync wrapper — calls _enable_plugin_async via asyncio.run().
