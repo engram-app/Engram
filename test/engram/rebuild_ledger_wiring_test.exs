@@ -161,6 +161,57 @@ defmodule Engram.RebuildLedgerWiringTest do
     assert reload(note).embed_retry_after == EmbedNote.parked_until_edited()
   end
 
+  # Oban kills a job past its timeout (and a node can die mid-pass): an
+  # `after` never runs then, so tokens Voyage already reported must be on
+  # the ledger the moment they are reported.
+  test "a rebuild killed mid-pass still debits what Voyage already reported", %{note: note} do
+    Rebuild.set_budget(10_000)
+    parent = self()
+
+    {pid, ref} =
+      spawn_monitor(fn ->
+        Ecto.Adapters.SQL.Sandbox.allow(Repo, parent, self())
+
+        Rebuild.spend(note, fn ->
+          :telemetry.execute([:engram, :voyage, :embed, :tokens], %{total_tokens: 77}, %{})
+          Process.exit(self(), :kill)
+        end)
+      end)
+
+    assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 5_000
+    assert Rebuild.ledger().spent_tokens == 77
+  end
+
+  test "an indexed note whose content did not change rebuilds with 0 Voyage calls", ctx do
+    %{note: note, user: user, vault: vault} = ctx
+    Rebuild.set_budget(10_000)
+
+    stub(Engram.MockEmbedder, :embed_texts, fn texts ->
+      {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+    end)
+
+    assert {:ok, _count} = Engram.Indexing.index_note(note, vault, user)
+
+    Repo.with_tenant!(user.id, fn ->
+      Repo.update_all(from(n in Note, where: n.id == ^note.id),
+        set: [
+          embed_hash: note.content_hash,
+          dense_indexed_hash: note.content_hash,
+          chunker_version: elem(@pins, 0),
+          keyword_version: elem(@pins, 1)
+        ]
+      )
+    end)
+
+    expect(Engram.MockEmbedder, :embed_texts, 0, fn _ ->
+      flunk("Voyage called on unchanged text")
+    end)
+
+    assert :ok = rebuild(note)
+    assert Rebuild.ledger().spent_tokens == 0
+    assert reload(note).chunker_version == Markdown.chunker_version()
+  end
+
   test "with the switch off the job rebuilds nothing and spends nothing", %{note: note} do
     ServiceConfig.put_override(:index_rebuild, "off")
     expect(Engram.MockEmbedder, :embed_texts, 0, fn _ -> flunk("Voyage called while off") end)

@@ -161,20 +161,22 @@ defmodule Engram.Rebuild do
 
   @doc """
   Runs one version rebuild's indexing `fun` and charges what it sent Voyage
-  (`usage.total_tokens`, counted from `[:engram, :voyage, :embed, :tokens]`
-  in this process) to the ledger, raise or not. Then the drift check: a
-  note that cost over its limit is parked until edited.
+  (`usage.total_tokens`, from `[:engram, :voyage, :embed, :tokens]` in this
+  process) to the ledger. Each response is debited the moment it is
+  reported (`handle_tokens/4`), not when `fun` returns: Oban kills a job
+  past its timeout and a node can die, and neither runs an `after`. Then
+  the drift check: a note that cost over its limit is parked until edited.
   """
   @spec spend(Note.t(), (-> result)) :: result when result: term()
   def spend(%Note{} = note, fun) do
-    Process.put(@meter_key, 0)
+    Process.put(@meter_key, {0, 0})
 
     try do
       fun.()
     after
-      tokens = Process.delete(@meter_key) || 0
-      _ = if tokens > 0, do: debit(tokens)
-      if check_note(note, tokens) != :ok, do: park_drift(note, tokens)
+      {total, undebited} = Process.delete(@meter_key) || {0, 0}
+      _ = if undebited > 0, do: debit(undebited)
+      if check_note(note, total) != :ok, do: park_drift(note, total)
     end
   end
 
@@ -194,13 +196,24 @@ defmodule Engram.Rebuild do
   def handle_tokens(_event, %{total_tokens: tokens}, _meta, _config) when is_integer(tokens) do
     case Process.get(@meter_key) do
       nil -> :ok
-      n -> Process.put(@meter_key, n + tokens)
+      {total, undebited} -> Process.put(@meter_key, {total + tokens, undebited + meter(tokens)})
     end
 
     :ok
   end
 
   def handle_tokens(_event, _measurements, _meta, _config), do: :ok
+
+  # The tokens left for `spend/2` to debit: 0 once this debit landed. A
+  # handler that raises is detached by `:telemetry` for good, which would
+  # stop metering on this node, so a failed debit is not raised here; it is
+  # carried and retried (and raised) by `spend/2`'s own debit.
+  defp meter(tokens) do
+    _ = debit(tokens)
+    0
+  rescue
+    _e in [DBConnection.ConnectionError, Postgrex.Error] -> tokens
+  end
 
   @doc """
   `{:park, :rebuild_drift}` when a note cost over 1.5x its manifest
