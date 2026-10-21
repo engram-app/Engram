@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import hashlib
 import json
 import math
 import os
@@ -54,7 +53,28 @@ from helpers.clerk_auth import ClerkAuth  # noqa: E402
 
 # Notes per account. Prod (2026-10-20): p50=1, p90=70, p99=1158, max 10,000.
 # One whale, three ~1k, the rest small. Index = account number.
-VAULT_SIZES = [10_000, 1_000, 1_000, 1_000, 300, 150, 90, 70, 50, 40, 30, 20, 15, 10, 8, 5, 3, 2, 1, 1]
+VAULT_SIZES = [
+    10_000,
+    1_000,
+    1_000,
+    1_000,
+    300,
+    150,
+    90,
+    70,
+    50,
+    40,
+    30,
+    20,
+    15,
+    10,
+    8,
+    5,
+    3,
+    2,
+    1,
+    1,
+]
 
 # Ops per second at 1x. 1x = prod's 24h mean (2026-10-20 Grafana): 0.74 HTTP
 # req/s (mcp POST 0.27, mcp GET 0.10, folders 0.06, manifest 0.045, attachments
@@ -82,8 +102,14 @@ RATES = {
 }
 # CRDT ops per second per CRDT session at 1x (crdt_load.ts).
 CRDT_RATES = {"burst": 0.01, "concurrent": 0.004, "closed": 0.01}
-CRDT_ACCOUNTS = [4, 5, 6]  # small/medium vaults: each replica downloads its vault at boot
-PURGE_ACCOUNT = 3  # a 1k vault, so the batched purge lasts long enough to race a restore
+CRDT_ACCOUNTS = [
+    4,
+    5,
+    6,
+]  # small/medium vaults: each replica downloads its vault at boot
+PURGE_ACCOUNT = (
+    3  # a 1k vault, so the batched purge lasts long enough to race a restore
+)
 
 WORDS = (
     "alpha beta gamma delta engram vault note sync crdt index embed query river stone "
@@ -96,6 +122,7 @@ WORDS = (
 # Deterministic corpus: same account + index -> same bytes on every run, so a
 # re-run seeds nothing and the server's unchanged-content skips hold.
 # --------------------------------------------------------------------------
+
 
 def words(rng: random.Random, n: int) -> str:
     return " ".join(rng.choice(WORDS) for _ in range(n))
@@ -123,7 +150,9 @@ def note_body(acct: int, i: int, n: int) -> str:
         out.append(words(rng, rng.randint(20, 60)))
     if n > 1:
         links = rng.sample(range(n), min(3, n))
-        out.append(" ".join(f"[[{Path(note_path(acct, j)).stem}]]" for j in links if j != i))
+        out.append(
+            " ".join(f"[[{Path(note_path(acct, j)).stem}]]" for j in links if j != i)
+        )
     out.append(f"#{rng.choice(WORDS)} #{rng.choice(WORDS)}")
     return "\n\n".join(out) + "\n"
 
@@ -131,18 +160,28 @@ def note_body(acct: int, i: int, n: int) -> str:
 def special_notes(acct: int) -> dict[str, str]:
     """A few large notes (hundreds of KB) and one base64-image note."""
     if acct == 1:
-        return {f"Large/big{k}.md": note_body(acct, 90_000 + k, 1) * 220 for k in range(3)}  # ~300 KB each
+        return {
+            f"Large/big{k}.md": note_body(acct, 90_000 + k, 1) * 220 for k in range(3)
+        }  # ~300 KB each
     if acct == 2:
         rng = random.Random("img")
-        blob = base64.b64encode(bytes(rng.getrandbits(8) for _ in range(150_000))).decode()
-        return {"Large/inline-image.md": f"# Inline image\n\n![shot](data:image/png;base64,{blob})\n"}
+        blob = base64.b64encode(
+            bytes(rng.getrandbits(8) for _ in range(150_000))
+        ).decode()
+        return {
+            "Large/inline-image.md": f"# Inline image\n\n![shot](data:image/png;base64,{blob})\n"
+        }
     return {}
 
 
 def attachment_bytes(acct: int, k: int) -> bytes:
     rng = random.Random(f"att:{acct}:{k}")
-    png_head = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
-    return png_head + bytes(rng.getrandbits(8) for _ in range(rng.randint(20_000, 200_000)))
+    png_head = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+    return png_head + bytes(
+        rng.getrandbits(8) for _ in range(rng.randint(20_000, 200_000))
+    )
 
 
 def n_attachments(n_notes: int) -> int:
@@ -160,18 +199,32 @@ def est_tokens(text: str) -> int:
 # Metrics
 # --------------------------------------------------------------------------
 
+
 class Recorder:
     def __init__(self, path: Path):
         self.f = open(path, "a", buffering=1)
         self.lock = threading.Lock()
 
-    def rec(self, op: str, ms: float, status: int | str, ok: bool, err: str = "") -> None:
-        line = json.dumps({"t": round(time.time(), 3), "op": op, "ms": round(ms), "status": status, "ok": ok, "err": err[:200]})
+    def rec(
+        self, op: str, ms: float, status: int | str, ok: bool, err: str = ""
+    ) -> None:
+        line = json.dumps(
+            {
+                "t": round(time.time(), 3),
+                "op": op,
+                "ms": round(ms),
+                "status": status,
+                "ok": ok,
+                "err": err[:200],
+            }
+        )
         with self.lock:
             self.f.write(line + "\n")
 
 
-def summarize(ops_files: list[Path], out: Path, windows: list[tuple[str, float, float]]) -> dict:
+def summarize(
+    ops_files: list[Path], out: Path, windows: list[tuple[str, float, float]]
+) -> dict:
     rows = []
     for p in ops_files:
         if p.exists():
@@ -209,9 +262,13 @@ def summarize(ops_files: list[Path], out: Path, windows: list[tuple[str, float, 
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
     md = []
     for wname, ops in summary.items():
-        md.append(f"\n### {wname}\n\n| op | n | rps | err | p50 ms | p95 ms | p99 ms | error statuses |\n|---|---|---|---|---|---|---|---|")
+        md.append(
+            f"\n### {wname}\n\n| op | n | rps | err | p50 ms | p95 ms | p99 ms | error statuses |\n|---|---|---|---|---|---|---|---|"
+        )
         for op, s in ops.items():
-            md.append(f"| {op} | {s['n']} | {s['rps']} | {s['err']} | {s['p50']} | {s['p95']} | {s['p99']} | {' '.join(s['statuses'])} |")
+            md.append(
+                f"| {op} | {s['n']} | {s['rps']} | {s['err']} | {s['p50']} | {s['p95']} | {s['p99']} | {' '.join(s['statuses'])} |"
+            )
     (out / "summary.md").write_text("\n".join(md) + "\n")
     return summary
 
@@ -219,6 +276,7 @@ def summarize(ops_files: list[Path], out: Path, windows: list[tuple[str, float, 
 # --------------------------------------------------------------------------
 # Accounts
 # --------------------------------------------------------------------------
+
 
 class Account:
     def __init__(self, idx: int, api: str, prefix: str):
@@ -252,7 +310,9 @@ def legal_manifest() -> dict:
 
 
 def provision(acct: Account, clerk: ClerkClient, run_id: str) -> None:
-    acct.clerk_id = clerk.find_user_by_email(acct.email) or clerk.create_user(acct.email, uuid.uuid4().hex + "Aa1!")
+    acct.clerk_id = clerk.find_user_by_email(acct.email) or clerk.create_user(
+        acct.email, uuid.uuid4().hex + "Aa1!"
+    )
     j = requests.Session()
     j.auth = ClerkAuth(clerk, acct.clerk_id)
     r = j.post(f"{acct.api}/api-keys", json={"name": f"load-sim-{run_id}"}, timeout=30)
@@ -265,41 +325,79 @@ def provision(acct: Account, clerk: ClerkClient, run_id: str) -> None:
             j.delete(f"{acct.api}/api-keys/{k['id']}", timeout=30)
         elif k["name"] == f"load-sim-{run_id}":
             acct.key_id = k["id"]
-    j.patch(f"{acct.api}/onboarding/profile", json={"uses_obsidian": True, "tools": ["claude"]}, timeout=30)
+    j.patch(
+        f"{acct.api}/onboarding/profile",
+        json={"uses_obsidian": True, "tools": ["claude"]},
+        timeout=30,
+    )
     st = j.get(f"{acct.api}/onboarding/status", timeout=30).json()
     tv, pv = st.get("current_tos_version"), st.get("current_privacy_version")
     man = legal_manifest()
     if tv and pv and tv in man["terms_of_service"] and pv in man["privacy_policy"]:
-        j.post(f"{acct.api}/onboarding/accept-terms", json={
-            "tos_version": tv, "tos_hash": man["terms_of_service"][tv],
-            "privacy_version": pv, "privacy_hash": man["privacy_policy"][pv]}, timeout=30)
+        j.post(
+            f"{acct.api}/onboarding/accept-terms",
+            json={
+                "tos_version": tv,
+                "tos_hash": man["terms_of_service"][tv],
+                "privacy_version": pv,
+                "privacy_hash": man["privacy_policy"][pv],
+            },
+            timeout=30,
+        )
     # Reuse the account's live vault (it may be the one a purge cycle re-created).
-    vaults = acct.s(vault=False).get(f"{acct.api}/vaults", timeout=30).json().get("vaults", [])
+    vaults = (
+        acct.s(vault=False)
+        .get(f"{acct.api}/vaults", timeout=30)
+        .json()
+        .get("vaults", [])
+    )
     if vaults:
         acct.vault_id = vaults[0]["id"]
     else:
-        r = requests.post(f"{acct.api}/vaults/register", json={"name": acct.client_id, "client_id": acct.client_id},
-                          headers={"Authorization": f"Bearer {acct.key}"}, timeout=30)
+        r = requests.post(
+            f"{acct.api}/vaults/register",
+            json={"name": acct.client_id, "client_id": acct.client_id},
+            headers={"Authorization": f"Bearer {acct.key}"},
+            timeout=30,
+        )
         r.raise_for_status()
         acct.vault_id = r.json().get("id") or r.json().get("vault", {}).get("id")
-    acct.user_id = acct.s(vault=False).get(f"{acct.api}/me", timeout=30).json()["user"]["id"]
+    acct.user_id = (
+        acct.s(vault=False).get(f"{acct.api}/me", timeout=30).json()["user"]["id"]
+    )
     # OAuth device family for refresh rotation. /auth/device* shares a
     # 10/min per-IP bucket (rate_limit_auth), so pace and retry.
-    d = post_retry(requests.Session(), f"{acct.api}/auth/device", {"client_id": "engram-obsidian"}, timeout=30).json()
+    d = post_retry(
+        requests.Session(),
+        f"{acct.api}/auth/device",
+        {"client_id": "engram-obsidian"},
+        timeout=30,
+    ).json()
     if "user_code" not in d:
         return
-    ra = j.post(f"{acct.api}/auth/device/authorize", json={"user_code": d["user_code"], "vault_id": acct.vault_id}, timeout=30)
+    ra = j.post(
+        f"{acct.api}/auth/device/authorize",
+        json={"user_code": d["user_code"], "vault_id": acct.vault_id},
+        timeout=30,
+    )
     if ra.status_code == 200:
-        t = post_retry(requests.Session(), f"{acct.api}/auth/device/token", {"device_code": d["device_code"], "platform": "desktop"}, timeout=30).json()
+        t = post_retry(
+            requests.Session(),
+            f"{acct.api}/auth/device/token",
+            {"device_code": d["device_code"], "platform": "desktop"},
+            timeout=30,
+        ).json()
         acct.refresh = t.get("refresh_token", "")
 
 
-def post_retry(sess: requests.Session, url: str, payload: dict, timeout: int = 60, tries: int = 12) -> requests.Response:
+def post_retry(
+    sess: requests.Session, url: str, payload: dict, timeout: int = 60, tries: int = 12
+) -> requests.Response:
     for n in range(tries):
         r = sess.post(url, json=payload, timeout=timeout)
         if r.status_code != 429:
             return r
-        time.sleep(float(r.headers.get("retry-after") or min(2 ** n, 10)))
+        time.sleep(float(r.headers.get("retry-after") or min(2**n, 10)))
     return r
 
 
@@ -313,7 +411,10 @@ def seed(acct: Account, rec: Recorder) -> int:
     for p, body in special_notes(acct.idx).items():
         want[p] = (-1, body)
     for k in range(10):  # churn set: renamed / deleted / restored during the run
-        want[f"Churn/c{k}.md"] = (-1, f"# churn {k}\n\nstable churn body {k} for the load sim.\n")
+        want[f"Churn/c{k}.md"] = (
+            -1,
+            f"# churn {k}\n\nstable churn body {k} for the load sim.\n",
+        )
     for k in range(5):
         want[f"Churn/F1/m{k}.md"] = (-1, f"# moving {k}\n\nfolder-move body {k}.\n")
     todo = [(p, i, b) for p, (i, b) in want.items() if p not in have]
@@ -323,8 +424,16 @@ def seed(acct: Account, rec: Recorder) -> int:
         p, i, b = item
         body = b if b is not None else note_body(acct.idx, i, acct.n_notes)
         t0 = time.time()
-        r = post_retry(s, f"{acct.api}/notes", {"path": p, "content": body, "mtime": time.time()})
-        rec.rec("seed_note", (time.time() - t0) * 1000, r.status_code, r.ok, "" if r.ok else r.text)
+        r = post_retry(
+            s, f"{acct.api}/notes", {"path": p, "content": body, "mtime": time.time()}
+        )
+        rec.rec(
+            "seed_note",
+            (time.time() - t0) * 1000,
+            r.status_code,
+            r.ok,
+            "" if r.ok else r.text,
+        )
         return est_tokens(body) if r.ok else 0
 
     with ThreadPoolExecutor(6) as ex:
@@ -334,8 +443,24 @@ def seed(acct: Account, rec: Recorder) -> int:
         if p in have_att:
             continue
         t0 = time.time()
-        r = post_retry(s, f"{acct.api}/attachments", {"path": p, "content_base64": base64.b64encode(attachment_bytes(acct.idx, k)).decode(), "mtime": time.time()})
-        rec.rec("seed_attachment", (time.time() - t0) * 1000, r.status_code, r.ok, "" if r.ok else r.text)
+        r = post_retry(
+            s,
+            f"{acct.api}/attachments",
+            {
+                "path": p,
+                "content_base64": base64.b64encode(
+                    attachment_bytes(acct.idx, k)
+                ).decode(),
+                "mtime": time.time(),
+            },
+        )
+        rec.rec(
+            "seed_attachment",
+            (time.time() - t0) * 1000,
+            r.status_code,
+            r.ok,
+            "" if r.ok else r.text,
+        )
     return tokens
 
 
@@ -351,6 +476,7 @@ def estimate_seed_tokens(prefix_existing: dict[int, set] | None = None) -> int:
 # Ops
 # --------------------------------------------------------------------------
 
+
 def pick(accts: list[Account], rng: random.Random) -> Account:
     live = [a for a in accts if not a.paused.is_set()]
     w = [1 + math.log10(a.n_notes) for a in live]  # bigger vaults are busier
@@ -358,9 +484,16 @@ def pick(accts: list[Account], rng: random.Random) -> Account:
 
 
 def mcp(acct: Account, name: str, args: dict) -> requests.Response:
-    return acct.s(vault=False).post(f"{acct.api}/mcp", json={
-        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-        "params": {"name": name, "arguments": {"vault_id": acct.vault_id, **args}}}, timeout=90)
+    return acct.s(vault=False).post(
+        f"{acct.api}/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": {"vault_id": acct.vault_id, **args}},
+        },
+        timeout=90,
+    )
 
 
 def mcp_ok(r: requests.Response) -> tuple[bool, str]:
@@ -372,10 +505,17 @@ def mcp_ok(r: requests.Response) -> tuple[bool, str]:
     return True, ""
 
 
-def ws_catchup_walk(acct: Account, ws_url: str, rec: Recorder, limit: int = 500) -> tuple[bool, str]:
+def ws_catchup_walk(
+    acct: Account, ws_url: str, rec: Recorder, limit: int = 500
+) -> tuple[bool, str]:
     """Phoenix V2 push/reply loop: walk crdt_catchup_since until has_more=false."""
     url = f"{ws_url}?vsn=2.0.0&token={acct.key}&device_id=load-walk-{acct.idx}&plugin_version=1.36.1"
-    with ws_connect(url, origin=ws_url.replace("wss://", "https://").split("/socket")[0], max_size=50_000_000, open_timeout=30) as ws:
+    with ws_connect(
+        url,
+        origin=ws_url.replace("wss://", "https://").split("/socket")[0],
+        max_size=50_000_000,
+        open_timeout=30,
+    ) as ws:
         ref = 0
 
         def push(topic, event, payload):
@@ -390,16 +530,26 @@ def ws_catchup_walk(acct: Account, ws_url: str, rec: Recorder, limit: int = 500)
             raise TimeoutError(event)
 
         topic = f"crdt:{acct.user_id}:{acct.vault_id}"
-        j = push(topic, "phx_join", {"client_type": "load-sim"})
+        j = push(topic, "phx_join", {"crdt_proto": 2, "client_type": "load-sim"})
         if j.get("status") != "ok":
             return False, f"join {json.dumps(j)[:150]}"
         seq, cid, rows, pages, seen = 0, None, 0, 0, set()
         while True:
             t0 = time.time()
-            payload = {"cursor_seq": seq, "limit": limit, **({"cursor_id": cid} if cid else {})}
+            payload = {
+                "cursor_seq": seq,
+                "limit": limit,
+                **({"cursor_id": cid} if cid else {}),
+            }
             r = push(topic, "crdt_catchup_since", payload)
             ok = r.get("status") == "ok"
-            rec.rec("ws_catchup_page", (time.time() - t0) * 1000, r.get("status"), ok, "" if ok else json.dumps(r)[:200])
+            rec.rec(
+                "ws_catchup_page",
+                (time.time() - t0) * 1000,
+                r.get("status"),
+                ok,
+                "" if ok else json.dumps(r)[:200],
+            )
             if not ok:
                 return False, "page refused"
             resp = r["response"]
@@ -433,12 +583,18 @@ def run_op(op: str, acct: Account, rng: random.Random, args, rec: Recorder) -> N
                 acct.edit_flip = not acct.edit_flip
                 v = acct.edit_flip
             p = f"Churn/Moved/c{k}.md" if moved else f"Churn/c{k}.md"
-            body = f"# churn {k}\n\nstable churn body {k} for the load sim.\n" + ("variant B\n" if v else "")
-            r = post_retry(s, f"{api}/notes", {"path": p, "content": body, "mtime": time.time()})
+            body = f"# churn {k}\n\nstable churn body {k} for the load sim.\n" + (
+                "variant B\n" if v else ""
+            )
+            r = post_retry(
+                s, f"{api}/notes", {"path": p, "content": body, "mtime": time.time()}
+            )
             status, ok = r.status_code, r.ok
         elif op == "rest_pull":
             i = rng.randrange(acct.n_notes)
-            r = s.get(f"{api}/notes/{quote(note_path(acct.idx, i), safe='')}", timeout=60)
+            r = s.get(
+                f"{api}/notes/{quote(note_path(acct.idx, i), safe='')}", timeout=60
+            )
             status, ok = r.status_code, r.status_code == 200
         elif op == "manifest":
             r = s.get(f"{api}/sync/manifest", timeout=120)
@@ -450,15 +606,30 @@ def run_op(op: str, acct: Account, rng: random.Random, args, rec: Recorder) -> N
             r = s.get(f"{api}/folders", timeout=60)
             status, ok = r.status_code, r.ok
         elif op == "folder_create":
-            r = post_retry(s, f"{api}/folders", {"folder": f"Empty/e{rng.randrange(20)}"})
+            r = post_retry(
+                s, f"{api}/folders", {"folder": f"Empty/e{rng.randrange(20)}"}
+            )
             status, ok = r.status_code, r.status_code in (200, 201, 409)
         elif op == "attach_up":
             k = rng.randrange(n_attachments(acct.n_notes))
-            r = post_retry(s, f"{api}/attachments", {"path": f"Attachments/a{k:03d}.png", "content_base64": base64.b64encode(attachment_bytes(acct.idx, k)).decode(), "mtime": time.time()})
+            r = post_retry(
+                s,
+                f"{api}/attachments",
+                {
+                    "path": f"Attachments/a{k:03d}.png",
+                    "content_base64": base64.b64encode(
+                        attachment_bytes(acct.idx, k)
+                    ).decode(),
+                    "mtime": time.time(),
+                },
+            )
             status, ok = r.status_code, r.ok
         elif op == "attach_get":
             k = rng.randrange(n_attachments(acct.n_notes))
-            r = s.get(f"{api}/attachments/{quote(f'Attachments/a{k:03d}.png', safe='')}", timeout=60)
+            r = s.get(
+                f"{api}/attachments/{quote(f'Attachments/a{k:03d}.png', safe='')}",
+                timeout=60,
+            )
             status, ok = r.status_code, r.status_code == 200 and len(r.content) > 20_000
         elif op == "ws_catchup_walk":
             ok, err = ws_catchup_walk(acct, args.ws, rec)
@@ -468,38 +639,83 @@ def run_op(op: str, acct: Account, rng: random.Random, args, rec: Recorder) -> N
             with acct.lock:
                 moved = k in acct.churn_moved
                 (acct.churn_moved.discard if moved else acct.churn_moved.add)(k)
-            a, b = (f"Churn/Moved/c{k}.md", f"Churn/c{k}.md") if moved else (f"Churn/c{k}.md", f"Churn/Moved/c{k}.md")
+            a, b = (
+                (f"Churn/Moved/c{k}.md", f"Churn/c{k}.md")
+                if moved
+                else (f"Churn/c{k}.md", f"Churn/Moved/c{k}.md")
+            )
             r = post_retry(s, f"{api}/notes/rename", {"old_path": a, "new_path": b})
             status, ok = r.status_code, r.status_code == 200
         elif op == "folder_move":
             with acct.lock:
                 acct.folder_flip = not acct.folder_flip
-                a, b = ("Churn/F1", "Churn/F2") if acct.folder_flip else ("Churn/F2", "Churn/F1")
+                a, b = (
+                    ("Churn/F1", "Churn/F2")
+                    if acct.folder_flip
+                    else ("Churn/F2", "Churn/F1")
+                )
             r = post_retry(s, f"{api}/folders/rename", {"old_path": a, "new_path": b})
             status, ok = r.status_code, r.status_code == 200
         elif op == "delete_restore":
+            # Restore with different bytes: re-pushing the exact content of a
+            # just-deleted note is refused by design (409 recently_deleted, the
+            # stale-device resurrection guard). Two variants keep the embed cache warm.
             p = f"Churn/dr{rng.randrange(3)}.md"
-            body = "# delete and restore\n\nthis note is deleted then restored by the load sim.\n"
-            r1 = post_retry(s, f"{api}/notes", {"path": p, "content": body, "mtime": time.time()})
+            base = "# delete and restore\n\nthis note is deleted then restored by the load sim.\n"
+            r1 = post_retry(
+                s, f"{api}/notes", {"path": p, "content": base, "mtime": time.time()}
+            )
             r2 = s.delete(f"{api}/notes/{quote(p, safe='')}", timeout=60)
-            r3 = post_retry(s, f"{api}/notes", {"path": p, "content": body, "mtime": time.time()})
+            r3 = post_retry(
+                s,
+                f"{api}/notes",
+                {"path": p, "content": base + "restored\n", "mtime": time.time()},
+            )
             r4 = s.get(f"{api}/notes/{quote(p, safe='')}", timeout=60)
-            status = f"{r1.status_code}/{r2.status_code}/{r3.status_code}/{r4.status_code}"
-            ok = r1.ok and r2.status_code in (200, 204) and r3.ok and r4.status_code == 200
+            status = (
+                f"{r1.status_code}/{r2.status_code}/{r3.status_code}/{r4.status_code}"
+            )
+            ok = (
+                r1.ok
+                and r2.status_code in (200, 204)
+                and r3.ok
+                and r4.status_code == 200
+            )
         elif op.startswith("mcp_"):
             name = op[4:]
             if name == "search_notes":
                 args_ = {"query": " ".join(rng.sample(WORDS, 3)), "limit": 5}
             elif name == "get_notes":
-                args_ = {"paths": [note_path(acct.idx, rng.randrange(acct.n_notes)) for _ in range(min(3, acct.n_notes))]}
+                args_ = {
+                    "paths": [
+                        note_path(acct.idx, rng.randrange(acct.n_notes))
+                        for _ in range(min(3, acct.n_notes))
+                    ]
+                }
             elif name == "write_note":
                 k = rng.randrange(3)
-                args_ = {"path": f"Churn/mcp{k}.md", "content": f"# mcp {k}\n\nwritten by mcp {rng.choice(['A', 'B'])}.\n\n## Todo\n- item\n"}
+                args_ = {
+                    "path": f"Churn/mcp{k}.md",
+                    "content": f"# mcp {k}\n\nwritten by mcp {rng.choice(['A', 'B'])}.\n\n## Todo\n- item\n",
+                }
             elif name == "edit_note":
                 k = rng.randrange(3)
-                post_retry(s, f"{api}/notes", {"path": f"Churn/mcpe{k}.md", "content": f"# mcpe {k}\n\nstate alpha\n", "mtime": time.time()}) if rng.random() < 0.05 else None
+                post_retry(
+                    s,
+                    f"{api}/notes",
+                    {
+                        "path": f"Churn/mcpe{k}.md",
+                        "content": f"# mcpe {k}\n\nstate alpha\n",
+                        "mtime": time.time(),
+                    },
+                ) if rng.random() < 0.05 else None
                 a, b = rng.choice([("alpha", "omega"), ("omega", "alpha")])
-                args_ = {"path": f"Churn/mcpe{k}.md", "mode": "replace_text", "find": f"state {a}", "replace": f"state {b}"}
+                args_ = {
+                    "path": f"Churn/mcpe{k}.md",
+                    "mode": "replace_text",
+                    "find": f"state {a}",
+                    "replace": f"state {b}",
+                }
             elif name == "list_folder":
                 args_ = {"folder": rng.choice(["Churn", "Attachments", "Large", ""])}
             else:
@@ -510,7 +726,16 @@ def run_op(op: str, acct: Account, rng: random.Random, args, rec: Recorder) -> N
             if not ok and name == "edit_note" and "not found" in err.lower():
                 # The target was never created yet or the find text is the other state: not a server fault.
                 ok, status = True, "edit_miss"
-            if not ok and name == "edit_note" and ("no match" in err.lower() or "not find" in err.lower() or "0 replacements" in err.lower() or "expected" in err.lower()):
+            if (
+                not ok
+                and name == "edit_note"
+                and (
+                    "no match" in err.lower()
+                    or "not find" in err.lower()
+                    or "0 replacements" in err.lower()
+                    or "expected" in err.lower()
+                )
+            ):
                 ok, status = True, "edit_miss"
         elif op == "oauth_refresh":
             with acct.lock:
@@ -518,7 +743,9 @@ def run_op(op: str, acct: Account, rng: random.Random, args, rec: Recorder) -> N
             if not rt:
                 ok, status, err = True, "no_family", ""
             else:
-                r = requests.post(f"{api}/auth/token/refresh", json={"refresh_token": rt}, timeout=30)
+                r = requests.post(
+                    f"{api}/auth/token/refresh", json={"refresh_token": rt}, timeout=30
+                )
                 status, ok = r.status_code, r.status_code == 200
                 if ok:
                     with acct.lock:
@@ -547,12 +774,24 @@ def purge_cycle(acct: Account, clerk: ClerkClient, rec: Recorder) -> None:
         s = acct.s(vault=False)
         t0 = time.time()
         r = s.delete(f"{acct.api}/vaults/{acct.vault_id}", timeout=60)
-        rec.rec("vault_delete", (time.time() - t0) * 1000, r.status_code, r.ok, "" if r.ok else r.text)
+        rec.rec(
+            "vault_delete",
+            (time.time() - t0) * 1000,
+            r.status_code,
+            r.ok,
+            "" if r.ok else r.text,
+        )
         j = requests.Session()
         j.auth = ClerkAuth(clerk, acct.clerk_id)
         t0 = time.time()
         r = j.post(f"{acct.api}/vaults/{acct.vault_id}/purge", timeout=60)
-        rec.rec("vault_purge", (time.time() - t0) * 1000, r.status_code, r.ok, "" if r.ok else r.text)
+        rec.rec(
+            "vault_purge",
+            (time.time() - t0) * 1000,
+            r.status_code,
+            r.ok,
+            "" if r.ok else r.text,
+        )
         # Poll restore: 409 purge_started while the batches run, then 404 once gone.
         seen = []
         t0 = time.time()
@@ -569,14 +808,25 @@ def purge_cycle(acct: Account, clerk: ClerkClient, rec: Recorder) -> None:
                 break
             time.sleep(0.2)
         ok = bool(seen) and seen[-1] == 404
-        rec.rec("vault_purge_complete", (time.time() - t0) * 1000, "->".join(map(str, seen)), ok,
-                "" if ok else f"restore statuses {seen}")
+        rec.rec(
+            "vault_purge_complete",
+            (time.time() - t0) * 1000,
+            "->".join(map(str, seen)),
+            ok,
+            "" if ok else f"restore statuses {seen}",
+        )
         # Did a restore land inside the purge window and get refused? (informational)
-        rec.rec("vault_restore_refused_409", 0, "seen" if 409 in seen else "not_seen", True)
+        rec.rec(
+            "vault_restore_refused_409", 0, "seen" if 409 in seen else "not_seen", True
+        )
         # Fresh vault for the rest of the run and the next one.
         acct.client_id = f"{acct.client_id.split('~')[0]}~{uuid.uuid4().hex[:6]}"
-        r = requests.post(f"{acct.api}/vaults/register", json={"name": acct.client_id, "client_id": acct.client_id},
-                          headers={"Authorization": f"Bearer {acct.key}"}, timeout=30)
+        r = requests.post(
+            f"{acct.api}/vaults/register",
+            json={"name": acct.client_id, "client_id": acct.client_id},
+            headers={"Authorization": f"Bearer {acct.key}"},
+            timeout=30,
+        )
         acct.vault_id = r.json().get("id") or r.json().get("vault", {}).get("id")
         seed(acct, rec)
     finally:
@@ -585,8 +835,13 @@ def purge_cycle(acct: Account, clerk: ClerkClient, rec: Recorder) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--api", default=os.environ.get("ENGRAM_API_URL", "https://staging.engram.page/api"))
-    ap.add_argument("--prefix", default="load-sim", help="account email prefix; stable across runs")
+    ap.add_argument(
+        "--api",
+        default=os.environ.get("ENGRAM_API_URL", "https://staging.engram.page/api"),
+    )
+    ap.add_argument(
+        "--prefix", default="load-sim", help="account email prefix; stable across runs"
+    )
     ap.add_argument("--accounts", type=int, default=len(VAULT_SIZES))
     ap.add_argument("--duration", type=int, default=7200)
     ap.add_argument("--warmup", type=int, default=600)
@@ -595,14 +850,28 @@ def main() -> int:
     ap.add_argument("--burst-at", type=int, default=3600)
     ap.add_argument("--burst-len", type=int, default=300)
     ap.add_argument("--purge-at", type=int, default=2700)
-    ap.add_argument("--max-seed-tokens", type=int, default=12_000_000, help="spend guard: refuse to seed more than this")
+    ap.add_argument(
+        "--max-seed-tokens",
+        type=int,
+        default=12_000_000,
+        help="spend guard: refuse to seed more than this",
+    )
     ap.add_argument("--seed-only", action="store_true")
-    ap.add_argument("--provision-only", action="store_true", help="create accounts + vaults, then stop (apply grant.sql next)")
+    ap.add_argument(
+        "--provision-only",
+        action="store_true",
+        help="create accounts + vaults, then stop (apply grant.sql next)",
+    )
     ap.add_argument("--no-crdt", action="store_true")
     ap.add_argument("--workers", type=int, default=24)
     ap.add_argument("--out", default=os.environ.get("LOAD_OUT", "load-out"))
     args = ap.parse_args()
-    args.ws = args.api.replace("https://", "wss://").replace("http://", "ws://").removesuffix("/api") + "/socket/websocket"
+    args.ws = (
+        args.api.replace("https://", "wss://")
+        .replace("http://", "ws://")
+        .removesuffix("/api")
+        + "/socket/websocket"
+    )
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     rec = Recorder(out / "ops.jsonl")
@@ -613,16 +882,38 @@ def main() -> int:
     with ThreadPoolExecutor(5) as ex:
         list(ex.map(lambda a: provision(a, clerk, run_id), accts))
     print(f"[sim] provisioned {len(accts)} accounts", flush=True)
-    (out / "accounts.json").write_text(json.dumps([{"idx": a.idx, "email": a.email, "user_id": a.user_id, "vault_id": a.vault_id, "notes": a.n_notes} for a in accts], indent=1))
+    (out / "accounts.json").write_text(
+        json.dumps(
+            [
+                {
+                    "idx": a.idx,
+                    "email": a.email,
+                    "user_id": a.user_id,
+                    "vault_id": a.vault_id,
+                    "notes": a.n_notes,
+                }
+                for a in accts
+            ],
+            indent=1,
+        )
+    )
 
     if args.provision_only:
         return 0
     est = estimate_seed_tokens()
-    print(f"[sim] full-corpus embed estimate {est / 1e6:.2f}M tokens (only missing notes are written)", flush=True)
+    print(
+        f"[sim] full-corpus embed estimate {est / 1e6:.2f}M tokens (only missing notes are written)",
+        flush=True,
+    )
     t0 = time.time()
     with ThreadPoolExecutor(4) as ex:
-        seeded = sum(ex.map(lambda a: seed(a, rec), sorted(accts, key=lambda a: -a.n_notes)))
-    print(f"[sim] seeded ~{seeded / 1e6:.2f}M est tokens in {time.time() - t0:.0f}s", flush=True)
+        seeded = sum(
+            ex.map(lambda a: seed(a, rec), sorted(accts, key=lambda a: -a.n_notes))
+        )
+    print(
+        f"[sim] seeded ~{seeded / 1e6:.2f}M est tokens in {time.time() - t0:.0f}s",
+        flush=True,
+    )
     if seeded > args.max_seed_tokens:
         print("[sim] spend guard tripped", flush=True)
         return 2
@@ -635,9 +926,25 @@ def main() -> int:
     plugin = os.environ.get("ENGRAM_PLUGIN_SRC")
     if plugin and not args.no_crdt:
         cfg = {
-            "sessions": [{"token": accts[i].key, "userId": accts[i].user_id, "vaultId": accts[i].vault_id, "label": f"u{i:02d}"} for i in CRDT_ACCOUNTS if i < len(accts)],
+            "sessions": [
+                {
+                    "token": accts[i].key,
+                    "userId": accts[i].user_id,
+                    "vaultId": accts[i].vault_id,
+                    "label": f"u{i:02d}",
+                }
+                for i in CRDT_ACCOUNTS
+                if i < len(accts)
+            ],
             "start": start,
-            "schedule": {"warmup": args.warmup, "steady": args.steady, "burst": args.burst, "burstAt": args.burst_at, "burstLen": args.burst_len, "duration": args.duration},
+            "schedule": {
+                "warmup": args.warmup,
+                "steady": args.steady,
+                "burst": args.burst,
+                "burstAt": args.burst_at,
+                "burstLen": args.burst_len,
+                "duration": args.duration,
+            },
             "rates": CRDT_RATES,
             "out": str((out / "crdt_ops.jsonl").resolve()),
             "apiUrl": args.api,
@@ -645,11 +952,22 @@ def main() -> int:
         (out / "crdt_cfg.json").write_text(json.dumps(cfg))
         env = {**os.environ, "ENGRAM_API_URL": args.api, "E2E_DELIVERY_TIMEOUT": "60"}
         crdt = subprocess.Popen(
-            ["bun", "--preload", str(E2E / "headless/preload.ts"), str(HERE / "crdt_load.ts"), str(out / "crdt_cfg.json")],
-            env=env, stdout=open(out / "crdt.log", "w"), stderr=subprocess.STDOUT)
+            [
+                "bun",
+                "--preload",
+                str(E2E / "headless/preload.ts"),
+                str(HERE / "crdt_load.ts"),
+                str(out / "crdt_cfg.json"),
+            ],
+            env=env,
+            stdout=open(out / "crdt.log", "w"),
+            stderr=subprocess.STDOUT,
+        )
 
     pool = ThreadPoolExecutor(args.workers)
-    inflight = threading.Semaphore(args.workers * 4)  # never queue unboundedly behind a slow server
+    inflight = threading.Semaphore(
+        args.workers * 4
+    )  # never queue unboundedly behind a slow server
     stop = threading.Event()
 
     def driver(op: str, base: float) -> None:
@@ -658,7 +976,9 @@ def main() -> int:
             t = time.time() - start
             rate = base * mult(t, args)
             if op == "oauth_refresh":
-                rate = min(rate, 0.12)  # /auth/token/refresh shares a 10/min per-IP bucket; one sim = one IP
+                rate = min(
+                    rate, 0.12
+                )  # /auth/token/refresh shares a 10/min per-IP bucket; one sim = one IP
             stop.wait(min(30.0, rng.expovariate(rate)))
             if stop.is_set() or time.time() >= end:
                 return
@@ -678,7 +998,10 @@ def main() -> int:
 
             pool.submit(go)
 
-    threads = [threading.Thread(target=driver, args=(op, r), daemon=True) for op, r in RATES.items()]
+    threads = [
+        threading.Thread(target=driver, args=(op, r), daemon=True)
+        for op, r in RATES.items()
+    ]
     for th in threads:
         th.start()
     purge_acct = accts[PURGE_ACCOUNT] if PURGE_ACCOUNT < len(accts) else None
@@ -688,7 +1011,9 @@ def main() -> int:
         time.sleep(5)
         t = time.time() - start
         if purge_acct and purge_th is None and t >= args.purge_at:
-            purge_th = threading.Thread(target=purge_cycle, args=(purge_acct, clerk, rec), daemon=True)
+            purge_th = threading.Thread(
+                target=purge_cycle, args=(purge_acct, clerk, rec), daemon=True
+            )
             purge_th.start()
         if t - last >= 300:
             last = t
@@ -714,7 +1039,10 @@ def main() -> int:
     allw = summary["all"]
     total = sum(s["n"] for s in allw.values())
     errs = sum(s["err"] for s in allw.values())
-    print(f"[sim] done: {total} ops, {errs} errors ({100 * errs / max(1, total):.2f}%)", flush=True)
+    print(
+        f"[sim] done: {total} ops, {errs} errors ({100 * errs / max(1, total):.2f}%)",
+        flush=True,
+    )
     print((out / "summary.md").read_text(), flush=True)
     return 0
 

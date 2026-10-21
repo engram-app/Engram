@@ -35,6 +35,18 @@ type Cfg = {
 	apiUrl: string;
 };
 
+// Bun's WebSocket sends no User-Agent, and Cloudflare's Browser Integrity
+// Check answers an empty UA with 403 before the upgrade reaches the app
+// (curl -A "" reproduces it). Obsidian always sends Electron's UA.
+const NativeWebSocket = globalThis.WebSocket;
+class UAWebSocket extends NativeWebSocket {
+	constructor(url: string | URL, protocols?: string | string[]) {
+		// biome-ignore lint/suspicious/noExplicitAny: Bun's options-object constructor overload.
+		super(url, { protocols, headers: { "User-Agent": "engram-load-sim (bun)" } } as any);
+	}
+}
+globalThis.WebSocket = UAWebSocket as typeof WebSocket;
+
 const cfg: Cfg = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const out = fs.openSync(cfg.out, "a");
 const KEYSTROKE_MS = 120; // ~8 chars/s, a fast typist
