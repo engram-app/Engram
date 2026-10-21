@@ -17,8 +17,10 @@ defmodule Engram.Workers.HealKeyAliases do
 
   One chain per user, resumed at an id cursor. Content is never logged.
   """
+  # On the hourly-backfill lane like `BackfillLinkKeys`: `maintenance` is
+  # for cron workers only (`ObanQueueConfigTest`).
   use Oban.Worker,
-    queue: :maintenance,
+    queue: :crdt_backfill,
     priority: 3,
     max_attempts: 5,
     unique: [keys: [:user_id], period: :infinity, states: [:available, :scheduled, :retryable]]
@@ -47,15 +49,20 @@ defmodule Engram.Workers.HealKeyAliases do
       notes = Repo.with_tenant!(user_id, fn -> Repo.all(page(user_id, args["after"])) end)
       Enum.each(notes, &heal(&1, user, fk))
 
-      if length(notes) == @batch,
-        do: {:ok, _} = Oban.insert(new(%{"user_id" => user_id, "after" => List.last(notes).id}))
-
-      :ok
+      continue(user_id, notes)
     else
       nil -> :ok
       {:error, _} = err -> err
     end
   end
+
+  # A full page: the successor resumes after its last id.
+  defp continue(user_id, notes) when length(notes) == @batch do
+    {:ok, _} = Oban.insert(new(%{"user_id" => user_id, "after" => List.last(notes).id}))
+    :ok
+  end
+
+  defp continue(_user_id, _notes), do: :ok
 
   @doc "Enqueues a chain for every user with a note read under another table. Returns how many."
   @spec enqueue_missing() :: non_neg_integer()
