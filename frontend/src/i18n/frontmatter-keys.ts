@@ -8,27 +8,16 @@
 // `tags` is left out on purpose: Obsidian reads only `tags` as tags, so a
 // localized alias would give a note tags its tag pane does not show.
 
+import KEY_FIELDS from "./frontmatter-key-fields.json" with { type: "json" };
 import type { Locale } from "./locales";
 
 const NOTE =
 	"A short frontmatter property name a user would type for this field; single word or compound, no spaces if natural in the language.";
 
-// Each English key and what the field holds, for the translator.
-const FIELDS = {
-	type: "what kind of note this is",
-	status: "where the note stands, such as draft or stable",
-	author: "who wrote the note",
-	reviewed_by: "who last checked the note",
-	source: "what the note is based on, usually a URL",
-	project: "the project the note belongs to",
-	created: "the date the note was created",
-	updated: "the date the note last changed",
-	reviewed: "the date the note was last checked",
-	expires: "the date the note goes out of date",
-	due: "the date the work in the note is due",
-	priority: "how much the note matters, as a number",
-	description: "a one-line summary of the note",
-} as const;
+// Each English key and what the field holds (for the translator), and the other
+// English names a named field already answers to: one JSON the backend's
+// Engram.Notes.KeyAliases reads at compile time too, so both sides agree.
+const FIELDS = KEY_FIELDS.fields;
 
 type FieldKey = keyof typeof FIELDS;
 
@@ -42,21 +31,8 @@ const KEY_DESCRIPTIONS: Readonly<Record<string, string>> = Object.fromEntries(
 
 // English names a named field already answers to (OKF aliases and the
 // unfilterable reserved keys). A localized alias equal to one is ignored, so it
-// can never point an English key at another field. Mirrors KeyAliases @english.
-const ENGLISH = new Set<string>([
-	...FIELD_KEYS,
-	"tags",
-	"resource",
-	"sources",
-	"date",
-	"timestamp",
-	"modified",
-	"stale_after",
-	"generated",
-	"verified",
-	"title",
-	"aliases",
-]);
+// can never point an English key at another field.
+const ENGLISH = new Set<string>([...FIELD_KEYS, ...KEY_FIELDS.english]);
 
 /** NFKC then lower case: `ｔｙｐｅ` and `Type` are `type`. Same as the backend. */
 function normalizeKey(name: string): string {

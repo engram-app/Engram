@@ -46,6 +46,18 @@ defmodule Engram.Notes.KeyAliasesTest do
       assert KeyAliases.canonical("expires") == "expires"
     end
 
+    # One source of truth with the web app (frontmatter-keys.ts reads it too).
+    test "the named fields and English names come from the shared spec" do
+      spec =
+        "frontend/src/i18n/frontmatter-key-fields.json"
+        |> File.read!()
+        |> Jason.decode!(objects: :ordered_objects)
+
+      fields = Enum.map(spec["fields"].values, &elem(&1, 0))
+      assert KeyAliases.fields() == fields
+      assert KeyAliases.english() == MapSet.new(fields ++ spec["english"])
+    end
+
     test "the table is versioned by its content" do
       assert is_integer(KeyAliases.version()) and KeyAliases.version() > 0
     end

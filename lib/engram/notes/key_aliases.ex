@@ -5,11 +5,11 @@ defmodule Engram.Notes.KeyAliases do
   locale, whatever the user's UI language.
 
   The names are not written here. They are translategemma output from the
-  web app's pipeline (`frontend/src/i18n/frontmatter-keys.ts` holds the
-  English source keys; `bun run i18n:translate` writes
-  `frontend/src/i18n/locale/keys/<locale>.json`), read at compile time, so
-  the backend and the web app resolve an alias from one generated source.
-  The Dockerfile's builder stage copies that directory for this reason.
+  web app's pipeline (`frontend/src/i18n/frontmatter-key-fields.json` holds
+  the English source keys, read by both sides; `bun run i18n:translate`
+  writes `frontend/src/i18n/locale/keys/<locale>.json`), read at compile
+  time, so the backend and the web app resolve an alias from one source.
+  The Dockerfile's builder stage copies both for this reason.
 
   Matching folds NFKC then lower case on both sides (`OkfFields.normalize_type/1`),
   so `ｔｙｐｅ`, `Type` and `種類` are all `type`. A localized name equal to
@@ -36,16 +36,16 @@ defmodule Engram.Notes.KeyAliases do
 
   alias Engram.Notes.OkfFields
 
-  @fields ~w(type status author reviewed_by source project created updated reviewed expires
-             due priority description)
+  # The named fields (in order) and the other English names they answer to:
+  # one JSON shared with the web app (`frontmatter-keys.ts`), read at compile
+  # time. A missing file fails the build: never an empty table.
+  @key_fields_path Path.expand("../../../frontend/src/i18n/frontmatter-key-fields.json", __DIR__)
+  @external_resource @key_fields_path
+  @key_fields @key_fields_path |> File.read!() |> Jason.decode!(objects: :ordered_objects)
 
-  # English names a named field already answers to. Mirrors ENGLISH in
-  # frontmatter-keys.ts.
-  @english MapSet.new(
-             @fields ++
-               ~w(tags resource sources date timestamp modified stale_after generated verified
-                  title aliases)
-           )
+  @fields Enum.map(@key_fields["fields"].values, &elem(&1, 0))
+
+  @english MapSet.new(@fields ++ @key_fields["english"])
 
   @dir Path.expand("../../../frontend/src/i18n/locale/keys", __DIR__)
 
@@ -90,6 +90,14 @@ defmodule Engram.Notes.KeyAliases do
 
              v
            )
+
+  @doc "The named fields, in order (`frontend/src/i18n/frontmatter-key-fields.json`)."
+  @spec fields() :: [String.t()]
+  def fields, do: @fields
+
+  @doc "Every English name a named field answers to; an alias equal to one is ignored."
+  @spec english() :: MapSet.t(String.t())
+  def english, do: @english
 
   @doc "The alias table's version (stamped on `notes.key_alias_version`)."
   def version, do: @version
