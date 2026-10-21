@@ -18,6 +18,7 @@ import { encodePathSegments } from "@/lib/path";
 import { randomUuid } from "@/lib/random-uuid";
 import { uuid7 } from "../crdt/uuid7";
 import { noteHref } from "../routes";
+import type { PlanLimits } from "../viewer/attachment-upload/upload-limits";
 import {
 	isSyntheticFolderId,
 	synthesizeFolders,
@@ -1636,6 +1637,8 @@ export function useRecordOnboardingAction() {
 export interface Capabilities {
 	tier: "free" | "starter" | "pro";
 	limits: Record<string, number | boolean | null>;
+	/** What each paid plan allows, for upgrade copy. Absent from an older server. */
+	plan_limits?: PlanLimits;
 }
 
 export interface BootstrapPayload {

@@ -314,6 +314,27 @@ defmodule Engram.BillingTest do
     end
   end
 
+  describe "capabilities plan_limits" do
+    # The web app tells a user what an upgrade buys before it refuses a file
+    # ("Starter: 200 MB, Pro: 500 MB"), so the paid tiers' numbers ride along.
+    test "lists the paid tiers' file and storage limits" do
+      user = insert(:user, free_tier_accepted_at: nil)
+
+      assert Billing.capabilities(user).plan_limits == %{
+               "starter" => %{
+                 "max_file_bytes" => Billing.tier_cap(:starter, :max_file_bytes),
+                 "attachment_bytes_cap" => Billing.tier_cap(:starter, :attachment_bytes_cap)
+               },
+               "pro" => %{
+                 "max_file_bytes" => Billing.tier_cap(:pro, :max_file_bytes),
+                 "attachment_bytes_cap" => Billing.tier_cap(:pro, :attachment_bytes_cap)
+               }
+             }
+
+      assert Billing.capabilities(user).plan_limits["pro"]["max_file_bytes"] == 524_288_000
+    end
+  end
+
   describe "the helper and the capabilities map cannot drift" do
     # `capabilities/1` does NOT call attachments_all_types?/1 — it resolves
     # every key generically through normalize_capability/2. That is the split

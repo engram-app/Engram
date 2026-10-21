@@ -4,10 +4,21 @@ import { captureServerFeatures, resetServerFeatures } from "@/api/server-feature
 import { AttachmentUploadProvider, useAttachmentUpload } from "./provider";
 
 const mutateAsync = vi.fn();
+let mockLimits: Record<string, number | null> = {
+	max_file_bytes: null,
+	attachment_bytes_cap: null,
+};
 vi.mock("@/api/queries", () => ({
 	useFolders: () => ({ data: [{ name: "docs" }] }),
-	useAttachments: () => ({ data: [{ path: "docs/a.png" }] }),
+	useAttachments: () => ({ data: [{ path: "docs/a.png", size_bytes: 3 }] }),
 	useUploadAttachment: () => ({ mutateAsync }),
+	useCapabilities: () => ({ data: { tier: "free", limits: mockLimits, plan_limits: {} } }),
+}));
+vi.mock("@/config-context", () => ({ useConfig: () => ({ billingEnabled: true }) }));
+vi.mock("./upload-limit-dialog", () => ({
+	UploadLimitDialog: ({ tooLarge, noRoom }: { tooLarge: File[]; noRoom: File[] }) => (
+		<div data-testid="limit-dialog">{[...tooLarge, ...noRoom].map((f) => f.name).join(",")}</div>
+	),
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 // Render a sentinel instead of the real dialog so this test stays unit-scoped.
@@ -39,6 +50,39 @@ function fileDragEvent(type: string, withFiles: boolean) {
 beforeEach(() => {
 	vi.clearAllMocks();
 	resetServerFeatures();
+	mockLimits = { max_file_bytes: null, attachment_bytes_cap: null };
+});
+
+describe("AttachmentUploadProvider plan limits", () => {
+	function pick(container: HTMLElement, files: File[]) {
+		const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+		fireEvent.change(input, { target: { files } });
+	}
+	const sized = (name: string, size: number) => new File([new Uint8Array(size)], name);
+
+	it("refuses an oversize file at pick time and says so, before the upload dialog", () => {
+		mockLimits = { max_file_bytes: 10, attachment_bytes_cap: null };
+		const { container } = render(<AttachmentUploadProvider>{null}</AttachmentUploadProvider>);
+		pick(container, [sized("big.zip", 11)]);
+		expect(screen.getByTestId("limit-dialog")).toHaveTextContent("big.zip");
+		expect(screen.queryByTestId("dialog")).toBeNull();
+	});
+
+	it("still opens the upload dialog with the files that fit", () => {
+		mockLimits = { max_file_bytes: 10, attachment_bytes_cap: null };
+		const { container } = render(<AttachmentUploadProvider>{null}</AttachmentUploadProvider>);
+		pick(container, [sized("big.zip", 11), sized("ok.txt", 2)]);
+		expect(screen.getByTestId("limit-dialog")).toHaveTextContent(/^big\.zip$/u);
+		expect(screen.getByTestId("dialog")).toHaveTextContent(/^ok\.txt$/u);
+	});
+
+	it("counts what is already stored against the storage cap", () => {
+		mockLimits = { max_file_bytes: null, attachment_bytes_cap: 10 };
+		const { container } = render(<AttachmentUploadProvider>{null}</AttachmentUploadProvider>);
+		// 3 bytes already stored (docs/a.png): 8 more does not fit.
+		pick(container, [sized("fits.txt", 7), sized("full.txt", 1)]);
+		expect(screen.getByTestId("limit-dialog")).toHaveTextContent(/^full\.txt$/u);
+	});
 });
 
 describe("AttachmentUploadProvider executables", () => {

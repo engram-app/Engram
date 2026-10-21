@@ -29,6 +29,8 @@ const NO_ATTACHMENTS: readonly { path: string }[] = [];
 
 interface Props {
 	initialFiles: File[];
+	/** Refuses files that cannot upload (executables, over a plan limit), and says why. */
+	screenFiles?: (files: File[]) => File[];
 	/** The vault's attachments, so a new upload never takes an existing name. */
 	existing?: readonly { path: string }[];
 	folders: { name: string }[];
@@ -71,6 +73,7 @@ const patch = (rows: Row[], i: number, next: Partial<Row>): Row[] =>
 export function AttachmentUploadDialog({
 	initialFiles,
 	existing = NO_ATTACHMENTS,
+	screenFiles,
 	folders,
 	defaultFolder,
 	onClose,
@@ -142,7 +145,8 @@ export function AttachmentUploadDialog({
 	}
 
 	function addFiles(picked: FileList | null) {
-		const more = withoutBlocked(Array.from(picked ?? []), t);
+		const files = Array.from(picked ?? []);
+		const more = screenFiles ? screenFiles(files) : withoutBlocked(files, t);
 		if (more.length > 0) {
 			setRows((r) => [...r, ...more.map((file): Row => ({ file, status: "pending" }))]);
 		}

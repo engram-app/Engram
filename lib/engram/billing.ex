@@ -454,7 +454,18 @@ defmodule Engram.Billing do
         {Atom.to_string(key), value}
       end)
 
-    %{tier: Atom.to_string(tier(user)), limits: limits}
+    %{tier: Atom.to_string(tier(user)), limits: limits, plan_limits: plan_limits()}
+  end
+
+  # What each paid tier allows, so a client can say what an upgrade buys
+  # before it refuses a file. Tier-wide (env override, else catalog default);
+  # nil = no ceiling, or enforcement off.
+  @upgrade_limit_keys [:max_file_bytes, :attachment_bytes_cap]
+  defp plan_limits do
+    Map.new([:starter, :pro], fn tier ->
+      {Atom.to_string(tier),
+       Map.new(@upgrade_limit_keys, &{Atom.to_string(&1), tier_cap(tier, &1)})}
+    end)
   end
 
   # Boolean feature: :unlimited (enforcement off) opens the gate; explicit

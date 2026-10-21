@@ -1,9 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { useAttachments, useFolders, useUploadAttachment } from "@/api/queries";
+import { useAttachments, useCapabilities, useFolders, useUploadAttachment } from "@/api/queries";
+import { useConfig } from "@/config-context";
 import { useStableT } from "@/i18n/locale-provider";
 import { notify } from "@/lib/notify";
 import { AttachmentUploadDialog } from "./upload-dialog";
 import { uploadFilesTo, withoutBlocked } from "./upload-files";
+import { UploadLimitDialog } from "./upload-limit-dialog";
+import { type Screened, screenUploads, type UploadLimits } from "./upload-limits";
 
 interface UploadApi {
 	// The Upload button's path: opens the OS picker, then the dialog to choose a
@@ -47,6 +50,37 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 	const folders = useFolders().data ?? [];
 	const attachments = useAttachments().data;
 	const upload = useUploadAttachment();
+	const capabilities = useCapabilities().data;
+	const { billingEnabled } = useConfig();
+	// Files refused for size or storage before any upload; non-null = dialog open.
+	const [refused, setRefused] = useState<Screened | null>(null);
+
+	const cap = (key: string): number | null => {
+		const v = capabilities?.limits[key];
+		return typeof v === "number" ? v : null;
+	};
+	const limits: UploadLimits = {
+		maxFileBytes: cap("max_file_bytes"),
+		storageCap: cap("attachment_bytes_cap"),
+		usedBytes: (attachments ?? []).reduce((sum, a) => sum + (a.size_bytes ?? 0), 0),
+	};
+	const limitsRef = useRef(limits);
+	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. The screening callback reads current limits without changing identity each render.
+	limitsRef.current = limits;
+
+	// Every way files enter (picker, drop, the dialog's Upload more) goes
+	// through here: executables and files over a plan limit are refused before
+	// any dialog or request, and the limit ones are explained.
+	const screenFiles = useCallback(
+		(incoming: File[]): File[] => {
+			const screened = screenUploads(withoutBlocked(incoming, t), limitsRef.current);
+			if (screened.tooLarge.length > 0 || screened.noRoom.length > 0) {
+				setRefused(screened);
+			}
+			return screened.allowed;
+		},
+		[t],
+	);
 
 	// No files → open the OS picker (the dialog opens once files are chosen, so
 	// the button never flashes an empty dialog). Files present → open directly.
@@ -57,12 +91,12 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 				pickerRef.current?.click();
 				return;
 			}
-			const allowed = withoutBlocked(dropped, t);
+			const allowed = screenFiles(dropped);
 			if (allowed.length > 0) {
 				setFiles(allowed);
 			}
 		},
-		[t],
+		[screenFiles],
 	);
 
 	const uploadFiles = useCallback(
@@ -70,7 +104,7 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 			const done = await uploadFilesTo({
 				upload: upload.mutateAsync,
 				existing: attachments ?? [],
-				files: withoutBlocked(dropped, t),
+				files: screenFiles(dropped),
 				folder,
 				t,
 			});
@@ -96,7 +130,7 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 				);
 			}
 		},
-		[upload.mutateAsync, attachments, t, tn],
+		[upload.mutateAsync, attachments, t, tn, screenFiles],
 	);
 
 	// A file dropped anywhere that is not a drop target does nothing, and must not
@@ -136,7 +170,7 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 				onChange={(e) => {
 					// Executables are refused here, before the dialog: choosing a folder
 					// for a file that can never upload would only waste the user's time.
-					const picked = withoutBlocked(Array.from(e.target.files ?? []), t);
+					const picked = screenFiles(Array.from(e.target.files ?? []));
 					e.target.value = "";
 					if (picked.length > 0) {
 						setFiles(picked);
@@ -147,9 +181,21 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 				<AttachmentUploadDialog
 					initialFiles={files}
 					existing={attachments}
+					screenFiles={screenFiles}
 					folders={folders.map((f) => ({ name: f.name }))}
 					defaultFolder={pendingFolder}
 					onClose={() => setFiles(null)}
+				/>
+			)}
+			{refused !== null && (
+				<UploadLimitDialog
+					tooLarge={refused.tooLarge}
+					noRoom={refused.noRoom}
+					tier={capabilities?.tier ?? "free"}
+					limits={limits}
+					planLimits={capabilities?.plan_limits ?? {}}
+					billingEnabled={billingEnabled}
+					onClose={() => setRefused(null)}
 				/>
 			)}
 		</Ctx.Provider>
