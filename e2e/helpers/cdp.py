@@ -39,6 +39,10 @@ MAIN_WINDOW_PROBE = "typeof app !== 'undefined' && !!app.workspace"
 SETTINGS_WINDOW_PROBE = "!!document.querySelector('.engram-tab-content')"
 
 
+# Fake vault id tests may set to provoke the vault-switch gate; must never outlive a test.
+SIMULATED_SWITCH_VAULT_ID = "__e2e_simulated_switch__"
+
+
 class CdpError(Exception):
     pass
 
@@ -595,6 +599,59 @@ class CdpClient:
             """
         )
         logger.info("Sync gate reset on CDP port %d", self.port)
+
+    async def restore_vault_identity(
+        self, vault_id: str | None, accepted_for: str | None, timeout: float = 30
+    ) -> None:
+        """Put the plugin back on a real vault after a test faked a vault id.
+
+        Writing settings.vaultId alone is not enough: any saveSettings() while
+        the fake id was set (modal paths call it) rebinds the WebSocket channel
+        to ``sync:{user}:{fake}``, and nothing rebinds it back, so the gate-open
+        flag is true but the channel pushes to a vault that does not exist.
+        Re-run saveSettings (rebuilds the channel from settings), reopen the
+        gate, then poll the REAL signals: channel vault id, connection, gate.
+        """
+        await self.evaluate(
+            f"{PLUGIN_PATH}.settings.vaultId = {json.dumps(vault_id)};"
+            f"{PLUGIN_PATH}.syncGateAcceptedFor = {json.dumps(accepted_for)};"
+            f"{PLUGIN_PATH}.saveSettings().then(() => 'ok')",
+            await_promise=True,
+        )
+        await self.accept_sync_gate()
+        deadline = time.monotonic() + timeout
+        state: object = None
+        while time.monotonic() < deadline:
+            state = await self.vault_binding_state()
+            if (
+                state.get("channel") == vault_id
+                and state.get("connected")
+                and not state.get("blocked")
+            ):
+                return
+            await asyncio.sleep(0.5)
+        raise TimeoutError(
+            f"Plugin not back on vault {vault_id!r} after {timeout}s "
+            f"on CDP port {self.port}: {state}"
+        )
+
+    async def vault_binding_state(self) -> dict:
+        """settings.vaultId vs the vault the live channel is actually bound to."""
+        raw = await self.evaluate(
+            f"""
+            (() => {{
+                const p = {PLUGIN_PATH};
+                const ns = p && p.noteStream;
+                return {{
+                    settings: (p && p.settings && p.settings.vaultId) || null,
+                    channel: ns && ns.getVaultId ? ns.getVaultId() : null,
+                    connected: typeof p.isLiveConnected === 'function' ? p.isLiveConnected() === true : false,
+                    blocked: {ENGINE_PATH}.isSyncBlocked() === true,
+                }};
+            }})()
+            """
+        )
+        return raw if isinstance(raw, dict) else {}
 
     async def is_sync_blocked(self) -> bool:
         """Read the engine's syncBlocked flag. False when plugin lacks gate."""

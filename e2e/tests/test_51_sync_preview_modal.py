@@ -28,6 +28,7 @@ import json
 
 import pytest
 
+from helpers.cdp import SIMULATED_SWITCH_VAULT_ID
 from helpers.vault import write_note
 
 
@@ -299,7 +300,7 @@ async def test_vault_switch_reopens_modal(vault_a, cdp_a):
         # not matching the (still non-null) accepted one.
         await cdp_a.evaluate(
             "app.plugins.plugins['engram-vault-sync'].settings.vaultId = "
-            "'__e2e_simulated_switch__'"
+            f"{json.dumps(SIMULATED_SWITCH_VAULT_ID)}"
         )
         gate_open = await cdp_a.evaluate(
             "app.plugins.plugins['engram-vault-sync'].applySyncGate()"
@@ -319,13 +320,12 @@ async def test_vault_switch_reopens_modal(vault_a, cdp_a):
 
         await _dismiss_via_escape(cdp_a)
     finally:
-        await cdp_a.evaluate(
-            "app.plugins.plugins['engram-vault-sync'].settings.vaultId = "
-            f"{json.dumps(original_vault_id)};"
-            "app.plugins.plugins['engram-vault-sync'].syncGateAcceptedFor = "
-            f"{json.dumps(original_accepted)}"
-        )
-        if (vault_a / path).exists():
-            (vault_a / path).unlink()
-        await cdp_a.resume_outgoing_sync()
-        await cdp_a.accept_sync_gate()
+        # Restore LAST but unconditionally: the inner finally guarantees a
+        # failing cleanup step cannot skip it, or the next tests inherit a
+        # dead channel.
+        try:
+            if (vault_a / path).exists():
+                (vault_a / path).unlink()
+            await cdp_a.resume_outgoing_sync()
+        finally:
+            await cdp_a.restore_vault_identity(original_vault_id, original_accepted)

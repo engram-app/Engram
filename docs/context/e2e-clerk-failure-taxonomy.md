@@ -43,6 +43,24 @@ an hour earlier is not that check. Two real failures can overlap (2026-08: a
 MinIO outage at e2e level and a genuine req 0.7 S3-GET break at unit level,
 #1272); clearing one does not clear the other.
 
+## Many unrelated "not on server after 120s", clean server log: a leaked fake vault id
+
+Symptom: several tests that share nothing (special-char paths, advanced sync
+choices, `sync_now`) all fail `Note ... not on server after 120s` in a run, the
+server logged no errors, and the failures start right after one earlier test.
+Cause (run 39596495602, 18 min of damage): `test_51_sync_preview_modal::
+test_vault_switch_reopens_modal` set `settings.vaultId` to
+`__e2e_simulated_switch__`; a `saveSettings()` while it was set rebound the
+WebSocket channel to that fake vault, and the old restore wrote the real id back
+into settings only. The channel stayed on the fake vault, the gate stayed
+closed, instance A pushed nothing. Spot it: in the job's plugin/diag logs,
+find the first test whose instance reports `sync:{user}:__e2e_simulated_switch__`
+and count failures after it. Fix: `CdpClient.restore_vault_identity()` (saveSettings
+rebuilds the channel, reopens the gate, polls the real channel/gate signals), and
+the autouse `_assert_no_vault_binding_leak` fixture in `e2e/conftest.py` now fails
+the leaking test itself. Any new test that fakes a vault id must restore through
+that helper in a `finally`. Refs #355.
+
 ## Search ReadTimeout: budgets must nest
 
 `test_32`'s `mcp_call("search_notes", ...)` failed with
