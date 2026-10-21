@@ -54,6 +54,8 @@ FRONTMATTER_BODY = (
     "# Roadmap\n\nShip the plugin-first journey.\n"
 )
 UNICODE_NOTE = "Journal/Café ☕ 日本語.md"
+# Seeded server-side into every new vault (lib/engram/vaults/welcome_note.ex).
+WELCOME_NOTE = "Welcome to Engram.md"
 
 
 def _vault_notes() -> dict[str, str]:
@@ -173,31 +175,25 @@ async def test_plugin_first_journey(fresh_unlinked_instance, clerk_client, ts, s
             api = ApiClient(API_URL, token).with_vault(linked["vaultId"])
 
         with timed_step("first-sync"):
-            # Linking opens the first-sync preview; an empty server vault gets the
-            # one-click upload screen, which is what the user clicks.
+            # Linking opens the first-sync preview. The server vault is not empty:
+            # creating it on /link seeds the welcome note, so this is the full
+            # preview, and its safe default ("Sync", smart-merge) is the user's click.
             await cdp.wait_for_sync_preview_modal(timeout=30)
-            try:
-                body = await _poll(
-                    lambda: cdp.evaluate(
-                        "document.querySelector('.engram-sync-preview-simple-body')?.textContent || ''"
-                    ),
-                    30,
-                    "the one-click first-sync screen",
-                )
-            except AssertionError as e:
-                shown = await cdp.evaluate(
-                    "[...document.querySelectorAll('.modal')].map(m => m.innerText).join(' || ')"
-                )
-                raise AssertionError(f"{e}; modals show: {shown!r}") from None
-            assert body == "This vault is empty on the server. Upload your 20 notes and 1 attachments?", body
-            await cdp.evaluate("document.querySelector('.engram-sync-preview-simple-action').click()")
+            plan = "Uploads 21, downloads 1."
+            deadline = time.monotonic() + 30
+            while plan not in (shown := await cdp.evaluate(
+                "document.querySelector('.engram-sync-preview-modal')?.innerText || ''"
+            )) and time.monotonic() < deadline:
+                await asyncio.sleep(0.5)
+            assert plan in shown, f"first-sync preview shows: {shown!r}"
+            await cdp.pick_modal_option("Sync")
             await cdp.wait_for_modal_closed(timeout=10)
             await cdp.trigger_full_sync()
             await await_quiescent(cdp, api, deadline_s=90)
 
         with timed_step("server-has-vault"):
             manifest = api.get_manifest()
-            assert sorted(n["path"] for n in manifest["notes"]) == sorted(notes)
+            assert sorted(n["path"] for n in manifest["notes"]) == sorted([*notes, WELCOME_NOTE])
             assert [a["path"] for a in manifest["attachments"]] == [ATTACHMENT]
             raw = api.session.get(
                 f"{api.base_url}/attachments/{quote(ATTACHMENT, safe='')}",
