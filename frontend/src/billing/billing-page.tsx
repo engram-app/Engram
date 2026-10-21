@@ -30,6 +30,7 @@ import { paddleLocale } from "../i18n/vendor-locales";
 import BillingHistoryTable from "./billing-history-table";
 import CancelPanel from "./cancel-panel";
 import CurrentPlanCard from "./current-plan-card";
+import EmbedBucketRow from "./embed-bucket-row";
 import PaymentMethodCard from "./payment-method-card";
 import PendingChangeBanner from "./pending-change-banner";
 import {
@@ -697,7 +698,7 @@ export default function BillingPage({
 			)}
 
 			{!hideHeading && (
-				<CurrentPlanCard billing={billing}>
+				<CurrentPlanCard billing={billing} details={<EmbedBucketRow />}>
 					{billing.subscription && panel !== "change" && (
 						<div className="flex flex-wrap justify-end gap-3">
 							<Button onClick={() => setPanel("change")}>{t("Change plan")}</Button>

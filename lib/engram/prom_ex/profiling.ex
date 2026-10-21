@@ -17,6 +17,8 @@ defmodule Engram.PromEx.Profiling do
 
   use PromEx.Plugin
 
+  alias Engram.PromEx.Buckets
+
   @impl true
   def event_metrics(opts) do
     otp_app = Keyword.fetch!(opts, :otp_app)
@@ -31,7 +33,7 @@ defmodule Engram.PromEx.Profiling do
           measurement: :duration_ms,
           description: "Wall time of one Pyroscope sampler pass (Process.list sweep).",
           unit: :millisecond,
-          reporter_options: [buckets: [0.5, 1, 2, 5, 10, 20, 50, 100]]
+          reporter_options: Buckets.opts(Engram.PromEx.Profiling.SampleDurationBuckets)
         ),
         last_value(
           metric_prefix ++ [:sample, :process_count],
@@ -42,4 +44,9 @@ defmodule Engram.PromEx.Profiling do
       ]
     )
   end
+end
+
+defmodule Engram.PromEx.Profiling.SampleDurationBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [0.5, 1, 2, 5, 10, 20, 50, 100]
 end

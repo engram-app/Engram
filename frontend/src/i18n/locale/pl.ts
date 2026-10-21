@@ -159,6 +159,24 @@ export default {
 		many: "Zostało {count} dni do końca darmowego okresu próbnego.",
 		other: "Pozostało {count} dnia w bezpłatnym okresie próbnym.",
 	},
+	"Indexing budget": "Budżet indeksowania",
+	"{available} of {capacity} tokens left": "Pozostało {available} z {capacity} tokenów",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Odzyskuje {perDay} tokenów dziennie. Pełny stan na {date}.",
+	"All tokens are available.": "Wszystkie tokeny są dostępne.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} notatka ma tylko wyszukiwanie po słowach kluczowych, do {date}.",
+		few: "{count} notatki mają tylko wyszukiwanie po słowach kluczowych, do czasu {date}.",
+		many: "{count} notatek ma tylko wyszukiwanie po słowach kluczowych, do {date}.",
+		other: "{count} Notatki mają tylko wyszukiwanie po słowach kluczowych, do czasu {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "Wyszukiwanie po słowach kluczowych działa tylko dla jednej notatki, do momentu uzupełnienia budżetu.",
+		few: "{count} notatki mają tylko wyszukiwanie po słowach kluczowych, do momentu uzupełnienia budżetu.",
+		many: "{count} notatek ma tylko wyszukiwanie po słowach kluczowych, do momentu uzupełnienia budżetu.",
+		other:
+			"{count} Notatki mają tylko wyszukiwanie po słowach kluczowych, do momentu uzupełnienia budżetu.",
+	},
 	"Loading current connection…": "Ładowanie aktualnego połączenia…",
 	"Disconnected. Retry the new connection now.": "Rozłączono. Spróbuj ponownie połączyć się.",
 	"Couldn't disconnect. Try Settings → Connections.":
@@ -901,6 +919,7 @@ export default {
 	"{client} is connected": "{client} jest połączone",
 	"Your AI tool is connected": "Twoje narzędzie AI jest połączone",
 	"What will you use Engram for?": "Do czego użyjesz Engram?",
+	"Could not continue. Please try again.": "Nie udało się kontynuować. Spróbuj ponownie.",
 	"Review the Terms": "Zapoznaj się z regulaminem",
 	"privacy notice": "polityka prywatności",
 	"What changed": "Co się zmieniło",
@@ -913,7 +932,6 @@ export default {
 		"Zapoznałem się i akceptuję Regulamin oraz Politykę Prywatności",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Zapoznałem się i akceptuję umowę powyżej oraz politykę prywatności",
-	"Could not continue. Please try again.": "Nie udało się kontynuować. Spróbuj ponownie.",
 	"Saving…": "Zapisywanie…",
 	Continue: "Dalej",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

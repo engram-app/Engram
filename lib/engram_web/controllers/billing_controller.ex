@@ -1,6 +1,8 @@
 defmodule EngramWeb.BillingController do
   use EngramWeb, :controller
 
+  import Ecto.Query
+
   alias Engram.Attachments
   alias Engram.Billing
   alias Engram.Billing.Subscriptions
@@ -32,6 +34,9 @@ defmodule EngramWeb.BillingController do
   Most entries are `{used, limit}` with `limit: null` meaning uncapped,
   matching the `cap_json/1` convention the rest of this controller uses.
 
+  `embed_bucket` is `{available, capacity, refill_per_day, full_at}` (or null
+  when the user has no bucket), for the same reason as below: it refills.
+
   The two daily search caps are `{remaining, limit}` instead, because a token
   bucket genuinely cannot answer "how many did you run today": it refills
   continuously, so a derived `used` DECAYS over the day (10 searches at 09:00
@@ -58,11 +63,10 @@ defmodule EngramWeb.BillingController do
             storage_used_bytes(user),
             Billing.cap(user, :attachment_bytes_cap)
           ),
-        lifetime_embed_tokens:
-          used_limit(
-            meters.lifetime_embed_tokens,
-            Billing.cap(user, :lifetime_embed_token_cap)
-          ),
+        # COMPAT SHIM: the lifetime cap is gone (Free has the refilling
+        # `embed_bucket` below), so this is a plain counter with no limit.
+        lifetime_embed_tokens: used_limit(meters.lifetime_embed_tokens, nil),
+        embed_bucket: embed_bucket(user),
         # COMPAT SHIM, remove in a later contract PR. Plugins from before the
         # search-coverage cap removal render a "Notes searchable" row from
         # this; `limit: nil` (uncapped) hides it there. Every stored note is
@@ -82,6 +86,46 @@ defmodule EngramWeb.BillingController do
   end
 
   defp used_limit(used, limit), do: %{used: used, limit: cap_json(limit)}
+
+  # Free's refilling embed budget, so the limit is never invisible: what is
+  # left, how fast it comes back, when it is full again (nil = full now), how
+  # many notes wait on it keyword-only, and when they will all fit
+  # (`parked_ready_at`, nil = on the next sweep). nil for a user with no bucket
+  # (paid, self-host, a -1 override). A 0 override is a bucket too: an empty
+  # one, which must still be shown.
+  defp embed_bucket(user) do
+    case Billing.cap(user, :embed_token_bucket) do
+      cap when is_integer(cap) and cap >= 0 ->
+        now = DateTime.utc_now()
+        available = UsageMeters.bucket_available(user.id, cap)
+        {parked, need} = parked_notes(user)
+
+        %{
+          available: available,
+          capacity: cap,
+          refill_per_day: div(cap * 86_400, UsageMeters.bucket_refill_seconds()),
+          full_at: UsageMeters.bucket_full_at(available, cap, now),
+          parked_notes: parked,
+          parked_ready_at:
+            if(parked > 0, do: UsageMeters.bucket_ready_at(available, need, cap, now))
+        }
+
+      _ ->
+        nil
+    end
+  end
+
+  # Tenant-scoped: `notes` is under FORCE RLS.
+  defp parked_notes(user) do
+    Engram.Repo.with_tenant!(user.id, fn ->
+      Engram.Repo.one(
+        from(n in Engram.Notes.Note,
+          where: n.kind == "note" and is_nil(n.deleted_at) and n.embed_budget_parked == true,
+          select: {count(n.id), type(coalesce(sum(n.embed_budget_need), 0), :integer)}
+        )
+      )
+    end)
+  end
 
   # Strict match, deliberately. `storage_usage/1` only fails on a DB error, and
   # reporting `used: 0` there would tell the user they have their whole quota

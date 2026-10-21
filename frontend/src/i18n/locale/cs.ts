@@ -157,6 +157,23 @@ export default {
 		many: "Zbývá {count} dne vaší bezplatné zkušební verze.",
 		other: "Zbývá {count} dní vaší bezplatné zkušební verze.",
 	},
+	"Indexing budget": "Limit indexování",
+	"{available} of {capacity} tokens left": "Zbývá {available} z {capacity} tokenů",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Doplňuje {perDay} tokenů denně. Opět plné {date}.",
+	"All tokens are available.": "Všechny tokeny jsou k dispozici.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} poznámka má pouze vyhledávání klíčových slov, do {date}.",
+		few: "{count} poznámky mají vyhledávání pouze podle klíčových slov, do {date}.",
+		many: "{count} Poznámky umožňují pouze vyhledávání podle klíčových slov, do {date}.",
+		other: "{count} poznámek má pouze vyhledávání podle klíčových slov, do {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "Pro jednu poznámku je vyhledávání klíčových slov dostupné pouze do vyčerpání kreditu.",
+		few: "{count} poznámky mají vyhledávání pouze podle klíčových slov, dokud se nevyčerpá limit.",
+		many: "{count} Poznámky umožňují vyhledávání podle klíčových slov, dokud se nevyčerpá limit.",
+		other: "{count} poznámek má vyhledávání pouze podle klíčových slov, dokud se nevyčerpá limit.",
+	},
 	"Loading current connection…": "Načítám aktuální připojení…",
 	"Disconnected. Retry the new connection now.": "Odpojeno. Zkuste znovu připojit.",
 	"Couldn't disconnect. Try Settings → Connections.":
@@ -903,6 +920,7 @@ export default {
 	"{client} is connected": "{client} je připojen",
 	"Your AI tool is connected": "Váš nástroj umělé inteligence je připojen",
 	"What will you use Engram for?": "K čemu budete Engram používat?",
+	"Could not continue. Please try again.": "Nelze pokračovat. Zkuste to znovu.",
 	"Review the Terms": "Prohlédněte si podmínky",
 	"privacy notice": "Zásady ochrany osobních údajů",
 	"What changed": "Co se změnilo",
@@ -914,7 +932,6 @@ export default {
 		"Přečetl jsem a souhlasím s obchodními podmínkami a zásadami ochrany osobních údajů",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Přečetl jsem a souhlasím s uvedenou smlouvou a prohlášením o ochraně osobních údajů",
-	"Could not continue. Please try again.": "Nelze pokračovat. Zkuste to znovu.",
 	"Saving…": "Ukládám…",
 	Continue: "Pokračovat",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

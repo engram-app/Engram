@@ -1,0 +1,129 @@
+name: staging-load
+
+# Prod-shaped traffic simulator against a deployed environment (staging by
+# default). Manual only: run it before promoting a release, and for the v5
+# staging rehearsal. See e2e/load/README.md (one-time grant, spend guard,
+# reading the summary). Server-side sampling (Oban, pg_stat_*, CRDT metrics)
+# needs SSH to the staging host, so it runs from the dev box alongside:
+#   e2e/load/server_probe.sh <out> 60 <seconds>
+#
+# Needs the STAGING_CLERK_SECRET_KEY secret: the Backend API key of the
+# TARGET's Clerk instance (staging's `CLERK_SECRET_KEY`; it is not the e2e
+# instance's E2E_CLERK_SECRET_KEY).
+
+on:
+  workflow_dispatch:
+    inputs:
+      api:
+        description: API base URL
+        type: string
+        default: https://staging.engram.page/api
+      duration:
+        description: Traffic seconds after seeding (default 2 h)
+        type: string
+        default: "7200"
+      steady:
+        description: Steady multiplier of prod's 24h mean rate
+        type: string
+        default: "10"
+      burst:
+        description: Burst multiplier (5 min at --burst-at)
+        type: string
+        default: "30"
+      burst_at:
+        type: string
+        default: "3600"
+      purge_at:
+        type: string
+        default: "2700"
+      plugin_ref:
+        description: Engram-obsidian ref for the CRDT half
+        type: string
+        default: main
+
+concurrency:
+  group: staging-load
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: [self-hosted, linux, x64, isolated]
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+
+      # Every input reaches the shell through env: and is quoted, never pasted
+      # into `run:` (this runner step holds the Clerk secret).
+      - name: Validate inputs
+        env:
+          API: ${{ inputs.api }}
+          DURATION: ${{ inputs.duration }}
+          STEADY: ${{ inputs.steady }}
+          BURST: ${{ inputs.burst }}
+          BURST_AT: ${{ inputs.burst_at }}
+          PURGE_AT: ${{ inputs.purge_at }}
+          PLUGIN_REF: ${{ inputs.plugin_ref }}
+        run: |
+          for v in DURATION BURST_AT PURGE_AT; do
+            [[ "${!v}" =~ ^[0-9]{1,6}$ ]] || { echo "::error::$v must be an integer"; exit 1; }
+          done
+          for v in STEADY BURST; do
+            [[ "${!v}" =~ ^[0-9]{1,3}(\.[0-9]{1,2})?$ ]] || { echo "::error::$v must be a number"; exit 1; }
+          done
+          [[ "$PLUGIN_REF" =~ ^[A-Za-z0-9._/-]{1,100}$ ]] || { echo "::error::bad plugin_ref"; exit 1; }
+          [[ "$API" =~ ^https?://[A-Za-z0-9.:-]+(/[A-Za-z0-9._/-]*)?$ ]] || { echo "::error::bad api URL"; exit 1; }
+          # sim.py also refuses any host outside its staging allowlist.
+
+      - name: Checkout plugin
+        env:
+          PLUGIN_REF: ${{ inputs.plugin_ref }}
+        run: |
+          rm -rf plugin-src
+          git clone --depth=1 --branch "$PLUGIN_REF" https://github.com/engram-app/Engram-obsidian.git plugin-src
+
+      - name: Install deps
+        env:
+          BUN_VERSION: "1.3.11"
+        run: |
+          # Pinned: a persistent $HOME would otherwise keep whatever version
+          # an unpinned install fetched first.
+          if [ "$("$HOME/.bun/bin/bun" --version 2>/dev/null)" != "$BUN_VERSION" ]; then
+            curl -fsSL https://bun.sh/install | bash -s "bun-v$BUN_VERSION"
+          fi
+          export PATH="$HOME/.bun/bin:$PATH"
+          (cd plugin-src && bun install --frozen-lockfile --registry http://10.0.20.214:4873)
+          python3 -m venv .venv-load
+          .venv-load/bin/pip install -q 'requests>=2.33' 'websockets>=13' urllib3
+
+      - name: Run simulator
+        env:
+          STAGING_CLERK_SECRET_KEY: ${{ secrets.STAGING_CLERK_SECRET_KEY }}
+          ENGRAM_PLUGIN_SRC: ${{ github.workspace }}/plugin-src
+          API: ${{ inputs.api }}
+          DURATION: ${{ inputs.duration }}
+          STEADY: ${{ inputs.steady }}
+          BURST: ${{ inputs.burst }}
+          BURST_AT: ${{ inputs.burst_at }}
+          PURGE_AT: ${{ inputs.purge_at }}
+        run: |
+          export PATH="$HOME/.bun/bin:$PATH"
+          .venv-load/bin/python e2e/load/sim.py --api "$API" \
+            --duration "$DURATION" --steady "$STEADY" \
+            --burst "$BURST" --burst-at "$BURST_AT" \
+            --purge-at "$PURGE_AT" --out load-out
+          cat load-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: staging-load-${{ github.run_id }}
+          # sim.py keeps the CRDT config (live API keys) out of load-out/;
+          # the exclusion is the second layer, since this repo is public.
+          path: |
+            load-out/
+            !load-out/crdt_cfg.json
+          retention-days: 30

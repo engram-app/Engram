@@ -114,7 +114,37 @@ defmodule Engram.Crypto.Envelope do
       when is_binary(ct_with_tag) and is_binary(nonce) and is_binary(aad),
       do: Engram.Native.envelope_open(ct_with_tag, nonce, dek, aad)
 
+  # A merged column (`nonce || ciphertext`, `split_merged/1`) stores no nonce.
+  def decrypt(merged, nil, <<_::256>> = dek, aad) when is_binary(merged) do
+    case split_merged(merged) do
+      {:ok, ct_with_tag, nonce} -> decrypt(ct_with_tag, nonce, dek, aad)
+      :error -> :error
+    end
+  end
+
   def decrypt(_ct_with_tag, _nonce, <<_::256>>, _aad), do: :error
+
+  @doc """
+  Splits a merged envelope (`nonce || ciphertext`, one column instead of
+  two; `note_bodies` and, from a later release, the `notes` text columns) into
+  `{:ok, ciphertext, nonce_field}`. The first byte says the format: a format
+  1 nonce field is 13 bytes starting with 1; a format 0 one (12 bytes) is
+  stored behind a leading 0. Every reader accepts it from this release on,
+  so a later one can write it.
+  """
+  @spec split_merged(binary()) :: {:ok, binary(), binary()} | :error
+  def split_merged(<<1, nonce::binary-12, ct::binary>>) when byte_size(ct) >= @tag_bytes,
+    do: {:ok, ct, <<1, nonce::binary>>}
+
+  def split_merged(<<0, nonce::binary-12, ct::binary>>) when byte_size(ct) >= @tag_bytes,
+    do: {:ok, ct, nonce}
+
+  def split_merged(_), do: :error
+
+  @doc "The merged layout `split_merged/1` reads."
+  @spec merge(<<_::96>> | <<_::104>>, binary()) :: binary()
+  def merge(<<1, _::binary-12>> = nonce, ct), do: nonce <> ct
+  def merge(<<_::binary-12>> = nonce, ct), do: <<0>> <> nonce <> ct
 
   @doc """
   `decrypt/4` for one column across many rows, under one key schedule:
@@ -123,10 +153,25 @@ defmodule Engram.Crypto.Envelope do
   (`Crypto.aad_for_row/3`'s shape, `prefix` from `Crypto.aad_prefix/2`),
   else empty (legacy rows). For listings that decrypt a column vault-wide.
   """
-  @spec decrypt_many(<<_::256>>, binary(), [{<<_::128>>, boolean(), binary(), binary()}]) ::
+  @spec decrypt_many(<<_::256>>, binary(), [{<<_::128>>, boolean(), binary(), binary() | nil}]) ::
           {:ok, [binary()]} | :error
-  def decrypt_many(<<_::256>> = dek, prefix, rows) when is_binary(prefix) and is_list(rows),
-    do: Engram.Native.envelope_open_many(dek, prefix, rows)
+  def decrypt_many(<<_::256>> = dek, prefix, rows) when is_binary(prefix) and is_list(rows) do
+    case unmerge_rows(rows, []) do
+      {:ok, rows} -> Engram.Native.envelope_open_many(dek, prefix, rows)
+      :error -> :error
+    end
+  end
+
+  defp unmerge_rows([], acc), do: {:ok, Enum.reverse(acc)}
+
+  defp unmerge_rows([{id, bind?, merged, nil} | rest], acc) do
+    case split_merged(merged) do
+      {:ok, ct, nonce} -> unmerge_rows(rest, [{id, bind?, ct, nonce} | acc])
+      :error -> :error
+    end
+  end
+
+  defp unmerge_rows([row | rest], acc), do: unmerge_rows(rest, [row | acc])
 
   # {table, column, mode}; prefixes come from Crypto.aad_prefix/2, the single
   # definition of the AAD shape, and are built once at compile time.

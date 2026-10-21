@@ -1397,6 +1397,157 @@ defmodule Engram.Crypto.UserDekRotationTest do
       refute_received {:write, "/points/batch", _, _}
     end
 
+    # A point under neither key (left by an earlier crashed rotation) used to
+    # halt the whole sweep, stranding every point after it under the DEK the
+    # flip just retired. It is skipped; a note whose chunk row names it is
+    # queued for an unmetered rebuild, and an orphan no row names is deleted.
+    test "a named point under neither key is skipped and its note requeued, unmetered",
+         %{user: user, bypass: bypass} do
+      %{note: note, bad: bad, good: good} = neither_key_fixture(user, bypass, true)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :crypto, :rotate, :dek, :row_failed]
+        ])
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      assert_received {:rewrapped, ^good}
+      refute_received {:rewrapped, ^bad}
+      refute_received {:deleted, _}
+
+      assert_received {[:engram, :crypto, :rotate, :dek, :row_failed], ^ref, %{count: 1},
+                       %{table: :qdrant, status: :after_flip}}
+
+      raw =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      # Version-stale, not content-stale: EmbedNote's unmetered maintenance path.
+      assert raw.chunker_version == nil
+      assert raw.embed_hash == raw.content_hash
+      assert_enqueued(worker: Engram.Workers.EmbedNote, args: %{note_id: note.id})
+
+      assert [nil] =
+               Repo.all(
+                 from(c in Engram.Notes.Chunk,
+                   where: c.note_id == ^note.id,
+                   select: c.context_hmac
+                 ),
+                 skip_tenant_check: true
+               )
+    end
+
+    test "an orphan point under neither key is deleted, scoped to the user, with no rebuild",
+         %{user: user, bypass: bypass} do
+      %{note: note, bad: bad} = neither_key_fixture(user, bypass, false)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      # The ids come from a scroll filtered to this user, and only those go.
+      assert_received {:scroll_filter,
+                       %{"must" => [%{"key" => "user_id", "match" => %{"value" => uid}}]}}
+
+      assert uid == user.id
+      assert_received {:deleted, %{"points" => [^bad]}}
+
+      raw =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      assert raw.chunker_version == 1, "an orphan costs no rebuild"
+      refute_enqueued(worker: Engram.Workers.EmbedNote)
+    end
+
+    test "a point under neither key owned by a trashed note is deleted, not rebuilt",
+         %{user: user, bypass: bypass} do
+      %{note: note, bad: bad} = neither_key_fixture(user, bypass, true)
+
+      {1, _} =
+        Repo.update_all(
+          from(n in Engram.Notes.Note, where: n.id == ^note.id),
+          [set: [deleted_at: DateTime.utc_now()]],
+          skip_tenant_check: true
+        )
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      assert_received {:deleted, %{"points" => [^bad]}}
+
+      raw =
+        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+      assert raw.chunker_version == 1, "a trashed note gets no rebuild"
+      refute_enqueued(worker: Engram.Workers.EmbedNote)
+    end
+
+    # The heal can now run concurrently with the text sweep (both start at the
+    # flip). The sweep must write only the text it rewrapped: a full payload
+    # from its scroll put the old-key filter HMACs back over the heal's.
+    test "the text sweep writes only the rewrapped keys, so the heal's HMACs survive",
+         %{user: user, bypass: bypass} do
+      {:ok, old_dek} = Crypto.get_dek(user)
+      collection = Qdrant.collection_name()
+      id = "00000000-0000-0000-0000-000000000301"
+
+      {ct, nonce} =
+        Envelope.encrypt("text", old_dek, Crypto.aad_for_qdrant(collection, id, :text))
+
+      scrolled = %{
+        "user_id" => user.id,
+        "type_hmac" => "OLD",
+        "text" => Base.encode64(ct),
+        "text_nonce" => Base.encode64(nonce)
+      }
+
+      # What the heal wrote between the sweep's scroll and its write.
+      stored = :ets.new(:stored_merge, [:set, :public])
+      :ets.insert(stored, {id, %{scrolled | "type_hmac" => "NEW"}})
+      test_pid = self()
+
+      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{
+            "result" => %{
+              "points" => [%{"id" => id, "payload" => scrolled}],
+              "next_page_offset" => nil
+            }
+          })
+        )
+      end)
+
+      Bypass.stub(bypass, "POST", "/collections/#{collection}/points/batch", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        %{"operations" => ops} = Jason.decode!(body)
+
+        for %{"set_payload" => %{"points" => [pid], "payload" => p}} <- ops do
+          send(test_pid, {:sent, p})
+          [{^pid, current}] = :ets.lookup(stored, pid)
+          :ets.insert(stored, {pid, Map.merge(current, p)})
+        end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{result: Enum.map(ops, fn _ -> %{status: "acknowledged"} end)})
+        )
+      end)
+
+      stub_barrier(bypass, collection)
+
+      stub_read_back(bypass, collection, fn ->
+        for {pid, p} <- :ets.tab2list(stored), do: %{"id" => pid, "payload" => p}
+      end)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      assert_received {:sent, sent}
+      assert Map.keys(sent) |> Enum.sort() == ["text", "text_nonce"]
+      assert [{^id, %{"type_hmac" => "NEW"}}] = :ets.lookup(stored, id)
+    end
+
     test "sweep re-encrypts Qdrant points under the new DEK and verifies decrypt correctness",
          %{user: user, bypass: bypass} do
       # Build a synthetic Qdrant point whose payload fields are encrypted under
@@ -1643,7 +1794,10 @@ defmodule Engram.Crypto.UserDekRotationTest do
       :ets.delete(set_payload_count)
     end
 
-    test "sweep returns error when scroll fails", %{user: user, bypass: bypass} do
+    test "a scroll failure is reported after the flip, not returned", %{
+      user: user,
+      bypass: bypass
+    } do
       collection = Qdrant.collection_name()
 
       Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
@@ -1652,10 +1806,27 @@ defmodule Engram.Crypto.UserDekRotationTest do
         |> Plug.Conn.send_resp(503, ~s({"status": {"error": "unavailable"}}))
       end)
 
-      assert {:error, {:qdrant_scroll, 503, _}} = UserDekRotation.rotate_user(user.id)
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :crypto, :rotate, :dek, :row_failed]
+        ])
+
+      # Points are derived data: the rotation commits, and the failure is
+      # reported, never returned (a failure before the flip stranded notes).
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      assert_receive {[:engram, :crypto, :rotate, :dek, :row_failed], ^ref, %{count: 1},
+                      %{table: :qdrant, status: :after_flip}}
+
+      assert Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+               skip_tenant_check: true
+             ).dek_rotation_locked_at == nil
     end
 
-    test "sweep returns error when set_payload fails", %{user: user, bypass: bypass} do
+    test "a set_payload failure is reported after the flip, not returned", %{
+      user: user,
+      bypass: bypass
+    } do
       {:ok, old_dek} = Crypto.get_dek(user)
       collection = Qdrant.collection_name()
       qdrant_id = "fail-payload-uuid-0001"
@@ -1695,7 +1866,21 @@ defmodule Engram.Crypto.UserDekRotationTest do
         |> Plug.Conn.send_resp(500, ~s({"status": {"error": "internal"}}))
       end)
 
-      assert {:error, {:qdrant_set_payload_failed, _}} = UserDekRotation.rotate_user(user.id)
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:engram, :crypto, :rotate, :dek, :row_failed]
+        ])
+
+      # Points are derived data: the rotation commits, and the failure is
+      # reported, never returned (a failure before the flip stranded notes).
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      assert_receive {[:engram, :crypto, :rotate, :dek, :row_failed], ^ref, %{count: 1},
+                      %{table: :qdrant, status: :after_flip}}
+
+      assert Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+               skip_tenant_check: true
+             ).dek_rotation_locked_at == nil
     end
   end
 
@@ -2113,7 +2298,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
     # which calls emit_telemetry/3 → classify_reason/1. We use telemetry capture
     # to assert the reason_label metadata key gets the expected string.
 
-    test "qdrant_scroll error is classified as qdrant_scroll_failed", %{user: user} do
+    test "a qdrant_scroll error after the flip is not a failed rotation", %{user: user} do
       # The module-level setup bypass already stubs scroll with 200/empty.
       # We override with a failing bypass in this test's own Bypass.
       bypass = Bypass.open()
@@ -2142,13 +2327,11 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
       on_exit(fn -> :telemetry.detach(handler_id) end)
 
-      assert {:error, {:qdrant_scroll, 503, _}} = UserDekRotation.rotate_user(user.id)
-
-      assert_receive {:telemetry_fired, %{status: :failed, reason_label: "qdrant_scroll_failed"}},
-                     500
+      assert :ok = UserDekRotation.rotate_user(user.id)
+      assert_receive {:telemetry_fired, %{status: :ok}}, 500
     end
 
-    test "qdrant_set_payload_failed is classified correctly", %{user: user} do
+    test "a set_payload failure after the flip is not a failed rotation", %{user: user} do
       bypass = Bypass.open()
       Application.put_env(:engram, :qdrant_url, "http://localhost:#{bypass.port}")
       on_exit(fn -> Application.delete_env(:engram, :qdrant_url) end)
@@ -2205,11 +2388,8 @@ defmodule Engram.Crypto.UserDekRotationTest do
 
       on_exit(fn -> :telemetry.detach(handler_id) end)
 
-      assert {:error, {:qdrant_set_payload_failed, _}} = UserDekRotation.rotate_user(user.id)
-
-      assert_receive {:telemetry_fired,
-                      %{status: :failed, reason_label: "qdrant_set_payload_failed"}},
-                     500
+      assert :ok = UserDekRotation.rotate_user(user.id)
+      assert_receive {:telemetry_fired, %{status: :ok}}, 500
     end
 
     test "postgres error tuple is classified with code", %{user: _user} do
@@ -2331,6 +2511,104 @@ defmodule Engram.Crypto.UserDekRotationTest do
   end
 
   # The read-back `Qdrant.set_payloads/2` checks the page against.
+  defp neither_key_fixture(user, bypass, named?) do
+    {:ok, old_dek} = Crypto.get_dek(user)
+    collection = Qdrant.collection_name()
+    [bad, good] = ["00000000-0000-0000-0000-000000000201", "00000000-0000-0000-0000-000000000202"]
+
+    point = fn id, dek ->
+      {ct, nonce} = Envelope.encrypt("text", dek, Crypto.aad_for_qdrant(collection, id, :text))
+
+      %{
+        "id" => id,
+        "payload" => %{
+          "user_id" => user.id,
+          "text" => Base.encode64(ct),
+          "text_nonce" => Base.encode64(nonce)
+        }
+      }
+    end
+
+    points = [point.(bad, :crypto.strong_rand_bytes(32)), point.(good, old_dek)]
+
+    vault = Engram.Fixtures.insert_vault!(user, "SkipVault")
+    note = Engram.Fixtures.insert_note!(user, vault, %{path: "skip.md", content: "body"})
+
+    {1, _} =
+      Repo.update_all(
+        from(n in Engram.Notes.Note,
+          where: n.id == ^note.id,
+          update: [set: [embed_hash: n.content_hash, chunker_version: 1]]
+        ),
+        [],
+        skip_tenant_check: true
+      )
+
+    Repo.insert!(
+      %Engram.Notes.Chunk{
+        note_id: note.id,
+        user_id: user.id,
+        vault_id: vault.id,
+        position: 0,
+        char_start: 0,
+        char_end: 4,
+        qdrant_point_id: if(named?, do: bad, else: good),
+        context_hmac: "stale"
+      },
+      skip_tenant_check: true
+    )
+
+    test_pid = self()
+
+    Bypass.stub(bypass, "POST", "/collections/#{collection}/points/scroll", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:scroll_filter, Jason.decode!(body)["filter"]})
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(
+        200,
+        Jason.encode!(%{"result" => %{"points" => points, "next_page_offset" => nil}})
+      )
+    end)
+
+    stored = :ets.new(:stored_skip, [:set, :public])
+
+    for path <- ["/points/batch", "/points/payload/delete", "/points/delete"] do
+      Bypass.stub(bypass, "POST", "/collections/#{collection}#{path}", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+
+        resp =
+          case {path, Jason.decode!(body)} do
+            {_, %{"operations" => ops}} ->
+              for %{"set_payload" => %{"points" => [id], "payload" => p}} <- ops do
+                send(test_pid, {:rewrapped, id})
+                :ets.insert(stored, {id, p})
+              end
+
+              Jason.encode!(%{result: Enum.map(ops, fn _ -> %{status: "acknowledged"} end)})
+
+            {"/points/delete", decoded} ->
+              send(test_pid, {:deleted, decoded})
+              ~s({"result":{"status":"completed"},"status":"ok"})
+
+            _ ->
+              ~s({"result":{"status":"completed"},"status":"ok"})
+          end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, resp)
+      end)
+    end
+
+    stub_read_back(bypass, collection, fn ->
+      for {id, p} <- :ets.tab2list(stored), do: %{"id" => id, "payload" => p}
+    end)
+
+    %{note: note, bad: bad, good: good}
+  end
+
   defp stub_read_back(bypass, collection, points_fun) do
     Bypass.stub(bypass, "POST", "/collections/#{collection}/points", fn conn ->
       conn

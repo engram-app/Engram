@@ -1,6 +1,6 @@
 defmodule EngramWeb.OAuthAuthorizeHTML do
   @moduledoc """
-  The two HTML error pages `GET /oauth/authorize` can answer with.
+  The HTML pages `GET /oauth/authorize` answers with instead of redirecting.
 
   These were hand-built strings interpolated through a private `html_escape/1`
   and handed to `send_resp/3`. The copy is unchanged; what changed is that
@@ -25,6 +25,23 @@ defmodule EngramWeb.OAuthAuthorizeHTML do
         <p>
           The OAuth client or redirect URI is not recognized. The request was rejected to prevent
           code-leak attacks.
+        </p>
+      </body>
+    </html>
+    """
+  end
+
+  # A bare GET: a crawler or a curious human, not an OAuth client. The docs
+  # URL is the one `WellKnownController` advertises as `resource_documentation`.
+  def not_a_connect_attempt(assigns) do
+    ~H"""
+    <!DOCTYPE html>
+    <html>
+      <body>
+        <h1>Engram connector</h1>
+        <p>
+          This address is used by AI tools to connect to Engram. See
+          <a href="https://engram.page/docs/mcp">how to connect an AI tool</a>.
         </p>
       </body>
     </html>

@@ -78,7 +78,7 @@ function imp(rel: string): Promise<any> {
 // Error carrying `.status` on >=400 unless `throw:false` (callers classify on
 // .status for 402/401/404/409).
 // ---------------------------------------------------------------------------
-async function realRequestUrl(opts: {
+export async function realRequestUrl(opts: {
 	url: string;
 	method?: string;
 	headers?: Record<string, string>;
@@ -104,7 +104,7 @@ async function realRequestUrl(opts: {
 // (both replicas = two devices on ONE account + ONE vault, so they share the
 // crdt:<user>:<vault> room). Mirrors e2e/helpers/auth_provider.py LocalAuthProvider.
 // ---------------------------------------------------------------------------
-interface Session {
+export interface Session {
 	token: string;
 	userId: string;
 	vaultId: string;
@@ -218,7 +218,7 @@ async function setupSession(): Promise<Session> {
 // scheduler/clock/socket — real global WebSocket + real fetch + real time).
 // Every `main.ts:NNNN` citation names the line transcribed.
 // ---------------------------------------------------------------------------
-class Replica {
+export class Replica {
 	readonly id: string;
 	readonly vaultDir: string;
 	// biome-ignore lint/suspicious/noExplicitAny: cross-repo dynamic types.
@@ -356,8 +356,7 @@ class Replica {
 			settings.apiKey,
 			session.userId,
 			settings.vaultId,
-			settings.enableCrdt,
-			id, // deviceId -> WS device_id param
+			id, // deviceId -> WS device_id param (ctor: baseUrl, apiKey, userId, vaultId, deviceId)
 		);
 		noteStream = channel;
 
@@ -468,6 +467,11 @@ class Replica {
 	async goOnline(): Promise<void> {
 		await this.channel.connect();
 	}
+	/** The device id this replica's socket URL carries (`device_id`). */
+	get socketDeviceId(): unknown {
+		return this.channel.deviceId;
+	}
+
 	disconnect(): void {
 		this.channel.disconnect();
 	}
@@ -511,6 +515,16 @@ async function main(): Promise<void> {
 	const b = await Replica.boot(session, "B", rootDir);
 	await scenario("handshake: A+B join + complete catch-up", async () => {
 		await Promise.all([barrier.synced(a), barrier.synced(b)]);
+	});
+
+	// Each replica is its own device: a stray positional arg once made every
+	// replica connect with device_id=true, so they all looked like one device.
+	await scenario("each replica's socket carries its own device id", async () => {
+		for (const r of [a, b]) {
+			if (r.socketDeviceId !== r.id) {
+				throw new Error(`replica ${r.id} socket device_id=${String(r.socketDeviceId)}`);
+			}
+		}
 	});
 
 	// GREEN 2 — A's create persists server-side over the real CRDT protocol.
@@ -601,7 +615,10 @@ async function main(): Promise<void> {
 	process.exit(0);
 }
 
-main().catch((e) => {
-	console.error("[headless] fatal:", e);
-	process.exit(1);
-});
+// Importable (e2e/load/crdt_load.ts reuses Replica); runs only as the entry point.
+if (import.meta.main) {
+	main().catch((e) => {
+		console.error("[headless] fatal:", e);
+		process.exit(1);
+	});
+}

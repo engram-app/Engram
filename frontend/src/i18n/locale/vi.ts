@@ -153,6 +153,17 @@ export default {
 	"{count} days remaining in your free trial.": {
 		other: "Còn {count} ngày trong thời gian dùng thử miễn phí của bạn.",
 	},
+	"Indexing budget": "Ngân sách lập chỉ mục",
+	"{available} of {capacity} tokens left": "Còn {available} trong số {capacity} token",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Tái nạp {perDay} token mỗi ngày. Đủ token lại vào lúc {date}.",
+	"All tokens are available.": "Tất cả mã thông báo đều khả dụng.",
+	"{count} notes have keyword search only, until {date}.": {
+		other: "{count} ghi chú chỉ hỗ trợ tìm kiếm theo từ khóa, cho đến {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		other: "{count} ghi chú chỉ có tìm kiếm theo từ khóa, cho đến khi tài khoản được nạp lại.",
+	},
 	"Loading current connection…": "Đang tải kết nối hiện tại…",
 	"Disconnected. Retry the new connection now.": "Đã ngắt kết nối. Thử kết nối mới ngay bây giờ.",
 	"Couldn't disconnect. Try Settings → Connections.":
@@ -835,6 +846,7 @@ export default {
 	"{client} is connected": "{client} đã kết nối",
 	"Your AI tool is connected": "Công cụ AI của bạn đã kết nối",
 	"What will you use Engram for?": "Bạn sẽ sử dụng Engram cho mục đích gì?",
+	"Could not continue. Please try again.": "Không thể tiếp tục. Vui lòng thử lại.",
 	"Review the Terms": "Xem lại Điều khoản",
 	"privacy notice": "Thông báo về quyền riêng tư",
 	"What changed": "Những thay đổi là gì",
@@ -847,7 +859,6 @@ export default {
 		"Tôi đã đọc và đồng ý với Điều khoản dịch vụ và Chính sách quyền riêng tư",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Tôi đã đọc và đồng ý với bản hợp đồng hiển thị ở trên và thông báo về quyền riêng tư",
-	"Could not continue. Please try again.": "Không thể tiếp tục. Vui lòng thử lại.",
 	"Saving…": "Đang lưu…",
 	Continue: "Tiếp tục",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

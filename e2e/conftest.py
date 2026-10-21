@@ -29,7 +29,6 @@ import pytest
 from helpers.api import ApiClient
 from helpers.auth_provider import get_auth_provider, ClerkAuthProvider
 from helpers.billing import grant_test_plan
-from helpers.cdp import CdpClient
 from helpers.cleanup import cleanup_test_data, cleanup_vaults
 from helpers.obsidian import ObsidianInstance
 from helpers.oauth import provision_oauth_tokens, swap_to_oauth, restore_auth, wait_for_stream
@@ -242,36 +241,17 @@ _WORKER = _worker_index()
 # Worker-stride constants (single source of truth)
 #
 # Each worker runs INSTANCES_PER_WORKER Obsidian instances (A, B, C).
-# Each instance needs its own CDP port and Xvfb display.
-# To keep workers non-overlapping, we stride ports/displays by the number
-# of instances per worker. Keeping _PORT_STRIDE == _DISPLAY_STRIDE ==
-# INSTANCES_PER_WORKER means bumping instance count updates both in one place.
+# Each instance needs its own Xvfb display; workers stride displays by the
+# number of instances per worker. CDP ports need no planning: Chromium binds
+# its own (`--remote-debugging-port=0`, see helpers/obsidian.py).
 # --------------------------------------------------------------------------
 INSTANCES_PER_WORKER = 3
-_PORT_STRIDE = INSTANCES_PER_WORKER
 _DISPLAY_STRIDE = INSTANCES_PER_WORKER
 
 
-def _worker_port(name: str, legacy_default: str) -> int:
-    """Prefer per-worker env var (E2E_CDP_PORT_A_W1), fall back to base + stride.
-
-    CI allocates 6 free ports and exports them as E2E_CDP_PORT_{A,B,C}_W{0,1}
-    so no two workers collide even when dynamic allocation is non-contiguous.
-    Serial / local runs fall back to the base env var + worker*stride.
-    """
-    scoped = os.environ.get(f"{name}_W{_WORKER}")
-    if scoped:
-        return int(scoped)
-    base = int(os.environ.get(name) or legacy_default)
-    return base + _WORKER * _PORT_STRIDE
-
-
-# Dynamic ports/paths for parallel CI runs (defaults match legacy hardcoded values)
+# Dynamic paths for parallel CI runs (defaults match legacy hardcoded values)
 VAULT_PREFIX = os.environ.get("E2E_VAULT_PREFIX", "/tmp/e2e-vault")
 CONFIG_PREFIX = os.environ.get("E2E_CONFIG_PREFIX", "/tmp/e2e-obsidian-config")
-CDP_PORT_A = _worker_port("E2E_CDP_PORT_A", "9250")
-CDP_PORT_B = _worker_port("E2E_CDP_PORT_B", "9251")
-CDP_PORT_C = _worker_port("E2E_CDP_PORT_C", "9252")
 DISPLAY_BASE = int(os.environ.get("E2E_DISPLAY_BASE") or "99") - _WORKER * _DISPLAY_STRIDE
 
 # Lowest display this worker will use (B=base-1, C=base-2 → base - (INSTANCES_PER_WORKER - 1)).
@@ -473,7 +453,6 @@ def obsidian_a(sync_user, sync_client_id):
     inst = ObsidianInstance(
         name="A",
         vault_path=Path(f"{VAULT_PREFIX}-a"),
-        cdp_port=CDP_PORT_A,
         display=f":{DISPLAY_BASE}",
         api_url=API_URL,
         api_key=sync_user[2],
@@ -494,7 +473,6 @@ def obsidian_b(sync_user, sync_client_id):
     inst = ObsidianInstance(
         name="B",
         vault_path=Path(f"{VAULT_PREFIX}-b"),
-        cdp_port=CDP_PORT_B,
         display=f":{DISPLAY_BASE - 1}",
         api_url=API_URL,
         api_key=sync_user[2],
@@ -515,7 +493,6 @@ def obsidian_c(isolation_user, iso_client_id):
     inst = ObsidianInstance(
         name="C",
         vault_path=Path(f"{VAULT_PREFIX}-c"),
-        cdp_port=CDP_PORT_C,
         display=f":{DISPLAY_BASE - 2}",
         api_url=API_URL,
         api_key=isolation_user[2],
@@ -535,17 +512,17 @@ def obsidian_c(isolation_user, iso_client_id):
 
 @pytest.fixture(scope="session")
 def cdp_a(obsidian_a):
-    return CdpClient(port=obsidian_a.cdp_port)
+    return obsidian_a.cdp
 
 
 @pytest.fixture(scope="session")
 def cdp_b(obsidian_b):
-    return CdpClient(port=obsidian_b.cdp_port)
+    return obsidian_b.cdp
 
 
 @pytest.fixture(scope="session")
 def cdp_c(obsidian_c):
-    return CdpClient(port=obsidian_c.cdp_port)
+    return obsidian_c.cdp
 
 
 @pytest.fixture(scope="session")
@@ -618,7 +595,7 @@ def _oauth_ws_warm(cdp_a, clerk_client):
 #
 # A stop/mutate-data.json/restart cycle must never touch the session-scoped
 # A/B/C fixtures the rest of the suite depends on, so this is its own pair on
-# its own ports/displays. It runs on a PRIVATE user+vault (resumed_user /
+# its own displays. It runs on a PRIVATE user+vault (resumed_user /
 # resumed_client_id), NOT sync_user's shared vault: that vault accumulates
 # ~1000 notes over a full run, and joining it late floods the resumed devices
 # with a full-vault genesis fan-out that starves the seed delivery inside the
@@ -627,8 +604,6 @@ def _oauth_ws_warm(cdp_a, clerk_client):
 # under test, minus the suite churn.
 # ---------------------------------------------------------------------------
 
-RESUMED_CDP_PORT_A = _worker_port("E2E_CDP_PORT_RESUMED_A", "9350")
-RESUMED_CDP_PORT_B = _worker_port("E2E_CDP_PORT_RESUMED_B", "9351")
 RESUMED_DISPLAY_BASE = int(os.environ.get("E2E_DISPLAY_BASE_RESUMED") or "150") - _WORKER * 2
 assert RESUMED_DISPLAY_BASE - 1 >= 1, (
     f"RESUMED_DISPLAY_BASE={RESUMED_DISPLAY_BASE} too low for worker {_WORKER}"
@@ -660,11 +635,6 @@ def fresh_instance_pair(resumed_user, resumed_client_id, resumed_api):
             "E2E_DISPLAY_BASE is set (CI) but E2E_DISPLAY_BASE_RESUMED is not: "
             "the default :150/:149 would kill a concurrent job's Xvfb"
         )
-    resumed_ports = [f"E2E_CDP_PORT_RESUMED_{x}_W{_WORKER}" for x in "AB"]
-    if os.environ.get("E2E_DISPLAY_BASE") and not all(map(os.environ.get, resumed_ports)):
-        # The 9350/9351 defaults are not reserved: a CI-allocated port or a
-        # concurrent run can already hold them.
-        pytest.fail(f"E2E_DISPLAY_BASE is set (CI) but {resumed_ports} are not all set")
     workers = int(os.environ.get("PYTEST_XDIST_WORKER_COUNT") or "1")
     if overlap := _display_overlap(workers):
         # Xvfb's pre-flight pkill would take down a session A/B/C instance.
@@ -672,7 +642,6 @@ def fresh_instance_pair(resumed_user, resumed_client_id, resumed_api):
     inst_a = ObsidianInstance(
         name="ResumedA",
         vault_path=Path(f"{VAULT_PREFIX}-resumed-a"),
-        cdp_port=RESUMED_CDP_PORT_A,
         display=f":{RESUMED_DISPLAY_BASE}",
         api_url=API_URL,
         api_key=resumed_user[2],
@@ -684,7 +653,6 @@ def fresh_instance_pair(resumed_user, resumed_client_id, resumed_api):
     inst_b = ObsidianInstance(
         name="ResumedB",
         vault_path=Path(f"{VAULT_PREFIX}-resumed-b"),
-        cdp_port=RESUMED_CDP_PORT_B,
         display=f":{RESUMED_DISPLAY_BASE - 1}",
         api_url=API_URL,
         api_key=resumed_user[2],
@@ -695,10 +663,8 @@ def fresh_instance_pair(resumed_user, resumed_client_id, resumed_api):
     )
     inst_a.start()
     inst_b.start()
-    cdp_a = CdpClient(port=inst_a.cdp_port)
-    cdp_b = CdpClient(port=inst_b.cdp_port)
     try:
-        yield inst_a, inst_b, cdp_a, cdp_b
+        yield inst_a, inst_b, inst_a.cdp, inst_b.cdp
     finally:
         inst_a.stop()
         inst_b.stop()

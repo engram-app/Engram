@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { clerkSetup } from "@clerk/testing/playwright";
 import { cleanupTestUsers } from "./db-cleanup";
+import { clerkFetch } from "./support/clerk-fetch";
 
 const AUTH_STATE_PATH = path.join(__dirname, ".auth-state.json");
 const CLERK_API = "https://api.clerk.com/v1";
@@ -15,7 +16,7 @@ async function preCompleteOnboarding(userId: string, secretKey: string): Promise
 	// user record (POST /api-keys triggers find_or_create_by_clerk_id), then
 	// mark onboarding complete so OnboardingGate stops redirecting tests away
 	// from the dashboard.
-	const sessionResp = await fetch(`${CLERK_API}/sessions`, {
+	const sessionResp = await clerkFetch(`${CLERK_API}/sessions`, {
 		method: "POST",
 		headers: { Authorization: `Bearer ${secretKey}`, "Content-Type": "application/json" },
 		body: JSON.stringify({ user_id: userId }),
@@ -27,7 +28,7 @@ async function preCompleteOnboarding(userId: string, secretKey: string): Promise
 	}
 	const sessionId = (await sessionResp.json()).id as string;
 
-	const tokenResp = await fetch(`${CLERK_API}/sessions/${sessionId}/tokens`, {
+	const tokenResp = await clerkFetch(`${CLERK_API}/sessions/${sessionId}/tokens`, {
 		method: "POST",
 		headers: { Authorization: `Bearer ${secretKey}`, "Content-Type": "application/json" },
 	});
@@ -103,7 +104,7 @@ async function waitUntilSignInReady(userId: string, secretKey: string): Promise<
 
 	while (true) {
 		attempt++;
-		const resp = await fetch(`${CLERK_API}/sign_in_tokens`, {
+		const resp = await clerkFetch(`${CLERK_API}/sign_in_tokens`, {
 			method: "POST",
 			headers,
 			body: JSON.stringify({ user_id: userId, expires_in_seconds: 60 }),
@@ -169,7 +170,7 @@ async function waitUntilEmailResolvable(
 
 	while (true) {
 		attempt++;
-		const resp = await fetch(`${CLERK_API}/users?email_address=${encodeURIComponent(email)}`, {
+		const resp = await clerkFetch(`${CLERK_API}/users?email_address=${encodeURIComponent(email)}`, {
 			headers,
 		});
 		if (!resp.ok) {
@@ -216,9 +217,12 @@ async function cleanupOrphanedClerkUsers(secretKey: string) {
 	let deleted = 0;
 
 	for (let offset = 0; ; offset += 100) {
-		const resp = await fetch(`${CLERK_API}/users?limit=100&offset=${offset}&order_by=created_at`, {
-			headers,
-		});
+		const resp = await clerkFetch(
+			`${CLERK_API}/users?limit=100&offset=${offset}&order_by=created_at`,
+			{
+				headers,
+			},
+		);
 		if (!resp.ok) {
 			break;
 		}
@@ -237,7 +241,10 @@ async function cleanupOrphanedClerkUsers(secretKey: string) {
 				continue;
 			}
 			if (emails.some((e: string) => E2E_PREFIXES.some((p) => e.startsWith(p)))) {
-				const del = await fetch(`${CLERK_API}/users/${user.id}`, { method: "DELETE", headers });
+				const del = await clerkFetch(`${CLERK_API}/users/${user.id}`, {
+					method: "DELETE",
+					headers,
+				});
 				if (del.ok) {
 					deleted++;
 				}
@@ -275,7 +282,7 @@ export default async function globalSetup() {
 	const email = `e2e-browser-${ts}@test.com`;
 	const password = crypto.randomBytes(12).toString("base64url");
 
-	const resp = await fetch(`${CLERK_API}/users`, {
+	const resp = await clerkFetch(`${CLERK_API}/users`, {
 		method: "POST",
 		headers: {
 			Authorization: `Bearer ${secretKey}`,

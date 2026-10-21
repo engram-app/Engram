@@ -218,7 +218,123 @@ defmodule Engram.Workers.ReconcileEmbeddings do
       )
     )
 
+    :ok = wake_budget_parked(backoff_until)
+
     if versions_done, do: :ok, else: sweep_keyword_stale(now, paid, page_size)
+  end
+
+  # The Free embed-bucket queue. A budget-parked note waits with no clock
+  # (`EmbedNote.parked_until_edited/0`); this wakes, per user, the parked notes
+  # whose recorded `embed_budget_need` fits what the bucket holds now, first
+  # fit by age (`embed_budget_parked_at`): oldest first, and a note that does
+  # not fit is skipped so smaller ones behind it still wake. The oldest note,
+  # if skipped, also wakes with whatever is left as its cap (`budget_cap`) once
+  # that covers its next chunk (`embed_budget_next`): it embeds what fits and
+  # parks the rest, so it cannot starve, and no pass runs to embed nothing.
+  @wake_page 500
+
+  defp wake_budget_parked(backoff_until) do
+    Enum.each(parked_user_ids(), &wake_user(&1, backoff_until))
+  end
+
+  defp parked_user_ids do
+    parked = from(n in Note, where: n.kind == "note" and n.embed_budget_parked == true)
+
+    case Repo.maintenance() do
+      # No cross-tenant pool (self-host): the per-user scan the sweep uses.
+      Repo ->
+        Enum.filter(TenantScan.user_ids(), fn user_id ->
+          Repo.with_tenant!(user_id, fn -> Repo.exists?(parked) end)
+        end)
+
+      maintenance ->
+        maintenance.all(from(n in parked, distinct: true, select: n.user_id))
+    end
+  end
+
+  defp wake_user(user_id, backoff_until) do
+    case Engram.Accounts.get_user_with_subscription(user_id) do
+      nil -> :ok
+      user -> wake(user, backoff_until)
+    end
+  end
+
+  defp wake(user, backoff_until) do
+    budget = spendable(user)
+
+    woken =
+      Repo.with_tenant!(user.id, fn ->
+        candidates =
+          from(n in IndexVersions.live_notes(),
+            where: n.embed_budget_parked == true,
+            order_by: [asc_nulls_last: n.embed_budget_parked_at, asc: n.id],
+            limit: @wake_page,
+            select: {n.id, n.embed_budget_need, n.embed_budget_next}
+          )
+          |> Repo.all()
+
+        woken = fitting(candidates, budget)
+        ids = Enum.map(woken, &elem(&1, 0))
+
+        _ =
+          Repo.update_all(from(n in Note, where: n.kind == "note" and n.id in ^ids),
+            set: [embed_budget_parked: nil, embed_retry_after: backoff_until]
+          )
+
+        woken
+      end)
+
+    caps = Map.new(woken)
+    fresh = EmbedNote.reject_already_queued(Map.keys(caps), EmbedNote.backfill_priority())
+
+    _ =
+      Oban.insert_all(
+        Enum.map(fresh, fn id ->
+          EmbedNote.new_debounced(id, user.id,
+            priority: EmbedNote.backfill_priority(),
+            budget_cap: caps[id]
+          )
+        end)
+      )
+
+    :ok
+  end
+
+  # What the bucket holds now, or `:unmetered` (paid, self-host, a -1 override).
+  defp spendable(user) do
+    case Engram.Billing.effective_limit(user, :embed_token_bucket) do
+      cap when is_integer(cap) and cap >= 0 -> Engram.UsageMeters.bucket_available(user.id, cap)
+      _ -> :unmetered
+    end
+  end
+
+  # A parked note's next chunk when its park did not record one.
+  @unknown_next_chunk 512
+
+  @doc false
+  # `candidates` (`{id, need, next_chunk}`, oldest first) to wake as
+  # `{id, budget_cap}`: every one whose need fits what is left, first fit, cap
+  # nil; then the oldest, if it was skipped and what is left covers its next
+  # chunk, capped at that remainder. Below that its pass would embed nothing.
+  def fitting(candidates, :unmetered), do: Enum.map(candidates, &{elem(&1, 0), nil})
+
+  def fitting([], _available), do: []
+
+  def fitting([{head, _, head_next} | _] = candidates, available) do
+    # Parked by an older release, need unknown: wake it once anything is left;
+    # its pass records the real need.
+    {fits, left} =
+      Enum.reduce(candidates, {[], available}, fn {id, need, _next}, {fits, left} ->
+        need = need || 1
+        if need <= left, do: {[{id, nil} | fits], left - need}, else: {fits, left}
+      end)
+
+    fits = Enum.reverse(fits)
+
+    if left > 0 and left >= (head_next || @unknown_next_chunk) and
+         not List.keymember?(fits, head, 0),
+       do: [{head, left} | fits],
+       else: fits
   end
 
   # The hour a day (04:00-04:59 UTC, twelve "2-59/5" ticks) that re-checks

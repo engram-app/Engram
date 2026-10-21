@@ -348,7 +348,7 @@ class ApiClient:
         return resp.json()
 
     def get_quiescence(self) -> dict:
-        """GET /sync/quiescence: {change_seq, pending_crdt_updates, pending_checkpoints}."""
+        """GET /sync/quiescence: change_seq plus pending_crdt_updates/_checkpoints and deferred_checkpoints."""
         resp = self.session.get(f"{self.base_url}/sync/quiescence", timeout=10)
         self._raise_for_status(resp)
         return resp.json()

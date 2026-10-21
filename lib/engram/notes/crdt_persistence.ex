@@ -431,9 +431,13 @@ defmodule Engram.Notes.CrdtPersistence do
         after
           CheckpointGate.release()
         end
+
+        # A job snoozed behind this room would otherwise read as owed for up
+        # to a minute after the room is gone.
+        Engram.Workers.CheckpointNote.retime_snoozed(note_id)
       else
         Enqueue.enqueue(
-          Engram.Workers.CheckpointNote.new(%{
+          Engram.Workers.CheckpointNote.for_room_exit(%{
             user_id: user_id,
             vault_id: vault_id,
             note_id: note_id

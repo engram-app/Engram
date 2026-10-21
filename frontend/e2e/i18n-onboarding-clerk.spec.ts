@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import type { Locale } from "../src/i18n/locales";
 import { clerkLocalizationLoaders } from "../src/i18n/vendor-locales";
 import { clerkSignIn, loadAuthState } from "./clerk-helpers";
+import { clerkFetch } from "./support/clerk-fetch";
 import { BROWSER_LOCALES, checkStep } from "./support/i18n-leaks";
 import { walkOnboarding } from "./support/i18n-onboarding";
 
@@ -24,7 +25,7 @@ const SECRET_KEY = process.env.E2E_CLERK_SECRET_KEY ?? "";
 async function createUnonboardedUser(code: string): Promise<{ email: string; id: string }> {
 	const ts = Date.now();
 	const email = `e2e-browser-i18n-e2e-${ts}-${code.toLowerCase()}@test.com`;
-	const resp = await fetch(`${CLERK_API}/users`, {
+	const resp = await clerkFetch(`${CLERK_API}/users`, {
 		method: "POST",
 		headers: { Authorization: `Bearer ${SECRET_KEY}`, "Content-Type": "application/json" },
 		body: JSON.stringify({
@@ -67,7 +68,7 @@ for (const { tag, code } of BROWSER_LOCALES) {
 			if (!user) {
 				return;
 			}
-			await fetch(`${CLERK_API}/users/${user.id}`, {
+			await clerkFetch(`${CLERK_API}/users/${user.id}`, {
 				method: "DELETE",
 				headers: { Authorization: `Bearer ${SECRET_KEY}` },
 			})

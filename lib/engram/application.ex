@@ -312,6 +312,8 @@ defmodule Engram.Application do
     [
       EngramWeb.Telemetry,
       Engram.PromEx,
+      # After PromEx: seeds the alerted counters at 0 once its handlers attach.
+      Engram.PromEx.ZeroInit,
       Engram.Repo,
       maintenance_repo_child(),
       boot_canary_guard(),

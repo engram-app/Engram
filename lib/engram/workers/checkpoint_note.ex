@@ -18,7 +18,14 @@ defmodule Engram.Workers.CheckpointNote do
   use Oban.Worker,
     queue: :crdt_checkpoint,
     max_attempts: 3,
-    unique: [keys: [:note_id], states: :incomplete]
+    unique: [keys: [:note_id], states: :incomplete],
+    # A job snoozed behind a live room ABSORBS later enqueues for its note
+    # (unique across `:incomplete`). Without this, an absorbed room-exit enqueue
+    # waits out the rest of the 60 s snooze; with it, the insert re-times the
+    # snoozed job to the new job's run time.
+    replace: [scheduled: [:scheduled_at]]
+
+  import Ecto.Query, only: [from: 2]
 
   alias Engram.{Accounts, Crypto, Repo}
   alias Engram.Crypto.RotationGate
@@ -26,6 +33,44 @@ defmodule Engram.Workers.CheckpointNote do
   alias Engram.Notes.{CrdtBridge, CrdtCheckpoint, CrdtPersistence, CrdtRegistry, Note}
 
   require Logger
+
+  # How long after a room exit its checkpoint runs. The exit enqueues from
+  # inside the room's own shutdown, while it is still registered in `:global`;
+  # running at once would find that dying room and snooze 60 s. Long enough
+  # for the room to deregister, short enough that readers of notes.content
+  # (REST, MCP, search) catch up within seconds.
+  @room_exit_delay_s 5
+
+  @doc "Seconds between a room exit and the checkpoint it owes."
+  def room_exit_delay_s, do: @room_exit_delay_s
+
+  @doc """
+  The overflow checkpoint a room exit owes when the inline gate is full. If a
+  snoozed job for the note already exists, it is re-timed (see `replace`)
+  rather than left at its snooze deadline.
+  """
+  def for_room_exit(args), do: new(args, schedule_in: @room_exit_delay_s)
+
+  @doc """
+  After a room's own inline checkpoint: re-time any job for the note that is
+  snoozed behind this (now exiting) room. Its work is usually already done, so
+  it runs as cheap compaction instead of reading as owed for up to a minute.
+  Enqueues nothing when no job is pending.
+  """
+  def retime_snoozed(note_id) do
+    run_at = DateTime.add(DateTime.utc_now(), @room_exit_delay_s, :second)
+
+    {count, _} =
+      from(j in Oban.Job,
+        where: j.worker == ^inspect(__MODULE__),
+        where: j.state == "scheduled",
+        where: j.scheduled_at > ^run_at,
+        where: fragment("? ->> 'note_id'", j.args) == ^to_string(note_id)
+      )
+      |> Repo.update_all(set: [scheduled_at: run_at])
+
+    count
+  end
 
   # BEST-EFFORT here, unlike every other worker. Oban implements `timeout/1`
   # with `:timer.exit_after/2`, and an exit signal is only handled when the

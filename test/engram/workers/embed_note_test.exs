@@ -133,7 +133,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       bypass: bypass,
       note: note
     } do
-      Engram.UsageMeters.add_embed_tokens(note.user_id, 20_000_000)
+      Engram.UsageMeters.bucket_take(note.user_id, 6_000_000, 6_000_000)
       used = Engram.UsageMeters.lifetime_embed_tokens(note.user_id)
 
       from(n in Note, where: n.id == ^note.id)
@@ -168,7 +168,7 @@ defmodule Engram.Workers.EmbedNoteTest do
     # The worker the sweep enqueues is EmbedNote's maintenance path under a
     # name the previous release lacks.
     test "RebuildStaleNote runs the same unmetered rebuild", %{bypass: bypass, note: note} do
-      Engram.UsageMeters.add_embed_tokens(note.user_id, 20_000_000)
+      Engram.UsageMeters.bucket_take(note.user_id, 6_000_000, 6_000_000)
       used = Engram.UsageMeters.lifetime_embed_tokens(note.user_id)
 
       from(n in Note, where: n.id == ^note.id)
@@ -336,7 +336,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       # sparse index is already there (the chunk row below), so this must
       # neither call Voyage nor rebuild: it parks the note so
       # ReconcileEmbeddings stops re-selecting it every tick.
-      Engram.UsageMeters.add_embed_tokens(note.user_id, 20_000_000)
+      Engram.UsageMeters.bucket_take(note.user_id, 6_000_000, 6_000_000)
 
       Repo.insert!(
         %Engram.Notes.Chunk{
@@ -423,7 +423,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       # An over-budget note carries the same bad chunks as everyone else's, and
       # re-chunking it sparse-only calls no embedder, so #1620 rebuilds it too.
       # The absence of a Mox expectation is the assertion that Voyage is NOT hit.
-      Engram.UsageMeters.add_embed_tokens(note.user_id, 20_000_000)
+      Engram.UsageMeters.bucket_take(note.user_id, 6_000_000, 6_000_000)
 
       from(n in Note, where: n.id == ^note.id)
       |> Repo.update_all(
@@ -1036,7 +1036,8 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       # Exhaust the budget, then edit. The re-index rebuilds the note's points
       # sparse-only, so the dense vectors this column names no longer exist.
-      Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
+      left = Engram.UsageMeters.bucket_available(user.id, 6_000_000)
+      {:ok, _} = Engram.UsageMeters.bucket_take(user.id, left, 6_000_000)
 
       {:ok, note} =
         Notes.upsert_note(
@@ -1121,7 +1122,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       end)
 
       stamp_as_cap_skipped(note)
-      Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
+      Engram.UsageMeters.bucket_take(user.id, 6_000_000, 6_000_000)
       stub_qdrant(bypass)
 
       # No MockEmbedder expectation: a Voyage call fails the test. Parking here
@@ -1146,7 +1147,7 @@ defmodule Engram.Workers.EmbedNoteTest do
       end)
 
       stamp_as_cap_skipped(note)
-      Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
+      Engram.UsageMeters.bucket_take(user.id, 6_000_000, 6_000_000)
       stub_qdrant(bypass)
 
       handler = "budget-exhausted-#{System.unique_integer()}"
@@ -1170,14 +1171,14 @@ defmodule Engram.Workers.EmbedNoteTest do
         end)
 
       refute_received :budget_exhausted
-      refute log =~ "lifetime embed-token cap reached"
+      refute log =~ "embed-token bucket empty"
     end
   end
 
-  describe "perform/1 — lifetime embed-token budget (pricing v2 §B)" do
+  describe "perform/1: Free refilling embed-token bucket" do
     setup do
       # Users without a Subscription default to :free tier (Billing.tier/1).
-      # Free's lifetime_embed_token_cap = 20M per LimitKeys catalog.
+      # Free's embed_token_bucket = 6M per LimitKeys catalog.
       prev = Application.get_env(:engram, :limits_enforced)
       Application.put_env(:engram, :limits_enforced, true)
 
@@ -1194,13 +1195,13 @@ defmodule Engram.Workers.EmbedNoteTest do
          %{bypass: bypass, user: user, note: note} do
       # Cancelling here (the old behaviour) cost an over-budget user their
       # BM25 index too, so the note stopped being searchable at all.
-      Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
+      Engram.UsageMeters.bucket_take(user.id, 6_000_000, 6_000_000)
       stub_qdrant(bypass)
 
       # No Mock expect declared: a Voyage call fails the test.
       assert :ok = perform_job(EmbedNote, %{note_id: note.id})
 
-      assert Engram.UsageMeters.lifetime_embed_tokens(user.id) == 20_000_000
+      assert Engram.UsageMeters.lifetime_embed_tokens(user.id) == 6_000_000
 
       assert Repo.exists?(from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id),
                skip_tenant_check: true
@@ -1235,7 +1236,7 @@ defmodule Engram.Workers.EmbedNoteTest do
         Plug.Conn.resp(conn, 200, "1")
       end)
 
-      Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
+      Engram.UsageMeters.bucket_take(user.id, 6_000_000, 6_000_000)
       stub_qdrant(bypass)
 
       other =
@@ -1249,9 +1250,42 @@ defmodule Engram.Workers.EmbedNoteTest do
 
       assert_receive {:captured, body}, 1_000
       assert body["event"] == "limit_hit"
-      assert body["properties"]["limit_key"] == "lifetime_embed_token_cap"
+      assert body["properties"]["limit_key"] == "embed_token_bucket"
       assert body["properties"]["silent"] == true
       refute_receive {:captured, %{"event" => "limit_hit"}}, 300
+    end
+
+    test "the empty-bucket warning fires once per user per day, not per note",
+         %{bypass: bypass, user: user, vault: vault, note: note} do
+      EngramWeb.RateLimiter.reset_buckets!()
+      Engram.UsageMeters.bucket_take(user.id, 6_000_000, 6_000_000)
+      stub_qdrant(bypass)
+
+      handler = "budget-exhausted-#{System.unique_integer()}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler,
+        [:engram, :abuse, :embed_budget_exhausted],
+        fn _, _, _, _ -> send(test_pid, :budget_exhausted) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      others =
+        for i <- 1..3 do
+          Engram.Fixtures.insert_note!(user, vault, %{path: "Test/N#{i}.md", content: "# N#{i}"})
+        end
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          for n <- [note | others], do: assert(:ok = perform_job(EmbedNote, %{note_id: n.id}))
+        end)
+
+      assert_received :budget_exhausted
+      refute_received :budget_exhausted
+      assert length(String.split(log, "embed-token bucket empty")) == 2
     end
 
     test "proceeds and increments the counter on success",
@@ -1373,14 +1407,79 @@ defmodule Engram.Workers.EmbedNoteTest do
       assert Engram.UsageMeters.lifetime_embed_tokens(user.id) == 0
     end
 
-    test "user override raises the cap above the default",
+    test "a refilled bucket re-embeds a keyword-only note densely",
          %{bypass: bypass, user: user, note: note} do
-      Engram.UsageMeters.add_embed_tokens(user.id, 20_000_000)
+      Engram.UsageMeters.bucket_take(user.id, 6_000_000, 6_000_000)
+      stub_qdrant(bypass)
+
+      # Empty bucket: keyword-only, parked, and no Voyage (no Mox expectation).
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+      parked = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert is_nil(parked.dense_indexed_hash)
+      assert parked.embed_budget_parked == true
+
+      # A month passes: ~500k tokens refill and the park expires, so the
+      # ReconcileEmbeddings dense backfill hands the note back to EmbedNote.
+      month_ago = DateTime.add(DateTime.utc_now(), -30, :day)
+
+      Repo.update_all(from(m in Engram.UsageMeters.Meter, where: m.user_id == ^user.id),
+        set: [embed_bucket_at: month_ago]
+      )
+
+      Repo.update_all(
+        from(n in Note, where: n.id == ^note.id),
+        [set: [embed_retry_after: month_ago]],
+        skip_tenant_check: true
+      )
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts -> {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)} end)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+
+      dense = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert dense.dense_indexed_hash == dense.content_hash
+      assert dense.embed_budget_parked == nil
+    end
+
+    test "a paid user is never limited by a drained bucket",
+         %{bypass: bypass, user: user, note: note} do
+      Engram.UsageMeters.bucket_take(user.id, 6_000_000, 6_000_000)
+      insert(:subscription, user: user, tier: "pro", status: "active")
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts -> {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)} end)
+
+      stub_qdrant(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+      indexed = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert indexed.dense_indexed_hash == indexed.content_hash
+    end
+
+    test "self-host (limits not enforced) has no bucket",
+         %{bypass: bypass, user: user, note: note} do
+      Application.put_env(:engram, :limits_enforced, false)
+      Engram.UsageMeters.bucket_take(user.id, 6_000_000, 6_000_000)
+
+      Engram.MockEmbedder
+      |> expect(:embed_texts, fn texts -> {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)} end)
+
+      stub_qdrant(bypass)
+
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+      indexed = Repo.get!(Note, note.id, skip_tenant_check: true)
+      assert indexed.dense_indexed_hash == indexed.content_hash
+    end
+
+    test "an override with no bucket (-1) embeds even with the bucket drained",
+         %{bypass: bypass, user: user, note: note} do
+      Engram.UsageMeters.bucket_take(user.id, 6_000_000, 6_000_000)
 
       insert(:user_limit_override,
         user: user,
-        key: "lifetime_embed_token_cap",
-        value: %{"v" => 100_000_000}
+        key: "embed_token_bucket",
+        value: %{"v" => -1}
       )
 
       Engram.MockEmbedder

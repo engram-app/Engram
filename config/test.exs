@@ -257,3 +257,6 @@ config :engram, :qdrant_collection_metrics, false
 # EmbedNote's Qdrant pressure preflight: off for the same reason (it GETs
 # /sys_metrics and /metrics); its tests opt in per-process.
 config :engram, :qdrant_backpressure_preflight, false
+
+# Post-flip Qdrant sweep retries without waiting in tests.
+config :engram, Engram.Crypto.UserDekRotation, qdrant_retry_ms: 0

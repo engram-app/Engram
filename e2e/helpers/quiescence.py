@@ -1,8 +1,10 @@
 """Wait until sync has settled on both ends, instead of sleeping a fixed window.
 
 Settled means, read twice in a row:
-  - server: no checkpoint job pending for the vault (a cold note's CRDT updates
-    fold in a debounced CheckpointNote, and the fold bumps change_seq), and
+  - server: no checkpoint job pending for the vault (CheckpointNote folds CRDT
+    updates a room could not checkpoint inline: a room-shutdown overflow past
+    CheckpointGate's limit, or a link rewrite on a roomless note; the fold bumps
+    change_seq), and
   - client: the catch-up cursor has reached the server's change_seq, and the
     device owes nothing outbound (debounced or running pushes, offline queue,
     CRDT op queue, in-flight flushes and creates).
@@ -13,6 +15,11 @@ deadline is a true-breakage bound, not an expected wait.
 `pending_crdt_updates` is deliberately NOT a settle condition: it counts the
 whole session vault, and a note another test left open in an editor holds its
 updates in a live room until that room checkpoints. It is reported on timeout.
+
+`deferred_checkpoints` is NOT a settle condition either: it counts checkpoints
+held by a live room (the room materializes the note itself on exit). A snoozed checkpoint whose room has exited IS pending: it still owes
+the notes.content write, and the room exit re-times it to run ~5s later. It is
+reported on timeout.
 """
 
 from __future__ import annotations

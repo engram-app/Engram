@@ -71,6 +71,7 @@ defmodule Engram.Billing do
     string_key = to_string(key)
 
     with :miss <- user_override_lookup(user.id, string_key),
+         :miss <- legacy_override_lookup(user.id, key),
          :miss <- env_override_lookup(user_tier, key),
          :miss <- plan_lookup(user, string_key) do
       LimitKeys.default_for(key, user_tier)
@@ -260,6 +261,14 @@ defmodule Engram.Billing do
       )
       |> wrap_lookup()
     end)
+  end
+
+  # An override row written under a key's old name (`LimitKeys.legacy_key/1`).
+  defp legacy_override_lookup(user_id, key) do
+    case LimitKeys.legacy_key(key) do
+      nil -> :miss
+      old -> user_override_lookup(user_id, old)
+    end
   end
 
   defp env_override_lookup(tier, key) do

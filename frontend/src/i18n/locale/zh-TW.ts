@@ -140,6 +140,17 @@ export default {
 	"Current Plan": "目前方案",
 	Free: "免费",
 	"{count} days remaining in your free trial.": { other: "您的免費試用期還剩 {count} 天。" },
+	"Indexing budget": "索引配額",
+	"{available} of {capacity} tokens left": "剩餘 {available} 個 {capacity} 個 token",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"每日額滿 {perDay} 個 token。於 {date} 再次額滿。",
+	"All tokens are available.": "所有 Token 皆可用。",
+	"{count} notes have keyword search only, until {date}.": {
+		other: "{count} 筆記僅支援關鍵字搜尋，至 {date} 為止。",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		other: "{count} 筆記僅支援關鍵字搜尋，直到索引預算恢復。",
+	},
 	"Loading current connection…": "正在載入連線…",
 	"Disconnected. Retry the new connection now.": "已斷線。立即重新連線。",
 	"Couldn't disconnect. Try Settings → Connections.": "斷線失敗。請嘗試「設定」→「連線」。",
@@ -799,6 +810,7 @@ export default {
 	"{client} is connected": "{client} 已連線",
 	"Your AI tool is connected": "您的 AI 工具已連線",
 	"What will you use Engram for?": "您將如何使用 Engram？",
+	"Could not continue. Please try again.": "執行失敗。請重試。",
 	"Review the Terms": "檢閱條款",
 	"privacy notice": "隱私權聲明",
 	"What changed": "變更內容",
@@ -810,7 +822,6 @@ export default {
 		"我已閱讀並同意服務條款和隱私權政策",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"我已閱讀並同意上方顯示的協議和隱私權聲明",
-	"Could not continue. Please try again.": "執行失敗。請重試。",
 	"Saving…": "儲存中…",
 	Continue: "繼續",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

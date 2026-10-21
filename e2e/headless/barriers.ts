@@ -131,6 +131,9 @@ export async function serverHasContent(
 	vaultId: string,
 	notePath: string,
 	contentHash: string,
+	// The load sim polls many notes at once; 100ms each would spend the
+	// account's api_rps_cap and 429 the engine's own REST calls.
+	pollMs = 100,
 ): Promise<void> {
 	const url = `${apiUrl.replace(/\/+$/, "")}/notes/${encodeURIComponent(notePath)}`;
 	const headers = { Authorization: `Bearer ${token}`, "X-Vault-ID": vaultId };
@@ -151,7 +154,7 @@ export async function serverHasContent(
 				`serverHasContent timeout: ${notePath} expected ${contentHash.slice(0, 12)} got ${last} after ${DELIVERY_TIMEOUT_MS}ms`,
 			);
 		}
-		await new Promise((r) => setTimeout(r, 100));
+		await new Promise((r) => setTimeout(r, pollMs));
 	}
 }
 

@@ -150,6 +150,17 @@ export default {
 	"Current Plan": "현재 요금제",
 	Free: "무료",
 	"{count} days remaining in your free trial.": { other: "무료 체험은 {count}일 남았습니다." },
+	"Indexing budget": "인덱싱 용량",
+	"{available} of {capacity} tokens left": "{available} 토큰 남음 ({capacity} 토큰 중)",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"하루 {perDay} 토큰을 충전합니다. {date}에 다시 가득 찹니다.",
+	"All tokens are available.": "모든 토큰이 사용 가능합니다.",
+	"{count} notes have keyword search only, until {date}.": {
+		other: "{count} 노트는 {date}까지 키워드 검색만 지원합니다.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		other: "{count} 노트는 예산이 충전될 때까지 키워드 검색만 지원합니다.",
+	},
 	"Loading current connection…": "현재 연결 로딩 중…",
 	"Disconnected. Retry the new connection now.": "연결 해제됨. 지금 새로운 연결을 시도하세요.",
 	"Couldn't disconnect. Try Settings → Connections.":
@@ -823,6 +834,7 @@ export default {
 	"{client} is connected": "{client}이 연결되었습니다",
 	"Your AI tool is connected": "AI 도구가 연결되었습니다",
 	"What will you use Engram for?": "Engram을 어디에 사용하시겠습니까?",
+	"Could not continue. Please try again.": "계속할 수 없습니다. 다시 시도해주세요.",
 	"Review the Terms": "이용 약관 확인",
 	"privacy notice": "개인정보 처리방침",
 	"What changed": "변경 내역",
@@ -834,7 +846,6 @@ export default {
 		"이용 약관 및 개인정보 처리방침을 읽고 동의합니다",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"위 약관 및 개인정보 처리방침을 읽고 동의합니다",
-	"Could not continue. Please try again.": "계속할 수 없습니다. 다시 시도해주세요.",
 	"Saving…": "저장 중...",
 	Continue: "계속하기",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

@@ -128,6 +128,7 @@ defmodule Engram.PromEx.Crdt do
   use PromEx.Plugin
 
   alias Engram.Notes.CrdtRoomLru
+  alias Engram.PromEx.Buckets
 
   @claim_event [:engram, :crdt, :index_claim]
   @rooms_event [:engram, :crdt, :rooms]
@@ -229,25 +230,21 @@ defmodule Engram.PromEx.Crdt do
               "Engram.Notes.CrdtBloat.min_content_bytes/0 take NO sample — their Yjs framing " <>
               "divides to a large ratio that is not bloat. Its `_count` is therefore lower " <>
               "than the state_bytes/content_bytes counts, by design.",
-          reporter_options: [buckets: [1, 2, 3, 5, 10, 25, 50, 100, 500]]
+          reporter_options: Buckets.opts(Engram.PromEx.Crdt.BloatRatioBuckets)
         ),
         distribution(
           metric_prefix ++ [:checkpoint_doc, :state_bytes],
           event_name: @doc_event,
           measurement: :state_bytes,
           description: "Encoded Yjs v1 state size per markdown checkpoint, before flatten.",
-          reporter_options: [
-            buckets: [1_000, 5_000, 10_000, 50_000, 100_000, 500_000, 1_000_000, 5_000_000]
-          ]
+          reporter_options: Buckets.opts(Engram.PromEx.Crdt.StateBytesBuckets)
         ),
         distribution(
           metric_prefix ++ [:checkpoint_doc, :content_bytes],
           event_name: @doc_event,
           measurement: :content_bytes,
           description: "Projected markdown size per checkpoint — the bloat_ratio denominator.",
-          reporter_options: [
-            buckets: [500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000]
-          ]
+          reporter_options: Buckets.opts(Engram.PromEx.Crdt.ContentBytesBuckets)
         ),
         # Every crdt_update_log append's update size (CrdtPersistence). The
         # table only holds the unfolded survivors, so their average said
@@ -258,9 +255,7 @@ defmodule Engram.PromEx.Crdt do
           event_name: @update_event,
           measurement: :bytes,
           description: "Yjs update size per CRDT update-log append, before encryption.",
-          reporter_options: [
-            buckets: [64, 256, 1_024, 4_096, 16_384, 65_536, 262_144, 1_048_576, 5_242_880]
-          ]
+          reporter_options: Buckets.opts(Engram.PromEx.Crdt.UpdateBytesBuckets)
         ),
         # The other half of the flatten gate. `should_flatten?/2` requires 1,000
         # distinct client IDs AND 500 KB; this says whether any real doc ever
@@ -270,7 +265,7 @@ defmodule Engram.PromEx.Crdt do
           event_name: @doc_event,
           measurement: :client_count,
           description: "Distinct client IDs in the doc state vector per markdown checkpoint.",
-          reporter_options: [buckets: [1, 2, 5, 10, 25, 50, 100, 500, 1_000]]
+          reporter_options: Buckets.opts(Engram.PromEx.Crdt.ClientCountBuckets)
         ),
         # #1706, the sweep half. The distributions above sample notes that were
         # OPENED, re-counting a frequently synced note on every open; these
@@ -559,4 +554,48 @@ defmodule Engram.PromEx.Crdt do
       %{}
     )
   end
+end
+
+defmodule Engram.PromEx.Crdt.BloatRatioBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [1, 2, 3, 5, 10, 25, 50, 100, 500]
+end
+
+defmodule Engram.PromEx.Crdt.StateBytesBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [
+    1_000,
+    5_000,
+    10_000,
+    50_000,
+    100_000,
+    500_000,
+    1_000_000,
+    5_000_000
+  ]
+end
+
+defmodule Engram.PromEx.Crdt.ContentBytesBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000]
+end
+
+defmodule Engram.PromEx.Crdt.UpdateBytesBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [
+    64,
+    256,
+    1_024,
+    4_096,
+    16_384,
+    65_536,
+    262_144,
+    1_048_576,
+    5_242_880
+  ]
+end
+
+defmodule Engram.PromEx.Crdt.ClientCountBuckets do
+  @moduledoc false
+  use Engram.PromEx.Buckets, [1, 2, 5, 10, 25, 50, 100, 500, 1_000]
 end

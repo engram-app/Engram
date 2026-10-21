@@ -163,6 +163,22 @@ export default {
 		many: "Restam {count} dias do seu período de teste gratuito.",
 		other: "Faltam {count} dias para o fim do seu período de teste gratuito.",
 	},
+	"Indexing budget": "Orçamento de indexação",
+	"{available} of {capacity} tokens left": "{available} de {capacity} tokens restantes",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Recarrega {perDay} tokens por dia. Completamente cheio novamente em {date}.",
+	"All tokens are available.": "Todos os tokens estão disponíveis.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} nota tem busca por palavra-chave apenas, até {date}.",
+		many: "{count} notas têm busca por palavra-chave apenas, até {date}.",
+		other: "{count} notas podem ser encontradas apenas por busca por palavra-chave, até {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "{count} nota só pode ser encontrada por busca por palavra-chave, até que o limite seja reabastecido.",
+		many: "{count} notas podem ser encontradas apenas por busca por palavra-chave, até que o limite seja reabastecido.",
+		other:
+			"{count} notas podem ser encontradas apenas por busca por palavra-chave, até que o limite seja reabastecido.",
+	},
 	"Loading current connection…": "Carregando a conexão atual…",
 	"Disconnected. Retry the new connection now.": "Desconectado. Tente reconectar agora.",
 	"Couldn't disconnect. Try Settings → Connections.":
@@ -871,6 +887,8 @@ export default {
 	"{client} is connected": "{client} está conectado",
 	"Your AI tool is connected": "Sua ferramenta de IA está conectada",
 	"What will you use Engram for?": "Para que você usará o Engram?",
+	"Could not continue. Please try again.":
+		"Não foi possível continuar. Por favor, tente novamente.",
 	"Review the Terms": "Revise os Termos",
 	"privacy notice": "aviso de privacidade",
 	"What changed": "O que mudou",
@@ -883,8 +901,6 @@ export default {
 		"Eu li e concordo com os Termos de Serviço e a Política de Privacidade",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Eu li e concordo com o contrato exibido acima e o aviso de privacidade",
-	"Could not continue. Please try again.":
-		"Não foi possível continuar. Por favor, tente novamente.",
 	"Saving…": "Salvando…",
 	Continue: "Continuar",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

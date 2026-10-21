@@ -161,6 +161,19 @@ export default {
 		one: "Noch {count} Tag in deiner kostenlosen Testphase.",
 		other: "Noch {count} Tage in deiner kostenlosen Testphase.",
 	},
+	"Indexing budget": "Indexierungsbudget",
+	"{available} of {capacity} tokens left": "{available} von {capacity} Token übrig",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Füllt {perDay} Token pro Tag auf. Wieder voll am {date}.",
+	"All tokens are available.": "Alle Token sind verfügbar.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} Notiz hat nur Stichwortsuche, bis {date}.",
+		other: "{count} Notizen haben nur eine Stichwortsuche, bis {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "Eine Notiz hat nur eine Stichwortsuche, bis das Guthaben wieder aufgefüllt ist.",
+		other: "{count} Notizen haben nur eine Stichwortsuche, bis das Guthaben wieder aufgefüllt ist.",
+	},
 	"Loading current connection…": "Verbindung wird aufgebaut…",
 	"Disconnected. Retry the new connection now.":
 		"Verbindung getrennt. Versuche die neue Verbindung jetzt.",
@@ -851,6 +864,8 @@ export default {
 	"{client} is connected": "{client} ist verbunden",
 	"Your AI tool is connected": "Dein KI-Tool ist verbunden",
 	"What will you use Engram for?": "Wofür möchtest du Engram nutzen?",
+	"Could not continue. Please try again.":
+		"Konnte nicht fortgesetzt werden. Bitte versuche es erneut.",
 	"Review the Terms": "Bedingungen prüfen",
 	"privacy notice": "Datenschutzerklärung",
 	"What changed": "Was hat sich geändert",
@@ -863,8 +878,6 @@ export default {
 		"Ich habe die Nutzungsbedingungen und die Datenschutzerklärung gelesen und akzeptiere sie",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Ich habe das oben angezeigte Dokument und die Datenschutzerklärung gelesen und akzeptiere sie",
-	"Could not continue. Please try again.":
-		"Konnte nicht fortgesetzt werden. Bitte versuche es erneut.",
 	"Saving…": "Speichern…",
 	Continue: "Fortfahren",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

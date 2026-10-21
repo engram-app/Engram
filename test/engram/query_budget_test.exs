@@ -134,8 +134,10 @@ defmodule Engram.QueryBudgetTest do
     # revisions read + 2 inserts, COMMIT) plus the dispatcher job insert and
     # Oban's pg_notify.
     "CRDT checkpoint tick" => 12,
-    # idle (was 48): bind 5 + delta 4 + the exit checkpoint 13.
-    "CRDT crdt_doc_update idle" => 21,
+    # idle (was 48): bind 5 + delta 4 + the exit checkpoint 13 + the exit's
+    # re-time of a CheckpointNote snoozed behind this room (one UPDATE on
+    # oban_jobs, `CheckpointNote.retime_snoozed/1`, #2085 review).
+    "CRDT crdt_doc_update idle" => 22,
     # open (was 25 at bee71923): the channel's note_in_vault? 4 + bind 5 +
     # the announce's path read 4.
     "CRDT room open" => 13

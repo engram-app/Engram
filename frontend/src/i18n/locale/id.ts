@@ -157,6 +157,18 @@ export default {
 	"{count} days remaining in your free trial.": {
 		other: "Sisa {count} hari dalam uji coba gratis Anda.",
 	},
+	"Indexing budget": "Kuota pengindeksan",
+	"{available} of {capacity} tokens left": "Tersisa {available} dari {capacity} token",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Mengisi ulang {perDay} token per hari. Penuh kembali pada {date}.",
+	"All tokens are available.": "Semua token tersedia.",
+	"{count} notes have keyword search only, until {date}.": {
+		other: "{count} catatan hanya memiliki pencarian berdasarkan kata kunci, hingga {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		other:
+			"{count} catatan hanya memiliki pencarian berdasarkan kata kunci, sampai anggaran terisi kembali.",
+	},
 	"Loading current connection…": "Memuat koneksi saat ini…",
 	"Disconnected. Retry the new connection now.": "Terputus. Coba sambungkan kembali sekarang.",
 	"Couldn't disconnect. Try Settings → Connections.": "Gagal terputus. Coba Pengaturan → Koneksi.",
@@ -839,6 +851,7 @@ export default {
 	"{client} is connected": "{client} terhubung",
 	"Your AI tool is connected": "Alat AI Anda terhubung",
 	"What will you use Engram for?": "Untuk apa Anda akan menggunakan Engram?",
+	"Could not continue. Please try again.": "Tidak dapat melanjutkan. Silakan coba lagi.",
 	"Review the Terms": "Tinjau Ketentuan",
 	"privacy notice": "pemberitahuan privasi",
 	"What changed": "Apa yang berubah",
@@ -851,7 +864,6 @@ export default {
 		"Saya telah membaca dan menyetujui Ketentuan Layanan dan Kebijakan Privasi",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Saya telah membaca dan menyetujui perjanjian yang ditampilkan di atas dan pemberitahuan privasi",
-	"Could not continue. Please try again.": "Tidak dapat melanjutkan. Silakan coba lagi.",
 	"Saving…": "Menyimpan…",
 	Continue: "Lanjutkan",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

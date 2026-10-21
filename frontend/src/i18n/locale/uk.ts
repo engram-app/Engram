@@ -162,6 +162,23 @@ export default {
 		many: "До кінця безкоштовного пробного періоду залишилося {count} днів.",
 		other: "До кінця безкоштовного пробного періоду залишилося {count} дні.",
 	},
+	"Indexing budget": "Обсяг індексування",
+	"{available} of {capacity} tokens left": "Залишилося {available} з {capacity} токенів",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Поповнює {perDay} токенів на день. Поповнення відбудеться знову {date}.",
+	"All tokens are available.": "Усі токени доступні.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} замітка має лише пошук за ключовими словами, до {date}.",
+		few: "{count} замітки мають лише пошук за ключовими словами, до {date}.",
+		many: "{count} заміток мають лише пошук за ключовими словами, до {date}.",
+		other: "{count} Замітки мають лише пошук за ключовими словами, до {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "{count} замітка має лише пошук за ключовими словами, поки не буде відновлено бюджет.",
+		few: "Для {count} заміток доступний лише пошук за ключовими словами, поки не буде відновлено бюджет.",
+		many: "{count} заміток мають лише пошук за ключовими словами, поки не буде відновлено бюджет.",
+		other: "{count} Замітки мають лише пошук за ключовими словами, поки не буде відновлено бюджет.",
+	},
 	"Loading current connection…": "Завантаження поточного з'єднання…",
 	"Disconnected. Retry the new connection now.": "Відключено. Спробуйте повторно підключитися.",
 	"Couldn't disconnect. Try Settings → Connections.":
@@ -912,6 +929,7 @@ export default {
 	"{client} is connected": "{client} підключено",
 	"Your AI tool is connected": "Ваш AI-інструмент підключено",
 	"What will you use Engram for?": "Для чого ви будете використовувати Engram?",
+	"Could not continue. Please try again.": "Не вдалося продовжити. Будь ласка, спробуйте ще раз.",
 	"Review the Terms": "Переглянути умови",
 	"privacy notice": "Повідомлення про конфіденційність",
 	"What changed": "Що змінилося",
@@ -923,7 +941,6 @@ export default {
 		"Я прочитав і погоджуюся з Умовами надання послуг та Політикою конфіденційності",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Я прочитав і погоджуюся з угодою, показаною вище, та політикою конфіденційності",
-	"Could not continue. Please try again.": "Не вдалося продовжити. Будь ласка, спробуйте ще раз.",
 	"Saving…": "Збереження…",
 	Continue: "Продовжити",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

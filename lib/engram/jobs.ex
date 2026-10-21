@@ -57,14 +57,14 @@ defmodule Engram.Jobs do
   end
 
   @doc """
-  The `note_id` arg of every `worker` job for `vault_id` that is not finished
-  yet (scheduled, available, executing or retryable).
+  The `note_id` arg of every `worker` job for `vault_id` in one of `states`
+  (Oban state names, e.g. `~w(available executing retryable)`).
   """
-  @spec pending_note_ids_for_vault(module(), String.t()) :: [String.t()]
-  def pending_note_ids_for_vault(worker, vault_id) do
+  @spec pending_note_ids_for_vault(module(), String.t(), [String.t()]) :: [String.t()]
+  def pending_note_ids_for_vault(worker, vault_id, states) do
     from(j in Oban.Job,
       where: j.worker == ^inspect(worker),
-      where: j.state in ~w(scheduled available executing retryable),
+      where: j.state in ^states,
       where: fragment("? ->> 'vault_id'", j.args) == ^to_string(vault_id),
       select: fragment("? ->> 'note_id'", j.args)
     )

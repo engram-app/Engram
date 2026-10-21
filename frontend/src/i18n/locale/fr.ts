@@ -161,6 +161,22 @@ export default {
 		many: "Il te reste {count} jour pour profiter de ton essai gratuit.",
 		other: "Il te reste {count} jours pour ta période d'essai gratuite.",
 	},
+	"Indexing budget": "Budget d'indexation",
+	"{available} of {capacity} tokens left": "{available} de {capacity} jetons restants",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Remplit {perDay} jetons par jour. Rechargement complet le {date}.",
+	"All tokens are available.": "Tous les jetons sont disponibles.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} note ne peut être trouvée qu'avec la recherche par mots-clés, jusqu'au {date}.",
+		many: "{count} notes ne sont accessibles qu'avec la recherche par mots-clés, jusqu'au {date}.",
+		other: "{count} notes ne sont accessibles qu'avec la recherche par mots-clés, jusqu'au {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "{count} note ne peut être trouvée qu'avec la recherche par mot-clé, jusqu'à ce que le budget soit reconstitué.",
+		many: "{count} notes ne sont accessibles qu'avec la recherche par mots-clés, jusqu'à ce que le budget soit reconstitué.",
+		other:
+			"{count} notes ne sont accessibles qu'avec la recherche par mot-clé, jusqu'à ce que le budget soit reconstitué.",
+	},
 	"Loading current connection…": "Chargement de la connexion actuelle…",
 	"Disconnected. Retry the new connection now.":
 		"Déconnecté. Réessaie la nouvelle connexion maintenant.",
@@ -873,6 +889,7 @@ export default {
 	"{client} is connected": "{client} est connecté",
 	"Your AI tool is connected": "Ton outil d'IA est connecté",
 	"What will you use Engram for?": "À quoi vas-tu utiliser Engram ?",
+	"Could not continue. Please try again.": "Impossible de continuer. Essaie à nouveau.",
 	"Review the Terms": "Consulte les conditions",
 	"privacy notice": "Avis de confidentialité",
 	"What changed": "Ce qui a changé",
@@ -885,7 +902,6 @@ export default {
 		"J'ai lu et j'accepte les conditions d'utilisation et la politique de confidentialité",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"J'ai lu et j'accepte l'accord ci-dessus et l'avis de confidentialité",
-	"Could not continue. Please try again.": "Impossible de continuer. Essaie à nouveau.",
 	"Saving…": "Enregistrement…",
 	Continue: "Continuer",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

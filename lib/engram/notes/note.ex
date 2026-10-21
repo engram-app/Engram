@@ -57,6 +57,13 @@ defmodule Engram.Notes.Note do
     # enqueues (upsert/rename) always run.
     field :embed_retry_after, :utc_datetime_usec
     field :embed_budget_parked, :boolean
+    # The Free embed-bucket queue (see `EmbedNote`): when a note was first
+    # parked (its queue position, kept across re-parks), the tokens it still
+    # needs, and its next deferred chunk's estimate (nil = unknown).
+    # ReconcileEmbeddings wakes, first fit by age, the notes whose need fits.
+    field :embed_budget_parked_at, :utc_datetime_usec
+    field :embed_budget_need, :integer
+    field :embed_budget_next, :integer
     # Crash-loop dead-man stamp, see Engram.Workers.EmbedNote.CrashGuard.
     field :embed_started_at, :utc_datetime_usec
     field :embed_started_by, :string
@@ -121,6 +128,22 @@ defmodule Engram.Notes.Note do
     # note content.
     field :parse_status, :string, default: "ok"
     field :parse_reason, :map
+
+    # Wave 3 narrow keys (migration 20261021110000). Written ONLY by the
+    # `notes_derive_core_keys` trigger from the columns above, never cast or
+    # put by the app; lookups filter on them through Engram.Notes.Keys.
+    field :path_id, :binary_id
+    field :folder_id, :binary_id
+    field :basename_id, :binary_id
+    field :path_ci_id, :binary_id
+    field :type_id, :binary_id
+    field :tag_ids, {:array, :binary_id}
+    field :is_folder, :boolean
+    field :key_version, :integer
+    field :path_len, :integer
+    field :parse_code, :integer
+    field :link_keys_v, :integer
+    field :content_digest, :binary
 
     belongs_to :user, Engram.Accounts.User
     belongs_to :vault, Engram.Vaults.Vault
@@ -195,6 +218,11 @@ defmodule Engram.Notes.Note do
     |> unique_constraint([:user_id, :vault_id, :folder_hmac],
       name: :notes_user_vault_folder_marker
     )
+    # Wave 3's twins of the two above. Postgres reports whichever unique index
+    # it checks first (index OID order, which a dump/restore can change), so
+    # both names map to the same error.
+    |> unique_constraint([:user_id, :vault_id, :path_hmac], name: :notes_path_live)
+    |> unique_constraint([:user_id, :vault_id, :folder_hmac], name: :notes_folder_marker)
   end
 
   defp validate_required_for_kind(changeset) do

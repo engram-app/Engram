@@ -157,6 +157,20 @@ export default {
 		one: "Ücretsiz denemeniz sona ermeye {count} gün kaldı.",
 		other: "Ücretsiz denemenize {count} gün kaldı.",
 	},
+	"Indexing budget": "İndeksleme kotası",
+	"{available} of {capacity} tokens left": "{available} {capacity} token kaldı",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Günde {perDay} token doldurur. {date} tarihinde tekrar dolacaktır.",
+	"All tokens are available.": "Tüm jetonlar kullanılabilir.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} not, yalnızca anahtar kelime aramasıyla bulunabilir, {date} tarihine kadar.",
+		other: "{count} not, yalnızca anahtar kelime aramasıyla bulunabilir, {date} tarihine kadar.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "{count} not, yalnızca anahtar kelime aramasıyla bulunabilir, indeksleme bütçesi dolana kadar.",
+		other:
+			"{count} not, yalnızca anahtar kelime aramasıyla bulunabilir, indeksleme bütçesi dolana kadar.",
+	},
 	"Loading current connection…": "Bağlantı yükleniyor…",
 	"Disconnected. Retry the new connection now.":
 		"Bağlantı kesildi. Yeni bağlantıyı şimdi tekrar deneyin.",
@@ -839,6 +853,7 @@ export default {
 	"{client} is connected": "{client} bağlı",
 	"Your AI tool is connected": "Yapay zeka aracınız bağlı",
 	"What will you use Engram for?": "Engram uygulamasını ne için kullanacaksınız?",
+	"Could not continue. Please try again.": "Devam edilemedi. Lütfen tekrar deneyin.",
 	"Review the Terms": "Şartları inceleyin",
 	"privacy notice": "Gizlilik bildirimi",
 	"What changed": "Değişiklikler",
@@ -850,7 +865,6 @@ export default {
 		"Hizmet Şartları ve Gizlilik Politikasını okudum ve kabul ediyorum",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Yukarıdaki anlaşmayı ve gizlilik bildirimini okudum ve kabul ediyorum",
-	"Could not continue. Please try again.": "Devam edilemedi. Lütfen tekrar deneyin.",
 	"Saving…": "Kaydediliyor…",
 	Continue: "Devam",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

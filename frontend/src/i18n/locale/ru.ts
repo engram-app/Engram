@@ -164,6 +164,23 @@ export default {
 		many: "До окончания бесплатного пробного периода осталось {count} дней.",
 		other: "До окончания бесплатного пробного периода осталось {count} дня.",
 	},
+	"Indexing budget": "Лимит индексации",
+	"{available} of {capacity} tokens left": "Осталось {available} из {capacity} токенов",
+	"Refills {perDay} tokens a day. Full again on {date}.":
+		"Пополняет {perDay} токенов в день. Пополнение до {date}.",
+	"All tokens are available.": "Все токены доступны.",
+	"{count} notes have keyword search only, until {date}.": {
+		one: "{count} заметка поддерживает только поиск по ключевым словам, до {date}.",
+		few: "{count} заметки имеют только поиск по ключевым словам, до {date}.",
+		many: "{count} заметок имеют только поиск по ключевым словам, до {date}.",
+		other: "{count} Заметки поддерживают поиск по ключевым словам, но только до {date}.",
+	},
+	"{count} notes have keyword search only, until the budget refills.": {
+		one: "{count} заметка поддерживает только поиск по ключевым словам, пока не будет пополнен лимит.",
+		few: "Для {count} заметок доступен только поиск по ключевым словам, пока не будет пополнен лимит.",
+		many: "{count} заметок доступны только для поиска по ключевым словам, пока не будет пополнен лимит.",
+		other: "{count}: Поиск по ключевым словам доступен только до пополнения бюджета.",
+	},
 	"Loading current connection…": "Загрузка текущего подключения…",
 	"Disconnected. Retry the new connection now.": "Отключено. Повторите подключение.",
 	"Couldn't disconnect. Try Settings → Connections.":
@@ -916,6 +933,7 @@ export default {
 	"{client} is connected": "{client} подключено",
 	"Your AI tool is connected": "Ваш AI-инструмент подключен",
 	"What will you use Engram for?": "Для чего вы будете использовать Engram?",
+	"Could not continue. Please try again.": "Не удалось продолжить. Пожалуйста, попробуйте ещё раз.",
 	"Review the Terms": "Ознакомьтесь с условиями",
 	"privacy notice": "Уведомление о конфиденциальности",
 	"What changed": "Что изменилось",
@@ -928,7 +946,6 @@ export default {
 		"Я прочитал и согласен с Условиями использования и Политикой конфиденциальности",
 	"I have read and agree to the agreement shown above and the privacy notice":
 		"Я прочитал и согласен с представленным выше соглашением и Уведомлением о конфиденциальности",
-	"Could not continue. Please try again.": "Не удалось продолжить. Пожалуйста, попробуйте ещё раз.",
 	"Saving…": "Сохранение…",
 	Continue: "Продолжить",
 	"Please read the full agreement below before continuing. Our {privacy} (reviewed at signup) describes how we handle your data.":

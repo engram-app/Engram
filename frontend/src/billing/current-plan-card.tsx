@@ -20,9 +20,12 @@ const FLASHY_TIERS: BillingStatus["tier"][] = ["starter", "pro"];
 
 export default function CurrentPlanCard({
 	billing,
+	details,
 	children,
 }: {
 	billing: BillingStatus;
+	/** Extra plan facts under the status rows (the Free indexing budget). */
+	details?: ReactNode;
 	children?: ReactNode;
 }) {
 	const { t, tn, renderedLocale } = useT();
@@ -78,6 +81,8 @@ export default function CurrentPlanCard({
 					)}
 				</dl>
 			) : null}
+
+			{details}
 
 			{/* toArray drops null/false/undefined. `Boolean(children)` was true for
 			    an array of all-`false` conditionals, which drew the divider over
