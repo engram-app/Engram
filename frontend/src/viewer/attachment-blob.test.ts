@@ -29,6 +29,17 @@ test("uniqueAttachmentName suffixes a taken name, keeping the extension", async 
 	expect(uniqueAttachmentName(list, "noext")).toBe("noext");
 });
 
+// One name per folder regardless of case: macOS and Windows Obsidian keep
+// files on case-insensitive disks, where "Photo.png" and "photo.png" collide.
+test("uniqueAttachmentName treats names that differ only by case as taken", async () => {
+	const { uniqueAttachmentName } = await import("./attachment-blob");
+	const list = [{ path: "Photo.png" }, { path: "IMG_1 1.JPG" }];
+	expect(uniqueAttachmentName(list, "photo.png")).toBe("photo 1.png");
+	expect(uniqueAttachmentName([{ path: "img_1.jpg" }, { path: "IMG_1 1.JPG" }], "IMG_1.JPG")).toBe(
+		"IMG_1 2.JPG",
+	);
+});
+
 test("the image cache is per vault, and clearAttachmentUrls drops it (user change)", async () => {
 	const { clearAttachmentUrls } = await import("./attachment-blob");
 	const { setActiveVaultId } = await import("../api/active-vault");

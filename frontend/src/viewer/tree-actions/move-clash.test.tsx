@@ -8,7 +8,7 @@ const rename = vi.fn();
 let mockAttachments: { path: string }[] = [];
 vi.mock("@/api/queries", () => ({
 	useAttachments: () => ({ data: mockAttachments }),
-	useBatchMoveAttachments: () => ({ mutate: move }),
+	useBatchMoveAttachments: () => ({ mutateAsync: move, mutate: move }),
 	useRenameAttachment: () => ({ mutate: rename }),
 }));
 
@@ -85,7 +85,7 @@ describe("useAttachmentMove", () => {
 		expect(screen.getByText(/that name is taken too/iu)).toBeInTheDocument();
 	});
 
-	it("for several, moves the rest and numbers the clashing ones on Keep both", () => {
+	it("for several, moves the rest and numbers the clashing ones on Keep both", async () => {
 		mockAttachments = [
 			{ path: "a/song.flac" },
 			{ path: "a/new.png" },
@@ -95,9 +95,54 @@ describe("useAttachmentMove", () => {
 		const { hook, ui } = setup();
 		act(() => hook.result.current.move(["a/song.flac", "a/new.png", "a/x.png"], "music"));
 		ui();
-		fireEvent.click(screen.getByRole("button", { name: /keep both/iu }));
+		await act(async () => {
+			fireEvent.click(screen.getByRole("button", { name: /keep both/iu }));
+		});
 		expect(move).toHaveBeenCalledWith({ paths: ["a/new.png", "a/x.png"], target_folder: "music" });
 		expect(rename).toHaveBeenCalledWith({ old_path: "a/song.flac", new_path: "music/song 2.flac" });
+	});
+
+	it("Keep both numbers a capitalised name instead of re-sending the taken one", async () => {
+		mockAttachments = [{ path: "a/IMG_1.JPG" }, { path: "a/b.png" }, { path: "cam/IMG_1.JPG" }];
+		const { hook, ui } = setup();
+		act(() => hook.result.current.move(["a/IMG_1.JPG", "a/b.png"], "cam"));
+		ui();
+		await act(async () => {
+			fireEvent.click(screen.getByRole("button", { name: /keep both/iu }));
+		});
+		expect(rename).toHaveBeenCalledWith({ old_path: "a/IMG_1.JPG", new_path: "cam/IMG_1 1.JPG" });
+	});
+
+	it("the one-file box opens on a free name even when the taken one is capitalised", () => {
+		mockAttachments = [{ path: "a/IMG_1.JPG" }, { path: "cam/IMG_1.JPG" }];
+		const { hook, ui } = setup();
+		act(() => hook.result.current.move(["a/IMG_1.JPG"], "cam"));
+		ui();
+		expect(screen.getByRole("textbox")).toHaveValue("IMG_1 1");
+		expect(screen.queryByText(/that name is taken too/iu)).not.toBeInTheDocument();
+	});
+
+	it("Keep both avoids names the same move is bringing in, and renames after the move lands", async () => {
+		mockAttachments = [{ path: "a/x.png" }, { path: "b/x.png" }, { path: "d/x 1.png" }];
+		const { hook, ui } = setup();
+		act(() => hook.result.current.move(["a/x.png", "b/x.png", "d/x 1.png"], "c"));
+		ui();
+		let release: () => void = () => undefined;
+		move.mockReturnValue(
+			new Promise<void>((r) => {
+				release = r;
+			}),
+		);
+		await act(async () => {
+			fireEvent.click(screen.getByRole("button", { name: /keep both/iu }));
+		});
+		expect(move).toHaveBeenCalledWith({ paths: ["a/x.png", "d/x 1.png"], target_folder: "c" });
+		// Not before the batch has landed: the two would race for one name.
+		expect(rename).not.toHaveBeenCalled();
+		await act(async () => {
+			release();
+		});
+		expect(rename).toHaveBeenCalledWith({ old_path: "b/x.png", new_path: "c/x 2.png" });
 	});
 
 	it("Cancel moves nothing", () => {

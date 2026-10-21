@@ -16,8 +16,9 @@ import { fileStem } from "../attachment-preview";
 
 const lower = (s: string) => s.toLowerCase();
 
-// Names already in `folder`, lowercased: the server refuses a move onto a name
-// that differs only by case, like Obsidian on a case-insensitive disk.
+// Names already in `folder`, lowercased. The server only refuses an exact-path
+// clash, but a case-only twin ("Photo.png" next to "photo.png") is one file on
+// a macOS or Windows Obsidian disk, so the client treats it as taken too.
 function namesIn(folder: string, attachments: readonly { path: string }[]): Set<string> {
 	return new Set(
 		attachments.filter((a) => dirOf(a.path) === folder).map((a) => lower(baseOf(a.path))),
@@ -198,12 +199,21 @@ export function useAttachmentMove(): {
 		setPending({ paths, target, clashes });
 	}
 
-	// Moves the files that do not clash, then each clashing one under `nameFor`.
-	function finish(p: Pending, nameFor: (path: string) => string) {
+	const clearOf = (p: Pending) => p.paths.filter((path) => !p.clashes.includes(path));
+
+	// Moves the files that do not clash, THEN each clashing one under `nameFor`.
+	// In that order: a rename sent alongside the batch could race it for one
+	// name, and the batch is all-or-nothing, so losing the race moved nothing.
+	// A refused batch is already toasted by its hook, so the renames are dropped.
+	async function finish(p: Pending, nameFor: (path: string) => string) {
 		setPending(null);
-		const clear = p.paths.filter((path) => !p.clashes.includes(path));
+		const clear = clearOf(p);
 		if (clear.length > 0) {
-			batchMove.mutate({ paths: clear, target_folder: p.target });
+			try {
+				await batchMove.mutateAsync({ paths: clear, target_folder: p.target });
+			} catch {
+				return;
+			}
 		}
 		for (const path of p.clashes) {
 			rename.mutate({ old_path: path, new_path: joinPath(p.target, nameFor(path)) });
@@ -211,7 +221,11 @@ export function useAttachmentMove(): {
 	}
 
 	function keepBoth(p: Pending) {
-		const taken = [...namesIn(p.target, attachments)].map((name) => ({ path: name }));
+		// Taken = what is in the target now plus what this move brings in.
+		const taken = [
+			...namesIn(p.target, attachments),
+			...clearOf(p).map((path) => lower(baseOf(path))),
+		].map((name) => ({ path: name }));
 		finish(p, (path) => {
 			const name = uniqueAttachmentName(taken, baseOf(path));
 			taken.push({ path: lower(name) });
