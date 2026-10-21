@@ -13,6 +13,11 @@ import {
  * a first note that survives a reload.
  */
 
+const BACKEND = `http://localhost:${process.env.PW_CLERK_BACKEND_PORT ?? "4001"}`;
+// Where the journey runs. Only the CI stack runs billing off; every other
+// target (staging, prod canary) shows the terms and heard-from steps.
+const TARGET = process.env.E2E_TARGET ?? "ci";
+
 const NOTE_TITLE = "First note";
 const NOTE_BODY = "Hello from the web";
 
@@ -53,7 +58,9 @@ test.describe("Website-first: a new user signs up on the web", () => {
 		});
 
 		await test.step("terms", async () => {
-			if (onboardStep() !== "/onboard/agreement") {
+			if (TARGET !== "ci") {
+				expect(onboardStep()).toBe("/onboard/agreement");
+			} else if (onboardStep() !== "/onboard/agreement") {
 				return;
 			}
 			await page.getByLabel(/I have read and agree/iu).click();
@@ -62,7 +69,9 @@ test.describe("Website-first: a new user signs up on the web", () => {
 		});
 
 		await test.step("heard", async () => {
-			if (onboardStep() !== "/onboard/heard") {
+			if (TARGET !== "ci") {
+				expect(onboardStep()).toBe("/onboard/heard");
+			} else if (onboardStep() !== "/onboard/heard") {
 				return;
 			}
 			await page.getByRole("radio", { name: "Search engine" }).click();
@@ -95,9 +104,34 @@ test.describe("Website-first: a new user signs up on the web", () => {
 		});
 
 		await test.step("note-persists", async () => {
-			// ponytail: the editor has no save indicator; the live channel flushes
-			// each keystroke, so give it a beat before dropping the page.
-			await page.waitForTimeout(2000);
+			// The editor has no save indicator, and after a reload the body can come
+			// from local IndexedDB. Prove the SERVER has it: poll the notes API with
+			// the same Clerk token and vault the SPA sends.
+			await expect
+				.poll(
+					async () => {
+						const token = await page.evaluate(() =>
+							(
+								window as unknown as {
+									Clerk?: { session?: { getToken: () => Promise<string | null> } };
+								}
+							).Clerk?.session?.getToken(),
+						);
+						const vaultId = await page.evaluate(() => localStorage.getItem("engram.activeVaultId"));
+						const res = await page.request.get(
+							`${BACKEND}/api/notes/${encodeURIComponent(`${NOTE_TITLE}.md`)}`,
+							{
+								headers: {
+									Authorization: `Bearer ${token}`,
+									...(vaultId ? { "X-Vault-ID": vaultId } : {}),
+								},
+							},
+						);
+						return res.ok() ? await res.text() : `HTTP ${res.status()}`;
+					},
+					{ timeout: 30_000, message: "server never received the note body" },
+				)
+				.toContain(NOTE_BODY);
 			await page.reload();
 			const row = page.getByRole("treeitem", { name: NOTE_TITLE, exact: true });
 			await expect(row).toBeVisible({ timeout: 20_000 });
