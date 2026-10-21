@@ -23,12 +23,14 @@ defmodule Engram.Workers.VectorCachePruneTest do
 
   defp count, do: Repo.query!("SELECT count(*) FROM embedding_cache").rows |> hd() |> hd()
 
-  test "flag off: a clean no-op, nothing deleted, nothing logged at error" do
+  # A cache turned on and then off again still holds rows: they must age
+  # out on the same 72 h, or they outlive the promise in the migration.
+  test "flag off: still expires rows older than 72 h, nothing logged at error" do
     Application.put_env(:engram, :vector_cache_enabled, false)
 
     log = capture_log(fn -> assert :ok = perform_job(VectorCachePrune, %{}) end)
 
-    assert count() == 1
+    assert count() == 0
     refute log =~ "[error]"
   end
 
