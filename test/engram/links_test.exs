@@ -34,8 +34,8 @@ defmodule Engram.LinksTest do
 
       :ok = Links.replace_links(user, vault, source.id, parsed)
 
-      {:ok, [link]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
-      assert link.target_note_id == target.id
+      assert [%{target_note_id: id, dangling: false}] = Links.links_for_note(user, source.id)
+      assert id == target.id
     end
 
     test "basename resolution picks the shortest path, lexicographic tiebreak", %{
@@ -51,8 +51,8 @@ defmodule Engram.LinksTest do
           %{target: "Dup", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
         ])
 
-      {:ok, [link]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
-      assert link.target_note_id == short.id
+      assert [%{target_note_id: id}] = Links.links_for_note(user, source.id)
+      assert id == short.id
     end
 
     test "unresolvable target stores a dangling edge with hmac + ciphertext", %{
@@ -67,12 +67,18 @@ defmodule Engram.LinksTest do
         ])
 
       {:ok, [link]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
-      assert is_nil(link.target_note_id)
-      assert is_nil(link.target_attachment_id)
       assert byte_size(link.target_basename_hmac) == 32
       # decrypts back
       [decrypted] = Links.links_for_note(user, source.id)
-      assert %{target_text: "Ghost", alias: "shown", anchor: "H", dangling: true} = decrypted
+
+      assert %{
+               target_text: "Ghost",
+               alias: "shown",
+               anchor: "H",
+               dangling: true,
+               target_note_id: nil,
+               target_attachment_id: nil
+             } = decrypted
     end
 
     test "embed with binary extension resolves to an attachment", %{user: user, vault: vault} do
@@ -87,8 +93,8 @@ defmodule Engram.LinksTest do
           %{target: "image.png", alias: nil, anchor: nil, link_type: "embed", position: 0}
         ])
 
-      {:ok, [link]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
-      assert link.target_attachment_id == att.id
+      assert [%{target_attachment_id: id}] = Links.links_for_note(user, source.id)
+      assert id == att.id
     end
 
     test "wikilink with binary extension also resolves to an attachment", %{
@@ -106,8 +112,8 @@ defmodule Engram.LinksTest do
           %{target: "image.png", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
         ])
 
-      {:ok, [link]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
-      assert link.target_attachment_id == att.id
+      assert [%{target_attachment_id: id}] = Links.links_for_note(user, source.id)
+      assert id == att.id
     end
 
     test "a dotted note name resolves as a note when no same-basename attachment exists", %{
@@ -124,9 +130,10 @@ defmodule Engram.LinksTest do
           %{target: "Node.js", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
         ])
 
-      {:ok, [link]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
-      assert link.target_note_id == target.id
-      assert is_nil(link.target_attachment_id)
+      assert [%{target_note_id: id, target_attachment_id: nil}] =
+               Links.links_for_note(user, source.id)
+
+      assert id == target.id
     end
 
     test "image.png still resolves to the attachment, not a note, when both tables miss", %{
@@ -141,9 +148,10 @@ defmodule Engram.LinksTest do
           %{target: "image.png", alias: nil, anchor: nil, link_type: "wikilink", position: 0}
         ])
 
-      {:ok, [link]} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
-      assert link.target_attachment_id == att.id
-      assert is_nil(link.target_note_id)
+      assert [%{target_attachment_id: id, target_note_id: nil}] =
+               Links.links_for_note(user, source.id)
+
+      assert id == att.id
     end
 
     test "replace is idempotent — re-running replaces, never duplicates", %{
@@ -678,7 +686,9 @@ defmodule Engram.LinksTest do
     end
   end
 
-  describe "replace_links/4 candidate prefetch" do
+  # Resolution moved from write to read, so the N+1 guard counts the
+  # candidate queries of `links_for_note/2`.
+  describe "links_for_note/2 candidate prefetch" do
     test "resolves every link with a bounded number of candidate queries",
          %{user: user, vault: vault} do
       source = Engram.Fixtures.insert_note!(user, vault, %{path: "Source.md"})
@@ -692,16 +702,14 @@ defmodule Engram.LinksTest do
       parsed = Parser.extract(content)
       assert length(parsed) == 12
 
-      {count, _} =
-        count_candidate_queries(fn ->
-          Links.replace_links(user, vault, source.id, parsed)
-        end)
+      :ok = Links.replace_links(user, vault, source.id, parsed)
+
+      {count, edges} = count_candidate_queries(fn -> Links.links_for_note(user, source.id) end)
 
       # One prefetch per table, NOT one query per link. Before this was 12+.
       assert count <= 2, "expected <= 2 candidate queries for 12 links, got #{count}"
 
       # ...and the resolution is still correct for every edge.
-      {:ok, edges} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
       assert length(edges) == 12
 
       assert Enum.sort(Enum.map(edges, & &1.target_note_id)) ==
@@ -714,19 +722,13 @@ defmodule Engram.LinksTest do
       hit = Engram.Fixtures.insert_note!(user, vault, %{path: "Real.md"})
       parsed = Parser.extract("[[Real]] [[Nope]] [[AlsoMissing]]")
 
-      {count, _} =
-        count_candidate_queries(fn ->
-          Links.replace_links(user, vault, source.id, parsed)
-        end)
+      :ok = Links.replace_links(user, vault, source.id, parsed)
+
+      {count, edges} = count_candidate_queries(fn -> Links.links_for_note(user, source.id) end)
 
       assert count <= 2
-
-      {:ok, edges} =
-        Repo.with_tenant(user.id, fn ->
-          Repo.all(from(l in NoteLink, order_by: l.position))
-        end)
-
       assert Enum.map(edges, & &1.target_note_id) == [hit.id, nil, nil]
+      assert Enum.map(edges, & &1.dangling) == [false, true, true]
     end
 
     test "duplicate targets in one note share a single prefetched bucket",
@@ -735,14 +737,11 @@ defmodule Engram.LinksTest do
       target = Engram.Fixtures.insert_note!(user, vault, %{path: "Same.md"})
       parsed = Parser.extract("[[Same]] [[Same]] [[Same]] [[Same]]")
 
-      {count, _} =
-        count_candidate_queries(fn ->
-          Links.replace_links(user, vault, source.id, parsed)
-        end)
+      :ok = Links.replace_links(user, vault, source.id, parsed)
+
+      {count, edges} = count_candidate_queries(fn -> Links.links_for_note(user, source.id) end)
 
       assert count <= 2
-
-      {:ok, edges} = Repo.with_tenant(user.id, fn -> Repo.all(NoteLink) end)
       assert length(edges) == 4
       assert Enum.all?(edges, &(&1.target_note_id == target.id))
     end

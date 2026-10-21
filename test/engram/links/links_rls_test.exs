@@ -71,13 +71,14 @@ defmodule Engram.Links.LinksRlsTest do
 
     :ok = Links.replace_links(user, vault, source.id, Parser.extract("See [[Target]]."))
 
-    # Force the edge to be BOUND rather than relying on basename-hmac
-    # resolution in the fixture path. `backlinks_for_note/2` filters on
-    # `target_note_id`, so a dangling edge would make that test vacuous — it
-    # would find nothing whether or not RLS was in play.
-    {1, _} =
-      from(l in NoteLink, where: l.source_note_id == ^source.id)
-      |> Repo.update_all([set: [target_note_id: target.id]], skip_tenant_check: true)
+    # The edge must RESOLVE to `target` (a real note, so it does on read):
+    # a dangling edge would make the backlinks test vacuous — it would find
+    # nothing whether or not RLS was in play. Checked here, outside the
+    # dropped role, so a fixture regression fails loudly instead.
+    assert [%{target_note_id: target_id, dangling: false}] =
+             Links.links_for_note(user, source.id)
+
+    assert target_id == target.id
 
     {:ok, user: user, vault: vault, source: source, target: target}
   end
@@ -121,6 +122,35 @@ defmodule Engram.Links.LinksRlsTest do
                "backlinks panel renders empty for a note that has one"
     end
 
+    test "dangling_basenames/4 sees the target, so a resolving name is no dangler",
+         %{user: user, vault: vault} do
+      parsed = Parser.extract("See [[Target]] and [[Nowhere]].")
+      target = Links.basename_hmac(user, "target")
+      nowhere = Links.basename_hmac(user, "nowhere")
+
+      assert {:returned, [^nowhere]} =
+               as_prod_role(fn ->
+                 Links.dangling_basenames(user, vault, parsed, [target, nowhere])
+               end),
+             "dangling_basenames reported a live target as dangling — its candidate read " <>
+               "was filtered by RLS, so every rename-repair probe would enqueue for nothing"
+    end
+
+    # Identity, not a count: an RLS-filtered candidate read leaves the edge in
+    # place but resolves it dangling, which a `[_]` match would still accept.
+    test "batched reads resolve the edge to its target",
+         %{user: user, source: source, target: target} do
+      assert {:returned, links} = as_prod_role(fn -> Links.links_for_notes(user, [source.id]) end)
+      target_id = target.id
+      assert [%{target_note_id: ^target_id}] = Map.fetch!(links, source.id)
+
+      assert {:returned, backlinks} =
+               as_prod_role(fn -> Links.backlinks_for_notes(user, [target.id]) end)
+
+      source_id = source.id
+      assert [%{source_note_id: ^source_id}] = Map.fetch!(backlinks, target.id)
+    end
+
     test "live_basename_count/3 counts the live note", %{user: user, vault: vault} do
       assert {:returned, count} =
                as_prod_role(fn -> Links.live_basename_count(user, vault, "target") end)
@@ -130,13 +160,11 @@ defmodule Engram.Links.LinksRlsTest do
                "a filtered read here feeds rename-collision decisions"
     end
 
-    # The candidate prefetch in `replace_links/4` runs BEFORE that function's
-    # own `with_tenant` block opens, so its two reads were unscoped. Filtered,
-    # they return no candidates and every edge is written DANGLING — the
-    # `insert_all` still succeeds inside the tenant block, so nothing raises
-    # and nothing logs. A "returns :ok" assertion passes vacuously here; only
-    # the persisted `target_note_id` discriminates.
-    test "replace_links/4 binds the edge to its target",
+    # A filtered write still returns :ok (only INSERTs raise without a
+    # tenant), so a "returns :ok" assertion passes vacuously here. What
+    # discriminates is the edge that survives: it must exist and resolve to
+    # the target on read.
+    test "replace_links/4 persists an edge that resolves to its target",
          %{user: user, vault: vault, target: target} do
       source2 = Engram.Fixtures.insert_note!(user, vault, %{path: "Source2.md"})
 
@@ -147,16 +175,14 @@ defmodule Engram.Links.LinksRlsTest do
                  Links.replace_links(user, vault, source2.id, Parser.extract("See [[Target]]."))
                end)
 
-      bound =
-        Repo.one(
-          from(l in NoteLink, where: l.source_note_id == ^source2.id, select: l.target_note_id),
-          skip_tenant_check: true
-        )
+      links = Links.links_for_note(user, source2.id)
+
+      assert [%{target_note_id: bound}] = links,
+             "replace_links/4 persisted #{length(links)} edges under RLS, expected 1"
 
       assert bound == target.id,
-             "edge was written dangling (target_note_id=#{inspect(bound)}) — the candidate " <>
-               "prefetch was filtered by RLS, so a wikilink to an existing note silently " <>
-               "never binds and the backlinks panel stays empty"
+             "edge reads dangling (target_note_id=#{inspect(bound)}) — a wikilink to an " <>
+               "existing note never binds and the backlinks panel stays empty"
     end
 
     test "on_note_soft_deleted/2 actually drops the outgoing edge",

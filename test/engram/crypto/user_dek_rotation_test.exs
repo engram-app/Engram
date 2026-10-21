@@ -1279,7 +1279,7 @@ defmodule Engram.Crypto.UserDekRotationTest do
       assert reloaded_attachment.basename_hmac == expected_att_basename
 
       # End-to-end resolution proof: a link written AFTER rotation must still
-      # resolve to the pre-rotation note/attachment — this only works if
+      # resolve (on read) to the pre-rotation note/attachment — this only works if
       # notes.basename_hmac / attachments.basename_hmac were rebuilt under the
       # NEW filter key (otherwise the HMAC lookup in resolve_target/4 misses).
       reloaded_vault =
@@ -1299,13 +1299,8 @@ defmodule Engram.Crypto.UserDekRotationTest do
           %{target: "Photo.png", alias: nil, anchor: nil, link_type: "embed", position: 1}
         ])
 
-      new_edges =
-        Repo.all(from(l in Engram.Links.NoteLink, where: l.source_note_id == ^new_source.id),
-          skip_tenant_check: true
-        )
-
-      note_edge = Enum.find(new_edges, &(&1.target_note_id != nil))
-      att_edge = Enum.find(new_edges, &(&1.target_attachment_id != nil))
+      assert [note_edge, att_edge] =
+               Engram.Links.links_for_note(reloaded_user, new_source.id)
 
       assert note_edge.target_note_id == target.id
       assert att_edge.target_attachment_id == attachment.id

@@ -1,10 +1,11 @@
 defmodule Engram.Links.NoteLink do
   @moduledoc """
   One row per link occurrence in a note (issue #591) — both `[[wikilink]]`
-  and markdown `[label](target.md)` syntax (#1302). Edges are
-  keyed by note UUIDs so renames never invalidate them; `target_note_id` /
-  `target_attachment_id` both nil means a dangling link, resolvable later
-  via `target_basename_hmac` (see `Engram.Links.bind_danglers_for_hmac/3`).
+  and markdown `[label](target.md)` syntax (#1302). An edge stores its
+  target's name, never a resolved id: `Engram.Links` resolves it on read.
+
+  The `target_note_id`/`target_attachment_id` columns are no longer read or
+  written; a later migration drops them.
   """
   use Engram.Schema
 
@@ -30,8 +31,6 @@ defmodule Engram.Links.NoteLink do
     belongs_to :user, Engram.Accounts.User
     belongs_to :vault, Engram.Vaults.Vault
     belongs_to :source_note, Engram.Notes.Note
-    belongs_to :target_note, Engram.Notes.Note
-    belongs_to :target_attachment, Engram.Attachments.Attachment
 
     timestamps(type: :utc_datetime_usec, inserted_at: :inserted_at, updated_at: false)
   end

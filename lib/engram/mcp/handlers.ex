@@ -1928,25 +1928,44 @@ defmodule Engram.MCP.Handlers do
 
   # `entries` is [{path, fetch_fn}]. Each note is fetched, budgeted and
   # rendered before the next, so at most the kept content plus one note is
-  # alive.
+  # alive. Links are read afterwards for every rendered note in one batch.
   defp render_notes(user, entries, outline?, links?, gate) do
     {rendered, _spent} =
       Enum.map_reduce(entries, 0, fn {path, fetch}, spent ->
         case fetch.() do
           nil ->
-            {{"Note not found: #{path}", %{"path" => path, "found" => false}}, spent}
+            {{"Note not found: #{path}", %{"path" => path, "found" => false}, nil}, spent}
 
           note ->
             size = if outline?, do: 0, else: byte_size(note.content || "")
 
-            if spent == 0 or spent + size <= @get_notes_budget,
-              do: {render_note(user, note, outline?, links?, gate), spent + size},
-              else: {over_budget(path), spent}
+            if spent == 0 or spent + size <= @get_notes_budget do
+              {text, payload} = render_note(note, outline?, gate)
+              {{text, payload, note.id}, spent + size}
+            else
+              {text, payload} = over_budget(path)
+              {{text, payload, nil}, spent}
+            end
         end
       end)
 
-    {texts, notes} = Enum.unzip(rendered)
-    {:ok, Enum.join(texts, "\n\n---\n\n"), %{"notes" => notes}}
+    rendered = if links?, do: with_links(user, rendered), else: rendered
+
+    {:ok, Enum.map_join(rendered, "\n\n---\n\n", &elem(&1, 0)),
+     %{"notes" => Enum.map(rendered, &elem(&1, 1))}}
+  end
+
+  defp with_links(user, rendered) do
+    payloads = links_payloads(user, for({_t, _p, id} <- rendered, id, do: id))
+
+    Enum.map(rendered, fn
+      {text, payload, nil} ->
+        {text, payload, nil}
+
+      {text, payload, id} ->
+        {links, truncation} = Map.fetch!(payloads, id)
+        {text <> "\n\n" <> format_links(links, truncation), Map.merge(payload, links), id}
+    end)
   end
 
   defp over_budget(path) do
@@ -1957,22 +1976,13 @@ defmodule Engram.MCP.Handlers do
     {"#{path}: #{msg}", %{"path" => path, "found" => true, "error" => msg}}
   end
 
-  defp render_note(user, note, outline?, links?, gate) do
+  defp render_note(note, outline?, gate) do
     {text, payload} =
       if outline?,
         do: outline_entry(note, gate),
         else: {format_get_note(note), note_payload(note)}
 
-    payload = Map.put(payload, "found", true)
-
-    # One backlinks + outgoing query pair per note (N+1), not batched.
-    # Fine at get_notes' 20-path cap; revisit only if that cap rises.
-    if links? do
-      {links, truncation} = links_payload(user, note)
-      {text <> "\n\n" <> format_links(links, truncation), Map.merge(payload, links)}
-    else
-      {text, payload}
-    end
+    {text, Map.put(payload, "found", true)}
   end
 
   # Both reads are user-scoped by the Links context; vault scoping holds
@@ -1994,16 +2004,31 @@ defmodule Engram.MCP.Handlers do
   @doc false
   @spec links_payload(map(), map(), pos_integer()) ::
           {map(), {boolean(), non_neg_integer(), non_neg_integer()}}
-  def links_payload(user, note, limit \\ Engram.Links.backlinks_limit()) do
-    raw_backlinks =
-      Engram.Links.backlinks_for_note(user, note.id, limit: limit + 1, distinct_sources: true)
+  def links_payload(user, note, limit \\ Engram.Links.backlinks_limit()),
+    do: user |> links_payloads([note.id], limit) |> Map.fetch!(note.id)
 
+  # `links_payload/3` for every note in one batch: two `Links` reads in all,
+  # not two per note.
+  defp links_payloads(user, note_ids, limit \\ Engram.Links.backlinks_limit())
+
+  defp links_payloads(_user, [], _limit), do: %{}
+
+  defp links_payloads(user, note_ids, limit) do
+    backlinks =
+      Engram.Links.backlinks_for_notes(user, note_ids, limit: limit + 1, distinct_sources: true)
+
+    outgoing = Engram.Links.links_for_notes(user, note_ids)
+
+    Map.new(note_ids, fn id ->
+      {id, links_entry(Map.fetch!(backlinks, id), Map.fetch!(outgoing, id), limit)}
+    end)
+  end
+
+  defp links_entry(raw_backlinks, outgoing_edges, limit) do
     backlinks_more? = length(raw_backlinks) > limit
 
     backlinks =
       raw_backlinks |> Enum.map(& &1.source_path) |> Enum.reject(&is_nil/1) |> Enum.take(limit)
-
-    outgoing_edges = Engram.Links.links_for_note(user, note.id)
 
     {targets, outgoing_extra} =
       outgoing_edges
