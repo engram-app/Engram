@@ -204,6 +204,7 @@ class Recorder:
     def __init__(self, path: Path):
         self.f = open(path, "a", buffering=1)
         self.lock = threading.Lock()
+        self.move_lock = threading.Lock()
 
     def rec(
         self, op: str, ms: float, status: int | str, ok: bool, err: str = ""
@@ -417,6 +418,16 @@ def seed(acct: Account, rec: Recorder) -> int:
         )
     for k in range(5):
         want[f"Churn/F1/m{k}.md"] = (-1, f"# moving {k}\n\nfolder-move body {k}.\n")
+    # Churn notes move between two homes; a note sitting in its other home is
+    # present, and re-seeding it would make the next move a 409 (target taken).
+    for k in range(10):
+        if f"Churn/Moved/c{k}.md" in have:
+            want.pop(f"Churn/c{k}.md", None)
+            acct.churn_moved.add(k)
+    if any(p.startswith("Churn/F2/") for p in have):
+        for k in range(5):
+            want.pop(f"Churn/F1/m{k}.md", None)
+        acct.folder_flip = True
     todo = [(p, i, b) for p, (i, b) in want.items() if p not in have]
     tokens = 0
 
@@ -635,27 +646,37 @@ def run_op(op: str, acct: Account, rng: random.Random, args, rec: Recorder) -> N
             ok, err = ws_catchup_walk(acct, args.ws, rec)
             status = "ok" if ok else "fail"
         elif op == "rename":
+            # Serialized per account: two in-flight moves of one note race each
+            # other into a 409 that is the harness's, not the server's.
             k = rng.randrange(10)
-            with acct.lock:
+            with acct.move_lock:
                 moved = k in acct.churn_moved
-                (acct.churn_moved.discard if moved else acct.churn_moved.add)(k)
-            a, b = (
-                (f"Churn/Moved/c{k}.md", f"Churn/c{k}.md")
-                if moved
-                else (f"Churn/c{k}.md", f"Churn/Moved/c{k}.md")
-            )
-            r = post_retry(s, f"{api}/notes/rename", {"old_path": a, "new_path": b})
-            status, ok = r.status_code, r.status_code == 200
-        elif op == "folder_move":
-            with acct.lock:
-                acct.folder_flip = not acct.folder_flip
                 a, b = (
-                    ("Churn/F1", "Churn/F2")
-                    if acct.folder_flip
-                    else ("Churn/F2", "Churn/F1")
+                    (f"Churn/Moved/c{k}.md", f"Churn/c{k}.md")
+                    if moved
+                    else (f"Churn/c{k}.md", f"Churn/Moved/c{k}.md")
                 )
-            r = post_retry(s, f"{api}/folders/rename", {"old_path": a, "new_path": b})
-            status, ok = r.status_code, r.status_code == 200
+                r = post_retry(s, f"{api}/notes/rename", {"old_path": a, "new_path": b})
+                status, ok = r.status_code, r.status_code == 200
+                if ok:
+                    (acct.churn_moved.discard if moved else acct.churn_moved.add)(k)
+                else:
+                    err = f"{a} -> {b}: {r.text[:150]}"
+        elif op == "folder_move":
+            with acct.move_lock:
+                a, b = (
+                    ("Churn/F2", "Churn/F1")
+                    if acct.folder_flip
+                    else ("Churn/F1", "Churn/F2")
+                )
+                r = post_retry(
+                    s, f"{api}/folders/rename", {"old_path": a, "new_path": b}
+                )
+                status, ok = r.status_code, r.status_code == 200
+                if ok:
+                    acct.folder_flip = not acct.folder_flip
+                else:
+                    err = f"{a} -> {b}: {r.text[:150]}"
         elif op == "delete_restore":
             # Restore with different bytes: re-pushing the exact content of a
             # just-deleted note is refused by design (409 recently_deleted, the

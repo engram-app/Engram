@@ -47,6 +47,12 @@ class UAWebSocket extends NativeWebSocket {
 }
 globalThis.WebSocket = UAWebSocket as typeof WebSocket;
 
+// The vault-fs shim's cachedRead throws ENOENT when sim.py's REST churn deletes
+// a file under an in-flight push; record it instead of dying (the engine retries).
+process.on("unhandledRejection", (e) => {
+	record("crdt_unhandled_rejection", 0, false, String((e as Error)?.message ?? e).slice(0, 200));
+});
+
 const cfg: Cfg = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const out = fs.openSync(cfg.out, "a");
 const KEYSTROKE_MS = 120; // ~8 chars/s, a fast typist
@@ -96,7 +102,7 @@ async function main(): Promise<void> {
 			const b = await Replica.boot(s, `${s.label}-B`, root);
 			await timed("crdt_handshake", () => Promise.all([barrier.synced(a), barrier.synced(b)]).then(() => {}));
 			const serverHas = (p: string, c: string) =>
-				barrier.serverHasContent(cfg.apiUrl, s.token, s.vaultId, p, barrier.sha256(c));
+				barrier.serverHasContent(cfg.apiUrl, s.token, s.vaultId, p, barrier.sha256(c), 1000);
 
 			// Hot notes + cold notes, created once per run (stable paths, stable base).
 			const hot = [0, 1].map((i) => `Hot/${s.label}-h${i}.md`);
@@ -133,32 +139,39 @@ async function main(): Promise<void> {
 					} else if (op === "concurrent") {
 						// Each device types its own word at its own end of the note.
 						const p = hot[1];
+						// Like two open editors: each device re-reads its own file (which
+						// carries whatever the other device's edits have delivered so far)
+						// and types at its own end. Writing a precomputed full body instead
+						// would be a stale external overwrite that deletes the other side.
 						await timed("crdt_two_device_converge", async () => {
 							const base = get(p)();
-							let ta = base;
-							let tb = base;
+							const read = (r: Replica) => fs.readFileSync(path.join(r.vaultDir, p), "utf8");
 							for (let i = 0; i < WORD.length; i++) {
-								ta = `${WORD.slice(0, i + 1)}${base}`;
-								tb = `${base}${WORD.slice(0, i + 1).toUpperCase()}`;
-								await Promise.all([a.editNote(p, ta), b.editNote(p, tb)]);
+								await Promise.all([
+									a.editNote(p, WORD[i] + read(a)),
+									b.editNote(p, read(b) + WORD[i].toUpperCase()),
+								]);
 								await sleep(KEYSTROKE_MS);
 							}
-							// Converged = both replicas hold the same bytes, and the server agrees.
+							const want = (x: string) =>
+								x.length === base.length + 2 * WORD.length &&
+								[...WORD].every((c) => x.includes(c)) &&
+								x.includes(base.trim());
 							const deadline = Date.now() + 60_000;
 							for (;;) {
-								const fa = fs.readFileSync(path.join(a.vaultDir, p), "utf8");
-								const fb = fs.readFileSync(path.join(b.vaultDir, p), "utf8");
-								if (fa === fb && fa.includes(WORD) && fa.includes(WORD.toUpperCase())) {
+								const fa = read(a);
+								const fb = read(b);
+								if (fa === fb && want(fa)) {
 									await serverHas(p, fa);
-									// Reset to the base so the next round reuses content.
 									text.set(p, base);
 									await a.editNote(p, base);
 									await serverHas(p, base);
 									await barrier.noteVisible(b, p, barrier.sha256(base));
 									return;
 								}
-								if (Date.now() > deadline) throw new Error(`no convergence: a=${fa.length}B b=${fb.length}B`);
-								await sleep(100);
+								if (Date.now() > deadline)
+									throw new Error(`no convergence: a=${JSON.stringify(fa)} b=${JSON.stringify(fb)}`);
+								await sleep(250);
 							}
 						});
 					} else {
