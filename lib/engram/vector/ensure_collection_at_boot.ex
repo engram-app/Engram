@@ -15,9 +15,9 @@ defmodule Engram.Vector.EnsureCollectionAtBoot do
   """
   use GenServer, restart: :temporary
 
-  require Logger
-
   alias Engram.Logger.Metadata
+
+  require Logger
 
   @retry_ms 60_000
 

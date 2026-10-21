@@ -20,7 +20,7 @@ defmodule Engram.DataMigrations.IndexVersionsPinTest do
   alias Engram.Notes.Note
   alias Engram.Rebuild
   alias Engram.ServiceConfig
-  alias Engram.Workers.{EmbedNote, RebuildStaleNote, RefreshKeywordVectors, ReconcileEmbeddings}
+  alias Engram.Workers.{EmbedNote, RebuildStaleNote, ReconcileEmbeddings, RefreshKeywordVectors}
 
   setup :set_mox_global
   setup :verify_on_exit!
