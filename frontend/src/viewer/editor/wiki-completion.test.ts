@@ -279,3 +279,11 @@ describe("wikiCompletionSource composed into livePreviewExtensions", () => {
 		}).not.toThrow();
 	});
 });
+
+describe("wikiCompletionCandidates with attachments", () => {
+	test("offers attachments with their extension, alongside notes", () => {
+		const got = wikiCompletionCandidates("snat", ["Snatch notes.md", "files/snatchlist.zip"]);
+		expect(got.map((c) => c.label)).toEqual(["Snatch notes", "snatchlist.zip"]);
+		expect(got[1]?.detail).toBe("files");
+	});
+});

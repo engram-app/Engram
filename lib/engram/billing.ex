@@ -388,6 +388,7 @@ defmodule Engram.Billing do
     %{
       tier: tier(user),
       attachments_all_types: all_types?,
+      blocked_extensions: advertised_blocked_extensions(),
       max_file_bytes: numeric_limit(user, :max_file_bytes),
       attachment_bytes_cap: numeric_limit(user, :attachment_bytes_cap),
       # COMPAT SHIM, remove in a later contract PR. The search-coverage cap was
@@ -396,6 +397,17 @@ defmodule Engram.Billing do
       # there, which is now always true.
       indexed_notes_cap: nil
     }
+  end
+
+  @doc """
+  Extensions clients should refuse before uploading. Empty under
+  ATTACHMENT_MIME_BYPASS, where the server accepts executables.
+  """
+  @spec advertised_blocked_extensions() :: [String.t()]
+  def advertised_blocked_extensions do
+    if Engram.Storage.MimeWhitelist.bypass?(),
+      do: [],
+      else: Engram.Storage.MimeWhitelist.blocked_extensions()
   end
 
   defp numeric_limit(user, key) do
@@ -442,7 +454,18 @@ defmodule Engram.Billing do
         {Atom.to_string(key), value}
       end)
 
-    %{tier: Atom.to_string(tier(user)), limits: limits}
+    %{tier: Atom.to_string(tier(user)), limits: limits, plan_limits: plan_limits()}
+  end
+
+  # What each paid tier allows, so a client can say what an upgrade buys
+  # before it refuses a file. Tier-wide (env override, else catalog default);
+  # nil = no ceiling, or enforcement off.
+  @upgrade_limit_keys [:max_file_bytes, :attachment_bytes_cap]
+  defp plan_limits do
+    Map.new([:starter, :pro], fn tier ->
+      {Atom.to_string(tier),
+       Map.new(@upgrade_limit_keys, &{Atom.to_string(&1), tier_cap(tier, &1)})}
+    end)
   end
 
   # Boolean feature: :unlimited (enforcement off) opens the gate; explicit
@@ -1150,6 +1173,7 @@ defmodule Engram.Billing do
           plan_state(u)
           |> Map.take([
             :attachments_all_types,
+            :blocked_extensions,
             :max_file_bytes,
             :attachment_bytes_cap,
             :indexed_notes_cap
@@ -1158,6 +1182,7 @@ defmodule Engram.Billing do
         _ ->
           %{
             attachments_all_types: nil,
+            blocked_extensions: advertised_blocked_extensions(),
             max_file_bytes: nil,
             attachment_bytes_cap: nil,
             indexed_notes_cap: nil

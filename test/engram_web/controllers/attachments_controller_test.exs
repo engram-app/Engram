@@ -92,9 +92,7 @@ defmodule EngramWeb.AttachmentsControllerTest do
       assert att["mime_type"] == "application/pdf"
     end
 
-    test "rejects unknown extension with 415 (defaults to non-allowlisted octet-stream)", %{
-      conn: conn
-    } do
+    test "accepts an unknown extension (detected as octet-stream)", %{conn: conn} do
       conn =
         post(conn, "/api/attachments", %{
           path: "files/data.xyz",
@@ -102,10 +100,8 @@ defmodule EngramWeb.AttachmentsControllerTest do
           mtime: 1_000.0
         })
 
-      assert json_response(conn, 415) == %{
-               "error" => "mime_not_allowed",
-               "mime_type" => "application/octet-stream"
-             }
+      assert %{"attachment" => %{"mime_type" => "application/octet-stream"}} =
+               json_response(conn, 200)
     end
 
     test "rejects .exe extension even with whitelisted MIME claim (belt-and-braces)", %{
@@ -125,16 +121,28 @@ defmodule EngramWeb.AttachmentsControllerTest do
              }
     end
 
-    test "rejects application/x-msdownload MIME", %{conn: conn} do
+    test "rejects a mime_type with header-illegal bytes with 422", %{conn: conn} do
       conn =
         post(conn, "/api/attachments", %{
-          path: "tools/installer",
+          path: "files/a.txt",
           content_base64: @sample_base64,
-          mime_type: "application/x-msdownload",
+          mime_type: "text/plain\r\nx: y",
           mtime: 1_000.0
         })
 
-      assert %{"error" => "mime_not_allowed"} = json_response(conn, 415)
+      assert json_response(conn, 422) == %{"error" => "invalid_mime_type"}
+    end
+
+    test "accepts a zip", %{conn: conn} do
+      conn =
+        post(conn, "/api/attachments", %{
+          path: "files/a.zip",
+          content_base64: @sample_base64,
+          mime_type: "application/zip",
+          mtime: 1_000.0
+        })
+
+      assert json_response(conn, 200)["attachment"]["mime_type"] == "application/zip"
     end
 
     test "allows explicit MIME type override", %{conn: conn} do
@@ -457,8 +465,11 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
     test "415 for a disallowed extension", %{conn: conn} do
       conn = raw_post(conn, %{path: "evil.exe", mtime: "1.0"}, "MZ")
-      # .exe detects as application/octet-stream, which the MIME list refuses first.
-      assert json_response(conn, 415)["error"] == "mime_not_allowed"
+
+      assert json_response(conn, 415) == %{
+               "error" => "extension_not_allowed",
+               "extension" => ".exe"
+             }
     end
 
     test "402 attachment_must_be_text when an override revokes the surface", %{
@@ -527,6 +538,70 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
       assert json_response(conn, 413)["error"] == "request_too_large"
       assert get_resp_header(conn, "connection") == ["close"]
+    end
+
+    # The body below is 5 bytes: read, it would fit the quota. Only the
+    # declared length can make this a 402, so a 402 proves no read happened.
+    test "a declared content-length over the remaining quota is 402 before reading", %{
+      conn: conn,
+      user: user
+    } do
+      insert(:user_limit_override, user: user, key: "attachment_bytes_cap", value: %{"v" => 2000})
+      assert json_response(raw_post(conn, %{path: "first.png"}, :binary.copy("a", 1500)), 200)
+
+      conn =
+        conn
+        |> put_req_header("content-length", "1000")
+        |> raw_post(%{path: "second.png", mtime: "1.0"}, "small")
+
+      body = json_response(conn, 402)
+      assert body["reason"] == "attachments_quota_exceeded"
+      assert body["limit"] == 2000
+      assert body["current"] == 1500
+    end
+
+    test "the early quota check nets out the file being replaced", %{conn: conn, user: user} do
+      insert(:user_limit_override, user: user, key: "attachment_bytes_cap", value: %{"v" => 2000})
+      assert json_response(raw_post(conn, %{path: "f.png"}, :binary.copy("a", 1500)), 200)
+
+      # 1500 used + 1000 declared > 2000, but it replaces the 1500.
+      conn = raw_post(conn, %{path: "f.png", mtime: "2.0"}, :binary.copy("b", 1000))
+      assert json_response(conn, 200)["attachment"]["size_bytes"] == 1000
+    end
+
+    # Same size as the stored file may be the same bytes, which the upload
+    # answers as a no-op 200 even over quota; only a read can tell.
+    test "the early quota check never refuses a same-size re-upload", %{conn: conn, user: user} do
+      assert json_response(raw_post(conn, %{path: "f.png"}, :binary.copy("a", 1500)), 200)
+      # Quota drops below what is already stored (e.g. a downgrade).
+      insert(:user_limit_override, user: user, key: "attachment_bytes_cap", value: %{"v" => 1000})
+
+      conn = raw_post(conn, %{path: "f.png", mtime: "2.0"}, :binary.copy("a", 1500))
+      assert json_response(conn, 200)["attachment"]["size_bytes"] == 1500
+    end
+
+    test "a text-only plan's non-text upload is 402 without reading the body", %{
+      conn: conn,
+      user: user
+    } do
+      insert(:user_limit_override,
+        user: user,
+        key: "attachments_all_types",
+        value: %{"v" => false},
+        reason: "revoke for test",
+        set_by: "test"
+      )
+
+      declared = Integer.to_string(EngramWeb.Endpoint.max_body_bytes() + 1)
+
+      conn =
+        conn
+        |> put_req_header("content-length", declared)
+        |> raw_post(%{path: "photo.png", mtime: "1.0"}, "PNG")
+
+      assert json_response(conn, 402)["reason"] == "attachment_must_be_text"
+      {Plug.Adapters.Test.Conn, state} = conn.adapter
+      assert state.req_body == "PNG"
     end
 
     for bad <- ["NaN", "1,5", "", "inf", "1e400"] do
@@ -1091,6 +1166,26 @@ defmodule EngramWeb.AttachmentsControllerTest do
 
       assert json_response(conn, 404)["error"] == "not_found"
     end
+
+    test "onto an executable extension → 415, nothing moves", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      {:ok, _} =
+        Attachments.upsert_attachment(user, vault, %{path: "notes.txt", content: "MZ"})
+
+      assert %{"error" => "extension_not_allowed", "extension" => ".exe"} =
+               conn
+               |> post("/api/attachments/rename", %{
+                 "old_path" => "notes.txt",
+                 "new_path" => "evil.exe."
+               })
+               |> json_response(415)
+
+      {:ok, metas} = Attachments.list_attachments(Engram.Repo.reload!(user), vault)
+      assert Enum.map(metas, & &1.path) == ["notes.txt"]
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -1178,6 +1273,37 @@ defmodule EngramWeb.AttachmentsControllerTest do
     end
   end
 
+  describe "POST /attachments/batch-move of a blocked file" do
+    setup do
+      prev = Application.get_env(:engram, :attachment_mime_bypass)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:engram, :attachment_mime_bypass, prev),
+          else: Application.delete_env(:engram, :attachment_mime_bypass)
+      end)
+    end
+
+    test "is 415 and moves nothing", %{conn: conn, user: user, vault: vault} do
+      # Stored while an operator had the bypass on.
+      Application.put_env(:engram, :attachment_mime_bypass, true)
+      {:ok, _} = Attachments.upsert_attachment(user, vault, %{path: "tool.exe", content: "MZ"})
+      Application.delete_env(:engram, :attachment_mime_bypass)
+
+      assert %{"error" => "extension_not_allowed", "extension" => ".exe"} =
+               conn
+               |> put_req_header("x-idempotency-key", Ecto.UUID.generate())
+               |> post("/api/attachments/batch-move", %{
+                 "paths" => ["tool.exe"],
+                 "target_folder" => "bin"
+               })
+               |> json_response(415)
+
+      {:ok, metas} = Attachments.list_attachments(Engram.Repo.reload!(user), vault)
+      assert Enum.map(metas, & &1.path) == ["tool.exe"]
+    end
+  end
+
   describe "POST /attachments/batch-delete" do
     test "requires idempotency key → 400", %{conn: conn} do
       conn = post(conn, "/api/attachments/batch-delete", %{"paths" => ["a.png"]})
@@ -1253,6 +1379,337 @@ defmodule EngramWeb.AttachmentsControllerTest do
       # it was previously pinned via the retired GET /attachments/changes.
       body = json_response(get(conn_b, "/api/sync/manifest"), 200)
       assert body["attachments"] == []
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # DEK rotation lock
+  # ---------------------------------------------------------------------------
+
+  describe "POST /attachments while a DEK rotation holds the user" do
+    import Ecto.Query, only: [from: 2]
+    import Mox
+
+    alias Engram.Attachments.Attachment
+    alias Engram.Repo
+    alias Engram.Storage.InMemory
+
+    defp set_rotation_lock(user, at) do
+      Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: at]],
+        skip_tenant_check: true
+      )
+
+      # The auth path serves the user from the :user cache.
+      Engram.Accounts.evict_user(user.id)
+    end
+
+    defp live_rows(user),
+      do: Repo.all(from(a in Attachment, where: a.user_id == ^user.id), skip_tenant_check: true)
+
+    defp upload(conn),
+      do: post(conn, "/api/attachments", %{path: "r.png", content_base64: @sample_base64})
+
+    test "is 503 rotation_in_progress and writes nothing; succeeds once cleared", %{
+      conn: conn,
+      user: user
+    } do
+      set_rotation_lock(user, DateTime.utc_now(:second))
+      resp = upload(conn)
+      assert %{"error" => "rotation_in_progress"} = json_response(resp, 503)
+      assert get_resp_header(resp, "retry-after") == ["60"]
+      assert live_rows(user) == []
+
+      set_rotation_lock(user, nil)
+      assert conn |> upload() |> json_response(200)
+    end
+
+    # The request plug saw no lock; the rotation starts while the bytes are
+    # stored, before the locked row write.
+    test "a rotation that starts mid-request is refused at the row write", %{
+      conn: conn,
+      user: user
+    } do
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      stub_with(Engram.MockStorage, InMemory)
+
+      test_pid = self()
+
+      stub(Engram.MockStorage, :put, fn key, bin, opts ->
+        send(test_pid, {:stored, key})
+        set_rotation_lock(user, DateTime.utc_now(:second))
+        InMemory.put(key, bin, opts)
+      end)
+
+      # The write's own tenant transaction sees the lock and raises, rendered
+      # as the same 503 the request plug answers with.
+      {503, headers, body} = assert_error_sent(503, fn -> upload(conn) end)
+      assert %{"error" => "rotation_in_progress"} = Jason.decode!(body)
+      assert {"retry-after", "60"} in headers
+      assert live_rows(user) == []
+
+      # The blob stored before the refusal is not left orphaned.
+      assert_received {:stored, key}
+      refute InMemory.exists?(key)
+    end
+
+    # A rotation that already finished (lock clear, DEK version moved)
+    # between the DEK read and the row write.
+    test "a rotation that completes mid-request is refused at the row write", %{
+      conn: conn,
+      user: user
+    } do
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      stub_with(Engram.MockStorage, InMemory)
+
+      stub(Engram.MockStorage, :put, fn k, bin, opts ->
+        Repo.update_all(
+          from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          [inc: [dek_version: 1]],
+          skip_tenant_check: true
+        )
+
+        InMemory.put(k, bin, opts)
+      end)
+
+      resp = upload(conn)
+      assert %{"error" => "rotation_in_progress"} = json_response(resp, 503)
+      assert live_rows(user) == []
+    end
+
+    test "a refused overwrite leaves the existing attachment readable", %{
+      conn: conn,
+      user: user
+    } do
+      original = conn |> upload() |> json_response(200)
+      [%{storage_key: key}] = live_rows(user)
+
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.MockStorage)
+      on_exit(fn -> Application.put_env(:engram, :storage, prev) end)
+      stub_with(Engram.MockStorage, InMemory)
+
+      stub(Engram.MockStorage, :put, fn k, bin, opts ->
+        set_rotation_lock(user, DateTime.utc_now(:second))
+        InMemory.put(k, bin, opts)
+      end)
+
+      {503, _headers, body} =
+        assert_error_sent(503, fn ->
+          post(conn, "/api/attachments", %{path: "r.png", content_base64: @updated_base64})
+        end)
+
+      assert %{"error" => "rotation_in_progress"} = Jason.decode!(body)
+      assert [%{storage_key: ^key}] = live_rows(user)
+
+      set_rotation_lock(user, nil)
+      raw = get(conn, "/api/attachments/r.png?raw=1")
+      assert response(raw, 200) == @sample_content
+
+      assert original["attachment"]["content_hash"] ==
+               get_resp_header(raw, "x-engram-content-hash") |> hd()
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # GET /attachments/*path for format v2 (segmented, chunked uploads)
+  # ---------------------------------------------------------------------------
+
+  describe "GET /attachments/*path (v2 segmented)" do
+    import ExUnit.CaptureLog
+
+    alias Engram.Attachments.{Attachment, SegmentedCipher, Uploads}
+    alias Engram.Repo
+    alias Engram.Storage.InMemory
+
+    @seg 8 * 1024 * 1024
+    # Two segments, 11.5 MB: over the 11 MB single-request ceiling.
+    @big @seg + 3 * 1024 * 1024
+
+    setup %{user: user, vault: vault} do
+      insert(:user_limit_override,
+        user: user,
+        key: "max_file_bytes",
+        value: %{"v" => 100 * 1024 * 1024}
+      )
+
+      bytes = :crypto.strong_rand_bytes(@big)
+      att = upload_v2(user, vault, "videos/clip.mp4", bytes)
+      %{bytes: bytes, att: att}
+    end
+
+    defp upload_v2(user, vault, path, bytes) do
+      {:ok, up} =
+        Uploads.start(user, vault, %{path: path, size_bytes: byte_size(bytes), mtime: 1.0})
+
+      for {part, n} <- Enum.with_index(chunk(bytes), 1),
+          do: {:ok, _} = Uploads.put_part(user, vault, up.id, n, part)
+
+      {:ok, att} = Uploads.complete(user, vault, up.id)
+      Repo.get!(Attachment, att.id, skip_tenant_check: true)
+    end
+
+    defp chunk(<<part::binary-size(@seg), rest::binary>>) when rest != "",
+      do: [part | chunk(rest)]
+
+    defp chunk(last), do: [last]
+
+    test "?raw=1 streams the plaintext with the metadata headers", %{
+      conn: conn,
+      bytes: bytes,
+      att: att
+    } do
+      resp = get(conn, "/api/attachments/videos/clip.mp4?raw=1")
+
+      assert resp.status == 200
+      assert resp.state == :chunked
+      assert resp.resp_body == bytes
+      assert get_resp_header(resp, "x-engram-content-hash") == [att.content_hash]
+      assert get_resp_header(resp, "content-length") == [Integer.to_string(@big)]
+      assert get_resp_header(resp, "accept-ranges") == ["bytes"]
+      assert get_resp_header(resp, "content-disposition") == [~s(attachment; filename="clip.mp4")]
+    end
+
+    test "Range: bytes=N- from a segment boundary is 206 with segment 2 onward", %{
+      conn: conn,
+      bytes: bytes
+    } do
+      resp =
+        conn
+        |> put_req_header("range", "bytes=#{@seg}-")
+        |> get("/api/attachments/videos/clip.mp4?raw=1")
+
+      assert resp.status == 206
+      assert resp.resp_body == binary_part(bytes, @seg, @big - @seg)
+      assert get_resp_header(resp, "content-range") == ["bytes #{@seg}-#{@big - 1}/#{@big}"]
+      assert get_resp_header(resp, "content-length") == [Integer.to_string(@big - @seg)]
+    end
+
+    test "Range: bytes=N-M across a boundary returns exactly those bytes", %{
+      conn: conn,
+      bytes: bytes
+    } do
+      {first, last} = {@seg - 5, @seg + 9}
+
+      resp =
+        conn
+        |> put_req_header("range", "bytes=#{first}-#{last}")
+        |> get("/api/attachments/videos/clip.mp4?raw=1")
+
+      assert resp.status == 206
+      assert resp.resp_body == binary_part(bytes, first, last - first + 1)
+      assert get_resp_header(resp, "content-range") == ["bytes #{first}-#{last}/#{@big}"]
+    end
+
+    test "Range end past the file is clamped to the last byte", %{conn: conn, bytes: bytes} do
+      resp =
+        conn
+        |> put_req_header("range", "bytes=#{@big - 3}-#{@big * 2}")
+        |> get("/api/attachments/videos/clip.mp4?raw=1")
+
+      assert resp.status == 206
+      assert resp.resp_body == binary_part(bytes, @big - 3, 3)
+      assert get_resp_header(resp, "content-range") == ["bytes #{@big - 3}-#{@big - 1}/#{@big}"]
+    end
+
+    test "a Range starting at or past the end is 416", %{conn: conn} do
+      resp =
+        conn
+        |> put_req_header("range", "bytes=#{@big}-")
+        |> get("/api/attachments/videos/clip.mp4?raw=1")
+
+      assert resp.status == 416
+      assert get_resp_header(resp, "content-range") == ["bytes */#{@big}"]
+    end
+
+    test "multi-range and suffix forms are ignored: 200 with the full body", %{
+      conn: conn,
+      bytes: bytes
+    } do
+      for range <- ["bytes=0-1,5-6", "bytes=-100", "items=0-1", "bytes=9-3"] do
+        resp =
+          conn
+          |> put_req_header("range", range)
+          |> get("/api/attachments/videos/clip.mp4?raw=1")
+
+        assert resp.status == 200, range
+        assert resp.resp_body == bytes
+      end
+    end
+
+    test "JSON show above the single-request ceiling is 409 use_raw_download", %{conn: conn} do
+      assert %{"error" => "use_raw_download"} =
+               conn |> get("/api/attachments/videos/clip.mp4") |> json_response(409)
+    end
+
+    test "JSON show of a small v2 row returns the assembled bytes", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      small = :crypto.strong_rand_bytes(5000)
+      _ = upload_v2(user, vault, "small.bin", small)
+
+      body = conn |> get("/api/attachments/small.bin") |> json_response(200)
+      assert Base.decode64!(body["content_base64"]) == small
+      assert body["size_bytes"] == 5000
+    end
+
+    # Over a real Bandit socket: once headers are out the status cannot
+    # change, so a bad segment must cut the connection rather than let Bandit
+    # finish the body (Plug.Test never shows what reaches the wire).
+    test "a tampered segment cuts the connection after headers, with an error log", %{
+      user: user,
+      att: att
+    } do
+      {:ok, blob} = InMemory.get(att.storage_key)
+      at = @seg + SegmentedCipher.overhead() + 100
+      <<head::binary-size(at), b, rest::binary>> = blob
+      :ok = InMemory.put(att.storage_key, <<head::binary, Bitwise.bxor(b, 1), rest::binary>>)
+
+      {:ok, pid} =
+        start_supervised(
+          {Bandit, plug: EngramWeb.Endpoint, port: 0, ip: :loopback, startup_log: false}
+        )
+
+      {:ok, {_ip, port}} = ThousandIsland.listener_info(pid)
+      {:ok, sock} = :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false])
+      {:ok, key, _} = Engram.Accounts.create_api_key(user, "socket-key")
+
+      log =
+        capture_log(fn ->
+          :ok =
+            :gen_tcp.send(
+              sock,
+              "GET /api/attachments/videos/clip.mp4?raw=1 HTTP/1.1\r\nhost: localhost\r\n" <>
+                "authorization: Bearer #{key}\r\n\r\n"
+            )
+
+          data = recv_until_closed(sock, [])
+          [headers, body] = :binary.split(data, "\r\n\r\n")
+
+          assert headers =~ "HTTP/1.1 200 OK"
+          assert headers =~ ~r/content-length: #{@big}/i
+          # Only the first, untampered segment made it out.
+          assert byte_size(body) < @big
+          assert byte_size(body) <= @seg
+        end)
+
+      assert log =~ "attachment segment unreadable"
+      assert log =~ att.id
+      refute log =~ "clip.mp4"
+    end
+
+    defp recv_until_closed(sock, acc) do
+      case :gen_tcp.recv(sock, 0, 5_000) do
+        {:ok, data} -> recv_until_closed(sock, [acc | data])
+        {:error, :closed} -> IO.iodata_to_binary(acc)
+      end
     end
   end
 end

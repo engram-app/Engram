@@ -47,17 +47,24 @@ export function resolveAttachmentTarget(
 	return attachments.find((a) => a.path.split("/").pop() === target)?.path ?? null;
 }
 
-/** A root-level file name not yet taken: `pic.png` -> `pic 1.png` -> `pic 2.png` (Obsidian-style). */
-export function uniqueAttachmentName(attachments: { path: string }[], name: string): string {
-	const taken = new Set(attachments.map((a) => a.path));
-	if (!taken.has(name)) {
+/**
+ * A root-level file name not yet taken: `pic.png` -> `pic 1.png` -> `pic 2.png`
+ * (Obsidian-style). Case-insensitive: macOS and Windows Obsidian keep the vault
+ * on case-insensitive disks, where `Photo.png` and `photo.png` are one file.
+ */
+export function uniqueAttachmentName(
+	attachments: readonly { path: string }[],
+	name: string,
+): string {
+	const taken = new Set(attachments.map((a) => a.path.toLowerCase()));
+	if (!taken.has(name.toLowerCase())) {
 		return name;
 	}
 	const dot = name.lastIndexOf(".");
 	const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
 	for (let n = 1; ; n++) {
 		const candidate = `${stem} ${n}${ext}`;
-		if (!taken.has(candidate)) {
+		if (!taken.has(candidate.toLowerCase())) {
 			return candidate;
 		}
 	}

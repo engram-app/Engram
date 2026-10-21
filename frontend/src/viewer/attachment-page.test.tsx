@@ -1,9 +1,11 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { Link, MemoryRouter, Route, Routes } from "react-router";
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { ApiError, api } from "../api/client";
 import type { AttachmentSummary } from "../api/queries";
+import { RightToolsProvider } from "../layout/right-tools-context";
 import AttachmentPage from "./attachment-page";
+import { TEXT_PREVIEW_MAX_BYTES } from "./attachment-preview";
 
 // Stub the heavy pdf.js viewer — this suite only verifies routing-by-mime, not
 // pdf.js rendering (covered in pdf-view.test.tsx).
@@ -15,8 +17,15 @@ vi.mock("./pdf-view", () => ({
 // list from the test (must be `mock*`-prefixed for vitest's vi.mock hoist guard).
 let mockAttachments: AttachmentSummary[] = [];
 let mockLoading = false;
+let mockBacklinks: { source_note_id: string; source_path: string; source_title: string | null }[] =
+	[];
 vi.mock("../api/queries", () => ({
 	useAttachments: () => ({ data: mockAttachments, isLoading: mockLoading }),
+	useAttachmentBacklinks: () => ({ data: mockBacklinks }),
+	useFolders: () => ({ data: [] }),
+	useRenameAttachment: () => ({ mutate: vi.fn() }),
+	useBatchMoveAttachments: () => ({ mutate: vi.fn() }),
+	useBatchDeleteAttachments: () => ({ mutate: vi.fn() }),
 }));
 
 const att = (over: Partial<AttachmentSummary> & { id: string }): AttachmentSummary => ({
@@ -24,7 +33,7 @@ const att = (over: Partial<AttachmentSummary> & { id: string }): AttachmentSumma
 	mime_type: "application/pdf",
 	size_bytes: 1,
 	mtime: 0,
-	updated_at: "",
+	updated_at: "2026-10-20T12:00:00Z",
 	...over,
 });
 
@@ -36,16 +45,19 @@ beforeAll(() => {
 beforeEach(() => {
 	mockAttachments = [];
 	mockLoading = false;
+	mockBacklinks = [];
 	vi.restoreAllMocks();
 });
 
 function renderAt(id: string) {
 	return render(
-		<MemoryRouter initialEntries={[`/v/work/${id}`]}>
-			<Routes>
-				<Route path="/v/:slug/:itemId" element={<AttachmentPage />} />
-			</Routes>
-		</MemoryRouter>,
+		<RightToolsProvider>
+			<MemoryRouter initialEntries={[`/v/work/${id}`]}>
+				<Routes>
+					<Route path="/v/:slug/:itemId" element={<AttachmentPage />} />
+				</Routes>
+			</MemoryRouter>
+		</RightToolsProvider>,
 	);
 }
 
@@ -54,7 +66,10 @@ it("renders an <img> for an image attachment, fetching bytes by path", async () 
 	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["x"], { type: "image/png" }));
 	renderAt("img-1");
 	await waitFor(() => expect(screen.getByRole("img")).toBeInTheDocument());
-	expect(api.getBlob).toHaveBeenCalledWith("/attachments/img/a.png?raw=1");
+	expect(api.getBlob).toHaveBeenCalledWith(
+		"/attachments/img/a.png?raw=1",
+		expect.objectContaining({ onProgress: expect.any(Function), signal: expect.any(AbortSignal) }),
+	);
 });
 
 it("renders the pdf.js viewer for a pdf attachment", async () => {
@@ -65,11 +80,104 @@ it("renders the pdf.js viewer for a pdf attachment", async () => {
 	expect(screen.getByTestId("pdf-view")).toHaveTextContent("q3.pdf");
 });
 
-it("renders a download fallback for unsupported types", async () => {
-	mockAttachments = [att({ id: "zip-1", path: "a.zip", mime_type: "application/zip" })];
-	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["x"], { type: "application/zip" }));
+it("shows the file card for a type with no preview, without fetching its bytes", () => {
+	mockAttachments = [
+		att({ id: "zip-1", path: "stuff/a.zip", mime_type: "application/zip", size_bytes: 1536 }),
+	];
+	const getBlob = vi.spyOn(api, "getBlob");
 	renderAt("zip-1");
-	await waitFor(() => expect(screen.getByRole("link", { name: /download/iu })).toBeInTheDocument());
+	expect(screen.getByRole("heading", { name: "a.zip" })).toBeInTheDocument();
+	expect(screen.getByText("1.5 kB")).toBeInTheDocument();
+	expect(screen.getByText("application/zip")).toBeInTheDocument();
+	expect(screen.queryByRole("link", { name: /open in new tab/iu })).not.toBeInTheDocument();
+	expect(getBlob).not.toHaveBeenCalled();
+});
+
+it("keeps the extension when renaming", () => {
+	mockAttachments = [att({ id: "zip-1", path: "a.zip", mime_type: "application/zip" })];
+	renderAt("zip-1");
+	fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+	expect(screen.getByRole("textbox")).toHaveValue("a");
+	expect(screen.getByText(".zip")).toBeInTheDocument();
+});
+
+it.each([0, 1])("clicking a file name (%i: header, title) opens rename", (which) => {
+	mockAttachments = [att({ id: "zip-1", path: "a.zip", mime_type: "application/zip" })];
+	renderAt("zip-1");
+	const names = screen.getAllByTitle("Click to rename");
+	expect(names).toHaveLength(2);
+	fireEvent.click(names[which] as HTMLElement);
+	expect(screen.getByRole("textbox")).toHaveValue("a");
+});
+
+it("fetches the bytes when Download is clicked on a card-only file", async () => {
+	mockAttachments = [att({ id: "zip-1", path: "a.zip", mime_type: "application/zip" })];
+	const getBlob = vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["x"]));
+	renderAt("zip-1");
+	fireEvent.click(screen.getByRole("button", { name: "Download" }));
+	await waitFor(() => expect(getBlob).toHaveBeenCalledWith("/attachments/a.zip?raw=1"));
+});
+
+it("previews a text file as read-only text", async () => {
+	mockAttachments = [
+		att({ id: "t-1", path: "logs/app.log", mime_type: "application/octet-stream" }),
+	];
+	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["line one\nline two"]));
+	renderAt("t-1");
+	expect(await screen.findByText(/line one/u)).toBeInTheDocument();
+});
+
+it("previews a CSV as a table", async () => {
+	mockAttachments = [att({ id: "c-1", path: "t.csv", mime_type: "text/csv" })];
+	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["name,qty\napple,3"]));
+	renderAt("c-1");
+	expect(await screen.findByRole("columnheader", { name: "name" })).toBeInTheDocument();
+	expect(screen.getByRole("cell", { name: "apple" })).toBeInTheDocument();
+});
+
+it("shows 500 data rows under the header, then says it stopped", async () => {
+	const csv = ["h", ...Array.from({ length: 600 }, (_, i) => String(i))].join("\n");
+	mockAttachments = [att({ id: "c-2", path: "big.csv", mime_type: "text/csv" })];
+	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob([csv]));
+	const { container } = renderAt("c-2");
+	expect(await screen.findByText(/showing the first 500 rows/iu)).toBeInTheDocument();
+	expect(container.querySelectorAll("tbody tr")).toHaveLength(500);
+});
+
+it("shows an Excalidraw placeholder with the drawing's text", async () => {
+	const json = JSON.stringify({ type: "excalidraw", elements: [{ type: "text", text: "Hello" }] });
+	mockAttachments = [
+		att({ id: "x-1", path: "Plan.excalidraw", mime_type: "application/octet-stream" }),
+	];
+	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob([json]));
+	renderAt("x-1");
+	expect(await screen.findByText(/excalidraw drawing/iu)).toBeInTheDocument();
+	expect(await screen.findByText("Hello")).toBeInTheDocument();
+});
+
+it("plays audio natively", async () => {
+	mockAttachments = [att({ id: "a-1", path: "s.mp3", mime_type: "audio/mpeg" })];
+	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["x"], { type: "audio/mpeg" }));
+	const { container } = renderAt("a-1");
+	await waitFor(() => expect(container.querySelector("audio")).toHaveAttribute("src", "blob:fake"));
+});
+
+it("never opens an SVG blob in a new tab", async () => {
+	mockAttachments = [att({ id: "s-1", path: "x.svg", mime_type: "image/svg+xml" })];
+	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["<svg/>"], { type: "image/svg+xml" }));
+	renderAt("s-1");
+	await screen.findByRole("img");
+	expect(screen.queryByRole("link", { name: /open in new tab/iu })).not.toBeInTheDocument();
+});
+
+it("opens a PNG in a new tab once loaded", async () => {
+	mockAttachments = [att({ id: "i-1", path: "a.png", mime_type: "image/png" })];
+	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["x"], { type: "image/png" }));
+	renderAt("i-1");
+	expect(await screen.findByRole("link", { name: /open in new tab/iu })).toHaveAttribute(
+		"target",
+		"_blank",
+	);
 });
 
 it('shows a transient error (not "missing") when the byte fetch fails with a 5xx', async () => {
@@ -109,15 +217,194 @@ it("shows the document header with folder and filename while the bytes load", ()
 	expect(screen.getByTestId("document-surface")).toBeInTheDocument();
 	expect(screen.getByText("Medical/")).toBeInTheDocument();
 	expect(screen.getByText("lab.pdf")).toBeInTheDocument();
-	// Held in place (disabled) so the header does not change height when the bytes land.
-	expect(screen.queryByRole("link", { name: /download/iu })).not.toBeInTheDocument();
-	expect(screen.getByRole("button", { name: "Download" })).toBeDisabled();
+	expect(screen.getByRole("button", { name: "Download lab.pdf" })).toBeEnabled();
 });
 
-it("offers a download link in the header once the bytes load", async () => {
+it("downloads from the loaded bytes without fetching again", async () => {
+	mockAttachments = [att({ id: "i-1", path: "a.png", mime_type: "image/png" })];
+	const getBlob = vi
+		.spyOn(api, "getBlob")
+		.mockResolvedValueOnce(new Blob(["x"], { type: "image/png" }));
+	renderAt("i-1");
+	await screen.findByRole("img");
+	fireEvent.click(screen.getByRole("button", { name: "Download a.png" }));
+	expect(getBlob).toHaveBeenCalledTimes(1);
+});
+
+it("keeps the loaded bytes when the file is renamed", async () => {
+	mockAttachments = [att({ id: "i-1", path: "a.png", mime_type: "image/png" })];
+	const getBlob = vi
+		.spyOn(api, "getBlob")
+		.mockResolvedValueOnce(new Blob(["x"], { type: "image/png" }));
+	const { rerender } = renderAt("i-1");
+	await screen.findByRole("img");
+	mockAttachments = [att({ id: "i-1", path: "b.png", mime_type: "image/png" })];
+	rerender(
+		<RightToolsProvider>
+			<MemoryRouter initialEntries={["/v/work/i-1"]}>
+				<Routes>
+					<Route path="/v/:slug/:itemId" element={<AttachmentPage />} />
+				</Routes>
+			</MemoryRouter>
+		</RightToolsProvider>,
+	);
+	expect(await screen.findByRole("img", { name: "b.png" })).toBeInTheDocument();
+	expect(getBlob).toHaveBeenCalledTimes(1);
+});
+
+it("refetches when the file's content changes", async () => {
+	mockAttachments = [att({ id: "i-1", path: "a.png", mime_type: "image/png", mtime: 1 })];
+	const getBlob = vi
+		.spyOn(api, "getBlob")
+		.mockResolvedValue(new Blob(["x"], { type: "image/png" }));
+	const { rerender } = renderAt("i-1");
+	await screen.findByRole("img");
+	mockAttachments = [att({ id: "i-1", path: "a.png", mime_type: "image/png", mtime: 2 })];
+	rerender(
+		<RightToolsProvider>
+			<MemoryRouter initialEntries={["/v/work/i-1"]}>
+				<Routes>
+					<Route path="/v/:slug/:itemId" element={<AttachmentPage />} />
+				</Routes>
+			</MemoryRouter>
+		</RightToolsProvider>,
+	);
+	await waitFor(() => expect(getBlob).toHaveBeenCalledTimes(2));
+});
+
+it("puts the file details and actions above the preview", async () => {
 	mockAttachments = [att({ id: "i-1", path: "a.png", mime_type: "image/png" })];
 	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["x"], { type: "image/png" }));
 	renderAt("i-1");
-	const link = await screen.findByRole("link", { name: "Download a.png" });
-	expect(link).toHaveAttribute("download", "a.png");
+	const img = await screen.findByRole("img");
+	const details = screen.getByRole("region", { name: "File details" });
+	expect(details.compareDocumentPosition(img)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+});
+
+it("says so when the browser can't render the file", async () => {
+	mockAttachments = [att({ id: "h-1", path: "IMG_1.heic", mime_type: "image/heic" })];
+	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["x"], { type: "image/heic" }));
+	renderAt("h-1");
+	fireEvent.error(await screen.findByRole("img"));
+	expect(await screen.findByText(/this browser can't preview IMG_1.heic/iu)).toBeInTheDocument();
+	expect(screen.queryByRole("img")).not.toBeInTheDocument();
+});
+
+it("loads a large file without asking, showing progress", async () => {
+	mockAttachments = [
+		att({ id: "v-1", path: "big.mp4", mime_type: "video/mp4", size_bytes: 200 * 1024 * 1024 }),
+	];
+	let finish: (b: Blob) => void = () => undefined;
+	vi.spyOn(api, "getBlob").mockImplementationOnce((_path, opts) => {
+		opts?.onProgress?.(50 * 1024 * 1024);
+		return new Promise((r) => {
+			finish = r;
+		});
+	});
+	const { container } = renderAt("v-1");
+	const bar = await screen.findByRole("progressbar", { name: /loading big\.mp4/iu });
+	expect(bar).toHaveAttribute("value", String(50 * 1024 * 1024));
+	expect(screen.queryByRole("button", { name: /preview anyway/iu })).not.toBeInTheDocument();
+	await act(async () => {
+		finish(new Blob(["x"], { type: "video/mp4" }));
+	});
+	await waitFor(() => expect(container.querySelector("video")).toHaveAttribute("src", "blob:fake"));
+});
+
+it("aborts the preview download when the page goes away", async () => {
+	mockAttachments = [att({ id: "v-1", path: "big.mp4", mime_type: "video/mp4" })];
+	let signal: AbortSignal | undefined;
+	vi.spyOn(api, "getBlob").mockImplementationOnce((_path, opts) => {
+		signal = opts?.signal;
+		return new Promise(() => undefined);
+	});
+	const { unmount } = renderAt("v-1");
+	await waitFor(() => expect(signal).toBeDefined());
+	expect(signal?.aborted).toBe(false);
+	unmount();
+	expect(signal?.aborted).toBe(true);
+});
+
+it.each([
+	["logs/app.log", "text/plain"],
+	["t.csv", "text/csv"],
+	["Plan.excalidraw", "application/octet-stream"],
+])("reads only the first preview bytes of %s", async (path, mime) => {
+	mockAttachments = [att({ id: "t-1", path, mime_type: mime, size_bytes: 1024 ** 3 })];
+	const getBlob = vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["x"]));
+	renderAt("t-1");
+	await waitFor(() =>
+		expect(getBlob).toHaveBeenCalledWith(
+			expect.any(String),
+			// One byte past the cap, so the preview can tell the file was cut.
+			expect.objectContaining({ maxBytes: TEXT_PREVIEW_MAX_BYTES + 1 }),
+		),
+	);
+});
+
+it("loads a whole image, with no byte cap", async () => {
+	mockAttachments = [att({ id: "i-1", path: "a.png", mime_type: "image/png" })];
+	const getBlob = vi
+		.spyOn(api, "getBlob")
+		.mockResolvedValueOnce(new Blob(["x"], { type: "image/png" }));
+	renderAt("i-1");
+	await screen.findByRole("img");
+	expect(getBlob.mock.calls[0]?.[1]?.maxBytes).toBeUndefined();
+});
+
+it("throttles progress updates and keeps the live region text static", async () => {
+	mockAttachments = [att({ id: "v-1", path: "big.mp4", mime_type: "video/mp4", size_bytes: 1000 })];
+	vi.spyOn(api, "getBlob").mockImplementationOnce((_path, opts) => {
+		opts?.onProgress?.(100);
+		opts?.onProgress?.(200);
+		opts?.onProgress?.(300);
+		return new Promise(() => undefined);
+	});
+	renderAt("v-1");
+	const bar = await screen.findByRole("progressbar", { name: /loading big\.mp4/iu });
+	expect(bar).toHaveAttribute("value", "100");
+	expect(screen.getByRole("status")).toHaveTextContent(/^Loading big\.mp4…$/u);
+});
+
+it("disables Download and says it is busy while a download runs", async () => {
+	mockAttachments = [att({ id: "zip-1", path: "a.zip", mime_type: "application/zip" })];
+	let finish: (b: Blob) => void = () => undefined;
+	const getBlob = vi.spyOn(api, "getBlob").mockImplementationOnce(
+		() =>
+			new Promise((r) => {
+				finish = r;
+			}),
+	);
+	renderAt("zip-1");
+	fireEvent.click(screen.getByRole("button", { name: "Download a.zip" }));
+	const busy = await screen.findByRole("button", { name: "Downloading a.zip…" });
+	expect(busy).toBeDisabled();
+	fireEvent.click(busy);
+	expect(getBlob).toHaveBeenCalledTimes(1);
+	await act(async () => {
+		finish(new Blob(["x"]));
+	});
+	expect(await screen.findByRole("button", { name: "Download a.zip" })).toBeEnabled();
+});
+
+it("closes the rename box when another file opens", async () => {
+	mockAttachments = [
+		att({ id: "a-1", path: "a.zip", mime_type: "application/zip" }),
+		att({ id: "b-1", path: "b.zip", mime_type: "application/zip" }),
+	];
+	render(
+		<RightToolsProvider>
+			<MemoryRouter initialEntries={["/v/work/a-1"]}>
+				<Link to="/v/work/b-1">next</Link>
+				<Routes>
+					<Route path="/v/:slug/:itemId" element={<AttachmentPage />} />
+				</Routes>
+			</MemoryRouter>
+		</RightToolsProvider>,
+	);
+	fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+	expect(screen.getByRole("textbox")).toHaveValue("a");
+	fireEvent.click(screen.getByRole("link", { name: "next" }));
+	expect(await screen.findByRole("heading", { name: "b.zip" })).toBeInTheDocument();
+	expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
 });

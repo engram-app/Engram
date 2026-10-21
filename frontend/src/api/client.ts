@@ -31,6 +31,12 @@ function firstValidationError(errors: unknown): string | undefined {
 	return typeof msg === "string" ? `${field}: ${msg}` : field;
 }
 
+/** `retry-after` in seconds, when the server sent a numeric one. */
+function parseRetryAfter(response: Response): number | undefined {
+	const secs = Number(response.headers.get("retry-after"));
+	return response.headers.has("retry-after") && Number.isFinite(secs) ? secs : undefined;
+}
+
 /** Report a request that failed in a way that means "broken", not "no": a
  *  network or CORS failure, or a 5xx. Reported from here because every caller
  *  HANDLES its errors (a mutation's onError toasts and stops), so nothing else
@@ -149,7 +155,9 @@ async function authFetch(
 	const token = await getAuthToken();
 
 	const headers = new Headers(options.headers);
-	headers.set("Content-Type", "application/json");
+	if (!headers.has("Content-Type")) {
+		headers.set("Content-Type", "application/json");
+	}
 	if (token) {
 		headers.set("Authorization", `Bearer ${token}`);
 	}
@@ -246,6 +254,7 @@ async function authFetch(
 		const error = new ApiError(
 			response.status,
 			body.error ?? firstValidationError(body.errors) ?? response.statusText,
+			parseRetryAfter(response),
 		);
 		if (response.status >= 500) {
 			ownedFailures.add(error);
@@ -315,6 +324,7 @@ export class ApiError extends Error {
 	constructor(
 		public status: number,
 		message: string,
+		public retryAfterS?: number,
 	) {
 		super(message);
 		this.name = "ApiError";
@@ -404,8 +414,107 @@ export const api = {
 		return res.json();
 	},
 
-	async getBlob(path: string): Promise<Blob> {
-		const res = await authFetch(path);
-		return res.blob();
+	/** Raw bytes in the body, metadata in the query (`POST /attachments`). */
+	async postRaw<T>(
+		path: string,
+		body: Blob,
+		query: Record<string, string | number | undefined>,
+		opts?: { signal?: AbortSignal },
+	): Promise<T> {
+		const params = new URLSearchParams();
+		for (const [k, v] of Object.entries(query)) {
+			if (v !== undefined) {
+				params.set(k, String(v));
+			}
+		}
+		const res = await authFetch(`${path}?${params}`, {
+			method: "POST",
+			body,
+			headers: { "Content-Type": "application/octet-stream" },
+			signal: opts?.signal,
+		});
+		return res.json();
+	},
+
+	async putRaw<T>(path: string, body: Blob, opts?: { signal?: AbortSignal }): Promise<T> {
+		const res = await authFetch(path, {
+			method: "PUT",
+			body,
+			headers: { "Content-Type": "application/octet-stream" },
+			signal: opts?.signal,
+		});
+		return res.json();
+	},
+
+	/** `onProgress` gets the bytes received so far, as they arrive. `maxBytes`
+	 *  stops the download once that many bytes arrived. `signal` aborts the
+	 *  request and the body read. */
+	async getBlob(
+		path: string,
+		opts: {
+			onProgress?: (received: number) => void;
+			signal?: AbortSignal;
+			maxBytes?: number;
+		} = {},
+	): Promise<Blob> {
+		const { onProgress, signal, maxBytes } = opts;
+		const res = await authFetch(path, { signal });
+		if (maxBytes !== undefined) {
+			return readHead(res, maxBytes, onProgress);
+		}
+		return onProgress ? readWithProgress(res, onProgress) : res.blob();
 	},
 };
+
+/** Read at most the first `maxBytes` of a response body, then cancel the rest.
+ *  Not a Range request: the server ignores Range on single-part files and
+ *  answers 416 for an empty one. */
+export function readHead(
+	res: Response,
+	maxBytes: number,
+	onProgress?: (received: number) => void,
+): Promise<Blob> {
+	const type = res.headers.get("content-type") ?? "";
+	if (!res.body) {
+		return Promise.resolve(new Blob([], { type }));
+	}
+	let received = 0;
+	// Terminating the transform cancels the body upstream: the rest of the
+	// file is never downloaded.
+	const cap = new TransformStream<Uint8Array, Uint8Array>({
+		transform(chunk, controller) {
+			controller.enqueue(chunk.subarray(0, maxBytes - received));
+			received += chunk.byteLength;
+			onProgress?.(received);
+			if (received >= maxBytes) {
+				controller.terminate();
+			}
+		},
+	});
+	return new Response(res.body.pipeThrough(cap), {
+		headers: { "content-type": type },
+	}).blob();
+}
+
+/** Read a response body into a Blob, reporting the bytes received so far. */
+export function readWithProgress(
+	res: Response,
+	onProgress: (received: number) => void,
+): Promise<Blob> {
+	const type = res.headers.get("content-type") ?? "";
+	if (!res.body) {
+		return Promise.resolve(new Blob([], { type }));
+	}
+	let received = 0;
+	// Count bytes as they pass through; the browser still assembles the Blob.
+	const counter = new TransformStream<Uint8Array, Uint8Array>({
+		transform(chunk, controller) {
+			received += chunk.byteLength;
+			onProgress(received);
+			controller.enqueue(chunk);
+		},
+	});
+	return new Response(res.body.pipeThrough(counter), {
+		headers: { "content-type": type },
+	}).blob();
+}

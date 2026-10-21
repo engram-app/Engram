@@ -196,9 +196,14 @@ export default function NotePage() {
 	// reasoning as manifestPathsRef below): edges lag behind fresh links, the
 	// manifest resolves them without the /wiki redirect flash, and a manifest
 	// refetch must not change these callbacks' identity.
+	// Everything a [[link]] can open: notes and attachments, both routed by id.
+	const linkTargets = useMemo(
+		() => [...(manifest?.notes ?? []), ...(manifest?.attachments ?? [])],
+		[manifest],
+	);
 	const wikiManifestRef = useRef<{ id: string; path: string }[]>([]);
 	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Writing during render is the point: it keeps the callback identity stable so the consuming effect does not re-fire on every render. See the comment above.
-	wikiManifestRef.current = manifest?.notes ?? [];
+	wikiManifestRef.current = linkTargets;
 	// useCallback keeps a stable identity so passing it to NoteEditor doesn't
 	// re-fire the decorationsCompartment reconfigure effect on every render.
 	const resolveWikiLink = useCallback(
@@ -254,13 +259,13 @@ export default function NotePage() {
 		},
 		[navigate, slug, wikiMap, createWikiTarget],
 	);
-	// `[[` autocomplete's candidate list. Read through a ref, not a useMemo keyed
+	// `[[` autocomplete's candidate list: notes and attachments. Read through a ref, not a useMemo keyed
 	// on manifest, so this callback's identity NEVER changes -- the manifest
 	// query refetches on its own staleTime, and a new function identity there
 	// would fire NoteEditor's decorationsCompartment.reconfigure effect for
 	// every refetch with no UI change to show for it (same onView/onShortcutRef
 	// reasoning documented in note-editor.tsx).
-	const manifestPaths = useMemo(() => manifest?.notes.map((n) => n.path) ?? [], [manifest]);
+	const manifestPaths = useMemo(() => linkTargets.map((n) => n.path), [linkTargets]);
 	const manifestPathsRef = useRef<string[]>([]);
 	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. Writing during render is the point: it keeps the callback identity stable so the consuming effect does not re-fire on every render. See the comment above.
 	manifestPathsRef.current = manifestPaths;
@@ -800,7 +805,7 @@ export default function NotePage() {
 									content={liveContent}
 									tags={note.tags}
 									links={note.links}
-									manifestNotes={manifest?.notes}
+									manifestNotes={linkTargets}
 									onCreateWikiTarget={createWikiTarget}
 								/>
 							</Suspense>

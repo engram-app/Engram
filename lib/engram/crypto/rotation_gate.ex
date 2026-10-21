@@ -32,20 +32,35 @@ defmodule Engram.Crypto.RotationGate do
   alias Engram.Accounts.User
   alias Engram.Repo
 
-  @spec check(Ecto.UUID.t()) :: :ok | {:error, :rotation_in_progress | :user_not_found}
-  def check(user_id) when is_binary(user_id) do
+  @doc """
+  Reads the lock fresh. With `share_lock: true` (inside a transaction) the
+  user row is also held `FOR SHARE` until commit: `RotationLock.acquire/1`
+  updates that row, so a rotation starting after this check waits for the
+  caller's write to commit, and its sweep then sees the row. Without it, a
+  write that passed the check can still commit after the sweep went by.
+
+  With `dek_version: v`, also refuses when `users.dek_version` is no longer
+  `v`: a rotation that started AND finished after the caller read its DEK
+  leaves the lock clear, and only the version shows the key moved. Read `v`
+  with `dek_version/1` BEFORE deriving anything from the DEK.
+  """
+  @spec check(Ecto.UUID.t(), keyword()) ::
+          :ok | {:error, :rotation_in_progress | :user_not_found}
+  def check(user_id, opts \\ []) when is_binary(user_id) do
     # Select `{id, locked_at}` so we can distinguish "user not found" (nil)
     # from "user found, lock nil" ({id, nil}).
-    case Repo.one(
-           from(u in User,
-             where: u.id == ^user_id,
-             select: {u.id, u.dek_rotation_locked_at}
-           ),
-           skip_tenant_check: true
-         ) do
+    query =
+      from(u in User,
+        where: u.id == ^user_id,
+        select: {u.id, u.dek_rotation_locked_at, u.dek_version}
+      )
+
+    query = if opts[:share_lock], do: from(u in query, lock: "FOR SHARE"), else: query
+
+    case Repo.one(query, skip_tenant_check: true) do
       nil -> {:error, :user_not_found}
-      {_id, %DateTime{}} -> {:error, :rotation_in_progress}
-      {_id, _} -> :ok
+      {_id, %DateTime{}, _version} -> {:error, :rotation_in_progress}
+      {_id, nil, version} -> same_version(opts, version)
     end
   end
 
@@ -71,6 +86,37 @@ defmodule Engram.Crypto.RotationGate do
     after
       unless previous, do: Process.delete(:engram_write_gate)
     end
+  end
+
+  @doc """
+  Run `fun` with `gated/1`'s (or `RotationLockCheck`'s) write gate lifted, for
+  cleanup that must still run after the gate refused the write, such as
+  checking whether a just-stored blob is referenced before deleting it.
+  """
+  @spec ungated((-> result)) :: result when result: term()
+  def ungated(fun) when is_function(fun, 0) do
+    previous = Process.delete(:engram_write_gate)
+
+    try do
+      fun.()
+    after
+      if previous, do: Process.put(:engram_write_gate, previous)
+    end
+  end
+
+  defp same_version(opts, version) do
+    case Keyword.fetch(opts, :dek_version) do
+      {:ok, expected} when expected != version -> {:error, :rotation_in_progress}
+      _ -> :ok
+    end
+  end
+
+  @doc "`users.dek_version`, read fresh (bumped by every DEK rotation)."
+  @spec dek_version(Ecto.UUID.t()) :: integer() | nil
+  def dek_version(user_id) when is_binary(user_id) do
+    Repo.one(from(u in User, where: u.id == ^user_id, select: u.dek_version),
+      skip_tenant_check: true
+    )
   end
 
   @spec check_user(User.t()) :: :ok | {:error, :rotation_in_progress}

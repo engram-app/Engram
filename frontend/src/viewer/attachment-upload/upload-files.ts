@@ -1,8 +1,9 @@
 import { LimitExceededError } from "@/api/client";
+import { isBlockedFileName } from "@/api/server-features";
 import type { Translate } from "@/i18n/translate";
 import { notify } from "@/lib/notify";
 import { uniqueAttachmentName } from "../attachment-blob";
-import { fileToBase64 } from "./file-to-base64";
+import { uploadFailure } from "./upload-failure";
 
 // Paths this tab has just uploaded. The attachments list only learns about them
 // after the upload's refetch lands, and the backend upserts, so a second drop of
@@ -20,12 +21,7 @@ function reservedPaths(now: number): { path: string }[] {
 	return [...reserved.keys()].map((path) => ({ path }));
 }
 
-type Upload = (body: {
-	path: string;
-	mime_type?: string;
-	content_base64: string;
-	mtime: number;
-}) => Promise<unknown>;
+type Upload = (body: { path: string; file: File }) => Promise<unknown>;
 
 /**
  * Upload files straight into `folder` ("" = vault root), no dialog. A name that
@@ -52,31 +48,65 @@ export async function uploadFilesTo(opts: {
 	t: Translate;
 }): Promise<string[]> {
 	const { t } = opts;
-	const taken = [...opts.existing, ...reservedPaths(Date.now())];
 	const done: string[] = [];
 	for (const file of opts.files) {
-		// Names are unique per folder, so compare against this folder's files only.
-		const prefix = opts.folder ? `${opts.folder}/` : "";
-		const inFolder = taken
-			.filter((a) => a.path.startsWith(prefix) && !a.path.slice(prefix.length).includes("/"))
-			.map((a) => ({ path: a.path.slice(prefix.length) }));
-		const name = uniqueAttachmentName(inFolder, safeName(file.name));
-		const path = opts.folder ? `${opts.folder}/${name}` : name;
-		reserved.set(path, Date.now());
+		const path = claimUploadPath(opts.existing, opts.folder, file.name);
 		try {
-			await opts.upload({
-				path,
-				mime_type: file.type || undefined,
-				content_base64: await fileToBase64(file),
-				mtime: Math.floor(file.lastModified / 1000),
-			});
-			taken.push({ path });
+			await opts.upload({ path, file });
 			done.push(path);
 		} catch (err) {
 			if (!(err instanceof LimitExceededError)) {
-				notify.error(t("Couldn't upload {name}", { name: file.name }));
+				notify.error(
+					t("{name}: {reason}", { name: file.name, reason: uploadFailure(err, t).text }),
+				);
 			}
 		}
 	}
 	return done;
+}
+
+/**
+ * Drop the files the server would refuse as executables, with one toast each,
+ * BEFORE any dialog or request: picking an AppImage must not walk the user
+ * through choosing a folder only to fail at Upload.
+ */
+export function withoutBlocked(files: File[], t: Translate): File[] {
+	return files.filter((file) => {
+		if (!isBlockedFileName(file.name)) {
+			return true;
+		}
+		notify.error(
+			t("{name}: {reason}", { name: file.name, reason: t("Executable files don't sync.") }),
+		);
+		return false;
+	});
+}
+
+/**
+ * The vault path a new upload of `fileName` into `folder` ("" = root) goes to,
+ * reserved so the next claim in this tab cannot pick it too. A taken name gets
+ * a number ("song 1.flac"), the way Obsidian names a duplicate, because the
+ * server UPSERTS by path: reusing a name silently replaces that file. The one
+ * rule for every upload path (drop, Upload dialog).
+ */
+export function claimUploadPath(
+	existing: readonly { path: string }[],
+	folder: string,
+	fileName: string,
+): string {
+	const taken = [...existing, ...reservedPaths(Date.now())];
+	// Names are unique per folder, so compare against this folder's files only.
+	const prefix = folder ? `${folder}/` : "";
+	const inFolder = taken
+		.filter((a) => a.path.startsWith(prefix) && !a.path.slice(prefix.length).includes("/"))
+		.map((a) => ({ path: a.path.slice(prefix.length) }));
+	const name = uniqueAttachmentName(inFolder, safeName(fileName));
+	const path = folder ? `${folder}/${name}` : name;
+	reserved.set(path, Date.now());
+	return path;
+}
+
+/** Test seam: forget every reservation. */
+export function resetReservedPaths(): void {
+	reserved.clear();
 }

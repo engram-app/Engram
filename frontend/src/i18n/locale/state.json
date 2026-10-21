@@ -1,7 +1,9 @@
 {
 	"de": {
 		"translator": "861e3a5f",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -30,7 +32,9 @@
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Notiz",
@@ -49,6 +53,9 @@
 			"Manage your profile, password, and account.": "Verwalte dein Profil, dein Passwort und dein Konto."
 		},
 		"descriptions": {
+			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
+			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
+			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -64,6 +71,8 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"This file is over your plan's size limit.": "Error shown for one file the user tried to upload. 'This file' is one file, so make the demonstrative agree in gender and case with the word for file.",
+			"Upload failed. Try again.": "Error shown when sending a file to the server failed. Upload means sending a file from the user's device to the server, not restoring or recovering. Then ask the user to try again.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
@@ -101,7 +110,9 @@
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Nota",
@@ -120,6 +131,9 @@
 			"Manage your profile, password, and account.": "Gestiona tu perfil, tu contraseña y tu cuenta."
 		},
 		"descriptions": {
+			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
+			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
+			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -135,6 +149,8 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"This file is over your plan's size limit.": "Error shown for one file the user tried to upload. 'This file' is one file, so make the demonstrative agree in gender and case with the word for file.",
+			"Upload failed. Try again.": "Error shown when sending a file to the server failed. Upload means sending a file from the user's device to the server, not restoring or recovering. Then ask the user to try again.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
@@ -143,7 +159,9 @@
 	},
 	"fr": {
 		"translator": "1e9aab3e",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -172,7 +190,9 @@
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Note",
@@ -209,6 +229,8 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"This file is over your plan's size limit.": "Error shown for one file the user tried to upload. 'This file' is one file, so make the demonstrative agree in gender and case with the word for file.",
+			"Upload failed. Try again.": "Error shown when sending a file to the server failed. Upload means sending a file from the user's device to the server, not restoring or recovering. Then ask the user to try again.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
@@ -217,7 +239,9 @@
 	},
 	"it": {
 		"translator": "bc8c6e7e",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -246,7 +270,9 @@
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Nota",
@@ -265,6 +291,9 @@
 			"Manage your profile, password, and account.": "Gestisci il tuo profilo, la password e l'account."
 		},
 		"descriptions": {
+			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
+			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
+			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -280,6 +309,8 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"This file is over your plan's size limit.": "Error shown for one file the user tried to upload. 'This file' is one file, so make the demonstrative agree in gender and case with the word for file.",
+			"Upload failed. Try again.": "Error shown when sending a file to the server failed. Upload means sending a file from the user's device to the server, not restoring or recovering. Then ask the user to try again.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
@@ -317,7 +348,9 @@
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "ノート",
@@ -354,6 +387,8 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"This file is over your plan's size limit.": "Error shown for one file the user tried to upload. 'This file' is one file, so make the demonstrative agree in gender and case with the word for file.",
+			"Upload failed. Try again.": "Error shown when sending a file to the server failed. Upload means sending a file from the user's device to the server, not restoring or recovering. Then ask the user to try again.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
@@ -391,7 +426,9 @@
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "노트",
@@ -410,6 +447,9 @@
 			"Manage your profile, password, and account.": "프로필, 비밀번호, 계정을 관리하세요."
 		},
 		"descriptions": {
+			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
+			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
+			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -425,6 +465,8 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"This file is over your plan's size limit.": "Error shown for one file the user tried to upload. 'This file' is one file, so make the demonstrative agree in gender and case with the word for file.",
+			"Upload failed. Try again.": "Error shown when sending a file to the server failed. Upload means sending a file from the user's device to the server, not restoring or recovering. Then ask the user to try again.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
@@ -433,7 +475,9 @@
 	},
 	"ms": {
 		"translator": "8729e02e",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -462,7 +506,9 @@
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Nota",
@@ -481,6 +527,9 @@
 			"Manage your profile, password, and account.": "Urus profil, kata laluan dan akaun anda."
 		},
 		"descriptions": {
+			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
+			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
+			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -496,6 +545,8 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"This file is over your plan's size limit.": "Error shown for one file the user tried to upload. 'This file' is one file, so make the demonstrative agree in gender and case with the word for file.",
+			"Upload failed. Try again.": "Error shown when sending a file to the server failed. Upload means sending a file from the user's device to the server, not restoring or recovering. Then ask the user to try again.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
@@ -504,7 +555,9 @@
 	},
 	"pt-BR": {
 		"translator": "bc28769b",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -533,7 +586,9 @@
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Nota",
@@ -570,6 +625,8 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"This file is over your plan's size limit.": "Error shown for one file the user tried to upload. 'This file' is one file, so make the demonstrative agree in gender and case with the word for file.",
+			"Upload failed. Try again.": "Error shown when sending a file to the server failed. Upload means sending a file from the user's device to the server, not restoring or recovering. Then ask the user to try again.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
@@ -578,7 +635,9 @@
 	},
 	"ru": {
 		"translator": "02588615",
-		"failed": {},
+		"failed": {
+			"{folder} already has files with these {count} names": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -607,7 +666,8 @@
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Заметка",
@@ -626,6 +686,9 @@
 			"Manage your profile, password, and account.": "Управляйте профилем, паролем и учётной записью."
 		},
 		"descriptions": {
+			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
+			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
+			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -641,6 +704,8 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"This file is over your plan's size limit.": "Error shown for one file the user tried to upload. 'This file' is one file, so make the demonstrative agree in gender and case with the word for file.",
+			"Upload failed. Try again.": "Error shown when sending a file to the server failed. Upload means sending a file from the user's device to the server, not restoring or recovering. Then ask the user to try again.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
@@ -649,7 +714,9 @@
 	},
 	"vi": {
 		"translator": "231582ae",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -678,7 +745,9 @@
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Ghi chú",
@@ -697,6 +766,9 @@
 			"Manage your profile, password, and account.": "Quản lý hồ sơ mật khẩu và tài khoản của bạn."
 		},
 		"descriptions": {
+			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
+			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
+			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -712,6 +784,8 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"This file is over your plan's size limit.": "Error shown for one file the user tried to upload. 'This file' is one file, so make the demonstrative agree in gender and case with the word for file.",
+			"Upload failed. Try again.": "Error shown when sending a file to the server failed. Upload means sending a file from the user's device to the server, not restoring or recovering. Then ask the user to try again.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
@@ -749,7 +823,9 @@
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "笔记",
@@ -786,6 +862,8 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"This file is over your plan's size limit.": "Error shown for one file the user tried to upload. 'This file' is one file, so make the demonstrative agree in gender and case with the word for file.",
+			"Upload failed. Try again.": "Error shown when sending a file to the server failed. Upload means sending a file from the user's device to the server, not restoring or recovering. Then ask the user to try again.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
@@ -823,7 +901,9 @@
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "筆記",
@@ -860,6 +940,8 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"This file is over your plan's size limit.": "Error shown for one file the user tried to upload. 'This file' is one file, so make the demonstrative agree in gender and case with the word for file.",
+			"Upload failed. Try again.": "Error shown when sending a file to the server failed. Upload means sending a file from the user's device to the server, not restoring or recovering. Then ask the user to try again.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
@@ -897,7 +979,9 @@
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Catatan",
@@ -916,6 +1000,9 @@
 			"Manage your profile, password, and account.": "Kelola profil kata sandi dan akun Anda."
 		},
 		"descriptions": {
+			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
+			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
+			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -931,6 +1018,8 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"This file is over your plan's size limit.": "Error shown for one file the user tried to upload. 'This file' is one file, so make the demonstrative agree in gender and case with the word for file.",
+			"Upload failed. Try again.": "Error shown when sending a file to the server failed. Upload means sending a file from the user's device to the server, not restoring or recovering. Then ask the user to try again.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
@@ -939,7 +1028,10 @@
 	},
 	"pl": {
 		"translator": "83e5a7f5",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21",
+			"{folder} already has files with these {count} names": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -968,7 +1060,8 @@
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Notatka",
@@ -987,6 +1080,9 @@
 			"Manage your profile, password, and account.": "Zarządzaj swoim profilem, hasłem i kontem."
 		},
 		"descriptions": {
+			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
+			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
+			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -1002,6 +1098,8 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"This file is over your plan's size limit.": "Error shown for one file the user tried to upload. 'This file' is one file, so make the demonstrative agree in gender and case with the word for file.",
+			"Upload failed. Try again.": "Error shown when sending a file to the server failed. Upload means sending a file from the user's device to the server, not restoring or recovering. Then ask the user to try again.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
@@ -1039,7 +1137,9 @@
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"{folder} already has files with these {count} names": "{folder} already has a file with this name",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Not",
@@ -1076,6 +1176,8 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"This file is over your plan's size limit.": "Error shown for one file the user tried to upload. 'This file' is one file, so make the demonstrative agree in gender and case with the word for file.",
+			"Upload failed. Try again.": "Error shown when sending a file to the server failed. Upload means sending a file from the user's device to the server, not restoring or recovering. Then ask the user to try again.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
@@ -1084,7 +1186,10 @@
 	},
 	"cs": {
 		"translator": "8cd06f57",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21",
+			"{folder} already has files with these {count} names": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -1113,7 +1218,8 @@
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Poznámka",
@@ -1132,6 +1238,9 @@
 			"Manage your profile, password, and account.": "Spravujte svůj profil heslo a účet."
 		},
 		"descriptions": {
+			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
+			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
+			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -1147,6 +1256,8 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"This file is over your plan's size limit.": "Error shown for one file the user tried to upload. 'This file' is one file, so make the demonstrative agree in gender and case with the word for file.",
+			"Upload failed. Try again.": "Error shown when sending a file to the server failed. Upload means sending a file from the user's device to the server, not restoring or recovering. Then ask the user to try again.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
@@ -1155,7 +1266,10 @@
 	},
 	"uk": {
 		"translator": "4cd2bf55",
-		"failed": {},
+		"failed": {
+			"OK": "2026-10-21",
+			"{folder} already has files with these {count} names": "2026-10-21"
+		},
 		"one": {
 			"{count} days remaining in your free trial.": "{count} day remaining in your free trial.",
 			"Your full-search passages are used up. {count} older notes are found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.": "Your full-search passages are used up. {count} older note is found by keyword only (exact words, not meaning). Nothing is deleted. Upgrade to bring full search back.",
@@ -1184,7 +1298,8 @@
 			"Copy {count} wikilinks": "Copy wikilink",
 			"Delete {count} items": "Delete {count} item",
 			"Delete {count} items?": "Delete {count} item?",
-			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?"
+			"Delete {path}/ and {count} items?": "Delete {path}/ and {count} item?",
+			"These {count} files would share a name with others in {folder}": "This file would share a name with another in {folder}"
 		},
 		"glossary": {
 			"Note": "Замітка",
@@ -1203,6 +1318,9 @@
 			"Manage your profile, password, and account.": "Керуйте вашим профілем паролем та обліковим записом."
 		},
 		"descriptions": {
+			"{available} of {capacity} tokens left": "Billing usage line: the first number is how many tokens remain, the second is the total allowance they are part of, like '3,000 of 6,000 tokens left'. Both numbers count the same tokens.",
+			"{count} notes have keyword search only, until {date}.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the given date. The number counts notes and is the subject of the sentence, not a list item.",
+			"{count} notes have keyword search only, until the budget refills.": "Billing note: the number is how many notes can only be found by keyword search, not semantic search, until the indexing budget refills. The number counts notes and is the subject of the sentence, not a list item.",
 			"Your plan resumes on {date}": "Billing banner: a subscription that was set to cancel becomes active again on this date.",
 			"Monthly": "Billing period: charged once a month. Not weekly.",
 			"2,000 notes · 20 AI searches a day · 1 vault": "Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
@@ -1218,6 +1336,8 @@
 			"Edit access": "Button that opens a dialog to change which vaults a connection can reach. An action (a verb phrase, like 'Change access'), not a noun.",
 			"Edit access for {name}": "Title of the dialog where the user changes which vaults the named connection can reach. An action (a verb phrase, like 'Change access for {name}'), not a noun.",
 			"Revoke access": "Destructive button that removes an app's access; must differ from Cancel, which sits next to it.",
+			"This file is over your plan's size limit.": "Error shown for one file the user tried to upload. 'This file' is one file, so make the demonstrative agree in gender and case with the word for file.",
+			"Upload failed. Try again.": "Error shown when sending a file to the server failed. Upload means sending a file from the user's device to the server, not restoring or recovering. Then ask the user to try again.",
 			"Notes in {folder}": "Heading over the notes inside a folder; {folder} is the folder's name.",
 			"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 			"use {alias} or {key}": "Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",

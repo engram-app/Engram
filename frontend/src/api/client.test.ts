@@ -151,3 +151,37 @@ describe("api client 402 handling", () => {
 		expect(headers.get("X-Device-Id")).toMatch(/^[0-9a-f-]{36}$/u);
 	});
 });
+
+describe("raw bodies", () => {
+	beforeEach(() => vi.restoreAllMocks());
+
+	it("postRaw sends the blob as octet-stream with metadata in the query", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+		globalThis.fetch = fetchMock;
+		const blob = new Blob([new Uint8Array([1, 2, 3])]);
+
+		await api.postRaw("/attachments", blob, { path: "a b.png", mtime: 5, mime_type: undefined });
+
+		const [url, init] = fetchMock.mock.calls[0]! as [string, RequestInit];
+		expect(url).toContain("/api/attachments?path=a+b.png&mtime=5");
+		expect(url).not.toContain("mime_type");
+		expect(init.method).toBe("POST");
+		expect(init.body).toBe(blob);
+		expect((init.headers as Headers).get("Content-Type")).toBe("application/octet-stream");
+	});
+
+	it("putRaw PUTs octet-stream and a 503 keeps its retry-after", async () => {
+		globalThis.fetch = vi.fn().mockResolvedValue(
+			new Response(JSON.stringify({ error: "rotation_in_progress" }), {
+				status: 503,
+				headers: { "retry-after": "7" },
+			}),
+		);
+		await expect(
+			api.putRaw("/attachment-uploads/u/parts/1", new Blob(["x"])),
+		).rejects.toMatchObject({
+			status: 503,
+			retryAfterS: 7,
+		});
+	});
+});

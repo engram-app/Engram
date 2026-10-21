@@ -808,26 +808,21 @@
       "MimeRejected": {
         "properties": {
           "error": {
-            "example": "mime_not_allowed",
+            "example": "extension_not_allowed",
             "type": "string",
             "x-struct": null,
             "x-validate": null
           },
           "extension": {
-            "nullable": true,
-            "type": "string",
-            "x-struct": null,
-            "x-validate": null
-          },
-          "mime_type": {
-            "nullable": true,
+            "example": ".exe",
             "type": "string",
             "x-struct": null,
             "x-validate": null
           }
         },
         "required": [
-          "error"
+          "error",
+          "extension"
         ],
         "title": "MimeRejected",
         "type": "object",
@@ -841,6 +836,34 @@
         "title": "ConnectionsList",
         "type": "array",
         "x-struct": "Elixir.EngramWeb.Schemas.ConnectionsList",
+        "x-validate": null
+      },
+      "AttachmentUploadMissingParts": {
+        "properties": {
+          "error": {
+            "example": "missing_parts",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "missing": {
+            "items": {
+              "type": "integer",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "error",
+          "missing"
+        ],
+        "title": "AttachmentUploadMissingParts",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.AttachmentUploadMissingParts",
         "x-validate": null
       },
       "VaultTreeAttachment": {
@@ -1089,6 +1112,36 @@
         "title": "DeleteAccountRequest",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.DeleteAccountRequest",
+        "x-validate": null
+      },
+      "AttachmentUploadSession": {
+        "properties": {
+          "part_count": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "part_size": {
+            "example": 8388608,
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "upload_id": {
+            "format": "uuid",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "upload_id",
+          "part_size",
+          "part_count"
+        ],
+        "title": "AttachmentUploadSession",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.AttachmentUploadSession",
         "x-validate": null
       },
       "FolderNotesResponse": {
@@ -2374,6 +2427,46 @@
         "x-struct": "Elixir.EngramWeb.Schemas.FolderRenameResponse",
         "x-validate": null
       },
+      "AttachmentUploadStatus": {
+        "properties": {
+          "completed": {
+            "description": "Complete already committed; complete again returns the attachment.",
+            "type": "boolean",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "done": {
+            "items": {
+              "type": "integer",
+              "x-struct": null,
+              "x-validate": null
+            },
+            "type": "array",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "part_count": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "part_size": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "done",
+          "part_count",
+          "part_size",
+          "completed"
+        ],
+        "title": "AttachmentUploadStatus",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.AttachmentUploadStatus",
+        "x-validate": null
+      },
       "BatchIdsRequest": {
         "example": {
           "ids": [
@@ -2729,6 +2822,51 @@
         "x-struct": "Elixir.EngramWeb.Schemas.LogIngestResponse",
         "x-validate": null
       },
+      "AttachmentUploadStartRequest": {
+        "example": {
+          "mime_type": "video/mp4",
+          "mtime": 1709234567.0,
+          "path": "videos/clip.mp4",
+          "size_bytes": 52428800
+        },
+        "properties": {
+          "mime_type": {
+            "description": "Detected from path if omitted.",
+            "nullable": true,
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "mtime": {
+            "format": "float",
+            "nullable": true,
+            "type": "number",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "path": {
+            "example": "videos/clip.mp4",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "size_bytes": {
+            "description": "Total file size.",
+            "minimum": 1,
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "path",
+          "size_bytes"
+        ],
+        "title": "AttachmentUploadStartRequest",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.AttachmentUploadStartRequest",
+        "x-validate": null
+      },
       "RenameRequest": {
         "example": {
           "new_path": "Archive/Engram.md",
@@ -2767,6 +2905,22 @@
         "title": "UserResponse",
         "type": "object",
         "x-struct": "Elixir.EngramWeb.Schemas.UserResponse",
+        "x-validate": null
+      },
+      "AttachmentUploadPart": {
+        "properties": {
+          "part": {
+            "type": "integer",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "part"
+        ],
+        "title": "AttachmentUploadPart",
+        "type": "object",
+        "x-struct": "Elixir.EngramWeb.Schemas.AttachmentUploadPart",
         "x-validate": null
       },
       "Backlinks": {
@@ -3555,6 +3709,52 @@
         ]
       }
     },
+    "/api/attachments/by-id/{id}/backlinks": {
+      "get": {
+        "callbacks": {},
+        "description": "Notes that link to or embed the attachment with the given UUID, one row per note. Empty when no such attachment exists in this vault.",
+        "operationId": "attachments-backlinks",
+        "parameters": [
+          {
+            "description": "Attachment UUID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Backlinks"
+                }
+              }
+            },
+            "description": "Backlinks"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Invalid UUID"
+          }
+        },
+        "summary": "Notes linking to an attachment",
+        "tags": [
+          "Attachments"
+        ]
+      }
+    },
     "/api/attachments/*path": {
       "delete": {
         "callbacks": {},
@@ -3639,6 +3839,19 @@
             },
             "description": "Attachment"
           },
+          "206": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string",
+                  "x-struct": null,
+                  "x-validate": null
+                }
+              }
+            },
+            "description": "With `?raw=1` and `Range: bytes=N-` or `bytes=N-M` on a file uploaded in parts: exactly the requested bytes, described by `content-range`."
+          },
           "404": {
             "content": {
               "application/json": {
@@ -3648,6 +3861,26 @@
               }
             },
             "description": "No such attachment"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "`use_raw_download`: the file is too large for the JSON body; use `?raw=1`."
+          },
+          "416": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "The range starts at or past the end of the file."
           },
           "500": {
             "content": {
@@ -4112,6 +4345,79 @@
         ]
       }
     },
+    "/api/attachment-uploads/{id}": {
+      "delete": {
+        "callbacks": {},
+        "description": "Drops the session and its stored parts. Idempotent. A completed session is left untouched (the attachment keeps its bytes).",
+        "operationId": "attachment-uploads-abort",
+        "parameters": [
+          {
+            "description": "Upload id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Dropped"
+          }
+        },
+        "summary": "Abandon a chunked upload",
+        "tags": [
+          "Attachments"
+        ]
+      },
+      "get": {
+        "callbacks": {},
+        "description": "For a client resuming an upload: the part numbers already stored, and `completed` once complete committed the session (complete again returns the attachment).",
+        "operationId": "attachment-uploads-status",
+        "parameters": [
+          {
+            "description": "Upload id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentUploadStatus"
+                }
+              }
+            },
+            "description": "Upload state"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "No such upload"
+          }
+        },
+        "summary": "Which parts the server holds",
+        "tags": [
+          "Attachments"
+        ]
+      }
+    },
     "/api/vaults": {
       "get": {
         "callbacks": {},
@@ -4433,6 +4739,16 @@
             },
             "description": "An item conflicts at target"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MimeRejected"
+                }
+              }
+            },
+            "description": "An item has an executable extension (stored while the self-host bypass was on)"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -4621,7 +4937,7 @@
     "/api/attachments/rename": {
       "post": {
         "callbacks": {},
-        "description": "Moves the attachment from `old_path` to `new_path`. Requires a plan with attachments enabled (402 otherwise). Returns 404 when the source is missing and 409 when the target path already exists.",
+        "description": "Moves the attachment from `old_path` to `new_path`. Requires a plan with attachments enabled (402 otherwise). Returns 404 when the source is missing, 409 when the target path already exists, and 415 when the new path has an executable extension.",
         "operationId": "attachments-rename",
         "parameters": [],
         "requestBody": {
@@ -4675,6 +4991,16 @@
               }
             },
             "description": "Target exists"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MimeRejected"
+                }
+              }
+            },
+            "description": "New path has an executable extension"
           }
         },
         "summary": "Rename / move an attachment",
@@ -4946,6 +5272,111 @@
         "summary": "Create or update a note",
         "tags": [
           "Notes"
+        ]
+      }
+    },
+    "/api/attachment-uploads": {
+      "post": {
+        "callbacks": {},
+        "description": "Opens a resumable upload for a file of `size_bytes`, refused up front with the same responses as `POST /api/attachments` (402 plan, size or quota, 415 executable extension, 422 invalid `mime_type`). The user's other open sessions count against the quota at their declared sizes, at most 4 may be open (429 `too_many_uploads`), and a file over 10,000 parts is 402 `file_too_large` on every plan. Then PUT each part and complete. A storage backend without multipart support (self-host database storage) returns 501.",
+        "operationId": "attachment-uploads-start",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachmentUploadStartRequest"
+              }
+            }
+          },
+          "description": "File to upload",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentUploadSession"
+                }
+              }
+            },
+            "description": "Session opened"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LimitError"
+                }
+              }
+            },
+            "description": "Attachments require a paid plan / quota"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MimeRejected"
+                }
+              }
+            },
+            "description": "Executable extension not allowed"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing size or path, or invalid mime_type"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "`too_many_uploads`: the user already holds the maximum open sessions (4); retry after `retry-after` seconds, once one completes or is aborted"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Storage backend has no multipart support"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Storage backend failure"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "`rotation_in_progress`: an encryption key rotation holds the account; retry after `retry-after` seconds."
+          }
+        },
+        "summary": "Start a chunked attachment upload",
+        "tags": [
+          "Attachments"
         ]
       }
     },
@@ -5362,7 +5793,7 @@
       },
       "post": {
         "callbacks": {},
-        "description": "Uploads an attachment to the vault's storage backend. Send the raw bytes as `application/octet-stream` with `path`, `mtime` and optional `mime_type` in the query string, or (legacy) base64 JSON. Attachments are a paid-tier feature (402 on Free, which is also limited to text MIME types), the MIME type and extension must pass the whitelist (415), the file must be within the per-plan size and total-quota limits (402), a raw body over the request ceiling returns 413, a raw body that stalls returns 408, a non-numeric `mtime` or `mime_type` returns 422, and a storage backend failure returns 502.",
+        "description": "Uploads an attachment to the vault's storage backend. Send the raw bytes as `application/octet-stream` with `path`, `mtime` and optional `mime_type` in the query string, or (legacy) base64 JSON. Attachments are a paid-tier feature (402 on Free, which is also limited to text MIME types), any file type is accepted except executables, whose extension returns 415 (`extension_not_allowed`), the file must be within the per-plan size and total-quota limits (402), a raw body over the request ceiling returns 413, a raw body that stalls returns 408, a non-numeric `mtime`, or a `mime_type` with illegal bytes (`invalid_mime_type`), returns 422, and a storage backend failure returns 502.",
         "operationId": "attachments-upload",
         "parameters": [
           {
@@ -5477,7 +5908,7 @@
                 }
               }
             },
-            "description": "MIME or extension not allowed"
+            "description": "Executable extension not allowed"
           },
           "422": {
             "content": {
@@ -5487,7 +5918,7 @@
                 }
               }
             },
-            "description": "Missing/invalid content"
+            "description": "Missing/invalid content, or invalid mime_type"
           },
           "502": {
             "content": {
@@ -5498,9 +5929,140 @@
               }
             },
             "description": "Storage backend failure"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "`rotation_in_progress`: an encryption key rotation holds the account; retry after `retry-after` seconds."
           }
         },
         "summary": "Upload an attachment",
+        "tags": [
+          "Attachments"
+        ]
+      }
+    },
+    "/api/attachment-uploads/{id}/parts/{n}": {
+      "put": {
+        "callbacks": {},
+        "description": "Stores part `n` (1-based) as raw `application/octet-stream` bytes. Every part is exactly `part_size` bytes except the last, which is the remainder; any other size returns 422 `bad_part_size` and a part number outside the session returns 422 `bad_part_number`. Re-sending a part replaces it. A body that stalls returns 408. A session that already completed returns 409 `upload_completed`.",
+        "operationId": "attachment-uploads-put-part",
+        "parameters": [
+          {
+            "description": "Upload id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          },
+          {
+            "description": "Part number, from 1",
+            "in": "path",
+            "name": "n",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "format": "binary",
+                "type": "string",
+                "x-struct": null,
+                "x-validate": null
+              }
+            }
+          },
+          "description": "Part bytes",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentUploadPart"
+                }
+              }
+            },
+            "description": "Part stored"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "No such upload"
+          },
+          "408": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Body stalled before it finished"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "`upload_completed`: the session already completed"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Bad part number or size"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Storage backend failure"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "`rotation_in_progress`: an encryption key rotation holds the account; retry after `retry-after` seconds."
+          }
+        },
+        "summary": "Upload one part",
         "tags": [
           "Attachments"
         ]
@@ -6111,6 +6673,92 @@
         "summary": "List explicitly-created (empty-capable) folders",
         "tags": [
           "Folders"
+        ]
+      }
+    },
+    "/api/attachment-uploads/{id}/complete": {
+      "post": {
+        "callbacks": {},
+        "description": "Assembles the parts into a live attachment and answers like `POST /api/attachments`. Returns 409 `missing_parts` (with the part numbers) while any part is missing, the session staying resumable, and 402 `attachments_quota_exceeded` when the file no longer fits the quota, the session then being dropped. Safe to retry: once committed, a repeat complete returns the same attachment (404 if it was since deleted or overwritten).",
+        "operationId": "attachment-uploads-complete",
+        "parameters": [
+          {
+            "description": "Upload id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "x-struct": null,
+              "x-validate": null
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentResponse"
+                }
+              }
+            },
+            "description": "Uploaded"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LimitError"
+                }
+              }
+            },
+            "description": "Quota exceeded"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "No such upload"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentUploadMissingParts"
+                }
+              }
+            },
+            "description": "Parts missing"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "Storage backend failure"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageError"
+                }
+              }
+            },
+            "description": "`rotation_in_progress`: an encryption key rotation holds the account; retry after `retry-after` seconds."
+          }
+        },
+        "summary": "Complete a chunked upload",
+        "tags": [
+          "Attachments"
         ]
       }
     },

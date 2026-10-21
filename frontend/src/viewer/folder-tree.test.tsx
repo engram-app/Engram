@@ -331,6 +331,36 @@ describe("FolderTree (HT)", () => {
 		});
 	});
 
+	it.each([
+		["Delete", [{ key: "Delete", code: "Delete" }]],
+		// A keyboard sends the modifier as its own keydown first.
+		[
+			"Cmd+Backspace",
+			[
+				{ key: "Meta", code: "MetaLeft", metaKey: true },
+				{ key: "Backspace", code: "Backspace", metaKey: true },
+			],
+		],
+	])("%s on the selected row asks to delete it", async (_name, presses) => {
+		renderTree();
+		const projects = await screen.findByRole("treeitem", { name: "Projects" });
+		fireEvent.click(projects);
+		for (const keys of presses) {
+			fireEvent.keyDown(projects, keys);
+		}
+		expect(await screen.findByRole("dialog")).toHaveTextContent(/delete/iu);
+		// Only asks: nothing is deleted until the user confirms.
+		expect(batchDeleteFoldersMutate).not.toHaveBeenCalled();
+	});
+
+	it("plain Backspace does not ask to delete", async () => {
+		renderTree();
+		const projects = await screen.findByRole("treeitem", { name: "Projects" });
+		fireEvent.click(projects);
+		fireEvent.keyDown(projects, { key: "Backspace", code: "Backspace" });
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
 	it("outlines the right-clicked row while its menu is open, and clears after", async () => {
 		renderTree();
 		const projects = await screen.findByRole("treeitem", { name: "Projects" });

@@ -421,6 +421,110 @@ defmodule Engram.LinksTest do
     end
   end
 
+  describe "backlinks_for_attachment/3" do
+    test "returns notes that embed or link the attachment", %{user: user, vault: vault} do
+      att = Engram.Fixtures.insert_attachment!(user, vault, %{path: "files/Report.zip"})
+      a = Engram.Fixtures.insert_note!(user, vault, %{path: "A.md", title: "Note A"})
+      b = Engram.Fixtures.insert_note!(user, vault, %{path: "B.md"})
+      _other = Engram.Fixtures.insert_note!(user, vault, %{path: "C.md"})
+
+      :ok =
+        Links.replace_links(user, vault, a.id, [
+          %{target: "Report.zip", alias: nil, anchor: nil, link_type: "embed", position: 0},
+          %{target: "report.zip", alias: nil, anchor: nil, link_type: "wikilink", position: 1}
+        ])
+
+      :ok =
+        Links.replace_links(user, vault, b.id, [
+          %{
+            target: "files/report.zip",
+            alias: nil,
+            anchor: nil,
+            link_type: "wikilink",
+            position: 0
+          }
+        ])
+
+      sources =
+        user |> Links.backlinks_for_attachment(vault.id, att.id) |> Enum.map(& &1.source_note_id)
+
+      assert Enum.sort(sources) == Enum.sort([a.id, b.id])
+    end
+
+    test "finds a link written before the attachment existed", %{user: user, vault: vault} do
+      a = Engram.Fixtures.insert_note!(user, vault, %{path: "A.md"})
+
+      :ok =
+        Links.replace_links(user, vault, a.id, [
+          %{target: "later.pdf", alias: nil, anchor: nil, link_type: "embed", position: 0}
+        ])
+
+      att = Engram.Fixtures.insert_attachment!(user, vault, %{path: "later.pdf"})
+
+      assert [%{source_note_id: sid, source_path: "A.md"}] =
+               Links.backlinks_for_attachment(user, vault.id, att.id)
+
+      assert sid == a.id
+    end
+
+    test "is empty for an unknown or note id", %{user: user, vault: vault} do
+      note = Engram.Fixtures.insert_note!(user, vault, %{path: "A.md"})
+      assert Links.backlinks_for_attachment(user, vault.id, Ecto.UUID.generate()) == []
+      assert Links.backlinks_for_attachment(user, vault.id, note.id) == []
+    end
+
+    test "is empty when the attachment is in another vault", %{user: user, vault: vault} do
+      other = insert(:vault, user: user)
+      att = Engram.Fixtures.insert_attachment!(user, other, %{path: "x.pdf"})
+      a = Engram.Fixtures.insert_note!(user, other, %{path: "A.md"})
+
+      :ok =
+        Links.replace_links(user, other, a.id, [
+          %{target: "x.pdf", alias: nil, anchor: nil, link_type: "embed", position: 0}
+        ])
+
+      assert [_] = Links.backlinks_for_attachment(user, other.id, att.id)
+      assert Links.backlinks_for_attachment(user, vault.id, att.id) == []
+    end
+
+    test "never reaches another user's or another vault's links on a shared name", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, intruder} = Engram.Fixtures.user_with_dek_fixture()
+      theirs = insert(:vault, user: intruder)
+      other = insert(:vault, user: user)
+
+      link = fn owner, v, note_path ->
+        n = Engram.Fixtures.insert_note!(owner, v, %{path: note_path})
+
+        :ok =
+          Links.replace_links(owner, v, n.id, [
+            %{target: "shared.pdf", alias: nil, anchor: nil, link_type: "embed", position: 0}
+          ])
+
+        n
+      end
+
+      att = Engram.Fixtures.insert_attachment!(user, vault, %{path: "shared.pdf"})
+      mine = link.(user, vault, "Mine.md")
+      _same_user_other_vault = link.(user, other, "Elsewhere.md")
+      _ = Engram.Fixtures.insert_attachment!(user, other, %{path: "shared.pdf"})
+
+      their_att = Engram.Fixtures.insert_attachment!(intruder, theirs, %{path: "shared.pdf"})
+      _ = link.(intruder, theirs, "Theirs.md")
+
+      assert [%{source_note_id: id}] = Links.backlinks_for_attachment(user, vault.id, att.id)
+      assert id == mine.id
+
+      # Another user's attachment id, asked through this user's vault or theirs.
+      assert Links.backlinks_for_attachment(user, vault.id, their_att.id) == []
+      assert Links.backlinks_for_attachment(user, theirs.id, their_att.id) == []
+      assert Links.backlinks_for_attachment(intruder, theirs.id, att.id) == []
+      assert Links.backlinks_for_attachment(intruder, vault.id, att.id) == []
+    end
+  end
+
   describe "backlinks_for_note/2" do
     test "returns sources with decrypted path/title", %{user: user, vault: vault} do
       a = Engram.Fixtures.insert_note!(user, vault, %{path: "A.md", title: "Note A"})

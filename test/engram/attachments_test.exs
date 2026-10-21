@@ -42,10 +42,10 @@ defmodule Engram.AttachmentsTest do
     metas |> Enum.map(& &1.path) |> Enum.sort()
   end
 
-  describe "MIME whitelist enforcement at the context boundary" do
-    # The whitelist used to be enforced only in AttachmentsController — any
+  describe "executable blocklist enforcement at the context boundary" do
+    # The gate used to be enforced only in AttachmentsController — any
     # non-HTTP caller (MCP tool, Oban job, console) bypassed it entirely.
-    test "rejects a blocklisted extension even with an allowlisted MIME", %{
+    test "rejects a blocklisted extension whatever the claimed MIME", %{
       user: user,
       vault: vault
     } do
@@ -57,14 +57,26 @@ defmodule Engram.AttachmentsTest do
                })
     end
 
-    test "rejects a disallowed MIME when no explicit mime_type is sent", %{
+    test "rejects a blocked extension hidden behind trailing dots or spaces", %{
       user: user,
       vault: vault
     } do
-      assert {:error, {:mime_not_allowed, "application/octet-stream"}} =
+      for path <- ["evil.exe.", "evil.exe ", "evil.exe. .", "EVIL.EXE."] do
+        assert {:error, {:extension_not_allowed, ".exe"}} =
+                 Attachments.upsert_attachment(user, vault, %{
+                   "path" => path,
+                   "content_base64" => @valid_content
+                 }),
+               inspect(path)
+      end
+    end
+
+    test "rejects a header-illegal mime_type", %{user: user, vault: vault} do
+      assert {:error, :invalid_mime} =
                Attachments.upsert_attachment(user, vault, %{
-                 "path" => "data/blob.bin",
-                 "content_base64" => @valid_content
+                 "path" => "data/blob.txt",
+                 "content_base64" => @valid_content,
+                 "mime_type" => "text/plain\r\nx: y"
                })
     end
   end
@@ -257,6 +269,8 @@ defmodule Engram.AttachmentsTest do
 
     test "different bytes at the same path still write", %{user: user, vault: vault} do
       expect(Engram.MockStorage, :put, 2, fn _key, _binary, _opts -> :ok end)
+      # The overwrite moves the row to a fresh key and releases the old blob.
+      expect(Engram.MockStorage, :delete, fn key -> send(self(), {:deleted, key}) && :ok end)
 
       {:ok, first} =
         Attachments.upsert_attachment(user, vault, %{
@@ -273,6 +287,7 @@ defmodule Engram.AttachmentsTest do
       assert second.id == first.id
       refute second.content_hash == first.content_hash
       assert second.size_bytes == byte_size("genuinely different bytes")
+      assert_received {:deleted, key} when key == first.storage_key
     end
 
     test "a corrected mime_type still lands even when the bytes are identical", %{
@@ -286,6 +301,8 @@ defmodule Engram.AttachmentsTest do
       # existing test.
       b64 = Base.encode64("PNGDATA")
       expect(Engram.MockStorage, :put, 2, fn _key, _binary, _opts -> :ok end)
+      # The overwrite moves the row to a fresh key and releases the old blob.
+      expect(Engram.MockStorage, :delete, fn key -> send(self(), {:deleted, key}) && :ok end)
 
       {:ok, _} =
         Attachments.upsert_attachment(user, vault, %{
@@ -431,6 +448,8 @@ defmodule Engram.AttachmentsTest do
 
     test "updates existing attachment at same path", %{user: user, vault: vault} do
       expect(Engram.MockStorage, :put, 2, fn _key, _binary, _opts -> :ok end)
+      # The overwrite moves the row to a fresh key and releases the old blob.
+      expect(Engram.MockStorage, :delete, fn key -> send(self(), {:deleted, key}) && :ok end)
 
       {:ok, v1} =
         Attachments.upsert_attachment(user, vault, %{
@@ -447,6 +466,8 @@ defmodule Engram.AttachmentsTest do
       # Same DB row id — it's an update, not a new insert
       assert v1.id == v2.id
       assert v2.size_bytes == byte_size("updated content")
+      refute v2.storage_key == v1.storage_key
+      assert_received {:deleted, key} when key == v1.storage_key
     end
 
     test "vault isolation — attachment in vault A not visible from vault B", %{user: user} do
@@ -819,7 +840,9 @@ defmodule Engram.AttachmentsTest do
           "mtime" => 1.0
         })
 
-      assert att.storage_key =~ ~r{/objects/#{att.id}$}
+      # A fresh uuid per stored blob (not the row id: an overwrite must not
+      # write over the live blob before it holds the lock).
+      assert att.storage_key =~ ~r"^#{user.id}/#{vault.id}/objects/[0-9a-f-]{36}$"
       refute att.storage_key =~ "img/cat.png"
     end
 
@@ -1004,6 +1027,144 @@ defmodule Engram.AttachmentsTest do
     end
   end
 
+  # A single-request write stores its ciphertext before it takes the path
+  # lock. Writing it over the live row's blob meant any refusal under the
+  # lock left the row pointing at bytes it cannot decrypt.
+  describe "single-request overwrites write a fresh blob" do
+    setup %{user: user} do
+      Mox.stub_with(Engram.MockStorage, InMemory)
+      {:ok, user} = Crypto.ensure_user_dek(user)
+      %{user: user}
+    end
+
+    defp upsert(user, vault, path, bytes),
+      do: Attachments.upsert_attachment(user, vault, %{path: path, content: bytes})
+
+    defp blobs(user, vault) do
+      prefix = "#{user.id}/#{vault.id}/"
+
+      :ets.foldl(
+        fn {k, _}, acc -> if String.starts_with?(k, prefix), do: [k | acc], else: acc end,
+        [],
+        :engram_test_storage_in_memory
+      )
+      |> Enum.sort()
+    end
+
+    defp content(user, vault, path) do
+      {:ok, att} = Attachments.get_attachment(Crypto.fresh_user(user), vault, path)
+      att.content
+    end
+
+    # Runs `fun` inside the first storage PUT, i.e. after the pre-lock checks
+    # and before the locked row write.
+    defp during_first_put(fun) do
+      ran = :counters.new(1, [])
+
+      Mox.stub(Engram.MockStorage, :put, fn key, bin, opts ->
+        :ok = InMemory.put(key, bin, opts)
+
+        if :counters.get(ran, 1) == 0 do
+          :counters.add(ran, 1, 1)
+          fun.()
+        end
+
+        :ok
+      end)
+    end
+
+    defp set_rotation_lock(user, at) do
+      Repo.update_all(
+        from(u in Engram.Accounts.User, where: u.id == ^user.id),
+        [set: [dek_rotation_locked_at: at]],
+        skip_tenant_check: true
+      )
+    end
+
+    test "a successful overwrite leaves exactly the new blob", %{user: user, vault: vault} do
+      {:ok, a} = upsert(user, vault, "a.txt", "original")
+      {:ok, b} = upsert(user, vault, "a.txt", "replacement")
+
+      assert b.id == a.id
+      refute b.storage_key == a.storage_key
+      assert blobs(user, vault) == [b.storage_key]
+      assert content(user, vault, "a.txt") == "replacement"
+    end
+
+    test "refused by the rotation gate: the live attachment is untouched, no new blob", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, a} = upsert(user, vault, "a.txt", "original")
+      during_first_put(fn -> set_rotation_lock(user, DateTime.utc_now(:second)) end)
+
+      assert {:error, :rotation_in_progress} = upsert(user, vault, "a.txt", "replacement")
+      assert blobs(user, vault) == [a.storage_key]
+
+      set_rotation_lock(user, nil)
+      assert content(user, vault, "a.txt") == "original"
+    end
+
+    test "refused by the locked quota re-check: the live attachment is untouched, no new blob",
+         %{user: user, vault: vault} do
+      insert(:user_limit_override, user: user, key: "attachment_bytes_cap", value: %{"v" => 30})
+      {:ok, a} = upsert(user, vault, "a.txt", :binary.copy("a", 10))
+
+      # Another upload takes the headroom between the pre-lock and locked checks.
+      during_first_put(fn ->
+        assert {:ok, _} = upsert(user, vault, "other.txt", :binary.copy("o", 15))
+      end)
+
+      assert {:error, {:storage_cap_reached, _, _}} =
+               upsert(user, vault, "a.txt", :binary.copy("b", 20))
+
+      {:ok, other} = Attachments.get_attachment(Crypto.fresh_user(user), vault, "other.txt")
+      assert blobs(user, vault) == Enum.sort([a.storage_key, other.storage_key])
+      assert content(user, vault, "a.txt") == :binary.copy("a", 10)
+    end
+
+    # The tombstone keeps the deleted row's id, so writing under it raised
+    # Ecto.ConstraintError and orphaned the fresh blob.
+    test "the live row deleted before the lock: a fresh row, readable, no orphan blob", %{
+      user: user,
+      vault: vault
+    } do
+      {:ok, a} = upsert(user, vault, "a.txt", "original")
+      during_first_put(fn -> :ok = Attachments.delete_attachment(user, vault, "a.txt") end)
+
+      assert {:ok, b} = upsert(user, vault, "a.txt", "replacement")
+      refute b.id == a.id
+      assert content(user, vault, "a.txt") == "replacement"
+      assert blobs(user, vault) == [b.storage_key]
+    end
+
+    test "a raise after the PUT still deletes the fresh blob", %{user: user, vault: vault} do
+      {:ok, _} = upsert(user, vault, "a.txt", "original")
+      puts = :counters.new(1, [])
+
+      # First PUT: the row is deleted under it. Second (the re-PUT for a fresh
+      # id, inside the locked transaction): storage raises.
+      Mox.stub(Engram.MockStorage, :put, fn key, bin, opts ->
+        :counters.add(puts, 1, 1)
+
+        case :counters.get(puts, 1) do
+          1 ->
+            :ok = InMemory.put(key, bin, opts)
+            :ok = Attachments.delete_attachment(user, vault, "a.txt")
+
+          _ ->
+            raise "storage exploded"
+        end
+      end)
+
+      assert_raise RuntimeError, "storage exploded", fn ->
+        upsert(user, vault, "a.txt", "replacement")
+      end
+
+      assert blobs(user, vault) == []
+    end
+  end
+
   describe "note_changed broadcast (kind=attachment)" do
     setup do
       Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
@@ -1118,6 +1279,63 @@ defmodule Engram.AttachmentsTest do
     } do
       assert {:error, :feature_not_available} =
                Attachments.batch_move(user, vault, ["Docs/a.png"], "Archive")
+    end
+  end
+
+  # A rename is a write of the new path: without the gate, upload notes.txt
+  # and rename it to evil.exe. Folder renames keep every basename, so they
+  # cannot change an extension and stay ungated.
+  describe "the executable blocklist on moves" do
+    setup %{user: user, vault: vault} do
+      Mox.stub_with(Engram.MockStorage, Engram.Storage.InMemory)
+      put_attachment(user, vault, "notes.txt")
+
+      prev = Application.get_env(:engram, :attachment_mime_bypass)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:engram, :attachment_mime_bypass, prev),
+          else: Application.delete_env(:engram, :attachment_mime_bypass)
+      end)
+
+      :ok
+    end
+
+    # A file stored while an operator had the bypass on (or before the list
+    # grew to cover it).
+    defp legacy_blocked!(user, vault, path) do
+      Application.put_env(:engram, :attachment_mime_bypass, true)
+      put_attachment(user, vault, path)
+      Application.delete_env(:engram, :attachment_mime_bypass)
+    end
+
+    test "a rename onto a blocked extension is refused and moves nothing", %{
+      user: user,
+      vault: vault
+    } do
+      for target <- ["evil.exe", "evil.exe.", "dir/EVIL.EXE "] do
+        assert {:error, {:extension_not_allowed, ".exe"}} =
+                 Attachments.move_attachment(user, vault, "notes.txt", target),
+               inspect(target)
+      end
+
+      assert live_paths(user, vault) == ["notes.txt"]
+    end
+
+    test "a batch move of a blocked file is refused", %{user: user, vault: vault} do
+      legacy_blocked!(user, vault, "tool.exe")
+
+      assert {:error, {:extension_not_allowed, ".exe"}} =
+               Attachments.batch_move(user, vault, ["notes.txt", "tool.exe"], "dir")
+
+      assert live_paths(user, vault) == ["notes.txt", "tool.exe"]
+    end
+
+    test "a folder rename still moves a blocked file it holds", %{user: user, vault: vault} do
+      legacy_blocked!(user, vault, "Docs/tool.exe")
+
+      assert {:ok, 1} = Attachments.rename_folder(user, vault, "Docs", "Archive")
+      assert "Archive/tool.exe" in live_paths(user, vault)
     end
   end
 

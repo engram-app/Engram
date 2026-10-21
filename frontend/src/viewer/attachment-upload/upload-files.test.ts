@@ -1,9 +1,9 @@
 import { beforeEach, expect, test, vi } from "vitest";
-import { LimitExceededError } from "@/api/client";
+import { ApiError, LimitExceededError } from "@/api/client";
+import { captureServerFeatures, resetServerFeatures } from "@/api/server-features";
 import { englishT } from "@/i18n/translate";
-import { uploadFilesTo } from "./upload-files";
+import { uploadFilesTo, withoutBlocked } from "./upload-files";
 
-vi.mock("./file-to-base64", () => ({ fileToBase64: () => Promise.resolve("AAAA") }));
 const toastError = vi.fn();
 vi.mock("sonner", () => ({ toast: { error: (m: string) => toastError(m) } }));
 
@@ -63,7 +63,19 @@ test("one failure toasts and the rest still upload; a plan limit does not toast"
 	});
 	expect(done).toEqual(["c.png"]);
 	expect(toastError).toHaveBeenCalledTimes(1);
-	expect(toastError).toHaveBeenCalledWith("Couldn't upload a.png");
+	expect(toastError).toHaveBeenCalledWith("a.png: Upload failed. Try again.");
+});
+
+test("a dropped executable toasts that executables don't sync", async () => {
+	const upload = vi.fn().mockRejectedValue(new ApiError(415, "extension_not_allowed"));
+	await uploadFilesTo({ upload, existing: [], files: [f("a.exe")], folder: "", t: englishT });
+	expect(toastError).toHaveBeenCalledWith("a.exe: Executable files don't sync.");
+});
+
+test("a network failure toasts Upload failed. Try again.", async () => {
+	const upload = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+	await uploadFilesTo({ upload, existing: [], files: [f("a.png")], folder: "", t: englishT });
+	expect(toastError).toHaveBeenCalledWith("a.png: Upload failed. Try again.");
 });
 
 test("a second drop of the same name inside the refetch window does not overwrite the first", async () => {
@@ -84,4 +96,12 @@ test("characters that break a [[wikilink]] target are replaced in the uploaded n
 		t: englishT,
 	});
 	expect(upload.mock.calls[0]?.[0].path).toBe("shot -2 -a--b-c.png");
+});
+
+test("withoutBlocked drops executables with one toast each and keeps the rest", () => {
+	captureServerFeatures({ features: { blocked_extensions: [".appimage"] } });
+	const kept = withoutBlocked([f("a.png"), f("Tool.AppImage")], englishT);
+	expect(kept.map((x) => x.name)).toEqual(["a.png"]);
+	expect(toastError).toHaveBeenCalledWith("Tool.AppImage: Executable files don't sync.");
+	resetServerFeatures();
 });

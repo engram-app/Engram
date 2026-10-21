@@ -89,6 +89,7 @@ defmodule EngramWeb.RequestLogger do
         mtls_clientcert_subject: mtls_clientcert_subject(conn)
       ]
       |> maybe_put_reject_reason(conn)
+      |> Keyword.merge(conn.assigns[:reject_meta] || [])
       |> maybe_put_client_identity(conn)
 
     Logger.log(
@@ -118,7 +119,9 @@ defmodule EngramWeb.RequestLogger do
 
   # A rejecting plug (e.g. VaultPlug) assigns :reject_reason so the reason rides
   # this single request line instead of a second per-request log. Omitted entirely
-  # for normal requests so the field only appears on rejections.
+  # for normal requests so the field only appears on rejections. `:reject_meta`
+  # (a keyword list of safe scalars, e.g. the attachment upload's plan and
+  # declared size) rides the same line for the same reason.
   defp maybe_put_reject_reason(meta, conn) do
     case conn.assigns[:reject_reason] do
       nil -> meta

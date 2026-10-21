@@ -31,6 +31,18 @@ defmodule Engram.Storage.S3 do
   end
 
   @impl true
+  def get_range(key, offset, length) do
+    range = "bytes=#{offset}-#{offset + length - 1}"
+
+    case ExAws.S3.get_object(bucket(), key, range: range) |> ExAws.request() do
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, {:http_error, 404, _}} -> {:error, :not_found}
+      {:error, {:http_error, 404}} -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @impl true
   def delete(key) do
     case ExAws.S3.delete_object(bucket(), key) |> ExAws.request() do
       {:ok, _} -> :ok
@@ -116,6 +128,9 @@ defmodule Engram.Storage.S3 do
 
   @impl true
   def selfhost?, do: false
+
+  @impl true
+  def multipart?, do: true
 
   @impl true
   def sign_url(key, opts) when is_binary(key) and is_list(opts) do

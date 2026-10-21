@@ -1275,15 +1275,53 @@ defmodule Engram.Links do
     note_ids = Enum.uniq(note_ids)
 
     Repo.with_tenant!(user.id, fn ->
-      do_backlinks_for_notes(user, note_ids, dek, limit, distinct?)
+      do_backlinks(user, note_ids, live_note_names(user, note_ids, dek), dek, limit, distinct?)
     end)
   end
 
-  defp do_backlinks_for_notes(user, note_ids, dek, limit, distinct?) do
+  @doc """
+  Notes that link to or embed the attachment `attachment_id`, resolved by name
+  the same way `backlinks_for_note/3` resolves a note's, so a link written
+  before the file was uploaded still counts. One row per linking note, capped
+  at `backlinks_limit/0`. Empty when the attachment is not in `vault_id`.
+  """
+  @spec backlinks_for_attachment(map(), binary(), binary()) :: [map()]
+  def backlinks_for_attachment(user, vault_id, attachment_id) do
+    in_vault? =
+      Repo.with_tenant!(user.id, fn ->
+        Repo.exists?(
+          from(a in Attachment,
+            where: a.user_id == ^user.id and a.vault_id == ^vault_id and a.id == ^attachment_id
+          ),
+          skip_tenant_check: true
+        )
+      end)
+
+    # The key only after the check: a user who has stored nothing has no DEK
+    # yet, and any id they ask about is someone else's or nobody's.
+    if in_vault? do
+      user = reload_for_dek(user)
+      {:ok, dek} = Crypto.get_dek(user)
+      ids = [attachment_id]
+
+      user.id
+      |> Repo.with_tenant!(fn ->
+        names = live_attachment_names(user, ids, dek)
+        do_backlinks(user, ids, names, dek, backlinks_limit(), true)
+      end)
+      |> Map.fetch!(attachment_id)
+    else
+      []
+    end
+  end
+
+  # `names` are the live targets among `ids` (notes or attachments), each
+  # `%{id, target, vault_id, hmac, path}`.
+  defp do_backlinks(user, ids, names, dek, limit, distinct?) do
     filter_key = Crypto.dek_filter_key_from_bytes(dek)
 
     names =
-      for {name, targets} <- winning_targets(user, live_note_names(user, note_ids, dek), dek) do
+      for {name, targets} <- winning_targets(user, names, dek) do
         Map.merge(name, %{
           targets: MapSet.new(targets),
           keys: MapSet.new(targets, &target_key_hmac(filter_key, &1))
@@ -1317,7 +1355,7 @@ defmodule Engram.Links do
       |> then(&Enum.zip(Enum.map(&1, fn edge -> edge.id end), render_backlinks(&1, user, dek)))
       |> Map.new()
 
-    Map.new(note_ids, fn id ->
+    Map.new(ids, fn id ->
       {id, picked |> Map.get(id, []) |> Enum.map(&Map.fetch!(rendered, &1.id))}
     end)
   end
@@ -1355,10 +1393,45 @@ defmodule Engram.Links do
 
     for {n, path} <- Enum.zip(rows, paths),
         is_binary(path),
-        do: %{id: n.id, vault_id: n.vault_id, hmac: n.basename_hmac, path: path}
+        do: %{
+          id: n.id,
+          target: {:note, n.id},
+          vault_id: n.vault_id,
+          hmac: n.basename_hmac,
+          path: path
+        }
   end
 
-  # Per name, every lowercased target text that resolves to that note. A link
+  # `live_note_names/3` for attachments: the live ones among `ids` whose path
+  # decrypts.
+  defp live_attachment_names(user, ids, dek) do
+    rows =
+      Repo.all(
+        from(a in Attachment,
+          where:
+            a.user_id == ^user.id and a.id in ^ids and is_nil(a.deleted_at) and
+              not is_nil(a.basename_hmac),
+          select:
+            map(a, [:id, :vault_id, :basename_hmac, :path_ciphertext, :path_nonce, :dek_version])
+        ),
+        skip_tenant_check: true
+      )
+
+    paths = decrypt_column(rows, dek, :attachments, :path, &{&1.path_ciphertext, &1.path_nonce})
+
+    for {a, path} <- Enum.zip(rows, paths),
+        is_binary(path),
+        do: %{
+          id: a.id,
+          target: {:attachment, a.id},
+          vault_id: a.vault_id,
+          hmac: a.basename_hmac,
+          path: path
+        }
+  end
+
+  # Per name, every lowercased target text that resolves to that note (or
+  # attachment). A link
   # resolves the same however its target is cased, and it can only reach a
   # note by its basename (bare) or by its full path (folder-qualified), so
   # these few candidates, run through the read-time rules, are the whole
@@ -1376,7 +1449,7 @@ defmodule Engram.Links do
         {name,
          for(
            text <- texts,
-           resolve_prefetched(candidates, name.hmac, text) == {:note, name.id},
+           resolve_prefetched(candidates, name.hmac, text) == name.target,
            do: text
          )}
       end

@@ -711,8 +711,29 @@ defmodule EngramWeb.Router do
     get "/attachments/changes", AttachmentsController, :changes
     # rename must come before *path wildcard so it is not swallowed
     post "/attachments/rename", AttachmentsController, :rename
+    # Before the `*path` catch-all, which would otherwise swallow it. It shadows
+    # a vault file stored literally at `by-id/<id>/backlinks` (no extension),
+    # which `GET /attachments/*path` can then not fetch. Same class as
+    # `/attachments/changes` above; accepted as vanishingly unlikely.
+    get "/attachments/by-id/:id/backlinks", AttachmentsController, :backlinks
     get "/attachments/*path", AttachmentsController, :show
     delete "/attachments/*path", AttachmentsController, :delete
+
+    # Chunked uploads. Own prefix: under /attachments/ they would shadow the
+    # *path show/delete routes for vault files in an `uploads/` folder. The
+    # same MCP token surface as `POST /attachments`; every route, GET
+    # included, is a write (`EngramWeb.ReadOnlyRoutes`).
+    scope "/attachment-uploads" do
+      post "/", AttachmentUploadsController, :start, private: %{token_surface: :mcp}
+      get "/:id", AttachmentUploadsController, :status, private: %{token_surface: :mcp}
+
+      put "/:id/parts/:n", AttachmentUploadsController, :put_part, private: %{token_surface: :mcp}
+
+      post "/:id/complete", AttachmentUploadsController, :complete,
+        private: %{token_surface: :mcp}
+
+      delete "/:id", AttachmentUploadsController, :abort, private: %{token_surface: :mcp}
+    end
 
     # Remote logging
     get "/logs", LogsController, :index

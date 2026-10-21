@@ -1,3 +1,22 @@
+defmodule Engram.Crypto.UserDekRotationTest.FixedDekProvider do
+  @moduledoc false
+  # `KeyProvider.Local`, except `rotate_dek/2` hands out the DEK the test put
+  # in `:test_fixed_rotation_dek`, so a test can pre-seed rows "already
+  # rotated" by a crashed run under the very key the retry will use.
+  alias Engram.Crypto.KeyProvider.Local
+
+  for {name, arity} <- Local.__info__(:functions), name != :rotate_dek do
+    args = Macro.generate_arguments(arity, __MODULE__)
+    def unquote(name)(unquote_splicing(args)), do: Local.unquote(name)(unquote_splicing(args))
+  end
+
+  def rotate_dek(_old_wrapped, ctx) do
+    dek = Application.fetch_env!(:engram, :test_fixed_rotation_dek)
+    {:ok, wrapped} = Local.wrap_dek(dek, ctx)
+    {:ok, wrapped, dek}
+  end
+end
+
 defmodule Engram.Crypto.UserDekRotationTest do
   use Engram.DataCase, async: false
   use Oban.Testing, repo: Engram.Repo
@@ -1369,6 +1388,199 @@ defmodule Engram.Crypto.UserDekRotationTest do
                Crypto.maybe_decrypt_attachment_fields(reloaded_att, reloaded_user)
 
       assert decrypted.path == "report.pdf"
+    end
+  end
+
+  # Format v2: the DEK wraps only the per-file key, so rotation rewraps 32
+  # bytes and never touches the blob.
+  describe "rotate_user/1 - segmented (v2) attachments" do
+    alias Engram.Attachments.{Upload, Uploads}
+    alias Engram.Storage.InMemory
+
+    setup %{user: user} do
+      {:ok, vault: Engram.Fixtures.insert_vault!(user, "V2Rotation")}
+    end
+
+    defp reload_user(user),
+      do:
+        Repo.one!(from(u in Engram.Accounts.User, where: u.id == ^user.id),
+          skip_tenant_check: true
+        )
+
+    # A completed session is kept for a retried complete. Its file key is
+    # bound to the id claimed at start, which a v1 upload that took the path
+    # first replaces at commit; rotation must not try to rewrap it.
+    test "a completed session whose commit id moved does not fail the sweep", %{
+      user: user,
+      vault: vault
+    } do
+      bytes = :crypto.strong_rand_bytes(3000)
+      {:ok, up} = Uploads.start(user, vault, %{path: "raced.txt", size_bytes: 3000, mtime: 1.0})
+      {:ok, _} = Uploads.put_part(user, vault, up.id, 1, bytes)
+      {:ok, v1} = Attachments.upsert_attachment(user, vault, %{path: "raced.txt", content: "v1"})
+      {:ok, att} = Uploads.complete(user, vault, up.id)
+      assert att.id == v1.id
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      {:ok, fetched} = Attachments.get_attachment(reload_user(user), vault, "raced.txt")
+      assert {:segments, stream} = fetched.content
+      assert stream |> Enum.map(fn {:ok, b} -> b end) |> IO.iodata_to_binary() == bytes
+      assert {:ok, %{id: id}} = Uploads.complete(reload_user(user), vault, up.id)
+      assert id == att.id
+    end
+
+    test "rewraps only the file key; the blob is untouched and still downloads", %{
+      user: user,
+      vault: vault
+    } do
+      bytes = :crypto.strong_rand_bytes(3000)
+      {:ok, up} = Uploads.start(user, vault, %{path: "big.txt", size_bytes: 3000, mtime: 1.0})
+      {:ok, _} = Uploads.put_part(user, vault, up.id, 1, bytes)
+      {:ok, att} = Uploads.complete(user, vault, up.id)
+
+      before = Repo.get!(Engram.Attachments.Attachment, att.id, skip_tenant_check: true)
+      {:ok, blob_before} = InMemory.get(before.storage_key)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      after_ = Repo.get!(Engram.Attachments.Attachment, att.id, skip_tenant_check: true)
+      {:ok, blob_after} = InMemory.get(after_.storage_key)
+
+      assert blob_after == blob_before
+      assert after_.wrapped_file_key != before.wrapped_file_key
+      assert after_.file_key_nonce != before.file_key_nonce
+      assert after_.dek_version == 2
+      assert is_nil(after_.dek_version_pending)
+      assert is_nil(after_.content_nonce)
+
+      assert Map.take(after_, [:encryption_version, :upload_id, :segment_size, :segment_count]) ==
+               Map.take(before, [:encryption_version, :upload_id, :segment_size, :segment_count])
+
+      reloaded = reload_user(user)
+      {:ok, fetched} = Attachments.get_attachment(reloaded, vault, "big.txt")
+      assert {:segments, stream} = fetched.content
+      assert stream |> Enum.map(fn {:ok, b} -> b end) |> IO.iodata_to_binary() == bytes
+    end
+
+    # A crashed run left the row marked pending with its file key (and the
+    # session's) already under the DEK the retry rotates to; the paths were
+    # not rewrapped yet. The retry must finish the rest and keep what is done.
+    test "a retry after a crash mid-sweep completes and keeps rotated keys", %{
+      user: user,
+      vault: vault
+    } do
+      new_dek = :crypto.strong_rand_bytes(32)
+      prev = Application.get_env(:engram, :key_provider)
+      Application.put_env(:engram, :key_provider, __MODULE__.FixedDekProvider)
+      Application.put_env(:engram, :test_fixed_rotation_dek, new_dek)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:engram, :key_provider, prev),
+          else: Application.delete_env(:engram, :key_provider)
+
+        Application.delete_env(:engram, :test_fixed_rotation_dek)
+      end)
+
+      bytes = :crypto.strong_rand_bytes(3000)
+      {:ok, up} = Uploads.start(user, vault, %{path: "done.txt", size_bytes: 3000, mtime: 1.0})
+      {:ok, _} = Uploads.put_part(user, vault, up.id, 1, bytes)
+      {:ok, att} = Uploads.complete(user, vault, up.id)
+
+      pending = :crypto.strong_rand_bytes(1000)
+      {:ok, sess} = Uploads.start(user, vault, %{path: "half.txt", size_bytes: 1000, mtime: 1.0})
+      {:ok, _} = Uploads.put_part(user, vault, sess.id, 1, pending)
+
+      {:ok, old_dek} = Crypto.get_dek(user)
+      row = Repo.get!(Engram.Attachments.Attachment, att.id, skip_tenant_check: true)
+      rewrapped = rewrap_under(row.wrapped_file_key, row.file_key_nonce, old_dek, new_dek, att.id)
+
+      Repo.update_all(
+        from(a in Engram.Attachments.Attachment, where: a.id == ^att.id),
+        [
+          set: [
+            wrapped_file_key: elem(rewrapped, 0),
+            file_key_nonce: elem(rewrapped, 1),
+            dek_version_pending: 2
+          ]
+        ],
+        skip_tenant_check: true
+      )
+
+      sess = Repo.get!(Upload, sess.id, skip_tenant_check: true)
+
+      sess_key =
+        rewrap_under(
+          sess.wrapped_file_key,
+          sess.file_key_nonce,
+          old_dek,
+          new_dek,
+          sess.attachment_id
+        )
+
+      Repo.update_all(
+        from(u in Upload, where: u.id == ^sess.id),
+        [set: [wrapped_file_key: elem(sess_key, 0), file_key_nonce: elem(sess_key, 1)]],
+        skip_tenant_check: true
+      )
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      after_ = Repo.get!(Engram.Attachments.Attachment, att.id, skip_tenant_check: true)
+      assert {after_.wrapped_file_key, after_.file_key_nonce} == rewrapped
+      assert after_.dek_version == 2
+      assert is_nil(after_.dek_version_pending)
+
+      reloaded = reload_user(user)
+      assert {:ok, ^new_dek} = Crypto.get_dek(reloaded)
+      {:ok, fetched} = Attachments.get_attachment(reloaded, vault, "done.txt")
+      assert {:segments, stream} = fetched.content
+      assert stream |> Enum.map(fn {:ok, b} -> b end) |> IO.iodata_to_binary() == bytes
+
+      sess_after = Repo.get!(Upload, sess.id, skip_tenant_check: true)
+      assert {sess_after.wrapped_file_key, sess_after.file_key_nonce} == sess_key
+      # Moved even though its key was already rewrapped, or complete refuses it.
+      assert sess_after.dek_version == sess.dek_version + 1
+      assert sess_after.path_ciphertext != sess.path_ciphertext
+      assert {:ok, _} = Uploads.complete(reloaded, vault, sess.id)
+      {:ok, fetched} = Attachments.get_attachment(reloaded, vault, "half.txt")
+      assert {:segments, stream} = fetched.content
+      assert stream |> Enum.map(fn {:ok, b} -> b end) |> IO.iodata_to_binary() == pending
+    end
+
+    defp rewrap_under(wrapped, nonce, old_dek, new_dek, bound_id) do
+      {:ok, key} =
+        Engram.Attachments.SegmentedCipher.unwrap_key(wrapped, nonce, old_dek, bound_id)
+
+      Engram.Attachments.SegmentedCipher.wrap_key(key, new_dek, bound_id)
+    end
+
+    test "an upload in flight across a rotation still completes", %{user: user, vault: vault} do
+      bytes = :crypto.strong_rand_bytes(2000)
+
+      {:ok, up} =
+        Uploads.start(user, vault, %{path: "inflight.txt", size_bytes: 2000, mtime: 1.0})
+
+      {:ok, _} = Uploads.put_part(user, vault, up.id, 1, bytes)
+      before = Repo.get!(Upload, up.id, skip_tenant_check: true)
+
+      assert :ok = UserDekRotation.rotate_user(user.id)
+
+      after_ = Repo.get!(Upload, up.id, skip_tenant_check: true)
+      assert after_.wrapped_file_key != before.wrapped_file_key
+      assert after_.dek_version == before.dek_version + 1
+      assert after_.path_ciphertext != before.path_ciphertext
+
+      reloaded = reload_user(user)
+      {:ok, filter_key} = Crypto.dek_filter_key(reloaded)
+      assert after_.path_hmac == Crypto.hmac_field(filter_key, "inflight.txt")
+
+      assert {:ok, _} = Uploads.complete(reloaded, vault, up.id)
+
+      {:ok, fetched} = Attachments.get_attachment(reloaded, vault, "inflight.txt")
+      assert {:segments, stream} = fetched.content
+      assert stream |> Enum.map(fn {:ok, b} -> b end) |> IO.iodata_to_binary() == bytes
     end
   end
 

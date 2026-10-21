@@ -10,7 +10,6 @@ import {
 	useBatchDeleteAttachments,
 	useBatchDeleteFolders,
 	useBatchDeleteNotes,
-	useBatchMoveAttachments,
 	useBatchMoveFolders,
 	useBatchMoveNotes,
 	useCreateFolder,
@@ -41,6 +40,7 @@ import { type ActionId, actionsFor, selectionActions } from "./tree-actions/acti
 import { ContextMenu } from "./tree-actions/context-menu";
 import { DeleteConfirm } from "./tree-actions/delete-confirm";
 import { nextCopyName } from "./tree-actions/duplicate";
+import { useAttachmentMove } from "./tree-actions/move-clash";
 import { MoveDialog } from "./tree-actions/move-dialog";
 import { renameBaseName } from "./tree-actions/rename-path";
 
@@ -103,7 +103,8 @@ export default function FolderTree() {
 	const createFolder = useCreateFolder();
 	const deleteFolder = useDeleteFolder();
 	const renameAttachment = useRenameAttachment();
-	const batchMoveAttachments = useBatchMoveAttachments();
+	// Asks before moving onto a taken name; its dialog renders below.
+	const attachmentMove = useAttachmentMove();
 	const batchDeleteAttachments = useBatchDeleteAttachments();
 
 	// Rename handler — TreeRow already wires HT's renaming state. HT calls
@@ -195,7 +196,7 @@ export default function FolderTree() {
 			});
 		}
 		if (attachmentPaths.length > 0) {
-			batchMoveAttachments.mutate({ paths: attachmentPaths, target_folder: destFolder });
+			attachmentMove.move(attachmentPaths, destFolder);
 		}
 	};
 
@@ -207,6 +208,12 @@ export default function FolderTree() {
 		scrollParentRef: scrollRef,
 		onRenameCommit,
 		onMove,
+		onDelete: (ids) => {
+			const targets = actionableSelection(ids);
+			if (targets.length > 0) {
+				openDelete(targets);
+			}
+		},
 	});
 
 	// The toolbar's collapse button lives in a sibling component, so hand it the
@@ -693,7 +700,7 @@ export default function FolderTree() {
 			});
 		}
 		if (attachmentPaths.length > 0) {
-			batchMoveAttachments.mutate({ paths: attachmentPaths, target_folder: targetFolderName });
+			attachmentMove.move(attachmentPaths, targetFolderName);
 		}
 		tree.setSelectedItems([]);
 		setDialog({ kind: "none" });
@@ -838,6 +845,7 @@ export default function FolderTree() {
 					onClose={() => setDialog((prev) => (prev.kind === "drawer" ? { kind: "none" } : prev))}
 				/>
 			)}
+			{attachmentMove.dialog}
 		</>
 	);
 }

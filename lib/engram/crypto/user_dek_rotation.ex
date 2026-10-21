@@ -32,6 +32,8 @@ defmodule Engram.Crypto.UserDekRotation do
   import Ecto.Query, only: [from: 2]
 
   alias Engram.Accounts.User
+  alias Engram.Attachments.SegmentedCipher
+  alias Engram.Attachments.Upload
   alias Engram.Auth.SessionInvalidator
   alias Engram.Crypto
   alias Engram.Crypto.{DekCache, Envelope, MigrationRunner, RotationLock, TenantSweep}
@@ -186,6 +188,7 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- sweep_vault_index_states(user, old_dek, new_dek, new_dek_version),
          :ok <- sweep_vault_index_update_log(user, old_dek, new_dek, new_dek_version),
          :ok <- sweep_attachments(user, old_dek, new_dek, new_filter_key, new_dek_version),
+         :ok <- sweep_attachment_uploads(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_note_links(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_chunk_texts(user, old_dek, new_dek),
          :ok <- sweep_slice_sums(user, old_dek, new_dek),
@@ -639,6 +642,45 @@ defmodule Engram.Crypto.UserDekRotation do
         end
       end)
 
+    if attachment.encryption_version == 2,
+      do: rewrap_file_key(attachment, old_dek, new_dek, new_dek_version),
+      else: recrypt_v1_blob(attachment, old_dek, new_dek, new_dek_version)
+  end
+
+  # Format v2: the DEK wraps only the per-file key. Rewrapping those 32 bytes
+  # is the whole rotation; the blob is never read or written.
+  defp rewrap_file_key(attachment, old_dek, new_dek, new_dek_version) do
+    att_id = attachment.id
+    aad = Crypto.aad_for_row(:attachments, :file_key, att_id)
+
+    case try_rewrap(
+           attachment.wrapped_file_key,
+           attachment.file_key_nonce,
+           old_dek,
+           new_dek,
+           aad,
+           aad,
+           table: :attachments,
+           phase: :sweep_attachments_file_key,
+           log: "T3.7 sweep_attachments: file key unwrap failed under both old and new DEK",
+           log_meta: [user_id: attachment.user_id, row_id: att_id, column: :wrapped_file_key],
+           on_both_failed:
+             {:raise,
+              "T3.7 sweep_attachments: file key unwrap failed under both old and new DEK " <>
+                "for att id=#{att_id} new_dek_version=#{new_dek_version}"}
+         ) do
+      {:ok, file_key} ->
+        {wrapped, nonce} = SegmentedCipher.wrap_key(file_key, new_dek, att_id)
+        {:ok, attachment, {:rewrapped_key, wrapped, nonce}}
+
+      :already_rotated ->
+        {:ok, attachment, :already_rotated}
+    end
+  end
+
+  defp recrypt_v1_blob(attachment, old_dek, new_dek, new_dek_version) do
+    att_id = attachment.id
+
     ct =
       case Engram.Storage.adapter().get(attachment.storage_key) do
         {:ok, blob} ->
@@ -709,6 +751,7 @@ defmodule Engram.Crypto.UserDekRotation do
       nonce_update =
         case recrypt_result do
           {:rotated, new_content_nonce} -> [content_nonce: new_content_nonce]
+          {:rewrapped_key, wrapped, nonce} -> [wrapped_file_key: wrapped, file_key_nonce: nonce]
           :already_rotated -> []
         end
 
@@ -804,6 +847,111 @@ defmodule Engram.Crypto.UserDekRotation do
         end
       end
     end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # attachment_uploads sweep: in-flight chunked upload sessions
+  # ---------------------------------------------------------------------------
+  #
+  # A session holds the file key its parts are sealed under (wrapped by the
+  # DEK, bound to the attachment id it will commit as) and the target path
+  # (DEK-encrypted, bound to the session id, plus its filter-key HMAC). Left
+  # under the old key, every upload spanning a rotation would fail at its
+  # next part or at complete. Rewrapped like any other DEK column; the parts
+  # already in storage are sealed under the file key and stay valid.
+
+  defp sweep_attachment_uploads(
+         %User{id: user_id},
+         old_dek,
+         new_dek,
+         new_filter_key,
+         new_dek_version
+       ) do
+    TenantSweep.each_batch(user_id, Upload, fn batch_ids ->
+      Repo.transaction(fn ->
+        # Completed sessions are skipped: nothing reads their key or path
+        # again (a repeat complete reads the committed row), and their file
+        # key may be bound to a claimed id the commit replaced.
+        from(u in Upload,
+          where: u.id in ^batch_ids and is_nil(u.completed_at),
+          lock: "FOR UPDATE"
+        )
+        |> Repo.all(skip_tenant_check: true)
+        |> Enum.each(&rewrap_upload(&1, old_dek, new_dek, new_filter_key, new_dek_version))
+      end)
+      |> case do
+        {:ok, _} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
+  defp rewrap_upload(%Upload{} = up, old_dek, new_dek, new_filter_key, new_dek_version) do
+    key_aad = Crypto.aad_for_row(:attachments, :file_key, up.attachment_id)
+    path_aad = Crypto.aad_for_row(:attachment_uploads, :path, up.id)
+
+    opts = fn column ->
+      [
+        table: :attachment_uploads,
+        phase: :sweep_attachment_uploads,
+        log: "T3.7 sweep_attachment_uploads: decrypt failed under both old and new DEK",
+        log_meta: [user_id: up.user_id, row_id: up.id, column: column],
+        on_both_failed:
+          {:raise,
+           "T3.7 sweep_attachment_uploads: decrypt failed under both old and new DEK " <>
+             "for upload id=#{up.id} column=#{column}"}
+      ]
+    end
+
+    key_updates =
+      case try_rewrap(
+             up.wrapped_file_key,
+             up.file_key_nonce,
+             old_dek,
+             new_dek,
+             key_aad,
+             key_aad,
+             opts.(:wrapped_file_key)
+           ) do
+        {:ok, file_key} ->
+          {wrapped, nonce} = SegmentedCipher.wrap_key(file_key, new_dek, up.attachment_id)
+          [wrapped_file_key: wrapped, file_key_nonce: nonce]
+
+        :already_rotated ->
+          []
+      end
+
+    path_updates =
+      case try_rewrap(
+             up.path_ciphertext,
+             up.path_nonce,
+             old_dek,
+             new_dek,
+             path_aad,
+             path_aad,
+             opts.(:path)
+           ) do
+        {:ok, path} ->
+          {ct, nonce} = Envelope.encrypt(path, new_dek, path_aad)
+
+          [
+            path_ciphertext: ct,
+            path_nonce: nonce,
+            path_hmac: Crypto.hmac_field(new_filter_key, path)
+          ]
+
+        :already_rotated ->
+          []
+      end
+
+    # dek_version always: complete refuses a session whose version is not
+    # the user's, so it must move even when a prior run rewrapped both.
+    from(u in Upload, where: u.id == ^up.id)
+    |> Repo.update_all([set: key_updates ++ path_updates ++ [dek_version: new_dek_version]],
+      skip_tenant_check: true
+    )
+
+    :ok
   end
 
   # ---------------------------------------------------------------------------

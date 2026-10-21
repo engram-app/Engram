@@ -271,3 +271,32 @@ describe("markdownLinkHref", () => {
 		expect(markdownLinkHref("My Note.md", undefined, map)).toBeNull();
 	});
 });
+
+describe("wikiHref to an attachment", () => {
+	test("an indexed edge to an attachment opens its page, not a new note", () => {
+		const map = buildWikiMap([
+			{
+				target_text: "snatchlist.zip",
+				target_note_id: null,
+				target_attachment_id: "att-1",
+				target_path: "snatchlist.zip",
+				alias: null,
+				anchor: null,
+				link_type: "wikilink",
+				dangling: false,
+			},
+		]);
+		expect(wikiHref("Snatchlist.zip", "work", map)).toBe("/v/work/att-1");
+	});
+
+	test("an attachment in the manifest resolves by name", () => {
+		const targets = [
+			{ id: "n-1", path: "Notes/Plan.md" },
+			{ id: "att-1", path: "files/snatchlist.zip" },
+		];
+		expect(wikiHref("snatchlist.zip", "work", new Map(), targets)).toBe("/v/work/att-1");
+		expect(markdownLinkHref("files/snatchlist.zip", "work", new Map(), targets)).toBe(
+			"/v/work/att-1",
+		);
+	});
+});

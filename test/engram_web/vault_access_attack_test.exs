@@ -180,14 +180,47 @@ defmodule EngramWeb.VaultAccessAttackTest do
       {:post, "/api/attachments/batch-move", %{"paths" => ["f.png"], "target_folder" => "X"}},
       {:post, "/api/attachments/batch-delete", %{"paths" => ["f.png"]}},
       {:post, "/api/logs", %{"logs" => [%{"level" => "info", "message" => "m"}]}}
+    ] ++ upload_routes(ctx, vault)
+  end
+
+  # The chunked upload protocol: every route writes, GET status included (it
+  # names a session only a writer opens). Sessions are opened through the
+  # context so the id routes act on a real one; on W they run start to finish.
+  defp upload_routes(ctx, vault) do
+    {:ok, up} =
+      Engram.Attachments.Uploads.start(ctx.user, vault, %{path: "u.png", size_bytes: 2})
+
+    base = "/api/attachment-uploads"
+
+    [
+      {:post, base, %{"path" => "big.png", "size_bytes" => 2}},
+      {:put, "#{base}/#{up.id}/parts/1", "hi"},
+      {:get, "#{base}/#{up.id}", %{}},
+      {:post, "#{base}/#{up.id}/complete", %{}},
+      {:delete, "#{base}/#{up.id}", %{}}
     ]
   end
+
+  # REST routes an MCP OAuth token may reach (`token_surface: :mcp`).
+  @mcp_rest_routes [
+    {:post, "/api/attachments"},
+    {:post, "/api/attachment-uploads"},
+    {:get, "/api/attachment-uploads/:id"},
+    {:put, "/api/attachment-uploads/:id/parts/:n"},
+    {:post, "/api/attachment-uploads/:id/complete"},
+    {:delete, "/api/attachment-uploads/:id"}
+  ]
 
   defp send_req(conn, :post, path, body),
     do: conn |> put_req_header("x-idempotency-key", Ecto.UUID.generate()) |> post(path, body)
 
   defp send_req(conn, :delete, path, body), do: delete(conn, path, body)
   defp send_req(conn, :get, path, _), do: get(conn, path)
+
+  defp send_req(conn, :put, path, body) when is_binary(body),
+    do: conn |> put_req_header("content-type", "application/octet-stream") |> put(path, body)
+
+  defp send_req(conn, :put, path, body), do: put(conn, path, body)
 
   # An OAuth token gets 401 on all of these ("oauth: outside /api/mcp"
   # below); its one REST write, the upload, is attacked there.
@@ -553,6 +586,7 @@ defmodule EngramWeb.VaultAccessAttackTest do
     {:get, "/api/sync/quiescence"},
     {:get, "/api/attachments"},
     {:get, "/api/attachments/changes"},
+    {:get, "/api/attachments/by-id/:id/backlinks"},
     {:get, "/api/attachments/*path"},
     {:get, "/api/logs"},
     {:get, "/api/embed-status"}
@@ -676,7 +710,7 @@ defmodule EngramWeb.VaultAccessAttackTest do
         routes =
           for(
             {verb, template} <- vault_routes(),
-            {verb, template} != {:post, "/api/attachments"},
+            {verb, template} not in @mcp_rest_routes,
             do: {verb, sample_path(template), %{}}
           ) ++ vault_management_routes(ctx)
 
@@ -732,6 +766,38 @@ defmodule EngramWeb.VaultAccessAttackTest do
     # The scope gate answers before any vault is resolved, so every vault
     # (N and one that does not exist included) gets the same refusal: no
     # write, and no oracle.
+    # The chunked upload is the same MCP-surface write as the single-request
+    # one: an mcp:read token is refused on every route, on every vault, the
+    # same way; an mcp token honours the vault level.
+    test "an mcp:read token is refused on every chunked upload route", ctx do
+      token = oauth_grant(ctx, levels(ctx), "mcp:read")["access_token"]
+
+      for vault <- [ctx.w, ctx.r], {verb, path, body} <- upload_routes(ctx, vault) do
+        conn = token |> in_vault(vault) |> send_req(verb, path, body)
+
+        assert json_response(conn, 403) == %{"error" => "read_only_grant"},
+               "#{verb} #{path} -> #{conn.status} #{conn.resp_body}"
+      end
+    end
+
+    test "an mcp token's chunked upload: W completes, R is 403 on every route", ctx do
+      token = credential(ctx, :oauth, levels(ctx))
+
+      for {verb, path, body} <- upload_routes(ctx, ctx.r) do
+        conn = token |> in_vault(ctx.r) |> send_req(verb, path, body)
+
+        assert json_response(conn, 403) == %{"error" => "read_only_vault"},
+               "#{verb} #{path} -> #{conn.status} #{conn.resp_body}"
+      end
+
+      statuses =
+        for {verb, path, body} <- upload_routes(ctx, ctx.w),
+            do: (token |> in_vault(ctx.w) |> send_req(verb, path, body)).status
+
+      assert statuses == [201, 200, 200, 200, 204]
+      assert attachment?(ctx, ctx.w, "u.png")
+    end
+
     test "an mcp:read token's upload is refused on every vault, alike", ctx do
       token = oauth_grant(ctx, levels(ctx), "mcp:read")["access_token"]
       fake = upload(token, %{id: Ecto.UUID.generate()})

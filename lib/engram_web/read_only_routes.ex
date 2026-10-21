@@ -22,6 +22,9 @@ defmodule EngramWeb.ReadOnlyRoutes do
     * `/api/feedback`: a message to the Engram team.
     * `/api/telemetry/spans`: the client's trace spans.
 
+  Every `/api/attachment-uploads` route writes, `GET` included (the chunked
+  upload's session status belongs to its writer).
+
   `POST /api/logs` is NOT here: it stores lines against the addressed vault,
   a vault-scoped write a read-only credential is refused. The MCP
   transport's GET and DELETE answer 405 on an auth-free route, so no
@@ -39,7 +42,12 @@ defmodule EngramWeb.ReadOnlyRoutes do
   ]
 
   # Only the POST on these paths is exempt; any other method there writes.
+  # Every chunked-upload route writes, its GET included: a session exists only
+  # because a writer opened one, so a read-only credential has no business
+  # probing it.
   @spec writes?(Plug.Conn.t()) :: boolean()
+  def writes?(%Plug.Conn{path_info: ["api", "attachment-uploads" | _]}), do: true
+
   def writes?(%Plug.Conn{method: method, path_info: path}),
     do: method not in @safe_methods and not (method == "POST" and path in @read_only_posts)
 end

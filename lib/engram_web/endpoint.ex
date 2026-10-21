@@ -184,7 +184,9 @@ defmodule EngramWeb.Endpoint do
   # JSON-RPC rather than raised (#1974). The parser below then sees the body
   # already parsed and only merges params.
   plug EngramWeb.Plugs.McpBodyParser, @parser_opts
-  plug Plug.Parsers, @parser_opts
+  # Plug.Parsers that also logs and span-tags a too-large body (status and
+  # body unchanged); without it that 413 has no request line at all.
+  plug EngramWeb.Plugs.BodyParser, @parser_opts
 
   # Sentry context: attaches conn metadata (request_id, method, route,
   # status) to any exception reported by PlugCapture above. Placed after
@@ -196,8 +198,22 @@ defmodule EngramWeb.Endpoint do
     body_scrubber: nil,
     cookie_scrubber: nil
 
+  plug :mark_head
   plug Plug.Head
   plug EngramWeb.Plugs.CORS
   # Drains a body the route left unread, after the response (raw uploads).
   plug EngramWeb.Plugs.SettleUnreadBody, EngramWeb.Router
+
+  # Plug.Head rewrites HEAD to GET; this keeps the original verb readable
+  # (`head_request?/1`) for a route that can skip producing a body it would
+  # throw away.
+  @doc false
+  def mark_head(%Plug.Conn{method: "HEAD"} = conn, _opts),
+    do: Plug.Conn.put_private(conn, :engram_head_request, true)
+
+  def mark_head(conn, _opts), do: conn
+
+  @doc "Whether the request was a HEAD before `Plug.Head` rewrote it."
+  @spec head_request?(Plug.Conn.t()) :: boolean()
+  def head_request?(conn), do: conn.private[:engram_head_request] == true
 end

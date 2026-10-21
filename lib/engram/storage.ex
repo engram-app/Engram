@@ -10,6 +10,13 @@ defmodule Engram.Storage do
   @callback get(key :: String.t()) ::
               {:ok, binary()} | {:error, :not_found | term()}
 
+  @doc """
+  Reads `length` bytes of `key` starting at byte `offset` (an S3 ranged GET).
+  Lets a segmented (format v2) attachment be read one segment at a time.
+  """
+  @callback get_range(key :: String.t(), offset :: non_neg_integer(), length :: pos_integer()) ::
+              {:ok, binary()} | {:error, :not_found | term()}
+
   @callback delete(key :: String.t()) ::
               :ok | {:error, term()}
 
@@ -85,13 +92,22 @@ defmodule Engram.Storage do
   @callback abort_multipart_upload(key :: String.t(), upload_id :: String.t()) ::
               :ok | {:error, term()}
 
+  @doc """
+  Whether this adapter supports the multipart calls above. Gates the chunked
+  attachment upload feature advertised to clients; `Database` cannot, so a
+  self-host on Postgres keeps single-request uploads.
+  """
+  @callback multipart?() :: boolean()
+
   @doc "Returns the configured storage adapter module."
   def adapter, do: Application.get_env(:engram, :storage, __MODULE__.S3)
 
   @doc """
-  Build a storage key from the immutable attachment row UUID. Decoupled from
-  the mutable vault path so move/rename never relocates the blob and a new
-  upload to a vacated path computes a fresh key (no clobber).
+  Build an attachment blob key from a UUID: a fresh one per stored blob
+  (single-request writes) or the upload id (chunked uploads), never the
+  path. Decoupled from the mutable vault path so move/rename never relocates
+  the blob; fresh per write so a write never clobbers a blob a live row still
+  reads. Readers always go through the row's `storage_key`.
 
   This is the only key builder for attachments; `revision_key/4` below is the only one for note versions. `key/3`, which produced
   `"user/vault/<cleartext path>"`, is deleted — a storage key ends up in the S3

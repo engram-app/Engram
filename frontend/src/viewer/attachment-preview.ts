@@ -1,0 +1,287 @@
+// Pure helpers behind the attachment page: which inline preview a file gets,
+// whether its blob may open in a new tab, and the CSV/byte formatting the
+// preview and file card render.
+
+const TEXT_MIMES = new Set([
+	"application/json",
+	"application/ld+json",
+	"application/xml",
+	"application/yaml",
+	"application/x-yaml",
+	"application/toml",
+	"application/javascript",
+	"application/sql",
+]);
+
+// Mime first; the extension covers uploads typed application/octet-stream.
+const TEXT_EXTS = new Set([
+	"txt",
+	"log",
+	"json",
+	"jsonl",
+	"ndjson",
+	"xml",
+	"yaml",
+	"yml",
+	"toml",
+	"ini",
+	"cfg",
+	"conf",
+	"env",
+	"properties",
+	"html",
+	"htm",
+	"css",
+	"scss",
+	"less",
+	"js",
+	"mjs",
+	"cjs",
+	"ts",
+	"tsx",
+	"jsx",
+	"py",
+	"rb",
+	"go",
+	"rs",
+	"java",
+	"kt",
+	"swift",
+	"c",
+	"h",
+	"cpp",
+	"hpp",
+	"cs",
+	"php",
+	"lua",
+	"r",
+	"sql",
+	"tex",
+	"bib",
+	"srt",
+	"vtt",
+	"diff",
+	"patch",
+	"ex",
+	"exs",
+	"erl",
+	"hs",
+	"ml",
+	"clj",
+	"dart",
+	"scala",
+	"vue",
+	"svelte",
+	"graphql",
+	"proto",
+	"dockerfile",
+	"makefile",
+	"gitignore",
+	"editorconfig",
+]);
+
+const CSV_EXTS = new Set(["csv", "tsv"]);
+
+function extOf(path: string): string {
+	const name = (path.split("/").pop() ?? path).toLowerCase();
+	const dot = name.lastIndexOf(".");
+	// A dotfile (".gitignore") or a bare "Makefile" is its own extension.
+	return dot <= 0 ? name.replace(/^\./u, "") : name.slice(dot + 1);
+}
+
+// Types a browser renders without running script. Raster images only: an SVG
+// is an image/* type that can carry script.
+const INERT_IMAGES = new Set([
+	"image/png",
+	"image/jpeg",
+	"image/gif",
+	"image/webp",
+	"image/avif",
+	"image/bmp",
+]);
+
+const UNITS = ["byte", "kilobyte", "megabyte", "gigabyte"] as const;
+
+export type PreviewKind = "image" | "pdf" | "audio" | "video" | "csv" | "text" | "excalidraw";
+
+// Text previews render only this much: a <pre> or table holding 100 MB of
+// text freezes the tab. Everything else previews at any size.
+export const TEXT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
+
+/** The first `maxBytes` of a file as text. Decoded as a stream, so a character
+ *  the cap cut in half stays in the decoder and is dropped, not shown as U+FFFD. */
+export async function readTextHead(blob: Blob, maxBytes: number): Promise<string> {
+	const bytes = await blob.slice(0, maxBytes).arrayBuffer();
+	return new TextDecoder().decode(bytes, { stream: true });
+}
+
+export function previewKind(path: string, mime: string): PreviewKind | null {
+	const ext = extOf(path);
+	let kind: PreviewKind | null = null;
+	// Before the text rules: the plugin's drawings are markdown, and a raw
+	// .excalidraw is JSON, but neither reads as text.
+	if (ext === "excalidraw" || path.toLowerCase().endsWith(".excalidraw.md")) {
+		kind = "excalidraw";
+	} else if (mime.startsWith("image/")) {
+		kind = "image";
+	} else if (mime === "application/pdf") {
+		kind = "pdf";
+	} else if (mime.startsWith("audio/")) {
+		kind = "audio";
+	} else if (mime.startsWith("video/")) {
+		kind = "video";
+	} else if (CSV_EXTS.has(ext) || mime === "text/csv" || mime === "text/tab-separated-values") {
+		kind = "csv";
+	} else if (mime.startsWith("text/") || TEXT_MIMES.has(mime) || TEXT_EXTS.has(ext)) {
+		kind = "text";
+	}
+	return kind;
+}
+
+// A blob: URL runs in OUR origin, so opening an HTML or SVG blob in a tab would
+// execute the file's script with the user's session. The stored type is
+// whatever the uploader sent ("image/svg+xml; charset=utf-8" included), so it
+// is canonicalised first, the same way the server's MimeWhitelist does, and
+// then checked against an allowlist rather than a denylist.
+export function opensInline(mime: string): boolean {
+	const type = mime.split(";")[0]?.trim().toLowerCase() ?? "";
+	return (
+		type === "application/pdf" ||
+		INERT_IMAGES.has(type) ||
+		type.startsWith("audio/") ||
+		type.startsWith("video/")
+	);
+}
+
+// RFC 4180-ish: quoted cells may hold the delimiter, newlines and "" escapes.
+// Stops after `maxRows` so a large file renders a bounded table.
+export function parseCsv(text: string, delimiter: string, maxRows: number): string[][] {
+	const rows: string[][] = [];
+	let row: string[] = [];
+	let cell = "";
+	let quoted = false;
+	for (let i = 0; i < text.length && rows.length < maxRows; i++) {
+		const ch = text[i];
+		if (quoted) {
+			if (ch === '"' && text[i + 1] === '"') {
+				cell += '"';
+				i++;
+			} else if (ch === '"') {
+				quoted = false;
+			} else {
+				cell += ch;
+			}
+		} else if (ch === '"' && cell === "") {
+			quoted = true;
+		} else if (ch === delimiter) {
+			row.push(cell);
+			cell = "";
+		} else if (ch === "\n" || ch === "\r") {
+			if (ch === "\r" && text[i + 1] === "\n") {
+				i++;
+			}
+			row.push(cell);
+			rows.push(row);
+			row = [];
+			cell = "";
+		} else {
+			cell += ch;
+		}
+	}
+	if (rows.length < maxRows && (cell !== "" || row.length > 0)) {
+		row.push(cell);
+		rows.push(row);
+	}
+	return rows;
+}
+
+export function formatBytes(bytes: number, locale?: string): string {
+	let value = bytes;
+	let unit = 0;
+	while (value >= 1024 && unit < UNITS.length - 1) {
+		value /= 1024;
+		unit++;
+	}
+	return new Intl.NumberFormat(locale, {
+		style: "unit",
+		unit: UNITS[unit],
+		// Short bytes read "685 byte"; the long form pluralizes ("685 bytes").
+		unitDisplay: unit === 0 ? "long" : "short",
+		maximumFractionDigits: unit === 0 ? 0 : 1,
+	}).format(value);
+}
+
+// "report.final.pdf" -> { stem: "report.final", ext: ".pdf" }. A dotfile or a
+// bare name has no extension.
+export function fileStem(path: string): { stem: string; ext: string } {
+	const name = path.split("/").pop() ?? path;
+	const dot = name.lastIndexOf(".");
+	return dot <= 0 ? { stem: name, ext: "" } : { stem: name.slice(0, dot), ext: name.slice(dot) };
+}
+
+// Rename keeps the folder and the extension; only the stem changes, so a file
+// cannot become a different type by rename. Null = nothing to send.
+export function attachmentRenamePath(path: string, nextStem: string): string | null {
+	const { stem, ext } = fileStem(path);
+	let next = nextStem.trim();
+	if (ext && next.toLowerCase().endsWith(ext.toLowerCase())) {
+		next = next.slice(0, -ext.length);
+	}
+	if (!next || next.includes("/") || next === stem) {
+		return null;
+	}
+	const folder = path.includes("/") ? path.slice(0, path.lastIndexOf("/") + 1) : "";
+	return `${folder}${next}${ext}`;
+}
+
+// The words in an Excalidraw drawing, so its placeholder says what it holds.
+// Reads both formats: a raw .excalidraw (JSON with text elements) and the
+// Obsidian plugin's .excalidraw.md (a "# Text Elements" section, each line
+// ending in a " ^id" block reference). Anything else yields nothing.
+export function excalidrawTexts(source: string): string[] {
+	try {
+		const doc: unknown = JSON.parse(source);
+		const elements =
+			typeof doc === "object" && doc !== null && "elements" in doc && Array.isArray(doc.elements)
+				? doc.elements
+				: [];
+		return elements.flatMap((e: unknown) =>
+			typeof e === "object" &&
+			e !== null &&
+			"type" in e &&
+			e.type === "text" &&
+			"text" in e &&
+			typeof e.text === "string" &&
+			e.text.trim()
+				? [e.text.trim()]
+				: [],
+		);
+	} catch {
+		// Not JSON: a raw drawing cut at the preview cap, or the plugin's
+		// markdown form, read below.
+	}
+	if (source.trimStart().startsWith("{")) {
+		// Only text elements carry a "text" key. Each match is a complete JSON
+		// string literal, so JSON.parse decodes its escapes.
+		return [...source.matchAll(/"text"\s*:\s*(?<literal>"(?:[^"\\]|\\.)*")/gu)].flatMap((m) => {
+			const text: unknown = JSON.parse(m.groups?.literal ?? '""');
+			return typeof text === "string" && text.trim() ? [text.trim()] : [];
+		});
+	}
+	const lines = source.split("\n");
+	const start = lines.findIndex((l) => l.trim() === "# Text Elements");
+	if (start < 0) {
+		return [];
+	}
+	const texts: string[] = [];
+	for (const line of lines.slice(start + 1)) {
+		if (line.startsWith("%%") || line.startsWith("# ")) {
+			break;
+		}
+		const text = line.replace(/\s\^[\w-]+\s*$/u, "").trim();
+		if (text) {
+			texts.push(text);
+		}
+	}
+	return texts;
+}

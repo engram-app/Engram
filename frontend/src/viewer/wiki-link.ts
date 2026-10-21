@@ -1,6 +1,11 @@
 import GithubSlugger from "github-slugger";
 import { vaultPath } from "../routes";
 
+// The note or attachment an indexed edge resolved to.
+function targetId(link: NoteLinkEdge | undefined): string | null {
+	return link?.target_note_id ?? link?.target_attachment_id ?? null;
+}
+
 // Obsidian-style wikilink resolution against the vault manifest. Pure module —
 // both link producers (note-view's remark-wiki-link config, note-page's editor
 // resolveWikiLink) share it.
@@ -23,6 +28,7 @@ export function wikiCreateTarget(href: string | undefined): string | null {
 	return href?.startsWith(WIKI_CREATE_SCHEME) ? href.slice(WIKI_CREATE_SCHEME.length) : null;
 }
 
+/** A link target: a note, or an attachment (both are routed by id). */
 export interface ManifestNote {
 	id: string;
 	path: string;
@@ -45,11 +51,12 @@ export interface NoteLinkEdge {
 // Keyed by lowercased target_text so wikiHref's lookup matches Obsidian's
 // case-insensitive resolution. Dangling entries stay OUT of the map — a
 // missing key and a dangling key are both "create it on click", so there is no
-// reason to carry a target_note_id: null entry into the lookup.
+// reason to carry an unresolved entry into the lookup. Attachment targets stay
+// IN: `[[file.zip]]` opens the file's page, which is routed by id like a note.
 export function buildWikiMap(links: NoteLinkEdge[] | undefined): Map<string, NoteLinkEdge> {
 	const map = new Map<string, NoteLinkEdge>();
 	for (const link of links ?? []) {
-		if (!link.dangling && link.target_note_id) {
+		if (!link.dangling && (link.target_note_id || link.target_attachment_id)) {
 			map.set(link.target_text.toLowerCase(), link);
 		}
 	}
@@ -120,9 +127,9 @@ export function wikiHref(
 	if (!slug) {
 		return "#";
 	}
-	const resolved = map?.get(page.toLowerCase());
-	if (resolved?.target_note_id) {
-		return `${vaultPath(slug, resolved.target_note_id)}${hash}`;
+	const resolvedId = targetId(map?.get(page.toLowerCase()));
+	if (resolvedId) {
+		return `${vaultPath(slug, resolvedId)}${hash}`;
 	}
 	const fromManifest = manifestNotes ? resolveWikiTarget(page, manifestNotes) : null;
 	if (fromManifest) {
@@ -178,9 +185,9 @@ export function markdownLinkHref(
 		return null;
 	}
 
-	const resolved = map?.get(page.toLowerCase());
-	if (resolved?.target_note_id) {
-		return `${vaultPath(slug, resolved.target_note_id)}${hash}`;
+	const resolvedId = targetId(map?.get(page.toLowerCase()));
+	if (resolvedId) {
+		return `${vaultPath(slug, resolvedId)}${hash}`;
 	}
 	const fromManifest = manifestNotes ? resolveWikiTarget(page, manifestNotes) : null;
 	return fromManifest ? `${vaultPath(slug, fromManifest.id)}${hash}` : null;

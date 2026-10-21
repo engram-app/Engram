@@ -32,6 +32,7 @@ import {
 	toastJoinRefused,
 } from "./crdt-ops";
 import { applyVaultTreeEvents, invalidateVaultTree } from "./queries";
+import { captureServerFeatures } from "./server-features";
 import type { AttachmentEvent, FolderMarkerEvent, NoteEvent } from "./vault-tree-patch";
 
 // phoenix.js's own default reconnect steps — kept for the 2nd+ attempt. Only
@@ -609,6 +610,7 @@ export async function connectChannel({
 		.join()
 		.receive("ok", (resp) => {
 			captureServerJitter(resp);
+			captureServerFeatures(resp);
 		})
 		.receive("error", (resp) => {
 			rlog().error("sync", `sync channel join FAILED: ${JSON.stringify(resp).slice(0, 200)}`);

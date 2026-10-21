@@ -209,6 +209,34 @@ export function moveFolders(tree: VaultTree, paths: readonly string[], destDir: 
 	);
 }
 
+/** Re-path attachments (rename or move) by their old path; ids stay. */
+export function moveAttachments(
+	tree: VaultTree,
+	moves: readonly { oldPath: string; newPath: string }[],
+): VaultTree {
+	const to = new Map(moves.map((m) => [m.oldPath, m.newPath]));
+	let changed = false;
+	const attachments = tree.attachments.map((a) => {
+		const next = to.get(a.path);
+		if (next === undefined || next === a.path) {
+			return a;
+		}
+		changed = true;
+		return { ...a, path: next };
+	});
+	return changed ? rebuild(tree.notes, tree.folders, attachments) : tree;
+}
+
+/** Drop attachments by path. */
+export function removeAttachments(tree: VaultTree, paths: readonly string[]): VaultTree {
+	const gone = new Set(paths);
+	return rebuild(
+		tree.notes,
+		tree.folders,
+		tree.attachments.filter((a) => !gone.has(a.path)),
+	);
+}
+
 /**
  * A note-level change as the sync channel reports it. Only what the tree
  * needs survives classification; everything else about the event (content,

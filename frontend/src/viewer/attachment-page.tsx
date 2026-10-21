@@ -1,12 +1,24 @@
 import { Download } from "lucide-react";
-import { lazy, type ReactNode, Suspense, useEffect, useState } from "react";
+import { lazy, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/locale-provider";
+import { intlLocale } from "@/lib/intl-locale";
+import { notify } from "@/lib/notify";
 import { encodePathSegments } from "@/lib/path";
 import { whenLoaded } from "@/lib/when-loaded";
 import { ApiError, api, isNotFound } from "../api/client";
 import { useAttachments } from "../api/queries";
+import { useRightToolSlot } from "../layout/right-tools-context";
+import { AttachmentDetails, AttachmentName } from "./attachment-details";
+import {
+	formatBytes,
+	opensInline,
+	previewKind,
+	TEXT_PREVIEW_MAX_BYTES,
+} from "./attachment-preview";
+import { AttachmentTextPreview, ExcalidrawPreview } from "./attachment-text-preview";
+import BacklinksPanel from "./backlinks-panel";
 import { DocumentHeader } from "./document-header";
 import { DocumentSurface } from "./document-surface";
 import LoadingPane from "./loading-pane";
@@ -16,47 +28,93 @@ import PreviewColumn from "./preview-column";
 // for image/other previews.
 const PdfView = lazy(() => whenLoaded(import("./pdf-view")));
 
+// Progress repaints at most this often: a stream chunk is ~64 KB, so a 1 GB
+// file would otherwise re-render the page ~16k times.
+const PROGRESS_INTERVAL_MS = 250;
+
 // Read-only preview for a single attachment, routed by uuid (/attachment/:id) —
 // like notes, so the URL survives a rename/move. Resolves the id to its path +
 // mime from the already-loaded attachments list (the tree sidebar keeps it
-// warm), then streams raw bytes (?raw=1) as a typed Blob so the browser renders
-// images / PDFs natively; unsupported types fall back to a download link.
+// warm). Previewable files (see previewKind) stream their raw bytes (?raw=1) as
+// a typed Blob for a native or text preview; everything else gets the file card
+// alone and fetches its bytes only when the user downloads.
 export default function AttachmentPage() {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
 	const { itemId: id } = useParams();
 	const { data: attachments, isLoading } = useAttachments();
 	const att = attachments?.find((a) => a.id === id);
 	const path = att?.path ?? "";
 	const filename = path.split("/").pop() ?? path;
 	const mime = att?.mime_type ?? "";
+	const kind = att ? previewKind(path, mime) : null;
+	const rawPath = `/attachments/${encodePathSegments(path)}?raw=1`;
+	// The bytes are keyed by WHAT the file is, not where it lives: a rename or
+	// move changes the path but not the content, so it must not refetch them.
+	const contentKey = att ? `${att.id}:${att.size_bytes}:${att.mtime}` : "";
+	// Read in the fetch effect so a path change alone does not re-run it.
+	const rawPathRef = useRef(rawPath);
+	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. The fetch must use the CURRENT path but re-run only when the content changes.
+	rawPathRef.current = rawPath;
 
+	// Which name is in rename mode: the pinned header, or the title on the page.
+	// Tied to the file it was opened on, so moving to another file closes it
+	// instead of carrying the old draft over to the new name.
+	const [renaming, setRenaming] = useState<{ id: string; at: "header" | "title" } | null>(null);
+	const renamingAt = renaming && renaming.id === att?.id ? renaming.at : null;
+	const setRenamingAt = (at: "header" | "title" | null) =>
+		setRenaming(at && att ? { id: att.id, at } : null);
+	const [downloading, setDownloading] = useState(false);
+	const [blob, setBlob] = useState<Blob | null>(null);
 	const [url, setUrl] = useState<string | null>(null);
 	// 'missing' = real 404; 'failed' = transient (5xx/network) — don't conflate.
 	const [error, setError] = useState<"missing" | "failed" | null>(null);
+	// Bytes of the preview received so far, for the progress bar.
+	const [received, setReceived] = useState(0);
+	// The browser refused to render the bytes (HEIC in Chrome, MKV, ...).
+	const [unrenderable, setUnrenderable] = useState(false);
 
-	// A new `path` is a new resource: drop the previous blob url and error
+	// New content is a new resource: drop the previous blob url and error
 	// during render rather than one paint later from inside the effect.
-	const [seededPath, setSeededPath] = useState(path);
-	if (seededPath !== path) {
-		setSeededPath(path);
+	const [seededKey, setSeededKey] = useState(contentKey);
+	if (seededKey !== contentKey) {
+		setSeededKey(contentKey);
+		setUnrenderable(false);
+		setReceived(0);
+		setBlob(null);
 		setUrl(null);
 		setError(null);
 	}
 
 	useEffect(() => {
-		if (!path) {
+		if (!contentKey || kind === null) {
 			return;
 		}
 		let revoke: string | null = null;
 		let cancelled = false;
+		let shownAt = Number.NEGATIVE_INFINITY;
+		const abort = new AbortController();
+		// Text previews show only the head of the file, so only the head is read.
+		// One byte past the cap tells the preview the file was cut.
+		const capped = kind === "text" || kind === "csv" || kind === "excalidraw";
 		api
-			.getBlob(`/attachments/${encodePathSegments(path)}?raw=1`)
-			.then((blob) => {
+			.getBlob(rawPathRef.current, {
+				signal: abort.signal,
+				maxBytes: capped ? TEXT_PREVIEW_MAX_BYTES + 1 : undefined,
+				onProgress: (n) => {
+					const now = performance.now();
+					if (!cancelled && now - shownAt >= PROGRESS_INTERVAL_MS) {
+						shownAt = now;
+						setReceived(n);
+					}
+				},
+			})
+			.then((fetched) => {
 				if (cancelled) {
 					return;
 				}
-				const objectUrl = URL.createObjectURL(blob);
+				const objectUrl = URL.createObjectURL(fetched);
 				revoke = objectUrl;
+				setBlob(fetched);
 				setUrl(objectUrl);
 			})
 			.catch((err) => {
@@ -73,11 +131,43 @@ export default function AttachmentPage() {
 			});
 		return () => {
 			cancelled = true;
+			abort.abort();
 			if (revoke) {
 				URL.revokeObjectURL(revoke);
 			}
 		};
-	}, [path]);
+	}, [contentKey, kind]);
+
+	// Same right-rail Backlinks panel a note gets.
+	const backlinksNode = useMemo(() => (id ? <BacklinksPanel attachmentId={id} /> : null), [id]);
+	useRightToolSlot("backlinks", backlinksNode);
+
+	// Previewed files already hold their bytes; the rest fetch them on click.
+	async function download() {
+		let href = url;
+		if (!href) {
+			setDownloading(true);
+			try {
+				href = URL.createObjectURL(await api.getBlob(rawPath));
+			} catch (err) {
+				if (!(err instanceof ApiError)) {
+					console.error("attachment download failed", err);
+				}
+				notify.error(t("Couldn't download {filename}. Try again.", { filename }));
+				return;
+			} finally {
+				setDownloading(false);
+			}
+		}
+		const a = document.createElement("a");
+		a.href = href;
+		a.download = filename;
+		a.click();
+		if (href !== url) {
+			// After the click has handed the blob to the download manager.
+			setTimeout(() => URL.revokeObjectURL(href), 0);
+		}
+	}
 
 	// Attachment list still loading and the id isn't resolved yet.
 	if (!att && isLoading) {
@@ -92,44 +182,125 @@ export default function AttachmentPage() {
 		);
 	}
 
-	let body: ReactNode;
+	let preview: ReactNode = null;
 	if (error) {
-		body = (
-			<p className="p-6 text-destructive text-sm">
+		preview = (
+			<p className="text-destructive text-sm">
 				{error === "missing"
 					? t("{filename} no longer exists.", { filename })
 					: t("Couldn't load {filename} — it may be temporarily unavailable.", { filename })}
 			</p>
 		);
-	} else if (!url) {
-		body = <LoadingPane />;
-	} else if (mime.startsWith("image/")) {
-		body = (
-			<PreviewColumn>
-				<div className="flex w-full justify-center p-4">
-					<img
-						draggable={false}
-						src={url}
-						alt={filename}
-						className="max-w-full rounded shadow-md"
-						style={{ maxWidth: 800 }}
-					/>
-				</div>
-			</PreviewColumn>
+	} else if (kind !== null && !(url && blob)) {
+		const fmt = (n: number) => formatBytes(n, intlLocale(renderedLocale));
+		// A text preview reads only its head, so the bar fills to that.
+		const total =
+			kind === "text" || kind === "csv" || kind === "excalidraw"
+				? Math.min(att.size_bytes, TEXT_PREVIEW_MAX_BYTES)
+				: att.size_bytes;
+		preview = (
+			// Centered in the space the preview will fill, so it reads as the
+			// preview loading rather than a stray control.
+			<div className="flex min-h-[40vh] flex-col items-center justify-center gap-2 text-muted-foreground text-sm">
+				<progress
+					aria-label={t("Loading {filename}", { filename })}
+					value={received}
+					max={total || undefined}
+					className="h-1.5 w-full max-w-md appearance-none overflow-hidden rounded-full bg-foreground/15 [&::-moz-progress-bar]:bg-primary [&::-webkit-progress-bar]:bg-foreground/15 [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:bg-primary"
+				/>
+				{/* Static, so a screen reader announces it once; the bar carries the value. */}
+				<p role="status">{t("Loading {filename}…", { filename })}</p>
+				{received > 0 ? (
+					<p aria-hidden="true">
+						{t("{received} of {total}", {
+							received: fmt(Math.min(received, total)),
+							total: fmt(total),
+						})}
+					</p>
+				) : null}
+			</div>
 		);
-	} else if (mime === "application/pdf") {
-		body = (
-			<Suspense fallback={<LoadingPane />}>
-				<PdfView url={url} filename={filename} />
-			</Suspense>
-		);
-	} else {
-		body = (
-			<p className="p-6 text-muted-foreground text-sm">
-				{t("Preview not supported for {filename}. Use Download above to save it.", { filename })}
+	} else if (unrenderable) {
+		preview = (
+			<p className="text-muted-foreground text-sm">
+				{t("This browser can't preview {filename}. Download it to open it.", { filename })}
 			</p>
 		);
+	} else if (url && blob) {
+		// The browser may not decode the format (HEIC in Chrome, MKV, ...): say so
+		// instead of showing a broken image or a dead player.
+		const onRenderError = () => setUnrenderable(true);
+		if (kind === "image") {
+			preview = (
+				// biome-ignore lint/a11y/noNoninteractiveElementInteractions: onError reports a decode failure, it is not a user interaction.
+				<img
+					draggable={false}
+					onError={onRenderError}
+					src={url}
+					alt={filename}
+					className="mx-auto block max-w-full rounded shadow-md"
+					style={{ maxWidth: 800 }}
+				/>
+			);
+		} else if (kind === "audio") {
+			// biome-ignore lint/a11y/useMediaCaption: user files ship no caption track to attach.
+			preview = <audio controls src={url} className="w-full" onError={onRenderError} />;
+		} else if (kind === "video") {
+			preview = (
+				// biome-ignore lint/a11y/useMediaCaption: user files ship no caption track to attach.
+				<video
+					controls
+					src={url}
+					className="max-h-[70vh] w-full rounded bg-black"
+					onError={onRenderError}
+				/>
+			);
+		} else if (kind === "excalidraw") {
+			preview = <ExcalidrawPreview blob={blob} />;
+		} else if (kind === "text" || kind === "csv") {
+			preview = <AttachmentTextPreview blob={blob} csv={kind === "csv"} filename={filename} />;
+		}
 	}
+
+	const details = (
+		<AttachmentDetails
+			att={att}
+			kind={kind}
+			// Both the stored type and the bytes' actual type must be inert.
+			inlineUrl={url && blob && opensInline(mime) && opensInline(blob.type) ? url : null}
+			onDownload={download}
+			downloading={downloading}
+			renaming={renamingAt === "title"}
+			onRename={() => setRenamingAt("title")}
+			onRenameDone={() => setRenamingAt(null)}
+		/>
+	);
+
+	const body =
+		kind === "pdf" && !error ? (
+			// The PDF viewer owns its scroll and fills the page; no card under it.
+			url ? (
+				<Suspense fallback={<LoadingPane />}>
+					<PdfView url={url} filename={filename} />
+				</Suspense>
+			) : (
+				<LoadingPane />
+			)
+		) : (kind === "text" || kind === "csv") && !error && !unrenderable ? (
+			// Text and tables fill the page and scroll INSIDE their own frame, so a
+			// long file never scrolls the details and buttons away.
+			<article className="flex min-h-0 flex-1 flex-col gap-6 p-6">
+				{details}
+				{preview}
+			</article>
+		) : (
+			<PreviewColumn>
+				<article className="flex flex-col gap-6 p-6">
+					{details}
+					{preview}
+				</article>
+			</PreviewColumn>
+		);
 
 	// Same surface and header as a note, so an attachment reads as a page in the
 	// vault rather than replacing the document view.
@@ -138,32 +309,32 @@ export default function AttachmentPage() {
 			<DocumentHeader
 				folder={path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : undefined}
 				title={path}
-				name={<span className="min-w-0 truncate font-medium">{filename}</span>}
+				name={
+					<AttachmentName
+						path={path}
+						editing={renamingAt === "header"}
+						onEdit={() => setRenamingAt("header")}
+						onDone={() => setRenamingAt(null)}
+						className="-mx-1 truncate px-1 font-medium"
+					/>
+				}
 				// Always rendered, disabled until the bytes land: an icon button is taller
 				// than the bare text row, so mounting it late made the header jump.
 				actions={
-					url ? (
-						<Button variant="ghost" size="icon" asChild>
-							<a
-								href={url}
-								download={filename}
-								aria-label={t("Download {filename}", { filename })}
-								title={t("Download")}
-							>
-								<Download className="size-4" />
-							</a>
-						</Button>
-					) : (
-						<Button
-							variant="ghost"
-							size="icon"
-							disabled
-							aria-label={t("Download")}
-							title={t("Download")}
-						>
-							<Download className="size-4" />
-						</Button>
-					)
+					<Button
+						variant="ghost"
+						size="icon"
+						onClick={download}
+						disabled={downloading}
+						aria-label={
+							downloading
+								? t("Downloading {filename}…", { filename })
+								: t("Download {filename}", { filename })
+						}
+						title={downloading ? t("Downloading…") : t("Download")}
+					>
+						<Download className="size-4" />
+					</Button>
 				}
 			/>
 			{body}

@@ -1,14 +1,23 @@
 defmodule EngramWeb.AttachmentsController do
   use EngramWeb, :controller
   use OpenApiSpex.ControllerSpecs
+  alias EngramWeb.AttachmentRawResponse
+  alias EngramWeb.AttachmentRefusalTelemetry
   alias EngramWeb.Plugs.SettleUnreadBody
+  alias EngramWeb.RequestMeta
   alias EngramWeb.Schemas
 
   alias Engram.Attachments
   alias Engram.Billing
+  alias Engram.Links
   alias Engram.Storage.MimeWhitelist
 
   action_fallback EngramWeb.FallbackController
+
+  # A controller plug, not a line in the action: the fallback (422 changeset)
+  # renders with the conn the action was CALLED with, so a before_send
+  # registered inside the action would miss it.
+  plug AttachmentRefusalTelemetry when action == :upload
 
   operation(:upload,
     operation_id: "attachments-upload",
@@ -17,10 +26,10 @@ defmodule EngramWeb.AttachmentsController do
       "Uploads an attachment to the vault's storage backend. Send the raw bytes as " <>
         "`application/octet-stream` with `path`, `mtime` and optional `mime_type` in the query " <>
         "string, or (legacy) base64 JSON. Attachments are a paid-tier feature (402 on Free, which " <>
-        "is also limited to text MIME types), the MIME type and extension must pass the whitelist " <>
-        "(415), the file must be within the per-plan size and total-quota limits (402), a raw body " <>
+        "is also limited to text MIME types), any file type is accepted except executables, whose extension returns 415 " <>
+        "(`extension_not_allowed`), the file must be within the per-plan size and total-quota limits (402), a raw body " <>
         "over the request ceiling returns 413, a raw body that stalls returns 408, a non-numeric " <>
-        "`mtime` or `mime_type` returns 422, and a storage backend failure returns 502.",
+        "`mtime`, or a `mime_type` with illegal bytes (`invalid_mime_type`), returns 422, and a storage backend failure returns 502.",
     tags: ["Attachments"],
     parameters: [
       path: [
@@ -53,6 +62,9 @@ defmodule EngramWeb.AttachmentsController do
       }
     },
     responses: [
+      service_unavailable:
+        {"`rotation_in_progress`: an encryption key rotation holds the account; retry after " <>
+           "`retry-after` seconds.", "application/json", Schemas.MessageError},
       ok: {"Uploaded", "application/json", Schemas.AttachmentResponse},
       bad_request: {"Invalid base64", "application/json", Schemas.MessageError},
       payment_required:
@@ -62,8 +74,10 @@ defmodule EngramWeb.AttachmentsController do
       request_entity_too_large:
         {"Raw body over the request ceiling", "application/json", Schemas.MessageError},
       unsupported_media_type:
-        {"MIME or extension not allowed", "application/json", Schemas.MimeRejected},
-      unprocessable_entity: {"Missing/invalid content", "application/json", Schemas.MessageError},
+        {"Executable extension not allowed", "application/json", Schemas.MimeRejected},
+      unprocessable_entity:
+        {"Missing/invalid content, or invalid mime_type", "application/json",
+         Schemas.MessageError},
       bad_gateway: {"Storage backend failure", "application/json", Schemas.MessageError}
     ]
   )
@@ -116,10 +130,8 @@ defmodule EngramWeb.AttachmentsController do
       )
     else
       case MimeWhitelist.check(effective_mime, path) do
-        {:error, {:mime_not_allowed, mime}} ->
-          conn
-          |> put_status(415)
-          |> json(%{error: "mime_not_allowed", mime_type: mime})
+        {:error, :invalid_mime} ->
+          conn |> put_status(422) |> json(%{error: "invalid_mime_type"})
 
         {:error, {:extension_not_allowed, ext}} ->
           conn
@@ -127,7 +139,7 @@ defmodule EngramWeb.AttachmentsController do
           |> json(%{error: "extension_not_allowed", extension: ext})
 
         :ok ->
-          if raw_body?(conn),
+          if AttachmentRefusalTelemetry.raw_body?(conn),
             do: upload_raw(conn, user, vault, params),
             # compat(plugin): raw_attachment_upload - remove when plugin floor includes Engram-obsidian#555 (#1877)
             else: do_upload(conn, user, vault, params)
@@ -135,22 +147,18 @@ defmodule EngramWeb.AttachmentsController do
     end
   end
 
-  defp raw_body?(conn) do
-    case get_req_header(conn, "content-type") do
-      [type | _] -> String.starts_with?(String.downcase(type), "application/octet-stream")
-      [] -> false
-    end
-  end
-
   # Plug.Parsers passes octet-stream through unread, so the body is read here,
   # after every gate, and never past the smaller of the plan's per-file cap
-  # and the endpoint's body ceiling. A declared content-length over that bound
-  # is refused without reading at all.
+  # and the endpoint's body ceiling. A declared content-length over that bound,
+  # or over the remaining attachment quota, is refused without reading at all
+  # (a quota refusal used to cost the whole body read first: 12-13 s per 402
+  # in the 2026-10-19 bulk-upload storm).
   defp upload_raw(conn, user, vault, params) do
     {limit, bound_by} = raw_read_limit(user)
 
     with {:ok, mtime} <- parse_mtime(params["mtime"]),
-         :ok <- check_declared_length(conn, limit) do
+         :ok <- check_declared_length(conn, limit),
+         :ok <- check_declared_quota(conn, user, vault, params["path"]) do
       read_raw(conn, user, vault, Map.put(params, "mtime", mtime), limit, bound_by)
     else
       :invalid_mtime ->
@@ -160,8 +168,29 @@ defmodule EngramWeb.AttachmentsController do
 
       :too_large ->
         conn |> too_large(limit, bound_by)
+
+      {:error, {:storage_cap_reached, used, cap}} ->
+        quota_exceeded(conn, used, cap)
     end
   end
+
+  defp check_declared_quota(conn, user, vault, path) do
+    case RequestMeta.declared_length(conn) do
+      n when is_integer(n) -> Attachments.check_storage_cap(user, vault, path, n)
+      nil -> :ok
+    end
+  end
+
+  # Free-tier launch §4.5 — paid user over lifetime attachment quota.
+  defp quota_exceeded(conn, used, cap),
+    do:
+      EngramWeb.LimitResponse.halt(
+        conn,
+        "attachments_quota_exceeded",
+        :attachment_bytes_cap,
+        cap,
+        used
+      )
 
   # Reads limit + 1 so "more than limit" is decided by size, not by the tag.
   # Bandit returns `:more` when it hits `length` even if the body ended there
@@ -195,7 +224,8 @@ defmodule EngramWeb.AttachmentsController do
   # client that stops sending is a client condition, answered with the same
   # 408 as the HTTP/2 `:more` case rather than surfacing as a crash. Any other
   # Bandit error (a malformed chunk, a client that hung up) still raises.
-  defp read_raw_body(conn, length) do
+  @doc false
+  def read_raw_body(conn, length) do
     read_body(conn, [length: length] ++ EngramWeb.Endpoint.body_read_opts())
   rescue
     e in Bandit.HTTPError ->
@@ -211,20 +241,9 @@ defmodule EngramWeb.AttachmentsController do
     do: conn |> put_status(413) |> json(%{error: "request_too_large"})
 
   defp check_declared_length(conn, limit) do
-    case declared_length(conn) do
+    case RequestMeta.declared_length(conn) do
       n when is_integer(n) and n > limit -> :too_large
       _ -> :ok
-    end
-  end
-
-  # Bandit rejects a malformed content-length before the plug runs, so an
-  # unparseable header only reaches here from tests; treat it as undeclared.
-  defp declared_length(conn) do
-    with [value | _] <- get_req_header(conn, "content-length"),
-         {n, ""} <- Integer.parse(value) do
-      n
-    else
-      _ -> nil
     end
   end
 
@@ -261,16 +280,18 @@ defmodule EngramWeb.AttachmentsController do
   # plugin pre-gates on (they did disagree: see Billing.attachments_all_types?/1).
   # The 402 body still names `attachments_text_only` — that is a client-facing
   # wire identifier, not a catalog lookup, and it changes in the contract step.
-  defp text_only?(user), do: not Billing.attachments_all_types?(user)
+  @doc false
+  def text_only?(user), do: not Billing.attachments_all_types?(user)
 
-  defp text_mime?(nil), do: false
+  @doc false
+  def text_mime?(nil), do: false
 
   # Same normalizer as the upload gate and `inline_safe?/1`. This was the third
   # MIME decision site and it was missed when the other two were unified, which
   # left the exact bug that unification existed to remove: a Free-tier user
   # uploading `" text/plain"` got 402 `attachment_must_be_text` while
   # `MimeWhitelist.check/2` considered the same string text.
-  defp text_mime?(mime) when is_binary(mime),
+  def text_mime?(mime) when is_binary(mime),
     do: String.starts_with?(MimeWhitelist.normalize(mime), "text/")
 
   defp do_upload(conn, user, vault, params) do
@@ -295,23 +316,20 @@ defmodule EngramWeb.AttachmentsController do
         )
 
       {:error, {:storage_cap_reached, used, limit}} ->
-        # Free-tier launch §4.5 — paid user over lifetime attachment quota.
-        EngramWeb.LimitResponse.halt(
-          conn,
-          "attachments_quota_exceeded",
-          :attachment_bytes_cap,
-          limit,
-          used
-        )
+        quota_exceeded(conn, used, limit)
 
       {:error, {:storage, _reason}} ->
         conn |> put_status(502) |> json(%{error: "failed to upload to storage backend"})
 
-      # Defense in depth: the context now enforces the whitelist too. The
-      # pre-check above answers first on the HTTP path; these keep a context
-      # rejection from falling into the changeset clause below.
-      {:error, {:mime_not_allowed, mime}} ->
-        conn |> put_status(415) |> json(%{error: "mime_not_allowed", mime_type: mime})
+      # A rotation that started after RotationLockCheck let the request in.
+      {:error, :rotation_in_progress} ->
+        EngramWeb.Plugs.RotationLockCheck.halt_rotating(conn)
+
+      # Defense in depth: the context enforces the gate too. The pre-check
+      # above answers first on the HTTP path; these keep a context rejection
+      # from falling into the changeset clause below.
+      {:error, :invalid_mime} ->
+        conn |> put_status(422) |> json(%{error: "invalid_mime_type"})
 
       {:error, {:extension_not_allowed, ext}} ->
         conn |> put_status(415) |> json(%{error: "extension_not_allowed", extension: ext})
@@ -326,8 +344,8 @@ defmodule EngramWeb.AttachmentsController do
     summary: "Rename / move an attachment",
     description:
       "Moves the attachment from `old_path` to `new_path`. Requires a plan with attachments " <>
-        "enabled (402 otherwise). Returns 404 when the source is missing and 409 when the target " <>
-        "path already exists.",
+        "enabled (402 otherwise). Returns 404 when the source is missing, 409 when the target " <>
+        "path already exists, and 415 when the new path has an executable extension.",
     tags: ["Attachments"],
     request_body: {"Old + new path", "application/json", Schemas.RenameRequest, required: true},
     responses: [
@@ -335,7 +353,9 @@ defmodule EngramWeb.AttachmentsController do
       payment_required:
         {"Attachments require a paid plan", "application/json", Schemas.LimitError},
       not_found: {"No such attachment", "application/json", Schemas.MessageError},
-      conflict: {"Target exists", "application/json", Schemas.MessageError}
+      conflict: {"Target exists", "application/json", Schemas.MessageError},
+      unsupported_media_type:
+        {"New path has an executable extension", "application/json", Schemas.MimeRejected}
     ]
   )
 
@@ -357,6 +377,9 @@ defmodule EngramWeb.AttachmentsController do
 
       {:error, :feature_not_available} ->
         attachments_disabled(conn)
+
+      {:error, {:extension_not_allowed, ext}} ->
+        conn |> put_status(415) |> json(%{error: "extension_not_allowed", extension: ext})
 
       {:error, reason} = error when reason in [:conflict, :not_found] ->
         error
@@ -381,6 +404,9 @@ defmodule EngramWeb.AttachmentsController do
         {"Attachments require a paid plan", "application/json", Schemas.LimitError},
       not_found: {"An item was not found", "application/json", Schemas.BatchItemError},
       conflict: {"An item conflicts at target", "application/json", Schemas.BatchItemError},
+      unsupported_media_type:
+        {"An item has an executable extension (stored while the self-host bypass was on)",
+         "application/json", Schemas.MimeRejected},
       unprocessable_entity: {"Target path cleans to nothing", "application/json", Schemas.Error}
     ]
   )
@@ -412,6 +438,9 @@ defmodule EngramWeb.AttachmentsController do
 
       {:error, {:not_found, p}} ->
         conn |> put_status(404) |> json(%{error: "not_found", item_path: p})
+
+      {:error, {:extension_not_allowed, ext}} ->
+        conn |> put_status(415) |> json(%{error: "extension_not_allowed", extension: ext})
 
       {:error, _} = error ->
         error
@@ -521,6 +550,32 @@ defmodule EngramWeb.AttachmentsController do
     end
   end
 
+  operation(:backlinks,
+    operation_id: "attachments-backlinks",
+    summary: "Notes linking to an attachment",
+    description:
+      "Notes that link to or embed the attachment with the given UUID, one row per note. " <>
+        "Empty when no such attachment exists in this vault.",
+    tags: ["Attachments"],
+    parameters: [id: [in: :path, type: :string, required: true, description: "Attachment UUID"]],
+    responses: [
+      ok: {"Backlinks", "application/json", Schemas.Backlinks},
+      bad_request: {"Invalid UUID", "application/json", Schemas.Error}
+    ]
+  )
+
+  def backlinks(conn, %{"id" => id_str}) do
+    case Ecto.UUID.cast(id_str) do
+      {:ok, id} ->
+        user = conn.assigns.current_user
+        vault = conn.assigns.current_vault
+        json(conn, %{backlinks: Links.backlinks_for_attachment(user, vault.id, id)})
+
+      :error ->
+        conn |> put_status(400) |> json(%{error: "invalid id"})
+    end
+  end
+
   operation(:show,
     operation_id: "attachments-show",
     summary: "Get an attachment",
@@ -540,7 +595,17 @@ defmodule EngramWeb.AttachmentsController do
     ],
     responses: [
       ok: {"Attachment", "application/json", Schemas.AttachmentWithContent},
+      partial_content:
+        {"With `?raw=1` and `Range: bytes=N-` or `bytes=N-M` on a file uploaded in parts: " <>
+           "exactly the requested bytes, described by `content-range`.",
+         "application/octet-stream", %OpenApiSpex.Schema{type: :string, format: :binary}},
       not_found: {"No such attachment", "application/json", Schemas.MessageError},
+      conflict:
+        {"`use_raw_download`: the file is too large for the JSON body; use `?raw=1`.",
+         "application/json", Schemas.MessageError},
+      requested_range_not_satisfiable:
+        {"The range starts at or past the end of the file.", "application/json",
+         Schemas.MessageError},
       bad_gateway: {"Storage fetch failed", "application/json", Schemas.MessageError},
       internal_server_error: {"Fetch error", "application/json", Schemas.MessageError}
     ]
@@ -557,46 +622,129 @@ defmodule EngramWeb.AttachmentsController do
 
       {:ok, att} ->
         if params["raw"] == "1" do
-          # Raw bytes are served from the API origin. nosniff (set on the :api
-          # pipeline) stops content-type confusion, but a declared inline type
-          # still renders in the browser — and HTML/SVG/XML can execute script
-          # (SVG <script>, XML via xml-stylesheet/XSLT). The MIME whitelist admits
-          # the whole `text/` prefix, so an allowlist of types known-safe to
-          # render inline is the correct gate; everything else force-downloads.
-          disposition = if inline_safe?(att.mime_type), do: "inline", else: "attachment"
-          # Strip control chars/quotes so a crafted filename can't break the
-          # header (Plug rejects control chars → 500 otherwise).
-          filename = String.replace(Path.basename(att.path), ~r/[[:cntrl:]"]/u, "")
-
           conn
-          |> put_resp_content_type(att.mime_type || "application/octet-stream")
-          |> put_resp_header("content-disposition", ~s(#{disposition}; filename="#{filename}"))
           |> maybe_skip_compression(att.mime_type)
           |> put_metadata_headers(att)
-          |> send_resp(200, att.content)
+          |> send_raw(user, att)
         else
-          # compat(plugin): raw_attachment_download - remove when plugin floor includes Engram-obsidian#555 (#1877)
-          json(conn, %{
-            id: att.id,
-            path: att.path,
-            mime_type: att.mime_type,
-            size_bytes: att.size_bytes,
-            mtime: att.mtime,
-            content_hash: att.content_hash,
-            # Pre-quoted fragment: the base64 alphabet needs no JSON escaping,
-            # so this skips Jason's escape scan over a multi-MB string. Same
-            # bytes on the wire (pinned by a byte-identity test).
-            content_base64: Jason.Fragment.new([?", Base.encode64(att.content), ?"]),
-            created_at: att.created_at,
-            updated_at: att.updated_at
-          })
+          show_json(conn, att)
         end
 
-      {:error, {:storage, _reason}} ->
-        conn |> put_status(502) |> json(%{error: "failed to fetch attachment from storage"})
+      {:error, reason} ->
+        fetch_error(conn, reason)
+    end
+  end
 
-      {:error, _reason} ->
-        conn |> put_status(500) |> json(%{error: "internal error fetching attachment"})
+  defp fetch_error(conn, {:storage, _reason}),
+    do: conn |> put_status(502) |> json(%{error: "failed to fetch attachment from storage"})
+
+  defp fetch_error(conn, _reason),
+    do: conn |> put_status(500) |> json(%{error: "internal error fetching attachment"})
+
+  defp send_raw(conn, _user, %{content: bytes} = att) when is_binary(bytes),
+    do: AttachmentRawResponse.send(conn, att, inline_safe?(att.mime_type))
+
+  # Format v2: streamed segment by segment, so a Range costs only the
+  # segments it touches. The body is trimmed to exactly the requested bytes.
+  defp send_raw(conn, user, att) do
+    size = att.size_bytes
+    head? = EngramWeb.Endpoint.head_request?(conn)
+    conn = put_resp_header(conn, "accept-ranges", "bytes")
+
+    case byte_range(get_req_header(conn, "range"), size) do
+      # HEAD: the headers from row metadata alone. Streaming the body would
+      # read and open every segment only for the adapter to discard it.
+      _ when head? ->
+        conn
+        |> put_resp_header("content-length", Integer.to_string(size))
+        |> AttachmentRawResponse.send(%{att | content: ""}, inline_safe?(att.mime_type))
+
+      :full ->
+        conn
+        |> put_resp_header("content-length", Integer.to_string(size))
+        |> AttachmentRawResponse.send(att, inline_safe?(att.mime_type))
+
+      {first, last} ->
+        case Attachments.segment_stream(user, att, first, last) do
+          {:ok, stream} ->
+            conn
+            |> put_resp_header("content-range", "bytes #{first}-#{last}/#{size}")
+            |> put_resp_header("content-length", Integer.to_string(last - first + 1))
+            |> AttachmentRawResponse.send(
+              %{att | content: {:segments, stream}},
+              inline_safe?(att.mime_type),
+              206
+            )
+
+          {:error, reason} ->
+            fetch_error(conn, reason)
+        end
+
+      :unsatisfiable ->
+        conn
+        |> put_resp_header("content-range", "bytes */#{size}")
+        |> put_status(416)
+        |> json(%{error: "range_not_satisfiable"})
+    end
+  end
+
+  # Only `bytes=N-` and `bytes=N-M`. Anything else (suffix, multi-range, a
+  # malformed or repeated header) is ignored and the full body is served,
+  # as RFC 9110 allows.
+  defp byte_range([header], size) do
+    case Regex.run(~r/\Abytes=(\d+)-(\d*)\z/, header) do
+      [_, first, ""] -> range_within(String.to_integer(first), nil, size)
+      [_, first, last] -> range_within(String.to_integer(first), String.to_integer(last), size)
+      nil -> :full
+    end
+  end
+
+  defp byte_range(_headers, _size), do: :full
+
+  # `last` nil: open-ended `bytes=N-`.
+  defp range_within(first, last, _size) when is_integer(last) and last < first, do: :full
+  defp range_within(first, _last, size) when first >= size, do: :unsatisfiable
+  defp range_within(first, last, size), do: {first, min(last || size - 1, size - 1)}
+
+  # compat(plugin): raw_attachment_download - remove when plugin floor includes Engram-obsidian#555 (#1877)
+  defp show_json(conn, %{content: {:segments, stream}} = att) do
+    # The base64 body of a file over the single-request ceiling is the
+    # oversized response this ceiling exists to prevent.
+    if att.size_bytes > EngramWeb.Endpoint.max_body_bytes() do
+      conn |> put_status(409) |> json(%{error: "use_raw_download"})
+    else
+      case collect_segments(stream) do
+        {:ok, bytes} -> show_json(conn, %{att | content: bytes})
+        {:error, reason} -> fetch_error(conn, reason)
+      end
+    end
+  end
+
+  defp show_json(conn, att) do
+    json(conn, %{
+      id: att.id,
+      path: att.path,
+      mime_type: att.mime_type,
+      size_bytes: att.size_bytes,
+      mtime: att.mtime,
+      content_hash: att.content_hash,
+      # Pre-quoted fragment: the base64 alphabet needs no JSON escaping,
+      # so this skips Jason's escape scan over a multi-MB string. Same
+      # bytes on the wire (pinned by a byte-identity test).
+      content_base64: Jason.Fragment.new([?", Base.encode64(att.content), ?"]),
+      created_at: att.created_at,
+      updated_at: att.updated_at
+    })
+  end
+
+  defp collect_segments(stream) do
+    Enum.reduce_while(stream, {:ok, []}, fn
+      {:ok, bytes}, {:ok, acc} -> {:cont, {:ok, [acc | bytes]}}
+      {:error, _} = err, _acc -> {:halt, err}
+    end)
+    |> case do
+      {:ok, iodata} -> {:ok, IO.iodata_to_binary(iodata)}
+      err -> err
     end
   end
 
@@ -770,7 +918,8 @@ defmodule EngramWeb.AttachmentsController do
   # One 402 body for `attachments_enabled`, shared by upload/rename/batch_move.
   # Written out three times before, which is three chances for the reason string
   # or the limit key to drift between endpoints that mean the same thing.
-  defp attachments_disabled(conn) do
+  @doc false
+  def attachments_disabled(conn) do
     EngramWeb.LimitResponse.halt(conn, "attachments_disabled", :attachments_enabled, false, nil)
   end
 
@@ -793,7 +942,8 @@ defmodule EngramWeb.AttachmentsController do
     end)
   end
 
-  defp serialize_metadata(att) do
+  @doc false
+  def serialize_metadata(att) do
     %{
       id: att.id,
       path: att.path,

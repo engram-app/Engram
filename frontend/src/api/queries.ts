@@ -18,6 +18,7 @@ import { encodePathSegments } from "@/lib/path";
 import { randomUuid } from "@/lib/random-uuid";
 import { uuid7 } from "../crdt/uuid7";
 import { noteHref } from "../routes";
+import type { PlanLimits } from "../viewer/attachment-upload/upload-limits";
 import {
 	isSyntheticFolderId,
 	synthesizeFolders,
@@ -27,8 +28,10 @@ import {
 import type { NoteLinkEdge } from "../viewer/wiki-link";
 import { reconcileActiveVault, useActiveVaultId } from "./active-vault";
 import { crdtCreateNote, crdtCreateNoteWithContent, crdtDeleteNote } from "./channel";
+import { uploadInParts } from "./chunked-upload";
 import { ApiError, api } from "./client";
 import { CrdtOpError, isPermanentJoinRefusal, toastJoinRefused } from "./crdt-ops";
+import { attachmentPartSize } from "./server-features";
 import {
 	type AttachmentEvent,
 	applyAttachmentEvents,
@@ -42,10 +45,12 @@ import {
 	dirOf as folderOf,
 	isUnder,
 	joinPath,
+	moveAttachments,
 	moveFolders,
 	moveNotes,
 	movesAcrossFolders,
 	type NoteEvent,
+	removeAttachments,
 	removeFolders,
 	removeNotes,
 	renameFolders,
@@ -89,7 +94,8 @@ const selectAllNotes = (tree: VaultTree): NoteSummary[] => tree.notes.map(treeNo
 
 // `ManifestNote` is `{ id, path }`; the tree rows carry those plus timestamps,
 // which callers ignore.
-const selectManifest = (tree: VaultTree) => ({ notes: tree.notes });
+// Attachments ride along for `[[` autocomplete, which links files as well as notes.
+const selectManifest = (tree: VaultTree) => ({ notes: tree.notes, attachments: tree.attachments });
 
 // Single source for the by-id note fetch used by useNote's queryFn.
 function fetchNoteById(id: string): Promise<Note> {
@@ -127,7 +133,8 @@ function joinRefused(err: unknown, t: Translate): boolean {
 // Shared by note rename (CRDT → CrdtOpError) and folder/attachment rename
 // (REST → ApiError). A note's target-occupied conflict surfaces as
 // crdt_create's `create_failed`; the REST paths use HTTP 409/404.
-function renameErrorToast(err: unknown, kind: "file" | "folder", t: Translate) {
+// "file" is a note (the tree's word for it); "attachment" is any other file.
+function renameErrorToast(err: unknown, kind: "file" | "folder" | "attachment", t: Translate) {
 	if (joinRefused(err, t)) {
 		return;
 	}
@@ -137,12 +144,20 @@ function renameErrorToast(err: unknown, kind: "file" | "folder", t: Translate) {
 	const gone = err instanceof ApiError && err.status === 404;
 	if (conflict) {
 		notify.error(
-			kind === "file"
-				? t("A note with that name already exists.")
-				: t("A folder with that name already exists."),
+			{
+				file: t("A note with that name already exists."),
+				folder: t("A folder with that name already exists."),
+				attachment: t("A file with that name already exists."),
+			}[kind],
 		);
 	} else if (gone) {
-		notify.error(kind === "file" ? t("Note no longer exists.") : t("Folder no longer exists."));
+		notify.error(
+			{
+				file: t("Note no longer exists."),
+				folder: t("Folder no longer exists."),
+				attachment: t("File no longer exists."),
+			}[kind],
+		);
 	} else {
 		notify.error(t("Rename failed."));
 	}
@@ -682,9 +697,33 @@ export function useUploadAttachment() {
 	return useMutation<
 		{ attachment: AttachmentSummary },
 		Error,
-		{ path: string; mime_type?: string; content_base64: string; mtime: number }
+		{
+			path: string;
+			file: File;
+			signal?: AbortSignal;
+			/** Parts uploads only; a single-request upload has no progress to report. */
+			onProgress?: (done: number, total: number) => void;
+			onRetry?: (err: unknown) => void;
+		}
 	>({
-		mutationFn: (body) => api.post<{ attachment: AttachmentSummary }>("/attachments", body),
+		// Raw bytes, not base64 JSON. Parts only when the server offers them and the
+		// file is bigger than one part; otherwise one request up to its size limit.
+		mutationFn: ({ path, file, signal, onProgress, onRetry }) => {
+			const partSize = attachmentPartSize();
+			if (partSize !== null && file.size > partSize) {
+				return uploadInParts(file, path, { signal, onProgress, onRetry });
+			}
+			return api.postRaw<{ attachment: AttachmentSummary }>(
+				"/attachments",
+				file,
+				{
+					path,
+					mtime: Math.floor(file.lastModified / 1000),
+					mime_type: file.type || undefined,
+				},
+				{ signal },
+			);
+		},
 		onSuccess: ({ attachment }) => {
 			// New attachment row changes the tree's attachment list AND the
 			// dashboard folder-browse list (which renders attachments). The
@@ -961,6 +1000,19 @@ export function useBacklinks(noteId: string | null) {
 				return true;
 			});
 		},
+	});
+}
+
+// "Linked from" on the attachment page: notes that link to or embed the file,
+// one row per note (the server dedupes).
+export function useAttachmentBacklinks(attachmentId: string | null) {
+	const vaultId = useActiveVaultId();
+	return useQuery({
+		queryKey: ["attachment-backlinks", vaultId, attachmentId],
+		queryFn: () =>
+			api.get<{ backlinks: Backlink[] }>(`/attachments/by-id/${attachmentId}/backlinks`),
+		enabled: attachmentId !== null,
+		select: (d) => d.backlinks,
 	});
 }
 
@@ -1594,6 +1646,8 @@ export function useRecordOnboardingAction() {
 export interface Capabilities {
 	tier: "free" | "starter" | "pro";
 	limits: Record<string, number | boolean | null>;
+	/** What each paid plan allows, for upgrade copy. Absent from an older server. */
+	plan_limits?: PlanLimits;
 }
 
 export interface BootstrapPayload {
@@ -2590,19 +2644,35 @@ export function useBatchMoveFolders() {
 	});
 }
 
+// Attachment rename/move/delete patch the tree up front, like notes: the
+// page, tree and pickers all read it, so the change shows on commit and rolls
+// back if the server refuses.
 export function useRenameAttachment() {
+	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
 	return useMutation<
 		{ renamed: boolean; old_path: string; new_path: string },
 		ApiError,
-		{ old_path: string; new_path: string }
+		{ old_path: string; new_path: string },
+		TreeContext
 	>({
 		mutationFn: (vars) =>
 			api.post<{ renamed: boolean; old_path: string; new_path: string }>(
 				"/attachments/rename",
 				vars,
 			),
+		onMutate: async ({ old_path, new_path }) => {
+			const tree = await snapshotTree(qc, vaultId);
+			const patched = patchTree(qc, vaultId, (prev) =>
+				moveAttachments(prev, [{ oldPath: old_path, newPath: new_path }]),
+			);
+			return { tree, patched };
+		},
+		onError: (err, _vars, ctx) => {
+			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
+			renameErrorToast(err, "attachment", t);
+		},
 		onSettled: () => {
 			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
@@ -2614,13 +2684,28 @@ export function useBatchMoveAttachments() {
 	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
-	return useMutation<{ moved: number }, ApiError, { paths: string[]; target_folder: string }>({
+	return useMutation<
+		{ moved: number },
+		ApiError,
+		{ paths: string[]; target_folder: string },
+		TreeContext
+	>({
 		mutationFn: ({ paths, target_folder }) =>
 			api.post<{ moved: number }>(
 				"/attachments/batch-move",
 				{ paths, target_folder },
 				idempotencyHeaders(),
 			),
+		onMutate: async ({ paths, target_folder }) => {
+			const tree = await snapshotTree(qc, vaultId);
+			const patched = patchTree(qc, vaultId, (prev) =>
+				moveAttachments(
+					prev,
+					paths.map((p) => ({ oldPath: p, newPath: joinPath(target_folder, baseOf(p)) })),
+				),
+			);
+			return { tree, patched };
+		},
 		onSettled: () => {
 			// Reconcile on both paths: a lost ack (server committed, client saw a
 			// network error) leaves the attachments shown at their old paths until
@@ -2630,10 +2715,27 @@ export function useBatchMoveAttachments() {
 		},
 		// Batch moves are fire-and-forget (.mutate, no caller .catch) — surface
 		// failures here, matching the note/folder batch hooks.
-		onError: (err) => {
-			if (!joinRefused(err, t)) {
-				notify.error(t("Batch move failed."));
+		onError: (err, { paths, target_folder }, ctx) => {
+			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
+			if (joinRefused(err, t)) {
+				return;
 			}
+			// 409: a file of that name is already in the target. The server refuses
+			// the whole batch (nothing moves), like Obsidian's "Destination file
+			// already exists", so say which name when there is only one.
+			if (err instanceof ApiError && err.status === 409) {
+				const [only] = paths;
+				notify.error(
+					paths.length === 1 && only
+						? t("{folder} already has a file named {name}.", {
+								folder: target_folder || t("Vault root"),
+								name: baseOf(only),
+							})
+						: t("Nothing was moved: a file with the same name is already there."),
+				);
+				return;
+			}
+			notify.error(t("Batch move failed."));
 		},
 	});
 }
@@ -2642,17 +2744,22 @@ export function useBatchDeleteAttachments() {
 	const { t } = useT();
 	const qc = useQueryClient();
 	const vaultId = useActiveVaultId();
-	return useMutation<{ deleted: number }, ApiError, { paths: string[] }>({
+	return useMutation<{ deleted: number }, ApiError, { paths: string[] }, TreeContext>({
 		mutationFn: ({ paths }) =>
 			api.post<{ deleted: number }>("/attachments/batch-delete", { paths }, idempotencyHeaders()),
+		onMutate: async ({ paths }) => {
+			const tree = await snapshotTree(qc, vaultId);
+			const patched = patchTree(qc, vaultId, (prev) => removeAttachments(prev, paths));
+			return { tree, patched };
+		},
 		onSettled: () => {
-			// Reconcile on both paths: no optimistic removal here, so a lost ack
-			// (server committed, client saw a network error) would otherwise leave
-			// the deleted attachments visible until an unrelated refetch.
+			// Reconcile on both paths: a lost ack (server committed, client saw a
+			// network error) must not leave the tree showing the restored rows.
 			invalidateVaultTree(qc, vaultId);
 			qc.invalidateQueries({ queryKey: ["folderNotes", vaultId] });
 		},
-		onError: (err) => {
+		onError: (err, _vars, ctx) => {
+			restoreTree(qc, vaultId, ctx?.tree, ctx?.patched);
 			if (!joinRefused(err, t)) {
 				notify.error(t("Batch delete failed."));
 			}

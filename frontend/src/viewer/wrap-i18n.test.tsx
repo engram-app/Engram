@@ -15,9 +15,6 @@ import { DeleteConfirm } from "./tree-actions/delete-confirm";
 
 const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: toastError } }));
-vi.mock("./attachment-upload/file-to-base64", () => ({
-	fileToBase64: () => Promise.resolve("AAAA"),
-}));
 
 test("DeleteConfirm counts a folder's items with the plural form", () => {
 	const { rerender } = render(
@@ -55,7 +52,9 @@ test("uploadFilesTo reports a failure through the translate function it is given
 	toastError.mockReset();
 	const upload = vi.fn().mockRejectedValue(new Error("boom"));
 	const t = (en: string, vars?: Record<string, string | number>) =>
-		untranslated(`[${en.replace("{name}", String(vars?.name))}]`);
+		untranslated(
+			`[${en.replace("{name}", String(vars?.name)).replace("{reason}", String(vars?.reason))}]`,
+		);
 	await uploadFilesTo({
 		upload,
 		existing: [],
@@ -63,7 +62,7 @@ test("uploadFilesTo reports a failure through the translate function it is given
 		folder: "",
 		t,
 	});
-	expect(toastError).toHaveBeenCalledWith("[Couldn't upload a.png]");
+	expect(toastError).toHaveBeenCalledWith("[a.png: [Upload failed. Try again.]]");
 });
 
 test("the translator facet defaults to English and carries the editor's translate function", () => {

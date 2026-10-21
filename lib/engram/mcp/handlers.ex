@@ -7,6 +7,7 @@ defmodule Engram.MCP.Handlers do
   alias Engram.MCP.{ParseGate, Sections}
   alias Engram.{Notes, Repo, Search}
   alias Engram.Notes.Frontmatter
+  alias EngramWeb.Endpoint
 
   # #1710: every MCP note write is the "mcp" history actor. The
   # HandlersWriteActorTest counts that every upsert_note call passes this.
@@ -660,6 +661,9 @@ defmodule Engram.MCP.Handlers do
       {:error, :feature_not_available} ->
         {:error, "attachments_enabled: not on your plan"}
 
+      {:error, {:extension_not_allowed, ext}} ->
+        {:error, "Executable file type not allowed: #{ext}"}
+
       # Catch-all (Bug 2): move_attachment's crypto `with` head can return an
       # arbitrary {:error, reason}; without this clause it CaseClauseError'd → 500.
       {:error, reason} ->
@@ -698,28 +702,51 @@ defmodule Engram.MCP.Handlers do
 
     types =
       if Engram.Billing.attachments_all_types?(user),
-        do: "images, PDFs, audio, video and other whitelisted binary types",
+        do: "any file type except executables (.exe, .sh, .dmg and similar)",
         else: "text/* only on this plan; images, PDFs, audio and video need a paid plan"
+
+    multipart? = Engram.Storage.adapter().multipart?()
+
+    larger_files =
+      if multipart? do
+        """
+        LARGER FILES (over #{Endpoint.max_body_bytes()} bytes): the parts protocol, same headers.
+          1. POST #{base}/api/attachment-uploads  (json: path, size_bytes, optional mime_type)
+             -> 201 {upload_id, part_size, part_count}. Use that part_size; do not choose your own.
+          2. PUT #{base}/api/attachment-uploads/<upload_id>/parts/<n>  (n from 1,
+             content-type: application/octet-stream). Every part is exactly part_size
+             bytes except the last. Re-sending a part replaces it.
+          3. POST #{base}/api/attachment-uploads/<upload_id>/complete
+             -> 200 with the attachment. 409 missing_parts lists what to resend.
+             Safe to retry: once committed, complete returns the same attachment.
+          To resume after an interruption, GET #{base}/api/attachment-uploads/<upload_id>
+          (returns done, part_count, part_size, completed), send the missing parts, then
+          complete. completed: true means it already committed; complete again.
+          DELETE the same URL to abandon an upload. Idle uploads expire after 24 hours.
+        """
+        |> String.trim_trailing()
+      else
+        "LARGER FILES (over #{Endpoint.max_body_bytes()} bytes): cannot be uploaded on this server " <>
+          "(its storage backend has no resumable uploads)."
+      end
 
     {:ok,
      """
      Attachments are uploaded over the REST API, not through this tool: the bytes
-     never pass through the model. POST the file yourself using the credential
+     never pass through the model. Send the file yourself using the credential
      already authorizing this MCP connection.
 
-     url:    #{base}/api/attachments
-     method: POST
-
-     headers:
-       content-type: application/json
+     headers (every request below):
        authorization: Bearer <the same token this MCP connection uses>
        x-vault-id: #{vault.id}
 
-     json body:
-       path            required: vault-relative destination, e.g. _attachments/diagram.png
-       content_base64  required: the file bytes, base64 encoded
-       mime_type       optional: inferred from the path extension when omitted
-       mtime           optional: unix timestamp
+     SMALL FILES (up to #{Endpoint.max_body_bytes()} bytes): one raw request.
+       POST #{base}/api/attachments?path=<vault-relative path>&mtime=<unix seconds>
+       content-type: application/octet-stream
+       body: the file bytes
+       optional query: mime_type (inferred from the path extension when omitted)
+
+     #{larger_files}
 
      limits for this account:
        max_bytes: #{max_bytes}
@@ -730,13 +757,17 @@ defmodule Engram.MCP.Handlers do
      %{
        "url" => "#{base}/api/attachments",
        "method" => "POST",
+       "max_body_bytes" => Endpoint.max_body_bytes(),
        "vault_id" => to_string(vault.id),
        # `max_bytes` renders as "unlimited" in the prose when the cap is
        # absent; the payload uses null rather than that string, so a client
        # comparing sizes never has to parse an English word.
        "max_bytes" => Engram.Billing.cap(user, :max_file_bytes),
        "all_types" => Engram.Billing.attachments_all_types?(user)
-     }}
+     }
+     |> then(
+       &if(multipart?, do: Map.put(&1, "uploads_url", "#{base}/api/attachment-uploads"), else: &1)
+     )}
   end
 
   # No "unknown tool" clause: `Tools.get/1` gates dispatch in mcp_controller.ex,

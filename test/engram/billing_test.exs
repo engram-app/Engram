@@ -227,6 +227,25 @@ defmodule Engram.BillingTest do
   end
 
   describe "plan_state/1" do
+    test "lists the blocked extensions so clients can skip them up front" do
+      assert ".exe" in Billing.plan_state(build(:user)).blocked_extensions
+    end
+
+    test "advertises no blocked extensions under ATTACHMENT_MIME_BYPASS" do
+      prev = Application.get_env(:engram, :attachment_mime_bypass)
+
+      on_exit(fn ->
+        if prev == nil,
+          do: Application.delete_env(:engram, :attachment_mime_bypass),
+          else: Application.put_env(:engram, :attachment_mime_bypass, prev)
+      end)
+
+      Application.put_env(:engram, :attachment_mime_bypass, true)
+      assert Billing.plan_state(build(:user)).blocked_extensions == []
+      # The web app reads the same list off the sync features.
+      assert EngramWeb.UserChannel.features().blocked_extensions == []
+    end
+
     test "free user: all MIME types allowed, numeric caps present" do
       user = build(:user, free_tier_accepted_at: nil)
       state = Billing.plan_state(user)
@@ -292,6 +311,27 @@ defmodule Engram.BillingTest do
       )
 
       assert Billing.inactivity_warnings_exempt?(user)
+    end
+  end
+
+  describe "capabilities plan_limits" do
+    # The web app tells a user what an upgrade buys before it refuses a file
+    # ("Starter: 200 MB, Pro: 500 MB"), so the paid tiers' numbers ride along.
+    test "lists the paid tiers' file and storage limits" do
+      user = insert(:user, free_tier_accepted_at: nil)
+
+      assert Billing.capabilities(user).plan_limits == %{
+               "starter" => %{
+                 "max_file_bytes" => Billing.tier_cap(:starter, :max_file_bytes),
+                 "attachment_bytes_cap" => Billing.tier_cap(:starter, :attachment_bytes_cap)
+               },
+               "pro" => %{
+                 "max_file_bytes" => Billing.tier_cap(:pro, :max_file_bytes),
+                 "attachment_bytes_cap" => Billing.tier_cap(:pro, :attachment_bytes_cap)
+               }
+             }
+
+      assert Billing.capabilities(user).plan_limits["pro"]["max_file_bytes"] == 524_288_000
     end
   end
 

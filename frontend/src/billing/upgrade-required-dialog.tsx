@@ -1,5 +1,3 @@
-import { useLocation, useNavigate } from "react-router";
-
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -10,12 +8,10 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { useT } from "@/i18n/locale-provider";
-import { settingsTo } from "@/settings/settings-hash";
 
-import { track } from "../analytics/track";
 import { ExistingConnectionsPanel } from "./existing-connections-panel";
 import { copyFor } from "./limit-copy";
-import { noteUpgradeSource } from "./upgrade-source";
+import { useOpenBilling } from "./use-open-billing";
 
 function isConnectionCap(reason: string): "obsidian" | null {
 	// concurrent_devices_exceeded (device-flow) and obsidian_connections_exceeded
@@ -38,8 +34,7 @@ export interface UpgradeRequiredDialogProps {
 
 export function UpgradeRequiredDialog({ reason, open, onOpenChange }: UpgradeRequiredDialogProps) {
 	const { t } = useT();
-	const navigate = useNavigate();
-	const location = useLocation();
+	const openBilling = useOpenBilling("paywall");
 	const { title, body } = copyFor(reason);
 	const connKind = isConnectionCap(reason);
 
@@ -58,10 +53,8 @@ export function UpgradeRequiredDialog({ reason, open, onOpenChange }: UpgradeReq
 				<DialogFooter>
 					<Button
 						onClick={() => {
-							track("upgrade_link_clicked", { source: "paywall" });
-							noteUpgradeSource("paywall");
 							onOpenChange(false);
-							navigate(settingsTo("billing", location.search));
+							openBilling();
 						}}
 					>
 						{t("Upgrade")}

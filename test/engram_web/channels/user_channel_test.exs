@@ -48,7 +48,10 @@ defmodule EngramWeb.UserChannelTest do
       assert reply.features == %{
                raw_attachment_upload: true,
                raw_attachment_download: true,
-               crdt_diff_refusal: true
+               crdt_diff_refusal: true,
+               chunked_attachment_upload: true,
+               attachment_part_size: 8_388_608,
+               blocked_extensions: Engram.Billing.advertised_blocked_extensions()
              }
     end
 

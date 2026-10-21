@@ -1441,7 +1441,7 @@
         "readOnlyHint": false,
         "title": "Get Attachment Upload Target"
       },
-      "description": "Get the endpoint and this account's limits for uploading an attachment (image, PDF, audio, video). Returns a URL to POST the file to yourself using the credential already authorizing this connection; the bytes do not pass through this tool. Call before uploading to learn the size cap and which file types the plan allows.",
+      "description": "Get the endpoints and this account's limits for uploading an attachment (any file type except executables). Returns how to send the file yourself using the credential already authorizing this connection: one raw request for small files, a resumable parts protocol above max_body_bytes. The bytes do not pass through this tool. Call before uploading to learn the size cap and which file types the plan allows.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1460,6 +1460,10 @@
             "description": "false means text/* only on this plan",
             "type": "boolean"
           },
+          "max_body_bytes": {
+            "description": "Largest file a single raw POST accepts",
+            "type": "integer"
+          },
           "max_bytes": {
             "type": [
               "integer",
@@ -1467,6 +1471,10 @@
             ]
           },
           "method": {
+            "type": "string"
+          },
+          "uploads_url": {
+            "description": "Start URL of the parts protocol, for files over max_body_bytes",
             "type": "string"
           },
           "url": {

@@ -1,74 +1,55 @@
 defmodule Engram.Storage.MimeWhitelist do
   @moduledoc """
-  Pricing v2 §H Phase 1 — attachment MIME / extension gate.
+  Attachment gate: any file type is accepted EXCEPT double-click executables.
 
-  Two-layer check on every attachment upload:
+  The check is on the file's extension (what the OS opens), not the claimed
+  `mime_type`, which a client can set to anything. A header-illegal `mime_type`
+  is refused outright (`:invalid_mime`) because it is stored verbatim and would
+  500 on every read.
 
-    1. MIME allowlist (prefix + explicit set). `application/octet-stream`
-       and `application/zip` are NOT allowed by default — they are common
-       malware delivery vectors and not justified by Obsidian's normal
-       attachment use case (images, audio, video, docs, text).
-    2. Extension blocklist. Belt-and-braces: a client can lie about
-       `mime_type`, but the file's stored extension is what the OS opens.
-       Reject known-executable extensions even if MIME claims `image/png`.
-
-  Self-host operators can bypass entirely (`ATTACHMENT_MIME_BYPASS=true`)
-  or extend the allowlist (`ATTACHMENT_MIME_ALLOWLIST_EXTRA=mime1,mime2`).
-  See `docs/context/attachment-mime-whitelist.md` for the deferred Phase 2
-  (PhotoDNA / DMCA) milestone trigger.
+  Self-host operators can bypass the extension blocklist (`ATTACHMENT_MIME_BYPASS=true`);
+  a header-illegal `mime_type` is refused even then.
+  See `docs/context/attachment-mime-whitelist.md`.
   """
 
-  @mime_prefixes ~w(image/ audio/ video/ text/)
-
-  @mime_explicit MapSet.new(~w(
-    application/pdf
-    application/json
-    application/msword
-    application/vnd.ms-excel
-    application/vnd.ms-powerpoint
-    application/vnd.openxmlformats-officedocument.wordprocessingml.document
-    application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
-    application/vnd.openxmlformats-officedocument.presentationml.presentation
-    application/vnd.oasis.opendocument.text
-    application/vnd.oasis.opendocument.spreadsheet
-    application/vnd.oasis.opendocument.presentation
-    application/rtf
-  ))
-
-  @blocked_extensions MapSet.new(~w(
+  # Double-click executables only; never source languages (.js, .py).
+  @blocked_extensions ~w(
     .exe .dll .com .scr .bat .cmd .vbs .vbe .ps1 .psm1 .msi .msp
     .app .dmg .pkg .deb .rpm .apk .ipa
     .jar .class
     .sh .bash .zsh .fish .so .dylib
     .lnk .reg .hta .cpl .gadget
     .iso
-  ))
+    .msix .msixbundle .appx .appxbundle .appimage .run .xpi .crx
+    .pif .wsf .wsh .jse .msc .scf .url .application .appref-ms .settingcontent-ms .chm
+  ) |> Enum.sort()
 
   @doc """
   Validates an upload's claimed MIME and filename. Returns:
 
-    * `:ok` — upload may proceed.
-    * `{:error, {:mime_not_allowed, mime}}` — MIME failed the allowlist.
-    * `{:error, {:extension_not_allowed, ext}}` — extension is blocklisted.
-
-  Order: bypass check first, then MIME (cheapest fail-fast), then
-  extension. Extension is the second line of defence specifically to
-  catch a lying client — running it after the MIME pass is correct.
+    * `:ok` - upload may proceed.
+    * `{:error, :invalid_mime}` - MIME contains header-illegal bytes.
+    * `{:error, {:extension_not_allowed, ext}}` - extension is blocklisted.
   """
   @spec check(String.t() | nil, String.t() | nil) ::
-          :ok
-          | {:error, {:mime_not_allowed, String.t()}}
-          | {:error, {:extension_not_allowed, String.t()}}
+          :ok | {:error, :invalid_mime} | {:error, {:extension_not_allowed, String.t()}}
   def check(mime, filename) do
     cond do
+      # First: the bypass waives the blocklist, never header safety.
+      invalid_mime?(mime) -> {:error, :invalid_mime}
       bypass?() -> :ok
-      not mime_allowed?(mime) -> {:error, {:mime_not_allowed, mime || ""}}
       ext = blocked_extension(filename) -> {:error, {:extension_not_allowed, ext}}
       true -> :ok
     end
   end
 
-  defp bypass?, do: Application.get_env(:engram, :attachment_mime_bypass, false) == true
+  @doc "Blocked extensions: sorted, lowercase, leading dot."
+  @spec blocked_extensions() :: [String.t()]
+  def blocked_extensions, do: @blocked_extensions
+
+  @doc "True when ATTACHMENT_MIME_BYPASS waives the extension blocklist."
+  @spec bypass?() :: boolean()
+  def bypass?, do: Application.get_env(:engram, :attachment_mime_bypass, false) == true
 
   @doc """
   Canonical form of a `mime_type` value, for DECISIONS only.
@@ -99,49 +80,30 @@ defmodule Engram.Storage.MimeWhitelist do
     |> String.downcase()
   end
 
-  defp mime_allowed?(nil), do: false
-
-  defp mime_allowed?(mime) when is_binary(mime) do
-    # Reject header-illegal bytes BEFORE normalizing. `String.trim/1` strips
-    # `\n` and `\r`, so normalizing first would let `"application/pdf\n"` pass
-    # the gate; the value is then stored VERBATIM (parameters are meaningful in
-    # a response Content-Type, so we deliberately do not store the normalized
-    # form), and `put_resp_content_type/2` raises on it at serve time —
-    # `GET /api/attachments/<path>?raw=1` would 500 forever on that row rather
-    # than 415 at upload. Plug's own check is
-    # `Plug.Conn.validate_header_key_value!`; this mirrors its byte set.
-    if String.contains?(mime, ["\n", "\r", "\0"]) do
-      false
-    else
-      mime = normalize(mime)
-
-      Enum.any?(@mime_prefixes, &String.starts_with?(mime, &1)) or
-        MapSet.member?(@mime_explicit, mime) or
-        MapSet.member?(extra_allowlist(), mime)
-    end
-  end
-
-  defp extra_allowlist do
-    case Application.get_env(:engram, :attachment_mime_allowlist_extra) do
-      list when is_list(list) -> MapSet.new(Enum.map(list, &normalize/1))
-      _ -> MapSet.new()
-    end
-  end
+  # Checked BEFORE normalizing: `String.trim/1` strips `\n`/`\r`, so normalizing
+  # first would let `"application/pdf\n"` through. Mirrors Plug's
+  # `validate_header_key_value!` byte set.
+  defp invalid_mime?(mime) when is_binary(mime), do: String.contains?(mime, ["\n", "\r", "\0"])
+  defp invalid_mime?(_), do: false
 
   defp blocked_extension(nil), do: nil
 
   defp blocked_extension(filename) when is_binary(filename) do
-    ext = filename |> Path.extname() |> String.downcase()
+    # Windows drops trailing dots and spaces on write ("evil.exe." is saved
+    # as "evil.exe"), and `Path.extname("evil.exe.")` is ".".
+    ext =
+      filename
+      |> String.replace(~r/[. ]+\z/, "")
+      |> Path.extname()
+      |> String.downcase()
 
-    if MapSet.member?(@blocked_extensions, ext), do: ext, else: nil
+    if ext in @blocked_extensions, do: ext, else: nil
   end
 
   @doc """
   Detects MIME type from the filename extension, via the `mime` library
   (Plug's own table) plus the audio types registered in `config :mime`.
-  Returns `application/octet-stream` for unknown extensions, which then
-  fails `check/2` by design: the client must send an explicit, allowlisted
-  `mime_type` for anything non-standard.
+  Returns `application/octet-stream` for unknown extensions.
   """
   @spec detect_mime(String.t() | nil) :: String.t()
   def detect_mime(nil), do: "application/octet-stream"

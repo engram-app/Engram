@@ -74,6 +74,7 @@ describe("useEngramTree", () => {
 		scrollParentRef: scrollRef,
 		onRenameCommit: vi.fn(),
 		onMove: vi.fn(),
+		onDelete: vi.fn(),
 	};
 
 	it("returns a tree object + virtualizer", () => {

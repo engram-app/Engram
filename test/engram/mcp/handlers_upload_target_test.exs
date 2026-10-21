@@ -56,6 +56,49 @@ defmodule Engram.MCP.HandlersUploadTargetTest do
 
     # The model needs the caller's real limits to decide whether a file can go
     # up at all, and those are per-plan. Free is text-only with a 10MB cap.
+    # Two protocols, one token. Small files go up raw in a single request; a
+    # file over the request ceiling must use the parts protocol, which lives
+    # under its own prefix (not /api/attachments/uploads, which would shadow
+    # vault files in an `uploads/` folder).
+    test "describes the raw upload and the parts protocol", ctx do
+      {:ok, text, _} = Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
+
+      assert text =~ "application/octet-stream"
+      assert text =~ "/api/attachment-uploads"
+      assert text =~ "11000000"
+      assert text =~ "part_size"
+      refute text =~ "whitelisted"
+      refute text =~ "\u2014"
+    end
+
+    # Self-host database storage has no multipart (the routes answer 501), so
+    # the tool must not send an agent to a protocol that cannot work.
+    test "omits the parts protocol when the storage adapter has no multipart", ctx do
+      prev = Application.get_env(:engram, :storage)
+      Application.put_env(:engram, :storage, Engram.Storage.Database)
+
+      on_exit(fn ->
+        if is_nil(prev),
+          do: Application.delete_env(:engram, :storage),
+          else: Application.put_env(:engram, :storage, prev)
+      end)
+
+      {:ok, text, payload} =
+        Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
+
+      refute text =~ "/api/attachment-uploads"
+      assert text =~ "cannot be uploaded on this server"
+      assert text =~ "application/octet-stream"
+      refute Map.has_key?(payload, "uploads_url")
+    end
+
+    test "advertises uploads_url when multipart is supported", ctx do
+      {:ok, _text, payload} =
+        Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
+
+      assert payload["uploads_url"] =~ "/api/attachment-uploads"
+    end
+
     test "reports the caller's resolved plan limits", ctx do
       {:ok, text, _} = Handlers.handle("get_attachment_upload_target", ctx.user, ctx.vault, %{})
 
