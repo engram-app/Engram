@@ -413,9 +413,12 @@ defmodule Engram.MCP.Tools do
           "fields" => %{
             "type" => "array",
             "description" =>
-              "Optional filters on any user-added frontmatter key (all must match). " <>
-                "op: eq, in (value is a list), gt/gte/lt/lte (numbers or ISO dates), " <>
-                "after/before (ISO dates). A key no note has is an error.",
+              "Optional filters on any frontmatter key, all must match: user-added keys " <>
+                "and the built-in status, author, reviewed_by, source, project, type, tags " <>
+                "(exact) and created, updated, reviewed, expires, due, priority (range). " <>
+                "op: eq, in (a list, at most 100), gt/gte/lt/lte (numbers or ISO dates), " <>
+                "after/before (ISO dates; a bare date is the whole UTC day). A quoted " <>
+                "number is text. A key no note has is an error.",
             "items" => %{
               "type" => "object",
               "properties" => %{

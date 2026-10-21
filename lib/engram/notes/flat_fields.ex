@@ -149,55 +149,51 @@ defmodule Engram.Notes.FlatFields do
   def put_key_ids(flat, key_ids), do: %{flat | key_ids: key_ids}
 
   @doc """
-  The `note_attrs` rows for `flat`: one per value, `key_id` plus exactly one
+  The `note_attrs` rows for `flat`: one per value, `key_id`, `ord` (the
+  value's position among its key's values, 0 for a scalar) and exactly one
   of `h` (exact, HMAC), `n` or `d`. The named fields use their reserved ids
   (`type`/`tags` from the note row's existing blind indexes); a user-added
   key without a dictionary id (past the cap) is left out, as in the payload.
   """
   @spec attr_rows(t(), map()) :: [map()]
   def attr_rows(flat, %{id: note_id, user_id: user_id, vault_id: vault_id} = note) do
-    row = fn key_id, value ->
-      Map.merge(%{note_id: note_id, user_id: user_id, vault_id: vault_id, key_id: key_id}, value)
-    end
-
-    named =
-      [
-        type: [Map.get(note, :type_hmac)],
-        tags: Map.get(note, :tags_hmac) || [],
-        status: [flat.status_hmac],
-        author: [flat.author_hmac],
-        reviewed_by: [flat.rev_by_hmac],
-        source: flat.src_hmac,
-        project: [flat.proj_hmac]
-      ]
-      |> Enum.flat_map(fn {field, hs} ->
-        for h <- hs, h != nil, do: row.(FrontmatterKeys.named_id(field), %{h: h})
-      end)
-
-    dates =
-      for {field, d} <- [
-            created: flat.fm_created,
-            updated: flat.fm_updated,
-            reviewed: flat.fm_reviewed,
-            expires: flat.fm_expires,
-            due: flat.fm_due
-          ],
-          d != nil,
-          do: row.(FrontmatterKeys.named_id(field), %{d: d})
-
-    priority =
-      if flat.fm_priority,
-        do: [row.(FrontmatterKeys.named_id(:priority), %{n: flat.fm_priority})],
-        else: []
-
+    base = %{note_id: note_id, user_id: user_id, vault_id: vault_id}
     ids = flat.key_ids
+    named = &FrontmatterKeys.named_id/1
+
+    values =
+      [
+        {named.(:type), :h, [Map.get(note, :type_hmac)]},
+        {named.(:tags), :h, Map.get(note, :tags_hmac) || []},
+        {named.(:status), :h, [flat.status_hmac]},
+        {named.(:author), :h, [flat.author_hmac]},
+        {named.(:reviewed_by), :h, [flat.rev_by_hmac]},
+        {named.(:source), :h, flat.src_hmac},
+        {named.(:project), :h, [flat.proj_hmac]},
+        {named.(:created), :d, [flat.fm_created]},
+        {named.(:updated), :d, [flat.fm_updated]},
+        {named.(:reviewed), :d, [flat.fm_reviewed]},
+        {named.(:expires), :d, [flat.fm_expires]},
+        {named.(:due), :d, [flat.fm_due]},
+        {named.(:priority), :n, [flat.fm_priority]}
+      ]
+      |> Enum.flat_map(fn {id, col, vs} -> for v <- vs, v != nil, do: {id, col, v} end)
 
     user =
-      for(%{k: k, v: v} <- flat.attrs, Map.has_key?(ids, k), do: row.(ids[k], %{h: v})) ++
-        for(%{k: k, n: n} <- flat.nums, Map.has_key?(ids, k), do: row.(ids[k], %{n: n})) ++
-        for %{k: k, t: t} <- flat.dates, Map.has_key?(ids, k), do: row.(ids[k], %{d: t})
+      for(%{k: k, v: v} <- flat.attrs, Map.has_key?(ids, k), do: {ids[k], :h, v}) ++
+        for(%{k: k, n: n} <- flat.nums, Map.has_key?(ids, k), do: {ids[k], :n, n}) ++
+        for %{k: k, t: t} <- flat.dates, Map.has_key?(ids, k), do: {ids[k], :d, t}
 
-    named ++ dates ++ priority ++ user
+    (values ++ user)
+    |> Enum.group_by(&elem(&1, 0))
+    |> Enum.flat_map(fn {key_id, entries} ->
+      entries
+      |> Enum.with_index()
+      |> Enum.map(fn {{_id, col, v}, ord} ->
+        Map.merge(base, %{key_id: key_id, ord: ord, h: nil, n: nil, d: nil})
+        |> Map.put(col, v)
+      end)
+    end)
   end
 
   # OKF `verified` is a list of `{by, at}`; the most recent entry with a

@@ -1,4 +1,4 @@
-defmodule Engram.Repo.Migrations.CreateNoteAttrsExpand do
+defmodule Engram.Repo.Migrations.CreateFrontmatterKeysAndNoteAttrsExpand do
   use Ecto.Migration
 
   # squawk-ignore-file
@@ -39,19 +39,26 @@ defmodule Engram.Repo.Migrations.CreateNoteAttrsExpand do
 
     create unique_index(:frontmatter_keys, [:user_id, :key_hmac])
 
+    # Columns ordered for alignment (8-byte n/d, then the 2-byte smallints,
+    # then the varlena h). `ord` is the value's position in its key's list
+    # (0 for a scalar), so (note_id, key_id, ord) is the natural key; the PK
+    # also serves the delete-by-note rewrite and the note cascade.
     create table(:note_attrs, primary_key: false) do
-      add :id, :uuid, primary_key: true, default: fragment("uuidv7()")
-      add :note_id, references(:notes, type: :uuid, on_delete: :delete_all), null: false
+      add :note_id, references(:notes, type: :uuid, on_delete: :delete_all),
+        null: false,
+        primary_key: true
+
       # No FKs on user_id / vault_id: a user or vault delete reaches these
       # rows through `note_id` (notes cascade from both), so neither needs an
       # index for a cascade scan. user_id is the RLS column; vault_id leads
       # the lookups.
       add :user_id, :uuid, null: false
       add :vault_id, :uuid, null: false
-      add :key_id, :smallint, null: false
-      add :h, :binary
       add :n, :float
       add :d, :bigint
+      add :key_id, :smallint, null: false, primary_key: true
+      add :ord, :smallint, null: false, primary_key: true
+      add :h, :binary
     end
 
     # Every search is vault-scoped (a multi-vault query is one IN over the
@@ -65,9 +72,6 @@ defmodule Engram.Repo.Migrations.CreateNoteAttrsExpand do
                where: "#{col} IS NOT NULL"
              )
     end
-
-    # Rewrite and cascade delete by note.
-    create index(:note_attrs, [:note_id])
 
     create constraint(:note_attrs, :note_attrs_one_value, check: "num_nonnulls(h, n, d) = 1")
 

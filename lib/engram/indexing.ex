@@ -179,8 +179,11 @@ defmodule Engram.Indexing do
   Phase 1 of the indexing pipeline. Parses the note, calls the embedder, and
   builds the encrypted Qdrant payloads + chunk row inserts in memory.
 
-  Performs **no** DB writes — safe to call without a transaction. Lets the
-  slow Voyage AI HTTP call run outside any Postgres connection.
+  Writes no index rows. Its one DB write (v5 format on) is the frontmatter
+  key dictionary (`FrontmatterKeys.resolve/3`), committed in its own short
+  transaction, so this must NOT run inside a caller's transaction: the
+  dictionary's advisory lock would then be held across the slow Voyage AI
+  HTTP call, which is meant to run outside any Postgres connection.
 
   Returns:
     * `{:ok, :no_chunks}` — note has no parseable chunks; caller must still

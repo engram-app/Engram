@@ -188,7 +188,7 @@ defmodule Engram.Crypto.UserDekRotation do
          :ok <- sweep_note_links(user, old_dek, new_dek, new_filter_key, new_dek_version),
          :ok <- sweep_qdrant(user, old_dek, new_dek),
          :ok <- clear_chunk_context_hmacs(user),
-         :ok <- FrontmatterKeys.rotate(to_string(user_id), old_dek, new_dek, new_filter_key),
+         :ok <- sweep_frontmatter_keys(user, old_dek, new_dek, new_filter_key),
          :ok <- resync_index_keys(user, new_dek, new_filter_key),
          :ok <- final_flip(user, new_dek_version, new_wrapped) do
       Logger.info(
@@ -373,6 +373,42 @@ defmodule Engram.Crypto.UserDekRotation do
         end
       end
     end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Frontmatter key dictionary sweep
+  # ---------------------------------------------------------------------------
+  #
+  # Every key name is rewrapped under the new DEK and its `key_hmac`
+  # recomputed under the new filter key; the ids stay (`FrontmatterKeys`).
+  # Old DEK, then new (already rotated by a crashed run, skip); a row neither
+  # opens raises like the other DB sweeps. A skipped row would keep an
+  # old-key HMAC nobody can match and get the same key a second id.
+  defp sweep_frontmatter_keys(%User{id: user_id}, old_dek, new_dek, new_filter_key) do
+    uid = to_string(user_id)
+
+    {:ok, _} =
+      Repo.with_tenant(uid, fn ->
+        for key <- FrontmatterKeys.all(uid) do
+          aad = FrontmatterKeys.name_aad(uid, key.key_id)
+
+          case try_rewrap(key.name_ct, key.name_nonce, old_dek, new_dek, aad, aad,
+                 table: :frontmatter_keys,
+                 phase: :sweep_frontmatter_keys,
+                 log: "T3.7 sweep_frontmatter_keys: decrypt failed under both old and new DEK",
+                 log_meta: [user_id: uid, key_id: key.key_id],
+                 on_both_failed:
+                   {:raise,
+                    "T3.7 sweep_frontmatter_keys: decrypt failed under both old and new DEK " <>
+                      "for key_id=#{key.key_id}"}
+               ) do
+            {:ok, name} -> FrontmatterKeys.put_rotated(key, name, new_dek, new_filter_key)
+            :already_rotated -> :ok
+          end
+        end
+      end)
+
+    :ok
   end
 
   # ---------------------------------------------------------------------------
@@ -948,7 +984,7 @@ defmodule Engram.Crypto.UserDekRotation do
     end
   end
 
-  # Key ids survive a rotation (`FrontmatterKeys.rotate/4` already rekeyed
+  # Key ids survive a rotation (`sweep_frontmatter_keys/4` already rekeyed
   # the dictionary), so resolving under the new filter key finds the same ids.
   defp flat_fields(user_id, note, new_dek, new_filter_key) do
     aad = Crypto.aad_for_row(:notes, :content, note.id)
