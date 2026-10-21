@@ -1261,6 +1261,7 @@ export default {
 	frontmatter: "前置信息",
 	reads: "读取",
 	"{what} Wants {expectsLabel}.": "{what} 想要 {expectsLabel}.",
+	"use {alias} or {key}": "使用 {alias} 或 {key}",
 	"also accepts {aliases}": "也接受 {aliases}",
 	or: "或者",
 	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":

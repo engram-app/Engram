@@ -1359,6 +1359,7 @@ export default {
 	frontmatter: "Frontmatter",
 	reads: "liest",
 	"{what} Wants {expectsLabel}.": "{what} möchte {expectsLabel}.",
+	"use {alias} or {key}": "verwende {alias} oder {key}",
 	"also accepts {aliases}": "akzeptiert auch {aliases}",
 	or: "oder",
 	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":

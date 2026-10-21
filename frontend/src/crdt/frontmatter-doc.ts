@@ -1,9 +1,8 @@
 import type * as Y from "yjs";
-import type { Catalog } from "@/i18n/core/core";
-import { buildAliases, canonicalKey } from "@/i18n/frontmatter-keys";
-import { isMember } from "@/lib/is-member";
+import { buildAliases, canonicalKey, type KeyCatalog } from "@/i18n/frontmatter-keys";
 import { LOCALES, type Locale } from "@/i18n/locales";
 import type { MsgKey } from "@/i18n/ui-text";
+import { isMember } from "@/lib/is-member";
 import { msg } from "../i18n/msg";
 import { coerceValue, type PropertyType } from "../viewer/property-types";
 import { emitFrontmatter } from "./frontmatter-codec";
@@ -30,6 +29,24 @@ const EMPTY_DEFAULT: Record<PropertyType, unknown> = {
 function isTaken(doc: Y.Doc, key: string): boolean {
 	return frontmatterMaps(doc).values.has(key) || rawMap(doc).has(key);
 }
+
+// The named fields' localized key names (translategemma, locale/keys/*.json): the
+// same catalogs the backend's KeyAliases reads, so `種類` is `type` on both sides.
+const KEY_CATALOGS: Partial<Record<Locale, KeyCatalog>> = Object.fromEntries(
+	Object.entries(
+		import.meta.glob<KeyCatalog>(
+			["../i18n/locale/keys/*.json", "!../i18n/locale/keys/state.json"],
+			{
+				eager: true,
+				import: "default",
+			},
+		),
+	).flatMap(([path, catalog]) => {
+		const code = path.slice(path.lastIndexOf("/") + 1, -".json".length);
+		return isMember(LOCALES, code) ? [[code, catalog]] : [];
+	}),
+);
+const KEY_ALIASES = buildAliases(KEY_CATALOGS, LOCALES);
 
 // The fields Engram READS rather than merely stores, and what each one buys
 // you -- the source for the field highlight and the `?` panel beside the
@@ -176,26 +193,13 @@ export const OKF_FIELD_HELP: ReadonlyArray<{
 	},
 ];
 
-// The named fields' localized key names (translategemma, locale/keys/*.json): the
-// same catalogs the backend's KeyAliases reads, so `種類` is `type` on both sides.
-const KEY_CATALOGS: Partial<Record<Locale, Catalog>> = Object.fromEntries(
-	Object.entries(
-		import.meta.glob<Catalog>(["../i18n/locale/keys/*.json", "!../i18n/locale/keys/state.json"], {
-			eager: true,
-			import: "default",
-		}),
-	).flatMap(([path, catalog]) => {
-		const code = path.slice(path.lastIndexOf("/") + 1, -".json".length);
-		return isMember(LOCALES, code) ? [[code, catalog]] : [];
-	}),
-);
-const KEY_ALIASES = buildAliases(KEY_CATALOGS, LOCALES);
-
-/** A named field's key name in `locale` (`種類` for `type` in ja); the English key
- *  when the locale has none. */
-export function fieldKeyLabel(key: string, locale: Locale): string {
+/** A named field's key name in `locale` (`種類` for `type` in ja), only when it
+ *  resolves back to that field (a word two fields share is dropped); undefined
+ *  otherwise, so the caller shows the English key alone. */
+export function fieldKeyLabel(key: string, locale: Locale): string | undefined {
 	const local = KEY_CATALOGS[locale]?.[key];
-	return typeof local === "string" ? local : key;
+	const name = Array.isArray(local) ? local[0] : local;
+	return typeof name === "string" && canonicalKey(name, KEY_ALIASES) === key ? name : undefined;
 }
 
 /** The flat key an alias stands for; `undefined` for a flat key or an unknown name. */

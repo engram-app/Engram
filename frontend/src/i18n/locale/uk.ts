@@ -1428,6 +1428,7 @@ export default {
 	frontmatter: "frontmatter",
 	reads: "читає",
 	"{what} Wants {expectsLabel}.": "{what} хоче {expectsLabel}.",
+	"use {alias} or {key}": "використовуйте {alias} або {key}",
 	"also accepts {aliases}": "також приймає {aliases}",
 	or: "або",
 	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":

@@ -163,6 +163,9 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
 	// ja joined the items with 、 and dropped the separators (2026-10-18).
 	"2,000 notes · 20 AI searches a day · 1 vault":
 		"Free plan summary: three short items. Keep each ' · ' separator between them exactly as written.",
+	// Properties help, under a field: either key name works in the frontmatter.
+	"use {alias} or {key}":
+		"Help text under a note property: the user may type either name as the property key. {alias} and {key} are those names; keep both tokens.",
 	Reading: "Note view mode that shows the rendered note, read-only, like Obsidian's Reading view.",
 	"Reading view": "Note view mode that shows the rendered note, read-only, as named in Obsidian.",
 	Idea: "Feedback category: suggest a feature.",

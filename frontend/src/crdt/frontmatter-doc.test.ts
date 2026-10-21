@@ -5,6 +5,7 @@ import {
 	applyParsedFrontmatter,
 	emitFrontmatterText,
 	FRONTMATTER_KEY,
+	fieldKeyLabel,
 	frontmatterMaps,
 	isOkfMatch,
 	OKF_FIELD_HELP,
@@ -255,6 +256,19 @@ describe("frontmatter apply-diff", () => {
 // mirror OkfFields.extract/1 and helpers.ex rather than the widget's display
 // heuristic. Pure-function tests on purpose: the widget-level equivalents cost
 // a full mount each, and a slow suite fails unrelated files by starving them.
+// The properties help teaches the generated key names (locale/keys/*.json).
+describe("fieldKeyLabel", () => {
+	test("a field's key name in the UI locale", () => {
+		expect(fieldKeyLabel("type", "ja")).toBe("種類");
+		expect(fieldKeyLabel("description", "de")).toBe("Beschreibung");
+	});
+	test("none for English, or for a word two fields share in one locale", () => {
+		expect(fieldKeyLabel("type", "en")).toBeUndefined();
+		expect(fieldKeyLabel("due", "it")).toBeUndefined();
+		expect(fieldKeyLabel("tags", "ja")).toBeUndefined();
+	});
+});
+
 describe("isOkfMatch", () => {
 	test.each([
 		["type", "text", "meeting-note"],

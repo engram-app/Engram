@@ -1322,6 +1322,7 @@ export default {
 	frontmatter: "フロントマター",
 	reads: "閲覧数",
 	"{what} Wants {expectsLabel}.": "{what} は {expectsLabel} を希望",
+	"use {alias} or {key}": "{alias}または{key}を使用します",
 	"also accepts {aliases}": "{aliases} も受け入れます",
 	or: "または",
 	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":

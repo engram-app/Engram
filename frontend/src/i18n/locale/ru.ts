@@ -1436,6 +1436,7 @@ export default {
 	frontmatter: "метаданные",
 	reads: "читает",
 	"{what} Wants {expectsLabel}.": "{what} хочет {expectsLabel}.",
+	"use {alias} or {key}": "используйте {alias} или {key}",
 	"also accepts {aliases}": "также принимает {aliases}",
 	or: "или",
 	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":

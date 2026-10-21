@@ -1302,6 +1302,7 @@ export default {
 	frontmatter: "프론트매터",
 	reads: "읽기",
 	"{what} Wants {expectsLabel}.": "{what}이(가) {expectsLabel}을(를) 원합니다.",
+	"use {alias} or {key}": "{alias} 또는 {key}을 사용하세요",
 	"also accepts {aliases}": "{aliases}도 지원합니다",
 	or: "또는",
 	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":
