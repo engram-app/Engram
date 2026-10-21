@@ -59,7 +59,7 @@ defmodule EngramWeb.BootstrapControllerTest do
 
       # Capabilities slice — free-tier matrix.
       assert body["capabilities"]["tier"] == "free"
-      assert body["capabilities"]["limits"]["notes_cap"] == 2_000
+      assert body["capabilities"]["limits"]["notes_cap"] == 3_000
       refute Map.has_key?(body["capabilities"]["limits"], "indexed_notes_cap")
       # Compat shim for SPA bundles from before the cap removal: zeros read as
       # "nothing unsearchable" there.
@@ -80,7 +80,7 @@ defmodule EngramWeb.BootstrapControllerTest do
       body = conn |> get("/api/bootstrap") |> json_response(200)
 
       assert body["capabilities"]["tier"] == "pro"
-      assert body["capabilities"]["limits"]["notes_cap"] == 40_000
+      assert body["capabilities"]["limits"]["notes_cap"] == nil
       assert body["billing"]["tier"] == "pro"
     end
 

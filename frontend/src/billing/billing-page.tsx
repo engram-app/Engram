@@ -33,14 +33,7 @@ import CurrentPlanCard from "./current-plan-card";
 import EmbedBucketRow from "./embed-bucket-row";
 import PaymentMethodCard from "./payment-method-card";
 import PendingChangeBanner from "./pending-change-banner";
-import {
-	CadenceToggle,
-	FREE_TIER,
-	formatPlanPrice,
-	PLAN_CATALOG,
-	PlanAccordionRow,
-	PlanCard,
-} from "./plan-cards";
+import { CadenceToggle, formatPlanPrice, PlanAccordionRow, PlanCard, planCopy } from "./plan-cards";
 import PlanChangePanel from "./plan-change-panel";
 import { upgradeSource } from "./upgrade-source";
 import { UsagePanel } from "./usage-limits";
@@ -265,6 +258,7 @@ export default function BillingPage({
 
 	const { data: billing, isLoading } = useBillingStatus();
 	const { data: config } = useBillingConfig();
+	const { freeTier, catalog } = planCopy(config?.plan_limits);
 	const { data: me } = useMe();
 	const hasSubscription = Boolean(billing?.subscription);
 	const { data: detail } = useBillingSubscriptionDetail(hasSubscription);
@@ -830,21 +824,21 @@ export default function BillingPage({
 							{/* Desktop: side-by-side full cards. */}
 							<ul className="hidden items-stretch gap-4 sm:grid sm:grid-cols-2">
 								<PlanCard
-									name={PLAN_CATALOG.starter.name}
+									name={catalog.starter.name}
 									cadence={cadence}
-									monthlyPrice={PLAN_CATALOG.starter.monthlyPrice}
-									annualPrice={PLAN_CATALOG.starter.annualPrice}
-									features={PLAN_CATALOG.starter.features}
+									monthlyPrice={catalog.starter.monthlyPrice}
+									annualPrice={catalog.starter.annualPrice}
+									features={catalog.starter.features}
 									tier="starter"
 									onAction={handleStartCheckout}
 									disabled={!checkoutReady}
 								/>
 								<PlanCard
-									name={PLAN_CATALOG.pro.name}
+									name={catalog.pro.name}
 									cadence={cadence}
-									monthlyPrice={PLAN_CATALOG.pro.monthlyPrice}
-									annualPrice={PLAN_CATALOG.pro.annualPrice}
-									features={PLAN_CATALOG.pro.features}
+									monthlyPrice={catalog.pro.monthlyPrice}
+									annualPrice={catalog.pro.annualPrice}
+									features={catalog.pro.features}
 									tier="pro"
 									onAction={handleStartCheckout}
 									disabled={!checkoutReady}
@@ -856,10 +850,10 @@ export default function BillingPage({
                   collapses the others. */}
 							<ul className="flex flex-col gap-2 sm:hidden">
 								<PlanAccordionRow
-									name={PLAN_CATALOG.pro.name}
-									price={formatPlanPrice(PLAN_CATALOG.pro, cadence, t)}
+									name={catalog.pro.name}
+									price={formatPlanPrice(catalog.pro, cadence, t)}
 									summary={t("Unlimited vaults · 50 GB · cross-vault search + API")}
-									features={PLAN_CATALOG.pro.features}
+									features={catalog.pro.features}
 									ctaLabel={t("Choose Pro")}
 									ctaNote={t("7-day free trial · cancel anytime")}
 									onClick={() => handleStartCheckout("pro")}
@@ -869,10 +863,10 @@ export default function BillingPage({
 									onOpen={() => setOpenTier("pro")}
 								/>
 								<PlanAccordionRow
-									name={PLAN_CATALOG.starter.name}
-									price={formatPlanPrice(PLAN_CATALOG.starter, cadence, t)}
+									name={catalog.starter.name}
+									price={formatPlanPrice(catalog.starter, cadence, t)}
 									summary={t("10 vaults · 10 GB · unlimited AI")}
-									features={PLAN_CATALOG.starter.features}
+									features={catalog.starter.features}
 									ctaLabel={t("Choose Starter")}
 									ctaNote={t("7-day free trial · cancel anytime")}
 									onClick={() => handleStartCheckout("starter")}
@@ -882,10 +876,10 @@ export default function BillingPage({
 								/>
 								{freeOption ? (
 									<PlanAccordionRow
-										name={FREE_TIER.name}
-										price={FREE_TIER.price}
-										summary={t(FREE_TIER.summary)}
-										features={[...FREE_TIER.features]}
+										name={freeTier.name}
+										price={freeTier.price}
+										summary={t(freeTier.summary)}
+										features={[...freeTier.features]}
 										ctaLabel={t("Choose Free")}
 										onClick={freeOption.onContinue}
 										disabled={freeOption.loading}

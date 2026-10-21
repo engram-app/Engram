@@ -10,12 +10,13 @@ import { cn } from "@/lib/utils";
 import { api } from "../api/client";
 import { type OnboardingStatus, useBillingStatus, useOnboardingStatus } from "../api/queries";
 import BillingPage from "../billing/billing-page";
-import { FREE_TIER } from "../billing/plan-cards";
+import { usePlanCopy } from "../billing/plan-cards";
 import LoadingScreen from "../layout/loading-screen";
 import { onboardingNext } from "./onboarding-next";
 
 export default function OnboardBillingPage() {
 	const { t } = useT();
+	const { freeTier } = usePlanCopy();
 	// Stable: handleContinueFree is a dependency of effects that must not re-run on a language change.
 	const { t: tLater } = useStableT();
 	const navigate = useNavigate();
@@ -131,7 +132,7 @@ export default function OnboardBillingPage() {
 							{t("Continue with Free →")}
 						</Button>
 						<p className="mt-2 text-muted-foreground text-xs">
-							{t("{summary} · upgrade anytime", { summary: t(FREE_TIER.summary) })}
+							{t("{summary} · upgrade anytime", { summary: t(freeTier.summary) })}
 						</p>
 					</section>
 				)}

@@ -1410,6 +1410,9 @@ export interface BillingConfig {
 	};
 	// Maximum number of active vaults the user may have, or null for unlimited.
 	vaults_cap: number | null;
+	// Which note-cap set the backend enforces (`LimitKeys.plan_limits/0`);
+	// the plan cards show its copy. Absent on an older backend: legacy.
+	plan_limits?: "legacy" | "v5";
 }
 
 export type BillingCadence = "monthly" | "annual";

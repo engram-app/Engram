@@ -253,7 +253,9 @@ export default {
 	Popular: "Popüler",
 	"2,000 notes · 20 AI searches a day · 1 vault":
 		"2.000 not · Günde 20 yapay zeka sorgusu · 1 kasa",
+	"3,000 notes · 20 AI searches a day · 1 vault": "3000 not · Günde 20 yapay zeka sorgusu · 1 kasa",
 	"2,000 notes, all searchable": "2.000 not, hepsi aranabilir",
+	"3,000 notes, all searchable": "3.000 not, hepsi aranabilir",
 	"20 AI searches a day": "Günde 20 yapay zeka sorgusu",
 	"1 vault": "1 kasa",
 	"1 GB attachments": "1 GB ek",

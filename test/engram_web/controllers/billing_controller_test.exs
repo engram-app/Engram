@@ -130,6 +130,15 @@ defmodule EngramWeb.BillingControllerTest do
       assert body["custom_data"]["user_id"] == user.id
     end
 
+    # The plan cards pick their note-cap copy from this, so they never show
+    # caps the backend is not enforcing.
+    test "reports which plan-limit set is enforced", %{conn: conn} do
+      assert json_response(get(conn, "/api/billing/config"), 200)["plan_limits"] == "legacy"
+
+      Engram.IndexBudgetHelpers.enable_index_budget()
+      assert json_response(get(conn, "/api/billing/config"), 200)["plan_limits"] == "v5"
+    end
+
     test "exposes the tier-default vaults_cap when the user has no override", %{conn: conn} do
       # limits_enforced is true in test (config/test.exs), so effective_limit
       # resolves the free-tier default for a new user with no subscription:

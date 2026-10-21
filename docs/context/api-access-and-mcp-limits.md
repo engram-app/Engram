@@ -15,7 +15,7 @@ credential called; cost is metered where it is incurred.
 | Limit | Free | Starter | Pro | Where it is enforced |
 |---|---|---|---|---|
 | `ai_searches_per_day` (THE cost meter) | 20 | unlimited | unlimited | `Engram.Search.search/4`, every transport |
-| `notes_cap` | 2,000 | 20,000 | 40,000 | note writes |
+| `notes_cap` | 3,000 (2,000 with `INDEX_BUDGET_ENABLED`) | 50,000 (20,000) | unlimited (40,000) | note writes; the set is `LimitKeys.plan_limits/0` |
 | `index_points_cap` (search points, chunk rows) | 12,000 | 120,000 | 240,000 | `Indexing` floor + 04:00 budget sweep; OFF until the v5 pass (`INDEX_BUDGET_ENABLED`) |
 | `note_points_cap` (points per note, merged past it) | 128 | 1,024 | 1,024 | `Indexing.cap_chunks/3`; OFF until the v5 pass |
 | `api_rps_cap` (API-key traffic, per user per second) | 30 | 30 | 30 | `RequireApiRpsBudget`; `0` also refuses API-key sockets (`ChannelGate.api_access/2`) |
@@ -28,7 +28,7 @@ Every stored note is searchable on every tier. The separate search-coverage
 cap (`indexed_notes_cap`, 2,000 on Free) was removed on 2026-10-17, when Free
 `notes_cap` dropped from 10,000 to 3,000. Notes it had skipped re-index on
 their own through `ReconcileEmbeddings` (it selects every note with no dense
-hash). Since 2026-10-19 the caps are 2,000 / 20,000 / 40,000 notes, and
+hash). The 2026-10-19 caps (2,000 / 20,000 / 40,000 notes) apply only once the v5 go flag `INDEX_BUDGET_ENABLED` is on (`/billing/config` reports `plan_limits`, and the plan cards follow it), and
 `/billing/usage` reports `index_points` (limit null while the v5 index budget
 is off) and `floor_notes` (notes on keyword-only search). `plan_state.indexed_notes_cap` (always `nil`), `/billing/usage`
 `indexed_notes` (`limit: nil`), `/api/index-status` and bootstrap
