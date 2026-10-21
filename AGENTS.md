@@ -414,6 +414,17 @@ The existing `# squawk-ignore-file` and `# rollback-irreversible` markers
 follow the same pattern — see `priv/repo/lint_migrations.sh` and
 `priv/repo/test_rollback.sh` for precedent.
 
+Squawk markers scope to their own file (each new migration is linted
+separately). Prefer the narrow one:
+
+```elixir
+# squawk-ignore: require-concurrent-index-creation
+# New empty table: a non-concurrent index cannot block anything.
+```
+
+The marker line holds rule names only; put the reason on the next line.
+`# squawk-ignore-file` (no lint at all) is for DDL squawk cannot parse.
+
 ## Migration self-host story
 
 We ship the same migrations to AWS ECS (rolling, zero-downtime) and to
