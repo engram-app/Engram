@@ -68,3 +68,58 @@ export async function clerkSignIn(page: Page, email: string, landOn = "/"): Prom
 
 	await page.goto(landOn);
 }
+
+const CLERK_API = "https://api.clerk.com/v1";
+
+/**
+ * A fresh Clerk user with NO onboarding performed. The onboarding specs
+ * consume it: finishing the wizard is the thing under test, so each attempt
+ * (Playwright retries included) needs its own.
+ *
+ * No readiness probe here. Clerk's user-list and sign-in-token endpoints can
+ * sit on different read replicas (#455), but `clerkSignIn` already rides that
+ * out: it retries on "No user found" with backoff.
+ */
+export async function createUnonboardedUser(prefix = "e2e-browser-pending"): Promise<{ email: string; id: string }> {
+	const ts = Date.now();
+	const email = `${prefix}-${ts}@test.com`;
+
+	const resp = await fetch(`${CLERK_API}/users`, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${process.env.E2E_CLERK_SECRET_KEY ?? ""}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({
+			email_address: [email],
+			username: `${prefix.replace(/^e2e-browser-/u, "e2e-")}-${ts}`,
+			password: `pw-${ts}-${Math.random().toString(36).slice(2)}`,
+			skip_password_checks: true,
+		}),
+	});
+
+	if (!resp.ok) {
+		throw new Error(`Clerk pending-user creation failed: ${resp.status} ${await resp.text()}`);
+	}
+
+	const user = await resp.json();
+	return { email, id: user.id as string };
+}
+
+/**
+ * Teardown must not fail the test, but it must not be mute either. A Clerk 429
+ * RESOLVES with a non-ok Response rather than throwing, so a bare `.catch()`
+ * sees nothing and the user leaks silently into the instance's 100-user cap.
+ */
+export async function deleteClerkUser(id: string): Promise<void> {
+	await fetch(`${CLERK_API}/users/${id}`, {
+		method: "DELETE",
+		headers: { Authorization: `Bearer ${process.env.E2E_CLERK_SECRET_KEY ?? ""}` },
+	})
+		.then((resp) => {
+			if (!resp.ok) {
+				console.warn(`clerk teardown failed for ${id}: ${resp.status}`);
+			}
+		})
+		.catch((err) => console.warn(`clerk teardown errored for ${id}: ${String(err)}`));
+}

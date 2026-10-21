@@ -108,6 +108,7 @@
 	"devDependencies": {
 		"@biomejs/biome": "2.5.15",
 		"@clerk/testing": "^2.2.45",
+		"@modelcontextprotocol/sdk": "^1.32.1",
 		"@playwright/test": "^1.64.0",
 		"@resvg/resvg-js": "^2.6.2",
 		"@tailwindcss/vite": "^4.3.0",

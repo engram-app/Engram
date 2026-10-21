@@ -1,7 +1,6 @@
 import { setupClerkTestingToken } from "@clerk/testing/playwright";
 import { devices, expect, type Page, test } from "@playwright/test";
-import { clerkSignIn, loadAuthState } from "./clerk-helpers";
-import { clerkFetch } from "./support/clerk-fetch";
+import { clerkSignIn, createUnonboardedUser, deleteClerkUser, loadAuthState } from "./clerk-helpers";
 
 /**
  * An MCP-first signup completes onboarding and resumes the authorization.
@@ -45,7 +44,6 @@ import { clerkFetch } from "./support/clerk-fetch";
  * tripped and cleanup refused to run at all.
  */
 
-const CLERK_API = "https://api.clerk.com/v1";
 const CLERK_BACKEND_PORT = process.env.PW_CLERK_BACKEND_PORT ?? "4001";
 const CLERK_VITE_PORT = process.env.PW_CLERK_VITE_PORT ?? "5174";
 const SECRET_KEY = process.env.E2E_CLERK_SECRET_KEY ?? "";
@@ -87,40 +85,6 @@ async function registerClient(): Promise<string> {
 	return body.client_id as string;
 }
 
-/** A fresh Clerk user with NO onboarding performed. The omission is the point. */
-async function createUnonboardedUser(): Promise<{ email: string; id: string }> {
-	const ts = Date.now();
-	const email = `e2e-browser-pending-${ts}@test.com`;
-
-	const resp = await clerkFetch(`${CLERK_API}/users`, {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${SECRET_KEY}`,
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify({
-			email_address: [email],
-			username: `e2e-pending-${ts}`,
-			password: `pw-${ts}-${Math.random().toString(36).slice(2)}`,
-			skip_password_checks: true,
-		}),
-	});
-
-	if (!resp.ok) {
-		throw new Error(`Clerk pending-user creation failed: ${resp.status} ${await resp.text()}`);
-	}
-
-	const user = await resp.json();
-
-	// No readiness probe here. Clerk's user-list and sign-in-token endpoints can
-	// sit on different read replicas (#455), but `clerkSignIn` already rides
-	// that out: it retries specifically on "No user found" for ~20s with
-	// backoff, which is that lookup lagging. Exporting global-setup's probes to
-	// duplicate the wait would also put mid-file exports in a module the linter
-	// requires to keep its exports last.
-	return { email, id: user.id as string };
-}
-
 function consentUrl(clientId: string): string {
 	const params = new URLSearchParams({
 		client_id: clientId,
@@ -155,21 +119,7 @@ test.describe("MCP-first signup resumes consent after onboarding", () => {
 		if (!pending) {
 			return;
 		}
-		// Teardown must not fail the test, but it must not be mute either. A
-		// Clerk 429 RESOLVES with a non-ok Response rather than throwing, so a
-		// bare `.catch()` sees nothing and the user leaks silently. This suite
-		// has hit Clerk's quota before, and it surfaces as unrelated specs
-		// failing to create users much later.
-		await clerkFetch(`${CLERK_API}/users/${pending.id}`, {
-			method: "DELETE",
-			headers: { Authorization: `Bearer ${SECRET_KEY}` },
-		})
-			.then((resp) => {
-				if (!resp.ok) {
-					console.warn(`clerk teardown failed for ${pending?.id}: ${resp.status}`);
-				}
-			})
-			.catch((err) => console.warn(`clerk teardown errored for ${pending?.id}: ${String(err)}`));
+		await deleteClerkUser(pending.id);
 		pending = null;
 	});
 
