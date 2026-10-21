@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.60.2](https://github.com/engram-app/Engram/compare/0.60.1...0.60.2) (2026-10-21)
+
+
+### Bug Fixes
+
+* **crdt:** remove the checkpoint flatten (rival lineage) ([#2118](https://github.com/engram-app/Engram/issues/2118)) ([4a1197e](https://github.com/engram-app/Engram/commit/4a1197e5b9c053121b9502e699980ea8df7eb257))
+* **notes:** live-first folder marker lookup ([#2122](https://github.com/engram-app/Engram/issues/2122)) ([4ee786b](https://github.com/engram-app/Engram/commit/4ee786ba04afcef462238f95fa313c58ed5131a1))
+
 ## [0.60.1](https://github.com/engram-app/Engram/compare/0.60.0...0.60.1) (2026-10-21)
 
 
