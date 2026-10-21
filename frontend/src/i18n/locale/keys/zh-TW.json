@@ -1,0 +1,15 @@
+{
+	"type": "類型",
+	"status": "狀態",
+	"author": "作者",
+	"reviewed_by": "審核者",
+	"source": "來源",
+	"project": "專案",
+	"created": "創建日期",
+	"updated": "更新時間",
+	"reviewed": "檢查日期",
+	"expires": "失效日",
+	"due": "截止日期",
+	"priority": "優先順序",
+	"description": "摘要"
+}

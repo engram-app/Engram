@@ -334,5 +334,26 @@
 			"priority": "A short frontmatter property name a user would type for this field; single word or compound, no spaces if natural in the language. The field holds how much the note matters, as a number.",
 			"description": "A short frontmatter property name a user would type for this field; single word or compound, no spaces if natural in the language. The field holds a one-line summary of the note."
 		}
+	},
+	"zh-TW": {
+		"translator": "723caf81",
+		"failed": {},
+		"one": {},
+		"glossary": {},
+		"descriptions": {
+			"type": "A short frontmatter property name a user would type for this field; single word or compound, no spaces if natural in the language. The field holds what kind of note this is.",
+			"status": "A short frontmatter property name a user would type for this field; single word or compound, no spaces if natural in the language. The field holds where the note stands, such as draft or stable.",
+			"author": "A short frontmatter property name a user would type for this field; single word or compound, no spaces if natural in the language. The field holds who wrote the note.",
+			"reviewed_by": "A short frontmatter property name a user would type for this field; single word or compound, no spaces if natural in the language. The field holds who last checked the note.",
+			"source": "A short frontmatter property name a user would type for this field; single word or compound, no spaces if natural in the language. The field holds what the note is based on, usually a URL.",
+			"project": "A short frontmatter property name a user would type for this field; single word or compound, no spaces if natural in the language. The field holds the project the note belongs to.",
+			"created": "A short frontmatter property name a user would type for this field; single word or compound, no spaces if natural in the language. The field holds the date the note was created.",
+			"updated": "A short frontmatter property name a user would type for this field; single word or compound, no spaces if natural in the language. The field holds the date the note last changed.",
+			"reviewed": "A short frontmatter property name a user would type for this field; single word or compound, no spaces if natural in the language. The field holds the date the note was last checked.",
+			"expires": "A short frontmatter property name a user would type for this field; single word or compound, no spaces if natural in the language. The field holds the date the note goes out of date.",
+			"due": "A short frontmatter property name a user would type for this field; single word or compound, no spaces if natural in the language. The field holds the date the work in the note is due.",
+			"priority": "A short frontmatter property name a user would type for this field; single word or compound, no spaces if natural in the language. The field holds how much the note matters, as a number.",
+			"description": "A short frontmatter property name a user would type for this field; single word or compound, no spaces if natural in the language. The field holds a one-line summary of the note."
+		}
 	}
 }
