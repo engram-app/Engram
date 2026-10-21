@@ -48,7 +48,8 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 	const [pendingFolder, setPendingFolder] = useState(""); // default dest for the next dialog
 	const pickerRef = useRef<HTMLInputElement>(null);
 	const folders = useFolders().data ?? [];
-	const attachments = useAttachments().data;
+	const attachmentsQuery = useAttachments();
+	const attachments = attachmentsQuery.data;
 	const upload = useUploadAttachment();
 	const capabilities = useCapabilities().data;
 	const { billingEnabled } = useConfig();
@@ -67,6 +68,45 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 	const limitsRef = useRef(limits);
 	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. The screening callback reads current limits without changing identity each render.
 	limitsRef.current = limits;
+
+	// New paths are claimed against the vault's attachments, and storage is
+	// screened against their sizes. Before the list loads (first paint, a vault
+	// switch) it reads as empty: a claim would take an existing name and the
+	// server's upsert by path would silently replace that file. So every entry
+	// point waits here first.
+	const attachmentsRef = useRef(attachments);
+	// biome-ignore lint/nursery/useReactCompiler: latest-ref pattern, deliberate. A deferred upload must claim against the list as it is once loaded, not as it was when the files arrived.
+	attachmentsRef.current = attachments;
+	const waiters = useRef<{ run: () => void; fail: () => void }[]>([]);
+	useEffect(() => {
+		if (attachments) {
+			for (const w of waiters.current.splice(0)) {
+				w.run();
+			}
+		} else if (attachmentsQuery.isError) {
+			for (const w of waiters.current.splice(0)) {
+				w.fail();
+			}
+		}
+	}, [attachments, attachmentsQuery.isError]);
+	// Runs `run` now if the list is in, else once it loads. A list that fails to
+	// load uploads nothing, and says so rather than leaving the files hanging.
+	const whenListLoaded = useCallback(
+		(run: () => void, fail: () => void = () => undefined) => {
+			if (attachmentsRef.current) {
+				run();
+				return;
+			}
+			waiters.current.push({
+				run,
+				fail: () => {
+					notify.error(t("Couldn't check your vault's files, so nothing was uploaded. Try again."));
+					fail();
+				},
+			});
+		},
+		[t],
+	);
 
 	// Every way files enter (picker, drop, the dialog's Upload more) goes
 	// through here: executables and files over a plan limit are refused before
@@ -91,19 +131,30 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 				pickerRef.current?.click();
 				return;
 			}
-			const allowed = screenFiles(dropped);
-			if (allowed.length > 0) {
-				setFiles(allowed);
-			}
+			whenListLoaded(() => {
+				const allowed = screenFiles(dropped);
+				if (allowed.length > 0) {
+					setFiles(allowed);
+				}
+			});
 		},
-		[screenFiles],
+		[screenFiles, whenListLoaded],
 	);
 
 	const uploadFiles = useCallback(
 		async (dropped: File[], folder: string) => {
+			const loaded = await new Promise<boolean>((resolve) =>
+				whenListLoaded(
+					() => resolve(true),
+					() => resolve(false),
+				),
+			);
+			if (!loaded) {
+				return;
+			}
 			const done = await uploadFilesTo({
 				upload: upload.mutateAsync,
-				existing: attachments ?? [],
+				existing: attachmentsRef.current ?? [],
 				files: screenFiles(dropped),
 				folder,
 				t,
@@ -130,7 +181,7 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 				);
 			}
 		},
-		[upload.mutateAsync, attachments, t, tn, screenFiles],
+		[upload.mutateAsync, t, tn, screenFiles, whenListLoaded],
 	);
 
 	// A file dropped anywhere that is not a drop target does nothing, and must not
@@ -170,11 +221,14 @@ export function AttachmentUploadProvider({ children }: { children: React.ReactNo
 				onChange={(e) => {
 					// Executables are refused here, before the dialog: choosing a folder
 					// for a file that can never upload would only waste the user's time.
-					const picked = screenFiles(Array.from(e.target.files ?? []));
+					const chosen = Array.from(e.target.files ?? []);
 					e.target.value = "";
-					if (picked.length > 0) {
-						setFiles(picked);
-					}
+					whenListLoaded(() => {
+						const picked = screenFiles(chosen);
+						if (picked.length > 0) {
+							setFiles(picked);
+						}
+					});
 				}}
 			/>
 			{files !== null && (

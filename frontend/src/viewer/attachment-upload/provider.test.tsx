@@ -8,9 +8,12 @@ let mockLimits: Record<string, number | null> = {
 	max_file_bytes: null,
 	attachment_bytes_cap: null,
 };
+// undefined = the attachments list has not loaded yet.
+let mockAttachments: { path: string; size_bytes: number }[] | undefined;
+let mockAttachmentsError = false;
 vi.mock("@/api/queries", () => ({
 	useFolders: () => ({ data: [{ name: "docs" }] }),
-	useAttachments: () => ({ data: [{ path: "docs/a.png", size_bytes: 3 }] }),
+	useAttachments: () => ({ data: mockAttachments, isError: mockAttachmentsError }),
 	useUploadAttachment: () => ({ mutateAsync }),
 	useCapabilities: () => ({ data: { tier: "free", limits: mockLimits, plan_limits: {} } }),
 }));
@@ -51,6 +54,8 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	resetServerFeatures();
 	mockLimits = { max_file_bytes: null, attachment_bytes_cap: null };
+	mockAttachments = [{ path: "docs/a.png", size_bytes: 3 }];
+	mockAttachmentsError = false;
 });
 
 describe("AttachmentUploadProvider plan limits", () => {
@@ -187,5 +192,72 @@ describe("AttachmentUploadProvider drops", () => {
 			expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ path: "docs/a 1.png" })),
 		);
 		expect(screen.queryByTestId("dialog")).toBeNull();
+	});
+
+	describe("before the attachments list has loaded", () => {
+		function Drop() {
+			const { uploadFiles, openUpload } = useAttachmentUpload();
+			return (
+				<>
+					<button type="button" onClick={() => uploadFiles([new File(["x"], "a.png")], "docs")}>
+						drop
+					</button>
+					<button type="button" onClick={() => openUpload([new File(["x"], "a.png")], "docs")}>
+						open
+					</button>
+				</>
+			);
+		}
+		const tree = () => (
+			<AttachmentUploadProvider>
+				<Drop />
+			</AttachmentUploadProvider>
+		);
+
+		// An empty list would claim the bare name, and the server's upsert by path
+		// would silently replace the file already stored there.
+		it("a drop waits for the list, then claims a free name", async () => {
+			mockAttachments = undefined;
+			mutateAsync.mockResolvedValue({});
+			const { rerender } = render(tree());
+			fireEvent.click(screen.getByText("drop"));
+			await act(async () => {
+				await Promise.resolve();
+			});
+			expect(mutateAsync).not.toHaveBeenCalled();
+			mockAttachments = [{ path: "docs/a.png", size_bytes: 3 }];
+			rerender(tree());
+			// A suffixed name, never the bare "docs/a.png" (the number depends on
+			// what earlier tests reserved in this module).
+			await waitFor(() =>
+				expect(mutateAsync).toHaveBeenCalledWith(
+					expect.objectContaining({ path: expect.stringMatching(/^docs\/a \d+\.png$/u) }),
+				),
+			);
+		});
+
+		it("the upload dialog opens only once the list has loaded", async () => {
+			mockAttachments = undefined;
+			const { rerender } = render(tree());
+			fireEvent.click(screen.getByText("open"));
+			await act(async () => {
+				await Promise.resolve();
+			});
+			expect(screen.queryByTestId("dialog")).toBeNull();
+			mockAttachments = [{ path: "docs/a.png", size_bytes: 3 }];
+			rerender(tree());
+			expect(await screen.findByTestId("dialog")).toHaveTextContent("a.png");
+		});
+
+		it("a list that fails to load uploads nothing and says so", async () => {
+			mockAttachments = undefined;
+			const { rerender } = render(tree());
+			fireEvent.click(screen.getByText("drop"));
+			mockAttachmentsError = true;
+			rerender(tree());
+			const { toast } = await import("sonner");
+			await waitFor(() => expect(toast.error).toHaveBeenCalled());
+			expect(mutateAsync).not.toHaveBeenCalled();
+		});
 	});
 });
