@@ -35,6 +35,21 @@ defmodule Engram.Native.YjsRootInsertsTest do
     assert roots |> Enum.map(&elem(&1, 1)) |> Enum.sort() == [17, 30]
   end
 
+  test "a doubled doc whose rival copy was deleted reports one live root" do
+    a = seeded("first body line.\n")
+    :ok = Yex.apply_update(a, state(seeded("first body line.\nsecond line.\n")))
+    text = Yex.Doc.get_text(a, "content")
+
+    at =
+      if String.starts_with?(Yex.Text.to_string(text), "first body line.\nsecond"),
+        do: 0,
+        else: 17
+
+    Yex.Text.delete(text, at, 30)
+
+    assert {:ok, [{_, 17}]} = Native.yjs_root_inserts(state(a), "content")
+  end
+
   test "clearing and retyping mints no new root" do
     a = seeded("old text")
     b = Yex.Doc.new()
