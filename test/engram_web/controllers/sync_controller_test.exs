@@ -23,7 +23,12 @@ defmodule EngramWeb.SyncControllerTest do
     test "an untouched vault is settled at seq 0", %{conn: conn} do
       body = conn |> get("/api/sync/quiescence") |> json_response(200)
 
-      assert body == %{"change_seq" => 0, "pending_crdt_updates" => 0, "pending_checkpoints" => 0}
+      assert body == %{
+               "change_seq" => 0,
+               "pending_crdt_updates" => 0,
+               "pending_checkpoints" => 0,
+               "deferred_checkpoints" => 0
+             }
     end
 
     test "counts this vault's unfolded CRDT updates and pending checkpoints only", %{
@@ -52,12 +57,8 @@ defmodule EngramWeb.SyncControllerTest do
           end
         end)
 
-      for vault_id <- [vault.id, other.id] do
-        {:ok, _} =
-          %{"user_id" => user.id, "vault_id" => vault_id, "note_id" => note_id}
-          |> Engram.Workers.CheckpointNote.new(schedule_in: 60)
-          |> Oban.insert()
-      end
+      for vault_id <- [vault.id, other.id],
+          do: checkpoint_job(user, vault_id, note_id, "available")
 
       body = conn |> get("/api/sync/quiescence") |> json_response(200)
 
@@ -86,12 +87,7 @@ defmodule EngramWeb.SyncControllerTest do
         |> Map.get("notes")
         |> Map.new(&{&1["path"], &1["id"]})
 
-      for note_id <- Map.values(ids) do
-        {:ok, _} =
-          %{"user_id" => user.id, "vault_id" => vault.id, "note_id" => note_id}
-          |> Engram.Workers.CheckpointNote.new(schedule_in: 60)
-          |> Oban.insert()
-      end
+      for note_id <- Map.values(ids), do: checkpoint_job(user, vault.id, note_id, "available")
 
       # Stand-in for the live room: CrdtRegistry.lookup/1 resolves the :global
       # name, and a real room would need the sandbox handed to it.
@@ -102,7 +98,65 @@ defmodule EngramWeb.SyncControllerTest do
       body = conn |> get("/api/sync/quiescence") |> json_response(200)
 
       assert body["pending_checkpoints"] == 1
+      assert body["deferred_checkpoints"] == 1
     end
+
+    # CheckpointNote snoozes (back to `scheduled`) for 60 s while the note's room
+    # is live or a key rotation runs. That is deferred by design, not unsettled
+    # work, so a 60 s e2e barrier must not wait on it.
+    test "a snoozed checkpoint is deferred, not pending", %{conn: conn, user: user, vault: vault} do
+      checkpoint_job(user, vault.id, Ecto.UUID.generate(), "scheduled")
+
+      body = conn |> get("/api/sync/quiescence") |> json_response(200)
+
+      assert body["pending_checkpoints"] == 0
+      assert body["deferred_checkpoints"] == 1
+    end
+
+    # Run 39403472535 (test_101): the job snoozed while the room was live, then
+    # the room idle-exited (5 s in CI). With no room left the room check alone
+    # counts it, and it sits `scheduled` for up to ~65 s, past the deadline.
+    test "a snoozed checkpoint whose room already closed is deferred", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      note_id = Ecto.UUID.generate()
+      checkpoint_job(user, vault.id, note_id, "scheduled")
+      assert Engram.Notes.CrdtRegistry.lookup(note_id) == nil
+
+      body = conn |> get("/api/sync/quiescence") |> json_response(200)
+
+      assert body["pending_checkpoints"] == 0
+      assert body["deferred_checkpoints"] == 1
+    end
+
+    test "available and retryable checkpoints are pending; other vaults are not counted", %{
+      conn: conn,
+      user: user,
+      vault: vault
+    } do
+      other = insert(:vault, user: user)
+
+      for state <- ~w(available retryable scheduled) do
+        checkpoint_job(user, vault.id, Ecto.UUID.generate(), state)
+        checkpoint_job(user, other.id, Ecto.UUID.generate(), state)
+      end
+
+      body = conn |> get("/api/sync/quiescence") |> json_response(200)
+
+      assert body["pending_checkpoints"] == 2
+      assert body["deferred_checkpoints"] == 1
+    end
+  end
+
+  defp checkpoint_job(user, vault_id, note_id, state) do
+    {:ok, job} =
+      %{"user_id" => user.id, "vault_id" => vault_id, "note_id" => note_id}
+      |> Engram.Workers.CheckpointNote.new()
+      |> Oban.insert()
+
+    job |> Ecto.Changeset.change(state: state) |> Engram.Repo.update!()
   end
 
   describe "GET /sync/manifest" do

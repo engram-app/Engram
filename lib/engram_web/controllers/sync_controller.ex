@@ -44,7 +44,9 @@ defmodule EngramWeb.SyncController do
     description:
       "The vault's `change_seq` plus how many CRDT updates still await their " <>
         "checkpoint. A client whose catch-up cursor has reached `change_seq` while " <>
-        "both counts are 0 has seen every change the server will make on its own.",
+        "both counts are 0 has seen every change the server will make on its own. " <>
+        "`deferred_checkpoints` (snoozed, or held by a live room) is reported but " <>
+        "is not owed work.",
     responses: [ok: {"Sync quiescence", "application/json", Schemas.SyncQuiescenceResponse}]
   )
 
@@ -60,21 +62,41 @@ defmodule EngramWeb.SyncController do
         {Engram.Vaults.raw_current_seq(vault.id), pending}
       end)
 
+    {owed, deferred} = checkpoint_counts(vault.id)
+
     json(conn, %{
       change_seq: current,
       pending_crdt_updates: pending_updates,
-      pending_checkpoints: unheld_checkpoints(vault.id)
+      pending_checkpoints: owed,
+      deferred_checkpoints: deferred
     })
   end
 
-  # A checkpoint whose note has a live room snoozes until the room closes
-  # (CheckpointNote), so it changes nothing a client can wait for; a note left
-  # open in an editor would hold it pending all session. Same rule as
-  # `pending_crdt_updates`, which the e2e barrier already ignores.
-  defp unheld_checkpoints(vault_id) do
-    Engram.Workers.CheckpointNote
-    |> Engram.Jobs.pending_note_ids_for_vault(vault_id)
-    |> Enum.count(&(is_binary(&1) and Engram.Notes.CrdtRegistry.lookup(&1) == nil))
+  # A checkpoint is owed only if it can run now AND its note has no live room.
+  # The rest is deferred by design, and the barrier must not wait on it:
+  #   - `scheduled`: CheckpointNote snoozed 60 s behind a live room or a key
+  #     rotation (nothing inserts one scheduled). It stays scheduled for up to
+  #     ~65 s even after the room exits, so the room check alone misses it.
+  #   - a live room: CheckpointNote will snooze, and the room materializes the
+  #     note itself on exit; a note open in an editor holds it all session.
+  # Same rule as `pending_crdt_updates`, which the e2e barrier already ignores.
+  defp checkpoint_counts(vault_id) do
+    runnable =
+      Engram.Jobs.pending_note_ids_for_vault(
+        Engram.Workers.CheckpointNote,
+        vault_id,
+        ~w(available executing retryable)
+      )
+
+    snoozed =
+      Engram.Jobs.pending_note_ids_for_vault(
+        Engram.Workers.CheckpointNote,
+        vault_id,
+        ~w(scheduled)
+      )
+
+    owed = Enum.count(runnable, &(is_binary(&1) and Engram.Notes.CrdtRegistry.lookup(&1) == nil))
+    {owed, length(runnable) - owed + length(snoozed)}
   end
 
   def manifest(conn, params) do
