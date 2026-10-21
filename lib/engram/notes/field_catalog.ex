@@ -295,6 +295,6 @@ defmodule Engram.Notes.FieldCatalog do
   defp leaves(list) when is_list(list), do: Enum.flat_map(list, &leaves/1)
   defp leaves(s) when is_binary(s) and s != "", do: [s]
   defp leaves(b) when is_boolean(b), do: [to_string(b)]
-  defp leaves(i) when is_integer(i), do: [Integer.to_string(i)]
+  defp leaves(n) when is_number(n), do: [to_string(n)]
   defp leaves(_other), do: []
 end

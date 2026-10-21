@@ -94,6 +94,13 @@ defmodule Engram.Notes.NoteFieldsTest do
 
   defp named(field), do: FrontmatterKeys.named_id(field)
 
+  # Qdrant's keyword `match` semantics on one payload: `value` matches a
+  # scalar or any element of a list, `any` matches if one of them does.
+  defp payload_matches?(p, %{key: k, match: %{value: v}}), do: v in List.wrap(p[k])
+
+  defp payload_matches?(p, %{key: k, match: %{any: vs}}),
+    do: Enum.any?(vs, &(&1 in List.wrap(p[k])))
+
   defp dictionary(user_id),
     do:
       Repo.all(from(k in FrontmatterKey, where: k.user_id == ^user_id, order_by: k.key_id),
@@ -297,6 +304,59 @@ defmodule Engram.Notes.NoteFieldsTest do
     setup do
       Application.put_env(:engram, :write_v5_layout, true)
       on_exit(fn -> Application.delete_env(:engram, :write_v5_layout) end)
+    end
+
+    # YAML reads `status: 2` as a number and `reviewed_by: true` as a
+    # boolean; a named exact field must still hold their text, or a filter
+    # for "2" finds nothing. Date-shaped strings stay text too.
+    test "numbers, booleans and date-shaped values on named exact fields match as text",
+         %{user: user, vault: vault} do
+      content = """
+      ---
+      type: 2026-01-01
+      status: 2
+      author: 42
+      reviewed_by: true
+      project: 2026-01-01
+      source: [2024, 1.5, https://a]
+      ---
+      # Fields
+
+      Body text that yields at least one chunk.
+      """
+
+      {note, user} = index!(user, vault, content)
+      {:ok, fk} = Crypto.dek_filter_key(user)
+      rows = attrs(note.id)
+      h = fn field -> for r <- rows, r.key_id == named(field), do: r.h end
+      v = &FilterId.value_hmac(fk, &1)
+
+      assert note.type_hmac == Crypto.hmac_field(fk, "2026-01-01")
+      assert h.(:status) == [v.("2")]
+      assert h.(:author) == [v.("42")]
+      assert h.(:reviewed_by) == [v.("true")]
+      assert h.(:project) == [v.("2026-01-01")]
+      assert Enum.sort(h.(:source)) == Enum.sort([v.("2024"), v.("1.5"), v.("https://a")])
+
+      assert_received {:upsert, body}
+      %{"points" => [%{"payload" => p} | _]} = Jason.decode!(body)
+
+      for {key, value} <- [
+            {"status", "2"},
+            {"status", 2},
+            {"author", "42"},
+            {"reviewed_by", true},
+            {"project", "2026-01-01"},
+            {"source", "2024"},
+            {"source", 1.5}
+          ] do
+        assert {:ok, [c]} =
+                 Engram.Search.FieldFilters.to_conditions(user.id, fk, [
+                   %{"key" => key, "value" => value}
+                 ])
+
+        assert payload_matches?(p, c), "#{key} #{inspect(value)}"
+      end
     end
 
     test "field for field", %{user: user, vault: vault} do

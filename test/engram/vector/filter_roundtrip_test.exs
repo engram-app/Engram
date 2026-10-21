@@ -317,6 +317,37 @@ defmodule Engram.Vector.FilterRoundtripTest do
     assert hits.(%{"key" => "due", "op" => "after", "value" => "2026-11-02"}) == 0
   end
 
+  # YAML reads `status: 2` as a number, `reviewed_by: true` as a boolean and
+  # `project: 2026-01-01` as a date-shaped string: a named exact field holds
+  # each as its text, so the text filter finds them in a real Qdrant.
+  test "numeric, boolean and date-shaped named values match as text", %{col: col} do
+    t = tenant()
+
+    yaml =
+      "status: 2\nauthor: 42\nreviewed_by: true\nproject: 2026-01-01\n" <>
+        "source: [2024, https://a]\n"
+
+    :ok = Qdrant.upsert_points(col, [v5_point(t, yaml), v5_point(t, "status: 3\n")])
+    u = %{key: "u", match: %{value: FilterId.uuid(t.user_id)}}
+
+    hits = fn filter ->
+      {:ok, [c]} = Engram.Search.FieldFilters.to_conditions(t.user_id, t.fk, [filter])
+      count(col, %{must: [u, c]})
+    end
+
+    for {key, value} <- [
+          {"status", "2"},
+          {"status", 2},
+          {"author", "42"},
+          {"reviewed_by", true},
+          {"reviewed_by", "true"},
+          {"project", "2026-01-01"},
+          {"source", "2024"}
+        ] do
+      assert hits.(%{"key" => key, "value" => value}) == 1, "#{key} #{inspect(value)}"
+    end
+  end
+
   test "cross tenant: the same status never matches the other user", %{col: col} do
     a = tenant()
     b = tenant()
