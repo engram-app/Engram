@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.60.1](https://github.com/engram-app/Engram/compare/0.60.0...0.60.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* 0.60.1 deploy safety (migration locks, boot session, ctime) ([#2117](https://github.com/engram-app/Engram/issues/2117)) ([f84b879](https://github.com/engram-app/Engram/commit/f84b879fb981ee25818ba12531e2d4aaec11212b))
+
 ## [0.60.0](https://github.com/engram-app/Engram/compare/0.59.0...0.60.0) (2026-10-21)
 
 
