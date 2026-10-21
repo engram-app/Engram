@@ -7,6 +7,8 @@ defmodule Engram.Billing.CapabilitiesTest do
 
   alias Engram.Billing
   alias Engram.Billing.EntitlementCache
+  alias Engram.Billing.LimitKeys
+  alias Engram.IndexBudgetHelpers
 
   setup do
     on_exit(fn -> EntitlementCache.evict_all() end)
@@ -54,7 +56,7 @@ defmodule Engram.Billing.CapabilitiesTest do
     user = insert(:user)
     caps = Billing.capabilities(user)
 
-    expected_keys = Enum.map(Engram.Billing.LimitKeys.all(), &Atom.to_string/1)
+    expected_keys = Enum.map(LimitKeys.all(), &Atom.to_string/1)
     assert Enum.sort(Map.keys(caps.limits)) == Enum.sort(expected_keys)
 
     Enum.each(caps.limits, fn {_key, v} ->
@@ -90,12 +92,12 @@ defmodule Engram.Billing.CapabilitiesTest do
   describe "v5 plan limits" do
     test "default: main's note caps" do
       assert Billing.capabilities(insert(:user)).limits["notes_cap"] == 3_000
-      assert Engram.Billing.LimitKeys.plan_limits() == :legacy
+      assert LimitKeys.plan_limits() == :legacy
     end
 
     test "flag on: the 2026-10-19 note caps", _ctx do
-      Engram.IndexBudgetHelpers.enable_index_budget()
-      assert Engram.Billing.LimitKeys.plan_limits() == :v5
+      IndexBudgetHelpers.enable_index_budget()
+      assert LimitKeys.plan_limits() == :v5
 
       free = insert(:user)
       starter = insert(:user)
