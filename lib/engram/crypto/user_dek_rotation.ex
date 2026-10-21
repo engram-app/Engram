@@ -40,6 +40,7 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Indexing.PayloadV5
   alias Engram.Logger.Metadata
   alias Engram.Notes.CrdtUpdateLog
+  alias Engram.Notes.FieldCatalog
   alias Engram.Notes.FlatFields
   alias Engram.Notes.FrontmatterKeys
   alias Engram.Repo
@@ -1016,6 +1017,9 @@ defmodule Engram.Crypto.UserDekRotation do
         for note <- notes, flat = flats[note.id], flat != nil do
           Repo.insert_all(Engram.Notes.NoteAttr, FlatFields.attr_rows(flat, note))
         end
+
+        # The seq does not move here: drop catalogs built on the old rows.
+        notes |> Enum.map(& &1.vault_id) |> Enum.uniq() |> Enum.each(&FieldCatalog.evict/1)
       end)
 
     :ok

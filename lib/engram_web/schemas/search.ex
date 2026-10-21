@@ -177,10 +177,15 @@ defmodule EngramWeb.Schemas.FieldsResponse do
           },
           required: [:name, :kinds, :list, :note_count, :number_range, :date_range, :values]
         }
+      },
+      filterable: %Schema{
+        type: :boolean,
+        description: "Whether search accepts `fields` filters on this server yet"
       }
     },
-    required: [:fields],
+    required: [:fields, :filterable],
     example: %{
+      "filterable" => true,
       "fields" => [
         %{
           "name" => "status",

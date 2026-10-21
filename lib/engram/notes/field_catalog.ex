@@ -15,9 +15,11 @@ defmodule Engram.Notes.FieldCatalog do
   comes from one sample note's frontmatter, decrypted; a value that note no
   longer holds (edited since the pass) is left out.
 
-  Cached per vault on `vaults.change_seq` (`:field_catalog`): a note write
-  moves the seq, so a stale entry is never read; the index pass, which writes
-  `note_attrs` without moving the seq, evicts the vault (`evict/1`).
+  Cached per vault and user (`:field_catalog`), stamped with the vault's
+  `change_seq`: a note write moves the seq, so a stale entry is never served
+  (and is replaced, not kept beside the new one). The index pass and the DEK
+  rotation, which rewrite `note_attrs` without moving the seq, evict the
+  vault (`evict/1`). A catalog built while a decrypt failed is not cached.
 
   Reads run under the caller's tenant, and decryption uses only the caller's
   DEK. Names and values are never logged.
@@ -64,26 +66,32 @@ defmodule Engram.Notes.FieldCatalog do
     SELECT key_id, note_id, 'd', NULL, d FROM note_attrs WHERE vault_id = $1 AND d IS NOT NULL
   ) a
   WHERE NOT EXISTS (
-    SELECT 1 FROM notes t WHERE t.id = a.note_id AND t.deleted_at IS NOT NULL
+    SELECT 1 FROM notes t
+    WHERE t.id = a.note_id AND t.vault_id = $1 AND t.deleted_at IS NOT NULL
   )
   GROUP BY a.key_id
   """
 
   # The most used exact values per key, with one sample note each to read the
-  # value's text from.
+  # value's text from. The sample is the lowest note id, so samples overlap
+  # across keys and values (fewer notes to decrypt); uuid has no min().
   @values_sql """
   SELECT key_id, h, notes, sample FROM (
-    SELECT a.key_id, a.h, count(DISTINCT a.note_id) AS notes, any_value(a.note_id) AS sample,
+    SELECT a.key_id, a.h, count(DISTINCT a.note_id) AS notes, min(a.note_id::text)::uuid AS sample,
            row_number() OVER (PARTITION BY a.key_id ORDER BY count(DISTINCT a.note_id) DESC, a.h) AS rn
     FROM note_attrs a
     WHERE a.vault_id = $1 AND a.h IS NOT NULL
       AND NOT EXISTS (
-        SELECT 1 FROM notes t WHERE t.id = a.note_id AND t.deleted_at IS NOT NULL
+        SELECT 1 FROM notes t
+        WHERE t.id = a.note_id AND t.vault_id = $1 AND t.deleted_at IS NOT NULL
       )
     GROUP BY a.key_id, a.h
   ) v
   WHERE rn <= #{@top_values}
   """
+
+  # Everything a note decrypt reads, without the CRDT state (the Y-doc).
+  @fields Engram.Notes.Note.__schema__(:fields) -- [:crdt_state_ciphertext, :crdt_state_nonce]
 
   @named_names Map.new(FrontmatterKeys.named(), fn {name, id} -> {id, Atom.to_string(name)} end)
 
@@ -93,14 +101,33 @@ defmodule Engram.Notes.FieldCatalog do
     with {:ok, fk} <- Crypto.dek_filter_key(user),
          {:ok, dek} <- Crypto.get_dek(user),
          seq when is_integer(seq) <- current_seq(user, vault) do
-      {:ok,
-       Cache.fetch(:field_catalog, {vault.id, {user.id, seq}}, fn ->
-         build(user, vault, fk, dek)
-       end)}
+      {:ok, cached(user, vault, seq, fn -> build(user, vault, fk, dek) end)}
     else
       _no_dek_or_vault -> {:ok, []}
     end
   end
+
+  defp cached(user, vault, seq, build) do
+    key = {vault.id, user.id}
+
+    case Cache.get(:field_catalog, key) do
+      {:ok, {^seq, catalog}} ->
+        catalog
+
+      other ->
+        # A previous seq's entry: drop it first, so the fetch below loads.
+        if other != :miss, do: Cache.evict_local(:field_catalog, vault.id)
+
+        case Cache.fetch(:field_catalog, key, fn -> stamp(seq, build.()) end) do
+          {_seq, catalog} -> catalog
+        end
+    end
+  end
+
+  # A partial catalog (a decrypt failed) is returned but not stored, so the
+  # next call retries instead of serving the gap until the next write.
+  defp stamp(seq, {:ok, catalog}), do: {seq, catalog}
+  defp stamp(seq, {:partial, catalog}), do: Cache.no_store({seq, catalog})
 
   @doc "Drop every cached catalog of `vault_id` (after an index pass commits), cluster-wide."
   @spec evict(Ecto.UUID.t()) :: :ok
@@ -142,8 +169,9 @@ defmodule Engram.Notes.FieldCatalog do
         {stats, values, keys}
       end)
 
-    names = Map.merge(@named_names, user_key_names(keys, dek, user))
-    texts = value_texts(user, vault, values, fk)
+    {names_ok?, user_names} = user_key_names(keys, dek, user)
+    names = Map.merge(@named_names, user_names)
+    {texts_ok?, texts} = value_texts(user, vault, values, fk)
 
     values_by_key =
       values
@@ -154,14 +182,17 @@ defmodule Engram.Notes.FieldCatalog do
          |> Enum.sort_by(&{-&1.count, &1.value})}
       end)
 
-    stats
-    |> Enum.flat_map(fn [key_id | _] = row ->
-      case names do
-        %{^key_id => name} -> [field(name, row, Map.get(values_by_key, key_id, []))]
-        _ -> []
-      end
-    end)
-    |> Enum.sort_by(&{-&1.note_count, &1.name})
+    fields =
+      stats
+      |> Enum.flat_map(fn [key_id | _] = row ->
+        case names do
+          %{^key_id => name} -> [field(name, row, Map.get(values_by_key, key_id, []))]
+          _ -> []
+        end
+      end)
+      |> Enum.sort_by(&{-&1.note_count, &1.name})
+
+    {if(names_ok? and texts_ok?, do: :ok, else: :partial), fields}
   end
 
   defp field(name, [_id, h?, n?, d?, notes, rows, n_min, n_max, d_min, d_max], values) do
@@ -191,50 +222,53 @@ defmodule Engram.Notes.FieldCatalog do
   defp date(unix), do: unix |> DateTime.from_unix!() |> DateTime.to_iso8601()
 
   defp user_key_names(keys, dek, user) do
-    for key <- keys, reduce: %{} do
-      acc ->
+    for key <- keys, reduce: {true, %{}} do
+      {ok?, acc} ->
         case FrontmatterKeys.name(key, dek) do
           {:ok, name} ->
-            Map.put(acc, key.key_id, name)
+            {ok?, Map.put(acc, key.key_id, name)}
 
           :error ->
             DecryptFailure.log("field_catalog_key_decrypt_failed", :decrypt_failed,
               user_id: user.id
             )
 
-            acc
+            {false, acc}
         end
     end
   end
 
   # value HMAC => text, from each sample note's frontmatter (and, for `type`
   # and `tags`, the note row's own blind-index inputs).
-  # ponytail: one decrypt per distinct sample note, so a vault with many keys
-  # of many distinct values pays up to 50 x keys decrypts on a cache miss.
-  # Pick samples that overlap (e.g. min(note_id) once uuid has min/max) if a
-  # cold catalog shows up in traces.
-  defp value_texts(_user, _vault, [], _fk), do: %{}
+  # ponytail: one decrypt per distinct sample note. Samples are the lowest
+  # note id per value, so they overlap, but a vault whose keys each hold many
+  # one-note values still pays up to 50 x keys decrypts on a cache miss (the
+  # CRDT state is never loaded). Cap the samples if a cold catalog shows up
+  # in traces.
+  defp value_texts(_user, _vault, [], _fk), do: {true, %{}}
 
   defp value_texts(user, vault, values, fk) do
     ids = values |> Enum.map(&List.last/1) |> Enum.uniq() |> Enum.map(&Ecto.UUID.load!/1)
 
-    query = from(n in Notes.scoped_live(user, vault), where: n.id in ^ids)
+    query =
+      from(n in Notes.scoped_live(user, vault), where: n.id in ^ids, select: struct(n, ^@fields))
+
     notes = Repo.with_tenant!(user.id, fn -> Repo.all(query) end)
 
     notes
     |> Crypto.decrypt_notes_batch(user)
     |> Enum.zip(notes)
-    |> Enum.reduce(%{}, fn
-      {{:ok, note}, _row}, acc ->
-        Map.merge(acc, note_texts(note, fk))
+    |> Enum.reduce({true, %{}}, fn
+      {{:ok, note}, _row}, {ok?, acc} ->
+        {ok?, Map.merge(acc, note_texts(note, fk))}
 
-      {{:error, reason}, row}, acc ->
+      {{:error, reason}, row}, {_ok?, acc} ->
         DecryptFailure.log("field_catalog_decrypt_failed", reason,
           user_id: user.id,
           note_id: row.id
         )
 
-        acc
+        {false, acc}
     end)
   end
 
