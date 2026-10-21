@@ -59,10 +59,10 @@ defmodule Engram.Crypto.RotationGate do
   """
   @spec gated((-> result)) :: result when result: term()
   def gated(fun) when is_function(fun, 0) do
-    if Process.get(:engram_tenant) && Repo.in_transaction?() do
-      with {:error, :rotation_in_progress} <- check(Process.get(:engram_tenant)),
-           do: raise(Engram.Crypto.RotationInProgressError)
-    end
+    tenant = Process.get(:engram_tenant)
+
+    if tenant && Repo.in_transaction?() && check(tenant) == {:error, :rotation_in_progress},
+      do: raise(Engram.Crypto.RotationInProgressError)
 
     previous = Process.put(:engram_write_gate, true)
 
