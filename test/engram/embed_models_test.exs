@@ -209,6 +209,42 @@ defmodule Engram.EmbedModelsTest do
     end
   end
 
+  describe "upgrade pacing" do
+    setup do
+      saas!()
+      EngramWeb.RateLimiter.reset_buckets!()
+      ServiceConfig.put_override(:index_rebuild, "off")
+      :ok
+    end
+
+    test "an upgrade re-embed charges the maintenance bucket; the next one in a spent minute snoozes" do
+      Rebuild.paced(fn ->
+        :telemetry.execute([:engram, :voyage, :embed, :tokens], %{total_tokens: 150_000}, %{
+          purpose: :maintenance,
+          model: @large
+        })
+      end)
+
+      note = indexed_note(paid_user(), @lite)
+
+      assert {:snooze, 30} =
+               perform_job(RebuildStaleNote, %{
+                 note_id: note.id,
+                 user_id: note.user_id,
+                 upgrade: true
+               })
+    end
+
+    test "paced/1 returns its function's result" do
+      :telemetry.execute([:engram, :voyage, :embed, :tokens], %{total_tokens: 150_000}, %{
+        purpose: :maintenance,
+        model: @large
+      })
+
+      assert Rebuild.paced(fn -> :ran end) == :ran
+    end
+  end
+
   describe "self-host keeps one configured model" do
     setup do: self_host!()
 

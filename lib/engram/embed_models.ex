@@ -11,9 +11,11 @@ defmodule Engram.EmbedModels do
 
     * The DOC model follows the note OWNER's plan at embed time (ordinary
       embeds and the rebuild) and is stamped on `notes.embed_model`. Every
-      reuse path (retained vectors, the vector cache, the chunk fingerprints
-      and so the rebuild's copied vectors) is keyed on that model, so a
-      vector made by another model is never reused for the note.
+      reuse path (the vector cache, the chunk fingerprints and so the
+      rebuild's copied and mean-pooled vectors, the dry-run estimate) takes a
+      vector made by that model or a higher tier of the family
+      (`reuse_models/2`), never a lower one. A kept vector's fingerprint
+      still names the model that made it.
     * The QUERY model follows the SEARCHING user's plan
       (`Engram.Search.SearchProfile`); a `search_query_model` override wins.
 
@@ -23,10 +25,12 @@ defmodule Engram.EmbedModels do
       unedited is found by the reconcile sweep's model term and queued as a
       `RebuildStaleNote` at the lowest priority (`upgrade: true`), paced by
       the rebuild's gate (maintenance token bucket and Qdrant health) even
-      when the pass is not `on`.
+      when the pass is not `on`, and its Voyage tokens debit that bucket
+      (`Rebuild.paced/1`).
     * Downgrade: the large vectors stay (`acceptable/1` takes any plan model
-      priced at least as high as the one the plan needs). The next edit
-      embeds at the new plan's model, with no reuse of the old vectors.
+      priced at least as high as the one the plan needs). A later pass,
+      including the rebuild, keeps every stored large vector
+      (`reuse_models/2`) and embeds only new or changed chunks at lite.
 
   Self-host (billing off), and any build that cannot name its model (the
   test mock): one configured model for every note and query, as before
@@ -97,6 +101,27 @@ defmodule Engram.EmbedModels do
       end
 
     models |> Enum.filter(&(price(&1) >= floor)) |> Enum.uniq()
+  end
+
+  @doc """
+  Models other than `model` whose STORED vectors `user`'s notes may keep: the
+  higher tiers of the family (`acceptable/1` for the owner's plan), most
+  expensive first. A Free pass keeps a large vector and embeds only new or
+  changed chunks with lite; a paid pass keeps nothing made by lite. [] off
+  per-plan.
+  """
+  @spec reuse_models(Engram.Accounts.User.t(), String.t() | nil) :: [String.t()]
+  def reuse_models(user, model) do
+    if per_plan?() do
+      class = if Billing.paid?(user), do: :paid, else: :free
+
+      class
+      |> acceptable()
+      |> Enum.reject(&(&1 == model))
+      |> Enum.sort_by(&price/1, :desc)
+    else
+      []
+    end
   end
 
   @doc "Micro-USD per million tokens; an unknown model prices as voyage-4-large."

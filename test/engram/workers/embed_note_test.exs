@@ -1551,5 +1551,78 @@ defmodule Engram.Workers.EmbedNoteTest do
         assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_model == unquote(model)
       end
     end
+
+    # Index once at `from_tier` (nil = Free), then flip the plan and force a
+    # version rebuild of the unchanged note. Returns the chunk point ids
+    # before and after, and how many texts the rebuild sent Voyage.
+    defp replan_and_rebuild(ctx, from_tier, to_tier, rebuild? \\ true)
+
+    defp replan_and_rebuild(
+           %{bypass: bypass, user: user, note: note},
+           from_tier,
+           to_tier,
+           rebuild?
+         ) do
+      if from_tier, do: insert(:subscription, user: user, tier: from_tier, status: "active")
+      sent = :counters.new(1, [])
+
+      Engram.MockEmbedder
+      |> stub(:embed_texts, fn texts, _opts ->
+        :counters.add(sent, 1, length(texts))
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      stub_qdrant_optional(bypass)
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+      assert :counters.get(sent, 1) > 0
+      before = point_ids(note)
+
+      Repo.delete_all(from(s in Engram.Billing.Subscription, where: s.user_id == ^user.id),
+        skip_tenant_check: true
+      )
+
+      if to_tier, do: insert(:subscription, user: user, tier: to_tier, status: "active")
+
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all([set: [chunker_version: nil]], skip_tenant_check: true)
+
+      :counters.put(sent, 1, 0)
+      if rebuild?, do: assert(:ok = perform_job(EmbedNote, %{note_id: note.id}))
+      {before, point_ids(note), :counters.get(sent, 1)}
+    end
+
+    defp point_ids(note) do
+      from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id, select: c.qdrant_point_id)
+      |> Repo.all(skip_tenant_check: true)
+      |> Enum.sort()
+    end
+
+    test "a downgraded note keeps its large vectors: the rebuild sends Voyage nothing", ctx do
+      {before, after_ids, sent} = replan_and_rebuild(ctx, "pro", nil)
+
+      assert sent == 0
+      assert after_ids == before
+      refute EmbedNote.version_stale?(Repo.get!(Note, ctx.note.id, skip_tenant_check: true))
+    end
+
+    test "a downgraded note's dry-run estimate costs 0 tokens", %{user: user, note: note} = ctx do
+      _ = replan_and_rebuild(ctx, "pro", nil, false)
+      user = Engram.Accounts.get_user_with_subscription!(user.id)
+
+      {:ok, dec} =
+        Crypto.maybe_decrypt_note_fields(Repo.get!(Note, note.id, skip_tenant_check: true), user)
+
+      assert {:ok, %{est_tokens: 0, reused_points: reused}} =
+               Engram.Indexing.rebuild_estimate(dec, user)
+
+      assert reused > 0
+    end
+
+    test "an upgraded note does not reuse its lite vectors", ctx do
+      {before, after_ids, sent} = replan_and_rebuild(ctx, nil, "pro")
+
+      assert sent > 0
+      assert MapSet.disjoint?(MapSet.new(before), MapSet.new(after_ids))
+    end
   end
 end
