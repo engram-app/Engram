@@ -1644,6 +1644,7 @@ defmodule Engram.Vector.Qdrant do
   @doc "Whether new points are written in the v5 layout (UUIDv5 ids, v5 payload)."
   @spec write_v5_layout?() :: boolean()
   def write_v5_layout?, do: ServiceConfig.get(:write_v5_layout, false) == true
+
   @doc """
   Whether search reads chunk text from Postgres. Writing the v5 layout IMPLIES
   it (same pattern as `v5_payload_format?/0`): v5 points store no text in
