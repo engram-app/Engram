@@ -1,8 +1,14 @@
+import { Shapes } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n/locale-provider";
 import { intlLocale } from "@/lib/intl-locale";
-import { formatBytes, parseCsv, TEXT_PREVIEW_MAX_BYTES } from "./attachment-preview";
+import {
+	excalidrawTexts,
+	formatBytes,
+	parseCsv,
+	TEXT_PREVIEW_MAX_BYTES,
+} from "./attachment-preview";
 
 // Data rows shown, not counting the header.
 const MAX_ROWS = 500;
@@ -105,5 +111,50 @@ export function AttachmentTextPreview({
 				</figcaption>
 			) : null}
 		</figure>
+	);
+}
+
+// We do not render Excalidraw drawings (its renderer is a very large
+// dependency), so say what the file is, where it opens, and the words in it.
+export function ExcalidrawPreview({ blob }: { blob: Blob }) {
+	const { t } = useT();
+	const [texts, setTexts] = useState<string[] | null>(null);
+
+	useEffect(() => {
+		let cancelled = false;
+		blob
+			.slice(0, TEXT_PREVIEW_MAX_BYTES)
+			.text()
+			.then((s) => {
+				if (!cancelled) {
+					setTexts(excalidrawTexts(s));
+				}
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [blob]);
+
+	return (
+		<section className="flex flex-col items-center gap-3 rounded-lg border border-dashed px-6 py-12 text-center">
+			<Shapes className="size-10 text-muted-foreground" aria-hidden="true" />
+			<h3 className="font-medium">{t("Excalidraw drawing")}</h3>
+			<p className="max-w-md text-muted-foreground text-sm">
+				{t("Open it in Obsidian with the Excalidraw plugin to see and edit the drawing.")}
+			</p>
+			{texts && texts.length > 0 ? (
+				<figure className="mt-2 flex max-w-md flex-col gap-1 text-sm">
+					<figcaption className="text-muted-foreground text-xs">
+						{t("Text in this drawing")}
+					</figcaption>
+					<ul translate="no">
+						{texts.map((text, i) => (
+							// biome-ignore lint/suspicious/noArrayIndexKey: the same words can repeat; position is the only identity.
+							<li key={i}>{text}</li>
+						))}
+					</ul>
+				</figure>
+			) : null}
+		</section>
 	);
 }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
 	attachmentRenamePath,
+	excalidrawTexts,
 	fileStem,
 	formatBytes,
 	opensInline,
@@ -103,5 +104,49 @@ describe("extension-locked rename", () => {
 		expect(attachmentRenamePath("a.zip", "a")).toBeNull();
 		expect(attachmentRenamePath("a.zip", "   ")).toBeNull();
 		expect(attachmentRenamePath("a.zip", "x/y")).toBeNull();
+	});
+});
+
+describe("Excalidraw", () => {
+	test("a .excalidraw file and the plugin's .excalidraw.md are drawings", () => {
+		expect(previewKind("a/Plan.excalidraw", "application/octet-stream")).toBe("excalidraw");
+		expect(previewKind("Plan.Excalidraw.md", "text/markdown")).toBe("excalidraw");
+		expect(previewKind("Plan.md", "text/markdown")).toBe("text");
+	});
+
+	test("pulls the text out of raw JSON", () => {
+		const json = JSON.stringify({
+			type: "excalidraw",
+			elements: [
+				{ type: "rectangle" },
+				{ type: "text", text: "Hello" },
+				{ type: "text", text: "  " },
+				{ type: "text", text: "World" },
+			],
+		});
+		expect(excalidrawTexts(json)).toEqual(["Hello", "World"]);
+	});
+
+	test("pulls the Text Elements section out of the plugin's markdown", () => {
+		const md = [
+			"---",
+			"excalidraw-plugin: parsed",
+			"---",
+			"# Text Elements",
+			"Hello Excalidraw ^txt1",
+			"",
+			"Second ^abc",
+			"%%",
+			"# Drawing",
+			"```json",
+			"{}",
+			"```",
+		].join("\n");
+		expect(excalidrawTexts(md)).toEqual(["Hello Excalidraw", "Second"]);
+	});
+
+	test("anything else yields no text", () => {
+		expect(excalidrawTexts("not json")).toEqual([]);
+		expect(excalidrawTexts("{}")).toEqual([]);
 	});
 });

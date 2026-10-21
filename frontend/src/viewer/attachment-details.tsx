@@ -11,6 +11,7 @@ import {
 	FileVideo,
 	FolderInput,
 	type LucideIcon,
+	Shapes,
 	TextCursorInput,
 	Trash2,
 } from "lucide-react";
@@ -48,6 +49,7 @@ const KIND_ICONS: Record<PreviewKind, LucideIcon> = {
 	video: FileVideo,
 	csv: FileSpreadsheet,
 	text: FileCode,
+	excalidraw: Shapes,
 };
 
 interface NameProps {

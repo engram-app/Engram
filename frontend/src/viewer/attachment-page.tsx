@@ -12,7 +12,7 @@ import { useAttachments } from "../api/queries";
 import { useRightToolSlot } from "../layout/right-tools-context";
 import { AttachmentDetails, AttachmentName } from "./attachment-details";
 import { formatBytes, opensInline, previewKind } from "./attachment-preview";
-import { AttachmentTextPreview } from "./attachment-text-preview";
+import { AttachmentTextPreview, ExcalidrawPreview } from "./attachment-text-preview";
 import BacklinksPanel from "./backlinks-panel";
 import { DocumentHeader } from "./document-header";
 import { DocumentSurface } from "./document-surface";
@@ -231,6 +231,8 @@ export default function AttachmentPage() {
 					onError={onRenderError}
 				/>
 			);
+		} else if (kind === "excalidraw") {
+			preview = <ExcalidrawPreview blob={blob} />;
 		} else if (kind === "text" || kind === "csv") {
 			preview = <AttachmentTextPreview blob={blob} csv={kind === "csv"} filename={filename} />;
 		}

@@ -91,7 +91,7 @@ function extOf(path: string): string {
 
 const UNITS = ["byte", "kilobyte", "megabyte", "gigabyte"] as const;
 
-export type PreviewKind = "image" | "pdf" | "audio" | "video" | "csv" | "text";
+export type PreviewKind = "image" | "pdf" | "audio" | "video" | "csv" | "text" | "excalidraw";
 
 // Text previews render only this much: a <pre> or table holding 100 MB of
 // text freezes the tab. Everything else previews at any size.
@@ -100,7 +100,11 @@ export const TEXT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
 export function previewKind(path: string, mime: string): PreviewKind | null {
 	const ext = extOf(path);
 	let kind: PreviewKind | null = null;
-	if (mime.startsWith("image/")) {
+	// Before the text rules: the plugin's drawings are markdown, and a raw
+	// .excalidraw is JSON, but neither reads as text.
+	if (ext === "excalidraw" || path.toLowerCase().endsWith(".excalidraw.md")) {
+		kind = "excalidraw";
+	} else if (mime.startsWith("image/")) {
 		kind = "image";
 	} else if (mime === "application/pdf") {
 		kind = "pdf";
@@ -208,4 +212,47 @@ export function attachmentRenamePath(path: string, nextStem: string): string | n
 	}
 	const folder = path.includes("/") ? path.slice(0, path.lastIndexOf("/") + 1) : "";
 	return `${folder}${next}${ext}`;
+}
+
+// The words in an Excalidraw drawing, so its placeholder says what it holds.
+// Reads both formats: a raw .excalidraw (JSON with text elements) and the
+// Obsidian plugin's .excalidraw.md (a "# Text Elements" section, each line
+// ending in a " ^id" block reference). Anything else yields nothing.
+export function excalidrawTexts(source: string): string[] {
+	try {
+		const doc: unknown = JSON.parse(source);
+		const elements =
+			typeof doc === "object" && doc !== null && "elements" in doc && Array.isArray(doc.elements)
+				? doc.elements
+				: [];
+		return elements.flatMap((e: unknown) =>
+			typeof e === "object" &&
+			e !== null &&
+			"type" in e &&
+			e.type === "text" &&
+			"text" in e &&
+			typeof e.text === "string" &&
+			e.text.trim()
+				? [e.text.trim()]
+				: [],
+		);
+	} catch {
+		// Not JSON: the plugin's markdown form, read below.
+	}
+	const lines = source.split("\n");
+	const start = lines.findIndex((l) => l.trim() === "# Text Elements");
+	if (start < 0) {
+		return [];
+	}
+	const texts: string[] = [];
+	for (const line of lines.slice(start + 1)) {
+		if (line.startsWith("%%") || line.startsWith("# ")) {
+			break;
+		}
+		const text = line.replace(/\s\^[\w-]+\s*$/u, "").trim();
+		if (text) {
+			texts.push(text);
+		}
+	}
+	return texts;
 }

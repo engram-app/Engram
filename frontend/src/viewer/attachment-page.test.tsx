@@ -140,6 +140,17 @@ it("shows 500 data rows under the header, then says it stopped", async () => {
 	expect(container.querySelectorAll("tbody tr")).toHaveLength(500);
 });
 
+it("shows an Excalidraw placeholder with the drawing's text", async () => {
+	const json = JSON.stringify({ type: "excalidraw", elements: [{ type: "text", text: "Hello" }] });
+	mockAttachments = [
+		att({ id: "x-1", path: "Plan.excalidraw", mime_type: "application/octet-stream" }),
+	];
+	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob([json]));
+	renderAt("x-1");
+	expect(await screen.findByText(/excalidraw drawing/iu)).toBeInTheDocument();
+	expect(await screen.findByText("Hello")).toBeInTheDocument();
+});
+
 it("plays audio natively", async () => {
 	mockAttachments = [att({ id: "a-1", path: "s.mp3", mime_type: "audio/mpeg" })];
 	vi.spyOn(api, "getBlob").mockResolvedValueOnce(new Blob(["x"], { type: "audio/mpeg" }));
