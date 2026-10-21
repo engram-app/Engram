@@ -49,9 +49,11 @@ Output: `load-out/summary.md` (p50/p95/p99 and errors per op, per phase),
   `guards.STAGING_HOSTS` (staging, the FastRaid LAN host, localhost);
   anything else needs `--i-know-this-is-not-staging`. It is never read from
   `ENGRAM_API_URL`. A `sk_live_` Clerk key is refused.
-- **Secrets.** The CRDT config (live API keys) goes to a 0600 tempfile
-  outside `--out` and is deleted after the run; the artifact upload also
-  excludes it. The bun child gets no Clerk key. Each run revokes the
+- **Secrets.** The CRDT config (live API keys) reaches bun on stdin, so no
+  file ever holds it; the artifact upload also excludes `crdt_cfg.json` as a
+  second layer. SIGTERM/SIGINT stop the bun child before exiting. Errors in
+  `ops.jsonl` are redacted (`token=` and `engram_` keys). The bun child gets
+  no Clerk key. Each run revokes the
   accounts' earlier API keys and device families, and its own at the end.
 
 ## Spend guard

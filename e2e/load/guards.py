@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
-import os
+import re
 import threading
 from urllib.parse import urlsplit
 
@@ -56,7 +55,11 @@ class SpendGuard:
             return True
 
 
-def remove_quietly(path: str) -> None:
-    """Delete `path` if it is there; never raises (safe from atexit)."""
-    with contextlib.suppress(OSError):
-        os.unlink(path)
+_TOKEN_PARAM = re.compile(r"(token=)[^&\s'\"]+")
+_API_KEY = re.compile(r"engram_[A-Za-z0-9_\-]{16,}")
+
+
+def redact(text: str) -> str:
+    """Strip live credentials from text bound for ops.jsonl or a log: the socket
+    URL's `token=` param and any bare `engram_` API key."""
+    return _API_KEY.sub("engram_REDACTED", _TOKEN_PARAM.sub(r"\1REDACTED", text))

@@ -23,15 +23,14 @@ See e2e/load/README.md for the one-time limit grant and the spend guard.
 from __future__ import annotations
 
 import argparse
-import atexit
 import base64
 import json
 import math
 import os
 import random
+import signal
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import uuid
@@ -47,11 +46,11 @@ import requests  # noqa: E402
 from websockets.sync.client import connect as ws_connect  # noqa: E402
 
 from helpers.clerk import ClerkClient  # noqa: E402
+from load.guards import redact  # noqa: E402
 from load.guards import (  # noqa: E402
     SpendGuard,
     check_clerk_key,
     check_target,
-    remove_quietly,
 )
 from helpers.clerk_auth import ClerkAuth  # noqa: E402
 
@@ -224,7 +223,7 @@ class Recorder:
                 "ms": round(ms),
                 "status": status,
                 "ok": ok,
-                "err": err[:200],
+                "err": redact(err)[:200],
             }
         )
         with self.lock:
@@ -916,6 +915,47 @@ def purge_cycle(
         acct.paused.clear()
 
 
+_CHILDREN: list[subprocess.Popen] = []
+
+
+def spawn_child(
+    cmd: list[str], cfg: dict, env: dict | None, log: Path
+) -> subprocess.Popen:
+    """Start the CRDT child with its config (live API keys) on STDIN, so no key
+    file ever exists, not even one a SIGTERM would strand."""
+    child = subprocess.Popen(
+        cmd,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=open(log, "w"),
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    _CHILDREN.append(child)
+    child.stdin.write(json.dumps(cfg))
+    child.stdin.close()
+    return child
+
+
+def install_signal_handlers() -> None:
+    """SIGTERM/SIGINT (a CI cancel or timeout): stop the children, exit 128+sig.
+    atexit alone does not run on a signal, which orphaned the bun child."""
+
+    def on_signal(signum, _frame):
+        for c in _CHILDREN:
+            if c.poll() is None:
+                c.terminate()
+        for c in _CHILDREN:
+            try:
+                c.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                c.kill()
+        os._exit(128 + signum)
+
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     # Deliberately NOT defaulted from ENGRAM_API_URL: the headless e2e harness
@@ -960,6 +1000,7 @@ def main() -> int:
     ap.add_argument("--workers", type=int, default=24)
     ap.add_argument("--out", default=os.environ.get("LOAD_OUT", "load-out"))
     args = ap.parse_args()
+    install_signal_handlers()
     check_target(args.api, args.allow_any_host)
     clerk_key = os.environ.get("STAGING_CLERK_SECRET_KEY", "")
     check_clerk_key(clerk_key)
@@ -1057,26 +1098,22 @@ def main() -> int:
             "out": str((out / "crdt_ops.jsonl").resolve()),
             "apiUrl": args.api,
         }
-        # The config carries live API keys: a 0600 tempfile OUTSIDE --out (which
-        # CI uploads as an artifact), deleted once the CRDT process exits.
-        fd, crdt_cfg = tempfile.mkstemp(prefix="load-crdt-", suffix=".json")
-        with os.fdopen(fd, "w") as f:
-            json.dump(cfg, f)
+        # The config carries live API keys: it goes to bun on STDIN, never to a
+        # file (see spawn_child), and never into --out (CI uploads that).
         # The plugin code bun imports comes from another repo's ref: it gets no Clerk key.
         env = {k: v for k, v in os.environ.items() if k != "STAGING_CLERK_SECRET_KEY"}
         env.update(ENGRAM_API_URL=args.api, E2E_DELIVERY_TIMEOUT="60")
-        atexit.register(remove_quietly, crdt_cfg)
-        crdt = subprocess.Popen(
+        crdt = spawn_child(
             [
                 "bun",
                 "--preload",
                 str(E2E / "headless/preload.ts"),
                 str(HERE / "crdt_load.ts"),
-                crdt_cfg,
+                "-",
             ],
+            cfg,
             env=env,
-            stdout=open(out / "crdt.log", "w"),
-            stderr=subprocess.STDOUT,
+            log=out / "crdt.log",
         )
 
     pool = ThreadPoolExecutor(args.workers)
@@ -1144,7 +1181,6 @@ def main() -> int:
             crdt.wait(timeout=600)
         except subprocess.TimeoutExpired:
             crdt.kill()
-        remove_quietly(crdt_cfg)
     for a in accts:  # don't leave this run's device families live
         revoke_device_families(a, clerk)
     a = args

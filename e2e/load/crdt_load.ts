@@ -15,7 +15,7 @@
 //
 // Run (sim.py spawns this):
 //   ENGRAM_PLUGIN_SRC=<plugin> ENGRAM_API_URL=<api> \
-//     bun --preload ./e2e/headless/preload.ts ./e2e/load/crdt_load.ts <config.json>
+//     bun --preload ./e2e/headless/preload.ts ./e2e/load/crdt_load.ts - < config.json
 // config: { sessions:[{token,userId,vaultId,label}], start, schedule:{...}, rates:{...}, out }
 // Emits one JSON line per op to `out` (jsonl): {t, op, ms, ok, err?}.
 
@@ -53,7 +53,8 @@ process.on("unhandledRejection", (e) => {
 	record("crdt_unhandled_rejection", 0, false, String((e as Error)?.message ?? e).slice(0, 200));
 });
 
-const cfg: Cfg = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+// Config arrives on stdin ("-"): it carries live API keys, so no file ever holds it.
+const cfg: Cfg = JSON.parse(fs.readFileSync(process.argv[2] === "-" ? 0 : process.argv[2], "utf8"));
 const out = fs.openSync(cfg.out, "a");
 const KEYSTROKE_MS = 120; // ~8 chars/s, a fast typist
 const WORD = "lorem";
