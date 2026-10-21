@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.60.0](https://github.com/engram-app/Engram/compare/0.59.0...0.60.0) (2026-10-21)
+
+
+### Features
+
+* **notes:** accept and store client file ctime ([#2082](https://github.com/engram-app/Engram/issues/2082)) ([789dd51](https://github.com/engram-app/Engram/commit/789dd51cfdb914107347cdaa385373677af3379a))
+
+
+### Bug Fixes
+
+* **ci:** skip e2e test steps on cancel so teardown runs ([#2099](https://github.com/engram-app/Engram/issues/2099)) ([dcf5a28](https://github.com/engram-app/Engram/commit/dcf5a2887cd25dbcebe35e0f7cc6e944e342b935))
+* **crypto:** single-flight DEK unwraps per node ([#2107](https://github.com/engram-app/Engram/issues/2107)) ([19728b0](https://github.com/engram-app/Engram/commit/19728b0c665b3c2d4a932f086e96d04bad13c819))
+* DEK rotation filter rewrite, Free 6M embed bucket, fixed PromEx buckets ([#2101](https://github.com/engram-app/Engram/issues/2101)) ([e53b205](https://github.com/engram-app/Engram/commit/e53b2056aaffbcb06f6aa956e8ae49d93fa51773))
+
+
+### Performance Improvements
+
+* **links:** stop storing resolved targets, batch MCP links ([#2051](https://github.com/engram-app/Engram/issues/2051)) ([09e2a3e](https://github.com/engram-app/Engram/commit/09e2a3e9420b84e0907c2a737bdb5ff1f5ea9b2b))
+
 ## [0.59.0](https://github.com/engram-app/Engram/compare/0.58.1...0.59.0) (2026-10-21)
 
 
