@@ -167,9 +167,7 @@ defmodule Engram.IndexingHugeNotesTest do
     ServiceConfig.put_override(:chunk_text_write, true)
     run_case(ctx)
 
-    [row | _] =
-      rows =
-      Repo.all(from(c in Chunk, where: c.user_id == ^ctx.user.id), skip_tenant_check: true)
+    rows = Repo.all(from(c in Chunk, where: c.user_id == ^ctx.user.id), skip_tenant_check: true)
 
     assert length(rows) > 4_369, "fixture must overflow one statement (got #{length(rows)})"
     # Over the display threshold: every point row holds its envelope.

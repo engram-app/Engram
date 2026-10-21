@@ -2,7 +2,8 @@ defmodule Engram.Notes.SearchHitsRlsTest do
   @moduledoc """
   `Notes.search_hits_by_qdrant_points/2` (Task 11.3) under enforced RLS, as
   `engram_app` (see `docs/context/rls-enforcement-testing-traps.md`). The
-  query reads `chunks` (FORCE RLS) for each hit's encrypted text. Unscoped it
+  query reads `chunks` and `chunk_points` (both FORCE RLS) for each hit's
+  encrypted text. Unscoped it
   returns zero rows, every hit reads as stale and is dropped: a search that
   silently finds nothing. The control proves the role drop engages, so the
   other assertions are not vacuous.
@@ -12,7 +13,7 @@ defmodule Engram.Notes.SearchHitsRlsTest do
   import Engram.RlsCase
 
   alias Engram.{Crypto, Notes}
-  alias Engram.Notes.Chunk
+  alias Engram.Notes.{Chunk, ChunkPoint}
 
   setup do
     {:ok, user} = Engram.Fixtures.user_with_dek_fixture()
@@ -44,7 +45,10 @@ defmodule Engram.Notes.SearchHitsRlsTest do
           char_end: 1,
           qdrant_point_id: point_id
         })
-        |> Ecto.Changeset.change(Crypto.encrypt_chunk_text(text, "H", dek, point_id))
+        |> Repo.insert!()
+
+        %ChunkPoint{point_id: point_id, note_id: note.id, user_id: user.id, position: 0}
+        |> struct(Crypto.encrypt_chunk_text(text, "H", dek, point_id))
         |> Repo.insert!()
       end)
 
