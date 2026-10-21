@@ -2536,8 +2536,12 @@ defmodule Engram.Indexing do
     plan = plan_chunks(capped, rows, content_key, dense?)
 
     # C13 averages each member's OWN stored vector: a fingerprint that lives
-    # only as a member of a merged point has none, so it is not counted.
-    known = standalone_hmacs(rows)
+    # only as a member of a merged point has none, so it is not counted, and
+    # a note that never had dense vectors (nil hash) has none at all.
+    known =
+      if Map.get(note, :dense_indexed_hash) == nil,
+        do: MapSet.new(),
+        else: standalone_hmacs(rows)
 
     Enum.reduce(plan.entries, zero, fn entry, acc ->
       chunk = entry_chunk(entry)

@@ -468,6 +468,19 @@ defmodule Engram.RebuildTest do
       assert est.est_tokens == 0
     end
 
+    # A note that never got dense vectors (a spent cap left it sparse-only)
+    # has no stored vector to average: its merged groups are paid for.
+    test "a capped sparse-only note is never counted as mean-pooled", %{user: user, vault: vault} do
+      note = %{indexed!(user, vault, sections(6)) | dense_indexed_hash: nil}
+      enable_index_budget()
+      insert(:user_limit_override, user: user, key: "note_points_cap", value: %{"v" => 2})
+
+      est = estimate!(note, Repo.reload!(user, skip_tenant_check: true))
+
+      assert est.mean_pooled_points == 0
+      assert est.est_tokens > 0
+    end
+
     test "a note with no dense hash is planned dense and estimated with tokens",
          %{user: user, vault: vault} do
       {:ok, note} =
