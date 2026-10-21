@@ -320,9 +320,12 @@ async def test_vault_switch_reopens_modal(vault_a, cdp_a):
 
         await _dismiss_via_escape(cdp_a)
     finally:
-        # Restore LAST and unconditionally: every cleanup step above it must
-        # not be able to skip it, or the next tests inherit a dead channel.
-        if (vault_a / path).exists():
-            (vault_a / path).unlink()
-        await cdp_a.resume_outgoing_sync()
-        await cdp_a.restore_vault_identity(original_vault_id, original_accepted)
+        # Restore LAST but unconditionally: the inner finally guarantees a
+        # failing cleanup step cannot skip it, or the next tests inherit a
+        # dead channel.
+        try:
+            if (vault_a / path).exists():
+                (vault_a / path).unlink()
+            await cdp_a.resume_outgoing_sync()
+        finally:
+            await cdp_a.restore_vault_identity(original_vault_id, original_accepted)
