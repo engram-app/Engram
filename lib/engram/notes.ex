@@ -915,13 +915,21 @@ defmodule Engram.Notes do
   end
 
   # Only carry ctime when sent: the key's absence leaves a stored value
-  # untouched on update (older plugins must not null it).
+  # untouched on update (older plugins must not null it). Same rule as
+  # POST /notes/ctime: a number > 0, anything else is ignored rather than
+  # failing the whole push.
   defp put_client_ctime(base_attrs, attrs) do
     case attrs["ctime"] || attrs[:ctime] do
-      nil -> base_attrs
-      ctime -> Map.put(base_attrs, :ctime, ctime)
+      ctime when is_number(ctime) and ctime > 0 -> Map.put(base_attrs, :ctime, ctime)
+      _ -> base_attrs
     end
   end
+
+  # ctime is the file's creation time, and another device's copy has its own
+  # (when that device synced the file down). The first ctime stored wins, as
+  # in set_client_ctimes/3; an edit only fills one the note never had.
+  defp keep_stored_ctime(attrs, %Note{ctime: nil}), do: attrs
+  defp keep_stored_ctime(attrs, %Note{ctime: ctime}), do: Map.put(attrs, :ctime, ctime)
 
   defp insert_new_note(base_attrs, user, sanitized_path, folder, client_id, lookup_query) do
     # Pricing v2 §G — server-side notes_cap enforcement. Free tier defaults
@@ -2595,13 +2603,17 @@ defmodule Engram.Notes do
              sanitized_path,
              merge_doc
            ),
-         merged_attrs = %{
-           base_attrs
-           | content: crdt.merged_text,
-             title: crdt.title,
-             tags: crdt.tags,
-             content_hash: crdt.content_hash
-         },
+         merged_attrs =
+           keep_stored_ctime(
+             %{
+               base_attrs
+               | content: crdt.merged_text,
+                 title: crdt.title,
+                 tags: crdt.tags,
+                 content_hash: crdt.content_hash
+             },
+             existing
+           ),
          {:ok, encrypted} <- Crypto.encrypt_note_fields(merged_attrs, user, existing.id) do
       phase_b =
         inject_phase_b_fields(encrypted, user, existing.id, sanitized_path, folder, crdt.tags)
