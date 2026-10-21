@@ -530,6 +530,15 @@ defmodule Engram.Notes.CrdtCheckpointTest do
 
     :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)
 
+    # Checkpoint 1 really persisted a doc past the old gate, on the live doc's
+    # lineage (`checkpoint/5` returns :ok on a skip too).
+    {:ok, row} = Repo.with_tenant(user.id, fn -> Repo.get!(Note, note.id) end)
+    {:ok, stored} = Crypto.decrypt_crdt_state(row, user)
+    {:ok, stored_doc} = CrdtBridge.doc_from_state(stored)
+    assert byte_size(stored) >= 500_000
+    assert CrdtBridge.client_count(stored_doc) >= 1_000
+    assert Yex.encode_state_vector!(stored_doc) == Yex.encode_state_vector!(doc)
+
     # The room keeps editing the doc it already holds.
     :ok = CrdtBridge.diff_into_text(Yex.Doc.get_text(doc, CrdtBridge.text_name()), body <> "BETA")
     :ok = CrdtCheckpoint.checkpoint(user.id, vault.id, note.id, doc)

@@ -186,6 +186,23 @@ defmodule Engram.Notes.CrdtBridgeTest do
     end
   end
 
+  describe "client_count/1" do
+    test "counts the distinct client ids in the state vector" do
+      {:ok, %{state: s}} = CrdtBridge.merge_plaintext(nil, "hello")
+      {:ok, doc} = CrdtBridge.doc_from_state(s)
+      assert CrdtBridge.client_count(doc) == 1
+
+      for i <- 1..3 do
+        other = Yex.Doc.new()
+        Yex.Map.set(Yex.Doc.get_map(other, "count_test"), "k#{i}", "v")
+        {:ok, u} = Yex.encode_state_as_update(other)
+        :ok = Yex.apply_update(doc, u)
+      end
+
+      assert CrdtBridge.client_count(doc) == 4
+    end
+  end
+
   describe "normalize_doc/1" do
     defp seed_body(doc, str) do
       text = Yex.Doc.get_text(doc, CrdtBridge.text_name())

@@ -254,8 +254,8 @@ defmodule Engram.PromEx.Crdt do
           description: "Yjs update size per CRDT update-log append, before encryption.",
           reporter_options: Buckets.opts(Engram.PromEx.Crdt.UpdateBytesBuckets)
         ),
-        # Distinct client IDs per doc. The checkpoint no longer flattens (#958),
-        # so this is the only signal for state-vector growth.
+        # Distinct client IDs per doc: state-vector growth, which the checkpoint
+        # no longer resets (#958).
         distribution(
           metric_prefix ++ [:checkpoint_doc, :client_count],
           event_name: @doc_event,
@@ -383,7 +383,7 @@ defmodule Engram.PromEx.Crdt do
           event_name: @sweep_event,
           measurement: :notes_over_threshold,
           description:
-            "Notes whose state exceeds 5x their content — the #1707 tuning target. Counted " <>
+            "Notes whose state exceeds 5x their content. Counted " <>
               "over `notes_measured`, so notes under the 100-byte content floor are NOT " <>
               "included: a note written then fully emptied has tiny content and large " <>
               "tombstone state, and lands in the excluded cohort rather than here. Sizes are " <>
@@ -593,5 +593,5 @@ end
 
 defmodule Engram.PromEx.Crdt.ClientCountBuckets do
   @moduledoc false
-  use Engram.PromEx.Buckets, [1, 2, 5, 10, 25, 50, 100, 500, 1_000]
+  use Engram.PromEx.Buckets, [1, 2, 5, 10, 25, 50, 100, 500, 1_000, 2_500, 5_000, 10_000]
 end
