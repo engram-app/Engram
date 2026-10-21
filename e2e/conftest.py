@@ -28,6 +28,7 @@ import pytest
 
 from helpers.api import ApiClient
 from helpers.auth_provider import get_auth_provider, ClerkAuthProvider
+from helpers.cdp import SIMULATED_SWITCH_VAULT_ID
 from helpers.billing import grant_test_plan
 from helpers.cleanup import cleanup_test_data, cleanup_vaults
 from helpers.obsidian import ObsidianInstance
@@ -832,6 +833,34 @@ async def _track_apikey_wipe(request):
             request.node.nodeid, mem_k, mem_r, disk_k,
             state.get("diskRefreshTokenLen", 0),
         )
+
+
+@pytest.fixture(autouse=True)
+async def _assert_no_vault_binding_leak(request):
+    """Fail the test that leaves a plugin bound to a fake or mismatched vault.
+
+    A test that fakes settings.vaultId and does not rebind the channel leaves
+    the sync gate closed for every later test on that instance; the victims
+    then time out with "not on server after 120s" and a clean server log
+    (run 39596495602: test_51 leaked into test_38/58/86). Check at teardown so
+    the culprit fails, not the victims. Cost: one CDP evaluate per instance.
+    """
+    yield
+    for name in ("cdp_a", "cdp_b", "cdp_c"):
+        if name not in request.fixturenames:
+            continue
+        try:
+            state = await request.getfixturevalue(name).vault_binding_state()
+        except Exception as e:  # noqa: BLE001 — probe must not mask the test result
+            logging.getLogger(__name__).debug("vault-binding probe skipped %s: %s", name, e)
+            continue
+        # Sentinel only: a settings/channel mismatch can be legitimate mid-churn
+        # (re-register, sign-out), so it would add false reds.
+        if SIMULATED_SWITCH_VAULT_ID in {state.get("settings"), state.get("channel")}:
+            pytest.fail(
+                f"{request.node.nodeid} left {name} on the simulated-switch vault id: {state}. "
+                "Restore via cdp.restore_vault_identity() in a finally."
+            )
 
 
 @pytest.fixture(autouse=True)
