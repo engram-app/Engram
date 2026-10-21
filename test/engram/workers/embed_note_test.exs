@@ -183,8 +183,11 @@ defmodule Engram.Workers.EmbedNoteTest do
         skip_tenant_check: true
       )
 
+      # A maintenance call: never retried once it may have been billed (H6).
       Engram.MockEmbedder
-      |> expect(:embed_texts, fn texts -> {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)} end)
+      |> expect(:embed_texts, fn texts, [purpose: :maintenance] ->
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
 
       stub_qdrant(bypass)
 
@@ -1503,6 +1506,137 @@ defmodule Engram.Workers.EmbedNoteTest do
       )
 
       assert {:cancel, :isolated_after_node_death} = perform_job(EmbedNote, args(note))
+    end
+  end
+
+  # Model per plan (`Engram.EmbedModels`): the owner's plan picks the doc model
+  # Voyage is sent, and the stamp names the same one.
+  describe "model per plan" do
+    setup do
+      prev = Map.new([:billing_enabled, :embed_model], &{&1, Application.get_env(:engram, &1)})
+      Application.put_env(:engram, :billing_enabled, true)
+      Application.put_env(:engram, :embed_model, "voyage-4-large")
+
+      on_exit(fn ->
+        for {k, v} <- prev,
+            do:
+              if(v == nil,
+                do: Application.delete_env(:engram, k),
+                else: Application.put_env(:engram, k, v)
+              )
+      end)
+    end
+
+    for {tier, model} <- [{nil, "voyage-4-lite"}, {"pro", "voyage-4-large"}] do
+      test "a #{tier || "free"} owner's note embeds and stamps #{model}", %{
+        bypass: bypass,
+        user: user,
+        note: note
+      } do
+        if unquote(tier),
+          do: insert(:subscription, user: user, tier: unquote(tier), status: "active")
+
+        me = self()
+
+        Engram.MockEmbedder
+        |> expect(:embed_texts, fn texts, opts ->
+          send(me, {:model, opts[:model]})
+          {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+        end)
+
+        stub_qdrant(bypass)
+
+        assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+        assert_received {:model, unquote(model)}
+        assert Repo.get!(Note, note.id, skip_tenant_check: true).embed_model == unquote(model)
+      end
+    end
+
+    # Index once at `from_tier` (nil = Free), then flip the plan and force a
+    # version rebuild of the unchanged note. Returns the chunk point ids
+    # before and after, and how many texts the rebuild sent Voyage.
+    defp replan_and_rebuild(ctx, from_tier, to_tier, rebuild? \\ true)
+
+    defp replan_and_rebuild(
+           %{bypass: bypass, user: user, note: note},
+           from_tier,
+           to_tier,
+           rebuild?
+         ) do
+      if from_tier, do: insert(:subscription, user: user, tier: from_tier, status: "active")
+      sent = :counters.new(1, [])
+
+      Engram.MockEmbedder
+      |> stub(:embed_texts, fn texts, _opts ->
+        :counters.add(sent, 1, length(texts))
+        {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
+      end)
+
+      stub_qdrant_optional(bypass)
+      assert :ok = perform_job(EmbedNote, %{note_id: note.id})
+      assert :counters.get(sent, 1) > 0
+      before = point_ids(note)
+
+      Repo.delete_all(from(s in Engram.Billing.Subscription, where: s.user_id == ^user.id),
+        skip_tenant_check: true
+      )
+
+      if to_tier, do: insert(:subscription, user: user, tier: to_tier, status: "active")
+
+      from(n in Note, where: n.id == ^note.id)
+      |> Repo.update_all([set: [chunker_version: nil]], skip_tenant_check: true)
+
+      :counters.put(sent, 1, 0)
+      if rebuild?, do: assert(:ok = perform_job(EmbedNote, %{note_id: note.id}))
+      {before, point_ids(note), :counters.get(sent, 1)}
+    end
+
+    defp point_ids(note) do
+      from(c in Engram.Notes.Chunk, where: c.note_id == ^note.id, select: c.qdrant_point_id)
+      |> Repo.all(skip_tenant_check: true)
+      |> Enum.sort()
+    end
+
+    test "a downgraded note keeps its large vectors: the rebuild sends Voyage nothing", ctx do
+      {before, after_ids, sent} = replan_and_rebuild(ctx, "pro", nil)
+
+      assert sent == 0
+      assert after_ids == before
+      refute EmbedNote.version_stale?(Repo.get!(Note, ctx.note.id, skip_tenant_check: true))
+    end
+
+    # `notes.embed_model` names the CHEAPEST model the note's vectors hold:
+    # kept large vectors stamp large, so a later upgrade re-embeds nothing.
+    test "a downgraded note that kept every large vector stays stamped large", ctx do
+      {_before, _after, 0} = replan_and_rebuild(ctx, "pro", nil)
+      note = Repo.get!(Note, ctx.note.id, skip_tenant_check: true)
+      assert note.embed_model == "voyage-4-large"
+      refute EmbedNote.version_stale?(note, true)
+    end
+
+    test "a Free note whose vectors are lite stays stamped lite", ctx do
+      {_before, _after, _sent} = replan_and_rebuild(ctx, nil, nil)
+      assert Repo.get!(Note, ctx.note.id, skip_tenant_check: true).embed_model == "voyage-4-lite"
+    end
+
+    test "a downgraded note's dry-run estimate costs 0 tokens", %{user: user, note: note} = ctx do
+      _ = replan_and_rebuild(ctx, "pro", nil, false)
+      user = Engram.Accounts.get_user_with_subscription!(user.id)
+
+      {:ok, dec} =
+        Crypto.maybe_decrypt_note_fields(Repo.get!(Note, note.id, skip_tenant_check: true), user)
+
+      assert {:ok, %{est_tokens: 0, reused_points: reused}} =
+               Engram.Indexing.rebuild_estimate(dec, user)
+
+      assert reused > 0
+    end
+
+    test "an upgraded note does not reuse its lite vectors", ctx do
+      {before, after_ids, sent} = replan_and_rebuild(ctx, nil, "pro")
+
+      assert sent > 0
+      assert MapSet.disjoint?(MapSet.new(before), MapSet.new(after_ids))
     end
   end
 end

@@ -46,6 +46,7 @@ defmodule Engram.Notes.Note do
     field :chunker_version, :integer
     field :keyword_version, :integer
     field :embed_model, :string
+    field :key_alias_version, :integer
     # Hash of the note-level Qdrant payload last written to this note's
     # points; see `Engram.Indexing.commit_index/2`. NULL = unknown, refresh.
     field :payload_hash, :binary
@@ -68,6 +69,9 @@ defmodule Engram.Notes.Note do
     field :embed_started_by, :string
     field :embed_started_hash, :string
     field :embed_crashes, :integer
+    # A v5 rebuild pass got its vectors from Voyage and has not committed yet
+    # (`Engram.Indexing`, chunker v5 Task 16.3).
+    field :rebuild_paid_at, :utc_datetime_usec
     field :mtime, :float
     field :deleted_at, :utc_datetime_usec
     field :content_ciphertext, :binary

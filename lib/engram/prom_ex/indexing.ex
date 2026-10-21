@@ -19,8 +19,17 @@ defmodule Engram.PromEx.Indexing do
     * `engram_prom_ex_indexing_rebuild_halted_total` and
       `engram_prom_ex_indexing_rebuild_drift_parked_total`: the v5 rebuild
       ledger halt (once per off transition) and drift parks (`Engram.Rebuild`).
+    * `engram_prom_ex_indexing_rebuild_double_pay_parked_total`: rebuild
+      notes parked before a second Voyage payment for the same content.
     * `engram_prom_ex_indexing_rebuild_meter_failed_total`: live ledger debits
       that failed and were carried to the end of the rebuild job.
+    * `engram_prom_ex_indexing_rebuild_ledger_{budget,spent}_tokens`: the
+      ledger (`Engram.Rebuild.ledger/0`), polled every 60 s on every node
+      (aggregate with `max`, never `sum`). Absent until a dry run seals a
+      budget. Spend past 1.1x the manifest is `spent > 1.1 * budget / 1.15`.
+    * `engram_prom_ex_indexing_rebuild_gated_total{reason}`: rebuild jobs
+      snoozed by `Engram.Rebuild.gate/0`, `tokens` (the maintenance bucket
+      is spent for the minute) or `qdrant` (the collection is behind).
     * `engram_prom_ex_indexing_repath_total` — counter of repath events by
       `:outcome`. Alert on `:fallback` / `:missing_points` rate; the `:ok` rate
       is the "renames took the cheap path" signal.
@@ -65,18 +74,77 @@ defmodule Engram.PromEx.Indexing do
 
   use PromEx.Plugin
 
+  require Logger
+
   @repath_stop_event [:engram, :indexing, :repath, :stop]
   @link_rewrite_failed_event [:engram, :links, :rewrite, :failed]
   @stale_points_leaked_event [:engram, :indexing, :stale_points_leaked]
   @rebuild_halted_event [:engram, :rebuild, :halted]
   @rebuild_drift_event [:engram, :rebuild, :drift_parked]
+  @rebuild_double_pay_event [:engram, :rebuild, :double_pay_parked]
   @rebuild_meter_failed_event [:engram, :rebuild, :meter_failed]
+  @rebuild_gated_event [:engram, :rebuild, :gated]
+  @rebuild_ledger_event [:engram, :rebuild, :ledger]
   @maintenance_embed_event [:engram, :embed, :maintenance]
   @points_written_event [:engram, :indexing, :points_written]
   @keys_skipped_event [:engram, :frontmatter_keys, :skipped]
   @vector_cache_lookup_event [:engram, :vector_cache, :lookup]
   @vector_cache_write_event [:engram, :vector_cache, :write]
   @vector_cache_skipped_event [:engram, :vector_cache, :skipped]
+
+  @impl true
+  def polling_metrics(opts) do
+    otp_app = Keyword.fetch!(opts, :otp_app)
+    prefix = PromEx.metric_prefix(otp_app, :indexing)
+
+    Polling.build(
+      :engram_rebuild_ledger_polling_metrics,
+      Keyword.get(opts, :rebuild_ledger_poll_rate, :timer.seconds(60)),
+      {__MODULE__, :execute_rebuild_ledger, []},
+      [
+        last_value(prefix ++ [:rebuild, :ledger, :budget_tokens],
+          event_name: @rebuild_ledger_event,
+          measurement: :budget_tokens,
+          description: "v5 rebuild ledger budget: 1.15x the dry-run manifest's estimated tokens."
+        ),
+        last_value(prefix ++ [:rebuild, :ledger, :spent_tokens],
+          event_name: @rebuild_ledger_event,
+          measurement: :spent_tokens,
+          description: "Voyage tokens the v5 rebuild pass has debited to its ledger."
+        )
+      ]
+    )
+  end
+
+  @doc false
+  # One ledger read per tick, on every node. telemetry_poller drops a
+  # measurement that raises for good, so a failed read is skipped here; the
+  # next tick retries. No ledger (before the dry run seals) emits nothing.
+  @spec execute_rebuild_ledger() :: :ok
+  def execute_rebuild_ledger do
+    case Engram.Rebuild.ledger() do
+      %{budget_tokens: budget, spent_tokens: spent} ->
+        :telemetry.execute(
+          @rebuild_ledger_event,
+          %{budget_tokens: budget, spent_tokens: spent},
+          %{}
+        )
+
+      nil ->
+        :ok
+    end
+
+    :ok
+  rescue
+    e -> ledger_skipped(inspect(e.__struct__))
+  catch
+    kind, _ -> ledger_skipped(Atom.to_string(kind))
+  end
+
+  defp ledger_skipped(why) do
+    Logger.warning("rebuild ledger poll skipped: #{why}")
+    :ok
+  end
 
   @impl true
   def event_metrics(opts) do
@@ -183,10 +251,22 @@ defmodule Engram.PromEx.Indexing do
             "v5 rebuild notes parked for costing over 1.5x their estimate and 50k tokens."
         ),
         counter(
+          metric_prefix ++ [:rebuild, :double_pay_parked, :total],
+          event_name: @rebuild_double_pay_event,
+          description: "v5 rebuild notes parked before paying Voyage twice for the same content."
+        ),
+        counter(
           metric_prefix ++ [:rebuild, :meter_failed, :total],
           event_name: @rebuild_meter_failed_event,
           description:
             "v5 rebuild ledger debits that failed live and were carried to the job's end."
+        ),
+        counter(
+          metric_prefix ++ [:rebuild, :gated, :total],
+          event_name: @rebuild_gated_event,
+          description:
+            "v5 rebuild jobs snoozed by the pass's pacing: tokens (bucket spent) or qdrant (behind).",
+          tags: [:reason]
         )
       ]
     )

@@ -1318,6 +1318,7 @@ export default {
 	frontmatter: "frontmatter",
 	reads: "đọc",
 	"{what} Wants {expectsLabel}.": "{what} muốn {expectsLabel}.",
+	"use {alias} or {key}": "sử dụng {alias} hoặc {key}",
 	"also accepts {aliases}": "cũng chấp nhận {aliases}",
 	or: "hoặc",
 	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":

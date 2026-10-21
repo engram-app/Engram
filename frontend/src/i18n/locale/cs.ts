@@ -1412,6 +1412,7 @@ export default {
 	frontmatter: "frontmatter",
 	reads: "čte",
 	"{what} Wants {expectsLabel}.": "{what} chce {expectsLabel}.",
+	"use {alias} or {key}": "použijte {alias} nebo {key}",
 	"also accepts {aliases}": "také přijímá {aliases}",
 	or: "nebo",
 	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":

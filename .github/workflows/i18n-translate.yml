@@ -163,6 +163,7 @@ jobs:
           add-paths: |
             frontend/src/i18n/locale/*.ts
             frontend/src/i18n/locale/state.json
+            frontend/src/i18n/locale/keys/*.json
             priv/i18n/email/*.json
           # main requires verified signatures; this routes the commit through
           # createCommitOnBranch, which GitHub signs for the App.

@@ -34,6 +34,14 @@ defmodule Engram.Workers.EmbedNote.CrashGuard do
 
   @isolated_queue "embed_isolated"
 
+  # The workers that run EmbedNote's pass, so the ones a quarantine cancels.
+  @workers ["Engram.Workers.EmbedNote", "Engram.Workers.RebuildStaleNote"]
+
+  defp worker(%Oban.Job{worker: "Engram.Workers.RebuildStaleNote"}),
+    do: Engram.Workers.RebuildStaleNote
+
+  defp worker(_job), do: Engram.Workers.EmbedNote
+
   # Oban kills an EmbedNote attempt at 10 minutes (EmbedNote.timeout/1), so a
   # stamp older than this cannot belong to a live attempt, whoever wrote it.
   @max_attempt_age_seconds 15 * 60
@@ -68,7 +76,7 @@ defmodule Engram.Workers.EmbedNote.CrashGuard do
   live attempt holds the note), or `{:cancel, reason}` after recording the
   death and acting on it.
   """
-  def check(%Note{} = note, %Oban.Job{queue: queue, args: args} = job) do
+  def check(%Note{} = note, %Oban.Job{queue: queue} = job) do
     same_content? = note.embed_started_hash == note.content_hash
     known = if same_content?, do: note.embed_crashes || 0, else: 0
 
@@ -80,13 +88,13 @@ defmodule Engram.Workers.EmbedNote.CrashGuard do
         quarantine(note, job, known + 1)
 
       dead_stamp?(note) and same_content? ->
-        isolate(note, args, known + 1)
+        isolate(note, job, known + 1)
 
       known >= 2 and future?(note.embed_retry_after) ->
         {:cancel, :quarantined}
 
       known >= 1 and queue != @isolated_queue ->
-        isolate(note, args, known)
+        isolate(note, job, known)
 
       true ->
         :run
@@ -138,11 +146,12 @@ defmodule Engram.Workers.EmbedNote.CrashGuard do
   defp future?(nil), do: false
   defp future?(at), do: DateTime.compare(at, DateTime.utc_now()) == :gt
 
-  defp isolate(note, args, deaths) do
+  # Re-run by the same worker: a `RebuildStaleNote` stays one, so the rerun
+  # keeps its maintenance Voyage purpose (no billable retries, H6) and the
+  # rebuild gate (chunker v5 Task 16.3).
+  defp isolate(note, %Oban.Job{args: args} = job, deaths) do
     :ok = write(note, embed_started_at: nil, embed_started_by: nil, embed_crashes: deaths)
-
-    {:ok, _} =
-      Oban.insert(Engram.Workers.EmbedNote.new(args, queue: @isolated_queue, unique: false))
+    {:ok, _} = Oban.insert(worker(job).new(args, queue: @isolated_queue, unique: false))
 
     {:cancel, :isolated_after_node_death}
   end
@@ -182,7 +191,7 @@ defmodule Engram.Workers.EmbedNote.CrashGuard do
     # cancels an executing job by killing its process.
     others =
       from(j in Oban.Job,
-        where: j.worker == "Engram.Workers.EmbedNote",
+        where: j.worker in @workers,
         where: j.state in ~w(available scheduled retryable executing),
         where: fragment("? @> ?", j.args, ^%{"note_id" => to_string(note.id)})
       )

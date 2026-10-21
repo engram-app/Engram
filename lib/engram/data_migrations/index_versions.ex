@@ -81,12 +81,12 @@ defmodule Engram.DataMigrations.IndexVersions do
     # forward would rebuild them all again.
     chunker_stale = dynamic([n], is_nil(n.chunker_version) or n.chunker_version < ^chunker)
 
-    case Indexing.embed_model() do
+    case model_unkeepable() do
       # The build cannot name its model: model tracking is off.
       nil ->
         chunker_stale
 
-      model ->
+      unkeepable ->
         # `not is_nil` first: on a sparse-only note `dense = content` is NULL,
         # and the keyword sweep negates this predicate, where NOT (NULL)
         # silently drops the row. Every term here must be TRUE or FALSE.
@@ -95,9 +95,48 @@ defmodule Engram.DataMigrations.IndexVersions do
           ^chunker_stale or
             (not is_nil(n.dense_indexed_hash) and not is_nil(n.content_hash) and
                n.dense_indexed_hash == n.content_hash and
-               (is_nil(n.embed_model) or n.embed_model != ^model))
+               (is_nil(n.embed_model) or ^unkeepable))
         )
     end
+  end
+
+  # A non-null `embed_model` the note may not keep, as `EmbedNote.version_stale?/2`
+  # decides it: per plan (`Engram.EmbedModels.acceptable/1`, by the owner's
+  # plan), else not the build's model. nil: tracking off.
+  defp model_unkeepable do
+    cond do
+      Engram.EmbedModels.per_plan?() ->
+        free_ok = Engram.EmbedModels.acceptable(:free)
+        paid_ok = Engram.EmbedModels.acceptable(:paid)
+        paid = owner_paid()
+
+        dynamic(
+          [n],
+          (exists(paid) and n.embed_model not in ^paid_ok) or
+            (not exists(paid) and n.embed_model not in ^free_ok)
+        )
+
+      model = Indexing.embed_model() ->
+        dynamic([n], n.embed_model != ^model)
+
+      true ->
+        nil
+    end
+  end
+
+  @doc """
+  Correlated subquery: the `:note`-bound row's owner has an entitled paid
+  plan (`Billing.paid?/1` in SQL). `subscriptions.status` DEFAULTS to
+  "trialing" and `tier` accepts "free", so both filters are load-bearing.
+  """
+  def owner_paid do
+    from(s in Engram.Billing.Subscription,
+      where:
+        s.user_id == parent_as(:note).user_id and
+          s.status in ^Engram.Billing.entitled_statuses() and
+          s.tier in ["starter", "pro"],
+      select: 1
+    )
   end
 
   @doc """

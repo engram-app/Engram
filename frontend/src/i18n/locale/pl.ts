@@ -1417,6 +1417,7 @@ export default {
 	frontmatter: "metadane",
 	reads: "odczytuje",
 	"{what} Wants {expectsLabel}.": "{what} potrzebuje {expectsLabel}.",
+	"use {alias} or {key}": "użyj {alias} lub {key}",
 	"also accepts {aliases}": "akceptuje również {aliases}",
 	or: "lub",
 	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":

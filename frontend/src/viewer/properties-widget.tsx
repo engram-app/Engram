@@ -10,6 +10,7 @@ import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
 import {
 	addKey,
+	fieldKeyLabel,
 	frontmatterMaps,
 	isOkfMatch,
 	OKF_FIELD_HELP,
@@ -142,7 +143,7 @@ interface Props {
  *  most keys are stored and handed back unchanged, but a handful are read,
  *  indexed and used by search, and nothing on screen said which. */
 function PropertiesHelp() {
-	const { t } = useT();
+	const { t, renderedLocale } = useT();
 	return (
 		<>
 			<p>
@@ -161,25 +162,36 @@ function PropertiesHelp() {
 				/>
 			</p>
 			<dl className="mt-2 space-y-1">
-				{OKF_FIELD_HELP.map(({ key, aliases, expectsLabel, what }) => (
-					<div key={key} className="flex gap-2">
-						<dt className="w-24 shrink-0 font-mono text-foreground">{key}</dt>
-						<dd className="flex-1 text-muted-foreground">
-							{t("{what} Wants {expectsLabel}.", {
-								what: t(what),
-								expectsLabel: t(expectsLabel),
-							})}
+				{OKF_FIELD_HELP.map(({ key, aliases, expectsLabel, what }) => {
+					// The key's name in the UI language (generated, frontmatter-keys.ts):
+					// the backend reads `種類` as `type`, so the help says so.
+					const local = fieldKeyLabel(key, renderedLocale);
+					return (
+						<div key={key} className="flex gap-2">
+							<dt className="w-24 shrink-0 font-mono text-foreground">{key}</dt>
+							<dd className="flex-1 text-muted-foreground">
+								{t("{what} Wants {expectsLabel}.", {
+									what: t(what),
+									expectsLabel: t(expectsLabel),
+								})}
 
-							{aliases.length > 0 ? (
-								<span className="block opacity-80">
-									{t("also accepts {aliases}", {
-										aliases: aliases.map((a) => `\`${a}\``).join(` ${t("or")} `),
-									})}
-								</span>
-							) : null}
-						</dd>
-					</div>
-				))}
+								{local !== undefined && local !== key ? (
+									<span className="block opacity-80">
+										{t("use {alias} or {key}", { alias: `\`${local}\``, key: `\`${key}\`` })}
+									</span>
+								) : null}
+
+								{aliases.length > 0 ? (
+									<span className="block opacity-80">
+										{t("also accepts {aliases}", {
+											aliases: aliases.map((a) => `\`${a}\``).join(` ${t("or")} `),
+										})}
+									</span>
+								) : null}
+							</dd>
+						</div>
+					);
+				})}
 			</dl>
 			<p className="mt-2">
 				{t(

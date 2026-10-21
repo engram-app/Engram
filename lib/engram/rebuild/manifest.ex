@@ -7,6 +7,9 @@ defmodule Engram.Rebuild.Manifest do
     field :user_id, :binary_id
     field :vault_id, :binary_id
     field :est_tokens, :integer
+    # The owner's plan doc model at planning time (`Engram.EmbedModels`); nil
+    # prices as voyage-4-large.
+    field :model, :string
     field :new_points, :integer
     field :reused_points, :integer
     field :mean_pooled_points, :integer

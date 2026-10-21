@@ -1,0 +1,15 @@
+{
+	"type": "種類",
+	"status": "状態",
+	"author": "作成者",
+	"reviewed_by": "確認者",
+	"source": "参照元",
+	"project": "プロジェクト",
+	"created": "作成日",
+	"updated": "更新日",
+	"reviewed": "確認日",
+	"expires": "有効期限",
+	"due": "期限",
+	"priority": "重要度",
+	"description": "概要"
+}

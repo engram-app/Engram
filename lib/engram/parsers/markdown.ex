@@ -10,6 +10,8 @@ defmodule Engram.Parsers.Markdown do
 
   alias Engram.Notes.Frontmatter
   alias Engram.Notes.Helpers
+  alias Engram.Notes.KeyAliases
+  alias Engram.Notes.OkfFields
 
   # #1620 — bump when a change alters the chunks `parse/2` emits for input it
   # already handled: a different split point, different chunk text, different
@@ -28,6 +30,8 @@ defmodule Engram.Parsers.Markdown do
   #     v4 chunker applies to new and edited notes only.
   # Unstamped, rides the next bump (the bundled v5 rebuild): a run with no
   # space is cut between words, never inside one (`word_split` in Rust).
+  # Also unstamped, same bump: the lead line reads `description`/`type` under
+  # any casing or a localized name (`説明`, `種類`; `KeyAliases`).
   @chunker_version 3
 
   @data_exts [".canvas", ".base"]
@@ -171,15 +175,15 @@ defmodule Engram.Parsers.Markdown do
   defp cut_bytes(s, max) when byte_size(s) <= max, do: s
   defp cut_bytes(s, max), do: s |> binary_part(0, max) |> String.chunk(:valid) |> hd()
 
-  # The decoded top-level frontmatter values; %{} when there is none or it
-  # is not YAML.
+  # The decoded top-level frontmatter values, named fields under their
+  # English key (`OkfFields.values/1`: `説明` is `description`); %{} when
+  # there is none or it is not YAML.
   # Only the keys the prefix and lead read; a block naming none of them is
   # not parsed at all (review L5: YamlElixir on every embed pass).
   defp frontmatter(content) do
     with {block, _body} when is_binary(block) <- Frontmatter.split(content),
-         true <- String.contains?(block, ["alias", "description"]),
-         {:ok, _order, values, _degraded} <- Frontmatter.parse(block) do
-      Map.new(values, fn {k, v} -> {k, Jason.decode!(v)} end)
+         true <- String.contains?(block, ["alias" | KeyAliases.markers("description")]) do
+      block |> Frontmatter.parse() |> OkfFields.values()
     else
       _ -> %{}
     end

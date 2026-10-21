@@ -1380,6 +1380,7 @@ export default {
 	frontmatter: "en-tête",
 	reads: "lectures",
 	"{what} Wants {expectsLabel}.": "{what} veut {expectsLabel}.",
+	"use {alias} or {key}": "utilise {alias} ou {key}",
 	"also accepts {aliases}": "accepte également {aliases}",
 	or: "ou",
 	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":

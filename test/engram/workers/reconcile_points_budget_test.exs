@@ -295,10 +295,11 @@ defmodule Engram.Workers.ReconcilePointsBudgetTest do
     end
   end
 
+  # Both arities: a RebuildStaleNote pass sends `purpose: :maintenance`.
   defp stub_embedder do
-    Mox.stub(Engram.MockEmbedder, :embed_texts, fn texts ->
-      {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)}
-    end)
+    embed = fn texts -> {:ok, Enum.map(texts, fn _ -> [0.1, 0.2, 0.3] end)} end
+    Mox.stub(Engram.MockEmbedder, :embed_texts, embed)
+    Mox.stub(Engram.MockEmbedder, :embed_texts, fn texts, _opts -> embed.(texts) end)
   end
 
   defp with_limits_enforced(value) do

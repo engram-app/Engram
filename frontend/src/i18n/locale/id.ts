@@ -1320,6 +1320,7 @@ export default {
 	frontmatter: "metadata awal",
 	reads: "membaca",
 	"{what} Wants {expectsLabel}.": "{what} menginginkan {expectsLabel}.",
+	"use {alias} or {key}": "gunakan {alias} atau {key}",
 	"also accepts {aliases}": "juga menerima {aliases}",
 	or: "atau",
 	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":

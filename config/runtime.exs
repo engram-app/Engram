@@ -101,6 +101,24 @@ if config_env() == :dev do
   config :logger, level: String.to_existing_atom(System.get_env("LOG_LEVEL", "debug"))
 end
 
+# Model per plan (SaaS, billing on): `{DOC,QUERY}_EMBED_MODEL_{FREE,STARTER,PRO}`.
+# Unset or blank reads the default (`Engram.EmbedModels.plan_defaults/0`):
+# Free voyage-4-lite, Starter and Pro voyage-4-large. Self-host ignores them.
+plan_models = fn prefix ->
+  Map.new(
+    [free: "voyage-4-lite", starter: "voyage-4-large", pro: "voyage-4-large"],
+    fn {plan, default} ->
+      case System.get_env("#{prefix}_#{String.upcase(to_string(plan))}", "") |> String.trim() do
+        "" -> {plan, default}
+        model -> {plan, model}
+      end
+    end
+  )
+end
+
+config :engram, :plan_doc_embed_models, plan_models.("DOC_EMBED_MODEL")
+config :engram, :plan_query_embed_models, plan_models.("QUERY_EMBED_MODEL")
+
 if config_env() != :test do
   # Storage backend. Default "s3" is the SaaS/prod path (AWS S3) and the
   # standard self-host path (MinIO). "database" is a self-host-only convenience
@@ -340,6 +358,56 @@ end
 case qdrant_switch.("TENANT_IDF") do
   nil -> :ok
   on? -> config :engram, :tenant_idf, on?
+end
+
+# v5 rebuild tuning (INFRA-5 sets these on the web and worker task defs).
+# Unset, nothing is configured and each reader's default applies: 0.2, 0.25,
+# 1_000, true and [] (today's behaviour). A malformed value refuses to boot.
+unit_fraction = fn var ->
+  with v when is_binary(v) <- System.get_env(var) do
+    case Float.parse(v) do
+      {f, ""} when f >= 0 and f <= 1 -> f
+      _ -> raise "#{var} must be a number from 0 to 1, got #{inspect(v)}"
+    end
+  end
+end
+
+# Qdrant optimizer `deleted_threshold` on the collection (`QdrantLayout`).
+if threshold = unit_fraction.("QDRANT_DELETED_THRESHOLD") do
+  config :engram, :qdrant_deleted_threshold, threshold
+end
+
+# BM25 `b` for merged (capped) chunks (`Indexing`).
+if b = unit_fraction.("BM25_B_MERGED") do
+  config :engram, :bm25_b_merged, b
+end
+
+# Points a user needs before TENANT_IDF computes IDF over their own points.
+if min_points = System.get_env("TENANT_IDF_MIN_POINTS") do
+  case Integer.parse(min_points) do
+    {n, ""} when n >= 0 -> config :engram, :tenant_idf_min_points, n
+    _ -> raise "TENANT_IDF_MIN_POINTS must be a non-negative integer, got #{inspect(min_points)}"
+  end
+end
+
+# true = filters also match the v3 `*_hmac` payload fields; false only after
+# the v5 pass has rewritten every point (PR-18).
+case qdrant_switch.("LEGACY_FILTER_FIELDS") do
+  nil -> :ok
+  on? -> config :engram, :legacy_filter_fields, on?
+end
+
+# Comma-separated user ids the v5 pass rebuilds last (`Rebuild.rebuild_order/1`).
+if last_users = System.get_env("REBUILD_LAST_USERS") do
+  ids =
+    for id <- last_users |> String.split(",") |> Enum.map(&String.trim/1), id != "" do
+      case Ecto.UUID.cast(id) do
+        {:ok, uuid} -> uuid
+        :error -> raise "REBUILD_LAST_USERS must be comma-separated user ids, got #{inspect(id)}"
+      end
+    end
+
+  config :engram, :rebuild_last_users, ids
 end
 
 # false = EmbedNote never pauses for Qdrant pressure before paying Voyage.

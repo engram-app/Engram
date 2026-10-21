@@ -1329,6 +1329,7 @@ export default {
 	frontmatter: "ön bilgi",
 	reads: "okur",
 	"{what} Wants {expectsLabel}.": "{what}, {expectsLabel} istiyor.",
+	"use {alias} or {key}": "{alias} veya {key} kullanın",
 	"also accepts {aliases}": "aynı zamanda {aliases} kabul eder",
 	or: "veya",
 	"A nested name such as {example} cannot be edited here or in Obsidian; only a raw edit, MCP or an AI writes it.":

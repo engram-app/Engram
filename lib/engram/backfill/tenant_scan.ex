@@ -92,4 +92,20 @@ defmodule Engram.Backfill.TenantScan do
   def user_ids do
     from(u in User, select: u.id) |> Repo.all()
   end
+
+  @doc """
+  User ids (`args.user_id`) with an executing `worker` job. A per-user chain
+  inserts its own successor while it executes, so `executing` cannot be a
+  `unique` state; an `enqueue_missing/0` skips these users instead, or a
+  second chain would run beside the first.
+  """
+  @spec executing_user_ids(module()) :: MapSet.t(String.t())
+  def executing_user_ids(worker) when is_atom(worker) do
+    from(j in Oban.Job,
+      where: j.worker == ^inspect(worker) and j.state == "executing",
+      select: fragment("?->>'user_id'", j.args)
+    )
+    |> Repo.all()
+    |> MapSet.new()
+  end
 end

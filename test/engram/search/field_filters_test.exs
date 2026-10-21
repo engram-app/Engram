@@ -114,6 +114,20 @@ defmodule Engram.Search.FieldFiltersTest do
       assert one(ctx, %{"key" => "tags", "value" => "ops"}) == Qdrant.match_filter(:tags, [tag])
     end
 
+    test "a named key folds NFKC + case and takes its localized names", ctx do
+      want = one(ctx, %{"key" => "type", "value" => "会議"})
+
+      for key <- ["Type", "ｔｙｐｅ", "種類"] do
+        assert one(ctx, %{"key" => key, "value" => "会議"}) == want, key
+      end
+
+      assert one(ctx, %{"key" => "ＳＴＡＴＵＳ", "value" => "draft"}) ==
+               one(ctx, %{"key" => "status", "value" => "draft"})
+
+      assert run(ctx, [%{"key" => "Beschreibung", "value" => "x"}]) ==
+               {:error, {:reserved_field, "Beschreibung"}}
+    end
+
     test "dates in seconds: created (date), updated (timestamp, modified), reviewed", ctx do
       day = DateTime.to_unix(~U[2026-11-01 00:00:00Z])
 
