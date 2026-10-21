@@ -1,10 +1,15 @@
 import { setupClerkTestingToken } from "@clerk/testing/playwright";
 import { expect, test } from "@playwright/test";
 import {
+	API_URL,
+	acceptTerms,
+	answerHeard,
 	clerkSignIn,
 	createUnonboardedUser,
+	createWizardVault,
 	deleteClerkUser,
 	loadAuthState,
+	spaApiHeaders,
 } from "./clerk-helpers";
 
 /**
@@ -12,11 +17,6 @@ import {
  * walks the onboarding wizard (terms, how they heard, first vault) and writes
  * a first note that survives a reload.
  */
-
-const BACKEND = `http://localhost:${process.env.PW_CLERK_BACKEND_PORT ?? "4001"}`;
-// Where the journey runs. Only the CI stack runs billing off; every other
-// target (staging, prod canary) shows the terms and heard-from steps.
-const TARGET = process.env.E2E_TARGET ?? "ci";
 
 const NOTE_TITLE = "First note";
 const NOTE_BODY = "Hello from the web";
@@ -47,46 +47,14 @@ test.describe("Website-first: a new user signs up on the web", () => {
 			{ type: "targets", description: "ci,staging" },
 		],
 	}, async ({ page }) => {
-		// Terms and the heard-from question only exist where billing is on (SaaS,
-		// staging); the CI stack runs billing off, so its wizard is the vault step
-		// alone. Each step runs when the wizard shows it.
-		const onboardStep = () => new URL(page.url()).pathname;
-
 		await test.step("sign-in", async () => {
 			await clerkSignIn(page, (pending as { email: string }).email, "/");
 			await page.waitForURL(/\/onboard\//u, { timeout: 25_000 });
 		});
 
-		await test.step("terms", async () => {
-			if (TARGET !== "ci") {
-				expect(onboardStep()).toBe("/onboard/agreement");
-			} else if (onboardStep() !== "/onboard/agreement") {
-				return;
-			}
-			await page.getByLabel(/I have read and agree/iu).click();
-			await page.getByRole("button", { name: /^continue$/iu }).click();
-			await page.waitForURL(/\/onboard\/(?:heard|vault)/u, { timeout: 25_000 });
-		});
-
-		await test.step("heard", async () => {
-			if (TARGET !== "ci") {
-				expect(onboardStep()).toBe("/onboard/heard");
-			} else if (onboardStep() !== "/onboard/heard") {
-				return;
-			}
-			await page.getByRole("radio", { name: "Search engine" }).click();
-			await page.getByRole("button", { name: /^continue$/iu }).click();
-			await page.waitForURL(/\/onboard\/vault/u, { timeout: 25_000 });
-		});
-
-		await test.step("vault", async () => {
-			await page.getByRole("button", { name: /starting fresh/iu }).click();
-			await page.getByLabel("Vault name").fill("Journey Vault");
-			await page.getByRole("button", { name: /create vault & continue/iu }).click();
-			await expect(page.getByRole("navigation", { name: "App navigation" })).toBeVisible({
-				timeout: 25_000,
-			});
-		});
+		await test.step("terms", () => acceptTerms(page));
+		await test.step("heard", () => answerHeard(page));
+		await test.step("vault", () => createWizardVault(page, "Journey Vault"));
 
 		await test.step("first-note", async () => {
 			await page.getByRole("button", { name: "New note", exact: true }).click();
@@ -110,22 +78,9 @@ test.describe("Website-first: a new user signs up on the web", () => {
 			await expect
 				.poll(
 					async () => {
-						const token = await page.evaluate(() =>
-							(
-								window as unknown as {
-									Clerk?: { session?: { getToken: () => Promise<string | null> } };
-								}
-							).Clerk?.session?.getToken(),
-						);
-						const vaultId = await page.evaluate(() => localStorage.getItem("engram.activeVaultId"));
 						const res = await page.request.get(
-							`${BACKEND}/api/notes/${encodeURIComponent(`${NOTE_TITLE}.md`)}`,
-							{
-								headers: {
-									Authorization: `Bearer ${token}`,
-									...(vaultId ? { "X-Vault-ID": vaultId } : {}),
-								},
-							},
+							`${API_URL}/api/notes/${encodeURIComponent(`${NOTE_TITLE}.md`)}`,
+							{ headers: await spaApiHeaders(page) },
 						);
 						return res.ok() ? await res.text() : `HTTP ${res.status()}`;
 					},

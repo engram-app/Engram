@@ -9,6 +9,8 @@ import type {
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { expect, type Page, test } from "@playwright/test";
 import {
+	API_URL,
+	APP_URL,
 	clerkSignIn,
 	createUnonboardedUser,
 	deleteClerkUser,
@@ -34,14 +36,12 @@ import {
  * playwright.config.ts), the same split as saas api./app.engram.page.
  */
 
-const BACKEND = `http://localhost:${process.env.PW_CLERK_BACKEND_PORT ?? "4001"}`;
-const SPA = `http://localhost:${process.env.PW_CLERK_VITE_PORT ?? "5174"}`;
-const MCP_URL = new URL("/api/mcp", BACKEND);
+const MCP_URL = new URL("/api/mcp", API_URL);
 
 // Loopback on the SPA's own origin, so approving cannot navigate off-box. The
 // page 404s; the code is read from the URL.
 const CALLBACK_PATH = "/oauth-callback-test";
-const REDIRECT_URI = `${SPA}${CALLBACK_PATH}`;
+const REDIRECT_URI = `${APP_URL}${CALLBACK_PATH}`;
 
 const NOTE_PATH = "Hello from my AI.md";
 const NOTE_BODY = "Written by an MCP client on its first connection.";
@@ -167,7 +167,7 @@ test.describe("MCP-first: a new user connects an AI app", () => {
 
 		// 4. What the app wrote is in the user's vault in the web app.
 		await test.step("note-visible-in-web", async () => {
-			await page.goto(`${SPA}/`);
+			await page.goto(`${APP_URL}/`);
 			await expect(page.getByText("Hello from my AI").first()).toBeVisible({ timeout: 20_000 });
 		});
 	});
