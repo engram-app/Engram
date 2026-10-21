@@ -122,6 +122,13 @@ test.describe("FTUX happy path", () => {
 		});
 		expect(profile.ok(), `profile patch failed: ${profile.status()}`).toBe(true);
 
+		// Before linking, the row must be there and unticked, or the tick below
+		// would prove nothing about the link.
+		const row = page.getByRole("listitem").filter({ hasText: "Install the Obsidian plugin" });
+		await page.goto(`${APP_URL}/`);
+		await expect(row).toContainText("☐", { timeout: 15_000 });
+		await expect(row).not.toContainText("☑");
+
 		// What the plugin does: ask for a code, show it, poll for the exchange.
 		const startRes = await page.request.post(`${API_URL}/api/auth/device`, {
 			data: { client_id: "e2e-plugin", vault_name: "Plugin Vault", device_name: "e2e-laptop" },
@@ -140,7 +147,6 @@ test.describe("FTUX happy path", () => {
 		expect(tokenRes.ok(), `device token exchange failed: ${tokenRes.status()}`).toBe(true);
 
 		await page.goto(`${APP_URL}/`);
-		const row = page.getByRole("listitem").filter({ hasText: "Install the Obsidian plugin" });
 		await expect(row).toContainText("☑", { timeout: 15_000 });
 	});
 
