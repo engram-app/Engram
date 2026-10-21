@@ -44,7 +44,7 @@ defmodule Engram.Crypto.UserDekRotation do
   alias Engram.Notes.FrontmatterKeys
   alias Engram.Repo
   alias Engram.Vector.Qdrant
-  alias Engram.Workers.EmbedNote
+  alias Engram.Workers.{EmbedNote, ReconcileNotePayloads, RotationTextGuard}
 
   require Logger
 
@@ -197,7 +197,7 @@ defmodule Engram.Crypto.UserDekRotation do
       # `post_flip_index_repairs/3`. The DB-only remap goes first, while few
       # edits can have landed; an incomplete text sweep then overrides it.
       :ok = post_flip_index_repairs(user, old_dek, new_dek)
-      :ok = sweep_qdrant_after_flip(user, old_dek, new_dek)
+      :ok = sweep_qdrant_after_flip(user, old_dek, new_dek, guard)
       # Finished (or requeued what it could not rewrap): the guard is moot.
       :ok = cancel_text_guard(guard)
 
@@ -1299,18 +1299,23 @@ defmodule Engram.Crypto.UserDekRotation do
   # text no key can read, and search drops it. Those notes are queued for a
   # rebuild (`requeue_for_rebuild/2`). If this process dies first, the
   # `RotationTextGuard` the flip committed finds them (`verify_point_text/1`).
-  defp sweep_qdrant_after_flip(user, old_dek, new_dek, attempt \\ 1) do
-    case sweep_qdrant(user, old_dek, new_dek) do
-      {:ok, []} ->
+  #
+  # Every page pushes the guard out again (`push_text_guard/1`): while this
+  # sweep makes progress the guard never fires, so it never pays Voyage to
+  # rebuild notes this sweep is about to rewrap. A dead sweep stops pushing
+  # and the guard runs `RotationTextGuard.delay_seconds/0` after its last page.
+  defp sweep_qdrant_after_flip(user, old_dek, new_dek, guard, attempt \\ 1) do
+    case sweep_qdrant(user, old_dek, new_dek, on_page: fn -> push_text_guard(guard) end) do
+      {:ok, [], nil} ->
         :ok
 
       # Deterministic (the point is under neither key), so not retried.
-      {:ok, skipped} ->
-        settle_undecryptable(user.id, skipped)
+      {:ok, skipped, nil} ->
+        settle_undecryptable(user.id, skipped, :after_flip)
 
       {:error, _} when attempt < @qdrant_attempts ->
         Process.sleep(@qdrant_retry_ms * attempt)
-        sweep_qdrant_after_flip(user, old_dek, new_dek, attempt + 1)
+        sweep_qdrant_after_flip(user, old_dek, new_dek, guard, attempt + 1)
 
       {:error, reason} ->
         requeue_for_rebuild(user.id, :all, classify_reason(reason))
@@ -1332,17 +1337,36 @@ defmodule Engram.Crypto.UserDekRotation do
 
   Reads only, unless something is unreadable. A Qdrant failure is
   `{:error, reason}`, for the job to retry: never a whole-vault rebuild.
+
+  At most `max_pages` pages from `offset` (a scroll cursor, nil from the
+  start), settled before it returns, so a big vault on a slow Qdrant makes
+  durable progress per job instead of rescanning from page 1 on every
+  attempt. `{:ok, next}`: nil when the scroll is done, else where the next
+  job resumes.
   """
-  @spec verify_point_text(User.t()) :: :ok | {:error, term()}
-  def verify_point_text(%User{} = user) do
-    with {:ok, dek} <- Crypto.get_dek(user) do
-      case sweep_qdrant(user, dek, dek) do
-        {:ok, []} -> :ok
-        {:ok, skipped} -> settle_undecryptable(user.id, skipped)
-        {:error, _} = err -> err
-      end
+  @spec verify_point_text(User.t(), term(), pos_integer()) ::
+          {:ok, term()} | {:error, term()}
+  def verify_point_text(%User{} = user, offset, max_pages) do
+    with {:ok, dek} <- Crypto.get_dek(user),
+         {:ok, skipped, next} <-
+           sweep_qdrant(user, dek, dek, offset: offset, max_pages: max_pages) do
+      :ok = settle_undecryptable(user.id, skipped, :guard_rebuild)
+      {:ok, next}
     end
   end
+
+  # The flip's guard, still scheduled, is due a full delay from now. A guard
+  # already running (or done, or cancelled) is left alone.
+  defp push_text_guard(%Oban.Job{id: id}) when is_integer(id) do
+    due = DateTime.add(DateTime.utc_now(), RotationTextGuard.delay_seconds())
+
+    from(j in Oban.Job, where: j.id == ^id and j.state == "scheduled")
+    |> Repo.update_all([set: [scheduled_at: due]], skip_tenant_check: true)
+
+    :ok
+  end
+
+  defp push_text_guard(_conflict), do: :ok
 
   # A skipped point a LIVE note's chunk row names belongs to an index that
   # must be rebuilt. Any other is dead weight: no row names it (an orphan
@@ -1350,7 +1374,9 @@ defmodule Engram.Crypto.UserDekRotation do
   # would only discard. Nothing would ever rebuild or reap those, so they are
   # deleted. The ids come from a scroll filtered to this user, so the delete
   # touches only this user's points.
-  defp settle_undecryptable(user_id, skipped) do
+  defp settle_undecryptable(_user_id, [], _status), do: :ok
+
+  defp settle_undecryptable(user_id, skipped, status) do
     {:ok, named} =
       Repo.with_tenant(user_id, fn ->
         from(c in Engram.Notes.Chunk,
@@ -1382,7 +1408,7 @@ defmodule Engram.Crypto.UserDekRotation do
 
       named ->
         note_ids = named |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
-        requeue_for_rebuild(user_id, note_ids, "undecryptable_points:#{length(named)}")
+        requeue_for_rebuild(user_id, note_ids, "undecryptable_points:#{length(named)}", status)
     end
   end
 
@@ -1395,7 +1421,11 @@ defmodule Engram.Crypto.UserDekRotation do
   # rather than at the reconcile sweep's daily version hour.
   #
   # Never raises: the rotation is committed by now and must report :ok.
-  defp requeue_for_rebuild(user_id, note_ids, reason) do
+  #
+  # `status` labels the row_failed counter: `:after_flip` counts one per
+  # incomplete post-flip sweep; `:guard_rebuild` counts the notes a
+  # `RotationTextGuard` rebuilt, as that is Voyage we pay with no ledger.
+  defp requeue_for_rebuild(user_id, note_ids, reason, status \\ :after_flip) do
     Logger.error(
       "T3.7 sweep_qdrant incomplete after the flip: notes requeued for a rebuild",
       Metadata.with_category(:error, :crypto,
@@ -1405,10 +1435,12 @@ defmodule Engram.Crypto.UserDekRotation do
       )
     )
 
+    count = if status == :guard_rebuild, do: length(note_ids), else: 1
+
     :telemetry.execute(
       [:engram, :crypto, :rotate, :dek, :row_failed],
-      %{count: 1},
-      %{table: :qdrant, phase: :sweep_qdrant, status: :after_flip}
+      %{count: count},
+      %{table: :qdrant, phase: :sweep_qdrant, status: status}
     )
 
     {:ok, ids} =
@@ -1469,13 +1501,31 @@ defmodule Engram.Crypto.UserDekRotation do
   # these keys leaves the filter keys alone.
   @qdrant_encrypted_keys Enum.flat_map(@qdrant_encrypted_fields, &[to_string(&1), "#{&1}_nonce"])
 
-  defp sweep_qdrant(%User{id: user_id}, old_dek, new_dek) do
+  # `{:ok, skipped, next}`: `next` is nil once the scroll is done, else the
+  # cursor after `:max_pages` pages. `:on_page` runs after each page.
+  defp sweep_qdrant(%User{id: user_id}, old_dek, new_dek, opts) do
     collection = Qdrant.collection_name()
     filter = %{must: [%{key: "user_id", match: %{value: user_id}}]}
-    sweep_qdrant_loop(collection, filter, user_id, {old_dek, new_dek}, nil, [])
+
+    walk = %{
+      on_page: Keyword.get(opts, :on_page, fn -> :ok end),
+      pages_left: Keyword.get(opts, :max_pages, :infinity)
+    }
+
+    sweep_qdrant_loop(
+      collection,
+      filter,
+      user_id,
+      {old_dek, new_dek},
+      Keyword.get(opts, :offset),
+      [],
+      walk
+    )
   end
 
-  defp sweep_qdrant_loop(collection, filter, user_id, {old_dek, new_dek} = deks, offset, skipped) do
+  defp sweep_qdrant_loop(collection, filter, user_id, deks, offset, skipped, walk) do
+    {old_dek, new_dek} = deks
+
     case Qdrant.scroll(collection,
            filter: filter,
            with_payload: @qdrant_encrypted_keys,
@@ -1484,15 +1534,29 @@ defmodule Engram.Crypto.UserDekRotation do
            offset: offset
          ) do
       {:ok, %{points: [], next_page_offset: _}} ->
-        {:ok, skipped}
+        {:ok, skipped, nil}
 
       {:ok, %{points: points, next_page_offset: next}} ->
         case rewrap_qdrant_points(collection, user_id, points, old_dek, new_dek) do
           {:ok, page_skipped} when is_nil(next) ->
-            {:ok, page_skipped ++ skipped}
+            {:ok, page_skipped ++ skipped, nil}
+
+          {:ok, page_skipped} when walk.pages_left == 1 ->
+            {:ok, page_skipped ++ skipped, next}
 
           {:ok, page_skipped} ->
-            sweep_qdrant_loop(collection, filter, user_id, deks, next, page_skipped ++ skipped)
+            :ok = walk.on_page.()
+            walk = %{walk | pages_left: next_pages_left(walk.pages_left)}
+
+            sweep_qdrant_loop(
+              collection,
+              filter,
+              user_id,
+              deks,
+              next,
+              page_skipped ++ skipped,
+              walk
+            )
 
           {:error, _} = err ->
             err
@@ -1512,6 +1576,9 @@ defmodule Engram.Crypto.UserDekRotation do
         {:error, reason}
     end
   end
+
+  defp next_pages_left(:infinity), do: :infinity
+  defp next_pages_left(n), do: n - 1
 
   # One page, two Qdrant requests whatever its size (`Qdrant.set_payloads/2`):
   # a waited set_payload per point was one WAL flush each, and a ~150k-point
@@ -2099,12 +2166,12 @@ defmodule Engram.Crypto.UserDekRotation do
         |> Repo.update_all(set: [payload_hash: nil, keyword_version: nil])
       end)
 
-    {:ok, _} = Oban.insert(Engram.Workers.ReconcileNotePayloads.new(%{"user_id" => user_id}))
+    {:ok, _} = Oban.insert(ReconcileNotePayloads.new(%{"user_id" => user_id}))
 
     Oban.insert(
-      Engram.Workers.RotationTextGuard.new(
+      RotationTextGuard.new(
         %{"user_id" => user_id, "dek_version" => new_dek_version},
-        schedule_in: Engram.Workers.RotationTextGuard.delay_seconds()
+        schedule_in: RotationTextGuard.delay_seconds()
       )
     )
   end

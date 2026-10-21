@@ -67,7 +67,7 @@ defmodule Engram.PromEx.ZeroInitTest do
     outcomes = for %{outcome: o} <- labels, uniq: true, do: o
 
     assert Enum.sort(statuses) ==
-             Enum.sort(~w(requeue_failed remap_failed after_flip both_deks_failed))
+             Enum.sort(~w(requeue_failed remap_failed after_flip guard_rebuild both_deks_failed))
 
     assert "drifted" in outcomes and "rewritten" in outcomes
   end

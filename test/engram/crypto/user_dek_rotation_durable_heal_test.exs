@@ -76,23 +76,31 @@ defmodule Engram.Crypto.UserDekRotationDurableHealTest do
     bypass = Bypass.open()
     Engram.ServiceConfig.put_override(:qdrant_url, "http://localhost:#{bypass.port}")
     test = self()
-    sweep = Keyword.get(opts, :sweep, [])
+    # `pages`: the sweep's scroll pages in order, page i answering offset i
+    # (nil is page 0) with `next_page_offset` i + 1 until the last.
+    # `on_sweep`: called with each sweep scroll's offset before it answers.
+    pages = Keyword.get(opts, :pages, [Keyword.get(opts, :sweep, [])])
+    on_sweep = Keyword.get(opts, :on_sweep, fn _offset -> :ok end)
     heal = Keyword.get(opts, :heal, [])
     status = Keyword.get(opts, :overwrite_status, 200)
 
     Bypass.stub(bypass, "POST", "/collections/engram_notes/points/scroll", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
-      %{"filter" => filter} = Jason.decode!(body)
+      %{"filter" => filter} = decoded = Jason.decode!(body)
 
-      points =
-        if Enum.any?(filter["must"] || [], &Map.has_key?(&1, "has_id")), do: heal, else: sweep
+      result =
+        if Enum.any?(filter["must"] || [], &Map.has_key?(&1, "has_id")) do
+          %{"points" => heal, "next_page_offset" => nil}
+        else
+          page = decoded["offset"] || 0
+          on_sweep.(decoded["offset"])
+          next = if page + 1 < length(pages), do: page + 1
+          %{"points" => Enum.at(pages, page, []), "next_page_offset" => next}
+        end
 
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(
-        200,
-        Jason.encode!(%{"result" => %{"points" => points, "next_page_offset" => nil}})
-      )
+      |> Plug.Conn.send_resp(200, Jason.encode!(%{"result" => result}))
     end)
 
     for method <- ["POST", "PUT"] do
@@ -136,6 +144,67 @@ defmodule Engram.Crypto.UserDekRotationDurableHealTest do
     do: Crypto.dek_filter_key(Repo.get!(Engram.Accounts.User, user.id))
 
   defp heal!(user), do: perform_job(ReconcileNotePayloads, %{"user_id" => user.id})
+
+  @row_failed [:engram, :crypto, :rotate, :dek, :row_failed]
+
+  defp guard_args(ctx),
+    do: %{"user_id" => ctx.user.id, "dek_version" => ctx.user.dek_version || 1}
+
+  defp raw(note),
+    do: Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^note.id), skip_tenant_check: true)
+
+  # A v3 point whose text is sealed under `dek`, AAD-bound as the index binds it.
+  defp text_point(id, user, dek) do
+    aad = Crypto.aad_for_qdrant("engram_notes", id, :text)
+    {ct, nonce} = Envelope.encrypt("text", dek, aad)
+
+    %{
+      "id" => id,
+      "payload" => %{
+        "user_id" => user.id,
+        "text" => Base.encode64(ct),
+        "text_nonce" => Base.encode64(nonce)
+      }
+    }
+  end
+
+  # Another indexed note of the same user, with its own point.
+  defp second_note(ctx) do
+    vault = Repo.get!(Engram.Vaults.Vault, ctx.note.vault_id, skip_tenant_check: true)
+
+    {:ok, note} =
+      Engram.Notes.upsert_note(ctx.user, vault, %{"path" => "heal/other.md", "content" => "x\n"},
+        actor: "api"
+      )
+
+    {1, _} =
+      Repo.update_all(
+        from(n in Engram.Notes.Note,
+          where: n.id == ^note.id,
+          update: [set: [embed_hash: n.content_hash, chunker_version: 1]]
+        ),
+        [],
+        skip_tenant_check: true
+      )
+
+    Repo.delete_all(Oban.Job)
+    point = Ecto.UUID.generate()
+
+    Repo.insert!(
+      %Engram.Notes.Chunk{
+        note_id: note.id,
+        user_id: ctx.user.id,
+        vault_id: vault.id,
+        position: 0,
+        char_start: 0,
+        char_end: 1,
+        qdrant_point_id: point
+      },
+      skip_tenant_check: true
+    )
+
+    {note, point}
+  end
 
   test "the rotation leaves the v5 filter keys to the job the flip commits", ctx do
     stub_qdrant(heal: stale_v5(ctx.point, ctx.user))
@@ -224,32 +293,87 @@ defmodule Engram.Crypto.UserDekRotationDurableHealTest do
     end
 
     test "after a crash: rebuilds only the notes whose text is unreadable", ctx do
-      {ct, nonce} = Envelope.encrypt("text", :crypto.strong_rand_bytes(32), <<>>)
+      unreadable = text_point(ctx.point, ctx.user, :crypto.strong_rand_bytes(32))
+      {readable_note, readable_point} = second_note(ctx)
+      {:ok, dek} = Crypto.get_dek(ctx.user)
+      readable = text_point(readable_point, ctx.user, dek)
 
-      unreadable = %{
-        "id" => ctx.point,
-        "payload" => %{
-          "user_id" => ctx.user.id,
-          "text" => Base.encode64(ct),
-          "text_nonce" => Base.encode64(nonce)
-        }
-      }
+      ref = :telemetry_test.attach_event_handlers(self(), [@row_failed])
+      stub_qdrant(sweep: [unreadable, readable])
 
-      stub_qdrant(sweep: [unreadable])
+      assert :ok = perform_job(RotationTextGuard, guard_args(ctx))
 
-      assert :ok =
-               perform_job(RotationTextGuard, %{
-                 "user_id" => ctx.user.id,
-                 "dek_version" => ctx.user.dek_version || 1
-               })
-
-      raw =
-        Repo.one!(from(n in Engram.Notes.Note, where: n.id == ^ctx.note.id),
-          skip_tenant_check: true
-        )
-
-      assert raw.chunker_version == nil
+      assert raw(ctx.note).chunker_version == nil
       assert_enqueued(worker: EmbedNote, args: %{note_id: ctx.note.id})
+
+      # Its text opens under the current DEK: left exactly as it was.
+      assert raw(readable_note).chunker_version == 1
+      refute_enqueued(worker: EmbedNote, args: %{note_id: readable_note.id})
+
+      # Unmetered Voyage spend, so it is counted: one note rebuilt.
+      assert_received {@row_failed, ^ref, %{count: 1}, %{table: :qdrant, status: :guard_rebuild}}
+    end
+
+    test "resumes at its scroll cursor instead of rescanning from page 1", ctx do
+      unreadable = text_point(ctx.point, ctx.user, :crypto.strong_rand_bytes(32))
+      test = self()
+
+      stub_qdrant(
+        pages: [[unreadable], [], []],
+        on_sweep: fn offset -> send(test, {:swept, offset}) end
+      )
+
+      assert :ok = perform_job(RotationTextGuard, Map.put(guard_args(ctx), "pages", 1))
+
+      # Page 1 settled before handing off: its note is already rebuilding.
+      assert_received {:swept, nil}
+      refute_received {:swept, _}
+      assert raw(ctx.note).chunker_version == nil
+      assert_enqueued(worker: EmbedNote, args: %{note_id: ctx.note.id})
+
+      [next] = all_enqueued(worker: RotationTextGuard)
+      assert next.args["offset"] == 1
+
+      assert :ok = perform_job(RotationTextGuard, next.args)
+      assert_received {:swept, 1}
+      refute_received {:swept, nil}
+    end
+
+    test "a live sweep keeps pushing the guard out, so it never fires behind it", ctx do
+      test = self()
+
+      # Page 0 makes the guard look due now; by the time page 1 is read the
+      # sweep must have pushed it a full delay out again.
+      on_sweep = fn
+        nil ->
+          Repo.update_all(
+            from(j in Oban.Job, where: j.worker == ^inspect(RotationTextGuard)),
+            [set: [scheduled_at: DateTime.utc_now()]],
+            skip_tenant_check: true
+          )
+
+        1 ->
+          [due] =
+            Repo.all(
+              from(j in Oban.Job,
+                where: j.worker == ^inspect(RotationTextGuard),
+                select: j.scheduled_at
+              ),
+              skip_tenant_check: true
+            )
+
+          send(test, {:guard_due, due})
+      end
+
+      stub_qdrant(
+        pages: [[%{"id" => ctx.point, "payload" => %{"user_id" => ctx.user.id}}], []],
+        on_sweep: on_sweep
+      )
+
+      assert :ok = UserDekRotation.rotate_user(ctx.user.id)
+
+      assert_received {:guard_due, due}
+      assert DateTime.diff(due, DateTime.utc_now()) > RotationTextGuard.delay_seconds() - 60
     end
 
     test "a later rotation owns its own guard", ctx do

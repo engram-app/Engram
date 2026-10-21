@@ -30,30 +30,52 @@ defmodule Engram.Workers.RotationTextGuard do
   alias Engram.Repo
 
   # Past any sweep the rotating process could still be running: a ~150k
-  # point user sweeps in minutes (`Qdrant.set_payloads/2`, review M3).
-  # ponytail: a fixed delay; a guard that fires while a slower sweep is still
-  # going rebuilds the notes it has not reached yet (cost, not data). Key it
-  # off a heartbeat if vaults ever sweep for longer.
+  # point user sweeps in minutes (`Qdrant.set_payloads/2`, review M3). The
+  # sweep pushes this job out by the same delay after every page, so a slow
+  # but live sweep never has it fire behind it.
   @delay_seconds 3_600
+
+  # Pages (200 points each) one job checks before handing the rest to a
+  # successor: progress survives a timeout instead of rescanning from page 1.
+  @pages_per_job 100
 
   @doc "How long after the flip the guard runs (its `schedule_in`)."
   def delay_seconds, do: @delay_seconds
 
-  # One user's points, read a page at a time: minutes at most.
+  # `@pages_per_job` pages: minutes at most.
   @impl Oban.Worker
   def timeout(_job), do: :timer.minutes(10)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"user_id" => user_id, "dek_version" => version}}) do
+  def perform(%Oban.Job{args: %{"user_id" => user_id, "dek_version" => version} = args}) do
     case Repo.get(User, user_id) do
       %User{dek_version: ^version} = user ->
         case RotationGate.check_user(user) do
-          :ok -> UserDekRotation.verify_point_text(user)
+          :ok -> verify(user, args)
           {:error, :rotation_in_progress} -> {:snooze, 60}
         end
 
       _gone_or_rotated_again ->
         :ok
+    end
+  end
+
+  # `pages` is for tests; production takes the default.
+  defp verify(user, args) do
+    pages = args["pages"] || @pages_per_job
+
+    case UserDekRotation.verify_point_text(user, args["offset"], pages) do
+      {:ok, nil} ->
+        :ok
+
+      # This job is executing, outside the unique states, so the successor
+      # inserts rather than conflicting with it.
+      {:ok, next} ->
+        {:ok, _} = Oban.insert(new(Map.put(args, "offset", next)))
+        :ok
+
+      {:error, _} = err ->
+        err
     end
   end
 end

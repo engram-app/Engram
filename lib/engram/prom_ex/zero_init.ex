@@ -48,7 +48,8 @@ defmodule Engram.PromEx.ZeroInit do
       [
         {:chunks, :post_flip_index_repairs, :remap_failed},
         {:qdrant, :sweep_qdrant, :requeue_failed},
-        {:qdrant, :sweep_qdrant, :after_flip}
+        {:qdrant, :sweep_qdrant, :after_flip},
+        {:qdrant, :sweep_qdrant, :guard_rebuild}
         | for({table, phase} <- @rewrap_sites, do: {table, phase, :both_deks_failed})
       ]
 
