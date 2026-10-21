@@ -36,6 +36,7 @@ defmodule Engram.Notes.FieldCatalog do
   alias Engram.Notes.FrontmatterKeys
   alias Engram.Notes.OkfFields
   alias Engram.Repo
+  alias Engram.Vaults.Vault
   alias Engram.Vector.FilterId
 
   @top_values 50
@@ -143,22 +144,16 @@ defmodule Engram.Notes.FieldCatalog do
 
   # nil when the vault is not this user's (RLS hides its row).
   defp current_seq(user, vault) do
-    Repo.with_tenant!(user.id, fn ->
-      case Repo.query!("SELECT change_seq FROM vaults WHERE id = $1", [
-             Ecto.UUID.dump!(vault.id)
-           ]) do
-        %{rows: [[seq]]} -> seq
-        %{rows: []} -> nil
-      end
-    end)
+    query = from(v in Vault, where: v.id == ^vault.id, select: v.change_seq)
+    Repo.with_tenant!(user.id, fn -> Repo.one(query) end)
   end
 
   defp build(user, vault, fk, dek) do
     {stats, values, keys} =
       Repo.with_tenant!(user.id, fn ->
-        [{stats_sql, params}, {values_sql, _}] = explain_queries(vault.id)
-        stats = Repo.query!(stats_sql, params).rows
-        values = Repo.query!(values_sql, params).rows
+        params = [Ecto.UUID.dump!(vault.id)]
+        stats = Repo.query!(@stats_sql, params).rows
+        values = Repo.query!(@values_sql, params).rows
         user_ids = for [id | _] <- stats, id >= FrontmatterKeys.first_user_id(), do: id
 
         keys =
